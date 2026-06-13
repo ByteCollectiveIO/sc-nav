@@ -74,8 +74,12 @@ def load_nav_data() -> nav_core.NavData:
 
 
 CUSTOM_POI_FILE = DATA_DIR / "custom_pois.json"
-RESOURCE_NODE_FILE = DATA_DIR / "resource_nodes.json"
 HANDLES_FILE = DATA_DIR / "handles.json"
+# One file per observation category (resource_nodes.json, wildlife.json, …),
+# defined centrally in nav_core so adding a category needs no new wiring here.
+OBSERVATION_FILES = {
+    cat: DATA_DIR / spec["file"] for cat, spec in nav_core.OBSERVATION_CATEGORIES.items()
+}
 
 
 def _load_json_list(path: Path) -> list[dict]:
@@ -130,13 +134,19 @@ class HandleRegistry:
         return sorted(self.by_handle.values(), key=lambda e: e["handle"].lower())
 
 
+def merge_all_observations(target_nav) -> None:
+    for category, items in observations.items():
+        nav_core.merge_observations(target_nav, items, category)
+
+
 app = FastAPI(title="SC Nav")
 nav = load_nav_data()
 custom_pois = load_custom_pois()
-resource_nodes = _load_json_list(RESOURCE_NODE_FILE)
+# observations[category] -> list of stored dicts (one JSON file each)
+observations = {cat: _load_json_list(path) for cat, path in OBSERVATION_FILES.items()}
 handles = HandleRegistry(HANDLES_FILE)
 nav_core.merge_custom_pois(nav, custom_pois)
-nav_core.merge_resource_nodes(nav, resource_nodes)
+merge_all_observations(nav)
 
 
 class PositionIn(BaseModel):
@@ -165,8 +175,19 @@ class NodeCaptureIn(BaseModel):
     note: str | None = None
 
 
+class WildlifeCaptureIn(BaseModel):
+    species: str
+    biome: str | None = None
+    note: str | None = None
+
+
+# Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
+PATH_MIN_MOVE_M = 250.0   # don't record a crumb until you've moved this far
+PATH_MAX = 5000           # cap so a long session can't grow unbounded
+
+
 class AppState:
-    """Latest sample + destination + connected websocket clients."""
+    """Latest sample + destination + breadcrumb trail + websocket clients."""
 
     def __init__(self):
         self.lock = asyncio.Lock()
@@ -176,11 +197,24 @@ class AppState:
         self.prev_t = None
         self.destination_id = None
         self.nav_state = None
-        # capture_pending: {"kind": "poi"|"node", ...fields} while armed
+        # capture_pending: {"kind": "poi"} or
+        # {"kind": "observation", "category", "data", "biome", "note"} while armed
         self.capture_pending = None
         self.last_capture = None      # summary of most recent capture
         self.owner = None             # {"player_id","handle"} from latest position
+        # Breadcrumb trail (in-memory, session-scoped). One trail, matching the
+        # single live position cursor (state.pos): the app tracks one active
+        # stream at a time, so a single global path is the coherent model.
+        # Crumb: {lat, lon, container}.
+        self.tracking = False
+        self.path = []
+        # Monotonic observation id, so a deleted top id is never reused.
+        self.obs_id_seq = max([*nav.observations.keys(), nav_core.OBSERVATION_ID_START - 1])
         self.clients: set[WebSocket] = set()
+
+    def next_observation_id(self):
+        self.obs_id_seq += 1
+        return self.obs_id_seq
 
     def capture_status(self):
         return {
@@ -201,6 +235,38 @@ class AppState:
             destination_id=self.destination_id,
             prev_pos=self.prev_pos,
             prev_t=self.prev_t,
+        )
+        self._attach_breadcrumbs()
+
+    def record_crumb(self):
+        """Append a breadcrumb if tracking is on, we're on a body surface, and
+        we've moved far enough since the last crumb. Call after recompute()."""
+        s = self.nav_state
+        cont = s.get("container") if s else None
+        if not (self.tracking and cont and cont.get("is_body") and s.get("latitude") is not None):
+            return
+        name, lat, lon = cont["name"], s["latitude"], s["longitude"]
+        if self.path and self.path[-1]["container"] == name:
+            radius = cont.get("body_radius_m") or 1.0
+            last = self.path[-1]
+            if nav_core.surface_distance_m(last["lat"], last["lon"], lat, lon, radius) < PATH_MIN_MOVE_M:
+                return
+        self.path.append({"lat": lat, "lon": lon, "container": name})
+        if len(self.path) > PATH_MAX:
+            del self.path[: len(self.path) - PATH_MAX]
+        self._attach_breadcrumbs()
+
+    def _attach_breadcrumbs(self):
+        """Expose the tracking flag + the trail for the *current* container
+        (crumbs on other bodies aren't drawable on the local map)."""
+        if self.nav_state is None:
+            return
+        cont = self.nav_state.get("container")
+        cur = cont["name"] if cont else None
+        self.nav_state["tracking"] = self.tracking
+        self.nav_state["path"] = (
+            [{"lat": c["lat"], "lon": c["lon"]} for c in self.path if c["container"] == cur]
+            if cur else []
         )
 
     async def broadcast(self):
@@ -239,12 +305,13 @@ async def post_position(body: PositionIn):
             pending = state.capture_pending
             state.capture_pending = None
             owner = state.owner or {}
-            if pending["kind"] == "node":
-                _capture_node(new_pos, now, pending, owner)
+            if pending["kind"] == "observation":
+                _capture_observation(new_pos, now, pending, owner)
             else:
                 _capture_poi(new_pos, now, pending, owner)
 
         state.recompute()
+        state.record_crumb()
         await state.broadcast()
     return {"ok": True}
 
@@ -272,28 +339,26 @@ def _capture_poi(pos_m, now, pending, owner):
     }
 
 
-def _capture_node(pos_m, now, pending, owner):
-    next_id = max(
-        (n["id"] for n in resource_nodes), default=nav_core.RESOURCE_ID_START - 1
-    ) + 1
-    node = nav_core.resource_node_from_position(
-        nav, pos_m, now, pending["ore"], pending["band"], next_id,
+def _capture_observation(pos_m, now, pending, owner):
+    category = pending["category"]
+    items = observations[category]
+    # Monotonic across all categories -> unique, and never reuses a deleted id.
+    next_id = state.next_observation_id()
+    obs = nav_core.observation_from_position(
+        nav, pos_m, now, category, pending["data"], next_id,
         biome=pending.get("biome"), note=pending.get("note"),
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
     )
-    resource_nodes.append(nav_core.resource_node_to_dict(node))
+    items.append(nav_core.observation_to_dict(obs))
     try:
-        _save_json_list(RESOURCE_NODE_FILE, resource_nodes)
+        _save_json_list(OBSERVATION_FILES[category], items)
     except OSError as exc:
-        print(f"[sc-nav] resource node save failed: {exc}")
-    nav.nodes[node.id] = node
+        print(f"[sc-nav] observation save failed: {exc}")
+    nav.observations[obs.id] = obs
     state.last_capture = {
-        "kind": "resource", "id": node.id, "name": f"{node.ore} (B{node.band})",
-        "ore": node.ore, "band": node.band, "quality": node.quality,
-        "container": node.container_name or "Space", "system": node.system,
-        "latitude": node.latitude, "longitude": node.longitude,
-        "owner_handle": node.owner_handle,
-        "captured_at": node.observed_at,
+        **nav_core._observation_base(obs),
+        "latitude": obs.latitude, "longitude": obs.longitude,
+        "captured_at": obs.observed_at,
     }
 
 
@@ -320,14 +385,17 @@ async def get_pois(
 
 @app.post("/api/destination")
 async def set_destination(body: DestinationIn):
-    target = nav.pois.get(body.poi_id) or nav.nodes.get(body.poi_id)
+    target = nav.pois.get(body.poi_id) or nav.observations.get(body.poi_id)
     if target is None:
         raise HTTPException(status_code=404, detail="unknown poi_id")
     async with state.lock:
         state.destination_id = body.poi_id
         state.recompute()
         await state.broadcast()
-    name = getattr(target, "name", None) or f"{target.ore} (B{target.band})"
+    if isinstance(target, nav_core.Observation):
+        name = nav_core.OBSERVATION_CATEGORIES[target.category]["display_name"](target.data)
+    else:
+        name = target.name
     return {"ok": True, "destination": {"id": body.poi_id, "name": name}}
 
 
@@ -346,8 +414,25 @@ async def capture_start(body: CaptureIn):
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     async with state.lock:
+        if state.capture_pending is not None:
+            raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
         state.capture_pending = {
             "kind": "poi", "name": name, "type": body.type.strip() or "Custom"
+        }
+        await state.broadcast()
+    return {"ok": True, "capture": state.capture_status()}
+
+
+async def _arm_observation(category, data, biome, note):
+    async with state.lock:
+        if state.capture_pending is not None:
+            raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
+        state.capture_pending = {
+            "kind": "observation",
+            "category": category,
+            "data": data,
+            "biome": (biome or "").strip() or None,
+            "note": (note or "").strip() or None,
         }
         await state.broadcast()
     return {"ok": True, "capture": state.capture_status()}
@@ -358,16 +443,17 @@ async def capture_node_start(body: NodeCaptureIn):
     ore = body.ore.strip()
     if not ore:
         raise HTTPException(status_code=400, detail="ore is required")
-    async with state.lock:
-        state.capture_pending = {
-            "kind": "node",
-            "ore": ore,
-            "band": max(1, min(8, body.band)),
-            "biome": (body.biome or "").strip() or None,
-            "note": (body.note or "").strip() or None,
-        }
-        await state.broadcast()
-    return {"ok": True, "capture": state.capture_status()}
+    return await _arm_observation(
+        "resource", {"ore": ore, "band": max(1, min(8, body.band))}, body.biome, body.note
+    )
+
+
+@app.post("/api/capture/wildlife")
+async def capture_wildlife_start(body: WildlifeCaptureIn):
+    species = body.species.strip()
+    if not species:
+        raise HTTPException(status_code=400, detail="species is required")
+    return await _arm_observation("wildlife", {"species": species}, body.biome, body.note)
 
 
 @app.post("/api/capture/cancel")
@@ -406,33 +492,53 @@ async def delete_custom_poi(poi_id: int):
     return {"ok": True}
 
 
-@app.get("/api/nodes")
-async def get_nodes(
-    q: str = "", system: str | None = None, container: str | None = None,
-    ore: str | None = None, owner_id: int | None = None, limit: int = 100,
+@app.get("/api/observations")
+async def get_observations(
+    q: str = "", category: str | None = None, system: str | None = None,
+    container: str | None = None, type: str | None = None,
+    owner_id: int | None = None, limit: int = 100,
 ):
-    return nav_core.search_nodes(
-        nav, query=q, system=system, container=container, ore=ore,
-        owner_id=owner_id, limit=min(limit, 500),
+    return nav_core.search_observations(
+        nav, query=q, category=category, system=system, container=container,
+        type_value=type, owner_id=owner_id, limit=min(limit, 500),
     )
 
 
-@app.delete("/api/nodes/{node_id}")
-async def delete_node(node_id: int):
+@app.delete("/api/observations/{obs_id}")
+async def delete_observation(obs_id: int):
     async with state.lock:
-        idx = next((i for i, n in enumerate(resource_nodes) if n["id"] == node_id), None)
-        if idx is None:
-            raise HTTPException(status_code=404, detail="unknown resource node")
-        resource_nodes.pop(idx)
-        _save_json_list(RESOURCE_NODE_FILE, resource_nodes)
-        nav.nodes.pop(node_id, None)
-        if state.destination_id == node_id:
-            state.destination_id = None
-        if state.last_capture and state.last_capture["id"] == node_id:
-            state.last_capture = None
-        state.recompute()
+        for category, items in observations.items():
+            idx = next((i for i, o in enumerate(items) if o["id"] == obs_id), None)
+            if idx is None:
+                continue
+            items.pop(idx)
+            _save_json_list(OBSERVATION_FILES[category], items)
+            nav.observations.pop(obs_id, None)
+            if state.destination_id == obs_id:
+                state.destination_id = None
+            if state.last_capture and state.last_capture.get("id") == obs_id:
+                state.last_capture = None
+            state.recompute()
+            await state.broadcast()
+            return {"ok": True}
+        raise HTTPException(status_code=404, detail="unknown observation")
+
+
+@app.post("/api/path/{action}")
+async def path_control(action: str):
+    if action not in ("start", "stop", "clear"):
+        raise HTTPException(status_code=404, detail="unknown path action")
+    async with state.lock:
+        if action == "start":
+            state.tracking = True
+        elif action == "stop":
+            state.tracking = False
+        else:  # clear
+            state.path.clear()
+        if state.nav_state is not None:
+            state._attach_breadcrumbs()
         await state.broadcast()
-    return {"ok": True}
+    return {"ok": True, "tracking": state.tracking, "crumbs": len(state.path)}
 
 
 @app.post("/api/refresh")
@@ -441,13 +547,13 @@ async def refresh_data():
     global nav
     fresh = await asyncio.to_thread(load_nav_data)
     nav_core.merge_custom_pois(fresh, custom_pois)
-    nav_core.merge_resource_nodes(fresh, resource_nodes)
+    merge_all_observations(fresh)
     async with state.lock:
         nav = fresh
         if (
             state.destination_id is not None
             and state.destination_id not in nav.pois
-            and state.destination_id not in nav.nodes
+            and state.destination_id not in nav.observations
         ):
             state.destination_id = None
         state.recompute()
@@ -457,7 +563,7 @@ async def refresh_data():
         "data": data_info,
         "containers": len(nav.containers),
         "pois": len(nav.pois),
-        "nodes": len(nav.nodes),
+        "observations": len(nav.observations),
     }
 
 
@@ -467,7 +573,7 @@ async def health():
         "ok": True,
         "containers": len(nav.containers),
         "pois": len(nav.pois),
-        "nodes": len(nav.nodes),
+        "observations": len(nav.observations),
         "handles": len(handles.by_handle),
         "has_position": state.pos is not None,
         "data": data_info,

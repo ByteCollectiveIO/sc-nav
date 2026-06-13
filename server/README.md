@@ -152,33 +152,51 @@ contributor's history intact. When friends each run their own watcher with
 their own handle, attribution is automatic. The UI shows who each entry is
 "by" and lets you filter the Nearby table by contributor.
 
-## Resource nodes
+## Observations (resource nodes + wildlife)
 
-Resource nodes are stored separately from custom POIs (`resource_nodes.json`)
-as an **append-only observation log** — because deposits are ephemeral and
-respawn, each capture is a *sighting*, not an editable entity, which is what
-makes later clustering / heatmap analysis possible. Each record holds ore,
-band (1–8), quality (auto-derived from band: 1 Lowest, 2–4 Low-Mid, 5–6
-Good/High, 7 Very High, 8 Perfect), position, auto-recorded altitude, optional
-biome/note, and the contributor. Capture flow mirrors POIs (Add Resource Node
-panel → arm → `/showlocation` at the node). The Nearby table combines POIs and
-nodes with a POI / Resource / Both toggle.
+User-recorded *observations* are an **append-only log** — because the things
+they record are ephemeral and respawn, each capture is a sighting, not an
+editable entity, which is what makes later clustering / heatmap analysis
+possible. Observations share one capture/store/search/summary path keyed by a
+`category` (adding a category is one entry in `nav_core.OBSERVATION_CATEGORIES`
+plus a capture endpoint — no new store/search/summary code):
+
+- **resource** (`resource_nodes.json`): ore, band 1–8, quality auto-derived
+  from band (1 Lowest, 2–4 Low-Mid, 5–6 Good/High, 7 Very High, 8 Perfect).
+- **wildlife** (`wildlife.json`): species; no quality.
+
+Both also record position, auto-captured altitude, optional biome/note, and
+the contributor. Capture mirrors POIs (Add … panel → arm → `/showlocation`).
+The Nearby table and map combine POIs + observations with an All / POIs /
+Resources / Wildlife filter. Observation IDs share one range (≥ 2,000,000).
+
+## Breadcrumb trail + map
+
+The UI has a north-up local map (no terrain — a metric grid centered on you)
+showing your position + heading, logged POIs/resources/wildlife as toggleable
+layers, and a breadcrumb trail. **Start / Stop / Clear Path** control tracking;
+while on, each `/showlocation` drops a crumb if you're inside a planet/moon
+container and have moved ≥ 250 m since the last (gated off in space). The trail
+is **in-memory and session-scoped** — it's not persisted and is lost on a
+server restart, by design. Crumbs are capped at 5000 points.
 
 ## API
 
 | Route | Purpose |
 |---|---|
 | `POST /api/position` | watcher ingest: `{"x","y","z","handle"}` meters, system frame |
-| `GET /api/state` | latest nav state (`nearest_pois`, `nearest_nodes`, destination, capture) |
+| `GET /api/state` | latest nav state (`nearest_pois`, `nearest_observations`, `path`, `tracking`, destination, capture) |
 | `GET /api/pois?q=&system=&container=&type=&owner_id=&limit=` | POI search |
-| `GET /api/nodes?q=&system=&container=&ore=&owner_id=&limit=` | resource-node search |
+| `GET /api/observations?q=&category=&system=&container=&type=&owner_id=&limit=` | observation search (resource/wildlife) |
 | `GET /api/handles` | contributor registry (handle → PlayerID) |
-| `POST /api/destination {"poi_id": N}` / `DELETE /api/destination` | set/clear destination (POI or node id) |
-| `POST /api/capture/start {"name","type"}` | arm custom-POI capture of next position |
+| `POST /api/destination {"poi_id": N}` / `DELETE /api/destination` | set/clear destination (POI or observation id) |
+| `POST /api/capture/start {"name","type"}` | arm custom-POI capture |
 | `POST /api/capture/node {"ore","band","biome","note"}` | arm resource-node capture |
+| `POST /api/capture/wildlife {"species","biome","note"}` | arm wildlife capture |
 | `POST /api/capture/cancel` | cancel armed capture |
+| `POST /api/path/{start,stop,clear}` | breadcrumb tracking control |
 | `GET /api/custom_pois` / `DELETE /api/custom_pois/{id}` | list/delete custom POIs |
-| `DELETE /api/nodes/{id}` | delete a resource-node observation |
+| `DELETE /api/observations/{id}` | delete an observation (resource or wildlife) |
 | `WS /ws` | state pushed on connect and on every update |
 | `POST /api/refresh` | re-fetch dataset from starmap.space |
 | `GET /api/health` | liveness + dataset counts + data source |

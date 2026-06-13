@@ -36,6 +36,6 @@ both (they're common) is one commit, never two repos to keep in sync.
   those two files — `git checkout poi/` to discard the churn. In Docker the
   cache lives in a named volume, so the repo copy is never touched.
 - Per-deployment data the server writes (`poi/custom_pois.json`,
-  `poi/resource_nodes.json`, `poi/handles.json`, `watcher/watcher_config.json`)
-  is gitignored — it's user data, not source.
+  `poi/resource_nodes.json`, `poi/wildlife.json`, `poi/handles.json`,
+  `watcher/watcher_config.json`) is gitignored — it's user data, not source.
 - Tests: `python3 server/test_nav_core.py` and `python3 watcher/test_parse.py`.

@@ -77,18 +77,21 @@ class Poi:
 
 
 @dataclass
-class ResourceNode:
-    """One *observation* of an ephemeral mineable deposit.
+class Observation:
+    """One *sighting* of an ephemeral, user-recorded thing at a location.
 
-    Stored as an append-only log (not an editable entity) because nodes
-    respawn pseudo-randomly — the value is in the history of where/what was
-    seen, which feeds clustering and heatmaps later. Position is stored in the
-    parent body's rotating frame, identical to POIs."""
+    Stored as an append-only log (not an editable entity) because the things
+    it records respawn pseudo-randomly — the value is the history of where/what
+    was seen, which feeds clustering and heatmaps later. Position is stored in
+    the parent body's rotating frame, identical to POIs.
+
+    `category` selects the kind ("resource", "wildlife", …); `data` holds the
+    category-specific fields (resource: ore/band/quality; wildlife: species).
+    Common geo/owner/biome/note/timestamp fields are shared across categories
+    so one capture/serialize/search/summary path serves them all."""
 
     id: int
-    ore: str
-    band: int                        # 1-8
-    quality: str                     # label derived from band
+    category: str
     system: str
     container_name: str | None
     local_km: tuple[float, float, float] | None
@@ -101,18 +104,19 @@ class ResourceNode:
     owner_id: int | None
     owner_handle: str | None
     observed_at: str                 # ISO timestamp of the sighting
+    data: dict                       # category-specific fields
 
 
 @dataclass
 class NavData:
     containers: dict[tuple[str, str], Container] = field(default_factory=dict)
     pois: dict[int, Poi] = field(default_factory=dict)
-    nodes: dict[int, ResourceNode] = field(default_factory=dict)
+    observations: dict[int, Observation] = field(default_factory=dict)
     systems: list[str] = field(default_factory=list)
 
     def container_of(self, entity) -> Container | None:
-        """Parent container of a Poi or ResourceNode (both carry
-        container_name + system)."""
+        """Parent container of any positioned entity (Poi or Observation —
+        both carry container_name + system)."""
         if entity.container_name is None:
             return None
         return self.containers.get((entity.system, entity.container_name))
@@ -306,8 +310,8 @@ def _geo_fields(nav, entity, t, pos_m, player_lat, player_lon, surface_radius_m)
     return out
 
 
-def _poi_summary(nav, poi, t, pos_m, player_lat=None, player_lon=None, surface_radius_m=None):
-    out = {
+def _poi_base(poi) -> dict:
+    return {
         "kind": "poi",
         "id": poi.id,
         "name": poi.name,
@@ -319,29 +323,39 @@ def _poi_summary(nav, poi, t, pos_m, player_lat=None, player_lon=None, surface_r
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
     }
+
+
+def _observation_base(obs) -> dict:
+    cat = OBSERVATION_CATEGORIES[obs.category]
+    # Flatten category data first (ore/band/quality or species for the UI),
+    # then set the canonical fields so a data key can never clobber them.
+    out = dict(obs.data)
+    out.update({
+        "kind": obs.category,
+        "id": obs.id,
+        "name": cat["display_name"](obs.data),
+        "type": obs.data.get(cat["type_field"]),
+        "system": obs.system,
+        "container": obs.container_name or "Space",
+        "biome": obs.biome,
+        "note": obs.note,
+        "owner_id": obs.owner_id,
+        "owner_handle": obs.owner_handle,
+        "observed_at": obs.observed_at,
+        "custom": True,
+    })
+    return out
+
+
+def _poi_summary(nav, poi, t, pos_m, player_lat=None, player_lon=None, surface_radius_m=None):
+    out = _poi_base(poi)
     out.update(_geo_fields(nav, poi, t, pos_m, player_lat, player_lon, surface_radius_m))
     return out
 
 
-def _node_summary(nav, node, t, pos_m, player_lat=None, player_lon=None, surface_radius_m=None):
-    out = {
-        "kind": "resource",
-        "id": node.id,
-        "name": f"{node.ore} (B{node.band})",
-        "type": node.ore,
-        "ore": node.ore,
-        "band": node.band,
-        "quality": node.quality,
-        "system": node.system,
-        "container": node.container_name or "Space",
-        "biome": node.biome,
-        "note": node.note,
-        "owner_id": node.owner_id,
-        "owner_handle": node.owner_handle,
-        "observed_at": node.observed_at,
-        "custom": True,
-    }
-    out.update(_geo_fields(nav, node, t, pos_m, player_lat, player_lon, surface_radius_m))
+def _observation_summary(nav, obs, t, pos_m, player_lat=None, player_lon=None, surface_radius_m=None):
+    out = _observation_base(obs)
+    out.update(_geo_fields(nav, obs, t, pos_m, player_lat, player_lon, surface_radius_m))
     return out
 
 
@@ -393,12 +407,19 @@ def compute_state(
         )[:nearest_count]
 
     nearest_pois = _nearest(nav.pois.values(), _poi_summary)
-    nearest_nodes = _nearest(nav.nodes.values(), _node_summary)
+    # Per-category so a dense category (e.g. resources) can't starve a sparse
+    # one (e.g. wildlife) out of the merged list.
+    by_cat = {}
+    for o in nav.observations.values():
+        by_cat.setdefault(o.category, []).append(o)
+    nearest_observations = []
+    for cat in OBSERVATION_CATEGORIES:
+        nearest_observations += _nearest(by_cat.get(cat, []), _observation_summary)
 
     destination = None
     dest_entity = nav.pois.get(destination_id)
     if dest_entity is None:
-        dest_entity = nav.nodes.get(destination_id)
+        dest_entity = nav.observations.get(destination_id)
     if dest_entity is not None:
         # Same body only if both name AND system match — names can repeat
         # across the multi-system dataset (matches _in_scope's guard).
@@ -409,7 +430,7 @@ def compute_state(
         )
         # Pick the summarizer from the entity we actually resolved, not from a
         # second id lookup that could disagree if an id ever exists in both.
-        summarize = _node_summary if isinstance(dest_entity, ResourceNode) else _poi_summary
+        summarize = _observation_summary if isinstance(dest_entity, Observation) else _poi_summary
         destination = summarize(
             nav,
             dest_entity,
@@ -438,6 +459,8 @@ def compute_state(
                 "name": container.name,
                 "type": container.type,
                 "distance_from_center_m": dist3(pos_m, container.pos),
+                "body_radius_m": container.body_radius,
+                "is_body": container.is_body,
             }
             if container
             else None
@@ -448,7 +471,7 @@ def compute_state(
         "speed_ms": speed_ms,
         "destination": destination,
         "nearest_pois": nearest_pois,
-        "nearest_nodes": nearest_nodes,
+        "nearest_observations": nearest_observations,
     }
 
 
@@ -544,15 +567,20 @@ def poi_from_custom_dict(d: dict) -> Poi:
 
 def merge_custom_pois(nav: NavData, custom_dicts: list[dict]) -> None:
     for d in custom_dicts:
-        poi = poi_from_custom_dict(d)
+        try:
+            poi = poi_from_custom_dict(d)
+        except (KeyError, ValueError, TypeError) as exc:
+            print(f"[sc-nav] skipping bad custom POI record: {exc}")
+            continue
         nav.pois[poi.id] = poi
 
 
 # ---------------------------------------------------------------------------
-# Resource nodes (ephemeral mineable deposits — observation log)
+# Observations (ephemeral user-recorded things — append-only log per category)
 # ---------------------------------------------------------------------------
 
-RESOURCE_ID_START = 2_000_000
+# Shared id space across all observation categories, above custom POIs (1M).
+OBSERVATION_ID_START = 2_000_000
 
 
 def quality_for_band(band: int) -> str:
@@ -568,26 +596,61 @@ def quality_for_band(band: int) -> str:
     return "Perfect"
 
 
-def resource_node_from_position(
+def _normalize_resource(data: dict) -> dict:
+    data = dict(data)
+    band = max(1, min(8, int(data.get("band") or 1)))
+    data["band"] = band
+    data["quality"] = quality_for_band(band)       # always derived from band
+    data["ore"] = (data.get("ore") or "Unknown")
+    return data
+
+
+def _normalize_wildlife(data: dict) -> dict:
+    data = dict(data)
+    data["species"] = (data.get("species") or "Unknown")
+    return data
+
+
+# Per-category behavior. Adding a category is one entry here plus a capture
+# endpoint — no new dataclass/store/search/summary code.
+OBSERVATION_CATEGORIES = {
+    "resource": {
+        "file": "resource_nodes.json",
+        "type_field": "ore",
+        "search_fields": ("ore",),
+        "normalize": _normalize_resource,
+        "display_name": lambda d: f"{d.get('ore')} (B{d.get('band')})",
+    },
+    "wildlife": {
+        "file": "wildlife.json",
+        "type_field": "species",
+        "search_fields": ("species",),
+        "normalize": _normalize_wildlife,
+        "display_name": lambda d: d.get("species") or "Wildlife",
+    },
+}
+
+
+def observation_from_position(
     nav: NavData,
     pos_m,
     t_unix: float,
-    ore: str,
-    band: int,
-    node_id: int,
+    category: str,
+    data: dict,
+    obs_id: int,
     biome: str | None = None,
     note: str | None = None,
     owner_id: int | None = None,
     owner_handle: str | None = None,
     observed_at: str | None = None,
-) -> ResourceNode:
-    band = max(1, min(8, int(band)))
+) -> Observation:
+    if category not in OBSERVATION_CATEGORIES:
+        raise ValueError(f"unknown observation category: {category}")
+    data = OBSERVATION_CATEGORIES[category]["normalize"](data)
     system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix)
-    return ResourceNode(
-        id=node_id,
-        ore=ore,
-        band=band,
-        quality=quality_for_band(band),
+    return Observation(
+        id=obs_id,
+        category=category,
         system=system,
         container_name=cname,
         local_km=local,
@@ -600,37 +663,48 @@ def resource_node_from_position(
         owner_id=owner_id,
         owner_handle=owner_handle,
         observed_at=observed_at or datetime.now(timezone.utc).isoformat(),
+        data=data,
     )
 
 
-def resource_node_to_dict(node: ResourceNode) -> dict:
+def observation_to_dict(obs: Observation) -> dict:
     return {
-        "id": node.id,
-        "ore": node.ore,
-        "band": node.band,
-        "quality": node.quality,
-        "system": node.system,
-        "container": node.container_name,
-        "local_km": list(node.local_km) if node.local_km else None,
-        "global_m": list(node.global_m) if node.global_m else None,
-        "latitude": node.latitude,
-        "longitude": node.longitude,
-        "height_m": node.height_m,
-        "biome": node.biome,
-        "note": node.note,
-        "owner_id": node.owner_id,
-        "owner_handle": node.owner_handle,
-        "observed_at": node.observed_at,
+        "id": obs.id,
+        "category": obs.category,
+        "system": obs.system,
+        "container": obs.container_name,
+        "local_km": list(obs.local_km) if obs.local_km else None,
+        "global_m": list(obs.global_m) if obs.global_m else None,
+        "latitude": obs.latitude,
+        "longitude": obs.longitude,
+        "height_m": obs.height_m,
+        "biome": obs.biome,
+        "note": obs.note,
+        "owner_id": obs.owner_id,
+        "owner_handle": obs.owner_handle,
+        "observed_at": obs.observed_at,
+        "data": obs.data,
     }
 
 
-def node_from_dict(d: dict) -> ResourceNode:
-    band = int(d.get("band") or 1)
-    return ResourceNode(
+# Category fields that pre-generalization records stored at the top level
+# instead of under "data" (resource nodes had ore/band/quality flat).
+_LEGACY_FLAT_FIELDS = ("ore", "band", "quality", "species")
+
+
+def observation_from_dict(d: dict, category: str | None = None) -> Observation:
+    category = d.get("category") or category
+    if category not in OBSERVATION_CATEGORIES:
+        raise ValueError(f"unknown observation category: {category!r}")
+    # Back-compat: if there's no "data" sub-dict, recover the category fields
+    # from the legacy flat layout so old resource_nodes.json isn't reset to
+    # Unknown/B1/Lowest on load.
+    raw = d.get("data")
+    if raw is None:
+        raw = {k: d[k] for k in _LEGACY_FLAT_FIELDS if k in d}
+    return Observation(
         id=int(d["id"]),
-        ore=d.get("ore") or "Unknown",
-        band=band,
-        quality=d.get("quality") or quality_for_band(band),
+        category=category,
         system=d.get("system") or "Unknown",
         container_name=d.get("container"),
         local_km=tuple(d["local_km"]) if d.get("local_km") else None,
@@ -643,13 +717,25 @@ def node_from_dict(d: dict) -> ResourceNode:
         owner_id=d.get("owner_id"),
         owner_handle=d.get("owner_handle"),
         observed_at=d.get("observed_at") or "",
+        data=OBSERVATION_CATEGORIES[category]["normalize"](raw),
     )
 
 
-def merge_resource_nodes(nav: NavData, node_dicts: list[dict]) -> None:
-    for d in node_dicts:
-        node = node_from_dict(d)
-        nav.nodes[node.id] = node
+def merge_observations(nav: NavData, dicts: list[dict], category: str | None = None) -> None:
+    for d in dicts:
+        try:
+            obs = observation_from_dict(d, category)
+        except (KeyError, ValueError, TypeError) as exc:
+            # One malformed/unknown-category record must not abort startup.
+            print(f"[sc-nav] skipping bad observation record: {exc}")
+            continue
+        nav.observations[obs.id] = obs
+
+
+def surface_distance_m(lat1, lon1, lat2, lon2, radius_m) -> float:
+    """Great-circle distance only (drops the bearing) — used for breadcrumb
+    move-distance gating."""
+    return great_circle(lat1, lon1, lat2, lon2, radius_m)[0]
 
 
 def search_pois(
@@ -676,69 +762,38 @@ def search_pois(
         if q and q not in name:
             continue
         rank = 0 if name.startswith(q) else 1
-        results.append(
-            (
-                rank,
-                len(name),
-                {
-                    "kind": "poi",
-                    "id": p.id,
-                    "name": p.name,
-                    "type": p.type,
-                    "system": p.system,
-                    "container": p.container_name or "Space",
-                    "qt_marker": p.qt_marker,
-                    "custom": p.custom,
-                    "owner_id": p.owner_id,
-                    "owner_handle": p.owner_handle,
-                },
-            )
-        )
+        results.append((rank, len(name), _poi_base(p)))
     results.sort(key=lambda r: (r[0], r[1], r[2]["name"]))
     return [r[2] for r in results[:limit]]
 
 
-def search_nodes(
+def search_observations(
     nav: NavData,
     query: str = "",
+    category: str | None = None,
     system: str | None = None,
     container: str | None = None,
-    ore: str | None = None,
+    type_value: str | None = None,
     owner_id: int | None = None,
     limit: int = 50,
 ) -> list[dict]:
     q = query.strip().lower()
     results = []
-    for n in nav.nodes.values():
-        if system and n.system != system:
+    for obs in nav.observations.values():
+        if category and obs.category != category:
             continue
-        if container and (n.container_name or "Space") != container:
+        if system and obs.system != system:
             continue
-        if ore and n.ore != ore:
+        if container and (obs.container_name or "Space") != container:
             continue
-        if owner_id is not None and n.owner_id != owner_id:
+        cat = OBSERVATION_CATEGORIES[obs.category]
+        if type_value and obs.data.get(cat["type_field"]) != type_value:
             continue
-        if q and q not in n.ore.lower():
+        if owner_id is not None and obs.owner_id != owner_id:
             continue
-        results.append(
-            {
-                "kind": "resource",
-                "id": n.id,
-                "name": f"{n.ore} (B{n.band})",
-                "type": n.ore,
-                "ore": n.ore,
-                "band": n.band,
-                "quality": n.quality,
-                "system": n.system,
-                "container": n.container_name or "Space",
-                "biome": n.biome,
-                "note": n.note,
-                "owner_id": n.owner_id,
-                "owner_handle": n.owner_handle,
-                "observed_at": n.observed_at,
-                "custom": True,
-            }
-        )
-    # newest observations first
+        if q and not any(q in str(obs.data.get(f, "")).lower() for f in cat["search_fields"]):
+            continue
+        results.append(_observation_base(obs))
+    # newest sightings first
     results.sort(key=lambda r: r["observed_at"], reverse=True)
     return results[:limit]

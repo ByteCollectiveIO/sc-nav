@@ -16,4 +16,5 @@ __pycache__/
 watcher/watcher_config.json
 poi/custom_pois.json
 poi/resource_nodes.json
+poi/wildlife.json
 poi/handles.json

@@ -235,69 +235,157 @@ class CustomPoiTests(unittest.TestCase):
         self.assertEqual(back.owner_handle, "Pilot7")
 
 
-class ResourceNodeTests(unittest.TestCase):
+def _obs(nav, ref_name, t, category, data, obs_id, **kw):
+    ref = [p for p in nav.pois.values()
+           if p.system == "Stanton" and p.container_name == ref_name][0]
+    pos = poi_global_m(nav, ref, t)
+    return ref, pos, nav_core.observation_from_position(nav, pos, t, category, data, obs_id, **kw)
+
+
+class ObservationTests(unittest.TestCase):
     def test_quality_mapping(self):
         cases = {1: "Lowest", 2: "Low to Mid", 4: "Low to Mid",
                  5: "Good / High", 6: "Good / High", 7: "Very High", 8: "Perfect"}
         for band, label in cases.items():
             self.assertEqual(nav_core.quality_for_band(band), label)
-        # out-of-range clamps
         self.assertEqual(nav_core.quality_for_band(0), "Lowest")
         self.assertEqual(nav_core.quality_for_band(99), "Perfect")
 
-    def test_node_capture_and_geometry(self):
+    def test_resource_capture_geometry_and_derived_quality(self):
         t = time.time()
-        ref = surface_pois("Daymar")[0]
-        pos = poi_global_m(NAV, ref, t)
-        node = nav_core.resource_node_from_position(
-            NAV, pos, t, "Quantanium", 7, nav_core.RESOURCE_ID_START,
-            biome="Desert", note="big rock", owner_id=3, owner_handle="Miner3",
-        )
-        self.assertEqual(node.quality, "Very High")
-        self.assertEqual(node.container_name, "Daymar")
-        self.assertEqual(node.owner_handle, "Miner3")
-        self.assertIsNotNone(node.height_m)  # altitude auto-recorded
-        self.assertAlmostEqual(node.latitude, ref.latitude, places=4)
-        # resolves back to the same global position later in the rotation
-        g = poi_global_m(NAV, node, t + 9999)
+        ref, pos, obs = _obs(NAV, "Daymar", t, "resource", {"ore": "Quantanium", "band": 7},
+                             nav_core.OBSERVATION_ID_START, biome="Desert", owner_handle="Miner3")
+        self.assertEqual(obs.category, "resource")
+        self.assertEqual(obs.data["quality"], "Very High")   # derived from band
+        self.assertEqual(obs.container_name, "Daymar")
+        self.assertIsNotNone(obs.height_m)                   # altitude auto-recorded
+        self.assertAlmostEqual(obs.latitude, ref.latitude, places=4)
+        g = poi_global_m(NAV, obs, t + 9999)
         ref_g = poi_global_m(NAV, ref, t + 9999)
         self.assertLess(nav_core.dist3(g, ref_g), 1.0)
 
-    def test_node_dict_round_trip_and_state(self):
+    def test_wildlife_has_no_quality(self):
         t = time.time()
-        ref = surface_pois("Yela")[0]
-        pos = poi_global_m(NAV, ref, t)
-        node = nav_core.resource_node_from_position(
-            NAV, pos, t, "Bexalite", 5, nav_core.RESOURCE_ID_START + 1
-        )
-        back = nav_core.node_from_dict(nav_core.resource_node_to_dict(node))
-        self.assertEqual(back, node)
+        _ref, _pos, obs = _obs(NAV, "Daymar", t, "wildlife", {"species": "Kopion"},
+                               nav_core.OBSERVATION_ID_START + 5, biome="Desert")
+        self.assertEqual(obs.category, "wildlife")
+        self.assertEqual(obs.data, {"species": "Kopion"})
+        self.assertNotIn("quality", obs.data)
+        self.assertNotIn("band", obs.data)
+        base = nav_core._observation_base(obs)
+        self.assertEqual(base["kind"], "wildlife")
+        self.assertEqual(base["name"], "Kopion")
+        self.assertEqual(base["species"], "Kopion")
 
+    def test_dict_round_trip_both_categories(self):
+        t = time.time()
+        for i, (cat, data) in enumerate([("resource", {"ore": "Bexalite", "band": 5}),
+                                         ("wildlife", {"species": "Marok"})]):
+            _r, _p, obs = _obs(NAV, "Yela", t, cat, data, nav_core.OBSERVATION_ID_START + 10 + i)
+            back = nav_core.observation_from_dict(nav_core.observation_to_dict(obs))
+            self.assertEqual(back, obs)
+
+    def test_categories_kept_separate_in_state(self):
+        t = time.time()
         nav2 = load_data(DATA_DIR)
-        nav_core.merge_resource_nodes(nav2, [nav_core.resource_node_to_dict(node)])
+        ref, pos, r = _obs(nav2, "Yela", t, "resource", {"ore": "Gold", "band": 6}, 2000020)
+        _r2, _p2, w = _obs(nav2, "Yela", t, "wildlife", {"species": "Kopion"}, 2000021)
+        nav2.observations[r.id] = r
+        nav2.observations[w.id] = w
         state = compute_state(nav2, pos, t)
-        node_ids = [n["id"] for n in state["nearest_nodes"]]
-        self.assertIn(nav_core.RESOURCE_ID_START + 1, node_ids)
-        # POIs and nodes stay in separate buckets
-        self.assertNotIn(nav_core.RESOURCE_ID_START + 1,
-                         [p["id"] for p in state["nearest_pois"]])
+        kinds = {o["kind"] for o in state["nearest_observations"]}
+        ids = {o["id"] for o in state["nearest_observations"]}
+        self.assertEqual(kinds, {"resource", "wildlife"})
+        self.assertTrue({2000020, 2000021} <= ids)
+        # observations never leak into the POI bucket
+        self.assertFalse(ids & {p["id"] for p in state["nearest_pois"]})
 
-    def test_node_as_destination(self):
+    def test_observation_as_destination(self):
         t = time.time()
-        ref = surface_pois("Daymar")[0]
-        pos = poi_global_m(NAV, ref, t)
         nav2 = load_data(DATA_DIR)
-        node = nav_core.resource_node_from_position(
-            NAV, pos, t, "Gold", 3, nav_core.RESOURCE_ID_START + 2
-        )
-        nav2.nodes[node.id] = node
-        # stand 5 km away, moving, expect a destination block with bearing+eta
+        ref, pos, w = _obs(nav2, "Daymar", t, "wildlife", {"species": "Valakkar"}, 2000030)
+        nav2.observations[w.id] = w
         away = (pos[0] + 5000.0, pos[1], pos[2])
-        state = compute_state(nav2, away, t, destination_id=node.id,
+        state = compute_state(nav2, away, t, destination_id=w.id,
                               prev_pos=(away[0] + 5000, away[1], away[2]), prev_t=t - 10)
-        self.assertEqual(state["destination"]["kind"], "resource")
-        self.assertEqual(state["destination"]["quality"], "Low to Mid")
-        self.assertIsNotNone(state["destination"]["eta_s"])
+        self.assertEqual(state["destination"]["kind"], "wildlife")
+        self.assertEqual(state["destination"]["name"], "Valakkar")
+        self.assertIsNotNone(state["destination"]["distance_m"])
+
+    def test_search_filters_by_category(self):
+        nav2 = load_data(DATA_DIR)
+        t = time.time()
+        _r, _p, r = _obs(nav2, "Daymar", t, "resource", {"ore": "Titanium", "band": 4}, 2000040)
+        _r2, _p2, w = _obs(nav2, "Daymar", t, "wildlife", {"species": "Kopion"}, 2000041)
+        nav2.observations.update({r.id: r, w.id: w})
+        res = nav_core.search_observations(nav2, category="resource")
+        self.assertTrue(all(o["kind"] == "resource" for o in res))
+        wild = nav_core.search_observations(nav2, category="wildlife", type_value="Kopion")
+        self.assertEqual([o["id"] for o in wild], [2000041])
+
+
+    def test_legacy_flat_resource_record_preserves_fields(self):
+        # Pre-generalization resource_nodes.json stored ore/band/quality at the
+        # top level with no "data" key — these must survive a load.
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        ref = [p for p in nav2.pois.values()
+               if p.system == "Stanton" and p.container_name == "Daymar"][0]
+        pos = poi_global_m(nav2, ref, t)
+        legacy = {
+            "id": 2000099, "ore": "Taranite", "band": 6, "quality": "Good / High",
+            "system": "Stanton", "container": "Daymar",
+            "local_km": list(nav_core.global_to_local_km(nav2.container_of(ref), pos, t)),
+            "global_m": None, "latitude": ref.latitude, "longitude": ref.longitude,
+            "height_m": 100.0, "biome": "Desert", "note": "old",
+            "owner_id": 2, "owner_handle": "Legacy", "observed_at": "2026-01-01T00:00:00+00:00",
+            # NOTE: no "category", no "data"
+        }
+        nav_core.merge_observations(nav2, [legacy], "resource")
+        obs = nav2.observations[2000099]
+        self.assertEqual(obs.category, "resource")
+        self.assertEqual(obs.data["ore"], "Taranite")   # not "Unknown"
+        self.assertEqual(obs.data["band"], 6)            # not 1
+        self.assertEqual(obs.data["quality"], "Good / High")
+        self.assertEqual(obs.owner_handle, "Legacy")
+
+
+    def test_merge_skips_bad_records_without_aborting(self):
+        # One malformed/unknown-category record must not stop the rest loading.
+        nav2 = load_data(DATA_DIR)
+        t = time.time()
+        _r, _p, good = _obs(nav2, "Daymar", t, "resource", {"ore": "Gold", "band": 5}, 2000200)
+        good_d = nav_core.observation_to_dict(good)
+        bad_category = {"id": 2000201, "category": "made_up", "data": {}}
+        bad_missing_id = {"category": "resource", "data": {"ore": "X", "band": 1}}
+        nav_core.merge_observations(nav2, [bad_category, good_d, bad_missing_id])
+        self.assertIn(2000200, nav2.observations)          # good one loaded
+        self.assertNotIn(2000201, nav2.observations)        # unknown category skipped
+        # custom POIs likewise tolerate a junk record
+        before = len(nav2.pois)
+        nav_core.merge_custom_pois(nav2, [{"not": "a poi"}])
+        self.assertEqual(len(nav2.pois), before)
+
+    def test_observation_base_data_cannot_clobber_canonical_fields(self):
+        # A data dict carrying a reserved key must not override the real field.
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        _r, _p, obs = _obs(nav2, "Daymar", t, "wildlife", {"species": "Kopion"}, 2000210)
+        obs.data["container"] = "EVIL"      # hostile/legacy data key
+        obs.data["kind"] = "poi"
+        base = nav_core._observation_base(obs)
+        self.assertEqual(base["kind"], "wildlife")          # canonical wins
+        self.assertEqual(base["container"], "Daymar")
+
+
+class BreadcrumbHelperTests(unittest.TestCase):
+    def test_surface_distance_matches_great_circle(self):
+        # 1 degree of latitude on a 1000 km radius body
+        d = nav_core.surface_distance_m(0, 0, 1, 0, 1_000_000)
+        self.assertAlmostEqual(d, math.radians(1) * 1_000_000, places=3)
+        # zero move -> ~zero distance (well under the 250 m gate; acos rounding
+        # leaves a sub-meter residue, never exactly 0.0)
+        self.assertLess(nav_core.surface_distance_m(10, 20, 10, 20, 1_000_000), 1.0)
 
 
 class DestinationFixTests(unittest.TestCase):
@@ -333,8 +421,8 @@ class DestinationFixTests(unittest.TestCase):
         self.assertIsNone(state["destination"]["bearing_deg"])
 
     def test_destination_summarizer_matches_resolved_entity(self):
-        # If an id somehow exists in BOTH pois and nodes, the summarizer must
-        # follow the resolved entity (pois wins) and not crash.
+        # If an id somehow exists in BOTH pois and observations, the summarizer
+        # must follow the resolved entity (pois wins) and not crash.
         nav2 = load_data(DATA_DIR)
         t = time.time()
         ref = [p for p in nav2.pois.values()
@@ -342,9 +430,9 @@ class DestinationFixTests(unittest.TestCase):
         pos = poi_global_m(nav2, ref, t)
         shared_id = 1234567
         poi = nav_core.custom_poi_from_position(nav2, pos, t, "Dup", "Stash", shared_id)
-        node = nav_core.resource_node_from_position(nav2, pos, t, "Gold", 3, shared_id)
+        obs = nav_core.observation_from_position(nav2, pos, t, "resource", {"ore": "Gold", "band": 3}, shared_id)
         nav2.pois[shared_id] = poi
-        nav2.nodes[shared_id] = node
+        nav2.observations[shared_id] = obs
         state = compute_state(nav2, pos, t, destination_id=shared_id)
         # pois.get wins -> summarized as a POI, no AttributeError
         self.assertEqual(state["destination"]["kind"], "poi")
