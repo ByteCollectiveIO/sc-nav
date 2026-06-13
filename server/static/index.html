@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SC Nav</title>
+<style>
+  :root {
+    --bg: #0b0e13; --panel: #141a23; --panel2: #1b2330;
+    --text: #d8e1ee; --dim: #7b8a9e; --accent: #4fc3f7; --warn: #ffb74d;
+    --good: #66bb6a; --bad: #ef5350; --border: #243044; --node: #b39ddb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: 2px; color: var(--accent); }
+  #conn { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  #conn.ok { background: var(--good); }
+  #where { color: var(--dim); font-size: 13px; margin-left: auto; text-align: right; }
+  #where b { color: var(--text); }
+
+  main { padding: 14px; max-width: 1100px; margin: 0 auto; display: grid; gap: 14px; }
+
+  .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+  .readout .label { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
+  .readout .value { font-size: 30px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .readout .value small { font-size: 14px; color: var(--dim); }
+  .readout.primary .value { color: var(--accent); font-size: 44px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .panel h2 { margin: 0 0 8px; font-size: 12px; color: var(--dim); letter-spacing: 1px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+
+  #dest-card { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  #dest-name { font-size: 18px; color: var(--warn); }
+  #dest-meta { color: var(--dim); font-size: 13px; }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+
+  input.ti, select.sel { padding: 8px 10px; font: inherit; font-size: 13px;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  #search { width: 100%; }
+  input.ti:focus, select.sel:focus { outline: none; border-color: var(--accent); }
+
+  .custom-star { color: var(--warn); }
+  .node-dot { color: var(--node); }
+  .del { color: var(--bad); padding: 0 6px; cursor: pointer; }
+  .del:hover { font-weight: bold; }
+  .kind-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
+  .kind-poi { color: var(--accent); }
+  .kind-resource { color: var(--node); }
+  .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; border-right: 1px solid var(--border); }
+  .seg button:last-child { border-right: none; }
+  .seg button.on { background: var(--accent); color: #07101a; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--dim); font-weight: normal; font-size: 11px;
+    letter-spacing: 1px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 8px; border-bottom: 1px solid #1a2230; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--panel2); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--dim); }
+  .armed { color: var(--warn); padding: 4px 0; }
+  .credited { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  #waiting { text-align: center; color: var(--dim); padding: 30px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SC NAV</h1>
+  <div id="conn" title="server connection"></div>
+  <div id="where">waiting for /showlocation&hellip;</div>
+</header>
+
+<main>
+  <div id="waiting">No position yet. In game: open chat and run <b>/showlocation</b>.</div>
+
+  <div class="readouts" id="readouts" hidden>
+    <div class="readout"><div class="label">CURRENT CONTAINER</div><div class="value" id="r-cont" style="font-size:22px">—</div></div>
+    <div class="readout primary"><div class="label">BEARING</div><div class="value" id="r-bearing">—</div></div>
+    <div class="readout"><div class="label">DISTANCE</div><div class="value" id="r-dist">—</div></div>
+    <div class="readout"><div class="label">ETA</div><div class="value" id="r-eta">—</div></div>
+    <div class="readout"><div class="label">ALTITUDE</div><div class="value" id="r-alt">—</div></div>
+    <div class="readout"><div class="label">SPEED</div><div class="value" id="r-speed">—</div></div>
+    <div class="readout"><div class="label">LAT / LON</div><div class="value" id="r-latlon" style="font-size:18px">—</div></div>
+  </div>
+
+  <div class="panel" id="dest-panel" hidden>
+    <h2>DESTINATION</h2>
+    <div id="dest-card">
+      <span id="dest-name"></span>
+      <span id="dest-meta"></span>
+      <button id="dest-clear">clear</button>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="panel">
+      <h2>ADD CUSTOM POI</h2>
+      <div id="poi-form" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <input id="poi-name" class="ti" placeholder="name" style="flex:2; min-width:140px;">
+        <input id="poi-type" class="ti" list="poi-types" placeholder="type" style="flex:1; min-width:100px;">
+        <datalist id="poi-types">
+          <option>Outpost</option><option>Cave</option><option>Derelict</option>
+          <option>Wreck</option><option>Bunker</option><option>Stash</option>
+          <option>Scrapyard</option><option>Landmark</option><option>Custom</option>
+        </datalist>
+        <button id="poi-arm">capture next /showlocation</button>
+      </div>
+      <div id="poi-armed" class="armed" hidden>
+        <span id="poi-armed-label">ARMED</span> — run <b>/showlocation</b> at the spot
+        <button id="poi-cancel" style="margin-left:8px;">cancel</button>
+      </div>
+      <div id="poi-result" class="muted" hidden style="padding-top:6px;"></div>
+      <div class="credited" id="poi-credit"></div>
+    </div>
+
+    <div class="panel">
+      <h2>ADD RESOURCE NODE</h2>
+      <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="node-ore" class="ti" list="ore-types" placeholder="ore" style="flex:1; min-width:120px;">
+        <datalist id="ore-types">
+          <option>Quantanium</option><option>Bexalite</option><option>Taranite</option>
+          <option>Borase</option><option>Laranite</option><option>Agricium</option>
+          <option>Hephaestanite</option><option>Titanium</option><option>Diamond</option>
+          <option>Gold</option><option>Copper</option><option>Aluminum</option>
+          <option>Tungsten</option><option>Iron</option><option>Quartz</option>
+          <option>Corundum</option><option>Tin</option><option>Silicon</option>
+          <option>Beryl</option><option>Inert Materials</option>
+        </datalist>
+        <label class="muted" style="font-size:12px;">band
+          <select id="node-band" class="sel">
+            <option>1</option><option>2</option><option>3</option><option>4</option>
+            <option>5</option><option>6</option><option>7</option><option>8</option>
+          </select>
+        </label>
+        <span id="node-quality" class="muted" style="font-size:12px;">Lowest</span>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+        <input id="node-biome" class="ti" placeholder="biome (optional)" style="flex:1; min-width:110px;">
+        <input id="node-note" class="ti" placeholder="note (optional)" style="flex:2; min-width:120px;">
+        <button id="node-arm">capture next /showlocation</button>
+      </div>
+      <div id="node-armed" class="armed" hidden>
+        <span id="node-armed-label">ARMED</span> — run <b>/showlocation</b> at the node
+        <button id="node-cancel" style="margin-left:8px;">cancel</button>
+      </div>
+      <div id="node-result" class="muted" hidden style="padding-top:6px;"></div>
+      <div class="credited" id="node-credit"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="nearby-panel" hidden>
+    <h2>NEARBY <span class="muted">(click to set destination)</span></h2>
+    <div class="filter-bar">
+      <span class="seg" id="kind-seg">
+        <button data-kind="both" class="on">Both</button>
+        <button data-kind="poi">POIs</button>
+        <button data-kind="resource">Resources</button>
+      </span>
+      <select id="f-container" class="sel"><option value="">all containers</option></select>
+      <select id="f-owner" class="sel"><option value="">all contributors</option></select>
+      <input id="f-text" class="ti" placeholder="filter name / type / ore" style="flex:1; min-width:140px;">
+    </div>
+    <table>
+      <thead><tr>
+        <th>NAME</th><th>KIND</th><th>CONTAINER</th><th>DETAIL</th>
+        <th class="num">DISTANCE</th><th class="num">BEARING</th><th>BY</th><th></th>
+      </tr></thead>
+      <tbody id="nearby-body"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>SEARCH (whole dataset)</h2>
+    <input id="search" class="ti" placeholder="search POIs and resource nodes…" autocomplete="off">
+    <table id="search-results" hidden>
+      <thead><tr><th>NAME</th><th>KIND</th><th>DETAIL</th><th>CONTAINER</th><th>BY</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+// Escape untrusted strings (POI/ore/biome names, handles — friends contribute
+// these) before interpolating into innerHTML, to prevent stored XSS.
+const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
+
+const BAND_QUALITY = (b) =>
+  b <= 1 ? "Lowest" : b <= 4 ? "Low to Mid" : b <= 6 ? "Good / High" : b === 7 ? "Very High" : "Perfect";
+
+// ---------- formatting ----------
+function fmtDist(m) {
+  if (m == null) return "—";
+  if (m < 1000) return `${m.toFixed(0)}<small> m</small>`;
+  if (m < 1e6) return `${(m / 1000).toFixed(1)}<small> km</small>`;
+  if (m < 1e9) return `${(m / 1e6).toFixed(2)}<small> Mm</small>`;
+  return `${(m / 1e9).toFixed(3)}<small> Gm</small>`;
+}
+function fmtEta(s) {
+  if (s == null || !isFinite(s)) return "—";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h) return `${h}<small>h</small>${String(m).padStart(2, "0")}<small>m</small>`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+function fmtSpeed(ms) { return ms == null ? "—" : `${ms.toFixed(0)}<small> m/s</small>`; }
+function fmtBearing(deg) { return deg == null ? "—" : `${deg.toFixed(1)}<small>°</small>`; }
+
+function entLabel(e) {
+  const mark = e.kind === "resource" ? `<span class="node-dot" title="resource node">◆</span> `
+    : e.custom ? `<span class="custom-star" title="custom POI">★</span> ` : "";
+  return mark + esc(e.name);
+}
+function kindBadge(e) {
+  return e.kind === "resource"
+    ? `<span class="kind-badge kind-resource">RSRC</span>`
+    : `<span class="kind-badge kind-poi">POI</span>`;
+}
+function entDetail(e) {
+  return e.kind === "resource"
+    ? `B${Number(e.band)} · ${esc(e.quality)}` + (e.biome ? ` · ${esc(e.biome)}` : "")
+    : esc(e.type);
+}
+function ownerLabel(e) { return esc(e.owner_handle || ""); }
+
+// ---------- state ----------
+let lastState = null;
+
+function render(state) {
+  if (!state) return;
+  lastState = state;
+  $("waiting").hidden = true;
+  $("readouts").hidden = false;
+  $("nearby-panel").hidden = false;
+
+  const c = state.container;
+  $("where").innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}` : `deep space`;
+  $("r-cont").innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>` : `deep space`;
+
+  const d = state.destination;
+  $("dest-panel").hidden = !d;
+  if (d) {
+    $("dest-name").innerHTML = entLabel(d);
+    const extra = d.kind === "resource" ? `${d.ore} · B${d.band} · ${d.quality}` : d.type;
+    $("dest-meta").textContent = `${d.container} · ${extra}` +
+      (d.same_container ? "" : " · different container — use quantum travel");
+    $("r-bearing").innerHTML = fmtBearing(d.bearing_deg);
+    $("r-dist").innerHTML = fmtDist(d.surface_distance_m ?? d.distance_m);
+    $("r-eta").innerHTML = fmtEta(d.eta_s);
+  } else {
+    $("r-bearing").innerHTML = $("r-dist").innerHTML = $("r-eta").innerHTML = "—";
+  }
+
+  $("r-alt").innerHTML = fmtDist(state.altitude_m);
+  $("r-speed").innerHTML = fmtSpeed(state.speed_ms);
+  $("r-latlon").textContent = state.latitude == null ? "—"
+    : `${state.latitude.toFixed(3)}°, ${state.longitude.toFixed(3)}°`;
+
+  renderNearby();
+}
+
+// ---------- nearby (combined, filtered) ----------
+let kindFilter = "both";
+
+function renderNearby() {
+  if (!lastState) return;
+  const pois = lastState.nearest_pois || [];
+  const nodes = lastState.nearest_nodes || [];
+  let rows = kindFilter === "poi" ? pois.slice()
+    : kindFilter === "resource" ? nodes.slice()
+    : pois.concat(nodes);
+  rows.sort((a, b) => (a.distance_m ?? 1e30) - (b.distance_m ?? 1e30));
+
+  // populate filter dropdowns from what's present
+  syncSelect("f-container", [...new Set(rows.map(r => r.container))].sort(), "all containers");
+  const owners = [...new Set(rows.map(r => r.owner_handle).filter(Boolean))].sort();
+  syncSelect("f-owner", owners, "all contributors");
+
+  const fc = $("f-container").value, fo = $("f-owner").value;
+  const ft = $("f-text").value.trim().toLowerCase();
+  rows = rows.filter(r =>
+    (!fc || r.container === fc) &&
+    (!fo || r.owner_handle === fo) &&
+    (!ft || `${r.name} ${r.type} ${r.ore || ""} ${r.quality || ""}`.toLowerCase().includes(ft))
+  );
+
+  const tbody = $("nearby-body");
+  tbody.innerHTML = "";
+  for (const e of rows) {
+    const tr = document.createElement("tr");
+    const del = e.kind === "resource"
+      ? `<span class="del" title="delete node" data-del-node="${e.id}">✕</span>`
+      : e.custom ? `<span class="del" title="delete custom POI" data-del-poi="${e.id}">✕</span>` : "";
+    tr.innerHTML =
+      `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td>` +
+      `<td class="muted">${esc(e.container)}</td><td class="muted">${entDetail(e)}</td>` +
+      `<td class="num">${fmtDist(e.surface_distance_m ?? e.distance_m)}</td>` +
+      `<td class="num">${fmtBearing(e.bearing_deg)}</td>` +
+      `<td class="muted">${ownerLabel(e)}</td><td>${del}</td>`;
+    tr.onclick = () => setDestination(e.id);
+    wireDelete(tr);
+    tbody.appendChild(tr);
+  }
+}
+
+function syncSelect(id, values, allLabel) {
+  const sel = $(id);
+  // Don't rebuild a dropdown the user is actively using — that closes the
+  // open popup and can yank their selection mid-click.
+  if (document.activeElement === sel) return;
+  const cur = sel.value;
+  // Keep the current selection in the list even if its rows drifted out of the
+  // nearest set (or the kind segment changed), so the filter isn't silently
+  // reset to "all".
+  const set = [...new Set(values)];
+  if (cur && !set.includes(cur)) set.push(cur);
+  set.sort();
+  const wanted = [""].concat(set);
+  const have = [...sel.options].map(o => o.value);
+  if (JSON.stringify(have) === JSON.stringify(wanted)) return;
+  sel.innerHTML = "";
+  for (const v of wanted) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v === "" ? allLabel : v;
+    sel.appendChild(o);
+  }
+  sel.value = wanted.includes(cur) ? cur : "";
+}
+
+async function afterDelete() {
+  // Nearby re-renders from the WS broadcast; the search table does not, so
+  // refresh it if it's showing or its stale row would 404 on click.
+  if (!$("search-results").hidden) runSearch();
+}
+
+function wireDelete(tr) {
+  const dp = tr.querySelector("[data-del-poi]");
+  if (dp) dp.onclick = async (ev) => { ev.stopPropagation();
+    await fetch(`/api/custom_pois/${dp.dataset.delPoi}`, { method: "DELETE" }); afterDelete(); };
+  const dn = tr.querySelector("[data-del-node]");
+  if (dn) dn.onclick = async (ev) => { ev.stopPropagation();
+    await fetch(`/api/nodes/${dn.dataset.delNode}`, { method: "DELETE" }); afterDelete(); };
+}
+
+$("kind-seg").querySelectorAll("button").forEach(b => {
+  b.onclick = () => {
+    kindFilter = b.dataset.kind;
+    $("kind-seg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    renderNearby();
+  };
+});
+["f-container", "f-owner"].forEach(id => $(id).onchange = renderNearby);
+$("f-text").addEventListener("input", renderNearby);
+
+// ---------- capture (POI + node share one armed slot on the server) ----------
+let lastCaptureStamp = null;
+
+function renderCapture(cap) {
+  if (!cap) return;
+  const armedKind = cap.armed && cap.pending ? cap.pending.kind : null;
+  $("poi-form").style.display = armedKind === "poi" ? "none" : "flex";
+  $("poi-armed").hidden = armedKind !== "poi";
+  $("node-form").style.display = armedKind === "node" ? "none" : "flex";
+  $("node-armed").hidden = armedKind !== "node";
+  if (armedKind === "poi") $("poi-armed-label").textContent = `ARMED for "${cap.pending.name}"`;
+  if (armedKind === "node")
+    $("node-armed-label").textContent = `ARMED for ${cap.pending.ore} (B${cap.pending.band})`;
+
+  const credit = cap.owner ? `captures credited to ${cap.owner.handle}` :
+    "no handle yet — set one in the watcher to attribute captures";
+  $("poi-credit").textContent = credit;
+  $("node-credit").textContent = credit;
+
+  if (cap.last && cap.last.captured_at !== lastCaptureStamp) {
+    lastCaptureStamp = cap.last.captured_at;
+    const by = cap.last.owner_handle ? ` by ${esc(cap.last.owner_handle)}` : "";
+    const ll = cap.last.latitude == null ? "" :
+      ` @ ${cap.last.latitude.toFixed(3)}°, ${cap.last.longitude.toFixed(3)}°`;
+    if (cap.last.kind === "resource") {
+      $("node-result").innerHTML =
+        `added <span class="node-dot">◆</span> <b>${esc(cap.last.ore)}</b> ` +
+        `B${Number(cap.last.band)} (${esc(cap.last.quality)}) on ${esc(cap.last.container)}${ll}${by}`;
+      $("node-result").hidden = false;
+    } else {
+      $("poi-result").innerHTML =
+        `added <span class="custom-star">★</span> <b>${esc(cap.last.name)}</b> ` +
+        `(${esc(cap.last.type)}) on ${esc(cap.last.container)}${ll}${by}`;
+      $("poi-result").hidden = false;
+    }
+  }
+}
+
+$("poi-arm").onclick = async () => {
+  const name = $("poi-name").value.trim();
+  if (!name) return $("poi-name").focus();
+  const res = await fetch("/api/capture/start", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, type: $("poi-type").value.trim() || "Custom" }),
+  });
+  if (res.ok) { $("poi-name").value = ""; $("poi-type").value = ""; }
+};
+$("poi-cancel").onclick = () => fetch("/api/capture/cancel", { method: "POST" });
+
+function nodeQualityPreview() {
+  $("node-quality").textContent = BAND_QUALITY(parseInt($("node-band").value, 10));
+}
+$("node-band").onchange = nodeQualityPreview;
+nodeQualityPreview();
+
+$("node-arm").onclick = async () => {
+  const ore = $("node-ore").value.trim();
+  if (!ore) return $("node-ore").focus();
+  const res = await fetch("/api/capture/node", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ore, band: parseInt($("node-band").value, 10),
+      biome: $("node-biome").value.trim(), note: $("node-note").value.trim(),
+    }),
+  });
+  if (res.ok) { $("node-ore").value = ""; $("node-biome").value = ""; $("node-note").value = ""; }
+};
+$("node-cancel").onclick = () => fetch("/api/capture/cancel", { method: "POST" });
+
+// ---------- destination ----------
+async function setDestination(id) {
+  await fetch("/api/destination", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ poi_id: id }),
+  });
+  $("search").value = "";
+  $("search-results").hidden = true;
+}
+$("dest-clear").onclick = () => fetch("/api/destination", { method: "DELETE" });
+
+// ---------- search (whole dataset, POIs + nodes) ----------
+let searchTimer = null;
+$("search").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 160);
+});
+async function runSearch() {
+  const q = $("search").value.trim();
+  const table = $("search-results");
+  if (q.length < 2) { table.hidden = true; return; }
+  const [pois, nodes] = await Promise.all([
+    fetch(`/api/pois?q=${encodeURIComponent(q)}&limit=15`).then(r => r.json()),
+    fetch(`/api/nodes?q=${encodeURIComponent(q)}&limit=15`).then(r => r.json()),
+  ]);
+  const rows = pois.concat(nodes);
+  const tbody = table.querySelector("tbody");
+  tbody.innerHTML = "";
+  for (const e of rows) {
+    const tr = document.createElement("tr");
+    const del = e.kind === "resource"
+      ? `<span class="del" title="delete node" data-del-node="${e.id}">✕</span>`
+      : e.custom ? `<span class="del" title="delete custom POI" data-del-poi="${e.id}">✕</span>` : "";
+    tr.innerHTML =
+      `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td><td class="muted">${entDetail(e)}</td>` +
+      `<td class="muted">${esc(e.container)}</td><td class="muted">${ownerLabel(e)}</td><td>${del}</td>`;
+    tr.onclick = () => setDestination(e.id);
+    wireDelete(tr);
+    tbody.appendChild(tr);
+  }
+  table.hidden = rows.length === 0;
+}
+
+// ---------- websocket with reconnect ----------
+let ws = null;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => $("conn").classList.add("ok");
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "state") {
+      if (msg.data) render(msg.data);
+      renderCapture(msg.capture);
+    }
+  };
+  ws.onclose = () => { $("conn").classList.remove("ok"); setTimeout(connect, 2000); };
+}
+setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
+connect();
+
+fetch("/api/state").then(r => r.json()).then(d => {
+  if (d.state) render(d.state);
+  renderCapture(d.capture);
+}).catch(() => {});
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+[Unit]
+Description=Star Citizen Nav Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=scnav
+Group=scnav
+WorkingDirectory=/opt/sc-nav/server
+ExecStart=/opt/sc-nav/server/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8765 --log-level info
+Restart=on-failure
+RestartSec=3
+
+# hardening — read-only system, except the poi dir (live-data cache writes)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/sc-nav/poi
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""SC Nav Watcher.
+
+Polls the system clipboard for Star Citizen `/showlocation` output and
+forwards parsed coordinates to the nav server as JSON over HTTP.
+
+Designed to run on the Windows gaming PC. Uses only the Python standard
+library so there is nothing to install beyond Python itself. Also runs on
+macOS/Linux (via pbpaste/xclip/wl-paste) for development and testing.
+
+Usage:
+    python sc_nav_watcher.py --server http://192.168.1.50:8765
+    python sc_nav_watcher.py --dry-run            # print instead of sending
+    python sc_nav_watcher.py --once --dry-run     # single read, then exit
+"""
+
+import argparse
+import collections
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+POSITION_ENDPOINT = "/api/position"
+
+# ---------------------------------------------------------------------------
+# Clipboard access
+# ---------------------------------------------------------------------------
+
+
+class WindowsClipboard:
+    """Clipboard reader using the Win32 API via ctypes.
+
+    GetClipboardSequenceNumber lets us detect *every* copy event cheaply,
+    including re-copies of identical text (e.g. running /showlocation twice
+    while stationary), without opening the clipboard on each poll.
+    """
+
+    CF_UNICODETEXT = 13
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        self._ctypes = ctypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.CloseClipboard.restype = wintypes.BOOL
+        user32.GetClipboardData.argtypes = [wintypes.UINT]
+        user32.GetClipboardData.restype = wintypes.HANDLE
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+        self._user32 = user32
+        self._kernel32 = kernel32
+
+    def sequence_number(self):
+        return self._user32.GetClipboardSequenceNumber()
+
+    def read_text(self):
+        # The game (or another app) may hold the clipboard; treat failure to
+        # open as "nothing new" and let the next poll retry.
+        if not self._user32.OpenClipboard(None):
+            return None
+        try:
+            handle = self._user32.GetClipboardData(self.CF_UNICODETEXT)
+            if not handle:
+                return None
+            ptr = self._kernel32.GlobalLock(handle)
+            if not ptr:
+                return None
+            try:
+                return self._ctypes.wstring_at(ptr)
+            finally:
+                self._kernel32.GlobalUnlock(handle)
+        finally:
+            self._user32.CloseClipboard()
+
+
+class CommandClipboard:
+    """Fallback clipboard reader for macOS/Linux dev machines.
+
+    No sequence number available, so change detection falls back to
+    comparing text (handled by the watcher loop).
+    """
+
+    def __init__(self):
+        if platform.system() == "Darwin":
+            self._cmd = ["pbpaste"]
+        elif shutil.which("wl-paste"):
+            self._cmd = ["wl-paste", "--no-newline"]
+        elif shutil.which("xclip"):
+            self._cmd = ["xclip", "-selection", "clipboard", "-o"]
+        else:
+            raise RuntimeError(
+                "No clipboard tool found (need pbpaste, wl-paste, or xclip)"
+            )
+
+    def sequence_number(self):
+        return None
+
+    def read_text(self):
+        try:
+            result = subprocess.run(
+                self._cmd, capture_output=True, text=True, timeout=2
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        return result.stdout if result.returncode == 0 else None
+
+
+def make_clipboard():
+    if platform.system() == "Windows":
+        return WindowsClipboard()
+    return CommandClipboard()
+
+
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+
+# /showlocation output looks like:
+#   Coordinates: x:-18930539540.392 y:-2610158765.392 z:0.0
+# The exact label and separators have shifted between patches, so match each
+# axis independently and tolerate commas, '=' separators, and reordering.
+_AXIS_PATTERNS = {
+    axis: re.compile(
+        rf"\b{axis}\s*[:=]\s*(-?[\d,]+(?:\.\d+)?)", re.IGNORECASE
+    )
+    for axis in ("x", "y", "z")
+}
+
+
+def parse_showlocation(text):
+    """Extract x/y/z (meters) from clipboard text, or None if not present."""
+    if not text or len(text) > 4096:
+        return None
+    coords = {}
+    for axis, pattern in _AXIS_PATTERNS.items():
+        match = pattern.search(text)
+        if not match:
+            return None
+        try:
+            coords[axis] = float(match.group(1).replace(",", ""))
+        except ValueError:
+            return None
+    return coords
+
+
+# ---------------------------------------------------------------------------
+# Sending
+# ---------------------------------------------------------------------------
+
+
+class Sender:
+    """POSTs position payloads to the nav server.
+
+    Failed sends are queued (bounded) and retried on subsequent events so a
+    server restart doesn't lose the session.
+    """
+
+    def __init__(self, server_url, timeout=3.0, dry_run=False):
+        self.url = server_url.rstrip("/") + POSITION_ENDPOINT if server_url else None
+        self.timeout = timeout
+        self.dry_run = dry_run
+        self.pending = collections.deque(maxlen=50)
+
+    def send(self, payload):
+        if self.dry_run:
+            log(f"DRY-RUN {json.dumps(payload)}")
+            return True
+        self.pending.append(payload)
+        return self.flush()
+
+    def flush(self):
+        ok = True
+        while self.pending:
+            payload = self.pending[0]
+            if self._post(payload):
+                self.pending.popleft()
+            else:
+                ok = False
+                break
+        return ok
+
+    def _post(self, payload):
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self.url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+                return 200 <= resp.status < 300
+        except (urllib.error.URLError, OSError) as exc:
+            log(f"send failed ({exc}); will retry ({len(self.pending)} queued)")
+            return False
+
+
+# ---------------------------------------------------------------------------
+# Watcher loop
+# ---------------------------------------------------------------------------
+
+
+def log(message):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def build_payload(coords, raw_text, handle=None):
+    return {
+        "x": coords["x"],
+        "y": coords["y"],
+        "z": coords["z"],
+        "raw": raw_text.strip()[:512],
+        "client_time": datetime.now(timezone.utc).isoformat(),
+        "source": "sc_nav_watcher",
+        "handle": handle,
+    }
+
+
+# Sticky handle: once set with --handle it's remembered here so future runs
+# (e.g. the double-click .bat) don't need to re-specify it.
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watcher_config.json")
+
+
+def resolve_handle(args):
+    config = {}
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as fh:
+            config = json.load(fh)
+    except (OSError, ValueError):
+        pass
+    if args.handle:
+        handle = args.handle.strip()
+        if handle and handle != config.get("handle"):
+            config["handle"] = handle
+            try:
+                with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+                    json.dump(config, fh)
+            except OSError as exc:
+                log(f"could not save handle to config: {exc}")
+        return handle
+    return (config.get("handle") or "").strip() or None
+
+
+def run(args):
+    clipboard = make_clipboard()
+    sender = Sender(args.server, timeout=args.timeout, dry_run=args.dry_run)
+    handle = resolve_handle(args)
+    if handle:
+        log(f"reporting as handle: {handle}")
+    else:
+        log("no handle set (captures will be unattributed) — pass --handle \"YourName\"")
+
+    last_seq = clipboard.sequence_number()
+    last_text = None
+    sent_count = 0
+
+    log(
+        f"watching clipboard every {args.interval}s -> "
+        + ("dry-run" if args.dry_run else sender.url)
+    )
+
+    while True:
+        changed = args.once  # single-shot mode always reads
+        seq = clipboard.sequence_number()
+        if seq is not None:
+            if seq != last_seq:
+                last_seq = seq
+                changed = True
+        else:
+            # No sequence numbers on this platform; detect by text diff below.
+            changed = True
+
+        if changed:
+            text = clipboard.read_text()
+            if text is not None and text != last_text:
+                last_text = text
+                coords = parse_showlocation(text)
+                if coords:
+                    payload = build_payload(coords, text, handle)
+                    sender.send(payload)
+                    sent_count += 1
+                    log(
+                        f"position #{sent_count}: "
+                        f"x={coords['x']:.1f} y={coords['y']:.1f} z={coords['z']:.1f}"
+                    )
+                elif args.verbose:
+                    log(f"clipboard changed, not a location ({len(text)} chars)")
+            elif seq is not None:
+                # New copy event with identical text (e.g. /showlocation while
+                # stationary) — forward it as a heartbeat so an armed capture
+                # still fires and late-joining UIs get the current position.
+                if last_text and (coords := parse_showlocation(last_text)):
+                    sender.send(build_payload(coords, last_text, handle))
+                    if args.verbose:
+                        log("re-copy of same position forwarded")
+
+        if args.once:
+            return 0 if sent_count else 1
+        if sender.pending:
+            sender.flush()
+        time.sleep(args.interval)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Forward Star Citizen /showlocation clipboard output to the nav server."
+    )
+    parser.add_argument(
+        "--server",
+        help="Nav server base URL, e.g. http://192.168.1.68:8765",
+    )
+    parser.add_argument(
+        "--interval", type=float, default=0.25, help="Poll interval seconds (default 0.25)"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=3.0, help="HTTP timeout seconds (default 3)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print payloads instead of sending"
+    )
+    parser.add_argument(
+        "--once", action="store_true", help="Read clipboard once, send if valid, exit"
+    )
+    parser.add_argument("--verbose", action="store_true", help="Log non-location clipboard changes")
+    parser.add_argument(
+        "--handle",
+        help="Your in-game player handle, attached to captures for attribution. "
+        "Saved to watcher_config.json so it's remembered on later runs.",
+    )
+    args = parser.parse_args()
+
+    if not args.server and not args.dry_run:
+        parser.error("--server is required unless --dry-run is set")
+
+    try:
+        sys.exit(run(args))
+    except KeyboardInterrupt:
+        log("stopped")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

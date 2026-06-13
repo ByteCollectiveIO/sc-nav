@@ -1,0 +1,5 @@
+server/.venv
+**/__pycache__
+watcher/
+Dockerfile
+docker-compose.yml

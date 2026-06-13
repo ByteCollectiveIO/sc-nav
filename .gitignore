@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local tooling / OS
+.claude/settings.local.json
+.DS_Store
+
+# Build artifacts
+*.zip
+
+# Per-deployment runtime data, written by the server/watcher at run time.
+# (The dataset cache poi/containers.json + poi/poi.json IS committed as an
+# offline seed so a fresh clone runs and the tests pass.)
+watcher/watcher_config.json
+poi/custom_pois.json
+poi/resource_nodes.json
+poi/handles.json

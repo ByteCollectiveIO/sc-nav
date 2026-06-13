@@ -1,0 +1,17 @@
+services:
+  sc-nav:
+    build: .
+    container_name: sc-nav
+    ports:
+      - "8765:8765"   # change the left side if 8765 is taken on the host
+    volumes:
+      - sc-nav-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8765/api/health', timeout=3)"]
+      interval: 60s
+      timeout: 5s
+      start_period: 30s
+
+volumes:
+  sc-nav-data:
