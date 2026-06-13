@@ -572,13 +572,16 @@ async def path_control(action: str):
 
 @app.post("/api/refresh")
 async def refresh_data():
-    """Re-fetch the dataset from starmap.space without restarting."""
-    global nav
+    """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
+    without restarting."""
+    global nav, raw_commodity_names
     fresh = await asyncio.to_thread(load_nav_data)
+    fresh_commodities = await asyncio.to_thread(load_raw_commodity_names)
     nav_core.merge_custom_pois(fresh, custom_pois)
     merge_all_observations(fresh)
     async with state.lock:
         nav = fresh
+        raw_commodity_names = fresh_commodities
         if (
             state.destination_id is not None
             and state.destination_id not in nav.pois
@@ -593,6 +596,7 @@ async def refresh_data():
         "containers": len(nav.containers),
         "pois": len(nav.pois),
         "observations": len(nav.observations),
+        "raw_commodities": len(raw_commodity_names),
     }
 
 
@@ -604,6 +608,7 @@ async def health():
         "pois": len(nav.pois),
         "observations": len(nav.observations),
         "handles": len(handles.by_handle),
+        "raw_commodities": len(raw_commodity_names),
         "has_position": state.pos is not None,
         "data": data_info,
     }
