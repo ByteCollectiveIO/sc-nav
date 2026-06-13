@@ -82,6 +82,38 @@ curl http://localhost:8765/api/health   # expect "source": "live"
 code change with `docker compose up -d --build`; update the dataset without
 a restart via `curl -X POST http://192.168.1.68:8765/api/refresh`.
 
+### Data persistence & backups
+
+All user data (custom POIs, resource nodes, wildlife, handle registry) lives
+in the named Docker volume `sc-nav-data` (mounted at `/data`). It **survives**
+a normal redeploy:
+
+```bash
+docker compose down            # safe — named volumes are kept
+docker compose up -d --build   # new code, data intact
+```
+
+The image's seed (`COPY poi/ /data/`) only populates the volume the first time
+it's created, so a rebuild never overwrites your data. **The one command that
+destroys it is `docker compose down -v`** (the `-v`/`--volumes` flag removes
+named volumes) — avoid it unless you intend to wipe everything. (Breadcrumb
+trails are the exception — in-memory only, reset on every restart by design.)
+
+Back up the volume any time (do this periodically once you've collected real
+finds):
+
+```bash
+# backup -> sc-nav-backup.tar.gz in the current directory
+docker run --rm -v sc-nav-data:/data -v "$PWD":/backup alpine \
+    tar czf /backup/sc-nav-backup.tar.gz -C /data .
+
+# restore into the volume (stop the app first so it's not writing)
+docker compose down
+docker run --rm -v sc-nav-data:/data -v "$PWD":/backup alpine \
+    sh -c "rm -rf /data/* && tar xzf /backup/sc-nav-backup.tar.gz -C /data"
+docker compose up -d
+```
+
 ## Deploy option B: bare systemd service
 
 From your Mac, copy the project over (the `.venv` here is local — exclude it):
