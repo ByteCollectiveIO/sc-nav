@@ -1,4 +1,4 @@
-# SC Nav Server (Ubuntu 26.04 @ 192.168.1.68)
+# SC Nav Server (Ubuntu 26.04)
 
 Receives positions from the Windows clipboard watcher, computes navigation
 state (container, lat/lon, bearing, distance, ETA) against the
@@ -10,6 +10,8 @@ watcher (Windows PC) ──POST /api/position──▶ this server ──WS─�
 ```
 
 ## Layout
+
+![SC Nav Server](sc-navigator-routes.png)
 
 ```
 server/

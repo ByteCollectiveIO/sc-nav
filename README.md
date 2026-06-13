@@ -5,6 +5,8 @@ the gaming PC forwards your coordinates to a small server on your LAN, which
 computes your container, lat/lon, altitude, and bearing/distance/ETA to any POI
 or recorded resource node, and pushes it live to a browser on a second device.
 
+![SC Nav Server](server/sc-navigator-routes.png)
+
 ## Layout (one repo, cloned to both machines)
 
 ```
