@@ -80,9 +80,10 @@
   #map-controls label { font-size: 12px; color: var(--dim); display: inline-flex; gap: 4px; align-items: center; }
   #map-wrap { position: relative; }
   #map { width: 100%; height: 440px; display: block; background: #080b10;
-    border: 1px solid var(--border); border-radius: 6px; }
-  #map-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    color: var(--dim); font-size: 14px; text-align: center; padding: 20px; }
+    border: 1px solid var(--border); border-radius: 6px; cursor: grab; touch-action: none; }
+  #map.dragging { cursor: grabbing; }
+  #map-msg { position: absolute; right: 8px; bottom: 8px; max-width: 55%;
+    color: var(--dim); font-size: 11px; text-align: right; pointer-events: none; }
   .legend { font-size: 11px; color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
   .legend span::before { content: "●"; margin-right: 4px; }
   .lg-you::before { content: "▲"; color: var(--accent); }
@@ -122,10 +123,11 @@
   </div>
 
   <div class="panel" id="map-panel" hidden>
-    <h2>MAP <span class="muted">(north up, centered on you)</span></h2>
+    <h2>MAP <span class="muted">(north up · drag to pan)</span></h2>
     <div id="map-controls">
       <button id="track-toggle">Start Tracking Path</button>
       <button id="track-clear">Clear Path</button>
+      <button id="map-recenter">Recenter</button>
       <label>view radius
         <input id="map-zoom" type="range" min="0.5" max="50" step="0.5" value="5">
         <span id="map-zoom-val">5 km</span>
@@ -540,6 +542,28 @@ $("map-zoom").oninput = () => {
 };
 window.addEventListener("resize", drawMap);
 
+// pan: drag the map; pan offset (px) shifts the projection origin off-center.
+let panX = 0, panY = 0;
+$("map-recenter").onclick = () => { panX = 0; panY = 0; drawMap(); };
+(() => {
+  const cv = $("map");
+  let dragging = false, lastX = 0, lastY = 0;
+  cv.addEventListener("pointerdown", (e) => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    cv.classList.add("dragging"); cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    panX += e.clientX - lastX; panY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    drawMap();
+  });
+  const end = (e) => { dragging = false; cv.classList.remove("dragging");
+    try { cv.releasePointerCapture(e.pointerId); } catch {} };
+  cv.addEventListener("pointerup", end);
+  cv.addEventListener("pointercancel", end);
+})();
+
 let prevPlayer = null, headingDeg = null, mapContainer = null;
 
 // Local tangent-plane projection (meters) relative to the player, north-up.
@@ -572,36 +596,36 @@ function drawMap() {
   }
   msg.hidden = true;
 
-  // Reset heading tracking when we change bodies (keyed on system+name, since
-  // body names repeat across systems) so heading isn't computed across bodies.
+  // Reset heading + pan when we change bodies (keyed on system+name, since
+  // body names repeat across systems) so neither is computed across bodies.
   const cid = s.system + "/" + s.container.name;
-  if (mapContainer !== cid) { mapContainer = cid; prevPlayer = null; headingDeg = null; }
+  if (mapContainer !== cid) { mapContainer = cid; prevPlayer = null; headingDeg = null; panX = 0; panY = 0; }
 
-  const cx = w / 2, cy = h / 2;
+  // Projection origin (where the player sits) = canvas center shifted by pan.
+  const originX = w / 2 + panX, originY = h / 2 + panY;
   const viewR = viewRadiusKm * 1000;             // meters from center to short edge
   const scale = Math.min(w, h) / 2 / viewR;      // px per meter
   const plLat = s.latitude, plLon = s.longitude, R = s.container.body_radius_m;
   const toXY = (lat, lon) => {
     const p = projectMeters(lat, lon, plLat, plLon, R);
-    return [cx + p.east * scale, cy - p.north * scale];
+    return [originX + p.east * scale, originY - p.north * scale];
   };
 
-  // grid: independent extents per axis so the lines fill the whole canvas
+  // grid: draw every `spacing` meters across the visible canvas (pan-aware)
   const spacing = niceStep(viewR / 4);
-  const xExt = (w / 2) / scale, yExt = (h / 2) / scale;
   ctx.strokeStyle = "#16202e"; ctx.lineWidth = 1; ctx.fillStyle = "#3a4a60";
   ctx.font = "10px monospace"; ctx.beginPath();
-  for (let mx = -Math.ceil(xExt / spacing) * spacing; mx <= xExt; mx += spacing) {
-    const x = cx + mx * scale; ctx.moveTo(x, 0); ctx.lineTo(x, h);
+  for (let mx = Math.floor(((0 - originX) / scale) / spacing) * spacing; mx <= (w - originX) / scale; mx += spacing) {
+    const x = originX + mx * scale; ctx.moveTo(x, 0); ctx.lineTo(x, h);
   }
-  for (let my = -Math.ceil(yExt / spacing) * spacing; my <= yExt; my += spacing) {
-    const y = cy - my * scale; ctx.moveTo(0, y); ctx.lineTo(w, y);
+  for (let my = Math.floor(((originY - h) / scale) / spacing) * spacing; my <= originY / scale; my += spacing) {
+    const y = originY - my * scale; ctx.moveTo(0, y); ctx.lineTo(w, y);
   }
   ctx.stroke();
   // axes through player
   ctx.strokeStyle = "#22304a";
-  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
-  ctx.fillStyle = "#5b6b82"; ctx.fillText("N", cx + 4, 12);
+  ctx.beginPath(); ctx.moveTo(originX, 0); ctx.lineTo(originX, h); ctx.moveTo(0, originY); ctx.lineTo(w, originY); ctx.stroke();
+  ctx.fillStyle = "#5b6b82"; ctx.fillText("N", 6, 12);
   const gridLabel = spacing >= 1000 ? `${(spacing / 1000)} km grid` : `${spacing} m grid`;
   ctx.fillText(gridLabel, 6, h - 6);
 
@@ -640,7 +664,7 @@ function drawMap() {
     if (Math.abs(v.east) + Math.abs(v.north) > 0) headingDeg = Math.atan2(v.east, v.north) / DEG;
   }
   prevPlayer = { lat: plLat, lon: plLon };
-  ctx.save(); ctx.translate(cx, cy); if (headingDeg != null) ctx.rotate(headingDeg * DEG);
+  ctx.save(); ctx.translate(originX, originY); if (headingDeg != null) ctx.rotate(headingDeg * DEG);
   ctx.fillStyle = "#4fc3f7"; ctx.beginPath();
   ctx.moveTo(0, -9); ctx.lineTo(6, 7); ctx.lineTo(0, 3); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
   ctx.restore();
