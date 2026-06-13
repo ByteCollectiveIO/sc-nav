@@ -264,6 +264,22 @@ class ObservationTests(unittest.TestCase):
         ref_g = poi_global_m(NAV, ref, t + 9999)
         self.assertLess(nav_core.dist3(g, ref_g), 1.0)
 
+    def test_unknown_band_yields_unk_quality(self):
+        # Band is unknown until mined: "Unk"/None/garbage -> band None, quality "Unk".
+        t = time.time()
+        for raw in ("Unk", None, "", "xyz"):
+            _r, _p, obs = _obs(NAV, "Daymar", t, "resource", {"ore": "Gold", "band": raw},
+                               nav_core.OBSERVATION_ID_START + 50)
+            self.assertIsNone(obs.data["band"], raw)
+            self.assertEqual(obs.data["quality"], "Unk", raw)
+        base = nav_core._observation_base(obs)
+        self.assertEqual(base["name"], "Gold (B?)")          # display handles None band
+        # a real band still derives normally
+        _r, _p, good = _obs(NAV, "Daymar", t, "resource", {"ore": "Gold", "band": 7},
+                            nav_core.OBSERVATION_ID_START + 51)
+        self.assertEqual(good.data["band"], 7)
+        self.assertEqual(good.data["quality"], "Very High")
+
     def test_wildlife_has_no_quality(self):
         t = time.time()
         _ref, _pos, obs = _obs(NAV, "Daymar", t, "wildlife", {"species": "Kopion"},

@@ -583,8 +583,15 @@ def merge_custom_pois(nav: NavData, custom_dicts: list[dict]) -> None:
 OBSERVATION_ID_START = 2_000_000
 
 
-def quality_for_band(band: int) -> str:
-    band = max(1, min(8, int(band)))
+UNKNOWN_QUALITY = "Unk"
+
+
+def quality_for_band(band) -> str:
+    # Band is unknown until a node is mined; band None/non-numeric -> "Unk".
+    try:
+        band = max(1, min(8, int(band)))
+    except (TypeError, ValueError):
+        return UNKNOWN_QUALITY
     if band == 1:
         return "Lowest"
     if band <= 4:
@@ -598,9 +605,12 @@ def quality_for_band(band: int) -> str:
 
 def _normalize_resource(data: dict) -> dict:
     data = dict(data)
-    band = max(1, min(8, int(data.get("band") or 1)))
+    try:
+        band = max(1, min(8, int(data.get("band"))))
+    except (TypeError, ValueError):
+        band = None                                 # unknown until mined
     data["band"] = band
-    data["quality"] = quality_for_band(band)       # always derived from band
+    data["quality"] = quality_for_band(band)        # always derived from band
     data["ore"] = (data.get("ore") or "Unknown")
     return data
 
@@ -619,7 +629,7 @@ OBSERVATION_CATEGORIES = {
         "type_field": "ore",
         "search_fields": ("ore",),
         "normalize": _normalize_resource,
-        "display_name": lambda d: f"{d.get('ore')} (B{d.get('band')})",
+        "display_name": lambda d: f"{d.get('ore')} (B{d.get('band') if d.get('band') is not None else '?'})",
     },
     "wildlife": {
         "file": "wildlife.json",

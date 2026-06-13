@@ -172,22 +172,15 @@
       <h2>ADD RESOURCE NODE</h2>
       <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <input id="node-ore" class="ti" list="ore-types" placeholder="ore" style="flex:1; min-width:110px;">
-        <datalist id="ore-types">
-          <option>Quantanium</option><option>Bexalite</option><option>Taranite</option>
-          <option>Borase</option><option>Laranite</option><option>Agricium</option>
-          <option>Hephaestanite</option><option>Titanium</option><option>Diamond</option>
-          <option>Gold</option><option>Copper</option><option>Aluminum</option>
-          <option>Tungsten</option><option>Iron</option><option>Quartz</option>
-          <option>Corundum</option><option>Tin</option><option>Silicon</option>
-          <option>Beryl</option><option>Inert Materials</option>
-        </datalist>
+        <datalist id="ore-types"></datalist>
         <label class="muted" style="font-size:12px;">band
           <select id="node-band" class="sel">
+            <option value="Unk">Unk</option>
             <option>1</option><option>2</option><option>3</option><option>4</option>
             <option>5</option><option>6</option><option>7</option><option>8</option>
           </select>
         </label>
-        <span id="node-quality" class="muted" style="font-size:12px;">Lowest</span>
+        <span id="node-quality" class="muted" style="font-size:12px;">Unk</span>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
         <input id="node-biome" class="ti" placeholder="biome (optional)" style="flex:1; min-width:100px;">
@@ -264,6 +257,7 @@ const $ = (id) => document.getElementById(id);
 const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 const BAND_QUALITY = (b) =>
+  !Number.isFinite(b) ? "Unk" :
   b <= 1 ? "Lowest" : b <= 4 ? "Low to Mid" : b <= 6 ? "Good / High" : b === 7 ? "Very High" : "Perfect";
 const DEG = Math.PI / 180;
 
@@ -297,7 +291,10 @@ function kindBadge(e) {
   return `<span class="kind-badge ${m[0]}">${m[1]}</span>`;
 }
 function entDetail(e) {
-  if (e.kind === "resource") return `B${Number(e.band)} · ${esc(e.quality)}` + (e.biome ? ` · ${esc(e.biome)}` : "");
+  if (e.kind === "resource") {
+    const band = e.band == null ? "?" : Number(e.band);
+    return `B${band} · ${esc(e.quality)}` + (e.biome ? ` · ${esc(e.biome)}` : "");
+  }
   if (e.kind === "wildlife") return e.biome ? esc(e.biome) : (e.note ? esc(e.note) : "—");
   return esc(e.type);
 }
@@ -324,7 +321,7 @@ function render(state) {
   $("dest-panel").hidden = !d;
   if (d) {
     $("dest-name").innerHTML = entLabel(d);
-    const extra = d.kind === "resource" ? `${esc(d.ore)} · B${Number(d.band)} · ${esc(d.quality)}`
+    const extra = d.kind === "resource" ? `${esc(d.ore)} · B${d.band == null ? "?" : Number(d.band)} · ${esc(d.quality)}`
       : d.kind === "wildlife" ? esc(d.name) : esc(d.type);
     $("dest-meta").innerHTML = `${esc(d.container)} · ${extra}` +
       (d.same_container ? "" : " · different container — use quantum travel");
@@ -465,7 +462,7 @@ function renderCapture(cap) {
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
     const ll = L.latitude == null ? "" : ` @ ${L.latitude.toFixed(3)}°, ${L.longitude.toFixed(3)}°`;
     if (L.kind === "resource") show("node-result",
-      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b> B${Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`);
+      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b> B${L.band == null ? "?" : Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`);
     else if (L.kind === "wildlife") show("wild-result",
       `added <span class="fauna-dot">❀</span> <b>${esc(L.species)}</b> on ${esc(L.container)}${ll}${by}`);
     else show("poi-result",
@@ -500,7 +497,7 @@ $("node-arm").onclick = async () => {
   const ore = $("node-ore").value.trim();
   if (!ore) return $("node-ore").focus();
   const r = await postJson("/api/capture/node", {
-    ore, band: parseInt($("node-band").value, 10),
+    ore, band: $("node-band").value,   // "Unk" or "1".."8"; server normalizes
     biome: $("node-biome").value.trim(), note: $("node-note").value.trim() });
   if (r.ok) { $("node-ore").value = ""; $("node-biome").value = ""; $("node-note").value = ""; } else armFailed("node-result", r);
 };
@@ -717,6 +714,13 @@ connect();
 fetch("/api/state").then(r => r.json()).then(d => {
   if (d.state) render(d.state);
   renderCapture(d.capture);
+}).catch(() => {});
+
+// Populate the ore datalist from the server's raw-commodity list (uexcorp).
+fetch("/api/raw_commodities").then(r => r.json()).then(names => {
+  const dl = $("ore-types");
+  dl.innerHTML = "";
+  for (const n of names) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
 }).catch(() => {});
 </script>
 </body>

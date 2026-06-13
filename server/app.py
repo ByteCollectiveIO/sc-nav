@@ -28,6 +28,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Live dataset endpoints (the files in DATA_DIR act as the offline cache).
 OC_URL = os.environ.get("SC_NAV_OC_URL", "https://starmap.space/api/v3/oc/index.php")
 POI_URL = os.environ.get("SC_NAV_POI_URL", "https://starmap.space/api/v3/pois/index.php")
+COMMODITIES_URL = os.environ.get("SC_NAV_COMMODITIES_URL", "https://api.uexcorp.uk/2.0/commodities")
 OFFLINE = os.environ.get("SC_NAV_OFFLINE") == "1"
 
 data_info = {"source": None, "fetched_at": None, "error": None}
@@ -75,6 +76,7 @@ def load_nav_data() -> nav_core.NavData:
 
 CUSTOM_POI_FILE = DATA_DIR / "custom_pois.json"
 HANDLES_FILE = DATA_DIR / "handles.json"
+COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
 # One file per observation category (resource_nodes.json, wildlife.json, …),
 # defined centrally in nav_core so adding a category needs no new wiring here.
 OBSERVATION_FILES = {
@@ -91,6 +93,25 @@ def _load_json_list(path: Path) -> list[dict]:
 
 def _save_json_list(path: Path, items: list[dict]) -> None:
     path.write_text(json.dumps(items, indent=1))
+
+
+def load_raw_commodity_names() -> list[str]:
+    """Sorted names of raw (is_raw==1) commodities from uexcorp, used to
+    populate the ore datalist. Fetched live with an on-disk cache fallback,
+    mirroring the dataset loader."""
+    rows = None
+    if not OFFLINE:
+        try:
+            resp = _fetch_json(COMMODITIES_URL, timeout=15)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            if rows:
+                _save_json_list(COMMODITIES_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] commodities fetch failed, using cache: {exc}")
+    if not rows:
+        rows = _load_json_list(COMMODITIES_FILE)
+    names = {r["name"] for r in rows if r.get("is_raw") in (1, "1", True) and r.get("name")}
+    return sorted(names)
 
 
 def load_custom_pois() -> list[dict]:
@@ -145,6 +166,7 @@ custom_pois = load_custom_pois()
 # observations[category] -> list of stored dicts (one JSON file each)
 observations = {cat: _load_json_list(path) for cat, path in OBSERVATION_FILES.items()}
 handles = HandleRegistry(HANDLES_FILE)
+raw_commodity_names = load_raw_commodity_names()
 nav_core.merge_custom_pois(nav, custom_pois)
 merge_all_observations(nav)
 
@@ -170,7 +192,7 @@ class CaptureIn(BaseModel):
 
 class NodeCaptureIn(BaseModel):
     ore: str
-    band: int = 1
+    band: int | str | None = None   # 1-8, or "Unk"/None when not yet mined
     biome: str | None = None
     note: str | None = None
 
@@ -443,8 +465,9 @@ async def capture_node_start(body: NodeCaptureIn):
     ore = body.ore.strip()
     if not ore:
         raise HTTPException(status_code=400, detail="ore is required")
+    # band passed through raw; _normalize_resource handles "Unk"/None.
     return await _arm_observation(
-        "resource", {"ore": ore, "band": max(1, min(8, body.band))}, body.biome, body.note
+        "resource", {"ore": ore, "band": body.band}, body.biome, body.note
     )
 
 
@@ -467,6 +490,12 @@ async def capture_cancel():
 @app.get("/api/handles")
 async def list_handles():
     return handles.list()
+
+
+@app.get("/api/raw_commodities")
+async def list_raw_commodities():
+    """Raw-ore names (uexcorp is_raw==1) for the ore datalist."""
+    return raw_commodity_names
 
 
 @app.get("/api/custom_pois")

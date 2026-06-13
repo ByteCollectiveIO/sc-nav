@@ -163,6 +163,10 @@ plus a capture endpoint — no new store/search/summary code):
 
 - **resource** (`resource_nodes.json`): ore, band 1–8, quality auto-derived
   from band (1 Lowest, 2–4 Low-Mid, 5–6 Good/High, 7 Very High, 8 Perfect).
+  Band may also be **Unk** (the default) — you can't know quality until a node
+  is mined — which stores band `null` and quality `"Unk"`. The ore datalist is
+  populated from the uexcorp commodities API (`is_raw == 1`), fetched on
+  startup and cached to `commodities.json` (falls back to the cache offline).
 - **wildlife** (`wildlife.json`): species; no quality.
 
 Both also record position, auto-captured altitude, optional biome/note, and
@@ -189,6 +193,7 @@ server restart, by design. Crumbs are capped at 5000 points.
 | `GET /api/pois?q=&system=&container=&type=&owner_id=&limit=` | POI search |
 | `GET /api/observations?q=&category=&system=&container=&type=&owner_id=&limit=` | observation search (resource/wildlife) |
 | `GET /api/handles` | contributor registry (handle → PlayerID) |
+| `GET /api/raw_commodities` | raw-ore names (uexcorp `is_raw==1`) for the ore datalist |
 | `POST /api/destination {"poi_id": N}` / `DELETE /api/destination` | set/clear destination (POI or observation id) |
 | `POST /api/capture/start {"name","type"}` | arm custom-POI capture |
 | `POST /api/capture/node {"ore","band","biome","note"}` | arm resource-node capture |
