@@ -201,12 +201,15 @@ plus a capture endpoint — no new store/search/summary code):
   is mined — which stores band `null` and quality `"Unk"`. The ore datalist is
   populated from the uexcorp commodities API (`is_raw == 1`), fetched on
   startup and cached to `commodities.json` (falls back to the cache offline).
-- **wildlife** (`wildlife.json`): species; no quality.
+- **wildlife** (`wildlife.json`): species; no quality. Labelled **Fauna** in
+  the UI ("Add Fauna" panel, "Fauna" filter); the category key stays
+  `wildlife` internally. The species datalist is populated from a curated
+  reference list (`server/fauna.json`, served at `GET /api/fauna`).
 
 Both also record position, auto-captured altitude, optional biome/note, and
 the contributor. Capture mirrors POIs (Add … panel → arm → `/showlocation`).
 The Nearby table and map combine POIs + observations with an All / POIs /
-Resources / Wildlife filter. Observation IDs share one range (≥ 2,000,000).
+Resources / Fauna filter. Observation IDs share one range (≥ 2,000,000).
 
 ## Nearest QT marker ("Jump to")
 
@@ -239,6 +242,7 @@ server restart, by design. Crumbs are capped at 5000 points.
 | `GET /api/observations?q=&category=&system=&container=&type=&owner_id=&limit=` | observation search (resource/wildlife) |
 | `GET /api/handles` | contributor registry (handle → PlayerID) |
 | `GET /api/raw_commodities` | raw-ore names (uexcorp `is_raw==1`) for the ore datalist |
+| `GET /api/fauna` | curated fauna/species names for the Add Fauna datalist |
 | `POST /api/destination {"poi_id": N}` / `DELETE /api/destination` | set/clear destination (POI or observation id) |
 | `POST /api/capture/start {"name","type"}` | arm custom-POI capture |
 | `POST /api/capture/node {"ore","band","biome","note"}` | arm resource-node capture |

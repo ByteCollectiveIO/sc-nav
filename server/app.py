@@ -95,6 +95,17 @@ def _save_json_list(path: Path, items: list[dict]) -> None:
     path.write_text(json.dumps(items, indent=1))
 
 
+def load_fauna_names() -> list[str]:
+    """Curated fauna/species names for the Add Fauna datalist. A committed
+    reference list shipped with the server (server/fauna.json)."""
+    try:
+        names = json.loads((Path(__file__).parent / "fauna.json").read_text())
+        return sorted({n for n in names if n}, key=str.lower)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[sc-nav] fauna list load failed: {exc}")
+        return []
+
+
 def load_raw_commodity_names() -> list[str]:
     """Sorted names of raw (is_raw==1) commodities from uexcorp, used to
     populate the ore datalist. Fetched live with an on-disk cache fallback,
@@ -167,6 +178,7 @@ custom_pois = load_custom_pois()
 observations = {cat: _load_json_list(path) for cat, path in OBSERVATION_FILES.items()}
 handles = HandleRegistry(HANDLES_FILE)
 raw_commodity_names = load_raw_commodity_names()
+fauna_names = load_fauna_names()
 nav_core.merge_custom_pois(nav, custom_pois)
 merge_all_observations(nav)
 nav_core.assign_qt_markers(nav)
@@ -497,6 +509,12 @@ async def list_handles():
 async def list_raw_commodities():
     """Raw-ore names (uexcorp is_raw==1) for the ore datalist."""
     return raw_commodity_names
+
+
+@app.get("/api/fauna")
+async def list_fauna():
+    """Curated fauna/species names for the Add Fauna datalist."""
+    return fauna_names
 
 
 @app.get("/api/custom_pois")

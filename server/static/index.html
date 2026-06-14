@@ -197,13 +197,10 @@
     </div>
 
     <div class="panel">
-      <h2>ADD WILDLIFE</h2>
+      <h2>ADD FAUNA</h2>
       <div id="wild-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <input id="wild-species" class="ti" list="fauna-types" placeholder="species / fauna" style="flex:1; min-width:120px;">
-        <datalist id="fauna-types">
-          <option>Kopion</option><option>Marok</option><option>Stalker Kopion</option>
-          <option>Valakkar (Sandworm)</option><option>Quasi Grazer</option>
-        </datalist>
+        <datalist id="fauna-types"></datalist>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
         <input id="wild-biome" class="ti" placeholder="biome (optional)" style="flex:1; min-width:100px;">
@@ -226,7 +223,7 @@
         <button data-kind="all" class="on">All</button>
         <button data-kind="poi">POIs</button>
         <button data-kind="resource">Resources</button>
-        <button data-kind="wildlife">Wildlife</button>
+        <button data-kind="wildlife">Fauna</button>
       </span>
       <select id="f-container" class="sel"><option value="">all containers</option></select>
       <select id="f-owner" class="sel"><option value="">all contributors</option></select>
@@ -729,12 +726,13 @@ fetch("/api/state").then(r => r.json()).then(d => {
   renderCapture(d.capture);
 }).catch(() => {});
 
-// Populate the ore datalist from the server's raw-commodity list (uexcorp).
-fetch("/api/raw_commodities").then(r => r.json()).then(names => {
-  const dl = $("ore-types");
-  dl.innerHTML = "";
+// Populate the ore + fauna datalists from the server.
+function fillDatalist(id, names) {
+  const dl = $(id); dl.innerHTML = "";
   for (const n of names) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
-}).catch(() => {});
+}
+fetch("/api/raw_commodities").then(r => r.json()).then(n => fillDatalist("ore-types", n)).catch(() => {});
+fetch("/api/fauna").then(r => r.json()).then(n => fillDatalist("fauna-types", n)).catch(() => {});
 </script>
 </body>
 </html>
