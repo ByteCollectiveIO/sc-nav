@@ -184,7 +184,7 @@
         <span id="node-quality" class="muted" style="font-size:12px;">Unk</span>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-        <input id="node-biome" class="ti" placeholder="biome (optional)" style="flex:1; min-width:100px;">
+        <input id="node-biome" class="ti" list="biome-types" placeholder="biome (optional)" style="flex:1; min-width:100px;">
         <input id="node-note" class="ti" placeholder="note (optional)" style="flex:2; min-width:110px;">
         <button id="node-arm">capture /showlocation</button>
       </div>
@@ -203,7 +203,8 @@
         <datalist id="fauna-types"></datalist>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-        <input id="wild-biome" class="ti" placeholder="biome (optional)" style="flex:1; min-width:100px;">
+        <input id="wild-biome" class="ti" list="biome-types" placeholder="biome (optional)" style="flex:1; min-width:100px;">
+        <datalist id="biome-types"></datalist>
         <input id="wild-note" class="ti" placeholder="note (optional)" style="flex:2; min-width:110px;">
         <button id="wild-arm">capture /showlocation</button>
       </div>
@@ -323,6 +324,7 @@ function render(state) {
   const c = state.container;
   $("where").innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}` : `deep space`;
   $("r-cont").innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>` : `deep space`;
+  updateBiomes(state.system, c && c.name);
 
   const d = state.destination;
   $("dest-panel").hidden = !d;
@@ -733,6 +735,27 @@ function fillDatalist(id, names) {
 }
 fetch("/api/raw_commodities").then(r => r.json()).then(n => fillDatalist("ore-types", n)).catch(() => {});
 fetch("/api/fauna").then(r => r.json()).then(n => fillDatalist("fauna-types", n)).catch(() => {});
+
+// Biome datalist: narrow to the player's current body, falling back to the
+// system's biomes, then all — so capturing always has a curated, standardized
+// list even on bodies the source doesn't cover (most moons).
+let biomeData = { by_body: {}, by_system: {}, all: [] };
+let lastBiomeKey = null;
+function updateBiomes(system, container) {
+  const s = (system || "").toLowerCase(), c = (container || "").toLowerCase();
+  const key = s + "/" + c;
+  if (key === lastBiomeKey) return;
+  lastBiomeKey = key;
+  const list = (biomeData.by_body[s] && biomeData.by_body[s][c])
+    || biomeData.by_system[s] || biomeData.all;
+  fillDatalist("biome-types", list);
+}
+fetch("/api/biomes").then(r => r.json()).then(d => {
+  biomeData = d;
+  lastBiomeKey = null;                       // force a refill against new data
+  if (lastState) updateBiomes(lastState.system, lastState.container && lastState.container.name);
+  else fillDatalist("biome-types", d.all);   // something usable before first fix
+}).catch(() => {});
 </script>
 </body>
 </html>

@@ -95,6 +95,39 @@ def _save_json_list(path: Path, items: list[dict]) -> None:
     path.write_text(json.dumps(items, indent=1))
 
 
+def load_biomes() -> dict:
+    """Normalize server/biomes.json into lookups for the biome datalist:
+      by_body[system][body] -> [biome names]   (system/body lowercased)
+      by_system[system]      -> [union of the system's biome names]
+      all                    -> [every biome name]
+    The source is irregular (Stanton keys by planet, Nyx by moon, Pyro is
+    system-wide) and sparse (moons mostly absent), so the UI falls back
+    body -> system -> all. Handled generically: a dict value is body->entries,
+    a list value applies to the whole system."""
+    out = {"by_body": {}, "by_system": {}, "all": []}
+    try:
+        raw = json.loads((Path(__file__).parent / "biomes.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[sc-nav] biomes load failed: {exc}")
+        return out
+    all_names = set()
+    for system, sysv in (raw.get("star_systems") or {}).items():
+        s = system.lower()
+        sys_names = set()
+        for group in (sysv.values() if isinstance(sysv, dict) else []):
+            if isinstance(group, dict):           # body -> [entries]
+                for body, entries in group.items():
+                    names = [e["biome_name"] for e in entries if e.get("biome_name")]
+                    out["by_body"].setdefault(s, {})[body.lower()] = sorted(set(names))
+                    sys_names.update(names)
+            elif isinstance(group, list):         # applies system-wide
+                sys_names.update(e["biome_name"] for e in group if e.get("biome_name"))
+        out["by_system"][s] = sorted(sys_names)
+        all_names.update(sys_names)
+    out["all"] = sorted(all_names)
+    return out
+
+
 def load_fauna_names() -> list[str]:
     """Curated fauna/species names for the Add Fauna datalist. A committed
     reference list shipped with the server (server/fauna.json)."""
@@ -179,6 +212,7 @@ observations = {cat: _load_json_list(path) for cat, path in OBSERVATION_FILES.it
 handles = HandleRegistry(HANDLES_FILE)
 raw_commodity_names = load_raw_commodity_names()
 fauna_names = load_fauna_names()
+biomes = load_biomes()
 nav_core.merge_custom_pois(nav, custom_pois)
 merge_all_observations(nav)
 nav_core.assign_qt_markers(nav)
@@ -515,6 +549,13 @@ async def list_raw_commodities():
 async def list_fauna():
     """Curated fauna/species names for the Add Fauna datalist."""
     return fauna_names
+
+
+@app.get("/api/biomes")
+async def list_biomes():
+    """Biome lookups (by_body / by_system / all) for the biome datalist; the
+    UI narrows to the player's current body, falling back to system then all."""
+    return biomes
 
 
 @app.get("/api/custom_pois")

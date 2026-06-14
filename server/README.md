@@ -207,7 +207,11 @@ plus a capture endpoint — no new store/search/summary code):
   reference list (`server/fauna.json`, served at `GET /api/fauna`).
 
 Both also record position, auto-captured altitude, optional biome/note, and
-the contributor. Capture mirrors POIs (Add … panel → arm → `/showlocation`).
+the contributor. The **biome** field is a datalist standardized from
+`server/biomes.json` (served at `GET /api/biomes`); the UI narrows the
+suggestions to the player's current body, falling back to the system's biomes
+then all (the source is sparse — most moons aren't listed — so the fallback
+keeps a curated list available everywhere). Capture mirrors POIs (Add … panel → arm → `/showlocation`).
 The Nearby table and map combine POIs + observations with an All / POIs /
 Resources / Fauna filter. Observation IDs share one range (≥ 2,000,000).
 
@@ -243,6 +247,7 @@ server restart, by design. Crumbs are capped at 5000 points.
 | `GET /api/handles` | contributor registry (handle → PlayerID) |
 | `GET /api/raw_commodities` | raw-ore names (uexcorp `is_raw==1`) for the ore datalist |
 | `GET /api/fauna` | curated fauna/species names for the Add Fauna datalist |
+| `GET /api/biomes` | biome lookups (by_body / by_system / all) for the biome datalist |
 | `POST /api/destination {"poi_id": N}` / `DELETE /api/destination` | set/clear destination (POI or observation id) |
 | `POST /api/capture/start {"name","type"}` | arm custom-POI capture |
 | `POST /api/capture/node {"ore","band","biome","note"}` | arm resource-node capture |

@@ -1,0 +1,86 @@
+{
+  "star_systems": {
+    "stanton": {
+      "planets": {
+        "hurston": [
+          {
+            "biome_name": "Desert",
+            "description": "Arid expanses with sandy dunes, sparse rocks, and dry air."
+          },
+          {
+            "biome_name": "Polluted Coast",
+            "description": "Murky, chemically contaminated shorelines near the industrial sectors."
+          },
+          {
+            "biome_name": "Acidic / Trash Plains",
+            "description": "Scrublands littered with strip-mining runoff and industrial scrap material."
+          },
+          {
+            "biome_name": "Savannah",
+            "description": "Yellowed, dry grass plains interspersed with specialized organic trees."
+          }
+        ],
+        "microtech": [
+          {
+            "biome_name": "Mountains / Alpine",
+            "description": "Snow-capped rocky peaks subject to sudden, severe blizzards."
+          },
+          {
+            "biome_name": "Forest Regions",
+            "description": "Dense clusters of evergreen trees surviving in sub-zero conditions."
+          },
+          {
+            "biome_name": "Low Frozen Zones / Tundra",
+            "description": "Glacial plains and harsh permafrost landscapes found near the poles."
+          },
+          {
+            "biome_name": "Floral Fields",
+            "description": "Mild, localized green valleys showcasing resilient planetary flora."
+          },
+          {
+            "biome_name": "Frozen Lakes",
+            "description": "Massive expanses of solid sheet ice visible from high orbit."
+          }
+        ],
+        "arccorp": [
+          {
+            "biome_name": "Ecumenopolis / Cityscape",
+            "description": "A completely terraformed artificial biome dominated by continuous skyscrapers, industrial factories, and glowing commercial plazas."
+          }
+        ],
+        "crusader": [
+          {
+            "biome_name": "Gas Giant Atmosphere",
+            "description": "Layers of high-altitude clouds, violent wind currents, and breathable air pockets housing the floating city of Orison."
+          }
+        ]
+      }
+    },
+    "nyx": {
+      "moons": {
+        "delamar": [
+          {
+            "biome_name": "Asteroid / Barren Rock",
+            "description": "Cratered, low-gravity rocky surface with minimal geological variety, housing the Levski mining facility."
+          }
+        ]
+      }
+    },
+    "pyro": {
+      "planets_and_moons": [
+        {
+          "biome_name": "Volcanic / Magma",
+          "description": "Cracked planetary surfaces featuring molten lava flows, searing heat, and violent geothermal vents."
+        },
+        {
+          "biome_name": "Scorched Desert",
+          "description": "Sun-baked, irradiated badlands stripped of atmosphere and moisture by high solar activity."
+        },
+        {
+          "biome_name": "Desolate Ice",
+          "description": "Freezing, dark rock faces covered in thick frost and methane-ice deposits on outer system bodies."
+        }
+      ]
+    }
+  }
+}
