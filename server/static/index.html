@@ -365,59 +365,82 @@ let kindFilter = "all";
 // Whole-dataset rows for "browse" mode — used before the first /showlocation,
 // so the filters are usable even without a live position. Replaced by the live
 // nearest lists as soon as a position arrives.
-let browseRows = null;
-const BROWSE_CAP = 250;   // max rows shown in browse mode (filters narrow it)
+// Whole-dataset rows (POIs + observations). Used for the no-position browse
+// view AND for dataset-wide filtering (contributor / container / text) even
+// while a live position drives the near-me view — so distant custom markers
+// (e.g. Orbital Markers spread around a planet) stay findable. Refreshed on
+// load and after every capture/delete so freshly added POIs appear.
+let allRows = null;
+const TABLE_CAP = 250;   // max rows rendered in the dataset view
 
-async function loadBrowse() {
-  if (lastState) return;                       // a live position takes over
+async function loadAll() {
   try {
     const [pois, obs] = await Promise.all([
       fetch("/api/pois?limit=5000").then(r => r.json()),
       fetch("/api/observations?limit=5000").then(r => r.json()),
     ]);
-    if (lastState) return;
-    browseRows = pois.concat(obs);
+    allRows = pois.concat(obs);
     renderNearby();
   } catch {}
 }
 
+function matchKind(r) {
+  return kindFilter === "all" || (kindFilter === "poi" ? r.kind === "poi" : r.kind === kindFilter);
+}
+
 function renderNearby() {
-  const live = !!lastState;
-  let rows;
-  if (live) {
-    const pois = lastState.nearest_pois || [];
-    const obs = observations();
-    rows = kindFilter === "poi" ? pois.slice()
-      : kindFilter === "all" ? pois.concat(obs)
-      : obs.filter(o => o.kind === kindFilter);
-    rows.sort((a, b) => (a.distance_m ?? 1e30) - (b.distance_m ?? 1e30));
-  } else {
-    rows = (browseRows || []).filter(r =>
-      kindFilter === "all" || (kindFilter === "poi" ? r.kind === "poi" : r.kind === kindFilter));
-    rows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }
-
-  syncSelect("f-container", [...new Set(rows.map(r => r.container))].sort(), "all containers");
-  syncSelect("f-owner", [...new Set(rows.map(r => r.owner_handle).filter(Boolean))].sort(), "all contributors");
-
   const fc = $("f-container").value, fo = $("f-owner").value;
   const ft = $("f-text").value.trim().toLowerCase();
+  const filtering = !!(fc || fo || ft);
+
+  // The container/contributor dropdowns list the WHOLE dataset (+ any live
+  // entities), so you can pick a contributor or body even when nothing of
+  // theirs is currently near you.
+  const liveRows = lastState ? (lastState.nearest_pois || []).concat(observations()) : [];
+  const universe = (allRows || []).concat(liveRows);
+  syncSelect("f-container", [...new Set(universe.map(r => r.container))].sort(), "all containers");
+  syncSelect("f-owner", [...new Set(universe.map(r => r.owner_handle).filter(Boolean))].sort(), "all contributors");
+
+  // Near-me view: the live distance-ranked nearest lists (default when there's
+  // a position and no field filter). Otherwise the dataset view: the whole
+  // dataset (browse, or any active filter), with live distances merged in where
+  // known so nearby rows still show distance/bearing.
+  const nearMe = !!lastState && !filtering;
+  let rows;
+  if (nearMe) {
+    const pois = lastState.nearest_pois || [];
+    rows = kindFilter === "poi" ? pois.slice()
+      : kindFilter === "all" ? pois.concat(observations())
+      : observations().filter(o => o.kind === kindFilter);
+    rows.sort((a, b) => (a.distance_m ?? 1e30) - (b.distance_m ?? 1e30));
+  } else {
+    const liveById = new Map(liveRows.map(r => [r.id, r]));
+    rows = (allRows || []).filter(matchKind).map(r => {
+      const lr = liveById.get(r.id);   // borrow distance/bearing if it's nearby
+      return lr ? { ...r, distance_m: lr.distance_m,
+        surface_distance_m: lr.surface_distance_m, bearing_deg: lr.bearing_deg } : r;
+    });
+    rows.sort((a, b) =>
+      (a.distance_m ?? Infinity) - (b.distance_m ?? Infinity)
+      || String(a.name).localeCompare(String(b.name)));
+  }
+
   rows = rows.filter(r =>
     (!fc || r.container === fc) &&
     (!fo || r.owner_handle === fo) &&
     (!ft || `${r.name} ${r.type || ""} ${r.ore || ""} ${r.species || ""} ${r.quality || ""}`.toLowerCase().includes(ft))
   );
 
-  // Live nearest lists are already small; the browse view spans the whole
-  // dataset, so cap the DOM rows and tell the user to refine.
+  // Near-me lists are already small; the dataset view spans everything, so cap
+  // the DOM rows and tell the user to refine.
   const total = rows.length;
-  const shown = live ? rows : rows.slice(0, BROWSE_CAP);
-  $("nearby-title").textContent = live ? "NEARBY" : "ALL POIs / OBSERVATIONS";
-  $("nearby-hint").textContent = live
+  const shown = nearMe ? rows : rows.slice(0, TABLE_CAP);
+  $("nearby-title").textContent = nearMe ? "NEARBY" : (filtering ? "MATCHES" : "ALL POIs / OBSERVATIONS");
+  $("nearby-hint").textContent = nearMe
     ? "(click to set destination)"
     : total > shown.length
-      ? `(no position yet · showing ${shown.length} of ${total} — refine filters · click to set destination)`
-      : `(no position yet · ${total} items · click to set destination)`;
+      ? `(${shown.length} of ${total} — refine filters · click to set destination)`
+      : `(${total} item${total === 1 ? "" : "s"} · click to set destination)`;
 
   const tbody = $("nearby-body");
   tbody.innerHTML = "";
@@ -465,7 +488,7 @@ function syncSelect(id, values, allLabel) {
 
 async function afterDelete() {
   if (!$("search-results").hidden) runSearch();
-  if (!lastState) loadBrowse();   // refresh the browse table after a delete
+  loadAll();   // refresh the dataset view so the removed row drops out
 }
 
 function wireDelete(tr) {
@@ -514,6 +537,7 @@ function renderCapture(cap) {
 
   if (cap.last && cap.last.captured_at !== lastCaptureStamp) {
     lastCaptureStamp = cap.last.captured_at;
+    loadAll();   // pull the new capture into the dataset view + filter dropdowns
     const L = cap.last;
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
     const ll = L.latitude == null ? "" : ` @ ${L.latitude.toFixed(3)}°, ${L.longitude.toFixed(3)}°`;
@@ -739,8 +763,8 @@ async function runSearch() {
   const table = $("search-results");
   if (q.length < 2) { table.hidden = true; return; }
   const [pois, obs] = await Promise.all([
-    fetch(`/api/pois?q=${encodeURIComponent(q)}&limit=15`).then(r => r.json()),
-    fetch(`/api/observations?q=${encodeURIComponent(q)}&limit=15`).then(r => r.json()),
+    fetch(`/api/pois?q=${encodeURIComponent(q)}&limit=50`).then(r => r.json()),
+    fetch(`/api/observations?q=${encodeURIComponent(q)}&limit=50`).then(r => r.json()),
   ]);
   const rows = pois.concat(obs);
   const tbody = table.querySelector("tbody");
@@ -773,9 +797,10 @@ setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
 connect();
 
 fetch("/api/state").then(r => r.json()).then(d => {
-  if (d.state) render(d.state); else loadBrowse();   // no position → browse mode
+  if (d.state) render(d.state);
   renderCapture(d.capture);
-}).catch(() => loadBrowse());
+  loadAll();   // always load the dataset for the browse view + filter dropdowns
+}).catch(() => loadAll());
 
 // ---------- constrained <select> with an "Other…" escape ----------
 // Used by the ore and biome fields: pick from a standardized list, or choose
