@@ -412,6 +412,25 @@ class NearestQtTests(unittest.TestCase):
         for i in (2, 3, 4):
             self.assertFalse(nav2.pois[i].qt_marker, f"item {i} QTMarker should not count")
 
+    def test_landing_zone_type_counts_but_only_exact(self):
+        # Type == "Landing Zone" (exact) is a QT marker even if QTMarker isn't 1
+        # (e.g. Area18). "Landing Zone3" / "Landing Zone 3" must NOT match.
+        def poi(i, t, qt):
+            return {"item_id": i, "PoiName": f"p{i}", "System": "Stanton", "Planet": "X",
+                    "Type": t, "XCoord": 0, "YCoord": 0, "ZCoord": 0, "QTMarker": qt}
+        nav2 = nav_core.parse_data([], [
+            poi(1, "Landing Zone", 0),       # Area18 case -> marker
+            poi(2, "Landing Zone3", 0),      # near-miss -> NOT a marker
+            poi(3, "Landing Zone 3", 0),     # near-miss -> NOT a marker
+            poi(4, "  Landing Zone  ", 0),   # whitespace only -> marker
+            poi(5, "Outpost", 1),            # QTMarker path still works
+        ])
+        self.assertTrue(nav2.pois[1].qt_marker)
+        self.assertFalse(nav2.pois[2].qt_marker)
+        self.assertFalse(nav2.pois[3].qt_marker)
+        self.assertTrue(nav2.pois[4].qt_marker)
+        self.assertTrue(nav2.pois[5].qt_marker)
+
     def test_qt_marker_poi_is_its_own_nearest(self):
         nav2 = load_data(DATA_DIR)
         nav_core.assign_qt_markers(nav2)

@@ -169,9 +169,15 @@ def parse_data(containers_raw: list[dict], pois_raw: list[dict]) -> NavData:
             latitude=p.get("Latitude"),
             longitude=p.get("Longitude"),
             height_m=p.get("Height"),
-            # QTMarker is 1 (active), -1, 0, or null; ONLY 1 is a jumpable
-            # marker. (bool() would wrongly treat -1 as truthy.)
-            qt_marker=p.get("QTMarker") in (1, "1"),
+            # Jumpable marker if QTMarker==1, OR Type=="Landing Zone" (major
+            # cities like Area18 are QT destinations but are sometimes flagged
+            # 0/null upstream). QTMarker is 1/-1/0/null; only 1 counts (bool()
+            # would wrongly treat -1 as truthy). Derived here, not by editing
+            # the data, so it survives starmap.space refreshes.
+            qt_marker=(
+                p.get("QTMarker") in (1, "1")
+                or (p.get("Type") or "").strip() == "Landing Zone"
+            ),
         )
         nav.pois[poi.id] = poi
 
