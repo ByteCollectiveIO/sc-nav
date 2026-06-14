@@ -395,6 +395,23 @@ class ObservationTests(unittest.TestCase):
 
 
 class NearestQtTests(unittest.TestCase):
+    def test_only_qtmarker_1_counts(self):
+        # QTMarker is 1 / -1 / 0 / null; only 1 is a real jump marker.
+        raw = [
+            {"item_id": 1, "PoiName": "Active", "System": "Stanton", "Planet": "Daymar",
+             "Type": "Outpost", "XCoord": 1, "YCoord": 2, "ZCoord": 3, "QTMarker": 1},
+            {"item_id": 2, "PoiName": "Minus", "System": "Stanton", "Planet": "Daymar",
+             "Type": "Outpost", "XCoord": 1, "YCoord": 2, "ZCoord": 3, "QTMarker": -1},
+            {"item_id": 3, "PoiName": "Null", "System": "Stanton", "Planet": "Daymar",
+             "Type": "Outpost", "XCoord": 1, "YCoord": 2, "ZCoord": 3, "QTMarker": None},
+            {"item_id": 4, "PoiName": "Zero", "System": "Stanton", "Planet": "Daymar",
+             "Type": "Outpost", "XCoord": 1, "YCoord": 2, "ZCoord": 3, "QTMarker": 0},
+        ]
+        nav2 = nav_core.parse_data([], raw)
+        self.assertTrue(nav2.pois[1].qt_marker)
+        for i in (2, 3, 4):
+            self.assertFalse(nav2.pois[i].qt_marker, f"item {i} QTMarker should not count")
+
     def test_qt_marker_poi_is_its_own_nearest(self):
         nav2 = load_data(DATA_DIR)
         nav_core.assign_qt_markers(nav2)
