@@ -243,6 +243,7 @@ class DestinationIn(BaseModel):
 class CaptureIn(BaseModel):
     name: str
     type: str = "Custom"
+    qt_marker: bool = False   # record as a jumpable QT marker (e.g. an OM)
 
 
 class NodeCaptureIn(BaseModel):
@@ -400,6 +401,7 @@ def _capture_poi(pos_m, now, pending, owner):
     poi = nav_core.custom_poi_from_position(
         nav, pos_m, now, pending["name"], pending["type"], next_id,
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
+        qt_marker=pending.get("qt_marker", False),
     )
     custom_pois.append(nav_core.custom_poi_to_dict(poi))
     try:
@@ -407,10 +409,15 @@ def _capture_poi(pos_m, now, pending, owner):
     except OSError as exc:
         print(f"[sc-nav] custom poi save failed: {exc}")
     nav.pois[poi.id] = poi
+    # A new QT marker changes the nearest-jump answer for every other entity,
+    # so rebuild the index + reassign nearest_qt across the dataset.
+    if poi.qt_marker:
+        nav_core.assign_qt_markers(nav)
     state.last_capture = {
         "kind": "poi", "id": poi.id, "name": poi.name, "type": poi.type,
         "container": poi.container_name or "Space", "system": poi.system,
         "latitude": poi.latitude, "longitude": poi.longitude,
+        "qt_marker": poi.qt_marker,
         "owner_handle": poi.owner_handle,
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -456,7 +463,7 @@ async def get_pois(
 ):
     return nav_core.search_pois(
         nav, query=q, system=system, container=container, poi_type=type,
-        owner_id=owner_id, limit=min(limit, 200),
+        owner_id=owner_id, limit=min(limit, 5000),
     )
 
 
@@ -494,7 +501,8 @@ async def capture_start(body: CaptureIn):
         if state.capture_pending is not None:
             raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
         state.capture_pending = {
-            "kind": "poi", "name": name, "type": body.type.strip() or "Custom"
+            "kind": "poi", "name": name, "type": body.type.strip() or "Custom",
+            "qt_marker": body.qt_marker,
         }
         await state.broadcast()
     return {"ok": True, "capture": state.capture_status()}
@@ -577,9 +585,13 @@ async def delete_custom_poi(poi_id: int):
         idx = next((i for i, c in enumerate(custom_pois) if c["id"] == poi_id), None)
         if idx is None:
             raise HTTPException(status_code=404, detail="unknown custom poi")
-        custom_pois.pop(idx)
+        removed = custom_pois.pop(idx)
         save_custom_pois(custom_pois)
         nav.pois.pop(poi_id, None)
+        # Removing a QT marker leaves other entities pointing at a marker that's
+        # gone, so rebuild the index + reassign nearest_qt across the dataset.
+        if removed.get("qt_marker"):
+            nav_core.assign_qt_markers(nav)
         if state.destination_id == poi_id:
             state.destination_id = None
         if state.last_capture and state.last_capture["id"] == poi_id:
@@ -597,7 +609,7 @@ async def get_observations(
 ):
     return nav_core.search_observations(
         nav, query=q, category=category, system=system, container=container,
-        type_value=type, owner_id=owner_id, limit=min(limit, 500),
+        type_value=type, owner_id=owner_id, limit=min(limit, 5000),
     )
 
 

@@ -158,7 +158,12 @@
           <option>Outpost</option><option>Cave</option><option>Derelict</option>
           <option>Wreck</option><option>Bunker</option><option>Stash</option>
           <option>Scrapyard</option><option>Landmark</option><option>Custom</option>
+          <option>Orbital Marker</option>
         </datalist>
+        <label class="muted" style="font-size:12px; display:inline-flex; align-items:center; gap:5px;"
+               title="record as a jumpable quantum-travel marker (e.g. an Orbital Marker)">
+          <input id="poi-qt" type="checkbox"> QT marker
+        </label>
         <button id="poi-arm">capture /showlocation</button>
       </div>
       <div id="poi-armed" class="armed" hidden>
@@ -218,8 +223,8 @@
     </div>
   </div>
 
-  <div class="panel" id="nearby-panel" hidden>
-    <h2>NEARBY <span class="muted">(click to set destination)</span></h2>
+  <div class="panel" id="nearby-panel">
+    <h2><span id="nearby-title">NEARBY</span> <span class="muted" id="nearby-hint">(click to set destination)</span></h2>
     <div class="filter-bar">
       <span class="seg" id="kind-seg">
         <button data-kind="all" class="on">All</button>
@@ -357,15 +362,40 @@ function render(state) {
 
 // ---------- nearby (combined, filtered) ----------
 let kindFilter = "all";
+// Whole-dataset rows for "browse" mode — used before the first /showlocation,
+// so the filters are usable even without a live position. Replaced by the live
+// nearest lists as soon as a position arrives.
+let browseRows = null;
+const BROWSE_CAP = 250;   // max rows shown in browse mode (filters narrow it)
+
+async function loadBrowse() {
+  if (lastState) return;                       // a live position takes over
+  try {
+    const [pois, obs] = await Promise.all([
+      fetch("/api/pois?limit=5000").then(r => r.json()),
+      fetch("/api/observations?limit=5000").then(r => r.json()),
+    ]);
+    if (lastState) return;
+    browseRows = pois.concat(obs);
+    renderNearby();
+  } catch {}
+}
 
 function renderNearby() {
-  if (!lastState) return;
-  const pois = lastState.nearest_pois || [];
-  const obs = observations();
-  let rows = kindFilter === "poi" ? pois.slice()
-    : kindFilter === "all" ? pois.concat(obs)
-    : obs.filter(o => o.kind === kindFilter);
-  rows.sort((a, b) => (a.distance_m ?? 1e30) - (b.distance_m ?? 1e30));
+  const live = !!lastState;
+  let rows;
+  if (live) {
+    const pois = lastState.nearest_pois || [];
+    const obs = observations();
+    rows = kindFilter === "poi" ? pois.slice()
+      : kindFilter === "all" ? pois.concat(obs)
+      : obs.filter(o => o.kind === kindFilter);
+    rows.sort((a, b) => (a.distance_m ?? 1e30) - (b.distance_m ?? 1e30));
+  } else {
+    rows = (browseRows || []).filter(r =>
+      kindFilter === "all" || (kindFilter === "poi" ? r.kind === "poi" : r.kind === kindFilter));
+    rows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
 
   syncSelect("f-container", [...new Set(rows.map(r => r.container))].sort(), "all containers");
   syncSelect("f-owner", [...new Set(rows.map(r => r.owner_handle).filter(Boolean))].sort(), "all contributors");
@@ -378,9 +408,20 @@ function renderNearby() {
     (!ft || `${r.name} ${r.type || ""} ${r.ore || ""} ${r.species || ""} ${r.quality || ""}`.toLowerCase().includes(ft))
   );
 
+  // Live nearest lists are already small; the browse view spans the whole
+  // dataset, so cap the DOM rows and tell the user to refine.
+  const total = rows.length;
+  const shown = live ? rows : rows.slice(0, BROWSE_CAP);
+  $("nearby-title").textContent = live ? "NEARBY" : "ALL POIs / OBSERVATIONS";
+  $("nearby-hint").textContent = live
+    ? "(click to set destination)"
+    : total > shown.length
+      ? `(no position yet · showing ${shown.length} of ${total} — refine filters · click to set destination)`
+      : `(no position yet · ${total} items · click to set destination)`;
+
   const tbody = $("nearby-body");
   tbody.innerHTML = "";
-  for (const e of rows) {
+  for (const e of shown) {
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td>` +
@@ -422,7 +463,10 @@ function syncSelect(id, values, allLabel) {
   sel.value = wanted.includes(cur) ? cur : "";
 }
 
-async function afterDelete() { if (!$("search-results").hidden) runSearch(); }
+async function afterDelete() {
+  if (!$("search-results").hidden) runSearch();
+  if (!lastState) loadBrowse();   // refresh the browse table after a delete
+}
 
 function wireDelete(tr) {
   const dp = tr.querySelector("[data-del-poi]");
@@ -478,7 +522,9 @@ function renderCapture(cap) {
     else if (L.kind === "wildlife") show("wild-result",
       `added <span class="fauna-dot">❀</span> <b>${esc(L.species)}</b> on ${esc(L.container)}${ll}${by}`);
     else show("poi-result",
-      `added <span class="custom-star">★</span> <b>${esc(L.name)}</b> (${esc(L.type)}) on ${esc(L.container)}${ll}${by}`);
+      `added <span class="custom-star">★</span> <b>${esc(L.name)}</b> (${esc(L.type)})` +
+      (L.qt_marker ? ` <span class="qt-self">⚡ QT marker</span>` : "") +
+      ` on ${esc(L.container)}${ll}${by}`);
   }
 }
 function show(id, html) { $(id).innerHTML = html; $(id).hidden = false; }
@@ -498,8 +544,10 @@ async function armFailed(resultId, r) {
 $("poi-arm").onclick = async () => {
   const name = $("poi-name").value.trim();
   if (!name) return $("poi-name").focus();
-  const r = await postJson("/api/capture/start", { name, type: $("poi-type").value.trim() || "Custom" });
-  if (r.ok) { $("poi-name").value = ""; $("poi-type").value = ""; } else armFailed("poi-result", r);
+  const r = await postJson("/api/capture/start", {
+    name, type: $("poi-type").value.trim() || "Custom", qt_marker: $("poi-qt").checked });
+  if (r.ok) { $("poi-name").value = ""; $("poi-type").value = ""; $("poi-qt").checked = false; }
+  else armFailed("poi-result", r);
 };
 $("poi-cancel").onclick = () => postJson("/api/capture/cancel", {});
 
@@ -725,9 +773,9 @@ setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
 connect();
 
 fetch("/api/state").then(r => r.json()).then(d => {
-  if (d.state) render(d.state);
+  if (d.state) render(d.state); else loadBrowse();   // no position → browse mode
   renderCapture(d.capture);
-}).catch(() => {});
+}).catch(() => loadBrowse());
 
 // ---------- constrained <select> with an "Other…" escape ----------
 // Used by the ore and biome fields: pick from a standardized list, or choose

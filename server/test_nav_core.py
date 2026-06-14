@@ -234,6 +234,39 @@ class CustomPoiTests(unittest.TestCase):
         self.assertEqual(back.owner_id, 7)
         self.assertEqual(back.owner_handle, "Pilot7")
 
+    def test_qt_marker_custom_poi_round_trips(self):
+        t = time.time()
+        pos = poi_global_m(NAV, surface_pois("Daymar")[0], t)
+        poi = nav_core.custom_poi_from_position(
+            NAV, pos, t, "Daymar OM-3", "Orbital Marker", 1000004, qt_marker=True
+        )
+        self.assertTrue(poi.qt_marker)
+        # it's its own nearest QT marker
+        self.assertEqual(poi.nearest_qt, "Daymar OM-3")
+        self.assertEqual(poi.nearest_qt_dist_m, 0.0)
+        # qt_marker survives the dict round trip (default-False path stays False)
+        back = nav_core.poi_from_custom_dict(nav_core.custom_poi_to_dict(poi))
+        self.assertTrue(back.qt_marker)
+        self.assertFalse(
+            nav_core.poi_from_custom_dict({"id": 1, "name": "x"}).qt_marker
+        )
+
+    def test_custom_qt_marker_becomes_nearest_for_others(self):
+        # A user-added QT marker should become the nearest-jump answer for a
+        # nearby non-marker entity once the index is rebuilt.
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        ref = [p for p in nav2.pois.values()
+               if p.container_name == "Daymar" and not p.qt_marker and p.local_km][0]
+        pos = poi_global_m(nav2, ref, t)
+        marker = nav_core.custom_poi_from_position(
+            nav2, pos, t, "Test OM", "Orbital Marker", 1000005, qt_marker=True
+        )
+        nav2.pois[marker.id] = marker
+        nav_core.assign_qt_markers(nav2)
+        self.assertIn(marker, nav2.qt_markers)
+        self.assertEqual(nav2.pois[ref.id].nearest_qt, "Test OM")
+
 
 def _obs(nav, ref_name, t, category, data, obs_id, **kw):
     ref = [p for p in nav.pois.values()

@@ -525,10 +525,15 @@ def custom_poi_from_position(
     poi_id: int,
     owner_id: int | None = None,
     owner_handle: str | None = None,
+    qt_marker: bool = False,
 ) -> Poi:
     """Create a POI at a global position, stored the same way the upstream
     dataset stores it: body-local rotating-frame km when at a container,
-    global meters when in open space."""
+    global meters when in open space.
+
+    Set qt_marker=True to record the POI as a jumpable quantum-travel marker
+    (e.g. an Orbital Marker the user is mapping) so it becomes a candidate
+    nearest-jump target for every other entity."""
     system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix)
     poi = Poi(
         id=poi_id,
@@ -541,7 +546,7 @@ def custom_poi_from_position(
         latitude=lat,
         longitude=lon,
         height_m=height,
-        qt_marker=False,
+        qt_marker=bool(qt_marker),
         custom=True,
         owner_id=owner_id,
         owner_handle=owner_handle,
@@ -562,6 +567,7 @@ def custom_poi_to_dict(poi: Poi) -> dict:
         "latitude": poi.latitude,
         "longitude": poi.longitude,
         "height_m": poi.height_m,
+        "qt_marker": poi.qt_marker,
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
     }
@@ -579,7 +585,7 @@ def poi_from_custom_dict(d: dict) -> Poi:
         latitude=d.get("latitude"),
         longitude=d.get("longitude"),
         height_m=d.get("height_m"),
-        qt_marker=False,
+        qt_marker=bool(d.get("qt_marker")),
         custom=True,
         owner_id=d.get("owner_id"),
         owner_handle=d.get("owner_handle"),
