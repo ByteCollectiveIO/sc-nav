@@ -172,8 +172,8 @@
     <div class="panel">
       <h2>ADD RESOURCE NODE</h2>
       <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="node-ore" class="ti" list="ore-types" placeholder="ore" style="flex:1; min-width:110px;">
-        <datalist id="ore-types"></datalist>
+        <select id="node-ore" class="sel" style="flex:1; min-width:130px;"></select>
+        <input id="node-ore-other" class="ti" placeholder="other ore" hidden style="flex:1; min-width:110px;">
         <label class="muted" style="font-size:12px;">band
           <select id="node-band" class="sel">
             <option value="Unk">Unk</option>
@@ -506,12 +506,12 @@ $("poi-cancel").onclick = () => postJson("/api/capture/cancel", {});
 function nodeQualityPreview() { $("node-quality").textContent = BAND_QUALITY(parseInt($("node-band").value, 10)); }
 $("node-band").onchange = nodeQualityPreview; nodeQualityPreview();
 $("node-arm").onclick = async () => {
-  const ore = $("node-ore").value.trim();
+  const ore = selectValue("node-ore");
   if (!ore) return $("node-ore").focus();
   const r = await postJson("/api/capture/node", {
     ore, band: $("node-band").value,   // "Unk" or "1".."8"; server normalizes
-    biome: biomeValue("node-biome"), note: $("node-note").value.trim() });
-  if (r.ok) { $("node-ore").value = ""; resetBiome("node-biome"); $("node-note").value = ""; } else armFailed("node-result", r);
+    biome: selectValue("node-biome"), note: $("node-note").value.trim() });
+  if (r.ok) { resetSelect("node-ore"); resetSelect("node-biome"); $("node-note").value = ""; } else armFailed("node-result", r);
 };
 $("node-cancel").onclick = () => postJson("/api/capture/cancel", {});
 
@@ -519,8 +519,8 @@ $("wild-arm").onclick = async () => {
   const species = $("wild-species").value.trim();
   if (!species) return $("wild-species").focus();
   const r = await postJson("/api/capture/wildlife", {
-    species, biome: biomeValue("wild-biome"), note: $("wild-note").value.trim() });
-  if (r.ok) { $("wild-species").value = ""; resetBiome("wild-biome"); $("wild-note").value = ""; } else armFailed("wild-result", r);
+    species, biome: selectValue("wild-biome"), note: $("wild-note").value.trim() });
+  if (r.ok) { $("wild-species").value = ""; resetSelect("wild-biome"); $("wild-note").value = ""; } else armFailed("wild-result", r);
 };
 $("wild-cancel").onclick = () => postJson("/api/capture/cancel", {});
 
@@ -729,43 +729,48 @@ fetch("/api/state").then(r => r.json()).then(d => {
   renderCapture(d.capture);
 }).catch(() => {});
 
-// Populate the ore + fauna datalists from the server.
+// ---------- constrained <select> with an "Other…" escape ----------
+// Used by the ore and biome fields: pick from a standardized list, or choose
+// "Other…" to reveal a free-text input for an off-list value.
+const OTHER_OPT = "__other__";
 function fillDatalist(id, names) {
   const dl = $(id); dl.innerHTML = "";
   for (const n of names) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
 }
-fetch("/api/raw_commodities").then(r => r.json()).then(n => fillDatalist("ore-types", n)).catch(() => {});
+function otherInputId(selId) { return selId + "-other"; }
+function toggleOther(selId) { $(otherInputId(selId)).hidden = $(selId).value !== OTHER_OPT; }
+// Effective value for capture: the "Other" text when chosen, else the selected
+// option ("" = unselected).
+function selectValue(selId) {
+  const v = $(selId).value;
+  return v === OTHER_OPT ? $(otherInputId(selId)).value.trim() : (v || "");
+}
+function resetSelect(selId) {
+  $(selId).value = ""; $(otherInputId(selId)).value = ""; toggleOther(selId);
+}
+function fillSelectWithOther(selId, names, placeholder) {
+  const sel = $(selId), cur = sel.value;
+  sel.innerHTML = "";
+  sel.appendChild(new Option(placeholder, ""));
+  for (const n of names) sel.appendChild(new Option(n, n));
+  sel.appendChild(new Option("Other…", OTHER_OPT));
+  sel.value = (cur === OTHER_OPT || names.includes(cur)) ? cur : "";  // keep if still valid
+  toggleOther(selId);
+}
+
+// Fauna stays a datalist (type-to-filter is handy for the longer list).
 fetch("/api/fauna").then(r => r.json()).then(n => fillDatalist("fauna-types", n)).catch(() => {});
 
-// Biome dropdowns (node + fauna): a constrained <select> standardizes entries.
-// Options narrow to the player's current body, falling back to system then all.
-// An "Other…" option reveals a text field so an off-list biome is still
-// recordable (and visibly flagged as non-standard).
-const BIOME_OTHER = "__other__";
+// Ore: a constrained dropdown standardized from the uexcorp raw-commodity list.
+$("node-ore").onchange = () => toggleOther("node-ore");
+fetch("/api/raw_commodities").then(r => r.json())
+  .then(n => fillSelectWithOther("node-ore", n, "— ore")).catch(() => {});
+
+// Biome dropdowns (node + fauna): options narrow to the player's current body,
+// falling back to system then all.
 const BIOME_SELECTS = ["node-biome", "wild-biome"];
 let biomeData = { by_body: {}, by_system: {}, all: [] };
 let lastBiomeKey = null;
-
-function biomeOtherId(selId) { return selId + "-other"; }
-function toggleBiomeOther(selId) { $(biomeOtherId(selId)).hidden = $(selId).value !== BIOME_OTHER; }
-// Effective biome string for capture: the "Other" text when chosen, else the
-// selected option (empty = unspecified, since biome is optional).
-function biomeValue(selId) {
-  const v = $(selId).value;
-  return v === BIOME_OTHER ? $(biomeOtherId(selId)).value.trim() : (v || "");
-}
-function resetBiome(selId) {
-  $(selId).value = ""; $(biomeOtherId(selId)).value = ""; toggleBiomeOther(selId);
-}
-function fillBiomeSelect(selId, names) {
-  const sel = $(selId), cur = sel.value;
-  sel.innerHTML = "";
-  sel.appendChild(new Option("— biome (optional)", ""));
-  for (const n of names) sel.appendChild(new Option(n, n));
-  sel.appendChild(new Option("Other…", BIOME_OTHER));
-  sel.value = (cur === BIOME_OTHER || names.includes(cur)) ? cur : "";  // keep if still valid
-  toggleBiomeOther(selId);
-}
 function updateBiomes(system, container) {
   const s = (system || "").toLowerCase(), c = (container || "").toLowerCase();
   const key = s + "/" + c;
@@ -773,14 +778,14 @@ function updateBiomes(system, container) {
   lastBiomeKey = key;
   const list = (biomeData.by_body[s] && biomeData.by_body[s][c])
     || biomeData.by_system[s] || biomeData.all;
-  for (const id of BIOME_SELECTS) fillBiomeSelect(id, list);
+  for (const id of BIOME_SELECTS) fillSelectWithOther(id, list, "— biome (optional)");
 }
-BIOME_SELECTS.forEach(id => $(id).onchange = () => toggleBiomeOther(id));
+BIOME_SELECTS.forEach(id => $(id).onchange = () => toggleOther(id));
 fetch("/api/biomes").then(r => r.json()).then(d => {
   biomeData = d;
   lastBiomeKey = null;                       // force a refill against new data
   if (lastState) updateBiomes(lastState.system, lastState.container && lastState.container.name);
-  else for (const id of BIOME_SELECTS) fillBiomeSelect(id, d.all);  // usable before first fix
+  else for (const id of BIOME_SELECTS) fillSelectWithOther(id, d.all, "— biome (optional)");
 }).catch(() => {});
 </script>
 </body>

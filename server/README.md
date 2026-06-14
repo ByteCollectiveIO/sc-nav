@@ -198,9 +198,10 @@ plus a capture endpoint — no new store/search/summary code):
 - **resource** (`resource_nodes.json`): ore, band 1–8, quality auto-derived
   from band (1 Lowest, 2–4 Low-Mid, 5–6 Good/High, 7 Very High, 8 Perfect).
   Band may also be **Unk** (the default) — you can't know quality until a node
-  is mined — which stores band `null` and quality `"Unk"`. The ore datalist is
-  populated from the uexcorp commodities API (`is_raw == 1`), fetched on
-  startup and cached to `commodities.json` (falls back to the cache offline).
+  is mined — which stores band `null` and quality `"Unk"`. The ore is a
+  constrained dropdown (with an "Other…" escape) populated from the uexcorp
+  commodities API (`is_raw == 1`), fetched on startup and cached to
+  `commodities.json` (falls back to the cache offline).
 - **wildlife** (`wildlife.json`): species; no quality. Labelled **Fauna** in
   the UI ("Add Fauna" panel, "Fauna" filter); the category key stays
   `wildlife` internally. The species datalist is populated from a curated
