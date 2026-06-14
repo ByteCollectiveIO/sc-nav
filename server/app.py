@@ -100,28 +100,36 @@ def load_biomes() -> dict:
       by_body[system][body] -> [biome names]   (system/body lowercased)
       by_system[system]      -> [union of the system's biome names]
       all                    -> [every biome name]
-    The source is irregular (Stanton keys by planet, Nyx by moon, Pyro is
-    system-wide) and sparse (moons mostly absent), so the UI falls back
-    body -> system -> all. Handled generically: a dict value is body->entries,
-    a list value applies to the whole system."""
+    Source shape: star_systems -> system -> planets -> planet ->
+      { "biomes": [{biome_name,...}], "moons": { moon: [{biome_name,...}] } }.
+    Both planets and moons land in by_body; the UI narrows to the player's body
+    and falls back body -> system -> all."""
     out = {"by_body": {}, "by_system": {}, "all": []}
     try:
         raw = json.loads((Path(__file__).parent / "biomes.json").read_text())
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[sc-nav] biomes load failed: {exc}")
         return out
+
+    def names_of(entries):
+        return sorted({e["biome_name"] for e in (entries or []) if e.get("biome_name")})
+
     all_names = set()
     for system, sysv in (raw.get("star_systems") or {}).items():
         s = system.lower()
         sys_names = set()
-        for group in (sysv.values() if isinstance(sysv, dict) else []):
-            if isinstance(group, dict):           # body -> [entries]
-                for body, entries in group.items():
-                    names = [e["biome_name"] for e in entries if e.get("biome_name")]
-                    out["by_body"].setdefault(s, {})[body.lower()] = sorted(set(names))
-                    sys_names.update(names)
-            elif isinstance(group, list):         # applies system-wide
-                sys_names.update(e["biome_name"] for e in group if e.get("biome_name"))
+        bodies = out["by_body"].setdefault(s, {})
+        for planet, pv in ((sysv or {}).get("planets") or {}).items():
+            pv = pv or {}
+            pnames = names_of(pv.get("biomes"))
+            if pnames:
+                bodies[planet.lower()] = pnames
+                sys_names.update(pnames)
+            for moon, entries in (pv.get("moons") or {}).items():
+                mnames = names_of(entries)
+                if mnames:
+                    bodies[moon.lower()] = mnames
+                    sys_names.update(mnames)
         out["by_system"][s] = sorted(sys_names)
         all_names.update(sys_names)
     out["all"] = sorted(all_names)

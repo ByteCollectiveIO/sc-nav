@@ -207,11 +207,12 @@ plus a capture endpoint — no new store/search/summary code):
   reference list (`server/fauna.json`, served at `GET /api/fauna`).
 
 Both also record position, auto-captured altitude, optional biome/note, and
-the contributor. The **biome** field is a datalist standardized from
-`server/biomes.json` (served at `GET /api/biomes`); the UI narrows the
-suggestions to the player's current body, falling back to the system's biomes
-then all (the source is sparse — most moons aren't listed — so the fallback
-keeps a curated list available everywhere). Capture mirrors POIs (Add … panel → arm → `/showlocation`).
+the contributor. The **biome** field is a constrained dropdown standardized
+from `server/biomes.json` (served at `GET /api/biomes`); its options narrow to
+the player's current body (planets and moons are both covered), falling back to
+the system's biomes then all if a body isn't listed. An **"Other…"** option
+reveals a free-text field so an off-list biome is still recordable while
+everything else stays standardized for analytics. Capture mirrors POIs (Add … panel → arm → `/showlocation`).
 The Nearby table and map combine POIs + observations with an All / POIs /
 Resources / Fauna filter. Observation IDs share one range (≥ 2,000,000).
 

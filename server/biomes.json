@@ -2,85 +2,110 @@
   "star_systems": {
     "stanton": {
       "planets": {
-        "hurston": [
-          {
-            "biome_name": "Desert",
-            "description": "Arid expanses with sandy dunes, sparse rocks, and dry air."
-          },
-          {
-            "biome_name": "Polluted Coast",
-            "description": "Murky, chemically contaminated shorelines near the industrial sectors."
-          },
-          {
-            "biome_name": "Acidic / Trash Plains",
-            "description": "Scrublands littered with strip-mining runoff and industrial scrap material."
-          },
-          {
-            "biome_name": "Savannah",
-            "description": "Yellowed, dry grass plains interspersed with specialized organic trees."
+        "hurston": {
+          "biomes": [
+            { "biome_name": "Desert", "description": "Arid expanses with sandy dunes, sparse rocks, and dry air." },
+            { "biome_name": "Polluted Coast", "description": "Murky, chemically contaminated shorelines near the industrial sectors." },
+            { "biome_name": "Acidic / Trash Plains", "description": "Scrublands littered with strip-mining runoff and industrial scrap material." },
+            { "biome_name": "Savannah", "description": "Yellowed, dry grass plains interspersed with specialized organic trees." }
+          ],
+          "moons": {
+            "arial": [
+              { "biome_name": "High-Pressure Acid Barren", "description": "Deeply fissured crystalline rock faces surrounded by thick, highly pressurized sulfuric mist." }
+            ],
+            "aberdeen": [
+              { "biome_name": "Sulfuric Haze Badlands", "description": "Craggy, corrosive terrain choked under a thick, poisonous greenish-yellow atmosphere with extreme ambient heat." }
+            ],
+            "magda": [
+              { "biome_name": "Crystalline Desolation", "description": "Desolate plains dominated by contrasting colorful mineral stains and sharp, rocky outcrop formations." }
+            ],
+            "ita": [
+              { "biome_name": "Rocky Steppes", "description": "Muted, windswept gray vistas broken up by ancient craters and deeply carved rocky canyons." }
+            ]
           }
-        ],
-        "microtech": [
-          {
-            "biome_name": "Mountains / Alpine",
-            "description": "Snow-capped rocky peaks subject to sudden, severe blizzards."
-          },
-          {
-            "biome_name": "Forest Regions",
-            "description": "Dense clusters of evergreen trees surviving in sub-zero conditions."
-          },
-          {
-            "biome_name": "Low Frozen Zones / Tundra",
-            "description": "Glacial plains and harsh permafrost landscapes found near the poles."
-          },
-          {
-            "biome_name": "Floral Fields",
-            "description": "Mild, localized green valleys showcasing resilient planetary flora."
-          },
-          {
-            "biome_name": "Frozen Lakes",
-            "description": "Massive expanses of solid sheet ice visible from high orbit."
+        },
+        "crusader": {
+          "biomes": [
+            { "biome_name": "Gas Giant Atmosphere", "description": "Layers of high-altitude clouds, violent wind currents, and breathable air pockets housing the floating city of Orison." }
+          ],
+          "moons": {
+            "cellin": [
+              { "biome_name": "Volcanic Cryo-Plains", "description": "Dormant geysers and active cryo-volcanoes scattered across white-hot thermal sand and jagged rock formations." }
+            ],
+            "daymar": [
+              { "biome_name": "Dust Deserts", "description": "Sweeping, high-altitude sand dunes continually reshaped by fierce dust storms, featuring vast canyon networks." }
+            ],
+            "yela": [
+              { "biome_name": "Glacial Ice Crust", "description": "Massive frozen sheets and deep crevasse systems surrounded by a ring of dense orbiting asteroids." }
+            ]
           }
-        ],
-        "arccorp": [
-          {
-            "biome_name": "Ecumenopolis / Cityscape",
-            "description": "A completely terraformed artificial biome dominated by continuous skyscrapers, industrial factories, and glowing commercial plazas."
+        },
+        "arccorp": {
+          "biomes": [
+            { "biome_name": "Ecumenopolis / Cityscape", "description": "A completely terraformed artificial biome dominated by continuous skyscrapers, industrial factories, and glowing commercial plazas." }
+          ],
+          "moons": {
+            "lyria": [
+              { "biome_name": "Cryo-Geothermal Ice", "description": "Glacial valleys rich in glowing liquid methane pools and erupting cryo-geysers." }
+            ],
+            "wala": [
+              { "biome_name": "Crystalline Tundra", "description": "Striking, brightly colored mineral deposits mixed with sharp topaz-like crystal clusters jutting from a low-gravity crust." }
+            ]
           }
-        ],
-        "crusader": [
-          {
-            "biome_name": "Gas Giant Atmosphere",
-            "description": "Layers of high-altitude clouds, violent wind currents, and breathable air pockets housing the floating city of Orison."
+        },
+        "microtech": {
+          "biomes": [
+            { "biome_name": "Mountains / Alpine", "description": "Snow-capped rocky peaks subject to sudden, severe blizzards." },
+            { "biome_name": "Forest Regions", "description": "Dense clusters of evergreen trees surviving in sub-zero conditions." },
+            { "biome_name": "Low Frozen Zones / Tundra", "description": "Glacial plains and harsh permafrost landscapes found near the poles." },
+            { "biome_name": "Floral Fields", "description": "Mild, localized green valleys showcasing resilient planetary flora." },
+            { "biome_name": "Frozen Lakes", "description": "Massive expanses of solid sheet ice visible from high orbit." }
+          ],
+          "moons": {
+            "calliope": [
+              { "biome_name": "Sub-Zero Windswept Desolation", "description": "Exceedingly low-temperature plains subject to blinding high-velocity windstorms over stark white snowdrifts." }
+            ],
+            "clio": [
+              { "biome_name": "Liquid Ocean & Snowy Archipelagos", "description": "Resilient, pinkish coastal flora borders freezing liquid oceans and snow-touched landmasses." }
+            ],
+            "euterpe": [
+              { "biome_name": "Sheer Ice Sheathes", "description": "An ultra-smooth, high-albedo frozen shell with sparse rocky spires breaking the horizon." }
+            ]
           }
-        ]
-      }
-    },
-    "nyx": {
-      "moons": {
-        "delamar": [
-          {
-            "biome_name": "Asteroid / Barren Rock",
-            "description": "Cratered, low-gravity rocky surface with minimal geological variety, housing the Levski mining facility."
-          }
-        ]
+        }
       }
     },
     "pyro": {
-      "planets_and_moons": [
-        {
-          "biome_name": "Volcanic / Magma",
-          "description": "Cracked planetary surfaces featuring molten lava flows, searing heat, and violent geothermal vents."
+      "planets": {
+        "pyro_i": { "biomes": [{ "biome_name": "Searing Volcanic Crack", "description": "Molten magma rivers and charred rock faces actively torn apart by solar flares." }] },
+        "pyro_ii": { "biomes": [{ "biome_name": "Irradiated Scorched Desert", "description": "Sun-bleached badlands rich in heavy raw mineral nodes stripped bare of a protective atmosphere." }] },
+        "pyro_iii": { "biomes": [{ "biome_name": "High-Heat Basalt Crags", "description": "Jet-black volcanic glass fields and rough basalt columns resulting from ancient lava flows." }] },
+        "pyro_iv": { "biomes": [{ "biome_name": "Corrosive Acid Plains", "description": "Yellowish, bubbling sulfur pools and highly unstable, crumbly sulfur-rich topsoils." }] },
+        "pyro_v": { 
+          "biomes": [{ "biome_name": "Hydrogen Gas Atmosphere", "description": "Violent, churning greenish-blue gas envelope subject to immense pressure shifts." }],
+          "moons": {
+            "ignis": [
+              { "biome_name": "Ash Desolation", "description": "Grey volcanic ash fields interspersed with cooling obsidian ridges." }
+            ],
+            "vatra": [
+              { "biome_name": "Thick-Mised Crags", "description": "High atmospheric pressure traps dense carbon gases over deep, treacherous trenches." }
+            ],
+            "adir": [
+              { "biome_name": "Canyon Badlands", "description": "Sharply eroded orange canyons featuring labyrinthine cave networks." }
+            ],
+            "fairo": [
+              { "biome_name": "Hydrocarbon Swamps", "description": "Dark, sludgy valleys filled with sticky organic runoffs and heavy crude compounds." }
+            ],
+            "fuego": [
+              { "biome_name": "Geothermal Hotspots", "description": "Ripped-apart rock plains continuously reshaped by surface magma pooling." }
+            ],
+            "vuur": [
+              { "biome_name": "Desolate Methane Frost", "description": "Extremely dark, sub-zero outer moon covered in thick slabs of methane-ice." }
+            ]
+          }
         },
-        {
-          "biome_name": "Scorched Desert",
-          "description": "Sun-baked, irradiated badlands stripped of atmosphere and moisture by high solar activity."
-        },
-        {
-          "biome_name": "Desolate Ice",
-          "description": "Freezing, dark rock faces covered in thick frost and methane-ice deposits on outer system bodies."
-        }
-      ]
+        "pyro_vi": { "biomes": [{ "biome_name": "Deep Space Permafrost", "description": "Freezing dark frontier rock faces blanketed by eternal frost far from the system's dying star." }] }
+      }
     }
   }
 }
