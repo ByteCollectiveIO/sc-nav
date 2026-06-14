@@ -306,7 +306,7 @@ function qtLabel(e) {
   const self = e.kind === "poi" && e.qt_marker;
   const name = `<span class="${self ? 'qt-self' : ''}" title="nearest quantum marker">${esc(e.nearest_qt)}</span>`;
   if (self || e.nearest_qt_dist_m == null) return name;
-  return `${name} <span class="muted">· ${fmtDist(e.nearest_qt_dist_m)}</span>`;
+  return `${name} <span class="muted">(${fmtDist(e.nearest_qt_dist_m)})</span>`;
 }
 
 // ---------- state ----------
