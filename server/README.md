@@ -208,6 +208,16 @@ the contributor. Capture mirrors POIs (Add … panel → arm → `/showlocation`
 The Nearby table and map combine POIs + observations with an All / POIs /
 Resources / Wildlife filter. Observation IDs share one range (≥ 2,000,000).
 
+## Nearest QT marker ("Jump to")
+
+Every POI / resource / wildlife row shows the nearest jumpable **QT marker**
+(POIs with `QTMarker == 1`) — the place to quantum-jump to in order to reach it
+from space. It prefers a marker on the same body (compared in the rotation-
+invariant local frame) and falls back to the nearest QT marker elsewhere in the
+system. A POI that is itself a QT marker shows its own name (highlighted). This
+is precomputed at load and on `POST /api/refresh` (and on each capture), so the
+per-frame nav path stays cheap.
+
 ## Breadcrumb trail + map
 
 The UI has a north-up local map (no terrain — a metric grid centered on you)

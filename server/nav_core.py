@@ -74,6 +74,7 @@ class Poi:
     custom: bool = False             # user-created, lives in custom_pois.json
     owner_id: int | None = None      # PlayerID who recorded it (custom only)
     owner_handle: str | None = None
+    nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
 
 
 @dataclass
@@ -105,6 +106,7 @@ class Observation:
     owner_handle: str | None
     observed_at: str                 # ISO timestamp of the sighting
     data: dict                       # category-specific fields
+    nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
 
 
 @dataclass
@@ -113,6 +115,9 @@ class NavData:
     pois: dict[int, Poi] = field(default_factory=dict)
     observations: dict[int, Observation] = field(default_factory=dict)
     systems: list[str] = field(default_factory=list)
+    # QT-marker indexes (filled by assign_qt_markers)
+    qt_markers: list = field(default_factory=list)               # all qt_marker POIs
+    qt_by_container: dict = field(default_factory=dict)           # (system,container) -> [Poi]
 
     def container_of(self, entity) -> Container | None:
         """Parent container of any positioned entity (Poi or Observation —
@@ -322,6 +327,7 @@ def _poi_base(poi) -> dict:
         "custom": poi.custom,
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
+        "nearest_qt": poi.nearest_qt,
     }
 
 
@@ -342,6 +348,7 @@ def _observation_base(obs) -> dict:
         "owner_id": obs.owner_id,
         "owner_handle": obs.owner_handle,
         "observed_at": obs.observed_at,
+        "nearest_qt": obs.nearest_qt,
         "custom": True,
     })
     return out
@@ -511,7 +518,7 @@ def custom_poi_from_position(
     dataset stores it: body-local rotating-frame km when at a container,
     global meters when in open space."""
     system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix)
-    return Poi(
+    poi = Poi(
         id=poi_id,
         name=name,
         system=system,
@@ -527,6 +534,8 @@ def custom_poi_from_position(
         owner_id=owner_id,
         owner_handle=owner_handle,
     )
+    poi.nearest_qt = nearest_qt_marker(nav, poi, t_unix)
+    return poi
 
 
 def custom_poi_to_dict(poi: Poi) -> dict:
@@ -658,7 +667,7 @@ def observation_from_position(
         raise ValueError(f"unknown observation category: {category}")
     data = OBSERVATION_CATEGORIES[category]["normalize"](data)
     system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix)
-    return Observation(
+    obs = Observation(
         id=obs_id,
         category=category,
         system=system,
@@ -675,6 +684,8 @@ def observation_from_position(
         observed_at=observed_at or datetime.now(timezone.utc).isoformat(),
         data=data,
     )
+    obs.nearest_qt = nearest_qt_marker(nav, obs, t_unix)
+    return obs
 
 
 def observation_to_dict(obs: Observation) -> dict:
@@ -746,6 +757,67 @@ def surface_distance_m(lat1, lon1, lat2, lon2, radius_m) -> float:
     """Great-circle distance only (drops the bearing) — used for breadcrumb
     move-distance gating."""
     return great_circle(lat1, lon1, lat2, lon2, radius_m)[0]
+
+
+# ---------------------------------------------------------------------------
+# Nearest QT (quantum-travel) marker
+# ---------------------------------------------------------------------------
+
+
+def index_qt_markers(nav: NavData) -> None:
+    """Build the lookup of QT-marker POIs used by nearest_qt_marker."""
+    nav.qt_markers = [p for p in nav.pois.values() if p.qt_marker]
+    nav.qt_by_container = {}
+    for p in nav.qt_markers:
+        nav.qt_by_container.setdefault((p.system, p.container_name), []).append(p)
+
+
+def nearest_qt_marker(nav: NavData, target, t_ref: float) -> str | None:
+    """Name of the nearest jumpable QT-marker POI to `target` (Poi or
+    Observation). A target that is itself a QT marker returns its own name.
+    Prefers a marker on the same body (rotation-invariant local distance);
+    falls back to the nearest QT marker elsewhere in the same system."""
+    if getattr(target, "qt_marker", False):
+        return target.name
+    system = target.system
+    # Same-body candidates: compare in the body-local frame (time-invariant).
+    if target.container_name is not None and target.local_km is not None:
+        best, best_d = None, math.inf
+        for p in nav.qt_by_container.get((system, target.container_name), []):
+            if p is target or p.local_km is None:
+                continue
+            d = dist3(target.local_km, p.local_km)
+            if d < best_d:
+                best, best_d = p, d
+        if best is not None:
+            return best.name
+    # Fallback: nearest QT marker anywhere in the same system (global frame).
+    # Body centers are static in the dataset, so this is rotation-insensitive.
+    tg = entity_global_m(nav, target, t_ref)
+    if tg is None:
+        return None
+    best, best_d = None, math.inf
+    for p in nav.qt_markers:
+        if p.system != system or p is target:
+            continue
+        pg = entity_global_m(nav, p, t_ref)
+        if pg is None:
+            continue
+        d = dist3(tg, pg)
+        if d < best_d:
+            best, best_d = p, d
+    return best.name if best else None
+
+
+def assign_qt_markers(nav: NavData, t_ref: float | None = None) -> None:
+    """(Re)build the QT index and assign every POI/observation its nearest
+    QT-marker name. Run after load and after a dataset refresh."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    index_qt_markers(nav)
+    for p in nav.pois.values():
+        p.nearest_qt = nearest_qt_marker(nav, p, t_ref)
+    for o in nav.observations.values():
+        o.nearest_qt = nearest_qt_marker(nav, o, t_ref)
 
 
 def search_pois(

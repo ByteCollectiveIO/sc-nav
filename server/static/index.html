@@ -51,6 +51,7 @@
   .custom-star { color: var(--warn); }
   .node-dot { color: var(--node); }
   .fauna-dot { color: var(--fauna); }
+  .qt-self { color: var(--good); }   /* destination is itself a QT marker */
   .del { color: var(--bad); padding: 0 6px; cursor: pointer; }
   .del:hover { font-weight: bold; }
   .kind-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
@@ -233,7 +234,7 @@
     </div>
     <table>
       <thead><tr>
-        <th>NAME</th><th>KIND</th><th>CONTAINER</th><th>DETAIL</th>
+        <th>NAME</th><th>KIND</th><th>CONTAINER</th><th>DETAIL</th><th>JUMP TO (QT)</th>
         <th class="num">DISTANCE</th><th class="num">BEARING</th><th>BY</th><th></th>
       </tr></thead>
       <tbody id="nearby-body"></tbody>
@@ -244,7 +245,7 @@
     <h2>SEARCH (whole dataset)</h2>
     <input id="search" class="ti" placeholder="search POIs, resources, wildlife…" autocomplete="off">
     <table id="search-results" hidden>
-      <thead><tr><th>NAME</th><th>KIND</th><th>DETAIL</th><th>CONTAINER</th><th>BY</th><th></th></tr></thead>
+      <thead><tr><th>NAME</th><th>KIND</th><th>DETAIL</th><th>CONTAINER</th><th>JUMP TO (QT)</th><th>BY</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -299,6 +300,12 @@ function entDetail(e) {
   return esc(e.type);
 }
 function ownerLabel(e) { return esc(e.owner_handle || ""); }
+// Nearest QT marker to jump to; for a marker itself this is its own name.
+function qtLabel(e) {
+  if (!e.nearest_qt) return '<span class="muted">—</span>';
+  const self = e.kind === "poi" && e.qt_marker;
+  return `<span class="${self ? 'qt-self' : ''}" title="nearest quantum marker">${esc(e.nearest_qt)}</span>`;
+}
 
 // ---------- state ----------
 let lastState = null;
@@ -324,6 +331,7 @@ function render(state) {
     const extra = d.kind === "resource" ? `${esc(d.ore)} · B${d.band == null ? "?" : Number(d.band)} · ${esc(d.quality)}`
       : d.kind === "wildlife" ? esc(d.name) : esc(d.type);
     $("dest-meta").innerHTML = `${esc(d.container)} · ${extra}` +
+      (d.nearest_qt ? ` · jump to ${qtLabel(d)}` : "") +
       (d.same_container ? "" : " · different container — use quantum travel");
     $("r-bearing").innerHTML = fmtBearing(d.bearing_deg);
     $("r-dist").innerHTML = fmtDist(d.surface_distance_m ?? d.distance_m);
@@ -374,6 +382,7 @@ function renderNearby() {
     tr.innerHTML =
       `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td>` +
       `<td class="muted">${esc(e.container)}</td><td class="muted">${entDetail(e)}</td>` +
+      `<td>${qtLabel(e)}</td>` +
       `<td class="num">${fmtDist(e.surface_distance_m ?? e.distance_m)}</td>` +
       `<td class="num">${fmtBearing(e.bearing_deg)}</td>` +
       `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
@@ -689,7 +698,8 @@ async function runSearch() {
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td><td class="muted">${entDetail(e)}</td>` +
-      `<td class="muted">${esc(e.container)}</td><td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
+      `<td class="muted">${esc(e.container)}</td><td>${qtLabel(e)}</td>` +
+      `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
     tr.onclick = () => setDestination(e.id);
     wireDelete(tr);
     tbody.appendChild(tr);

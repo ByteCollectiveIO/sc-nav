@@ -394,6 +394,41 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(base["container"], "Daymar")
 
 
+class NearestQtTests(unittest.TestCase):
+    def test_qt_marker_poi_is_its_own_nearest(self):
+        nav2 = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav2)
+        kudre = next(p for p in nav2.pois.values()
+                     if p.container_name == "Daymar" and p.name == "Kudre Ore")
+        self.assertTrue(kudre.qt_marker)
+        self.assertEqual(kudre.nearest_qt, "Kudre Ore")
+
+    def test_non_qt_poi_gets_a_same_body_marker(self):
+        nav2 = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav2)
+        # a Daymar POI that is NOT itself a QT marker
+        p = next(p for p in nav2.pois.values()
+                 if p.container_name == "Daymar" and not p.qt_marker and p.local_km)
+        self.assertIsNotNone(p.nearest_qt)
+        # the assigned marker is a real QT marker on the same body
+        target = next(q for q in nav2.pois.values()
+                      if q.container_name == "Daymar" and q.name == p.nearest_qt)
+        self.assertTrue(target.qt_marker)
+
+    def test_observation_gets_nearest_qt(self):
+        nav2 = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav2)            # build the index first
+        t = time.time()
+        ref = next(p for p in nav2.pois.values()
+                   if p.container_name == "Daymar" and p.name == "Kudre Ore")
+        pos = poi_global_m(nav2, ref, t)
+        obs = nav_core.observation_from_position(nav2, pos, t, "resource",
+                                                 {"ore": "Gold", "band": 4}, 2000300)
+        # captured right at Kudre Ore (a QT marker) -> that's the nearest
+        self.assertEqual(obs.nearest_qt, "Kudre Ore")
+        self.assertEqual(nav_core._observation_base(obs)["nearest_qt"], "Kudre Ore")
+
+
 class BreadcrumbHelperTests(unittest.TestCase):
     def test_surface_distance_matches_great_circle(self):
         # 1 degree of latitude on a 1000 km radius body

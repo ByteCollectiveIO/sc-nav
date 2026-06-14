@@ -169,6 +169,7 @@ handles = HandleRegistry(HANDLES_FILE)
 raw_commodity_names = load_raw_commodity_names()
 nav_core.merge_custom_pois(nav, custom_pois)
 merge_all_observations(nav)
+nav_core.assign_qt_markers(nav)
 
 
 class PositionIn(BaseModel):
@@ -579,6 +580,7 @@ async def refresh_data():
     fresh_commodities = await asyncio.to_thread(load_raw_commodity_names)
     nav_core.merge_custom_pois(fresh, custom_pois)
     merge_all_observations(fresh)
+    nav_core.assign_qt_markers(fresh)
     async with state.lock:
         nav = fresh
         raw_commodity_names = fresh_commodities
