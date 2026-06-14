@@ -211,12 +211,13 @@ Resources / Wildlife filter. Observation IDs share one range (≥ 2,000,000).
 ## Nearest QT marker ("Jump to")
 
 Every POI / resource / wildlife row shows the nearest jumpable **QT marker**
-(POIs with `QTMarker == 1`) — the place to quantum-jump to in order to reach it
-from space. It prefers a marker on the same body (compared in the rotation-
+(POIs with `QTMarker == 1`) **and the distance to it** — the place to
+quantum-jump to in order to reach it from space, and how far the target is from
+that marker. It prefers a marker on the same body (compared in the rotation-
 invariant local frame) and falls back to the nearest QT marker elsewhere in the
-system. A POI that is itself a QT marker shows its own name (highlighted). This
-is precomputed at load and on `POST /api/refresh` (and on each capture), so the
-per-frame nav path stays cheap.
+system. A POI that is itself a QT marker shows its own name (highlighted, 0 m).
+Name + distance are precomputed at load and on `POST /api/refresh` (and on each
+capture), so the per-frame nav path stays cheap.
 
 ## Breadcrumb trail + map
 

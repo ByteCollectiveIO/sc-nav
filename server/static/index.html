@@ -300,11 +300,14 @@ function entDetail(e) {
   return esc(e.type);
 }
 function ownerLabel(e) { return esc(e.owner_handle || ""); }
-// Nearest QT marker to jump to; for a marker itself this is its own name.
+// Nearest QT marker to jump to (+ distance to it); for a marker itself this is
+// its own name at 0 distance, so we show just the name.
 function qtLabel(e) {
   if (!e.nearest_qt) return '<span class="muted">—</span>';
   const self = e.kind === "poi" && e.qt_marker;
-  return `<span class="${self ? 'qt-self' : ''}" title="nearest quantum marker">${esc(e.nearest_qt)}</span>`;
+  const name = `<span class="${self ? 'qt-self' : ''}" title="nearest quantum marker">${esc(e.nearest_qt)}</span>`;
+  if (self || e.nearest_qt_dist_m == null) return name;
+  return `${name} <span class="muted">· ${fmtDist(e.nearest_qt_dist_m)}</span>`;
 }
 
 // ---------- state ----------

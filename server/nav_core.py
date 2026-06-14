@@ -75,6 +75,7 @@ class Poi:
     owner_id: int | None = None      # PlayerID who recorded it (custom only)
     owner_handle: str | None = None
     nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
+    nearest_qt_dist_m: float | None = None  # distance to that marker, meters
 
 
 @dataclass
@@ -107,6 +108,7 @@ class Observation:
     observed_at: str                 # ISO timestamp of the sighting
     data: dict                       # category-specific fields
     nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
+    nearest_qt_dist_m: float | None = None  # distance to that marker, meters
 
 
 @dataclass
@@ -328,6 +330,7 @@ def _poi_base(poi) -> dict:
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
         "nearest_qt": poi.nearest_qt,
+        "nearest_qt_dist_m": poi.nearest_qt_dist_m,
     }
 
 
@@ -349,6 +352,7 @@ def _observation_base(obs) -> dict:
         "owner_handle": obs.owner_handle,
         "observed_at": obs.observed_at,
         "nearest_qt": obs.nearest_qt,
+        "nearest_qt_dist_m": obs.nearest_qt_dist_m,
         "custom": True,
     })
     return out
@@ -534,7 +538,7 @@ def custom_poi_from_position(
         owner_id=owner_id,
         owner_handle=owner_handle,
     )
-    poi.nearest_qt = nearest_qt_marker(nav, poi, t_unix)
+    poi.nearest_qt, poi.nearest_qt_dist_m = nearest_qt_marker(nav, poi, t_unix)
     return poi
 
 
@@ -684,7 +688,7 @@ def observation_from_position(
         observed_at=observed_at or datetime.now(timezone.utc).isoformat(),
         data=data,
     )
-    obs.nearest_qt = nearest_qt_marker(nav, obs, t_unix)
+    obs.nearest_qt, obs.nearest_qt_dist_m = nearest_qt_marker(nav, obs, t_unix)
     return obs
 
 
@@ -772,15 +776,16 @@ def index_qt_markers(nav: NavData) -> None:
         nav.qt_by_container.setdefault((p.system, p.container_name), []).append(p)
 
 
-def nearest_qt_marker(nav: NavData, target, t_ref: float) -> str | None:
-    """Name of the nearest jumpable QT-marker POI to `target` (Poi or
-    Observation). A target that is itself a QT marker returns its own name.
-    Prefers a marker on the same body (rotation-invariant local distance);
-    falls back to the nearest QT marker elsewhere in the same system."""
+def nearest_qt_marker(nav: NavData, target, t_ref: float):
+    """(name, distance_m) of the nearest jumpable QT-marker POI to `target`
+    (a Poi or Observation). A target that is itself a QT marker returns its own
+    name at distance 0. Prefers a marker on the same body (rotation-invariant
+    local distance); falls back to the nearest QT marker elsewhere in the same
+    system. Returns (None, None) if there's no QT marker in the system."""
     if getattr(target, "qt_marker", False):
-        return target.name
+        return target.name, 0.0
     system = target.system
-    # Same-body candidates: compare in the body-local frame (time-invariant).
+    # Same-body candidates: compare in the body-local frame (km, time-invariant).
     if target.container_name is not None and target.local_km is not None:
         best, best_d = None, math.inf
         for p in nav.qt_by_container.get((system, target.container_name), []):
@@ -790,12 +795,12 @@ def nearest_qt_marker(nav: NavData, target, t_ref: float) -> str | None:
             if d < best_d:
                 best, best_d = p, d
         if best is not None:
-            return best.name
-    # Fallback: nearest QT marker anywhere in the same system (global frame).
+            return best.name, best_d * 1000.0       # km -> meters
+    # Fallback: nearest QT marker anywhere in the same system (global meters).
     # Body centers are static in the dataset, so this is rotation-insensitive.
     tg = entity_global_m(nav, target, t_ref)
     if tg is None:
-        return None
+        return None, None
     best, best_d = None, math.inf
     for p in nav.qt_markers:
         if p.system != system or p is target:
@@ -806,18 +811,18 @@ def nearest_qt_marker(nav: NavData, target, t_ref: float) -> str | None:
         d = dist3(tg, pg)
         if d < best_d:
             best, best_d = p, d
-    return best.name if best else None
+    return (best.name, best_d) if best else (None, None)
 
 
 def assign_qt_markers(nav: NavData, t_ref: float | None = None) -> None:
     """(Re)build the QT index and assign every POI/observation its nearest
-    QT-marker name. Run after load and after a dataset refresh."""
+    QT-marker name + distance. Run after load and after a dataset refresh."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     index_qt_markers(nav)
     for p in nav.pois.values():
-        p.nearest_qt = nearest_qt_marker(nav, p, t_ref)
+        p.nearest_qt, p.nearest_qt_dist_m = nearest_qt_marker(nav, p, t_ref)
     for o in nav.observations.values():
-        o.nearest_qt = nearest_qt_marker(nav, o, t_ref)
+        o.nearest_qt, o.nearest_qt_dist_m = nearest_qt_marker(nav, o, t_ref)
 
 
 def search_pois(

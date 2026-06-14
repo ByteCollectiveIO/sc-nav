@@ -424,9 +424,27 @@ class NearestQtTests(unittest.TestCase):
         pos = poi_global_m(nav2, ref, t)
         obs = nav_core.observation_from_position(nav2, pos, t, "resource",
                                                  {"ore": "Gold", "band": 4}, 2000300)
-        # captured right at Kudre Ore (a QT marker) -> that's the nearest
+        # captured right at Kudre Ore (a QT marker) -> that's the nearest, ~0 m
         self.assertEqual(obs.nearest_qt, "Kudre Ore")
+        self.assertLess(obs.nearest_qt_dist_m, 1.0)
         self.assertEqual(nav_core._observation_base(obs)["nearest_qt"], "Kudre Ore")
+
+    def test_nearest_qt_distance(self):
+        nav2 = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav2)
+        # a QT marker itself: distance 0
+        kudre = next(p for p in nav2.pois.values()
+                     if p.container_name == "Daymar" and p.name == "Kudre Ore")
+        self.assertEqual(kudre.nearest_qt_dist_m, 0.0)
+        # a non-QT Daymar POI: positive distance in meters, and it equals the
+        # local-frame distance to the assigned marker.
+        p = next(p for p in nav2.pois.values()
+                 if p.container_name == "Daymar" and not p.qt_marker and p.local_km)
+        marker = next(q for q in nav2.pois.values()
+                      if q.container_name == "Daymar" and q.name == p.nearest_qt)
+        self.assertGreater(p.nearest_qt_dist_m, 0.0)
+        expected_m = nav_core.dist3(p.local_km, marker.local_km) * 1000.0
+        self.assertAlmostEqual(p.nearest_qt_dist_m, expected_m, places=3)
 
 
 class BreadcrumbHelperTests(unittest.TestCase):
