@@ -611,5 +611,82 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(all(r["container"] == "Daymar" for r in results))
 
 
+class ResourceStatsTests(unittest.TestCase):
+    R = 295_000.0
+
+    def _body_nav(self):
+        nav = nav_core.NavData()
+        nav.containers[("Stanton", "Yela")] = nav_core.Container(
+            name="Yela", system="Stanton", type="Moon", internal_name="",
+            pos=(0, 0, 0), body_radius=self.R, om_radius=0, grid_radius=0,
+            rotation_speed=0, rotation_adjustment=0,
+        )
+        self._oid = nav_core.OBSERVATION_ID_START
+        return nav
+
+    def _add(self, nav, lat, lon, ore):
+        nav.observations[self._oid] = nav_core.Observation(
+            id=self._oid, category="resource", system="Stanton",
+            container_name="Yela", local_km=None, global_m=None,
+            latitude=lat, longitude=lon, height_m=0.0, biome=None, note=None,
+            owner_id=None, owner_handle=None, observed_at="2026-01-01", data={"ore": ore},
+        )
+        self._oid += 1
+
+    def test_grid_cell_center_round_trips(self):
+        for lat, lon in [(0, 0), (45, 90), (-60, -150), (88, 179), (-88, -179)]:
+            i, j = nav_core.grid_cell(lat, lon, self.R)
+            clat, clon = nav_core.grid_cell_center(i, j, self.R)
+            self.assertEqual((i, j), nav_core.grid_cell(clat, clon, self.R))
+
+    def test_equal_area_cells(self):
+        # Equal-area: a cell near the pole and one at the equator cover ~same m².
+        # Cell count is uniform in (lon, sin lat), so this is structural — assert
+        # the dims are the documented equal-area dimensions.
+        n_lon, n_lat = nav_core.grid_dims(self.R)
+        self.assertEqual(n_lon, round(2 * math.pi * self.R / nav_core.RESOURCE_CELL_M))
+        self.assertEqual(n_lat, round(2 * self.R / nav_core.RESOURCE_CELL_M))
+
+    def test_forecast_none_without_data(self):
+        nav = self._body_nav()
+        self.assertIsNone(nav_core.resource_forecast(nav, "Stanton", "Yela", 0, 0, self.R))
+
+    def test_local_cluster_sharpens_above_base_rate(self):
+        nav = self._body_nav()
+        for _ in range(15):
+            self._add(nav, 10.0, 20.0, "Quantanium")
+        for _ in range(3):
+            self._add(nav, 10.02, 20.02, "Bexalite")
+        for _ in range(6):                      # far cluster, pulls the base rate down
+            self._add(nav, -40.0, 100.0, "Bexalite")
+        base, base_n = nav_core.body_base_rate(nav, "Stanton", "Yela")
+        self.assertEqual(base_n, 24)
+        fc = nav_core.resource_forecast(nav, "Stanton", "Yela", 10.0, 20.0, self.R)
+        top = fc["ranked"][0]
+        self.assertEqual(top["ore"], "Quantanium")
+        self.assertEqual(fc["n_local"], 18)     # the far cluster is out of the neighborhood
+        # Local evidence pushes Quantanium above its body-wide share.
+        self.assertGreater(top["p"], base["Quantanium"])
+
+    def test_empty_neighborhood_falls_back_to_base_rate(self):
+        nav = self._body_nav()
+        for _ in range(10):
+            self._add(nav, 10.0, 20.0, "Quantanium")
+        fc = nav_core.resource_forecast(nav, "Stanton", "Yela", -70.0, -120.0, self.R)
+        self.assertEqual(fc["n_local"], 0)
+        self.assertAlmostEqual(fc["ranked"][0]["p"], 1.0, places=6)   # only ore seen on body
+
+    def test_cells_only_for_visited_areas(self):
+        nav = self._body_nav()
+        for _ in range(4):
+            self._add(nav, 10.0, 20.0, "Quantanium")
+        self._add(nav, -40.0, 100.0, "Bexalite")
+        cells = nav_core.resource_cells(nav, "Stanton", "Yela", self.R)
+        self.assertEqual(len(cells), 2)
+        comp_sums = [round(sum(c["comp"].values()), 6) for c in cells]
+        self.assertTrue(all(s == 1.0 for s in comp_sums))   # each cell is a distribution
+        self.assertEqual({c["top"] for c in cells}, {"Quantanium", "Bexalite"})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

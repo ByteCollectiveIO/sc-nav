@@ -92,6 +92,17 @@
   .lg-res::before { content: "◆"; color: var(--node); }
   .lg-wild::before { content: "▲"; color: var(--fauna); }
   .lg-path::before { content: "•"; color: var(--warn); }
+
+  /* resource forecast */
+  .fc-row { display: grid; grid-template-columns: 130px 1fr 46px 56px;
+    gap: 10px; align-items: center; padding: 3px 0; font-size: 13px; }
+  .fc-ore { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fc-bar-outer { background: var(--panel2); border-radius: 4px; height: 11px; overflow: hidden; }
+  .fc-bar-inner { height: 100%; border-radius: 4px; }
+  .fc-pct { text-align: right; font-variant-numeric: tabular-nums; }
+  .fc-n { color: var(--dim); font-size: 11px; text-align: right; }
+  .fc-low { color: var(--warn); }
+  #heatmap-mode { font-size: 12px; padding: 3px 6px; }
 </style>
 </head>
 <body>
@@ -137,6 +148,12 @@
       <label><input type="checkbox" class="layer" data-layer="poi" checked> POIs</label>
       <label><input type="checkbox" class="layer" data-layer="resource" checked> resources</label>
       <label><input type="checkbox" class="layer" data-layer="wildlife" checked> wildlife</label>
+      <label>ore heatmap
+        <select id="heatmap-mode" class="sel">
+          <option value="off">off</option>
+          <option value="dominant">most likely</option>
+        </select>
+      </label>
     </div>
     <div id="map-wrap">
       <canvas id="map"></canvas>
@@ -146,6 +163,11 @@
       <span class="lg-you">you / heading</span><span class="lg-path">breadcrumb</span>
       <span class="lg-poi">POI</span><span class="lg-res">resource</span><span class="lg-wild">wildlife</span>
     </div>
+  </div>
+
+  <div class="panel" id="forecast-panel" hidden>
+    <h2>RESOURCE FORECAST <span class="muted" id="forecast-hint"></span></h2>
+    <div id="forecast-body"></div>
   </div>
 
   <div class="capture-grid">
@@ -314,6 +336,36 @@ function qtLabel(e) {
   return `${name} <span class="muted">(${fmtDist(e.nearest_qt_dist_m)})</span>`;
 }
 
+// ---------- ore colors (stable per name) ----------
+function oreHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return h;
+}
+function oreColor(name, a = 1) { return `hsla(${oreHue(name)}, 65%, 55%, ${a})`; }
+const confOf = (n) => n / (n + 4);   // 0..1 confidence from sample count
+
+// ---------- resource forecast (what's around me) ----------
+function renderForecast(state) {
+  const rf = state && state.resource_forecast;
+  const panel = $("forecast-panel");
+  const rows = rf && rf.ranked ? rf.ranked.filter(r => r.p >= 0.02).slice(0, 6) : [];
+  if (!rows.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  $("forecast-hint").textContent = rf.n_local
+    ? `(${rf.n_local} node${rf.n_local === 1 ? "" : "s"} nearby · ${rf.n_body} on this body)`
+    : `(none logged nearby yet — body average of ${rf.n_body} node${rf.n_body === 1 ? "" : "s"})`;
+  $("forecast-body").innerHTML = rows.map(r => {
+    const pct = Math.round(r.p * 100);
+    const low = r.n < 4 ? ` <span class="fc-low">·</span>` : "";
+    return `<div class="fc-row">` +
+      `<span class="fc-ore" title="${esc(r.ore)}">${esc(r.ore)}</span>` +
+      `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${pct}%;background:${oreColor(r.ore)}"></span></span>` +
+      `<span class="fc-pct">${pct}%</span>` +
+      `<span class="fc-n">n=${r.n}${low}</span></div>`;
+  }).join("");
+}
+
 // ---------- state ----------
 let lastState = null;
 
@@ -356,6 +408,8 @@ function render(state) {
   $("track-toggle").textContent = state.tracking ? "Stop Tracking Path" : "Start Tracking Path";
   $("track-toggle").classList.toggle("active", !!state.tracking);
 
+  renderForecast(state);
+  if (heatmapMode !== "off") ensureCells();
   renderNearby();
   drawMap();
 }
@@ -563,6 +617,10 @@ function renderCapture(cap) {
     lastCaptureStamp = cap.last.captured_at;
     loadAll();   // pull the new capture into the dataset view + filter dropdowns
     const L = cap.last;
+    if (L.kind === "resource") {   // new node → refresh heatmap cells + ore list
+      resourceCellsKey = null;
+      if (heatmapMode !== "off") ensureCells();
+    }
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
     const ll = L.latitude == null ? "" : ` @ ${L.latitude.toFixed(3)}°, ${L.longitude.toFixed(3)}°`;
     if (L.kind === "resource") show("node-result",
@@ -639,6 +697,39 @@ const layers = { path: true, poi: true, resource: true, wildlife: true };
 document.querySelectorAll(".layer").forEach(cb => {
   cb.onchange = () => { layers[cb.dataset.layer] = cb.checked; drawMap(); };
 });
+
+// ore heatmap overlay: per-cell ore composition for the current body.
+let heatmapMode = "off";
+let resourceCells = null;        // { cell_m, cells:[{lat,lon,n,top,comp}] }
+let resourceCellsKey = null;     // "system/body" the cached cells belong to
+$("heatmap-mode").onchange = () => {
+  heatmapMode = $("heatmap-mode").value;
+  if (heatmapMode !== "off") ensureCells();
+  drawMap();
+};
+async function ensureCells() {
+  const s = lastState;
+  if (!(s && s.container && s.container.is_body)) return;
+  const key = s.system + "/" + s.container.name;
+  if (resourceCellsKey === key && resourceCells) return;   // already loaded
+  try {
+    resourceCells = await fetch(
+      `/api/resource_cells?system=${encodeURIComponent(s.system)}&body=${encodeURIComponent(s.container.name)}`
+    ).then(r => r.json());
+    resourceCellsKey = key;
+    populateHeatmapOres();
+    drawMap();
+  } catch {}
+}
+function populateHeatmapOres() {
+  const sel = $("heatmap-mode"), cur = sel.value;
+  const ores = [...new Set((resourceCells && resourceCells.cells || [])
+    .flatMap(c => Object.keys(c.comp)))].sort();
+  sel.querySelectorAll("option[data-ore]").forEach(o => o.remove());
+  for (const ore of ores) { const o = new Option(ore, ore); o.dataset.ore = "1"; sel.appendChild(o); }
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : "off";
+  heatmapMode = sel.value;
+}
 let viewRadiusKm = 5;
 $("map-zoom").oninput = () => {
   viewRadiusKm = parseFloat($("map-zoom").value);
@@ -733,6 +824,25 @@ function drawMap() {
   ctx.fillStyle = "#5b6b82"; ctx.fillText("N", 6, 12);
   const gridLabel = spacing >= 1000 ? `${(spacing / 1000)} km grid` : `${spacing} m grid`;
   ctx.fillText(gridLabel, 6, h - 6);
+
+  // ore heatmap overlay (visited cells only — presence-only data)
+  if (heatmapMode !== "off" && resourceCells && resourceCellsKey === cid && resourceCells.cells) {
+    const side = resourceCells.cell_m * scale, half = side / 2;
+    for (const c of resourceCells.cells) {
+      const [x, y] = toXY(c.lat, c.lon);
+      if (x < -half || x > w + half || y < -half || y > h + half) continue;
+      let fill;
+      if (heatmapMode === "dominant") {
+        fill = oreColor(c.top, Math.min(0.7, 0.18 + 0.5 * confOf(c.n)));
+      } else {
+        const p = c.comp[heatmapMode] || 0;
+        if (p < 0.02) continue;
+        fill = oreColor(heatmapMode, Math.min(0.8, 0.12 + 0.65 * p));
+      }
+      ctx.fillStyle = fill;
+      ctx.fillRect(x - half, y - half, side, side);
+    }
+  }
 
   // breadcrumb path — project each crumb once, reuse for line + dots
   if (layers.path && s.path && s.path.length) {

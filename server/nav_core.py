@@ -439,6 +439,13 @@ def compute_state(
     for cat in OBSERVATION_CATEGORIES:
         nearest_observations += _nearest(by_cat.get(cat, []), _observation_summary)
 
+    # "What's around me" ore forecast — only meaningful on a body surface.
+    forecast = None
+    if container is not None and container.is_body and lat is not None:
+        forecast = resource_forecast(
+            nav, container.system, container.name, lat, lon, container.body_radius
+        )
+
     destination = None
     dest_entity = nav.pois.get(destination_id)
     if dest_entity is None:
@@ -495,6 +502,7 @@ def compute_state(
         "destination": destination,
         "nearest_pois": nearest_pois,
         "nearest_observations": nearest_observations,
+        "resource_forecast": forecast,
     }
 
 
@@ -902,3 +910,172 @@ def search_observations(
     # newest sightings first
     results.sort(key=lambda r: r["observed_at"], reverse=True)
     return results[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Resource-node statistics (spatial ore composition over a body)
+# ---------------------------------------------------------------------------
+#
+# Ore nodes respawn in different exact spots, but type composition is believed
+# to cluster by area. We bin sightings into an equal-area grid on the body and
+# estimate, per area, the probability of each ore — many ores coexist, so the
+# output is always a *composition*, never a single label.
+#
+# Sparsity is handled two ways so a solo logger gets useful answers early:
+#   * Shrinkage: each area's composition is pulled toward the body-wide base
+#     rate by a Dirichlet prior, so one node never reads as "100% X".
+#   * Neighborhood blend: the "what's around me" forecast pools the player's
+#     own cell with its ring-1 neighbors (distance-weighted).
+# Both are presence-only estimates: an empty area means "not yet logged", not
+# "nothing spawns" — coverage normalization is a later phase.
+
+# Equal-area grid cell size (meters, target edge near the equator). Cells are
+# uniform in longitude and in sin(latitude) — the Lambert cylindrical
+# equal-area trick — so every cell covers the same area regardless of latitude.
+RESOURCE_CELL_M = 2000.0
+# Dirichlet/Laplace prior strength (pseudo-counts) pulling a sparse area toward
+# the body base rate. Roughly the sample size at which local data and the prior
+# carry equal weight.
+RESOURCE_PRIOR_STRENGTH = 6.0
+# Forecast neighborhood weights by Chebyshev ring distance (own cell vs ring-1).
+_FORECAST_RING_WEIGHT = {0: 1.0, 1: 0.5}
+
+
+def grid_dims(radius_m: float, cell_m: float = RESOURCE_CELL_M) -> tuple[int, int]:
+    """(n_lon, n_lat) cell counts for a body of the given radius. lon spans the
+    full circumference (2 pi R); lat spans pole-to-pole as sin(lat) over 2 R."""
+    n_lon = max(1, round(2 * math.pi * radius_m / cell_m))
+    n_lat = max(1, round(2 * radius_m / cell_m))
+    return n_lon, n_lat
+
+
+def grid_cell(lat: float, lon: float, radius_m: float, cell_m: float = RESOURCE_CELL_M):
+    """(i_lon, i_lat) equal-area cell index for a lat/lon on a body."""
+    n_lon, n_lat = grid_dims(radius_m, cell_m)
+    u = ((lon + 180.0) % 360.0) / 360.0
+    v = (math.sin(RAD(lat)) + 1.0) / 2.0
+    i_lon = min(n_lon - 1, int(u * n_lon))
+    i_lat = min(n_lat - 1, max(0, int(v * n_lat)))
+    return i_lon, i_lat
+
+
+def grid_cell_center(i_lon: int, i_lat: int, radius_m: float, cell_m: float = RESOURCE_CELL_M):
+    """(lat, lon) of the center of an equal-area cell — used to draw the map
+    heatmap and to measure neighbor distance."""
+    n_lon, n_lat = grid_dims(radius_m, cell_m)
+    lon = (i_lon + 0.5) / n_lon * 360.0 - 180.0
+    sin_lat = max(-1.0, min(1.0, 2.0 * (i_lat + 0.5) / n_lat - 1.0))
+    return DEG(math.asin(sin_lat)), lon
+
+
+def _ore_of(o: Observation) -> str:
+    return o.data.get("ore") or "Unknown"
+
+
+def _resource_obs_on_body(nav: NavData, system: str, body: str) -> list[Observation]:
+    return [
+        o for o in nav.observations.values()
+        if o.category == "resource" and o.system == system
+        and o.container_name == body
+        and o.latitude is not None and o.longitude is not None
+    ]
+
+
+def _shrunk_composition(counts: dict, total: float, prior: dict, alpha: float) -> dict:
+    """P(ore) for a (possibly fractional) count dict, pulled toward `prior` by
+    `alpha` pseudo-counts. With no local data this returns `prior`."""
+    denom = total + alpha
+    if denom <= 0:
+        return dict(prior)
+    return {
+        ore: (counts.get(ore, 0.0) + alpha * prior.get(ore, 0.0)) / denom
+        for ore in (set(counts) | set(prior))
+    }
+
+
+def body_base_rate(nav: NavData, system: str, body: str) -> tuple[dict, int]:
+    """(composition, n) of every resource sighting on the body — the prior that
+    each area shrinks toward."""
+    counts: dict[str, int] = {}
+    for o in _resource_obs_on_body(nav, system, body):
+        counts[_ore_of(o)] = counts.get(_ore_of(o), 0) + 1
+    n = sum(counts.values())
+    if n == 0:
+        return {}, 0
+    return {ore: c / n for ore, c in counts.items()}, n
+
+
+def _ranked(comp: dict, counts: dict) -> list[dict]:
+    rows = [
+        {"ore": ore, "p": p, "n": int(counts.get(ore, 0))}
+        for ore, p in comp.items()
+    ]
+    rows.sort(key=lambda r: (-r["p"], r["ore"]))
+    return rows
+
+
+def resource_forecast(
+    nav: NavData, system: str, body: str, lat: float, lon: float,
+    radius_m: float, cell_m: float = RESOURCE_CELL_M,
+) -> dict | None:
+    """Ranked ore likelihoods for the player's neighborhood (own cell + ring-1,
+    distance-weighted), shrunk toward the body base rate. None until the body
+    has at least one resource sighting."""
+    base, base_n = body_base_rate(nav, system, body)
+    if base_n == 0:
+        return None
+    n_lon, _ = grid_dims(radius_m, cell_m)
+    pi, pj = grid_cell(lat, lon, radius_m, cell_m)
+    weighted: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    total_w = 0.0
+    n_local = 0
+    for o in _resource_obs_on_body(nav, system, body):
+        oi, oj = grid_cell(o.latitude, o.longitude, radius_m, cell_m)
+        ring = max(min((oi - pi) % n_lon, (pi - oi) % n_lon), abs(oj - pj))
+        w = _FORECAST_RING_WEIGHT.get(ring)
+        if w is None:
+            continue
+        ore = _ore_of(o)
+        weighted[ore] = weighted.get(ore, 0.0) + w
+        counts[ore] = counts.get(ore, 0) + 1
+        total_w += w
+        n_local += 1
+    comp = _shrunk_composition(weighted, total_w, base, RESOURCE_PRIOR_STRENGTH)
+    return {
+        "ranked": _ranked(comp, counts),
+        "n_local": n_local,
+        "n_body": base_n,
+        "cell_m": cell_m,
+    }
+
+
+def resource_cells(
+    nav: NavData, system: str, body: str, radius_m: float,
+    cell_m: float = RESOURCE_CELL_M,
+) -> list[dict]:
+    """Per-cell shrunk ore composition for every cell with at least one sighting
+    (the only cells we can speak to) — drives the map heatmap."""
+    base, base_n = body_base_rate(nav, system, body)
+    if base_n == 0:
+        return []
+    cells: dict[tuple[int, int], dict] = {}
+    for o in _resource_obs_on_body(nav, system, body):
+        key = grid_cell(o.latitude, o.longitude, radius_m, cell_m)
+        c = cells.setdefault(key, {})
+        c[_ore_of(o)] = c.get(_ore_of(o), 0) + 1
+    out = []
+    for (i, j), counts in cells.items():
+        n = sum(counts.values())
+        comp = _shrunk_composition(counts, n, base, RESOURCE_PRIOR_STRENGTH)
+        clat, clon = grid_cell_center(i, j, radius_m, cell_m)
+        out.append({
+            "lat": clat, "lon": clon, "n": n,
+            # "top" = the ore actually logged most here (raw plurality), so a
+            # sparse cell shows what *you found* rather than collapsing to the
+            # body's dominant ore under the prior. "comp" stays the shrunk
+            # probability used for the specific-ore heatmap and the forecast.
+            "top": max(counts, key=counts.get),
+            "comp": comp,
+        })
+    return out

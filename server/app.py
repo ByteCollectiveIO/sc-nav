@@ -567,6 +567,16 @@ async def list_fauna():
     return fauna_names
 
 
+@app.get("/api/resource_cells")
+async def get_resource_cells(system: str, body: str):
+    """Per-cell ore composition for the map heatmap (cells with ≥1 sighting)."""
+    cont = nav.containers.get((system, body))
+    if cont is None or not cont.is_body:
+        raise HTTPException(status_code=404, detail="unknown body")
+    cells = nav_core.resource_cells(nav, system, body, cont.body_radius)
+    return {"cell_m": nav_core.RESOURCE_CELL_M, "cells": cells}
+
+
 @app.get("/api/biomes")
 async def list_biomes():
     """Biome lookups (by_body / by_system / all) for the biome datalist; the
