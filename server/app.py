@@ -577,6 +577,26 @@ async def get_resource_cells(system: str, body: str):
     return {"cell_m": nav_core.RESOURCE_CELL_M, "cells": cells}
 
 
+@app.get("/api/resource_ores")
+async def get_resource_ores():
+    """Ore names present in resource sightings (element-finder picker)."""
+    return nav_core.resource_ore_names(nav)
+
+
+@app.get("/api/resource_hotspots")
+async def get_resource_hotspots(
+    ore: str, system: str | None = None, body: str | None = None, limit: int = 20,
+):
+    """Known areas richest in `ore`, ranked by shrunk probability."""
+    return {
+        "ore": ore,
+        "cell_m": nav_core.RESOURCE_CELL_M,
+        "hotspots": nav_core.resource_hotspots(
+            nav, ore, system=system, body=body, limit=min(limit, 100)
+        ),
+    }
+
+
 @app.get("/api/biomes")
 async def list_biomes():
     """Biome lookups (by_body / by_system / all) for the biome datalist; the

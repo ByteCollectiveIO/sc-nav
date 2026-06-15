@@ -139,6 +139,21 @@
     </div>
   </div>
 
+  <div class="panel" id="finder-panel">
+    <h2>ELEMENT FINDER <span class="muted">(where to mine — ranked by likelihood)</span></h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <select id="finder-ore" class="sel" style="min-width:170px;"><option value="">— choose an ore</option></select>
+      <span class="muted" id="finder-status"></span>
+    </div>
+    <table id="finder-results" hidden style="margin-top:8px;">
+      <thead><tr>
+        <th>LIKELIHOOD</th><th>GO TO</th><th>JUMP TO (QT)</th>
+        <th>TYPICAL BAND</th><th class="num">SAMPLES</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <div class="panel" id="map-panel" hidden>
     <h2>MAP <span class="muted">(north up · drag to pan)</span></h2>
     <div id="map-controls">
@@ -623,9 +638,10 @@ function renderCapture(cap) {
     lastCaptureStamp = cap.last.captured_at;
     loadAll();   // pull the new capture into the dataset view + filter dropdowns
     const L = cap.last;
-    if (L.kind === "resource") {   // new node → refresh heatmap cells + ore list
+    if (L.kind === "resource") {   // new node → refresh heatmap cells + finder
       resourceCellsKey = null;
       if (heatmapMode !== "off") ensureCells();
+      loadFinderOres().then(() => { if (finderOre) runFinder(); });
     }
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
     const ll = L.latitude == null ? "" : ` @ ${L.latitude.toFixed(3)}°, ${L.longitude.toFixed(3)}°`;
@@ -944,6 +960,59 @@ async function runSearch() {
   }
   table.hidden = rows.length === 0;
 }
+
+// ---------- element finder (where to mine an ore) ----------
+// A planner: pick an ore and get the bodies + QT jump points where you're most
+// likely to find it, ranked by a confidence-aware likelihood. Works without a
+// live position so you can plan before flying out.
+let finderOre = "";
+async function loadFinderOres() {
+  try {
+    const ores = await fetch("/api/resource_ores").then(r => r.json());
+    const sel = $("finder-ore"), cur = sel.value;
+    sel.innerHTML = '<option value="">— choose an ore</option>';
+    for (const o of ores) sel.appendChild(new Option(o, o));
+    sel.value = ores.includes(cur) ? cur : "";
+    finderOre = sel.value;
+  } catch {}
+}
+$("finder-ore").onchange = () => { finderOre = $("finder-ore").value; runFinder(); };
+
+async function runFinder() {
+  const table = $("finder-results"), status = $("finder-status");
+  if (!finderOre) { table.hidden = true; status.textContent = ""; return; }
+  let data;
+  try { data = await fetch(`/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&limit=15`).then(r => r.json()); }
+  catch { return; }
+  const hs = data.hotspots || [];
+  if (!hs.length) {
+    table.hidden = true;
+    status.textContent = `no ${finderOre} logged yet — mine some and it'll appear here`;
+    return;
+  }
+  status.textContent = `${hs.length} known area${hs.length === 1 ? "" : "s"}, most likely first`;
+  const tbody = table.querySelector("tbody");
+  tbody.innerHTML = "";
+  for (const h of hs) {
+    const pct = Math.round(h.p * 100);
+    const band = h.avg_band == null ? '<span class="muted">—</span>'
+      : `B${h.avg_band.toFixed(1)} <span class="muted">${esc(BAND_QUALITY(Math.round(h.avg_band)))}</span>`;
+    const qt = h.nearest_qt
+      ? `${esc(h.nearest_qt)} <span class="muted">(${fmtDist(h.nearest_qt_dist_m)})</span>`
+      : '<span class="muted">—</span>';
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td><span class="hm-key"><i style="background:${oreColor(finderOre)}"></i>${pct}%</span></td>` +
+      `<td><b>${esc(h.body)}</b> <span class="muted">${esc(h.system)}</span></td>` +
+      `<td>${qt}</td><td>${band}</td>` +
+      `<td class="num muted">${h.n_ore}/${h.n}</td>`;
+    if (h.nearest_qt_id != null) tr.onclick = () => setDestination(h.nearest_qt_id);
+    else tr.style.cursor = "default";
+    tbody.appendChild(tr);
+  }
+  table.hidden = false;
+}
+loadFinderOres();
 
 // ---------- websocket ----------
 let ws = null;

@@ -258,6 +258,17 @@ def latlon_from_local(local_km) -> tuple[float, float, float]:
     return lat, lon, r
 
 
+def local_km_from_latlon(lat, lon, radius_m) -> tuple[float, float, float]:
+    """Inverse of latlon_from_local on the body surface: (lat, lon ±180) ->
+    body-local km at sea level. Used to place a grid-cell center back into the
+    rotating frame so we can find the QT marker nearest to it."""
+    r = radius_m / 1000.0
+    lon360 = RAD(lon + 180.0)
+    return (r * math.cos(RAD(lat)) * math.cos(lon360),
+            r * math.cos(RAD(lat)) * math.sin(lon360),
+            r * math.sin(RAD(lat)))
+
+
 def great_circle(lat1, lon1, lat2, lon2, radius_m) -> tuple[float, float]:
     """Returns (surface distance m, initial bearing deg 0..360, 0=N, 90=E)."""
     p1, p2 = RAD(lat1), RAD(lat2)
@@ -981,6 +992,19 @@ def _resource_obs_on_body(nav: NavData, system: str, body: str) -> list[Observat
     ]
 
 
+def _wilson_lower_bound(successes: float, n: float, z: float = 1.96) -> float:
+    """Lower bound of the Wilson score interval for a proportion — high only
+    when the observed ratio is high AND backed by enough samples. Used to rank
+    hotspots so a lucky 3/3 doesn't outrank a solid 8/10."""
+    if n <= 0:
+        return 0.0
+    phat = successes / n
+    z2 = z * z
+    centre = phat + z2 / (2 * n)
+    margin = z * math.sqrt((phat * (1 - phat) + z2 / (4 * n)) / n)
+    return max(0.0, (centre - margin) / (1 + z2 / n))
+
+
 def _shrunk_composition(counts: dict, total: float, prior: dict, alpha: float) -> dict:
     """P(ore) for a (possibly fractional) count dict, pulled toward `prior` by
     `alpha` pseudo-counts. With no local data this returns `prior`."""
@@ -1078,4 +1102,83 @@ def resource_cells(
             "top": max(counts, key=counts.get),
             "comp": comp,
         })
+    return out
+
+
+def resource_ore_names(nav: NavData) -> list[str]:
+    """Sorted ore names that appear in resource sightings — populates the
+    element-finder picker."""
+    return sorted({_ore_of(o) for o in nav.observations.values()
+                   if o.category == "resource"})
+
+
+def resource_hotspots(
+    nav: NavData, ore: str, system: str | None = None, body: str | None = None,
+    limit: int = 20, cell_m: float = RESOURCE_CELL_M,
+) -> list[dict]:
+    """Known areas richest in `ore`, ranked, across every body (optionally
+    filtered to one system/body) — a "where do I fly to mine X" planner.
+
+    Bins resource sightings per body into the equal-area grid. Each cell reports
+    the empirical hit rate of `ore` (n_ore / n samples there), but cells are
+    *ranked* by the Wilson lower bound of that rate, so a well-sampled 8/10
+    outranks a lucky 3/3 — the planner trusts a percentage more once it's backed
+    by more visits. Returns only cells that actually contain the ore, each with
+    location, hit rate, sample counts, average band, and the QT marker to jump
+    to."""
+    ore = ore.strip()
+    if not ore:
+        return []
+    groups: dict[tuple[str, str], list[Observation]] = {}
+    for o in nav.observations.values():
+        if o.category != "resource" or o.latitude is None or o.longitude is None:
+            continue
+        if (system and o.system != system) or (body and o.container_name != body):
+            continue
+        groups.setdefault((o.system, o.container_name), []).append(o)
+
+    out = []
+    for (sys, bod), obs in groups.items():
+        cont = nav.containers.get((sys, bod))
+        if cont is None or cont.body_radius <= 0:
+            continue
+        cells: dict[tuple[int, int], dict] = {}
+        for o in obs:
+            key = grid_cell(o.latitude, o.longitude, cont.body_radius, cell_m)
+            c = cells.setdefault(key, {"counts": {}, "bands": []})
+            c["counts"][_ore_of(o)] = c["counts"].get(_ore_of(o), 0) + 1
+            if _ore_of(o) == ore and isinstance(o.data.get("band"), (int, float)):
+                c["bands"].append(o.data["band"])
+        for key, c in cells.items():
+            n_ore = c["counts"].get(ore, 0)
+            if n_ore == 0:
+                continue
+            n = sum(c["counts"].values())
+            clat, clon = grid_cell_center(*key, cont.body_radius, cell_m)
+            out.append({
+                "system": sys, "body": bod, "lat": clat, "lon": clon,
+                "p": n_ore / n, "score": _wilson_lower_bound(n_ore, n),
+                "n": n, "n_ore": n_ore,
+                "avg_band": (sum(c["bands"]) / len(c["bands"])) if c["bands"] else None,
+            })
+    out.sort(key=lambda r: (-r["score"], -r["n_ore"], -r["n"]))
+    out = out[:limit]
+    # Attach the QT marker you'd travel to for each surviving hotspot — the
+    # actual answer to "where do I jump to". Done after the cut so we only run
+    # the marker search for the cells we return.
+    for h in out:
+        cont = nav.containers.get((h["system"], h["body"]))
+        target = Poi(
+            id=-1, name="", system=h["system"], container_name=h["body"], type="",
+            local_km=local_km_from_latlon(h["lat"], h["lon"], cont.body_radius),
+            global_m=None, latitude=h["lat"], longitude=h["lon"], height_m=None,
+            qt_marker=False,
+        )
+        h["nearest_qt"], h["nearest_qt_dist_m"] = nearest_qt_marker(nav, target, ROTATION_EPOCH)
+        # id of that marker, so the UI can set it as a destination on click.
+        h["nearest_qt_id"] = next(
+            (p.id for p in nav.qt_markers
+             if p.name == h["nearest_qt"] and p.system == h["system"]),
+            None,
+        )
     return out

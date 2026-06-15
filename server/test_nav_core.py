@@ -624,12 +624,13 @@ class ResourceStatsTests(unittest.TestCase):
         self._oid = nav_core.OBSERVATION_ID_START
         return nav
 
-    def _add(self, nav, lat, lon, ore):
+    def _add(self, nav, lat, lon, ore, body="Yela", band=None):
         nav.observations[self._oid] = nav_core.Observation(
             id=self._oid, category="resource", system="Stanton",
-            container_name="Yela", local_km=None, global_m=None,
+            container_name=body, local_km=None, global_m=None,
             latitude=lat, longitude=lon, height_m=0.0, biome=None, note=None,
-            owner_id=None, owner_handle=None, observed_at="2026-01-01", data={"ore": ore},
+            owner_id=None, owner_handle=None, observed_at="2026-01-01",
+            data={"ore": ore, "band": band},
         )
         self._oid += 1
 
@@ -686,6 +687,55 @@ class ResourceStatsTests(unittest.TestCase):
         comp_sums = [round(sum(c["comp"].values()), 6) for c in cells]
         self.assertTrue(all(s == 1.0 for s in comp_sums))   # each cell is a distribution
         self.assertEqual({c["top"] for c in cells}, {"Quantanium", "Bexalite"})
+
+    def test_local_km_latlon_round_trips(self):
+        for lat, lon in [(0, 0), (30, -45), (-72, 120)]:
+            x, y, z = nav_core.local_km_from_latlon(lat, lon, self.R)
+            blat, blon, _ = nav_core.latlon_from_local((x, y, z))
+            self.assertAlmostEqual(blat, lat, places=4)
+            self.assertAlmostEqual(blon, lon, places=4)
+
+    def test_ore_names_listed(self):
+        nav = self._body_nav()
+        self._add(nav, 0, 0, "Quantanium")
+        self._add(nav, 1, 1, "Bexalite")
+        self.assertEqual(nav_core.resource_ore_names(nav), ["Bexalite", "Quantanium"])
+
+    def test_hotspots_rank_by_confidence_not_raw_rate(self):
+        # 8/10 (well sampled) should outrank 3/3 (lucky), despite the lower rate.
+        nav = self._body_nav()
+        nav.containers[("Stanton", "Daymar")] = nav_core.Container(
+            name="Daymar", system="Stanton", type="Moon", internal_name="",
+            pos=(1e9, 0, 0), body_radius=self.R, om_radius=0, grid_radius=0,
+            rotation_speed=0, rotation_adjustment=0,
+        )
+        for _ in range(8):
+            self._add(nav, 10, 20, "Quantanium", body="Daymar", band=7)
+        for _ in range(2):
+            self._add(nav, 10, 20, "Bexalite", body="Daymar")
+        for _ in range(3):
+            self._add(nav, -30, 80, "Quantanium", body="Yela", band=4)
+        hs = nav_core.resource_hotspots(nav, "Quantanium")
+        self.assertEqual(hs[0]["body"], "Daymar")     # 8/10 beats 3/3
+        self.assertEqual(hs[1]["body"], "Yela")
+        self.assertAlmostEqual(hs[0]["p"], 0.8)
+        self.assertEqual(hs[0]["avg_band"], 7.0)
+        self.assertGreater(hs[0]["score"], hs[1]["score"])
+
+    def test_hotspot_carries_nearest_qt_marker(self):
+        nav = self._body_nav()
+        # a jumpable QT marker on the body, near the ore cluster
+        nav.pois[1] = nav_core.Poi(
+            id=1, name="Yela OM-1", system="Stanton", container_name="Yela",
+            type="Outpost", local_km=nav_core.local_km_from_latlon(10, 20, self.R),
+            global_m=None, latitude=10, longitude=20, height_m=None, qt_marker=True,
+        )
+        nav_core.index_qt_markers(nav)
+        for _ in range(4):
+            self._add(nav, 10, 20, "Quantanium")
+        hs = nav_core.resource_hotspots(nav, "Quantanium")
+        self.assertEqual(hs[0]["nearest_qt"], "Yela OM-1")
+        self.assertIsNotNone(hs[0]["nearest_qt_dist_m"])
 
 
 if __name__ == "__main__":
