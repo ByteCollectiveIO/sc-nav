@@ -722,6 +722,34 @@ class ResourceStatsTests(unittest.TestCase):
         self.assertEqual(hs[0]["avg_band"], 7.0)
         self.assertGreater(hs[0]["score"], hs[1]["score"])
 
+    def test_moon_two_hop_travel_from_outside_its_system(self):
+        nav = nav_core.NavData()
+
+        def cont(name, internal, pos):
+            return nav_core.Container(
+                name=name, system="Stanton", type="Planet", internal_name=internal,
+                pos=pos, body_radius=200_000, om_radius=0, grid_radius=0,
+                rotation_speed=0, rotation_adjustment=0,
+            )
+        nav.containers[("Stanton", "Crusader")] = cont("Crusader", "Stanton2", (0, 0, 0))
+        nav.containers[("Stanton", "Daymar")] = cont("Daymar", "Stanton2b", (1e6, 0, 0))
+        nav.containers[("Stanton", "ArcCorp")] = cont("ArcCorp", "Stanton3", (5e10, 0, 0))
+        nav.containers[("Stanton", "Wala")] = cont("Wala", "Stanton3b", (5e10 + 1e6, 0, 0))
+        self.assertEqual(nav_core.parent_planet(nav, nav.containers[("Stanton", "Daymar")]).name, "Crusader")
+
+        self._oid = nav_core.OBSERVATION_ID_START
+        for _ in range(4):
+            self._add(nav, 10, 20, "Quantanium", body="Daymar", band=7)
+
+        # From ArcCorp's neighborhood you can't jump straight to Daymar (a
+        # Crusader moon) — it routes via Crusader and costs more.
+        far = nav_core.resource_hotspots(nav, "Quantanium", from_pos=(5e10, 0, 0), sort="near")[0]
+        self.assertEqual(far["via"], "Crusader")
+        # Standing at Crusader, the jump is direct.
+        near = nav_core.resource_hotspots(nav, "Quantanium", from_pos=(0, 0, 0), sort="near")[0]
+        self.assertIsNone(near["via"])
+        self.assertGreater(far["travel_m"], near["travel_m"])
+
     def test_hotspot_carries_nearest_qt_marker(self):
         nav = self._body_nav()
         # a jumpable QT marker on the body, near the ore cluster

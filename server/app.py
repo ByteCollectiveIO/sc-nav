@@ -585,14 +585,19 @@ async def get_resource_ores():
 
 @app.get("/api/resource_hotspots")
 async def get_resource_hotspots(
-    ore: str, system: str | None = None, body: str | None = None, limit: int = 20,
+    ore: str, system: str | None = None, body: str | None = None,
+    limit: int = 20, sort: str = "likely",
 ):
-    """Known areas richest in `ore`, ranked by shrunk probability."""
+    """Known areas richest in `ore`, ranked. sort: likely | near | value.
+    The 'near'/'value' modes use the live position to factor travel distance."""
     return {
         "ore": ore,
+        "sort": sort,
+        "has_position": state.pos is not None,
         "cell_m": nav_core.RESOURCE_CELL_M,
         "hotspots": nav_core.resource_hotspots(
-            nav, ore, system=system, body=body, limit=min(limit, 100)
+            nav, ore, system=system, body=body, limit=min(limit, 100),
+            from_pos=state.pos, t_ref=state.t, sort=sort,
         ),
     }
 

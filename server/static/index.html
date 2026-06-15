@@ -143,12 +143,19 @@
     <h2>ELEMENT FINDER <span class="muted">(where to mine — ranked by likelihood)</span></h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <select id="finder-ore" class="sel" style="min-width:170px;"><option value="">— choose an ore</option></select>
+      <label class="muted" style="font-size:12px;">order
+        <select id="finder-sort" class="sel">
+          <option value="likely">most likely</option>
+          <option value="near">nearest</option>
+          <option value="value">best value (from here)</option>
+        </select>
+      </label>
       <span class="muted" id="finder-status"></span>
     </div>
     <table id="finder-results" hidden style="margin-top:8px;">
       <thead><tr>
         <th>LIKELIHOOD</th><th>GO TO</th><th>JUMP TO (QT)</th>
-        <th>TYPICAL BAND</th><th class="num">SAMPLES</th>
+        <th class="num">TRAVEL</th><th>TYPICAL BAND</th><th class="num">SAMPLES</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -431,6 +438,7 @@ function render(state) {
 
   renderForecast(state);
   if (heatmapMode !== "off") ensureCells();
+  maybeRefreshFinder(state);
   renderNearby();
   drawMap();
 }
@@ -966,6 +974,15 @@ async function runSearch() {
 // likely to find it, ranked by a confidence-aware likelihood. Works without a
 // live position so you can plan before flying out.
 let finderOre = "";
+let finderPosKey = null;
+// Re-rank the finder when you actually move bodies (travel-based orders depend
+// on where you are) — but not on every position sample within a body.
+function maybeRefreshFinder(state) {
+  const key = state && state.container ? state.system + "/" + state.container.name : "(space)";
+  if (key === finderPosKey) return;
+  finderPosKey = key;
+  if (finderOre && $("finder-sort").value !== "likely") runFinder();
+}
 async function loadFinderOres() {
   try {
     const ores = await fetch("/api/resource_ores").then(r => r.json());
@@ -977,34 +994,48 @@ async function loadFinderOres() {
   } catch {}
 }
 $("finder-ore").onchange = () => { finderOre = $("finder-ore").value; runFinder(); };
+$("finder-sort").onchange = runFinder;
 
 async function runFinder() {
   const table = $("finder-results"), status = $("finder-status");
   if (!finderOre) { table.hidden = true; status.textContent = ""; return; }
+  const sort = $("finder-sort").value;
   let data;
-  try { data = await fetch(`/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&limit=15`).then(r => r.json()); }
-  catch { return; }
+  try {
+    data = await fetch(
+      `/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&sort=${sort}&limit=15`
+    ).then(r => r.json());
+  } catch { return; }
   const hs = data.hotspots || [];
   if (!hs.length) {
     table.hidden = true;
     status.textContent = `no ${finderOre} logged yet — mine some and it'll appear here`;
     return;
   }
-  status.textContent = `${hs.length} known area${hs.length === 1 ? "" : "s"}, most likely first`;
+  // The distance-aware orders need a live position to measure travel from.
+  const needsPos = sort !== "likely";
+  status.textContent = needsPos && !data.has_position
+    ? `sorted by likelihood — run /showlocation to order by travel`
+    : `${hs.length} known area${hs.length === 1 ? "" : "s"}` +
+      (sort === "near" ? ", closest first" : sort === "value" ? ", best value first" : ", most likely first");
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
   for (const h of hs) {
     const pct = Math.round(h.p * 100);
     const band = h.avg_band == null ? '<span class="muted">—</span>'
       : `B${h.avg_band.toFixed(1)} <span class="muted">${esc(BAND_QUALITY(Math.round(h.avg_band)))}</span>`;
+    // Jump route honors the moon rule: from outside its planet's system a moon
+    // is reached "via <planet>" first.
+    const via = h.via ? `<span class="muted">via ${esc(h.via)} → </span>` : "";
     const qt = h.nearest_qt
-      ? `${esc(h.nearest_qt)} <span class="muted">(${fmtDist(h.nearest_qt_dist_m)})</span>`
+      ? `${via}${esc(h.nearest_qt)} <span class="muted">(${fmtDist(h.nearest_qt_dist_m)})</span>`
       : '<span class="muted">—</span>';
+    const travel = h.travel_m == null ? '<span class="muted">—</span>' : fmtDist(h.travel_m);
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td><span class="hm-key"><i style="background:${oreColor(finderOre)}"></i>${pct}%</span></td>` +
       `<td><b>${esc(h.body)}</b> <span class="muted">${esc(h.system)}</span></td>` +
-      `<td>${qt}</td><td>${band}</td>` +
+      `<td>${qt}</td><td class="num">${travel}</td><td>${band}</td>` +
       `<td class="num muted">${h.n_ore}/${h.n}</td>`;
     if (h.nearest_qt_id != null) tr.onclick = () => setDestination(h.nearest_qt_id);
     else tr.style.cursor = "default";

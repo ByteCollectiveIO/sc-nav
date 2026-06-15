@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1112,20 +1113,63 @@ def resource_ore_names(nav: NavData) -> list[str]:
                    if o.category == "resource"})
 
 
+# Body hierarchy is encoded in InternalName, not Type (the dataset types moons
+# as "Planet"): a planet is "<System><number>" (e.g. Stanton2 = Crusader) and a
+# moon appends a letter ("Stanton2b" = Daymar, moon of Crusader).
+_MOON_RE = re.compile(r"^(.+?\d+)[a-z]+$")
+
+
+def parent_planet(nav: NavData, moon: Container) -> Container | None:
+    """The planet a moon orbits, from its InternalName (Stanton2b -> Stanton2),
+    or None if the body isn't a moon."""
+    m = _MOON_RE.match(moon.internal_name or "")
+    if not m:
+        return None
+    parent_internal = m.group(1)
+    return next(
+        (c for c in nav.containers.values()
+         if c.system == moon.system and c.internal_name == parent_internal and c is not moon),
+        None,
+    )
+
+
+def _planets_in_system(nav: NavData, system: str) -> list[Container]:
+    """Top-level planets (QT-reachable directly): bodies whose InternalName ends
+    in a digit — moons end in a letter — excluding stars."""
+    return [
+        c for c in nav.containers.values()
+        if c.system == system and c.body_radius > 0 and c.type != "Star"
+        and not _MOON_RE.match(c.internal_name or "")
+        and re.search(r"\d$", c.internal_name or "")
+    ]
+
+
+def nearest_planet(nav: NavData, system: str, pos) -> Container | None:
+    planets = _planets_in_system(nav, system)
+    return min(planets, key=lambda p: dist3(pos, p.pos)) if planets else None
+
+
 def resource_hotspots(
     nav: NavData, ore: str, system: str | None = None, body: str | None = None,
     limit: int = 20, cell_m: float = RESOURCE_CELL_M,
+    from_pos=None, t_ref: float | None = None, sort: str = "likely",
 ) -> list[dict]:
     """Known areas richest in `ore`, ranked, across every body (optionally
     filtered to one system/body) — a "where do I fly to mine X" planner.
 
     Bins resource sightings per body into the equal-area grid. Each cell reports
-    the empirical hit rate of `ore` (n_ore / n samples there), but cells are
-    *ranked* by the Wilson lower bound of that rate, so a well-sampled 8/10
-    outranks a lucky 3/3 — the planner trusts a percentage more once it's backed
-    by more visits. Returns only cells that actually contain the ore, each with
-    location, hit rate, sample counts, average band, and the QT marker to jump
-    to."""
+    the empirical hit rate of `ore` (n_ore / n samples there), but the base rank
+    uses the Wilson lower bound of that rate, so a well-sampled 8/10 outranks a
+    lucky 3/3 — the planner trusts a percentage more once it's backed by more
+    visits. Each hotspot carries the QT marker to jump to.
+
+    With `from_pos` (the player's global position), each hotspot also gets the
+    straight-line travel distance to its jump marker, and `sort` chooses how to
+    order:
+      "likely" — by confidence-adjusted likelihood (ignores distance).
+      "near"   — by travel distance (closest first).
+      "value"  — likelihood discounted by travel, to trade off rich vs close.
+    Without `from_pos` it always falls back to "likely"."""
     ore = ore.strip()
     if not ore:
         return []
@@ -1161,11 +1205,13 @@ def resource_hotspots(
                 "n": n, "n_ore": n_ore,
                 "avg_band": (sum(c["bands"]) / len(c["bands"])) if c["bands"] else None,
             })
+
+    # Keep a generous likelihood-ranked pool, then attach jump marker + travel
+    # for just that pool (so distance can reorder a sane set without running the
+    # marker search over every cell).
     out.sort(key=lambda r: (-r["score"], -r["n_ore"], -r["n"]))
-    out = out[:limit]
-    # Attach the QT marker you'd travel to for each surviving hotspot — the
-    # actual answer to "where do I jump to". Done after the cut so we only run
-    # the marker search for the cells we return.
+    out = out[: max(limit * 4, 50)]
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     for h in out:
         cont = nav.containers.get((h["system"], h["body"]))
         target = Poi(
@@ -1175,10 +1221,46 @@ def resource_hotspots(
             qt_marker=False,
         )
         h["nearest_qt"], h["nearest_qt_dist_m"] = nearest_qt_marker(nav, target, ROTATION_EPOCH)
-        # id of that marker, so the UI can set it as a destination on click.
         h["nearest_qt_id"] = next(
             (p.id for p in nav.qt_markers
              if p.name == h["nearest_qt"] and p.system == h["system"]),
             None,
         )
-    return out
+        # Travel proxy: distance from the player to the jump marker (its position
+        # at t_ref, since rotating bodies move their markers), falling back to
+        # the body center when the hotspot has no QT marker.
+        #
+        # Business rule: a moon is only reachable directly when you're already in
+        # its planet's neighborhood (your nearest planet IS its parent). From
+        # anywhere else you must QT to the parent planet first, then the moon —
+        # so the cost is player->planet + planet->moon, and we flag the via-hop.
+        h["travel_m"] = None
+        h["via"] = None
+        if from_pos is not None:
+            marker = nav.pois.get(h["nearest_qt_id"]) if h["nearest_qt_id"] is not None else None
+            ref = entity_global_m(nav, marker, t_ref) if marker is not None else cont.pos
+            if ref is not None:
+                parent = parent_planet(nav, cont)
+                in_local_system = (
+                    parent is not None
+                    and nearest_planet(nav, cont.system, from_pos) is parent
+                )
+                if parent is not None and not in_local_system:
+                    h["via"] = parent.name
+                    h["travel_m"] = dist3(from_pos, parent.pos) + dist3(parent.pos, ref)
+                else:
+                    h["travel_m"] = dist3(from_pos, ref)
+
+    if from_pos is not None and sort in ("near", "value"):
+        if sort == "near":
+            out.sort(key=lambda r: (r["travel_m"] if r["travel_m"] is not None else math.inf,
+                                    -r["score"]))
+        else:  # "value": likelihood discounted by travel, scaled to the data
+            travels = sorted(r["travel_m"] for r in out if r["travel_m"] is not None)
+            scale = max(travels[len(travels) // 2], 1.0) if travels else 1.0
+            def value(r):
+                tm = r["travel_m"] if r["travel_m"] is not None else scale * 10
+                return r["score"] / (1 + tm / scale)
+            out.sort(key=lambda r: (-value(r), -r["score"]))
+    # else: keep the likelihood order already in place
+    return out[:limit]
