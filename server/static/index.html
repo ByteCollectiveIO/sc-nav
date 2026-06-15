@@ -388,6 +388,17 @@ function matchKind(r) {
   return kindFilter === "all" || (kindFilter === "poi" ? r.kind === "poi" : r.kind === kindFilter);
 }
 
+// Surface distance (m) + initial bearing (deg) between two lat/lon on a sphere
+// of radius R — mirrors nav_core.great_circle so the dataset view can show a
+// distance for same-body entities the server's nearest list didn't include.
+function greatCircle(lat1, lon1, lat2, lon2, R) {
+  const p1 = lat1 * DEG, p2 = lat2 * DEG, dl = (lon2 - lon1) * DEG;
+  const sp1 = Math.sin(p1), cp1 = Math.cos(p1), sp2 = Math.sin(p2), cp2 = Math.cos(p2);
+  const central = Math.acos(Math.max(-1, Math.min(1, sp1 * sp2 + cp1 * cp2 * Math.cos(dl))));
+  const bearing = (Math.atan2(Math.sin(dl) * cp2, cp1 * sp2 - sp1 * cp2 * Math.cos(dl)) / DEG + 360) % 360;
+  return { dist: central * R, bearing };
+}
+
 function renderNearby() {
   const fc = $("f-container").value, fo = $("f-owner").value;
   const ft = $("f-text").value.trim().toLowerCase();
@@ -415,13 +426,26 @@ function renderNearby() {
     rows.sort((a, b) => (a.distance_m ?? 1e30) - (b.distance_m ?? 1e30));
   } else {
     const liveById = new Map(liveRows.map(r => [r.id, r]));
+    // Player frame, so we can compute distance to any entity on the SAME body
+    // that the live nearest list (distance-capped) left out — e.g. far Orbital
+    // Markers around the planet you're on.
+    const s = lastState;
+    const onBody = s && s.container && s.container.is_body
+      && s.latitude != null && s.container.body_radius_m;
     rows = (allRows || []).filter(matchKind).map(r => {
       const lr = liveById.get(r.id);   // borrow distance/bearing if it's nearby
-      return lr ? { ...r, distance_m: lr.distance_m,
-        surface_distance_m: lr.surface_distance_m, bearing_deg: lr.bearing_deg } : r;
+      if (lr) return { ...r, distance_m: lr.distance_m,
+        surface_distance_m: lr.surface_distance_m, bearing_deg: lr.bearing_deg };
+      if (onBody && r.latitude != null && r.longitude != null
+          && r.container === s.container.name && r.system === s.system) {
+        const gc = greatCircle(s.latitude, s.longitude, r.latitude, r.longitude, s.container.body_radius_m);
+        return { ...r, surface_distance_m: gc.dist, bearing_deg: gc.bearing };
+      }
+      return r;
     });
+    const eff = r => r.surface_distance_m ?? r.distance_m;
     rows.sort((a, b) =>
-      (a.distance_m ?? Infinity) - (b.distance_m ?? Infinity)
+      ((eff(a) ?? Infinity) - (eff(b) ?? Infinity))
       || String(a.name).localeCompare(String(b.name)));
   }
 
