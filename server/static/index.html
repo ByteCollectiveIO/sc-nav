@@ -103,6 +103,11 @@
   .fc-n { color: var(--dim); font-size: 11px; text-align: right; }
   .fc-low { color: var(--warn); }
   #heatmap-mode { font-size: 12px; padding: 3px 6px; }
+  #heatmap-legend { font-size: 11px; color: var(--dim); display: none; gap: 12px;
+    flex-wrap: wrap; align-items: center; margin-top: 6px; }
+  .hm-key { display: inline-flex; align-items: center; gap: 5px; }
+  .hm-key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+  .hm-grad { display: inline-block; width: 90px; height: 11px; border-radius: 3px; }
 </style>
 </head>
 <body>
@@ -163,6 +168,7 @@
       <span class="lg-you">you / heading</span><span class="lg-path">breadcrumb</span>
       <span class="lg-poi">POI</span><span class="lg-res">resource</span><span class="lg-wild">wildlife</span>
     </div>
+    <div id="heatmap-legend"></div>
   </div>
 
   <div class="panel" id="forecast-panel" hidden>
@@ -705,6 +711,7 @@ let resourceCellsKey = null;     // "system/body" the cached cells belong to
 $("heatmap-mode").onchange = () => {
   heatmapMode = $("heatmap-mode").value;
   if (heatmapMode !== "off") ensureCells();
+  renderHeatmapLegend();
   drawMap();
 };
 async function ensureCells() {
@@ -718,6 +725,7 @@ async function ensureCells() {
     ).then(r => r.json());
     resourceCellsKey = key;
     populateHeatmapOres();
+    renderHeatmapLegend();
     drawMap();
   } catch {}
 }
@@ -729,6 +737,27 @@ function populateHeatmapOres() {
   for (const ore of ores) { const o = new Option(ore, ore); o.dataset.ore = "1"; sel.appendChild(o); }
   sel.value = [...sel.options].some(o => o.value === cur) ? cur : "off";
   heatmapMode = sel.value;
+}
+
+// Legend so the heatmap colors are interpretable. "Most likely" mode colors a
+// cell by the ore logged most there, so the key is a swatch per dominant ore;
+// a specific-ore mode shades by probability, so the key is a low→high gradient.
+function renderHeatmapLegend() {
+  const el = $("heatmap-legend");
+  const cells = resourceCells && resourceCells.cells;
+  if (heatmapMode === "off" || !cells || !cells.length) { el.style.display = "none"; el.innerHTML = ""; return; }
+  el.style.display = "flex";
+  if (heatmapMode === "dominant") {
+    const freq = {};
+    for (const c of cells) freq[c.top] = (freq[c.top] || 0) + 1;
+    const ores = Object.keys(freq).sort((a, b) => freq[b] - freq[a]);
+    el.innerHTML = `<span>most likely ore · opacity = confidence</span>` +
+      ores.map(o => `<span class="hm-key"><i style="background:${oreColor(o, 0.85)}"></i>${esc(o)}</span>`).join("");
+  } else {
+    el.innerHTML =
+      `<span class="hm-key"><i style="background:${oreColor(heatmapMode, 0.85)}"></i>${esc(heatmapMode)}</span>` +
+      `<span class="hm-key">unlikely <span class="hm-grad" style="background:linear-gradient(to right, ${oreColor(heatmapMode, 0.10)}, ${oreColor(heatmapMode, 0.8)})"></span> likely</span>`;
+  }
 }
 let viewRadiusKm = 5;
 $("map-zoom").oninput = () => {
