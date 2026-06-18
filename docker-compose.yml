@@ -2,6 +2,7 @@ services:
   sc-nav:
     build: .
     container_name: sc-nav
+    env_file: .env          # Discord OAuth + session config (and the tunnel token)
     ports:
       - "8765:8765"   # change the left side if 8765 is taken on the host
     volumes:
@@ -12,6 +13,20 @@ services:
       interval: 60s
       timeout: 5s
       start_period: 30s
+
+  # Cloudflare Tunnel — outbound-only; exposes the app over HTTPS with no
+  # inbound ports. Public hostname (nav.bytecollective.io) -> http://sc-nav:8765
+  # is configured in the Zero Trust dashboard. If you were running cloudflared
+  # as a standalone container, stop it so you don't run two connectors.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: sc-nav-tunnel
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - sc-nav
 
 volumes:
   sc-nav-data:

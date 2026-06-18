@@ -11,15 +11,19 @@ Data: ../poi by default, override with SC_NAV_DATA=/path/to/poi
 import asyncio
 import json
 import os
+import secrets
 import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
 
+import auth
 import nav_core
 
 DATA_DIR = Path(os.environ.get("SC_NAV_DATA", Path(__file__).parent.parent / "poi"))
@@ -213,6 +217,17 @@ def merge_all_observations(target_nav) -> None:
 
 
 app = FastAPI(title="SC Nav")
+
+# Signed session cookie (Discord login state). The secret must be stable across
+# restarts so sessions survive a redeploy; a random fallback keeps dev working.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("SESSION_SECRET") or secrets.token_hex(32),
+    https_only=os.environ.get("COOKIE_SECURE", "true").lower() == "true",
+    same_site="lax",
+    max_age=8 * 3600,
+)
+
 nav = load_nav_data()
 custom_pois = load_custom_pois()
 # observations[category] -> list of stored dicts (one JSON file each)
@@ -752,6 +767,73 @@ async def websocket_endpoint(ws: WebSocket):
         pass
     finally:
         state.clients.discard(ws)
+
+
+# ---------------------------------------------------------------------------
+# Discord OAuth gate (Phase 0)
+# ---------------------------------------------------------------------------
+# Login + org-membership check + signed session. Enforcement on the data
+# endpoints + watcher tokens lands in the next increment; for now the Cloudflare
+# Access gate still shields everything, so these routes can be tested live
+# without locking anyone out.
+
+
+def current_user(request: Request) -> dict | None:
+    return request.session.get("user")
+
+
+def require_session(request: Request) -> dict:
+    """Dependency: a logged-in org member, else 401."""
+    user = current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    return user
+
+
+def require_admin(user: dict = Depends(require_session)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="admin only")
+    return user
+
+
+@app.get("/auth/login")
+async def auth_login(request: Request):
+    if not auth.configured():
+        raise HTTPException(status_code=503, detail="Discord login is not configured")
+    state = secrets.token_urlsafe(24)
+    request.session["oauth_state"] = state
+    return RedirectResponse(auth.authorize_url(state))
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request, code: str = "", state: str = ""):
+    expected = request.session.pop("oauth_state", None)
+    if not state or state != expected:
+        raise HTTPException(status_code=400, detail="invalid OAuth state")
+    if not code:
+        raise HTTPException(status_code=400, detail="missing authorization code")
+    try:
+        token = await asyncio.to_thread(auth.exchange_code, code)
+        profile = await asyncio.to_thread(auth.fetch_member_profile, token)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Discord auth failed: {exc}")
+    if profile is None:
+        request.session.clear()
+        return HTMLResponse(auth.NOT_IN_ORG_HTML, status_code=403)
+    request.session["user"] = profile
+    return RedirectResponse("/")
+
+
+@app.post("/auth/logout")
+async def auth_logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/me")
+async def api_me(request: Request):
+    """The signed-in org member (or 401). Drives the UI's account state."""
+    return require_session(request)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
