@@ -197,9 +197,14 @@ class Sender:
                 break
         return ok
 
+    # A descriptive User-Agent — the default "Python-urllib/x.y" is flagged as a
+    # bot by Cloudflare (in front of the tunnel) and gets a 403 before reaching
+    # the app.
+    USER_AGENT = "sc-nav-watcher/1.0"
+
     def _post(self, payload):
         data = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "User-Agent": self.USER_AGENT}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         request = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
@@ -208,10 +213,21 @@ class Sender:
                 return 200 <= resp.status < 300
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
-                # Bad/missing token: retrying won't help, so drop it (don't jam
-                # the queue) and tell the user how to fix it.
-                log(f"AUTH FAILED (HTTP {exc.code}): set a valid --token "
-                    "(generate one in the web UI under 'Watcher token')")
+                # Retrying won't help, so drop it (don't jam the queue) and point
+                # at the likely cause: the app 401s a bad token, Cloudflare 403s
+                # a blocked bot request.
+                body = ""
+                try:
+                    body = exc.read().decode("utf-8", "replace")[:200].lower()
+                except Exception:
+                    pass
+                if "cloudflare" in body or "cf-ray" in body or exc.code == 403:
+                    log(f"BLOCKED before the app (HTTP {exc.code}) — Cloudflare is "
+                        "filtering this request. Add a WAF Skip rule for /api/* or "
+                        "turn off Bot Fight Mode for the zone.")
+                else:
+                    log(f"AUTH FAILED (HTTP {exc.code}): set a valid --token "
+                        "(generate one in the web UI under 'Watcher token')")
                 return True
             log(f"send failed (HTTP {exc.code}); will retry ({len(self.pending)} queued)")
             return False
