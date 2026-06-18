@@ -125,19 +125,40 @@ teammates as a toggle layer; a roster lists everyone across systems.
 
 ## Phased migration (each phase ships and keeps the app working)
 
-### Phase 0 — Front door (gate only; state still global)
-Delivers the lockout without the risky refactor.
-- Caddy reverse proxy + TLS (domain -> elastic IP, auto Let's Encrypt). Security
-  group: 443 + locked-down 22. Never expose raw uvicorn.
-- Discord OAuth: `/auth/login`, `/auth/callback`, signed session cookie.
-- Auth deps: `require_session`, `require_token`, `require_user` (session OR
-  token), `require_admin`.
-- Watcher tokens: `POST/GET/DELETE /api/tokens`.
-- Apply the auth matrix to every endpoint; SPA redirects to `/auth/login`; WS
-  handshake reads the cookie.
-- State is STILL the global singleton — behaves like today (one shared cursor)
-  but org-gated. Shippable.
-- Watcher gains a token in its config; its handle becomes a cosmetic label.
+### Phase 0 — Front door (gate only; state still global) — ✅ DONE (2026-06-18)
+Delivers the lockout without the risky refactor. Deployed to a home server in an
+isolated VLAN, exposed via Cloudflare Tunnel at https://nav.bytecollective.io.
+- ~~Caddy reverse proxy + TLS~~ → **Cloudflare Tunnel instead** (outbound-only,
+  TLS at Cloudflare's edge, no inbound ports, no public IP, no Caddy). `cloudflared`
+  runs as a compose service; public hostname -> `http://sc-nav:8765`.
+- Discord OAuth: `/auth/login`, `/auth/callback`, signed session cookie
+  (`server/auth.py` + SessionMiddleware). Gate = guild membership (scopes
+  `identify`+`guilds`).
+- Auth deps: `require_session`, `require_admin`, `token_user`; a single
+  `auth_gate` http middleware enforces "session OR watcher token" on every
+  `/api/*` (health/auth/static stay open). `/ws` requires a session.
+- Watcher tokens: `TokenStore` (hashed) + `POST/GET/DELETE /api/tokens`
+  (session-only). `/api/refresh` admin-only.
+- SPA: login-gate overlay + account bar + "Watcher token" panel; app init
+  deferred until `/api/me` confirms a session; WebSocket uses `wss://`.
+- State is STILL the global singleton — one shared cursor, org-gated. Phase 1
+  makes it per-user.
+- Watcher sends `Authorization: Bearer <token>` (`--token`, sticky in
+  watcher_config.json); handle is now a cosmetic label.
+
+**Gotchas hit (so nobody relives them):**
+- The watcher must point at the public hostname (the server's VLAN is isolated
+  from the gaming PC), and must send a non-default **User-Agent** — Cloudflare
+  403s `Python-urllib/*` as a bot. Turn off **Bot Fight Mode** for headless API
+  clients.
+- `OAUTH_REDIRECT_URI` must match the Discord app exactly; a wrong/truncated
+  `DISCORD_CLIENT_SECRET` shows as `HTTP 401 invalid_client` on the callback.
+- `env_file: .env` on the app service is what passes the Discord/session config
+  into the container; recreate (not just restart) after `.env` changes.
+- A CSS `display:` rule overrides the `[hidden]` attribute — the login overlay
+  needed `.login-gate[hidden]{display:none}` to actually hide after sign-in.
+- `.env` (incl. `CLOUDFLARE_TUNNEL_TOKEN`) lives only on the server; it's
+  gitignored and does not deploy via git.
 
 ### Phase 1 — Per-user sessions (core refactor)
 Replace `AppState` singletons with `sessions[discord_id]`:
@@ -199,8 +220,8 @@ Replace `AppState` singletons with `sessions[discord_id]`:
 - Membership drift handled by re-check on session expiry.
 
 ## Recommended order
-Phase 0 (deployable lockout) -> 1 (simultaneous courses + captures) -> 2
-(durability) -> 3 (teammate map) -> 4 (admin/backups).
+~~Phase 0 (deployable lockout)~~ ✅ -> **1 (simultaneous courses + captures)
+[next]** -> 2 (durability) -> 3 (teammate map) -> 4 (admin/backups).
 
 ## Current single-user architecture (baseline being migrated)
 - FastAPI + single global `AppState` (one live cursor): `pos`, `destination_id`,
