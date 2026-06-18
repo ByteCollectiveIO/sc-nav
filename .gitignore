@@ -20,6 +20,9 @@ poi/wildlife.json
 poi/handles.json
 poi/commodities.json
 poi/watcher_tokens.json
+poi/sc_nav.db
+poi/sc_nav.db-wal
+poi/sc_nav.db-shm
 
 # Secrets / local env — list the FILE here, never the secret itself.
 # The Cloudflare tunnel token goes inside .env (CLOUDFLARE_TUNNEL_TOKEN=...).

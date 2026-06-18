@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
+import db
 import nav_core
 
 DATA_DIR = Path(os.environ.get("SC_NAV_DATA", Path(__file__).parent.parent / "poi"))
@@ -80,14 +81,8 @@ def load_nav_data() -> nav_core.NavData:
     return nav_core.load_data(DATA_DIR)
 
 
-CUSTOM_POI_FILE = DATA_DIR / "custom_pois.json"
-HANDLES_FILE = DATA_DIR / "handles.json"
 COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
-# One file per observation category (resource_nodes.json, wildlife.json, …),
-# defined centrally in nav_core so adding a category needs no new wiring here.
-OBSERVATION_FILES = {
-    cat: DATA_DIR / spec["file"] for cat, spec in nav_core.OBSERVATION_CATEGORIES.items()
-}
+DB_FILE = DATA_DIR / "sc_nav.db"                   # user-contributed data (Phase 2)
 
 
 def _load_json_list(path: Path) -> list[dict]:
@@ -172,23 +167,15 @@ def load_raw_commodity_names() -> list[str]:
     return sorted(names)
 
 
-def load_custom_pois() -> list[dict]:
-    return _load_json_list(CUSTOM_POI_FILE)
-
-
-def save_custom_pois(custom: list[dict]) -> None:
-    _save_json_list(CUSTOM_POI_FILE, custom)
-
-
 class HandleRegistry:
-    """Maps in-game handles to stable assigned PlayerIDs.
+    """Maps in-game handles to stable assigned PlayerIDs (DB-backed, cached
+    in memory).
 
     The PlayerID (not the raw handle) is the key attached to contributions, so
     a character rename keeps a player's history intact."""
 
-    def __init__(self, path: Path):
-        self.path = path
-        self.by_handle = {h["handle"]: h for h in _load_json_list(path)}
+    def __init__(self):
+        self.by_handle = {h["handle"]: h for h in db.all_handles()}
 
     def register(self, handle: str) -> dict:
         handle = handle.strip()
@@ -198,33 +185,29 @@ class HandleRegistry:
             next_id = max((e["player_id"] for e in self.by_handle.values()), default=0) + 1
             entry = {"player_id": next_id, "handle": handle, "first_seen": now, "last_seen": now}
             self.by_handle[handle] = entry
-            # Persist only when a genuinely new handle appears — this runs on
-            # the position hot path (every /showlocation), so we must not
-            # rewrite the file on every sample just to bump last_seen.
+            # Persist only when a genuinely new handle appears — this runs on the
+            # position hot path (every /showlocation), so we don't write per
+            # sample just to bump last_seen (kept in memory).
             try:
-                _save_json_list(self.path, list(self.by_handle.values()))
-            except OSError as exc:
+                db.upsert_handle(entry)
+            except Exception as exc:
                 print(f"[sc-nav] handle registry save failed: {exc}")
         else:
-            entry["last_seen"] = now  # in-memory only; not worth a disk write per position
+            entry["last_seen"] = now  # in-memory only; not worth a write per position
         return entry
 
     def list(self) -> list[dict]:
         return sorted(self.by_handle.values(), key=lambda e: e["handle"].lower())
 
 
-WATCHER_TOKENS_FILE = DATA_DIR / "watcher_tokens.json"
-
-
 class TokenStore:
-    """Per-user watcher tokens. The headless watcher can't do OAuth, so an org
-    member mints a token in the web UI and the watcher sends it as a bearer
-    token. Tokens are stored hashed (only the hash is persisted) and bound to
-    the minting member's Discord id; admin status is resolved live."""
+    """Per-user watcher tokens (DB-backed, cached in memory). The headless
+    watcher can't do OAuth, so an org member mints a token in the web UI and the
+    watcher sends it as a bearer token. Only the hash is persisted; admin status
+    is resolved live."""
 
-    def __init__(self, path: Path):
-        self.path = path
-        self.items = _load_json_list(path)
+    def __init__(self):
+        self.items = db.all_tokens()
 
     @staticmethod
     def _hash(raw: str) -> str:
@@ -237,8 +220,8 @@ class TokenStore:
 
     def resolve(self, raw: str) -> dict | None:
         """A raw bearer token -> the owning member (id/display_name/is_admin),
-        or None. last_used is bumped in memory only (avoids a disk write per
-        position, like HandleRegistry)."""
+        or None. last_used is bumped in memory only (avoids a write per position
+        on the watcher heartbeat)."""
         h = self._hash(raw)
         for t in self.items:
             if secrets.compare_digest(t["hash"], h):
@@ -261,8 +244,8 @@ class TokenStore:
             "created": datetime.now(timezone.utc).isoformat(),
             "last_used": None,
         }
+        db.add_token(entry)
         self.items.append(entry)
-        self._save()
         return raw, self._public(entry)
 
     def list_for(self, discord_id: str) -> list[dict]:
@@ -271,21 +254,14 @@ class TokenStore:
     def revoke(self, token_id: str, discord_id: str, is_admin: bool) -> bool:
         for i, t in enumerate(self.items):
             if t["id"] == token_id and (is_admin or t["discord_id"] == discord_id):
+                db.delete_token(token_id)
                 self.items.pop(i)
-                self._save()
                 return True
         return False
 
-    def _save(self) -> None:
-        try:
-            _save_json_list(self.path, self.items)
-        except OSError as exc:
-            print(f"[sc-nav] watcher token save failed: {exc}")
-
 
 def merge_all_observations(target_nav) -> None:
-    for category, items in observations.items():
-        nav_core.merge_observations(target_nav, items, category)
+    nav_core.merge_observations(target_nav, db.list_observations())
 
 
 app = FastAPI(title="SC Nav")
@@ -315,16 +291,16 @@ app.add_middleware(
     max_age=8 * 3600,
 )
 
+db.init(DB_FILE)
+db.import_legacy_json(DATA_DIR, nav_core.OBSERVATION_CATEGORIES)  # one-time JSON -> SQLite
+
 nav = load_nav_data()
-custom_pois = load_custom_pois()
-# observations[category] -> list of stored dicts (one JSON file each)
-observations = {cat: _load_json_list(path) for cat, path in OBSERVATION_FILES.items()}
-handles = HandleRegistry(HANDLES_FILE)
-tokens = TokenStore(WATCHER_TOKENS_FILE)
+handles = HandleRegistry()
+tokens = TokenStore()
 raw_commodity_names = load_raw_commodity_names()
 fauna_names = load_fauna_names()
 biomes = load_biomes()
-nav_core.merge_custom_pois(nav, custom_pois)
+nav_core.merge_custom_pois(nav, db.list_custom_pois())
 merge_all_observations(nav)
 nav_core.assign_qt_markers(nav)
 
@@ -416,13 +392,7 @@ class AppState:
         # Crumb: {lat, lon, container}.
         self.tracking = False
         self.path = []
-        # Monotonic observation id, so a deleted top id is never reused.
-        self.obs_id_seq = max([*nav.observations.keys(), nav_core.OBSERVATION_ID_START - 1])
         self.clients: set[WebSocket] = set()
-
-    def next_observation_id(self):
-        self.obs_id_seq += 1
-        return self.obs_id_seq
 
     def capture_status(self):
         return {
@@ -525,18 +495,15 @@ async def post_position(body: PositionIn):
 
 
 def _capture_poi(pos_m, now, pending, owner):
-    next_id = max(
-        (c["id"] for c in custom_pois), default=nav_core.CUSTOM_ID_START - 1
-    ) + 1
+    next_id = db.next_custom_poi_id()
     poi = nav_core.custom_poi_from_position(
         nav, pos_m, now, pending["name"], pending["type"], next_id,
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
         qt_marker=pending.get("qt_marker", False),
     )
-    custom_pois.append(nav_core.custom_poi_to_dict(poi))
     try:
-        save_custom_pois(custom_pois)
-    except OSError as exc:
+        db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
+    except Exception as exc:
         print(f"[sc-nav] custom poi save failed: {exc}")
     nav.pois[poi.id] = poi
     # A new QT marker changes the nearest-jump answer for every other entity,
@@ -555,18 +522,17 @@ def _capture_poi(pos_m, now, pending, owner):
 
 def _capture_observation(pos_m, now, pending, owner):
     category = pending["category"]
-    items = observations[category]
-    # Monotonic across all categories -> unique, and never reuses a deleted id.
-    next_id = state.next_observation_id()
+    # Shared id space across categories (>= OBSERVATION_ID_START); MAX(id)+1 from
+    # the DB, so a deleted top id is never reused even across restarts.
+    next_id = db.next_observation_id()
     obs = nav_core.observation_from_position(
         nav, pos_m, now, category, pending["data"], next_id,
         biome=pending.get("biome"), note=pending.get("note"),
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
     )
-    items.append(nav_core.observation_to_dict(obs))
     try:
-        _save_json_list(OBSERVATION_FILES[category], items)
-    except OSError as exc:
+        db.add_observation(nav_core.observation_to_dict(obs))
+    except Exception as exc:
         print(f"[sc-nav] observation save failed: {exc}")
     nav.observations[obs.id] = obs
     state.last_capture = {
@@ -741,21 +707,21 @@ async def list_biomes():
 
 @app.get("/api/custom_pois")
 async def list_custom_pois():
-    return custom_pois
+    return db.list_custom_pois()
 
 
 @app.delete("/api/custom_pois/{poi_id}")
 async def delete_custom_poi(poi_id: int):
     async with state.lock:
-        idx = next((i for i, c in enumerate(custom_pois) if c["id"] == poi_id), None)
-        if idx is None:
+        removed = nav.pois.get(poi_id)
+        if removed is None or not getattr(removed, "custom", False):
             raise HTTPException(status_code=404, detail="unknown custom poi")
-        removed = custom_pois.pop(idx)
-        save_custom_pois(custom_pois)
+        was_qt = removed.qt_marker
+        db.delete_custom_poi(poi_id)
         nav.pois.pop(poi_id, None)
         # Removing a QT marker leaves other entities pointing at a marker that's
         # gone, so rebuild the index + reassign nearest_qt across the dataset.
-        if removed.get("qt_marker"):
+        if was_qt:
             nav_core.assign_qt_markers(nav)
         if state.destination_id == poi_id:
             state.destination_id = None
@@ -781,21 +747,17 @@ async def get_observations(
 @app.delete("/api/observations/{obs_id}")
 async def delete_observation(obs_id: int):
     async with state.lock:
-        for category, items in observations.items():
-            idx = next((i for i, o in enumerate(items) if o["id"] == obs_id), None)
-            if idx is None:
-                continue
-            items.pop(idx)
-            _save_json_list(OBSERVATION_FILES[category], items)
-            nav.observations.pop(obs_id, None)
-            if state.destination_id == obs_id:
-                state.destination_id = None
-            if state.last_capture and state.last_capture.get("id") == obs_id:
-                state.last_capture = None
-            state.recompute()
-            await state.broadcast()
-            return {"ok": True}
-        raise HTTPException(status_code=404, detail="unknown observation")
+        if obs_id not in nav.observations:
+            raise HTTPException(status_code=404, detail="unknown observation")
+        db.delete_observation(obs_id)
+        nav.observations.pop(obs_id, None)
+        if state.destination_id == obs_id:
+            state.destination_id = None
+        if state.last_capture and state.last_capture.get("id") == obs_id:
+            state.last_capture = None
+        state.recompute()
+        await state.broadcast()
+        return {"ok": True}
 
 
 @app.post("/api/path/{action}")
@@ -822,7 +784,7 @@ async def refresh_data(admin: dict = Depends(require_admin)):
     global nav, raw_commodity_names
     fresh = await asyncio.to_thread(load_nav_data)
     fresh_commodities = await asyncio.to_thread(load_raw_commodity_names)
-    nav_core.merge_custom_pois(fresh, custom_pois)
+    nav_core.merge_custom_pois(fresh, db.list_custom_pois())
     merge_all_observations(fresh)
     nav_core.assign_qt_markers(fresh)
     async with state.lock:
