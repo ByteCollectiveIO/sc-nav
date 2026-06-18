@@ -184,15 +184,23 @@ Replace `AppState` singletons with `sessions[discord_id]`:
 - Rename client `"state"` message handling to `"self"`.
 - Now simultaneous courses + concurrent captures work. Still JSON-backed.
 
-### Phase 2 — SQLite (durable, concurrent-safe)
-- Tables: `custom_pois`, `observations`, `profiles` (discord_id, display_name,
-  handle, share_default), `watcher_tokens`. Autoincrement ids kill the in-memory
-  counter races; transactions serialize writes, reads stay concurrent.
-- Loader changes from "read JSON files" to "query DB," still building a
-  `NavData` for `nav_core` (search/forecast/finder untouched). `/api/refresh`
-  rebuilds `NavData` from DB + upstream cache.
-- One-time import script for existing `custom_pois.json`, `resource_nodes.json`,
-  `wildlife.json`, `handles.json`.
+### Phase 2 — SQLite (durable, concurrent-safe) — ✅ DONE (2026-06-18)
+Done **before** Phase 1 (the per-user session refactor is still open). `server/db.py`.
+- Tables: `custom_pois`, `observations`, `handles`, `watcher_tokens`, `meta`
+  (key/value settings). WAL mode; transactions serialize writes, reads stay
+  concurrent. Ids are allocated `MAX(id)+1` within the reserved ranges from the
+  DB (no in-memory counter that resets/races on restart). NOTE: kept the
+  existing handle->player_id model (attribution by handle); the
+  `profiles`/discord-id-owner change is deferred to Phase 1.
+- `HandleRegistry`/`TokenStore` are DB-backed but still memory-cached (token
+  resolve stays a hot path). nav_core is untouched — `NavData` is built from the
+  same dicts, now sourced from the DB. `/api/refresh` rebuilds via `_rebuild_nav`.
+- `db.import_legacy_json()` does a one-time import of the old JSON files, guarded
+  by a `meta` flag so it runs exactly once (the JSON is left as a backup). An
+  existing deployment migrates automatically on first boot.
+- Bonus (not in the original plan): the starmap.space POI catalog is now an
+  admin toggle (`meta.starmap_pois_enabled`, default on) via `/api/settings`, so
+  an org can start from a blank POI database. Containers are always loaded.
 
 ### Phase 3 — Presence (teammate map)
 - `presence: dict[uid, record]` + throttled (~1–2 Hz) broadcaster.
@@ -220,8 +228,9 @@ Replace `AppState` singletons with `sessions[discord_id]`:
 - Membership drift handled by re-check on session expiry.
 
 ## Recommended order
-~~Phase 0 (deployable lockout)~~ ✅ -> **1 (simultaneous courses + captures)
-[next]** -> 2 (durability) -> 3 (teammate map) -> 4 (admin/backups).
+~~Phase 0 (deployable lockout)~~ ✅ -> ~~2 (durability)~~ ✅ (done out of order) ->
+**1 (simultaneous courses + captures) [next]** -> 3 (teammate map) ->
+4 (admin/backups).
 
 ## Current single-user architecture (baseline being migrated)
 - FastAPI + single global `AppState` (one live cursor): `pos`, `destination_id`,
