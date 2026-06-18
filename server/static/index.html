@@ -108,13 +108,36 @@
   .hm-key { display: inline-flex; align-items: center; gap: 5px; }
   .hm-key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
   .hm-grad { display: inline-block; width: 90px; height: 11px; border-radius: 3px; }
+
+  /* account + login */
+  #account { margin-left: 16px; font-size: 12px; color: var(--dim);
+    display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #account a { color: var(--accent); cursor: pointer; }
+  #account b { color: var(--text); }
+  .login-gate { position: fixed; inset: 0; background: var(--bg);
+    display: grid; place-items: center; z-index: 50; padding: 20px; }
+  .login-card { text-align: center; max-width: 380px; }
+  .login-card h1 { color: var(--accent); letter-spacing: 3px; margin: 0 0 10px; }
+  .btn-discord { display: inline-block; background: #5865F2; color: #fff; border: none;
+    border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
+    cursor: pointer; text-decoration: none; margin-top: 14px; }
+  #token-new code { color: var(--good); }
 </style>
 </head>
 <body>
+<div id="login-gate" class="login-gate" hidden>
+  <div class="login-card">
+    <h1>SC NAV</h1>
+    <p class="muted">Sign in with your Discord account to access your organization's navigation data.</p>
+    <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
+  </div>
+</div>
+
 <header>
   <h1>SC NAV</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
+  <div id="account"></div>
 </header>
 
 <main>
@@ -300,6 +323,20 @@
     <input id="search" class="ti" placeholder="search POIs, resources, wildlife…" autocomplete="off">
     <table id="search-results" hidden>
       <thead><tr><th>NAME</th><th>KIND</th><th>DETAIL</th><th>CONTAINER</th><th>JUMP TO (QT)</th><th>BY</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel" id="token-panel" hidden>
+    <h2>WATCHER TOKEN <span class="muted">(authenticates the desktop watcher)</span></h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="token-label" class="ti" placeholder="label (e.g. gaming-pc)" style="min-width:160px;">
+      <button id="token-gen">Generate token</button>
+      <span class="muted" id="token-status"></span>
+    </div>
+    <div id="token-new" class="armed" hidden style="margin-top:8px;"></div>
+    <table id="token-table" hidden style="margin-top:8px;">
+      <thead><tr><th>LABEL</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -1043,12 +1080,11 @@ async function runFinder() {
   }
   table.hidden = false;
 }
-loadFinderOres();
-
 // ---------- websocket ----------
 let ws = null;
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => $("conn").classList.add("ok");
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
@@ -1057,13 +1093,6 @@ function connect() {
   ws.onclose = () => { $("conn").classList.remove("ok"); setTimeout(connect, 2000); };
 }
 setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
-connect();
-
-fetch("/api/state").then(r => r.json()).then(d => {
-  if (d.state) render(d.state);
-  renderCapture(d.capture);
-  loadAll();   // always load the dataset for the browse view + filter dropdowns
-}).catch(() => loadAll());
 
 // ---------- constrained <select> with an "Other…" escape ----------
 // Used by the ore and biome fields: pick from a standardized list, or choose
@@ -1094,13 +1123,8 @@ function fillSelectWithOther(selId, names, placeholder) {
   toggleOther(selId);
 }
 
-// Fauna stays a datalist (type-to-filter is handy for the longer list).
-fetch("/api/fauna").then(r => r.json()).then(n => fillDatalist("fauna-types", n)).catch(() => {});
-
-// Ore: a constrained dropdown standardized from the uexcorp raw-commodity list.
+// Ore datalist toggle (the list itself is fetched in init()).
 $("node-ore").onchange = () => toggleOther("node-ore");
-fetch("/api/raw_commodities").then(r => r.json())
-  .then(n => fillSelectWithOther("node-ore", n, "— ore")).catch(() => {});
 
 // Biome dropdowns (node + fauna): options narrow to the player's current body,
 // falling back to system then all.
@@ -1117,12 +1141,79 @@ function updateBiomes(system, container) {
   for (const id of BIOME_SELECTS) fillSelectWithOther(id, list, "— biome (optional)");
 }
 BIOME_SELECTS.forEach(id => $(id).onchange = () => toggleOther(id));
-fetch("/api/biomes").then(r => r.json()).then(d => {
-  biomeData = d;
-  lastBiomeKey = null;                       // force a refill against new data
-  if (lastState) updateBiomes(lastState.system, lastState.container && lastState.container.name);
-  else for (const id of BIOME_SELECTS) fillSelectWithOther(id, d.all, "— biome (optional)");
-}).catch(() => {});
+
+// ---------- auth gate / account ----------
+function renderAccount(me) {
+  const el = $("account");
+  if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; return; }
+  const admin = me.is_admin ? ` <span class="muted">(admin)</span>` : "";
+  el.innerHTML = `<span class="muted">signed in as</span> <b>${esc(me.display_name || me.username || "member")}</b>${admin} · <a id="logout">log out</a>`;
+  $("logout").onclick = async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); };
+  $("token-panel").hidden = false;
+  loadTokens();
+}
+
+// ---------- watcher tokens ----------
+async function loadTokens() {
+  let list = [];
+  try { const r = await fetch("/api/tokens"); if (r.ok) list = await r.json(); } catch {}
+  const tbody = $("token-table").querySelector("tbody");
+  tbody.innerHTML = "";
+  for (const t of list) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td>${esc(t.label)}</td>` +
+      `<td class="muted">${esc((t.created || "").slice(0, 10))}</td>` +
+      `<td class="muted">${t.last_used ? esc(t.last_used.slice(0, 16).replace("T", " ")) : "never"}</td>` +
+      `<td><span class="del" title="revoke">✕</span></td>`;
+    tr.querySelector(".del").onclick = async () => {
+      await fetch(`/api/tokens/${t.id}`, { method: "DELETE" }); loadTokens();
+    };
+    tbody.appendChild(tr);
+  }
+  $("token-table").hidden = list.length === 0;
+}
+$("token-gen").onclick = async () => {
+  const label = $("token-label").value.trim() || "watcher";
+  const r = await fetch("/api/tokens", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label }) });
+  if (!r.ok) return;
+  const d = await r.json();
+  $("token-label").value = "";
+  show("token-new", `New token — copy it now, it won't be shown again:<br>` +
+    `<code style="word-break:break-all">${esc(d.token)}</code><br>` +
+    `<span class="muted">Put it in the watcher config as the auth token.</span>`);
+  loadTokens();
+};
+
+// ---------- init (only after we confirm the user is signed in) ----------
+function init() {
+  connect();
+  loadFinderOres();
+  fetch("/api/state").then(r => r.json()).then(d => {
+    if (d.state) render(d.state);
+    renderCapture(d.capture);
+    loadAll();   // dataset for the browse view + filter dropdowns
+  }).catch(() => loadAll());
+  fetch("/api/fauna").then(r => r.json()).then(n => fillDatalist("fauna-types", n)).catch(() => {});
+  fetch("/api/raw_commodities").then(r => r.json())
+    .then(n => fillSelectWithOther("node-ore", n, "— ore")).catch(() => {});
+  fetch("/api/biomes").then(r => r.json()).then(d => {
+    biomeData = d;
+    lastBiomeKey = null;
+    if (lastState) updateBiomes(lastState.system, lastState.container && lastState.container.name);
+    else for (const id of BIOME_SELECTS) fillSelectWithOther(id, d.all, "— biome (optional)");
+  }).catch(() => {});
+}
+
+async function boot() {
+  let me = null;
+  try { const r = await fetch("/api/me"); if (r.ok) me = await r.json(); } catch {}
+  renderAccount(me);
+  if (me) { $("login-gate").hidden = true; init(); }
+  else { $("login-gate").hidden = false; }   // anonymous: show the sign-in gate
+}
+boot();
 </script>
 </body>
 </html>

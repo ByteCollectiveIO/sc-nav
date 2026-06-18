@@ -172,10 +172,11 @@ class Sender:
     server restart doesn't lose the session.
     """
 
-    def __init__(self, server_url, timeout=3.0, dry_run=False):
+    def __init__(self, server_url, timeout=3.0, dry_run=False, token=None):
         self.url = server_url.rstrip("/") + POSITION_ENDPOINT if server_url else None
         self.timeout = timeout
         self.dry_run = dry_run
+        self.token = token
         self.pending = collections.deque(maxlen=50)
 
     def send(self, payload):
@@ -198,15 +199,22 @@ class Sender:
 
     def _post(self, payload):
         data = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            self.url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        request = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as resp:
                 return 200 <= resp.status < 300
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                # Bad/missing token: retrying won't help, so drop it (don't jam
+                # the queue) and tell the user how to fix it.
+                log(f"AUTH FAILED (HTTP {exc.code}): set a valid --token "
+                    "(generate one in the web UI under 'Watcher token')")
+                return True
+            log(f"send failed (HTTP {exc.code}); will retry ({len(self.pending)} queued)")
+            return False
         except (urllib.error.URLError, OSError) as exc:
             log(f"send failed ({exc}); will retry ({len(self.pending)} queued)")
             return False
@@ -233,39 +241,59 @@ def build_payload(coords, raw_text, handle=None):
     }
 
 
-# Sticky handle: once set with --handle it's remembered here so future runs
-# (e.g. the double-click .bat) don't need to re-specify it.
+# Sticky config: --handle and --token are remembered here so future runs
+# (e.g. the double-click .bat) don't need to re-specify them.
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watcher_config.json")
 
 
-def resolve_handle(args):
-    config = {}
+def _load_config():
     try:
         with open(CONFIG_PATH, encoding="utf-8") as fh:
-            config = json.load(fh)
+            return json.load(fh)
     except (OSError, ValueError):
-        pass
-    if args.handle:
-        handle = args.handle.strip()
-        if handle and handle != config.get("handle"):
-            config["handle"] = handle
-            try:
-                with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
-                    json.dump(config, fh)
-            except OSError as exc:
-                log(f"could not save handle to config: {exc}")
-        return handle
-    return (config.get("handle") or "").strip() or None
+        return {}
+
+
+def _save_config(config):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+            json.dump(config, fh)
+    except OSError as exc:
+        log(f"could not save watcher config: {exc}")
+
+
+def _resolve_sticky(args_value, key):
+    """Return args_value (saving it to config if new), else the saved value."""
+    config = _load_config()
+    if args_value:
+        value = args_value.strip()
+        if value and value != config.get(key):
+            config[key] = value
+            _save_config(config)
+        return value
+    return (config.get(key) or "").strip() or None
+
+
+def resolve_handle(args):
+    return _resolve_sticky(args.handle, "handle")
+
+
+def resolve_token(args):
+    return _resolve_sticky(args.token, "token")
 
 
 def run(args):
     clipboard = make_clipboard()
-    sender = Sender(args.server, timeout=args.timeout, dry_run=args.dry_run)
+    token = resolve_token(args)
+    sender = Sender(args.server, timeout=args.timeout, dry_run=args.dry_run, token=token)
     handle = resolve_handle(args)
     if handle:
         log(f"reporting as handle: {handle}")
     else:
         log("no handle set (captures will be unattributed) — pass --handle \"YourName\"")
+    if not token and not args.dry_run:
+        log("WARNING: no auth token set — the server will reject positions. "
+            "Generate one in the web UI ('Watcher token') and pass --token \"...\"")
 
     last_seq = clipboard.sequence_number()
     last_text = None
@@ -343,6 +371,11 @@ def main():
         "--handle",
         help="Your in-game player handle, attached to captures for attribution. "
         "Saved to watcher_config.json so it's remembered on later runs.",
+    )
+    parser.add_argument(
+        "--token",
+        help="Watcher auth token (generate one in the web UI under 'Watcher token'). "
+        "Required by an authenticated server. Saved to watcher_config.json.",
     )
     args = parser.parse_args()
 

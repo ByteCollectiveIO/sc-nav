@@ -9,6 +9,7 @@ Data: ../poi by default, override with SC_NAV_DATA=/path/to/poi
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import secrets
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
@@ -212,12 +213,97 @@ class HandleRegistry:
         return sorted(self.by_handle.values(), key=lambda e: e["handle"].lower())
 
 
+WATCHER_TOKENS_FILE = DATA_DIR / "watcher_tokens.json"
+
+
+class TokenStore:
+    """Per-user watcher tokens. The headless watcher can't do OAuth, so an org
+    member mints a token in the web UI and the watcher sends it as a bearer
+    token. Tokens are stored hashed (only the hash is persisted) and bound to
+    the minting member's Discord id; admin status is resolved live."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.items = _load_json_list(path)
+
+    @staticmethod
+    def _hash(raw: str) -> str:
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @staticmethod
+    def _public(t: dict) -> dict:
+        return {"id": t["id"], "label": t["label"],
+                "created": t["created"], "last_used": t["last_used"]}
+
+    def resolve(self, raw: str) -> dict | None:
+        """A raw bearer token -> the owning member (id/display_name/is_admin),
+        or None. last_used is bumped in memory only (avoids a disk write per
+        position, like HandleRegistry)."""
+        h = self._hash(raw)
+        for t in self.items:
+            if secrets.compare_digest(t["hash"], h):
+                t["last_used"] = datetime.now(timezone.utc).isoformat()
+                return {
+                    "id": t["discord_id"],
+                    "display_name": t.get("display_name"),
+                    "is_admin": t["discord_id"] in auth.ADMIN_IDS,
+                }
+        return None
+
+    def mint(self, discord_id: str, display_name: str, label: str) -> tuple[str, dict]:
+        raw = secrets.token_urlsafe(32)
+        entry = {
+            "id": secrets.token_hex(8),
+            "hash": self._hash(raw),
+            "discord_id": discord_id,
+            "display_name": display_name,
+            "label": (label or "watcher").strip()[:60],
+            "created": datetime.now(timezone.utc).isoformat(),
+            "last_used": None,
+        }
+        self.items.append(entry)
+        self._save()
+        return raw, self._public(entry)
+
+    def list_for(self, discord_id: str) -> list[dict]:
+        return [self._public(t) for t in self.items if t["discord_id"] == discord_id]
+
+    def revoke(self, token_id: str, discord_id: str, is_admin: bool) -> bool:
+        for i, t in enumerate(self.items):
+            if t["id"] == token_id and (is_admin or t["discord_id"] == discord_id):
+                self.items.pop(i)
+                self._save()
+                return True
+        return False
+
+    def _save(self) -> None:
+        try:
+            _save_json_list(self.path, self.items)
+        except OSError as exc:
+            print(f"[sc-nav] watcher token save failed: {exc}")
+
+
 def merge_all_observations(target_nav) -> None:
     for category, items in observations.items():
         nav_core.merge_observations(target_nav, items, category)
 
 
 app = FastAPI(title="SC Nav")
+
+
+# Auth gate: every /api/* call needs a logged-in org member (session) or a valid
+# watcher token; the SPA shell, /auth/* and /api/health stay open. Registered
+# BEFORE SessionMiddleware below so that (being the inner layer) it runs after
+# the session has been loaded from the cookie.
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") or path == "/api/health":
+        return await call_next(request)
+    if request.session.get("user") or token_user(request):
+        return await call_next(request)
+    return JSONResponse({"detail": "not authenticated"}, status_code=401)
+
 
 # Signed session cookie (Discord login state). The secret must be stable across
 # restarts so sessions survive a redeploy; a random fallback keeps dev working.
@@ -234,12 +320,40 @@ custom_pois = load_custom_pois()
 # observations[category] -> list of stored dicts (one JSON file each)
 observations = {cat: _load_json_list(path) for cat, path in OBSERVATION_FILES.items()}
 handles = HandleRegistry(HANDLES_FILE)
+tokens = TokenStore(WATCHER_TOKENS_FILE)
 raw_commodity_names = load_raw_commodity_names()
 fauna_names = load_fauna_names()
 biomes = load_biomes()
 nav_core.merge_custom_pois(nav, custom_pois)
 merge_all_observations(nav)
 nav_core.assign_qt_markers(nav)
+
+
+# --- auth dependencies (defined before the endpoints that use them) ---------
+def current_user(request: Request) -> dict | None:
+    return request.session.get("user")
+
+
+def token_user(request: Request) -> dict | None:
+    """The org member behind a `Authorization: Bearer <watcher token>`, or None."""
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    return tokens.resolve(header[7:].strip())
+
+
+def require_session(request: Request) -> dict:
+    """Dependency: a logged-in org member, else 401."""
+    user = current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    return user
+
+
+def require_admin(user: dict = Depends(require_session)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="admin only")
+    return user
 
 
 class PositionIn(BaseModel):
@@ -702,9 +816,9 @@ async def path_control(action: str):
 
 
 @app.post("/api/refresh")
-async def refresh_data():
+async def refresh_data(admin: dict = Depends(require_admin)):
     """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
-    without restarting."""
+    without restarting. Admin only."""
     global nav, raw_commodity_names
     fresh = await asyncio.to_thread(load_nav_data)
     fresh_commodities = await asyncio.to_thread(load_raw_commodity_names)
@@ -748,6 +862,10 @@ async def health():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    # Browsers only; require a logged-in org member (session loaded from cookie).
+    if not ws.session.get("user"):
+        await ws.close(code=1008)   # policy violation
+        return
     await ws.accept()
     state.clients.add(ws)
     try:
@@ -773,28 +891,10 @@ async def websocket_endpoint(ws: WebSocket):
 # ---------------------------------------------------------------------------
 # Discord OAuth gate (Phase 0)
 # ---------------------------------------------------------------------------
-# Login + org-membership check + signed session. Enforcement on the data
-# endpoints + watcher tokens lands in the next increment; for now the Cloudflare
-# Access gate still shields everything, so these routes can be tested live
-# without locking anyone out.
-
-
-def current_user(request: Request) -> dict | None:
-    return request.session.get("user")
-
-
-def require_session(request: Request) -> dict:
-    """Dependency: a logged-in org member, else 401."""
-    user = current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="not authenticated")
-    return user
-
-
-def require_admin(user: dict = Depends(require_session)) -> dict:
-    if not user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="admin only")
-    return user
+# Login + org-membership check + signed session for browsers; bearer watcher
+# tokens for the headless watcher. The auth_gate middleware enforces "any /api/*
+# needs one of these" centrally; the dependencies below add the finer checks
+# (session-only, admin-only).
 
 
 @app.get("/auth/login")
@@ -846,6 +946,33 @@ async def auth_logout(request: Request):
 async def api_me(request: Request):
     """The signed-in org member (or 401). Drives the UI's account state."""
     return require_session(request)
+
+
+class TokenCreateIn(BaseModel):
+    label: str = "watcher"
+
+
+@app.post("/api/tokens")
+async def create_token(request: Request, body: TokenCreateIn):
+    """Mint a watcher token for the signed-in member. The raw token is returned
+    once and never stored in the clear."""
+    user = require_session(request)
+    raw, public = tokens.mint(user["id"], user.get("display_name"), body.label)
+    return {"token": raw, **public}
+
+
+@app.get("/api/tokens")
+async def list_tokens(request: Request):
+    user = require_session(request)
+    return tokens.list_for(user["id"])
+
+
+@app.delete("/api/tokens/{token_id}")
+async def delete_token(request: Request, token_id: str):
+    user = require_session(request)
+    if not tokens.revoke(token_id, user["id"], user.get("is_admin", False)):
+        raise HTTPException(status_code=404, detail="unknown token")
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
