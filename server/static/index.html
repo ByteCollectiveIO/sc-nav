@@ -71,6 +71,9 @@
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: var(--panel2); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* scrollable table window so a long browse list doesn't stretch the page */
+  .table-scroll { max-height: 480px; overflow-y: auto; }
+  .table-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
   .muted { color: var(--dim); }
   .armed { color: var(--warn); padding: 4px 0; }
   .credited { color: var(--dim); font-size: 12px; margin-top: 6px; }
@@ -311,13 +314,15 @@
       <select id="f-owner" class="sel"><option value="">all contributors</option></select>
       <input id="f-text" class="ti" placeholder="filter name / type / ore / species" style="flex:1; min-width:140px;">
     </div>
-    <table>
-      <thead><tr>
-        <th>NAME</th><th>KIND</th><th>CONTAINER</th><th>DETAIL</th><th>JUMP TO (QT)</th>
-        <th class="num">DISTANCE</th><th class="num">BEARING</th><th>BY</th><th></th>
-      </tr></thead>
-      <tbody id="nearby-body"></tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th>NAME</th><th>KIND</th><th>CONTAINER</th><th>DETAIL</th><th>JUMP TO (QT)</th>
+          <th class="num">DISTANCE</th><th class="num">BEARING</th><th>BY</th><th></th>
+        </tr></thead>
+        <tbody id="nearby-body"></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="panel">
@@ -341,6 +346,18 @@
       <thead><tr><th>LABEL</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
+  </div>
+
+  <div class="panel" id="admin-panel" hidden>
+    <h2>ORG SETTINGS <span class="muted">(admin)</span></h2>
+    <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
+      <input type="checkbox" id="starmap-toggle"> Use the starmap.space POI catalog
+    </label>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Uncheck to start from a blank POI database — only your org's own custom POIs
+      (and the QT markers you add) are used. Celestial bodies are always loaded.
+    </div>
+    <div class="muted" id="admin-status" style="margin-top:6px;"></div>
   </div>
 </main>
 
@@ -493,7 +510,7 @@ let kindFilter = "all";
 // (e.g. Orbital Markers spread around a planet) stay findable. Refreshed on
 // load and after every capture/delete so freshly added POIs appear.
 let allRows = null;
-const TABLE_CAP = 250;   // max rows rendered in the dataset view
+const TABLE_CAP = 50;    // max rows rendered in the dataset view (scrolls within)
 
 async function loadAll() {
   try {
@@ -1153,7 +1170,39 @@ function renderAccount(me) {
   $("logout").onclick = async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); };
   $("token-panel").hidden = false;
   loadTokens();
+  if (me.is_admin) { $("admin-panel").hidden = false; loadSettings(); }
 }
+
+// ---------- org settings (admin) ----------
+async function loadSettings() {
+  try {
+    const s = await fetch("/api/settings").then(r => r.json());
+    $("starmap-toggle").checked = !!s.starmap_pois_enabled;
+  } catch {}
+}
+$("starmap-toggle").onchange = async (e) => {
+  const enabled = e.target.checked;
+  if (!enabled && !confirm(
+      "Start from a blank POI database? The starmap.space POIs will be removed " +
+      "from the dataset (your custom POIs are kept). You can re-enable this later.")) {
+    e.target.checked = true;
+    return;
+  }
+  $("admin-status").textContent = "rebuilding dataset…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ starmap_pois_enabled: enabled }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    $("admin-status").textContent = `done — ${d.pois} POIs in the dataset`;
+    loadAll();                       // refresh the browse view against the new dataset
+    if (finderOre) runFinder();
+  } catch {
+    $("admin-status").textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
 
 // ---------- watcher tokens ----------
 async function loadTokens() {

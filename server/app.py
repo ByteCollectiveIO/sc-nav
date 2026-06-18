@@ -47,17 +47,26 @@ def _fetch_json(url, timeout=30):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def starmap_pois_enabled() -> bool:
+    """Whether to load starmap.space's POI catalog. Off lets an org start from a
+    blank POI database (their own custom POIs only). Celestial bodies (the
+    container catalog) are always loaded — the nav math needs them."""
+    return db.get_setting("starmap_pois_enabled", "1") == "1"
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
     A successful fetch refreshes the cache files, so the newest good dataset
-    survives restarts and network outages.
+    survives restarts and network outages. The POI catalog is skipped when the
+    org has opted out (containers are always loaded).
     """
+    want_pois = starmap_pois_enabled()
     if not OFFLINE:
         try:
             oc_raw = _fetch_json(OC_URL)
-            poi_raw = _fetch_json(POI_URL)
-            if len(oc_raw) < 50 or len(poi_raw) < 100:
+            poi_raw = _fetch_json(POI_URL) if want_pois else []
+            if len(oc_raw) < 50 or (want_pois and len(poi_raw) < 100):
                 raise ValueError(
                     f"suspiciously small dataset ({len(oc_raw)} containers, "
                     f"{len(poi_raw)} pois) — keeping cache"
@@ -65,7 +74,8 @@ def load_nav_data() -> nav_core.NavData:
             fresh = nav_core.parse_data(oc_raw, poi_raw)
             try:
                 (DATA_DIR / "containers.json").write_text(json.dumps(oc_raw))
-                (DATA_DIR / "poi.json").write_text(json.dumps(poi_raw))
+                if want_pois:
+                    (DATA_DIR / "poi.json").write_text(json.dumps(poi_raw))
             except OSError as exc:
                 print(f"[sc-nav] cache write failed (continuing): {exc}")
             data_info.update(
@@ -78,7 +88,9 @@ def load_nav_data() -> nav_core.NavData:
             data_info["error"] = str(exc)
             print(f"[sc-nav] live fetch failed, using cached data: {exc}")
     data_info["source"] = "offline" if OFFLINE else "cache"
-    return nav_core.load_data(DATA_DIR)
+    oc_raw = json.loads((DATA_DIR / "containers.json").read_text())
+    poi_raw = json.loads((DATA_DIR / "poi.json").read_text()) if want_pois else []
+    return nav_core.parse_data(oc_raw, poi_raw)
 
 
 COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
@@ -777,19 +789,16 @@ async def path_control(action: str):
     return {"ok": True, "tracking": state.tracking, "crumbs": len(state.path)}
 
 
-@app.post("/api/refresh")
-async def refresh_data(admin: dict = Depends(require_admin)):
-    """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
-    without restarting. Admin only."""
-    global nav, raw_commodity_names
+async def _rebuild_nav() -> None:
+    """Rebuild NavData (upstream catalog + DB customs/observations) and swap it
+    in. Used by /api/refresh and when org settings change."""
+    global nav
     fresh = await asyncio.to_thread(load_nav_data)
-    fresh_commodities = await asyncio.to_thread(load_raw_commodity_names)
     nav_core.merge_custom_pois(fresh, db.list_custom_pois())
     merge_all_observations(fresh)
     nav_core.assign_qt_markers(fresh)
     async with state.lock:
         nav = fresh
-        raw_commodity_names = fresh_commodities
         if (
             state.destination_id is not None
             and state.destination_id not in nav.pois
@@ -798,6 +807,15 @@ async def refresh_data(admin: dict = Depends(require_admin)):
             state.destination_id = None
         state.recompute()
         await state.broadcast()
+
+
+@app.post("/api/refresh")
+async def refresh_data(admin: dict = Depends(require_admin)):
+    """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
+    without restarting. Admin only."""
+    global raw_commodity_names
+    raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
+    await _rebuild_nav()
     return {
         "ok": True,
         "data": data_info,
@@ -806,6 +824,26 @@ async def refresh_data(admin: dict = Depends(require_admin)):
         "observations": len(nav.observations),
         "raw_commodities": len(raw_commodity_names),
     }
+
+
+@app.get("/api/settings")
+async def get_settings(user: dict = Depends(require_session)):
+    """Org-wide settings (any member can read; admins change them)."""
+    return {"starmap_pois_enabled": starmap_pois_enabled()}
+
+
+class SettingsIn(BaseModel):
+    starmap_pois_enabled: bool
+
+
+@app.post("/api/settings")
+async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)):
+    """Toggle whether the starmap.space POI catalog is used, then rebuild the
+    dataset. Admin only."""
+    db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
+    await _rebuild_nav()
+    return {"ok": True, "starmap_pois_enabled": body.starmap_pois_enabled,
+            "pois": len(nav.pois)}
 
 
 @app.get("/api/health")

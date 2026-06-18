@@ -247,6 +247,18 @@ def _meta_set(key: str, value: str) -> None:
         _conn.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (key, value))
 
 
+# --- settings (key/value in the meta table) --------------------------------
+
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    v = _meta_get(key)
+    return default if v is None else v
+
+
+def set_setting(key: str, value: str) -> None:
+    _meta_set(key, value)
+
+
 def import_legacy_json(data_dir, observation_categories) -> None:
     """One-time import of the old per-file JSON into the DB. Guarded by a meta
     flag so it runs exactly once (even if the user later deletes every row),
