@@ -13,6 +13,7 @@ import json
 import os
 import secrets
 import time
+import traceback
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -816,7 +817,18 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
         token = await asyncio.to_thread(auth.exchange_code, code)
         profile = await asyncio.to_thread(auth.fetch_member_profile, token)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Discord auth failed: {exc}")
+        # A urllib HTTPError carries Discord's JSON error body (e.g.
+        # {"error":"invalid_client"}); read it and log to stdout so the real
+        # reason shows up in `docker logs`, not just an opaque 502.
+        body = ""
+        if hasattr(exc, "read"):
+            try:
+                body = exc.read().decode("utf-8", "replace")[:500]
+            except Exception:
+                pass
+        print(f"[sc-nav] auth callback failed: {exc!r} {body}", flush=True)
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Discord auth failed: {exc} {body}")
     if profile is None:
         request.session.clear()
         return HTMLResponse(auth.NOT_IN_ORG_HTML, status_code=403)
