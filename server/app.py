@@ -54,6 +54,13 @@ def starmap_pois_enabled() -> bool:
     return db.get_setting("starmap_pois_enabled", "1") == "1"
 
 
+def member_role_id() -> str:
+    """Discord role a user must hold (besides guild membership) to sign in.
+    Empty = any guild member is allowed. DB-backed + admin-editable, seeded by
+    the ORG_MEMBER_ROLE_ID env default. Admins (ADMIN_IDS) bypass this check."""
+    return db.get_setting("member_role_id", auth.MEMBER_ROLE_ID) or ""
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
@@ -984,21 +991,29 @@ async def refresh_data(admin: dict = Depends(require_admin)):
 @app.get("/api/settings")
 async def get_settings(user: dict = Depends(require_session)):
     """Org-wide settings (any member can read; admins change them)."""
-    return {"starmap_pois_enabled": starmap_pois_enabled()}
+    return {
+        "starmap_pois_enabled": starmap_pois_enabled(),
+        "member_role_id": member_role_id(),
+    }
 
 
 class SettingsIn(BaseModel):
-    starmap_pois_enabled: bool
+    starmap_pois_enabled: bool | None = None
+    member_role_id: str | None = None
 
 
 @app.post("/api/settings")
 async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)):
-    """Toggle whether the starmap.space POI catalog is used, then rebuild the
-    dataset. Admin only."""
-    db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
-    await _rebuild_nav()
-    return {"ok": True, "starmap_pois_enabled": body.starmap_pois_enabled,
-            "pois": len(nav.pois)}
+    """Update org settings (admin only). Only the fields present are changed.
+    Toggling the POI catalog rebuilds the dataset; the member-role gate takes
+    effect at the next login (existing sessions stand until they expire)."""
+    if body.member_role_id is not None:
+        db.set_setting("member_role_id", body.member_role_id.strip())
+    if body.starmap_pois_enabled is not None:
+        db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
+        await _rebuild_nav()
+    return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
+            "member_role_id": member_role_id(), "pois": len(nav.pois)}
 
 
 @app.get("/api/health")
@@ -1077,7 +1092,8 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
         raise HTTPException(status_code=400, detail="missing authorization code")
     try:
         token = await asyncio.to_thread(auth.exchange_code, code)
-        profile = await asyncio.to_thread(auth.fetch_member_profile, token)
+        profile, denied = await asyncio.to_thread(
+            auth.fetch_member_profile, token, member_role_id())
     except Exception as exc:
         # A urllib HTTPError carries Discord's JSON error body (e.g.
         # {"error":"invalid_client"}); read it and log to stdout so the real
@@ -1093,7 +1109,8 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
         raise HTTPException(status_code=502, detail=f"Discord auth failed: {exc} {body}")
     if profile is None:
         request.session.clear()
-        return HTMLResponse(auth.NOT_IN_ORG_HTML, status_code=403)
+        html = auth.MISSING_ROLE_HTML if denied == "missing_role" else auth.NOT_IN_ORG_HTML
+        return HTMLResponse(html, status_code=403)
     request.session["user"] = profile
     return RedirectResponse("/")
 

@@ -379,6 +379,19 @@
       Uncheck to start from a blank POI database — only your org's own custom POIs
       (and the QT markers you add) are used. Celestial bodies are always loaded.
     </div>
+
+    <h2 style="margin-top:16px;">ACCESS</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="member-role" class="ti" placeholder="(empty = any server member)"
+             style="min-width:220px;" inputmode="numeric">
+      <button id="member-role-save">Save role gate</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Require a Discord <b>role</b> (in addition to being in the server) to sign in.
+      Leave blank to allow any member. In Discord with Developer Mode on, right-click
+      the role → <b>Copy Role ID</b> and paste it here. Admins always have access; a
+      change takes effect at each member's next sign-in.
+    </div>
     <div class="muted" id="admin-status" style="margin-top:6px;"></div>
   </div>
 </main>
@@ -1282,8 +1295,32 @@ async function loadSettings() {
   try {
     const s = await fetch("/api/settings").then(r => r.json());
     $("starmap-toggle").checked = !!s.starmap_pois_enabled;
+    if (document.activeElement !== $("member-role"))
+      $("member-role").value = s.member_role_id || "";
   } catch {}
 }
+
+$("member-role-save").onclick = async () => {
+  const id = $("member-role").value.trim();
+  if (id && !/^\d+$/.test(id)) {
+    $("admin-status").textContent = "role ID must be numeric (Copy Role ID in Discord)";
+    return;
+  }
+  $("admin-status").textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ member_role_id: id }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    $("admin-status").textContent = d.member_role_id
+      ? `saved — members now need role ${d.member_role_id} (applies at next sign-in)`
+      : "saved — any server member can sign in";
+  } catch {
+    $("admin-status").textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
 $("starmap-toggle").onchange = async (e) => {
   const enabled = e.target.checked;
   if (!enabled && !confirm(

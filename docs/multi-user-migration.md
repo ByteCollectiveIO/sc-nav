@@ -16,8 +16,12 @@ Discord — even though the server is on a public IP.
 
 ## Decisions locked
 
-1. **Auth gate = Discord guild membership** (everyone in the guild; no role gate,
-   no bot). Scopes: `identify` + `guilds`.
+1. **Auth gate = Discord guild membership + an optional role** (Phase 4). By
+   default everyone in the guild is allowed; admins can require a specific role
+   (the "member" role) on top. No bot — roles come from the OAuth member object.
+   Scopes: `identify` + `guilds` + `guilds.members.read`. The required role id is
+   DB-backed + admin-editable (empty = membership-only); admins (`ADMIN_IDS`)
+   always bypass the role check so a mis-set role can't lock them out.
 2. **Identity = Discord user ID, permanently.** The RSI handle is **cosmetic** (it
    changes; people have alts). One Discord ID = one contributor. Filtering "by
    contributor" keys on Discord ID; the handle is a display label.
@@ -40,11 +44,12 @@ Discord — even though the server is on a public IP.
 
 **Browser (interactive):**
 ```
-GET /auth/login  -> 302 Discord authorize (scope=identify+guilds, state=<csrf>)
+GET /auth/login  -> 302 Discord authorize (scope=identify+guilds+guilds.members.read)
 Discord -> GET /auth/callback?code&state
   -> exchange code -> GET /users/@me  (id, username, avatar)
-                    -> GET /users/@me/guilds  -> assert ORG_GUILD_ID in list
-  -> not a member: 403
+                    -> GET /users/@me/guilds/{ORG_GUILD_ID}/member  (404 = not a member)
+                    -> if member_role_id set and not in member.roles and not admin: deny
+  -> not a member: 403 "Not in the org"; missing role: 403 "Missing the required role"
   -> else: mint signed session cookie {discord_id, exp, ver}; 302 to app
 ```
 Cookie httpOnly/Secure/SameSite. Re-check membership at login and on session
@@ -242,10 +247,23 @@ a separate `roster`/`presence` channel) and handle-based attribution; `PUT /api/
 carries only `share_presence` for now (cosmetic-handle editing stays deferred).
 
 ### Phase 4 — Admin & ops
-- `require_admin` (static `ADMIN_IDS`) for delete-anyone, token admin,
-  `/api/refresh`.
-- Ownership-scoped deletes: non-admin deletes only `owner_id == uid`.
-- EBS snapshots of the SQLite/data volume — contributions are now irreplaceable.
+- **Access gating by role — ✅ DONE (2026-06-18).** Login now requires guild
+  membership **and** (optionally) a specific Discord role. The required role id is
+  a DB `meta` setting (`member_role_id`), seeded by the `ORG_MEMBER_ROLE_ID` env
+  default and editable by admins in the ORG SETTINGS panel (empty = any member).
+  Roles are read from `GET /users/@me/guilds/{guild}/member` via the added
+  `guilds.members.read` scope (no bot). Admins (`ADMIN_IDS`) bypass the role
+  check. `auth.fetch_member_profile` returns `(profile, reason)` so the callback
+  shows a distinct "missing role" vs "not in org" 403. Changing the role takes
+  effect at each member's next sign-in (existing sessions stand until expiry).
+  Multiple admins already work via the comma-separated `ADMIN_IDS` env list —
+  unchanged (decision: keep the ID list, no admin role).
+- **Still TODO**: ownership-scoped deletes (non-admin deletes only `owner_id ==
+  uid`); EBS snapshots of the SQLite/data volume (contributions are irreplaceable).
+
+New env (optional): `ORG_MEMBER_ROLE_ID` seeds the role gate; once set in the UI
+the DB value wins. Re-adding the OAuth scope means members re-consent on next
+login (automatic redirect).
 
 ## Watch-items
 - **Single worker stays mandatory** — sessions/presence are in process memory.
