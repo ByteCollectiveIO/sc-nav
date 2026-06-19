@@ -363,7 +363,10 @@ app = FastAPI(title="SC Nav")
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     path = request.url.path
-    if not path.startswith("/api/") or path == "/api/health":
+    # The org logo is shown on the pre-auth login splash, so reading it is public
+    # (GET only — POST/DELETE still fall through to the admin-gated route).
+    if (not path.startswith("/api/") or path == "/api/health"
+            or (path == "/api/org-logo" and request.method == "GET")):
         return await call_next(request)
     if request.session.get("user") or token_user(request):
         return await call_next(request)
@@ -1216,9 +1219,10 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
 
 
 @app.get("/api/org-logo")
-async def get_org_logo(user: dict = Depends(require_session)):
-    """Serve the org's uploaded logo (header brand, alongside the built-in one).
-    Session-gated — shown only after sign-in, so no pre-auth probing."""
+async def get_org_logo():
+    """Serve the org's uploaded logo (shown alongside the built-in one in the
+    header and on the login splash). Public so it can render pre-auth; the
+    auth_gate middleware exempts this GET."""
     ext = db.get_setting("org_logo_ext")
     if ext:
         path = BRANDING_DIR / f"org_logo.{ext}"

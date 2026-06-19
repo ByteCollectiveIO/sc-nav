@@ -175,6 +175,13 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
     padding: 32px 36px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
   .login-logo { width: 180px; height: auto; margin: 0 auto 16px; display: block; }
+  .login-logos { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 12px; }
+  .login-logos .login-logo { margin: 0; }
+  /* shrink the built-in logo when a guild logo sits beside it so both fit the card */
+  .login-logos.has-org .login-logo { width: 120px; }
+  .login-logo-sep { width: 1px; align-self: stretch; background: var(--border); flex: none; }
+  #login-org-logo { max-height: 110px; max-width: 120px; width: auto; height: auto; display: block; }
+  #login-org-logo[hidden] { display: none; }
   .login-card h1 { color: var(--accent); letter-spacing: 3px; margin: 0 0 10px; }
   .header-logo { width: 40px; height: 40px; flex: none; display: block; }
   .logos { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -222,7 +229,11 @@
 <body>
 <div id="login-gate" class="login-gate" hidden>
   <div class="login-card">
-    <img class="login-logo" src="/images/sc_org_navigator_logo.png" alt="Org Navigator logo" width="180" height="180">
+    <div class="login-logos">
+      <img class="login-logo" src="/images/sc_org_navigator_logo.png" alt="Org Navigator logo" width="180" height="180">
+      <span id="login-org-sep" class="login-logo-sep" hidden></span>
+      <img id="login-org-logo" alt="org logo" hidden>
+    </div>
     <h1>Org Navigator</h1>
     <p class="muted">Sign in with your Discord account to access your organization's navigation data.</p>
     <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
@@ -1952,7 +1963,17 @@ async function boot() {
     $("login-gate").hidden = true;
     renderRoster();   // reveal the (empty) teammates panel before the WS roster lands
     init();
-  } else { $("login-gate").hidden = false; }   // anonymous: show the sign-in gate
+  } else { $("login-gate").hidden = false; loadLoginOrgLogo(); }   // anonymous: show the sign-in gate
+}
+
+// The login splash shows the org logo (if any) beside the built-in one. This is
+// pre-auth — settings/me are 401 here — so we can't read the org_logo flag; just
+// try the public image and reveal it on load, hide (and 404) silently otherwise.
+function loadLoginOrgLogo() {
+  const img = $("login-org-logo"), sep = $("login-org-sep"), row = img.parentElement;
+  img.onload = () => { img.hidden = false; sep.hidden = false; row.classList.add("has-org"); };
+  img.onerror = () => { img.hidden = true; sep.hidden = true; row.classList.remove("has-org"); };
+  img.src = "/api/org-logo?t=" + Date.now();
 }
 boot();
 </script>
