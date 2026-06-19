@@ -601,3 +601,106 @@ existing routes is less surface area than four new ones.
 - `server/static/index.html` — `#finder-panel` (l.281), `#forecast-panel`
   (l.347), `#heatmap-mode` (l.319), element-finder JS (~l.1366), resource-forecast
   JS (~l.720).
+
+---
+
+## 9. Nonce-based CSP for `script-src` (XSS containment, not just escaping)
+
+**Status:** designed, not built. Follow-up to the 2026-06-19 security batch
+(input length caps, host-header pinning, WS origin check, security-headers
+middleware, logo magic-byte check — all shipped).
+
+### Problem / why
+
+The app's XSS defense today is **output escaping only**: every untrusted value
+goes through `esc()` in `index.html` before hitting the DOM. Coverage is
+currently complete, but it depends on a human remembering to call `esc()` at
+*every* sink in *all future code*. One missed interpolation in a new feature is
+one stored-XSS hole — and because notes/handles are broadcast to every connected
+member over the WebSocket, a single stored payload is effectively wormable across
+the whole org.
+
+The security batch already added a CSP (`_CSP` constant + `security_headers`
+middleware in `server/app.py`), but it keeps `script-src 'self' 'unsafe-inline'`
+because the SPA ships one inline `<script>`. `'unsafe-inline'` means the CSP does
+**not** block an injected `<script>` — exactly the gap a nonce closes. Goal: drop
+`'unsafe-inline'` from `script-src` and authorize the one legit inline script via
+a per-request nonce, so an injected inline script won't execute even if escaping
+is ever missed. This is containment underneath the escaping, not a replacement.
+
+### Scope decision: script-src only, leave style-src alone
+
+Do **`script-src`** only. Leave `style-src 'unsafe-inline'` as-is:
+- `index.html` has a `<style>` block (~l.7) and static `style="..."` attributes
+  in markup (e.g. the capture-form inputs ~l.379/411/431), both of which are
+  governed by `style-src` and would need refactoring to CSS classes to noncify.
+- NOTE: programmatic CSSOM (`element.style.x = ...`, used heavily by the map /
+  heatmap / forecast bars) is **not** governed by CSP — that keeps working
+  regardless. Only the `<style>` block + static `style=` attrs need
+  `'unsafe-inline'`. Refactoring those out is a separate, larger chore with low
+  security payoff (style injection is far weaker than script injection).
+
+So: `script-src` enforced via nonce; `style-src 'unsafe-inline'` stays.
+
+### Why this needs a structural change
+
+A nonce must be unique + unguessable **per response**, so the HTML shell can no
+longer be served as a flat static file — it has to be templated per request to
+stamp the same nonce into (a) the `<script nonce="...">` tag and (b) the CSP
+header. Today the shell is served by the catch-all static mount
+(`app.mount("/", StaticFiles(..., html=True))`, last line of `app.py`).
+
+### Implementation sketch
+
+1. **Generate a nonce per request** in `security_headers` middleware
+   (`server/app.py`): `nonce = secrets.token_urlsafe(16)`, stash on
+   `request.state.csp_nonce`. Build the CSP header from it:
+   `script-src 'self' 'nonce-{nonce}'` (drop `'unsafe-inline'`); keep the rest of
+   `_CSP` unchanged. Setting the nonce on every response's CSP is harmless even
+   for JSON/asset responses (no inline script there to match).
+2. **Serve the shell via a route, not the mount.** Add an explicit
+   `@app.get("/")` (and any other top-level document path) returning an
+   `HTMLResponse`, registered **before** the `app.mount("/", StaticFiles(...))`
+   line so the exact-path route wins; the mount keeps serving `/images/*`, etc.
+   The SPA uses hash routing (`#/settings`, `#/setup`, `#/leaderboard`), so only
+   `/` serves the shell — hash routes never hit the server. Keep `/` public
+   (auth_gate already exempts non-`/api` paths — login splash must render
+   pre-auth).
+3. **Template the nonce into the HTML.** Put `nonce="__CSP_NONCE__"` on the one
+   inline `<script>` tag in `index.html` (~l.664), and in the route do
+   `html = STATIC_DIR.joinpath("index.html").read_text().replace("__CSP_NONCE__",
+   request.state.csp_nonce)`. (Single placeholder, single inline script — verify
+   there's still exactly one `<script>` and zero inline `on*=` HTML attributes at
+   build time; both were true on 2026-06-19.)
+4. **Don't cache the shell.** Set `Cache-Control: no-store` on the `/` route so a
+   cached document can't pin a stale nonce (mismatch would dead-script the app).
+   The static mount's ETag/Last-Modified no longer applies to `/`.
+
+### Gotchas
+
+- Middleware vs. route ordering: the middleware must run and set
+  `request.state.csp_nonce` *before* the route reads it. With Starlette HTTP
+  middleware wrapping the routes that holds, but assert it in a test.
+- Any future inline `<script>` or inline `on*=` handler will silently break
+  unless it carries the nonce — that's the intended discipline, but document it
+  so it doesn't surprise the next dev.
+- Verify the WebSocket and `/api/*` still work (they carry no inline script; CSP
+  nonce is irrelevant to them).
+
+### Test
+
+- The legit inline script executes (page boots) and the response CSP contains a
+  matching `nonce-...`.
+- An injected `<script>nonce-less</script>` does not execute (manual: paste a
+  payload into a note, confirm no alert; the browser console logs a CSP refusal).
+- `script-src` no longer contains `'unsafe-inline'`.
+- Existing tests still pass; add a TestClient check that `GET /` returns a nonce
+  in both the body and the CSP header and they match.
+
+### Relevant code
+
+- `server/app.py` — `_CSP` constant + `security_headers` middleware (added in the
+  2026-06-19 batch, near `db.init`); `app.mount("/", StaticFiles(...))` (last
+  line); `auth_gate` middleware (non-`/api` paths are public).
+- `server/static/index.html` — inline `<script>` (~l.664), `<style>` block (~l.7),
+  static `style=` attributes (~l.379/411/431).
