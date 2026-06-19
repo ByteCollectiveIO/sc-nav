@@ -8,10 +8,30 @@
 # $KEEP backups and prunes older ones.
 #
 # Usage:   backup_db.sh
-# Cron:    0 4 * * *  /opt/sc-nav/server/deploy/backup_db.sh   # nightly 04:00
 # Env:     SC_NAV_DATA   data dir holding sc_nav.db (default: ../../poi)
 #          SC_NAV_BACKUP_DIR   where to write copies (default: $SC_NAV_DATA/backups)
 #          SC_NAV_BACKUP_KEEP  how many to retain (default: 14)
+#
+# --- Docker deployment (the live nav.bytecollective.io setup) ---------------
+# The server runs in a container and the DB lives in a named volume, NOT in the
+# repo's poi/ dir (those poi.json/containers.json are just the offline cache).
+# The host path is the SAME file the container has open, so sqlite3 ".backup"
+# from the host is still safe (WAL allows cross-process access). Point the
+# script at the volume and write copies OUTSIDE it. Must run as root (the volume
+# is root-owned). Find the volume with: docker volume ls | grep sc-nav
+#
+#   sudo SC_NAV_DATA=/var/lib/docker/volumes/<project>_sc-nav-data/_data \
+#        SC_NAV_BACKUP_DIR=/var/backups/sc-nav \
+#        server/deploy/backup_db.sh
+#
+# Nightly via root cron (`sudo crontab -e`):
+#   0 4 * * * SC_NAV_DATA=/var/lib/docker/volumes/<project>_sc-nav-data/_data \
+#     SC_NAV_BACKUP_DIR=/var/backups/sc-nav \
+#     /path/to/server/deploy/backup_db.sh >> /var/log/sc-nav-backup.log 2>&1
+#
+# NOTE: the volume name embeds the compose project (usually the repo dir name),
+# so renaming the project changes the path — the "no database" check below makes
+# that loud in the log rather than silently backing up nothing.
 
 set -euo pipefail
 
