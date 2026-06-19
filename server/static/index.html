@@ -313,10 +313,15 @@
       <label><input type="checkbox" class="layer" data-layer="harvestable" checked> harvestables</label>
       <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
       <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
-      <label>ore heatmap
+      <label>heatmap
         <select id="heatmap-mode" class="sel">
           <option value="off">off</option>
-          <option value="dominant">most likely</option>
+          <optgroup label="Ores" id="hm-grp-resource">
+            <option value="resource:dominant">most likely</option>
+          </optgroup>
+          <optgroup label="Harvestables" id="hm-grp-harvestable" hidden>
+            <option value="harvestable:dominant">most likely</option>
+          </optgroup>
         </select>
       </label>
     </div>
@@ -1048,11 +1053,9 @@ function renderCapture(cap) {
     const L = cap.last;
     // Your own just-placed sightings always count as fresh, even with a tiny window.
     if (OBS_KINDS.has(L.kind)) sessionObsIds.add(L.id);
-    if (L.kind === "resource") {   // new node → refresh heatmap cells + finder
-      resourceCellsKey = null;
+    if (L.kind === "resource" || L.kind === "harvestable") {   // refresh heatmap cells + finder
+      heatCellsKey = null;
       if (heatmapMode !== "off") ensureCells();
-      loadFinderOres().then(() => { if (finderOre) runFinder(); });
-    } else if (L.kind === "harvestable") {   // new harvestable → refresh finder
       loadFinderOres().then(() => { if (finderOre) runFinder(); });
     }
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
@@ -1144,12 +1147,21 @@ $("fresh-toggle").onchange = (e) => {
   freshOnly = e.target.checked; renderNearby(); drawMap();
 };
 
-// ore heatmap overlay: per-cell ore composition for the current body.
-let heatmapMode = "off";
-let resourceCells = null;        // { cell_m, cells:[{lat,lon,n,top,comp}] }
-let resourceCellsKey = null;     // "system/body" the cached cells belong to
+// Heatmap overlay: per-cell type composition for the current body. Works for
+// ores (by ore) or harvestables (by name); the selected option encodes the
+// category as "<category>:<mode>" so a value is unambiguous across both groups.
+let heatmapMode = "off";          // "off" | "dominant" | "<specific name>"
+let heatmapCategory = "resource"; // which category the overlay is showing
+let heatCells = { resource: null, harvestable: null };  // cells per category
+let heatCellsKey = null;          // "system/body" both caches belong to
+function applyHeatmapSelection(token) {
+  if (!token || token === "off") { heatmapMode = "off"; heatmapCategory = "resource"; return; }
+  const i = token.indexOf(":");
+  heatmapCategory = token.slice(0, i);
+  heatmapMode = token.slice(i + 1);
+}
 $("heatmap-mode").onchange = () => {
-  heatmapMode = $("heatmap-mode").value;
+  applyHeatmapSelection($("heatmap-mode").value);
   if (heatmapMode !== "off") ensureCells();
   renderHeatmapLegend();
   drawMap();
@@ -1158,25 +1170,41 @@ async function ensureCells() {
   const s = lastState;
   if (!(s && s.container && s.container.is_body)) return;
   const key = s.system + "/" + s.container.name;
-  if (resourceCellsKey === key && resourceCells) return;   // already loaded
+  if (heatCellsKey === key && (heatCells.resource || heatCells.harvestable)) return;
+  const q = `system=${encodeURIComponent(s.system)}&body=${encodeURIComponent(s.container.name)}`;
   try {
-    resourceCells = await fetch(
-      `/api/resource_cells?system=${encodeURIComponent(s.system)}&body=${encodeURIComponent(s.container.name)}`
-    ).then(r => r.json());
-    resourceCellsKey = key;
-    populateHeatmapOres();
+    const [res, harv] = await Promise.all([
+      fetch(`/api/resource_cells?${q}`).then(r => r.json()).catch(() => null),
+      fetch(`/api/resource_cells?${q}&category=harvestable`).then(r => r.json()).catch(() => null),
+    ]);
+    heatCells = { resource: res, harvestable: harv };
+    heatCellsKey = key;
+    populateHeatmapOptions();
     renderHeatmapLegend();
     drawMap();
   } catch {}
 }
-function populateHeatmapOres() {
+// Per category: a specific-name option for each type present on this body, under
+// its optgroup (hidden when the category has none here). Option values stay
+// "<category>:<name>" so restore is exact.
+function populateHeatmapOptions() {
   const sel = $("heatmap-mode"), cur = sel.value;
-  const ores = [...new Set((resourceCells && resourceCells.cells || [])
-    .flatMap(c => Object.keys(c.comp)))].sort();
-  sel.querySelectorAll("option[data-ore]").forEach(o => o.remove());
-  for (const ore of ores) { const o = new Option(ore, ore); o.dataset.ore = "1"; sel.appendChild(o); }
+  for (const cat of ["resource", "harvestable"]) {
+    const grp = $("hm-grp-" + cat);
+    grp.querySelectorAll("option[data-name]").forEach(o => o.remove());
+    const cells = (heatCells[cat] && heatCells[cat].cells) || [];
+    const names = [...new Set(cells.flatMap(c => Object.keys(c.comp)))].sort();
+    for (const nm of names) {
+      const o = new Option(nm, cat + ":" + nm); o.dataset.name = "1"; grp.appendChild(o);
+    }
+    grp.hidden = cells.length === 0;
+  }
   sel.value = [...sel.options].some(o => o.value === cur) ? cur : "off";
-  heatmapMode = sel.value;
+  applyHeatmapSelection(sel.value);
+  // The remembered selection's category may have no cells on this body.
+  if (heatmapMode !== "off" && !((heatCells[heatmapCategory] && heatCells[heatmapCategory].cells || []).length)) {
+    sel.value = "off"; applyHeatmapSelection("off");
+  }
 }
 
 // Legend so the heatmap colors are interpretable. "Most likely" mode colors a
@@ -1184,14 +1212,16 @@ function populateHeatmapOres() {
 // a specific-ore mode shades by probability, so the key is a low→high gradient.
 function renderHeatmapLegend() {
   const el = $("heatmap-legend");
-  const cells = resourceCells && resourceCells.cells;
+  const active = heatCells[heatmapCategory];
+  const cells = active && active.cells;
   if (heatmapMode === "off" || !cells || !cells.length) { el.style.display = "none"; el.innerHTML = ""; return; }
   el.style.display = "flex";
+  const noun = heatmapCategory === "harvestable" ? "harvestable" : "ore";
   if (heatmapMode === "dominant") {
     const freq = {};
     for (const c of cells) freq[c.top] = (freq[c.top] || 0) + 1;
     const ores = Object.keys(freq).sort((a, b) => freq[b] - freq[a]);
-    el.innerHTML = `<span>most likely ore · opacity = confidence</span>` +
+    el.innerHTML = `<span>most likely ${noun} · opacity = confidence</span>` +
       ores.map(o => `<span class="hm-key"><i style="background:${oreColor(o, 0.85)}"></i>${esc(o)}</span>`).join("");
   } else {
     el.innerHTML =
@@ -1294,10 +1324,11 @@ function drawMap() {
   const gridLabel = spacing >= 1000 ? `${(spacing / 1000)} km grid` : `${spacing} m grid`;
   ctx.fillText(gridLabel, 6, h - 6);
 
-  // ore heatmap overlay (visited cells only — presence-only data)
-  if (heatmapMode !== "off" && resourceCells && resourceCellsKey === cid && resourceCells.cells) {
-    const side = resourceCells.cell_m * scale, half = side / 2;
-    for (const c of resourceCells.cells) {
+  // heatmap overlay (visited cells only — presence-only data)
+  const heatActive = heatCells[heatmapCategory];
+  if (heatmapMode !== "off" && heatActive && heatCellsKey === cid && heatActive.cells) {
+    const side = heatActive.cell_m * scale, half = side / 2;
+    for (const c of heatActive.cells) {
       const [x, y] = toXY(c.lat, c.lon);
       if (x < -half || x > w + half || y < -half || y > h + half) continue;
       let fill;

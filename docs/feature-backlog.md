@@ -510,8 +510,8 @@ if inference proves ambiguous.
 
 ## 8. Track, map, forecast & find harvestables (like the element finder)
 
-**Status:** done (2026-06-19) — forecast + finder shipped; heatmap deferred (see
-note). The resource stats (`body_base_rate`, `resource_forecast`,
+**Status:** done (2026-06-19) — forecast + finder + **heatmap** all shipped. The
+resource stats (`body_base_rate`, `resource_forecast`,
 `resource_cells`, `resource_hotspots`, `resource_ore_names`) were parameterized by
 `category` + type field via `_type_of`/`_obs_on_body`, so harvestables reuse the
 exact same math on their own data (compositions never pooled). `compute_state`
@@ -519,11 +519,15 @@ now emits `harvestable_forecast`; the three finder/heatmap endpoints accept
 `?category=` (validated against `resource`/`harvestable`). UI: Element Finder
 picker uses Ores/Harvestables optgroups carrying each option's category;
 RESOURCE FORECAST shows separate "Ores"/"Harvestables" sections. Harvestable
-point-markers already came from #7. **Heatmap-for-harvestables was deferred** —
-the `#heatmap-mode` overlay stays ores-only for now (point markers + finder cover
-"map them out"); the endpoint is already category-ready when we want it. Verified
-end-to-end against real Daymar data (forecast/hotspots/type-names), bad-category
-rejection, JS syntax, and the full test suite.
+point-markers already came from #7. **Heatmap (shipped 2026-06-19):** the
+`#heatmap-mode` select is now category-aware — "Ores" and "Harvestables"
+optgroups, each with "most likely" + per-type options, option values encoded
+`"<category>:<name>"` so a selection is unambiguous; `ensureCells` keeps a
+per-category cell cache (dual fetch of `/api/resource_cells`), and the legend +
+canvas draw the active category's cells. The Harvestables optgroup hides on bodies
+with no harvestable sightings. Verified end-to-end against real Daymar data
+(forecast/hotspots/type-names/cells), bad-category rejection, JS syntax, and the
+full test suite.
 
 **Original plan below (for reference).**
 
