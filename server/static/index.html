@@ -10,6 +10,7 @@
     --text: #d8e1ee; --dim: #7b8a9e; --accent: #4fc3f7; --warn: #ffb74d;
     --good: #66bb6a; --bad: #ef5350; --border: #243044;
     --node: #b39ddb; --fauna: #81c784; --mate: #f06292; --harvest: #cddc39;
+    --sel: #ffd54f;  /* gold: currently-selected destination (map ring + row) */
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -80,7 +81,8 @@
   td { padding: 6px 8px; border-bottom: 1px solid #1a2230; }
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: var(--panel2); }
-  tbody tr.selected { background: rgba(79,195,247,.16); box-shadow: inset 2px 0 0 var(--accent); }
+  tbody tr.selected { background: rgba(255,213,79,.12); box-shadow: inset 2px 0 0 var(--sel); }
+  tbody tr.selected td, tbody tr.selected td.muted { color: var(--sel); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* scrollable table window so a long browse list doesn't stretch the page */
   .table-scroll { max-height: 480px; overflow-y: auto; }
@@ -796,19 +798,26 @@ function isFreshObs(o) {
   const t = Date.parse(o.observed_at);
   return !isNaN(t) && t >= Date.now() - freshWindowH * 3600e3;
 }
-// Pure freshness test, independent of the "fresh only" toggle: is this
-// observation still inside the org's fresh window? Drives the dimmed rendering
-// of stale markers when "fresh only" is off (SC respawns ephemeral nodes on
-// shard reload, so an old position may be gone). POIs are never stale.
-function obsWithinWindow(o) {
+// When this client first saw a live position — a proxy for "entered the current
+// shard." SC respawns ephemeral nodes on shard load, so observations from before
+// this moment likely sit at positions that have since moved.
+let sessionStartMs = null;
+// Is this observation trustworthy *right now* — i.e. seen during this play
+// session? Used to dim suspect markers regardless of the admin fresh window (a
+// 5h window can still include a previous shard's now-moved nodes). Nodes you
+// placed this session and non-ephemeral POIs are always current.
+function obsCurrentThisSession(o) {
   if (!OBS_KINDS.has(o.kind) || sessionObsIds.has(o.id)) return true;
+  if (sessionStartMs == null) return true;   // no baseline yet — don't dim
   const t = Date.parse(o.observed_at);
-  return !isNaN(t) && t >= Date.now() - freshWindowH * 3600e3;
+  return !isNaN(t) && t >= sessionStartMs;
 }
 
 function render(state) {
   if (!state) return;
   lastState = state;
+  // First live position this session = baseline for the stale-marker heuristic.
+  if (sessionStartMs == null) sessionStartMs = Date.now();
   $("waiting").hidden = true;
   $("readouts").hidden = false;
   $("nearby-panel").hidden = false;
@@ -958,7 +967,7 @@ function renderNearby() {
 
   const tbody = $("nearby-body");
   tbody.innerHTML = "";
-  const selId = lastState ? lastState.destination_id : null;
+  const selId = lastState && lastState.destination ? lastState.destination.id : null;
   let selRow = null;
   for (const e of shown) {
     const tr = document.createElement("tr");
@@ -1258,6 +1267,7 @@ window.addEventListener("resize", drawMap);
 // pan: drag the map; pan offset (px) shifts the projection origin off-center.
 let panX = 0, panY = 0;
 let mapHits = [];   // {id, x, y} click targets recorded each drawMap (canvas px)
+const SEL_GOLD = "#ffd54f";   // matches --sel; canvas strokes can't read CSS vars
 $("map-recenter").onclick = () => { panX = 0; panY = 0; drawMap(); };
 (() => {
   const cv = $("map");
@@ -1401,21 +1411,21 @@ function drawMap() {
   // observations (only shown when "fresh only" is off) are dimmed but stay
   // clickable, since the node may still be there.
   mapHits = [];
-  const destId = lastState.destination_id;
+  const destId = lastState.destination && lastState.destination.id;
   const drawEntities = (list) => {
     for (const e of list) {
       if (!layers[e.kind] || e.latitude == null) continue;
       const [x, y] = toXY(e.latitude, e.longitude);
       if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
       mapHits.push({ id: e.id, x, y });
-      ctx.globalAlpha = obsWithinWindow(e) ? 1 : 0.3;
+      ctx.globalAlpha = obsCurrentThisSession(e) ? 1 : 0.3;
       if (e.kind === "resource") { ctx.fillStyle = "#b39ddb"; diamond(ctx, x, y, 4); }
       else if (e.kind === "wildlife") { ctx.fillStyle = "#81c784"; triangle(ctx, x, y, 4); }
       else if (e.kind === "harvestable") { ctx.fillStyle = "#cddc39"; square(ctx, x, y, 3.5); }
       else { ctx.fillStyle = "#4fc3f7"; ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill(); }
       ctx.fillStyle = "#7b8a9e"; ctx.fillText(e.name, x + 6, y + 3);
       if (destId != null && e.id === destId) {   // selection ring (full opacity)
-        ctx.globalAlpha = 1; ctx.strokeStyle = "#ffd54f"; ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 1; ctx.strokeStyle = SEL_GOLD; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.stroke();
       }
       ctx.globalAlpha = 1;
