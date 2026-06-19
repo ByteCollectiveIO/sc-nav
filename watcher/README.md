@@ -4,6 +4,12 @@ Watches the clipboard for Star Citizen `/showlocation` output and forwards
 the coordinates to the nav server on your LAN. Single file, standard library
 only — no pip installs.
 
+> **Downloaded this from the web UI's Setup page?** It's already configured for
+> you — the server address is set and your access token is in
+> `watcher_config.json`. Just install Python (step 1 below) and double-click
+> `run_watcher.bat`; it'll ask once for your in-game handle. The manual steps
+> below are only for setting it up by hand from a fresh copy.
+
 ## Setup on the gaming PC
 
 1. Install Python 3.10+ from https://www.python.org/downloads/windows/

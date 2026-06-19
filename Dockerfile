@@ -7,6 +7,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server/ .
 
+# The watcher source is served as a personalized download from the Setup page
+# (app.py /download/watcher), so bundle it into the image.
+COPY watcher/ ./watcher_src/
+
 # Seed the data cache with the repo's snapshot. /data is mounted as a named
 # volume; Docker copies this seed into the volume on first use, so the app
 # can start even if starmap.space is unreachable at first boot. Live fetches

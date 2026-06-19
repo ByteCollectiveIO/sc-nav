@@ -26,8 +26,8 @@
   /* The two views are layout-transparent so their panels remain direct grid
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
-  #main-view, #settings-view { display: contents; }
-  #main-view[hidden], #settings-view[hidden] { display: none; }
+  #main-view, #settings-view, #setup-view { display: contents; }
+  #main-view[hidden], #settings-view[hidden], #setup-view[hidden] { display: none; }
 
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
@@ -152,6 +152,37 @@
     border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
     cursor: pointer; text-decoration: none; margin-top: 14px; }
   #token-new code { color: var(--good); }
+
+  /* setup guide */
+  #setup-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
+    text-decoration: none; white-space: nowrap; }
+  #setup-toggle:hover { text-decoration: underline; }
+  .setup { max-width: 760px; margin: 0 auto; }
+  .setup > h2 { color: var(--accent); letter-spacing: 2px; font-size: 18px; margin: 0 0 6px; }
+  .setup-intro { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 0 0 18px; }
+  ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 14px; }
+  ol.steps > li { counter-increment: step; position: relative;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px 16px 58px; }
+  ol.steps > li::before { content: counter(step); position: absolute; left: 14px; top: 14px;
+    width: 30px; height: 30px; border-radius: 50%; background: var(--panel2);
+    border: 1px solid var(--accent); color: var(--accent); font-weight: bold; font-size: 15px;
+    display: grid; place-items: center; }
+  ol.steps h3 { margin: 4px 0 8px; font-size: 14px; color: var(--text); letter-spacing: 0.5px; }
+  ol.steps p { margin: 7px 0; font-size: 13px; color: var(--dim); line-height: 1.6; }
+  ol.steps b { color: var(--text); }
+  .setup code, ol.steps code { background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px; color: var(--good); font-size: 12px;
+    word-break: break-word; }
+  .setup pre { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
+  .setup pre code { background: none; border: none; padding: 0; color: var(--good); }
+  .setup .dl-btn { display: inline-block; background: var(--accent); color: #06222e;
+    border: none; border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
+    font-weight: bold; cursor: pointer; text-decoration: none; margin: 4px 0; }
+  .kbd { background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 6px; font-size: 12px; color: var(--text); }
 </style>
 </head>
 <body>
@@ -169,6 +200,7 @@
   <h1>Org Navigator</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
+  <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
   <a id="nav-toggle" href="#/settings" hidden></a>
   <div id="account"></div>
 </header>
@@ -447,6 +479,80 @@
     <div class="muted" id="fresh-window-status" style="font-size:12px; margin-top:4px;"></div>
   </div>
   </div><!-- /settings-view -->
+
+  <div id="setup-view" hidden>
+  <div class="setup">
+    <h2>SET UP THE WATCHER</h2>
+    <p class="setup-intro">
+      Org Navigator shows where you are in the 'verse on this screen, but it needs a small
+      helper — the <b>watcher</b> — running on your gaming PC. The watcher reads the
+      <code>/showlocation</code> coordinates the game copies to your clipboard and sends them
+      here. Set it up once, then forget it. The steps below take about five minutes.
+    </p>
+
+    <ol class="steps">
+      <li>
+        <h3>You're signed in ✓</h3>
+        <p>You reached this page through Discord, so this step is already done. Everything
+        below happens on the <b>gaming PC</b> where you play Star Citizen.</p>
+      </li>
+
+      <li>
+        <h3>Download your watcher</h3>
+        <p>Click below to get a ready-to-run bundle. It's already pointed at your server
+        (<code id="setup-server">this server</code>) and has your private access token built in —
+        nothing to type, nothing to edit.</p>
+        <p>
+          <button class="dl-btn" id="setup-download">⬇ Download my watcher</button>
+          <span class="muted" id="setup-download-status" style="margin-left:10px;"></span>
+        </p>
+        <p><b>Unzip it</b> somewhere you'll find again, like your Desktop. You'll see a
+        <code>watcher</code> folder with <code>run_watcher.bat</code> inside.</p>
+        <p class="muted" style="font-size:12px;">The download contains a personal token tied to your
+        account, so keep the file to yourself. You can revoke it any time under
+        <a href="#/settings">⚙ Settings</a> (handy if you re-download or change PCs).</p>
+      </li>
+
+      <li>
+        <h3>Install Python (one time)</h3>
+        <p>The watcher needs Python — a free program many apps use. Get it from
+        <a href="https://www.python.org/downloads/windows/" target="_blank" rel="noopener">python.org</a>.
+        In the installer, <b>check the box that says "Add python.exe to PATH"</b> before clicking
+        Install. If Python is already on this PC, skip this step.</p>
+      </li>
+
+      <li>
+        <h3>Run it</h3>
+        <p><b>Double-click <code>run_watcher.bat</code></b> in the folder you unzipped. A black
+        window opens and asks for your <b>in-game handle</b> — your RSI/Star Citizen name, so
+        sightings you capture are credited to you. Type it and press
+        <span class="kbd">Enter</span>.</p>
+        <p>That's the only thing it asks; your token is already built in. It remembers the handle,
+        so next time you just double-click and play. Leave the window open (minimized is fine)
+        while you play. When you see <code>listening for /showlocation</code>, it's working.</p>
+        <details style="margin-top:8px;">
+          <summary class="muted" style="cursor:pointer; font-size:12px;">Prefer the command line?</summary>
+          <pre><code id="setup-cmd">python sc_nav_watcher.py --server SERVER --handle "YourName"</code></pre>
+          <p class="muted" style="font-size:12px;">The token is read from the bundled
+          <code>watcher_config.json</code>, so you don't pass it on the command line.</p>
+        </details>
+      </li>
+
+      <li>
+        <h3>Send your first position</h3>
+        <p>In Star Citizen, open the chat box (your chat key, <span class="kbd">Enter</span> by
+        default), type <code>/showlocation</code> and press Enter. The game copies your coordinates;
+        the watcher sends them here within a fraction of a second.</p>
+        <p>Come back to <a href="#">the navigation view</a> — your position, bearing, and distance
+        to your destination will be live. Re-run <code>/showlocation</code> whenever you want to
+        update it (the up-arrow in chat re-sends it fast).</p>
+      </li>
+    </ol>
+    <p class="setup-intro" style="margin-top:18px;">
+      Manage or revoke your tokens any time under <a href="#/settings">⚙ Settings</a>.
+    </p>
+  </div>
+  </div><!-- /setup-view -->
 </main>
 
 <script>
@@ -1382,6 +1488,10 @@ function renderAccount(me) {
   // now live inside #settings-view, shown by the hash router (applyView).
   $("token-panel").hidden = false;
   $("admin-panel").hidden = !me.is_admin;
+  // Show the real server address in the Setup guide.
+  $("setup-server").textContent = location.origin;
+  $("setup-cmd").textContent =
+    `python sc_nav_watcher.py --server ${location.origin} --handle "YourName"`;
   applyView();
 }
 
@@ -1391,23 +1501,29 @@ function renderAccount(me) {
 // view holds the account-only panels (watcher token + admin org settings) so the
 // main navigation/map view stays uncluttered.
 function applyView() {
-  // Settings is reachable only when signed in; bounce anonymous deep-links so a
+  // Sub-views are reachable only when signed in; bounce anonymous deep-links so a
   // stray #/settings can't leave the map hidden behind the login gate.
   const settings = location.hash === "#/settings" && !!currentMe;
+  const setup = location.hash === "#/setup" && !!currentMe;
+  const sub = settings || setup;
 
-  $("main-view").hidden = settings;
+  $("main-view").hidden = sub;
   $("settings-view").hidden = !settings;
+  $("setup-view").hidden = !setup;
 
+  // ⚙ Settings link doubles as the "back" control on any sub-view.
   const link = $("nav-toggle");
   link.hidden = !currentMe;
-  link.textContent = settings ? "← Navigation" : "⚙ Settings";
-  link.setAttribute("href", settings ? "#" : "#/settings");
+  link.textContent = sub ? "← Navigation" : "⚙ Settings";
+  link.setAttribute("href", sub ? "#" : "#/settings");
+  // 📖 Setup link: visible when signed in, except while already on the guide.
+  $("setup-toggle").hidden = !currentMe || setup;
 
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
     loadTokens();
     if (currentMe.is_admin) loadSettings();
-  } else if (lastState) {
+  } else if (!sub && lastState) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.
     drawMap();
@@ -1593,6 +1709,35 @@ $("token-gen").onclick = async () => {
     `<code style="word-break:break-all">${esc(d.token)}</code><br>` +
     `<span class="muted">Put it in the watcher config as the auth token.</span>`);
   loadTokens();
+};
+
+// ---------- setup guide: download a pre-configured watcher ----------
+// POST (not a plain link) so the server can mint a token and bake it into the
+// zip without the secret ever appearing in a URL. We stream it back as a blob
+// and trigger the browser's save dialog.
+$("setup-download").onclick = async () => {
+  const btn = $("setup-download");
+  const status = $("setup-download-status");
+  btn.disabled = true;
+  status.textContent = "preparing your bundle…";
+  try {
+    const r = await fetch("/download/watcher", { method: "POST" });
+    if (!r.ok) throw new Error();
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "watcher.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    status.textContent = "downloaded — check your Downloads folder, then unzip it.";
+  } catch {
+    status.textContent = "download failed — try again.";
+  } finally {
+    btn.disabled = false;
+  }
 };
 
 // ---------- init (only after we confirm the user is signed in) ----------

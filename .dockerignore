@@ -1,5 +1,5 @@
 server/.venv
 **/__pycache__
-watcher/
+watcher/watcher_config.json
 Dockerfile
 docker-compose.yml

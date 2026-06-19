@@ -10,17 +10,20 @@ Data: ../poi by default, override with SC_NAV_DATA=/path/to/poi
 
 import asyncio
 import hashlib
+import io
 import json
 import os
+import re
 import secrets
 import time
 import traceback
 import urllib.request
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
@@ -31,6 +34,17 @@ import nav_core
 
 DATA_DIR = Path(os.environ.get("SC_NAV_DATA", Path(__file__).parent.parent / "poi"))
 STATIC_DIR = Path(__file__).parent / "static"
+# Watcher source for the Setup-page download. In the Docker image the files are
+# copied to server/watcher_src (see Dockerfile); in a dev checkout they live in
+# the repo's ../watcher. First existing wins.
+WATCHER_DIR = next(
+    (p for p in (Path(__file__).parent / "watcher_src",
+                 Path(__file__).parent.parent / "watcher") if p.is_dir()),
+    None,
+)
+# Files bundled into the download (everything else — tests, __pycache__, any
+# stale watcher_config.json — is left out).
+WATCHER_BUNDLE_FILES = ("sc_nav_watcher.py", "run_watcher.bat", "README.md")
 
 # Live dataset endpoints (the files in DATA_DIR act as the offline cache).
 OC_URL = os.environ.get("SC_NAV_OC_URL", "https://starmap.space/api/v3/oc/index.php")
@@ -1284,6 +1298,56 @@ async def delete_token(request: Request, token_id: str):
     if not tokens.revoke(token_id, user["id"], user.get("is_admin", False)):
         raise HTTPException(status_code=404, detail="unknown token")
     return {"ok": True}
+
+
+def _server_base_url(request: Request) -> str:
+    """Public base URL the watcher should POST to. Honors the proxy's forwarded
+    scheme/host (the app runs behind Cloudflare) so the bundled bat points at the
+    address the user actually reached us on, not the container's internal one."""
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = (request.headers.get("x-forwarded-host")
+            or request.headers.get("host")
+            or request.url.netloc)
+    return f"{scheme}://{host}"
+
+
+def _build_watcher_zip(base_url: str, token: str) -> bytes:
+    """Zip the watcher up with this member's setup baked in: the bat is pointed
+    at `base_url`, and `watcher_config.json` carries the token so the script
+    authenticates with zero typing (the watcher reads token stickily from there).
+    Returned under a top-level `watcher/` folder for a clean unzip."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in WATCHER_BUNDLE_FILES:
+            src = WATCHER_DIR / name
+            if not src.is_file():
+                continue
+            text = src.read_text(encoding="utf-8")
+            if name == "run_watcher.bat":
+                # Replace the SERVER= line (whatever address it was committed with)
+                # with this deployment's URL so the user never edits the bat.
+                text = re.sub(r"(?m)^set SERVER=.*$", f"set SERVER={base_url}", text)
+            zf.writestr(f"watcher/{name}", text)
+        # The token lives in watcher_config.json, the script's sticky-config file.
+        zf.writestr("watcher/watcher_config.json", json.dumps({"token": token}))
+    return buf.getvalue()
+
+
+@app.post("/download/watcher")
+async def download_watcher(request: Request):
+    """Mint a token for the signed-in member and stream back a personalized,
+    ready-to-run watcher bundle (Setup page, step 2). The token is baked into the
+    zip rather than put in a URL, so it never lands in a log or browser history."""
+    user = require_session(request)
+    if WATCHER_DIR is None:
+        raise HTTPException(status_code=503, detail="watcher bundle unavailable")
+    raw, _ = tokens.mint(user["id"], user.get("display_name"), "watcher download")
+    data = _build_watcher_zip(_server_base_url(request), raw)
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="watcher.zip"'},
+    )
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
