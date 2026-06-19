@@ -456,11 +456,17 @@ def compute_state(
     for cat in OBSERVATION_CATEGORIES:
         nearest_observations += _nearest(by_cat.get(cat, []), _observation_summary)
 
-    # "What's around me" ore forecast — only meaningful on a body surface.
+    # "What's around me" forecast — only meaningful on a body surface. Ores and
+    # harvestables are forecast separately (their compositions are never pooled).
     forecast = None
+    harvestable_forecast = None
     if container is not None and container.is_body and lat is not None:
         forecast = resource_forecast(
             nav, container.system, container.name, lat, lon, container.body_radius
+        )
+        harvestable_forecast = resource_forecast(
+            nav, container.system, container.name, lat, lon, container.body_radius,
+            category="harvestable",
         )
 
     destination = None
@@ -520,6 +526,7 @@ def compute_state(
         "nearest_pois": nearest_pois,
         "nearest_observations": nearest_observations,
         "resource_forecast": forecast,
+        "harvestable_forecast": harvestable_forecast,
     }
 
 
@@ -681,6 +688,12 @@ def _normalize_wildlife(data: dict) -> dict:
     return data
 
 
+def _normalize_harvestable(data: dict) -> dict:
+    data = dict(data)
+    data["name"] = (data.get("name") or "Unknown")
+    return data
+
+
 # Per-category behavior. Adding a category is one entry here plus a capture
 # endpoint — no new dataclass/store/search/summary code.
 OBSERVATION_CATEGORIES = {
@@ -697,6 +710,13 @@ OBSERVATION_CATEGORIES = {
         "search_fields": ("species",),
         "normalize": _normalize_wildlife,
         "display_name": lambda d: d.get("species") or "Wildlife",
+    },
+    "harvestable": {
+        "file": "harvestables.json",   # no legacy file; kept for symmetry
+        "type_field": "name",
+        "search_fields": ("name",),
+        "normalize": _normalize_harvestable,
+        "display_name": lambda d: d.get("name") or "Harvestable",
     },
 }
 
@@ -989,14 +1009,24 @@ def grid_cell_center(i_lon: int, i_lat: int, radius_m: float, cell_m: float = RE
     return DEG(math.asin(sin_lat)), lon
 
 
-def _ore_of(o: Observation) -> str:
-    return o.data.get("ore") or "Unknown"
+# The forecast / element-finder / heatmap stats are category-agnostic: they bin
+# sightings into the equal-area grid and rank by a type field. Resources rank by
+# "ore", harvestables by "name". Each function takes `category` and reads that
+# category's type field, so harvestables reuse the exact same math (kept on its
+# own data — ore and harvestable compositions are never pooled).
+def _type_of(o: Observation, field: str) -> str:
+    return o.data.get(field) or "Unknown"
 
 
-def _resource_obs_on_body(nav: NavData, system: str, body: str) -> list[Observation]:
+def _category_field(category: str) -> str:
+    return OBSERVATION_CATEGORIES[category]["type_field"]
+
+
+def _obs_on_body(nav: NavData, system: str, body: str,
+                 category: str = "resource") -> list[Observation]:
     return [
         o for o in nav.observations.values()
-        if o.category == "resource" and o.system == system
+        if o.category == category and o.system == system
         and o.container_name == body
         and o.latitude is not None and o.longitude is not None
     ]
@@ -1027,12 +1057,14 @@ def _shrunk_composition(counts: dict, total: float, prior: dict, alpha: float) -
     }
 
 
-def body_base_rate(nav: NavData, system: str, body: str) -> tuple[dict, int]:
-    """(composition, n) of every resource sighting on the body — the prior that
-    each area shrinks toward."""
+def body_base_rate(nav: NavData, system: str, body: str,
+                   category: str = "resource") -> tuple[dict, int]:
+    """(composition, n) of every sighting of `category` on the body — the prior
+    that each area shrinks toward."""
+    field = _category_field(category)
     counts: dict[str, int] = {}
-    for o in _resource_obs_on_body(nav, system, body):
-        counts[_ore_of(o)] = counts.get(_ore_of(o), 0) + 1
+    for o in _obs_on_body(nav, system, body, category):
+        counts[_type_of(o, field)] = counts.get(_type_of(o, field), 0) + 1
     n = sum(counts.values())
     if n == 0:
         return {}, 0
@@ -1050,12 +1082,14 @@ def _ranked(comp: dict, counts: dict) -> list[dict]:
 
 def resource_forecast(
     nav: NavData, system: str, body: str, lat: float, lon: float,
-    radius_m: float, cell_m: float = RESOURCE_CELL_M,
+    radius_m: float, cell_m: float = RESOURCE_CELL_M, category: str = "resource",
 ) -> dict | None:
-    """Ranked ore likelihoods for the player's neighborhood (own cell + ring-1,
-    distance-weighted), shrunk toward the body base rate. None until the body
-    has at least one resource sighting."""
-    base, base_n = body_base_rate(nav, system, body)
+    """Ranked type likelihoods (ore for resources, name for harvestables) for the
+    player's neighborhood (own cell + ring-1, distance-weighted), shrunk toward
+    the body base rate. None until the body has at least one sighting of the
+    category."""
+    field = _category_field(category)
+    base, base_n = body_base_rate(nav, system, body, category)
     if base_n == 0:
         return None
     n_lon, _ = grid_dims(radius_m, cell_m)
@@ -1064,13 +1098,13 @@ def resource_forecast(
     counts: dict[str, int] = {}
     total_w = 0.0
     n_local = 0
-    for o in _resource_obs_on_body(nav, system, body):
+    for o in _obs_on_body(nav, system, body, category):
         oi, oj = grid_cell(o.latitude, o.longitude, radius_m, cell_m)
         ring = max(min((oi - pi) % n_lon, (pi - oi) % n_lon), abs(oj - pj))
         w = _FORECAST_RING_WEIGHT.get(ring)
         if w is None:
             continue
-        ore = _ore_of(o)
+        ore = _type_of(o, field)
         weighted[ore] = weighted.get(ore, 0.0) + w
         counts[ore] = counts.get(ore, 0) + 1
         total_w += w
@@ -1086,18 +1120,19 @@ def resource_forecast(
 
 def resource_cells(
     nav: NavData, system: str, body: str, radius_m: float,
-    cell_m: float = RESOURCE_CELL_M,
+    cell_m: float = RESOURCE_CELL_M, category: str = "resource",
 ) -> list[dict]:
-    """Per-cell shrunk ore composition for every cell with at least one sighting
-    (the only cells we can speak to) — drives the map heatmap."""
-    base, base_n = body_base_rate(nav, system, body)
+    """Per-cell shrunk type composition for every cell with at least one sighting
+    of `category` (the only cells we can speak to) — drives the map heatmap."""
+    field = _category_field(category)
+    base, base_n = body_base_rate(nav, system, body, category)
     if base_n == 0:
         return []
     cells: dict[tuple[int, int], dict] = {}
-    for o in _resource_obs_on_body(nav, system, body):
+    for o in _obs_on_body(nav, system, body, category):
         key = grid_cell(o.latitude, o.longitude, radius_m, cell_m)
         c = cells.setdefault(key, {})
-        c[_ore_of(o)] = c.get(_ore_of(o), 0) + 1
+        c[_type_of(o, field)] = c.get(_type_of(o, field), 0) + 1
     out = []
     for (i, j), counts in cells.items():
         n = sum(counts.values())
@@ -1115,11 +1150,12 @@ def resource_cells(
     return out
 
 
-def resource_ore_names(nav: NavData) -> list[str]:
-    """Sorted ore names that appear in resource sightings — populates the
-    element-finder picker."""
-    return sorted({_ore_of(o) for o in nav.observations.values()
-                   if o.category == "resource"})
+def resource_ore_names(nav: NavData, category: str = "resource") -> list[str]:
+    """Sorted type names that appear in sightings of `category` (ore for
+    resources, name for harvestables) — populates the element-finder picker."""
+    field = _category_field(category)
+    return sorted({_type_of(o, field) for o in nav.observations.values()
+                   if o.category == category})
 
 
 # Body hierarchy is encoded in InternalName, not Type (the dataset types moons
@@ -1162,6 +1198,7 @@ def resource_hotspots(
     nav: NavData, ore: str, system: str | None = None, body: str | None = None,
     limit: int = 20, cell_m: float = RESOURCE_CELL_M,
     from_pos=None, t_ref: float | None = None, sort: str = "likely",
+    category: str = "resource",
 ) -> list[dict]:
     """Known areas richest in `ore`, ranked, across every body (optionally
     filtered to one system/body) — a "where do I fly to mine X" planner.
@@ -1182,9 +1219,10 @@ def resource_hotspots(
     ore = ore.strip()
     if not ore:
         return []
+    field = _category_field(category)
     groups: dict[tuple[str, str], list[Observation]] = {}
     for o in nav.observations.values():
-        if o.category != "resource" or o.latitude is None or o.longitude is None:
+        if o.category != category or o.latitude is None or o.longitude is None:
             continue
         if (system and o.system != system) or (body and o.container_name != body):
             continue
@@ -1199,8 +1237,8 @@ def resource_hotspots(
         for o in obs:
             key = grid_cell(o.latitude, o.longitude, cont.body_radius, cell_m)
             c = cells.setdefault(key, {"counts": {}, "bands": []})
-            c["counts"][_ore_of(o)] = c["counts"].get(_ore_of(o), 0) + 1
-            if _ore_of(o) == ore and isinstance(o.data.get("band"), (int, float)):
+            c["counts"][_type_of(o, field)] = c["counts"].get(_type_of(o, field), 0) + 1
+            if _type_of(o, field) == ore and isinstance(o.data.get("band"), (int, float)):
                 c["bands"].append(o.data["band"])
         for key, c in cells.items():
             n_ore = c["counts"].get(ore, 0)

@@ -9,7 +9,7 @@
     --bg: #0b0e13; --panel: #141a23; --panel2: #1b2330;
     --text: #d8e1ee; --dim: #7b8a9e; --accent: #4fc3f7; --warn: #ffb74d;
     --good: #66bb6a; --bad: #ef5350; --border: #243044;
-    --node: #b39ddb; --fauna: #81c784; --mate: #f06292;
+    --node: #b39ddb; --fauna: #81c784; --mate: #f06292; --harvest: #cddc39;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -57,6 +57,7 @@
   .custom-star { color: var(--warn); }
   .node-dot { color: var(--node); }
   .fauna-dot { color: var(--fauna); }
+  .harvest-dot { color: var(--harvest); }
   .qt-self { color: var(--good); }   /* destination is itself a QT marker */
   .del { color: var(--bad); padding: 0 6px; cursor: pointer; }
   .del:hover { font-weight: bold; }
@@ -66,6 +67,7 @@
   .kind-poi { color: var(--accent); }
   .kind-resource { color: var(--node); }
   .kind-wildlife { color: var(--fauna); }
+  .kind-harvest { color: var(--harvest); }
   .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .seg button { border: none; border-radius: 0; border-right: 1px solid var(--border); }
@@ -102,6 +104,7 @@
   .lg-poi::before { color: var(--accent); }
   .lg-res::before { content: "◆"; color: var(--node); }
   .lg-wild::before { content: "▲"; color: var(--fauna); }
+  .lg-harv::before { content: "■"; color: var(--harvest); }
   .lg-path::before { content: "•"; color: var(--warn); }
   .lg-mate::before { color: var(--mate); }
 
@@ -112,11 +115,13 @@
   .lb-card .n { font-size: 30px; font-variant-numeric: tabular-nums; }
   .lb-card .k { font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-top: 2px; }
   .lb-c-poi { color: var(--accent); } .lb-c-resource { color: var(--node); } .lb-c-wildlife { color: var(--fauna); }
+  .lb-c-harvestable { color: var(--harvest); }
   .lb-legend { font-size: 11px; color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 12px; }
   .lb-legend span::before { content: "■"; margin-right: 5px; }
   .lb-legend .poi::before { color: var(--accent); }
   .lb-legend .resource::before { color: var(--node); }
   .lb-legend .wildlife::before { color: var(--fauna); }
+  .lb-legend .harvestable::before { color: var(--harvest); }
   /* horizontal stacked bars: one row per contributor */
   .lb-chart { display: flex; flex-direction: column; gap: 12px; }
   .lb-row { display: flex; flex-direction: column; gap: 4px; }
@@ -131,6 +136,7 @@
   .lb-seg.poi { background: var(--accent); }
   .lb-seg.resource { background: var(--node); }
   .lb-seg.wildlife { background: var(--fauna); }
+  .lb-seg.harvestable { background: var(--harvest); }
   #lb-table tbody tr { cursor: default; }
 
   /* teammate presence (roster) */
@@ -152,6 +158,10 @@
   .fc-pct { text-align: right; font-variant-numeric: tabular-nums; }
   .fc-n { color: var(--dim); font-size: 11px; text-align: right; }
   .fc-low { color: var(--warn); }
+  .fc-section + .fc-section { margin-top: 12px; }
+  .fc-sec-head { font-size: 11px; color: var(--dim); letter-spacing: 1px;
+    text-transform: uppercase; margin-bottom: 4px; }
+  .fc-sec-head .muted { text-transform: none; letter-spacing: 0; }
   #heatmap-mode { font-size: 12px; padding: 3px 6px; }
   #heatmap-legend { font-size: 11px; color: var(--dim); display: none; gap: 12px;
     flex-wrap: wrap; align-items: center; margin-top: 6px; }
@@ -263,7 +273,6 @@
     <div class="readout"><div class="label">CURRENT CONTAINER</div><div class="value" id="r-cont" style="font-size:22px">—</div></div>
     <div class="readout primary"><div class="label">BEARING</div><div class="value" id="r-bearing">—</div></div>
     <div class="readout"><div class="label">DISTANCE</div><div class="value" id="r-dist">—</div></div>
-    <div class="readout"><div class="label">ETA</div><div class="value" id="r-eta">—</div></div>
     <div class="readout"><div class="label">ALTITUDE</div><div class="value" id="r-alt">—</div></div>
     <div class="readout"><div class="label">SPEED</div><div class="value" id="r-speed">—</div></div>
     <div class="readout"><div class="label">LAT / LON</div><div class="value" id="r-latlon" style="font-size:18px">—</div></div>
@@ -278,8 +287,58 @@
     </div>
   </div>
 
+  <div class="panel" id="roster-panel" hidden>
+    <h2>TEAMMATES <span class="muted" id="roster-hint"></span>
+      <label class="roster-share" title="hide your location from teammates (you still see theirs)">
+        <input type="checkbox" id="share-toggle"> share my location
+      </label>
+    </h2>
+    <div id="roster-body"></div>
+  </div>
+
+  <div class="panel" id="map-panel" hidden>
+    <h2>MAP <span class="muted">(north up · drag to pan)</span></h2>
+    <div id="map-controls">
+      <button id="track-toggle">Start Tracking Path</button>
+      <button id="track-clear">Clear Path</button>
+      <button id="map-recenter">Recenter</button>
+      <label>view radius
+        <input id="map-zoom" type="range" min="0.5" max="50" step="0.5" value="5">
+        <span id="map-zoom-val">5 km</span>
+      </label>
+      <label><input type="checkbox" class="layer" data-layer="path" checked> path</label>
+      <label><input type="checkbox" class="layer" data-layer="poi" checked> POIs</label>
+      <label><input type="checkbox" class="layer" data-layer="resource" checked> resources</label>
+      <label><input type="checkbox" class="layer" data-layer="wildlife" checked> wildlife</label>
+      <label><input type="checkbox" class="layer" data-layer="harvestable" checked> harvestables</label>
+      <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
+      <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
+      <label>ore heatmap
+        <select id="heatmap-mode" class="sel">
+          <option value="off">off</option>
+          <option value="dominant">most likely</option>
+        </select>
+      </label>
+    </div>
+    <div id="map-wrap">
+      <canvas id="map"></canvas>
+      <div id="map-msg" hidden></div>
+    </div>
+    <div class="legend">
+      <span class="lg-you">you / heading</span><span class="lg-path">breadcrumb</span>
+      <span class="lg-poi">POI</span><span class="lg-res">resource</span><span class="lg-wild">wildlife</span>
+      <span class="lg-harv">harvestable</span><span class="lg-mate">teammate</span>
+    </div>
+    <div id="heatmap-legend"></div>
+  </div>
+
+  <div class="panel" id="forecast-panel" hidden>
+    <h2>RESOURCE FORECAST <span class="muted" id="forecast-hint"></span></h2>
+    <div id="forecast-body"></div>
+  </div>
+
   <div class="panel" id="finder-panel">
-    <h2>ELEMENT FINDER <span class="muted">(where to mine — ranked by likelihood)</span></h2>
+    <h2>ELEMENT FINDER <span class="muted">(where to find ores &amp; harvestables — ranked by likelihood)</span></h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <select id="finder-ore" class="sel" style="min-width:170px;"><option value="">— choose an ore</option></select>
       <label class="muted" style="font-size:12px;">order
@@ -298,55 +357,6 @@
       </tr></thead>
       <tbody></tbody>
     </table>
-  </div>
-
-  <div class="panel" id="map-panel" hidden>
-    <h2>MAP <span class="muted">(north up · drag to pan)</span></h2>
-    <div id="map-controls">
-      <button id="track-toggle">Start Tracking Path</button>
-      <button id="track-clear">Clear Path</button>
-      <button id="map-recenter">Recenter</button>
-      <label>view radius
-        <input id="map-zoom" type="range" min="0.5" max="50" step="0.5" value="5">
-        <span id="map-zoom-val">5 km</span>
-      </label>
-      <label><input type="checkbox" class="layer" data-layer="path" checked> path</label>
-      <label><input type="checkbox" class="layer" data-layer="poi" checked> POIs</label>
-      <label><input type="checkbox" class="layer" data-layer="resource" checked> resources</label>
-      <label><input type="checkbox" class="layer" data-layer="wildlife" checked> wildlife</label>
-      <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
-      <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
-      <label>ore heatmap
-        <select id="heatmap-mode" class="sel">
-          <option value="off">off</option>
-          <option value="dominant">most likely</option>
-        </select>
-      </label>
-    </div>
-    <div id="map-wrap">
-      <canvas id="map"></canvas>
-      <div id="map-msg" hidden></div>
-    </div>
-    <div class="legend">
-      <span class="lg-you">you / heading</span><span class="lg-path">breadcrumb</span>
-      <span class="lg-poi">POI</span><span class="lg-res">resource</span><span class="lg-wild">wildlife</span>
-      <span class="lg-mate">teammate</span>
-    </div>
-    <div id="heatmap-legend"></div>
-  </div>
-
-  <div class="panel" id="roster-panel" hidden>
-    <h2>TEAMMATES <span class="muted" id="roster-hint"></span>
-      <label class="roster-share" title="hide your location from teammates (you still see theirs)">
-        <input type="checkbox" id="share-toggle"> share my location
-      </label>
-    </h2>
-    <div id="roster-body"></div>
-  </div>
-
-  <div class="panel" id="forecast-panel" hidden>
-    <h2>RESOURCE FORECAST <span class="muted" id="forecast-hint"></span></h2>
-    <div id="forecast-body"></div>
   </div>
 
   <div class="capture-grid">
@@ -405,9 +415,9 @@
     </div>
 
     <div class="panel">
-      <h2>ADD FAUNA</h2>
+      <h2>ADD FAUNA &amp; HARVESTABLES</h2>
       <div id="wild-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="wild-species" class="ti" list="fauna-types" placeholder="species / fauna" style="flex:1; min-width:120px;">
+        <input id="wild-species" class="ti" list="fauna-types" placeholder="fauna or harvestable" style="flex:1; min-width:120px;">
         <datalist id="fauna-types"></datalist>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
@@ -433,6 +443,7 @@
         <button data-kind="poi">POIs</button>
         <button data-kind="resource">Resources</button>
         <button data-kind="wildlife">Fauna</button>
+        <button data-kind="harvestable">Harvest</button>
       </span>
       <select id="f-container" class="sel"><option value="">all containers</option></select>
       <select id="f-owner" class="sel"><option value="">all contributors</option></select>
@@ -627,7 +638,7 @@
   <div class="panel">
     <h2>WHO'S ADDING WHAT <span class="muted">(stacked by category · ranked by total)</span></h2>
     <div class="lb-legend">
-      <span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span>
+      <span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span><span class="harvestable">Harvestables</span>
     </div>
     <div class="lb-chart" id="lb-chart"></div>
     <div class="muted" id="lb-empty" hidden style="padding:8px 0;">No contributions yet — start capturing POIs, resource nodes and fauna in game.</div>
@@ -637,7 +648,7 @@
     <table id="lb-table">
       <thead><tr>
         <th>#</th><th>CONTRIBUTOR</th>
-        <th class="num">POIs</th><th class="num">RESOURCES</th><th class="num">FAUNA</th><th class="num">TOTAL</th>
+        <th class="num">POIs</th><th class="num">RESOURCES</th><th class="num">FAUNA</th><th class="num">HARVEST</th><th class="num">TOTAL</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -675,13 +686,15 @@ function fmtSpeed(ms) { return ms == null ? "—" : `${ms.toFixed(0)}<small> m/s
 function fmtBearing(deg) { return deg == null ? "—" : `${deg.toFixed(1)}<small>°</small>`; }
 
 const KIND_MARK = { resource: '<span class="node-dot" title="resource">◆</span> ',
-                    wildlife: '<span class="fauna-dot" title="wildlife">❀</span> ' };
+                    wildlife: '<span class="fauna-dot" title="wildlife">❀</span> ',
+                    harvestable: '<span class="harvest-dot" title="harvestable">■</span> ' };
 function entLabel(e) {
   const mark = KIND_MARK[e.kind] || (e.custom ? '<span class="custom-star" title="custom POI">★</span> ' : "");
   return mark + esc(e.name);
 }
 function kindBadge(e) {
-  const m = { resource: ["kind-resource", "RSRC"], wildlife: ["kind-wildlife", "FAUNA"] }[e.kind]
+  const m = { resource: ["kind-resource", "RSRC"], wildlife: ["kind-wildlife", "FAUNA"],
+              harvestable: ["kind-harvest", "HARV"] }[e.kind]
     || ["kind-poi", "POI"];
   return `<span class="kind-badge ${m[0]}">${m[1]}</span>`;
 }
@@ -690,7 +703,8 @@ function entDetail(e) {
     const band = e.band == null ? "?" : Number(e.band);
     return `B${band} · ${esc(e.quality)}` + (e.biome ? ` · ${esc(e.biome)}` : "");
   }
-  if (e.kind === "wildlife") return e.biome ? esc(e.biome) : (e.note ? esc(e.note) : "—");
+  if (e.kind === "wildlife" || e.kind === "harvestable")
+    return e.biome ? esc(e.biome) : (e.note ? esc(e.note) : "—");
   // POIs: type, then any note (custom notes are editable; upstream Comments are not).
   let detail = esc(e.type) + (e.note ? ` · ${esc(e.note)}` : "");
   if (e.custom)
@@ -718,16 +732,15 @@ function oreColor(name, a = 1) { return `hsla(${oreHue(name)}, 65%, 55%, ${a})`;
 const confOf = (n) => n / (n + 4);   // 0..1 confidence from sample count
 
 // ---------- resource forecast (what's around me) ----------
-function renderForecast(state) {
-  const rf = state && state.resource_forecast;
-  const panel = $("forecast-panel");
+// Ores and harvestables are forecast separately (server keeps their stats
+// unpooled), so each gets its own labeled section in the one panel.
+function forecastSection(rf, label, unit) {
   const rows = rf && rf.ranked ? rf.ranked.filter(r => r.p >= 0.02).slice(0, 6) : [];
-  if (!rows.length) { panel.hidden = true; return; }
-  panel.hidden = false;
-  $("forecast-hint").textContent = rf.n_local
-    ? `(${rf.n_local} node${rf.n_local === 1 ? "" : "s"} nearby · ${rf.n_body} on this body)`
-    : `(none logged nearby yet — body average of ${rf.n_body} node${rf.n_body === 1 ? "" : "s"})`;
-  $("forecast-body").innerHTML = rows.map(r => {
+  if (!rows.length) return "";
+  const hint = rf.n_local
+    ? `${rf.n_local} ${unit}${rf.n_local === 1 ? "" : "s"} nearby · ${rf.n_body} on this body`
+    : `none logged nearby yet — body average of ${rf.n_body} ${unit}${rf.n_body === 1 ? "" : "s"}`;
+  const rowsHtml = rows.map(r => {
     const pct = Math.round(r.p * 100);
     const low = r.n < 4 ? ` <span class="fc-low">·</span>` : "";
     return `<div class="fc-row">` +
@@ -736,6 +749,19 @@ function renderForecast(state) {
       `<span class="fc-pct">${pct}%</span>` +
       `<span class="fc-n">n=${r.n}${low}</span></div>`;
   }).join("");
+  return `<div class="fc-section"><div class="fc-sec-head">${label} ` +
+    `<span class="muted">(${hint})</span></div>${rowsHtml}</div>`;
+}
+function renderForecast(state) {
+  const panel = $("forecast-panel");
+  const blocks = [
+    forecastSection(state && state.resource_forecast, "Ores", "node"),
+    forecastSection(state && state.harvestable_forecast, "Harvestables", "site"),
+  ].filter(Boolean);
+  if (!blocks.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  $("forecast-hint").textContent = "";   // per-section hints carry the counts now
+  $("forecast-body").innerHTML = blocks.join("");
 }
 
 // ---------- state ----------
@@ -753,8 +779,13 @@ let freshWindowH = 48;            // hours; org "obs_fresh_window_h" meta settin
 let rootAdmins = [], extraAdmins = [];  // env (read-only) + DB-backed admin ids
 const sessionObsIds = new Set();  // placed this browser session — always fresh
 
+const OBS_KINDS = new Set(["resource", "wildlife", "harvestable"]);
+// Names that should capture as a harvestable (vs. fauna). The Add Fauna &
+// Harvestables box shares one input + datalist; membership here routes the
+// capture to the right category.
+const harvestableNames = new Set();
 function isFreshObs(o) {
-  if (o.kind !== "resource" && o.kind !== "wildlife") return true;  // not an observation
+  if (!OBS_KINDS.has(o.kind)) return true;  // not an ephemeral observation
   if (!freshOnly || sessionObsIds.has(o.id)) return true;
   const t = Date.parse(o.observed_at);
   return !isNaN(t) && t >= Date.now() - freshWindowH * 3600e3;
@@ -778,15 +809,14 @@ function render(state) {
   if (d) {
     $("dest-name").innerHTML = entLabel(d);
     const extra = d.kind === "resource" ? `${esc(d.ore)} · B${d.band == null ? "?" : Number(d.band)} · ${esc(d.quality)}`
-      : d.kind === "wildlife" ? esc(d.name) : esc(d.type);
+      : (d.kind === "wildlife" || d.kind === "harvestable") ? esc(d.name) : esc(d.type);
     $("dest-meta").innerHTML = `${esc(d.container)} · ${extra}` +
       (d.nearest_qt ? ` · jump to ${qtLabel(d)}` : "") +
       (d.same_container ? "" : " · different container — use quantum travel");
     $("r-bearing").innerHTML = fmtBearing(d.bearing_deg);
     $("r-dist").innerHTML = fmtDist(d.surface_distance_m ?? d.distance_m);
-    $("r-eta").innerHTML = fmtEta(d.eta_s);
   } else {
-    $("r-bearing").innerHTML = $("r-dist").innerHTML = $("r-eta").innerHTML = "—";
+    $("r-bearing").innerHTML = $("r-dist").innerHTML = "—";
   }
 
   $("r-alt").innerHTML = fmtDist(state.altitude_m);
@@ -995,7 +1025,7 @@ function renderCapture(cap) {
   const p = cap.armed ? cap.pending : null;
   const armedPoi = p && p.kind === "poi";
   const armedRes = p && p.kind === "observation" && p.category === "resource";
-  const armedWild = p && p.kind === "observation" && p.category === "wildlife";
+  const armedWild = p && p.kind === "observation" && (p.category === "wildlife" || p.category === "harvestable");
   $("poi-form").style.display = armedPoi ? "none" : "flex";
   $("poi-armed").hidden = !armedPoi;
   $("node-form").style.display = armedRes ? "none" : "flex";
@@ -1004,7 +1034,7 @@ function renderCapture(cap) {
   $("wild-armed").hidden = !armedWild;
   if (armedPoi) $("poi-armed-label").textContent = `ARMED for "${p.name}"`;
   if (armedRes) $("node-armed-label").textContent = `ARMED for ${p.data.ore} (B${p.data.band})`;
-  if (armedWild) $("wild-armed-label").textContent = `ARMED for ${p.data.species}`;
+  if (armedWild) $("wild-armed-label").textContent = `ARMED for ${p.category === "harvestable" ? p.data.name : p.data.species}`;
 
   const credit = cap.owner ? `captures credited to ${esc(cap.owner.handle)}` :
     "no handle yet — set one in the watcher to attribute captures";
@@ -1017,10 +1047,12 @@ function renderCapture(cap) {
     loadAll();   // pull the new capture into the dataset view + filter dropdowns
     const L = cap.last;
     // Your own just-placed sightings always count as fresh, even with a tiny window.
-    if (L.kind === "resource" || L.kind === "wildlife") sessionObsIds.add(L.id);
+    if (OBS_KINDS.has(L.kind)) sessionObsIds.add(L.id);
     if (L.kind === "resource") {   // new node → refresh heatmap cells + finder
       resourceCellsKey = null;
       if (heatmapMode !== "off") ensureCells();
+      loadFinderOres().then(() => { if (finderOre) runFinder(); });
+    } else if (L.kind === "harvestable") {   // new harvestable → refresh finder
       loadFinderOres().then(() => { if (finderOre) runFinder(); });
     }
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
@@ -1029,6 +1061,8 @@ function renderCapture(cap) {
       `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b> B${L.band == null ? "?" : Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`);
     else if (L.kind === "wildlife") show("wild-result",
       `added <span class="fauna-dot">❀</span> <b>${esc(L.species)}</b> on ${esc(L.container)}${ll}${by}`);
+    else if (L.kind === "harvestable") show("wild-result",
+      `added <span class="harvest-dot">■</span> <b>${esc(L.name)}</b> on ${esc(L.container)}${ll}${by}`);
     else show("poi-result",
       `added <span class="custom-star">★</span> <b>${esc(L.name)}</b> (${esc(L.type)})` +
       (L.qt_marker ? ` <span class="qt-self">⚡ QT marker</span>` : "") +
@@ -1074,10 +1108,15 @@ $("node-arm").onclick = async () => {
 $("node-cancel").onclick = () => postJson("/api/capture/cancel", {});
 
 $("wild-arm").onclick = async () => {
-  const species = $("wild-species").value.trim();
-  if (!species) return $("wild-species").focus();
-  const r = await postJson("/api/capture/wildlife", {
-    species, biome: selectValue("wild-biome"), note: $("wild-note").value.trim() });
+  const name = $("wild-species").value.trim();
+  if (!name) return $("wild-species").focus();
+  // Known harvestable name -> harvestable category; otherwise fauna (the
+  // default for free-text the catalog doesn't recognize).
+  const isHarvest = harvestableNames.has(name);
+  const biome = selectValue("wild-biome"), note = $("wild-note").value.trim();
+  const r = isHarvest
+    ? await postJson("/api/capture/harvestable", { name, biome, note })
+    : await postJson("/api/capture/wildlife", { species: name, biome, note });
   if (r.ok) { $("wild-species").value = ""; resetSelect("wild-biome"); $("wild-note").value = ""; } else armFailed("wild-result", r);
 };
 $("wild-cancel").onclick = () => postJson("/api/capture/cancel", {});
@@ -1097,7 +1136,7 @@ $("track-toggle").onclick = () => {
 $("track-clear").onclick = () => fetch("/api/path/clear", { method: "POST" });
 
 // ---------- map ----------
-const layers = { path: true, poi: true, resource: true, wildlife: true, teammates: true };
+const layers = { path: true, poi: true, resource: true, wildlife: true, harvestable: true, teammates: true };
 document.querySelectorAll(".layer").forEach(cb => {
   cb.onchange = () => { layers[cb.dataset.layer] = cb.checked; drawMap(); };
 });
@@ -1296,6 +1335,7 @@ function drawMap() {
       if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
       if (e.kind === "resource") { ctx.fillStyle = "#b39ddb"; diamond(ctx, x, y, 4); }
       else if (e.kind === "wildlife") { ctx.fillStyle = "#81c784"; triangle(ctx, x, y, 4); }
+      else if (e.kind === "harvestable") { ctx.fillStyle = "#cddc39"; square(ctx, x, y, 3.5); }
       else { ctx.fillStyle = "#4fc3f7"; ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill(); }
       ctx.fillStyle = "#7b8a9e"; ctx.fillText(e.name, x + 6, y + 3);
     }
@@ -1335,6 +1375,7 @@ function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(x))); const 
   return (f >= 5 ? 5 : f >= 2 ? 2 : 1) * p; }
 function diamond(ctx, x, y, r) { ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill(); }
 function triangle(ctx, x, y, r) { ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y + r); ctx.lineTo(x - r, y + r); ctx.closePath(); ctx.fill(); }
+function square(ctx, x, y, r) { ctx.fillRect(x - r, y - r, r * 2, r * 2); }
 
 // ---------- search (whole dataset) ----------
 let searchTimer = null;
@@ -1368,6 +1409,7 @@ async function runSearch() {
 // likely to find it, ranked by a confidence-aware likelihood. Works without a
 // live position so you can plan before flying out.
 let finderOre = "";
+let finderCategory = "resource";   // "resource" (ore) or "harvestable" (name)
 let finderPosKey = null;
 // Re-rank the finder when you actually move bodies (travel-based orders depend
 // on where you are) — but not on every position sample within a body.
@@ -1377,17 +1419,35 @@ function maybeRefreshFinder(state) {
   finderPosKey = key;
   if (finderOre && $("finder-sort").value !== "likely") runFinder();
 }
+// The picker offers ores and harvestables in separate optgroups; each option
+// carries its category so the finder queries the right stats (they never pool).
 async function loadFinderOres() {
   try {
-    const ores = await fetch("/api/resource_ores").then(r => r.json());
+    const [ores, harv] = await Promise.all([
+      fetch("/api/resource_ores").then(r => r.json()).catch(() => []),
+      fetch("/api/resource_ores?category=harvestable").then(r => r.json()).catch(() => []),
+    ]);
     const sel = $("finder-ore"), cur = sel.value;
-    sel.innerHTML = '<option value="">— choose an ore</option>';
-    for (const o of ores) sel.appendChild(new Option(o, o));
-    sel.value = ores.includes(cur) ? cur : "";
-    finderOre = sel.value;
+    sel.innerHTML = '<option value="">— choose an ore or harvestable</option>';
+    const addGroup = (label, names, category) => {
+      if (!names.length) return;
+      const g = document.createElement("optgroup"); g.label = label;
+      for (const n of names) { const o = new Option(n, n); o.dataset.category = category; g.appendChild(o); }
+      sel.appendChild(g);
+    };
+    addGroup("Ores", ores, "resource");
+    addGroup("Harvestables", harv, "harvestable");
+    sel.value = [...ores, ...harv].includes(cur) ? cur : "";
+    syncFinderSelection();
   } catch {}
 }
-$("finder-ore").onchange = () => { finderOre = $("finder-ore").value; runFinder(); };
+function syncFinderSelection() {
+  const sel = $("finder-ore");
+  finderOre = sel.value;
+  const opt = sel.selectedOptions[0];
+  finderCategory = (opt && opt.dataset.category) || "resource";
+}
+$("finder-ore").onchange = () => { syncFinderSelection(); runFinder(); };
 $("finder-sort").onchange = runFinder;
 
 async function runFinder() {
@@ -1397,13 +1457,14 @@ async function runFinder() {
   let data;
   try {
     data = await fetch(
-      `/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&sort=${sort}&limit=15`
+      `/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&sort=${sort}&limit=15` +
+      `&category=${finderCategory}`
     ).then(r => r.json());
   } catch { return; }
   const hs = data.hotspots || [];
   if (!hs.length) {
     table.hidden = true;
-    status.textContent = `no ${finderOre} logged yet — mine some and it'll appear here`;
+    status.textContent = `no ${finderOre} logged yet — log some and it'll appear here`;
     return;
   }
   // The distance-aware orders need a live position to measure travel from.
@@ -1523,6 +1584,20 @@ const OTHER_OPT = "__other__";
 function fillDatalist(id, names) {
   const dl = $(id); dl.innerHTML = "";
   for (const n of names) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
+}
+// Fauna (curated) + harvestables (uexcorp Natural/harvestable) share one
+// datalist; the harvestable names are remembered so capture can route them to
+// the harvestable category. Both lists arrive sorted; merge, dedupe, re-sort.
+function loadFaunaHarvestables() {
+  Promise.all([
+    fetch("/api/fauna").then(r => r.json()).catch(() => []),
+    fetch("/api/harvestables").then(r => r.json()).catch(() => []),
+  ]).then(([fauna, harv]) => {
+    harvestableNames.clear();
+    for (const n of harv) harvestableNames.add(n);
+    const all = [...new Set([...fauna, ...harv])].sort((a, b) => a.localeCompare(b));
+    fillDatalist("fauna-types", all);
+  });
 }
 function otherInputId(selId) { return selId + "-other"; }
 function toggleOther(selId) { $(otherInputId(selId)).hidden = $(selId).value !== OTHER_OPT; }
@@ -1673,6 +1748,7 @@ async function loadLeaderboard() {
        <td class="num">${r.counts.poi || 0}</td>
        <td class="num">${r.counts.resource || 0}</td>
        <td class="num">${r.counts.wildlife || 0}</td>
+       <td class="num">${r.counts.harvestable || 0}</td>
        <td class="num"><b>${r.total}</b></td>
      </tr>`).join("");
 }
@@ -1941,7 +2017,7 @@ function init() {
   fetch("/api/settings").then(r => r.json()).then(s => {   // freshness window (all members)
     if (s.obs_fresh_window_h) { freshWindowH = s.obs_fresh_window_h; renderNearby(); drawMap(); }
   }).catch(() => {});
-  fetch("/api/fauna").then(r => r.json()).then(n => fillDatalist("fauna-types", n)).catch(() => {});
+  loadFaunaHarvestables();
   fetch("/api/raw_commodities").then(r => r.json())
     .then(n => fillSelectWithOther("node-ore", n, "— ore")).catch(() => {});
   fetch("/api/biomes").then(r => r.json()).then(d => {

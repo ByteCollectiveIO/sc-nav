@@ -326,3 +326,274 @@ upload is stored on the volume and served by a real route, not the static mount.
 - `server/static/index.html` — `.header-logo` (l.228), `#admin-panel` (l.458),
   `loadSettings()` (l.1644+), the `settings`/`/api/settings` fetch.
 - Docker: `/data` volume in `docker-compose.yml`; `Dockerfile` seeds `/data`.
+
+---
+
+## UI refresh batch (2026-06-19) — tackle in this order
+
+Four UI changes designed together. **5 and 6 are quick, independent layout wins**
+(do them first, in either order). **7 is the data plumbing that 8 depends on**, so
+7 must land before 8. Net order: **5 → 6 → 7 → 8**.
+
+---
+
+## 5. Drop the ETA readout (keep the calculation)
+
+**Status:** done (2026-06-19). Built as designed. Removed the ETA `.readout` box
+and the two `#r-eta` writes in `index.html`; the `auto-fit` grid now balances at
+6 boxes. `eta_s` is still computed in `nav_core.py` (and still set on the
+destination payload) for future use; `fmtEta` is now unused but left in place,
+paired with the retained calc.
+
+### Problem
+
+The top readout strip has 7 boxes — CURRENT CONTAINER, BEARING, DISTANCE, ETA,
+ALTITUDE, SPEED, LAT/LON. The grid is `auto-fit, minmax(150px, 1fr)`
+(`index.html:33`), so 7 boxes wrap to leave a single lonely box (LAT/LON) on its
+own row at most widths. Dropping one box → 6, which fills rows evenly and looks
+cleaner.
+
+ETA is also the least meaningful readout: position updates are user-driven
+(manual `/showlocation` runs at irregular intervals), not a constant-speed feed,
+so the ETA value is misleading. Remove the **display** but **keep the
+calculation** so we can resurrect it later.
+
+### Decision
+
+Display-only removal. The server keeps computing `eta_s`.
+
+### Implementation
+
+- **Keep** `eta_s` in `server/nav_core.py` (l.491 / l.498) untouched — it stays
+  in the destination payload for future use.
+- `server/static/index.html`:
+  - Remove the ETA `.readout` box markup (l.266).
+  - Remove the two lines that write it: `$("r-eta").innerHTML = fmtEta(d.eta_s)`
+    (l.787) and the `r-eta` clear in the else branch (l.789, which sets
+    `r-bearing`/`r-dist`/`r-eta` to `—` together — drop just the `r-eta` part).
+  - `fmtEta` (l.667) becomes unused; leave it (cheap, paired with the retained
+    calc) or delete it — either is fine.
+
+### Relevant code
+
+- `server/nav_core.py` — `eta_s` compute (l.491, l.498), **keep**.
+- `server/static/index.html` — `.readouts` grid CSS (l.33), ETA box (l.266),
+  `r-eta` writes (l.787, l.789), `fmtEta` (l.667).
+
+---
+
+## 6. Swap TEAMMATES above the map / ELEMENT FINDER below it
+
+**Status:** done (2026-06-19). Pure markup reorder in `index.html` — panel order
+is now DESTINATION → TEAMMATES → MAP → RESOURCE FORECAST → ELEMENT FINDER →
+capture grid → NEARBY. No JS change (panels wired by id; layout follows DOM
+order).
+
+### Problem
+
+Current panel order in `<main>` (`index.html`): DESTINATION → **ELEMENT FINDER**
+(l.281) → MAP (l.303) → **TEAMMATES** (l.338) → RESOURCE FORECAST (l.347) →
+capture grid (POI/Resource/Fauna adds, l.352) → NEARBY. We want teammates up top
+near the map, and the finder down with the other resource tooling.
+
+### Target order
+
+DESTINATION → **TEAMMATES** → MAP → RESOURCE FORECAST → **ELEMENT FINDER** →
+capture grid → NEARBY.
+
+i.e. teammates display **above** the map; element finder displays **below** the
+map and below the resource forecast, but **above** the ADD POI/Resource/Fauna
+capture boxes.
+
+### Implementation
+
+Pure markup reordering in `server/static/index.html` — move the
+`#finder-panel` block (l.281–301) and `#roster-panel` block (l.338–345) to their
+new positions. No JS change: all panels are wired by `id`, and the layout is
+document-flow grid items, so order follows DOM order.
+
+- **Watch:** the map canvas has a zero-size resize guard (it recenters when its
+  panel becomes visible). Moving the map panel in the DOM doesn't change *when*
+  it's shown, so this should be inert — but eyeball the map after the move to
+  confirm it still sizes on first render.
+
+### Relevant code
+
+- `server/static/index.html` — `#finder-panel` (l.281), `#map-panel` (l.303),
+  `#roster-panel` (l.338), `#forecast-panel` (l.347), `.capture-grid` (l.352).
+
+---
+
+## 7. Add flora/harvestables to the "Add Fauna" box (rename → "Add Fauna & Harvestables")
+
+**Status:** done (2026-06-19). Built as designed. New `harvestable` observation
+category in `OBSERVATION_CATEGORIES` (type field `name`); `load_harvestable_names`
+(uexcorp `kind=="Natural" && is_harvestable==1` → 10 items) served at
+`/api/harvestables`; `POST /api/capture/harvestable`. The Add Fauna &
+Harvestables box merges both lists into one datalist and routes each capture by
+name-set membership (unknown free-text → wildlife). Harvestables got a full kind
+identity (lime `--harvest`, ■ marker/square, badge, map layer, NEARBY filter,
+fresh-only) and a Harvestables column on the leaderboard. Verified: loader filter,
+app boot, 54 nav_core tests green.
+
+### Problem
+
+We can log fauna (animals) but not harvestable flora/plants. The UEX commodities
+dataset (`poi/commodities.json`, loaded in `app.py`) marks these with
+`kind == "Natural"` **and** `is_harvestable == 1`. We want them addable from the
+same box, which becomes **ADD FAUNA & HARVESTABLES**. There are many, so the box
+keeps its type-ahead (already a `<datalist>`, which does prefix search for free).
+
+### Background (correct the current wiring)
+
+- The **ADD FAUNA** box (`#wild-form`, l.408) populates its datalist
+  (`#fauna-types`, l.411) from **`/api/fauna`** → `fauna_names` (curated
+  `server/fauna.json`), **not** from commodities. (`index.html:1944`.)
+- The **ADD RESOURCE NODE** box is the one fed by commodities, via
+  `/api/raw_commodities` → `load_raw_commodity_names()` (`is_raw==1`,
+  `app.py:218`). So harvestables are a *new* slice of the commodities data, not
+  the one already wired into the fauna box.
+
+### Key design point: the box must route to the right category
+
+This box adds one free-text "species / name", but #8 needs to know whether a
+given entry is **fauna** (a point marker only) or a **harvestable** (gets
+finder/forecast/heatmap treatment). The combined datalist hides that distinction
+from the user, so the **client resolves it at capture time**: if the typed name
+is in the harvestable set → capture as category `harvestable`; otherwise →
+`wildlife`. (Decide tie-break/unknown handling: unknown free-text defaults to
+`wildlife`, the current behavior.)
+
+This means #7 should land the harvestable **name list + category routing** even
+though the finder/forecast/map payoff only arrives in #8. Until #8, a
+`harvestable` observation just renders as a point marker like fauna.
+
+### Implementation
+
+- **`server/app.py`** — add `load_harvestable_names()` mirroring
+  `load_raw_commodity_names()` (l.218) but filtering
+  `kind == "Natural" and is_harvestable in (1,"1",True)`; expose
+  `GET /api/harvestables` (mirror `/api/raw_commodities`, l.926); add the count to
+  the `/api/settings` + status payloads alongside `raw_commodities`
+  (l.1160, l.1274) if we surface counts.
+- **`server/nav_core.py`** — add a `"harvestable"` entry to
+  `OBSERVATION_CATEGORIES` (l.686): `type_field`/search on `"name"` (or reuse
+  `"species"`), a `_normalize_harvestable`, and a `display_name`. The registry is
+  designed so "adding a category is one entry here plus a capture endpoint."
+- **`server/app.py`** — add the capture endpoint for `harvestable` (mirror the
+  wildlife arm path, l.905–909 / `_arm_observation`).
+- **`server/static/index.html`** —
+  - Rename the `<h2>` to **ADD FAUNA & HARVESTABLES** (l.408).
+  - On load, fetch `/api/harvestables` and merge into the `#fauna-types` datalist
+    alongside `/api/fauna` (extend l.1944); keep a client-side `Set` of
+    harvestable names for category routing.
+  - In the capture POST, choose category `harvestable` vs `wildlife` by membership
+    in that set, hitting the matching endpoint.
+
+### Open question for build time
+
+Reuse the single `#wild-form` box (one input, category inferred) **vs.** a small
+fauna/harvestable toggle in the box. Recommend **inferred from the name set**
+(zero extra UI, matches the "lots of options, just search" ask); add a toggle only
+if inference proves ambiguous.
+
+### Relevant code
+
+- `server/app.py` — `load_raw_commodity_names` (l.218), `/api/raw_commodities`
+  (l.926), `/api/fauna` (l.932), `_arm_observation` / wildlife arm (l.877, l.905).
+- `server/nav_core.py` — `OBSERVATION_CATEGORIES` (l.686),
+  `observation_from_position` (l.704).
+- `server/static/index.html` — ADD FAUNA box (l.408), `#fauna-types` (l.411),
+  datalist load (l.1944).
+
+---
+
+## 8. Track, map, forecast & find harvestables (like the element finder)
+
+**Status:** done (2026-06-19) — forecast + finder shipped; heatmap deferred (see
+note). The resource stats (`body_base_rate`, `resource_forecast`,
+`resource_cells`, `resource_hotspots`, `resource_ore_names`) were parameterized by
+`category` + type field via `_type_of`/`_obs_on_body`, so harvestables reuse the
+exact same math on their own data (compositions never pooled). `compute_state`
+now emits `harvestable_forecast`; the three finder/heatmap endpoints accept
+`?category=` (validated against `resource`/`harvestable`). UI: Element Finder
+picker uses Ores/Harvestables optgroups carrying each option's category;
+RESOURCE FORECAST shows separate "Ores"/"Harvestables" sections. Harvestable
+point-markers already came from #7. **Heatmap-for-harvestables was deferred** —
+the `#heatmap-mode` overlay stays ores-only for now (point markers + finder cover
+"map them out"); the endpoint is already category-ready when we want it. Verified
+end-to-end against real Daymar data (forecast/hotspots/type-names), bad-category
+rejection, JS syntax, and the full test suite.
+
+**Original plan below (for reference).**
+
+**Depends on #7** (needs the `harvestable` category +
+captures flowing in).
+
+### Problem
+
+Once harvestables are being logged (#7), treat them like resource nodes: list
+them in the **RESOURCE FORECAST**, make them selectable in the **ELEMENT FINDER**,
+and draw them on the **map heatmap** — all the "where do I find this" tooling
+that today is hardwired to `category == "resource"`.
+
+### Core decision: parameterize the resource stats by category, don't fork
+
+The forecast/finder/heatmap math (Wilson lower bound, base-rate shrinkage, ring
+weighting) lives in `nav_core.py` and is keyed on `category == "resource"` +
+`_ore_of` (the `"ore"` data field): `_resource_obs_on_body` (l.996),
+`body_base_rate` (l.1030), `resource_forecast` (l.1051), `resource_cells`
+(l.1087), `resource_hotspots`, `resource_ore_names` (l.1118).
+
+**Plan:** generalize these to take a `category` + a type-field accessor (ore for
+resources, name for harvestables) so harvestables reuse the *exact* same stats on
+their own data — no duplicated math. Band/quality is resource-only and only
+*displayed*, never used in the likelihood math, so dropping it for harvestables is
+clean.
+
+### Keep the probability math within-category
+
+Do **not** pool harvestables and ores into one composition — a cell with
+"3 Aphorite + 2 SomePlant" must not read as a 60/40 *ore* mix. Compute ore
+composition and harvestable composition **separately**, then present together:
+
+- **Resource Forecast** — show harvestables as a clearly-labeled second
+  section/group under the existing ore ranking (or a tab), each with its own
+  likelihoods. (`#forecast-panel` l.347, `resource_forecast` render in
+  `index.html` ~l.720.)
+- **Element Finder** — include harvestables in the picker (`#finder-ore`, l.284),
+  ideally `<optgroup>`-separated ("Ores" / "Harvestables"). The results table and
+  `resource_hotspots` sort modes (likely/near/value) work unchanged once
+  parameterized — though "best value" needs a price source for harvestables (the
+  commodity `price_sell`); if that's not readily wired, disable the value sort for
+  harvestables initially.
+- **Map heatmap** — either a separate harvestable heatmap mode in the
+  `#heatmap-mode` select (l.319) or fold into the existing one; recommend a
+  distinct mode so ore and flora layers stay legible.
+
+### Endpoints
+
+Mirror the resource endpoints for harvestables (or add a `category=` param to the
+existing ones): `/api/resource_ores` (l.948), `/api/resource_hotspots` (l.954),
+`/api/resource_cells` (l.938), `resource_forecast` consumer. Parameterizing the
+existing routes is less surface area than four new ones.
+
+### Open questions for build time
+
+1. **Forecast presentation** — combined list with category badges vs. separate
+   sections vs. a tab. (Recommend separate labeled sections.)
+2. **Finder picker** — one dropdown with optgroups vs. a category toggle.
+3. **"Best value" sort for harvestables** — wire commodity `price_sell` or disable
+   the sort for them at first.
+
+### Relevant code
+
+- `server/nav_core.py` — `_ore_of` (l.992), `_resource_obs_on_body` (l.996),
+  `body_base_rate` (l.1030), `_shrunk_composition` (l.1018), `resource_forecast`
+  (l.1051), `resource_cells` (l.1087), `resource_hotspots`, `resource_ore_names`
+  (l.1118), `OBSERVATION_CATEGORIES` (l.686).
+- `server/app.py` — `/api/resource_cells` (l.938), `/api/resource_ores` (l.948),
+  `/api/resource_hotspots` (l.954).
+- `server/static/index.html` — `#finder-panel` (l.281), `#forecast-panel`
+  (l.347), `#heatmap-mode` (l.319), element-finder JS (~l.1366), resource-forecast
+  JS (~l.720).

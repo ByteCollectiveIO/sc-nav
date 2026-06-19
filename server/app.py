@@ -234,6 +234,30 @@ def load_raw_commodity_names() -> list[str]:
     return sorted(names)
 
 
+def load_harvestable_names() -> list[str]:
+    """Sorted names of harvestable flora/natural commodities (uexcorp
+    kind=="Natural" and is_harvestable==1) for the Add Fauna & Harvestables
+    datalist. Reuses the same commodities cache as the ore loader."""
+    rows = None
+    if not OFFLINE:
+        try:
+            resp = _fetch_json(COMMODITIES_URL, timeout=15)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            if rows:
+                _save_json_list(COMMODITIES_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] commodities fetch failed, using cache: {exc}")
+    if not rows:
+        rows = _load_json_list(COMMODITIES_FILE)
+    names = {
+        r["name"] for r in rows
+        if r.get("kind") == "Natural"
+        and r.get("is_harvestable") in (1, "1", True)
+        and r.get("name")
+    }
+    return sorted(names)
+
+
 class HandleRegistry:
     """Maps in-game handles to stable assigned PlayerIDs (DB-backed, cached
     in memory).
@@ -391,6 +415,7 @@ nav = load_nav_data()
 handles = HandleRegistry()
 tokens = TokenStore()
 raw_commodity_names = load_raw_commodity_names()
+harvestable_names = load_harvestable_names()
 fauna_names = load_fauna_names()
 biomes = load_biomes()
 nav_core.merge_custom_pois(nav, db.list_custom_pois())
@@ -481,6 +506,12 @@ class NodeCaptureIn(BaseModel):
 
 class WildlifeCaptureIn(BaseModel):
     species: str
+    biome: str | None = None
+    note: str | None = None
+
+
+class HarvestableCaptureIn(BaseModel):
+    name: str
     biome: str | None = None
     note: str | None = None
 
@@ -909,6 +940,14 @@ async def capture_wildlife_start(body: WildlifeCaptureIn, user: dict = Depends(r
     return await _arm_observation(user, "wildlife", {"species": species}, body.biome, body.note)
 
 
+@app.post("/api/capture/harvestable")
+async def capture_harvestable_start(body: HarvestableCaptureIn, user: dict = Depends(require_session)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    return await _arm_observation(user, "harvestable", {"name": name}, body.biome, body.note)
+
+
 @app.post("/api/capture/cancel")
 async def capture_cancel(user: dict = Depends(require_session)):
     async with hub.lock:
@@ -929,46 +968,68 @@ async def list_raw_commodities():
     return raw_commodity_names
 
 
+@app.get("/api/harvestables")
+async def list_harvestables():
+    """Harvestable flora/natural names (uexcorp kind=Natural, is_harvestable=1)
+    for the Add Fauna & Harvestables datalist."""
+    return harvestable_names
+
+
 @app.get("/api/fauna")
 async def list_fauna():
     """Curated fauna/species names for the Add Fauna datalist."""
     return fauna_names
 
 
+# The forecast/finder/heatmap endpoints work for any mappable observation
+# category (resources by ore, harvestables by name); `category` selects which.
+_MAPPABLE_CATEGORIES = ("resource", "harvestable")
+
+
+def _require_mappable_category(category: str) -> str:
+    if category not in _MAPPABLE_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"unknown category: {category}")
+    return category
+
+
 @app.get("/api/resource_cells")
-async def get_resource_cells(system: str, body: str):
-    """Per-cell ore composition for the map heatmap (cells with ≥1 sighting)."""
+async def get_resource_cells(system: str, body: str, category: str = "resource"):
+    """Per-cell type composition for the map heatmap (cells with ≥1 sighting)."""
+    _require_mappable_category(category)
     cont = nav.containers.get((system, body))
     if cont is None or not cont.is_body:
         raise HTTPException(status_code=404, detail="unknown body")
-    cells = nav_core.resource_cells(nav, system, body, cont.body_radius)
+    cells = nav_core.resource_cells(nav, system, body, cont.body_radius, category=category)
     return {"cell_m": nav_core.RESOURCE_CELL_M, "cells": cells}
 
 
 @app.get("/api/resource_ores")
-async def get_resource_ores():
-    """Ore names present in resource sightings (element-finder picker)."""
-    return nav_core.resource_ore_names(nav)
+async def get_resource_ores(category: str = "resource"):
+    """Type names present in sightings of `category` (element-finder picker)."""
+    _require_mappable_category(category)
+    return nav_core.resource_ore_names(nav, category=category)
 
 
 @app.get("/api/resource_hotspots")
 async def get_resource_hotspots(
     request: Request, ore: str, system: str | None = None, body: str | None = None,
-    limit: int = 20, sort: str = "likely",
+    limit: int = 20, sort: str = "likely", category: str = "resource",
 ):
-    """Known areas richest in `ore`, ranked. sort: likely | near | value.
-    The 'near'/'value' modes use the caller's own live position for travel."""
+    """Known areas richest in `ore` (or harvestable name), ranked. sort: likely |
+    near | value. The 'near'/'value' modes use the caller's own live position."""
+    _require_mappable_category(category)
     sess = hub.sessions.get(require_user(request)["id"])
     pos = sess.pos if sess else None
     t = sess.t if sess else None
     return {
         "ore": ore,
         "sort": sort,
+        "category": category,
         "has_position": pos is not None,
         "cell_m": nav_core.RESOURCE_CELL_M,
         "hotspots": nav_core.resource_hotspots(
             nav, ore, system=system, body=body, limit=min(limit, 100),
-            from_pos=pos, t_ref=t, sort=sort,
+            from_pos=pos, t_ref=t, sort=sort, category=category,
         ),
     }
 
@@ -1060,6 +1121,7 @@ async def leaderboard(user: dict = Depends(require_session)):
         {"key": "poi", "label": "POIs"},
         {"key": "resource", "label": "Resource Nodes"},
         {"key": "wildlife", "label": "Fauna"},
+        {"key": "harvestable", "label": "Harvestables"},
     ]
     by_player: dict[str, dict] = {}
     mine_ids = handles.player_ids_for(user["id"])
@@ -1090,7 +1152,7 @@ async def leaderboard(user: dict = Depends(require_session)):
 
     for obs in db.list_observations():
         cat = obs.get("category")
-        if cat not in ("resource", "wildlife"):
+        if cat not in ("resource", "wildlife", "harvestable"):
             continue
         row = bucket(obs.get("owner_id"), obs.get("owner_handle"))
         row["counts"][cat] += 1
@@ -1158,6 +1220,7 @@ async def refresh_data(admin: dict = Depends(require_admin)):
         "pois": len(nav.pois),
         "observations": len(nav.observations),
         "raw_commodities": len(raw_commodity_names),
+        "harvestables": len(harvestable_names),
     }
 
 
@@ -1272,6 +1335,7 @@ async def health():
         "observations": len(nav.observations),
         "handles": len(handles.by_handle),
         "raw_commodities": len(raw_commodity_names),
+        "harvestables": len(harvestable_names),
         "active_sessions": sum(1 for s in hub.sessions.values() if s.pos is not None),
         "data": data_info,
     }
