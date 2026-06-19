@@ -196,13 +196,14 @@ class HandleRegistry:
     def __init__(self):
         self.by_handle = {h["handle"]: h for h in db.all_handles()}
 
-    def register(self, handle: str) -> dict:
+    def register(self, handle: str, discord_id: str | None = None) -> dict:
         handle = handle.strip()
         now = datetime.now(timezone.utc).isoformat()
         entry = self.by_handle.get(handle)
         if entry is None:
             next_id = max((e["player_id"] for e in self.by_handle.values()), default=0) + 1
-            entry = {"player_id": next_id, "handle": handle, "first_seen": now, "last_seen": now}
+            entry = {"player_id": next_id, "handle": handle, "first_seen": now,
+                     "last_seen": now, "discord_id": discord_id}
             self.by_handle[handle] = entry
             # Persist only when a genuinely new handle appears — this runs on the
             # position hot path (every /showlocation), so we don't write per
@@ -213,7 +214,21 @@ class HandleRegistry:
                 print(f"[sc-nav] handle registry save failed: {exc}")
         else:
             entry["last_seen"] = now  # in-memory only; not worth a write per position
+            # Bind ownership the first time we learn who is posting this handle
+            # (the watcher's token resolves to a Discord id). Persist that once.
+            if discord_id and entry.get("discord_id") != discord_id:
+                entry["discord_id"] = discord_id
+                try:
+                    db.upsert_handle(entry)
+                except Exception as exc:
+                    print(f"[sc-nav] handle owner bind failed: {exc}")
         return entry
+
+    def player_ids_for(self, discord_id: str) -> set[int]:
+        """Every PlayerID owned by a Discord member (alts/renames included).
+        Used to scope deletes to a member's own contributions."""
+        return {e["player_id"] for e in self.by_handle.values()
+                if e.get("discord_id") == discord_id}
 
     def list(self) -> list[dict]:
         return sorted(self.by_handle.values(), key=lambda e: e["handle"].lower())
@@ -349,6 +364,17 @@ def require_admin(user: dict = Depends(require_session)) -> dict:
     if not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="admin only")
     return user
+
+
+def ensure_owns(user: dict, owner_id: int | None) -> None:
+    """A member may delete only their own contributions — any PlayerID bound to
+    their Discord id (alts/renames included). Admins (ADMIN_IDS) delete anything.
+    Ownerless legacy records (owner_id is None) are admin-only."""
+    if user.get("is_admin"):
+        return
+    if owner_id is not None and owner_id in handles.player_ids_for(user["id"]):
+        return
+    raise HTTPException(status_code=403, detail="you can only delete your own contributions")
 
 
 def require_user(request: Request) -> dict:
@@ -644,7 +670,7 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         sess.pos, sess.t = new_pos, now
 
         if body.handle:
-            entry = handles.register(body.handle)
+            entry = handles.register(body.handle, sess.user["id"])
             sess.owner = {"player_id": entry["player_id"], "handle": entry["handle"]}
 
         captured = False
@@ -899,6 +925,7 @@ async def delete_custom_poi(poi_id: int, user: dict = Depends(require_session)):
         removed = nav.pois.get(poi_id)
         if removed is None or not getattr(removed, "custom", False):
             raise HTTPException(status_code=404, detail="unknown custom poi")
+        ensure_owns(user, removed.owner_id)
         was_qt = removed.qt_marker
         db.delete_custom_poi(poi_id)
         nav.pois.pop(poi_id, None)
@@ -926,8 +953,10 @@ async def get_observations(
 @app.delete("/api/observations/{obs_id}")
 async def delete_observation(obs_id: int, user: dict = Depends(require_session)):
     async with hub.lock:
-        if obs_id not in nav.observations:
+        obs = nav.observations.get(obs_id)
+        if obs is None:
             raise HTTPException(status_code=404, detail="unknown observation")
+        ensure_owns(user, obs.owner_id)
         db.delete_observation(obs_id)
         nav.observations.pop(obs_id, None)
         hub.forget_entity(obs_id)

@@ -57,7 +57,8 @@ CREATE INDEX IF NOT EXISTS observations_category ON observations(category);
 CREATE TABLE IF NOT EXISTS handles (
     player_id INTEGER PRIMARY KEY,
     handle TEXT UNIQUE,
-    first_seen TEXT, last_seen TEXT
+    first_seen TEXT, last_seen TEXT,
+    discord_id TEXT          -- owning member; bound when a watcher posts the handle
 );
 
 CREATE TABLE IF NOT EXISTS watcher_tokens (
@@ -77,6 +78,15 @@ def init(db_path) -> None:
     _conn.execute("PRAGMA busy_timeout=5000")
     with _lock, _conn:
         _conn.executescript(SCHEMA)
+        # Migrate DBs created before a column existed (CREATE TABLE IF NOT EXISTS
+        # won't add columns to an already-present table).
+        _ensure_column("handles", "discord_id", "TEXT")
+
+
+def _ensure_column(table: str, column: str, decl: str) -> None:
+    cols = {r["name"] for r in _conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def _j(v):
@@ -201,10 +211,10 @@ def all_handles() -> list[dict]:
 def upsert_handle(entry: dict) -> None:
     with _lock, _conn:
         _conn.execute(
-            "INSERT OR REPLACE INTO handles (player_id,handle,first_seen,last_seen) "
-            "VALUES (?,?,?,?)",
+            "INSERT OR REPLACE INTO handles (player_id,handle,first_seen,last_seen,discord_id) "
+            "VALUES (?,?,?,?,?)",
             (entry["player_id"], entry["handle"], entry.get("first_seen"),
-             entry.get("last_seen")),
+             entry.get("last_seen"), entry.get("discord_id")),
         )
 
 

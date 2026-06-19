@@ -246,7 +246,7 @@ Deviations from the sketch: kept the existing `"state"` self-message (presence i
 a separate `roster`/`presence` channel) and handle-based attribution; `PUT /api/me`
 carries only `share_presence` for now (cosmetic-handle editing stays deferred).
 
-### Phase 4 — Admin & ops
+### Phase 4 — Admin & ops — ✅ DONE (2026-06-18)
 - **Access gating by role — ✅ DONE (2026-06-18).** Login now requires guild
   membership **and** (optionally) a specific Discord role. The required role id is
   a DB `meta` setting (`member_role_id`), seeded by the `ORG_MEMBER_ROLE_ID` env
@@ -258,12 +258,29 @@ carries only `share_presence` for now (cosmetic-handle editing stays deferred).
   effect at each member's next sign-in (existing sessions stand until expiry).
   Multiple admins already work via the comma-separated `ADMIN_IDS` env list —
   unchanged (decision: keep the ID list, no admin role).
-- **Still TODO**: ownership-scoped deletes (non-admin deletes only `owner_id ==
-  uid`); EBS snapshots of the SQLite/data volume (contributions are irreplaceable).
+- **Ownership-scoped deletes — ✅ DONE (2026-06-18).** A member can delete only
+  their own contributions; admins (`ADMIN_IDS`) delete anything. Since attribution
+  is still PlayerID-based (handle-derived), the `handles` table grew a `discord_id`
+  column (migrated in place via `_ensure_column` for existing DBs). The watcher's
+  token resolves to a Discord id, so `HandleRegistry.register(handle, discord_id)`
+  binds each handle to its owner the first time that member posts it — late-binding
+  previously-ownerless handles too. A member owns every PlayerID under their Discord
+  id (alts/renames included) via `handles.player_ids_for(uid)`. `ensure_owns()`
+  guards `DELETE /api/custom_pois/{id}` and `/api/observations/{id}` (403 otherwise).
+  Ownerless legacy records (`owner_id` None, or a handle never re-posted since the
+  migration) are admin-only until the owning member next runs the watcher, which
+  rebinds the handle. This finally realizes the locked "identity = Discord id"
+  attribution for deletes; capture-side attribution still writes `owner_id =
+  player_id` unchanged.
+- **Backups — ✅ DONE (2026-06-18).** The EBS-snapshot idea was EC2-specific; this
+  deploys on a home server via Cloudflare Tunnel, so instead `server/deploy/backup_db.sh`
+  does an online `sqlite3 .backup` (WAL-safe, no downtime), gzips it, and prunes to
+  the newest N (`SC_NAV_BACKUP_KEEP`, default 14). Run nightly from cron. Honors
+  `SC_NAV_DATA` (DB at `$SC_NAV_DATA/sc_nav.db`) and `SC_NAV_BACKUP_DIR`.
 
 New env (optional): `ORG_MEMBER_ROLE_ID` seeds the role gate; once set in the UI
 the DB value wins. Re-adding the OAuth scope means members re-consent on next
-login (automatic redirect).
+login (automatic redirect). Backups: `SC_NAV_BACKUP_DIR` / `SC_NAV_BACKUP_KEEP`.
 
 ## Watch-items
 - **Single worker stays mandatory** — sessions/presence are in process memory.
@@ -276,7 +293,8 @@ login (automatic redirect).
 
 ## Recommended order
 ~~Phase 0 (deployable lockout)~~ ✅ -> ~~2 (durability)~~ ✅ -> ~~1 (simultaneous
-courses + captures)~~ ✅ -> ~~3 (teammate map)~~ ✅ -> **4 (admin/backups) [next]**.
+courses + captures)~~ ✅ -> ~~3 (teammate map)~~ ✅ -> ~~4 (admin/backups)~~ ✅.
+**All phases complete (2026-06-18).**
 
 ## Current single-user architecture (baseline being migrated)
 - FastAPI + single global `AppState` (one live cursor): `pos`, `destination_id`,
