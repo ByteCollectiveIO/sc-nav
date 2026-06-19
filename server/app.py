@@ -272,6 +272,13 @@ class HandleRegistry:
         return {e["player_id"] for e in self.by_handle.values()
                 if e.get("discord_id") == discord_id}
 
+    def handle_for(self, player_id: int) -> str | None:
+        """Current handle for a PlayerID (latest known after any rename)."""
+        for e in self.by_handle.values():
+            if e["player_id"] == player_id:
+                return e["handle"]
+        return None
+
     def list(self) -> list[dict]:
         return sorted(self.by_handle.values(), key=lambda e: e["handle"].lower())
 
@@ -1031,6 +1038,64 @@ async def delete_observation(obs_id: int, user: dict = Depends(require_session))
         hub.forget_entity(obs_id)
         await hub.broadcast_all()
         return {"ok": True}
+
+
+@app.get("/api/leaderboard")
+async def leaderboard(user: dict = Depends(require_session)):
+    """Per-contributor tallies for the Leaderboard page: custom POIs and each
+    observation category, counted per player. Players are keyed by their stable
+    PlayerID (so a character rename stays one row) and labelled with their
+    current handle; ownerless legacy records fold into a single 'Unknown' row."""
+    cats = [
+        {"key": "poi", "label": "POIs"},
+        {"key": "resource", "label": "Resource Nodes"},
+        {"key": "wildlife", "label": "Fauna"},
+    ]
+    by_player: dict[str, dict] = {}
+    mine_ids = handles.player_ids_for(user["id"])
+
+    def bucket(owner_id, owner_handle):
+        if owner_id is not None:
+            key = f"id:{owner_id}"
+            label = handles.handle_for(owner_id) or owner_handle or f"Player {owner_id}"
+        elif owner_handle:
+            key = f"h:{owner_handle}"
+            label = owner_handle
+        else:
+            key, label = "unknown", "Unknown"
+        row = by_player.get(key)
+        if row is None:
+            row = by_player[key] = {
+                "handle": label,
+                "counts": {c["key"]: 0 for c in cats},
+                "total": 0,
+                "mine": owner_id is not None and owner_id in mine_ids,
+            }
+        return row
+
+    for poi in db.list_custom_pois():
+        row = bucket(poi.get("owner_id"), poi.get("owner_handle"))
+        row["counts"]["poi"] += 1
+        row["total"] += 1
+
+    for obs in db.list_observations():
+        cat = obs.get("category")
+        if cat not in ("resource", "wildlife"):
+            continue
+        row = bucket(obs.get("owner_id"), obs.get("owner_handle"))
+        row["counts"][cat] += 1
+        row["total"] += 1
+
+    contributors = sorted(
+        by_player.values(), key=lambda r: (-r["total"], r["handle"].lower())
+    )
+    totals = {c["key"]: sum(r["counts"][c["key"]] for r in contributors) for c in cats}
+    return {
+        "categories": cats,
+        "contributors": contributors,
+        "totals": totals,
+        "grand_total": sum(totals.values()),
+    }
 
 
 @app.post("/api/path/{action}")

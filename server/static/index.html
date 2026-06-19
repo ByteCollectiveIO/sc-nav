@@ -26,8 +26,9 @@
   /* The two views are layout-transparent so their panels remain direct grid
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
-  #main-view, #settings-view, #setup-view { display: contents; }
-  #main-view[hidden], #settings-view[hidden], #setup-view[hidden] { display: none; }
+  #main-view, #settings-view, #setup-view, #leaderboard-view { display: contents; }
+  #main-view[hidden], #settings-view[hidden], #setup-view[hidden],
+  #leaderboard-view[hidden] { display: none; }
 
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
@@ -104,6 +105,34 @@
   .lg-path::before { content: "•"; color: var(--warn); }
   .lg-mate::before { color: var(--mate); }
 
+  /* leaderboard */
+  .lb-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .lb-card { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; text-align: center; }
+  .lb-card .n { font-size: 30px; font-variant-numeric: tabular-nums; }
+  .lb-card .k { font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-top: 2px; }
+  .lb-c-poi { color: var(--accent); } .lb-c-resource { color: var(--node); } .lb-c-wildlife { color: var(--fauna); }
+  .lb-legend { font-size: 11px; color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 12px; }
+  .lb-legend span::before { content: "■"; margin-right: 5px; }
+  .lb-legend .poi::before { color: var(--accent); }
+  .lb-legend .resource::before { color: var(--node); }
+  .lb-legend .wildlife::before { color: var(--fauna); }
+  /* horizontal stacked bars: one row per contributor */
+  .lb-chart { display: flex; flex-direction: column; gap: 12px; }
+  .lb-row { display: flex; flex-direction: column; gap: 4px; }
+  .lb-row-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+  .lb-rank { color: var(--dim); font-variant-numeric: tabular-nums; min-width: 22px; }
+  .lb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lb-name.me { color: var(--warn); }
+  .lb-total { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--dim); white-space: nowrap; }
+  .lb-bar { display: flex; height: 20px; border-radius: 4px; overflow: hidden; background: #0c1119; }
+  .lb-seg { height: 100%; min-width: 0; transition: filter .1s; }
+  .lb-seg:hover { filter: brightness(1.25); }
+  .lb-seg.poi { background: var(--accent); }
+  .lb-seg.resource { background: var(--node); }
+  .lb-seg.wildlife { background: var(--fauna); }
+  #lb-table tbody tr { cursor: default; }
+
   /* teammate presence (roster) */
   .roster-share { float: right; font-size: 12px; color: var(--dim);
     display: inline-flex; align-items: center; gap: 5px; font-weight: normal; letter-spacing: 0; }
@@ -154,9 +183,9 @@
   #token-new code { color: var(--good); }
 
   /* setup guide */
-  #setup-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
+  #setup-toggle, #leaderboard-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
     text-decoration: none; white-space: nowrap; }
-  #setup-toggle:hover { text-decoration: underline; }
+  #setup-toggle:hover, #leaderboard-toggle:hover { text-decoration: underline; }
   .setup { max-width: 760px; margin: 0 auto; }
   .setup > h2 { color: var(--accent); letter-spacing: 2px; font-size: 18px; margin: 0 0 6px; }
   .setup-intro { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 0 0 18px; }
@@ -200,6 +229,7 @@
   <h1>Org Navigator</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
+  <a id="leaderboard-toggle" href="#/leaderboard" hidden>🏆 Leaderboard</a>
   <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
   <a id="nav-toggle" href="#/settings" hidden></a>
   <div id="account"></div>
@@ -553,6 +583,31 @@
     </p>
   </div>
   </div><!-- /setup-view -->
+
+  <div id="leaderboard-view" hidden>
+  <div class="panel">
+    <h2>CONTRIBUTION TOTALS</h2>
+    <div class="lb-cards" id="lb-cards"></div>
+  </div>
+  <div class="panel">
+    <h2>WHO'S ADDING WHAT <span class="muted">(stacked by category · ranked by total)</span></h2>
+    <div class="lb-legend">
+      <span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span>
+    </div>
+    <div class="lb-chart" id="lb-chart"></div>
+    <div class="muted" id="lb-empty" hidden style="padding:8px 0;">No contributions yet — start capturing POIs, resource nodes and fauna in game.</div>
+  </div>
+  <div class="panel">
+    <h2>BREAKDOWN</h2>
+    <table id="lb-table">
+      <thead><tr>
+        <th>#</th><th>CONTRIBUTOR</th>
+        <th class="num">POIs</th><th class="num">RESOURCES</th><th class="num">FAUNA</th><th class="num">TOTAL</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  </div><!-- /leaderboard-view -->
 </main>
 
 <script>
@@ -1505,24 +1560,29 @@ function applyView() {
   // stray #/settings can't leave the map hidden behind the login gate.
   const settings = location.hash === "#/settings" && !!currentMe;
   const setup = location.hash === "#/setup" && !!currentMe;
-  const sub = settings || setup;
+  const leaderboard = location.hash === "#/leaderboard" && !!currentMe;
+  const sub = settings || setup || leaderboard;
 
   $("main-view").hidden = sub;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
+  $("leaderboard-view").hidden = !leaderboard;
 
   // ⚙ Settings link doubles as the "back" control on any sub-view.
   const link = $("nav-toggle");
   link.hidden = !currentMe;
   link.textContent = sub ? "← Navigation" : "⚙ Settings";
   link.setAttribute("href", sub ? "#" : "#/settings");
-  // 📖 Setup link: visible when signed in, except while already on the guide.
+  // 📖 Setup / 🏆 Leaderboard links: visible when signed in, except on their own page.
   $("setup-toggle").hidden = !currentMe || setup;
+  $("leaderboard-toggle").hidden = !currentMe || leaderboard;
 
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
     loadTokens();
     if (currentMe.is_admin) loadSettings();
+  } else if (leaderboard) {
+    loadLeaderboard();
   } else if (!sub && lastState) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.
@@ -1530,6 +1590,56 @@ function applyView() {
   }
 }
 window.addEventListener("hashchange", applyView);
+
+// ---------- leaderboard ----------
+async function loadLeaderboard() {
+  let data;
+  try {
+    data = await fetch("/api/leaderboard").then(r => r.json());
+  } catch { return; }
+  const { categories, contributors, totals, grand_total } = data;
+
+  // Summary cards: one per category plus the grand total.
+  $("lb-cards").innerHTML =
+    categories.map(c =>
+      `<div class="lb-card"><div class="n lb-c-${c.key}">${totals[c.key] || 0}</div>` +
+      `<div class="k">${esc(c.label).toUpperCase()}</div></div>`).join("") +
+    `<div class="lb-card"><div class="n">${grand_total || 0}</div><div class="k">TOTAL</div></div>`;
+
+  const chart = $("lb-chart");
+  $("lb-empty").hidden = contributors.length > 0;
+  // Bars are scaled to the biggest contributor so the leader fills the row and
+  // the rest read as a fraction of it (each segment width ∝ that category's count).
+  const max = contributors.reduce((m, r) => Math.max(m, r.total), 0) || 1;
+  chart.innerHTML = contributors.map((r, i) => {
+    const segs = categories.map(c => {
+      const n = r.counts[c.key] || 0;
+      if (!n) return "";
+      const pct = (n / max) * 100;
+      return `<div class="lb-seg ${c.key}" style="width:${pct}%" title="${esc(r.handle)} — ${n} ${esc(c.label)}"></div>`;
+    }).join("");
+    return `<div class="lb-row">
+        <div class="lb-row-head">
+          <span class="lb-rank">${i + 1}.</span>
+          <span class="lb-name${r.mine ? " me" : ""}">${esc(r.handle)}${r.mine ? " (you)" : ""}</span>
+          <span class="lb-total">${r.total}</span>
+        </div>
+        <div class="lb-bar">${segs}</div>
+      </div>`;
+  }).join("");
+
+  // Full numeric breakdown table.
+  const tb = $("lb-table").querySelector("tbody");
+  tb.innerHTML = contributors.map((r, i) =>
+    `<tr>
+       <td class="num">${i + 1}</td>
+       <td class="${r.mine ? "lb-name me" : ""}">${esc(r.handle)}${r.mine ? " (you)" : ""}</td>
+       <td class="num">${r.counts.poi || 0}</td>
+       <td class="num">${r.counts.resource || 0}</td>
+       <td class="num">${r.counts.wildlife || 0}</td>
+       <td class="num"><b>${r.total}</b></td>
+     </tr>`).join("");
+}
 
 // ---------- org settings (admin) ----------
 async function loadSettings() {
