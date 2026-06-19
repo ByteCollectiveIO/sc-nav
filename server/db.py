@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS custom_pois (
     local_km TEXT, global_m TEXT,
     latitude REAL, longitude REAL, height_m REAL,
     qt_marker INTEGER DEFAULT 0,
-    owner_id INTEGER, owner_handle TEXT
+    owner_id INTEGER, owner_handle TEXT,
+    note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS observations (
@@ -81,6 +82,7 @@ def init(db_path) -> None:
         # Migrate DBs created before a column existed (CREATE TABLE IF NOT EXISTS
         # won't add columns to an already-present table).
         _ensure_column("handles", "discord_id", "TEXT")
+        _ensure_column("custom_pois", "note", "TEXT")
 
 
 def _ensure_column(table: str, column: str, decl: str) -> None:
@@ -101,7 +103,7 @@ def _u(s):
 
 _CUSTOM_COLS = ("id", "name", "system", "container", "type", "local_km",
                 "global_m", "latitude", "longitude", "height_m", "qt_marker",
-                "owner_id", "owner_handle")
+                "owner_id", "owner_handle", "note")
 
 
 def _custom_row_to_dict(r: sqlite3.Row) -> dict:
@@ -112,6 +114,7 @@ def _custom_row_to_dict(r: sqlite3.Row) -> dict:
         "latitude": r["latitude"], "longitude": r["longitude"],
         "height_m": r["height_m"], "qt_marker": bool(r["qt_marker"]),
         "owner_id": r["owner_id"], "owner_handle": r["owner_handle"],
+        "note": r["note"],
     }
 
 
@@ -120,12 +123,13 @@ def add_custom_poi(d: dict) -> None:
         _conn.execute(
             "INSERT OR REPLACE INTO custom_pois "
             "(id,name,system,container,type,local_km,global_m,latitude,longitude,"
-            "height_m,qt_marker,owner_id,owner_handle) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "height_m,qt_marker,owner_id,owner_handle,note) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (d["id"], d.get("name"), d.get("system"), d.get("container"),
              d.get("type"), _j(d.get("local_km")), _j(d.get("global_m")),
              d.get("latitude"), d.get("longitude"), d.get("height_m"),
-             1 if d.get("qt_marker") else 0, d.get("owner_id"), d.get("owner_handle")),
+             1 if d.get("qt_marker") else 0, d.get("owner_id"), d.get("owner_handle"),
+             d.get("note")),
         )
 
 
@@ -146,6 +150,14 @@ def next_custom_poi_id() -> int:
 def delete_custom_poi(poi_id: int) -> bool:
     with _lock, _conn:
         cur = _conn.execute("DELETE FROM custom_pois WHERE id=?", (poi_id,))
+    return cur.rowcount > 0
+
+
+def update_custom_poi_note(poi_id: int, note: str | None) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE custom_pois SET note=? WHERE id=?", (note, poi_id)
+        )
     return cur.rowcount > 0
 
 

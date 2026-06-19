@@ -86,7 +86,17 @@ An observation is "fresh" if **either**:
 
 ## 2. Notes on custom POIs (+ surface upstream POI comments)
 
-**Status:** designed, not started.
+**Status:** done (2026-06-19). Built as designed. `note TEXT` added to the
+`custom_pois` table with an `_ensure_column("custom_pois", "note", "TEXT")`
+migration (legacy rows get `note = NULL`); threaded through `Poi`,
+`custom_poi_from_position` / `custom_poi_to_dict` / `poi_from_custom_dict`, and
+`_poi_base`. `parse_data` now maps upstream `Comment` → `note` (read-only; 251
+upstream POIs carry one). `CaptureIn.note` flows through the capture path; a new
+ownership-scoped `PATCH /api/custom_pois/{id}` (with `db.update_custom_poi_note`)
+edits it and re-broadcasts. UI: note input on the ADD CUSTOM POI form; the table
+DETAIL column shows the note and, for custom POIs, an inline ✎ edit (prompt →
+PATCH) — chosen over a live in-place input because the table re-renders on every
+WS broadcast.
 
 ### Problem
 
@@ -156,3 +166,74 @@ migration** (existing custom POIs get `note = NULL`).
   `/api/custom_pois`, `delete_custom_poi` (ownership scoping to mirror).
 - `server/static/index.html` — ADD CUSTOM POI form, `entDetail`, table row
   render, `delSpan` / `wireDelete` (pattern for the inline edit control).
+
+---
+
+## 3. Dedicated settings page (move admin/watcher panels off the splash)
+
+**Status:** designed, not started.
+
+### Problem
+
+The main view is a single-page app: `server/static/index.html` stacks every
+panel inside one `<main>`, and the account-only panels are tacked onto the
+**bottom** — `#token-panel` (WATCHER TOKEN) and `#admin-panel` (ORG SETTINGS).
+This pushes the navigation/finder/map content down and clutters the splash with
+controls most members touch rarely. We want those settings on their own page,
+reached via a link across the top, leaving the main UI cleaner.
+
+### What moves
+
+- **`#token-panel`** — watcher token generation + the token table
+  (`loadTokens`, `/api/tokens` GET/POST/DELETE). Visible to any signed-in member.
+- **`#admin-panel`** — ORG SETTINGS (`loadSettings`, `/api/settings`, Discord
+  role gate, `obs_fresh_window_h`, etc.). Admin-only.
+
+Both are currently shown by `renderAccount()` in `index.html` (around the
+`$("token-panel").hidden = false` / `if (me.is_admin) $("admin-panel")...`
+block). The same gating logic moves with the panels.
+
+### Decision: client-side view, not a second HTML file
+
+The app is served as one static SPA (`app.mount("/", StaticFiles(..., html=True))`
+in `server/app.py`) and all the auth/WS/account bootstrap lives in `index.html`.
+A standalone `settings.html` would duplicate that bootstrap (account header,
+session check, `/api/me`). Instead:
+
+- Keep one `index.html`; add a **hash-routed view toggle** (`#/settings` vs the
+  default map view). A tiny router shows/hides the main panels as a group vs. the
+  settings panels as a group.
+- Add a **nav link in the `<header>`** (`index.html` ~line 152, next to the
+  `#account` element) — e.g. a "Settings" link and a "← Back" / "Nav" link, or
+  toggle the link label by current view. Only render the Settings link when
+  signed in (the panels require a session anyway).
+- Move `#token-panel` and `#admin-panel` markup into a `#settings-view`
+  container; wrap the existing panels in a `#main-view` container so the router
+  can flip them. No server route change — StaticFiles still serves the one file;
+  the `#` fragment never hits the server.
+
+(If a real separate URL is preferred over a hash route later, add a
+`/settings` FastAPI route returning the same `index.html` and switch on
+`location.pathname` — but the hash route avoids touching `app.py` entirely.)
+
+### Notes / gotchas
+
+- **Canvas sizing:** the map canvas guards against a zero-size canvas when its
+  panel is hidden (see the resize guard ~`index.html` comment "Guard against a
+  zero-size canvas"). When returning from the settings view, trigger a
+  recenter/resize so the map redraws at the correct size.
+- **Lazy load:** call `loadTokens()` / `loadSettings()` on entering the settings
+  view (or keep the current load-on-sign-in) — don't fetch settings for members
+  who never open the page.
+- Preserve the admin-only gate: non-admins see the watcher-token section but not
+  ORG SETTINGS, exactly as today.
+
+### Relevant code
+
+- `server/static/index.html` — `<header>` (~line 152, add nav link); `#account`
+  (~156); `#token-panel` (~360) and `#admin-panel` (~374) markup to relocate;
+  `renderAccount()` (~1322) and the `token-panel`/`admin-panel` `.hidden`
+  toggles; `loadTokens()` / `loadSettings()` (~1331); the map canvas zero-size
+  resize guard.
+- `server/app.py` — `app.mount("/", StaticFiles(..., html=True))` (only touched
+  if we opt for a real `/settings` route instead of the hash route).

@@ -416,6 +416,7 @@ class CaptureIn(BaseModel):
     name: str
     type: str = "Custom"
     qt_marker: bool = False   # record as a jumpable QT marker (e.g. an OM)
+    note: str = ""            # optional free-text context for the POI
 
 
 class NodeCaptureIn(BaseModel):
@@ -711,7 +712,7 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     poi = nav_core.custom_poi_from_position(
         nav, pos_m, now, pending["name"], pending["type"], next_id,
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
-        qt_marker=pending.get("qt_marker", False),
+        qt_marker=pending.get("qt_marker", False), note=pending.get("note"),
     )
     try:
         db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
@@ -814,7 +815,7 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
             raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
         sess.capture_pending = {
             "kind": "poi", "name": name, "type": body.type.strip() or "Custom",
-            "qt_marker": body.qt_marker,
+            "qt_marker": body.qt_marker, "note": body.note.strip() or None,
         }
         await sess.broadcast()
         return {"ok": True, "capture": sess.capture_status()}
@@ -929,6 +930,26 @@ async def list_biomes():
 @app.get("/api/custom_pois")
 async def list_custom_pois():
     return db.list_custom_pois()
+
+
+class PoiNoteIn(BaseModel):
+    note: str = ""
+
+
+@app.patch("/api/custom_pois/{poi_id}")
+async def update_custom_poi(poi_id: int, body: PoiNoteIn, user: dict = Depends(require_session)):
+    """Edit a custom POI's note. Ownership-scoped like delete; only custom POIs
+    are editable (upstream POIs carry a read-only Comment)."""
+    note = body.note.strip() or None
+    async with hub.lock:
+        poi = nav.pois.get(poi_id)
+        if poi is None or not getattr(poi, "custom", False):
+            raise HTTPException(status_code=404, detail="unknown custom poi")
+        ensure_owns(user, poi.owner_id)
+        db.update_custom_poi_note(poi_id, note)
+        poi.note = note
+        await hub.broadcast_all()
+    return {"ok": True, "note": note}
 
 
 @app.delete("/api/custom_pois/{poi_id}")

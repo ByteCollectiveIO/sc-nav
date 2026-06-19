@@ -75,6 +75,7 @@ class Poi:
     custom: bool = False             # user-created, lives in custom_pois.json
     owner_id: int | None = None      # PlayerID who recorded it (custom only)
     owner_handle: str | None = None
+    note: str | None = None          # free-text context; upstream POIs map from Comment
     nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
     nearest_qt_dist_m: float | None = None  # distance to that marker, meters
 
@@ -179,6 +180,9 @@ def parse_data(containers_raw: list[dict], pois_raw: list[dict]) -> NavData:
                 p.get("QTMarker") in (1, "1")
                 or (p.get("Type") or "").strip() == "Landing Zone"
             ),
+            # Upstream catalog carries a capital-C Comment for some POIs; surface
+            # it (read-only) through the same note field custom POIs now use.
+            note=p.get("Comment") or None,
         )
         nav.pois[poi.id] = poi
 
@@ -351,6 +355,7 @@ def _poi_base(poi) -> dict:
         "longitude": poi.longitude,
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
+        "note": poi.note,
         "nearest_qt": poi.nearest_qt,
         "nearest_qt_dist_m": poi.nearest_qt_dist_m,
     }
@@ -550,6 +555,7 @@ def custom_poi_from_position(
     owner_id: int | None = None,
     owner_handle: str | None = None,
     qt_marker: bool = False,
+    note: str | None = None,
 ) -> Poi:
     """Create a POI at a global position, stored the same way the upstream
     dataset stores it: body-local rotating-frame km when at a container,
@@ -574,6 +580,7 @@ def custom_poi_from_position(
         custom=True,
         owner_id=owner_id,
         owner_handle=owner_handle,
+        note=note,
     )
     poi.nearest_qt, poi.nearest_qt_dist_m = nearest_qt_marker(nav, poi, t_unix)
     return poi
@@ -594,6 +601,7 @@ def custom_poi_to_dict(poi: Poi) -> dict:
         "qt_marker": poi.qt_marker,
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
+        "note": poi.note,
     }
 
 
@@ -613,6 +621,7 @@ def poi_from_custom_dict(d: dict) -> Poi:
         custom=True,
         owner_id=d.get("owner_id"),
         owner_handle=d.get("owner_handle"),
+        note=d.get("note"),
     )
 
 
