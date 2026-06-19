@@ -80,6 +80,7 @@
   td { padding: 6px 8px; border-bottom: 1px solid #1a2230; }
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: var(--panel2); }
+  tbody tr.selected { background: rgba(79,195,247,.16); box-shadow: inset 2px 0 0 var(--accent); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* scrollable table window so a long browse list doesn't stretch the page */
   .table-scroll { max-height: 480px; overflow-y: auto; }
@@ -795,6 +796,15 @@ function isFreshObs(o) {
   const t = Date.parse(o.observed_at);
   return !isNaN(t) && t >= Date.now() - freshWindowH * 3600e3;
 }
+// Pure freshness test, independent of the "fresh only" toggle: is this
+// observation still inside the org's fresh window? Drives the dimmed rendering
+// of stale markers when "fresh only" is off (SC respawns ephemeral nodes on
+// shard reload, so an old position may be gone). POIs are never stale.
+function obsWithinWindow(o) {
+  if (!OBS_KINDS.has(o.kind) || sessionObsIds.has(o.id)) return true;
+  const t = Date.parse(o.observed_at);
+  return !isNaN(t) && t >= Date.now() - freshWindowH * 3600e3;
+}
 
 function render(state) {
   if (!state) return;
@@ -948,6 +958,8 @@ function renderNearby() {
 
   const tbody = $("nearby-body");
   tbody.innerHTML = "";
+  const selId = lastState ? lastState.destination_id : null;
+  let selRow = null;
   for (const e of shown) {
     const tr = document.createElement("tr");
     tr.innerHTML =
@@ -958,10 +970,16 @@ function renderNearby() {
       `<td class="num">${fmtBearing(e.bearing_deg)}</td>` +
       `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
     tr.onclick = () => setDestination(e.id);
+    if (selId != null && e.id === selId) { tr.classList.add("selected"); selRow = tr; }
     wireDelete(tr);
     tbody.appendChild(tr);
   }
+  // Scroll the highlighted row into view only when the selection changes (e.g.
+  // a map tap), so re-renders on each state poll don't fight the user's scroll.
+  if (selRow && selId !== lastScrolledSel) selRow.scrollIntoView({ block: "nearest" });
+  lastScrolledSel = selId;
 }
+let lastScrolledSel = null;
 
 function delSpan(e) {
   if (e.kind === "resource" || e.kind === "wildlife")
@@ -1239,24 +1257,43 @@ window.addEventListener("resize", drawMap);
 
 // pan: drag the map; pan offset (px) shifts the projection origin off-center.
 let panX = 0, panY = 0;
+let mapHits = [];   // {id, x, y} click targets recorded each drawMap (canvas px)
 $("map-recenter").onclick = () => { panX = 0; panY = 0; drawMap(); };
 (() => {
   const cv = $("map");
-  let dragging = false, lastX = 0, lastY = 0;
+  let dragging = false, lastX = 0, lastY = 0, moved = 0;
   cv.addEventListener("pointerdown", (e) => {
-    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    dragging = true; lastX = e.clientX; lastY = e.clientY; moved = 0;
     cv.classList.add("dragging"); cv.setPointerCapture(e.pointerId);
   });
   cv.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     panX += e.clientX - lastX; panY += e.clientY - lastY;
+    moved += Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY);
     lastX = e.clientX; lastY = e.clientY;
     drawMap();
   });
-  const end = (e) => { dragging = false; cv.classList.remove("dragging");
-    try { cv.releasePointerCapture(e.pointerId); } catch {} };
+  const end = (e) => {
+    const wasDragging = dragging;
+    dragging = false; cv.classList.remove("dragging");
+    try { cv.releasePointerCapture(e.pointerId); } catch {}
+    // A tap (negligible travel) selects the nearest marker as destination —
+    // same as clicking its NEARBY row. Pan drags exceed the threshold.
+    if (wasDragging && moved < 6 && e.type === "pointerup") pickMarker(e);
+  };
   cv.addEventListener("pointerup", end);
   cv.addEventListener("pointercancel", end);
+
+  function pickMarker(e) {
+    const rect = cv.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    let best = null, bestD = 12 * 12;   // ~12px tap radius (touch-friendly)
+    for (const hit of mapHits) {
+      const d = (hit.x - px) ** 2 + (hit.y - py) ** 2;
+      if (d <= bestD) { bestD = d; best = hit; }
+    }
+    if (best) setDestination(best.id);
+  }
 })();
 
 let prevPlayer = null, headingDeg = null, mapContainer = null;
@@ -1287,6 +1324,7 @@ function drawMap() {
     // Leaving a body invalidates heading history so a later return doesn't
     // compute a heading across the gap.
     prevPlayer = null; headingDeg = null; mapContainer = null;
+    mapHits = [];   // no markers shown — drop stale tap targets
     return;
   }
   msg.hidden = true;
@@ -1358,17 +1396,29 @@ function drawMap() {
     }
   }
 
-  // entity markers
+  // entity markers — also record click targets (mapHits, in canvas px) so a tap
+  // can set the nearest as destination, and ring the active destination. Stale
+  // observations (only shown when "fresh only" is off) are dimmed but stay
+  // clickable, since the node may still be there.
+  mapHits = [];
+  const destId = lastState.destination_id;
   const drawEntities = (list) => {
     for (const e of list) {
       if (!layers[e.kind] || e.latitude == null) continue;
       const [x, y] = toXY(e.latitude, e.longitude);
       if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
+      mapHits.push({ id: e.id, x, y });
+      ctx.globalAlpha = obsWithinWindow(e) ? 1 : 0.3;
       if (e.kind === "resource") { ctx.fillStyle = "#b39ddb"; diamond(ctx, x, y, 4); }
       else if (e.kind === "wildlife") { ctx.fillStyle = "#81c784"; triangle(ctx, x, y, 4); }
       else if (e.kind === "harvestable") { ctx.fillStyle = "#cddc39"; square(ctx, x, y, 3.5); }
       else { ctx.fillStyle = "#4fc3f7"; ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill(); }
       ctx.fillStyle = "#7b8a9e"; ctx.fillText(e.name, x + 6, y + 3);
+      if (destId != null && e.id === destId) {   // selection ring (full opacity)
+        ctx.globalAlpha = 1; ctx.strokeStyle = "#ffd54f"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
   };
   drawEntities(lastState.nearest_pois || []);
