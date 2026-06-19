@@ -160,8 +160,18 @@ isolated VLAN, exposed via Cloudflare Tunnel at https://nav.bytecollective.io.
 - `.env` (incl. `CLOUDFLARE_TUNNEL_TOKEN`) lives only on the server; it's
   gitignored and does not deploy via git.
 
-### Phase 1 — Per-user sessions (core refactor)
-Replace `AppState` singletons with `sessions[discord_id]`:
+### Phase 1 — Per-user sessions (core refactor) — ✅ DONE (2026-06-18)
+`Session` (per-member live state + that member's `ws_clients`) + `SessionHub`
+(keys by Discord id, one lock serializing state + shared-dataset writes) replace
+the global `AppState`. The web client needed **no changes** — the WS message
+stays `"state"`, so each browser just renders its own session. Server-only.
+Deviations from the sketch below: kept the `"state"` message name (not `"self"`)
+since presence isn't built yet; attribution still flows through the in-game
+handle (`owner_id = player_id`) — the Discord-id-owner change is deferred. A
+capture/delete/refresh rebroadcasts to ALL sessions (shared dataset changed);
+plain position updates push only to that member's tabs.
+
+Original sketch — replace `AppState` singletons with `sessions[discord_id]`:
 
 | Today (global AppState) | Becomes |
 |---|---|
@@ -228,9 +238,8 @@ Done **before** Phase 1 (the per-user session refactor is still open). `server/d
 - Membership drift handled by re-check on session expiry.
 
 ## Recommended order
-~~Phase 0 (deployable lockout)~~ ✅ -> ~~2 (durability)~~ ✅ (done out of order) ->
-**1 (simultaneous courses + captures) [next]** -> 3 (teammate map) ->
-4 (admin/backups).
+~~Phase 0 (deployable lockout)~~ ✅ -> ~~2 (durability)~~ ✅ -> ~~1 (simultaneous
+courses + captures)~~ ✅ -> **3 (teammate map) [next]** -> 4 (admin/backups).
 
 ## Current single-user architecture (baseline being migrated)
 - FastAPI + single global `AppState` (one live cursor): `pos`, `destination_id`,
