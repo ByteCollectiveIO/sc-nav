@@ -215,6 +215,7 @@
       <label><input type="checkbox" class="layer" data-layer="resource" checked> resources</label>
       <label><input type="checkbox" class="layer" data-layer="wildlife" checked> wildlife</label>
       <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
+      <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
       <label>ore heatmap
         <select id="heatmap-mode" class="sel">
           <option value="off">off</option>
@@ -393,6 +394,20 @@
       change takes effect at each member's next sign-in.
     </div>
     <div class="muted" id="admin-status" style="margin-top:6px;"></div>
+
+    <h2 style="margin-top:16px;">OBSERVATION FRESHNESS</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Mark sightings stale after
+      <input id="fresh-window" type="number" min="1" step="1" style="width:80px;"> hours
+      <button id="fresh-window-save">Save</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Resource nodes and fauna are ephemeral — SC respawns them. The map markers
+      and NEARBY list hide sightings older than this (the map's "fresh only"
+      toggle is the per-view escape hatch; the ore heatmap always uses every
+      sighting). Tune this as you learn SC's respawn cadence.
+    </div>
+    <div class="muted" id="fresh-window-status" style="font-size:12px; margin-top:4px;"></div>
   </div>
 </main>
 
@@ -489,6 +504,22 @@ function renderForecast(state) {
 let lastState = null;
 
 function observations() { return (lastState && lastState.nearest_observations) || []; }
+
+// ---------- freshness ----------
+// Resource nodes + fauna are ephemeral (SC respawns them), so the actionable
+// views — map point-markers + the NEARBY list — default to recent sightings
+// only. The heatmap deliberately stays all-time. "fresh only" off reveals the
+// full history as a reference overlay.
+let freshOnly = true;             // map + NEARBY default to fresh observations
+let freshWindowH = 48;            // hours; org "obs_fresh_window_h" meta setting
+const sessionObsIds = new Set();  // placed this browser session — always fresh
+
+function isFreshObs(o) {
+  if (o.kind !== "resource" && o.kind !== "wildlife") return true;  // not an observation
+  if (!freshOnly || sessionObsIds.has(o.id)) return true;
+  const t = Date.parse(o.observed_at);
+  return !isNaN(t) && t >= Date.now() - freshWindowH * 3600e3;
+}
 
 function render(state) {
   if (!state) return;
@@ -624,6 +655,7 @@ function renderNearby() {
   }
 
   rows = rows.filter(r =>
+    isFreshObs(r) &&
     (!fc || r.container === fc) &&
     (!fo || r.owner_handle === fo) &&
     (!ft || `${r.name} ${r.type || ""} ${r.ore || ""} ${r.species || ""} ${r.quality || ""}`.toLowerCase().includes(ft))
@@ -737,6 +769,8 @@ function renderCapture(cap) {
     lastCaptureStamp = cap.last.captured_at;
     loadAll();   // pull the new capture into the dataset view + filter dropdowns
     const L = cap.last;
+    // Your own just-placed sightings always count as fresh, even with a tiny window.
+    if (L.kind === "resource" || L.kind === "wildlife") sessionObsIds.add(L.id);
     if (L.kind === "resource") {   // new node → refresh heatmap cells + finder
       resourceCellsKey = null;
       if (heatmapMode !== "off") ensureCells();
@@ -818,6 +852,9 @@ const layers = { path: true, poi: true, resource: true, wildlife: true, teammate
 document.querySelectorAll(".layer").forEach(cb => {
   cb.onchange = () => { layers[cb.dataset.layer] = cb.checked; drawMap(); };
 });
+$("fresh-toggle").onchange = (e) => {
+  freshOnly = e.target.checked; renderNearby(); drawMap();
+};
 
 // ore heatmap overlay: per-cell ore composition for the current body.
 let heatmapMode = "off";
@@ -1015,7 +1052,7 @@ function drawMap() {
     }
   };
   drawEntities(lastState.nearest_pois || []);
-  drawEntities(observations());
+  drawEntities(observations().filter(isFreshObs));
 
   // teammates on this same body (north-up, like everything else)
   if (layers.teammates) {
@@ -1297,8 +1334,32 @@ async function loadSettings() {
     $("starmap-toggle").checked = !!s.starmap_pois_enabled;
     if (document.activeElement !== $("member-role"))
       $("member-role").value = s.member_role_id || "";
+    if (s.obs_fresh_window_h) {
+      freshWindowH = s.obs_fresh_window_h;
+      if (document.activeElement !== $("fresh-window"))
+        $("fresh-window").value = s.obs_fresh_window_h;
+    }
   } catch {}
 }
+
+$("fresh-window-save").onclick = async () => {
+  const h = parseInt($("fresh-window").value, 10);
+  if (!(h >= 1)) { $("fresh-window-status").textContent = "enter a number of hours (≥ 1)"; return; }
+  $("fresh-window-status").textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ obs_fresh_window_h: h }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    freshWindowH = d.obs_fresh_window_h;
+    $("fresh-window-status").textContent = `saved — sightings stale after ${freshWindowH}h`;
+    renderNearby(); drawMap();
+  } catch {
+    $("fresh-window-status").textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
 
 $("member-role-save").onclick = async () => {
   const id = $("member-role").value.trim();
@@ -1387,6 +1448,9 @@ function init() {
     renderCapture(d.capture);
     loadAll();   // dataset for the browse view + filter dropdowns
   }).catch(() => loadAll());
+  fetch("/api/settings").then(r => r.json()).then(s => {   // freshness window (all members)
+    if (s.obs_fresh_window_h) { freshWindowH = s.obs_fresh_window_h; renderNearby(); drawMap(); }
+  }).catch(() => {});
   fetch("/api/fauna").then(r => r.json()).then(n => fillDatalist("fauna-types", n)).catch(() => {});
   fetch("/api/raw_commodities").then(r => r.json())
     .then(n => fillSelectWithOther("node-ore", n, "— ore")).catch(() => {});

@@ -61,6 +61,18 @@ def member_role_id() -> str:
     return db.get_setting("member_role_id", auth.MEMBER_ROLE_ID) or ""
 
 
+def obs_fresh_window_h() -> int:
+    """How many hours an observation stays "fresh" for the map markers + NEARBY
+    list. Resource nodes and fauna are ephemeral (SC respawns them), so stale
+    sightings are hidden from those actionable views by default. DB-backed +
+    admin-editable so it can be tuned to SC's respawn cadence without a redeploy;
+    the heatmap still aggregates all sightings regardless of this."""
+    try:
+        return max(1, int(db.get_setting("obs_fresh_window_h", "48")))
+    except (TypeError, ValueError):
+        return 48
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
@@ -1023,26 +1035,32 @@ async def get_settings(user: dict = Depends(require_session)):
     return {
         "starmap_pois_enabled": starmap_pois_enabled(),
         "member_role_id": member_role_id(),
+        "obs_fresh_window_h": obs_fresh_window_h(),
     }
 
 
 class SettingsIn(BaseModel):
     starmap_pois_enabled: bool | None = None
     member_role_id: str | None = None
+    obs_fresh_window_h: int | None = None
 
 
 @app.post("/api/settings")
 async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)):
     """Update org settings (admin only). Only the fields present are changed.
     Toggling the POI catalog rebuilds the dataset; the member-role gate takes
-    effect at the next login (existing sessions stand until they expire)."""
+    effect at the next login (existing sessions stand until they expire); the
+    freshness window is display-only and applies on the clients' next refresh."""
     if body.member_role_id is not None:
         db.set_setting("member_role_id", body.member_role_id.strip())
+    if body.obs_fresh_window_h is not None:
+        db.set_setting("obs_fresh_window_h", str(max(1, body.obs_fresh_window_h)))
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
     return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
-            "member_role_id": member_role_id(), "pois": len(nav.pois)}
+            "member_role_id": member_role_id(),
+            "obs_fresh_window_h": obs_fresh_window_h(), "pois": len(nav.pois)}
 
 
 @app.get("/api/health")
