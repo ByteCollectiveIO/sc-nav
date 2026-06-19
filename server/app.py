@@ -17,6 +17,7 @@ import re
 import secrets
 import time
 import traceback
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
@@ -25,7 +26,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
@@ -40,6 +41,18 @@ STATIC_DIR = Path(__file__).parent / "static"
 BRANDING_DIR = DATA_DIR / "branding"
 _LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 _LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _sniff_image(data: bytes, ext: str) -> bool:
+    """True when the leading bytes match the magic number for `ext`. Guards the
+    upload against a mislabeled (or polyglot) file slipping onto the volume."""
+    if ext == "png":
+        return data[:8] == b"\x89PNG\r\n\x1a\n"
+    if ext == "jpg":
+        return data[:3] == b"\xff\xd8\xff"
+    if ext == "webp":
+        return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return False
 # Watcher source for the Setup-page download. In the Docker image the files are
 # copied to server/watcher_src (see Dockerfile); in a dev checkout they live in
 # the repo's ../watcher. First existing wins.
@@ -57,6 +70,11 @@ OC_URL = os.environ.get("SC_NAV_OC_URL", "https://starmap.space/api/v3/oc/index.
 POI_URL = os.environ.get("SC_NAV_POI_URL", "https://starmap.space/api/v3/pois/index.php")
 COMMODITIES_URL = os.environ.get("SC_NAV_COMMODITIES_URL", "https://api.uexcorp.uk/2.0/commodities")
 OFFLINE = os.environ.get("SC_NAV_OFFLINE") == "1"
+
+# Canonical public URL (e.g. https://nav.bytecollective.io). When set it is the
+# only address baked into the watcher download bundle, so a spoofed Host /
+# X-Forwarded-Host header can't redirect a member's watcher (and its token).
+PUBLIC_BASE_URL = os.environ.get("SC_NAV_PUBLIC_URL", "").rstrip("/")
 
 data_info = {"source": None, "fetched_at": None, "error": None}
 
@@ -408,6 +426,35 @@ app.add_middleware(
     max_age=8 * 3600,
 )
 
+# Defense-in-depth response headers on every response (static + API). The SPA
+# ships one inline <script> and inline styles, so script/style need
+# 'unsafe-inline'; everything else is locked to same-origin. No 'unsafe-eval',
+# no external script/object sources, and framing is denied (clickjacking). The
+# app's consistent output-escaping is the primary XSS defense; this is backup.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "font-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("Content-Security-Policy", _CSP)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    return resp
+
+
 db.init(DB_FILE)
 db.import_legacy_json(DATA_DIR, nav_core.OBSERVATION_CATEGORIES)  # one-time JSON -> SQLite
 
@@ -476,14 +523,30 @@ def require_user(request: Request) -> dict:
     return user
 
 
+# Field length caps. User-supplied free text is bounded at the schema edge so a
+# member (or a watcher token) can't persist multi-MB strings that then get
+# fanned out to every connected tab over the WebSocket. Generous vs. real use,
+# tight vs. abuse.
+_NAME_MAX = 120
+_TYPE_MAX = 60
+_NOTE_MAX = 500
+_TERM_MAX = 80     # ore / species / harvestable name
+_BIOME_MAX = 60
+_HANDLE_MAX = 64
+_BAND_MAX = 16
+_RAW_MAX = 512
+_META_MAX = 64     # client_time / source / discord-id-ish small fields
+_LABEL_MAX = 60
+
+
 class PositionIn(BaseModel):
     x: float
     y: float
     z: float
-    raw: str | None = None
-    client_time: str | None = None
-    source: str | None = None
-    handle: str | None = None
+    raw: str | None = Field(default=None, max_length=_RAW_MAX)
+    client_time: str | None = Field(default=None, max_length=_META_MAX)
+    source: str | None = Field(default=None, max_length=_META_MAX)
+    handle: str | None = Field(default=None, max_length=_HANDLE_MAX)
 
 
 class DestinationIn(BaseModel):
@@ -491,29 +554,30 @@ class DestinationIn(BaseModel):
 
 
 class CaptureIn(BaseModel):
-    name: str
-    type: str = "Custom"
+    name: str = Field(max_length=_NAME_MAX)
+    type: str = Field(default="Custom", max_length=_TYPE_MAX)
     qt_marker: bool = False   # record as a jumpable QT marker (e.g. an OM)
-    note: str = ""            # optional free-text context for the POI
+    note: str = Field(default="", max_length=_NOTE_MAX)   # optional free-text context
 
 
 class NodeCaptureIn(BaseModel):
-    ore: str
-    band: int | str | None = None   # 1-8, or "Unk"/None when not yet mined
-    biome: str | None = None
-    note: str | None = None
+    ore: str = Field(max_length=_TERM_MAX)
+    band: int | str | None = None   # 1-8, or "Unk"/None; str length checked in the handler
+
+    biome: str | None = Field(default=None, max_length=_BIOME_MAX)
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
 
 
 class WildlifeCaptureIn(BaseModel):
-    species: str
-    biome: str | None = None
-    note: str | None = None
+    species: str = Field(max_length=_TERM_MAX)
+    biome: str | None = Field(default=None, max_length=_BIOME_MAX)
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
 
 
 class HarvestableCaptureIn(BaseModel):
-    name: str
-    biome: str | None = None
-    note: str | None = None
+    name: str = Field(max_length=_TERM_MAX)
+    biome: str | None = Field(default=None, max_length=_BIOME_MAX)
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
 
 
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
@@ -926,6 +990,8 @@ async def capture_node_start(body: NodeCaptureIn, user: dict = Depends(require_s
     ore = body.ore.strip()
     if not ore:
         raise HTTPException(status_code=400, detail="ore is required")
+    if isinstance(body.band, str) and len(body.band) > _BAND_MAX:
+        raise HTTPException(status_code=400, detail="band value too long")
     # band passed through raw; _normalize_resource handles "Unk"/None.
     return await _arm_observation(
         user, "resource", {"ore": ore, "band": body.band}, body.biome, body.note
@@ -1047,7 +1113,7 @@ async def list_custom_pois():
 
 
 class PoiNoteIn(BaseModel):
-    note: str = ""
+    note: str = Field(default="", max_length=_NOTE_MAX)
 
 
 @app.patch("/api/custom_pois/{poi_id}")
@@ -1239,9 +1305,11 @@ async def get_settings(user: dict = Depends(require_session)):
 
 class SettingsIn(BaseModel):
     starmap_pois_enabled: bool | None = None
-    member_role_id: str | None = None
-    obs_fresh_window_h: int | None = None
-    extra_admin_ids: list[str] | None = None
+    member_role_id: str | None = Field(default=None, max_length=_META_MAX)
+    obs_fresh_window_h: int | None = Field(default=None, ge=1, le=8760)  # 1h .. 1yr
+    # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
+    # be used to stuff the meta table. Each id is validated (isdigit) below.
+    extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
 
 
 @app.post("/api/settings")
@@ -1258,7 +1326,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             s = (raw or "").strip()
             if not s or s in seen:
                 continue
-            if not s.isdigit():   # Discord ids are numeric snowflakes
+            if not s.isdigit() or len(s) > 20:   # Discord ids are numeric snowflakes (<=20 digits)
                 raise HTTPException(status_code=400,
                                     detail=f"invalid Discord id: {s!r}")
             seen.add(s)
@@ -1308,6 +1376,12 @@ async def upload_org_logo(file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail="the file is empty")
     if len(data) > _LOGO_MAX_BYTES:
         raise HTTPException(status_code=400, detail="logo too large (max 2 MB)")
+    # Verify the bytes actually match the claimed type — the Content-Type header
+    # is client-supplied, so don't trust it to keep e.g. an HTML/script polyglot
+    # off the /data volume.
+    if not _sniff_image(data, ext):
+        raise HTTPException(status_code=400,
+                            detail="file contents don't match a PNG, JPG, or WebP image")
     BRANDING_DIR.mkdir(parents=True, exist_ok=True)
     # Drop any prior logo (possibly a different extension) so none is orphaned.
     for old in BRANDING_DIR.glob("org_logo.*"):
@@ -1341,9 +1415,32 @@ async def health():
     }
 
 
+def _ws_origin_ok(ws: WebSocket) -> bool:
+    """Reject a cross-origin WebSocket handshake. SameSite=Lax already keeps a
+    script-initiated cross-site handshake from carrying the session cookie, but
+    an explicit Origin check is cheap defense-in-depth against socket hijacking.
+    A same-origin browser sends Origin == its own scheme://host; non-browser
+    clients (no Origin) are allowed since the cookie gate still applies."""
+    origin = ws.headers.get("origin")
+    if not origin:
+        return True
+    if PUBLIC_BASE_URL and origin.rstrip("/") == PUBLIC_BASE_URL:
+        return True
+    host = ws.headers.get("x-forwarded-host") or ws.headers.get("host")
+    if host:
+        try:
+            return urllib.parse.urlparse(origin).netloc == host
+        except ValueError:
+            return False
+    return False
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     # Browsers only; require a logged-in org member (session loaded from cookie).
+    if not _ws_origin_ok(ws):
+        await ws.close(code=1008)   # policy violation (cross-origin)
+        return
     user = ws.session.get("user")
     if not user:
         await ws.close(code=1008)   # policy violation
@@ -1440,7 +1537,9 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
                 pass
         print(f"[sc-nav] auth callback failed: {exc!r} {body}", flush=True)
         traceback.print_exc()
-        raise HTTPException(status_code=502, detail=f"Discord auth failed: {exc} {body}")
+        # Detail (which may carry Discord's raw error body) is logged above only;
+        # the client gets a generic message so we don't disclose internals.
+        raise HTTPException(status_code=502, detail="Discord authentication failed; please try again.")
     if profile is None:
         request.session.clear()
         html = auth.MISSING_ROLE_HTML if denied == "missing_role" else auth.NOT_IN_ORG_HTML
@@ -1486,7 +1585,7 @@ async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
 
 
 class TokenCreateIn(BaseModel):
-    label: str = "watcher"
+    label: str = Field(default="watcher", max_length=_LABEL_MAX)
 
 
 @app.post("/api/tokens")
@@ -1513,9 +1612,15 @@ async def delete_token(request: Request, token_id: str):
 
 
 def _server_base_url(request: Request) -> str:
-    """Public base URL the watcher should POST to. Honors the proxy's forwarded
-    scheme/host (the app runs behind Cloudflare) so the bundled bat points at the
-    address the user actually reached us on, not the container's internal one."""
+    """Public base URL the watcher should POST to.
+
+    Prefer the explicitly configured SC_NAV_PUBLIC_URL — the watcher zip bakes a
+    freshly minted token into the bundled bat's SERVER=, so an attacker who could
+    spoof X-Forwarded-Host (reachable only if the app is exposed off-tunnel)
+    could otherwise redirect a victim's watcher — and its token — to their own
+    server. Falling back to the forwarded headers keeps dev/no-config working."""
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
     scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = (request.headers.get("x-forwarded-host")
             or request.headers.get("host")
