@@ -249,3 +249,80 @@ session check, `/api/me`). Instead:
   resize guard.
 - `server/app.py` — `app.mount("/", StaticFiles(..., html=True))` (only touched
   if we opt for a real `/settings` route instead of the hash route).
+
+---
+
+## 4. Custom org logo (displayed alongside the Org Navigator logo)
+
+**Status:** done (2026-06-19). Built as designed. Stored on the `/data` volume
+at `BRANDING_DIR/org_logo.<ext>` with the extension recorded in the `meta` table
+(`org_logo_ext`); no schema change. Three routes in `server/app.py`:
+`GET /api/org-logo` (require_session, `FileResponse`, 404 if none),
+`POST /api/org-logo` (admin, `UploadFile` validated by Content-Type against
+PNG/JPG/WebP, 2 MB cap, replaces any prior file so no orphans) and
+`DELETE /api/org-logo` (admin). `org_logo` bool added to both `/api/settings`
+and `/api/me`. Frontend (`server/static/index.html`): header logo wrapped in a
+`.logos` flex row with a `.logo-sep` divider and `#org-logo` shown next to the
+built-in logo for every signed-in member (`applyOrgLogo` in `renderAccount`);
+admin BRANDING section in ORG SETTINGS with file input / preview / remove,
+driven by `applyOrgLogoAdmin` from `loadSettings`. Added `python-multipart` to
+`requirements.txt` (FastAPI needs it for `UploadFile`) and `poi/branding/` to
+`.gitignore`. Verified with a TestClient lifecycle check (404 → reject bad type
+→ upload → byte-exact serve → no-orphan on re-upload → delete → 404).
+
+### Problem
+
+The server is built to be self-hosted by individual guilds, many of which have
+their own logos. Admins should be able to upload their guild's logo to display
+**next to** the built-in Org Navigator logo — never replacing it.
+
+### Key constraint: where the file can live
+
+The built-in logo lives in `server/static/images/sc_org_navigator_logo.png`,
+served by the `StaticFiles` mount (`app.py:1418`). That directory is baked into
+the Docker image, so an upload written there is **lost on the next image
+rebuild**. The only writable, persisted location is the `/data` named volume
+(`SC_NAV_DATA`, `app.py:35`) — the same volume that holds `sc_nav.db`. So the
+upload is stored on the volume and served by a real route, not the static mount.
+
+### Decisions
+
+1. **Placement: header only.** Shown next to `.header-logo` after sign-in. The
+   login card is *not* used, so `GET /api/org-logo` can stay behind
+   `require_session` — no pre-auth exposure of whether an org logo exists.
+2. **File types: raster only (PNG / JPG / WebP).** No SVG — avoids the XSS
+   surface of serving an admin-uploaded SVG.
+3. **No DB schema change.** Reuse the `meta` key/value table via
+   `db.get_setting` / `set_setting` (e.g. `org_logo_ext = "png"` records both
+   presence and extension).
+
+### Implementation sketch
+
+- **Storage:** save to `DATA_DIR / "branding" / "org_logo.<ext>"` (mkdir on
+  first upload). One `meta` key `org_logo_ext` tracks presence + extension.
+- **`server/app.py`** — three routes following the `require_admin` /
+  `require_session` patterns:
+  - `POST /api/org-logo` (admin) — `UploadFile`; validate content-type against
+    PNG/JPG/WebP, cap size (~1–2 MB), write to the volume, set `org_logo_ext`.
+  - `DELETE /api/org-logo` (admin) — delete the file + clear the meta key.
+  - `GET /api/org-logo` (require_session) — `FileResponse` of the current file,
+    404 if none.
+  - Add `"org_logo": bool(get_setting("org_logo_ext"))` to the `/api/settings`
+    payload (`get_settings`, app.py:1157) so the frontend knows to render it.
+- **`server/static/index.html`** —
+  - Header: wrap `.header-logo` (index.html:228) in a flex row; when
+    `settings.org_logo` is true, append an `<img src="/api/org-logo">` sized to
+    match (~40px). Cache-bust with a `?t=` on upload/delete.
+  - ORG SETTINGS panel (`#admin-panel`, index.html:458): add a file input +
+    current-logo preview + "Remove logo" button, wired to POST/DELETE and
+    refreshing `loadSettings()`.
+
+### Relevant code
+
+- `server/app.py` — `DATA_DIR` (l.35), `require_admin` (l.418), `require_session`,
+  `get_settings` / `update_settings` (l.1154–1208), `StaticFiles` mount (l.1418).
+  FastAPI already provides `UploadFile` and `FileResponse` — no new deps.
+- `server/db.py` — `get_setting` / `set_setting` over the `meta` table (l.275).
+- `server/static/index.html` — `.header-logo` (l.228), `#admin-panel` (l.458),
+  `loadSettings()` (l.1644+), the `settings`/`/api/settings` fetch.
+- Docker: `/data` volume in `docker-compose.yml`; `Dockerfile` seeds `/data`.

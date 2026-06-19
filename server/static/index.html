@@ -177,6 +177,9 @@
   .login-logo { width: 180px; height: auto; margin: 0 auto 16px; display: block; }
   .login-card h1 { color: var(--accent); letter-spacing: 3px; margin: 0 0 10px; }
   .header-logo { width: 40px; height: 40px; flex: none; display: block; }
+  .logos { display: flex; align-items: center; gap: 10px; flex: none; }
+  .logo-sep { width: 1px; height: 28px; background: var(--border); flex: none; }
+  #org-logo { height: 40px; width: auto; max-width: 140px; flex: none; display: block; }
   .btn-discord { display: inline-block; background: #5865F2; color: #fff; border: none;
     border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
     cursor: pointer; text-decoration: none; margin-top: 14px; }
@@ -225,7 +228,11 @@
 </div>
 
 <header>
-  <img class="header-logo" src="/images/sc_org_navigator_logo.png" alt="" width="40" height="40">
+  <div class="logos">
+    <img class="header-logo" src="/images/sc_org_navigator_logo.png" alt="" width="40" height="40">
+    <span id="org-logo-sep" class="logo-sep" hidden></span>
+    <img id="org-logo" alt="org logo" hidden>
+  </div>
   <h1>Org Navigator</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
@@ -507,6 +514,21 @@
       sighting). Tune this as you learn SC's respawn cadence.
     </div>
     <div class="muted" id="fresh-window-status" style="font-size:12px; margin-top:4px;"></div>
+
+    <h2 style="margin-top:16px;">BRANDING</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
+      the header — it's added alongside, never replacing it. PNG, JPG, or WebP, up
+      to 2&nbsp;MB.
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <img id="org-logo-preview" alt="current org logo" hidden
+           style="height:40px; width:auto; max-width:140px; border:1px solid var(--border); border-radius:6px; padding:2px; background:var(--bg);">
+      <input type="file" id="org-logo-file" accept="image/png,image/jpeg,image/webp">
+      <button id="org-logo-upload">Upload</button>
+      <button id="org-logo-remove" hidden>Remove logo</button>
+      <span class="muted" id="org-logo-status"></span>
+    </div>
   </div>
   </div><!-- /settings-view -->
 
@@ -1535,7 +1557,8 @@ let currentMe = null;
 function renderAccount(me) {
   currentMe = me;
   const el = $("account");
-  if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; applyView(); return; }
+  if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; applyOrgLogo(false); applyView(); return; }
+  applyOrgLogo(!!me.org_logo);
   const admin = me.is_admin ? ` <span class="muted">(admin)</span>` : "";
   el.innerHTML = `<span class="muted">signed in as</span> <b>${esc(me.display_name || me.username || "member")}</b>${admin} · <a id="logout">log out</a>`;
   $("logout").onclick = async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); };
@@ -1656,8 +1679,51 @@ async function loadSettings() {
     rootAdmins = s.root_admin_ids || [];
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
+    applyOrgLogoAdmin(!!s.org_logo);
   } catch {}
 }
+
+// ---------- org logo (custom guild branding) ----------
+// The header image (every signed-in member) and the admin panel's preview share
+// the one /api/org-logo route; bust the cache on change so a fresh upload shows.
+function applyOrgLogo(has) {
+  const img = $("org-logo"), sep = $("org-logo-sep");
+  if (has) { img.src = "/api/org-logo?t=" + Date.now(); img.hidden = false; sep.hidden = false; }
+  else { img.removeAttribute("src"); img.hidden = true; sep.hidden = true; }
+}
+function applyOrgLogoAdmin(has) {
+  const prev = $("org-logo-preview"), rm = $("org-logo-remove");
+  if (has) { prev.src = "/api/org-logo?t=" + Date.now(); prev.hidden = false; rm.hidden = false; }
+  else { prev.removeAttribute("src"); prev.hidden = true; rm.hidden = true; }
+}
+
+$("org-logo-upload").onclick = async () => {
+  const f = $("org-logo-file").files[0], st = $("org-logo-status");
+  if (!f) { st.textContent = "choose an image first"; return; }
+  st.textContent = "uploading…";
+  const fd = new FormData(); fd.append("file", f);
+  try {
+    const r = await fetch("/api/org-logo", { method: "POST", body: fd });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
+    st.textContent = "saved";
+    $("org-logo-file").value = "";
+    applyOrgLogoAdmin(true);
+    applyOrgLogo(true);          // update the live header straight away
+  } catch (e) { st.textContent = (e && e.message) || "failed — try again"; }
+};
+
+$("org-logo-remove").onclick = async () => {
+  if (!confirm("Remove the org logo? The Org Navigator logo stays.")) return;
+  const st = $("org-logo-status");
+  st.textContent = "removing…";
+  try {
+    const r = await fetch("/api/org-logo", { method: "DELETE" });
+    if (!r.ok) throw new Error("failed");
+    st.textContent = "removed";
+    applyOrgLogoAdmin(false);
+    applyOrgLogo(false);
+  } catch { st.textContent = "failed — try again"; }
+};
 
 // ---------- admins (admin) ----------
 function renderAdmins() {

@@ -22,8 +22,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
@@ -34,6 +34,12 @@ import nav_core
 
 DATA_DIR = Path(os.environ.get("SC_NAV_DATA", Path(__file__).parent.parent / "poi"))
 STATIC_DIR = Path(__file__).parent / "static"
+# Admin-uploaded guild logo lives on the writable /data volume (not the static
+# dir, which is baked into the image and lost on rebuild). Served by a route,
+# not the StaticFiles mount. PNG/JPG/WebP only — no SVG (script-injection risk).
+BRANDING_DIR = DATA_DIR / "branding"
+_LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+_LOGO_MAX_BYTES = 2 * 1024 * 1024
 # Watcher source for the Setup-page download. In the Docker image the files are
 # copied to server/watcher_src (see Dockerfile); in a dev checkout they live in
 # the repo's ../watcher. First existing wins.
@@ -1160,6 +1166,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "obs_fresh_window_h": obs_fresh_window_h(),
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
+        "org_logo": bool(db.get_setting("org_logo_ext")),
     }
 
 
@@ -1206,6 +1213,49 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "obs_fresh_window_h": obs_fresh_window_h(),
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois)}
+
+
+@app.get("/api/org-logo")
+async def get_org_logo(user: dict = Depends(require_session)):
+    """Serve the org's uploaded logo (header brand, alongside the built-in one).
+    Session-gated — shown only after sign-in, so no pre-auth probing."""
+    ext = db.get_setting("org_logo_ext")
+    if ext:
+        path = BRANDING_DIR / f"org_logo.{ext}"
+        if path.is_file():
+            return FileResponse(path)
+    raise HTTPException(status_code=404, detail="no org logo")
+
+
+@app.post("/api/org-logo")
+async def upload_org_logo(file: UploadFile = File(...),
+                          admin: dict = Depends(require_admin)):
+    """Replace the org's custom logo (admin). Validates by Content-Type and caps
+    size; writes to the /data volume and records the extension in `meta`."""
+    ext = _LOGO_TYPES.get((file.content_type or "").lower())
+    if not ext:
+        raise HTTPException(status_code=400, detail="logo must be a PNG, JPG, or WebP image")
+    data = await file.read(_LOGO_MAX_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="the file is empty")
+    if len(data) > _LOGO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="logo too large (max 2 MB)")
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    # Drop any prior logo (possibly a different extension) so none is orphaned.
+    for old in BRANDING_DIR.glob("org_logo.*"):
+        old.unlink(missing_ok=True)
+    (BRANDING_DIR / f"org_logo.{ext}").write_bytes(data)
+    db.set_setting("org_logo_ext", ext)
+    return {"ok": True, "org_logo": True}
+
+
+@app.delete("/api/org-logo")
+async def delete_org_logo(admin: dict = Depends(require_admin)):
+    """Remove the org's custom logo (admin). The built-in logo always remains."""
+    for old in BRANDING_DIR.glob("org_logo.*"):
+        old.unlink(missing_ok=True)
+    db.set_setting("org_logo_ext", "")
+    return {"ok": True, "org_logo": False}
 
 
 @app.get("/api/health")
@@ -1318,7 +1368,8 @@ async def api_me(request: Request):
     """The signed-in org member (or 401). Drives the UI's account state. Carries
     the live presence-share flag so the UI's toggle reflects the current state."""
     user = require_session(request)
-    return {**user, "share_presence": hub.get(user).share_presence}
+    return {**user, "share_presence": hub.get(user).share_presence,
+            "org_logo": bool(db.get_setting("org_logo_ext"))}
 
 
 class ProfileIn(BaseModel):
