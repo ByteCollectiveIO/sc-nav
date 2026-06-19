@@ -180,6 +180,8 @@
   .logos { display: flex; align-items: center; gap: 10px; flex: none; }
   .logo-sep { width: 1px; height: 28px; background: var(--border); flex: none; }
   #org-logo { height: 40px; width: auto; max-width: 140px; flex: none; display: block; }
+  /* the explicit display above overrides the [hidden] attribute, so restore it */
+  #org-logo[hidden] { display: none; }
   .btn-discord { display: inline-block; background: #5865F2; color: #fff; border: none;
     border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
     cursor: pointer; text-decoration: none; margin-top: 14px; }
