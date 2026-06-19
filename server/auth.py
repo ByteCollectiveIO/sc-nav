@@ -2,7 +2,8 @@
 
 Locks the app to a single Discord guild: a user can sign in only if they're a
 member of `ORG_GUILD_ID`. Identity is the **Discord user id** (permanent); the
-RSI handle stays cosmetic elsewhere. Admins are a static `ADMIN_IDS` list.
+RSI handle stays cosmetic elsewhere. `ADMIN_IDS` are the immutable root admins;
+more can be granted from the UI (app.py `admin_ids()`, DB-backed).
 
 This module is just the login + membership check + config. App state is still
 global at this phase; per-user sessions come later. The signed session cookie
@@ -86,7 +87,8 @@ def exchange_code(code: str) -> str:
     return tok["access_token"]
 
 
-def fetch_member_profile(access_token: str, required_role_id: str = "") -> tuple[dict | None, str | None]:
+def fetch_member_profile(access_token: str, required_role_id: str = "",
+                         admin_ids: set[str] | None = None) -> tuple[dict | None, str | None]:
     """Resolve the signed-in user to an org-member profile.
 
     Returns (profile, None) on success, or (None, reason) when denied:
@@ -94,8 +96,11 @@ def fetch_member_profile(access_token: str, required_role_id: str = "") -> tuple
       "missing_role" -> in the guild but lacks the required role
 
     Roles come from the per-guild member object (needs the guilds.members.read
-    scope; no bot). Admins (ADMIN_IDS) bypass the role requirement so a mis-set
-    role can never lock out the people who fix it. Blocking — call via a thread."""
+    scope; no bot). Admins bypass the role requirement so a mis-set role can
+    never lock out the people who fix it. `admin_ids` is the effective admin set
+    (env root admins + the DB-backed list); it falls back to the env ADMIN_IDS
+    when not supplied. Blocking — call via a thread."""
+    admins = ADMIN_IDS if admin_ids is None else admin_ids
     me = _get(f"{DISCORD_API}/users/@me", access_token)
     try:
         member = _get(f"{DISCORD_API}/users/@me/guilds/{GUILD_ID}/member", access_token)
@@ -104,7 +109,7 @@ def fetch_member_profile(access_token: str, required_role_id: str = "") -> tuple
             return None, "not_member"   # not a guild member
         raise
     uid = str(me["id"])
-    is_admin = uid in ADMIN_IDS
+    is_admin = uid in admins
     roles = {str(r) for r in (member.get("roles") or [])}
     if required_role_id and required_role_id not in roles and not is_admin:
         return None, "missing_role"

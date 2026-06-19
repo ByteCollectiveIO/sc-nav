@@ -411,6 +411,21 @@
     </div>
     <div class="muted" id="admin-status" style="margin-top:6px;"></div>
 
+    <h2 style="margin-top:16px;">ADMINS</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      Admins change these org settings and can delete any contribution. Add a member by
+      their Discord <b>user ID</b> (Developer Mode on → right-click a user →
+      <b>Copy User ID</b>); changes take effect immediately. Admins set in the server's
+      environment show as <b>root</b> and can't be removed here.
+    </div>
+    <div id="admin-list" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="admin-add" class="ti" placeholder="Discord user ID"
+             style="min-width:220px;" inputmode="numeric">
+      <button id="admin-add-btn">Add admin</button>
+      <span class="muted" id="admin-ids-status"></span>
+    </div>
+
     <h2 style="margin-top:16px;">OBSERVATION FRESHNESS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Mark sightings stale after
@@ -533,6 +548,7 @@ function observations() { return (lastState && lastState.nearest_observations) |
 // full history as a reference overlay.
 let freshOnly = true;             // map + NEARBY default to fresh observations
 let freshWindowH = 48;            // hours; org "obs_fresh_window_h" meta setting
+let rootAdmins = [], extraAdmins = [];  // env (read-only) + DB-backed admin ids
 const sessionObsIds = new Set();  // placed this browser session — always fresh
 
 function isFreshObs(o) {
@@ -1405,8 +1421,76 @@ async function loadSettings() {
       if (document.activeElement !== $("fresh-window"))
         $("fresh-window").value = s.obs_fresh_window_h;
     }
+    rootAdmins = s.root_admin_ids || [];
+    extraAdmins = s.extra_admin_ids || [];
+    renderAdmins();
   } catch {}
 }
+
+// ---------- admins (admin) ----------
+function renderAdmins() {
+  const box = $("admin-list");
+  if (!box) return;
+  box.innerHTML = "";
+  const chip = (id, removable) => {
+    const el = document.createElement("span");
+    el.className = "armed";
+    el.style.cssText = "display:inline-flex; align-items:center; gap:6px; padding:3px 8px; border-radius:4px;";
+    el.append(document.createTextNode(removable ? id : id + " (root)"));
+    if (removable) {
+      const x = document.createElement("button");
+      x.textContent = "✕";
+      x.title = "Remove admin";
+      x.style.cssText = "padding:0 5px; line-height:1;";
+      x.onclick = () => removeAdmin(id);
+      el.append(x);
+    }
+    return el;
+  };
+  rootAdmins.forEach(id => box.append(chip(id, false)));
+  extraAdmins.forEach(id => box.append(chip(id, true)));
+  if (!rootAdmins.length && !extraAdmins.length)
+    box.textContent = "(no admins configured)";
+}
+
+async function saveAdmins(next, okMsg) {
+  $("admin-ids-status").textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ extra_admin_ids: next }) });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.detail || "failed");
+    }
+    const d = await r.json();
+    extraAdmins = d.extra_admin_ids || [];
+    rootAdmins = d.root_admin_ids || rootAdmins;
+    renderAdmins();
+    $("admin-ids-status").textContent = okMsg || "saved";
+  } catch (e) {
+    $("admin-ids-status").textContent = (e && e.message) || "failed — try again";
+  }
+}
+
+function removeAdmin(id) {
+  if (!confirm(`Remove admin ${id}? They lose admin access immediately.`)) return;
+  saveAdmins(extraAdmins.filter(x => x !== id), `removed ${id}`);
+}
+
+$("admin-add-btn").onclick = () => {
+  const id = $("admin-add").value.trim();
+  if (!/^\d+$/.test(id)) {
+    $("admin-ids-status").textContent = "user ID must be numeric (Copy User ID in Discord)";
+    return;
+  }
+  if (rootAdmins.includes(id) || extraAdmins.includes(id)) {
+    $("admin-ids-status").textContent = "already an admin";
+    return;
+  }
+  saveAdmins([...extraAdmins, id], `added ${id}`);
+  $("admin-add").value = "";
+};
 
 $("fresh-window-save").onclick = async () => {
   const h = parseInt($("fresh-window").value, 10);

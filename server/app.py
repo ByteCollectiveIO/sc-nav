@@ -61,6 +61,22 @@ def member_role_id() -> str:
     return db.get_setting("member_role_id", auth.MEMBER_ROLE_ID) or ""
 
 
+def extra_admin_ids() -> list[str]:
+    """Discord ids granted admin from the UI (DB-backed, admin-editable).
+    Additive to the env `ADMIN_IDS` root admins, which the UI can't touch."""
+    raw = db.get_setting("extra_admin_ids", "") or ""
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def admin_ids() -> set[str]:
+    """Effective admin set: the immutable env root admins (auth.ADMIN_IDS)
+    unioned with the DB-backed list. Keeping the env admins as a floor means a
+    wrecked DB or a bad UI edit can never lock everyone out, and resolving this
+    live (rather than trusting the login-time flag) makes a grant/revoke take
+    effect on the member's very next request."""
+    return auth.ADMIN_IDS | set(extra_admin_ids())
+
+
 def obs_fresh_window_h() -> int:
     """How many hours an observation stays "fresh" for the map markers + NEARBY
     list. Resource nodes and fauna are ephemeral (SC respawns them), so stale
@@ -275,7 +291,7 @@ class TokenStore:
                 return {
                     "id": t["discord_id"],
                     "display_name": t.get("display_name"),
-                    "is_admin": t["discord_id"] in auth.ADMIN_IDS,
+                    "is_admin": t["discord_id"] in admin_ids(),
                 }
         return None
 
@@ -353,7 +369,13 @@ nav_core.assign_qt_markers(nav)
 
 # --- auth dependencies (defined before the endpoints that use them) ---------
 def current_user(request: Request) -> dict | None:
-    return request.session.get("user")
+    """The signed-in member. `is_admin` is recomputed against the live admin set
+    (not read from the login-time session value) so a UI grant/revoke applies on
+    the member's next request rather than only at their next sign-in."""
+    user = request.session.get("user")
+    if user is None:
+        return None
+    return {**user, "is_admin": user["id"] in admin_ids()}
 
 
 def token_user(request: Request) -> dict | None:
@@ -380,7 +402,7 @@ def require_admin(user: dict = Depends(require_session)) -> dict:
 
 def ensure_owns(user: dict, owner_id: int | None) -> None:
     """A member may delete only their own contributions — any PlayerID bound to
-    their Discord id (alts/renames included). Admins (ADMIN_IDS) delete anything.
+    their Discord id (alts/renames included). Admins delete anything.
     Ownerless legacy records (owner_id is None) are admin-only."""
     if user.get("is_admin"):
         return
@@ -1057,6 +1079,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "starmap_pois_enabled": starmap_pois_enabled(),
         "member_role_id": member_role_id(),
         "obs_fresh_window_h": obs_fresh_window_h(),
+        "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
+        "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
     }
 
 
@@ -1064,6 +1088,7 @@ class SettingsIn(BaseModel):
     starmap_pois_enabled: bool | None = None
     member_role_id: str | None = None
     obs_fresh_window_h: int | None = None
+    extra_admin_ids: list[str] | None = None
 
 
 @app.post("/api/settings")
@@ -1074,6 +1099,24 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     freshness window is display-only and applies on the clients' next refresh."""
     if body.member_role_id is not None:
         db.set_setting("member_role_id", body.member_role_id.strip())
+    if body.extra_admin_ids is not None:
+        cleaned, seen = [], set()
+        for raw in body.extra_admin_ids:
+            s = (raw or "").strip()
+            if not s or s in seen:
+                continue
+            if not s.isdigit():   # Discord ids are numeric snowflakes
+                raise HTTPException(status_code=400,
+                                    detail=f"invalid Discord id: {s!r}")
+            seen.add(s)
+            if s not in auth.ADMIN_IDS:   # root admins are implicit; don't store dupes
+                cleaned.append(s)
+        # The env root admins are the floor; only block a change that would
+        # leave the whole org with no admin at all (possible only when ADMIN_IDS
+        # is unset), which would be an unrecoverable lockout.
+        if not (auth.ADMIN_IDS or cleaned):
+            raise HTTPException(status_code=400, detail="can't remove the last admin")
+        db.set_setting("extra_admin_ids", ",".join(cleaned))
     if body.obs_fresh_window_h is not None:
         db.set_setting("obs_fresh_window_h", str(max(1, body.obs_fresh_window_h)))
     if body.starmap_pois_enabled is not None:
@@ -1081,7 +1124,9 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         await _rebuild_nav()
     return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
             "member_role_id": member_role_id(),
-            "obs_fresh_window_h": obs_fresh_window_h(), "pois": len(nav.pois)}
+            "obs_fresh_window_h": obs_fresh_window_h(),
+            "extra_admin_ids": extra_admin_ids(),
+            "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois)}
 
 
 @app.get("/api/health")
@@ -1161,7 +1206,7 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
     try:
         token = await asyncio.to_thread(auth.exchange_code, code)
         profile, denied = await asyncio.to_thread(
-            auth.fetch_member_profile, token, member_role_id())
+            auth.fetch_member_profile, token, member_role_id(), admin_ids())
     except Exception as exc:
         # A urllib HTTPError carries Discord's JSON error body (e.g.
         # {"error":"invalid_client"}); read it and log to stdout so the real
