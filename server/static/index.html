@@ -23,6 +23,11 @@
   #where b { color: var(--text); }
 
   main { padding: 14px; max-width: 1100px; margin: 0 auto; display: grid; gap: 14px; }
+  /* The two views are layout-transparent so their panels remain direct grid
+     items of <main> (preserving the gap/sizing); the [hidden] rule is more
+     specific than the bare id, so toggling the attribute still hides a view. */
+  #main-view, #settings-view { display: contents; }
+  #main-view[hidden], #settings-view[hidden] { display: none; }
 
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
@@ -130,6 +135,9 @@
     display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   #account a { color: var(--accent); cursor: pointer; }
   #account b { color: var(--text); }
+  #nav-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
+    text-decoration: none; white-space: nowrap; }
+  #nav-toggle:hover { text-decoration: underline; }
   .login-gate { position: fixed; inset: 0; background: var(--bg);
     display: grid; place-items: center; z-index: 50; padding: 20px; }
   /* the explicit display above overrides the [hidden] attribute, so restore it */
@@ -155,10 +163,12 @@
   <h1>SC NAV</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
+  <a id="nav-toggle" href="#/settings" hidden></a>
   <div id="account"></div>
 </header>
 
 <main>
+  <div id="main-view">
   <div id="waiting">No position yet. In game: open chat and run <b>/showlocation</b>.</div>
 
   <div class="readouts" id="readouts" hidden>
@@ -360,6 +370,9 @@
     </table>
   </div>
 
+  </div><!-- /main-view -->
+
+  <div id="settings-view" hidden>
   <div class="panel" id="token-panel" hidden>
     <h2>WATCHER TOKEN <span class="muted">(authenticates the desktop watcher)</span></h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
@@ -412,6 +425,7 @@
     </div>
     <div class="muted" id="fresh-window-status" style="font-size:12px; margin-top:4px;"></div>
   </div>
+  </div><!-- /settings-view -->
 </main>
 
 <script>
@@ -1333,16 +1347,51 @@ function updateBiomes(system, container) {
 BIOME_SELECTS.forEach(id => $(id).onchange = () => toggleOther(id));
 
 // ---------- auth gate / account ----------
+let currentMe = null;
+
 function renderAccount(me) {
+  currentMe = me;
   const el = $("account");
-  if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; return; }
+  if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; applyView(); return; }
   const admin = me.is_admin ? ` <span class="muted">(admin)</span>` : "";
   el.innerHTML = `<span class="muted">signed in as</span> <b>${esc(me.display_name || me.username || "member")}</b>${admin} · <a id="logout">log out</a>`;
   $("logout").onclick = async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); };
+  // The watcher-token panel is for any member; ORG SETTINGS is admin-only. Both
+  // now live inside #settings-view, shown by the hash router (applyView).
   $("token-panel").hidden = false;
-  loadTokens();
-  if (me.is_admin) { $("admin-panel").hidden = false; loadSettings(); }
+  $("admin-panel").hidden = !me.is_admin;
+  applyView();
 }
+
+// ---------- view router (map view <-> dedicated settings page) ----------
+// One SPA, two views toggled by the URL hash (#/settings); the fragment never
+// hits the server (StaticFiles still serves the single index.html). The settings
+// view holds the account-only panels (watcher token + admin org settings) so the
+// main navigation/map view stays uncluttered.
+function applyView() {
+  // Settings is reachable only when signed in; bounce anonymous deep-links so a
+  // stray #/settings can't leave the map hidden behind the login gate.
+  const settings = location.hash === "#/settings" && !!currentMe;
+
+  $("main-view").hidden = settings;
+  $("settings-view").hidden = !settings;
+
+  const link = $("nav-toggle");
+  link.hidden = !currentMe;
+  link.textContent = settings ? "← Navigation" : "⚙ Settings";
+  link.setAttribute("href", settings ? "#" : "#/settings");
+
+  if (settings) {
+    // Lazy-load: don't fetch tokens/settings for members who never open the page.
+    loadTokens();
+    if (currentMe.is_admin) loadSettings();
+  } else if (lastState) {
+    // Back to the map: the canvas had zero size while hidden (drawMap bails on a
+    // 0-dimension canvas), so redraw now that it has layout again.
+    drawMap();
+  }
+}
+window.addEventListener("hashchange", applyView);
 
 // ---------- org settings (admin) ----------
 async function loadSettings() {

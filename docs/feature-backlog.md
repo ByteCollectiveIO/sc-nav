@@ -171,7 +171,19 @@ migration** (existing custom POIs get `note = NULL`).
 
 ## 3. Dedicated settings page (move admin/watcher panels off the splash)
 
-**Status:** designed, not started.
+**Status:** done (2026-06-19). Built as designed — a client-side hash router
+(`#/settings`) in the one SPA, no server change. `<main>` now wraps the splash
+panels in `#main-view` and the account-only panels (`#token-panel`,
+`#admin-panel`) in `#settings-view`; both wrappers are `display: contents` so
+their children stay direct grid items of `<main>` (a `#id[hidden]` rule, more
+specific than the bare id, still hides a view). A header `#nav-toggle` link
+flips between "⚙ Settings" and "← Navigation", shown only when signed in.
+`applyView()` (run from `renderAccount` and on `hashchange`) toggles the views,
+bounces anonymous `#/settings` deep-links, lazy-loads `loadTokens()`/
+`loadSettings()` on entering settings, and calls `drawMap()` when returning so
+the canvas redraws at the right size. Admin-only gate on ORG SETTINGS preserved
+(`#admin-panel` hidden for non-admins). Verified with a jsdom harness (23
+assertions) against the real `index.html`.
 
 ### Problem
 
