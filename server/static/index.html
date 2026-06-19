@@ -142,10 +142,12 @@
     display: grid; place-items: center; z-index: 50; padding: 20px; }
   /* the explicit display above overrides the [hidden] attribute, so restore it */
   .login-gate[hidden] { display: none; }
-  .login-card { text-align: center; max-width: 380px; }
+  .login-card { text-align: center; max-width: 380px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 32px 36px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
   .login-logo { width: 180px; height: auto; margin: 0 auto 16px; display: block; }
   .login-card h1 { color: var(--accent); letter-spacing: 3px; margin: 0 0 10px; }
-  .header-logo { width: 28px; height: 28px; flex: none; display: block; }
+  .header-logo { width: 40px; height: 40px; flex: none; display: block; }
   .btn-discord { display: inline-block; background: #5865F2; color: #fff; border: none;
     border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
     cursor: pointer; text-decoration: none; margin-top: 14px; }
@@ -163,7 +165,7 @@
 </div>
 
 <header>
-  <img class="header-logo" src="/images/sc_org_navigator_logo.png" alt="" width="28" height="28">
+  <img class="header-logo" src="/images/sc_org_navigator_logo.png" alt="" width="40" height="40">
   <h1>Org Navigator</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
