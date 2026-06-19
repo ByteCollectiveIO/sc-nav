@@ -344,6 +344,15 @@ def require_admin(user: dict = Depends(require_session)) -> dict:
     return user
 
 
+def require_user(request: Request) -> dict:
+    """A logged-in member (browser session) OR a watcher token — used where
+    either client is valid (e.g. posting a position)."""
+    user = current_user(request) or token_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    return user
+
+
 class PositionIn(BaseModel):
     x: float
     y: float
@@ -382,11 +391,13 @@ PATH_MIN_MOVE_M = 250.0   # don't record a crumb until you've moved this far
 PATH_MAX = 5000           # cap so a long session can't grow unbounded
 
 
-class AppState:
-    """Latest sample + destination + breadcrumb trail + websocket clients."""
+class Session:
+    """One org member's live state: position cursor, destination, capture
+    arming, breadcrumb trail, and their open browser tabs. Keyed by Discord id
+    so each member gets an independent course while sharing the dataset."""
 
-    def __init__(self):
-        self.lock = asyncio.Lock()
+    def __init__(self, user: dict):
+        self.user = user           # {"id","display_name","is_admin"}
         self.pos = None
         self.t = None
         self.prev_pos = None
@@ -396,15 +407,11 @@ class AppState:
         # capture_pending: {"kind": "poi"} or
         # {"kind": "observation", "category", "data", "biome", "note"} while armed
         self.capture_pending = None
-        self.last_capture = None      # summary of most recent capture
+        self.last_capture = None      # summary of this member's most recent capture
         self.owner = None             # {"player_id","handle"} from latest position
-        # Breadcrumb trail (in-memory, session-scoped). One trail, matching the
-        # single live position cursor (state.pos): the app tracks one active
-        # stream at a time, so a single global path is the coherent model.
-        # Crumb: {lat, lon, container}.
         self.tracking = False
-        self.path = []
-        self.clients: set[WebSocket] = set()
+        self.path = []                # crumbs: {lat, lon, container}
+        self.ws_clients: set[WebSocket] = set()
 
     def capture_status(self):
         return {
@@ -419,12 +426,9 @@ class AppState:
             self.nav_state = None
             return
         self.nav_state = nav_core.compute_state(
-            nav,
-            self.pos,
-            self.t,
+            nav, self.pos, self.t,
             destination_id=self.destination_id,
-            prev_pos=self.prev_pos,
-            prev_t=self.prev_t,
+            prev_pos=self.prev_pos, prev_t=self.prev_t,
         )
         self._attach_breadcrumbs()
 
@@ -463,50 +467,85 @@ class AppState:
         message = json.dumps(
             {"type": "state", "data": self.nav_state, "capture": self.capture_status()}
         )
-        dead = []
-        for ws in self.clients:
+        for ws in list(self.ws_clients):   # copy: a tab may connect/drop mid-send
             try:
                 await ws.send_text(message)
             except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.clients.discard(ws)
+                self.ws_clients.discard(ws)
 
 
-state = AppState()
+class SessionHub:
+    """All live member sessions + the single lock that serializes state +
+    shared-dataset mutations (org scale is low; one lock is simplest + safe)."""
+
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.sessions: dict[str, Session] = {}
+
+    def get(self, user: dict) -> Session:
+        sess = self.sessions.get(user["id"])
+        if sess is None:
+            sess = Session(user)
+            self.sessions[user["id"]] = sess
+        else:
+            sess.user = user           # refresh display name / admin flag
+        return sess
+
+    def forget_entity(self, entity_id: int) -> None:
+        """A deleted/refreshed-away POI/observation must stop being any member's
+        destination or last-capture reference."""
+        for s in self.sessions.values():
+            if s.destination_id == entity_id:
+                s.destination_id = None
+            if s.last_capture and s.last_capture.get("id") == entity_id:
+                s.last_capture = None
+
+    async def broadcast_all(self) -> None:
+        """The shared dataset changed (capture/delete/refresh) — recompute and
+        push every session so all members' nearby/destination reflect it."""
+        for s in self.sessions.values():
+            s.recompute()
+            await s.broadcast()
+
+
+hub = SessionHub()
 
 
 @app.post("/api/position")
-async def post_position(body: PositionIn):
-    async with state.lock:
+async def post_position(body: PositionIn, user: dict = Depends(require_user)):
+    async with hub.lock:
+        sess = hub.get(user)
         now = time.time()
-        # Ignore exact duplicates within a second (watcher heartbeat); still
-        # rebroadcast so freshly-opened UIs get state.
         new_pos = (body.x, body.y, body.z)
-        if state.pos is not None and new_pos != state.pos:
-            state.prev_pos, state.prev_t = state.pos, state.t
-        state.pos, state.t = new_pos, now
+        if sess.pos is not None and new_pos != sess.pos:
+            sess.prev_pos, sess.prev_t = sess.pos, sess.t
+        sess.pos, sess.t = new_pos, now
 
         if body.handle:
             entry = handles.register(body.handle)
-            state.owner = {"player_id": entry["player_id"], "handle": entry["handle"]}
+            sess.owner = {"player_id": entry["player_id"], "handle": entry["handle"]}
 
-        if state.capture_pending is not None:
-            pending = state.capture_pending
-            state.capture_pending = None
-            owner = state.owner or {}
+        captured = False
+        if sess.capture_pending is not None:
+            pending = sess.capture_pending
+            sess.capture_pending = None
+            owner = sess.owner or {}
             if pending["kind"] == "observation":
-                _capture_observation(new_pos, now, pending, owner)
+                _capture_observation(sess, new_pos, now, pending, owner)
             else:
-                _capture_poi(new_pos, now, pending, owner)
+                _capture_poi(sess, new_pos, now, pending, owner)
+            captured = True
 
-        state.recompute()
-        state.record_crumb()
-        await state.broadcast()
+        sess.recompute()
+        sess.record_crumb()
+        if captured:
+            await hub.broadcast_all()   # a new POI is visible to everyone
+        else:
+            await sess.broadcast()
     return {"ok": True}
 
 
-def _capture_poi(pos_m, now, pending, owner):
+def _capture_poi(sess, pos_m, now, pending, owner):
     next_id = db.next_custom_poi_id()
     poi = nav_core.custom_poi_from_position(
         nav, pos_m, now, pending["name"], pending["type"], next_id,
@@ -522,7 +561,7 @@ def _capture_poi(pos_m, now, pending, owner):
     # so rebuild the index + reassign nearest_qt across the dataset.
     if poi.qt_marker:
         nav_core.assign_qt_markers(nav)
-    state.last_capture = {
+    sess.last_capture = {
         "kind": "poi", "id": poi.id, "name": poi.name, "type": poi.type,
         "container": poi.container_name or "Space", "system": poi.system,
         "latitude": poi.latitude, "longitude": poi.longitude,
@@ -532,7 +571,7 @@ def _capture_poi(pos_m, now, pending, owner):
     }
 
 
-def _capture_observation(pos_m, now, pending, owner):
+def _capture_observation(sess, pos_m, now, pending, owner):
     category = pending["category"]
     # Shared id space across categories (>= OBSERVATION_ID_START); MAX(id)+1 from
     # the DB, so a deleted top id is never reused even across restarts.
@@ -547,7 +586,7 @@ def _capture_observation(pos_m, now, pending, owner):
     except Exception as exc:
         print(f"[sc-nav] observation save failed: {exc}")
     nav.observations[obs.id] = obs
-    state.last_capture = {
+    sess.last_capture = {
         **nav_core._observation_base(obs),
         "latitude": obs.latitude, "longitude": obs.longitude,
         "captured_at": obs.observed_at,
@@ -555,11 +594,12 @@ def _capture_observation(pos_m, now, pending, owner):
 
 
 @app.get("/api/state")
-async def get_state():
+async def get_state(user: dict = Depends(require_session)):
+    sess = hub.get(user)
     return {
-        "state": state.nav_state,
-        "destination_id": state.destination_id,
-        "capture": state.capture_status(),
+        "state": sess.nav_state,
+        "destination_id": sess.destination_id,
+        "capture": sess.capture_status(),
         "systems": nav.systems,
     }
 
@@ -576,14 +616,15 @@ async def get_pois(
 
 
 @app.post("/api/destination")
-async def set_destination(body: DestinationIn):
+async def set_destination(body: DestinationIn, user: dict = Depends(require_session)):
     target = nav.pois.get(body.poi_id) or nav.observations.get(body.poi_id)
     if target is None:
         raise HTTPException(status_code=404, detail="unknown poi_id")
-    async with state.lock:
-        state.destination_id = body.poi_id
-        state.recompute()
-        await state.broadcast()
+    async with hub.lock:
+        sess = hub.get(user)
+        sess.destination_id = body.poi_id
+        sess.recompute()
+        await sess.broadcast()
     if isinstance(target, nav_core.Observation):
         name = nav_core.OBSERVATION_CATEGORIES[target.category]["display_name"](target.data)
     else:
@@ -592,69 +633,73 @@ async def set_destination(body: DestinationIn):
 
 
 @app.delete("/api/destination")
-async def clear_destination():
-    async with state.lock:
-        state.destination_id = None
-        state.recompute()
-        await state.broadcast()
+async def clear_destination(user: dict = Depends(require_session)):
+    async with hub.lock:
+        sess = hub.get(user)
+        sess.destination_id = None
+        sess.recompute()
+        await sess.broadcast()
     return {"ok": True}
 
 
 @app.post("/api/capture/start")
-async def capture_start(body: CaptureIn):
+async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
-    async with state.lock:
-        if state.capture_pending is not None:
+    async with hub.lock:
+        sess = hub.get(user)
+        if sess.capture_pending is not None:
             raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
-        state.capture_pending = {
+        sess.capture_pending = {
             "kind": "poi", "name": name, "type": body.type.strip() or "Custom",
             "qt_marker": body.qt_marker,
         }
-        await state.broadcast()
-    return {"ok": True, "capture": state.capture_status()}
+        await sess.broadcast()
+        return {"ok": True, "capture": sess.capture_status()}
 
 
-async def _arm_observation(category, data, biome, note):
-    async with state.lock:
-        if state.capture_pending is not None:
+async def _arm_observation(user, category, data, biome, note):
+    async with hub.lock:
+        sess = hub.get(user)
+        if sess.capture_pending is not None:
             raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
-        state.capture_pending = {
+        sess.capture_pending = {
             "kind": "observation",
             "category": category,
             "data": data,
             "biome": (biome or "").strip() or None,
             "note": (note or "").strip() or None,
         }
-        await state.broadcast()
-    return {"ok": True, "capture": state.capture_status()}
+        await sess.broadcast()
+        return {"ok": True, "capture": sess.capture_status()}
 
 
 @app.post("/api/capture/node")
-async def capture_node_start(body: NodeCaptureIn):
+async def capture_node_start(body: NodeCaptureIn, user: dict = Depends(require_session)):
     ore = body.ore.strip()
     if not ore:
         raise HTTPException(status_code=400, detail="ore is required")
     # band passed through raw; _normalize_resource handles "Unk"/None.
     return await _arm_observation(
-        "resource", {"ore": ore, "band": body.band}, body.biome, body.note
+        user, "resource", {"ore": ore, "band": body.band}, body.biome, body.note
     )
 
 
 @app.post("/api/capture/wildlife")
-async def capture_wildlife_start(body: WildlifeCaptureIn):
+async def capture_wildlife_start(body: WildlifeCaptureIn, user: dict = Depends(require_session)):
     species = body.species.strip()
     if not species:
         raise HTTPException(status_code=400, detail="species is required")
-    return await _arm_observation("wildlife", {"species": species}, body.biome, body.note)
+    return await _arm_observation(user, "wildlife", {"species": species}, body.biome, body.note)
 
 
 @app.post("/api/capture/cancel")
-async def capture_cancel():
-    async with state.lock:
-        state.capture_pending = None
-        await state.broadcast()
+async def capture_cancel(user: dict = Depends(require_session)):
+    async with hub.lock:
+        sess = hub.get(user)
+        sess.capture_pending = None
+        await sess.broadcast()
     return {"ok": True}
 
 
@@ -693,19 +738,22 @@ async def get_resource_ores():
 
 @app.get("/api/resource_hotspots")
 async def get_resource_hotspots(
-    ore: str, system: str | None = None, body: str | None = None,
+    request: Request, ore: str, system: str | None = None, body: str | None = None,
     limit: int = 20, sort: str = "likely",
 ):
     """Known areas richest in `ore`, ranked. sort: likely | near | value.
-    The 'near'/'value' modes use the live position to factor travel distance."""
+    The 'near'/'value' modes use the caller's own live position for travel."""
+    sess = hub.sessions.get(require_user(request)["id"])
+    pos = sess.pos if sess else None
+    t = sess.t if sess else None
     return {
         "ore": ore,
         "sort": sort,
-        "has_position": state.pos is not None,
+        "has_position": pos is not None,
         "cell_m": nav_core.RESOURCE_CELL_M,
         "hotspots": nav_core.resource_hotspots(
             nav, ore, system=system, body=body, limit=min(limit, 100),
-            from_pos=state.pos, t_ref=state.t, sort=sort,
+            from_pos=pos, t_ref=t, sort=sort,
         ),
     }
 
@@ -723,8 +771,8 @@ async def list_custom_pois():
 
 
 @app.delete("/api/custom_pois/{poi_id}")
-async def delete_custom_poi(poi_id: int):
-    async with state.lock:
+async def delete_custom_poi(poi_id: int, user: dict = Depends(require_session)):
+    async with hub.lock:
         removed = nav.pois.get(poi_id)
         if removed is None or not getattr(removed, "custom", False):
             raise HTTPException(status_code=404, detail="unknown custom poi")
@@ -735,12 +783,8 @@ async def delete_custom_poi(poi_id: int):
         # gone, so rebuild the index + reassign nearest_qt across the dataset.
         if was_qt:
             nav_core.assign_qt_markers(nav)
-        if state.destination_id == poi_id:
-            state.destination_id = None
-        if state.last_capture and state.last_capture["id"] == poi_id:
-            state.last_capture = None
-        state.recompute()
-        await state.broadcast()
+        hub.forget_entity(poi_id)
+        await hub.broadcast_all()
     return {"ok": True}
 
 
@@ -757,36 +801,33 @@ async def get_observations(
 
 
 @app.delete("/api/observations/{obs_id}")
-async def delete_observation(obs_id: int):
-    async with state.lock:
+async def delete_observation(obs_id: int, user: dict = Depends(require_session)):
+    async with hub.lock:
         if obs_id not in nav.observations:
             raise HTTPException(status_code=404, detail="unknown observation")
         db.delete_observation(obs_id)
         nav.observations.pop(obs_id, None)
-        if state.destination_id == obs_id:
-            state.destination_id = None
-        if state.last_capture and state.last_capture.get("id") == obs_id:
-            state.last_capture = None
-        state.recompute()
-        await state.broadcast()
+        hub.forget_entity(obs_id)
+        await hub.broadcast_all()
         return {"ok": True}
 
 
 @app.post("/api/path/{action}")
-async def path_control(action: str):
+async def path_control(action: str, user: dict = Depends(require_session)):
     if action not in ("start", "stop", "clear"):
         raise HTTPException(status_code=404, detail="unknown path action")
-    async with state.lock:
+    async with hub.lock:
+        sess = hub.get(user)
         if action == "start":
-            state.tracking = True
+            sess.tracking = True
         elif action == "stop":
-            state.tracking = False
+            sess.tracking = False
         else:  # clear
-            state.path.clear()
-        if state.nav_state is not None:
-            state._attach_breadcrumbs()
-        await state.broadcast()
-    return {"ok": True, "tracking": state.tracking, "crumbs": len(state.path)}
+            sess.path.clear()
+        if sess.nav_state is not None:
+            sess._attach_breadcrumbs()
+        await sess.broadcast()
+    return {"ok": True, "tracking": sess.tracking, "crumbs": len(sess.path)}
 
 
 async def _rebuild_nav() -> None:
@@ -797,16 +838,14 @@ async def _rebuild_nav() -> None:
     nav_core.merge_custom_pois(fresh, db.list_custom_pois())
     merge_all_observations(fresh)
     nav_core.assign_qt_markers(fresh)
-    async with state.lock:
+    async with hub.lock:
         nav = fresh
-        if (
-            state.destination_id is not None
-            and state.destination_id not in nav.pois
-            and state.destination_id not in nav.observations
-        ):
-            state.destination_id = None
-        state.recompute()
-        await state.broadcast()
+        for s in hub.sessions.values():
+            if (s.destination_id is not None
+                    and s.destination_id not in nav.pois
+                    and s.destination_id not in nav.observations):
+                s.destination_id = None
+        await hub.broadcast_all()
 
 
 @app.post("/api/refresh")
@@ -855,7 +894,7 @@ async def health():
         "observations": len(nav.observations),
         "handles": len(handles.by_handle),
         "raw_commodities": len(raw_commodity_names),
-        "has_position": state.pos is not None,
+        "active_sessions": sum(1 for s in hub.sessions.values() if s.pos is not None),
         "data": data_info,
     }
 
@@ -863,20 +902,22 @@ async def health():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     # Browsers only; require a logged-in org member (session loaded from cookie).
-    if not ws.session.get("user"):
+    user = ws.session.get("user")
+    if not user:
         await ws.close(code=1008)   # policy violation
         return
     await ws.accept()
-    state.clients.add(ws)
+    sess = hub.get(user)
+    sess.ws_clients.add(ws)
     try:
-        # Send current state immediately so the UI isn't blank until the
-        # next /showlocation.
+        # Send this member's current state immediately so the UI isn't blank
+        # until their next /showlocation.
         await ws.send_text(
             json.dumps(
                 {
                     "type": "state",
-                    "data": state.nav_state,
-                    "capture": state.capture_status(),
+                    "data": sess.nav_state,
+                    "capture": sess.capture_status(),
                 }
             )
         )
@@ -885,7 +926,7 @@ async def websocket_endpoint(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        state.clients.discard(ws)
+        sess.ws_clients.discard(ws)
 
 
 # ---------------------------------------------------------------------------
