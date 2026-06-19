@@ -375,10 +375,11 @@ async def auth_gate(request: Request, call_next):
 
 # Signed session cookie (Discord login state). The secret must be stable across
 # restarts so sessions survive a redeploy; a random fallback keeps dev working.
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("SESSION_SECRET") or secrets.token_hex(32),
-    https_only=os.environ.get("COOKIE_SECURE", "true").lower() == "true",
+    https_only=COOKIE_SECURE,
     same_site="lax",
     max_age=8 * 3600,
 )
@@ -1320,18 +1321,41 @@ async def websocket_endpoint(ws: WebSocket):
 # (session-only, admin-only).
 
 
+# The OAuth CSRF token rides in its own short-lived cookie rather than the Lax
+# session, because Discord's "Authorize" button is a cross-site POST that
+# redirects to /auth/callback. Chrome's "Lax+POST" grace still sends a Lax
+# cookie there, but Safari/WebKit (iPhone) does not — so a Lax session lost the
+# state and every mobile login 400'd with "invalid OAuth state". SameSite=None
+# (only valid alongside Secure, i.e. over HTTPS) is sent on that redirect. Kept
+# separate from the session cookie so the rest of the app stays Lax.
+OAUTH_STATE_COOKIE = "oauth_state"
+
+
+def _set_oauth_state_cookie(resp: Response, state: str) -> None:
+    resp.set_cookie(
+        OAUTH_STATE_COOKIE, state,
+        max_age=600, httponly=True, secure=COOKIE_SECURE,
+        samesite="none" if COOKIE_SECURE else "lax", path="/auth",
+    )
+
+
+def _clear_oauth_state_cookie(resp: Response) -> None:
+    resp.delete_cookie(OAUTH_STATE_COOKIE, path="/auth")
+
+
 @app.get("/auth/login")
 async def auth_login(request: Request):
     if not auth.configured():
         raise HTTPException(status_code=503, detail="Discord login is not configured")
     state = secrets.token_urlsafe(24)
-    request.session["oauth_state"] = state
-    return RedirectResponse(auth.authorize_url(state))
+    resp = RedirectResponse(auth.authorize_url(state))
+    _set_oauth_state_cookie(resp, state)
+    return resp
 
 
 @app.get("/auth/callback")
 async def auth_callback(request: Request, code: str = "", state: str = ""):
-    expected = request.session.pop("oauth_state", None)
+    expected = request.cookies.get(OAUTH_STATE_COOKIE)
     if not state or state != expected:
         raise HTTPException(status_code=400, detail="invalid OAuth state")
     if not code:
@@ -1356,9 +1380,13 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
     if profile is None:
         request.session.clear()
         html = auth.MISSING_ROLE_HTML if denied == "missing_role" else auth.NOT_IN_ORG_HTML
-        return HTMLResponse(html, status_code=403)
+        resp = HTMLResponse(html, status_code=403)
+        _clear_oauth_state_cookie(resp)
+        return resp
     request.session["user"] = profile
-    return RedirectResponse("/")
+    resp = RedirectResponse("/")
+    _clear_oauth_state_cookie(resp)
+    return resp
 
 
 @app.post("/auth/logout")
