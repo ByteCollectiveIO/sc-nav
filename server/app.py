@@ -390,6 +390,11 @@ class WildlifeCaptureIn(BaseModel):
 PATH_MIN_MOVE_M = 250.0   # don't record a crumb until you've moved this far
 PATH_MAX = 5000           # cap so a long session can't grow unbounded
 
+# Live presence tuning.
+PRESENCE_TICK_S = 1.0     # broadcaster cadence (coalesced upserts, ~1 Hz)
+PRESENCE_STALE_S = 120.0  # drop a teammate after this long with no new position
+PRESENCE_MOVE_M = 5.0     # only recompute heading once actually moving
+
 
 class Session:
     """One org member's live state: position cursor, destination, capture
@@ -411,6 +416,10 @@ class Session:
         self.owner = None             # {"player_id","handle"} from latest position
         self.tracking = False
         self.path = []                # crumbs: {lat, lon, container}
+        # Live teammate presence: on by default, one-way opt-out (hide yourself
+        # but keep seeing others). In-memory + per-session (resets to share-on
+        # on restart, matching the "share by default" decision).
+        self.share_presence = True
         self.ws_clients: set[WebSocket] = set()
 
     def capture_status(self):
@@ -476,11 +485,19 @@ class Session:
 
 class SessionHub:
     """All live member sessions + the single lock that serializes state +
-    shared-dataset mutations (org scale is low; one lock is simplest + safe)."""
+    shared-dataset mutations (org scale is low; one lock is simplest + safe).
+
+    Also owns live teammate presence: `presence[uid]` holds each sharing
+    member's latest on-a-body fix; changes are queued (`_dirty`/`_removed`) and
+    flushed by a ~1 Hz background broadcaster so a fast watcher can't spam tabs.
+    All mutations happen while holding `lock`."""
 
     def __init__(self):
         self.lock = asyncio.Lock()
         self.sessions: dict[str, Session] = {}
+        self.presence: dict[str, dict] = {}   # uid -> internal record (w/ last_update)
+        self._dirty: set[str] = set()          # uids with a pending upsert
+        self._removed: set[str] = set()        # uids with a pending remove
 
     def get(self, user: dict) -> Session:
         sess = self.sessions.get(user["id"])
@@ -490,6 +507,72 @@ class SessionHub:
         else:
             sess.user = user           # refresh display name / admin flag
         return sess
+
+    # --- presence -----------------------------------------------------------
+    def _presence_record(self, sess: "Session") -> dict | None:
+        """Build a presence fix from a session's current nav_state, or None when
+        the member isn't on a body surface (presence is surface-only — there's no
+        teammate map in deep space). Heading is derived from the last fix."""
+        s = sess.nav_state
+        cont = s.get("container") if s else None
+        if not (cont and cont.get("is_body") and s.get("latitude") is not None):
+            return None
+        uid = sess.user["id"]
+        lat, lon = s["latitude"], s["longitude"]
+        system, body = s.get("system"), cont["name"]
+        heading = None
+        prev = self.presence.get(uid)
+        if prev and prev["system"] == system and prev["body"] == body:
+            radius = cont.get("body_radius_m") or 1.0
+            dist, bearing = nav_core.great_circle(prev["lat"], prev["lon"], lat, lon, radius)
+            heading = bearing if dist > PRESENCE_MOVE_M else prev.get("heading")
+        return {
+            "discord_id": uid,
+            "display_name": sess.user.get("display_name"),
+            "handle": sess.owner["handle"] if sess.owner else None,
+            "system": system, "body": body, "lat": lat, "lon": lon,
+            "heading": heading, "last_update": time.time(),
+        }
+
+    @staticmethod
+    def _public_presence(rec: dict) -> dict:
+        """Wire form: drop last_update, expose age_s at send time."""
+        return {
+            "discord_id": rec["discord_id"], "display_name": rec["display_name"],
+            "handle": rec["handle"], "system": rec["system"], "body": rec["body"],
+            "lat": rec["lat"], "lon": rec["lon"], "heading": rec["heading"],
+            "age_s": max(0.0, time.time() - rec["last_update"]),
+        }
+
+    def touch_presence(self, sess: "Session") -> None:
+        """Recompute + queue this member's presence (or a remove if they left a
+        body / stopped sharing). Call under the lock after recompute()."""
+        uid = sess.user["id"]
+        rec = self._presence_record(sess) if sess.share_presence else None
+        if rec is None:
+            self.drop_presence(uid)
+            return
+        self.presence[uid] = rec
+        self._dirty.add(uid)
+        self._removed.discard(uid)
+
+    def drop_presence(self, uid: str) -> None:
+        if uid in self.presence:
+            del self.presence[uid]
+            self._removed.add(uid)
+            self._dirty.discard(uid)
+
+    def roster(self) -> list[dict]:
+        return [self._public_presence(r) for r in self.presence.values()]
+
+    async def send_to_all_clients(self, message: dict) -> None:
+        text = json.dumps(message)
+        for s in self.sessions.values():
+            for ws in list(s.ws_clients):   # copy: a tab may drop mid-send
+                try:
+                    await ws.send_text(text)
+                except Exception:
+                    s.ws_clients.discard(ws)
 
     def forget_entity(self, entity_id: int) -> None:
         """A deleted/refreshed-away POI/observation must stop being any member's
@@ -509,6 +592,38 @@ class SessionHub:
 
 
 hub = SessionHub()
+
+
+async def presence_broadcaster():
+    """~1 Hz loop: drop teammates whose last fix is stale (emit `remove`), then
+    flush coalesced upserts/removes to every open tab. Coalescing means a fast
+    watcher posting many positions still costs at most one upsert per tick."""
+    while True:
+        await asyncio.sleep(PRESENCE_TICK_S)
+        try:
+            async with hub.lock:
+                now = time.time()
+                for uid, rec in list(hub.presence.items()):
+                    if now - rec["last_update"] > PRESENCE_STALE_S:
+                        hub.drop_presence(uid)
+                upserts = [hub._public_presence(hub.presence[u])
+                           for u in hub._dirty if u in hub.presence]
+                removes = list(hub._removed)
+                hub._dirty.clear()
+                hub._removed.clear()
+                if upserts:
+                    await hub.send_to_all_clients(
+                        {"type": "presence", "op": "upsert", "users": upserts})
+                for uid in removes:
+                    await hub.send_to_all_clients(
+                        {"type": "presence", "op": "remove", "discord_id": uid})
+        except Exception as exc:   # never let the loop die on a transient error
+            print(f"[sc-nav] presence broadcaster error: {exc}")
+
+
+@app.on_event("startup")
+async def _start_presence_broadcaster():
+    asyncio.create_task(presence_broadcaster())
 
 
 @app.post("/api/position")
@@ -538,6 +653,7 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
 
         sess.recompute()
         sess.record_crumb()
+        hub.touch_presence(sess)        # queue a teammate-map upsert (or remove)
         if captured:
             await hub.broadcast_all()   # a new POI is visible to everyone
         else:
@@ -921,6 +1037,11 @@ async def websocket_endpoint(ws: WebSocket):
                 }
             )
         )
+        # Initial teammate snapshot so the new tab's map/roster start populated
+        # (later changes arrive as throttled presence deltas).
+        async with hub.lock:
+            roster = hub.roster()
+        await ws.send_text(json.dumps({"type": "roster", "users": roster}))
         while True:
             await ws.receive_text()  # client pings; content ignored
     except WebSocketDisconnect:
@@ -985,8 +1106,27 @@ async def auth_logout(request: Request):
 
 @app.get("/api/me")
 async def api_me(request: Request):
-    """The signed-in org member (or 401). Drives the UI's account state."""
-    return require_session(request)
+    """The signed-in org member (or 401). Drives the UI's account state. Carries
+    the live presence-share flag so the UI's toggle reflects the current state."""
+    user = require_session(request)
+    return {**user, "share_presence": hub.get(user).share_presence}
+
+
+class ProfileIn(BaseModel):
+    share_presence: bool | None = None
+
+
+@app.put("/api/me")
+async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
+    """Update the caller's profile. For now just the presence-share toggle:
+    turning it off emits a `remove` and stops broadcasting the member (one-way —
+    they keep receiving teammates); turning it on re-publishes their last fix."""
+    async with hub.lock:
+        sess = hub.get(user)
+        if body.share_presence is not None:
+            sess.share_presence = body.share_presence
+            hub.touch_presence(sess)   # re-publish, or drop if now off / not on a body
+        return {"ok": True, "share_presence": sess.share_presence}
 
 
 class TokenCreateIn(BaseModel):

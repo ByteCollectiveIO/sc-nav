@@ -212,15 +212,34 @@ Done **before** Phase 1 (the per-user session refactor is still open). `server/d
   admin toggle (`meta.starmap_pois_enabled`, default on) via `/api/settings`, so
   an org can start from a blank POI database. Containers are always loaded.
 
-### Phase 3 — Presence (teammate map)
-- `presence: dict[uid, record]` + throttled (~1–2 Hz) broadcaster.
-- `/api/position`: if `share_presence` and on a body, update presence and
-  broadcast upsert to all sessions' ws_clients. WS connect sends `roster`.
-- `PUT /api/me {handle, share_presence}`: off -> emit `presence/remove`, stop
-  broadcasting, but keep receiving (one-way).
-- Background sweeper drops stale presence (no update N min -> `remove`).
-- SPA: teammate map layer (same-body, distinct color + handle labels), roster
-  panel, share toggle.
+### Phase 3 — Presence (teammate map) — ✅ DONE (2026-06-18)
+Server-side state lives on `SessionHub` (`presence[uid]` + `_dirty`/`_removed`
+queues, all mutated under the existing `hub.lock`). nav_core untouched.
+- `hub.touch_presence(sess)` (called from `/api/position` after recompute, and
+  from `PUT /api/me`) builds a fix from the member's `nav_state` when sharing AND
+  on a body surface, else drops them. Heading is derived from the previous fix
+  via `nav_core.great_circle` (only updated once moved > `PRESENCE_MOVE_M` 5 m).
+- One `presence_broadcaster` asyncio task (started in an `on_event("startup")`),
+  `PRESENCE_TICK_S` = 1 s: sweeps stale fixes (`PRESENCE_STALE_S` 120 s ->
+  `remove`), then flushes **coalesced** upserts + removes to every tab — so a fast
+  watcher costs at most one upsert per tick. WS connect sends the `roster`
+  snapshot right after the initial `state`.
+- `PUT /api/me {share_presence}` toggles one-way: off drops + emits `remove` and
+  stops broadcasting you, but you keep receiving teammates; on re-publishes your
+  last fix. `GET /api/me` now also returns `share_presence` so the toggle
+  reflects state. Share defaults on, in-memory per-session (resets on restart).
+- Presence record (wire form): `{discord_id, display_name, handle, system, body,
+  lat, lon, heading, age_s}`. `handle` is the cosmetic in-game label (from the
+  watcher), `display_name` the Discord name; the client labels with `handle ||
+  display_name`.
+- SPA: teammates map layer (same-body, pink dot + heading tick + label, toggle in
+  the map layer row), a TEAMMATES roster panel (sorted, on-body highlighted, live
+  ages), and a "share my location" toggle. Client filters out its own id (it's the
+  arrow). `roster`/`presence` deltas update both the map and roster.
+
+Deviations from the sketch: kept the existing `"state"` self-message (presence is
+a separate `roster`/`presence` channel) and handle-based attribution; `PUT /api/me`
+carries only `share_presence` for now (cosmetic-handle editing stays deferred).
 
 ### Phase 4 — Admin & ops
 - `require_admin` (static `ADMIN_IDS`) for delete-anyone, token admin,
@@ -239,7 +258,7 @@ Done **before** Phase 1 (the per-user session refactor is still open). `server/d
 
 ## Recommended order
 ~~Phase 0 (deployable lockout)~~ ✅ -> ~~2 (durability)~~ ✅ -> ~~1 (simultaneous
-courses + captures)~~ ✅ -> **3 (teammate map) [next]** -> 4 (admin/backups).
+courses + captures)~~ ✅ -> ~~3 (teammate map)~~ ✅ -> **4 (admin/backups) [next]**.
 
 ## Current single-user architecture (baseline being migrated)
 - FastAPI + single global `AppState` (one live cursor): `pos`, `destination_id`,

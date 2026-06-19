@@ -9,7 +9,7 @@
     --bg: #0b0e13; --panel: #141a23; --panel2: #1b2330;
     --text: #d8e1ee; --dim: #7b8a9e; --accent: #4fc3f7; --warn: #ffb74d;
     --good: #66bb6a; --bad: #ef5350; --border: #243044;
-    --node: #b39ddb; --fauna: #81c784;
+    --node: #b39ddb; --fauna: #81c784; --mate: #f06292;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -95,6 +95,17 @@
   .lg-res::before { content: "◆"; color: var(--node); }
   .lg-wild::before { content: "▲"; color: var(--fauna); }
   .lg-path::before { content: "•"; color: var(--warn); }
+  .lg-mate::before { color: var(--mate); }
+
+  /* teammate presence (roster) */
+  .roster-share { float: right; font-size: 12px; color: var(--dim);
+    display: inline-flex; align-items: center; gap: 5px; font-weight: normal; letter-spacing: 0; }
+  .mate-row { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 13px; }
+  .mate-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mate);
+    opacity: 0.45; flex: none; }
+  .mate-dot.here { opacity: 1; box-shadow: 0 0 5px var(--mate); }
+  .mate-where { color: var(--dim); }
+  .mate-age { margin-left: auto; color: var(--dim); font-size: 11px; }
 
   /* resource forecast */
   .fc-row { display: grid; grid-template-columns: 130px 1fr 46px 56px;
@@ -203,6 +214,7 @@
       <label><input type="checkbox" class="layer" data-layer="poi" checked> POIs</label>
       <label><input type="checkbox" class="layer" data-layer="resource" checked> resources</label>
       <label><input type="checkbox" class="layer" data-layer="wildlife" checked> wildlife</label>
+      <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
       <label>ore heatmap
         <select id="heatmap-mode" class="sel">
           <option value="off">off</option>
@@ -217,8 +229,18 @@
     <div class="legend">
       <span class="lg-you">you / heading</span><span class="lg-path">breadcrumb</span>
       <span class="lg-poi">POI</span><span class="lg-res">resource</span><span class="lg-wild">wildlife</span>
+      <span class="lg-mate">teammate</span>
     </div>
     <div id="heatmap-legend"></div>
+  </div>
+
+  <div class="panel" id="roster-panel" hidden>
+    <h2>TEAMMATES <span class="muted" id="roster-hint"></span>
+      <label class="roster-share" title="hide your location from teammates (you still see theirs)">
+        <input type="checkbox" id="share-toggle"> share my location
+      </label>
+    </h2>
+    <div id="roster-body"></div>
   </div>
 
   <div class="panel" id="forecast-panel" hidden>
@@ -779,7 +801,7 @@ $("track-toggle").onclick = () => {
 $("track-clear").onclick = () => fetch("/api/path/clear", { method: "POST" });
 
 // ---------- map ----------
-const layers = { path: true, poi: true, resource: true, wildlife: true };
+const layers = { path: true, poi: true, resource: true, wildlife: true, teammates: true };
 document.querySelectorAll(".layer").forEach(cb => {
   cb.onchange = () => { layers[cb.dataset.layer] = cb.checked; drawMap(); };
 });
@@ -982,6 +1004,23 @@ function drawMap() {
   drawEntities(lastState.nearest_pois || []);
   drawEntities(observations());
 
+  // teammates on this same body (north-up, like everything else)
+  if (layers.teammates) {
+    for (const m of presence.values()) {
+      if (m.system !== s.system || m.body !== s.container.name
+          || m.lat == null) continue;
+      const [x, y] = toXY(m.lat, m.lon);
+      if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
+      if (m.heading != null) {   // short heading tick, same convention as the player
+        ctx.save(); ctx.translate(x, y); ctx.rotate(m.heading * DEG);
+        ctx.strokeStyle = "#f06292"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -11); ctx.stroke(); ctx.restore();
+      }
+      ctx.fillStyle = "#f06292"; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill();
+      ctx.fillStyle = "#f8bbd0"; ctx.fillText(m.handle || m.display_name || "", x + 7, y + 3);
+    }
+  }
+
   // player + heading arrow (north-up)
   if (prevPlayer && (prevPlayer.lat !== plLat || prevPlayer.lon !== plLon)) {
     const v = projectMeters(plLat, plLon, prevPlayer.lat, prevPlayer.lon, R); // movement vector
@@ -1099,6 +1138,62 @@ async function runFinder() {
   }
   table.hidden = false;
 }
+// ---------- teammate presence ----------
+// Live teammates keyed by Discord id (everyone but me — the server may include
+// my own fix, which I filter out since I'm the arrow). Each record carries the
+// server-sent age plus the local receive time so the roster age ticks forward.
+let myId = null;
+let presence = new Map();
+let sharePresence = true;
+
+function rememberMate(u) {
+  if (u.discord_id === myId) return;   // don't list/draw myself as a teammate
+  u._recv = Date.now();
+  presence.set(u.discord_id, u);
+}
+function mateAge(m) { return (m.age_s || 0) + (Date.now() - (m._recv || Date.now())) / 1000; }
+function fmtAge(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 10) return "live";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+}
+
+function renderRoster() {
+  const panel = $("roster-panel");
+  if (!myId) { panel.hidden = true; return; }   // not signed in
+  panel.hidden = false;
+  const mates = [...presence.values()].sort((a, b) =>
+    (a.handle || a.display_name || "").localeCompare(b.handle || b.display_name || ""));
+  $("roster-hint").textContent = mates.length
+    ? `(${mates.length} sharing location)` : "";
+  const body = $("roster-body");
+  if (!mates.length) {
+    body.innerHTML = `<span class="muted">No teammates are sharing their location right now.</span>`;
+    return;
+  }
+  body.innerHTML = mates.map(m => {
+    const here = lastState && lastState.container
+      && m.system === lastState.system && m.body === lastState.container.name;
+    return `<div class="mate-row">` +
+      `<span class="mate-dot${here ? " here" : ""}" title="${here ? "on your body" : "elsewhere"}"></span>` +
+      `<b>${esc(m.handle || m.display_name || "member")}</b>` +
+      `<span class="mate-where">${esc(m.body)} · ${esc(m.system)}</span>` +
+      `<span class="mate-age">${fmtAge(mateAge(m))}</span></div>`;
+  }).join("");
+}
+// Tick the roster ages without waiting on a server delta.
+setInterval(() => { if (presence.size) renderRoster(); }, 5000);
+
+$("share-toggle").onchange = async (e) => {
+  sharePresence = e.target.checked;
+  try {
+    await fetch("/api/me", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ share_presence: sharePresence }) });
+  } catch {}
+};
+
 // ---------- websocket ----------
 let ws = null;
 function connect() {
@@ -1108,6 +1203,15 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); }
+    else if (msg.type === "roster") {
+      presence.clear();
+      for (const u of msg.users) rememberMate(u);
+      renderRoster(); drawMap();
+    } else if (msg.type === "presence") {
+      if (msg.op === "upsert") for (const u of msg.users) rememberMate(u);
+      else if (msg.op === "remove") presence.delete(msg.discord_id);
+      renderRoster(); drawMap();
+    }
   };
   ws.onclose = () => { $("conn").classList.remove("ok"); setTimeout(connect, 2000); };
 }
@@ -1261,8 +1365,14 @@ async function boot() {
   let me = null;
   try { const r = await fetch("/api/me"); if (r.ok) me = await r.json(); } catch {}
   renderAccount(me);
-  if (me) { $("login-gate").hidden = true; init(); }
-  else { $("login-gate").hidden = false; }   // anonymous: show the sign-in gate
+  if (me) {
+    myId = me.id;
+    sharePresence = me.share_presence !== false;   // default share-on
+    $("share-toggle").checked = sharePresence;
+    $("login-gate").hidden = true;
+    renderRoster();   // reveal the (empty) teammates panel before the WS roster lands
+    init();
+  } else { $("login-gate").hidden = false; }   // anonymous: show the sign-in gate
 }
 boot();
 </script>
