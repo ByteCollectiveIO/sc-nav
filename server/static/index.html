@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SC Nav</title>
+<title>Org Navigator</title>
 <style>
   :root {
     --bg: #0b0e13; --panel: #141a23; --panel2: #1b2330;
@@ -143,7 +143,9 @@
   /* the explicit display above overrides the [hidden] attribute, so restore it */
   .login-gate[hidden] { display: none; }
   .login-card { text-align: center; max-width: 380px; }
+  .login-logo { width: 180px; height: auto; margin: 0 auto 16px; display: block; }
   .login-card h1 { color: var(--accent); letter-spacing: 3px; margin: 0 0 10px; }
+  .header-logo { width: 28px; height: 28px; flex: none; display: block; }
   .btn-discord { display: inline-block; background: #5865F2; color: #fff; border: none;
     border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
     cursor: pointer; text-decoration: none; margin-top: 14px; }
@@ -153,14 +155,16 @@
 <body>
 <div id="login-gate" class="login-gate" hidden>
   <div class="login-card">
-    <h1>SC NAV</h1>
+    <img class="login-logo" src="/images/sc_org_navigator_logo.png" alt="Org Navigator logo" width="180" height="180">
+    <h1>Org Navigator</h1>
     <p class="muted">Sign in with your Discord account to access your organization's navigation data.</p>
     <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
   </div>
 </div>
 
 <header>
-  <h1>SC NAV</h1>
+  <img class="header-logo" src="/images/sc_org_navigator_logo.png" alt="" width="28" height="28">
+  <h1>Org Navigator</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
   <a id="nav-toggle" href="#/settings" hidden></a>

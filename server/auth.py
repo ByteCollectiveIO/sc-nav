@@ -123,7 +123,7 @@ def fetch_member_profile(access_token: str, required_role_id: str = "",
 
 
 _DENIED_PAGE = """<!doctype html><meta charset="utf-8">
-<title>SC Nav — access denied</title>
+<title>Org Navigator — access denied</title>
 <body style="background:#0b0e13;color:#d8e1ee;font-family:system-ui;
   display:grid;place-items:center;height:100vh;margin:0;text-align:center">
 <div><h1 style="color:#ef5350">{title}</h1>
@@ -134,9 +134,9 @@ _DENIED_PAGE = """<!doctype html><meta charset="utf-8">
 NOT_IN_ORG_HTML = _DENIED_PAGE.format(
     title="Not in the org",
     body="Your Discord account isn't a member of this organization's server, "
-         "so you can't access SC Nav.")
+         "so you can't access Org Navigator.")
 
 MISSING_ROLE_HTML = _DENIED_PAGE.format(
     title="Missing the required role",
-    body="You're in the server but don't have the role required to use SC Nav. "
+    body="You're in the server but don't have the role required to use Org Navigator. "
          "Ask an admin to grant it, then sign in again.")
