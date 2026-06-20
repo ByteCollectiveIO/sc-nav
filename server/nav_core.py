@@ -109,6 +109,11 @@ class Observation:
     owner_handle: str | None
     observed_at: str                 # ISO timestamp of the sighting
     data: dict                       # category-specific fields
+    # SC shard the sighting was made on (e.g. "pub_use1b_12030094_130"), read
+    # from Game.log by the watcher. Ephemeral nodes only exist on their shard,
+    # so this is what lets a client hide nodes that aren't on its server. None
+    # for legacy records and captures with no shard known.
+    shard_id: str | None = None
     nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
     nearest_qt_dist_m: float | None = None  # distance to that marker, meters
 
@@ -380,6 +385,7 @@ def _observation_base(obs) -> dict:
         "owner_id": obs.owner_id,
         "owner_handle": obs.owner_handle,
         "observed_at": obs.observed_at,
+        "shard_id": obs.shard_id,
         "nearest_qt": obs.nearest_qt,
         "nearest_qt_dist_m": obs.nearest_qt_dist_m,
         "custom": True,
@@ -733,6 +739,7 @@ def observation_from_position(
     owner_id: int | None = None,
     owner_handle: str | None = None,
     observed_at: str | None = None,
+    shard_id: str | None = None,
 ) -> Observation:
     if category not in OBSERVATION_CATEGORIES:
         raise ValueError(f"unknown observation category: {category}")
@@ -754,6 +761,7 @@ def observation_from_position(
         owner_handle=owner_handle,
         observed_at=observed_at or datetime.now(timezone.utc).isoformat(),
         data=data,
+        shard_id=shard_id,
     )
     obs.nearest_qt, obs.nearest_qt_dist_m = nearest_qt_marker(nav, obs, t_unix)
     return obs
@@ -775,6 +783,7 @@ def observation_to_dict(obs: Observation) -> dict:
         "owner_id": obs.owner_id,
         "owner_handle": obs.owner_handle,
         "observed_at": obs.observed_at,
+        "shard_id": obs.shard_id,
         "data": obs.data,
     }
 
@@ -809,6 +818,7 @@ def observation_from_dict(d: dict, category: str | None = None) -> Observation:
         owner_id=d.get("owner_id"),
         owner_handle=d.get("owner_handle"),
         observed_at=d.get("observed_at") or "",
+        shard_id=d.get("shard_id"),
         data=OBSERVATION_CATEGORIES[category]["normalize"](raw),
     )
 

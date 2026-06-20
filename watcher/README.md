@@ -43,9 +43,19 @@ a three-keystroke action. A programmable keyboard/mouse macro can make it one.
 | `--once` | off | Read clipboard once, send if valid, exit (connectivity test) |
 | `--verbose` | off | Log non-location clipboard changes |
 | `--handle NAME` | — | Your in-game handle, attached to captures for attribution |
+| `--game-log PATH` | autodetect | Path to SC's `Game.log`; tags captures with your current shard so nodes from other servers can be filtered out |
 
-`--handle` is saved to `watcher_config.json` on first use and remembered after
-that, so you only need to pass it once (or set `HANDLE` in `run_watcher.bat`).
+`--handle`, `--token`, and `--game-log` are saved to `watcher_config.json` on
+first use and remembered after that, so you only need to pass each once (or set
+`HANDLE` in `run_watcher.bat`).
+
+The watcher tails `Game.log` for your **shard** (e.g. `pub_use1b_12030094_130`),
+read from the `<Join PU>` and `<Update Shard Id>` lines, and includes it in each
+position. SC's ephemeral nodes (resources/fauna) only exist on the shard they
+were seen on, so the web UI uses this to hide nodes that aren't on your server
+and to flag which teammates share your shard. If no `Game.log` is found (and
+`--game-log` isn't given) the watcher still runs — captures just go out untagged
+and aren't shard-filtered.
 
 Failed sends are queued (last 50) and retried automatically, so a nav-server
 restart mid-session loses nothing.
@@ -62,9 +72,12 @@ The watcher POSTs to `{server}/api/position` with `Content-Type: application/jso
   "raw": "Coordinates: x:-18930539540.392 y:-2610158765.392 z:0.0",
   "client_time": "2026-06-12T22:26:12.461474+00:00",
   "source": "sc_nav_watcher",
-  "handle": "YourInGameName"
+  "handle": "YourInGameName",
+  "shard": "pub_use1b_12030094_130"
 }
 ```
+
+`shard` is `null` when no `Game.log` is available.
 
 `x`/`y`/`z` are meters in the current star system's global frame (origin =
 system center). Any 2xx response counts as delivered; anything else (or a

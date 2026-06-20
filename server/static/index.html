@@ -150,6 +150,10 @@
     opacity: 0.45; flex: none; }
   .mate-dot.here { opacity: 1; box-shadow: 0 0 5px var(--mate); }
   .mate-where { color: var(--dim); }
+  .mate-shard { font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    border: 1px solid var(--border); color: var(--dim); white-space: nowrap; }
+  .mate-shard.same { border-color: var(--good); color: var(--good); }
+  .mate-row.same-shard b { color: var(--good); }
   .mate-age { margin-left: auto; color: var(--dim); font-size: 11px; }
 
   /* resource forecast */
@@ -316,6 +320,7 @@
       <label><input type="checkbox" class="layer" data-layer="harvestable" checked> harvestables</label>
       <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
       <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
+      <label title="Ephemeral nodes only exist on the shard they were seen on. Checked hides nodes known to be on a different SC server than yours (needs the watcher's Game.log shard); uncheck to show every shard's nodes."><input type="checkbox" id="shard-toggle" checked> this shard</label>
       <label>heatmap
         <select id="heatmap-mode" class="sel">
           <option value="off">off</option>
@@ -802,13 +807,32 @@ function isFreshObs(o) {
 // shard." SC respawns ephemeral nodes on shard load, so observations from before
 // this moment likely sit at positions that have since moved.
 let sessionStartMs = null;
-// Is this observation trustworthy *right now* — i.e. seen during this play
-// session? Used to dim suspect markers regardless of the admin fresh window (a
-// 5h window can still include a previous shard's now-moved nodes). Nodes you
-// placed this session and non-ephemeral POIs are always current.
+
+// ---------- shard ----------
+// Ephemeral nodes only exist on the shard they were observed on. The watcher
+// reads our shard from Game.log (state.shard) and tags each sighting; when both
+// are known we know *for certain* whether a node is on our server, which beats
+// the session-time heuristic above. Legacy/untagged nodes stay "unknown".
+let currentShard = null;            // this client's shard, from state.shard
+let shardOnly = true;               // map + NEARBY hide off-shard nodes by default
+function obsShardState(o) {
+  if (!OBS_KINDS.has(o.kind)) return "mine";          // POIs aren't shard-bound
+  if (!o.shard_id || !currentShard) return "unknown"; // can't tell
+  return o.shard_id === currentShard ? "mine" : "other";
+}
+// Show this node in the actionable views? Hide only nodes *known* to be on
+// another shard; keep ours and untagged ones (don't hide what we can't judge).
+function onShard(o) { return !shardOnly || obsShardState(o) !== "other"; }
+
+// Is this observation trustworthy *right now*? Prefer the definitive shard match;
+// fall back to the session-time heuristic when shards aren't known (legacy nodes,
+// or no Game.log). Used to dim suspect markers. Nodes you placed this session and
+// non-ephemeral POIs are always current.
 function obsCurrentThisSession(o) {
   if (!OBS_KINDS.has(o.kind) || sessionObsIds.has(o.id)) return true;
-  if (sessionStartMs == null) return true;   // no baseline yet — don't dim
+  const ss = obsShardState(o);
+  if (ss !== "unknown") return ss === "mine";   // authoritative when shards known
+  if (sessionStartMs == null) return true;       // no baseline yet — don't dim
   const t = Date.parse(o.observed_at);
   return !isNaN(t) && t >= sessionStartMs;
 }
@@ -816,6 +840,9 @@ function obsCurrentThisSession(o) {
 function render(state) {
   if (!state) return;
   lastState = state;
+  const shardChanged = currentShard !== (state.shard || null);
+  currentShard = state.shard || null;
+  if (shardChanged) renderRoster();   // re-sort/relabel teammates by the new shard
   // First live position this session = baseline for the stale-marker heuristic.
   if (sessionStartMs == null) sessionStartMs = Date.now();
   $("waiting").hidden = true;
@@ -948,7 +975,7 @@ function renderNearby() {
   }
 
   rows = rows.filter(r =>
-    isFreshObs(r) &&
+    isFreshObs(r) && onShard(r) &&
     (!fc || r.container === fc) &&
     (!fo || r.owner_handle === fo) &&
     (!ft || `${r.name} ${r.type || ""} ${r.ore || ""} ${r.species || ""} ${r.quality || ""}`.toLowerCase().includes(ft))
@@ -1166,6 +1193,9 @@ document.querySelectorAll(".layer").forEach(cb => {
 });
 $("fresh-toggle").onchange = (e) => {
   freshOnly = e.target.checked; renderNearby(); drawMap();
+};
+$("shard-toggle").onchange = (e) => {
+  shardOnly = e.target.checked; renderNearby(); drawMap();
 };
 
 // Heatmap overlay: per-cell type composition for the current body. Works for
@@ -1426,7 +1456,7 @@ function drawMap() {
     }
   };
   drawEntities(lastState.nearest_pois || []);
-  drawEntities(observations().filter(isFreshObs));
+  drawEntities(observations().filter(o => isFreshObs(o) && onShard(o)));
 
   // teammates on this same body (north-up, like everything else)
   if (layers.teammates) {
@@ -1609,10 +1639,14 @@ function renderRoster() {
   const panel = $("roster-panel");
   if (!myId) { panel.hidden = true; return; }   // not signed in
   panel.hidden = false;
+  const sameShard = m => currentShard && m.shard && m.shard === currentShard;
+  // Same-shard teammates first (they share your world); then alphabetical.
   const mates = [...presence.values()].sort((a, b) =>
-    (a.handle || a.display_name || "").localeCompare(b.handle || b.display_name || ""));
+    (sameShard(b) ? 1 : 0) - (sameShard(a) ? 1 : 0)
+    || (a.handle || a.display_name || "").localeCompare(b.handle || b.display_name || ""));
+  const onMyShard = mates.filter(sameShard).length;
   $("roster-hint").textContent = mates.length
-    ? `(${mates.length} sharing location)` : "";
+    ? `(${mates.length} sharing` + (currentShard ? `, ${onMyShard} on your shard` : "") + `)` : "";
   const body = $("roster-body");
   if (!mates.length) {
     body.innerHTML = `<span class="muted">No teammates are sharing their location right now.</span>`;
@@ -1621,10 +1655,15 @@ function renderRoster() {
   body.innerHTML = mates.map(m => {
     const here = lastState && lastState.container
       && m.system === lastState.system && m.body === lastState.container.name;
-    return `<div class="mate-row">` +
+    const mine = sameShard(m);
+    const chip = (!currentShard || !m.shard) ? ""
+      : `<span class="mate-shard${mine ? " same" : ""}" title="${esc(m.shard)}">` +
+        `${mine ? "same shard" : "other shard"}</span>`;
+    return `<div class="mate-row${mine ? " same-shard" : ""}">` +
       `<span class="mate-dot${here ? " here" : ""}" title="${here ? "on your body" : "elsewhere"}"></span>` +
       `<b>${esc(m.handle || m.display_name || "member")}</b>` +
       `<span class="mate-where">${esc(m.body)} · ${esc(m.system)}</span>` +
+      chip +
       `<span class="mate-age">${fmtAge(mateAge(m))}</span></div>`;
   }).join("");
 }

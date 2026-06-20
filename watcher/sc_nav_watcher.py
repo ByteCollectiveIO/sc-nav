@@ -161,6 +161,74 @@ def parse_showlocation(text):
 
 
 # ---------------------------------------------------------------------------
+# Shard detection (Game.log)
+# ---------------------------------------------------------------------------
+
+# Star Citizen writes its current shard to Game.log. Two lines carry it:
+#   <Join PU> address[..] port[..] shard[pub_use1b_12030094_130] locationId[..]
+#   <Update Shard Id> New Shard Id: pub_use1b_12030094_130. Old Shard Id [..]
+# The "Update Shard Id" line re-fires on every shard change (relog / mesh
+# handoff), so tailing the log keeps `current_shard` correct across a session.
+_SHARD_UPDATE_RE = re.compile(r"New Shard Id:\s*([^\s.]+)")
+_SHARD_JOIN_RE = re.compile(r"<Join PU>.*?\bshard\[([^\]]+)\]")
+
+# Common install locations, checked in order when --game-log isn't given. The
+# live build is by far the most common; PTU/EPTU are there for power users.
+_DEFAULT_LOG_CANDIDATES = (
+    r"C:\Program Files\Roberts Space Industries\StarCitizen\LIVE\Game.log",
+    r"C:\Program Files\Roberts Space Industries\StarCitizen\PTU\Game.log",
+    r"C:\Program Files\Roberts Space Industries\StarCitizen\EPTU\Game.log",
+)
+
+
+def default_game_log():
+    """First existing Game.log among the common install paths, or None."""
+    for path in _DEFAULT_LOG_CANDIDATES:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+class GameLogShardReader:
+    """Tails Star Citizen's Game.log and tracks the current shard id.
+
+    Reads only the bytes appended since the last poll, so it's cheap to call
+    every loop. The whole file is scanned once on the first poll so a session
+    already in progress is picked up. The log is truncated when the game
+    relaunches; a shrink in size re-seeks to the start.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self._offset = 0
+        self.shard = None
+
+    def poll(self):
+        """Scan new log lines; return the current shard id (or None)."""
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            return self.shard
+        if size < self._offset:
+            self._offset = 0          # log rotated on game relaunch
+        if size == self._offset:
+            return self.shard
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(self._offset)
+                chunk = fh.read()
+                self._offset = fh.tell()
+        except OSError:
+            return self.shard
+        for line in chunk.splitlines():
+            match = _SHARD_UPDATE_RE.search(line) or _SHARD_JOIN_RE.search(line)
+            if match and match.group(1) != self.shard:
+                self.shard = match.group(1)
+                log(f"shard: {self.shard}")
+        return self.shard
+
+
+# ---------------------------------------------------------------------------
 # Sending
 # ---------------------------------------------------------------------------
 
@@ -245,7 +313,7 @@ def log(message):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
 
 
-def build_payload(coords, raw_text, handle=None):
+def build_payload(coords, raw_text, handle=None, shard=None):
     return {
         "x": coords["x"],
         "y": coords["y"],
@@ -254,6 +322,7 @@ def build_payload(coords, raw_text, handle=None):
         "client_time": datetime.now(timezone.utc).isoformat(),
         "source": "sc_nav_watcher",
         "handle": handle,
+        "shard": shard,
     }
 
 
@@ -298,6 +367,13 @@ def resolve_token(args):
     return _resolve_sticky(args.token, "token")
 
 
+def resolve_game_log(args):
+    """The Game.log path: --game-log (sticky), else the saved one, else a
+    common-install autodetect. None disables shard detection."""
+    chosen = _resolve_sticky(args.game_log, "game_log")
+    return chosen or default_game_log()
+
+
 def run(args):
     clipboard = make_clipboard()
     token = resolve_token(args)
@@ -307,6 +383,14 @@ def run(args):
         log(f"reporting as handle: {handle}")
     else:
         log("no handle set (captures will be unattributed) — pass --handle \"YourName\"")
+
+    game_log = resolve_game_log(args)
+    shard_reader = GameLogShardReader(game_log) if game_log else None
+    if shard_reader:
+        log(f"watching shard from: {game_log}")
+    else:
+        log("no Game.log found — shard tagging off (pass --game-log to enable; "
+            "nodes won't be filtered by server)")
     if not token and not args.dry_run:
         log("WARNING: no auth token set — the server will reject positions. "
             "Generate one in the web UI ('Watcher token') and pass --token \"...\"")
@@ -321,6 +405,7 @@ def run(args):
     )
 
     while True:
+        shard = shard_reader.poll() if shard_reader else None
         changed = args.once  # single-shot mode always reads
         seq = clipboard.sequence_number()
         if seq is not None:
@@ -337,7 +422,7 @@ def run(args):
                 last_text = text
                 coords = parse_showlocation(text)
                 if coords:
-                    payload = build_payload(coords, text, handle)
+                    payload = build_payload(coords, text, handle, shard)
                     sender.send(payload)
                     sent_count += 1
                     log(
@@ -351,7 +436,7 @@ def run(args):
                 # stationary) — forward it as a heartbeat so an armed capture
                 # still fires and late-joining UIs get the current position.
                 if last_text and (coords := parse_showlocation(last_text)):
-                    sender.send(build_payload(coords, last_text, handle))
+                    sender.send(build_payload(coords, last_text, handle, shard))
                     if args.verbose:
                         log("re-copy of same position forwarded")
 
@@ -392,6 +477,13 @@ def main():
         "--token",
         help="Watcher auth token (generate one in the web UI under 'Watcher token'). "
         "Required by an authenticated server. Saved to watcher_config.json.",
+    )
+    parser.add_argument(
+        "--game-log",
+        help="Path to Star Citizen's Game.log, used to tag captures with your "
+        "current shard so nodes from other servers can be filtered out. "
+        "Autodetected from the default install if omitted. Saved to "
+        "watcher_config.json.",
     )
     args = parser.parse_args()
 

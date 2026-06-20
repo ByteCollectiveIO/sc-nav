@@ -704,3 +704,48 @@ header. Today the shell is served by the catch-all static mount
   line); `auth_gate` middleware (non-`/api` paths are public).
 - `server/static/index.html` — inline `<script>` (~l.664), `<style>` block (~l.7),
   static `style=` attributes (~l.379/411/431).
+
+---
+
+## 10. Per-shard nodes (hide nodes that aren't on your SC server)
+
+**Status:** done (2026-06-20). Built as designed below.
+
+### Problem
+
+The server aggregates observations from every contributor, but SC players are
+spread across different **shards** (server instances). Ephemeral nodes
+(resources/fauna) only exist on the shard they were seen on, so a node another
+player reported from *their* shard doesn't exist on mine — yet we drew it on my
+map as if actionable. There's no in-game API for your shard, so we couldn't tell
+nodes apart by server.
+
+### Decision
+
+The watcher PC has SC's `Game.log`, which **does** expose the shard. Tag each
+sighting with the shard it was made on and let clients filter to their own.
+
+- **Shard source:** `Game.log` lines `<Join PU> … shard[<id>]` (initial) and
+  `<Update Shard Id> New Shard Id: <id>` (re-fires on every shard change, so it
+  tracks mid-session rotation). Verified against in-game `r_displayinfo`. The id
+  embeds the build number (`pub_use1b_12030094_130`), so shard ids naturally
+  self-invalidate across patches. (See the `shard-id-from-game-log` memory.)
+- **Scope:** observations only. Custom POIs are geographic (same on every shard),
+  so they're never shard-filtered.
+- **UI:** a "this shard" map toggle (default on, beside "fresh only") hides nodes
+  *known* to be on another shard; ours and untagged/legacy nodes stay visible.
+  The session-time staleness heuristic now defers to the definitive shard match
+  when both shards are known. The TEAMMATES roster sorts same-shard players first
+  and tags them with a green "same shard" chip.
+
+### Relevant code
+
+- `watcher/sc_nav_watcher.py` — `GameLogShardReader` (tails `Game.log`, handles
+  truncation), `--game-log` flag (sticky), `shard` added to the position payload.
+- `server/nav_core.py` — `Observation.shard_id`, threaded through
+  `observation_from_position` / `to_dict` / `from_dict` / `_observation_base`.
+- `server/db.py` — `observations.shard_id` column + `_ensure_column` migration.
+- `server/app.py` — `PositionIn.shard`, `Session.shard`, stamped in
+  `_capture_observation`, exposed on `nav_state["shard"]` and in presence records.
+- `server/static/index.html` — `currentShard`, `obsShardState`/`onShard`,
+  `shardOnly` + `#shard-toggle`, roster same-shard sort/chip.

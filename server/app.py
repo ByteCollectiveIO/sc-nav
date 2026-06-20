@@ -536,6 +536,7 @@ _HANDLE_MAX = 64
 _BAND_MAX = 16
 _RAW_MAX = 512
 _META_MAX = 64     # client_time / source / discord-id-ish small fields
+_SHARD_MAX = 64    # SC shard id, e.g. "pub_use1b_12030094_130"
 _LABEL_MAX = 60
 
 
@@ -547,6 +548,9 @@ class PositionIn(BaseModel):
     client_time: str | None = Field(default=None, max_length=_META_MAX)
     source: str | None = Field(default=None, max_length=_META_MAX)
     handle: str | None = Field(default=None, max_length=_HANDLE_MAX)
+    # SC shard id from Game.log (watcher). Stamped onto captures and broadcast so
+    # clients can tell which ephemeral nodes / teammates are on their own server.
+    shard: str | None = Field(default=None, max_length=_SHARD_MAX)
 
 
 class DestinationIn(BaseModel):
@@ -608,6 +612,7 @@ class Session:
         self.capture_pending = None
         self.last_capture = None      # summary of this member's most recent capture
         self.owner = None             # {"player_id","handle"} from latest position
+        self.shard = None             # current SC shard id (from the watcher's Game.log)
         self.tracking = False
         self.path = []                # crumbs: {lat, lon, container}
         # Live teammate presence: on by default, one-way opt-out (hide yourself
@@ -633,6 +638,9 @@ class Session:
             destination_id=self.destination_id,
             prev_pos=self.prev_pos, prev_t=self.prev_t,
         )
+        # The client's own shard rides on the state so it can flag which
+        # observations / teammates share its server.
+        self.nav_state["shard"] = self.shard
         self._attach_breadcrumbs()
 
     def record_crumb(self):
@@ -724,6 +732,7 @@ class SessionHub:
             "discord_id": uid,
             "display_name": sess.user.get("display_name"),
             "handle": sess.owner["handle"] if sess.owner else None,
+            "shard": sess.shard,
             "system": system, "body": body, "lat": lat, "lon": lon,
             "heading": heading, "last_update": time.time(),
         }
@@ -733,7 +742,8 @@ class SessionHub:
         """Wire form: drop last_update, expose age_s at send time."""
         return {
             "discord_id": rec["discord_id"], "display_name": rec["display_name"],
-            "handle": rec["handle"], "system": rec["system"], "body": rec["body"],
+            "handle": rec["handle"], "shard": rec["shard"],
+            "system": rec["system"], "body": rec["body"],
             "lat": rec["lat"], "lon": rec["lon"], "heading": rec["heading"],
             "age_s": max(0.0, time.time() - rec["last_update"]),
         }
@@ -829,6 +839,8 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         if sess.pos is not None and new_pos != sess.pos:
             sess.prev_pos, sess.prev_t = sess.pos, sess.t
         sess.pos, sess.t = new_pos, now
+        if body.shard:
+            sess.shard = body.shard.strip() or None
 
         if body.handle:
             entry = handles.register(body.handle, sess.user["id"])
@@ -890,6 +902,7 @@ def _capture_observation(sess, pos_m, now, pending, owner):
         nav, pos_m, now, category, pending["data"], next_id,
         biome=pending.get("biome"), note=pending.get("note"),
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
+        shard_id=sess.shard,
     )
     try:
         db.add_observation(nav_core.observation_to_dict(obs))

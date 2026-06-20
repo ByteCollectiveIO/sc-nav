@@ -326,6 +326,25 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(base["name"], "Kopion")
         self.assertEqual(base["species"], "Kopion")
 
+    def test_shard_id_flows_through_capture_and_serialization(self):
+        t = time.time()
+        _r, _p, obs = _obs(NAV, "Daymar", t, "resource", {"ore": "Gold", "band": 3},
+                           nav_core.OBSERVATION_ID_START + 60,
+                           shard_id="pub_use1b_12030094_130")
+        self.assertEqual(obs.shard_id, "pub_use1b_12030094_130")
+        # Survives the persistence round-trip and reaches the UI-facing dict.
+        self.assertEqual(nav_core.observation_to_dict(obs)["shard_id"],
+                         "pub_use1b_12030094_130")
+        back = nav_core.observation_from_dict(nav_core.observation_to_dict(obs))
+        self.assertEqual(back.shard_id, "pub_use1b_12030094_130")
+        self.assertEqual(nav_core._observation_base(obs)["shard_id"],
+                         "pub_use1b_12030094_130")
+        # Legacy/untagged capture stays None (the "unknown shard" case).
+        _r, _p, legacy = _obs(NAV, "Daymar", t, "resource", {"ore": "Gold", "band": 3},
+                              nav_core.OBSERVATION_ID_START + 61)
+        self.assertIsNone(legacy.shard_id)
+        self.assertIsNone(nav_core._observation_base(legacy)["shard_id"])
+
     def test_dict_round_trip_both_categories(self):
         t = time.time()
         for i, (cat, data) in enumerate([("resource", {"ore": "Bexalite", "band": 5}),

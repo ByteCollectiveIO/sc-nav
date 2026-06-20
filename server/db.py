@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS observations (
     biome TEXT, note TEXT,
     owner_id INTEGER, owner_handle TEXT,
     observed_at TEXT,
+    shard_id TEXT,           -- SC shard the sighting was made on (Game.log)
     data TEXT
 );
 CREATE INDEX IF NOT EXISTS observations_category ON observations(category);
@@ -83,6 +84,7 @@ def init(db_path) -> None:
         # won't add columns to an already-present table).
         _ensure_column("handles", "discord_id", "TEXT")
         _ensure_column("custom_pois", "note", "TEXT")
+        _ensure_column("observations", "shard_id", "TEXT")
 
 
 def _ensure_column(table: str, column: str, decl: str) -> None:
@@ -172,6 +174,7 @@ def _obs_row_to_dict(r: sqlite3.Row) -> dict:
         "longitude": r["longitude"], "height_m": r["height_m"],
         "biome": r["biome"], "note": r["note"], "owner_id": r["owner_id"],
         "owner_handle": r["owner_handle"], "observed_at": r["observed_at"],
+        "shard_id": r["shard_id"],
         "data": _u(r["data"]) or {},
     }
 
@@ -181,13 +184,13 @@ def add_observation(d: dict) -> None:
         _conn.execute(
             "INSERT OR REPLACE INTO observations "
             "(id,category,system,container,local_km,global_m,latitude,longitude,"
-            "height_m,biome,note,owner_id,owner_handle,observed_at,data) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "height_m,biome,note,owner_id,owner_handle,observed_at,shard_id,data) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (d["id"], d.get("category"), d.get("system"), d.get("container"),
              _j(d.get("local_km")), _j(d.get("global_m")), d.get("latitude"),
              d.get("longitude"), d.get("height_m"), d.get("biome"), d.get("note"),
              d.get("owner_id"), d.get("owner_handle"), d.get("observed_at"),
-             _j(d.get("data") or {})),
+             d.get("shard_id"), _j(d.get("data") or {})),
         )
 
 
