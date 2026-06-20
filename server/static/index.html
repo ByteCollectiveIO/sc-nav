@@ -1392,6 +1392,20 @@ function drawMap() {
   ctx.clearRect(0, 0, w, h);
 
   const s = lastState;
+  if (!s) {
+    // The panel is shown before the first fix so the map feature is visible,
+    // but there's no reference point to plot yet — paint a centered notice on
+    // the blank canvas instead of the in-space message below.
+    msg.hidden = true;
+    ctx.fillStyle = "#5b6b82"; ctx.textAlign = "center";
+    ctx.font = "14px monospace";
+    ctx.fillText("Awaiting your location…", w / 2, h / 2 - 8);
+    ctx.font = "12px monospace";
+    ctx.fillText("run /showlocation in game to populate the map", w / 2, h / 2 + 14);
+    ctx.textAlign = "left";
+    mapHits = [];
+    return;
+  }
   const onBody = s && s.container && s.container.is_body && s.latitude != null && s.container.body_radius_m;
   if (!onBody) {
     msg.hidden = false;
@@ -2174,6 +2188,11 @@ $("setup-download").onclick = async () => {
 function init() {
   connect();
   loadFinderOres();
+  // Show the map from the start so the feature is discoverable; drawMap paints
+  // an "awaiting location" notice on the blank canvas until the first
+  // /showlocation arrives (render() repopulates it once a fix lands).
+  $("map-panel").hidden = false;
+  drawMap();
   fetch("/api/state").then(r => r.json()).then(d => {
     if (d.state) render(d.state);
     renderCapture(d.capture);
