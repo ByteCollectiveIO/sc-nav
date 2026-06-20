@@ -749,3 +749,83 @@ sighting with the shard it was made on and let clients filter to their own.
   `_capture_observation`, exposed on `nav_state["shard"]` and in presence records.
 - `server/static/index.html` — `currentShard`, `obsShardState`/`onShard`,
   `shardOnly` + `#shard-toggle`, roster same-shard sort/chip.
+
+---
+
+## 11. Mobile-friendly responsive UI (phones / iPads)
+
+**Status:** done (2026-06-20). Built CSS-only as designed, no server/JS change.
+`header` got `flex-wrap: wrap`; the four wide tables (`#finder-results`,
+`#search-results`, `#token-table`, `#lb-table`) are wrapped in `.table-x`
+(`overflow-x: auto`) and `.table-scroll` (NEARBY) gained `overflow-x: auto`, so
+wide rows scroll inside their panel instead of past the viewport. One
+`@media (max-width: 640px)` block tightens `main`/`.panel` padding, packs/shrinks
+the `.readouts` tiles (44/30px digits → 30/22px), drops `#where` to its own
+full-width line, neutralizes the inline `min-width` on the wide inputs
+(`input.ti, select.sel { min-width: 0 !important }`), relaxes `.fc-row` from 4 to
+3 columns (hides the `n=` count), and shortens the map to 320px. Map touch
+already worked — `#map` carries `touch-action: none`. Verified HTML tag balance.
+
+### Original plan below (for reference).
+
+### Problem
+
+The UI trails off the right edge on phones and iPads — much of it isn't visible
+without horizontal scrolling. The app is one static SPA
+(`server/static/index.html`, ~2180 lines, inline CSS + JS, no build step). It
+*already* ships `<meta name="viewport" content="width=device-width,
+initial-scale=1">` (l.5) and leans on fluid primitives almost everywhere
+(`flex-wrap: wrap` on form/filter rows, `grid-template-columns: repeat(auto-fit,
+minmax(...))` on the readouts/capture/leaderboard grids, a centered
+`max-width: 1100px` main, the map canvas is `width: 100%`). The foundation is
+mostly there — what's missing is small-screen tuning.
+
+### Decision: responsive CSS on the one UI, NOT user-agent detection + a second UI
+
+Do **not** sniff the user-agent and serve a separate mobile UI. That's the
+high-maintenance path (two UIs to keep in sync, UA detection that misfires —
+iPadOS reports as desktop Safari by default, etc.). Because the layout is already
+largely fluid, the right move is a handful of `@media` rules and overflow
+wrappers on the **single existing `index.html`**. No server work, no JS
+architecture change — almost entirely CSS.
+
+### The actual offenders (why it overflows today)
+
+- **Zero `@media` queries** in the whole file — nothing is tuned for narrow
+  screens.
+- **Header doesn't wrap** — `header { display: flex }` (l.18) has no
+  `flex-wrap`, so logo + title + connection dot + `#where` location + the
+  Leaderboard/Setup/Settings nav links + `#account` all sit on one row and push
+  off-screen.
+- **Tables overflow** — the leaderboard (`#lb-table`), search results
+  (`#search-results`), finder results (`#finder-results`), and token table
+  (`#token-table`) have no horizontal-scroll wrapper, so wide rows spill past
+  the viewport edge.
+- **Fixed `min-width` inputs / grids force overflow** — e.g. the shard/rotation
+  inputs at `min-width: 220px` (l.515/536) and the `.fc-row` fixed grid
+  `130px 1fr 46px 56px` (l.160) are wider than a narrow screen.
+
+### Implementation sketch (≈ half-day to a day, CSS-only)
+
+1. **Header wrap** — add `flex-wrap: wrap` to `header` (l.18); shrink or collapse
+   the nav links / `#where` readout on small screens.
+2. **Table overflow wrappers** — wrap each `<table>` in an `overflow-x: auto`
+   container (or a single `@media` rule giving tables a scroll parent) so wide
+   tables scroll within their panel instead of the whole page.
+3. **One `@media (max-width: 640px)` block** — collapse the multi-column grids to
+   a single column, drop the fixed input `min-width`s to `100%`/`auto`, relax
+   `.fc-row` to fewer columns, and tighten panel padding / font sizes.
+4. **Map touch** — the map is canvas-based with pan/tap interaction; verify
+   pan + node-tap work via touch (it may already work through pointer events —
+   check `#map` handlers, the `mapHits` tap targets ~l.1293/1433, and the
+   `.dragging` logic) and add `touch-action` if needed to stop the page
+   panning while dragging the map.
+
+### Relevant code
+
+- `server/static/index.html` — `<style>` block (l.7+, add `@media` rules here);
+  `header` (l.18) + header markup (l.260); the `.readouts` / `.capture-grid` /
+  `.lb-cards` auto-fit grids (l.34/43/115); `.fc-row` fixed grid (l.160); tables
+  `#lb-table`/`#search-results`/`#finder-results`/`#token-table`; fixed
+  `min-width` inputs (l.515/536); map canvas `#map` (l.99) + tap/drag handlers
+  (`mapHits` ~l.1293, draw ~l.1433).

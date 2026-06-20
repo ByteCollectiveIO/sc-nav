@@ -15,7 +15,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
     font-family: "SF Mono", "Cascadia Code", Consolas, monospace; }
-  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px;
     background: var(--panel); border-bottom: 1px solid var(--border); }
   header h1 { font-size: 16px; margin: 0; letter-spacing: 2px; color: var(--accent); }
   #conn { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
@@ -85,8 +85,11 @@
   tbody tr.selected td, tbody tr.selected td.muted { color: var(--sel); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* scrollable table window so a long browse list doesn't stretch the page */
-  .table-scroll { max-height: 480px; overflow-y: auto; }
+  .table-scroll { max-height: 480px; overflow-y: auto; overflow-x: auto; }
   .table-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  /* horizontal-scroll parent so a wide table scrolls within its panel on
+     narrow screens instead of spilling past the viewport edge */
+  .table-x { overflow-x: auto; }
   .muted { color: var(--dim); }
   .armed { color: var(--warn); padding: 4px 0; }
   .credited { color: var(--dim); font-size: 12px; margin-top: 6px; }
@@ -241,6 +244,36 @@
     font-weight: bold; cursor: pointer; text-decoration: none; margin: 4px 0; }
   .kbd { background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px;
     border-radius: 4px; padding: 1px 6px; font-size: 12px; color: var(--text); }
+
+  /* ---- small screens (phones / narrow tablets) -------------------------- *
+   * The layout is already fluid (flex-wrap, auto-fit grids, % map canvas);   *
+   * these rules tune it so nothing spills past a phone-width viewport.       */
+  @media (max-width: 640px) {
+    header { gap: 8px 10px; padding: 8px 12px; }
+    header h1 { font-size: 14px; letter-spacing: 1px; }
+    /* let the location readout drop to its own full-width line under the row */
+    #where { font-size: 11px; flex-basis: 100%; text-align: left; }
+
+    main { padding: 10px; gap: 10px; }
+    .panel { padding: 10px 12px; }
+
+    /* pack the big number tiles tighter and shrink their oversized digits */
+    .readouts { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+    .readout { padding: 8px 10px; }
+    .readout .value { font-size: 22px; }
+    .readout.primary .value { font-size: 30px; }
+
+    /* desktop min-widths on inputs/selects shouldn't force horizontal overflow;
+       let flex shrink them (overrides inline min-width on the wide ID fields) */
+    input.ti, select.sel { min-width: 0 !important; }
+
+    /* fewer columns so a forecast row fits a narrow viewport */
+    .fc-row { grid-template-columns: 92px 1fr 40px; }
+    .fc-row .fc-n { display: none; }
+
+    /* map already handles touch panning via touch-action:none; just shorten it */
+    #map { height: 320px; }
+  }
 </style>
 </head>
 <body>
@@ -363,13 +396,15 @@
       </label>
       <span class="muted" id="finder-status"></span>
     </div>
-    <table id="finder-results" hidden style="margin-top:8px;">
+    <div class="table-x" style="margin-top:8px;">
+    <table id="finder-results" hidden>
       <thead><tr>
         <th>LIKELIHOOD</th><th>GO TO</th><th>JUMP TO (QT)</th>
         <th class="num">TRAVEL</th><th>TYPICAL BAND</th><th class="num">SAMPLES</th>
       </tr></thead>
       <tbody></tbody>
     </table>
+    </div>
   </div>
 
   <div class="capture-grid">
@@ -476,10 +511,12 @@
   <div class="panel">
     <h2>SEARCH (whole dataset)</h2>
     <input id="search" class="ti" placeholder="search POIs, resources, wildlife…" autocomplete="off">
+    <div class="table-x">
     <table id="search-results" hidden>
       <thead><tr><th>NAME</th><th>KIND</th><th>DETAIL</th><th>CONTAINER</th><th>JUMP TO (QT)</th><th>BY</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
+    </div>
   </div>
 
   </div><!-- /main-view -->
@@ -493,10 +530,12 @@
       <span class="muted" id="token-status"></span>
     </div>
     <div id="token-new" class="armed" hidden style="margin-top:8px;"></div>
-    <table id="token-table" hidden style="margin-top:8px;">
+    <div class="table-x" style="margin-top:8px;">
+    <table id="token-table" hidden>
       <thead><tr><th>LABEL</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
+    </div>
   </div>
 
   <div class="panel" id="admin-panel" hidden>
@@ -658,6 +697,7 @@
   </div>
   <div class="panel">
     <h2>BREAKDOWN</h2>
+    <div class="table-x">
     <table id="lb-table">
       <thead><tr>
         <th>#</th><th>CONTRIBUTOR</th>
@@ -665,6 +705,7 @@
       </tr></thead>
       <tbody></tbody>
     </table>
+    </div>
   </div>
   </div><!-- /leaderboard-view -->
 </main>
