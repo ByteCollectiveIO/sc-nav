@@ -2085,21 +2085,21 @@ async function loadStats() {
     ...(hasImported ? [["IMPORTED POIs", imported, "lb-c-imported"]] : []),
     ["RESOURCE NODES", t.resource, "lb-c-resource"],
     ["FAUNA", t.wildlife, "lb-c-wildlife"], ["HARVESTABLES", t.harvestable, "lb-c-harvestable"],
-    ["TOTAL RECORDS", t.records, ""], ["CONTRIBUTORS", t.contributors, ""],
-    ["SYSTEMS", t.systems, ""], ["BODIES", t.bodies, ""], ["SHARDS", t.shards, ""],
+    ["CONTRIBUTORS", t.contributors, ""],
+    ["SYSTEMS", t.systems, ""], ["BODIES", t.bodies, ""],
   ];
   $("stat-cards").innerHTML = cards.map(([k, n, c]) =>
     `<div class="stat-card"><div class="n ${c}">${n || 0}</div><div class="k">${k}</div></div>`).join("");
 
   // Annotate the imported catalog: it inflates the type/body/system/coverage
-  // breakdowns but is excluded from TOTAL RECORDS and CONTRIBUTORS (guild work).
+  // breakdowns but is excluded from the guild-contribution metrics (guild work).
   const note = $("stat-imported-note");
   note.hidden = !hasImported;
   if (hasImported)
     note.textContent =
       `Includes ${imported.toLocaleString()} POIs imported from the starmap catalog (dataset scope) — ` +
       `folded into POIs-by-type, systems and coverage, and shown as a "+N" note per body. ` +
-      `Guild-contribution metrics (TOTAL RECORDS, CONTRIBUTORS, and the body ranking) exclude them.`;
+      `Guild-contribution metrics (CONTRIBUTORS and the body ranking) exclude them.`;
 
   // Weekly activity columns.
   const act = d.activity || [];
