@@ -968,7 +968,6 @@ function renderNearby() {
   const tbody = $("nearby-body");
   tbody.innerHTML = "";
   const selId = lastState && lastState.destination ? lastState.destination.id : null;
-  let selRow = null;
   for (const e of shown) {
     const tr = document.createElement("tr");
     tr.innerHTML =
@@ -979,16 +978,11 @@ function renderNearby() {
       `<td class="num">${fmtBearing(e.bearing_deg)}</td>` +
       `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
     tr.onclick = () => setDestination(e.id);
-    if (selId != null && e.id === selId) { tr.classList.add("selected"); selRow = tr; }
+    if (selId != null && e.id === selId) tr.classList.add("selected");
     wireDelete(tr);
     tbody.appendChild(tr);
   }
-  // Scroll the highlighted row into view only when the selection changes (e.g.
-  // a map tap), so re-renders on each state poll don't fight the user's scroll.
-  if (selRow && selId !== lastScrolledSel) selRow.scrollIntoView({ block: "nearest" });
-  lastScrolledSel = selId;
 }
-let lastScrolledSel = null;
 
 function delSpan(e) {
   if (e.kind === "resource" || e.kind === "wildlife")
