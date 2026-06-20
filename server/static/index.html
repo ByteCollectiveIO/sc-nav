@@ -27,9 +27,9 @@
   /* The two views are layout-transparent so their panels remain direct grid
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
-  #main-view, #settings-view, #setup-view, #leaderboard-view { display: contents; }
+  #main-view, #settings-view, #setup-view, #leaderboard-view, #stats-view { display: contents; }
   #main-view[hidden], #settings-view[hidden], #setup-view[hidden],
-  #leaderboard-view[hidden] { display: none; }
+  #leaderboard-view[hidden], #stats-view[hidden] { display: none; }
 
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
@@ -145,6 +145,47 @@
   .lb-seg.harvestable { background: var(--harvest); }
   #lb-table tbody tr { cursor: default; }
 
+  /* statistics page */
+  .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .stat-card { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; text-align: center; }
+  .stat-card .n { font-size: 28px; font-variant-numeric: tabular-nums; }
+  .stat-card .k { font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-top: 2px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .stat-grid .panel { margin: 0; }
+  /* horizontal labelled bars (one metric per row) */
+  .hbars { display: flex; flex-direction: column; gap: 7px; }
+  .hbar { display: grid; grid-template-columns: 130px 1fr 42px; gap: 9px; align-items: center; font-size: 13px; }
+  .hbar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hbar-track { background: #0c1119; border-radius: 4px; height: 14px; overflow: hidden; }
+  .hbar-fill { height: 100%; border-radius: 4px; background: var(--accent); min-width: 2px; }
+  .hbar-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+  .stat-more { font-size: 11px; color: var(--dim); margin-top: 8px; }
+  .stat-empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
+  /* weekly activity columns */
+  .colchart { display: flex; align-items: flex-end; gap: 3px; height: 130px; padding-top: 6px; }
+  .colchart .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+    align-items: center; gap: 3px; min-width: 0; height: 100%; }
+  .colchart .col .bar { width: 100%; background: var(--accent); border-radius: 3px 3px 0 0;
+    min-height: 2px; transition: filter .1s; }
+  .colchart .col:hover .bar { filter: brightness(1.3); }
+  .colchart .col .cv { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .colchart-x { display: flex; gap: 3px; margin-top: 4px; }
+  .colchart-x span { flex: 1; text-align: center; font-size: 9px; color: var(--dim);
+    white-space: nowrap; overflow: hidden; }
+  /* tinting so each breakdown reads as its category */
+  .hbar.resource .hbar-fill { background: var(--node); }
+  .hbar.wildlife .hbar-fill { background: var(--fauna); }
+  .hbar.harvestable .hbar-fill { background: var(--harvest); }
+  .hbar.poi .hbar-fill { background: var(--accent); }
+  /* stacked body bars reuse the leaderboard segment colors */
+  .stat-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: #0c1119; }
+  .stat-seg { height: 100%; min-width: 0; }
+  .stat-seg.poi { background: var(--accent); }
+  .stat-seg.resource { background: var(--node); }
+  .stat-seg.wildlife { background: var(--fauna); }
+  .stat-seg.harvestable { background: var(--harvest); }
+
   /* teammate presence (roster) */
   .roster-share { float: right; font-size: 12px; color: var(--dim);
     display: inline-flex; align-items: center; gap: 5px; font-weight: normal; letter-spacing: 0; }
@@ -215,9 +256,9 @@
   #token-new code { color: var(--good); }
 
   /* setup guide */
-  #setup-toggle, #leaderboard-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
+  #setup-toggle, #leaderboard-toggle, #stats-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
     text-decoration: none; white-space: nowrap; }
-  #setup-toggle:hover, #leaderboard-toggle:hover { text-decoration: underline; }
+  #setup-toggle:hover, #leaderboard-toggle:hover, #stats-toggle:hover { text-decoration: underline; }
   .setup { max-width: 760px; margin: 0 auto; }
   .setup > h2 { color: var(--accent); letter-spacing: 2px; font-size: 18px; margin: 0 0 6px; }
   .setup-intro { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 0 0 18px; }
@@ -299,6 +340,7 @@
   <h1>Org Navigator</h1>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
+  <a id="stats-toggle" href="#/stats" hidden>📊 Stats</a>
   <a id="leaderboard-toggle" href="#/leaderboard" hidden>🏆 Leaderboard</a>
   <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
   <a id="nav-toggle" href="#/settings" hidden></a>
@@ -708,6 +750,57 @@
     </div>
   </div>
   </div><!-- /leaderboard-view -->
+
+  <div id="stats-view" hidden>
+  <div class="panel">
+    <h2>DATASET OVERVIEW</h2>
+    <div class="stat-cards" id="stat-cards"></div>
+  </div>
+  <div class="panel">
+    <h2>SIGHTINGS OVER TIME <span class="muted">(per week · last 16 weeks)</span></h2>
+    <div class="colchart" id="stat-activity"></div>
+    <div class="colchart-x" id="stat-activity-x"></div>
+    <div class="stat-empty" id="stat-activity-empty" hidden>No timestamped sightings yet.</div>
+  </div>
+  <div class="panel">
+    <h2>MOST-MAPPED BODIES <span class="muted">(records per body · stacked by type)</span></h2>
+    <div class="lb-legend">
+      <span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span><span class="harvestable">Harvestables</span>
+    </div>
+    <div class="hbars" id="stat-bodies"></div>
+    <div class="stat-empty" id="stat-bodies-empty" hidden>No records yet.</div>
+  </div>
+  <div class="stat-grid">
+    <div class="panel">
+      <h2>RESOURCE NODES BY ORE</h2>
+      <div class="hbars" id="stat-ores"></div>
+    </div>
+    <div class="panel">
+      <h2>RESOURCE QUALITY <span class="muted">(band)</span></h2>
+      <div class="hbars" id="stat-bands"></div>
+    </div>
+    <div class="panel">
+      <h2>FAUNA BY SPECIES</h2>
+      <div class="hbars" id="stat-species"></div>
+    </div>
+    <div class="panel">
+      <h2>HARVESTABLES</h2>
+      <div class="hbars" id="stat-harvestables"></div>
+    </div>
+    <div class="panel">
+      <h2>BIOME COVERAGE</h2>
+      <div class="hbars" id="stat-biomes"></div>
+    </div>
+    <div class="panel">
+      <h2>POIs BY TYPE</h2>
+      <div class="hbars" id="stat-poi-types"></div>
+    </div>
+    <div class="panel">
+      <h2>RECORDS BY SYSTEM</h2>
+      <div class="hbars" id="stat-systems"></div>
+    </div>
+  </div>
+  </div><!-- /stats-view -->
 </main>
 
 <script>
@@ -1851,12 +1944,14 @@ function applyView() {
   const settings = location.hash === "#/settings" && !!currentMe;
   const setup = location.hash === "#/setup" && !!currentMe;
   const leaderboard = location.hash === "#/leaderboard" && !!currentMe;
-  const sub = settings || setup || leaderboard;
+  const stats = location.hash === "#/stats" && !!currentMe;
+  const sub = settings || setup || leaderboard || stats;
 
   $("main-view").hidden = sub;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   $("leaderboard-view").hidden = !leaderboard;
+  $("stats-view").hidden = !stats;
 
   // ⚙ Settings link doubles as the "back" control on any sub-view.
   const link = $("nav-toggle");
@@ -1866,6 +1961,7 @@ function applyView() {
   // 📖 Setup / 🏆 Leaderboard links: visible when signed in, except on their own page.
   $("setup-toggle").hidden = !currentMe || setup;
   $("leaderboard-toggle").hidden = !currentMe || leaderboard;
+  $("stats-toggle").hidden = !currentMe || stats;
 
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
@@ -1873,6 +1969,8 @@ function applyView() {
     if (currentMe.is_admin) loadSettings();
   } else if (leaderboard) {
     loadLeaderboard();
+  } else if (stats) {
+    loadStats();
   } else if (!sub && lastState) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.
@@ -1930,6 +2028,91 @@ async function loadLeaderboard() {
        <td class="num">${r.counts.harvestable || 0}</td>
        <td class="num"><b>${r.total}</b></td>
      </tr>`).join("");
+}
+
+// ---------- statistics ----------
+// One labelled horizontal bar per {name,count}, scaled to the row max. `block`
+// is a {items,distinct} payload from /api/stats; `cls` tints the fill to a
+// category color. Renders an empty-state note when there's nothing to show.
+function statBars(elId, block, cls = "") {
+  const el = $(elId);
+  if (!el) return;
+  const items = (block && block.items) || [];
+  if (!items.length) { el.innerHTML = `<div class="stat-empty">No data yet.</div>`; return; }
+  const max = items.reduce((m, it) => Math.max(m, it.count), 0) || 1;
+  let html = items.map(it => {
+    const pct = (it.count / max) * 100;
+    return `<div class="hbar ${cls}">
+        <span class="hbar-label" title="${esc(it.name)}">${esc(it.name)}</span>
+        <span class="hbar-track"><span class="hbar-fill" style="width:${pct}%"></span></span>
+        <span class="hbar-n">${it.count}</span>
+      </div>`;
+  }).join("");
+  const more = (block.distinct || items.length) - items.length;
+  if (more > 0) html += `<div class="stat-more">+${more} more not shown</div>`;
+  el.innerHTML = html;
+}
+
+async function loadStats() {
+  let d;
+  try {
+    d = await fetch("/api/stats").then(r => r.json());
+  } catch { return; }
+  const t = d.totals || {};
+
+  // Overview cards.
+  const cards = [
+    ["POIs", t.poi, "lb-c-poi"], ["RESOURCE NODES", t.resource, "lb-c-resource"],
+    ["FAUNA", t.wildlife, "lb-c-wildlife"], ["HARVESTABLES", t.harvestable, "lb-c-harvestable"],
+    ["TOTAL RECORDS", t.records, ""], ["CONTRIBUTORS", t.contributors, ""],
+    ["SYSTEMS", t.systems, ""], ["BODIES", t.bodies, ""], ["SHARDS", t.shards, ""],
+  ];
+  $("stat-cards").innerHTML = cards.map(([k, n, c]) =>
+    `<div class="stat-card"><div class="n ${c}">${n || 0}</div><div class="k">${k}</div></div>`).join("");
+
+  // Weekly activity columns.
+  const act = d.activity || [];
+  $("stat-activity-empty").hidden = act.length > 0;
+  const aMax = act.reduce((m, w) => Math.max(m, w.count), 0) || 1;
+  $("stat-activity").innerHTML = act.map(w => {
+    const h = (w.count / aMax) * 100;
+    return `<div class="col" title="${esc(w.label)}: ${w.count}">
+        <span class="cv">${w.count || ""}</span>
+        <span class="bar" style="height:${h}%"></span>
+      </div>`;
+  }).join("");
+  // Label every other week so a 16-wide axis doesn't crowd.
+  $("stat-activity-x").innerHTML = act.map((w, i) =>
+    `<span>${i % 2 === 0 ? esc(w.label) : ""}</span>`).join("");
+
+  // Most-mapped bodies: stacked bars (label | segments | total).
+  const bodies = d.top_bodies || [];
+  $("stat-bodies-empty").hidden = bodies.length > 0;
+  const bMax = bodies.reduce((m, b) => Math.max(m, b.total), 0) || 1;
+  const CATS = ["poi", "resource", "wildlife", "harvestable"];
+  $("stat-bodies").innerHTML = bodies.map(b => {
+    const segs = CATS.map(c => {
+      const n = b[c] || 0;
+      if (!n) return "";
+      return `<span class="stat-seg ${c}" style="width:${(n / bMax) * 100}%" title="${n} ${c}"></span>`;
+    }).join("");
+    return `<div class="hbar">
+        <span class="hbar-label" title="${esc(b.body)} · ${esc(b.system)}">${esc(b.body)} <span class="muted">${esc(b.system)}</span></span>
+        <span class="stat-bar">${segs}</span>
+        <span class="hbar-n">${b.total}</span>
+      </div>`;
+  }).join("") || `<div class="stat-empty">No records yet.</div>`;
+
+  // Resource quality bands: drop trailing empties so an all-unknown set stays compact.
+  const bands = (d.bands || []).filter(b => b.count > 0);
+  statBars("stat-bands", { items: bands.map(b => ({ name: b.band, count: b.count })) }, "resource");
+
+  statBars("stat-ores", d.ores, "resource");
+  statBars("stat-species", d.species, "wildlife");
+  statBars("stat-harvestables", d.harvestables, "harvestable");
+  statBars("stat-biomes", d.biomes, "");
+  statBars("stat-poi-types", d.poi_types, "poi");
+  statBars("stat-systems", d.systems, "");
 }
 
 // ---------- org settings (admin) ----------

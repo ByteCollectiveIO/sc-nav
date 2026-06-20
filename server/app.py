@@ -20,7 +20,8 @@ import traceback
 import urllib.parse
 import urllib.request
 import zipfile
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -1246,6 +1247,159 @@ async def leaderboard(user: dict = Depends(require_session)):
         "contributors": contributors,
         "totals": totals,
         "grand_total": sum(totals.values()),
+    }
+
+
+# How many entries each "top N" breakdown returns to the Statistics page; the
+# response also carries the distinct-count so the UI can say "+N more".
+_STATS_TOP_N = 15
+# How many trailing weeks the activity sparkline covers.
+_STATS_WEEKS = 16
+
+
+def _top_counter(counter: Counter, limit: int = _STATS_TOP_N) -> dict:
+    """A Counter -> {"items": [{"name","count"}, ...top], "distinct": int} shape.
+    Distinct is the full key count so the UI can note how many were truncated."""
+    items = [{"name": name, "count": n} for name, n in counter.most_common(limit)]
+    return {"items": items, "distinct": len(counter)}
+
+
+def _iso_week_start(dt: datetime) -> datetime:
+    """Monday 00:00 (UTC) of the ISO week containing `dt`."""
+    d = dt.astimezone(timezone.utc)
+    monday = (d - timedelta(days=d.weekday())).date()
+    return datetime(monday.year, monday.month, monday.day, tzinfo=timezone.utc)
+
+
+@app.get("/api/stats")
+async def stats(user: dict = Depends(require_session)):
+    """Aggregate dataset statistics for the Statistics page: overall totals, the
+    spread across bodies / systems / biomes / shards, per-type breakdowns
+    (ore, fauna species, harvestables, POI types), resource quality bands, and a
+    weekly activity sparkline. Computed live from the DB — the dataset is small
+    (org scale), so a full scan per page load is cheap and always current."""
+    pois = db.list_custom_pois()
+    obs = db.list_observations()
+
+    cat_obs = {"resource": [], "wildlife": [], "harvestable": []}
+    for o in obs:
+        bucket = cat_obs.get(o.get("category"))
+        if bucket is not None:
+            bucket.append(o)
+
+    records = pois + obs
+
+    def _body_label(r):
+        return r.get("container") or "Deep Space"
+
+    # --- coverage: distinct systems / bodies / shards / contributors ---------
+    systems = {r.get("system") for r in records if r.get("system")}
+    bodies = {(r.get("system"), r.get("container")) for r in records if r.get("container")}
+    shards = {o.get("shard_id") for o in obs if o.get("shard_id")}
+    contributors = set()
+    for r in records:
+        if r.get("owner_id") is not None:
+            contributors.add(f"id:{r['owner_id']}")
+        elif r.get("owner_handle"):
+            contributors.add(f"h:{r['owner_handle']}")
+
+    # --- where: records per body (stacked by category) -----------------------
+    by_body: dict[tuple, dict] = {}
+    by_system: Counter = Counter()
+    by_biome: Counter = Counter()
+
+    def _body_row(r):
+        key = (r.get("system"), _body_label(r))
+        row = by_body.get(key)
+        if row is None:
+            row = by_body[key] = {
+                "body": key[1], "system": key[0] or "?",
+                "poi": 0, "resource": 0, "wildlife": 0, "harvestable": 0, "total": 0,
+            }
+        return row
+
+    for p in pois:
+        row = _body_row(p)
+        row["poi"] += 1
+        row["total"] += 1
+        if p.get("system"):
+            by_system[p["system"]] += 1
+    for o in obs:
+        cat = o.get("category")
+        if cat not in cat_obs:
+            continue
+        row = _body_row(o)
+        row[cat] += 1
+        row["total"] += 1
+        if o.get("system"):
+            by_system[o["system"]] += 1
+        if o.get("biome"):
+            by_biome[o["biome"]] += 1
+
+    top_bodies = sorted(by_body.values(), key=lambda r: (-r["total"], r["body"].lower()))[:_STATS_TOP_N]
+
+    # --- per-type breakdowns -------------------------------------------------
+    ores = Counter(o["data"].get("ore") or "Unknown" for o in cat_obs["resource"])
+    species = Counter(o["data"].get("species") or "Unknown" for o in cat_obs["wildlife"])
+    harvestables = Counter(o["data"].get("name") or "Unknown" for o in cat_obs["harvestable"])
+    poi_types = Counter((p.get("type") or "Custom") for p in pois)
+
+    # --- resource quality bands (B1..B8 + Unknown) ---------------------------
+    bands = Counter()
+    for o in cat_obs["resource"]:
+        b = o["data"].get("band")
+        try:
+            bands[str(max(1, min(8, int(b))))] += 1
+        except (TypeError, ValueError):
+            bands["Unk"] += 1
+    band_series = [{"band": f"B{n}", "count": bands.get(str(n), 0)} for n in range(1, 9)]
+    band_series.append({"band": "Unk", "count": bands.get("Unk", 0)})
+
+    # --- weekly activity (observations carry a timestamp; POIs don't) --------
+    weeks: Counter = Counter()
+    for o in obs:
+        ts = o.get("observed_at")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        weeks[_iso_week_start(dt)] += 1
+    activity = []
+    if weeks:
+        end = _iso_week_start(datetime.now(timezone.utc))
+        start = end - timedelta(weeks=_STATS_WEEKS - 1)
+        wk = start
+        while wk <= end:
+            activity.append({
+                "label": wk.strftime("%b %d"),
+                "count": weeks.get(wk, 0),
+            })
+            wk += timedelta(weeks=1)
+
+    return {
+        "totals": {
+            "poi": len(pois),
+            "resource": len(cat_obs["resource"]),
+            "wildlife": len(cat_obs["wildlife"]),
+            "harvestable": len(cat_obs["harvestable"]),
+            "observations": len(obs),
+            "records": len(records),
+            "contributors": len(contributors),
+            "systems": len(systems),
+            "bodies": len(bodies),
+            "shards": len(shards),
+        },
+        "top_bodies": top_bodies,
+        "systems": _top_counter(by_system),
+        "ores": _top_counter(ores),
+        "species": _top_counter(species),
+        "harvestables": _top_counter(harvestables),
+        "poi_types": _top_counter(poi_types),
+        "biomes": _top_counter(by_biome),
+        "bands": band_series,
+        "activity": activity,
     }
 
 
