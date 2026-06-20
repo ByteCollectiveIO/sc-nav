@@ -87,10 +87,12 @@ def _fetch_json(url, timeout=30):
 
 
 def starmap_pois_enabled() -> bool:
-    """Whether to load starmap.space's POI catalog. Off lets an org start from a
-    blank POI database (their own custom POIs only). Celestial bodies (the
-    container catalog) are always loaded — the nav math needs them."""
-    return db.get_setting("starmap_pois_enabled", "1") == "1"
+    """Whether to load starmap.space's POI catalog. Defaults OFF: a new org
+    starts from a blank POI database (their own custom POIs only) and an admin
+    opts in. Once opted in, the flag persists, so every restart and /api/refresh
+    re-fetches the latest catalog automatically. Celestial bodies (the container
+    catalog) are always loaded — the nav math needs them."""
+    return db.get_setting("starmap_pois_enabled", "0") == "1"
 
 
 def member_role_id() -> str:

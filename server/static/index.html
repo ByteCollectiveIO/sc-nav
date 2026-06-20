@@ -588,11 +588,15 @@
   <div class="panel" id="admin-panel" hidden>
     <h2>ORG SETTINGS <span class="muted">(admin)</span></h2>
     <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
-      <input type="checkbox" id="starmap-toggle"> Use the starmap.space POI catalog
+      <input type="checkbox" id="starmap-toggle"> Import the starmap.space POI catalog
     </label>
     <div class="muted" style="font-size:12px; margin-top:4px;">
-      Uncheck to start from a blank POI database — only your org's own custom POIs
-      (and the QT markers you add) are used. Celestial bodies are always loaded.
+      Off by default — your org starts from a blank POI database (only your own
+      custom POIs and QT markers). Check this to import the full starmap.space
+      catalog right now (no restart needed); once imported it re-fetches the
+      latest on every restart. Uncheck to remove it and go back to a clean
+      database immediately — your custom POIs are kept. Celestial bodies are
+      always loaded.
     </div>
 
     <h2 style="margin-top:16px;">ACCESS</h2>
