@@ -1276,9 +1276,26 @@ async def stats(user: dict = Depends(require_session)):
     """Aggregate dataset statistics for the Statistics page: overall totals, the
     spread across bodies / systems / biomes / shards, per-type breakdowns
     (ore, fauna species, harvestables, POI types), resource quality bands, and a
-    weekly activity sparkline. Computed live from the DB — the dataset is small
-    (org scale), so a full scan per page load is cheap and always current."""
-    pois = db.list_custom_pois()
+    weekly activity sparkline. Computed live — the dataset is small (org scale),
+    so a full scan per page load is cheap and always current.
+
+    POIs are read from the in-memory NavData (the only place the imported
+    starmap catalog exists), split by `.custom` into guild-created vs imported.
+    Imported POIs are folded into the dataset-wide breakdowns (bodies, systems,
+    POI types) as their own dimension, and surfaced separately in the totals so
+    the UI can annotate them; the guild-activity metrics (contributors, weekly
+    activity, resource/fauna/harvestable observations) stay contribution-only."""
+    # Normalize the Poi dataclasses to the same dict shape the observation rows
+    # use (note: "container" not "container_name") so one aggregation path serves
+    # both. `custom` distinguishes guild-created POIs from the imported catalog.
+    all_pois = [
+        {"system": p.system, "container": p.container_name,
+         "type": p.type or "Custom", "owner_id": p.owner_id,
+         "owner_handle": p.owner_handle, "custom": p.custom}
+        for p in nav.pois.values()
+    ]
+    custom_pois = [p for p in all_pois if p["custom"]]
+    imported_pois = [p for p in all_pois if not p["custom"]]
     obs = db.list_observations()
 
     cat_obs = {"resource": [], "wildlife": [], "harvestable": []}
@@ -1287,17 +1304,18 @@ async def stats(user: dict = Depends(require_session)):
         if bucket is not None:
             bucket.append(o)
 
-    records = pois + obs
-
     def _body_label(r):
         return r.get("container") or "Deep Space"
 
     # --- coverage: distinct systems / bodies / shards / contributors ---------
-    systems = {r.get("system") for r in records if r.get("system")}
-    bodies = {(r.get("system"), r.get("container")) for r in records if r.get("container")}
+    # Coverage spans the whole dataset (imported catalog included); contributors
+    # is guild-only (imported POIs carry no owner).
+    coverage = all_pois + obs
+    systems = {r.get("system") for r in coverage if r.get("system")}
+    bodies = {(r.get("system"), r.get("container")) for r in coverage if r.get("container")}
     shards = {o.get("shard_id") for o in obs if o.get("shard_id")}
     contributors = set()
-    for r in records:
+    for r in custom_pois + obs:
         if r.get("owner_id") is not None:
             contributors.add(f"id:{r['owner_id']}")
         elif r.get("owner_handle"):
@@ -1313,14 +1331,14 @@ async def stats(user: dict = Depends(require_session)):
         row = by_body.get(key)
         if row is None:
             row = by_body[key] = {
-                "body": key[1], "system": key[0] or "?",
+                "body": key[1], "system": key[0] or "?", "imported": 0,
                 "poi": 0, "resource": 0, "wildlife": 0, "harvestable": 0, "total": 0,
             }
         return row
 
-    for p in pois:
+    for p in all_pois:
         row = _body_row(p)
-        row["poi"] += 1
+        row["imported" if not p["custom"] else "poi"] += 1
         row["total"] += 1
         if p.get("system"):
             by_system[p["system"]] += 1
@@ -1342,7 +1360,9 @@ async def stats(user: dict = Depends(require_session)):
     ores = Counter(o["data"].get("ore") or "Unknown" for o in cat_obs["resource"])
     species = Counter(o["data"].get("species") or "Unknown" for o in cat_obs["wildlife"])
     harvestables = Counter(o["data"].get("name") or "Unknown" for o in cat_obs["harvestable"])
-    poi_types = Counter((p.get("type") or "Custom") for p in pois)
+    # POI types span both guild-created and imported POIs (the imported catalog is
+    # where the rich type variety lives); the totals annotate the split.
+    poi_types = Counter(p["type"] for p in all_pois)
 
     # --- resource quality bands (B1..B8 + Unknown) ---------------------------
     bands = Counter()
@@ -1380,17 +1400,22 @@ async def stats(user: dict = Depends(require_session)):
 
     return {
         "totals": {
-            "poi": len(pois),
+            "poi": len(custom_pois),
+            "poi_imported": len(imported_pois),
             "resource": len(cat_obs["resource"]),
             "wildlife": len(cat_obs["wildlife"]),
             "harvestable": len(cat_obs["harvestable"]),
             "observations": len(obs),
-            "records": len(records),
+            # Guild contributions only (imported catalog excluded).
+            "records": len(custom_pois) + len(obs),
             "contributors": len(contributors),
             "systems": len(systems),
             "bodies": len(bodies),
             "shards": len(shards),
         },
+        # Whether the imported starmap POI catalog is loaded, so the UI knows to
+        # show the imported annotations even when the count happens to be 0.
+        "catalog_enabled": starmap_pois_enabled(),
         "top_bodies": top_bodies,
         "systems": _top_counter(by_system),
         "ores": _top_counter(ores),

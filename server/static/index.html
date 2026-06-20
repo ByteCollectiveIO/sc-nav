@@ -122,12 +122,14 @@
   .lb-card .k { font-size: 11px; color: var(--dim); letter-spacing: 1px; margin-top: 2px; }
   .lb-c-poi { color: var(--accent); } .lb-c-resource { color: var(--node); } .lb-c-wildlife { color: var(--fauna); }
   .lb-c-harvestable { color: var(--harvest); }
+  .lb-c-imported { color: var(--dim); }
   .lb-legend { font-size: 11px; color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 12px; }
   .lb-legend span::before { content: "■"; margin-right: 5px; }
   .lb-legend .poi::before { color: var(--accent); }
   .lb-legend .resource::before { color: var(--node); }
   .lb-legend .wildlife::before { color: var(--fauna); }
   .lb-legend .harvestable::before { color: var(--harvest); }
+  .lb-legend .imported::before { color: var(--dim); }
   /* horizontal stacked bars: one row per contributor */
   .lb-chart { display: flex; flex-direction: column; gap: 12px; }
   .lb-row { display: flex; flex-direction: column; gap: 4px; }
@@ -181,6 +183,7 @@
   /* stacked body bars reuse the leaderboard segment colors */
   .stat-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: #0c1119; }
   .stat-seg { height: 100%; min-width: 0; }
+  .stat-seg.imported { background: var(--dim); }
   .stat-seg.poi { background: var(--accent); }
   .stat-seg.resource { background: var(--node); }
   .stat-seg.wildlife { background: var(--fauna); }
@@ -755,6 +758,7 @@
   <div class="panel">
     <h2>DATASET OVERVIEW</h2>
     <div class="stat-cards" id="stat-cards"></div>
+    <div class="stat-more" id="stat-imported-note" hidden></div>
   </div>
   <div class="panel">
     <h2>SIGHTINGS OVER TIME <span class="muted">(per week · last 16 weeks)</span></h2>
@@ -765,7 +769,7 @@
   <div class="panel">
     <h2>MOST-MAPPED BODIES <span class="muted">(records per body · stacked by type)</span></h2>
     <div class="lb-legend">
-      <span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span><span class="harvestable">Harvestables</span>
+      <span class="imported" id="stat-bodies-imported-legend" hidden>Imported POIs</span><span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span><span class="harvestable">Harvestables</span>
     </div>
     <div class="hbars" id="stat-bodies"></div>
     <div class="stat-empty" id="stat-bodies-empty" hidden>No records yet.</div>
@@ -792,7 +796,7 @@
       <div class="hbars" id="stat-biomes"></div>
     </div>
     <div class="panel">
-      <h2>POIs BY TYPE</h2>
+      <h2>POIs BY TYPE <span class="muted" id="stat-poi-types-note"></span></h2>
       <div class="hbars" id="stat-poi-types"></div>
     </div>
     <div class="panel">
@@ -2059,16 +2063,31 @@ async function loadStats() {
     d = await fetch("/api/stats").then(r => r.json());
   } catch { return; }
   const t = d.totals || {};
+  // Imported = the starmap POI catalog (admin opt-in). Shown only when loaded,
+  // distinct from the guild's own POIs.
+  const imported = t.poi_imported || 0;
+  const hasImported = !!d.catalog_enabled && imported > 0;
 
-  // Overview cards.
+  // Overview cards. POIs counts the guild's own; imported gets its own card.
   const cards = [
-    ["POIs", t.poi, "lb-c-poi"], ["RESOURCE NODES", t.resource, "lb-c-resource"],
+    ["POIs", t.poi, "lb-c-poi"],
+    ...(hasImported ? [["IMPORTED POIs", imported, "lb-c-imported"]] : []),
+    ["RESOURCE NODES", t.resource, "lb-c-resource"],
     ["FAUNA", t.wildlife, "lb-c-wildlife"], ["HARVESTABLES", t.harvestable, "lb-c-harvestable"],
     ["TOTAL RECORDS", t.records, ""], ["CONTRIBUTORS", t.contributors, ""],
     ["SYSTEMS", t.systems, ""], ["BODIES", t.bodies, ""], ["SHARDS", t.shards, ""],
   ];
   $("stat-cards").innerHTML = cards.map(([k, n, c]) =>
     `<div class="stat-card"><div class="n ${c}">${n || 0}</div><div class="k">${k}</div></div>`).join("");
+
+  // Annotate the imported catalog: it inflates the type/body/system/coverage
+  // breakdowns but is excluded from TOTAL RECORDS and CONTRIBUTORS (guild work).
+  const note = $("stat-imported-note");
+  note.hidden = !hasImported;
+  if (hasImported)
+    note.textContent =
+      `Includes ${imported.toLocaleString()} POIs imported from the starmap catalog — counted in ` +
+      `POIs-by-type, bodies, systems and coverage below, but not in TOTAL RECORDS or CONTRIBUTORS.`;
 
   // Weekly activity columns.
   const act = d.activity || [];
@@ -2085,11 +2104,14 @@ async function loadStats() {
   $("stat-activity-x").innerHTML = act.map((w, i) =>
     `<span>${i % 2 === 0 ? esc(w.label) : ""}</span>`).join("");
 
-  // Most-mapped bodies: stacked bars (label | segments | total).
+  // Most-mapped bodies: stacked bars (label | segments | total). Imported POIs
+  // ride as their own leading segment so catalog density reads apart from the
+  // guild's own records; the legend entry shows only when there are any.
   const bodies = d.top_bodies || [];
   $("stat-bodies-empty").hidden = bodies.length > 0;
+  $("stat-bodies-imported-legend").hidden = !hasImported;
   const bMax = bodies.reduce((m, b) => Math.max(m, b.total), 0) || 1;
-  const CATS = ["poi", "resource", "wildlife", "harvestable"];
+  const CATS = ["imported", "poi", "resource", "wildlife", "harvestable"];
   $("stat-bodies").innerHTML = bodies.map(b => {
     const segs = CATS.map(c => {
       const n = b[c] || 0;
@@ -2112,6 +2134,7 @@ async function loadStats() {
   statBars("stat-harvestables", d.harvestables, "harvestable");
   statBars("stat-biomes", d.biomes, "");
   statBars("stat-poi-types", d.poi_types, "poi");
+  $("stat-poi-types-note").textContent = hasImported ? "(guild + imported)" : "";
   statBars("stat-systems", d.systems, "");
 }
 
