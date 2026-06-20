@@ -163,7 +163,7 @@
   .hbar-fill { display: block; height: 100%; border-radius: 4px; background: var(--accent); min-width: 2px; }
   .hbar-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
   .bn-imp { display: block; font-size: 10px; color: var(--dim); opacity: 0.8; }
-  #stat-bodies .hbar { grid-template-columns: 130px 1fr 56px; }
+  #stat-bodies .hbar, #stat-poi-types .hbar { grid-template-columns: 130px 1fr 56px; }
   .stat-more { font-size: 11px; color: var(--dim); margin-top: 8px; }
   .stat-empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
   /* weekly activity columns */
@@ -2047,10 +2047,14 @@ function statBars(elId, block, cls = "") {
   const max = items.reduce((m, it) => Math.max(m, it.count), 0) || 1;
   let html = items.map(it => {
     const pct = (it.count / max) * 100;
+    // When an item carries a guild subtotal (POIs by type, which mixes guild +
+    // imported), show "N guild" under the total so the split is visible.
+    const sub = it.guild === undefined ? "" :
+      `<span class="bn-imp" title="${it.guild} guild, ${it.count - it.guild} imported">${it.guild} guild</span>`;
     return `<div class="hbar ${cls}">
         <span class="hbar-label" title="${esc(it.name)}">${esc(it.name)}</span>
         <span class="hbar-track"><span class="hbar-fill" style="width:${pct}%"></span></span>
-        <span class="hbar-n">${it.count}</span>
+        <span class="hbar-n">${it.count}${sub}</span>
       </div>`;
   }).join("");
   const more = (block.distinct || items.length) - items.length;

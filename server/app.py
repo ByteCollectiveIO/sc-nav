@@ -1370,8 +1370,18 @@ async def stats(user: dict = Depends(require_session)):
     species = Counter(o["data"].get("species") or "Unknown" for o in cat_obs["wildlife"])
     harvestables = Counter(o["data"].get("name") or "Unknown" for o in cat_obs["harvestable"])
     # POI types span both guild-created and imported POIs (the imported catalog is
-    # where the rich type variety lives); the totals annotate the split.
-    poi_types = Counter(p["type"] for p in all_pois)
+    # where the rich type variety lives). Each item carries the guild subtotal
+    # alongside the total so the UI can show how many of each type the org
+    # contributed vs imported.
+    poi_types_all = Counter(p["type"] for p in all_pois)
+    poi_types_guild = Counter(p["type"] for p in custom_pois)
+    poi_types = {
+        "items": [
+            {"name": name, "count": n, "guild": poi_types_guild.get(name, 0)}
+            for name, n in poi_types_all.most_common(_STATS_TOP_N)
+        ],
+        "distinct": len(poi_types_all),
+    }
 
     # --- resource quality bands (B1..B8 + Unknown) ---------------------------
     bands = Counter()
@@ -1430,8 +1440,8 @@ async def stats(user: dict = Depends(require_session)):
         "ores": _top_counter(ores),
         "species": _top_counter(species),
         "harvestables": _top_counter(harvestables),
-        "poi_types": _top_counter(poi_types),
         "biomes": _top_counter(by_biome),
+        "poi_types": poi_types,
         "bands": band_series,
         "activity": activity,
     }
