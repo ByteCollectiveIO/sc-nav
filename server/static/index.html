@@ -162,6 +162,8 @@
   .hbar-track { background: #0c1119; border-radius: 4px; height: 14px; overflow: hidden; }
   .hbar-fill { height: 100%; border-radius: 4px; background: var(--accent); min-width: 2px; }
   .hbar-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+  .bn-imp { display: block; font-size: 10px; color: var(--dim); opacity: 0.8; }
+  #stat-bodies .hbar { grid-template-columns: 130px 1fr 56px; }
   .stat-more { font-size: 11px; color: var(--dim); margin-top: 8px; }
   .stat-empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
   /* weekly activity columns */
@@ -183,7 +185,6 @@
   /* stacked body bars reuse the leaderboard segment colors */
   .stat-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: #0c1119; }
   .stat-seg { height: 100%; min-width: 0; }
-  .stat-seg.imported { background: var(--dim); }
   .stat-seg.poi { background: var(--accent); }
   .stat-seg.resource { background: var(--node); }
   .stat-seg.wildlife { background: var(--fauna); }
@@ -767,9 +768,9 @@
     <div class="stat-empty" id="stat-activity-empty" hidden>No timestamped sightings yet.</div>
   </div>
   <div class="panel">
-    <h2>MOST-MAPPED BODIES <span class="muted">(records per body · stacked by type)</span></h2>
+    <h2>MOST-MAPPED BODIES <span class="muted">(guild records per body · stacked by type)</span></h2>
     <div class="lb-legend">
-      <span class="imported" id="stat-bodies-imported-legend" hidden>Imported POIs</span><span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span><span class="harvestable">Harvestables</span>
+      <span class="poi">POIs</span><span class="resource">Resource Nodes</span><span class="wildlife">Fauna</span><span class="harvestable">Harvestables</span><span class="imported" id="stat-bodies-imported-legend" hidden>+N = imported catalog on that body</span>
     </div>
     <div class="hbars" id="stat-bodies"></div>
     <div class="stat-empty" id="stat-bodies-empty" hidden>No records yet.</div>
@@ -2086,8 +2087,9 @@ async function loadStats() {
   note.hidden = !hasImported;
   if (hasImported)
     note.textContent =
-      `Includes ${imported.toLocaleString()} POIs imported from the starmap catalog — counted in ` +
-      `POIs-by-type, bodies, systems and coverage below, but not in TOTAL RECORDS or CONTRIBUTORS.`;
+      `Includes ${imported.toLocaleString()} POIs imported from the starmap catalog (dataset scope) — ` +
+      `folded into POIs-by-type, systems and coverage, and shown as a "+N" note per body. ` +
+      `Guild-contribution metrics (TOTAL RECORDS, CONTRIBUTORS, and the body ranking) exclude them.`;
 
   // Weekly activity columns.
   const act = d.activity || [];
@@ -2104,24 +2106,27 @@ async function loadStats() {
   $("stat-activity-x").innerHTML = act.map((w, i) =>
     `<span>${i % 2 === 0 ? esc(w.label) : ""}</span>`).join("");
 
-  // Most-mapped bodies: stacked bars (label | segments | total). Imported POIs
-  // ride as their own leading segment so catalog density reads apart from the
-  // guild's own records; the legend entry shows only when there are any.
+  // Most-mapped bodies: stacked bars of guild records (scaled to the busiest
+  // body), so the ranking reflects the guild's own work. Imported catalog POIs
+  // aren't part of the bar — they ride as a muted "+N" scope annotation so the
+  // dataset's size on each body is still visible without skewing the ranking.
   const bodies = d.top_bodies || [];
   $("stat-bodies-empty").hidden = bodies.length > 0;
   $("stat-bodies-imported-legend").hidden = !hasImported;
   const bMax = bodies.reduce((m, b) => Math.max(m, b.total), 0) || 1;
-  const CATS = ["imported", "poi", "resource", "wildlife", "harvestable"];
+  const CATS = ["poi", "resource", "wildlife", "harvestable"];
   $("stat-bodies").innerHTML = bodies.map(b => {
     const segs = CATS.map(c => {
       const n = b[c] || 0;
       if (!n) return "";
       return `<span class="stat-seg ${c}" style="width:${(n / bMax) * 100}%" title="${n} ${c}"></span>`;
     }).join("");
+    const imp = b.imported || 0;
+    const impTag = imp ? `<span class="bn-imp" title="${imp} imported catalog POIs here">+${imp}</span>` : "";
     return `<div class="hbar">
         <span class="hbar-label" title="${esc(b.body)} · ${esc(b.system)}">${esc(b.body)} <span class="muted">${esc(b.system)}</span></span>
         <span class="stat-bar">${segs}</span>
-        <span class="hbar-n">${b.total}</span>
+        <span class="hbar-n">${b.total}${impTag}</span>
       </div>`;
   }).join("") || `<div class="stat-empty">No records yet.</div>`;
 

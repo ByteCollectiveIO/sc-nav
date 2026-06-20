@@ -1338,8 +1338,11 @@ async def stats(user: dict = Depends(require_session)):
 
     for p in all_pois:
         row = _body_row(p)
-        row["imported" if not p["custom"] else "poi"] += 1
-        row["total"] += 1
+        if p["custom"]:
+            row["poi"] += 1
+            row["total"] += 1   # `total` ranks by guild activity, not catalog size
+        else:
+            row["imported"] += 1   # carried as scope context, not part of the rank
         if p.get("system"):
             by_system[p["system"]] += 1
     for o in obs:
@@ -1354,7 +1357,13 @@ async def stats(user: dict = Depends(require_session)):
         if o.get("biome"):
             by_biome[o["biome"]] += 1
 
-    top_bodies = sorted(by_body.values(), key=lambda r: (-r["total"], r["body"].lower()))[:_STATS_TOP_N]
+    # Rank by guild contributions ("most-mapped by us"); bodies that only carry
+    # imported catalog POIs aren't "mapped" by the guild, so they're left out
+    # here (their scope still shows in the systems / coverage / type breakdowns).
+    top_bodies = sorted(
+        (r for r in by_body.values() if r["total"] > 0),
+        key=lambda r: (-r["total"], r["body"].lower()),
+    )[:_STATS_TOP_N]
 
     # --- per-type breakdowns -------------------------------------------------
     ores = Counter(o["data"].get("ore") or "Unknown" for o in cat_obs["resource"])
