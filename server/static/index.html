@@ -421,6 +421,16 @@
   .run-check.checked { color: var(--dim); text-decoration: line-through; }
   .run-check input { width: 16px; height: 16px; accent-color: var(--accent); }
   .run-skip { font-size: 12px; margin-top: 6px; }
+  /* contract grouping (display-only colour coding) */
+  .contract-chip { display: inline-block; font-size: 10px; letter-spacing: .5px; padding: 0 6px;
+    border-radius: 10px; color: var(--cc); border: 1px solid var(--cc); vertical-align: middle;
+    margin-left: 4px; white-space: nowrap; }
+  .completes { font-size: 12px; color: var(--good); margin-top: 4px; }
+  .run-hold { font-size: 12px; margin: 8px 0 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .hold-item { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
+  .run-contracts { display: flex; flex-direction: column; gap: 3px; margin: 4px 0 8px; }
+  .contract-prog { font-size: 12px; }
+  .contract-prog.done { opacity: .65; }
 </style>
 </head>
 <body>
@@ -967,6 +977,7 @@
         off the in-game contract; we visit shared stops once.</p>
       <div id="route-pkgs"></div>
       <datalist id="route-commodities"></datalist>
+      <datalist id="route-contracts"></datalist>
       <button id="route-add-pkg" style="margin-top:8px;">+ add package</button>
       <div class="route-actions">
         <button id="route-plan" class="active">Plan route</button>
@@ -2223,11 +2234,27 @@ function addPkgRow() {
     + `<span class="poi-pick pkg-from"><input class="ti" placeholder="from" autocomplete="off"></span>`
     + `<span class="arrow">→</span>`
     + `<span class="poi-pick pkg-to"><input class="ti" placeholder="to" autocomplete="off"></span>`
+    + `<input class="ti pkg-contract" list="route-contracts" placeholder="contract (optional)" autocomplete="off" style="width:140px;">`
     + `<span class="pkg-del" title="remove">✕</span>`;
   $("route-pkgs").appendChild(row);
   attachPoiPicker(row.querySelector(".pkg-from"));
   attachPoiPicker(row.querySelector(".pkg-to"));
-  row.querySelector(".pkg-del").onclick = () => row.remove();
+  const cinput = row.querySelector(".pkg-contract");
+  cinput.addEventListener("input", refreshContractList);
+  cinput.addEventListener("blur", refreshContractList);
+  row.querySelector(".pkg-del").onclick = () => { row.remove(); refreshContractList(); };
+}
+
+// Keep the contract datalist in sync with the labels already in use, so a player
+// types a group name once and picks it for sibling rows.
+function refreshContractList() {
+  const seen = new Set();
+  $("route-pkgs").querySelectorAll(".pkg-contract").forEach(i => {
+    const v = i.value.trim(); if (v) seen.add(v);
+  });
+  const dl = $("route-contracts");
+  dl.innerHTML = "";
+  [...seen].sort().forEach(v => { const o = document.createElement("option"); o.value = v; dl.appendChild(o); });
 }
 
 // Type-to-search POI picker resolving to a POI id (stored on the input's
@@ -2275,8 +2302,9 @@ async function planRoute() {
     const to = row.querySelector(".pkg-to input");
     const scu = Number(row.querySelector(".pkg-scu").value);
     const commodity = row.querySelector(".pkg-commodity").value.trim();
+    const contract = row.querySelector(".pkg-contract").value.trim() || null;
     if (!from.dataset.poiId || !to.dataset.poiId || !(scu > 0)) { skipped++; continue; }
-    packages.push({ commodity, scu, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
+    packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
   lastPlanInput = { packages, usable_scu: usable };
@@ -2305,6 +2333,32 @@ function fmtDur(s) {
 }
 function metric(v, l) { return `<div class="metric"><span class="v">${v}</span><span class="l">${l}</span></div>`; }
 
+// Contract grouping is display-only: each distinct label gets a stable colour so
+// the player can eyeball which packages belong together and which contract a
+// dropoff completes.
+const CONTRACT_PALETTE = ["#4fc3f7", "#ffb74d", "#66bb6a", "#ba68c8", "#f06292", "#4db6ac", "#ff8a65", "#9575cd"];
+let contractColors = {};
+function assignContractColors(stops) {
+  contractColors = {};
+  let i = 0;
+  for (const s of stops)
+    for (const p of s.pickups.concat(s.dropoffs))
+      if (p.contract && !(p.contract in contractColors))
+        contractColors[p.contract] = CONTRACT_PALETTE[i++ % CONTRACT_PALETTE.length];
+}
+function contractChip(label) {
+  if (!label) return "";
+  return ` <span class="contract-chip" style="--cc:${contractColors[label] || "#7b8a9e"}">${esc(label)}</span>`;
+}
+// contract -> the last stop (in visit order) that drops one of its packages =
+// where that contract is fully delivered.
+function contractCompletions(stops) {
+  const last = {}, byStop = {};
+  stops.forEach((s, i) => { for (const p of s.dropoffs) if (p.contract) last[p.contract] = i; });
+  for (const [c, i] of Object.entries(last)) (byStop[i] = byStop[i] || []).push(c);
+  return byStop;
+}
+
 function renderPlan(res) {
   const out = $("route-result");
   const sm = res.summary;
@@ -2328,7 +2382,9 @@ function renderPlan(res) {
   h += `<div class="route-actions"><button id="route-start" class="active">Start this run ▸</button>`
     + `<span class="muted" style="font-size:12px;">guides you stop-by-stop in the navigator</span></div>`;
   h += `</div><div class="panel"><h2>STOPS</h2>`;
-  res.stops.forEach((s, i) => { h += renderStop(s, i); });
+  assignContractColors(res.stops);
+  const completes = contractCompletions(res.stops);
+  res.stops.forEach((s, i) => { h += renderStop(s, i, completes[i] || []); });
   h += `</div>`;
   out.innerHTML = h; out.hidden = false;
   $("route-start").onclick = startRun;
@@ -2388,6 +2444,7 @@ function renderRun(run) {
   lastRunSig = runSig(run);
   if (!run) { box.hidden = true; box.innerHTML = ""; return; }
   box.hidden = false;
+  assignContractColors(run.stops);
   const cap = run.usable_scu || 0;
   const pct = cap ? Math.min(100, Math.round(run.onboard_scu / cap * 100)) : 0;
   let h = `<div class="panel route-run-panel"><div class="run-head"><h2>RUN IN PROGRESS</h2>`
@@ -2399,6 +2456,7 @@ function renderRun(run) {
     h += `<p class="route-feasible">✓ Run complete — all cargo delivered. Fly safe.</p></div>`;
     box.innerHTML = h; $("run-abandon").remove(); return;
   }
+  h += runHoldHtml(run) + runContractsHtml(run);
   run.stops.forEach((s, i) => {
     const past = i < run.active, active = i === run.active;
     h += `<div class="run-stop${active ? " active" : ""}${past ? " past" : ""}">`
@@ -2432,10 +2490,38 @@ function checkItem(p, kind) {
   return `<label class="run-check${done ? " checked" : ""}">`
     + `<input type="checkbox"${done ? " checked" : ""} data-pkg="${esc(String(p.id))}" data-state="${next}">`
     + `<span class="${kind === "load" ? "up" : "down"}">${kind === "load" ? "▲ load" : "▼ drop"}</span> `
-    + `${esc(p.commodity || "cargo")} · ${p.scu} SCU</label>`;
+    + `${esc(p.commodity || "cargo")} · ${p.scu} SCU${contractChip(p.contract)}</label>`;
 }
 
-function renderStop(s, i) {
+// "What's in the hold" — every package currently onboard, so the player can match
+// the colour-coded contract chips to the boxes in their ship.
+function runHoldHtml(run) {
+  const aboard = [];
+  for (const s of run.stops) for (const p of s.pickups) if (p.state === "onboard") aboard.push(p);
+  if (!aboard.length) return `<div class="run-hold muted">hold empty</div>`;
+  const items = aboard.map(p =>
+    `<span class="hold-item">${esc(p.commodity || "cargo")} · ${p.scu}${contractChip(p.contract)}</span>`).join("");
+  return `<div class="run-hold"><span class="muted">in the hold:</span> ${items}</div>`;
+}
+
+// Per-contract delivery progress (only when the player labelled contracts).
+function runContractsHtml(run) {
+  const stat = {};
+  for (const s of run.stops) for (const p of s.pickups) {
+    if (!p.contract) continue;
+    const st = stat[p.contract] || (stat[p.contract] = { total: 0, delivered: 0 });
+    st.total++; if (p.state === "delivered") st.delivered++;
+  }
+  const labels = Object.keys(stat);
+  if (!labels.length) return "";
+  return `<div class="run-contracts">` + labels.map(c => {
+    const st = stat[c], done = st.delivered === st.total;
+    return `<div class="contract-prog${done ? " done" : ""}">${contractChip(c)} `
+      + `<span class="muted">${st.delivered}/${st.total} delivered${done ? " ✓" : ""}</span></div>`;
+  }).join("") + `</div>`;
+}
+
+function renderStop(s, i, completes) {
   let legHtml = "";
   if (s.leg && s.leg.distance_m != null) {
     const bits = [];
@@ -2451,12 +2537,14 @@ function renderStop(s, i) {
     legHtml = `<div class="route-leg">start here</div>`;
   }
   const line = (p, dir) => `<div class="pkg-line"><span class="${dir === "up" ? "up" : "down"}">`
-    + `${dir === "up" ? "▲ load" : "▼ drop"}</span> ${esc(p.commodity || "cargo")} · ${p.scu} SCU</div>`;
+    + `${dir === "up" ? "▲ load" : "▼ drop"}</span> ${esc(p.commodity || "cargo")} · ${p.scu} SCU${contractChip(p.contract)}</div>`;
   const pk = (s.pickups || []).map(p => line(p, "up")).join("");
   const dp = (s.dropoffs || []).map(p => line(p, "down")).join("");
+  const done = (completes || []).length
+    ? `<div class="completes">✓ completes${(completes).map(c => contractChip(c)).join("")}</div>` : "";
   return `<div class="route-stop"><div class="seq">${i + 1}</div><div class="body">`
     + `<div class="stop-name">${esc(s.name)} <span class="stop-sys">${esc(s.system)}${s.type ? " · " + esc(s.type) : ""}</span></div>`
-    + legHtml + pk + dp
+    + legHtml + pk + dp + done
     + `<div class="onboard">aboard after stop: <b>${s.onboard_scu}</b> SCU</div>`
     + `</div></div>`;
 }

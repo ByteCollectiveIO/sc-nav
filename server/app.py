@@ -603,6 +603,7 @@ _SHARD_MAX = 64    # SC shard id, e.g. "pub_use1b_12030094_130"
 _LABEL_MAX = 60
 _COMMODITY_MAX = 80
 _PKG_ID_MAX = 64
+_CONTRACT_MAX = 60   # player's free-text contract/group label
 _MAX_PACKAGES = 60   # one hauling run rarely exceeds a handful of contracts
 
 
@@ -658,6 +659,7 @@ class PackageIn(BaseModel):
     scu: float = Field(ge=0, le=100_000)
     from_id: int
     to_id: int
+    contract: str | None = Field(default=None, max_length=_CONTRACT_MAX)  # display-only group label
 
 
 class RoutePlanIn(BaseModel):

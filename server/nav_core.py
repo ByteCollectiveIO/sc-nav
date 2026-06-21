@@ -1532,8 +1532,11 @@ def _leg_time_s(distance_m):
 
 
 def _pkg_view(p):
+    # `contract` is a player-supplied grouping label, carried through for display
+    # only (it never affects routing) so the UI can colour-group packages and
+    # flag which contract a dropoff completes.
     return {"id": p["id"], "commodity": p["commodity"], "scu": p["scu"],
-            "from_id": p["from_id"], "to_id": p["to_id"]}
+            "from_id": p["from_id"], "to_id": p["to_id"], "contract": p.get("contract")}
 
 
 def _leg_view(leg):
@@ -1569,7 +1572,8 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, t_ref=None) ->
         if pid is None:
             pid = i
         pkgs.append({"id": pid, "commodity": p.get("commodity"),
-                     "scu": float(p.get("scu") or 0), "from_id": fid, "to_id": tid})
+                     "scu": float(p.get("scu") or 0), "from_id": fid, "to_id": tid,
+                     "contract": p.get("contract")})
 
     if not pkgs:
         return {"summary": {"feasible": True, "num_stops": 0, "num_packages": 0,
