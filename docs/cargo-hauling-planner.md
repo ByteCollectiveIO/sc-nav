@@ -456,6 +456,14 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      redraws so the checklist doesn't thrash). Resumes via `GET /api/route/run` on
      entering `#/route`. Endpoints + lifecycle + arrival + resume verified
      end-to-end over HTTP (forged session + simulated positions).
+   - ✅ **Start-from location SHIPPED 2026-06-21.** A "START FROM" control: a POI
+     picker (`start_id`) **or** "📍 my current location" (`start_here` → the
+     server seeds from the caller's live `sess.pos` via `nav_core.position_start`,
+     a synthetic space-POI whose system is `system_at(pos)`). Live position wins
+     over a chosen POI; absent both, the run still begins free at the first stop.
+     `plan_route` gained a `start_pos` param; plan output carries `summary.start`
+     for display. Both `/plan` and `/run` honor it (400 if `start_here` without a
+     live fix). Verified end-to-end over HTTP.
    - **Dependency:** the from/to pickers search `/api/pois`, which is empty until
      the org enables the starmap catalog (default OFF) or adds custom POIs — same
      as the navigator's search.

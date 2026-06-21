@@ -972,6 +972,21 @@
     </div>
 
     <div class="panel">
+      <h2>START FROM</h2>
+      <div class="route-row">
+        <span class="poi-pick" style="flex:2; min-width:160px;">
+          <input id="route-start-poi" class="ti" placeholder="a station / POI you're at (optional)"
+                 autocomplete="off">
+        </span>
+        <span class="muted" style="font-size:12px;">or</span>
+        <button id="route-here">📍 my current location</button>
+        <span id="route-start-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <p class="muted route-hint">Where the route begins, so the first hop is from where you actually
+        are. Leave blank to begin at the most efficient first stop.</p>
+    </div>
+
+    <div class="panel">
       <h2>PACKAGES</h2>
       <p class="muted route-hint">One row per cargo line. <b>From</b> → <b>To</b> reads straight
         off the in-game contract; we visit shared stops once.</p>
@@ -2135,8 +2150,9 @@ function renderAccount(me) {
 let routeCatalog = null;        // [{name, scu, company}] from /api/ships
 let routeCatalogByName = null;
 let routeWired = false;
-let lastPlanInput = null;       // {packages, usable_scu} of the last plan, for "start run"
+let lastPlanInput = null;       // last plan request body, reused for "start run"
 let currentRun = null;          // active run view (or null)
+let routeStartHere = false;     // start from the live show_location position?
 let lastRunSig = null;          // signature of the last-rendered run (skip no-op redraws)
 
 async function loadRoutePlanner() {
@@ -2167,6 +2183,37 @@ function wireRoutePlanner() {
   $("route-ship-save").onclick = rememberShip;
   $("route-add-pkg").onclick = () => addPkgRow();
   $("route-plan").onclick = planRoute;
+  // Start-from controls: a POI picker and a "use my live position" toggle (the
+  // two are mutually exclusive).
+  attachPoiPicker($("route-start-poi").parentElement);
+  $("route-start-poi").addEventListener("input", () => {
+    if ($("route-start-poi").value.trim()) { routeStartHere = false; updateStartUI(); }
+  });
+  $("route-here").onclick = toggleStartHere;
+}
+
+function currentLocLabel() {
+  if (!lastState) return "your location";
+  const c = lastState.container;
+  return (c ? c.name : "deep space") + (lastState.system ? " · " + lastState.system : "");
+}
+function updateStartUI() {
+  $("route-here").classList.toggle("active", routeStartHere);
+  $("route-start-msg").textContent = routeStartHere ? "starting from " + currentLocLabel() : "";
+}
+function toggleStartHere() {
+  if (routeStartHere) { routeStartHere = false; updateStartUI(); return; }
+  if (!lastState) { $("route-start-msg").textContent = "no position yet — run /showlocation in game"; return; }
+  routeStartHere = true;
+  const inp = $("route-start-poi");
+  inp.value = ""; inp.dataset.poiId = ""; inp.parentElement.classList.remove("picked");
+  updateStartUI();
+}
+// {start_here} | {start_id} | {} for the plan/run request (live position wins).
+function routeStartPayload() {
+  if (routeStartHere) return { start_here: true };
+  const pid = $("route-start-poi").dataset.poiId;
+  return pid ? { start_id: Number(pid) } : {};
 }
 
 // Type-to-search ship picker (custom dropdown, not a <datalist> — datalists
@@ -2307,12 +2354,12 @@ async function planRoute() {
     packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
-  lastPlanInput = { packages, usable_scu: usable };
+  lastPlanInput = { packages, usable_scu: usable, ...routeStartPayload() };
   msg.textContent = "planning…";
   let res;
   try {
     const r = await fetch("/api/route/plan", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ packages, usable_scu: usable }) });
+      body: JSON.stringify(lastPlanInput) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
     res = await r.json();
   } catch { msg.textContent = "⚠ network error"; return; }
@@ -2377,6 +2424,8 @@ function renderPlan(res) {
     + metric(fmtGm(sm.total_distance_m), "QT DISTANCE")
     + metric(fmtDur(sm.total_time_s), "EST. TIME")
     + `</div>`;
+  if (sm.start)
+    h += `<p class="route-hint muted">Starting from <b>${esc(sm.start)}</b>.</p>`;
   if (sm.min_capacity_scu < sm.peak_load_scu)
     h += `<p class="route-hint muted">A different order could peak as low as ${sm.min_capacity_scu} SCU.</p>`;
   h += `<div class="route-actions"><button id="route-start" class="active">Start this run ▸</button>`

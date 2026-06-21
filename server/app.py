@@ -665,7 +665,9 @@ class PackageIn(BaseModel):
 class RoutePlanIn(BaseModel):
     packages: list[PackageIn] = Field(max_length=_MAX_PACKAGES)
     usable_scu: float = Field(gt=0, le=100_000)
-    start_id: int | None = None   # POI to start from; defaults to the first stop
+    start_id: int | None = None    # POI to start from
+    start_here: bool = False       # start from the caller's live show_location fix
+    # Precedence: start_here (live position) > start_id (chosen POI) > free start.
 
 
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
@@ -1272,13 +1274,19 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
     pickups/dropoffs, arrival leg detail, running onboard SCU) plus a feasibility
     + totals summary. Leg distances reflect the caller's live rotation time."""
     sess = hub.sessions.get(user["id"])
-    t = sess.t if sess else None
     if body.start_id is not None and body.start_id not in nav.pois:
         raise HTTPException(status_code=404, detail="unknown start_id")
+    start_pos = None
+    if body.start_here:
+        if sess is None or sess.pos is None:
+            raise HTTPException(status_code=400,
+                                detail="no live position yet — run /showlocation, or pick a start POI")
+        start_pos = sess.pos
     try:
         return nav_core.plan_route(
             nav, [p.model_dump() for p in body.packages],
-            usable_scu=body.usable_scu, start_id=body.start_id, t_ref=t,
+            usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
+            t_ref=sess.t if sess else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1335,10 +1343,17 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
         raise HTTPException(status_code=404, detail="unknown start_id")
     async with hub.lock:
         sess = hub.get(user)
+        start_pos = None
+        if body.start_here:
+            if sess.pos is None:
+                raise HTTPException(status_code=400,
+                                    detail="no live position yet — run /showlocation, or pick a start POI")
+            start_pos = sess.pos
         try:
             plan = nav_core.plan_route(
                 nav, [p.model_dump() for p in body.packages],
-                usable_scu=body.usable_scu, start_id=body.start_id, t_ref=sess.t,
+                usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
+                t_ref=sess.t,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

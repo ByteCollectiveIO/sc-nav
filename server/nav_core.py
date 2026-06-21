@@ -1204,6 +1204,32 @@ def nearest_planet(nav: NavData, system: str, pos) -> Container | None:
     return min(planets, key=lambda p: dist3(pos, p.pos)) if planets else None
 
 
+def system_at(nav: NavData, pos) -> str | None:
+    """The system a raw position is in: the container detected at it, else the
+    nearest container's system (deep space between bodies)."""
+    c = detect_container(nav, pos)
+    if c is not None:
+        return c.system
+    best, best_d = None, math.inf
+    for cont in nav.containers.values():
+        d = dist3(pos, cont.pos)
+        if d < best_d:
+            best, best_d = cont, d
+    return best.system if best is not None else (nav.systems[0] if nav.systems else None)
+
+
+def position_start(nav: NavData, pos) -> Poi:
+    """A synthetic space-POI standing in for the player's live position, so the
+    route planner can seed the first leg from where they actually are (the
+    show_location feed) — travel_cost only needs a `src` with a system + a
+    resolvable global position."""
+    return Poi(
+        id=-1, name="your location", system=system_at(nav, pos), container_name=None,
+        type="", local_km=None, global_m=(pos[0], pos[1], pos[2]),
+        latitude=None, longitude=None, height_m=None, qt_marker=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Travel cost — the reusable QT-distance primitive for the route planner.
 #
@@ -1548,7 +1574,8 @@ def _leg_view(leg):
             "partial": leg["partial"]}
 
 
-def plan_route(nav: NavData, packages, usable_scu, start_id=None, t_ref=None) -> dict:
+def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None,
+               t_ref=None) -> dict:
     """Order accepted cargo packages into an efficient run.
 
     Returns {summary, stops}. `summary` carries feasibility (peak load vs.
@@ -1610,7 +1637,14 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, t_ref=None) ->
             legs[a][b] = leg
             if leg["distance_m"] is not None:
                 dmat[a][b] = leg["distance_m"]
-    start_poi = nav.pois.get(int(start_id)) if start_id is not None else None
+    # Start seed: a live position (show_location) wins over a chosen POI; absent
+    # both, the run begins free at the optimizer's first stop.
+    if start_pos is not None:
+        start_poi = position_start(nav, start_pos)
+    elif start_id is not None:
+        start_poi = nav.pois.get(int(start_id))
+    else:
+        start_poi = None
     start_legs = [None] * n
     start_d = [0.0] * n
     if start_poi is not None:
@@ -1636,7 +1670,8 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, t_ref=None) ->
                             "num_packages": len(pkgs), "usable_scu": usable_scu,
                             "peak_load_scu": None, "min_capacity_scu": round(min_cap, 2),
                             "total_distance_m": None, "total_time_s": None,
-                            "start_id": start_poi.id if start_poi else None}, "stops": []}
+                            "start_id": start_poi.id if (start_poi and start_poi.id >= 0) else None,
+                            "start": start_poi.name if start_poi else None}, "stops": []}
 
     # --- build output ---
     out_stops = []
@@ -1662,7 +1697,8 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, t_ref=None) ->
                         "usable_scu": usable_scu, "peak_load_scu": round(peak, 2),
                         "min_capacity_scu": round(min_cap, 2),
                         "total_distance_m": total_dist, "total_time_s": total_time,
-                        "start_id": start_poi.id if start_poi else None},
+                        "start_id": start_poi.id if (start_poi and start_poi.id >= 0) else None,
+                        "start": start_poi.name if start_poi else None},
             "stops": out_stops}
 
 
