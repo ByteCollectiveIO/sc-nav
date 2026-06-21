@@ -1008,5 +1008,76 @@ class RunStatsTests(unittest.TestCase):
         self.assertIsNone(s["auec_per_hour"])
 
 
+class GuildLeaderboardTests(unittest.TestCase):
+    def _run(self, did, name, reward, time_s, pkgs):
+        return {"discord_id": did, "display_name": name, "total_reward": reward,
+                "total_time_s": time_s, "packages":
+                {str(i): {**p, "id": str(i)} for i, p in enumerate(pkgs)}}
+
+    def test_groups_runs_by_member(self):
+        runs = [
+            self._run("a", "Alice", 100000, 3600, [{"scu": 50}]),
+            self._run("a", "Alice", 50000, 1800, [{"scu": 25}]),
+            self._run("b", "Bob", 20000, 3600, [{"scu": 10}]),
+        ]
+        rows = {r["discord_id"]: r for r in nav_core.derive_guild_leaderboard(runs)}
+        self.assertEqual(set(rows), {"a", "b"})
+        self.assertEqual(rows["a"]["num_runs"], 2)
+        self.assertEqual(rows["a"]["total_reward"], 150000.0)
+        self.assertEqual(rows["a"]["total_scu"], 75.0)
+        self.assertEqual(rows["b"]["total_reward"], 20000.0)
+
+    def test_name_lifted_from_freshest_run_that_has_one(self):
+        # runs arrive freshest-first; the freshest carries no name, the next does.
+        runs = [self._run("a", None, 100, 0, []),
+                self._run("a", "Alice", 100, 0, [])]
+        rows = nav_core.derive_guild_leaderboard(runs)
+        self.assertEqual(rows[0]["display_name"], "Alice")
+
+    def test_runs_without_discord_id_skipped(self):
+        runs = [{"total_reward": 5, "packages": {}}]
+        self.assertEqual(nav_core.derive_guild_leaderboard(runs), [])
+
+
+class GuildCargoStatsTests(unittest.TestCase):
+    def setUp(self):
+        self.nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)])
+
+    def _run(self, did, ship, pkgs, **extra):
+        return {"discord_id": did, "ship": ship, "packages":
+                {str(i): {**p, "id": str(i)} for i, p in enumerate(pkgs)}, **extra}
+
+    def test_headline_totals_and_hauler_count(self):
+        runs = [
+            self._run("a", "Hull C", [{"commodity": "Gold", "scu": 100, "from_id": 0, "to_id": 1}],
+                      total_reward=200000, total_time_s=3600),
+            self._run("b", "MOLE", [{"commodity": "Gold", "scu": 50, "from_id": 0, "to_id": 1}],
+                      total_reward=100000, total_time_s=3600),
+        ]
+        s = nav_core.derive_guild_cargo_stats(self.nav, runs)
+        self.assertEqual(s["num_runs"], 2)
+        self.assertEqual(s["num_haulers"], 2)
+        self.assertEqual(s["total_reward"], 300000.0)
+        self.assertEqual(s["total_scu"], 150.0)
+
+    def test_top_commodities_ranked_by_scu(self):
+        runs = [
+            self._run("a", "A", [{"commodity": "Gold", "scu": 30, "from_id": 0, "to_id": 1},
+                                 {"commodity": "Iron", "scu": 80, "from_id": 0, "to_id": 1}]),
+        ]
+        s = nav_core.derive_guild_cargo_stats(self.nav, runs)
+        self.assertEqual([c["commodity"] for c in s["top_commodities"]], ["Iron", "Gold"])
+        self.assertEqual(s["top_commodities"][0]["scu"], 80.0)
+
+    def test_lanes_resolve_names_and_drop_unresolvable(self):
+        runs = [
+            self._run("a", "A", [{"commodity": "x", "scu": 1, "from_id": 0, "to_id": 1}]),
+            self._run("a", "A", [{"commodity": "y", "scu": 1, "from_id": 0, "to_id": 999}]),
+        ]
+        s = nav_core.derive_guild_cargo_stats(self.nav, runs)
+        self.assertEqual([(l["from_name"], l["to_name"]) for l in s["top_lanes"]],
+                         [("P0", "P1")])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

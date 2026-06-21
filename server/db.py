@@ -411,6 +411,30 @@ def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:
     return out
 
 
+def list_all_completed_runs(since: str | None = None) -> list[dict]:
+    """Every member's completed runs (for the guild leaderboard/stats), freshest
+    first. Each parsed blob carries its row id, the owning `discord_id`, and
+    `completed_at`. `since` (ISO ts) limits to runs completed at/after that point
+    for the trailing-week window; None is all-time."""
+    q = ("SELECT id, discord_id, completed_at, data FROM runs "
+         "WHERE status='completed'")
+    params: list = []
+    if since:
+        q += " AND completed_at >= ?"
+        params.append(since)
+    q += " ORDER BY completed_at DESC"
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        run = _u(r["data"]) or {}
+        run["id"] = r["id"]
+        run["discord_id"] = r["discord_id"]
+        run["completed_at"] = r["completed_at"]
+        out.append(run)
+    return out
+
+
 # --- one-time migration from the legacy JSON files -------------------------
 
 

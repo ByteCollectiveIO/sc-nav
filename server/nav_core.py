@@ -1932,3 +1932,71 @@ def derive_quick_picks(nav: NavData, runs, limit: int = 12) -> dict:
     ships = [{"ship": s, "count": c}
              for s, c in sorted(ship_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
     return {"lanes": lanes, "commodities": commodities, "ships": ships}
+
+
+def derive_guild_leaderboard(runs) -> list[dict]:
+    """Per-member hauling tallies for the guild leaderboard. Groups completed
+    runs by their owning `discord_id` and runs `derive_run_stats` over each
+    group, so one member's whole hauling record collapses to a single row (the
+    stat block plus a `display_name` lifted from their most recent run that
+    carried one). The endpoint resolves missing names, ranks, and splits the
+    rows into the top-earner and aUEC/hour boards. Runs lacking a discord_id
+    (shouldn't happen for persisted runs) are skipped."""
+    by_member: dict[str, list] = {}
+    for run in runs:
+        did = str(run.get("discord_id") or "")
+        if not did:
+            continue
+        by_member.setdefault(did, []).append(run)
+    rows = []
+    for did, member_runs in by_member.items():
+        # member_runs preserve the freshest-first order they arrived in, so the
+        # first that carries a name is the most recent one.
+        name = next((r.get("display_name") for r in member_runs if r.get("display_name")), None)
+        rows.append({"discord_id": did, "display_name": name,
+                     **derive_run_stats(member_runs)})
+    return rows
+
+
+def derive_guild_cargo_stats(nav: NavData, runs, limit: int = 15) -> dict:
+    """Guild-wide hauling aggregates for the cargo Statistics page: the headline
+    totals (reward / SCU / distance / time + aUEC/hour, via `derive_run_stats`)
+    plus a count of distinct haulers, and the top commodities (by total SCU
+    moved), busiest lanes, and most-run ships across every member's completed
+    runs. Pure derivation; POI ids resolve against the live catalog and lanes
+    that no longer resolve are dropped. The weekly activity series is added by
+    the endpoint, which owns the iso-week helper."""
+    base = derive_run_stats(runs)
+    haulers = {str(r.get("discord_id")) for r in runs if r.get("discord_id")}
+    lane_ct, ship_ct = {}, {}
+    commodity_scu, commodity_ct = {}, {}
+    for run in runs:
+        ship = (run.get("ship") or "").strip()
+        if ship:
+            ship_ct[ship] = ship_ct.get(ship, 0) + 1
+        for p in run_packages(run):
+            fid, tid = p.get("from_id"), p.get("to_id")
+            if fid is not None and tid is not None:
+                lane_ct[(int(fid), int(tid))] = lane_ct.get((int(fid), int(tid)), 0) + 1
+            name = (p.get("commodity") or "").strip()
+            if name:
+                commodity_scu[name] = commodity_scu.get(name, 0.0) + float(p.get("scu") or 0)
+                commodity_ct[name] = commodity_ct.get(name, 0) + 1
+
+    lanes = []
+    for (fid, tid), ct in sorted(lane_ct.items(), key=lambda kv: (-kv[1], kv[0])):
+        fn, tn = _poi_name(nav, fid), _poi_name(nav, tid)
+        if fn is None or tn is None:
+            continue                       # a POI that no longer resolves — skip
+        lanes.append({"from_id": fid, "from_name": fn, "to_id": tid,
+                      "to_name": tn, "count": ct})
+        if len(lanes) >= limit:
+            break
+    commodities = [
+        {"commodity": n, "scu": round(commodity_scu[n], 2), "count": commodity_ct[n]}
+        for n in sorted(commodity_scu, key=lambda k: (-commodity_scu[k], k))[:limit]
+    ]
+    ships = [{"ship": s, "count": c}
+             for s, c in sorted(ship_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+    return {**base, "num_haulers": len(haulers), "top_commodities": commodities,
+            "top_lanes": lanes, "top_ships": ships}

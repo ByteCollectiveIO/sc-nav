@@ -1410,6 +1410,9 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
         sm = plan["summary"]
         run = {
             "ship": body.ship, "usable_scu": body.usable_scu,
+            # denormalized onto the blob so the guild leaderboard can label the
+            # member without a join (the runs row keys only on discord_id).
+            "display_name": user.get("display_name"),
             "started_at": datetime.now(timezone.utc).isoformat(),
             "stops": plan["stops"], "packages": packages, "active": 0,
             # frozen totals for history/stats (no need to re-solve completed runs)
@@ -1532,6 +1535,83 @@ async def reset_route_session(user: dict = Depends(require_session)):
     ts = datetime.now(timezone.utc).isoformat()
     db.set_cargo_session_start(user["id"], ts)
     return {"ok": True, "session_start": ts}
+
+
+def _resolve_member_name(discord_id: str, stored: str | None) -> str:
+    """A display name for a member on the cargo leaderboard. Prefers the name the
+    run was stamped with; otherwise falls back to a watcher token's name, then a
+    linked SC handle, then a short id stub. Keeps the board labelled even for
+    runs that predate name capture or members who never minted a token."""
+    if stored:
+        return stored
+    for t in tokens.items:
+        if t.get("discord_id") == discord_id and t.get("display_name"):
+            return t["display_name"]
+    for pid in handles.player_ids_for(discord_id):
+        h = handles.handle_for(pid)
+        if h:
+            return h
+    return f"Member {str(discord_id)[-4:]}"
+
+
+def _cargo_window_start(rng: str) -> str | None:
+    """ISO start for a cargo leaderboard/stats time window: 'week' = the trailing
+    7 days; anything else = all-time (None)."""
+    if rng == "week":
+        return (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    return None
+
+
+@app.get("/api/cargo/leaderboard")
+async def cargo_leaderboard(range: str = "all", user: dict = Depends(require_session)):
+    """Guild hauling leaderboard. Every member's completed runs are tallied per
+    member (no opt-in — contribution is the point), then surfaced as two boards:
+    top earners (total aUEC) and most efficient (aUEC/hour, members with timed
+    runs only). `range=week` limits to the trailing 7 days; default is all-time."""
+    runs = db.list_all_completed_runs(_cargo_window_start(range))
+    rows = nav_core.derive_guild_leaderboard(runs)
+    for r in rows:
+        r["display_name"] = _resolve_member_name(r["discord_id"], r.get("display_name"))
+        r["mine"] = r["discord_id"] == user["id"]
+    earners = sorted(rows, key=lambda r: (-r["total_reward"], r["display_name"].lower()))
+    efficient = sorted((r for r in rows if r.get("auec_per_hour")),
+                       key=lambda r: (-r["auec_per_hour"], r["display_name"].lower()))
+    return {"range": range, "num_haulers": len(rows),
+            "earners": earners, "efficient": efficient}
+
+
+@app.get("/api/cargo/stats")
+async def cargo_stats(range: str = "all", user: dict = Depends(require_session)):
+    """Guild-wide hauling statistics for the cargo Statistics page: headline
+    totals, top commodities / lanes / ships, and a weekly aUEC sparkline.
+    `range=week` scopes the totals/breakdowns to the trailing 7 days; the
+    sparkline always spans the trailing weeks so the trend stays readable."""
+    runs = db.list_all_completed_runs(_cargo_window_start(range))
+    stats = nav_core.derive_guild_cargo_stats(nav, runs)
+    # Weekly aUEC earned (mirrors /api/stats' activity series). Always all-time so
+    # the trend doesn't collapse to a single bar under the 'week' range.
+    spark_runs = runs if range != "week" else db.list_all_completed_runs(None)
+    weeks: Counter = Counter()
+    for run in spark_runs:
+        ts = run.get("completed_at")
+        rw = nav_core.run_total_reward(run)
+        if not ts or not rw:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        weeks[_iso_week_start(dt)] += rw
+    activity = []
+    if weeks:
+        end = _iso_week_start(datetime.now(timezone.utc))
+        start = end - timedelta(weeks=_STATS_WEEKS - 1)
+        wk = start
+        while wk <= end:
+            activity.append({"label": wk.strftime("%b %d"),
+                             "count": round(weeks.get(wk, 0), 2)})
+            wk += timedelta(weeks=1)
+    return {"range": range, **stats, "activity": activity}
 
 
 @app.get("/api/biomes")

@@ -32,9 +32,10 @@
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
   #main-view, #settings-view, #setup-view, #leaderboard-view, #stats-view,
-  #route-view { display: contents; }
+  #route-view, #cargo-leaderboard-view, #cargo-stats-view { display: contents; }
   #main-view[hidden], #settings-view[hidden], #setup-view[hidden],
-  #leaderboard-view[hidden], #stats-view[hidden], #route-view[hidden] { display: none; }
+  #leaderboard-view[hidden], #stats-view[hidden], #route-view[hidden],
+  #cargo-leaderboard-view[hidden], #cargo-stats-view[hidden] { display: none; }
 
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
@@ -151,6 +152,16 @@
   .lb-seg.wildlife { background: var(--fauna); }
   .lb-seg.harvestable { background: var(--harvest); }
   #lb-table tbody tr { cursor: default; }
+
+  /* cargo guild leaderboard/stats: a range toggle + gold/accent metric bars */
+  .range-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .range-toggle button { background: var(--panel2); border: 0; border-radius: 0; color: var(--dim);
+    padding: 5px 12px; font-size: 12px; cursor: pointer; }
+  .range-toggle button.active { background: var(--accent); color: #06223a; cursor: default; }
+  .lb-head-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .lb-seg.auec { background: var(--warn); }
+  .lb-seg.rate { background: var(--accent); }
+  .hbar.auec .hbar-fill { background: var(--warn); }
 
   /* statistics page */
   .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
@@ -1018,6 +1029,62 @@
     </div>
   </div>
   </div><!-- /stats-view -->
+
+  <div id="cargo-leaderboard-view" hidden>
+  <div class="panel">
+    <div class="lb-head-row">
+      <h2 style="margin:0;">GUILD HAULING <span class="muted" id="cargo-lb-sub"></span></h2>
+      <div class="range-toggle" id="cargo-lb-range">
+        <button data-range="all" class="active">All-time</button>
+        <button data-range="week">This week</button>
+      </div>
+    </div>
+    <div class="lb-cards" id="cargo-lb-cards" style="margin-top:12px;"></div>
+  </div>
+  <div class="panel">
+    <h2>TOP EARNERS <span class="muted">(total aUEC delivered)</span></h2>
+    <div class="lb-chart" id="cargo-lb-earners"></div>
+    <div class="muted" id="cargo-lb-earners-empty" hidden style="padding:8px 0;">No completed hauls yet.</div>
+  </div>
+  <div class="panel">
+    <h2>MOST EFFICIENT <span class="muted">(aUEC / hour · timed runs only)</span></h2>
+    <div class="lb-chart" id="cargo-lb-efficient"></div>
+    <div class="muted" id="cargo-lb-efficient-empty" hidden style="padding:8px 0;">No timed hauls yet.</div>
+  </div>
+  </div><!-- /cargo-leaderboard-view -->
+
+  <div id="cargo-stats-view" hidden>
+  <div class="panel">
+    <div class="lb-head-row">
+      <h2 style="margin:0;">GUILD HAULING OVERVIEW <span class="muted" id="cargo-stat-sub"></span></h2>
+      <div class="range-toggle" id="cargo-stat-range">
+        <button data-range="all" class="active">All-time</button>
+        <button data-range="week">This week</button>
+      </div>
+    </div>
+    <div class="stat-cards" id="cargo-stat-cards" style="margin-top:12px;"></div>
+  </div>
+  <div class="panel">
+    <h2>aUEC EARNED OVER TIME <span class="muted">(per week · last 16 weeks)</span></h2>
+    <div class="colchart" id="cargo-stat-activity"></div>
+    <div class="colchart-x" id="cargo-stat-activity-x"></div>
+    <div class="stat-empty" id="cargo-stat-activity-empty" hidden>No completed hauls yet.</div>
+  </div>
+  <div class="stat-grid">
+    <div class="panel">
+      <h2>TOP COMMODITIES <span class="muted">(by SCU moved)</span></h2>
+      <div class="hbars" id="cargo-stat-commodities"></div>
+    </div>
+    <div class="panel">
+      <h2>BUSIEST LANES <span class="muted">(runs)</span></h2>
+      <div class="hbars" id="cargo-stat-lanes"></div>
+    </div>
+    <div class="panel">
+      <h2>MOST-RUN SHIPS</h2>
+      <div class="hbars" id="cargo-stat-ships"></div>
+    </div>
+  </div>
+  </div><!-- /cargo-stats-view -->
 
   <div id="route-view" hidden>
     <div id="route-run" hidden></div>
@@ -2988,8 +3055,11 @@ function applyView() {
   const setup = h === "#/setup" && authed;
   const leaderboard = h === "#/leaderboard" && authed;
   const stats = h === "#/stats" && authed;
+  const cargoLeaderboard = h === "#/cargo-leaderboard" && authed;
+  const cargoStats = h === "#/cargo-stats" && authed;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !route && !settings && !setup && !leaderboard && !stats;
+  const launcher = authed && !nav && !route && !settings && !setup && !leaderboard
+    && !stats && !cargoLeaderboard && !cargoStats;
 
   $("launcher-view").hidden = !launcher;
   $("main-view").hidden = !nav;
@@ -2998,12 +3068,17 @@ function applyView() {
   $("setup-view").hidden = !setup;
   $("leaderboard-view").hidden = !leaderboard;
   $("stats-view").hidden = !stats;
+  $("cargo-leaderboard-view").hidden = !cargoLeaderboard;
+  $("cargo-stats-view").hidden = !cargoStats;
 
   // Remember which app you're in, so the sub-pages (Settings/Setup/Stats/
   // Leaderboard) can offer a "← back to that app" link.
   if (nav || route) { lastApp = h; try { sessionStorage.setItem("scLastApp", h); } catch {} }
-  // Navigator context = the navigator and its own sub-pages (Stats/Leaderboard).
+  // App contexts = each app plus its own Stats/Leaderboard sub-pages. The Stats/
+  // Leaderboard header toggles stay visible across both and point at whichever
+  // app's analytics you're currently in.
   const inNav = nav || stats || leaderboard;
+  const inCargo = route || cargoStats || cargoLeaderboard;
 
   // Header chrome. The logo/title (a.home-link) is the universal Home; the back
   // link returns to the app you came from. ⚙ Settings + 📖 Setup are global (both
@@ -3014,7 +3089,7 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[h] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route;   // location readout is the navigator's
+  $("where").hidden = launcher || route || inCargo;   // location readout is the navigator's
   $("back-toggle").hidden = !authed || launcher || nav || route;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
@@ -3023,10 +3098,14 @@ function applyView() {
   $("nav-toggle").classList.toggle("nav-active", settings);
   $("setup-toggle").hidden = !authed || launcher;
   $("setup-toggle").classList.toggle("nav-active", setup);
-  $("stats-toggle").hidden = !authed || !inNav;
-  $("stats-toggle").classList.toggle("nav-active", stats);
-  $("leaderboard-toggle").hidden = !authed || !inNav;
-  $("leaderboard-toggle").classList.toggle("nav-active", leaderboard);
+  // Stats/Leaderboard toggles serve both apps; in the cargo context they point
+  // at the guild-hauling analytics, otherwise the navigator's dataset pages.
+  $("stats-toggle").hidden = !authed || (!inNav && !inCargo);
+  $("stats-toggle").setAttribute("href", inCargo ? "#/cargo-stats" : "#/stats");
+  $("stats-toggle").classList.toggle("nav-active", stats || cargoStats);
+  $("leaderboard-toggle").hidden = !authed || (!inNav && !inCargo);
+  $("leaderboard-toggle").setAttribute("href", inCargo ? "#/cargo-leaderboard" : "#/leaderboard");
+  $("leaderboard-toggle").classList.toggle("nav-active", leaderboard || cargoLeaderboard);
 
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
@@ -3036,6 +3115,10 @@ function applyView() {
     loadLeaderboard();
   } else if (stats) {
     loadStats();
+  } else if (cargoLeaderboard) {
+    loadCargoLeaderboard();
+  } else if (cargoStats) {
+    loadCargoStats();
   } else if (route) {
     loadRoutePlanner();
   } else if (nav && lastState) {
@@ -3208,6 +3291,100 @@ async function loadStats() {
   statBars("stat-poi-types", d.poi_types, "poi");
   $("stat-poi-types-note").textContent = hasImported ? "(guild / total)" : "";
   statBars("stat-systems", d.systems, "");
+}
+
+// ---------- guild hauling: leaderboard + stats (cargo planner) ----------
+// Both pages share an All-time / This-week range toggle. The range is kept
+// per-page so switching apps doesn't carry a stale selection across.
+let cargoLbRange = "all", cargoStatRange = "all";
+
+// One ranked board: rows of {display_name, mine, <metric>} drawn as bars scaled
+// to the leader. `valOf` reads the metric, `fmt` renders it, `cls` tints the bar.
+function cargoBoard(elId, emptyId, rows, valOf, fmt, cls) {
+  const chart = $(elId);
+  $(emptyId).hidden = rows.length > 0;
+  const max = rows.reduce((m, r) => Math.max(m, valOf(r)), 0) || 1;
+  chart.innerHTML = rows.map((r, i) => {
+    const v = valOf(r);
+    const pct = (v / max) * 100;
+    return `<div class="lb-row">
+        <div class="lb-row-head">
+          <span class="lb-rank">${i + 1}.</span>
+          <span class="lb-name${r.mine ? " me" : ""}">${esc(r.display_name)}${r.mine ? " (you)" : ""}</span>
+          <span class="lb-total">${fmt(v)}</span>
+        </div>
+        <div class="lb-bar"><div class="lb-seg ${cls}" style="width:${pct}%"></div></div>
+      </div>`;
+  }).join("");
+}
+
+async function loadCargoLeaderboard() {
+  $("cargo-lb-sub").textContent = cargoLbRange === "week" ? "(this week)" : "(all-time)";
+  wireRangeToggle("cargo-lb-range", cargoLbRange, r => { cargoLbRange = r; loadCargoLeaderboard(); });
+  let d;
+  try {
+    d = await fetch(`/api/cargo/leaderboard?range=${cargoLbRange}`).then(r => r.json());
+  } catch { return; }
+  const earners = d.earners || [], efficient = d.efficient || [];
+  const topReward = earners.reduce((m, r) => Math.max(m, r.total_reward), 0);
+  $("cargo-lb-cards").innerHTML = [
+    [d.num_haulers || 0, "HAULERS"],
+    [earners.reduce((s, r) => s + r.num_runs, 0), "RUNS"],
+    [fmtAuec(earners.reduce((s, r) => s + r.total_reward, 0)), "aUEC EARNED"],
+    [fmtAuec(topReward), "TOP HAUL TOTAL"],
+  ].map(([n, k]) =>
+    `<div class="lb-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
+
+  cargoBoard("cargo-lb-earners", "cargo-lb-earners-empty", earners,
+    r => r.total_reward, v => fmtAuec(v) + " aUEC", "auec");
+  cargoBoard("cargo-lb-efficient", "cargo-lb-efficient-empty", efficient,
+    r => r.auec_per_hour, v => fmtAuec(v) + "/hr", "rate");
+}
+
+async function loadCargoStats() {
+  $("cargo-stat-sub").textContent = cargoStatRange === "week" ? "(this week)" : "(all-time)";
+  wireRangeToggle("cargo-stat-range", cargoStatRange, r => { cargoStatRange = r; loadCargoStats(); });
+  let d;
+  try {
+    d = await fetch(`/api/cargo/stats?range=${cargoStatRange}`).then(r => r.json());
+  } catch { return; }
+  $("cargo-stat-cards").innerHTML = [
+    [d.num_haulers || 0, "HAULERS"], [d.num_runs || 0, "RUNS"],
+    [fmtAuec(d.total_reward || 0), "aUEC EARNED"], [fmtAuec(d.total_scu || 0), "SCU MOVED"],
+    [d.auec_per_hour ? fmtAuec(d.auec_per_hour) : "—", "aUEC / HR"],
+  ].map(([n, k]) =>
+    `<div class="stat-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
+
+  // Weekly aUEC columns (always trailing 16 weeks, regardless of the range).
+  const act = d.activity || [];
+  $("cargo-stat-activity-empty").hidden = act.length > 0;
+  const aMax = act.reduce((m, w) => Math.max(m, w.count), 0) || 1;
+  $("cargo-stat-activity").innerHTML = act.map(w => {
+    const h = (w.count / aMax) * 100;
+    return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)} aUEC">
+        <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
+        <span class="bar" style="height:${h}%"></span>
+      </div>`;
+  }).join("");
+  $("cargo-stat-activity-x").innerHTML = act.map((w, i) =>
+    `<span>${i % 2 === 0 ? esc(w.label) : ""}</span>`).join("");
+
+  statBars("cargo-stat-commodities",
+    { items: (d.top_commodities || []).map(c => ({ name: c.commodity, count: c.scu })) }, "auec");
+  statBars("cargo-stat-lanes",
+    { items: (d.top_lanes || []).map(l => ({ name: `${l.from_name} → ${l.to_name}`, count: l.count })) });
+  statBars("cargo-stat-ships",
+    { items: (d.top_ships || []).map(s => ({ name: s.ship, count: s.count })) });
+}
+
+// Mark the active button in a range toggle and (re)bind its clicks. Idempotent —
+// safe to call on every (re)load; clicking a range invokes `onPick(range)`.
+function wireRangeToggle(elId, current, onPick) {
+  const el = $(elId);
+  el.querySelectorAll("button").forEach(b => {
+    b.classList.toggle("active", b.dataset.range === current);
+    b.onclick = () => { if (b.dataset.range !== current) onPick(b.dataset.range); };
+  });
 }
 
 // ---------- org settings (admin) ----------
