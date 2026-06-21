@@ -20,6 +20,9 @@
   header h1 { font-size: 16px; margin: 0; letter-spacing: 2px; color: var(--accent); }
   #conn { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
   #conn.ok { background: var(--good); }
+  /* current-app indicator (gold), sits just after the server status dot */
+  #app-title { font-size: 15px; letter-spacing: 1px; color: var(--warn);
+    padding-left: 12px; border-left: 1px solid var(--border); white-space: nowrap; }
   .header-right { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-left: auto; }
   #where { color: var(--dim); font-size: 13px; text-align: right; }
   #where b { color: var(--text); }
@@ -522,6 +525,7 @@
     <h1>Org Navigator</h1>
   </a>
   <div id="conn" title="server connection"></div>
+  <div id="app-title" hidden></div>
   <div class="header-right">
     <div id="where">waiting for /showlocation&hellip;</div>
     <a id="back-toggle" href="#/nav" hidden></a>
@@ -2968,6 +2972,9 @@ function renderStop(s, i, completes) {
 // hosts the app picker; the Resource Navigator lives at #/nav; #/settings, #/setup,
 // #/leaderboard and #/stats are account/app sub-pages. Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner", "#/": "Home" };
+// Full display names for the header's current-app indicator. Add a row here when
+// a new app ships and it'll show automatically while that app is active.
+const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner" };
 // The app a sub-page should return to (persisted so a reload on a sub-page keeps it).
 let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch { return null; } })() || "#/nav";
 function applyView() {
@@ -3002,6 +3009,11 @@ function applyView() {
   // link returns to the app you came from. ⚙ Settings + 📖 Setup are global (both
   // apps); 📊 Stats + 🏆 Leaderboard are navigator-scoped. The current sub-page's
   // own link stays visible but marked active (so the set doesn't appear to swap).
+  // Current-app indicator (gold): shown while in an app view. Driven purely by
+  // APP_TITLE, so a future app only needs a row added there to appear here.
+  const appTitle = authed ? APP_TITLE[h] : null;
+  $("app-title").hidden = !appTitle;
+  $("app-title").textContent = appTitle || "";
   $("where").hidden = launcher || route;   // location readout is the navigator's
   $("back-toggle").hidden = !authed || launcher || nav || route;
   $("back-toggle").setAttribute("href", lastApp);
