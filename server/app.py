@@ -662,12 +662,19 @@ class PackageIn(BaseModel):
     contract: str | None = Field(default=None, max_length=_CONTRACT_MAX)  # display-only group label
 
 
+_MAX_REWARD = 1e12   # generous aUEC ceiling — a sanity cap, not a real limit
+
+
 class RoutePlanIn(BaseModel):
     packages: list[PackageIn] = Field(max_length=_MAX_PACKAGES)
     usable_scu: float = Field(gt=0, le=100_000)
     start_id: int | None = None    # POI to start from
     start_here: bool = False       # start from the caller's live show_location fix
     # Precedence: start_here (live position) > start_id (chosen POI) > free start.
+    # Per-contract payout keyed by the package `contract` label ("" = the
+    # ungrouped bucket). Display-only/advisory — never affects routing; the run's
+    # total payout is the sum, the denominator for aUEC/hour.
+    rewards: dict[str, float] = Field(default_factory=dict)
 
 
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
@@ -1267,15 +1274,45 @@ async def get_resource_hotspots(
     }
 
 
+def _clean_rewards(rewards: dict) -> dict:
+    """Validate + drop empty per-contract payouts. Keys are contract labels
+    (capped like the entry field); values are non-negative aUEC under a sanity
+    ceiling. 400 on anything malformed."""
+    out = {}
+    if len(rewards) > _MAX_PACKAGES:
+        raise HTTPException(status_code=400, detail="too many contract rewards")
+    for label, amount in rewards.items():
+        if len(label) > _CONTRACT_MAX:
+            raise HTTPException(status_code=400, detail="contract label too long")
+        if not (0 <= amount <= _MAX_REWARD):
+            raise HTTPException(status_code=400, detail="reward out of range")
+        if amount:                       # 0 / blank means "no payout entered"
+            out[label] = float(amount)
+    return out
+
+
+def _apply_reward_summary(summary: dict, rewards: dict) -> dict:
+    """Layer the run's payout onto a plan summary: total reward and the derived
+    aUEC/hour (needs a finite run time). Always present so the client can render
+    uniformly; aUEC/hour is null when there's no reward or no time estimate."""
+    total = round(float(sum(rewards.values())), 2)
+    t = summary.get("total_time_s")
+    summary["total_reward"] = total
+    summary["auec_per_hour"] = round(total / (t / 3600.0), 2) if (total and t) else None
+    return summary
+
+
 @app.post("/api/route/plan")
 async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_session)):
     """Stateless cargo-route optimizer: order the accepted packages into an
     efficient run under the ship's usable SCU. Returns ordered stops (each with
     pickups/dropoffs, arrival leg detail, running onboard SCU) plus a feasibility
-    + totals summary. Leg distances reflect the caller's live rotation time."""
+    + totals summary (payout + aUEC/hour when rewards are supplied). Leg distances
+    reflect the caller's live rotation time."""
     sess = hub.sessions.get(user["id"])
     if body.start_id is not None and body.start_id not in nav.pois:
         raise HTTPException(status_code=404, detail="unknown start_id")
+    rewards = _clean_rewards(body.rewards)
     start_pos = None
     if body.start_here:
         if sess is None or sess.pos is None:
@@ -1283,13 +1320,15 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
                                 detail="no live position yet — run /showlocation, or pick a start POI")
         start_pos = sess.pos
     try:
-        return nav_core.plan_route(
+        plan = nav_core.plan_route(
             nav, [p.model_dump() for p in body.packages],
             usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
             t_ref=sess.t if sess else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    _apply_reward_summary(plan["summary"], rewards)
+    return plan
 
 
 # --- cargo run execution (stateful, persisted per member) -------------------
@@ -1341,6 +1380,7 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
     any prior active run. 409 if the bundle is infeasible."""
     if body.start_id is not None and body.start_id not in nav.pois:
         raise HTTPException(status_code=404, detail="unknown start_id")
+    rewards = _clean_rewards(body.rewards)
     async with hub.lock:
         sess = hub.get(user)
         start_pos = None
@@ -1362,14 +1402,19 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
                 status_code=409,
                 detail=f"route infeasible: needs {plan['summary']['min_capacity_scu']} usable SCU",
             )
+        _apply_reward_summary(plan["summary"], rewards)
         packages = {}
         for s in plan["stops"]:
             for p in s["pickups"]:
                 packages[str(p["id"])] = {**p, "state": "pending"}
+        sm = plan["summary"]
         run = {
             "ship": body.ship, "usable_scu": body.usable_scu,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "stops": plan["stops"], "packages": packages, "active": 0,
+            # frozen totals for history/stats (no need to re-solve completed runs)
+            "rewards": rewards, "total_reward": sm["total_reward"],
+            "total_time_s": sm["total_time_s"], "total_distance_m": sm["total_distance_m"],
         }
         run["id"] = db.start_run(user["id"], body.ship, run["started_at"], run)
         sess.run = run
@@ -1429,6 +1474,47 @@ async def abandon_run(user: dict = Depends(require_session)):
         sess.recompute()
         await sess.broadcast()
         return {"ok": True, "abandoned": had}
+
+
+def _run_summary(run: dict) -> dict:
+    """Compact completed-run record for the history list + the 'clone' shortcut:
+    headline totals plus the full package list (POI ids resolved to names) so the
+    UI can repopulate the entry form without another round-trip."""
+    pkgs = []
+    total_scu = 0.0
+    for p in nav_core.run_packages(run):
+        fid, tid = p.get("from_id"), p.get("to_id")
+        scu = float(p.get("scu") or 0)
+        total_scu += scu
+        pkgs.append({
+            "commodity": p.get("commodity"), "scu": scu,
+            "from_id": fid, "from_name": nav_core._poi_name(nav, fid),
+            "to_id": tid, "to_name": nav_core._poi_name(nav, tid),
+            "contract": p.get("contract"),
+        })
+    reward = nav_core.run_total_reward(run)
+    t = run.get("total_time_s")
+    return {
+        "id": run.get("id"), "ship": run.get("ship"),
+        "started_at": run.get("started_at"), "completed_at": run.get("completed_at"),
+        "usable_scu": run.get("usable_scu"),
+        "num_stops": len(run.get("stops", [])), "num_packages": len(pkgs),
+        "total_scu": round(total_scu, 2), "packages": pkgs,
+        "reward": round(reward, 2), "rewards": run.get("rewards") or {},
+        "auec_per_hour": round(reward / (t / 3600.0), 2) if (reward and t) else None,
+    }
+
+
+@app.get("/api/route/history")
+async def get_route_history(user: dict = Depends(require_session)):
+    """The caller's completed hauling runs (freshest first, for the recent-runs
+    list + clone), headline hauling stats (totals + aUEC/hour), and frequency-
+    ranked quick-picks (lanes / commodities / ships) that float a player's repeat
+    hauls to the top of the entry pickers."""
+    runs = db.list_run_history(user["id"])
+    return {"runs": [_run_summary(r) for r in runs],
+            "stats": nav_core.derive_run_stats(runs),
+            "picks": nav_core.derive_quick_picks(nav, runs)}
 
 
 @app.get("/api/biomes")

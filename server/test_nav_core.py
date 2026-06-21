@@ -924,5 +924,89 @@ class PlanRouteTests(unittest.TestCase):
         self.assertTrue(res["stops"][1]["leg"]["cross_system"])
 
 
+class QuickPicksTests(unittest.TestCase):
+    def setUp(self):
+        self.nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)])
+
+    def _run(self, ship, pkgs):
+        # mirror the persisted shape: packages keyed by id, plus a stops list
+        return {"ship": ship, "stops": [{}], "packages":
+                {str(i): {**p, "id": str(i)} for i, p in enumerate(pkgs)}}
+
+    def test_lanes_ranked_by_frequency_with_names(self):
+        runs = [
+            self._run("Hull C", [{"commodity": "Gold", "scu": 50, "from_id": 0, "to_id": 1}]),
+            self._run("Hull C", [{"commodity": "Gold", "scu": 50, "from_id": 0, "to_id": 1}]),
+            self._run("MOLE", [{"commodity": "Iron", "scu": 10, "from_id": 2, "to_id": 3}]),
+        ]
+        picks = nav_core.derive_quick_picks(self.nav, runs)
+        self.assertEqual([(l["from_id"], l["to_id"], l["count"]) for l in picks["lanes"]],
+                         [(0, 1, 2), (2, 3, 1)])
+        self.assertEqual(picks["lanes"][0]["from_name"], "P0")
+        self.assertEqual(picks["lanes"][0]["to_name"], "P1")
+
+    def test_lane_with_unresolvable_poi_is_dropped(self):
+        runs = [self._run("Hull C", [{"commodity": "x", "scu": 1, "from_id": 0, "to_id": 999}])]
+        self.assertEqual(nav_core.derive_quick_picks(self.nav, runs)["lanes"], [])
+
+    def test_commodity_carries_most_common_scu(self):
+        runs = [
+            self._run("A", [{"commodity": "Gold", "scu": 50, "from_id": 0, "to_id": 1}]),
+            self._run("A", [{"commodity": "Gold", "scu": 50, "from_id": 0, "to_id": 1}]),
+            self._run("A", [{"commodity": "Gold", "scu": 32, "from_id": 0, "to_id": 1}]),
+        ]
+        picks = nav_core.derive_quick_picks(self.nav, runs)
+        gold = next(c for c in picks["commodities"] if c["commodity"] == "Gold")
+        self.assertEqual(gold["count"], 3)
+        self.assertEqual(gold["scu"], 50.0)
+
+    def test_ships_ranked(self):
+        runs = [self._run("MOLE", []), self._run("Hull C", []), self._run("Hull C", [])]
+        self.assertEqual([s["ship"] for s in nav_core.derive_quick_picks(self.nav, runs)["ships"]],
+                         ["Hull C", "MOLE"])
+
+    def test_run_packages_falls_back_to_stops(self):
+        run = {"stops": [{"pickups": [{"commodity": "x", "scu": 1, "from_id": 0, "to_id": 1}]}]}
+        self.assertEqual(len(nav_core.run_packages(run)), 1)
+
+
+class RunStatsTests(unittest.TestCase):
+    def test_total_reward_prefers_stored_total(self):
+        self.assertEqual(nav_core.run_total_reward({"total_reward": 5000}), 5000.0)
+
+    def test_total_reward_sums_rewards_map_when_no_total(self):
+        run = {"rewards": {"A": 1000, "B": 2500, "": 0}}
+        self.assertEqual(nav_core.run_total_reward(run), 3500.0)
+
+    def test_total_reward_zero_when_absent(self):
+        self.assertEqual(nav_core.run_total_reward({}), 0.0)
+
+    def test_stats_totals_and_auec_per_hour(self):
+        runs = [
+            {"total_reward": 360000, "total_time_s": 3600, "total_distance_m": 5e9,
+             "packages": {"0": {"scu": 100, "from_id": 0, "to_id": 1}}},
+            {"total_reward": 180000, "total_time_s": 1800, "total_distance_m": 2e9,
+             "packages": {"0": {"scu": 50, "from_id": 0, "to_id": 1}}},
+        ]
+        s = nav_core.derive_run_stats(runs)
+        self.assertEqual(s["num_runs"], 2)
+        self.assertEqual(s["total_reward"], 540000.0)
+        self.assertEqual(s["total_scu"], 150.0)
+        self.assertEqual(s["total_distance_m"], 7e9)
+        self.assertEqual(s["total_time_s"], 5400.0)
+        # 540000 aUEC over 1.5 h
+        self.assertEqual(s["auec_per_hour"], 360000.0)
+
+    def test_stats_auec_per_hour_null_without_time(self):
+        s = nav_core.derive_run_stats([{"total_reward": 1000, "packages": {}}])
+        self.assertIsNone(s["auec_per_hour"])
+
+    def test_stats_empty(self):
+        s = nav_core.derive_run_stats([])
+        self.assertEqual(s["num_runs"], 0)
+        self.assertEqual(s["total_reward"], 0.0)
+        self.assertIsNone(s["auec_per_hour"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

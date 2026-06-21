@@ -480,6 +480,45 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      stations + surface POIs still need the starmap catalog enabled (default OFF)
      or custom POIs; the container-stations above are always available.
 5. History log + frequency-ranked quick-picks/priors + `#/stats` hooks.
+   - ✅ **History + quick-picks SHIPPED 2026-06-21.** `GET /api/route/history`
+     returns the member's completed runs (freshest first, each summarized with
+     resolved POI names + the full package list for cloning) plus
+     `nav_core.derive_quick_picks` output: frequency-ranked **lanes** (from→to,
+     names resolved, unresolvable POIs dropped), **commodities** (each carrying
+     the SCU amount most often booked), and **ships**. `nav_core.run_packages`
+     normalizes the stored blob shape. The `#/route` view gained a **RECENT
+     HAULS** panel above PACKAGES: frequent-lane chips (click → prefilled package
+     row), a last-runs list with a **clone** button (refills the whole form +
+     ship), and the member's top commodities floated to the head of the commodity
+     datalist (`data-prior`-tagged so repeat visits don't accumulate dupes). The
+     history reloads on run completion. 5 tests in `test_nav_core.py`
+     (`QuickPicksTests`); endpoint verified end-to-end via TestClient.
+   - ✅ **Reward capture + hauling analytics SHIPPED 2026-06-21.** Reward is
+     **per-contract**, keyed by the package `contract` grouping label, with the
+     ungrouped packages folding into a `""` bucket; the **run total payout is the
+     sum** (decided with the user — matches how SC missions pay, one reward per
+     mission, and reuses the existing grouping). `RoutePlanIn.rewards:
+     dict[str,float]` (validated by `_clean_rewards`: ≤`_MAX_PACKAGES` entries,
+     label ≤`_CONTRACT_MAX`, amount 0..`_MAX_REWARD`=1e12, blanks dropped). It's
+     **display-only/advisory — never affects routing**; `_apply_reward_summary`
+     layers `total_reward` + `auec_per_hour` (= reward ÷ run time) onto the plan
+     summary. `/run` freezes `rewards`/`total_reward`/`total_time_s`/
+     `total_distance_m` into the run blob so completed runs need no re-solve.
+     `nav_core.run_total_reward` + `derive_run_stats` (totals + overall aUEC/hr);
+     history endpoint returns a `stats` block and per-run `reward`/`auec_per_hour`
+     /`rewards`. **UI:** a CONTRACT PAYOUTS section (`#route-rewards`) auto-derived
+     from the contract labels in use (+ "(no contract)" bucket), amounts kept in
+     `rewardByLabel` across re-renders; PAYOUT + aUEC/HR metrics on the plan
+     summary; a HAULING STATS strip + per-run 💰 payout in RECENT HAULS; clone
+     restores a run's per-contract payouts. 6 tests (`RunStatsTests`); full
+     plan→run→complete→history flow verified end-to-end via TestClient.
+     **Analytics live in `#/route`, not the org-wide `#/stats`** (which is
+     resource/dataset-scoped) — consistent with the doc's "each app owns its stats
+     content". Folding them into a future app-scoped `#/stats` fork is optional.
+     **Deferred within this:** reward isn't attributed per-lane (a contract spans
+     lanes), so "best lane" stays frequency-ranked; "best contract" by aUEC/hr is
+     not isolatable (contracts share a route) — per-run aUEC/hr is the granular
+     view shipped.
 
 **In v1 (decided 2026-06-20):** cross-system jump-gate routing; total-run-time
 estimate; quantum-fuel range + opt-in refuel advisory (range **computed** from a

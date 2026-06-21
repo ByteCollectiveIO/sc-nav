@@ -1832,3 +1832,103 @@ def _min_capacity(stops, preds, n):
 
     dfs(set(), 0.0, 0.0)
     return best["peak"]
+
+
+def _poi_name(nav: NavData, pid):
+    poi = nav.pois.get(int(pid)) if pid is not None else None
+    return poi.name if poi else None
+
+
+def run_packages(run: dict) -> list[dict]:
+    """The package records of a stored run, regardless of which shape it was
+    persisted in. Active/completed runs keep packages as an id->record dict;
+    fall back to scraping the stops' pickups for any older blob."""
+    pkgs = run.get("packages")
+    if isinstance(pkgs, dict):
+        return list(pkgs.values())
+    if isinstance(pkgs, list):
+        return pkgs
+    out = []
+    for s in run.get("stops", []):
+        out.extend(s.get("pickups", []))
+    return out
+
+
+def run_total_reward(run: dict) -> float:
+    """A run's total payout: the stored total if present, else the sum of its
+    per-contract rewards (older blobs may carry only the rewards map)."""
+    total = run.get("total_reward")
+    if total is not None:
+        return float(total)
+    rw = run.get("rewards")
+    if isinstance(rw, dict):
+        return float(sum(v for v in rw.values() if v))
+    return 0.0
+
+
+def derive_run_stats(runs) -> dict:
+    """Headline hauling analytics over a member's completed runs: totals plus the
+    overall aUEC/hour (reward ÷ run time). Pure derivation over the stored blobs;
+    runs predating reward/time capture contribute 0 and are simply diluted."""
+    total_reward = total_scu = total_dist = total_time = 0.0
+    for run in runs:
+        total_reward += run_total_reward(run)
+        total_scu += sum(float(p.get("scu") or 0) for p in run_packages(run))
+        total_dist += float(run.get("total_distance_m") or 0)
+        total_time += float(run.get("total_time_s") or 0)
+    per_hr = (total_reward / (total_time / 3600.0)) if total_time > 0 else None
+    return {
+        "num_runs": len(runs),
+        "total_reward": round(total_reward, 2),
+        "total_scu": round(total_scu, 2),
+        "total_distance_m": round(total_dist, 2),
+        "total_time_s": round(total_time, 2),
+        "auec_per_hour": round(per_hr, 2) if per_hr is not None else None,
+    }
+
+
+def derive_quick_picks(nav: NavData, runs, limit: int = 12) -> dict:
+    """Frequency-ranked data-entry priors from a member's completed runs: the
+    lanes (from->to) they haul most, the commodities they carry (with the SCU
+    amount they most often book), and the ships they run. Feeds the planner's
+    quick-picks so repeat hauls re-enter in a couple of clicks. Pure derivation
+    over the persisted run blobs — names are resolved against the live catalog."""
+    lane_ct, ship_ct = {}, {}
+    commodity_ct, commodity_scu = {}, {}
+    for run in runs:
+        ship = (run.get("ship") or "").strip()
+        if ship:
+            ship_ct[ship] = ship_ct.get(ship, 0) + 1
+        for p in run_packages(run):
+            fid, tid = p.get("from_id"), p.get("to_id")
+            if fid is not None and tid is not None:
+                lane_ct[(int(fid), int(tid))] = lane_ct.get((int(fid), int(tid)), 0) + 1
+            name = (p.get("commodity") or "").strip()
+            if name:
+                commodity_ct[name] = commodity_ct.get(name, 0) + 1
+                scu = p.get("scu")
+                if scu:
+                    by = commodity_scu.setdefault(name, {})
+                    by[float(scu)] = by.get(float(scu), 0) + 1
+
+    lanes = []
+    for (fid, tid), ct in sorted(lane_ct.items(), key=lambda kv: (-kv[1], kv[0])):
+        fn, tn = _poi_name(nav, fid), _poi_name(nav, tid)
+        if fn is None or tn is None:
+            continue                       # a POI that no longer resolves — skip
+        lanes.append({"from_id": fid, "from_name": fn, "to_id": tid,
+                      "to_name": tn, "count": ct})
+        if len(lanes) >= limit:
+            break
+
+    commodities = []
+    for name, ct in sorted(commodity_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]:
+        scu = None
+        by = commodity_scu.get(name)
+        if by:                             # the SCU amount most often booked for it
+            scu = max(by.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        commodities.append({"commodity": name, "count": ct, "scu": scu})
+
+    ships = [{"ship": s, "count": c}
+             for s, c in sorted(ship_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+    return {"lanes": lanes, "commodities": commodities, "ships": ships}

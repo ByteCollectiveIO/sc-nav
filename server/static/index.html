@@ -367,6 +367,27 @@
   .route-pkg .arrow { color: var(--dim); }
   .route-pkg .pkg-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
   .route-pkg .pkg-del:hover { border-color: var(--bad); }
+  /* recent runs + quick-picks (history priors) */
+  .route-picks { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .route-chip { font-size: 12px; padding: 4px 9px; border: 1px solid var(--border);
+    border-radius: 14px; cursor: pointer; background: none; color: var(--text); }
+  .route-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .route-chip .ct { color: var(--dim); margin-left: 4px; }
+  .route-recent { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--border); }
+  .route-recent:first-of-type { border-top: none; }
+  .route-recent .rr-main { flex: 1; min-width: 180px; }
+  .route-recent .rr-sub { font-size: 11px; color: var(--dim); }
+  .route-picks-h { font-size: 11px; color: var(--dim); letter-spacing: 1px; margin: 10px 0 2px; }
+  /* per-contract payouts + earnings */
+  #route-rewards { margin: 12px 0 4px; }
+  .route-reward { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+  .route-reward .rw-label { flex: 1; min-width: 120px; font-size: 13px; }
+  .route-reward .rw-label.none { color: var(--dim); font-style: italic; }
+  .route-reward .rw-amt { width: 130px; }
+  .rw-total { margin-top: 8px; font-size: 13px; }
+  .rw-total b { color: var(--accent); }
+  .route-stats { display: flex; flex-wrap: wrap; gap: 18px; align-items: baseline; }
   /* POI autocomplete */
   .poi-pick { position: relative; flex: 1; min-width: 150px; display: flex; }
   .poi-pick .ti { width: 100%; }
@@ -1007,6 +1028,8 @@
         are. Leave blank to begin at the most efficient first stop.</p>
     </div>
 
+    <div id="route-history" class="panel" hidden></div>
+
     <div class="panel">
       <h2>PACKAGES</h2>
       <p class="muted route-hint">One row per cargo line. <b>From</b> → <b>To</b> reads straight
@@ -1015,6 +1038,7 @@
       <datalist id="route-commodities"></datalist>
       <datalist id="route-contracts"></datalist>
       <button id="route-add-pkg" style="margin-top:8px;">+ add package</button>
+      <div id="route-rewards" hidden></div>
       <div class="route-actions">
         <button id="route-plan" class="active">Plan route</button>
         <span id="route-plan-msg" class="muted" style="font-size:12px;"></span>
@@ -2179,6 +2203,8 @@ let routeStartHere = false;     // start from the live show_location position?
 let routeStartArmed = false;    // armed, waiting on the next /showlocation fix
 let runComplete = false;        // showing the terminal "route complete" card
 let lastRunSig = null;          // signature of the last-rendered run (skip no-op redraws)
+let routeHistory = null;        // {runs, stats, picks} from /api/route/history
+let rewardByLabel = {};         // contract label -> aUEC payout ("" = ungrouped bucket)
 
 async function loadRoutePlanner() {
   if (!routeCatalog) {
@@ -2195,11 +2221,91 @@ async function loadRoutePlanner() {
   }
   if (!routeWired) wireRoutePlanner();
   if (!$("route-pkgs").children.length) addPkgRow();
+  loadRouteHistory();
   // Restore an in-progress run (resumes across reload / device switch).
   try {
     const d = await fetch("/api/route/run").then(r => r.json());
     renderRun(d.run);
   } catch {}
+}
+
+// Completed-run history → recent-runs list (clone) + frequency quick-picks
+// (lanes/commodities float the player's repeat hauls to the top of entry).
+async function loadRouteHistory() {
+  try {
+    routeHistory = await fetch("/api/route/history").then(r => r.json());
+  } catch { return; }
+  renderRouteHistory();
+  // Float the player's most-hauled commodities to the top of the datalist.
+  // Clear any priors injected on a prior visit so they don't accumulate.
+  const cd = $("route-commodities");
+  cd.querySelectorAll("option[data-prior]").forEach(o => o.remove());
+  for (const c of [...(routeHistory.picks.commodities || [])].reverse()) {
+    const o = document.createElement("option");
+    o.value = c.commodity; o.dataset.prior = "1";
+    cd.insertBefore(o, cd.firstChild);
+  }
+}
+
+function renderRouteHistory() {
+  const el = $("route-history");
+  if (!routeHistory) { el.hidden = true; return; }
+  const { runs, picks, stats } = routeHistory;
+  if (!runs.length && !picks.lanes.length) { el.hidden = true; return; }
+  let h = `<h2>RECENT HAULS</h2>`;
+  if (stats && stats.num_runs) {
+    h += `<div class="route-stats">`
+      + metric(stats.num_runs, "RUNS")
+      + (stats.total_reward ? metric(fmtAuec(stats.total_reward), "TOTAL aUEC") : "")
+      + (stats.auec_per_hour ? metric(fmtAuec(stats.auec_per_hour), "aUEC / HR") : "")
+      + metric(fmtAuec(stats.total_scu), "SCU MOVED")
+      + metric(fmtGm(stats.total_distance_m), "QT DISTANCE")
+      + metric(fmtDur(stats.total_time_s), "TIME")
+      + `</div>`;
+  }
+  if (picks.lanes.length) {
+    h += `<p class="route-picks-h">FREQUENT LANES — click to add a package row</p>`
+      + `<div class="route-picks">` + picks.lanes.map((l, i) =>
+        `<button class="route-chip" data-lane="${i}">${esc(l.from_name)} → ${esc(l.to_name)}`
+        + `<span class="ct">×${l.count}</span></button>`).join("") + `</div>`;
+  }
+  if (runs.length) {
+    h += `<p class="route-picks-h">LAST RUNS — clone to refill the form</p>`
+      + runs.slice(0, 6).map((r, i) => {
+        const when = r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "";
+        const pay = r.reward ? ` · 💰 ${fmtAuec(r.reward)}`
+          + (r.auec_per_hour ? ` (${fmtAuec(r.auec_per_hour)}/hr)` : "") : "";
+        return `<div class="route-recent"><div class="rr-main">`
+          + `${esc(r.ship || "ship?")} <span class="rr-sub">· ${r.num_packages} pkg · `
+          + `${r.total_scu} SCU · ${r.num_stops} stops${pay}${when ? " · " + esc(when) : ""}</span>`
+          + `</div><button class="route-chip" data-clone="${i}">clone</button></div>`;
+      }).join("");
+  }
+  el.innerHTML = h;
+  el.hidden = false;
+  el.querySelectorAll("[data-lane]").forEach(b =>
+    b.onclick = () => { const l = picks.lanes[+b.dataset.lane];
+      addPkgRow({ from_id: l.from_id, from_name: l.from_name,
+                  to_id: l.to_id, to_name: l.to_name }); });
+  el.querySelectorAll("[data-clone]").forEach(b =>
+    b.onclick = () => cloneRun(runs[+b.dataset.clone]));
+}
+
+// Replace the entry rows with a previous run's packages (the clone shortcut),
+// restoring its per-contract payouts so a repeat of the same contracts is ready.
+function cloneRun(run) {
+  $("route-pkgs").innerHTML = "";
+  rewardByLabel = { ...(run.rewards || {}) };
+  for (const p of run.packages) {
+    if (p.from_id == null || p.to_id == null) continue;
+    addPkgRow({ commodity: p.commodity || "", scu: p.scu || "",
+      from_id: p.from_id, from_name: p.from_name, to_id: p.to_id, to_name: p.to_name,
+      contract: p.contract || "" });
+  }
+  if (!$("route-pkgs").children.length) addPkgRow();
+  if (run.ship) { $("route-ship").value = run.ship; prefillScu(); }
+  refreshContractList();
+  $("route-pkgs").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function wireRoutePlanner() {
@@ -2314,7 +2420,9 @@ async function rememberShip() {
   } catch { $("route-ship-msg").textContent = "network error"; }
 }
 
-function addPkgRow() {
+// `pre` (optional) prefills a row from a quick-pick / clone: commodity, scu, and
+// the resolved from/to POIs (name + id, marked as already-picked).
+function addPkgRow(pre) {
   const row = document.createElement("div");
   row.className = "route-pkg";
   row.innerHTML =
@@ -2326,12 +2434,34 @@ function addPkgRow() {
     + `<input class="ti pkg-contract" list="route-contracts" placeholder="contract (optional)" autocomplete="off" style="width:140px;">`
     + `<span class="pkg-del" title="remove">✕</span>`;
   $("route-pkgs").appendChild(row);
-  attachPoiPicker(row.querySelector(".pkg-from"));
-  attachPoiPicker(row.querySelector(".pkg-to"));
+  // from/to picks (and commodity/SCU edits) can create or empty the ungrouped
+  // payout bucket, so they refresh the reward rows too.
+  attachPoiPicker(row.querySelector(".pkg-from"), refreshRewardRows);
+  attachPoiPicker(row.querySelector(".pkg-to"), refreshRewardRows);
+  row.querySelector(".pkg-commodity").addEventListener("input", refreshRewardRows);
+  row.querySelector(".pkg-scu").addEventListener("input", refreshRewardRows);
   const cinput = row.querySelector(".pkg-contract");
   cinput.addEventListener("input", refreshContractList);
   cinput.addEventListener("blur", refreshContractList);
   row.querySelector(".pkg-del").onclick = () => { row.remove(); refreshContractList(); };
+  if (pre) {
+    if (pre.commodity) row.querySelector(".pkg-commodity").value = pre.commodity;
+    if (pre.scu) row.querySelector(".pkg-scu").value = pre.scu;
+    if (pre.contract) row.querySelector(".pkg-contract").value = pre.contract;
+    setPickedPoi(row.querySelector(".pkg-from"), pre.from_id, pre.from_name);
+    setPickedPoi(row.querySelector(".pkg-to"), pre.to_id, pre.to_name);
+    refreshRewardRows();
+  }
+  return row;
+}
+
+// Mark a from/to picker as resolved to a known POI (same end-state as a manual
+// pick: name in the field, id on the dataset, the .picked styling on).
+function setPickedPoi(wrap, id, name) {
+  if (id == null || name == null) return;
+  const input = wrap.querySelector("input");
+  input.value = name; input.dataset.poiId = id;
+  wrap.classList.add("picked");
 }
 
 // Keep the contract datalist in sync with the labels already in use, so a player
@@ -2344,6 +2474,80 @@ function refreshContractList() {
   const dl = $("route-contracts");
   dl.innerHTML = "";
   [...seen].sort().forEach(v => { const o = document.createElement("option"); o.value = v; dl.appendChild(o); });
+  refreshRewardRows();
+}
+
+// A row contributes a payout bucket once it carries any cargo detail (so empty
+// scratch rows don't conjure a "(no contract)" line). Labelled rows group by
+// label; the rest fall into the "" ungrouped bucket.
+function rowHasContent(row) {
+  return !!(row.querySelector(".pkg-commodity").value.trim()
+    || row.querySelector(".pkg-scu").value.trim()
+    || row.querySelector(".pkg-from input").dataset.poiId
+    || row.querySelector(".pkg-to input").dataset.poiId);
+}
+
+// Per-contract payout inputs, derived from the labels in use (plus an ungrouped
+// bucket when any unlabelled row has cargo). Entered amounts persist by label in
+// `rewardByLabel` across re-renders so retyping a label doesn't lose its payout.
+function refreshRewardRows() {
+  const labels = new Set();
+  let ungrouped = false;
+  for (const row of $("route-pkgs").children) {
+    if (!rowHasContent(row)) continue;
+    const v = row.querySelector(".pkg-contract").value.trim();
+    if (v) labels.add(v); else ungrouped = true;
+  }
+  const keys = [...labels].sort();
+  if (ungrouped) keys.push("");      // "" = the ungrouped bucket, shown last
+  const el = $("route-rewards");
+  if (!keys.length) { el.hidden = true; el.innerHTML = ""; return; }
+  let h = `<p class="route-picks-h">CONTRACT PAYOUTS (optional) — drives aUEC/hour</p>`;
+  for (const k of keys) {
+    const amt = rewardByLabel[k] != null ? rewardByLabel[k] : "";
+    h += `<div class="route-reward" data-label="${esc(k)}">`
+      + `<span class="rw-label${k ? "" : " none"}">${k ? esc(k) : "(no contract)"}</span>`
+      + `<input class="ti rw-amt" type="number" min="0" step="1000" placeholder="aUEC" value="${amt}">`
+      + `</div>`;
+  }
+  el.innerHTML = h;
+  el.hidden = false;
+  el.querySelectorAll(".route-reward").forEach(rw => {
+    const inp = rw.querySelector(".rw-amt");
+    inp.oninput = () => {
+      const n = Number(inp.value);
+      if (inp.value.trim() && n >= 0) rewardByLabel[rw.dataset.label] = n;
+      else delete rewardByLabel[rw.dataset.label];
+      updateRewardTotal();
+    };
+  });
+  updateRewardTotal();
+}
+
+function rewardTotal() {
+  return Object.values(buildRewards()).reduce((a, b) => a + b, 0);
+}
+function updateRewardTotal() {
+  const el = $("route-rewards");
+  let line = el.querySelector(".rw-total");
+  const t = rewardTotal();
+  if (!t) { if (line) line.remove(); return; }
+  if (!line) { line = document.createElement("div"); line.className = "rw-total"; el.appendChild(line); }
+  line.innerHTML = `Total payout: <b>${fmtAuec(t)}</b> aUEC`;
+}
+
+// The rewards payload for /plan + /run: only labels still present with a >0
+// amount (a relabelled or removed contract drops out automatically).
+function buildRewards() {
+  const present = new Set();
+  for (const row of $("route-pkgs").children) {
+    if (!rowHasContent(row)) continue;
+    present.add(row.querySelector(".pkg-contract").value.trim());
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(rewardByLabel))
+    if (present.has(k) && v > 0) out[k] = v;
+  return out;
 }
 
 // Type-to-search POI picker resolving to a POI id (stored on the input's
@@ -2398,7 +2602,7 @@ async function planRoute() {
     packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
-  lastPlanInput = { packages, usable_scu: usable, ...routeStartPayload() };
+  lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(), ...routeStartPayload() };
   msg.textContent = "planning…";
   let res;
   try {
@@ -2423,6 +2627,13 @@ function fmtDur(s) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 function metric(v, l) { return `<div class="metric"><span class="v">${v}</span><span class="l">${l}</span></div>`; }
+// aUEC with thousands separators; compact (k/M) for big headline numbers.
+function fmtAuec(n) {
+  if (n == null) return "—";
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 1 : 2).replace(/\.0+$/, "") + "M";
+  if (n >= 10000) return Math.round(n / 1000) + "k";
+  return Math.round(n).toLocaleString();
+}
 
 // A horizontal stops-on-a-line diagram. `active` is the current stop index
 // (-1 for a static plan preview): earlier stops render done, the active one is
@@ -2479,6 +2690,8 @@ function renderPlan(res) {
     + metric(`<span class="${peakClass}">${sm.peak_load_scu}</span><span class="l" style="display:inline"> / ${sm.usable_scu}</span>`, "PEAK SCU")
     + metric(fmtGm(sm.total_distance_m), "QT DISTANCE")
     + metric(fmtDur(sm.total_time_s), "EST. TIME")
+    + (sm.total_reward ? metric(fmtAuec(sm.total_reward), "PAYOUT") : "")
+    + (sm.auec_per_hour ? metric(fmtAuec(sm.auec_per_hour), "aUEC / HR") : "")
     + `</div>`;
   if (sm.start)
     h += `<p class="route-hint muted">Starting from <b>${esc(sm.start)}</b>.</p>`;
@@ -2528,6 +2741,7 @@ async function patchRun(body) {
 function showRunComplete() {
   runComplete = true;
   lastRunSig = "complete";
+  loadRouteHistory();   // the finished haul now feeds recents + quick-picks
   const n = currentRun ? currentRun.stops.length : null;
   const box = $("route-run");
   box.hidden = false;
