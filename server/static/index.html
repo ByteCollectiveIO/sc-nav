@@ -396,11 +396,7 @@
   .route-reward .rw-amt { width: 130px; }
   .rw-total { margin-top: 8px; font-size: 13px; }
   .rw-total b { color: var(--accent); }
-  .route-stats { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: baseline;
-    margin: 4px 0 6px; }
-  .route-stats .metric { display: flex; flex-direction: column; }
-  .route-stats .metric .v { font-size: 20px; color: var(--warn); }
-  .route-stats .metric .l { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
+  #route-history .stat-cards { margin: 4px 0 8px; }
   /* POI autocomplete */
   .poi-pick { position: relative; flex: 1; min-width: 150px; display: flex; }
   .poi-pick .ti { width: 100%; }
@@ -2267,13 +2263,15 @@ function renderRouteHistory() {
   if (!runs.length && !picks.lanes.length) { el.hidden = true; return; }
   let h = `<h2>RECENT HAULS</h2>`;
   if (stats && stats.num_runs) {
-    h += `<div class="route-stats">`
-      + metric(stats.num_runs, "RUNS")
-      + (stats.total_reward ? metric(fmtAuec(stats.total_reward), "TOTAL aUEC") : "")
-      + (stats.auec_per_hour ? metric(fmtAuec(stats.auec_per_hour), "aUEC / HR") : "")
-      + metric(fmtAuec(stats.total_scu), "SCU MOVED")
-      + metric(fmtGm(stats.total_distance_m), "QT DISTANCE")
-      + metric(fmtDur(stats.total_time_s), "TIME")
+    // Boxed stat cards, matching the Statistics page for consistency.
+    const cards = [[stats.num_runs, "RUNS"]];
+    if (stats.total_reward) cards.push([fmtAuec(stats.total_reward), "TOTAL aUEC"]);
+    if (stats.auec_per_hour) cards.push([fmtAuec(stats.auec_per_hour), "aUEC / HR"]);
+    cards.push([fmtAuec(stats.total_scu), "SCU MOVED"],
+               [fmtGm(stats.total_distance_m), "QT DISTANCE"],
+               [fmtDur(stats.total_time_s), "TIME"]);
+    h += `<div class="stat-cards">` + cards.map(([n, k]) =>
+      `<div class="stat-card"><div class="n route-warn">${n}</div><div class="k">${k}</div></div>`).join("")
       + `</div>`;
   }
   if (picks.lanes.length) {
