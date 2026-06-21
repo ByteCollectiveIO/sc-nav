@@ -435,7 +435,9 @@
   #route-scope-seg button { font-size: 12px; padding: 4px 12px; }
   .route-scope-note { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px;
     font-size: 12px; margin-bottom: 4px; }
-  #route-session-reset { font-size: 12px; padding: 4px 10px; }
+  #route-session-reset { font-size: 12px; padding: 5px 12px; font-weight: 600;
+    color: var(--accent); border-color: var(--accent); }
+  #route-session-reset:hover { background: var(--accent); color: #07101a; }
   /* POI autocomplete */
   .poi-pick { position: relative; flex: 1; min-width: 150px; display: flex; }
   .poi-pick .ti { width: 100%; }
@@ -1150,6 +1152,7 @@
       <div id="route-rewards" hidden></div>
       <div class="route-actions">
         <button id="route-plan" class="active">Plan route</button>
+        <button id="route-clear" title="clear all cargo lines and start a fresh route">Clear route</button>
         <span id="route-plan-msg" class="muted" style="font-size:12px;"></span>
       </div>
     </div>
@@ -2483,6 +2486,7 @@ function wireRoutePlanner() {
   $("route-add-pkg").onclick = () => addPkgRow();
   $("route-add-group").onclick = () => addGroupRow();
   $("route-plan").onclick = planRoute;
+  $("route-clear").onclick = clearRoute;
   // Start-from controls: a POI picker and a "use my live position" toggle (the
   // two are mutually exclusive — choosing a POI cancels an armed/live start).
   attachPoiPicker($("route-start-poi").parentElement, cancelStartHere);
@@ -3007,7 +3011,24 @@ function showRunComplete() {
 function clearRun() {
   runComplete = false; currentRun = null; lastRunSig = null;
   $("route-run").hidden = true; $("route-run").innerHTML = "";
-  $("route-result").hidden = true;
+  clearRoute();   // a finished run leaves its cargo lines behind — wipe them too
+}
+
+// Reset the entry form to a clean slate for a new route: empty cargo lines (one
+// fresh row), no payouts, default start, no plan output. Keeps the ship + usable
+// SCU, since that's the player's vessel, not part of any one contract.
+function clearRoute() {
+  $("route-pkgs").innerHTML = "";
+  rewardByLabel = {};
+  addPkgRow();
+  refreshContractList();        // rebuilds + hides the (now empty) payout rows
+  routeStartHere = false; routeStartArmed = false;
+  const sp = $("route-start-poi");
+  sp.value = ""; sp.dataset.poiId = ""; sp.parentElement.classList.remove("picked");
+  updateStartUI();
+  lastPlanInput = null;
+  $("route-result").hidden = true; $("route-result").innerHTML = "";
+  $("route-plan-msg").textContent = "";
 }
 
 async function abandonRun() {
