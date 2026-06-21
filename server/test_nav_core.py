@@ -924,6 +924,80 @@ class PlanRouteTests(unittest.TestCase):
         self.assertTrue(res["stops"][1]["leg"]["cross_system"])
 
 
+class MultiPickupGroupTests(unittest.TestCase):
+    """Multi-pickup deliveries: one commodity total spread over several pickup
+    locations with an unknown per-location split. Rows share a `group` id and
+    carry the delivery total in `group_scu`; the solver counts that total once,
+    holds it conservatively from the first pickup, and requires every pickup
+    before the drop."""
+
+    def _coords(self):
+        return [(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)]
+
+    def _group(self, total, from_ids, to_id):
+        return [{"id": f"g-{fid}", "commodity": "Scrap", "scu": 0,
+                 "group": "G", "group_scu": total, "from_id": fid, "to_id": to_id}
+                for fid in from_ids]
+
+    def test_visits_all_pickups_before_drop(self):
+        nav = _line_nav(self._coords())
+        # total 3 SCU of Scrap from P0 and P1, delivered to P3
+        pkgs = self._group(3, [0, 1], 3)
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertTrue(res["summary"]["feasible"])
+        pos = {s["stop_id"]: i for i, s in enumerate(res["stops"])}
+        self.assertIn(0, pos); self.assertIn(1, pos)        # both pickups visited
+        self.assertLess(pos[0], pos[3])
+        self.assertLess(pos[1], pos[3])
+
+    def test_total_counted_once_conservatively_from_first_pickup(self):
+        nav = _line_nav(self._coords())
+        pkgs = self._group(3, [0, 1], 3)
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        by_id = {s["stop_id"]: s for s in res["stops"]}
+        # full total aboard from the very first pickup (not 1.5 split), once only
+        self.assertEqual(by_id[0]["onboard_scu"], 3.0)
+        self.assertEqual(by_id[1]["onboard_scu"], 3.0)
+        self.assertEqual(by_id[3]["onboard_scu"], 0.0)
+        self.assertEqual(res["summary"]["peak_load_scu"], 3.0)
+
+    def test_peak_is_group_total_not_sum_of_rows(self):
+        nav = _line_nav(self._coords())
+        # two independent groups of 3 SCU each to the same drop; conservative peak
+        # = both totals held together = 6 (never 4 rows * something)
+        pkgs = (self._group(3, [0, 1], 3))
+        for p in self._group(3, [1, 2], 3):
+            p["id"] = p["id"] + "-2"; p["group"] = "H"
+            pkgs.append(p)
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertEqual(res["summary"]["peak_load_scu"], 6.0)
+
+    def test_capacity_margin_uses_full_total(self):
+        nav = _line_nav(self._coords())
+        pkgs = self._group(3, [0, 1], 3)
+        infeasible = nav_core.plan_route(nav, pkgs, usable_scu=2, start_id=0)
+        self.assertFalse(infeasible["summary"]["feasible"])
+        self.assertEqual(infeasible["summary"]["min_capacity_scu"], 3.0)
+        ok = nav_core.plan_route(nav, pkgs, usable_scu=3, start_id=0)
+        self.assertTrue(ok["summary"]["feasible"])
+
+    def test_group_total_mixes_with_normal_packages(self):
+        nav = _line_nav(self._coords())
+        pkgs = self._group(3, [0, 1], 3)
+        pkgs.append({"id": "N", "commodity": "Gold", "scu": 10,
+                     "from_id": 0, "to_id": 3})
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        by_id = {s["stop_id"]: s for s in res["stops"]}
+        self.assertEqual(by_id[0]["onboard_scu"], 13.0)   # 3 (group) + 10 (normal)
+        self.assertEqual(res["summary"]["peak_load_scu"], 13.0)
+
+    def test_packages_scu_counts_group_once(self):
+        recs = [{"group": "G", "group_scu": 3, "scu": 0},
+                {"group": "G", "group_scu": 3, "scu": 0},
+                {"group": None, "scu": 10}]
+        self.assertEqual(nav_core.packages_scu(recs), 13.0)
+
+
 class QuickPicksTests(unittest.TestCase):
     def setUp(self):
         self.nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)])

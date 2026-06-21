@@ -1613,7 +1613,8 @@ def _pkg_view(p):
     # only (it never affects routing) so the UI can colour-group packages and
     # flag which contract a dropoff completes.
     return {"id": p["id"], "commodity": p["commodity"], "scu": p["scu"],
-            "from_id": p["from_id"], "to_id": p["to_id"], "contract": p.get("contract")}
+            "from_id": p["from_id"], "to_id": p["to_id"], "contract": p.get("contract"),
+            "group": p.get("group"), "group_scu": p.get("group_scu")}
 
 
 def _leg_view(leg):
@@ -1623,6 +1624,23 @@ def _leg_view(leg):
             "qt_marker": leg["qt_marker"], "via": leg["via"],
             "cross_system": leg["cross_system"], "via_gate": leg["via_gate"],
             "partial": leg["partial"]}
+
+
+def _stop_delta(stops, gpick, gdrop, gtot, j, seen):
+    """Onboard SCU change from visiting stop j, given the groups already started
+    (`seen`). Static (normal-package) load/drop plus the conservative group rule:
+    a multi-pickup group's full total joins the hold at its *first* pickup and
+    leaves at its drop. Returns (delta, newly_seen_group_ids)."""
+    d = stops[j]["load_scu"] - stops[j]["drop_scu"]
+    newly = []
+    for g in gpick[j]:
+        if g not in seen:
+            d += gtot[g]
+            newly.append(g)
+    for g in gdrop[j]:
+        if g in seen:            # always true: precedence puts all pickups first
+            d -= gtot[g]
+    return d, newly
 
 
 def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None,
@@ -1651,7 +1669,8 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
             pid = i
         pkgs.append({"id": pid, "commodity": p.get("commodity"),
                      "scu": float(p.get("scu") or 0), "from_id": fid, "to_id": tid,
-                     "contract": p.get("contract")})
+                     "contract": p.get("contract"), "group": p.get("group"),
+                     "group_scu": float(p["group_scu"]) if p.get("group_scu") is not None else None})
 
     if not pkgs:
         return {"summary": {"feasible": True, "num_stops": 0, "num_packages": 0,
@@ -1670,12 +1689,37 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     stops = [{"id": lid, "poi": nav.pois[lid], "loads": [], "drops": [],
               "load_scu": 0.0, "drop_scu": 0.0} for lid in loc_ids]
     preds = [set() for _ in range(n)]
+    # Multi-pickup groups carry their total once (group_scu), accounted dynamically
+    # during ordering — full total held from the group's first pickup to its drop —
+    # so they're kept out of the static per-stop load/drop sums here. Their
+    # precedence (every pickup before the drop) still rides on `preds`.
+    groups = {}   # gid -> {"total": float, "picks": set(stop idx), "drop": stop idx}
     for pi, p in enumerate(pkgs):
         a, b = idx[p["from_id"]], idx[p["to_id"]]
-        stops[a]["loads"].append(pi); stops[a]["load_scu"] += p["scu"]
-        stops[b]["drops"].append(pi); stops[b]["drop_scu"] += p["scu"]
+        stops[a]["loads"].append(pi)
+        stops[b]["drops"].append(pi)
+        g = p.get("group")
+        if g is None:
+            stops[a]["load_scu"] += p["scu"]
+            stops[b]["drop_scu"] += p["scu"]
+        else:
+            info = groups.setdefault(g, {"total": 0.0, "picks": set(), "drop": b})
+            if p.get("group_scu") is not None:
+                info["total"] = float(p["group_scu"])
+            info["picks"].add(a)
+            info["drop"] = b
         if a != b:
             preds[b].add(a)
+
+    # Per-stop group views for the dynamic onboard accounting (see _stop_delta).
+    gpick = [[] for _ in range(n)]   # groups with a pickup at this stop
+    gdrop = [[] for _ in range(n)]   # groups whose dropoff is this stop
+    gtot = {}                        # gid -> delivery total
+    for g, info in groups.items():
+        gtot[g] = info["total"]
+        for sidx in info["picks"]:
+            gpick[sidx].append(g)
+        gdrop[info["drop"]].append(g)
 
     # --- cost matrix ---
     legs = [[None] * n for _ in range(n)]
@@ -1707,14 +1751,16 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     def step_cost(prev, j):
         return start_d[j] if prev is None else dmat[prev][j]
 
+    gctx = (gpick, gdrop, gtot)
+
     # --- minimum capacity the bundle requires (precedence only, min peak) ---
-    min_cap = _min_capacity(stops, preds, n)
+    min_cap = _min_capacity(stops, preds, n, gctx)
 
     # --- order the stops (minimize distance under precedence + capacity) ---
     if n <= _BNB_MAX_STOPS:
-        order, peak = _bnb_order(stops, preds, dmat, start_d, usable_scu, n)
+        order, peak = _bnb_order(stops, preds, dmat, start_d, usable_scu, n, gctx)
     else:
-        order, peak = _greedy_order(stops, preds, step_cost, usable_scu, n)
+        order, peak = _greedy_order(stops, preds, step_cost, usable_scu, n, gctx)
 
     if order is None:
         return {"summary": {"feasible": False, "num_stops": n,
@@ -1727,9 +1773,12 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     # --- build output ---
     out_stops = []
     onboard = total_dist = 0.0
+    seen = set()
     for k, si in enumerate(order):
         s = stops[si]; poi = s["poi"]
-        onboard += s["load_scu"] - s["drop_scu"]
+        delta, newly = _stop_delta(stops, gpick, gdrop, gtot, si, seen)
+        onboard += delta
+        seen.update(newly)
         leg = start_legs[si] if k == 0 else legs[order[k - 1]][si]
         if leg and leg["distance_m"] is not None:
             total_dist += leg["distance_m"]
@@ -1753,12 +1802,13 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
             "stops": out_stops}
 
 
-def _bnb_order(stops, preds, dmat, start_d, cap, n):
+def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx):
     """Branch-and-bound: least-distance precedence+capacity-feasible order.
     Returns (order, peak_load) or (None, None) if no feasible order exists."""
+    gpick, gdrop, gtot = gctx
     best = {"cost": math.inf, "order": None, "peak": None}
 
-    def dfs(order, visited, onboard, cost, peak):
+    def dfs(order, visited, onboard, cost, peak, seen):
         if cost >= best["cost"]:
             return
         if len(order) == n:
@@ -1768,57 +1818,67 @@ def _bnb_order(stops, preds, dmat, start_d, cap, n):
         for j in range(n):
             if j in visited or not preds[j].issubset(visited):
                 continue
-            no = onboard + stops[j]["load_scu"] - stops[j]["drop_scu"]
+            delta, newly = _stop_delta(stops, gpick, gdrop, gtot, j, seen)
+            no = onboard + delta
             if no > cap + 1e-9:
                 continue
             step = start_d[j] if prev is None else dmat[prev][j]
             if step == math.inf:
                 continue
-            dfs(order + [j], visited | {j}, no, cost + step, max(peak, no))
+            dfs(order + [j], visited | {j}, no, cost + step, max(peak, no),
+                seen | set(newly))
 
-    dfs([], set(), 0.0, 0.0, 0.0)
+    dfs([], set(), 0.0, 0.0, 0.0, frozenset())
     return (best["order"], best["peak"]) if best["order"] is not None else (None, None)
 
 
-def _greedy_order(stops, preds, step_cost, cap, n):
+def _greedy_order(stops, preds, step_cost, cap, n, gctx):
     """Nearest-neighbor fallback for large stop sets: at each step take the
     nearest precedence- and capacity-feasible stop."""
+    gpick, gdrop, gtot = gctx
     order, visited = [], set()
     onboard = peak = 0.0
+    seen = set()
     prev = None
     while len(order) < n:
         cands = [
             j for j in range(n)
             if j not in visited and preds[j].issubset(visited)
-            and onboard + stops[j]["load_scu"] - stops[j]["drop_scu"] <= cap + 1e-9
+            and onboard + _stop_delta(stops, gpick, gdrop, gtot, j, seen)[0] <= cap + 1e-9
             and step_cost(prev, j) != math.inf
         ]
         if not cands:
             return None, None
         j = min(cands, key=lambda j: step_cost(prev, j))
-        onboard += stops[j]["load_scu"] - stops[j]["drop_scu"]
+        delta, newly = _stop_delta(stops, gpick, gdrop, gtot, j, seen)
+        onboard += delta
         peak = max(peak, onboard)
+        seen.update(newly)
         order.append(j); visited.add(j); prev = j
     return order, peak
 
 
-def _min_capacity(stops, preds, n):
+def _min_capacity(stops, preds, n, gctx):
     """Minimum peak onboard SCU achievable over any precedence-valid order —
     i.e. the smallest ship the bundle can possibly fit on. Exhaustive for small
     sets, greedy (least-load-first) above the bound."""
+    gpick, gdrop, gtot = gctx
     if n > _BNB_MAX_STOPS:
         visited = set()
         onboard = peak = 0.0
+        seen = set()
         while len(visited) < n:
             cands = [j for j in range(n) if j not in visited and preds[j].issubset(visited)]
-            j = min(cands, key=lambda j: stops[j]["load_scu"] - stops[j]["drop_scu"])
-            onboard += stops[j]["load_scu"] - stops[j]["drop_scu"]
+            j = min(cands, key=lambda j: _stop_delta(stops, gpick, gdrop, gtot, j, seen)[0])
+            delta, newly = _stop_delta(stops, gpick, gdrop, gtot, j, seen)
+            onboard += delta
             peak = max(peak, onboard)
+            seen.update(newly)
             visited.add(j)
         return peak
     best = {"peak": math.inf}
 
-    def dfs(visited, onboard, peak):
+    def dfs(visited, onboard, peak, seen):
         if peak >= best["peak"]:
             return
         if len(visited) == n:
@@ -1827,10 +1887,11 @@ def _min_capacity(stops, preds, n):
         for j in range(n):
             if j in visited or not preds[j].issubset(visited):
                 continue
-            no = onboard + stops[j]["load_scu"] - stops[j]["drop_scu"]
-            dfs(visited | {j}, no, max(peak, no))
+            delta, newly = _stop_delta(stops, gpick, gdrop, gtot, j, seen)
+            no = onboard + delta
+            dfs(visited | {j}, no, max(peak, no), seen | set(newly))
 
-    dfs(set(), 0.0, 0.0)
+    dfs(set(), 0.0, 0.0, frozenset())
     return best["peak"]
 
 
@@ -1854,6 +1915,22 @@ def run_packages(run: dict) -> list[dict]:
     return out
 
 
+def packages_scu(packages) -> float:
+    """Total SCU a package list represents. A multi-pickup group's pickup rows
+    share one delivery total (`group_scu`) instead of per-row `scu`, so the total
+    is counted once per group; normal rows sum their own `scu`."""
+    total = 0.0
+    seen = set()
+    for p in packages:
+        g = p.get("group")
+        if g is None:
+            total += float(p.get("scu") or 0)
+        elif g not in seen:
+            seen.add(g)
+            total += float(p.get("group_scu") or 0)
+    return total
+
+
 def run_total_reward(run: dict) -> float:
     """A run's total payout: the stored total if present, else the sum of its
     per-contract rewards (older blobs may carry only the rewards map)."""
@@ -1873,7 +1950,7 @@ def derive_run_stats(runs) -> dict:
     total_reward = total_scu = total_dist = total_time = 0.0
     for run in runs:
         total_reward += run_total_reward(run)
-        total_scu += sum(float(p.get("scu") or 0) for p in run_packages(run))
+        total_scu += packages_scu(run_packages(run))
         total_dist += float(run.get("total_distance_m") or 0)
         total_time += float(run.get("total_time_s") or 0)
     per_hr = (total_reward / (total_time / 3600.0)) if total_time > 0 else None
@@ -1906,7 +1983,7 @@ def derive_quick_picks(nav: NavData, runs, limit: int = 12) -> dict:
             name = (p.get("commodity") or "").strip()
             if name:
                 commodity_ct[name] = commodity_ct.get(name, 0) + 1
-                scu = p.get("scu")
+                scu = p.get("scu") or p.get("group_scu")
                 if scu:
                     by = commodity_scu.setdefault(name, {})
                     by[float(scu)] = by.get(float(scu), 0) + 1
@@ -1974,14 +2051,21 @@ def derive_guild_cargo_stats(nav: NavData, runs, limit: int = 15) -> dict:
         ship = (run.get("ship") or "").strip()
         if ship:
             ship_ct[ship] = ship_ct.get(ship, 0) + 1
+        seen_groups = set()   # a multi-pickup group's total counts once per run
         for p in run_packages(run):
             fid, tid = p.get("from_id"), p.get("to_id")
             if fid is not None and tid is not None:
                 lane_ct[(int(fid), int(tid))] = lane_ct.get((int(fid), int(tid)), 0) + 1
             name = (p.get("commodity") or "").strip()
             if name:
-                commodity_scu[name] = commodity_scu.get(name, 0.0) + float(p.get("scu") or 0)
-                commodity_ct[name] = commodity_ct.get(name, 0) + 1
+                g = p.get("group")
+                if g is None:
+                    commodity_scu[name] = commodity_scu.get(name, 0.0) + float(p.get("scu") or 0)
+                    commodity_ct[name] = commodity_ct.get(name, 0) + 1
+                elif g not in seen_groups:
+                    seen_groups.add(g)
+                    commodity_scu[name] = commodity_scu.get(name, 0.0) + float(p.get("group_scu") or 0)
+                    commodity_ct[name] = commodity_ct.get(name, 0) + 1
 
     lanes = []
     for (fid, tid), ct in sorted(lane_ct.items(), key=lambda kv: (-kv[1], kv[0])):

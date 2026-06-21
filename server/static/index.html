@@ -386,6 +386,19 @@
   .route-pkg .arrow { color: var(--dim); }
   .route-pkg .pkg-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
   .route-pkg .pkg-del:hover { border-color: var(--bad); }
+  /* multi-pickup delivery: a boxed block (commodity + total + dest on top, a
+     list of pickup locations below) so it reads as one delivery, not loose rows. */
+  .route-pkg-group { display: block; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; margin: 8px 0; background: rgba(255,255,255,.02); }
+  .route-pkg-group .grp-head { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .route-pkg-group .grp-tag { font-size: 10px; letter-spacing: .5px; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 3px; padding: 0 5px; text-transform: uppercase; }
+  .route-pkg-group .grp-picks { margin: 8px 0 0 14px; display: flex; flex-direction: column; gap: 6px; }
+  .route-pkg-group .grp-pick { display: flex; gap: 6px; align-items: center; }
+  .route-pkg-group .grp-pick .arrow { color: var(--dim); }
+  .route-pkg-group .grp-add-pick { font-size: 12px; margin-top: 2px; align-self: flex-start; }
+  .route-pkg-group .pick-del { color: var(--bad); cursor: pointer; padding: 2px 6px; }
+  .route-add-row { display: flex; gap: 8px; flex-wrap: wrap; }
   /* recent runs + quick-picks (history priors) */
   .route-picks { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
   .route-chip { font-size: 12px; padding: 4px 9px; border: 1px solid var(--border);
@@ -1124,11 +1137,16 @@
     <div class="panel">
       <h2>PACKAGES</h2>
       <p class="muted route-hint">One row per cargo line. <b>From</b> → <b>To</b> reads straight
-        off the in-game contract; we visit shared stops once.</p>
+        off the in-game contract; we visit shared stops once. For the rare contract that gives a
+        commodity total spread over several pickup spots without saying how much is at each, use
+        <b>multi-pickup</b> — enter the total once and list every pickup.</p>
       <div id="route-pkgs"></div>
       <datalist id="route-commodities"></datalist>
       <datalist id="route-contracts"></datalist>
-      <button id="route-add-pkg" style="margin-top:8px;">+ add package</button>
+      <div class="route-add-row" style="margin-top:8px;">
+        <button id="route-add-pkg">+ add package</button>
+        <button id="route-add-group">+ add multi-pickup delivery</button>
+      </div>
       <div id="route-rewards" hidden></div>
       <div class="route-actions">
         <button id="route-plan" class="active">Plan route</button>
@@ -2437,12 +2455,21 @@ async function startNewSession() {
 function cloneRun(run) {
   $("route-pkgs").innerHTML = "";
   rewardByLabel = { ...(run.rewards || {}) };
+  const groups = {};   // gid -> {commodity, group_scu, contract, to_id, to_name, picks:[]}
   for (const p of run.packages) {
     if (p.from_id == null || p.to_id == null) continue;
-    addPkgRow({ commodity: p.commodity || "", scu: p.scu || "",
-      from_id: p.from_id, from_name: p.from_name, to_id: p.to_id, to_name: p.to_name,
-      contract: p.contract || "" });
+    if (p.group) {
+      const g = groups[p.group] || (groups[p.group] = { commodity: p.commodity || "",
+        group_scu: p.group_scu || "", contract: p.contract || "",
+        to_id: p.to_id, to_name: p.to_name, picks: [] });
+      g.picks.push({ from_id: p.from_id, from_name: p.from_name });
+    } else {
+      addPkgRow({ commodity: p.commodity || "", scu: p.scu || "",
+        from_id: p.from_id, from_name: p.from_name, to_id: p.to_id, to_name: p.to_name,
+        contract: p.contract || "" });
+    }
   }
+  for (const g of Object.values(groups)) addGroupRow(g);
   if (!$("route-pkgs").children.length) addPkgRow();
   if (run.ship) { $("route-ship").value = run.ship; prefillScu(); }
   refreshContractList();
@@ -2454,6 +2481,7 @@ function wireRoutePlanner() {
   attachShipPicker();
   $("route-ship-save").onclick = rememberShip;
   $("route-add-pkg").onclick = () => addPkgRow();
+  $("route-add-group").onclick = () => addGroupRow();
   $("route-plan").onclick = planRoute;
   // Start-from controls: a POI picker and a "use my live position" toggle (the
   // two are mutually exclusive — choosing a POI cancels an armed/live start).
@@ -2596,6 +2624,61 @@ function addPkgRow(pre) {
   return row;
 }
 
+// Multi-pickup delivery: a commodity total spread over several pickup locations
+// (split unknown). One block = commodity + total SCU + destination + 1..N pickup
+// rows, all sharing a generated `group` id. `pre` rebuilds it on clone.
+let groupSeq = 0;
+function addGroupRow(pre) {
+  const gid = "g" + (++groupSeq);
+  const row = document.createElement("div");
+  row.className = "route-pkg route-pkg-group";
+  row.dataset.group = gid;
+  row.innerHTML =
+    `<div class="grp-head"><span class="grp-tag">multi-pickup</span>`
+    + `<input class="ti pkg-commodity" list="route-commodities" placeholder="commodity" autocomplete="off" style="flex:1; min-width:120px;">`
+    + `<input class="ti pkg-scu" type="number" min="1" step="1" placeholder="total SCU" style="width:90px;">`
+    + `<span class="arrow">→</span>`
+    + `<span class="poi-pick pkg-to"><input class="ti" placeholder="deliver to" autocomplete="off"></span>`
+    + `<input class="ti pkg-contract" list="route-contracts" placeholder="contract (optional)" autocomplete="off" style="width:140px;">`
+    + `<span class="pkg-del" title="remove delivery">✕</span></div>`
+    + `<div class="grp-picks"></div>`
+    + `<button class="grp-add-pick">+ pickup location</button>`;
+  $("route-pkgs").appendChild(row);
+  attachPoiPicker(row.querySelector(".pkg-to"), refreshRewardRows);
+  row.querySelector(".pkg-commodity").addEventListener("input", refreshRewardRows);
+  row.querySelector(".pkg-scu").addEventListener("input", refreshRewardRows);
+  const cinput = row.querySelector(".pkg-contract");
+  cinput.addEventListener("input", refreshContractList);
+  cinput.addEventListener("blur", refreshContractList);
+  row.querySelector(".pkg-del").onclick = () => { row.remove(); refreshContractList(); };
+  const picks = row.querySelector(".grp-picks");
+  row.querySelector(".grp-add-pick").onclick = () => addPickupRow(picks);
+  if (pre) {
+    if (pre.commodity) row.querySelector(".pkg-commodity").value = pre.commodity;
+    if (pre.group_scu) row.querySelector(".pkg-scu").value = pre.group_scu;
+    if (pre.contract) row.querySelector(".pkg-contract").value = pre.contract;
+    setPickedPoi(row.querySelector(".pkg-to"), pre.to_id, pre.to_name);
+    for (const pk of (pre.picks || [])) addPickupRow(picks, pk);
+  }
+  if (!picks.children.length) { addPickupRow(picks); addPickupRow(picks); }  // start with two
+  refreshRewardRows();
+  return row;
+}
+
+// One pickup location inside a multi-pickup delivery block.
+function addPickupRow(picks, pre) {
+  const r = document.createElement("div");
+  r.className = "grp-pick";
+  r.innerHTML = `<span class="muted" style="font-size:12px;">collect at</span>`
+    + `<span class="poi-pick pkg-pickup"><input class="ti" placeholder="pickup location" autocomplete="off"></span>`
+    + `<span class="pick-del" title="remove">✕</span>`;
+  picks.appendChild(r);
+  attachPoiPicker(r.querySelector(".pkg-pickup"), refreshRewardRows);
+  r.querySelector(".pick-del").onclick = () => { r.remove(); refreshRewardRows(); };
+  if (pre) setPickedPoi(r.querySelector(".pkg-pickup"), pre.from_id, pre.from_name);
+  return r;
+}
+
 // Mark a from/to picker as resolved to a known POI (same end-state as a manual
 // pick: name in the field, id on the dataset, the .picked styling on).
 function setPickedPoi(wrap, id, name) {
@@ -2622,10 +2705,12 @@ function refreshContractList() {
 // scratch rows don't conjure a "(no contract)" line). Labelled rows group by
 // label; the rest fall into the "" ungrouped bucket.
 function rowHasContent(row) {
-  return !!(row.querySelector(".pkg-commodity").value.trim()
+  const c = row.querySelector(".pkg-commodity").value.trim()
     || row.querySelector(".pkg-scu").value.trim()
-    || row.querySelector(".pkg-from input").dataset.poiId
-    || row.querySelector(".pkg-to input").dataset.poiId);
+    || row.querySelector(".pkg-to input").dataset.poiId;
+  if (row.classList.contains("route-pkg-group"))
+    return !!(c || [...row.querySelectorAll(".pkg-pickup input")].some(i => i.dataset.poiId));
+  return !!(c || row.querySelector(".pkg-from input").dataset.poiId);
 }
 
 // Per-contract payout inputs, derived from the labels in use (plus an ungrouped
@@ -2734,11 +2819,21 @@ async function planRoute() {
   const packages = [];
   let skipped = 0;
   for (const row of $("route-pkgs").children) {
-    const from = row.querySelector(".pkg-from input");
     const to = row.querySelector(".pkg-to input");
     const scu = Number(row.querySelector(".pkg-scu").value);
     const commodity = row.querySelector(".pkg-commodity").value.trim();
     const contract = row.querySelector(".pkg-contract").value.trim() || null;
+    if (row.classList.contains("route-pkg-group")) {
+      // one delivery total spread over every listed pickup (split unknown): emit
+      // a package per pickup, sharing the group id + carrying the total once.
+      const picks = [...row.querySelectorAll(".pkg-pickup input")].filter(i => i.dataset.poiId);
+      if (!to.dataset.poiId || !(scu > 0) || !picks.length) { skipped++; continue; }
+      for (const pk of picks)
+        packages.push({ commodity, scu: 0, group: row.dataset.group, group_scu: scu,
+          contract, from_id: Number(pk.dataset.poiId), to_id: Number(to.dataset.poiId) });
+      continue;
+    }
+    const from = row.querySelector(".pkg-from input");
     if (!from.dataset.poiId || !to.dataset.poiId || !(scu > 0)) { skipped++; continue; }
     packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
@@ -2804,6 +2899,24 @@ function assignContractColors(stops) {
 function contractChip(label) {
   if (!label) return "";
   return ` <span class="contract-chip" style="--cc:${contractColors[label] || "#7b8a9e"}">${esc(label)}</span>`;
+}
+// Cargo descriptor for a package line. A multi-pickup group shows its delivery
+// total (collected across several stops) rather than the per-row 0 SCU: at a
+// pickup it's "part of N SCU", at the drop the full "N SCU total".
+function cargoDesc(p, isPickup) {
+  const name = esc(p.commodity || "cargo");
+  if (p.group) return `${name} · ${isPickup ? "part of " : ""}${p.group_scu} SCU${isPickup ? " (multi-pickup)" : " total"}`;
+  return `${name} · ${p.scu} SCU`;
+}
+// Collapse a stop's dropoffs so a multi-pickup group (whose pickup rows all share
+// one destination) shows a single "deliver" line, not one per pickup location.
+function dedupeGroupDrops(list) {
+  const seen = new Set(), out = [];
+  for (const p of list || []) {
+    if (p.group) { if (seen.has(p.group)) continue; seen.add(p.group); }
+    out.push(p);
+  }
+  return out;
 }
 // contract -> the last stop (in visit order) that drops one of its packages =
 // where that contract is fully delivered.
@@ -2952,7 +3065,7 @@ function renderRun(run) {
         h += `<div class="route-leg">QT ${s.leg.qt_marker ? "to <b>" + esc(s.leg.qt_marker) + "</b> · " : ""}`
           + `${fmtGm(s.leg.distance_m)}${s.leg.cross_system ? ' · <span class="gate">⇆ ' + esc((s.leg.via_gate || []).join(" → ")) + "</span>" : ""}</div>`;
       s.pickups.forEach(p => { h += checkItem(p, "load"); });
-      s.dropoffs.forEach(p => { h += checkItem(p, "drop"); });
+      dedupeGroupDrops(s.dropoffs).forEach(p => { h += checkItem(p, "drop"); });
       h += `<button class="run-skip" data-advance="1">skip to next stop ▸</button>`;
     }
     h += `</div>`;
@@ -2963,6 +3076,10 @@ function renderRun(run) {
   box.querySelectorAll("input[data-pkg]").forEach(cb => {
     cb.onchange = () => patchRun({ package_id: cb.dataset.pkg, state: cb.dataset.state });
   });
+  // group-drop checkbox: delivers every pickup of the multi-pickup group at once.
+  box.querySelectorAll("input[data-group]").forEach(cb => {
+    cb.onchange = () => patchRun({ group: cb.dataset.group, state: cb.dataset.state });
+  });
   box.querySelectorAll("[data-advance]").forEach(b => { b.onclick = () => patchRun({ advance: true }); });
 }
 
@@ -2971,20 +3088,27 @@ function renderRun(run) {
 function checkItem(p, kind) {
   const done = kind === "load" ? (p.state === "onboard" || p.state === "delivered") : (p.state === "delivered");
   const next = kind === "load" ? (done ? "pending" : "onboard") : (done ? "onboard" : "delivered");
+  // A group dropoff checks off the whole delivery (data-group); everything else
+  // checks off a single package (data-pkg).
+  const target = (kind === "drop" && p.group)
+    ? `data-group="${esc(p.group)}"` : `data-pkg="${esc(String(p.id))}"`;
   return `<label class="run-check${done ? " checked" : ""}">`
-    + `<input type="checkbox"${done ? " checked" : ""} data-pkg="${esc(String(p.id))}" data-state="${next}">`
+    + `<input type="checkbox"${done ? " checked" : ""} ${target} data-state="${next}">`
     + `<span class="${kind === "load" ? "up" : "down"}">${kind === "load" ? "▲ load" : "▼ drop"}</span> `
-    + `${esc(p.commodity || "cargo")} · ${p.scu} SCU${contractChip(p.contract)}</label>`;
+    + `${cargoDesc(p, kind === "load")}${contractChip(p.contract)}</label>`;
 }
 
 // "What's in the hold" — every package currently onboard, so the player can match
 // the colour-coded contract chips to the boxes in their ship.
 function runHoldHtml(run) {
-  const aboard = [];
-  for (const s of run.stops) for (const p of s.pickups) if (p.state === "onboard") aboard.push(p);
+  const aboard = [], seen = new Set();
+  for (const s of run.stops) for (const p of s.pickups) if (p.state === "onboard") {
+    if (p.group) { if (seen.has(p.group)) continue; seen.add(p.group); }   // group counts once
+    aboard.push(p);
+  }
   if (!aboard.length) return `<div class="run-hold muted">hold empty</div>`;
   const items = aboard.map(p =>
-    `<span class="hold-item">${esc(p.commodity || "cargo")} · ${p.scu}${contractChip(p.contract)}</span>`).join("");
+    `<span class="hold-item">${esc(p.commodity || "cargo")} · ${p.group ? p.group_scu : p.scu}${contractChip(p.contract)}</span>`).join("");
   return `<div class="run-hold"><span class="muted">in the hold:</span> ${items}</div>`;
 }
 
@@ -3021,9 +3145,9 @@ function renderStop(s, i, completes) {
     legHtml = `<div class="route-leg">start here</div>`;
   }
   const line = (p, dir) => `<div class="pkg-line"><span class="${dir === "up" ? "up" : "down"}">`
-    + `${dir === "up" ? "▲ load" : "▼ drop"}</span> ${esc(p.commodity || "cargo")} · ${p.scu} SCU${contractChip(p.contract)}</div>`;
+    + `${dir === "up" ? "▲ load" : "▼ drop"}</span> ${cargoDesc(p, dir === "up")}${contractChip(p.contract)}</div>`;
   const pk = (s.pickups || []).map(p => line(p, "up")).join("");
-  const dp = (s.dropoffs || []).map(p => line(p, "down")).join("");
+  const dp = dedupeGroupDrops(s.dropoffs).map(p => line(p, "down")).join("");
   const done = (completes || []).length
     ? `<div class="completes">✓ completes${(completes).map(c => contractChip(c)).join("")}</div>` : "";
   return `<div class="route-stop"><div class="seq">${i + 1}</div><div class="body">`

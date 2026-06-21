@@ -653,13 +653,22 @@ class HarvestableCaptureIn(BaseModel):
 
 class PackageIn(BaseModel):
     """One cargo line: pick up `scu` of `commodity` at `from_id`, deliver to
-    `to_id`. from->to encodes pickup-before-dropoff precedence."""
+    `to_id`. from->to encodes pickup-before-dropoff precedence.
+
+    Multi-pickup delivery (rare): when a contract gives one commodity total but
+    spreads the cargo over several pickup locations without saying how much is at
+    each, the rows share a `group` id and carry the delivery total in `group_scu`
+    (per-row `scu` is then unused/0). The solver counts that total once, holds it
+    conservatively from the group's first pickup to its drop, and requires every
+    listed pickup to precede the dropoff. Normal rows leave `group` None."""
     id: str | None = Field(default=None, max_length=_PKG_ID_MAX)
     commodity: str | None = Field(default=None, max_length=_COMMODITY_MAX)
     scu: float = Field(ge=0, le=100_000)
     from_id: int
     to_id: int
     contract: str | None = Field(default=None, max_length=_CONTRACT_MAX)  # display-only group label
+    group: str | None = Field(default=None, max_length=_PKG_ID_MAX)       # multi-pickup binding id
+    group_scu: float | None = Field(default=None, ge=0, le=100_000)       # delivery total for the group
 
 
 _MAX_REWARD = 1e12   # generous aUEC ceiling — a sanity cap, not a real limit
@@ -757,10 +766,21 @@ class Session:
         return d is not None and d < ARRIVAL_SPACE_M
 
     def onboard_scu(self) -> float:
-        """Live cargo aboard = sum of SCU for packages currently 'onboard'."""
+        """Live cargo aboard = sum of SCU for packages currently 'onboard'. A
+        multi-pickup group's full total counts once while any of its pickups is
+        aboard (conservative, matching the planner's capacity model)."""
         if not self.run:
             return 0.0
-        return sum(p["scu"] for p in self.run["packages"].values() if p["state"] == "onboard")
+        total = 0.0
+        group_aboard = {}     # gid -> group_scu, counted if any pickup is onboard
+        for p in self.run["packages"].values():
+            g = p.get("group")
+            if g is None:
+                if p["state"] == "onboard":
+                    total += p["scu"]
+            elif p["state"] == "onboard":
+                group_aboard[g] = float(p.get("group_scu") or 0)
+        return total + sum(group_aboard.values())
 
     def run_view(self) -> dict | None:
         """The active run as the client renders it: ordered stops with per-package
@@ -1340,6 +1360,7 @@ class RunStartIn(RoutePlanIn):
 
 class RunPatchIn(BaseModel):
     package_id: str | None = Field(default=None, max_length=_PKG_ID_MAX)
+    group: str | None = Field(default=None, max_length=_PKG_ID_MAX)  # set every package of a group
     state: str | None = None       # pending | onboard | delivered
     advance: bool = False          # force past the current stop (partial load)
 
@@ -1444,12 +1465,20 @@ async def patch_run(body: RunPatchIn, user: dict = Depends(require_session)):
         run = sess.run
         if not run:
             raise HTTPException(status_code=404, detail="no active run")
-        if body.package_id is not None and body.state is not None:
+        if body.state is not None and (body.package_id is not None or body.group is not None):
             if body.state not in ("pending", "onboard", "delivered"):
                 raise HTTPException(status_code=400, detail="bad package state")
-            if body.package_id not in run["packages"]:
-                raise HTTPException(status_code=404, detail="unknown package")
-            run["packages"][body.package_id]["state"] = body.state
+            if body.group is not None:
+                # set every package of a multi-pickup group at once (its single drop)
+                ids = [pid for pid, p in run["packages"].items() if p.get("group") == body.group]
+                if not ids:
+                    raise HTTPException(status_code=404, detail="unknown group")
+                for pid in ids:
+                    run["packages"][pid]["state"] = body.state
+            else:
+                if body.package_id not in run["packages"]:
+                    raise HTTPException(status_code=404, detail="unknown package")
+                run["packages"][body.package_id]["state"] = body.state
         if body.advance and run["active"] < len(run["stops"]):
             run["active"] += 1
             _point_at_active_stop(sess)
@@ -1484,16 +1513,16 @@ def _run_summary(run: dict) -> dict:
     headline totals plus the full package list (POI ids resolved to names) so the
     UI can repopulate the entry form without another round-trip."""
     pkgs = []
-    total_scu = 0.0
-    for p in nav_core.run_packages(run):
+    records = nav_core.run_packages(run)
+    total_scu = nav_core.packages_scu(records)
+    for p in records:
         fid, tid = p.get("from_id"), p.get("to_id")
-        scu = float(p.get("scu") or 0)
-        total_scu += scu
         pkgs.append({
-            "commodity": p.get("commodity"), "scu": scu,
+            "commodity": p.get("commodity"), "scu": float(p.get("scu") or 0),
             "from_id": fid, "from_name": nav_core._poi_name(nav, fid),
             "to_id": tid, "to_name": nav_core._poi_name(nav, tid),
             "contract": p.get("contract"),
+            "group": p.get("group"), "group_scu": p.get("group_scu"),
         })
     reward = nav_core.run_total_reward(run)
     t = run.get("total_time_s")
