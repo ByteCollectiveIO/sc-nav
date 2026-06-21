@@ -233,6 +233,29 @@
   #nav-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
     text-decoration: none; white-space: nowrap; }
   #nav-toggle:hover { text-decoration: underline; }
+  /* logo + title double as the "home" control → back to the app launcher */
+  .home-link { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+
+  /* app launcher (home) */
+  .launcher { max-width: 760px; margin: 0 auto; }
+  .launcher-head { color: var(--accent); letter-spacing: 2px; font-size: 18px;
+    margin: 4px 0 18px; text-align: center; }
+  .app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 18px; }
+  .app-card { position: relative; display: flex; flex-direction: column; align-items: center;
+    text-align: center; gap: 10px; padding: 24px 20px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    text-decoration: none; color: var(--text);
+    transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s; }
+  a.app-card:hover { border-color: var(--accent); transform: translateY(-2px);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
+  .app-logo { width: 160px; height: auto; border-radius: 10px; }
+  .app-name { font-size: 16px; letter-spacing: 1px; color: var(--accent); }
+  .app-desc { font-size: 12px; color: var(--dim); line-height: 1.55; }
+  .app-card.disabled { cursor: default; opacity: 0.55; filter: grayscale(0.6); }
+  .app-badge { position: absolute; top: 10px; right: 10px; font-size: 10px;
+    letter-spacing: 1px; text-transform: uppercase; padding: 2px 8px; border-radius: 10px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--warn); }
   .login-gate { position: fixed; inset: 0; background: var(--bg);
     display: grid; place-items: center; z-index: 50; padding: 20px; }
   /* the explicit display above overrides the [hidden] attribute, so restore it */
@@ -337,12 +360,14 @@
 </div>
 
 <header>
-  <div class="logos">
-    <img class="header-logo" src="/images/sc_org_navigator_logo.png" alt="" width="40" height="40">
-    <span id="org-logo-sep" class="logo-sep" hidden></span>
-    <img id="org-logo" alt="org logo" hidden>
-  </div>
-  <h1>Org Navigator</h1>
+  <a class="home-link" href="#/" title="Home — choose an app">
+    <div class="logos">
+      <img class="header-logo" src="/images/sc_org_navigator_logo.png" alt="" width="40" height="40">
+      <span id="org-logo-sep" class="logo-sep" hidden></span>
+      <img id="org-logo" alt="org logo" hidden>
+    </div>
+    <h1>Org Navigator</h1>
+  </a>
   <div id="conn" title="server connection"></div>
   <div id="where">waiting for /showlocation&hellip;</div>
   <a id="stats-toggle" href="#/stats" hidden>📊 Stats</a>
@@ -353,6 +378,25 @@
 </header>
 
 <main>
+  <div id="launcher-view" hidden>
+    <h2 class="launcher-head">Choose an app</h2>
+    <div class="app-grid">
+      <a class="app-card" href="#/nav">
+        <img class="app-logo" src="/images/resource_navigator_logo.png" alt="" width="160" height="160">
+        <div class="app-name">Resource Navigator</div>
+        <div class="app-desc">Find POIs, resources &amp; wildlife and get live turn-by-turn
+          guidance with your org.</div>
+      </a>
+      <div class="app-card disabled" aria-disabled="true">
+        <span class="app-badge">Coming soon</span>
+        <img class="app-logo" src="/images/cargo_planner_logo.png" alt="" width="160" height="160">
+        <div class="app-name">Cargo Planner</div>
+        <div class="app-desc">Plan efficient multi-stop hauling routes under your ship's
+          cargo capacity, then run them turn-by-turn.</div>
+      </div>
+    </div>
+  </div>
+
   <div id="main-view">
   <div id="waiting">No position yet. In game: open chat and run <b>/showlocation</b>.</div>
 
@@ -722,7 +766,7 @@
         <p>In Star Citizen, open the chat box (your chat key, <span class="kbd">Enter</span> by
         default), type <code>/showlocation</code> and press Enter. The game copies your coordinates;
         the watcher sends them here within a fraction of a second.</p>
-        <p>Come back to <a href="#">the navigation view</a> — your position, bearing, and distance
+        <p>Come back to <a href="#/nav">the navigation view</a> — your position, bearing, and distance
         to your destination will be live. Re-run <code>/showlocation</code> whenever you want to
         update it (the up-arrow in chat re-sends it fast).</p>
       </li>
@@ -1943,35 +1987,42 @@ function renderAccount(me) {
   applyView();
 }
 
-// ---------- view router (map view <-> dedicated settings page) ----------
-// One SPA, two views toggled by the URL hash (#/settings); the fragment never
-// hits the server (StaticFiles still serves the single index.html). The settings
-// view holds the account-only panels (watcher token + admin org settings) so the
-// main navigation/map view stays uncluttered.
+// ---------- view router (app launcher + apps + dedicated sub-pages) ----------
+// One SPA; the URL hash picks the view (fragment never hits the server, so
+// StaticFiles still serves the single index.html). The launcher (#/) is home and
+// hosts the app picker; the Resource Navigator lives at #/nav; #/settings, #/setup,
+// #/leaderboard and #/stats are account/app sub-pages. Empty/unknown hash → home.
 function applyView() {
-  // Sub-views are reachable only when signed in; bounce anonymous deep-links so a
-  // stray #/settings can't leave the map hidden behind the login gate.
-  const settings = location.hash === "#/settings" && !!currentMe;
-  const setup = location.hash === "#/setup" && !!currentMe;
-  const leaderboard = location.hash === "#/leaderboard" && !!currentMe;
-  const stats = location.hash === "#/stats" && !!currentMe;
-  const sub = settings || setup || leaderboard || stats;
+  // Every view requires sign-in; the login gate covers anonymous users, but guard
+  // here too so a stray deep-link can't leave a view exposed behind the gate.
+  const authed = !!currentMe;
+  const h = location.hash;
+  const nav = h === "#/nav" && authed;
+  const settings = h === "#/settings" && authed;
+  const setup = h === "#/setup" && authed;
+  const leaderboard = h === "#/leaderboard" && authed;
+  const stats = h === "#/stats" && authed;
+  // Home/launcher = signed in with no (recognized) sub-route selected.
+  const launcher = authed && !nav && !settings && !setup && !leaderboard && !stats;
 
-  $("main-view").hidden = sub;
+  $("launcher-view").hidden = !launcher;
+  $("main-view").hidden = !nav;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   $("leaderboard-view").hidden = !leaderboard;
   $("stats-view").hidden = !stats;
 
-  // ⚙ Settings link doubles as the "back" control on any sub-view.
-  const link = $("nav-toggle");
-  link.hidden = !currentMe;
-  link.textContent = sub ? "← Navigation" : "⚙ Settings";
-  link.setAttribute("href", sub ? "#" : "#/settings");
-  // 📖 Setup / 🏆 Leaderboard links: visible when signed in, except on their own page.
-  $("setup-toggle").hidden = !currentMe || setup;
-  $("leaderboard-toggle").hidden = !currentMe || leaderboard;
-  $("stats-toggle").hidden = !currentMe || stats;
+  // Header chrome: the logo/title (a.home-link) is the universal "back to home"
+  // control, so ⚙ Settings stays purely Settings. The app toggles and the
+  // location readout are app-scoped — hide them on the launcher (home).
+  $("where").hidden = launcher;
+  $("nav-toggle").hidden = !authed || launcher || settings;
+  $("nav-toggle").textContent = "⚙ Settings";
+  $("nav-toggle").setAttribute("href", "#/settings");
+  // 📖 Setup / 🏆 Leaderboard / 📊 Stats: signed in, off the launcher, not own page.
+  $("setup-toggle").hidden = !authed || launcher || setup;
+  $("leaderboard-toggle").hidden = !authed || launcher || leaderboard;
+  $("stats-toggle").hidden = !authed || launcher || stats;
 
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
@@ -1981,7 +2032,7 @@ function applyView() {
     loadLeaderboard();
   } else if (stats) {
     loadStats();
-  } else if (!sub && lastState) {
+  } else if (nav && lastState) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.
     drawMap();
