@@ -240,6 +240,15 @@ def delete_observation(obs_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def clear_observations() -> int:
+    """Wipe every resource/wildlife/harvestable sighting (admin 'clear resource
+    statistics'). Custom POIs and QT markers live in their own tables and are
+    untouched. Returns the number of rows removed."""
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM observations")
+    return cur.rowcount
+
+
 # --- handles ---------------------------------------------------------------
 
 
@@ -433,6 +442,17 @@ def list_all_completed_runs(since: str | None = None) -> list[dict]:
         run["completed_at"] = r["completed_at"]
         out.append(run)
     return out
+
+
+def clear_run_history() -> int:
+    """Wipe finished hauling runs (completed + abandoned) across all members for
+    the admin 'clear cargo statistics' action — this zeroes the leaderboard,
+    hauling stats, and every member's run history. In-progress (active) runs are
+    left alone so a member mid-haul isn't disrupted. Returns rows removed."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM runs WHERE status IN ('completed','abandoned')")
+    return cur.rowcount
 
 
 # --- one-time migration from the legacy JSON files -------------------------

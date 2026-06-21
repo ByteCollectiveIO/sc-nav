@@ -889,6 +889,25 @@
       <button id="org-logo-remove" hidden>Remove logo</button>
       <span class="muted" id="org-logo-status"></span>
     </div>
+
+    <h2 style="margin-top:16px;">CLEAR STATISTICS <span class="muted">(danger)</span></h2>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      Permanently wipe the data behind a Statistics page. There's no undo, so
+      each button asks you to confirm first.
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button id="clear-resource-stats">Clear resource statistics</button>
+      <button id="clear-cargo-stats">Clear cargo statistics</button>
+      <span class="muted" id="clear-stats-status"></span>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      <b>Resource</b> deletes every resource, fauna, and harvestable sighting
+      org-wide — the Statistics page contributions and the resource leaderboard
+      reset to zero (your custom POIs and QT markers are kept). <b>Cargo</b>
+      deletes every member's completed hauling run — the cargo leaderboard,
+      hauling stats, and run history reset to zero (any in-progress haul keeps
+      running).
+    </div>
   </div>
   </div><!-- /settings-view -->
 
@@ -3719,6 +3738,43 @@ $("starmap-toggle").onchange = async (e) => {
   } catch {
     $("admin-status").textContent = "failed to update — try again";
     loadSettings();
+  }
+};
+
+// ---------- clear statistics (admin, destructive) ----------
+$("clear-resource-stats").onclick = async () => {
+  if (!confirm(
+      "Delete EVERY resource, fauna, and harvestable sighting for the whole org?\n\n" +
+      "The Statistics page contributions and the resource leaderboard reset to " +
+      "zero. Your custom POIs and QT markers are kept. This can't be undone.")) return;
+  const st = $("clear-stats-status");
+  st.textContent = "clearing resource statistics…";
+  try {
+    const r = await fetch("/api/admin/stats/resources/clear", { method: "POST" });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `cleared ${d.deleted} sighting${d.deleted === 1 ? "" : "s"}`;
+    loadAll();                       // drop the wiped sightings from the browse view
+    if (finderOre) runFinder();      // and the ore heatmap/finder
+  } catch {
+    st.textContent = "failed — try again";
+  }
+};
+
+$("clear-cargo-stats").onclick = async () => {
+  if (!confirm(
+      "Delete EVERY member's completed hauling run for the whole org?\n\n" +
+      "The cargo leaderboard, hauling stats, and run history reset to zero. " +
+      "In-progress hauls keep running. This can't be undone.")) return;
+  const st = $("clear-stats-status");
+  st.textContent = "clearing cargo statistics…";
+  try {
+    const r = await fetch("/api/admin/stats/cargo/clear", { method: "POST" });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `cleared ${d.deleted} run${d.deleted === 1 ? "" : "s"}`;
+  } catch {
+    st.textContent = "failed — try again";
   }
 };
 

@@ -2033,6 +2033,27 @@ async def refresh_data(admin: dict = Depends(require_admin)):
     }
 
 
+@app.post("/api/admin/stats/resources/clear")
+async def clear_resource_stats(admin: dict = Depends(require_admin)):
+    """Wipe every resource/wildlife/harvestable sighting org-wide (admin only):
+    zeroes the Statistics page's contribution metrics and the resource
+    leaderboard. Custom POIs and QT markers are kept. The in-memory dataset is
+    rebuilt afterwards so the change is live without a restart (and any session
+    aimed at a now-deleted sighting is cleared)."""
+    deleted = await asyncio.to_thread(db.clear_observations)
+    await _rebuild_nav()
+    return {"ok": True, "deleted": deleted, "observations": len(nav.observations)}
+
+
+@app.post("/api/admin/stats/cargo/clear")
+async def clear_cargo_stats(admin: dict = Depends(require_admin)):
+    """Wipe finished hauling runs org-wide (admin only): zeroes the cargo
+    leaderboard, hauling stats, and every member's run history. In-progress
+    (active) runs are left running."""
+    deleted = await asyncio.to_thread(db.clear_run_history)
+    return {"ok": True, "deleted": deleted}
+
+
 @app.get("/api/settings")
 async def get_settings(user: dict = Depends(require_session)):
     """Org-wide settings (any member can read; admins change them)."""

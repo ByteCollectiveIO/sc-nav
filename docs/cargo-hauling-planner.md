@@ -1,7 +1,22 @@
 # Cargo-hauling route planner — design
 
-**Status:** designed, not built (2026-06-20). This doc captures the decisions so
-the feature can be picked up later without re-deriving them.
+**Status:** designed 2026-06-20; **v1 BUILT and shipped 2026-06-21** (build-order
+steps 0–5 all live). This doc captures the original decisions plus what actually
+shipped. The **only** unbuilt v1 piece is the quantum-fuel / drive-range overlay,
+**blocked** on a reuse-permitted CIG drive-data source (erkul rejected — see
+*Quantum fuel & refueling*). Everything else below marked ✅ is live; ⛔ is
+blocked; deferred items are listed at the end.
+
+**Shipped beyond the original design** (enhancements added after v1 landed):
+- **Multi-pickup grouped deliveries** — one commodity total spread across several
+  pickup locations with an unknown per-location split (see *Multi-pickup
+  deliveries* below). Commit `3a6f801`.
+- **Guild hauling leaderboard + guild cargo stats** — `derive_guild_leaderboard`
+  / `derive_guild_cargo_stats`, `GET /api/cargo/leaderboard` + `/api/cargo/stats`,
+  `#/cargo-leaderboard` + `#/cargo-stats` views. Commit `4cc73be`.
+- **Clear-route button + emphasized "start new session"** — a one-click reset of
+  the entry form (also fires after a completed run), keeping ship/usable SCU.
+  Commit `a518a8b`.
 
 A planner for **cargo-hauling contracts**: take the pickups/dropoffs a player has
 accepted, compute an efficient visiting order under cargo capacity, then guide
@@ -75,6 +90,40 @@ run      = { id, owner_id, ship, contracts[], stops[], status, started_at }
   and a destination), so there's no mental reshaping during entry.
 - Multi-pickup / multi-dropoff is just several packages; the planner **merges
   visits** to any shared location into one stop.
+
+### Multi-pickup deliveries (shipped 2026-06-21, commit `3a6f801`)
+
+The common case — a contract that states the SCU at each pickup — uses the plain
+per-package model above. But some contracts give a commodity **total** spread over
+several pickup locations **without** saying how much is at each (e.g. "deliver 3
+SCU of Scrap to Port Tressler, collect from MIC-L5 *and* MIC-L4"). The per-pickup
+SCU is unknown until you arrive, so it can't be entered.
+
+For that case a package gains two optional fields:
+
+```
+package += { group?, group_scu? }
+           group     = a shared id binding the pickup rows of one delivery
+           group_scu = the delivery total (per-row scu is then unused/0)
+```
+
+Decisions (confirmed with the user):
+- **Visit all** — the cargo is pre-distributed, so every listed pickup must be
+  collected; each pickup precedes the single dropoff (rides on the existing
+  `preds`).
+- **Conservative capacity** — the full `group_scu` total is held onboard from the
+  group's **first** pickup to its drop, counted **once**. Never under-plans
+  capacity; the per-location split being unknown can't cause an over-capacity
+  route. Implemented via `nav_core._stop_delta` threading a `seen_groups` set
+  through `_bnb_order` / `_greedy_order` / `_min_capacity` and the output pass.
+- **Totals dedupe** — `nav_core.packages_scu` counts a group's total once across
+  stats / history / leaderboard; `Session.onboard_scu` counts it once while any
+  pickup is aboard.
+- **Run mode** — pickups check off per location; `PATCH /api/route/run` gained a
+  `group` field so the single dropoff delivers the whole group at once.
+- **UI** — a "+ add multi-pickup delivery" block (commodity + total + destination
+  + a pickup list, no per-location SCU); plan/run/clone render the group as one
+  unit. 6 tests in `MultiPickupGroupTests`.
 
 ---
 
@@ -423,8 +472,9 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
    - **Fuel/refuel advisory: NOT yet built** (needs the drive catalog). Plan
      output already carries per-leg + cumulative QT distance, so the overlay is a
      later add.
-   - **Not yet built:** the live-position → synthetic start seed (start_id is an
-     optional POI; absent it, the run begins free at the first stop).
+   - **Live-position start seed: ✅ SHIPPED 2026-06-21** (in step 4, below) — the
+     "📍 my current location" `start_here` path seeds from `sess.pos` via
+     `nav_core.position_start`. `start_id` (a chosen POI) and a free start remain.
 3. ✅ **Run persistence + arrival detection SHIPPED 2026-06-21.** `runs` table
    `(id, discord_id, status, ship, started_at, completed_at, data)` in `db.py`
    (`get_active_run` / `start_run` / `update_run` / `complete_run` / `abandon_run`
@@ -476,6 +526,13 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      can search "ARC-L1". They flow through `/api/pois` (searchable in both apps)
      and route like any space POI. **Side benefit:** these 28–29 stations are
      present even when the starmap POI catalog is OFF.
+   - ✅ **Multi-pickup delivery entry SHIPPED 2026-06-21** — see *Multi-pickup
+     deliveries* under Data model.
+   - ✅ **Clear-route button SHIPPED 2026-06-21** (commit `a518a8b`). `clearRoute()`
+     wipes all cargo lines (one fresh row), payouts, start location, and plan
+     output for a fresh start, keeping ship + usable SCU; it also runs on "Plan
+     another route" after a completed run, so finished routes no longer leave
+     their entries behind. The "↻ start new session" button got accent emphasis.
    - **Dependency:** the from/to pickers search `/api/pois`. The planet-orbital
      stations + surface POIs still need the starmap catalog enabled (default OFF)
      or custom POIs; the container-stations above are always available.
@@ -533,6 +590,14 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      a "↻ start new session" button under the cards with a "since <time>" note.
      Only the stat boxes are scoped; LAST RUNS + FREQUENT LANES always use the
      full window. Verified end-to-end (reset partitions session vs recent).
+   - ✅ **Guild hauling leaderboard + guild cargo stats SHIPPED** (commit
+     `4cc73be`). `nav_core.derive_guild_leaderboard` groups completed runs by
+     `discord_id` and runs `derive_run_stats` per member (top-earner + aUEC/hr
+     boards); `derive_guild_cargo_stats` adds guild-wide totals, hauler count, and
+     top commodities / lanes / ships. `GET /api/cargo/leaderboard` +
+     `GET /api/cargo/stats` (both with a `range` window); `#/cargo-leaderboard` +
+     `#/cargo-stats` SPA views. This is the app-scoped analytics surface the doc
+     anticipated ("each app owns its stats content").
 
 **In v1 (decided 2026-06-20):** cross-system jump-gate routing; total-run-time
 estimate; quantum-fuel range + opt-in refuel advisory (range **computed** from a
