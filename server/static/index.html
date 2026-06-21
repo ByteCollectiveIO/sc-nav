@@ -27,9 +27,10 @@
   /* The two views are layout-transparent so their panels remain direct grid
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
-  #main-view, #settings-view, #setup-view, #leaderboard-view, #stats-view { display: contents; }
+  #main-view, #settings-view, #setup-view, #leaderboard-view, #stats-view,
+  #route-view { display: contents; }
   #main-view[hidden], #settings-view[hidden], #setup-view[hidden],
-  #leaderboard-view[hidden], #stats-view[hidden] { display: none; }
+  #leaderboard-view[hidden], #stats-view[hidden], #route-view[hidden] { display: none; }
 
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
@@ -350,7 +351,12 @@
   }
 
   /* ---- cargo planner (#/route) ---- */
-  #route-view { display: flex; flex-direction: column; gap: 14px; }
+  /* #route-view + its toggled sub-containers are display:contents so every panel
+     is a direct <main> grid item (matching the other views, so the grid gap
+     spaces them). The [hidden] companions restore the attribute's hide, which the
+     bare-id display would otherwise override. */
+  #route-run, #route-result { display: contents; }
+  #route-run[hidden], #route-result[hidden] { display: none; }
   .route-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .route-hint { font-size: 12px; margin: 6px 0 0; line-height: 1.5; }
   .route-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
