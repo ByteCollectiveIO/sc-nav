@@ -390,6 +390,17 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
    fact, so the planner **computes** effective range from a per-ship drive choice
    (remembered per user). Manual range override kept as a fallback. Do **not** use
    erkul (CC BY-NC-ND / private API — see *Quantum fuel & refueling*).
+   - ✅ **Ships feed SHIPPED 2026-06-21.** `load_ships()` + `GET /api/ships`
+     (cargo-capable spaceships, name + stated SCU, from the uexcorp vehicles feed,
+     cached `poi/ships.json` — full rows kept for the deferred drive work), wired
+     into `/api/refresh` + `/api/health`.
+   - ✅ **Ship-pref persistence SHIPPED 2026-06-21.** `user_ships` table
+     `(discord_id, name, usable_scu, last_used)` in `server/db.py`
+     (`list/upsert/delete_user_ship`); `GET /api/me` carries the saved fleet;
+     `PUT /api/me/ship` (upsert + stamp last_used) and `DELETE /api/me/ship`.
+   - ⛔ **Quantum-drive catalog + computed range: NOT built** — blocked on the
+     CIG drive-data sourcing decision (erkul rejected; need a reuse-permitted
+     extract). The fuel/refuel advisory waits on this.
 2. ✅ **SHIPPED 2026-06-21.** `travel_cost(nav, src, dst)` extracted into
    `server/nav_core.py` + cross-system jump-gate routing + `plan_route` solver +
    `POST /api/route/plan` (`server/app.py`). 12 tests in `test_nav_core.py`

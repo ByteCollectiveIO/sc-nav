@@ -69,6 +69,17 @@ CREATE TABLE IF NOT EXISTS watcher_tokens (
     discord_id TEXT, display_name TEXT, label TEXT,
     created TEXT, last_used TEXT
 );
+
+-- Per-member cargo-planner ship prefs: the usable-SCU a member has learned for
+-- each ship (stated catalog SCU minus what they can't physically stuff). Keyed
+-- on the Discord member id; one row per (member, ship).
+CREATE TABLE IF NOT EXISTS user_ships (
+    discord_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    usable_scu REAL,
+    last_used TEXT,
+    PRIMARY KEY (discord_id, name)
+);
 """
 
 
@@ -255,6 +266,41 @@ def add_token(t: dict) -> None:
 def delete_token(token_id: str) -> bool:
     with _lock, _conn:
         cur = _conn.execute("DELETE FROM watcher_tokens WHERE id=?", (token_id,))
+    return cur.rowcount > 0
+
+
+# --- cargo-planner ship prefs (per member) ---------------------------------
+
+
+def list_user_ships(discord_id: str) -> list[dict]:
+    """A member's saved ships, most-recently-used first."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT name, usable_scu, last_used FROM user_ships WHERE discord_id=? "
+            "ORDER BY last_used DESC, name",
+            (str(discord_id),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_user_ship(discord_id: str, name: str, usable_scu: float, last_used: str) -> None:
+    """Remember (or update) a member's usable-SCU for a ship and stamp last_used."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO user_ships (discord_id, name, usable_scu, last_used) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(discord_id, name) DO UPDATE SET "
+            "usable_scu=excluded.usable_scu, last_used=excluded.last_used",
+            (str(discord_id), name, usable_scu, last_used),
+        )
+
+
+def delete_user_ship(discord_id: str, name: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM user_ships WHERE discord_id=? AND name=?",
+            (str(discord_id), name),
+        )
     return cur.rowcount > 0
 
 

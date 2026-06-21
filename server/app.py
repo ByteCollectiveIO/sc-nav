@@ -1862,11 +1862,18 @@ async def api_me(request: Request):
     the live presence-share flag so the UI's toggle reflects the current state."""
     user = require_session(request)
     return {**user, "share_presence": hub.get(user).share_presence,
-            "org_logo": bool(db.get_setting("org_logo_ext"))}
+            "org_logo": bool(db.get_setting("org_logo_ext")),
+            "ships": db.list_user_ships(user["id"])}
 
 
 class ProfileIn(BaseModel):
     share_presence: bool | None = None
+
+
+class ShipPrefIn(BaseModel):
+    """A member's learned usable-SCU for a ship (the cargo-planner override)."""
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    usable_scu: float = Field(ge=0, le=100_000)
 
 
 @app.put("/api/me")
@@ -1880,6 +1887,23 @@ async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
             sess.share_presence = body.share_presence
             hub.touch_presence(sess)   # re-publish, or drop if now off / not on a body
         return {"ok": True, "share_presence": sess.share_presence}
+
+
+@app.put("/api/me/ship")
+async def remember_ship(body: ShipPrefIn, user: dict = Depends(require_session)):
+    """Save (or update) the caller's usable-SCU for a ship and mark it most
+    recently used. Returns the caller's saved fleet, freshest first."""
+    db.upsert_user_ship(user["id"], body.name.strip(), body.usable_scu,
+                        datetime.now(timezone.utc).isoformat())
+    return {"ok": True, "ships": db.list_user_ships(user["id"])}
+
+
+@app.delete("/api/me/ship")
+async def forget_ship(name: str, user: dict = Depends(require_session)):
+    """Drop a saved ship from the caller's fleet."""
+    if not db.delete_user_ship(user["id"], name.strip()):
+        raise HTTPException(status_code=404, detail="no such saved ship")
+    return {"ok": True, "ships": db.list_user_ships(user["id"])}
 
 
 class TokenCreateIn(BaseModel):
