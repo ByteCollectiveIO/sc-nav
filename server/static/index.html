@@ -291,9 +291,14 @@
   #token-new code { color: var(--good); }
 
   /* setup guide */
-  #setup-toggle, #leaderboard-toggle, #stats-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
+  #setup-toggle, #leaderboard-toggle, #stats-toggle, #back-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
     text-decoration: none; white-space: nowrap; }
-  #setup-toggle:hover, #leaderboard-toggle:hover, #stats-toggle:hover { text-decoration: underline; }
+  #setup-toggle:hover, #leaderboard-toggle:hover, #stats-toggle:hover, #back-toggle:hover { text-decoration: underline; }
+  /* the current sub-page's own header link: shown but marked active, not hidden,
+     so the link set doesn't appear to swap as you move between sub-pages */
+  #nav-toggle.nav-active, #setup-toggle.nav-active, #stats-toggle.nav-active,
+  #leaderboard-toggle.nav-active { color: var(--warn); cursor: default; text-decoration: none; }
+  #back-toggle { font-weight: 600; }
   .setup { max-width: 760px; margin: 0 auto; }
   .setup > h2 { color: var(--accent); letter-spacing: 2px; font-size: 18px; margin: 0 0 6px; }
   .setup-intro { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 0 0 18px; }
@@ -519,6 +524,7 @@
   <div id="conn" title="server connection"></div>
   <div class="header-right">
     <div id="where">waiting for /showlocation&hellip;</div>
+    <a id="back-toggle" href="#/nav" hidden></a>
     <a id="stats-toggle" href="#/stats" hidden>📊 Stats</a>
     <a id="leaderboard-toggle" href="#/leaderboard" hidden>🏆 Leaderboard</a>
     <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
@@ -2212,6 +2218,7 @@ function renderAccount(me) {
 // /api/me (the saved fleet) + PUT /api/me/ship.
 let routeCatalog = null;        // [{name, scu, company}] from /api/ships
 let routeCatalogByName = null;
+let routeCommodityNames = [];   // base commodity list from /api/commodities
 let routeWired = false;
 let lastPlanInput = null;       // last plan request body, reused for "start run"
 let currentRun = null;          // active run view (or null)
@@ -2232,8 +2239,8 @@ async function loadRoutePlanner() {
     // list (every kind, not just ores) seeds the suggestions so hauling goods
     // like Medical Supplies are offered.
     fetch("/api/commodities").then(r => r.json()).then(names => {
-      const cd = $("route-commodities");
-      for (const n of names) { const o = document.createElement("option"); o.value = n; cd.appendChild(o); }
+      routeCommodityNames = names || [];
+      rebuildCommodityList();
     }).catch(() => {});
   }
   if (!routeWired) wireRoutePlanner();
@@ -2253,15 +2260,24 @@ async function loadRouteHistory() {
     routeHistory = await fetch("/api/route/history").then(r => r.json());
   } catch { return; }
   renderRouteHistory();
-  // Float the player's most-hauled commodities to the top of the datalist.
-  // Clear any priors injected on a prior visit so they don't accumulate.
+  rebuildCommodityList();   // float the player's most-hauled commodities to the top
+}
+
+// Rebuild the commodity datalist as: the player's most-hauled commodities first,
+// then the rest of the catalog — deduped (case-insensitive) so a floated prior
+// doesn't also appear in its original spot.
+function rebuildCommodityList() {
   const cd = $("route-commodities");
-  cd.querySelectorAll("option[data-prior]").forEach(o => o.remove());
-  for (const c of [...(routeHistory.picks.commodities || [])].reverse()) {
-    const o = document.createElement("option");
-    o.value = c.commodity; o.dataset.prior = "1";
-    cd.insertBefore(o, cd.firstChild);
+  if (!cd) return;
+  const priors = ((routeHistory && routeHistory.picks.commodities) || []).map(c => c.commodity);
+  const seen = new Set();
+  const ordered = [];
+  for (const n of [...priors, ...routeCommodityNames]) {
+    const k = (n || "").toLowerCase();
+    if (!n || seen.has(k)) continue;
+    seen.add(k); ordered.push(n);
   }
+  cd.innerHTML = ordered.map(n => `<option value="${esc(n)}"></option>`).join("");
 }
 
 function renderRouteHistory() {
@@ -2951,6 +2967,9 @@ function renderStop(s, i, completes) {
 // StaticFiles still serves the single index.html). The launcher (#/) is home and
 // hosts the app picker; the Resource Navigator lives at #/nav; #/settings, #/setup,
 // #/leaderboard and #/stats are account/app sub-pages. Empty/unknown hash → home.
+const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner", "#/": "Home" };
+// The app a sub-page should return to (persisted so a reload on a sub-page keeps it).
+let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch { return null; } })() || "#/nav";
 function applyView() {
   // Every view requires sign-in; the login gate covers anonymous users, but guard
   // here too so a stray deep-link can't leave a view exposed behind the gate.
@@ -2973,17 +2992,29 @@ function applyView() {
   $("leaderboard-view").hidden = !leaderboard;
   $("stats-view").hidden = !stats;
 
-  // Header chrome: the logo/title (a.home-link) is the universal "back to home"
-  // control, so ⚙ Settings stays purely Settings. The app toggles and the
-  // location readout are app-scoped — hide them on the launcher (home).
+  // Remember which app you're in, so the sub-pages (Settings/Setup/Stats/
+  // Leaderboard) can offer a "← back to that app" link.
+  if (nav || route) { lastApp = h; try { sessionStorage.setItem("scLastApp", h); } catch {} }
+  // Navigator context = the navigator and its own sub-pages (Stats/Leaderboard).
+  const inNav = nav || stats || leaderboard;
+
+  // Header chrome. The logo/title (a.home-link) is the universal Home; the back
+  // link returns to the app you came from. ⚙ Settings + 📖 Setup are global (both
+  // apps); 📊 Stats + 🏆 Leaderboard are navigator-scoped. The current sub-page's
+  // own link stays visible but marked active (so the set doesn't appear to swap).
   $("where").hidden = launcher || route;   // location readout is the navigator's
-  $("nav-toggle").hidden = !authed || launcher || settings;
+  $("back-toggle").hidden = !authed || launcher || nav || route;
+  $("back-toggle").setAttribute("href", lastApp);
+  $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
+  $("nav-toggle").hidden = !authed || launcher;
   $("nav-toggle").textContent = "⚙ Settings";
-  $("nav-toggle").setAttribute("href", "#/settings");
-  // 📖 Setup / 🏆 Leaderboard / 📊 Stats: signed in, off the launcher, not own page.
-  $("setup-toggle").hidden = !authed || launcher || setup;
-  $("leaderboard-toggle").hidden = !authed || launcher || leaderboard;
-  $("stats-toggle").hidden = !authed || launcher || stats;
+  $("nav-toggle").classList.toggle("nav-active", settings);
+  $("setup-toggle").hidden = !authed || launcher;
+  $("setup-toggle").classList.toggle("nav-active", setup);
+  $("stats-toggle").hidden = !authed || !inNav;
+  $("stats-toggle").classList.toggle("nav-active", stats);
+  $("leaderboard-toggle").hidden = !authed || !inNav;
+  $("leaderboard-toggle").classList.toggle("nav-active", leaderboard);
 
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
