@@ -785,5 +785,130 @@ class ResourceStatsTests(unittest.TestCase):
         self.assertIsNotNone(hs[0]["nearest_qt_dist_m"])
 
 
+def _line_nav(coords):
+    """A toy system of directly-QT-able space POIs at the given xyz coords, so
+    travel_cost reduces to straight-line distance (no via-hops, no gates)."""
+    nav = nav_core.NavData()
+    nav.systems = ["Test"]
+    for i, (x, y, z) in enumerate(coords):
+        nav.pois[i] = nav_core.Poi(
+            id=i, name=f"P{i}", system="Test", container_name=None,
+            type="Orbital Station", local_km=None, global_m=(float(x), float(y), float(z)),
+            latitude=None, longitude=None, height_m=None, qt_marker=True,
+        )
+    nav_core.index_qt_markers(nav)
+    return nav
+
+
+class TravelCostTests(unittest.TestCase):
+    def test_intra_system_straight_line(self):
+        nav = _line_nav([(0, 0, 0), (10, 0, 0)])
+        leg = nav_core.travel_cost(nav, nav.pois[0], nav.pois[1])
+        self.assertFalse(leg["cross_system"])
+        self.assertAlmostEqual(leg["distance_m"], 10.0)
+        self.assertEqual(leg["qt_marker"], "P1")
+
+    def test_moon_two_hop_via_parent(self):
+        # A surface POI on a moon, reached from far away, routes via its planet.
+        port = next(p for p in NAV.pois.values()
+                    if p.name == "Port Tressler" and p.system == "Stanton")
+        daymar = next(p for p in NAV.pois.values()
+                      if p.system == "Stanton" and p.container_name == "Daymar")
+        leg = nav_core.travel_cost(NAV, port, daymar)
+        self.assertEqual(leg["via"], "Crusader")
+        self.assertFalse(leg["cross_system"])
+
+    def test_system_path_chains_through_pyro(self):
+        self.assertEqual(nav_core.system_path("Stanton", "Pyro"), ["Stanton", "Pyro"])
+        self.assertEqual(nav_core.system_path("Stanton", "Nyx"),
+                         ["Stanton", "Pyro", "Nyx"])
+        self.assertEqual(nav_core.system_path("Stanton", "Stanton"), ["Stanton"])
+
+    def test_cross_system_leg(self):
+        area = next(p for p in NAV.pois.values()
+                    if p.name == "Area18" and p.system == "Stanton")
+        orb = next(p for p in NAV.pois.values()
+                   if p.name == "Orbituary" and p.system == "Pyro")
+        leg = nav_core.travel_cost(NAV, area, orb)
+        self.assertTrue(leg["cross_system"])
+        self.assertEqual(leg["via_gate"], ["Stanton", "Pyro"])
+        self.assertGreater(leg["distance_m"], 0)
+
+
+class PlanRouteTests(unittest.TestCase):
+    def _coords(self):
+        return [(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)]
+
+    def test_empty_is_trivially_feasible(self):
+        res = nav_core.plan_route(_line_nav(self._coords()), [], usable_scu=100)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertEqual(res["stops"], [])
+
+    def test_merges_shared_pickup_into_one_stop(self):
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 2},
+                {"id": "B", "commodity": "y", "scu": 10, "from_id": 0, "to_id": 3}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertEqual(res["summary"]["num_stops"], 3)       # P0 not duplicated
+        self.assertEqual(res["stops"][0]["stop_id"], 0)
+        self.assertEqual(len(res["stops"][0]["pickups"]), 2)
+
+    def test_precedence_pickup_before_dropoff(self):
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 3, "to_id": 0},
+                {"id": "B", "commodity": "y", "scu": 10, "from_id": 1, "to_id": 2}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        pos = {s["stop_id"]: i for i, s in enumerate(res["stops"])}
+        for p in pkgs:
+            self.assertLess(pos[p["from_id"]], pos[p["to_id"]])
+
+    def test_chooses_shorter_tour(self):
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 1},
+                {"id": "B", "commodity": "y", "scu": 10, "from_id": 0, "to_id": 3}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertEqual([s["stop_id"] for s in res["stops"]], [0, 1, 3])
+        self.assertAlmostEqual(res["summary"]["total_distance_m"], 30.0)
+
+    def test_capacity_infeasible_reports_min_capacity(self):
+        nav = _line_nav(self._coords())
+        # both load at the same stop -> 200 SCU aboard simultaneously, unavoidable
+        pkgs = [{"id": "A", "commodity": "x", "scu": 100, "from_id": 0, "to_id": 1},
+                {"id": "B", "commodity": "y", "scu": 100, "from_id": 0, "to_id": 1}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=150, start_id=0)
+        self.assertFalse(res["summary"]["feasible"])
+        self.assertEqual(res["summary"]["min_capacity_scu"], 200)
+        self.assertEqual(res["stops"], [])
+        ok = nav_core.plan_route(nav, pkgs, usable_scu=200, start_id=0)
+        self.assertTrue(ok["summary"]["feasible"])
+        self.assertEqual(ok["summary"]["peak_load_scu"], 200)
+
+    def test_running_onboard_load(self):
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 40, "from_id": 0, "to_id": 2}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        by_id = {s["stop_id"]: s for s in res["stops"]}
+        self.assertEqual(by_id[0]["onboard_scu"], 40.0)
+        self.assertEqual(by_id[2]["onboard_scu"], 0.0)
+
+    def test_unknown_poi_raises(self):
+        nav = _line_nav(self._coords())
+        with self.assertRaises(ValueError):
+            nav_core.plan_route(nav, [{"scu": 1, "from_id": 0, "to_id": 999}],
+                                usable_scu=100)
+
+    def test_cross_system_plan(self):
+        area = next(p for p in NAV.pois.values()
+                    if p.name == "Area18" and p.system == "Stanton")
+        orb = next(p for p in NAV.pois.values()
+                   if p.name == "Orbituary" and p.system == "Pyro")
+        pkgs = [{"id": "A", "commodity": "Gold", "scu": 50,
+                 "from_id": area.id, "to_id": orb.id}]
+        res = nav_core.plan_route(NAV, pkgs, usable_scu=696, start_id=area.id)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertEqual(res["summary"]["num_stops"], 2)
+        self.assertTrue(res["stops"][1]["leg"]["cross_system"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

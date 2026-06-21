@@ -541,6 +541,9 @@ _RAW_MAX = 512
 _META_MAX = 64     # client_time / source / discord-id-ish small fields
 _SHARD_MAX = 64    # SC shard id, e.g. "pub_use1b_12030094_130"
 _LABEL_MAX = 60
+_COMMODITY_MAX = 80
+_PKG_ID_MAX = 64
+_MAX_PACKAGES = 60   # one hauling run rarely exceeds a handful of contracts
 
 
 class PositionIn(BaseModel):
@@ -585,6 +588,22 @@ class HarvestableCaptureIn(BaseModel):
     name: str = Field(max_length=_TERM_MAX)
     biome: str | None = Field(default=None, max_length=_BIOME_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
+
+
+class PackageIn(BaseModel):
+    """One cargo line: pick up `scu` of `commodity` at `from_id`, deliver to
+    `to_id`. from->to encodes pickup-before-dropoff precedence."""
+    id: str | None = Field(default=None, max_length=_PKG_ID_MAX)
+    commodity: str | None = Field(default=None, max_length=_COMMODITY_MAX)
+    scu: float = Field(ge=0, le=100_000)
+    from_id: int
+    to_id: int
+
+
+class RoutePlanIn(BaseModel):
+    packages: list[PackageIn] = Field(max_length=_MAX_PACKAGES)
+    usable_scu: float = Field(gt=0, le=100_000)
+    start_id: int | None = None   # POI to start from; defaults to the first stop
 
 
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
@@ -1114,6 +1133,25 @@ async def get_resource_hotspots(
             from_pos=pos, t_ref=t, sort=sort, category=category,
         ),
     }
+
+
+@app.post("/api/route/plan")
+async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_session)):
+    """Stateless cargo-route optimizer: order the accepted packages into an
+    efficient run under the ship's usable SCU. Returns ordered stops (each with
+    pickups/dropoffs, arrival leg detail, running onboard SCU) plus a feasibility
+    + totals summary. Leg distances reflect the caller's live rotation time."""
+    sess = hub.sessions.get(user["id"])
+    t = sess.t if sess else None
+    if body.start_id is not None and body.start_id not in nav.pois:
+        raise HTTPException(status_code=404, detail="unknown start_id")
+    try:
+        return nav_core.plan_route(
+            nav, [p.model_dump() for p in body.packages],
+            usable_scu=body.usable_scu, start_id=body.start_id, t_ref=t,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/biomes")

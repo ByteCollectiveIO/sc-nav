@@ -390,11 +390,30 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
    fact, so the planner **computes** effective range from a per-ship drive choice
    (remembered per user). Manual range override kept as a fallback. Do **not** use
    erkul (CC BY-NC-ND / private API — see *Quantum fuel & refueling*).
-2. `travel_cost` extraction from `resource_hotspots`, **extended for cross-system
-   jump-gate routing** (gate POIs + inter-system cost), + `POST /api/route/plan`
-   returning per-leg ETA, total run time, and the fuel/refuel advisory. With
-   `server/test_nav_core.py` coverage for precedence/capacity/merging **and a
-   cross-system lane**.
+2. ✅ **SHIPPED 2026-06-21.** `travel_cost(nav, src, dst)` extracted into
+   `server/nav_core.py` + cross-system jump-gate routing + `plan_route` solver +
+   `POST /api/route/plan` (`server/app.py`). 12 tests in `test_nav_core.py`
+   (precedence / capacity / merging / via-hop / cross-system lane). Notes:
+   - **Gate model:** functioning network is the **Stanton — Pyro — Nyx chain**
+     (`GATE_LINKS`; Stanton↔Nyx routes via Pyro). The Terra/Magnus jump points in
+     the dataset are **not** functioning gates and are excluded. `GATE_ENDPOINTS`
+     only has clean Stanton-side (id 480) + Nyx-side (id 642) POIs; the **Pyro
+     side has no gate POI in the data**, so Pyro-side legs degrade to an
+     approach-only cost and the leg is flagged `partial: True`. `GATE_TRAVERSAL_M`
+     is a tunable per-tunnel constant.
+   - **`_intra_leg` refinement:** a directly-QT-able destination (a flagged QT
+     marker, OR any space POI such as a station / jump point) aims at its own
+     position; only a *non-marker surface POI* gets the nearest-marker
+     substitution. This fixed the gate (a space POI) collapsing its source-side
+     hop onto an unrelated nearby planet marker.
+   - **Per-leg ETA + total run time** use **nominal** constants
+     (`QT_CRUISE_SPEED_MS`, `QT_LEG_OVERHEAD_S`, `STOP_DWELL_S`) — distance is
+     exact; time becomes drive-accurate once the step-1 drive catalog lands.
+   - **Fuel/refuel advisory: NOT yet built** (needs the drive catalog). Plan
+     output already carries per-leg + cumulative QT distance, so the overlay is a
+     later add.
+   - **Not yet built:** the live-position → synthetic start seed (start_id is an
+     optional POI; absent it, the run begins free at the first stop).
 3. Run persistence (`runs` table) + arrival detection + per-package checklist on
    the position pipeline.
 4. `#/route` UI (entry → plan → run).

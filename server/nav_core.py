@@ -1204,6 +1204,186 @@ def nearest_planet(nav: NavData, system: str, pos) -> Container | None:
     return min(planets, key=lambda p: dist3(pos, p.pos)) if planets else None
 
 
+# ---------------------------------------------------------------------------
+# Travel cost — the reusable QT-distance primitive for the route planner.
+#
+# This generalizes the per-hotspot travel proxy in resource_hotspots into a
+# cost between any two stops. The intra-system rule is identical to the one
+# proven there: jump to the destination's nearest QT marker, and if the
+# destination is a moon you aren't already neighboring, hop to its parent
+# planet first (player -> planet -> moon).
+# ---------------------------------------------------------------------------
+
+# Currently-functioning jump-gate network (in-game): Stanton — Pyro — Nyx.
+# Stanton<->Nyx is not a direct lane; it routes through Pyro. The Terra/Magnus
+# jump points present in the dataset are NOT functioning gates, so they are
+# deliberately excluded here.
+GATE_LINKS: dict[str, list[str]] = {
+    "Stanton": ["Pyro"],
+    "Pyro": ["Stanton", "Nyx"],
+    "Nyx": ["Pyro"],
+}
+
+# Gate POI on a system's side, toward a neighbor: (from_system, to_system) ->
+# poi id. The dataset only carries clean endpoints for some sides; missing
+# sides degrade to an approach-only cost (the leg is flagged `partial`).
+GATE_ENDPOINTS: dict[tuple[str, str], int] = {
+    ("Stanton", "Pyro"): 480,   # "Jump Point to Pyro" (Stanton-side, space POI)
+    ("Nyx", "Pyro"): 642,       # "Gateway Station Pyro" (Nyx-side)
+}
+
+# Nominal fixed cost of traversing a jump-gate tunnel, in meters-equivalent, so
+# the solver consistently prefers grouping same-system stops. Tunable; the gate
+# approach legs already dominate, this just guarantees a cross-system penalty.
+GATE_TRAVERSAL_M = 1.0e9
+
+
+def _nearest_qt_poi(nav: NavData, target, t_ref: float):
+    """The nearest jumpable QT-marker Poi to `target` (or `target` itself if it
+    is one). Same selection rule as nearest_qt_marker — prefer a marker on the
+    same body (rotation-invariant local distance), else nearest in-system — but
+    returns the Poi so callers can resolve its position."""
+    if getattr(target, "qt_marker", False):
+        return target
+    system = target.system
+    if target.container_name is not None and target.local_km is not None:
+        best, best_d = None, math.inf
+        for p in nav.qt_by_container.get((system, target.container_name), []):
+            if p is target or p.local_km is None:
+                continue
+            d = dist3(target.local_km, p.local_km)
+            if d < best_d:
+                best, best_d = p, d
+        if best is not None:
+            return best
+    tg = entity_global_m(nav, target, t_ref)
+    if tg is None:
+        return None
+    best, best_d = None, math.inf
+    for p in nav.qt_markers:
+        if p.system != system or p is target:
+            continue
+        pg = entity_global_m(nav, p, t_ref)
+        if pg is None:
+            continue
+        d = dist3(tg, pg)
+        if d < best_d:
+            best, best_d = p, d
+    return best
+
+
+def _intra_leg(nav: NavData, from_pos, dst, t_ref: float):
+    """(distance_m, via, qt_marker_name) for an in-system hop from a global
+    position to a destination Poi, applying the planet->moon two-hop rule."""
+    cont = nav.container_of(dst)
+    # A directly QT-able destination — a flagged QT marker, or any space POI
+    # (stations and jump points float in the system frame) — is its own aim
+    # point. Only a non-marker surface POI needs the nearest-marker substitute
+    # (you can't quantum to a bare surface point; you jump to its marker first).
+    if getattr(dst, "qt_marker", False) or cont is None:
+        ref = entity_global_m(nav, dst, t_ref)
+        marker_name = dst.name
+    else:
+        marker = _nearest_qt_poi(nav, dst, t_ref)
+        ref = entity_global_m(nav, marker, t_ref) if marker is not None else cont.pos
+        marker_name = marker.name if marker is not None else None
+    if ref is None:
+        return None, None, marker_name
+    parent = parent_planet(nav, cont) if cont is not None else None
+    in_local = parent is not None and nearest_planet(nav, dst.system, from_pos) is parent
+    if parent is not None and not in_local:
+        dist = dist3(from_pos, parent.pos) + dist3(parent.pos, ref)
+        via = parent.name
+    else:
+        dist = dist3(from_pos, ref)
+        via = None
+    return dist, via, marker_name
+
+
+def _gate_poi(nav: NavData, from_system: str, to_system: str):
+    """The gate Poi on `from_system`'s side toward `to_system`, or None if the
+    dataset doesn't carry that endpoint."""
+    pid = GATE_ENDPOINTS.get((from_system, to_system))
+    return nav.pois.get(pid) if pid is not None else None
+
+
+def system_path(from_system: str, to_system: str) -> list[str] | None:
+    """Shortest chain of systems through the functioning gate network, inclusive
+    of both ends (e.g. Stanton -> Nyx == [Stanton, Pyro, Nyx]). None if
+    unconnected."""
+    if from_system == to_system:
+        return [from_system]
+    seen = {from_system}
+    queue: list[list[str]] = [[from_system]]
+    while queue:
+        path = queue.pop(0)
+        for nxt in GATE_LINKS.get(path[-1], []):
+            if nxt in seen:
+                continue
+            if nxt == to_system:
+                return path + [nxt]
+            seen.add(nxt)
+            queue.append(path + [nxt])
+    return None
+
+
+def travel_cost(nav: NavData, src, dst, t_ref: float | None = None) -> dict:
+    """QT travel cost from stop `src` to stop `dst` (both Poi). Returns a dict:
+
+        distance_m    total QT distance for the leg
+        qt_marker     name of the marker to jump to on arrival (or None)
+        via           parent planet for the moon two-hop rule (or None)
+        cross_system  True if the leg crosses a jump gate
+        via_gate      list of system names traversed, gate-first (or None)
+        partial       True if a gate endpoint was missing and the cost is a
+                      lower bound (approach-only on that side)
+
+    Cross-system legs route through the functioning Stanton-Pyro-Nyx network:
+    cost = src -> exit gate(src side) + gate traversal(s) + entry gate -> dst,
+    using the same intra-system primitives one level up."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    from_pos = entity_global_m(nav, src, t_ref)
+    if from_pos is None:
+        return {"distance_m": None, "qt_marker": None, "via": None,
+                "cross_system": False, "via_gate": None, "partial": True}
+
+    if src.system == dst.system:
+        dist, via, marker = _intra_leg(nav, from_pos, dst, t_ref)
+        return {"distance_m": dist, "qt_marker": marker, "via": via,
+                "cross_system": False, "via_gate": None, "partial": dist is None}
+
+    path = system_path(src.system, dst.system)
+    if path is None:                          # unconnected systems
+        return {"distance_m": None, "qt_marker": None, "via": None,
+                "cross_system": True, "via_gate": None, "partial": True}
+
+    total = 0.0
+    partial = False
+    # src side: hop to the gate leaving src.system toward the next system.
+    out_gate = _gate_poi(nav, src.system, path[1])
+    if out_gate is not None:
+        d, _, _ = _intra_leg(nav, from_pos, out_gate, t_ref)
+        total += d or 0.0
+    else:
+        partial = True                        # unknown source-side gate
+    # one tunnel traversal per gate crossed.
+    total += GATE_TRAVERSAL_M * (len(path) - 1)
+    # dst side: hop from the entry gate (last system's side toward prev) to dst.
+    in_gate = _gate_poi(nav, dst.system, path[-2])
+    if in_gate is not None:
+        gate_pos = entity_global_m(nav, in_gate, t_ref)
+        d, via, marker = _intra_leg(nav, gate_pos, dst, t_ref)
+        total += d or 0.0
+    else:
+        # Unknown entry gate: floor the dst side with its local QT approach.
+        marker_poi = _nearest_qt_poi(nav, dst, t_ref)
+        total += dst.nearest_qt_dist_m or 0.0
+        via, marker = None, (marker_poi.name if marker_poi else None)
+        partial = True
+    return {"distance_m": total, "qt_marker": marker, "via": via,
+            "cross_system": True, "via_gate": path, "partial": partial}
+
+
 def resource_hotspots(
     nav: NavData, ore: str, system: str | None = None, body: str | None = None,
     limit: int = 20, cell_m: float = RESOURCE_CELL_M,
@@ -1321,3 +1501,238 @@ def resource_hotspots(
             out.sort(key=lambda r: (-value(r), -r["score"]))
     # else: keep the likelihood order already in place
     return out[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Route planner — the pickup-and-delivery solver.
+#
+# A `package` = {id?, commodity, scu, from_id, to_id}; from->to encodes
+# pickup-before-dropoff precedence for free. plan_route merges packages sharing
+# a location into one stop, then orders the stops to minimize total QT distance
+# under two constraints: precedence (a package's pickup precedes its dropoff)
+# and capacity (onboard SCU never exceeds usable_scu). Pure stdlib.
+# ---------------------------------------------------------------------------
+
+# Planner timing knobs. Nominal until the drive catalog lands (build-order step
+# 1), at which point per-leg time becomes drive-accurate; distance is exact now.
+QT_CRUISE_SPEED_MS = 179_000_000.0   # ~179,000 km/s, nominal QT cruise speed
+QT_LEG_OVERHEAD_S = 30.0             # spool-up + accel/decel + cooldown per jump
+STOP_DWELL_S = 120.0                 # loading/unloading dwell per stop
+
+# Above this many stops, exhaustive branch-and-bound is replaced by a
+# precedence/capacity-safe nearest-neighbor pass. Real cargo runs sit well under
+# this; the bound keeps the worst case bounded.
+_BNB_MAX_STOPS = 11
+
+
+def _leg_time_s(distance_m):
+    if distance_m is None:
+        return None
+    return QT_LEG_OVERHEAD_S + distance_m / QT_CRUISE_SPEED_MS
+
+
+def _pkg_view(p):
+    return {"id": p["id"], "commodity": p["commodity"], "scu": p["scu"],
+            "from_id": p["from_id"], "to_id": p["to_id"]}
+
+
+def _leg_view(leg):
+    if leg is None:
+        return None
+    return {"distance_m": leg["distance_m"], "eta_s": _leg_time_s(leg["distance_m"]),
+            "qt_marker": leg["qt_marker"], "via": leg["via"],
+            "cross_system": leg["cross_system"], "via_gate": leg["via_gate"],
+            "partial": leg["partial"]}
+
+
+def plan_route(nav: NavData, packages, usable_scu, start_id=None, t_ref=None) -> dict:
+    """Order accepted cargo packages into an efficient run.
+
+    Returns {summary, stops}. `summary` carries feasibility (peak load vs.
+    usable_scu, and the minimum capacity the bundle actually requires), totals
+    (distance, time), and counts. `stops` is the ordered visit list, each with
+    its pickups/dropoffs, the arrival leg detail, and running onboard SCU.
+    An over-capacity or unconnected bundle returns feasible=False with an empty
+    stop list and the min_capacity_scu needed to make it work."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    usable_scu = float(usable_scu)
+
+    # --- normalize packages ---
+    pkgs = []
+    for i, p in enumerate(packages):
+        fid, tid = int(p["from_id"]), int(p["to_id"])
+        if fid not in nav.pois or tid not in nav.pois:
+            raise ValueError(f"unknown POI id in package {p.get('id', i)}")
+        pkgs.append({"id": p.get("id", i), "commodity": p.get("commodity"),
+                     "scu": float(p.get("scu") or 0), "from_id": fid, "to_id": tid})
+
+    if not pkgs:
+        return {"summary": {"feasible": True, "num_stops": 0, "num_packages": 0,
+                            "usable_scu": usable_scu, "peak_load_scu": 0.0,
+                            "min_capacity_scu": 0.0, "total_distance_m": 0.0,
+                            "total_time_s": 0.0, "start_id": None}, "stops": []}
+
+    # --- merge packages sharing a location into stops ---
+    loc_ids = []
+    for p in pkgs:
+        for lid in (p["from_id"], p["to_id"]):
+            if lid not in loc_ids:
+                loc_ids.append(lid)
+    idx = {lid: k for k, lid in enumerate(loc_ids)}
+    n = len(loc_ids)
+    stops = [{"id": lid, "poi": nav.pois[lid], "loads": [], "drops": [],
+              "load_scu": 0.0, "drop_scu": 0.0} for lid in loc_ids]
+    preds = [set() for _ in range(n)]
+    for pi, p in enumerate(pkgs):
+        a, b = idx[p["from_id"]], idx[p["to_id"]]
+        stops[a]["loads"].append(pi); stops[a]["load_scu"] += p["scu"]
+        stops[b]["drops"].append(pi); stops[b]["drop_scu"] += p["scu"]
+        if a != b:
+            preds[b].add(a)
+
+    # --- cost matrix ---
+    legs = [[None] * n for _ in range(n)]
+    dmat = [[math.inf] * n for _ in range(n)]
+    for a in range(n):
+        for b in range(n):
+            if a == b:
+                continue
+            leg = travel_cost(nav, stops[a]["poi"], stops[b]["poi"], t_ref)
+            legs[a][b] = leg
+            if leg["distance_m"] is not None:
+                dmat[a][b] = leg["distance_m"]
+    start_poi = nav.pois.get(int(start_id)) if start_id is not None else None
+    start_legs = [None] * n
+    start_d = [0.0] * n
+    if start_poi is not None:
+        for b in range(n):
+            leg = travel_cost(nav, start_poi, stops[b]["poi"], t_ref)
+            start_legs[b] = leg
+            start_d[b] = leg["distance_m"] if leg["distance_m"] is not None else math.inf
+
+    def step_cost(prev, j):
+        return start_d[j] if prev is None else dmat[prev][j]
+
+    # --- minimum capacity the bundle requires (precedence only, min peak) ---
+    min_cap = _min_capacity(stops, preds, n)
+
+    # --- order the stops (minimize distance under precedence + capacity) ---
+    if n <= _BNB_MAX_STOPS:
+        order, peak = _bnb_order(stops, preds, dmat, start_d, usable_scu, n)
+    else:
+        order, peak = _greedy_order(stops, preds, step_cost, usable_scu, n)
+
+    if order is None:
+        return {"summary": {"feasible": False, "num_stops": n,
+                            "num_packages": len(pkgs), "usable_scu": usable_scu,
+                            "peak_load_scu": None, "min_capacity_scu": round(min_cap, 2),
+                            "total_distance_m": None, "total_time_s": None,
+                            "start_id": start_poi.id if start_poi else None}, "stops": []}
+
+    # --- build output ---
+    out_stops = []
+    onboard = total_dist = 0.0
+    for k, si in enumerate(order):
+        s = stops[si]; poi = s["poi"]
+        onboard += s["load_scu"] - s["drop_scu"]
+        leg = start_legs[si] if k == 0 else legs[order[k - 1]][si]
+        if leg and leg["distance_m"] is not None:
+            total_dist += leg["distance_m"]
+        out_stops.append({
+            "stop_id": s["id"], "name": poi.name, "system": poi.system,
+            "type": poi.type,
+            "pickups": [_pkg_view(pkgs[pi]) for pi in s["loads"]],
+            "dropoffs": [_pkg_view(pkgs[pi]) for pi in s["drops"]],
+            "leg": _leg_view(leg),
+            "onboard_scu": round(onboard, 2),
+        })
+    total_time = sum((_leg_time_s(s["leg"]["distance_m"]) or 0.0)
+                     for s in out_stops if s["leg"]) + STOP_DWELL_S * n
+
+    return {"summary": {"feasible": True, "num_stops": n, "num_packages": len(pkgs),
+                        "usable_scu": usable_scu, "peak_load_scu": round(peak, 2),
+                        "min_capacity_scu": round(min_cap, 2),
+                        "total_distance_m": total_dist, "total_time_s": total_time,
+                        "start_id": start_poi.id if start_poi else None},
+            "stops": out_stops}
+
+
+def _bnb_order(stops, preds, dmat, start_d, cap, n):
+    """Branch-and-bound: least-distance precedence+capacity-feasible order.
+    Returns (order, peak_load) or (None, None) if no feasible order exists."""
+    best = {"cost": math.inf, "order": None, "peak": None}
+
+    def dfs(order, visited, onboard, cost, peak):
+        if cost >= best["cost"]:
+            return
+        if len(order) == n:
+            best.update(cost=cost, order=list(order), peak=peak)
+            return
+        prev = order[-1] if order else None
+        for j in range(n):
+            if j in visited or not preds[j].issubset(visited):
+                continue
+            no = onboard + stops[j]["load_scu"] - stops[j]["drop_scu"]
+            if no > cap + 1e-9:
+                continue
+            step = start_d[j] if prev is None else dmat[prev][j]
+            if step == math.inf:
+                continue
+            dfs(order + [j], visited | {j}, no, cost + step, max(peak, no))
+
+    dfs([], set(), 0.0, 0.0, 0.0)
+    return (best["order"], best["peak"]) if best["order"] is not None else (None, None)
+
+
+def _greedy_order(stops, preds, step_cost, cap, n):
+    """Nearest-neighbor fallback for large stop sets: at each step take the
+    nearest precedence- and capacity-feasible stop."""
+    order, visited = [], set()
+    onboard = peak = 0.0
+    prev = None
+    while len(order) < n:
+        cands = [
+            j for j in range(n)
+            if j not in visited and preds[j].issubset(visited)
+            and onboard + stops[j]["load_scu"] - stops[j]["drop_scu"] <= cap + 1e-9
+            and step_cost(prev, j) != math.inf
+        ]
+        if not cands:
+            return None, None
+        j = min(cands, key=lambda j: step_cost(prev, j))
+        onboard += stops[j]["load_scu"] - stops[j]["drop_scu"]
+        peak = max(peak, onboard)
+        order.append(j); visited.add(j); prev = j
+    return order, peak
+
+
+def _min_capacity(stops, preds, n):
+    """Minimum peak onboard SCU achievable over any precedence-valid order —
+    i.e. the smallest ship the bundle can possibly fit on. Exhaustive for small
+    sets, greedy (least-load-first) above the bound."""
+    if n > _BNB_MAX_STOPS:
+        visited = set()
+        onboard = peak = 0.0
+        while len(visited) < n:
+            cands = [j for j in range(n) if j not in visited and preds[j].issubset(visited)]
+            j = min(cands, key=lambda j: stops[j]["load_scu"] - stops[j]["drop_scu"])
+            onboard += stops[j]["load_scu"] - stops[j]["drop_scu"]
+            peak = max(peak, onboard)
+            visited.add(j)
+        return peak
+    best = {"peak": math.inf}
+
+    def dfs(visited, onboard, peak):
+        if peak >= best["peak"]:
+            return
+        if len(visited) == n:
+            best["peak"] = peak
+            return
+        for j in range(n):
+            if j in visited or not preds[j].issubset(visited):
+                continue
+            no = onboard + stops[j]["load_scu"] - stops[j]["drop_scu"]
+            dfs(visited | {j}, no, max(peak, no))
+
+    dfs(set(), 0.0, 0.0)
+    return best["peak"]
