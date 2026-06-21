@@ -282,9 +282,12 @@ def load_ships() -> list[dict]:
             return 0
 
     ships = [
-        {"name": r["name"], "company": r.get("company_name"), "scu": to_scu(r.get("scu"))}
+        # name_full includes the manufacturer ("Argo MOLE"), which is how players
+        # search; fall back to the bare model name.
+        {"name": r.get("name_full") or r["name"], "company": r.get("company_name"),
+         "scu": to_scu(r.get("scu"))}
         for r in rows
-        if r.get("name") and r.get("is_spaceship") in (1, "1", True)
+        if (r.get("name_full") or r.get("name")) and r.get("is_spaceship") in (1, "1", True)
         and to_scu(r.get("scu")) > 0
     ]
     ships.sort(key=lambda s: s["name"].lower())

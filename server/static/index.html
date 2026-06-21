@@ -946,9 +946,10 @@
     <div class="panel">
       <h2>SHIP</h2>
       <div class="route-row">
-        <input id="route-ship" class="ti" list="route-ships" placeholder="ship — type to search"
-               style="flex:2; min-width:160px;" autocomplete="off">
-        <datalist id="route-ships"></datalist>
+        <span class="poi-pick" style="flex:2; min-width:160px;">
+          <input id="route-ship" class="ti" placeholder="ship — type a name (e.g. Argo MOLE)"
+                 autocomplete="off">
+        </span>
         <label class="muted" style="font-size:12px;">usable SCU
           <input id="route-scu" class="ti" type="number" min="0" step="1"
                  style="width:90px;">
@@ -2131,14 +2132,7 @@ async function loadRoutePlanner() {
   if (!routeCatalog) {
     routeCatalog = await fetch("/api/ships").then(r => r.json()).catch(() => []);
     routeCatalogByName = {};
-    const dl = $("route-ships"); dl.innerHTML = "";
-    for (const s of routeCatalog) {
-      routeCatalogByName[s.name.toLowerCase()] = s;
-      const o = document.createElement("option");
-      o.value = s.name;
-      o.label = `${s.scu} SCU${s.company ? " · " + s.company : ""}`;
-      dl.appendChild(o);
-    }
+    for (const s of routeCatalog) routeCatalogByName[s.name.toLowerCase()] = s;
     // Commodity is a free-text label (not used by routing); offer the raw-ore
     // names as suggestions. A full-commodities datalist is a later nicety.
     fetch("/api/raw_commodities").then(r => r.json()).then(names => {
@@ -2157,11 +2151,39 @@ async function loadRoutePlanner() {
 
 function wireRoutePlanner() {
   routeWired = true;
-  $("route-ship").addEventListener("input", prefillScu);
-  $("route-ship").addEventListener("change", prefillScu);
+  attachShipPicker();
   $("route-ship-save").onclick = rememberShip;
   $("route-add-pkg").onclick = () => addPkgRow();
   $("route-plan").onclick = planRoute;
+}
+
+// Type-to-search ship picker (custom dropdown, not a <datalist> — datalists
+// match against the option label too, which polluted name search with the
+// manufacturer, and render the label instead of the ship name). Matches the
+// catalog by name substring; picking fills the name and prefills usable SCU.
+function attachShipPicker() {
+  const input = $("route-ship");
+  const wrap = input.parentElement;            // .poi-pick (position: relative)
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true;
+  wrap.appendChild(drop);
+  function refresh() {
+    const q = input.value.trim().toLowerCase();
+    drop.innerHTML = "";
+    const hits = q ? routeCatalog.filter(s => s.name.toLowerCase().includes(q)).slice(0, 12) : [];
+    for (const s of hits) {
+      const it = document.createElement("div");
+      it.className = "poi-opt";
+      it.innerHTML = `${esc(s.name)} <span class="muted">${s.scu} SCU${s.company ? " · " + esc(s.company) : ""}</span>`;
+      it.onmousedown = (e) => { e.preventDefault(); input.value = s.name; drop.hidden = true; prefillScu(); };
+      drop.appendChild(it);
+    }
+    drop.hidden = hits.length === 0;
+    prefillScu();   // also handle an exact name typed without picking
+  }
+  input.addEventListener("input", refresh);
+  input.addEventListener("focus", () => { if (input.value.trim()) refresh(); });
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
 }
 
 function savedScuFor(name) {
