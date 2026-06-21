@@ -348,6 +348,48 @@
     /* map already handles touch panning via touch-action:none; just shorten it */
     #map { height: 320px; }
   }
+
+  /* ---- cargo planner (#/route) ---- */
+  #route-view { display: flex; flex-direction: column; gap: 14px; }
+  .route-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .route-hint { font-size: 12px; margin: 6px 0 0; line-height: 1.5; }
+  .route-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  .route-pkg { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    padding: 8px 0; border-top: 1px solid var(--border); }
+  .route-pkg:first-child { border-top: none; }
+  .route-pkg .arrow { color: var(--dim); }
+  .route-pkg .pkg-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
+  .route-pkg .pkg-del:hover { border-color: var(--bad); }
+  /* POI autocomplete */
+  .poi-pick { position: relative; flex: 1; min-width: 150px; display: flex; }
+  .poi-pick .ti { width: 100%; }
+  .poi-pick.picked .ti { border-color: var(--good); }
+  .poi-drop { position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+    margin-top: 2px; max-height: 240px; overflow-y: auto; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+  .poi-opt { padding: 7px 10px; cursor: pointer; font-size: 13px; }
+  .poi-opt:hover { background: var(--panel); }
+  .poi-opt .muted { font-size: 11px; }
+  /* plan result */
+  .route-summary { display: flex; flex-wrap: wrap; gap: 18px; align-items: baseline; }
+  .route-summary .metric { display: flex; flex-direction: column; }
+  .route-summary .metric .v { font-size: 22px; color: var(--accent); }
+  .route-summary .metric .l { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
+  .route-feasible { color: var(--good); } .route-infeasible { color: var(--bad); }
+  .route-warn { color: var(--warn); }
+  .route-stop { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+  .route-stop .seq { flex: none; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .route-stop .body { flex: 1; }
+  .route-stop .stop-name { font-size: 15px; color: var(--text); }
+  .route-stop .stop-sys { font-size: 11px; color: var(--dim); }
+  .route-leg { font-size: 12px; color: var(--dim); margin: 4px 0; }
+  .route-leg .gate { color: var(--warn); } .route-leg .via { color: var(--accent); }
+  .pkg-line { font-size: 13px; margin: 2px 0; }
+  .pkg-line .up { color: var(--good); } .pkg-line .down { color: var(--accent); }
+  .onboard { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  .onboard b { color: var(--text); }
 </style>
 </head>
 <body>
@@ -396,13 +438,12 @@
         <div class="app-desc">Find POIs, resources &amp; wildlife and get live turn-by-turn
           guidance with your org.</div>
       </a>
-      <div class="app-card disabled" aria-disabled="true">
-        <span class="app-badge">Coming soon</span>
+      <a class="app-card" href="#/route">
         <img class="app-logo" src="/images/cargo_planner_logo.png" alt="" width="160" height="160">
         <div class="app-name">Cargo Planner</div>
         <div class="app-desc">Plan efficient multi-stop hauling routes under your ship's
           cargo capacity, then run them turn-by-turn.</div>
-      </div>
+      </a>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. All content not authored by its host or
@@ -868,6 +909,45 @@
     </div>
   </div>
   </div><!-- /stats-view -->
+
+  <div id="route-view" hidden>
+    <div class="panel">
+      <h2>SHIP</h2>
+      <div class="route-row">
+        <input id="route-ship" class="ti" list="route-ships" placeholder="ship — type to search"
+               style="flex:2; min-width:160px;" autocomplete="off">
+        <datalist id="route-ships"></datalist>
+        <label class="muted" style="font-size:12px;">usable SCU
+          <input id="route-scu" class="ti" type="number" min="0" step="1"
+                 style="width:90px;">
+        </label>
+        <button id="route-ship-save" title="remember this usable SCU for the ship">remember</button>
+        <span id="route-ship-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <p class="muted route-hint">Stated cargo grid is prefilled; override it with what you can
+        actually stuff, and we'll remember it for this ship.</p>
+    </div>
+
+    <div class="panel">
+      <h2>PACKAGES</h2>
+      <p class="muted route-hint">One row per cargo line. <b>From</b> → <b>To</b> reads straight
+        off the in-game contract; we visit shared stops once.</p>
+      <div id="route-pkgs"></div>
+      <datalist id="route-commodities"></datalist>
+      <button id="route-add-pkg" style="margin-top:8px;">+ add package</button>
+      <div class="route-actions">
+        <button id="route-plan" class="active">Plan route</button>
+        <span id="route-plan-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+    </div>
+
+    <div id="route-result" hidden></div>
+
+    <p class="fansite-disclaimer">Ship &amp; commodity data via the uexcorp fan API. This is an
+      unofficial Star Citizen fansite, not affiliated with the Cloud Imperium group of companies.
+      Star Citizen®, Roberts Space Industries® and Cloud Imperium® are registered trademarks of
+      Cloud Imperium Rights LLC.</p>
+  </div><!-- /route-view -->
 </main>
 
 <script>
@@ -2000,6 +2080,216 @@ function renderAccount(me) {
   applyView();
 }
 
+// ---------- cargo planner (#/route) ----------
+// Stateless planner: pick a ship + its usable SCU, enter the contract's cargo
+// lines (commodity / SCU / from->to), POST to /api/route/plan, render the
+// optimized stop order. Ship + usable-SCU overrides persist per member via
+// /api/me (the saved fleet) + PUT /api/me/ship.
+let routeCatalog = null;        // [{name, scu, company}] from /api/ships
+let routeCatalogByName = null;
+let routeWired = false;
+
+async function loadRoutePlanner() {
+  if (!routeCatalog) {
+    routeCatalog = await fetch("/api/ships").then(r => r.json()).catch(() => []);
+    routeCatalogByName = {};
+    const dl = $("route-ships"); dl.innerHTML = "";
+    for (const s of routeCatalog) {
+      routeCatalogByName[s.name.toLowerCase()] = s;
+      const o = document.createElement("option");
+      o.value = s.name;
+      o.label = `${s.scu} SCU${s.company ? " · " + s.company : ""}`;
+      dl.appendChild(o);
+    }
+    // Commodity is a free-text label (not used by routing); offer the raw-ore
+    // names as suggestions. A full-commodities datalist is a later nicety.
+    fetch("/api/raw_commodities").then(r => r.json()).then(names => {
+      const cd = $("route-commodities");
+      for (const n of names) { const o = document.createElement("option"); o.value = n; cd.appendChild(o); }
+    }).catch(() => {});
+  }
+  if (!routeWired) wireRoutePlanner();
+  if (!$("route-pkgs").children.length) addPkgRow();
+}
+
+function wireRoutePlanner() {
+  routeWired = true;
+  $("route-ship").addEventListener("input", prefillScu);
+  $("route-ship").addEventListener("change", prefillScu);
+  $("route-ship-save").onclick = rememberShip;
+  $("route-add-pkg").onclick = () => addPkgRow();
+  $("route-plan").onclick = planRoute;
+}
+
+function savedScuFor(name) {
+  const fleet = (currentMe && currentMe.ships) || [];
+  const hit = fleet.find(s => s.name.toLowerCase() === name.toLowerCase());
+  return hit ? hit.usable_scu : null;
+}
+function prefillScu() {
+  const name = $("route-ship").value.trim();
+  const cat = routeCatalogByName && routeCatalogByName[name.toLowerCase()];
+  if (!cat) { $("route-ship-msg").textContent = ""; return; }
+  const saved = savedScuFor(name);
+  $("route-scu").value = saved != null ? saved : cat.scu;
+  $("route-ship-msg").textContent = saved != null ? "your saved override" : `stated ${cat.scu} SCU`;
+}
+async function rememberShip() {
+  const name = $("route-ship").value.trim();
+  const scu = Number($("route-scu").value);
+  if (!name || !(scu >= 0)) { $("route-ship-msg").textContent = "enter a ship + SCU"; return; }
+  try {
+    const r = await fetch("/api/me/ship", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, usable_scu: scu }) });
+    if (!r.ok) { $("route-ship-msg").textContent = "could not save"; return; }
+    const d = await r.json();
+    if (currentMe) currentMe.ships = d.ships;
+    $("route-ship-msg").textContent = "remembered ✓";
+  } catch { $("route-ship-msg").textContent = "network error"; }
+}
+
+function addPkgRow() {
+  const row = document.createElement("div");
+  row.className = "route-pkg";
+  row.innerHTML =
+    `<input class="ti pkg-commodity" list="route-commodities" placeholder="commodity" autocomplete="off" style="flex:1; min-width:120px;">`
+    + `<input class="ti pkg-scu" type="number" min="1" step="1" placeholder="SCU" style="width:80px;">`
+    + `<span class="poi-pick pkg-from"><input class="ti" placeholder="from" autocomplete="off"></span>`
+    + `<span class="arrow">→</span>`
+    + `<span class="poi-pick pkg-to"><input class="ti" placeholder="to" autocomplete="off"></span>`
+    + `<span class="pkg-del" title="remove">✕</span>`;
+  $("route-pkgs").appendChild(row);
+  attachPoiPicker(row.querySelector(".pkg-from"));
+  attachPoiPicker(row.querySelector(".pkg-to"));
+  row.querySelector(".pkg-del").onclick = () => row.remove();
+}
+
+// Type-to-search POI picker resolving to a POI id (stored on the input's
+// dataset). `wrap` is the .poi-pick span; the resolved id rides on its input.
+function attachPoiPicker(wrap) {
+  const input = wrap.querySelector("input");
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true;
+  wrap.appendChild(drop);
+  let timer = null;
+  input.addEventListener("input", () => {
+    wrap.classList.remove("picked"); input.dataset.poiId = "";   // typing invalidates a prior pick
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 2) { drop.hidden = true; return; }
+    timer = setTimeout(async () => {
+      const pois = await fetch(`/api/pois?q=${encodeURIComponent(q)}&limit=12`).then(r => r.json()).catch(() => []);
+      drop.innerHTML = "";
+      for (const p of pois) {
+        const it = document.createElement("div");
+        it.className = "poi-opt";
+        it.innerHTML = `${esc(p.name)} <span class="muted">${esc(p.container)} · ${esc(p.system)}</span>`;
+        // mousedown (not click) so the pick lands before the input's blur hides the drop.
+        it.onmousedown = (e) => {
+          e.preventDefault();
+          input.value = p.name; input.dataset.poiId = p.id;
+          wrap.classList.add("picked"); drop.hidden = true;
+        };
+        drop.appendChild(it);
+      }
+      drop.hidden = pois.length === 0;
+    }, 160);
+  });
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+}
+
+async function planRoute() {
+  const usable = Number($("route-scu").value);
+  const msg = $("route-plan-msg");
+  if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return; }
+  const packages = [];
+  let skipped = 0;
+  for (const row of $("route-pkgs").children) {
+    const from = row.querySelector(".pkg-from input");
+    const to = row.querySelector(".pkg-to input");
+    const scu = Number(row.querySelector(".pkg-scu").value);
+    const commodity = row.querySelector(".pkg-commodity").value.trim();
+    if (!from.dataset.poiId || !to.dataset.poiId || !(scu > 0)) { skipped++; continue; }
+    packages.push({ commodity, scu, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
+  }
+  if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
+  msg.textContent = "planning…";
+  let res;
+  try {
+    const r = await fetch("/api/route/plan", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ packages, usable_scu: usable }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
+    res = await r.json();
+  } catch { msg.textContent = "⚠ network error"; return; }
+  msg.textContent = skipped ? `${skipped} incomplete row skipped` : "";
+  renderPlan(res);
+}
+
+function fmtGm(m) {
+  if (m == null) return "—";
+  const g = m / 1e9;
+  return g >= 1 ? g.toFixed(2) + " Gm" : (m / 1e6).toFixed(0) + " Mm";
+}
+function fmtDur(s) {
+  if (s == null) return "—";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+function metric(v, l) { return `<div class="metric"><span class="v">${v}</span><span class="l">${l}</span></div>`; }
+
+function renderPlan(res) {
+  const out = $("route-result");
+  const sm = res.summary;
+  let h = `<div class="panel"><h2>PLAN</h2>`;
+  if (!sm.feasible) {
+    h += `<p class="route-infeasible">⚠ This won't fit your ship. It needs at least
+      <b>${sm.min_capacity_scu} SCU</b> of usable capacity (you have ${sm.usable_scu}).
+      Drop a contract or split it into two trips.</p></div>`;
+    out.innerHTML = h; out.hidden = false; return;
+  }
+  const peakClass = sm.peak_load_scu > sm.usable_scu ? "route-warn" : "route-feasible";
+  h += `<div class="route-summary">`
+    + metric(sm.num_stops, "STOPS")
+    + metric(sm.num_packages, "PACKAGES")
+    + metric(`<span class="${peakClass}">${sm.peak_load_scu}</span><span class="l" style="display:inline"> / ${sm.usable_scu}</span>`, "PEAK SCU")
+    + metric(fmtGm(sm.total_distance_m), "QT DISTANCE")
+    + metric(fmtDur(sm.total_time_s), "EST. TIME")
+    + `</div>`;
+  if (sm.min_capacity_scu < sm.peak_load_scu)
+    h += `<p class="route-hint muted">A different order could peak as low as ${sm.min_capacity_scu} SCU.</p>`;
+  h += `</div><div class="panel"><h2>STOPS</h2>`;
+  res.stops.forEach((s, i) => { h += renderStop(s, i); });
+  h += `</div>`;
+  out.innerHTML = h; out.hidden = false;
+}
+
+function renderStop(s, i) {
+  let legHtml = "";
+  if (s.leg && s.leg.distance_m != null) {
+    const bits = [];
+    if (s.leg.qt_marker) bits.push(`QT to <b>${esc(s.leg.qt_marker)}</b>`);
+    bits.push(fmtGm(s.leg.distance_m));
+    if (s.leg.eta_s != null) bits.push(fmtDur(s.leg.eta_s));
+    let extra = "";
+    if (s.leg.cross_system && s.leg.via_gate)
+      extra += ` <span class="gate">⇆ ${esc(s.leg.via_gate.join(" → "))}${s.leg.partial ? " (approx)" : ""}</span>`;
+    if (s.leg.via) extra += ` <span class="via">via ${esc(s.leg.via)}</span>`;
+    legHtml = `<div class="route-leg">${bits.join(" · ")}${extra}</div>`;
+  } else if (i === 0) {
+    legHtml = `<div class="route-leg">start here</div>`;
+  }
+  const line = (p, dir) => `<div class="pkg-line"><span class="${dir === "up" ? "up" : "down"}">`
+    + `${dir === "up" ? "▲ load" : "▼ drop"}</span> ${esc(p.commodity || "cargo")} · ${p.scu} SCU</div>`;
+  const pk = (s.pickups || []).map(p => line(p, "up")).join("");
+  const dp = (s.dropoffs || []).map(p => line(p, "down")).join("");
+  return `<div class="route-stop"><div class="seq">${i + 1}</div><div class="body">`
+    + `<div class="stop-name">${esc(s.name)} <span class="stop-sys">${esc(s.system)}${s.type ? " · " + esc(s.type) : ""}</span></div>`
+    + legHtml + pk + dp
+    + `<div class="onboard">aboard after stop: <b>${s.onboard_scu}</b> SCU</div>`
+    + `</div></div>`;
+}
+
 // ---------- view router (app launcher + apps + dedicated sub-pages) ----------
 // One SPA; the URL hash picks the view (fragment never hits the server, so
 // StaticFiles still serves the single index.html). The launcher (#/) is home and
@@ -2011,15 +2301,17 @@ function applyView() {
   const authed = !!currentMe;
   const h = location.hash;
   const nav = h === "#/nav" && authed;
+  const route = h === "#/route" && authed;
   const settings = h === "#/settings" && authed;
   const setup = h === "#/setup" && authed;
   const leaderboard = h === "#/leaderboard" && authed;
   const stats = h === "#/stats" && authed;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !settings && !setup && !leaderboard && !stats;
+  const launcher = authed && !nav && !route && !settings && !setup && !leaderboard && !stats;
 
   $("launcher-view").hidden = !launcher;
   $("main-view").hidden = !nav;
+  $("route-view").hidden = !route;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   $("leaderboard-view").hidden = !leaderboard;
@@ -2028,7 +2320,7 @@ function applyView() {
   // Header chrome: the logo/title (a.home-link) is the universal "back to home"
   // control, so ⚙ Settings stays purely Settings. The app toggles and the
   // location readout are app-scoped — hide them on the launcher (home).
-  $("where").hidden = launcher;
+  $("where").hidden = launcher || route;   // location readout is the navigator's
   $("nav-toggle").hidden = !authed || launcher || settings;
   $("nav-toggle").textContent = "⚙ Settings";
   $("nav-toggle").setAttribute("href", "#/settings");
@@ -2045,6 +2337,8 @@ function applyView() {
     loadLeaderboard();
   } else if (stats) {
     loadStats();
+  } else if (route) {
+    loadRoutePlanner();
   } else if (nav && lastState) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.

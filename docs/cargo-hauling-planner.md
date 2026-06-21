@@ -427,7 +427,19 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      optional POI; absent it, the run begins free at the first stop).
 3. Run persistence (`runs` table) + arrival detection + per-package checklist on
    the position pipeline.
-4. `#/route` UI (entry → plan → run).
+4. ✅ **`#/route` entry → plan UI SHIPPED 2026-06-21** (`server/static/index.html`).
+   Launcher card enabled (`#/route`), view wired into `applyView()`. Ship picker
+   (datalist from `/api/ships`, prefills stated SCU or the member's saved
+   override, "remember" → `PUT /api/me/ship`); package rows (free-text commodity
+   + SCU + two type-to-search POI pickers resolving to ids via `/api/pois`);
+   `POST /api/route/plan` → rendered summary (stops / packages / peak vs usable
+   SCU / QT distance / est. time, infeasible → min-capacity message) + ordered
+   stop list (per-leg QT marker / distance / ETA / via-planet / cross-system gate
+   badge, running onboard SCU). CSS-only, matches the SPA. Verified end-to-end
+   over HTTP (forged session). **Run mode (execute) not built** — this is the
+   entry→plan half of step 4. **Dependency:** the from/to pickers search
+   `/api/pois`, which is empty until the org enables the starmap catalog (default
+   OFF) or adds custom POIs — same as the navigator's search.
 5. History log + frequency-ranked quick-picks/priors + `#/stats` hooks.
 
 **In v1 (decided 2026-06-20):** cross-system jump-gate routing; total-run-time
