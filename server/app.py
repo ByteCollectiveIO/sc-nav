@@ -294,6 +294,25 @@ def load_ships() -> list[dict]:
     return ships
 
 
+def load_commodity_names() -> list[str]:
+    """All commodity names from uexcorp (every kind, not just is_raw ores) for
+    the cargo-planner commodity picker — hauling contracts carry Medical
+    Supplies, Processed Food, etc., not only raw ores. Same fetch + on-disk
+    cache as the ore loader."""
+    rows = None
+    if not OFFLINE:
+        try:
+            resp = _fetch_json(COMMODITIES_URL, timeout=15)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            if rows:
+                _save_json_list(COMMODITIES_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] commodities fetch failed, using cache: {exc}")
+    if not rows:
+        rows = _load_json_list(COMMODITIES_FILE)
+    return sorted({r["name"] for r in rows if r.get("name")})
+
+
 def load_harvestable_names() -> list[str]:
     """Sorted names of harvestable flora/natural commodities (uexcorp
     kind=="Natural" and is_harvestable==1) for the Add Fauna & Harvestables
@@ -504,6 +523,7 @@ nav = load_nav_data()
 handles = HandleRegistry()
 tokens = TokenStore()
 raw_commodity_names = load_raw_commodity_names()
+commodity_names = load_commodity_names()
 harvestable_names = load_harvestable_names()
 ships = load_ships()
 fauna_names = load_fauna_names()
@@ -1164,6 +1184,12 @@ async def list_raw_commodities():
     return raw_commodity_names
 
 
+@app.get("/api/commodities")
+async def list_commodities():
+    """All commodity names (every kind) for the cargo-planner commodity picker."""
+    return commodity_names
+
+
 @app.get("/api/ships")
 async def list_ships():
     """Cargo-capable ships (name + stated SCU) for the cargo-planner ship
@@ -1761,8 +1787,9 @@ async def _rebuild_nav() -> None:
 async def refresh_data(admin: dict = Depends(require_admin)):
     """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
     without restarting. Admin only."""
-    global raw_commodity_names, ships
+    global raw_commodity_names, commodity_names, ships
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
+    commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
     await _rebuild_nav()
     return {

@@ -2133,9 +2133,10 @@ async function loadRoutePlanner() {
     routeCatalog = await fetch("/api/ships").then(r => r.json()).catch(() => []);
     routeCatalogByName = {};
     for (const s of routeCatalog) routeCatalogByName[s.name.toLowerCase()] = s;
-    // Commodity is a free-text label (not used by routing); offer the raw-ore
-    // names as suggestions. A full-commodities datalist is a later nicety.
-    fetch("/api/raw_commodities").then(r => r.json()).then(names => {
+    // Commodity is a free-text label (not used by routing); the full commodity
+    // list (every kind, not just ores) seeds the suggestions so hauling goods
+    // like Medical Supplies are offered.
+    fetch("/api/commodities").then(r => r.json()).then(names => {
       const cd = $("route-commodities");
       for (const n of names) { const o = document.createElement("option"); o.value = n; cd.appendChild(o); }
     }).catch(() => {});
