@@ -25,6 +25,13 @@ poi/sc_nav.db-wal
 poi/sc_nav.db-shm
 poi/branding/
 
+# Third-party reference data kept locally for development only — NOT committed.
+# erkul.games content is CC BY-NC-ND 4.0; redistributing their compiled feed /
+# calculator output would violate NoDerivatives/NonCommercial. We source quantum
+# drive + fuel facts from CIG game data instead (see docs/cargo-hauling-planner.md).
+docs/qdrives.json
+docs/loadout.json
+
 # Secrets / local env — list the FILE here, never the secret itself.
 # The Cloudflare tunnel token goes inside .env (CLOUDFLARE_TUNNEL_TOKEN=...).
 .env

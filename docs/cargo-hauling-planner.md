@@ -114,6 +114,17 @@ ordered stops + per-leg detail.
 2. **Cost matrix** — `travel_cost(nav, a, b)` for every stop pair, extracted from
    the `resource_hotspots` via-hop logic (nearest-QT-marker jump + planet→moon
    two-hop rule). `start_id` (current player position or first pickup) seeds it.
+   - **Cross-system (v1, decided 2026-06-20):** the dataset already spans five
+     systems (Stanton, Pyro, Nyx, Ellis, Sol) — `nav.systems`, and every entity
+     carries `system`. But the current cost primitives are **intra-system only**:
+     `nearest_qt_marker` is scoped to the target's system (returns nothing if no
+     QT marker there). Two pieces are therefore required for v1:
+     - **Jump-gate POIs** — add the inter-system gates (Stanton↔Pyro, etc.) as
+       POIs flagged like QT markers, one endpoint per system.
+     - **Inter-system routing in `travel_cost`** — when `a.system != b.system`,
+       cost = `a → gate(A)` + gate traversal + `gate(B) → b`, recursing as a small
+       graph over gates if the lane chains systems. Same via-hop primitives,
+       just one level up: gates are the inter-system QT markers.
 3. **Optimize** under two constraints:
    - **precedence** — a package's pickup stop precedes its dropoff stop;
    - **capacity** — onboard SCU never exceeds `usable_scu` at any point.
@@ -122,11 +133,93 @@ ordered stops + per-leg detail.
    - **more:** nearest-neighbor seed + precedence-safe 2-opt / or-opt local
      search (reject any move that breaks precedence or capacity).
    - Pure stdlib — no solver dependency, matching the codebase ethos.
-4. **Output per leg:** QT marker to jump to, distance, bearing, "via parent
-   planet" flag, and **running onboard SCU**. Plus a feasibility summary:
-   **peak load** and **minimum capacity required** — so an over-capacity bundle
-   is reported ("these three contracts can't co-load on your Freelancer — drop
-   one or take two trips") instead of silently producing a bad route.
+4. **Output per leg:** QT marker / gate to jump to, distance, bearing, "via parent
+   planet" and "via jump gate" flags, leg ETA, and **running onboard SCU**. Plus a
+   run-level summary:
+   - **Feasibility** — **peak load** and **minimum capacity required**, so an
+     over-capacity bundle is reported ("these three contracts can't co-load on
+     your Freelancer — drop one or take two trips") instead of silently producing
+     a bad route.
+   - **Total run time** — Σ leg ETAs + a per-stop loading-dwell constant. This is
+     the answer to the player's *"how much time do I have to play"* decision in the
+     accept step, and the denominator for the deferred reward-per-hour selector
+     (reward is already captured per contract). Cheap to surface now.
+   - **Fuel/refuel advisory** — see *Quantum fuel & refueling* below.
+
+---
+
+## Quantum fuel & refueling — advisory, not a constraint
+
+**Decided 2026-06-20: v1 treats fuel as an advisory overlay, not a solver
+constraint.** The route is still optimized purely on travel cost; fuel is layered
+on top so the player decides, matching how SC hauling actually works.
+
+**Hard data reality (verified against the uexcorp feed 2026-06-20):** the uexcorp
+catalog gives us **no usable range data**. `fuel_quantum` is `0` for every vehicle
+(field exists but unpopulated), and the only real signal, `is_quantum_capable`
+(0/1), is true for every haul ship — so it's near-useless. Effective QT range is
+**loadout-dependent** (the equipped *quantum drive* + the hull's quantum-fuel
+tank), which the uexcorp ship catalog can't know.
+
+**But range is computable from CIG game facts (decided 2026-06-21).** It decomposes
+into two facts plus one player choice:
+
+```
+max single-jump range ≈ hull_quantum_fuel_capacity / drive_fuel_per_distance
+per-leg QT time        ≈ overhead + leg_distance / drive_driveSpeed
+```
+
+- `drive_driveSpeed`, `drive_fuel_per_distance` (`quantumFuelRequirement`), and the
+  two-stage accel rates are **per quantum-drive** game facts.
+- `hull_quantum_fuel_capacity` is a **per-hull** game fact.
+- The only thing the catalog can't know — *which drive is equipped* — is a small
+  **player choice** (a drive dropdown), not an unknowable.
+
+Both fact tables come from **CIG game data** via an openly-licensed extract (e.g.
+scunpacked-style game-file dumps) or whatever UEX exposes — the same kind of
+offline-cached feed as `commodities.json`. We compute `maxDistance` and per-leg
+time ourselves; no third-party calculator is shipped or called at runtime. The
+overhead constant (spool-up + accel/decel + cooldown, ~28 s for the sampled drive)
+and the cruise term were validated against a known calculator's output and confirm
+the linear-in-distance model holds at Gm scale.
+
+> **Licensing note (2026-06-21) — why we compute this ourselves.**
+> [erkul.games](https://erkul.games) exposes a private API whose loadout blob
+> already contains a computed `results.travelTime.maxDistance`, which would have
+> auto-filled the range field from a pasted share link. **We deliberately do not
+> use it.** erkul content is licensed **CC BY-NC-ND 4.0**
+> (Attribution-NonCommercial-NoDerivatives): bundling/redistributing their compiled
+> `qdrives` feed or building on their calculator *output* implicates **NoDerivatives**,
+> and the org/multi-user direction makes the **NonCommercial** clause a future
+> liability; their `server.erkul.games/*` endpoints are also an undocumented private
+> API (ToS/load risk). The *underlying numbers* (drive speed, fuel-per-distance, hull
+> fuel tank) are **CIG game facts, not erkul's to license**, so we source those facts
+> from a reuse-permitted dataset and do the math in-house. Local reference copies of
+> the erkul responses are git-ignored (`docs/qdrives.json`, `docs/loadout.json`) —
+> kept for development reference, never committed or served. This supersedes any
+> earlier "paste your erkul link" idea.
+
+- **Cumulative QT distance — always shown (free).** The cost matrix already
+  computes per-leg QT distance, so the plan always displays per-leg and total QT
+  distance. This is truthful with zero new data and is useful on its own.
+- **Drive picker → computed per-ship range (decided 2026-06-21).** The player picks
+  their ship (→ hull fuel tank) and their equipped quantum drive from a dropdown
+  (→ drive speed + fuel-per-distance); the planner **computes** effective range and
+  accurate per-leg time. This replaces the earlier "manual range number, no prefill"
+  plan — it's still player-supplied (the drive choice) but now yields a real
+  computed range and a real ETA instead of a hand-typed guess. The chosen drive is
+  remembered per ship (per-user) alongside usable SCU; a manual range override stays
+  available as a fallback. While no drive is chosen and no override is set, the
+  planner shows distances but raises **no** warnings.
+- **Flagging — only once a range is set.** With a range entered, flag any leg (or
+  the run as a whole) whose cumulative QT distance exceeds it. No silent rerouting.
+- **Opt-in refuel stops.** A *"consider refuel stops"* toggle (only meaningful once
+  a range exists). When on, the planner inserts the nearest refuel-capable POI
+  (stations / rest stops) as an advisory waypoint before a flagged leg; when off,
+  it only warns. Refuel POIs are surfaced, never forced.
+- **Interaction with jump gates** — cross-system lanes are the most likely to trip
+  the range warning, so the fuel overlay and the gate routing are designed
+  together: a gate leg reports its own QT distance into the same cumulative budget.
 
 ---
 
@@ -292,12 +385,25 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
    + `#/route` branches in `applyView()`, top-left logo/title → home (see *UI
    integration* above). Land this first so the planner slots into a real shell.
 1. Ship feed — `GET /api/ships` + `user_ships` persistence + `/api/me` carry.
-2. `travel_cost` extraction from `resource_hotspots` + `POST /api/route/plan`
-   (with `server/test_nav_core.py` coverage for precedence/capacity/merging).
+   Add a **quantum-drive catalog** (drive speed + fuel-per-distance, from CIG game
+   data, offline-cached like `commodities.json`) and a hull→quantum-fuel-capacity
+   fact, so the planner **computes** effective range from a per-ship drive choice
+   (remembered per user). Manual range override kept as a fallback. Do **not** use
+   erkul (CC BY-NC-ND / private API — see *Quantum fuel & refueling*).
+2. `travel_cost` extraction from `resource_hotspots`, **extended for cross-system
+   jump-gate routing** (gate POIs + inter-system cost), + `POST /api/route/plan`
+   returning per-leg ETA, total run time, and the fuel/refuel advisory. With
+   `server/test_nav_core.py` coverage for precedence/capacity/merging **and a
+   cross-system lane**.
 3. Run persistence (`runs` table) + arrival detection + per-package checklist on
    the position pipeline.
 4. `#/route` UI (entry → plan → run).
 5. History log + frequency-ranked quick-picks/priors + `#/stats` hooks.
 
-**Deferred:** contract *selection* ("which to accept" — reward already captured),
-box-size/bin-packing, OCR contract ingestion, anything trading-related.
+**In v1 (decided 2026-06-20):** cross-system jump-gate routing; total-run-time
+estimate; quantum-fuel range + opt-in refuel advisory (range **computed** from a
+CIG-sourced drive catalog + per-ship drive choice, decided 2026-06-21 — not erkul).
+
+**Deferred:** contract *selection* ("which to accept" — reward + run-time now
+captured, so reward-per-hour is a thin later add), box-size/bin-packing, OCR
+contract ingestion, anything trading-related.

@@ -256,6 +256,11 @@
   .app-badge { position: absolute; top: 10px; right: 10px; font-size: 10px;
     letter-spacing: 1px; text-transform: uppercase; padding: 2px 8px; border-radius: 10px;
     background: var(--panel2); border: 1px solid var(--border); color: var(--warn); }
+  /* unofficial-fansite / CIG trademark disclaimer (login splash + launcher) */
+  .fansite-disclaimer { max-width: 620px; margin: 28px auto 0; text-align: center;
+    font-size: 10px; line-height: 1.6; color: var(--dim); }
+  .login-card .fansite-disclaimer { margin-top: 20px; }
+
   .login-gate { position: fixed; inset: 0; background: var(--bg);
     display: grid; place-items: center; z-index: 50; padding: 20px; }
   /* the explicit display above overrides the [hidden] attribute, so restore it */
@@ -356,6 +361,10 @@
     <h1>Org Navigator</h1>
     <p class="muted">Sign in with your Discord account to access your organization's navigation data.</p>
     <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. All content not authored by its host or
+      users is property of their respective owners. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div>
 </div>
 
@@ -395,6 +404,10 @@
           cargo capacity, then run them turn-by-turn.</div>
       </div>
     </div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. All content not authored by its host or
+      users is property of their respective owners. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div>
 
   <div id="main-view">
