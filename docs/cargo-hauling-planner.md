@@ -519,6 +519,20 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      lanes), so "best lane" stays frequency-ranked; "best contract" by aUEC/hr is
      not isolatable (contracts share a route) — per-run aUEC/hr is the granular
      view shipped.
+   - ✅ **Session vs. recent stat scoping SHIPPED 2026-06-21.** A player-controlled
+     **session marker** (one per-user ISO timestamp in the `meta` table under
+     `cargo_session_start:{discord_id}`, via `db.get/set_cargo_session_start`) lets
+     a player track *this play session* instead of only the rolling window. The
+     history endpoint returns **two** `derive_run_stats` blocks — `stats` over the
+     recent 50-run window and `session_stats` over runs with
+     `completed_at >= session_start` (ISO-UTC strings compare lexicographically) —
+     plus `session_start`. `POST /api/route/session/reset` stamps "now" (the
+     reset = start-new-session action; **non-destructive** — runs + quick-picks
+     untouched). UI: a **Session ⇄ Recent** seg toggle in the RECENT HAULS header
+     (re-renders from the already-loaded payload, no refetch; default Session) and
+     a "↻ start new session" button under the cards with a "since <time>" note.
+     Only the stat boxes are scoped; LAST RUNS + FREQUENT LANES always use the
+     full window. Verified end-to-end (reset partitions session vs recent).
 
 **In v1 (decided 2026-06-20):** cross-system jump-gate routing; total-run-time
 estimate; quantum-fuel range + opt-in refuel advisory (range **computed** from a

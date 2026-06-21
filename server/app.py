@@ -1508,13 +1508,30 @@ def _run_summary(run: dict) -> dict:
 @app.get("/api/route/history")
 async def get_route_history(user: dict = Depends(require_session)):
     """The caller's completed hauling runs (freshest first, for the recent-runs
-    list + clone), headline hauling stats (totals + aUEC/hour), and frequency-
-    ranked quick-picks (lanes / commodities / ships) that float a player's repeat
-    hauls to the top of the entry pickers."""
+    list + clone), headline hauling stats (totals + aUEC/hour) in two scopes —
+    `stats` over the recent window and `session_stats` since the player's session
+    marker — and frequency-ranked quick-picks (lanes / commodities / ships) that
+    float a player's repeat hauls to the top of the entry pickers."""
     runs = db.list_run_history(user["id"])
+    session_start = db.get_cargo_session_start(user["id"])
+    # ISO-8601 UTC timestamps compare lexicographically, so a string >= works.
+    session_runs = ([r for r in runs if (r.get("completed_at") or "") >= session_start]
+                    if session_start else runs)
     return {"runs": [_run_summary(r) for r in runs],
             "stats": nav_core.derive_run_stats(runs),
+            "session_stats": nav_core.derive_run_stats(session_runs),
+            "session_start": session_start,
             "picks": nav_core.derive_quick_picks(nav, runs)}
+
+
+@app.post("/api/route/session/reset")
+async def reset_route_session(user: dict = Depends(require_session)):
+    """Start a fresh hauling session: stamp 'now' as the session marker so the
+    session-scoped stats reset to zero and count only runs completed from here on.
+    Non-destructive — run history and quick-picks are untouched."""
+    ts = datetime.now(timezone.utc).isoformat()
+    db.set_cargo_session_start(user["id"], ts)
+    return {"ok": True, "session_start": ts}
 
 
 @app.get("/api/biomes")

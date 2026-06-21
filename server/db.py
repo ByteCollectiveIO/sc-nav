@@ -383,6 +383,17 @@ def abandon_run(discord_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def get_cargo_session_start(discord_id: str) -> str | None:
+    """The member's hauling-session marker (ISO ts): stats since this point are
+    'this session'. None until they first start a session."""
+    return _meta_get(f"cargo_session_start:{discord_id}")
+
+
+def set_cargo_session_start(discord_id: str, ts: str) -> None:
+    """Stamp the start of a fresh hauling session (the 'reset' action)."""
+    _meta_set(f"cargo_session_start:{discord_id}", ts)
+
+
 def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:
     """Completed runs, freshest first (feeds the deferred history/quick-picks)."""
     with _lock:

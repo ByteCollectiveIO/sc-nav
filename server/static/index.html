@@ -396,7 +396,14 @@
   .route-reward .rw-amt { width: 130px; }
   .rw-total { margin-top: 8px; font-size: 13px; }
   .rw-total b { color: var(--accent); }
-  #route-history .stat-cards { margin: 4px 0 8px; }
+  #route-history .stat-cards { margin: 4px 0 6px; }
+  .route-hist-head { display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px; }
+  .route-hist-head h2 { margin: 0; }
+  #route-scope-seg button { font-size: 12px; padding: 4px 12px; }
+  .route-scope-note { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px;
+    font-size: 12px; margin-bottom: 4px; }
+  #route-session-reset { font-size: 12px; padding: 4px 10px; }
   /* POI autocomplete */
   .poi-pick { position: relative; flex: 1; min-width: 150px; display: flex; }
   .poi-pick .ti { width: 100%; }
@@ -2212,8 +2219,9 @@ let routeStartHere = false;     // start from the live show_location position?
 let routeStartArmed = false;    // armed, waiting on the next /showlocation fix
 let runComplete = false;        // showing the terminal "route complete" card
 let lastRunSig = null;          // signature of the last-rendered run (skip no-op redraws)
-let routeHistory = null;        // {runs, stats, picks} from /api/route/history
+let routeHistory = null;        // {runs, stats, session_stats, session_start, picks}
 let rewardByLabel = {};         // contract label -> aUEC payout ("" = ungrouped bucket)
+let routeStatsScope = "session"; // which stats the boxes show: session | recent
 
 async function loadRoutePlanner() {
   if (!routeCatalog) {
@@ -2259,20 +2267,36 @@ async function loadRouteHistory() {
 function renderRouteHistory() {
   const el = $("route-history");
   if (!routeHistory) { el.hidden = true; return; }
-  const { runs, picks, stats } = routeHistory;
+  const { runs, picks, stats, session_stats } = routeHistory;
   if (!runs.length && !picks.lanes.length) { el.hidden = true; return; }
-  let h = `<h2>RECENT HAULS</h2>`;
-  if (stats && stats.num_runs) {
-    // Boxed stat cards, matching the Statistics page for consistency.
-    const cards = [[stats.num_runs, "RUNS"]];
-    if (stats.total_reward) cards.push([fmtAuec(stats.total_reward), "TOTAL aUEC"]);
-    if (stats.auec_per_hour) cards.push([fmtAuec(stats.auec_per_hour), "aUEC / HR"]);
-    cards.push([fmtAuec(stats.total_scu), "SCU MOVED"],
-               [fmtGm(stats.total_distance_m), "QT DISTANCE"],
-               [fmtDur(stats.total_time_s), "TIME"]);
+  const scope = routeStatsScope;
+  let h = `<div class="route-hist-head"><h2>RECENT HAULS</h2>`
+    + `<span class="seg" id="route-scope-seg">`
+    + `<button data-scope="session" class="${scope === "session" ? "on" : ""}">Session</button>`
+    + `<button data-scope="recent" class="${scope === "recent" ? "on" : ""}">Recent</button>`
+    + `</span></div>`;
+  if (runs.length) {
+    // Boxed stat cards, matching the Statistics page; scope = session | recent.
+    const s = (scope === "session" ? session_stats : stats) || stats;
+    const cards = [[s.num_runs, "RUNS"]];
+    if (s.total_reward) cards.push([fmtAuec(s.total_reward), "aUEC EARNED"]);
+    if (s.auec_per_hour) cards.push([fmtAuec(s.auec_per_hour), "aUEC / HR"]);
+    cards.push([fmtAuec(s.total_scu), "SCU MOVED"],
+               [fmtGm(s.total_distance_m), "QT DISTANCE"],
+               [fmtDur(s.total_time_s), "TIME"]);
     h += `<div class="stat-cards">` + cards.map(([n, k]) =>
       `<div class="stat-card"><div class="n route-warn">${n}</div><div class="k">${k}</div></div>`).join("")
       + `</div>`;
+    h += `<div class="route-scope-note">`;
+    if (scope === "session") {
+      h += routeHistory.session_start
+        ? `<span class="muted">Session since ${esc(new Date(routeHistory.session_start).toLocaleString())}.</span>`
+        : `<span class="muted">No session started — these count all recent runs.</span>`;
+      h += ` <button id="route-session-reset">↻ start new session</button>`;
+    } else {
+      h += `<span class="muted">Across your last ${stats.num_runs} run${stats.num_runs === 1 ? "" : "s"}.</span>`;
+    }
+    h += `</div>`;
   }
   if (picks.lanes.length) {
     h += `<p class="route-picks-h">FREQUENT LANES — click to add a package row</p>`
@@ -2300,12 +2324,25 @@ function renderRouteHistory() {
   }
   el.innerHTML = h;
   el.hidden = false;
+  // Scope toggle re-renders from the already-loaded payload (no refetch).
+  el.querySelectorAll("#route-scope-seg [data-scope]").forEach(b =>
+    b.onclick = () => { routeStatsScope = b.dataset.scope; renderRouteHistory(); });
+  const reset = $("route-session-reset");
+  if (reset) reset.onclick = startNewSession;
   el.querySelectorAll("[data-lane]").forEach(b =>
     b.onclick = () => { const l = picks.lanes[+b.dataset.lane];
       addPkgRow({ from_id: l.from_id, from_name: l.from_name,
                   to_id: l.to_id, to_name: l.to_name }); });
   el.querySelectorAll("[data-clone]").forEach(b =>
     b.onclick = () => cloneRun(runs[+b.dataset.clone]));
+}
+
+// Stamp a fresh hauling session, then reload so the session stats zero out.
+async function startNewSession() {
+  if (!confirm("Start a new session? Your session stats reset to zero (run history is kept).")) return;
+  try { await fetch("/api/route/session/reset", { method: "POST" }); } catch { return; }
+  routeStatsScope = "session";
+  loadRouteHistory();
 }
 
 // Replace the entry rows with a previous run's packages (the clone shortcut),
