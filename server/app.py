@@ -70,6 +70,7 @@ WATCHER_BUNDLE_FILES = ("sc_nav_watcher.py", "run_watcher.bat", "README.md")
 OC_URL = os.environ.get("SC_NAV_OC_URL", "https://starmap.space/api/v3/oc/index.php")
 POI_URL = os.environ.get("SC_NAV_POI_URL", "https://starmap.space/api/v3/pois/index.php")
 COMMODITIES_URL = os.environ.get("SC_NAV_COMMODITIES_URL", "https://api.uexcorp.uk/2.0/commodities")
+SHIPS_URL = os.environ.get("SC_NAV_SHIPS_URL", "https://api.uexcorp.uk/2.0/vehicles")
 OFFLINE = os.environ.get("SC_NAV_OFFLINE") == "1"
 
 # Canonical public URL (e.g. https://nav.bytecollective.io). When set it is the
@@ -170,6 +171,7 @@ def load_nav_data() -> nav_core.NavData:
 
 
 COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
+SHIPS_FILE = DATA_DIR / "ships.json"               # cached uexcorp vehicles
 DB_FILE = DATA_DIR / "sc_nav.db"                   # user-contributed data (Phase 2)
 
 
@@ -253,6 +255,40 @@ def load_raw_commodity_names() -> list[str]:
         rows = _load_json_list(COMMODITIES_FILE)
     names = {r["name"] for r in rows if r.get("is_raw") in (1, "1", True) and r.get("name")}
     return sorted(names)
+
+
+def load_ships() -> list[dict]:
+    """Cargo-capable spaceships from the uexcorp vehicles feed (name + stated
+    SCU + company), for the cargo-planner ship picker. Fetched live with an
+    on-disk cache fallback, mirroring the commodities loader. The full rows are
+    cached (not just the trimmed view) so the deferred quantum-drive/range work
+    can reuse fuel + capability fields without a second feed."""
+    rows = None
+    if not OFFLINE:
+        try:
+            resp = _fetch_json(SHIPS_URL, timeout=15)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            if rows:
+                _save_json_list(SHIPS_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] ships fetch failed, using cache: {exc}")
+    if not rows:
+        rows = _load_json_list(SHIPS_FILE)
+
+    def to_scu(v):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+    ships = [
+        {"name": r["name"], "company": r.get("company_name"), "scu": to_scu(r.get("scu"))}
+        for r in rows
+        if r.get("name") and r.get("is_spaceship") in (1, "1", True)
+        and to_scu(r.get("scu")) > 0
+    ]
+    ships.sort(key=lambda s: s["name"].lower())
+    return ships
 
 
 def load_harvestable_names() -> list[str]:
@@ -466,6 +502,7 @@ handles = HandleRegistry()
 tokens = TokenStore()
 raw_commodity_names = load_raw_commodity_names()
 harvestable_names = load_harvestable_names()
+ships = load_ships()
 fauna_names = load_fauna_names()
 biomes = load_biomes()
 nav_core.merge_custom_pois(nav, db.list_custom_pois())
@@ -1069,6 +1106,13 @@ async def list_raw_commodities():
     return raw_commodity_names
 
 
+@app.get("/api/ships")
+async def list_ships():
+    """Cargo-capable ships (name + stated SCU) for the cargo-planner ship
+    picker, from the uexcorp vehicles feed."""
+    return ships
+
+
 @app.get("/api/harvestables")
 async def list_harvestables():
     """Harvestable flora/natural names (uexcorp kind=Natural, is_harvestable=1)
@@ -1527,8 +1571,9 @@ async def _rebuild_nav() -> None:
 async def refresh_data(admin: dict = Depends(require_admin)):
     """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
     without restarting. Admin only."""
-    global raw_commodity_names
+    global raw_commodity_names, ships
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
+    ships = await asyncio.to_thread(load_ships)
     await _rebuild_nav()
     return {
         "ok": True,
@@ -1538,6 +1583,7 @@ async def refresh_data(admin: dict = Depends(require_admin)):
         "observations": len(nav.observations),
         "raw_commodities": len(raw_commodity_names),
         "harvestables": len(harvestable_names),
+        "ships": len(ships),
     }
 
 
@@ -1661,6 +1707,7 @@ async def health():
         "handles": len(handles.by_handle),
         "raw_commodities": len(raw_commodity_names),
         "harvestables": len(harvestable_names),
+        "ships": len(ships),
         "active_sessions": sum(1 for s in hub.sessions.values() if s.pos is not None),
         "data": data_info,
     }

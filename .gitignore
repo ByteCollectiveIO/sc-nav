@@ -19,6 +19,7 @@ poi/resource_nodes.json
 poi/wildlife.json
 poi/handles.json
 poi/commodities.json
+poi/ships.json
 poi/watcher_tokens.json
 poi/sc_nav.db
 poi/sc_nav.db-wal
