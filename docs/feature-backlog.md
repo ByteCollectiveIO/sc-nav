@@ -829,3 +829,56 @@ architecture change — almost entirely CSS.
   `#lb-table`/`#search-results`/`#finder-results`/`#token-table`; fixed
   `min-width` inputs (l.515/536); map canvas `#map` (l.99) + tap/drag handlers
   (`mapHits` ~l.1293, draw ~l.1433).
+
+---
+
+## 12. Cargo-hauling route planner
+
+**Status:** designed, not built (2026-06-20). Full spec in
+[`docs/cargo-hauling-planner.md`](cargo-hauling-planner.md) — this is a pointer
+so it isn't lost in the backlog.
+
+### Problem
+
+We've built a guild POI/resource tracker and navigator, but nothing for cargo
+hauling. A hauling contract gives a set of pickups and dropoffs (commodity + SCU
+at named locations, often multi-pickup/multi-dropoff); players take one or more
+and want the most efficient visiting order under their ship's cargo capacity,
+then guidance through the run. The locations, distances, and QT logic we already
+have make this tractable. (Commodities *trading* is out of scope — UEX owns it.)
+
+### Decision (summary — see the design doc for detail)
+
+Three layers: **Plan** (stateless `POST /api/route/plan` — a Pickup-and-Delivery
+solver reusing the via-hop `travel_cost` extracted from `resource_hotspots`),
+**Execute** (per-user run persisted in DB, driven by the existing
+`destination_id`/`compute_state`/`/ws` guidance loop; confirm-on-arrival package
+checklists; live onboard-SCU), and **Learn** (per-user completed-run history →
+frequency-ranked quick-picks/priors to ease manual entry, + `#/stats` analytics).
+
+Key decisions: contract atom is a `package = {commodity, scu, from→to}` (encodes
+precedence); ship list + stated SCU from the uexcorp vehicles feed (mirrors the
+commodities fetch), capacity is a single per-user "usable SCU" override
+remembered per ship; arrival prompts confirmation rather than auto-completing;
+active runs persist per-user. `Game.log` has **no** contract data (verified), so
+entry is manual — OCR of the contract screen is the only remaining automation
+path and is deferred.
+
+Because this is the **second app** in a single-app SPA, build step 0 is an **app
+shell**: an app launcher at `#/` (Discord gate → launcher → app; also a
+future-expansion landing page), the navigator re-parented from the implicit home
+to `#/nav`, and `#/route` added as a peer view in `applyView()`. Launcher is home
+but skippable via deep links (no silent last-app redirect); Stats/Leaderboard
+become app-scoped since the planner has its own analytics.
+
+### Relevant code
+
+- `server/nav_core.py` — via-hop travel model to generalize (`resource_hotspots`
+  ~l.1294-1309), geo primitives, `nearest_qt_marker`, `parent_planet`.
+- `server/app.py` — uexcorp fetch pattern (`load_raw_commodity_names`,
+  `COMMODITIES_URL`, `/api/refresh`), `compute_state` destination loop,
+  `/api/position` + `/ws`, `/api/me`.
+- `server/db.py` — `CREATE TABLE IF NOT EXISTS` + `_ensure_column` pattern; new
+  `user_ships` + `runs` tables keyed on `discord_id`.
+- `server/static/index.html` — app launcher + navigator re-parented to `#/nav` +
+  new `#/route` view, all branches in `applyView()` (~l.1951).
