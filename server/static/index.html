@@ -373,12 +373,21 @@
     border-radius: 14px; cursor: pointer; background: none; color: var(--text); }
   .route-chip:hover { border-color: var(--accent); color: var(--accent); }
   .route-chip .ct { color: var(--dim); margin-left: 4px; }
-  .route-recent { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 8px 0; border-top: 1px solid var(--border); }
+  .route-recent { display: flex; align-items: center; gap: 12px;
+    padding: 10px 0; border-top: 1px solid var(--border); }
   .route-recent:first-of-type { border-top: none; }
-  .route-recent .rr-main { flex: 1; min-width: 180px; }
+  .route-recent .rr-main { flex: 1; min-width: 180px; display: flex;
+    flex-direction: column; gap: 3px; }
+  .route-recent .rr-title { display: flex; align-items: baseline; flex-wrap: wrap;
+    gap: 6px 10px; }
+  .route-recent .rr-ship { font-size: 14px; font-weight: 600; color: var(--text); }
+  .route-recent .rr-pay { font-size: 13px; color: var(--good); }
+  .route-recent .rr-pay .hr { color: var(--dim); }
   .route-recent .rr-sub { font-size: 11px; color: var(--dim); }
-  .route-picks-h { font-size: 11px; color: var(--dim); letter-spacing: 1px; margin: 10px 0 2px; }
+  .route-recent .rr-sub b { color: var(--text); font-weight: 600; }
+  .route-picks-h { font-size: 11px; color: var(--dim); letter-spacing: 1px;
+    text-transform: uppercase; margin: 16px 0 6px; }
+  .route-picks-h:first-of-type { margin-top: 4px; }
   /* per-contract payouts + earnings */
   #route-rewards { margin: 12px 0 4px; }
   .route-reward { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
@@ -387,7 +396,11 @@
   .route-reward .rw-amt { width: 130px; }
   .rw-total { margin-top: 8px; font-size: 13px; }
   .rw-total b { color: var(--accent); }
-  .route-stats { display: flex; flex-wrap: wrap; gap: 18px; align-items: baseline; }
+  .route-stats { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: baseline;
+    margin: 4px 0 6px; }
+  .route-stats .metric { display: flex; flex-direction: column; }
+  .route-stats .metric .v { font-size: 20px; color: var(--accent); }
+  .route-stats .metric .l { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
   /* POI autocomplete */
   .poi-pick { position: relative; flex: 1; min-width: 150px; display: flex; }
   .poi-pick .ti { width: 100%; }
@@ -2273,11 +2286,17 @@ function renderRouteHistory() {
     h += `<p class="route-picks-h">LAST RUNS — clone to refill the form</p>`
       + runs.slice(0, 6).map((r, i) => {
         const when = r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "";
-        const pay = r.reward ? ` · 💰 ${fmtAuec(r.reward)}`
-          + (r.auec_per_hour ? ` (${fmtAuec(r.auec_per_hour)}/hr)` : "") : "";
+        const pay = r.reward
+          ? `<span class="rr-pay">💰 ${fmtAuec(r.reward)} aUEC`
+            + (r.auec_per_hour ? ` <span class="hr">· ${fmtAuec(r.auec_per_hour)}/hr</span>` : "")
+            + `</span>`
+          : "";
+        const meta = [`<b>${r.num_packages}</b> pkg`, `<b>${r.total_scu}</b> SCU`,
+                      `<b>${r.num_stops}</b> stops`];
+        if (when) meta.push(esc(when));
         return `<div class="route-recent"><div class="rr-main">`
-          + `${esc(r.ship || "ship?")} <span class="rr-sub">· ${r.num_packages} pkg · `
-          + `${r.total_scu} SCU · ${r.num_stops} stops${pay}${when ? " · " + esc(when) : ""}</span>`
+          + `<div class="rr-title"><span class="rr-ship">${esc(r.ship || "Unknown ship")}</span>${pay}</div>`
+          + `<div class="rr-sub">${meta.join(" · ")}</div>`
           + `</div><button class="route-chip" data-clone="${i}">clone</button></div>`;
       }).join("");
   }
