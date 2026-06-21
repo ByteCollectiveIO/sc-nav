@@ -390,6 +390,31 @@
   .pkg-line .up { color: var(--good); } .pkg-line .down { color: var(--accent); }
   .onboard { font-size: 12px; color: var(--dim); margin-top: 4px; }
   .onboard b { color: var(--text); }
+  /* run mode */
+  .route-run-panel { border-color: var(--accent); }
+  .run-head { display: flex; align-items: center; justify-content: space-between; }
+  .run-head h2 { margin: 0; }
+  #run-abandon { color: var(--bad); font-size: 12px; padding: 4px 10px; }
+  #run-abandon:hover { border-color: var(--bad); }
+  .run-onboard { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 13px; }
+  .run-onboard b { color: var(--accent); }
+  .run-bar { flex: 1; height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden;
+    border: 1px solid var(--border); }
+  .run-bar-fill { height: 100%; background: var(--accent); transition: width .25s; }
+  .run-stop { padding: 10px 0; border-top: 1px solid var(--border); opacity: .6; }
+  .run-stop.active { opacity: 1; }
+  .run-stop.past { opacity: .45; }
+  .run-stop-head { display: flex; align-items: center; gap: 10px; }
+  .run-stop .seq { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--panel2);
+    border: 1px solid var(--border); color: var(--accent); display: flex; align-items: center;
+    justify-content: center; font-size: 12px; }
+  .run-stop.active .seq { background: var(--accent); color: #07101a; border-color: var(--accent); }
+  .run-stop.past .seq { color: var(--good); }
+  .run-arrived { color: var(--warn); font-size: 13px; margin: 8px 0 4px; }
+  .run-check { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 5px 0; cursor: pointer; }
+  .run-check.checked { color: var(--dim); text-decoration: line-through; }
+  .run-check input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .run-skip { font-size: 12px; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -911,6 +936,7 @@
   </div><!-- /stats-view -->
 
   <div id="route-view" hidden>
+    <div id="route-run" hidden></div>
     <div class="panel">
       <h2>SHIP</h2>
       <div class="route-row">
@@ -1121,6 +1147,9 @@ function obsCurrentThisSession(o) {
 function render(state) {
   if (!state) return;
   lastState = state;
+  // Live run updates (arrival flag, onboard SCU) ride on the nav state. Only
+  // re-render when something actually changed, so the checklist doesn't thrash.
+  if ("run" in state) maybeRenderRun(state.run);
   const shardChanged = currentShard !== (state.shard || null);
   currentShard = state.shard || null;
   if (shardChanged) renderRoster();   // re-sort/relabel teammates by the new shard
@@ -2088,6 +2117,9 @@ function renderAccount(me) {
 let routeCatalog = null;        // [{name, scu, company}] from /api/ships
 let routeCatalogByName = null;
 let routeWired = false;
+let lastPlanInput = null;       // {packages, usable_scu} of the last plan, for "start run"
+let currentRun = null;          // active run view (or null)
+let lastRunSig = null;          // signature of the last-rendered run (skip no-op redraws)
 
 async function loadRoutePlanner() {
   if (!routeCatalog) {
@@ -2110,6 +2142,11 @@ async function loadRoutePlanner() {
   }
   if (!routeWired) wireRoutePlanner();
   if (!$("route-pkgs").children.length) addPkgRow();
+  // Restore an in-progress run (resumes across reload / device switch).
+  try {
+    const d = await fetch("/api/route/run").then(r => r.json());
+    renderRun(d.run);
+  } catch {}
 }
 
 function wireRoutePlanner() {
@@ -2213,6 +2250,7 @@ async function planRoute() {
     packages.push({ commodity, scu, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
+  lastPlanInput = { packages, usable_scu: usable };
   msg.textContent = "planning…";
   let res;
   try {
@@ -2258,10 +2296,114 @@ function renderPlan(res) {
     + `</div>`;
   if (sm.min_capacity_scu < sm.peak_load_scu)
     h += `<p class="route-hint muted">A different order could peak as low as ${sm.min_capacity_scu} SCU.</p>`;
+  h += `<div class="route-actions"><button id="route-start" class="active">Start this run ▸</button>`
+    + `<span class="muted" style="font-size:12px;">guides you stop-by-stop in the navigator</span></div>`;
   h += `</div><div class="panel"><h2>STOPS</h2>`;
   res.stops.forEach((s, i) => { h += renderStop(s, i); });
   h += `</div>`;
   out.innerHTML = h; out.hidden = false;
+  $("route-start").onclick = startRun;
+}
+
+// ---- run mode (execute) ----
+async function startRun() {
+  if (!lastPlanInput) return;
+  const msg = $("route-plan-msg");
+  const ship = $("route-ship").value.trim() || null;
+  try {
+    const r = await fetch("/api/route/run", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...lastPlanInput, ship }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "could not start run"); return; }
+    const d = await r.json();
+    $("route-result").hidden = true;       // collapse the plan; run mode takes over
+    renderRun(d.run);
+    window.scrollTo(0, 0);
+  } catch { msg.textContent = "⚠ network error"; }
+}
+
+async function patchRun(body) {
+  try {
+    const r = await fetch("/api/route/run", { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    if (!r.ok) return;
+    const d = await r.json();
+    renderRun(d.run);
+  } catch {}
+}
+
+async function abandonRun() {
+  if (!confirm("Abandon this run? Your progress will be discarded.")) return;
+  try { await fetch("/api/route/run", { method: "DELETE" }); } catch {}
+  renderRun(null);
+}
+
+// A compact signature of the run's visible state, so the WS feed (which fires on
+// every position sample) only re-renders the checklist when something changed.
+function runSig(run) {
+  if (!run) return "none";
+  return [run.id, run.active, run.arrived, run.onboard_scu, run.done,
+    run.stops.map(s => s.pickups.concat(s.dropoffs).map(p => p.state).join("")).join("|")].join(":");
+}
+function maybeRenderRun(run) {
+  const sig = runSig(run);
+  if (sig === lastRunSig) return;
+  renderRun(run);
+}
+
+// Renders the active run (from HTTP responses and from live WS state). The WS
+// path adds the live `arrived` flag once a position is flowing; HTTP responses
+// drive it even before the watcher reports a position.
+function renderRun(run) {
+  const box = $("route-run");
+  currentRun = run;
+  lastRunSig = runSig(run);
+  if (!run) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  const cap = run.usable_scu || 0;
+  const pct = cap ? Math.min(100, Math.round(run.onboard_scu / cap * 100)) : 0;
+  let h = `<div class="panel route-run-panel"><div class="run-head"><h2>RUN IN PROGRESS</h2>`
+    + `<button id="run-abandon">abandon</button></div>`;
+  h += `<div class="run-onboard"><span class="muted">${esc(run.ship || "ship")}</span>`
+    + `<div class="run-bar"><div class="run-bar-fill" style="width:${pct}%"></div></div>`
+    + `<span><b>${run.onboard_scu}</b> / ${cap} SCU aboard</span></div>`;
+  if (run.done) {
+    h += `<p class="route-feasible">✓ Run complete — all cargo delivered. Fly safe.</p></div>`;
+    box.innerHTML = h; $("run-abandon").remove(); return;
+  }
+  run.stops.forEach((s, i) => {
+    const past = i < run.active, active = i === run.active;
+    h += `<div class="run-stop${active ? " active" : ""}${past ? " past" : ""}">`
+      + `<div class="run-stop-head"><span class="seq">${past ? "✓" : i + 1}</span>`
+      + `<span class="stop-name">${esc(s.name)} <span class="stop-sys">${esc(s.system)}</span></span></div>`;
+    if (active) {
+      if (run.arrived) h += `<div class="run-arrived">⚑ You've arrived — confirm what you loaded / dropped.</div>`;
+      else if (s.leg && s.leg.distance_m != null)
+        h += `<div class="route-leg">QT ${s.leg.qt_marker ? "to <b>" + esc(s.leg.qt_marker) + "</b> · " : ""}`
+          + `${fmtGm(s.leg.distance_m)}${s.leg.cross_system ? ' · <span class="gate">⇆ ' + esc((s.leg.via_gate || []).join(" → ")) + "</span>" : ""}</div>`;
+      s.pickups.forEach(p => { h += checkItem(p, "load"); });
+      s.dropoffs.forEach(p => { h += checkItem(p, "drop"); });
+      h += `<button class="run-skip" data-advance="1">skip to next stop ▸</button>`;
+    }
+    h += `</div>`;
+  });
+  h += `</div>`;
+  box.innerHTML = h;
+  $("run-abandon").onclick = abandonRun;
+  box.querySelectorAll("input[data-pkg]").forEach(cb => {
+    cb.onchange = () => patchRun({ package_id: cb.dataset.pkg, state: cb.dataset.state });
+  });
+  box.querySelectorAll("[data-advance]").forEach(b => { b.onclick = () => patchRun({ advance: true }); });
+}
+
+// A package checkbox at the active stop. "load" toggles pending<->onboard,
+// "drop" toggles onboard<->delivered; the data-state is the state a click sets.
+function checkItem(p, kind) {
+  const done = kind === "load" ? (p.state === "onboard" || p.state === "delivered") : (p.state === "delivered");
+  const next = kind === "load" ? (done ? "pending" : "onboard") : (done ? "onboard" : "delivered");
+  return `<label class="run-check${done ? " checked" : ""}">`
+    + `<input type="checkbox"${done ? " checked" : ""} data-pkg="${esc(String(p.id))}" data-state="${next}">`
+    + `<span class="${kind === "load" ? "up" : "down"}">${kind === "load" ? "▲ load" : "▼ drop"}</span> `
+    + `${esc(p.commodity || "cargo")} · ${p.scu} SCU</label>`;
 }
 
 function renderStop(s, i) {

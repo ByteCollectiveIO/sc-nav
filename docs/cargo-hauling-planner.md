@@ -425,8 +425,17 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      later add.
    - **Not yet built:** the live-position → synthetic start seed (start_id is an
      optional POI; absent it, the run begins free at the first stop).
-3. Run persistence (`runs` table) + arrival detection + per-package checklist on
-   the position pipeline.
+3. ✅ **Run persistence + arrival detection SHIPPED 2026-06-21.** `runs` table
+   `(id, discord_id, status, ship, started_at, completed_at, data)` in `db.py`
+   (`get_active_run` / `start_run` / `update_run` / `complete_run` / `abandon_run`
+   / `list_run_history`); the JSON `data` blob holds ordered stops + per-package
+   state (`pending → onboard → delivered`) + the active-stop cursor. The active
+   run lives on `Session.run` and is **reloaded in `hub.get` on session create**,
+   so it resumes across restart / reconnect. Arrival = the live guidance distance
+   to the active stop under `ARRIVAL_SURFACE_M` (5 km) / `ARRIVAL_SPACE_M` (50 km);
+   `Session.run_view()` rides on `nav_state["run"]` (broadcast over `/ws`) and
+   carries the `arrived` flag + live onboard SCU. Generous thresholds are safe —
+   arrival only surfaces the checklist, never auto-completes.
 4. ✅ **`#/route` entry → plan UI SHIPPED 2026-06-21** (`server/static/index.html`).
    Launcher card enabled (`#/route`), view wired into `applyView()`. Ship picker
    (datalist from `/api/ships`, prefills stated SCU or the member's saved
@@ -435,11 +444,21 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
    `POST /api/route/plan` → rendered summary (stops / packages / peak vs usable
    SCU / QT distance / est. time, infeasible → min-capacity message) + ordered
    stop list (per-leg QT marker / distance / ETA / via-planet / cross-system gate
-   badge, running onboard SCU). CSS-only, matches the SPA. Verified end-to-end
-   over HTTP (forged session). **Run mode (execute) not built** — this is the
-   entry→plan half of step 4. **Dependency:** the from/to pickers search
-   `/api/pois`, which is empty until the org enables the starmap catalog (default
-   OFF) or adds custom POIs — same as the navigator's search.
+   badge, running onboard SCU). CSS-only, matches the SPA.
+   - ✅ **Run mode (execute) SHIPPED 2026-06-21.** "Start this run" on the plan →
+     `POST /api/route/run` (re-solves server-side, 409 if infeasible). Run panel
+     (`#route-run`): ship + onboard/usable SCU bar, ordered stops with the active
+     one highlighted, the active stop's per-package **checklist** (load toggles
+     pending↔onboard, drop toggles onboard↔delivered → `PATCH /api/route/run`),
+     "skip to next stop" (force-advance), "abandon" (`DELETE`). Auto-advances past
+     fully-resolved stops; finishing the last stop completes the run. Driven by
+     both the HTTP responses *and* live `/ws` state (a `runSig` guard skips no-op
+     redraws so the checklist doesn't thrash). Resumes via `GET /api/route/run` on
+     entering `#/route`. Endpoints + lifecycle + arrival + resume verified
+     end-to-end over HTTP (forged session + simulated positions).
+   - **Dependency:** the from/to pickers search `/api/pois`, which is empty until
+     the org enables the starmap catalog (default OFF) or adds custom POIs — same
+     as the navigator's search.
 5. History log + frequency-ranked quick-picks/priors + `#/stats` hooks.
 
 **In v1 (decided 2026-06-20):** cross-system jump-gate routing; total-run-time

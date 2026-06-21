@@ -1562,8 +1562,13 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, t_ref=None) ->
     for i, p in enumerate(packages):
         fid, tid = int(p["from_id"]), int(p["to_id"])
         if fid not in nav.pois or tid not in nav.pois:
-            raise ValueError(f"unknown POI id in package {p.get('id', i)}")
-        pkgs.append({"id": p.get("id", i), "commodity": p.get("commodity"),
+            raise ValueError(f"unknown POI id in package {p.get('id') if p.get('id') is not None else i}")
+        # Fall back to the row index when no id was supplied (a present-but-None
+        # `id`, as Pydantic emits, must still get a unique index — not stay None).
+        pid = p.get("id")
+        if pid is None:
+            pid = i
+        pkgs.append({"id": pid, "commodity": p.get("commodity"),
                      "scu": float(p.get("scu") or 0), "from_id": fid, "to_id": tid})
 
     if not pkgs:

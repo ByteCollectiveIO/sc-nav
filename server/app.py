@@ -647,6 +647,12 @@ class RoutePlanIn(BaseModel):
 PATH_MIN_MOVE_M = 250.0   # don't record a crumb until you've moved this far
 PATH_MAX = 5000           # cap so a long session can't grow unbounded
 
+# Cargo-run arrival thresholds. Generous on purpose: arrival only surfaces the
+# stop's package checklist for the player to confirm — it never auto-completes —
+# so erring toward "you're here" is safe and helpful.
+ARRIVAL_SURFACE_M = 5_000.0    # on the destination's own body (surface guidance)
+ARRIVAL_SPACE_M = 50_000.0     # everything else (station / space approach)
+
 # Live presence tuning.
 PRESENCE_TICK_S = 1.0     # broadcaster cadence (coalesced upserts, ~1 Hz)
 PRESENCE_STALE_S = 120.0  # drop a teammate after this long with no new position
@@ -665,6 +671,7 @@ class Session:
         self.prev_pos = None
         self.prev_t = None
         self.destination_id = None
+        self.run = None            # active cargo-planner run blob (or None)
         self.nav_state = None
         # capture_pending: {"kind": "poi"} or
         # {"kind": "observation", "category", "data", "biome", "note"} while armed
@@ -701,6 +708,48 @@ class Session:
         # observations / teammates share its server.
         self.nav_state["shard"] = self.shard
         self._attach_breadcrumbs()
+        self.nav_state["run"] = self.run_view()
+
+    def _arrived_at_active(self) -> bool:
+        """Whether the guidance distance to the active stop is within the
+        arrival threshold (surface vs. space picked from the live readout)."""
+        dest = self.nav_state.get("destination") if self.nav_state else None
+        if not dest:
+            return False
+        surf = dest.get("surface_distance_m")
+        if surf is not None:
+            return surf < ARRIVAL_SURFACE_M
+        d = dest.get("distance_m")
+        return d is not None and d < ARRIVAL_SPACE_M
+
+    def onboard_scu(self) -> float:
+        """Live cargo aboard = sum of SCU for packages currently 'onboard'."""
+        if not self.run:
+            return 0.0
+        return sum(p["scu"] for p in self.run["packages"].values() if p["state"] == "onboard")
+
+    def run_view(self) -> dict | None:
+        """The active run as the client renders it: ordered stops with per-package
+        live state, the active-stop cursor, live onboard SCU, and the arrival
+        flag for the active stop."""
+        if not self.run:
+            return None
+        run, pkgs = self.run, self.run["packages"]
+        active = run["active"]
+        stops = []
+        for i, s in enumerate(run["stops"]):
+            stops.append({
+                **s,
+                "pickups": [{**pkgs[str(p["id"])]} for p in s["pickups"]],
+                "dropoffs": [{**pkgs[str(p["id"])]} for p in s["dropoffs"]],
+            })
+        return {
+            "id": run["id"], "ship": run.get("ship"), "usable_scu": run["usable_scu"],
+            "active": active, "done": active >= len(run["stops"]),
+            "arrived": active < len(run["stops"]) and self._arrived_at_active(),
+            "onboard_scu": round(self.onboard_scu(), 2),
+            "stops": stops,
+        }
 
     def record_crumb(self):
         """Append a breadcrumb if tracking is on, we're on a body surface, and
@@ -765,6 +814,12 @@ class SessionHub:
         if sess is None:
             sess = Session(user)
             self.sessions[user["id"]] = sess
+            # Resume an in-progress cargo run across restart / reconnect: reload
+            # it and re-point guidance at its active stop.
+            run = db.get_active_run(user["id"])
+            if run:
+                sess.run = run
+                _point_at_active_stop(sess)
         else:
             sess.user = user           # refresh display name / admin flag
         return sess
@@ -1196,6 +1251,138 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# --- cargo run execution (stateful, persisted per member) -------------------
+
+
+class RunStartIn(RoutePlanIn):
+    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+
+
+class RunPatchIn(BaseModel):
+    package_id: str | None = Field(default=None, max_length=_PKG_ID_MAX)
+    state: str | None = None       # pending | onboard | delivered
+    advance: bool = False          # force past the current stop (partial load)
+
+
+def _point_at_active_stop(sess: "Session") -> None:
+    """Point the session's destination at the run's active stop (or clear it
+    when the run is finished), so the existing guidance loop drives the player."""
+    run = sess.run
+    if run and run["active"] < len(run["stops"]):
+        sess.destination_id = run["stops"][run["active"]]["stop_id"]
+    else:
+        sess.destination_id = None
+
+
+def _stop_resolved(run: dict, i: int) -> bool:
+    """A stop is done when every package it loads is onboard/delivered and every
+    package it drops is delivered."""
+    pkgs = run["packages"]
+    if any(pkgs[str(p["id"])]["state"] == "pending" for p in run["stops"][i]["pickups"]):
+        return False
+    return all(pkgs[str(p["id"])]["state"] == "delivered" for p in run["stops"][i]["dropoffs"])
+
+
+def _advance_run(sess: "Session") -> bool:
+    """Skip the cursor past any fully-resolved stops and re-point guidance.
+    Returns True when the run is now complete."""
+    run = sess.run
+    while run["active"] < len(run["stops"]) and _stop_resolved(run, run["active"]):
+        run["active"] += 1
+    _point_at_active_stop(sess)
+    return run["active"] >= len(run["stops"])
+
+
+@app.post("/api/route/run")
+async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
+    """Start (and persist) an active run from the same input as /plan. Re-solves
+    server-side, sets the first stop as the guidance destination, and replaces
+    any prior active run. 409 if the bundle is infeasible."""
+    if body.start_id is not None and body.start_id not in nav.pois:
+        raise HTTPException(status_code=404, detail="unknown start_id")
+    async with hub.lock:
+        sess = hub.get(user)
+        try:
+            plan = nav_core.plan_route(
+                nav, [p.model_dump() for p in body.packages],
+                usable_scu=body.usable_scu, start_id=body.start_id, t_ref=sess.t,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if not plan["summary"]["feasible"]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"route infeasible: needs {plan['summary']['min_capacity_scu']} usable SCU",
+            )
+        packages = {}
+        for s in plan["stops"]:
+            for p in s["pickups"]:
+                packages[str(p["id"])] = {**p, "state": "pending"}
+        run = {
+            "ship": body.ship, "usable_scu": body.usable_scu,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "stops": plan["stops"], "packages": packages, "active": 0,
+        }
+        run["id"] = db.start_run(user["id"], body.ship, run["started_at"], run)
+        sess.run = run
+        _point_at_active_stop(sess)
+        sess.recompute()
+        await sess.broadcast()
+        return {"ok": True, "run": sess.run_view()}
+
+
+@app.get("/api/route/run")
+async def get_run(user: dict = Depends(require_session)):
+    """The caller's active run (or null) — for the UI to load / resume run mode."""
+    async with hub.lock:
+        return {"run": hub.get(user).run_view()}
+
+
+@app.patch("/api/route/run")
+async def patch_run(body: RunPatchIn, user: dict = Depends(require_session)):
+    """Check a package off at the active stop (state = onboard / delivered), or
+    force-advance. Auto-advances past fully-resolved stops; completing the last
+    stop finishes the run."""
+    async with hub.lock:
+        sess = hub.get(user)
+        run = sess.run
+        if not run:
+            raise HTTPException(status_code=404, detail="no active run")
+        if body.package_id is not None and body.state is not None:
+            if body.state not in ("pending", "onboard", "delivered"):
+                raise HTTPException(status_code=400, detail="bad package state")
+            if body.package_id not in run["packages"]:
+                raise HTTPException(status_code=404, detail="unknown package")
+            run["packages"][body.package_id]["state"] = body.state
+        if body.advance and run["active"] < len(run["stops"]):
+            run["active"] += 1
+            _point_at_active_stop(sess)
+        completed = _advance_run(sess)
+        if completed:
+            db.complete_run(user["id"], run["id"],
+                            datetime.now(timezone.utc).isoformat(), run)
+            sess.run = None
+            sess.destination_id = None
+        else:
+            db.update_run(user["id"], run["id"], run)
+        sess.recompute()
+        await sess.broadcast()
+        return {"ok": True, "completed": completed, "run": sess.run_view()}
+
+
+@app.delete("/api/route/run")
+async def abandon_run(user: dict = Depends(require_session)):
+    """Abandon the caller's active run and release the guidance destination."""
+    async with hub.lock:
+        sess = hub.get(user)
+        had = db.abandon_run(user["id"])
+        sess.run = None
+        sess.destination_id = None
+        sess.recompute()
+        await sess.broadcast()
+        return {"ok": True, "abandoned": had}
 
 
 @app.get("/api/biomes")

@@ -80,6 +80,21 @@ CREATE TABLE IF NOT EXISTS user_ships (
     last_used TEXT,
     PRIMARY KEY (discord_id, name)
 );
+
+-- Cargo-planner runs: one active route a member is executing, plus their
+-- completed-run history. `data` is the JSON run blob (ordered stops, package
+-- states, the active-stop cursor); ship/started_at/completed_at are denormalized
+-- for history queries. At most one row per member has status='active'.
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY,
+    discord_id TEXT NOT NULL,
+    status TEXT NOT NULL,          -- active | completed | abandoned
+    ship TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    data TEXT
+);
+CREATE INDEX IF NOT EXISTS runs_owner_status ON runs(discord_id, status);
 """
 
 
@@ -302,6 +317,87 @@ def delete_user_ship(discord_id: str, name: str) -> bool:
             (str(discord_id), name),
         )
     return cur.rowcount > 0
+
+
+# --- cargo-planner runs (per member) ---------------------------------------
+
+
+def get_active_run(discord_id: str) -> dict | None:
+    """The member's in-progress run as the parsed blob (with the row id), or
+    None. At most one active run exists per member."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT id, ship, started_at, data FROM runs "
+            "WHERE discord_id=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (str(discord_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    run = _u(row["data"]) or {}
+    run["id"] = row["id"]
+    return run
+
+
+def start_run(discord_id: str, ship: str | None, started_at: str, run: dict) -> int:
+    """Persist a fresh active run, abandoning any prior active one (a member runs
+    one route at a time). Returns the new run id."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE runs SET status='abandoned' WHERE discord_id=? AND status='active'",
+            (str(discord_id),),
+        )
+        cur = _conn.execute(
+            "INSERT INTO runs (discord_id, status, ship, started_at, data) "
+            "VALUES (?, 'active', ?, ?, ?)",
+            (str(discord_id), ship, started_at, _j(run)),
+        )
+    return cur.lastrowid
+
+
+def update_run(discord_id: str, run_id: int, run: dict) -> None:
+    """Persist progress on the active run (package states / active cursor)."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE runs SET data=? WHERE id=? AND discord_id=? AND status='active'",
+            (_j(run), run_id, str(discord_id)),
+        )
+
+
+def complete_run(discord_id: str, run_id: int, completed_at: str, run: dict) -> None:
+    """Mark the active run completed, freezing its final blob for history."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE runs SET status='completed', completed_at=?, data=? "
+            "WHERE id=? AND discord_id=? AND status='active'",
+            (completed_at, _j(run), run_id, str(discord_id)),
+        )
+
+
+def abandon_run(discord_id: str) -> bool:
+    """Drop the member's active run (they bailed). Returns whether one existed."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE runs SET status='abandoned' WHERE discord_id=? AND status='active'",
+            (str(discord_id),),
+        )
+    return cur.rowcount > 0
+
+
+def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:
+    """Completed runs, freshest first (feeds the deferred history/quick-picks)."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, ship, started_at, completed_at, data FROM runs "
+            "WHERE discord_id=? AND status='completed' ORDER BY completed_at DESC LIMIT ?",
+            (str(discord_id), limit),
+        ).fetchall()
+    out = []
+    for r in rows:
+        run = _u(r["data"]) or {}
+        run["id"] = r["id"]
+        run["completed_at"] = r["completed_at"]
+        out.append(run)
+    return out
 
 
 # --- one-time migration from the legacy JSON files -------------------------
