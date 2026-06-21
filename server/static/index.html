@@ -20,7 +20,8 @@
   header h1 { font-size: 16px; margin: 0; letter-spacing: 2px; color: var(--accent); }
   #conn { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
   #conn.ok { background: var(--good); }
-  #where { color: var(--dim); font-size: 13px; margin-left: auto; text-align: right; }
+  .header-right { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-left: auto; }
+  #where { color: var(--dim); font-size: 13px; text-align: right; }
   #where b { color: var(--text); }
 
   main { padding: 14px; max-width: 1100px; margin: 0 auto; display: grid; gap: 14px; }
@@ -479,12 +480,14 @@
     <h1>Org Navigator</h1>
   </a>
   <div id="conn" title="server connection"></div>
-  <div id="where">waiting for /showlocation&hellip;</div>
-  <a id="stats-toggle" href="#/stats" hidden>📊 Stats</a>
-  <a id="leaderboard-toggle" href="#/leaderboard" hidden>🏆 Leaderboard</a>
-  <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
-  <a id="nav-toggle" href="#/settings" hidden></a>
-  <div id="account"></div>
+  <div class="header-right">
+    <div id="where">waiting for /showlocation&hellip;</div>
+    <a id="stats-toggle" href="#/stats" hidden>📊 Stats</a>
+    <a id="leaderboard-toggle" href="#/leaderboard" hidden>🏆 Leaderboard</a>
+    <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
+    <a id="nav-toggle" href="#/settings" hidden></a>
+    <div id="account"></div>
+  </div>
 </header>
 
 <main>
@@ -2206,11 +2209,8 @@ function wireRoutePlanner() {
   $("route-add-pkg").onclick = () => addPkgRow();
   $("route-plan").onclick = planRoute;
   // Start-from controls: a POI picker and a "use my live position" toggle (the
-  // two are mutually exclusive).
-  attachPoiPicker($("route-start-poi").parentElement);
-  $("route-start-poi").addEventListener("input", () => {
-    if ($("route-start-poi").value.trim()) { routeStartHere = false; updateStartUI(); }
-  });
+  // two are mutually exclusive — choosing a POI cancels an armed/live start).
+  attachPoiPicker($("route-start-poi").parentElement, cancelStartHere);
   $("route-here").onclick = toggleStartHere;
 }
 
@@ -2244,6 +2244,12 @@ function toggleStartHere() {
 function resolveStartArm() {     // called from render() when a live fix arrives
   if (!routeStartArmed) return;
   routeStartArmed = false; routeStartHere = true; updateStartUI();
+}
+// Picking / typing a start POI supersedes the live-location start (clears the
+// armed or active "my location" state).
+function cancelStartHere() {
+  if (!routeStartHere && !routeStartArmed) return;
+  routeStartHere = false; routeStartArmed = false; updateStartUI();
 }
 // {start_here} | {start_id} | {} for the plan/run request (live position wins).
 function routeStartPayload() {
@@ -2342,7 +2348,7 @@ function refreshContractList() {
 
 // Type-to-search POI picker resolving to a POI id (stored on the input's
 // dataset). `wrap` is the .poi-pick span; the resolved id rides on its input.
-function attachPoiPicker(wrap) {
+function attachPoiPicker(wrap, onPick) {
   const input = wrap.querySelector("input");
   const drop = document.createElement("div");
   drop.className = "poi-drop"; drop.hidden = true;
@@ -2350,6 +2356,7 @@ function attachPoiPicker(wrap) {
   let timer = null;
   input.addEventListener("input", () => {
     wrap.classList.remove("picked"); input.dataset.poiId = "";   // typing invalidates a prior pick
+    if (onPick) onPick(null);    // typing here also supersedes any other start mode
     clearTimeout(timer);
     const q = input.value.trim();
     if (q.length < 2) { drop.hidden = true; return; }
@@ -2365,6 +2372,7 @@ function attachPoiPicker(wrap) {
           e.preventDefault();
           input.value = p.name; input.dataset.poiId = p.id;
           wrap.classList.add("picked"); drop.hidden = true;
+          if (onPick) onPick(p);
         };
         drop.appendChild(it);
       }
