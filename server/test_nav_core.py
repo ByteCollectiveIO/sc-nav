@@ -36,11 +36,25 @@ def surface_pois(container_name, system="Stanton"):
 class DataLoadingTests(unittest.TestCase):
     def test_counts(self):
         self.assertEqual(len(NAV.containers), 496)
-        self.assertEqual(len(NAV.pois), 1885)
+        # Starmap POIs (ids well below the synthesized-station range) are the
+        # data-integrity snapshot; container-stations are added on top.
+        starmap = [p for p in NAV.pois.values() if p.id < nav_core.CONTAINER_POI_START]
+        self.assertEqual(len(starmap), 1885)
         self.assertIn("Stanton", NAV.systems)
 
+    def test_container_stations_synthesized(self):
+        synth = [p for p in NAV.pois.values() if p.id >= nav_core.CONTAINER_POI_START]
+        self.assertTrue(synth)
+        # Lagrange stations are searchable by their L-code (folded into the name).
+        self.assertTrue(any(p.name.startswith("Wide Forest Station") and "ARC-L1" in p.name
+                            for p in synth))
+        # all are directly-QT-able space POIs at the container's position
+        self.assertTrue(all(p.container_name is None and p.global_m is not None and p.qt_marker
+                            for p in synth))
+
     def test_space_pois_have_global_coords(self):
-        space = [p for p in NAV.pois.values() if p.container_name is None]
+        space = [p for p in NAV.pois.values()
+                 if p.container_name is None and p.id < nav_core.CONTAINER_POI_START]
         self.assertEqual(len(space), 13)
         self.assertTrue(all(p.global_m is not None for p in space))
 

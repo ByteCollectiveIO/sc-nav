@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -192,7 +193,57 @@ def parse_data(containers_raw: list[dict], pois_raw: list[dict]) -> NavData:
         nav.pois[poi.id] = poi
 
     nav.systems = sorted({c.system for c in nav.containers.values()})
+    synth_container_pois(nav)
     return nav
+
+
+# Container types that are dockable cargo locations (Lagrange stations, jump
+# points, asteroid/refinery/naval bases) but live only in the container catalog,
+# not the POI catalog — so they aren't otherwise searchable or pickable as
+# pickup/dropoff stops. Bodies, bare Lagrange points and asteroid belts are not
+# cargo destinations and stay out.
+_STATION_CONTAINER_TYPES = {
+    "RestStop", "Refinery Station", "Naval Station", "AsteroidBase", "Jumppoint",
+}
+# Reserved POI id range for these synthesized container-stations (well clear of
+# starmap ids ~<50k, custom 1M+, observations 2M+). Ids are derived from the
+# container's internal name so they're stable across restarts (run persistence
+# can reference them).
+CONTAINER_POI_START = 3_000_000
+
+
+def _station_lagrange_code(internal_name: str | None) -> str | None:
+    """The Lagrange designation players actually search by, pulled from a
+    station's internal name ('ARC-L1-A Station' -> 'ARC-L1'); None when the name
+    isn't Lagrange-style (e.g. 'PYR6 Station', 'Hurston-Wikelo')."""
+    base = re.sub(r"[-\s]*[A-Z]?\s*Station\s*$", "", internal_name or "").strip()
+    return base if re.search(r"-L[1-5]\b", base) else None
+
+
+def synth_container_pois(nav: NavData) -> None:
+    """Add cargo-relevant station containers to nav.pois as directly-QT-able
+    space POIs, so the navigator + cargo planner can search and route to them.
+    Skips any whose name already exists as a POI. Lagrange stations get their
+    L-code folded into the name ('Wide Forest Station (ARC-L1)') for search."""
+    existing = {p.name.strip().lower() for p in nav.pois.values()}
+    used_ids = set(nav.pois)
+    for cont in nav.containers.values():
+        if cont.type not in _STATION_CONTAINER_TYPES:
+            continue
+        if cont.name.strip().lower() in existing:
+            continue
+        base = re.sub(r"\s+", " ", cont.name).strip()   # raw names carry stray tabs
+        code = _station_lagrange_code(cont.internal_name)
+        name = f"{base} ({code})" if code and code.lower() not in base.lower() else base
+        pid = CONTAINER_POI_START + (zlib.crc32((cont.internal_name or cont.name).encode()) % 900_000)
+        while pid in used_ids:        # crc collisions are vanishingly rare; probe anyway
+            pid += 1
+        used_ids.add(pid)
+        nav.pois[pid] = Poi(
+            id=pid, name=name, system=cont.system, container_name=None,
+            type=cont.type, local_km=None, global_m=cont.pos,
+            latitude=None, longitude=None, height_m=None, qt_marker=True,
+        )
 
 
 # ---------------------------------------------------------------------------

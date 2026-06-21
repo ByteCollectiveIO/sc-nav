@@ -464,9 +464,21 @@ Built CSS-only / hand-rolled to match the existing SPA (`server/static/index.htm
      `plan_route` gained a `start_pos` param; plan output carries `summary.start`
      for display. Both `/plan` and `/run` honor it (400 if `start_here` without a
      live fix). Verified end-to-end over HTTP.
-   - **Dependency:** the from/to pickers search `/api/pois`, which is empty until
-     the org enables the starmap catalog (default OFF) or adds custom POIs — same
-     as the navigator's search.
+   - ✅ **Container-station locations SHIPPED 2026-06-21.** Lagrange stations
+     (Wide Forest etc.), jump points, and naval/refinery/asteroid bases live only
+     in the **container** catalog, not the POI catalog, yet are the bulk of cargo
+     pickup/dropoff points. `nav_core.synth_container_pois` (run inside
+     `parse_data`, so every load/refresh path) adds the cargo-relevant station
+     container types as directly-QT-able space POIs (reserved id range
+     `CONTAINER_POI_START` = 3M+, crc32 of internal name → stable across
+     restarts), skipping any whose name already exists as a POI. Lagrange stations
+     fold their L-code into the name ("Wide Forest Station (ARC-L1)") so players
+     can search "ARC-L1". They flow through `/api/pois` (searchable in both apps)
+     and route like any space POI. **Side benefit:** these 28–29 stations are
+     present even when the starmap POI catalog is OFF.
+   - **Dependency:** the from/to pickers search `/api/pois`. The planet-orbital
+     stations + surface POIs still need the starmap catalog enabled (default OFF)
+     or custom POIs; the container-stations above are always available.
 5. History log + frequency-ranked quick-picks/priors + `#/stats` hooks.
 
 **In v1 (decided 2026-06-20):** cross-system jump-gate routing; total-run-time
