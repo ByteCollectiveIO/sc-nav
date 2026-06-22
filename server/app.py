@@ -488,28 +488,37 @@ app.add_middleware(
 )
 
 # Defense-in-depth response headers on every response (static + API). The SPA
-# ships one inline <script> and inline styles, so script/style need
-# 'unsafe-inline'; everything else is locked to same-origin. No 'unsafe-eval',
-# no external script/object sources, and framing is denied (clickjacking). The
-# app's consistent output-escaping is the primary XSS defense; this is backup.
-_CSP = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; "
-    "connect-src 'self'; "
-    "font-src 'self'; "
-    "object-src 'none'; "
-    "base-uri 'self'; "
-    "form-action 'self'; "
-    "frame-ancestors 'none'"
-)
+# ships one inline <script>, authorized by a per-request nonce so script-src can
+# drop 'unsafe-inline' entirely — an injected <script> (or img onerror, etc.)
+# carries no valid nonce and won't execute, so a future escaping slip can't
+# become script execution. Inline STYLE attributes are pervasive (style="width:
+# ..%") and nonces don't cover them, so style-src keeps 'unsafe-inline' (style
+# injection is far lower risk). No 'unsafe-eval', no external script/object
+# sources, framing denied (clickjacking). Output-escaping is still the primary
+# XSS defense; the nonce makes the CSP a real backstop rather than a formality.
+def _csp(nonce: str) -> str:
+    return (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "font-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    )
 
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    # Fresh, unguessable nonce per request; the index route reads it back off
+    # request.state to stamp the inline <script> with a matching nonce.
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
     resp = await call_next(request)
-    resp.headers.setdefault("Content-Security-Policy", _CSP)
+    resp.headers.setdefault("Content-Security-Policy", _csp(nonce))
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Referrer-Policy", "same-origin")
@@ -2474,6 +2483,32 @@ async def download_watcher(request: Request):
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="watcher.zip"'},
     )
+
+
+# The SPA shell is served through a route (not the StaticFiles mount) so the
+# per-request CSP nonce can be stamped onto its single inline <script>. Routing
+# is hash-based, so "/" is the only path that serves the shell; "/index.html" is
+# handled too in case it's hit directly. Read per request so a dev edit shows up
+# without a restart (matching StaticFiles); the file is small and only read on a
+# full page load, not per API call. All other assets fall through to the mount.
+INDEX_FILE = STATIC_DIR / "index.html"
+
+
+def _index_response(request: Request) -> HTMLResponse:
+    nonce = getattr(request.state, "csp_nonce", "")
+    html = INDEX_FILE.read_text(encoding="utf-8").replace(
+        "<script>", f'<script nonce="{nonce}">', 1)
+    return HTMLResponse(html)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return _index_response(request)
+
+
+@app.get("/index.html", response_class=HTMLResponse)
+async def index_html(request: Request):
+    return _index_response(request)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
