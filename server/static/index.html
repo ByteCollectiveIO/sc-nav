@@ -49,6 +49,9 @@
 
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
   .panel h2 { margin: 0 0 8px; font-size: 12px; color: var(--dim); letter-spacing: 1px; }
+  /* Org Settings is one long panel of many sections — rule off each section
+     (after the first) so they stop blending into one another. */
+  #admin-panel h2 ~ h2 { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
   .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 
   #dest-card { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
@@ -836,7 +839,7 @@
       always loaded.
     </div>
 
-    <h2 style="margin-top:16px;">ACCESS</h2>
+    <h2>ACCESS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <input id="member-role" class="ti" placeholder="(empty = any server member)"
              style="min-width:220px;" inputmode="numeric">
@@ -850,7 +853,7 @@
     </div>
     <div class="muted" id="admin-status" style="margin-top:6px;"></div>
 
-    <h2 style="margin-top:16px;">ADMINS</h2>
+    <h2>ADMINS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Admins change these org settings and can delete any contribution. Add a member by
       their Discord <b>user ID</b> (Developer Mode on → right-click a user →
@@ -865,7 +868,7 @@
       <span class="muted" id="admin-ids-status"></span>
     </div>
 
-    <h2 style="margin-top:16px;">OBSERVATION FRESHNESS</h2>
+    <h2>OBSERVATION FRESHNESS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Mark sightings stale after
       <input id="fresh-window" type="number" min="1" step="1" style="width:80px;"> hours
@@ -879,7 +882,7 @@
     </div>
     <div class="muted" id="fresh-window-status" style="font-size:12px; margin-top:4px;"></div>
 
-    <h2 style="margin-top:16px;">BRANDING</h2>
+    <h2>BRANDING</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
       the header — it's added alongside, never replacing it. PNG, JPG, or WebP, up
@@ -894,7 +897,7 @@
       <span class="muted" id="org-logo-status"></span>
     </div>
 
-    <h2 style="margin-top:16px;">CLEAR STATISTICS <span class="muted">(danger)</span></h2>
+    <h2>CLEAR STATISTICS <span class="muted">(danger)</span></h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Permanently wipe the data behind a Statistics page. There's no undo, so
       each button asks you to confirm first.
