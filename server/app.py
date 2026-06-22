@@ -2385,6 +2385,40 @@ async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
         return {"ok": True, "share_presence": sess.share_presence}
 
 
+@app.delete("/api/me")
+async def delete_me(request: Request, user: dict = Depends(require_session)):
+    """Self-service account deletion (Privacy Policy). Erases the caller's
+    personal data — watcher tokens, saved ships, cargo runs, handle->Discord
+    bindings, hauling-session marker — and de-identifies their contributed POIs/
+    sightings (kept for the org, stripped of owner). The browser session is
+    cleared so they're signed out; signing in again just creates a fresh, empty
+    account (deletion erases data, it doesn't ban the Discord member)."""
+    uid = user["id"]
+    async with hub.lock:
+        player_ids = handles.player_ids_for(uid)
+        counts = db.delete_member(uid, player_ids)
+
+        # Mirror the DB changes in the in-memory caches so nothing stale survives
+        # until the next restart. 1) De-identify this member's live contributions.
+        for poi in nav.pois.values():
+            if poi.owner_id in player_ids:
+                poi.owner_id = poi.owner_handle = None
+        for obs in nav.observations.values():
+            if obs.owner_id in player_ids:
+                obs.owner_id = obs.owner_handle = None
+        # 2) Forget their handle bindings + watcher tokens.
+        handles.by_handle = {h: e for h, e in handles.by_handle.items()
+                             if e.get("discord_id") != uid}
+        tokens.items = [t for t in tokens.items if t["discord_id"] != uid]
+        # 3) Drop their live presence + session so teammates see them leave.
+        hub.drop_presence(uid)
+        hub.sessions.pop(uid, None)
+        await hub.broadcast_all()
+    await hub.broadcast_online()
+    request.session.clear()
+    return {"ok": True, "deleted": counts}
+
+
 @app.put("/api/me/ship")
 async def remember_ship(body: ShipPrefIn, user: dict = Depends(require_session)):
     """Save (or update) the caller's usable-SCU for a ship and mark it most

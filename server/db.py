@@ -455,6 +455,42 @@ def clear_run_history() -> int:
     return cur.rowcount
 
 
+# --- account deletion (privacy: erase a member) ----------------------------
+
+
+def delete_member(discord_id: str, player_ids: set[int]) -> dict:
+    """Erase a member's personal data for an account-deletion request, in one
+    transaction. Their *contributions* (custom POIs / observations) are kept for
+    the org but de-identified: owner_id/owner_handle are nulled for every
+    PlayerID the member owned. Everything personal — watcher tokens, saved ships,
+    cargo runs, the handle->Discord bindings, and the hauling-session marker — is
+    hard-deleted. Returns per-table counts; the caller mirrors these changes in
+    the in-memory caches under the hub lock."""
+    did = str(discord_id)
+    counts = {"pois_anonymized": 0, "observations_anonymized": 0}
+    with _lock, _conn:
+        if player_ids:
+            marks = ",".join("?" * len(player_ids))
+            ids = list(player_ids)
+            counts["pois_anonymized"] = _conn.execute(
+                f"UPDATE custom_pois SET owner_id=NULL, owner_handle=NULL "
+                f"WHERE owner_id IN ({marks})", ids).rowcount
+            counts["observations_anonymized"] = _conn.execute(
+                f"UPDATE observations SET owner_id=NULL, owner_handle=NULL "
+                f"WHERE owner_id IN ({marks})", ids).rowcount
+        counts["tokens"] = _conn.execute(
+            "DELETE FROM watcher_tokens WHERE discord_id=?", (did,)).rowcount
+        counts["ships"] = _conn.execute(
+            "DELETE FROM user_ships WHERE discord_id=?", (did,)).rowcount
+        counts["runs"] = _conn.execute(
+            "DELETE FROM runs WHERE discord_id=?", (did,)).rowcount
+        counts["handles"] = _conn.execute(
+            "DELETE FROM handles WHERE discord_id=?", (did,)).rowcount
+        _conn.execute("DELETE FROM meta WHERE key=?",
+                      (f"cargo_session_start:{did}",))
+    return counts
+
+
 # --- one-time migration from the legacy JSON files -------------------------
 
 

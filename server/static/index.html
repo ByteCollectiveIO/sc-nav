@@ -35,10 +35,42 @@
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
   #main-view, #settings-view, #setup-view, #leaderboard-view, #stats-view,
-  #route-view, #cargo-leaderboard-view, #cargo-stats-view { display: contents; }
+  #route-view, #cargo-leaderboard-view, #cargo-stats-view,
+  #terms-view, #privacy-view { display: contents; }
   #main-view[hidden], #settings-view[hidden], #setup-view[hidden],
   #leaderboard-view[hidden], #stats-view[hidden], #route-view[hidden],
-  #cargo-leaderboard-view[hidden], #cargo-stats-view[hidden] { display: none; }
+  #cargo-leaderboard-view[hidden], #cargo-stats-view[hidden],
+  #terms-view[hidden], #privacy-view[hidden] { display: none; }
+
+  /* ---- legal pages (#/terms, #/privacy) ---- */
+  .legal-page { max-width: 760px; margin: 0 auto; line-height: 1.65; }
+  .legal-page h2 { margin: 0 0 4px; }
+  .legal-page .legal-updated { color: var(--dim); font-size: 12px; margin: 0 0 20px; }
+  .legal-page h3 { color: var(--accent); font-size: 15px; letter-spacing: .5px;
+    margin: 26px 0 8px; }
+  .legal-page p, .legal-page li { color: var(--text); }
+  .legal-page ul { margin: 8px 0; padding-left: 22px; }
+  .legal-page li { margin: 4px 0; }
+  .legal-page a { color: var(--accent); }
+  .legal-page .legal-back { display: inline-block; margin-bottom: 14px; font-size: 13px; }
+
+  /* ---- persistent site footer ---- */
+  .site-footer { max-width: 1100px; margin: 8px auto 0; padding: 16px 14px 22px;
+    border-top: 1px solid var(--border); color: var(--dim); font-size: 12px;
+    line-height: 1.6; text-align: center; }
+  .site-footer a { color: var(--dim); text-decoration: none; }
+  .site-footer a:hover { color: var(--accent); }
+  .site-footer .foot-links { margin-bottom: 6px; }
+  .site-footer .foot-links a { margin: 0 8px; }
+  .site-footer .foot-copy b { color: var(--text); font-weight: 600; }
+
+  /* destructive action button (e.g. delete account) */
+  .danger-btn { border-color: var(--bad); color: var(--bad); }
+  .danger-btn:hover { background: var(--bad); color: #07101a; border-color: var(--bad); }
+
+  /* small Terms/Privacy links under the login splash disclaimer */
+  .login-card .legal-links { margin-top: 12px; font-size: 12px; }
+  .login-card .legal-links a { color: var(--accent); margin: 0 6px; }
 
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
@@ -544,6 +576,8 @@
       with the Cloud Imperium group of companies. All content not authored by its host or
       users is property of their respective owners. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+    <p class="legal-links">By signing in you agree to our
+      <a href="#/terms">Terms of Service</a> and <a href="#/privacy">Privacy Policy</a>.</p>
   </div>
 </div>
 
@@ -822,6 +856,21 @@
       <thead><tr><th>LABEL</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
+    </div>
+  </div>
+
+  <div class="panel" id="account-panel">
+    <h2>DELETE ACCOUNT <span class="muted">(danger)</span></h2>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      Permanently delete your account data — your watcher tokens, saved ships,
+      cargo runs, and hauling history. The POIs and sightings you contributed are
+      kept for the org but stripped of your name. This can't be undone. You'll be
+      signed out; signing in again starts a fresh, empty account. See our
+      <a href="#/privacy">Privacy Policy</a>.
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button id="delete-account" class="danger-btn">Delete my account</button>
+      <span class="muted" id="delete-account-status"></span>
     </div>
   </div>
 
@@ -1192,7 +1241,203 @@
       Star Citizen®, Roberts Space Industries® and Cloud Imperium® are registered trademarks of
       Cloud Imperium Rights LLC.</p>
   </div><!-- /route-view -->
+
+  <!-- ============================================================
+       Legal pages. STARTER TEXT drafted to fit this app — have a
+       lawyer review before relying on it. Fill the bracketed
+       placeholders: [GOVERNING-STATE] and the support email
+       (support@bytecollective.io is a guess at your domain).
+       ============================================================ -->
+  <div id="terms-view" hidden>
+  <div class="legal-page">
+    <a class="legal-back" href="#/">← Back</a>
+    <h2>Terms of Service</h2>
+    <p class="legal-updated">Last updated: June 21, 2026</p>
+
+    <p>These Terms of Service ("Terms") govern your use of Org Navigator (the "Service"),
+      an unofficial Star Citizen companion tool operated by <b>ByteCollective LLC</b>
+      ("ByteCollective", "we", "us"). By signing in or otherwise using the Service, you
+      agree to these Terms. If you do not agree, do not use the Service.</p>
+
+    <h3>1. What the Service is</h3>
+    <p>Org Navigator is a fan-made tool that helps Star Citizen players and organizations
+      share in-game position data and plan navigation and cargo-hauling routes. It is an
+      unofficial fansite and is not affiliated with, endorsed by, or sponsored by the Cloud
+      Imperium group of companies.</p>
+
+    <h3>2. Accounts &amp; eligibility</h3>
+    <ul>
+      <li>You sign in using a Discord account, and you must comply with Discord's own terms
+        and age requirements. You are responsible for activity that occurs under your
+        account.</li>
+      <li>The optional "watcher" you install on your gaming PC carries a private access
+        token tied to your account. Keep it confidential; you may revoke it at any time in
+        Settings.</li>
+      <li>Your organization's administrators can manage org membership, roles, and settings,
+        and may remove you from an organization.</li>
+    </ul>
+
+    <h3>3. Acceptable use</h3>
+    <p>You agree not to:</p>
+    <ul>
+      <li>use the Service for any unlawful purpose or in violation of these Terms;</li>
+      <li>disrupt, overload, probe, or attempt to gain unauthorized access to the Service or
+        other users' data;</li>
+      <li>scrape, bulk-export, resell, or redistribute data from the Service except your own;</li>
+      <li>submit false location data or impersonate another player or organization;</li>
+      <li>harass other users or upload unlawful or infringing content (including org logos
+        you do not have the right to use).</li>
+    </ul>
+
+    <h3>4. Content you submit</h3>
+    <p>You retain ownership of the data you submit (such as your in-game handle, captured
+      sightings, and hauling routes). You grant ByteCollective a non-exclusive license to
+      store, process, and display that data as needed to operate the Service — including
+      sharing your shared position and contributions with members of your organization and
+      aggregating data into statistics and leaderboards. You can stop sharing your live
+      presence at any time using the share toggle.</p>
+
+    <h3>5. Third-party services &amp; data</h3>
+    <p>The Service relies on third parties, including Discord (sign-in) and the uexcorp fan
+      API (ship and commodity data). Your use of those services is subject to their own
+      terms. We do not control and are not responsible for third-party services or the
+      accuracy of third-party data.</p>
+
+    <h3>6. Intellectual property</h3>
+    <p>The Service's software, design, and original content are owned by ByteCollective LLC.
+      © 2026 ByteCollective LLC. All rights reserved. Star Citizen®, Roberts Space
+      Industries®, and Cloud Imperium® are registered trademarks of Cloud Imperium Rights
+      LLC; all Star Citizen content and assets are the property of their respective owners,
+      and nothing here claims any right in them.</p>
+
+    <h3>7. No warranty</h3>
+    <p>The Service is provided "as is" and "as available", without warranties of any kind,
+      express or implied. We do not warrant that route guidance, distances, or game data are
+      accurate or that the Service will be uninterrupted or error-free. You use it at your
+      own risk.</p>
+
+    <h3>8. Limitation of liability</h3>
+    <p>To the fullest extent permitted by law, ByteCollective LLC will not be liable for any
+      indirect, incidental, special, consequential, or punitive damages, or for any loss of
+      data, arising out of or related to your use of the Service. Our total liability for any
+      claim relating to the Service will not exceed USD $50.</p>
+
+    <h3>9. Suspension &amp; termination</h3>
+    <p>We may suspend or terminate your access at any time, with or without notice, for
+      conduct that we believe violates these Terms or harms the Service or other users. You
+      may stop using the Service at any time and request deletion of your account (see the
+      Privacy Policy).</p>
+
+    <h3>10. Changes</h3>
+    <p>We may modify the Service or these Terms. When we make material changes, we'll update
+      the "Last updated" date above. Continued use after changes take effect means you accept
+      the revised Terms.</p>
+
+    <h3>11. Governing law</h3>
+    <p>These Terms are governed by the laws of the State of [GOVERNING-STATE], without regard
+      to its conflict-of-laws rules.</p>
+
+    <h3>12. Contact</h3>
+    <p>Questions about these Terms? Contact us at
+      <a href="mailto:support@bytecollective.io">support@bytecollective.io</a>.</p>
+
+    <p style="margin-top:24px;"><a href="#/privacy">Read our Privacy Policy →</a></p>
+  </div>
+  </div><!-- /terms-view -->
+
+  <div id="privacy-view" hidden>
+  <div class="legal-page">
+    <a class="legal-back" href="#/">← Back</a>
+    <h2>Privacy Policy</h2>
+    <p class="legal-updated">Last updated: June 21, 2026</p>
+
+    <p>This Privacy Policy explains how <b>ByteCollective LLC</b> ("we", "us") collects, uses,
+      and shares information when you use Org Navigator (the "Service"). By using the Service,
+      you agree to this Policy.</p>
+
+    <h3>1. Information we collect</h3>
+    <ul>
+      <li><b>Discord account data.</b> When you sign in with Discord, we receive your Discord
+        user ID, username, and avatar.</li>
+      <li><b>In-game data you provide.</b> Your Star Citizen handle, the in-game position and
+        coordinates your watcher captures from <code>/showlocation</code>, sightings of POIs
+        and resources you record, and the hauling routes, runs, and rewards you plan or log.</li>
+      <li><b>Organization data.</b> Which organization you belong to and your role within it.</li>
+      <li><b>Technical data.</b> Basic request and connection information (such as IP address
+        and timestamps) used for security and to operate the Service.</li>
+    </ul>
+
+    <h3>2. How we use information</h3>
+    <ul>
+      <li>to operate the Service and authenticate you;</li>
+      <li>to show your shared in-game position and contributions to members of your
+        organization;</li>
+      <li>to generate statistics, leaderboards, and route guidance;</li>
+      <li>to secure the Service, prevent abuse, and debug problems.</li>
+    </ul>
+
+    <h3>3. How information is shared</h3>
+    <ul>
+      <li><b>Within your organization.</b> Your live presence (when sharing is enabled),
+        sightings, and hauling contributions are visible to members and administrators of
+        your organization.</li>
+      <li><b>Service providers.</b> We use Discord for sign-in and the uexcorp fan API for
+        ship and commodity data. Their handling of data is governed by their own policies.</li>
+      <li><b>We do not sell your personal information.</b> We may disclose information if
+        required by law or to protect the Service and its users.</li>
+    </ul>
+
+    <h3>4. Cookies &amp; session</h3>
+    <p>We use a session cookie to keep you signed in. We do not use third-party advertising
+      or tracking cookies.</p>
+
+    <h3>5. Data retention</h3>
+    <p>We keep your account and contributed data for as long as your account is active or as
+      needed to operate the Service. You can ask us to delete your account and associated
+      data (see "Your choices").</p>
+
+    <h3>6. Your choices</h3>
+    <ul>
+      <li>Turn off live presence sharing at any time with the share toggle.</li>
+      <li>Revoke your watcher access token in <a href="#/settings">⚙ Settings</a>.</li>
+      <li>Delete your account at any time under <a href="#/settings">⚙ Settings</a> →
+        Delete Account. This erases your personal data (tokens, saved ships, cargo
+        runs, and hauling history) and removes your name from the POIs and sightings
+        you contributed, which are otherwise kept for your organization.</li>
+      <li>For any other request about your data, contact us at
+        <a href="mailto:support@bytecollective.io">support@bytecollective.io</a>.</li>
+    </ul>
+
+    <h3>7. Security</h3>
+    <p>We take reasonable measures to protect your information, but no method of transmission
+      or storage is completely secure, and we cannot guarantee absolute security.</p>
+
+    <h3>8. Children</h3>
+    <p>The Service is not directed to children under 13 (or the minimum age required by
+      Discord in your region), and we do not knowingly collect their information.</p>
+
+    <h3>9. Changes</h3>
+    <p>We may update this Policy from time to time. When we make material changes, we'll
+      update the "Last updated" date above.</p>
+
+    <h3>10. Contact</h3>
+    <p>Questions about this Policy? Contact us at
+      <a href="mailto:support@bytecollective.io">support@bytecollective.io</a>.</p>
+
+    <p style="margin-top:24px;"><a href="#/terms">Read our Terms of Service →</a></p>
+  </div>
+  </div><!-- /privacy-view -->
 </main>
+
+<footer class="site-footer">
+  <div class="foot-links">
+    <a href="#/terms">Terms of Service</a>·<a href="#/privacy">Privacy Policy</a>
+  </div>
+  <div class="foot-copy">© 2026 <b>ByteCollective LLC</b>. Site design and original content,
+    all rights reserved. An unofficial Star Citizen fansite, not affiliated with the Cloud
+    Imperium group of companies. Star Citizen®, Roberts Space Industries®, and Cloud Imperium®
+    are registered trademarks of Cloud Imperium Rights LLC.</div>
+</footer>
 
 <script>
 "use strict";
@@ -3239,10 +3484,21 @@ function applyView() {
   const stats = h === "#/stats" && authed;
   const cargoLeaderboard = h === "#/cargo-leaderboard" && authed;
   const cargoStats = h === "#/cargo-stats" && authed;
+  // Legal pages are public — readable before sign-in (linked from the login
+  // splash), so they are NOT gated on `authed`. They also suppress the sign-in
+  // overlay so an anonymous visitor can actually read them.
+  const terms = h === "#/terms";
+  const privacy = h === "#/privacy";
+  const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
   const launcher = authed && !nav && !route && !settings && !setup && !leaderboard
-    && !stats && !cargoLeaderboard && !cargoStats;
+    && !stats && !cargoLeaderboard && !cargoStats && !legal;
 
+  // The sign-in gate covers everything for anonymous users, except a legal page.
+  $("login-gate").hidden = authed || legal;
+
+  $("terms-view").hidden = !terms;
+  $("privacy-view").hidden = !privacy;
   $("launcher-view").hidden = !launcher;
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
@@ -3271,8 +3527,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[h] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || inCargo;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route;
+  $("where").hidden = launcher || route || inCargo || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   $("nav-toggle").hidden = !authed || launcher;
@@ -3796,6 +4052,26 @@ $("clear-cargo-stats").onclick = async () => {
   }
 };
 
+// ---------- delete account (self-service, all members) ----------
+$("delete-account").onclick = async () => {
+  if (!confirm(
+      "Permanently delete your account?\n\n" +
+      "Your watcher tokens, saved ships, cargo runs, and hauling history are " +
+      "erased. The POIs and sightings you contributed stay on the org map but " +
+      "are stripped of your name. This can't be undone.\n\n" +
+      "You'll be signed out immediately.")) return;
+  const st = $("delete-account-status");
+  st.textContent = "deleting your account…";
+  try {
+    const r = await fetch("/api/me", { method: "DELETE" });
+    if (!r.ok) throw new Error();
+    // The session is cleared server-side; leave the app for the sign-in gate.
+    location.href = "/";
+  } catch {
+    st.textContent = "failed — try again";
+  }
+};
+
 // ---------- watcher tokens ----------
 async function loadTokens() {
   let list = [];
@@ -3894,10 +4170,9 @@ async function boot() {
     myId = me.id;
     sharePresence = me.share_presence !== false;   // default share-on
     $("share-toggle").checked = sharePresence;
-    $("login-gate").hidden = true;
     renderRoster();   // reveal the (empty) teammates panel before the WS roster lands
     init();
-  } else { $("login-gate").hidden = false; loadLoginOrgLogo(); }   // anonymous: show the sign-in gate
+  } else { loadLoginOrgLogo(); }   // anonymous: applyView() (via renderAccount) owns the sign-in gate
 }
 
 // The login splash shows the org logo (if any) beside the built-in one. This is
