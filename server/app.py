@@ -939,7 +939,7 @@ class SessionHub:
 
     async def send_to_all_clients(self, message: dict) -> None:
         text = json.dumps(message)
-        for s in self.sessions.values():
+        for s in list(self.sessions.values()):   # copy: get() may add a session mid-send
             for ws in list(s.ws_clients):   # copy: a tab may drop mid-send
                 try:
                     await ws.send_text(text)
