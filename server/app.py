@@ -946,6 +946,17 @@ class SessionHub:
                 except Exception:
                     s.ws_clients.discard(ws)
 
+    def online_count(self) -> int:
+        """Members with at least one open tab right now. Counts people, not tabs
+        (one member with three tabs is one online player). Approximate: a tab
+        that dies without a clean close lingers until a failed send prunes it."""
+        return sum(1 for s in self.sessions.values() if s.ws_clients)
+
+    async def broadcast_online(self) -> None:
+        """Push the current online-player count to every tab. Cheap; called on
+        connect/disconnect so the top-bar count tracks comings and goings."""
+        await self.send_to_all_clients({"type": "online", "count": self.online_count()})
+
     def forget_entity(self, entity_id: int) -> None:
         """A deleted/refreshed-away POI/observation must stop being any member's
         destination or last-capture reference."""
@@ -2212,6 +2223,7 @@ async def websocket_endpoint(ws: WebSocket):
         return
     await ws.accept()
     sess = hub.get(user)
+    was_offline = not sess.ws_clients   # first tab for this member?
     sess.ws_clients.add(ws)
     try:
         # Send this member's current state immediately so the UI isn't blank
@@ -2230,12 +2242,20 @@ async def websocket_endpoint(ws: WebSocket):
         async with hub.lock:
             roster = hub.roster()
         await ws.send_text(json.dumps({"type": "roster", "users": roster}))
+        # Tell the new tab the current count immediately; tell everyone else only
+        # when this member actually came online (a 2nd/3rd tab doesn't change it).
+        if was_offline:
+            await hub.broadcast_online()
+        else:
+            await ws.send_text(json.dumps({"type": "online", "count": hub.online_count()}))
         while True:
             await ws.receive_text()  # client pings; content ignored
     except WebSocketDisconnect:
         pass
     finally:
         sess.ws_clients.discard(ws)
+        if not sess.ws_clients:   # member's last tab closed — they went offline
+            await hub.broadcast_online()
 
 
 # ---------------------------------------------------------------------------

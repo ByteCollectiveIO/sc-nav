@@ -20,6 +20,9 @@
   header h1 { font-size: 16px; margin: 0; letter-spacing: 2px; color: var(--accent); }
   #conn { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
   #conn.ok { background: var(--good); }
+  /* online-player count (people with a tab open right now) */
+  #online { color: var(--dim); font-size: 13px; white-space: nowrap; }
+  #online.off { opacity: 0.5; }
   /* current-app indicator (gold), sits just after the server status dot */
   #app-title { font-size: 15px; letter-spacing: 1px; color: var(--warn);
     padding-left: 12px; border-left: 1px solid var(--border); white-space: nowrap; }
@@ -551,6 +554,7 @@
     <h1>Org Navigator</h1>
   </a>
   <div id="conn" title="server connection"></div>
+  <div id="online" title="players online in the app" hidden></div>
   <div id="app-title" hidden></div>
   <div class="header-right">
     <div id="where">waiting for /showlocation&hellip;</div>
@@ -2215,12 +2219,21 @@ $("share-toggle").onchange = async (e) => {
   } catch {}
 };
 
+// ---------- online-player count ----------
+// People (not tabs) with the app open right now, pushed by the server on every
+// connect/disconnect. Greyed out while our own socket is down (count is stale).
+function renderOnline(n) {
+  const el = $("online");
+  el.hidden = false;
+  el.textContent = `👥 ${n} online`;
+}
+
 // ---------- websocket ----------
 let ws = null;
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => $("conn").classList.add("ok");
+  ws.onopen = () => { $("conn").classList.add("ok"); $("online").classList.remove("off"); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); }
@@ -2232,9 +2245,11 @@ function connect() {
       if (msg.op === "upsert") for (const u of msg.users) rememberMate(u);
       else if (msg.op === "remove") presence.delete(msg.discord_id);
       renderRoster(); drawMap();
+    } else if (msg.type === "online") {
+      renderOnline(msg.count);
     }
   };
-  ws.onclose = () => { $("conn").classList.remove("ok"); setTimeout(connect, 2000); };
+  ws.onclose = () => { $("conn").classList.remove("ok"); $("online").classList.add("off"); setTimeout(connect, 2000); };
 }
 setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
 
