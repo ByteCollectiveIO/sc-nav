@@ -76,6 +76,7 @@ class Poi:
     custom: bool = False             # user-created, lives in custom_pois.json
     owner_id: int | None = None      # PlayerID who recorded it (custom only)
     owner_handle: str | None = None
+    private: bool = False            # owner-only; hidden from the rest of the org
     note: str | None = None          # free-text context; upstream POIs map from Comment
     nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
     nearest_qt_dist_m: float | None = None  # distance to that marker, meters
@@ -411,6 +412,7 @@ def _poi_base(poi) -> dict:
         "longitude": poi.longitude,
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
+        "private": getattr(poi, "private", False),
         "note": poi.note,
         "nearest_qt": poi.nearest_qt,
         "nearest_qt_dist_m": poi.nearest_qt_dist_m,
@@ -456,6 +458,15 @@ def _observation_summary(nav, obs, t, pos_m, player_lat=None, player_lon=None, s
     return out
 
 
+def poi_visible_to(poi, viewer_owner_ids) -> bool:
+    """A POI is visible to a viewer unless it's marked private and owned by
+    someone else. Privacy is keyed on the in-game PlayerID(s) the viewer owns
+    (`viewer_owner_ids`); shared POIs are visible to everyone."""
+    if not getattr(poi, "private", False):
+        return True
+    return poi.owner_id is not None and poi.owner_id in viewer_owner_ids
+
+
 def compute_state(
     nav: NavData,
     pos_m,
@@ -464,8 +475,10 @@ def compute_state(
     prev_pos=None,
     prev_t: float | None = None,
     nearest_count: int = 10,
+    viewer_owner_ids=frozenset(),
 ) -> dict:
-    """Full navigation state for one position sample."""
+    """Full navigation state for one position sample. `viewer_owner_ids` are the
+    PlayerIDs the viewer owns, used to hide other members' private POIs."""
     container = detect_container(nav, pos_m)
 
     lat = lon = None
@@ -503,7 +516,8 @@ def compute_state(
             key=lambda r: r["distance_m"],
         )[:nearest_count]
 
-    nearest_pois = _nearest(nav.pois.values(), _poi_summary)
+    visible_pois = [p for p in nav.pois.values() if poi_visible_to(p, viewer_owner_ids)]
+    nearest_pois = _nearest(visible_pois, _poi_summary)
     # Per-category so a dense category (e.g. resources) can't starve a sparse
     # one (e.g. wildlife) out of the merged list.
     by_cat = {}
@@ -528,6 +542,9 @@ def compute_state(
 
     destination = None
     dest_entity = nav.pois.get(destination_id)
+    # Never route to another member's private POI, even if its id is known.
+    if dest_entity is not None and not poi_visible_to(dest_entity, viewer_owner_ids):
+        dest_entity = None
     if dest_entity is None:
         dest_entity = nav.observations.get(destination_id)
     if dest_entity is not None:
@@ -619,6 +636,7 @@ def custom_poi_from_position(
     owner_id: int | None = None,
     owner_handle: str | None = None,
     qt_marker: bool = False,
+    private: bool = False,
     note: str | None = None,
 ) -> Poi:
     """Create a POI at a global position, stored the same way the upstream
@@ -644,6 +662,7 @@ def custom_poi_from_position(
         custom=True,
         owner_id=owner_id,
         owner_handle=owner_handle,
+        private=bool(private),
         note=note,
     )
     poi.nearest_qt, poi.nearest_qt_dist_m = nearest_qt_marker(nav, poi, t_unix)
@@ -665,6 +684,7 @@ def custom_poi_to_dict(poi: Poi) -> dict:
         "qt_marker": poi.qt_marker,
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
+        "private": poi.private,
         "note": poi.note,
     }
 
@@ -685,6 +705,7 @@ def poi_from_custom_dict(d: dict) -> Poi:
         custom=True,
         owner_id=d.get("owner_id"),
         owner_handle=d.get("owner_handle"),
+        private=bool(d.get("private")),
         note=d.get("note"),
     )
 
@@ -897,8 +918,11 @@ def surface_distance_m(lat1, lon1, lat2, lon2, radius_m) -> float:
 
 
 def index_qt_markers(nav: NavData) -> None:
-    """Build the lookup of QT-marker POIs used by nearest_qt_marker."""
-    nav.qt_markers = [p for p in nav.pois.values() if p.qt_marker]
+    """Build the lookup of QT-marker POIs used by nearest_qt_marker. Private POIs
+    are excluded: a QT marker is shared navigation infrastructure, and a private
+    one would otherwise leak its name/location via every entity's nearest_qt."""
+    nav.qt_markers = [p for p in nav.pois.values()
+                      if p.qt_marker and not getattr(p, "private", False)]
     nav.qt_by_container = {}
     for p in nav.qt_markers:
         nav.qt_by_container.setdefault((p.system, p.container_name), []).append(p)
@@ -961,10 +985,13 @@ def search_pois(
     poi_type: str | None = None,
     owner_id: int | None = None,
     limit: int = 25,
+    viewer_owner_ids=frozenset(),
 ) -> list[dict]:
     q = query.strip().lower()
     results = []
     for p in nav.pois.values():
+        if not poi_visible_to(p, viewer_owner_ids):
+            continue
         if system and p.system != system:
             continue
         if container and (p.container_name or "Space") != container:

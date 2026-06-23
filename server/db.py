@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS custom_pois (
     latitude REAL, longitude REAL, height_m REAL,
     qt_marker INTEGER DEFAULT 0,
     owner_id INTEGER, owner_handle TEXT,
-    note TEXT
+    note TEXT,
+    private INTEGER DEFAULT 0     -- owner-only POI; hidden from the rest of the org
 );
 
 CREATE TABLE IF NOT EXISTS observations (
@@ -110,6 +111,7 @@ def init(db_path) -> None:
         # won't add columns to an already-present table).
         _ensure_column("handles", "discord_id", "TEXT")
         _ensure_column("custom_pois", "note", "TEXT")
+        _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
         _ensure_column("observations", "shard_id", "TEXT")
 
 
@@ -131,7 +133,7 @@ def _u(s):
 
 _CUSTOM_COLS = ("id", "name", "system", "container", "type", "local_km",
                 "global_m", "latitude", "longitude", "height_m", "qt_marker",
-                "owner_id", "owner_handle", "note")
+                "owner_id", "owner_handle", "note", "private")
 
 
 def _custom_row_to_dict(r: sqlite3.Row) -> dict:
@@ -142,7 +144,7 @@ def _custom_row_to_dict(r: sqlite3.Row) -> dict:
         "latitude": r["latitude"], "longitude": r["longitude"],
         "height_m": r["height_m"], "qt_marker": bool(r["qt_marker"]),
         "owner_id": r["owner_id"], "owner_handle": r["owner_handle"],
-        "note": r["note"],
+        "note": r["note"], "private": bool(r["private"]),
     }
 
 
@@ -151,13 +153,13 @@ def add_custom_poi(d: dict) -> None:
         _conn.execute(
             "INSERT OR REPLACE INTO custom_pois "
             "(id,name,system,container,type,local_km,global_m,latitude,longitude,"
-            "height_m,qt_marker,owner_id,owner_handle,note) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "height_m,qt_marker,owner_id,owner_handle,note,private) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (d["id"], d.get("name"), d.get("system"), d.get("container"),
              d.get("type"), _j(d.get("local_km")), _j(d.get("global_m")),
              d.get("latitude"), d.get("longitude"), d.get("height_m"),
              1 if d.get("qt_marker") else 0, d.get("owner_id"), d.get("owner_handle"),
-             d.get("note")),
+             d.get("note"), 1 if d.get("private") else 0),
         )
 
 
@@ -185,6 +187,15 @@ def update_custom_poi_note(poi_id: int, note: str | None) -> bool:
     with _lock, _conn:
         cur = _conn.execute(
             "UPDATE custom_pois SET note=? WHERE id=?", (note, poi_id)
+        )
+    return cur.rowcount > 0
+
+
+def update_custom_poi_private(poi_id: int, private: bool) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE custom_pois SET private=? WHERE id=?",
+            (1 if private else 0, poi_id),
         )
     return cur.rowcount > 0
 
@@ -467,11 +478,16 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
     hard-deleted. Returns per-table counts; the caller mirrors these changes in
     the in-memory caches under the hub lock."""
     did = str(discord_id)
-    counts = {"pois_anonymized": 0, "observations_anonymized": 0}
+    counts = {"pois_anonymized": 0, "pois_deleted": 0, "observations_anonymized": 0}
     with _lock, _conn:
         if player_ids:
             marks = ",".join("?" * len(player_ids))
             ids = list(player_ids)
+            # Private POIs were never shared with the org, so de-identifying them
+            # would just leave invisible orphans — hard-delete them instead.
+            counts["pois_deleted"] = _conn.execute(
+                f"DELETE FROM custom_pois "
+                f"WHERE private=1 AND owner_id IN ({marks})", ids).rowcount
             counts["pois_anonymized"] = _conn.execute(
                 f"UPDATE custom_pois SET owner_id=NULL, owner_handle=NULL "
                 f"WHERE owner_id IN ({marks})", ids).rowcount

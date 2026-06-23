@@ -104,6 +104,7 @@
   .fauna-dot { color: var(--fauna); }
   .harvest-dot { color: var(--harvest); }
   .qt-self { color: var(--good); }   /* destination is itself a QT marker */
+  .poi-private { color: var(--dim); font-size: 11px; }   /* owner-only POI badge */
   .del { color: var(--bad); padding: 0 6px; cursor: pointer; }
   .del:hover { font-weight: bold; }
   .edit { color: var(--dim); padding: 0 4px; cursor: pointer; }
@@ -744,6 +745,10 @@
         <label class="muted" style="font-size:12px; display:inline-flex; align-items:center; gap:5px;"
                title="record as a jumpable quantum-travel marker (e.g. an Orbital Marker)">
           <input id="poi-qt" type="checkbox"> QT marker
+        </label>
+        <label class="muted" style="font-size:12px; display:inline-flex; align-items:center; gap:5px;"
+               title="keep this POI to yourself — hidden from the rest of the org">
+          <input id="poi-private" type="checkbox"> 🔒 private
         </label>
         <button id="poi-arm">capture /showlocation</button>
       </div>
@@ -1490,8 +1495,13 @@ function entDetail(e) {
     return e.biome ? esc(e.biome) : (e.note ? esc(e.note) : "—");
   // POIs: type, then any note (custom notes are editable; upstream Comments are not).
   let detail = esc(e.type) + (e.note ? ` · ${esc(e.note)}` : "");
-  if (e.custom)
+  if (e.private)
+    detail += ` <span class="poi-private" title="private — only you can see this">🔒</span>`;
+  if (e.custom) {
     detail += ` <span class="edit" title="edit note" data-edit-poi="${e.id}" data-note="${esc(e.note || "")}">✎</span>`;
+    detail += ` <span class="edit" title="${e.private ? "make shared (visible to the org)" : "make private (only you)"}"`
+            + ` data-priv-poi="${e.id}" data-private="${e.private ? 1 : 0}">${e.private ? "🔓" : "🔒"}</span>`;
+  }
   return detail;
 }
 function ownerLabel(e) { return esc(e.owner_handle || ""); }
@@ -1833,6 +1843,13 @@ function wireDelete(tr) {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ note: next }) });
     afterDelete(); };
+  const pp = tr.querySelector("[data-priv-poi]");
+  if (pp) pp.onclick = async (ev) => { ev.stopPropagation();
+    const makePrivate = pp.dataset.private !== "1";  // toggle from current state
+    await fetch(`/api/custom_pois/${pp.dataset.privPoi}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ private: makePrivate }) });
+    afterDelete(); };
 }
 
 $("kind-seg").querySelectorAll("button").forEach(b => {
@@ -1892,6 +1909,7 @@ function renderCapture(cap) {
     else show("poi-result",
       `added <span class="custom-star">★</span> <b>${esc(L.name)}</b> (${esc(L.type)})` +
       (L.qt_marker ? ` <span class="qt-self">⚡ QT marker</span>` : "") +
+      (L.private ? ` <span class="poi-private">🔒 private</span>` : "") +
       ` on ${esc(L.container)}${ll}${by}`);
   }
 }
@@ -1909,14 +1927,18 @@ async function armFailed(resultId, r) {
   show(resultId, `<span style="color:var(--warn)">⚠ ${esc(detail)}</span>`);
 }
 
+// A QT marker is shared navigation infrastructure, so the two are exclusive:
+// ticking one clears the other.
+$("poi-qt").onchange = () => { if ($("poi-qt").checked) $("poi-private").checked = false; };
+$("poi-private").onchange = () => { if ($("poi-private").checked) $("poi-qt").checked = false; };
 $("poi-arm").onclick = async () => {
   const name = $("poi-name").value.trim();
   if (!name) return $("poi-name").focus();
   const r = await postJson("/api/capture/start", {
     name, type: $("poi-type").value.trim() || "Custom", qt_marker: $("poi-qt").checked,
-    note: $("poi-note").value.trim() });
+    private: $("poi-private").checked, note: $("poi-note").value.trim() });
   if (r.ok) { $("poi-name").value = ""; $("poi-type").value = ""; $("poi-qt").checked = false;
-    $("poi-note").value = ""; }
+    $("poi-private").checked = false; $("poi-note").value = ""; }
   else armFailed("poi-result", r);
 };
 $("poi-cancel").onclick = () => postJson("/api/capture/cancel", {});

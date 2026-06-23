@@ -595,6 +595,15 @@ def require_user(request: Request) -> dict:
     return user
 
 
+def viewer_owner_ids(user: dict | None) -> frozenset[int]:
+    """The PlayerIDs a viewer owns (alts/renames included) — the key that lets
+    them see their own private POIs. Empty for an anonymous viewer, so they see
+    only shared POIs."""
+    if not user:
+        return frozenset()
+    return frozenset(handles.player_ids_for(user["id"]))
+
+
 # Field length caps. User-supplied free text is bounded at the schema edge so a
 # member (or a watcher token) can't persist multi-MB strings that then get
 # fanned out to every connected tab over the WebSocket. Generous vs. real use,
@@ -637,6 +646,7 @@ class CaptureIn(BaseModel):
     name: str = Field(max_length=_NAME_MAX)
     type: str = Field(default="Custom", max_length=_TYPE_MAX)
     qt_marker: bool = False   # record as a jumpable QT marker (e.g. an OM)
+    private: bool = False     # owner-only POI; hidden from the rest of the org
     note: str = Field(default="", max_length=_NOTE_MAX)   # optional free-text context
 
 
@@ -755,6 +765,7 @@ class Session:
             nav, self.pos, self.t,
             destination_id=self.destination_id,
             prev_pos=self.prev_pos, prev_t=self.prev_t,
+            viewer_owner_ids=viewer_owner_ids(self.user),
         )
         # The client's own shard rides on the state so it can flag which
         # observations / teammates share its server.
@@ -1060,7 +1071,8 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     poi = nav_core.custom_poi_from_position(
         nav, pos_m, now, pending["name"], pending["type"], next_id,
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
-        qt_marker=pending.get("qt_marker", False), note=pending.get("note"),
+        qt_marker=pending.get("qt_marker", False),
+        private=pending.get("private", False), note=pending.get("note"),
     )
     try:
         db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
@@ -1075,7 +1087,7 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         "kind": "poi", "id": poi.id, "name": poi.name, "type": poi.type,
         "container": poi.container_name or "Space", "system": poi.system,
         "latitude": poi.latitude, "longitude": poi.longitude,
-        "qt_marker": poi.qt_marker,
+        "qt_marker": poi.qt_marker, "private": poi.private,
         "owner_handle": poi.owner_handle,
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1119,16 +1131,23 @@ async def get_state(user: dict = Depends(require_session)):
 async def get_pois(
     q: str = "", system: str | None = None, container: str | None = None,
     type: str | None = None, owner_id: int | None = None, limit: int = 25,
+    user: dict | None = Depends(current_user),
 ):
     return nav_core.search_pois(
         nav, query=q, system=system, container=container, poi_type=type,
         owner_id=owner_id, limit=min(limit, 5000),
+        viewer_owner_ids=viewer_owner_ids(user),
     )
 
 
 @app.post("/api/destination")
 async def set_destination(body: DestinationIn, user: dict = Depends(require_session)):
     target = nav.pois.get(body.poi_id) or nav.observations.get(body.poi_id)
+    # A private POI you don't own is invisible — including as a routing target.
+    if isinstance(target, nav_core.Poi) and not nav_core.poi_visible_to(
+        target, viewer_owner_ids(user)
+    ):
+        target = None
     if target is None:
         raise HTTPException(status_code=404, detail="unknown poi_id")
     async with hub.lock:
@@ -1164,7 +1183,11 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
             raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
         sess.capture_pending = {
             "kind": "poi", "name": name, "type": body.type.strip() or "Custom",
-            "qt_marker": body.qt_marker, "note": body.note.strip() or None,
+            # A QT marker is shared navigation infrastructure, so private wins:
+            # a private POI is never also a QT marker.
+            "qt_marker": body.qt_marker and not body.private,
+            "private": body.private,
+            "note": body.note.strip() or None,
         }
         await sess.broadcast()
         return {"ok": True, "capture": sess.capture_status()}
@@ -1671,28 +1694,45 @@ async def list_biomes():
 
 
 @app.get("/api/custom_pois")
-async def list_custom_pois():
-    return db.list_custom_pois()
+async def list_custom_pois(user: dict | None = Depends(current_user)):
+    """Custom POIs visible to the caller — everyone's shared POIs plus the
+    caller's own private ones."""
+    allowed = viewer_owner_ids(user)
+    return [
+        d for d in db.list_custom_pois()
+        if not d.get("private")
+        or (d.get("owner_id") is not None and d["owner_id"] in allowed)
+    ]
 
 
-class PoiNoteIn(BaseModel):
-    note: str = Field(default="", max_length=_NOTE_MAX)
+class PoiEditIn(BaseModel):
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
+    private: bool | None = None   # toggle owner-only visibility
 
 
 @app.patch("/api/custom_pois/{poi_id}")
-async def update_custom_poi(poi_id: int, body: PoiNoteIn, user: dict = Depends(require_session)):
-    """Edit a custom POI's note. Ownership-scoped like delete; only custom POIs
-    are editable (upstream POIs carry a read-only Comment)."""
-    note = body.note.strip() or None
+async def update_custom_poi(poi_id: int, body: PoiEditIn, user: dict = Depends(require_session)):
+    """Edit a custom POI's note and/or private flag. Ownership-scoped like
+    delete; only custom POIs are editable (upstream POIs carry a read-only
+    Comment). Only the supplied fields change."""
     async with hub.lock:
         poi = nav.pois.get(poi_id)
         if poi is None or not getattr(poi, "custom", False):
             raise HTTPException(status_code=404, detail="unknown custom poi")
         ensure_owns(user, poi.owner_id)
-        db.update_custom_poi_note(poi_id, note)
-        poi.note = note
+        if body.note is not None:
+            note = body.note.strip() or None
+            db.update_custom_poi_note(poi_id, note)
+            poi.note = note
+        if body.private is not None and body.private != poi.private:
+            db.update_custom_poi_private(poi_id, body.private)
+            poi.private = body.private
+            # A QT marker going private (or back) changes the shared jump index,
+            # so rebuild it + reassign nearest_qt across the dataset.
+            if poi.qt_marker:
+                nav_core.assign_qt_markers(nav)
         await hub.broadcast_all()
-    return {"ok": True, "note": note}
+    return {"ok": True, "note": poi.note, "private": poi.private}
 
 
 @app.delete("/api/custom_pois/{poi_id}")
@@ -1837,11 +1877,14 @@ async def stats(user: dict = Depends(require_session)):
     # Normalize the Poi dataclasses to the same dict shape the observation rows
     # use (note: "container" not "container_name") so one aggregation path serves
     # both. `custom` distinguishes guild-created POIs from the imported catalog.
+    # Private POIs are owner-only — keep them out of org-wide stats entirely so
+    # neither their count nor their location leaks to the rest of the org.
     all_pois = [
         {"system": p.system, "container": p.container_name,
          "type": p.type or "Custom", "owner_id": p.owner_id,
          "owner_handle": p.owner_handle, "custom": p.custom}
         for p in nav.pois.values()
+        if not getattr(p, "private", False)
     ]
     custom_pois = [p for p in all_pois if p["custom"]]
     imported_pois = [p for p in all_pois if not p["custom"]]
@@ -2399,7 +2442,12 @@ async def delete_me(request: Request, user: dict = Depends(require_session)):
         counts = db.delete_member(uid, player_ids)
 
         # Mirror the DB changes in the in-memory caches so nothing stale survives
-        # until the next restart. 1) De-identify this member's live contributions.
+        # until the next restart. 1) Drop this member's private POIs outright, then
+        # de-identify the rest of their live contributions.
+        for poi in [p for p in nav.pois.values()
+                    if p.owner_id in player_ids and getattr(p, "private", False)]:
+            nav.pois.pop(poi.id, None)
+            hub.forget_entity(poi.id)
         for poi in nav.pois.values():
             if poi.owner_id in player_ids:
                 poi.owner_id = poi.owner_handle = None

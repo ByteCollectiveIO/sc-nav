@@ -282,6 +282,94 @@ class CustomPoiTests(unittest.TestCase):
         self.assertEqual(nav2.pois[ref.id].nearest_qt, "Test OM")
 
 
+class PrivatePoiTests(unittest.TestCase):
+    def _private_poi(self, nav, t, owner_id=7):
+        ref = [p for p in nav.pois.values()
+               if p.container_name == "Daymar" and p.local_km][0]
+        pos = poi_global_m(nav, ref, t)
+        poi = nav_core.custom_poi_from_position(
+            nav, pos, t, "Secret Spot", "Stash", nav_core.CUSTOM_ID_START,
+            owner_id=owner_id, owner_handle="Pilot7", private=True,
+        )
+        nav.pois[poi.id] = poi
+        return poi, pos
+
+    def test_private_flag_round_trips(self):
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        poi, _ = self._private_poi(nav2, t)
+        self.assertTrue(poi.private)
+        back = nav_core.poi_from_custom_dict(nav_core.custom_poi_to_dict(poi))
+        self.assertTrue(back.private)
+        # default path stays shared
+        self.assertFalse(nav_core.poi_from_custom_dict({"id": 1, "name": "x"}).private)
+
+    def test_visible_only_to_owner(self):
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        poi, _ = self._private_poi(nav2, t, owner_id=7)
+        shared = poi  # alias for readability
+        self.assertTrue(nav_core.poi_visible_to(shared, frozenset({7})))
+        self.assertFalse(nav_core.poi_visible_to(shared, frozenset({99})))
+        self.assertFalse(nav_core.poi_visible_to(shared, frozenset()))
+
+    def test_search_hides_private_from_others(self):
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        self._private_poi(nav2, t, owner_id=7)
+        # owner sees it
+        owner_hits = [r["id"] for r in
+                      search_pois(nav2, query="secret", viewer_owner_ids=frozenset({7}))]
+        self.assertIn(nav_core.CUSTOM_ID_START, owner_hits)
+        # everyone else does not
+        other_hits = [r["id"] for r in
+                      search_pois(nav2, query="secret", viewer_owner_ids=frozenset({99}))]
+        self.assertNotIn(nav_core.CUSTOM_ID_START, other_hits)
+        anon_hits = [r["id"] for r in search_pois(nav2, query="secret")]
+        self.assertNotIn(nav_core.CUSTOM_ID_START, anon_hits)
+
+    def test_compute_state_hides_private_from_others(self):
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        poi, pos = self._private_poi(nav2, t, owner_id=7)
+        owner_ids = [n["id"] for n in
+                     compute_state(nav2, pos, t, viewer_owner_ids=frozenset({7}))["nearest_pois"]]
+        self.assertIn(poi.id, owner_ids)
+        other_ids = [n["id"] for n in
+                     compute_state(nav2, pos, t, viewer_owner_ids=frozenset({99}))["nearest_pois"]]
+        self.assertNotIn(poi.id, other_ids)
+
+    def test_compute_state_blocks_private_destination(self):
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        poi, pos = self._private_poi(nav2, t, owner_id=7)
+        # a non-owner can't resolve the private POI as a destination
+        state = compute_state(nav2, pos, t, destination_id=poi.id,
+                              viewer_owner_ids=frozenset({99}))
+        self.assertIsNone(state["destination"])
+        # the owner can
+        state = compute_state(nav2, pos, t, destination_id=poi.id,
+                              viewer_owner_ids=frozenset({7}))
+        self.assertIsNotNone(state["destination"])
+
+    def test_private_qt_marker_excluded_from_index(self):
+        # A private POI marked qt_marker must never enter the shared QT index,
+        # or its name/location would leak via other entities' nearest_qt.
+        t = time.time()
+        nav2 = load_data(DATA_DIR)
+        ref = [p for p in nav2.pois.values()
+               if p.container_name == "Daymar" and not p.qt_marker and p.local_km][0]
+        pos = poi_global_m(nav2, ref, t)
+        marker = nav_core.custom_poi_from_position(
+            nav2, pos, t, "Hidden OM", "Orbital Marker", nav_core.CUSTOM_ID_START,
+            qt_marker=True, private=True, owner_id=7,
+        )
+        nav2.pois[marker.id] = marker
+        nav_core.assign_qt_markers(nav2)
+        self.assertNotIn(marker, nav2.qt_markers)
+        self.assertNotEqual(nav2.pois[ref.id].nearest_qt, "Hidden OM")
+
+
 def _obs(nav, ref_name, t, category, data, obs_id, **kw):
     ref = [p for p in nav.pois.values()
            if p.system == "Stanton" and p.container_name == ref_name][0]
