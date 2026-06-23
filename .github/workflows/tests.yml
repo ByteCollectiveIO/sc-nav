@@ -1,0 +1,24 @@
+name: tests
+
+# Safety net: run the nav_core suite on every push and PR so a regression is
+# caught before it reaches main (and before a release tag is cut from it).
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Match the deploy target (Dockerfile: python:3.12-slim).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The suite is pure stdlib and reads the committed poi/ dataset, so no
+      # dependency install is needed.
+      - name: Run nav_core tests
+        working-directory: server
+        run: python test_nav_core.py

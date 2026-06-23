@@ -33,6 +33,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import auth
 import db
 import nav_core
+from version import __version__ as APP_VERSION
 
 DATA_DIR = Path(os.environ.get("SC_NAV_DATA", Path(__file__).parent.parent / "poi"))
 STATIC_DIR = Path(__file__).parent / "static"
@@ -2231,6 +2232,7 @@ async def delete_org_logo(admin: dict = Depends(require_admin)):
 async def health():
     return {
         "ok": True,
+        "version": APP_VERSION,
         "containers": len(nav.containers),
         "pois": len(nav.pois),
         "observations": len(nav.observations),
@@ -2578,8 +2580,13 @@ INDEX_FILE = STATIC_DIR / "index.html"
 
 def _index_response(request: Request) -> HTMLResponse:
     nonce = getattr(request.state, "csp_nonce", "")
-    html = INDEX_FILE.read_text(encoding="utf-8").replace(
-        "<script>", f'<script nonce="{nonce}">', 1)
+    html = (
+        INDEX_FILE.read_text(encoding="utf-8")
+        .replace("<script>", f'<script nonce="{nonce}">', 1)
+        # Stamp the running version into the footer (placeholder degrades to the
+        # current version; the string is our own SemVer, so no escaping needed).
+        .replace("{{APP_VERSION}}", APP_VERSION)
+    )
     return HTMLResponse(html)
 
 
