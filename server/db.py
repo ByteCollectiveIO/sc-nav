@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS events (
     title TEXT, description TEXT,
     type TEXT, category TEXT,           -- type & category: JSON lists (1+ each)
     start_at TEXT,                      -- event start, UTC ISO8601
+    signup_deadline TEXT,               -- optional UTC ISO8601; after it, signups lock
     duration_min INTEGER,
     location TEXT,                       -- rally point
     event_location TEXT,                 -- where the activity happens (optional)
@@ -153,6 +154,7 @@ def init(db_path) -> None:
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
         _ensure_column("observations", "shard_id", "TEXT")
         _ensure_column("events", "event_location", "TEXT")
+        _ensure_column("events", "signup_deadline", "TEXT")
 
 
 def _ensure_column(table: str, column: str, decl: str) -> None:
@@ -460,7 +462,7 @@ def set_cargo_session_start(discord_id: str, ts: str) -> None:
 # status and created_at are set on insert and never edited here (status flips via
 # cancel_event); updated_at is stamped on every write.
 _EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
-                   "duration_min", "location", "event_location",
+                   "signup_deadline", "duration_min", "location", "event_location",
                    "min_players", "max_players", "roles")
 
 # Columns the create/edit layer hands us as Python lists; stored as JSON text.
@@ -502,14 +504,15 @@ def create_event(d: dict) -> int:
     with _lock, _conn:
         cur = _conn.execute(
             "INSERT INTO events (organizer_id, title, description, type, category, "
-            "start_at, duration_min, location, event_location, min_players, "
-            "max_players, roles, status, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "start_at, signup_deadline, duration_min, location, event_location, "
+            "min_players, max_players, roles, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["organizer_id"]), d.get("title"), d.get("description"),
              _j(d.get("type") or []), _j(d.get("category") or []), d.get("start_at"),
-             d.get("duration_min"), d.get("location"), d.get("event_location"),
-             d.get("min_players"), d.get("max_players"), _j(d.get("roles") or []),
-             d.get("status", "scheduled"), d.get("created_at"), d.get("updated_at")),
+             d.get("signup_deadline"), d.get("duration_min"), d.get("location"),
+             d.get("event_location"), d.get("min_players"), d.get("max_players"),
+             _j(d.get("roles") or []), d.get("status", "scheduled"),
+             d.get("created_at"), d.get("updated_at")),
         )
     return cur.lastrowid
 

@@ -6,6 +6,7 @@ Run: python3 test_nav_core.py
 import math
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import nav_core
@@ -1340,6 +1341,73 @@ class EventFillTests(unittest.TestCase):
         self.assertFalse(f["is_full"])
         self.assertEqual(f["roster"][0]["filled"], 0)
         self.assertEqual(f["roster"][0]["short"], 2)
+
+
+class DeriveEventPhaseTests(unittest.TestCase):
+    """Lifecycle phase derived from timestamps (open/closed/live/ended) + the
+    cancelled/completed overrides. `now` is fixed; events are placed relative."""
+    def setUp(self):
+        self.now = datetime(2026, 6, 24, 12, 0, tzinfo=timezone.utc)
+
+    def _ev(self, start_delta_min, *, deadline_delta_min=None, duration_min=None,
+            status="scheduled"):
+        def iso(delta):
+            return (self.now + timedelta(minutes=delta)).isoformat()
+        ev = {"start_at": iso(start_delta_min), "status": status,
+              "duration_min": duration_min}
+        if deadline_delta_min is not None:
+            ev["signup_deadline"] = iso(deadline_delta_min)
+        return ev
+
+    def _phase(self, ev):
+        return nav_core.derive_event_phase(ev, self.now)
+
+    def test_open_before_deadline(self):
+        p = self._phase(self._ev(60 * 24, deadline_delta_min=60 * 12))
+        self.assertEqual(p["phase"], "open")
+        self.assertTrue(p["signups_open"])
+
+    def test_open_no_deadline_before_start(self):
+        p = self._phase(self._ev(120))
+        self.assertEqual(p["phase"], "open")
+
+    def test_closed_after_deadline_before_start(self):
+        p = self._phase(self._ev(300, deadline_delta_min=-60))
+        self.assertEqual(p["phase"], "closed")
+        self.assertFalse(p["signups_open"])
+
+    def test_live_within_duration(self):
+        p = self._phase(self._ev(-30, duration_min=120))
+        self.assertEqual(p["phase"], "live")
+        self.assertFalse(p["signups_open"])
+
+    def test_ended_after_duration(self):
+        p = self._phase(self._ev(-300, duration_min=60))
+        self.assertEqual(p["phase"], "ended")
+
+    def test_no_duration_live_within_grace(self):
+        # Started 30 min ago, no duration → still live inside the 3h grace window.
+        p = self._phase(self._ev(-30))
+        self.assertEqual(p["phase"], "live")
+
+    def test_no_duration_ended_after_grace(self):
+        # Started past the grace window with no duration → finished.
+        p = self._phase(self._ev(-(nav_core.EVENT_LIVE_GRACE_MIN + 30)))
+        self.assertEqual(p["phase"], "ended")
+
+    def test_cancelled_override(self):
+        p = self._phase(self._ev(120, status="cancelled"))
+        self.assertEqual(p["phase"], "cancelled")
+        self.assertFalse(p["signups_open"])
+
+    def test_completed_override_before_end(self):
+        # Marked completed even though the clock says it'd be live → ended.
+        p = self._phase(self._ev(-10, duration_min=120, status="completed"))
+        self.assertEqual(p["phase"], "ended")
+
+    def test_signup_close_falls_back_to_start(self):
+        p = self._phase(self._ev(120))
+        self.assertEqual(p["signup_close"], self._ev(120)["start_at"])
 
 
 class EventTaxonomyTests(unittest.TestCase):

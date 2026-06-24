@@ -596,6 +596,17 @@
   .ev-chip.cat-mixed { color: var(--node); border-color: var(--node); }
   .ev-chip.cat-event { color: var(--sel); border-color: var(--sel); }
   .ev-chip.cat-race { color: var(--harvest); border-color: var(--harvest); }
+  /* lifecycle phase badge (open / signups closed / live / finished / cancelled) */
+  .ev-phase { font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    text-transform: uppercase; border-radius: 3px; padding: 1px 7px;
+    border: 1px solid var(--border); }
+  .ev-phase-open { color: var(--good); border-color: var(--good); }
+  .ev-phase-closed { color: var(--warn); border-color: var(--warn); }
+  .ev-phase-live { color: #07101a; background: var(--accent); border-color: var(--accent);
+    animation: ev-live-pulse 1.6s ease-in-out infinite; }
+  .ev-phase-ended { color: var(--dim); border-color: var(--border); }
+  .ev-phase-cancelled { color: var(--bad); border-color: var(--bad); }
+  @keyframes ev-live-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
   /* event card */
   .ev-card { display: block; text-decoration: none; color: var(--text);
     padding: 12px 0; border-top: 1px solid var(--border); }
@@ -673,6 +684,10 @@
   .ev-signup-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   /* create/edit form */
   .ev-form { display: flex; flex-direction: column; gap: 14px; }
+  /* functional sub-card grouping related fields (When / Where / Crew size) */
+  .ev-form-card { border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel2); padding: 12px 14px 14px; }
+  .ev-form-card > .ev-section-h { margin: 0 0 10px; }
   .ev-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
   /* One uniform control height across the grid: native date/time/number controls
      and the .poi-pick-wrapped text inputs otherwise render taller/shorter than
@@ -3684,6 +3699,14 @@ function eventChips(e) {
       `<span class="ev-chip ${catClass(c)}">${esc(c)}</span>`).join("");
 }
 
+// Derived lifecycle badge (server computes `phase`; see derive_event_phase).
+const EV_PHASE_LABEL = { open: "Open", closed: "Signups closed", live: "Live",
+  ended: "Finished", cancelled: "Cancelled" };
+function phaseBadge(e) {
+  const ph = e.phase || "open";
+  return `<span class="ev-phase ev-phase-${ph}">${esc(EV_PHASE_LABEL[ph] || ph)}</span>`;
+}
+
 // The viewer's resolved IANA timezone (e.g. "Europe/Berlin"), for the form hint
 // and detail meta so it's clear whose clock the times are shown in.
 function localTzName() {
@@ -3718,7 +3741,7 @@ function eventCard(e) {
   const where = e.event_location || e.location;
   return `<a class="ev-card" href="#/events/${e.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(e.title)}</div>` +
-    `<div class="ev-chips">${eventChips(e)}</div></div>` +
+    `<div class="ev-chips">${phaseBadge(e)}${eventChips(e)}</div></div>` +
     `<div class="ev-meta">🕓 ${esc(fmtEventTime(e.start_at))} · 📍 ${esc(where || "—")} · ` +
     `by ${esc(e.organizer_name)}</div>` +
     `<div class="ev-fill"><div class="ev-players ${f.min_met ? "met" : ""}">` +
@@ -3824,10 +3847,10 @@ async function renderDetailBody(e) {
   const tax = await loadEventsTaxonomy();
   const f = e.fill, cap = e.max_players == null ? "∞" : e.max_players;
   const cancelled = e.status === "cancelled";
-  const chips = eventChips(e) +
-    (cancelled ? ` <span class="ev-cancelled">CANCELLED</span>` : "");
+  const chips = phaseBadge(e) + eventChips(e);
   const meta = [
     `🕓 <b title="${esc(new Date(e.start_at).toUTCString())}">${esc(fmtEventTime(e.start_at))}</b> (${esc(localTzName())})`,
+    e.signup_deadline ? `🔒 Signups close: <b>${esc(fmtEventTime(e.signup_deadline))}</b>` : "",
     e.duration_min ? `⏱ ${e.duration_min} min` : "",
     `🚩 Rally: <b>${esc(e.location || "—")}</b>`,
     e.event_location ? `📍 Event: <b>${esc(e.event_location)}</b>` : "",
@@ -3867,13 +3890,19 @@ async function renderDetailBody(e) {
       (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
     : "";
 
+  // Signups are open only in the `open` phase; once closed/live/ended show a note
+  // (and let an already-signed-up member still withdraw).
+  const signupSection = cancelled ? ""
+    : e.signups_open ? signupForm(e, tax)
+    : closedSignupSection(e);
+
   $("ev-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
     `<div class="ev-detail-meta">${meta}</div>` +
     (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
     maybeRow +
-    (cancelled ? "" : signupForm(e, tax)) +
+    signupSection +
     (editControls ? `<div class="ev-form-actions">${editControls}</div>` : "");
 
   if (!cancelled) bindSignup(e);
@@ -3902,6 +3931,24 @@ function signupForm(e, tax) {
     `<button id="ev-join" class="ev-btn primary">${mine ? "Update signup" : "Join event"}</button>` +
     (mine ? `<button id="ev-withdraw" class="ev-btn danger">Withdraw</button>` : "") +
     `<span id="ev-signup-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+}
+
+// Shown in place of the signup form once signups have closed. An already-signed-up
+// member can still withdraw (the server allows withdraw in any phase).
+function closedSignupSection(e) {
+  const note = { closed: "Signups for this event have closed.",
+    live: "This event is under way — signups are closed.",
+    ended: "This event has finished." }[e.phase] || "Signups are closed.";
+  const mine = e.my_signup;
+  return `<div class="ev-signup"><h3>Signups closed</h3>` +
+    `<p class="muted" style="font-size:13px; margin:0 0 10px;">${esc(note)}</p>` +
+    (mine
+      ? `<div class="ev-signup-row"><span class="muted" style="font-size:12px;">` +
+        `You're signed up${mine.roles && mine.roles.length ? " as " + esc(mine.roles.join(", ")) : ""}.</span>` +
+        `<button id="ev-withdraw" class="ev-btn danger">Withdraw</button>` +
+        `<span id="ev-signup-msg" class="muted" style="font-size:12px;"></span></div>`
+      : "") +
+    `</div>`;
 }
 
 function bindSignup(e) {
@@ -3964,16 +4011,28 @@ function eventFormHtml(tax, e) {
       `<div class="ev-cat-grid" id="ev-f-types">${typeChips}</div></div>` +
     `<div class="ev-field"><label>Category (pick one or more)</label>` +
       `<div class="ev-cat-grid" id="ev-f-cats">${catChips}</div></div>` +
-    `<div class="ev-form-grid">` +
-      `<div class="ev-field"><label>Date</label><input id="ev-f-date" class="ti" type="date" value="${e ? toLocalDate(e.start_at) : ""}"></div>` +
-      `<div class="ev-field"><label>Time</label><input id="ev-f-time" class="ti" type="time" value="${e ? toLocalTime(e.start_at) : ""}">` +
-        `<span class="ev-hint">Shown in your timezone — ${esc(localTzName())}. Everyone sees it in their own.</span></div>` +
-      `<div class="ev-field"><label>Duration (min, optional)</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}"></div>` +
-      `<div class="ev-field"><label>Rally point</label><span class="poi-pick"><input id="ev-f-loc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.location || "") : ""}" placeholder="where the org forms up"></span></div>` +
-      `<div class="ev-field"><label>Event location (optional)</label><span class="poi-pick"><input id="ev-f-evloc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.event_location || "") : ""}" placeholder="where the activity happens"></span></div>` +
+    `<div class="ev-form-card"><div class="ev-section-h">When</div><div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Signup deadline date</label><input id="ev-f-dl-date" class="ti" type="date" value="${e && e.signup_deadline ? toLocalDate(e.signup_deadline) : ""}">` +
+        `<span class="ev-hint">Optional — after this, signups lock.</span></div>` +
+      `<div class="ev-field"><label>Signup deadline time</label><input id="ev-f-dl-time" class="ti" type="time" value="${e && e.signup_deadline ? toLocalTime(e.signup_deadline) : ""}">` +
+        `<span class="ev-hint">Blank ⇒ signups close at start.</span></div>` +
+      `<div class="ev-field"><label>Event Date</label><input id="ev-f-date" class="ti" type="date" value="${e ? toLocalDate(e.start_at) : ""}"></div>` +
+      `<div class="ev-field"><label>Event Time</label><input id="ev-f-time" class="ti" type="time" value="${e ? toLocalTime(e.start_at) : ""}">` +
+        `<span class="ev-hint">Your timezone — ${esc(localTzName())}. Everyone sees their own.</span></div>` +
+      `<div class="ev-field"><label>Duration</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}">` +
+        `<span class="ev-hint">Minutes, optional.</span></div>` +
+    `</div></div>` +
+    `<div class="ev-form-card"><div class="ev-section-h">Where</div><div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Rally point</label><span class="poi-pick"><input id="ev-f-loc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.location || "") : ""}"></span>` +
+        `<span class="ev-hint">Where the org forms up.</span></div>` +
+      `<div class="ev-field"><label>Event location</label><span class="poi-pick"><input id="ev-f-evloc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.event_location || "") : ""}"></span>` +
+        `<span class="ev-hint">Optional — where the activity happens.</span></div>` +
+    `</div></div>` +
+    `<div class="ev-form-card"><div class="ev-section-h">Crew size</div><div class="ev-form-grid">` +
       `<div class="ev-field"><label>Min players</label><input id="ev-f-min" class="ti" type="number" min="0" step="1" value="${e && e.min_players != null ? e.min_players : 0}"></div>` +
-      `<div class="ev-field"><label>Max players (blank = unlimited)</label><input id="ev-f-max" class="ti" type="number" min="1" step="1" value="${e && e.max_players != null ? e.max_players : ""}"></div>` +
-    `</div>` +
+      `<div class="ev-field"><label>Max players</label><input id="ev-f-max" class="ti" type="number" min="1" step="1" value="${e && e.max_players != null ? e.max_players : ""}">` +
+        `<span class="ev-hint">Blank = unlimited.</span></div>` +
+    `</div></div>` +
     `<div class="ev-field"><label>Desired roles &amp; how many of each</label>` +
       `<div class="ev-roster" id="ev-f-roster">${rosterRows}</div>` +
       `<button class="ev-btn" id="ev-f-addrole" style="align-self:flex-start;margin-top:4px;">+ add role</button></div>` +
@@ -3998,10 +4057,18 @@ function collectEventForm() {
   })).filter(r => r.role);
   const seen = new Set();
   for (const r of roles) { if (seen.has(r.role)) return { error: `Role "${r.role}" is listed twice.` }; seen.add(r.role); }
+  const start_at = new Date(`${date}T${time}`).toISOString();
+  const dlDate = $("ev-f-dl-date").value, dlTime = $("ev-f-dl-time").value;
+  let signup_deadline = null;
+  if (dlDate || dlTime) {
+    if (!dlDate || !dlTime) return { error: "Set both the signup deadline date and time, or leave both blank." };
+    signup_deadline = new Date(`${dlDate}T${dlTime}`).toISOString();
+    if (signup_deadline > start_at) return { error: "Signup deadline must be at or before the event start." };
+  }
   const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
   return { payload: {
     title, types, categories,
-    start_at: new Date(`${date}T${time}`).toISOString(),
+    start_at, signup_deadline,
     duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
     location: $("ev-f-loc").value.trim(),
     event_location: $("ev-f-evloc").value.trim(),

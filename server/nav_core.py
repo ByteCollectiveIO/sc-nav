@@ -23,7 +23,7 @@ import math
 import re
 import zlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # --- Rotation model calibration knobs ---------------------------------------
@@ -2164,4 +2164,71 @@ def derive_event_fill(event: dict, signups) -> dict:
         "min_met": total >= min_players,
         "is_full": max_players is not None and total >= max_players,
         "roster": roster,
+    }
+
+
+# How long a no-duration event stays "live" after its start before it's treated as
+# finished — events without a set duration have no real end time, so we give them a
+# grace window rather than flipping to finished the instant they start.
+EVENT_LIVE_GRACE_MIN = 180
+
+
+def _parse_event_dt(s):
+    """Parse a stored event timestamp (UTC ISO8601) to an aware datetime, or None.
+    Tolerates the trailing-Z form the same way `_normalize_event_start` does."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def derive_event_phase(event: dict, now_dt: datetime) -> dict:
+    """Lifecycle phase of an event, derived purely from its timestamps + status.
+
+    No stored phase column: an event moves Open → Signups closed → Live → Finished
+    on its own as the clock passes its signup deadline, start, and end. `cancelled`
+    and an explicit `completed` status are the only stored overrides.
+
+      open    — accepting signups (now < signup close)
+      closed  — signups locked, not started yet (signup close ≤ now < start)
+      live    — under way (start ≤ now < end)
+      ended   — finished (now ≥ end, or status 'completed')
+      cancelled — explicitly cancelled
+
+    `signup close` is the signup deadline if set, else the start. `end` is
+    start + duration, or start + EVENT_LIVE_GRACE_MIN when no duration is set.
+    Returns the phase plus the derived `signups_open` flag and the resolved
+    `signup_close` / `end_at` ISO strings (None when start is unparseable)."""
+    status = event.get("status")
+    start = _parse_event_dt(event.get("start_at"))
+    deadline = _parse_event_dt(event.get("signup_deadline"))
+    signup_close = deadline or start
+    if start is not None:
+        dur = event.get("duration_min")
+        grace = int(dur) if dur else EVENT_LIVE_GRACE_MIN
+        end_at = start + timedelta(minutes=grace)
+    else:
+        end_at = None
+
+    if status == "cancelled":
+        phase = "cancelled"
+    elif start is None:
+        phase = "open"                          # malformed start: leave it joinable
+    elif status == "completed" or now_dt >= end_at:
+        phase = "ended"
+    elif now_dt >= start:
+        phase = "live"
+    elif signup_close is not None and now_dt >= signup_close:
+        phase = "closed"
+    else:
+        phase = "open"
+
+    return {
+        "phase": phase,
+        "signups_open": phase == "open",
+        "signup_close": signup_close.isoformat() if signup_close else None,
+        "end_at": end_at.isoformat() if end_at else None,
     }

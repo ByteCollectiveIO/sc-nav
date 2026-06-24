@@ -629,6 +629,10 @@ _DESC_MAX = 2000     # event description free-text
 _MAX_ROSTER_ROLES = 20   # target roles on one event
 _MAX_SIGNUP_ROLES = 10   # roles one member claims on a signup
 _MAX_PLAYERS = 10_000    # sanity cap on min/max player counts
+# How far back the upcoming board reaches to keep live/ongoing events visible
+# (their start has passed but they aren't finished); finished ones are then filtered
+# out by derived phase. Generous enough to cover most op lengths + the live grace.
+_EVENT_BOARD_LOOKBACK_MIN = 24 * 60
 
 
 class PositionIn(BaseModel):
@@ -1708,6 +1712,8 @@ class EventIn(BaseModel):
     types: list[str] = Field(default_factory=list, max_length=12)
     categories: list[str] = Field(default_factory=list, max_length=12)
     start_at: str = Field(max_length=_META_MAX)   # ISO8601 UTC; validated below
+    # Optional: after this, signups lock. Blank ⇒ signups close at start_at.
+    signup_deadline: str | None = Field(default=None, max_length=_META_MAX)
     duration_min: int | None = Field(default=None, ge=0, le=100_000)
     location: str = Field(default="", max_length=_NAME_MAX)         # rally point
     event_location: str = Field(default="", max_length=_NAME_MAX)   # where it happens
@@ -1723,7 +1729,7 @@ class SignupIn(BaseModel):
 
 
 _EVENT_PUBLIC = ("id", "organizer_id", "title", "description",
-                 "start_at", "duration_min", "location", "event_location",
+                 "start_at", "signup_deadline", "duration_min", "location", "event_location",
                  "min_players", "max_players", "roles", "status",
                  "created_at", "updated_at")
 
@@ -1771,11 +1777,19 @@ def _validate_event(body: EventIn) -> dict:
         roster.append({"role": r.role, "needed": r.needed})
     if body.max_players is not None and body.max_players < max(1, body.min_players):
         raise HTTPException(status_code=400, detail="max_players must be >= min_players")
+    start_at = _normalize_event_start(body.start_at)
+    signup_deadline = None
+    if body.signup_deadline:
+        signup_deadline = _normalize_event_start(body.signup_deadline)
+        if signup_deadline > start_at:
+            raise HTTPException(status_code=400,
+                                detail="signup deadline must be at or before the event start")
     return {
         "title": body.title.strip(),
         "description": (body.description or "").strip(),
         "type": types, "category": categories,
-        "start_at": _normalize_event_start(body.start_at),
+        "start_at": start_at,
+        "signup_deadline": signup_deadline,
         "duration_min": body.duration_min,
         "location": (body.location or "").strip(),
         "event_location": (body.event_location or "").strip(),
@@ -1818,6 +1832,7 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
     view["is_organizer"] = ev["organizer_id"] == user["id"]
     view["can_edit"] = view["is_organizer"] or bool(user.get("is_admin"))
     view["fill"] = nav_core.derive_event_fill(ev, signups)
+    view.update(nav_core.derive_event_phase(ev, datetime.now(timezone.utc)))
     view["my_signup"] = ({"roles": mine["roles"], "status": mine["status"]}
                          if mine else None)
     if detail:
@@ -1838,12 +1853,24 @@ async def events_taxonomy(user: dict = Depends(require_session)):
 
 @app.get("/api/events")
 async def list_events(range: str = "upcoming", user: dict = Depends(require_session)):
-    """The event board. `range=past` lists started events (freshest first);
-    default lists scheduled events from now on (soonest first). Each carries its
-    derived fill so cards render without a per-event round-trip."""
-    now = datetime.now(timezone.utc).isoformat()
-    rows = db.list_events(range, now)
-    return {"range": range, "events": [_event_view(e, user) for e in rows]}
+    """The event board. `range=past` lists finished/cancelled events (freshest
+    first); default lists everything not yet finished — open, signups-closed, and
+    live/ongoing — soonest first. Each carries its derived fill + phase so cards
+    render (and badge) without a per-event round-trip."""
+    now_dt = datetime.now(timezone.utc)
+    if range == "past":
+        rows = db.list_events("past", now_dt.isoformat())
+    else:
+        # Reach back so live/ongoing events (start passed, not yet ended) stay on the
+        # board; the phase filter below drops the ones that have actually finished.
+        lookback = (now_dt - timedelta(minutes=_EVENT_BOARD_LOOKBACK_MIN)).isoformat()
+        rows = db.list_events("upcoming", lookback)
+    views = [_event_view(e, user) for e in rows]
+    if range == "past":
+        views = [v for v in views if v["phase"] in ("ended", "cancelled")]
+    else:
+        views = [v for v in views if v["phase"] != "ended"]
+    return {"range": range, "events": views}
 
 
 @app.post("/api/events")
@@ -1895,8 +1922,11 @@ async def signup_event(event_id: int, body: SignupIn,
     ev = db.get_event(event_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="unknown event")
-    if ev["status"] != "scheduled":
-        raise HTTPException(status_code=400, detail="event is not open for signups")
+    phase = nav_core.derive_event_phase(ev, datetime.now(timezone.utc))
+    if not phase["signups_open"]:
+        detail = ("event is cancelled" if phase["phase"] == "cancelled"
+                  else "signups have closed for this event")
+        raise HTTPException(status_code=400, detail=detail)
     roles = _validate_signup_roles(body.roles)
     status = body.status if body.status in ("going", "maybe") else "going"
     db.upsert_signup(event_id, user["id"], roles, status, body.note,
