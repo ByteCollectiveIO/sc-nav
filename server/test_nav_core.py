@@ -1241,5 +1241,120 @@ class GuildCargoStatsTests(unittest.TestCase):
                          [("P0", "P1")])
 
 
+class EventFillTests(unittest.TestCase):
+    def _event(self, roster, min_players=0, max_players=None):
+        return {"min_players": min_players, "max_players": max_players,
+                "roles": [{"role": r, "needed": n} for r, n in roster]}
+
+    def _signup(self, did, roles, status="going"):
+        return {"discord_id": did, "roles": roles, "status": status}
+
+    def test_headline_totals_and_min_met(self):
+        # 3 signups, min 3, max 5: min met, 2 spots left, Medical 2/2, Escort n/a.
+        ev = self._event([("Medical", 2)], min_players=3, max_players=5)
+        signups = [self._signup("a", ["Medical"]), self._signup("b", ["Escort"]),
+                   self._signup("c", ["Medical"])]
+        f = nav_core.derive_event_fill(ev, signups)
+        self.assertEqual(f["total_going"], 3)
+        self.assertEqual(f["spots_left"], 2)
+        self.assertTrue(f["min_met"])
+        self.assertFalse(f["is_full"])
+        self.assertEqual({r["role"]: r["filled"] for r in f["roster"]}["Medical"], 2)
+
+    def test_min_not_met(self):
+        ev = self._event([], min_players=4)
+        f = nav_core.derive_event_fill(ev, [self._signup("a", [])])
+        self.assertFalse(f["min_met"])
+        self.assertEqual(f["total_going"], 1)
+
+    def test_double_count_rule(self):
+        # Two members each cover Medical AND Escort: headline counts them once,
+        # both role bars fill.
+        ev = self._event([("Medical", 2), ("Escort", 2)], min_players=2, max_players=5)
+        signups = [self._signup("a", ["Medical", "Escort"]),
+                   self._signup("b", ["Medical", "Escort"])]
+        f = nav_core.derive_event_fill(ev, signups)
+        self.assertEqual(f["total_going"], 2)
+        roster = {r["role"]: r for r in f["roster"]}
+        self.assertEqual(roster["Medical"]["filled"], 2)
+        self.assertEqual(roster["Escort"]["filled"], 2)
+        self.assertEqual(roster["Medical"]["short"], 0)
+
+    def test_short_count(self):
+        ev = self._event([("Surveyor", 3)])
+        f = nav_core.derive_event_fill(ev, [self._signup("a", ["Surveyor"])])
+        roster = {r["role"]: r for r in f["roster"]}
+        self.assertEqual(roster["Surveyor"]["filled"], 1)
+        self.assertEqual(roster["Surveyor"]["short"], 2)
+
+    def test_surplus_clamps_short_to_zero(self):
+        ev = self._event([("Medical", 1)])
+        signups = [self._signup("a", ["Medical"]), self._signup("b", ["Medical"])]
+        roster = {r["role"]: r
+                  for r in nav_core.derive_event_fill(ev, signups)["roster"]}
+        self.assertEqual(roster["Medical"]["filled"], 2)
+        self.assertEqual(roster["Medical"]["short"], 0)
+
+    def test_unlimited_max(self):
+        ev = self._event([], max_players=None)
+        f = nav_core.derive_event_fill(ev, [self._signup("a", []),
+                                            self._signup("b", [])])
+        self.assertIsNone(f["spots_left"])
+        self.assertFalse(f["is_full"])
+
+    def test_full_when_max_reached(self):
+        ev = self._event([], max_players=2)
+        f = nav_core.derive_event_fill(ev, [self._signup("a", []),
+                                            self._signup("b", [])])
+        self.assertTrue(f["is_full"])
+        self.assertEqual(f["spots_left"], 0)
+
+    def test_maybe_and_withdrawn_excluded(self):
+        ev = self._event([("Medical", 2)], max_players=5)
+        signups = [self._signup("a", ["Medical"], status="going"),
+                   self._signup("b", ["Medical"], status="maybe"),
+                   self._signup("c", ["Medical"], status="withdrawn")]
+        f = nav_core.derive_event_fill(ev, signups)
+        self.assertEqual(f["total_going"], 1)
+        self.assertEqual({r["role"]: r["filled"] for r in f["roster"]}["Medical"], 1)
+
+    def test_missing_status_counts_as_going(self):
+        ev = self._event([], max_players=5)
+        f = nav_core.derive_event_fill(ev, [{"discord_id": "a", "roles": []}])
+        self.assertEqual(f["total_going"], 1)
+
+    def test_duplicate_member_deduped(self):
+        # Defensive: a stray double signup for one member counts once.
+        ev = self._event([("Medical", 2)], max_players=5)
+        f = nav_core.derive_event_fill(
+            ev, [self._signup("a", ["Medical"]), self._signup("a", ["Medical"])])
+        self.assertEqual(f["total_going"], 1)
+        self.assertEqual({r["role"]: r["filled"] for r in f["roster"]}["Medical"], 1)
+
+    def test_empty(self):
+        ev = self._event([("Medical", 2)], min_players=1, max_players=4)
+        f = nav_core.derive_event_fill(ev, [])
+        self.assertEqual(f["total_going"], 0)
+        self.assertEqual(f["spots_left"], 4)
+        self.assertFalse(f["min_met"])
+        self.assertFalse(f["is_full"])
+        self.assertEqual(f["roster"][0]["filled"], 0)
+        self.assertEqual(f["roster"][0]["short"], 2)
+
+
+class EventTaxonomyTests(unittest.TestCase):
+    def test_flat_roles_match_groups(self):
+        import event_taxonomy
+        flat = [r for g in event_taxonomy.ROLE_GROUPS for r in g["roles"]]
+        self.assertEqual(event_taxonomy.ROLES, flat)
+
+    def test_taxonomy_payload_shape(self):
+        import event_taxonomy
+        t = event_taxonomy.taxonomy()
+        self.assertEqual(set(t), {"types", "categories", "role_groups", "roles"})
+        self.assertIn("Survey Op", t["types"])
+        self.assertIn("Surveyor", t["roles"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -32,6 +32,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import auth
 import db
+import event_taxonomy
 import nav_core
 from version import __version__ as APP_VERSION
 
@@ -624,6 +625,10 @@ _COMMODITY_MAX = 80
 _PKG_ID_MAX = 64
 _CONTRACT_MAX = 60   # player's free-text contract/group label
 _MAX_PACKAGES = 60   # one hauling run rarely exceeds a handful of contracts
+_DESC_MAX = 2000     # event description free-text
+_MAX_ROSTER_ROLES = 20   # target roles on one event
+_MAX_SIGNUP_ROLES = 10   # roles one member claims on a signup
+_MAX_PLAYERS = 10_000    # sanity cap on min/max player counts
 
 
 class PositionIn(BaseModel):
@@ -1685,6 +1690,207 @@ async def cargo_stats(range: str = "all", user: dict = Depends(require_session))
                              "count": round(weeks.get(wk, 0), 2)})
             wk += timedelta(weeks=1)
     return {"range": range, **stats, "activity": activity}
+
+
+# --- event planner (guild events) ------------------------------------------
+
+
+class RoleTargetIn(BaseModel):
+    role: str = Field(max_length=_TYPE_MAX)
+    needed: int = Field(default=1, ge=0, le=500)
+
+
+class EventIn(BaseModel):
+    title: str = Field(min_length=1, max_length=_NAME_MAX)
+    description: str = Field(default="", max_length=_DESC_MAX)
+    type: str = Field(max_length=_TYPE_MAX)
+    category: str = Field(max_length=_TYPE_MAX)
+    start_at: str = Field(max_length=_META_MAX)   # ISO8601 UTC; validated below
+    duration_min: int | None = Field(default=None, ge=0, le=100_000)
+    location: str = Field(default="", max_length=_NAME_MAX)
+    min_players: int = Field(default=0, ge=0, le=_MAX_PLAYERS)
+    max_players: int | None = Field(default=None, ge=1, le=_MAX_PLAYERS)
+    roles: list[RoleTargetIn] = Field(default_factory=list, max_length=_MAX_ROSTER_ROLES)
+
+
+class SignupIn(BaseModel):
+    roles: list[str] = Field(default_factory=list, max_length=_MAX_SIGNUP_ROLES)
+    status: str = Field(default="going", max_length=16)   # going | maybe
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
+
+
+_EVENT_PUBLIC = ("id", "organizer_id", "title", "description", "type", "category",
+                 "start_at", "duration_min", "location", "min_players",
+                 "max_players", "roles", "status", "created_at", "updated_at")
+
+
+def _normalize_event_start(s: str) -> str:
+    """Parse the client's start time and canonicalize to a UTC ISO8601 string.
+    Naive (tz-less) inputs are assumed UTC. Rejects unparseable values."""
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="start_at must be ISO8601")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _validate_event(body: EventIn) -> dict:
+    """Validate an event against the curated taxonomy and normalize its fields
+    into the column dict db.create_event / db.update_event expect."""
+    if body.type not in event_taxonomy.TYPES:
+        raise HTTPException(status_code=400, detail="unknown event type")
+    if body.category not in event_taxonomy.CATEGORIES:
+        raise HTTPException(status_code=400, detail="unknown event category")
+    roster, seen = [], set()
+    for r in body.roles:
+        if r.role not in event_taxonomy.ROLES:
+            raise HTTPException(status_code=400, detail=f"unknown role: {r.role}")
+        if r.role in seen:
+            raise HTTPException(status_code=400, detail=f"duplicate role: {r.role}")
+        seen.add(r.role)
+        roster.append({"role": r.role, "needed": r.needed})
+    if body.max_players is not None and body.max_players < max(1, body.min_players):
+        raise HTTPException(status_code=400, detail="max_players must be >= min_players")
+    return {
+        "title": body.title.strip(),
+        "description": (body.description or "").strip(),
+        "type": body.type, "category": body.category,
+        "start_at": _normalize_event_start(body.start_at),
+        "duration_min": body.duration_min,
+        "location": (body.location or "").strip(),
+        "min_players": body.min_players, "max_players": body.max_players,
+        "roles": roster,
+    }
+
+
+def _validate_signup_roles(roles: list[str]) -> list[str]:
+    """De-dupe (order-preserving) and reject any role outside the taxonomy."""
+    out, seen = [], set()
+    for r in roles:
+        if r not in event_taxonomy.ROLES:
+            raise HTTPException(status_code=400, detail=f"unknown role: {r}")
+        if r in seen:
+            continue
+        seen.add(r)
+        out.append(r)
+    return out
+
+
+def _require_event_owner(ev: dict, user: dict) -> None:
+    if ev["organizer_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="only the organizer or an admin can change this event")
+
+
+def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
+    """Serialize an event for the client: its fields plus the derived fill
+    summary, the organizer's name, the caller's own signup, and the caller's
+    permissions. `detail=True` adds the attendee roster (used by the detail view;
+    list cards skip it to stay light)."""
+    signups = db.list_signups(ev["id"])
+    mine = next((s for s in signups
+                 if s["discord_id"] == user["id"] and s["status"] != "withdrawn"), None)
+    view = {k: ev.get(k) for k in _EVENT_PUBLIC}
+    view["organizer_name"] = _resolve_member_name(ev["organizer_id"], None)
+    view["is_organizer"] = ev["organizer_id"] == user["id"]
+    view["can_edit"] = view["is_organizer"] or bool(user.get("is_admin"))
+    view["fill"] = nav_core.derive_event_fill(ev, signups)
+    view["my_signup"] = ({"roles": mine["roles"], "status": mine["status"]}
+                         if mine else None)
+    if detail:
+        view["attendees"] = [
+            {"discord_id": s["discord_id"],
+             "display_name": _resolve_member_name(s["discord_id"], None),
+             "roles": s["roles"], "status": s["status"]}
+            for s in signups if s["status"] in ("going", "maybe")
+        ]
+    return view
+
+
+@app.get("/api/events/taxonomy")
+async def events_taxonomy(user: dict = Depends(require_session)):
+    """Curated types / categories / grouped roles for the create form."""
+    return event_taxonomy.taxonomy()
+
+
+@app.get("/api/events")
+async def list_events(range: str = "upcoming", user: dict = Depends(require_session)):
+    """The event board. `range=past` lists started events (freshest first);
+    default lists scheduled events from now on (soonest first). Each carries its
+    derived fill so cards render without a per-event round-trip."""
+    now = datetime.now(timezone.utc).isoformat()
+    rows = db.list_events(range, now)
+    return {"range": range, "events": [_event_view(e, user) for e in rows]}
+
+
+@app.post("/api/events")
+async def create_event(body: EventIn, user: dict = Depends(require_session)):
+    """Create an event. Any org member may organize."""
+    fields = _validate_event(body)
+    now = datetime.now(timezone.utc).isoformat()
+    eid = db.create_event({**fields, "organizer_id": user["id"],
+                           "status": "scheduled", "created_at": now, "updated_at": now})
+    return _event_view(db.get_event(eid), user, detail=True)
+
+
+@app.get("/api/events/{event_id}")
+async def get_event(event_id: int, user: dict = Depends(require_session)):
+    """One event with its attendee roster + fill."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    return _event_view(ev, user, detail=True)
+
+
+@app.patch("/api/events/{event_id}")
+async def edit_event(event_id: int, body: EventIn, user: dict = Depends(require_session)):
+    """Edit an event (organizer or admin) — full replace of the editable fields."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    fields = _validate_event(body)
+    db.update_event(event_id, fields, datetime.now(timezone.utc).isoformat())
+    return _event_view(db.get_event(event_id), user, detail=True)
+
+
+@app.delete("/api/events/{event_id}")
+async def cancel_event(event_id: int, user: dict = Depends(require_session)):
+    """Cancel an event (organizer or admin). Soft — the row + roster survive."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    db.cancel_event(event_id, datetime.now(timezone.utc).isoformat())
+    return {"ok": True, "status": "cancelled"}
+
+
+@app.post("/api/events/{event_id}/signup")
+async def signup_event(event_id: int, body: SignupIn,
+                       user: dict = Depends(require_session)):
+    """Join (or update) the caller's signup with the role(s) they'll fill."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    if ev["status"] != "scheduled":
+        raise HTTPException(status_code=400, detail="event is not open for signups")
+    roles = _validate_signup_roles(body.roles)
+    status = body.status if body.status in ("going", "maybe") else "going"
+    db.upsert_signup(event_id, user["id"], roles, status, body.note,
+                     datetime.now(timezone.utc).isoformat())
+    return _event_view(db.get_event(event_id), user, detail=True)
+
+
+@app.delete("/api/events/{event_id}/signup")
+async def withdraw_signup(event_id: int, user: dict = Depends(require_session)):
+    """Withdraw the caller from an event (kept as 'withdrawn' so re-joining is easy)."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    db.withdraw_signup(event_id, user["id"])
+    return _event_view(db.get_event(event_id), user, detail=True)
 
 
 @app.get("/api/biomes")

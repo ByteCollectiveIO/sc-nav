@@ -96,6 +96,41 @@ CREATE TABLE IF NOT EXISTS runs (
     data TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_owner_status ON runs(discord_id, status);
+
+-- Event planner: guild-organized in-game events (raids, ops, survey/exploration
+-- expeditions, meetups). `organizer_id` is the creating member; `roles` is the
+-- JSON target roster [{role, needed}]; `start_at` is UTC ISO8601 (rendered local
+-- in the client). Cancelling sets status rather than deleting, so a mistaken
+-- cancel is recoverable and the roster history survives.
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY,
+    organizer_id TEXT NOT NULL,         -- Discord member id of the creator
+    title TEXT, description TEXT,
+    type TEXT, category TEXT,
+    start_at TEXT,                      -- event start, UTC ISO8601
+    duration_min INTEGER,
+    location TEXT,
+    min_players INTEGER, max_players INTEGER,   -- max NULL = unlimited
+    roles TEXT,                         -- JSON target roster: [{role, needed}]
+    status TEXT NOT NULL DEFAULT 'scheduled',   -- scheduled | cancelled | completed
+    created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS events_start ON events(start_at);
+
+-- One signup per (event, member) — joining again upserts the role list. `roles`
+-- is a JSON list of role names the member will fill (a medic who'll also escort
+-- claims both). Withdrawn rows are kept (status flips) so a re-join is cheap.
+CREATE TABLE IF NOT EXISTS event_signups (
+    id INTEGER PRIMARY KEY,
+    event_id INTEGER NOT NULL,
+    discord_id TEXT NOT NULL,
+    roles TEXT,                         -- JSON list of role names
+    status TEXT NOT NULL DEFAULT 'going',   -- going | maybe | withdrawn
+    note TEXT,
+    created_at TEXT,
+    UNIQUE(event_id, discord_id)
+);
+CREATE INDEX IF NOT EXISTS event_signups_event ON event_signups(event_id);
 """
 
 
@@ -412,6 +447,124 @@ def get_cargo_session_start(discord_id: str) -> str | None:
 def set_cargo_session_start(discord_id: str, ts: str) -> None:
     """Stamp the start of a fresh hauling session (the 'reset' action)."""
     _meta_set(f"cargo_session_start:{discord_id}", ts)
+
+
+# --- event planner (events + signups) --------------------------------------
+
+# Columns a create/edit writes; `roles` is the JSON target roster. organizer_id,
+# status and created_at are set on insert and never edited here (status flips via
+# cancel_event); updated_at is stamped on every write.
+_EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
+                   "duration_min", "location", "min_players", "max_players", "roles")
+
+
+def _event_row_to_dict(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["roles"] = _u(d.get("roles")) or []
+    return d
+
+
+def _signup_row_to_dict(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["roles"] = _u(d.get("roles")) or []
+    return d
+
+
+def create_event(d: dict) -> int:
+    """Insert a new event (caller supplies validated fields + organizer_id +
+    created_at/updated_at). Returns the new event id."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO events (organizer_id, title, description, type, category, "
+            "start_at, duration_min, location, min_players, max_players, roles, "
+            "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(d["organizer_id"]), d.get("title"), d.get("description"),
+             d.get("type"), d.get("category"), d.get("start_at"),
+             d.get("duration_min"), d.get("location"), d.get("min_players"),
+             d.get("max_players"), _j(d.get("roles") or []),
+             d.get("status", "scheduled"), d.get("created_at"), d.get("updated_at")),
+        )
+    return cur.lastrowid
+
+
+def get_event(event_id: int) -> dict | None:
+    """One event by id (roles parsed), or None."""
+    with _lock:
+        row = _conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+    return _event_row_to_dict(row) if row else None
+
+
+def list_events(scope: str, now_iso: str) -> list[dict]:
+    """Events for the board. `scope='past'` → started before now, freshest first;
+    anything else → scheduled events from now on, soonest first. Cancelled future
+    events drop out of both (soft-hidden) but stay reachable by id."""
+    if scope == "past":
+        sql = "SELECT * FROM events WHERE start_at < ? ORDER BY start_at DESC"
+    else:
+        sql = ("SELECT * FROM events WHERE status='scheduled' AND start_at >= ? "
+               "ORDER BY start_at ASC")
+    with _lock:
+        rows = _conn.execute(sql, (now_iso,)).fetchall()
+    return [_event_row_to_dict(r) for r in rows]
+
+
+def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
+    """Replace the editable columns of an event (organizer/admin check is the
+    caller's job). Returns whether a row matched."""
+    sets = ", ".join(f"{c}=?" for c in _EVENT_EDITABLE)
+    vals = [_j(fields.get("roles") or []) if c == "roles" else fields.get(c)
+            for c in _EVENT_EDITABLE]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE events SET {sets}, updated_at=? WHERE id=?",
+            (*vals, updated_at, event_id),
+        )
+    return cur.rowcount > 0
+
+
+def cancel_event(event_id: int, updated_at: str) -> bool:
+    """Soft-cancel: flip status to 'cancelled' (the row + roster survive)."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE events SET status='cancelled', updated_at=? WHERE id=?",
+            (updated_at, event_id),
+        )
+    return cur.rowcount > 0
+
+
+def list_signups(event_id: int) -> list[dict]:
+    """All signups for an event (roles parsed), oldest first."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM event_signups WHERE event_id=? ORDER BY created_at, id",
+            (event_id,),
+        ).fetchall()
+    return [_signup_row_to_dict(r) for r in rows]
+
+
+def upsert_signup(event_id: int, discord_id: str, roles: list, status: str,
+                  note: str | None, created_at: str) -> None:
+    """Join (or update) a member's signup. UNIQUE(event_id, discord_id) makes a
+    re-join overwrite roles/status/note; created_at is preserved from first join."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO event_signups (event_id, discord_id, roles, status, note, "
+            "created_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(event_id, discord_id) DO UPDATE SET "
+            "roles=excluded.roles, status=excluded.status, note=excluded.note",
+            (event_id, str(discord_id), _j(roles or []), status, note, created_at),
+        )
+
+
+def withdraw_signup(event_id: int, discord_id: str) -> bool:
+    """Member bows out: flip their signup to 'withdrawn' (kept, so re-joining is
+    cheap). Returns whether they had a signup."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE event_signups SET status='withdrawn' WHERE event_id=? AND discord_id=?",
+            (event_id, str(discord_id)),
+        )
+    return cur.rowcount > 0
 
 
 def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:

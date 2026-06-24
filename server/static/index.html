@@ -561,6 +561,115 @@
   .route-stepper .step.active .dot { border-color: var(--accent); color: var(--accent);
     box-shadow: 0 0 0 3px rgba(79, 195, 247, .2); }
   .route-stepper .step.active .lbl { color: var(--accent); }
+
+  /* ---- event planner (#/events) ---- */
+  #events-view, #events-root { display: contents; }
+  #events-view[hidden] { display: none; }
+  .ev-head { display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px; }
+  .ev-head h2 { margin: 0; }
+  .ev-btn { font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: none; color: var(--text); text-decoration: none; }
+  .ev-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .ev-btn.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .ev-btn.primary:hover { background: var(--accent); color: #07101a; }
+  .ev-btn.danger { border-color: var(--bad); color: var(--bad); }
+  .ev-btn.danger:hover { background: var(--bad); color: #07101a; }
+  .ev-back { display: inline-block; font-size: 12px; color: var(--dim);
+    text-decoration: none; margin-bottom: 10px; }
+  .ev-back:hover { color: var(--accent); }
+  /* type/category chips */
+  .ev-chip { font-size: 10px; letter-spacing: .5px; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 6px; border: 1px solid var(--border); color: var(--dim); }
+  .ev-chip.type { color: var(--accent); border-color: var(--accent); }
+  .ev-chip.cat-pvp { color: var(--bad); border-color: var(--bad); }
+  .ev-chip.cat-pve { color: var(--good); border-color: var(--good); }
+  .ev-chip.cat-social { color: var(--mate); border-color: var(--mate); }
+  .ev-chip.cat-logistics { color: var(--warn); border-color: var(--warn); }
+  .ev-chip.cat-mixed { color: var(--node); border-color: var(--node); }
+  /* event card */
+  .ev-card { display: block; text-decoration: none; color: var(--text);
+    padding: 12px 0; border-top: 1px solid var(--border); }
+  .ev-card:first-child { border-top: none; }
+  .ev-card:hover .ev-title { color: var(--accent); }
+  .ev-card-top { display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; }
+  .ev-title { font-size: 16px; font-weight: 600; }
+  .ev-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ev-meta { font-size: 12px; color: var(--dim); margin: 4px 0 8px; }
+  .ev-fill { display: flex; flex-direction: column; gap: 5px; }
+  .ev-players { font-size: 13px; color: var(--text); }
+  .ev-players.met { color: var(--good); }
+  .ev-players .ev-min { color: var(--dim); font-size: 11px; }
+  .ev-cancelled { color: var(--bad); font-weight: 600; }
+  /* per-role mini bars */
+  .ev-role { display: grid; grid-template-columns: 130px 1fr 56px; gap: 9px;
+    align-items: center; font-size: 12px; }
+  .ev-role-n { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev-role-bar { height: 8px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden; }
+  .ev-role-bar > span { display: block; height: 100%; background: var(--accent); }
+  .ev-role.done .ev-role-bar > span { background: var(--good); }
+  .ev-role-ct { font-variant-numeric: tabular-nums; color: var(--dim); text-align: right; }
+  .ev-role.done .ev-role-ct { color: var(--good); }
+  /* calendar */
+  .ev-cal-head { display: flex; align-items: center; justify-content: center; gap: 16px;
+    margin-bottom: 8px; }
+  .ev-cal-label { font-size: 14px; color: var(--accent); letter-spacing: 1px; min-width: 150px;
+    text-align: center; }
+  .ev-cal-nav { font-size: 16px; padding: 2px 10px; line-height: 1; }
+  .ev-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .ev-cal-dow { font-size: 10px; color: var(--dim); text-align: center; padding: 2px 0;
+    letter-spacing: .5px; }
+  .ev-cal-cell { position: relative; aspect-ratio: 1; display: flex; align-items: center;
+    justify-content: center; font-size: 12px; color: var(--dim); border-radius: 5px;
+    border: 1px solid transparent; }
+  .ev-cal-cell.has { color: var(--text); cursor: pointer; border-color: var(--border);
+    background: var(--panel2); }
+  .ev-cal-cell.has:hover { border-color: var(--accent); }
+  .ev-cal-cell.sel { border-color: var(--accent); color: var(--accent); }
+  .ev-cal-cell.empty { border-color: transparent; }
+  .ev-dot { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
+    width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+  .ev-cal-cell.sel .ev-dot { background: var(--accent); }
+  .ev-filter-note { display: flex; align-items: center; gap: 10px; font-size: 12px;
+    color: var(--dim); margin-bottom: 8px; }
+  /* detail */
+  .ev-detail-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .ev-detail-title h2 { margin: 0; }
+  .ev-detail-meta { font-size: 13px; color: var(--dim); margin: 8px 0; line-height: 1.7; }
+  .ev-detail-meta b { color: var(--text); font-weight: 600; }
+  .ev-desc { font-size: 14px; line-height: 1.6; margin: 10px 0; white-space: pre-wrap; }
+  .ev-section-h { font-size: 11px; color: var(--dim); letter-spacing: 1px; text-transform: uppercase;
+    margin: 16px 0 8px; }
+  .ev-roster-role { margin-bottom: 10px; }
+  .ev-roster-names { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .ev-name { font-size: 12px; padding: 3px 9px; border-radius: 12px; background: var(--panel2);
+    border: 1px solid var(--border); }
+  .ev-name.maybe { opacity: .7; font-style: italic; }
+  /* signup + role pickers */
+  .ev-signup { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 14px; }
+  .ev-signup h3 { font-size: 13px; color: var(--accent); margin: 0 0 10px; letter-spacing: .5px; }
+  .ev-roles-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px; margin-bottom: 12px; }
+  .ev-rolegrp-h { font-size: 11px; color: var(--dim); letter-spacing: .5px; margin-bottom: 5px; }
+  .ev-rolegrp-roles { display: flex; flex-direction: column; gap: 4px; }
+  .ev-rolechk { font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .ev-signup-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  /* create/edit form */
+  .ev-form { display: flex; flex-direction: column; gap: 14px; }
+  .ev-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .ev-field { display: flex; flex-direction: column; gap: 4px; }
+  .ev-field label { font-size: 11px; color: var(--dim); letter-spacing: .5px; }
+  .ev-field input, .ev-field select, .ev-field textarea { width: 100%; }
+  .ev-field textarea { min-height: 80px; resize: vertical; font-family: inherit; }
+  .ev-roster { display: flex; flex-direction: column; gap: 8px; }
+  .ev-roster-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ev-roster-row select { flex: 1; min-width: 140px; }
+  .ev-roster-row input { width: 80px; }
+  .ev-roster-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
+  .ev-form-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    border-top: 1px solid var(--border); padding-top: 14px; }
 </style>
 </head>
 <body>
@@ -621,6 +730,12 @@
         <div class="app-name">Cargo Planner</div>
         <div class="app-desc">Plan efficient multi-stop hauling routes under your ship's
           cargo capacity, then run them turn-by-turn.</div>
+      </a>
+      <a class="app-card" href="#/events">
+        <img class="app-logo" src="/images/event_planner_logo.png" alt="" width="160" height="160">
+        <div class="app-name">Event Planner</div>
+        <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
+          sign up your org, and track who's filling each slot.</div>
       </a>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
@@ -1247,6 +1362,13 @@
       Star Citizen®, Roberts Space Industries® and Cloud Imperium® are registered trademarks of
       Cloud Imperium Rights LLC.</p>
   </div><!-- /route-view -->
+
+  <div id="events-view" hidden>
+    <div id="events-root"></div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /events-view -->
 
   <!-- ============================================================
        Legal pages. STARTER TEXT drafted to fit this app — have a
@@ -3484,15 +3606,383 @@ function renderStop(s, i, completes) {
     + `</div></div>`;
 }
 
+// ---------- event planner (#/events) ----------
+// One SPA view that owns three screens under #/events: the board (calendar +
+// upcoming cards), the create/edit form, and the detail+signup page. The screen
+// is chosen from the sub-hash so each is deep-linkable and the back button works.
+let evTaxonomy = null;        // cached {types, categories, role_groups, roles}
+let evBoardEvents = [];       // last board fetch (so calendar nav doesn't refetch)
+let evCalMonth = null;        // Date at the first of the displayed month
+let evFilterDay = null;       // "YYYY-MM-DD" (local) day filter, or null
+
+async function loadEventsTaxonomy() {
+  if (!evTaxonomy) evTaxonomy = await fetch("/api/events/taxonomy").then(r => r.json());
+  return evTaxonomy;
+}
+
+function eventsSubRoute() {
+  const rest = location.hash.slice("#/events".length).replace(/^\//, "");
+  if (rest === "new") return { view: "new" };
+  if (/^\d+$/.test(rest)) return { view: "detail", id: parseInt(rest, 10) };
+  return { view: "board" };
+}
+
+function loadEvents() {
+  const r = eventsSubRoute();
+  if (r.view === "new") return renderEventForm();
+  if (r.view === "detail") return renderEventDetail(r.id);
+  return renderEventBoard();
+}
+
+function catClass(cat) { return "cat-" + String(cat || "").toLowerCase().replace(/[^a-z]/g, ""); }
+
+function fmtEventTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit" });
+}
+
+function localDayKey(iso) {
+  const d = new Date(iso), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function roleBar(r) {
+  const pct = r.needed ? Math.min(100, Math.round(100 * r.filled / r.needed)) : (r.filled ? 100 : 0);
+  const done = r.needed && r.filled >= r.needed;
+  return `<div class="ev-role ${done ? "done" : ""}">` +
+    `<span class="ev-role-n">${esc(r.role)}</span>` +
+    `<span class="ev-role-bar"><span style="width:${pct}%"></span></span>` +
+    `<span class="ev-role-ct">${r.filled}/${r.needed || "—"}${done ? " ✓" : ""}</span></div>`;
+}
+
+function eventCard(e) {
+  const f = e.fill;
+  const cap = e.max_players == null ? "∞" : e.max_players;
+  const chips = `<span class="ev-chip type">${esc(e.type)}</span>` +
+    `<span class="ev-chip ${catClass(e.category)}">${esc(e.category)}</span>`;
+  const roles = (f.roster || []).map(roleBar).join("");
+  return `<a class="ev-card" href="#/events/${e.id}">` +
+    `<div class="ev-card-top"><div class="ev-title">${esc(e.title)}</div>` +
+    `<div class="ev-chips">${chips}</div></div>` +
+    `<div class="ev-meta">🕓 ${esc(fmtEventTime(e.start_at))} · 📍 ${esc(e.location || "—")} · ` +
+    `by ${esc(e.organizer_name)}</div>` +
+    `<div class="ev-fill"><div class="ev-players ${f.min_met ? "met" : ""}">` +
+    `${f.total_going}/${cap} players` +
+    `${f.min_players ? ` <span class="ev-min">(min ${f.min_players})</span>` : ""}</div>` +
+    `${roles}</div></a>`;
+}
+
+function renderCalendar() {
+  const month = evCalMonth, y = month.getFullYear(), m = month.getMonth();
+  const days = new Set(evBoardEvents.map(e => localDayKey(e.start_at)));
+  const startDow = new Date(y, m, 1).getDay();
+  const numDays = new Date(y, m + 1, 0).getDate();
+  const p = n => String(n).padStart(2, "0");
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(`<div class="ev-cal-cell empty"></div>`);
+  for (let d = 1; d <= numDays; d++) {
+    const key = `${y}-${p(m + 1)}-${p(d)}`, has = days.has(key), sel = evFilterDay === key;
+    cells.push(`<div class="ev-cal-cell${has ? " has" : ""}${sel ? " sel" : ""}"` +
+      `${has ? ` data-day="${key}"` : ""}>${d}${has ? '<span class="ev-dot"></span>' : ""}</div>`);
+  }
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    .map(x => `<div class="ev-cal-dow">${x}</div>`).join("");
+  const label = month.toLocaleString(undefined, { month: "long", year: "numeric" });
+  return `<div class="ev-cal-head"><button id="ev-cal-prev" class="ev-cal-nav">‹</button>` +
+    `<span class="ev-cal-label">${esc(label)}</span>` +
+    `<button id="ev-cal-next" class="ev-cal-nav">›</button></div>` +
+    `<div class="ev-cal-grid">${dow}${cells.join("")}</div>`;
+}
+
+function bindCalendar() {
+  $("ev-cal").innerHTML = renderCalendar();
+  $("ev-cal-prev").onclick = () => { evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth() - 1, 1); bindCalendar(); };
+  $("ev-cal-next").onclick = () => { evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth() + 1, 1); bindCalendar(); };
+  $("ev-cal").querySelectorAll(".ev-cal-cell.has").forEach(c => {
+    c.onclick = () => { evFilterDay = (evFilterDay === c.dataset.day) ? null : c.dataset.day; bindCalendar(); renderBoardList(); };
+  });
+}
+
+function renderBoardList() {
+  const shown = evFilterDay ? evBoardEvents.filter(e => localDayKey(e.start_at) === evFilterDay) : evBoardEvents;
+  const note = evFilterDay
+    ? `<div class="ev-filter-note">Showing ${esc(evFilterDay)} · <a class="ev-back" href="javascript:void 0" id="ev-clear-filter" style="margin:0">clear</a></div>`
+    : "";
+  $("ev-list").innerHTML = note + (shown.length
+    ? shown.map(eventCard).join("")
+    : `<p class="stat-empty">No upcoming events${evFilterDay ? " on this day" : ""}. ` +
+      `<a href="#/events/new">Create one →</a></p>`);
+  const clr = $("ev-clear-filter");
+  if (clr) clr.onclick = () => { evFilterDay = null; bindCalendar(); renderBoardList(); };
+}
+
+async function renderEventBoard() {
+  const root = $("events-root");
+  root.innerHTML =
+    `<div class="panel"><div class="ev-head"><h2>EVENTS</h2>` +
+    `<a class="ev-btn primary" href="#/events/new">+ Create event</a></div>` +
+    `<div id="ev-cal"></div></div>` +
+    `<div id="ev-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
+  let data;
+  try { data = await fetch("/api/events?range=upcoming").then(r => r.json()); }
+  catch { $("ev-list").innerHTML = `<p class="stat-empty">Couldn't load events.</p>`; return; }
+  evBoardEvents = data.events || [];
+  evCalMonth = new Date(); evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth(), 1);
+  evFilterDay = null;
+  bindCalendar();
+  renderBoardList();
+}
+
+function attendeesByRole(attendees, targetRoles) {
+  const going = attendees.filter(a => a.status === "going");
+  const byRole = {}, noRole = [];
+  going.forEach(a => {
+    const roles = a.roles || [];
+    if (!roles.length) { noRole.push(a); return; }
+    roles.forEach(r => (byRole[r] = byRole[r] || []).push(a));
+  });
+  // Order: the event's target roles first, then any extra roles members claimed.
+  const ordered = [];
+  (targetRoles || []).forEach(t => { if (byRole[t]) ordered.push([t, byRole[t]]); });
+  Object.keys(byRole).forEach(r => { if (!(targetRoles || []).some(t => t.role === r) && !ordered.some(o => o[0] === r)) ordered.push([r, byRole[r]]); });
+  return { ordered, noRole, maybe: attendees.filter(a => a.status === "maybe") };
+}
+
+async function renderEventDetail(id) {
+  const root = $("events-root");
+  root.innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
+    `<div id="ev-detail-body"><p class="stat-empty">Loading…</p></div></div>`;
+  let e;
+  try {
+    const r = await fetch(`/api/events/${id}`);
+    if (!r.ok) throw 0;
+    e = await r.json();
+  } catch { $("ev-detail-body").innerHTML = `<p class="stat-empty">Event not found.</p>`; return; }
+  renderDetailBody(e);
+}
+
+async function renderDetailBody(e) {
+  const tax = await loadEventsTaxonomy();
+  const f = e.fill, cap = e.max_players == null ? "∞" : e.max_players;
+  const cancelled = e.status === "cancelled";
+  const chips = `<span class="ev-chip type">${esc(e.type)}</span>` +
+    `<span class="ev-chip ${catClass(e.category)}">${esc(e.category)}</span>` +
+    (cancelled ? ` <span class="ev-cancelled">CANCELLED</span>` : "");
+  const meta = [
+    `🕓 <b title="${esc(new Date(e.start_at).toUTCString())}">${esc(fmtEventTime(e.start_at))}</b> (your local time)`,
+    e.duration_min ? `⏱ ${e.duration_min} min` : "",
+    `📍 <b>${esc(e.location || "—")}</b>`,
+    `👤 organized by <b>${esc(e.organizer_name)}</b>`,
+    `👥 <b class="${f.min_met ? "ev-players met" : ""}">${f.total_going}/${cap}</b> signed up` +
+      (f.min_players ? ` (min ${f.min_players})` : ""),
+  ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+
+  // Roster grouped by role, each with its fill bar + the members filling it.
+  const grouped = attendeesByRole(e.attendees || [], e.roles || []);
+  const fillByRole = {}; (f.roster || []).forEach(r => fillByRole[r.role] = r);
+  let roster = (f.roster || []).map(r => {
+    const names = (grouped.ordered.find(o => o[0] === r.role) || [null, []])[1];
+    return `<div class="ev-roster-role">${roleBar(r)}` +
+      `<div class="ev-roster-names">${names.length
+        ? names.map(a => `<span class="ev-name">${esc(a.display_name)}</span>`).join("")
+        : `<span class="muted" style="font-size:12px;">— open —</span>`}</div></div>`;
+  }).join("");
+  // Any extra roles members claimed that aren't in the target roster.
+  grouped.ordered.filter(o => !fillByRole[o[0]]).forEach(([role, names]) => {
+    roster += `<div class="ev-roster-role"><div class="ev-role"><span class="ev-role-n">${esc(role)}</span>` +
+      `<span class="ev-role-bar"><span style="width:100%"></span></span>` +
+      `<span class="ev-role-ct">${names.length}</span></div>` +
+      `<div class="ev-roster-names">${names.map(a => `<span class="ev-name">${esc(a.display_name)}</span>`).join("")}</div></div>`;
+  });
+  if (grouped.noRole.length) {
+    roster += `<div class="ev-roster-role"><div class="ev-section-h" style="margin:4px 0">No role yet</div>` +
+      `<div class="ev-roster-names">${grouped.noRole.map(a => `<span class="ev-name">${esc(a.display_name)}</span>`).join("")}</div></div>`;
+  }
+  const maybeRow = grouped.maybe.length
+    ? `<div class="ev-section-h">Tentative (${grouped.maybe.length})</div>` +
+      `<div class="ev-roster-names">${grouped.maybe.map(a => `<span class="ev-name maybe">${esc(a.display_name)}</span>`).join("")}</div>`
+    : "";
+
+  const editControls = e.can_edit
+    ? `<button class="ev-btn" id="ev-edit">Edit</button>` +
+      (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
+    : "";
+
+  $("ev-detail-body").innerHTML =
+    `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
+    `<div class="ev-detail-meta">${meta}</div>` +
+    (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
+    `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
+    maybeRow +
+    (cancelled ? "" : signupForm(e, tax)) +
+    (editControls ? `<div class="ev-form-actions">${editControls}</div>` : "");
+
+  if (!cancelled) bindSignup(e);
+  if (e.can_edit) {
+    const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
+    const cn = $("ev-cancel"); if (cn) cn.onclick = async () => {
+      if (!confirm("Cancel this event? Signups are kept but it's hidden from the board.")) return;
+      const r = await fetch(`/api/events/${e.id}`, { method: "DELETE" });
+      if (r.ok) renderEventDetail(e.id);
+    };
+  }
+}
+
+function signupForm(e, tax) {
+  const mine = e.my_signup;
+  const checked = new Set(mine ? mine.roles : []);
+  const groups = tax.role_groups.map(g =>
+    `<div class="ev-rolegrp"><div class="ev-rolegrp-h">${esc(g.group)}</div>` +
+    `<div class="ev-rolegrp-roles">${g.roles.map(r =>
+      `<label class="ev-rolechk"><input type="checkbox" value="${esc(r)}" ${checked.has(r) ? "checked" : ""}> ${esc(r)}</label>`).join("")}</div></div>`).join("");
+  return `<div class="ev-signup"><h3>${mine ? "Your signup" : "Sign up"}</h3>` +
+    `<div class="ev-roles-pick">${groups}</div>` +
+    `<div class="ev-signup-row"><label class="muted" style="font-size:12px;">Status ` +
+    `<select id="ev-status"><option value="going" ${!mine || mine.status === "going" ? "selected" : ""}>Going</option>` +
+    `<option value="maybe" ${mine && mine.status === "maybe" ? "selected" : ""}>Maybe</option></select></label>` +
+    `<button id="ev-join" class="ev-btn primary">${mine ? "Update signup" : "Join event"}</button>` +
+    (mine ? `<button id="ev-withdraw" class="ev-btn danger">Withdraw</button>` : "") +
+    `<span id="ev-signup-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+}
+
+function bindSignup(e) {
+  const join = $("ev-join");
+  if (join) join.onclick = async () => {
+    const roles = [...document.querySelectorAll(".ev-roles-pick input:checked")].map(i => i.value);
+    const status = $("ev-status").value;
+    const msg = $("ev-signup-msg"); msg.textContent = "Saving…";
+    try {
+      const r = await fetch(`/api/events/${e.id}/signup`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roles, status }) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      renderDetailBody(await r.json());
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+  const wd = $("ev-withdraw");
+  if (wd) wd.onclick = async () => {
+    const r = await fetch(`/api/events/${e.id}/signup`, { method: "DELETE" });
+    if (r.ok) renderDetailBody(await r.json());
+  };
+}
+
+// --- create / edit form ---
+function toLocalInput(iso) {
+  const d = new Date(iso), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function rosterRowHtml(tax, role, needed) {
+  const opts = `<option value="">role…</option>` + tax.roles.map(r =>
+    `<option value="${esc(r)}" ${r === role ? "selected" : ""}>${esc(r)}</option>`).join("");
+  return `<div class="ev-roster-row"><select class="ev-rr-role">${opts}</select>` +
+    `<input class="ev-rr-needed" type="number" min="0" step="1" value="${needed != null ? needed : 1}" title="how many needed">` +
+    `<span class="ev-row-del" title="remove role">✕</span></div>`;
+}
+
+function eventFormHtml(tax, e) {
+  const typeOpts = tax.types.map(t => `<option ${e && e.type === t ? "selected" : ""}>${esc(t)}</option>`).join("");
+  const catOpts = tax.categories.map(c => `<option ${e && e.category === c ? "selected" : ""}>${esc(c)}</option>`).join("");
+  const rosterRows = (e && e.roles && e.roles.length ? e.roles : [{ role: "", needed: 1 }])
+    .map(r => rosterRowHtml(tax, r.role, r.needed)).join("");
+  return `<div class="ev-form">` +
+    `<div class="ev-field"><label>Title</label><input id="ev-f-title" class="ti" maxlength="120" value="${e ? esc(e.title) : ""}" placeholder="e.g. Daymar survey sweep"></div>` +
+    `<div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Type</label><select id="ev-f-type">${typeOpts}</select></div>` +
+      `<div class="ev-field"><label>Category</label><select id="ev-f-cat">${catOpts}</select></div>` +
+      `<div class="ev-field"><label>Start (your local time)</label><input id="ev-f-start" class="ti" type="datetime-local" value="${e ? toLocalInput(e.start_at) : ""}"></div>` +
+      `<div class="ev-field"><label>Duration (min, optional)</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}"></div>` +
+      `<div class="ev-field"><label>Start location</label><input id="ev-f-loc" class="ti" maxlength="120" value="${e ? esc(e.location || "") : ""}" placeholder="e.g. Everus Harbor"></div>` +
+      `<div class="ev-field"><label>Min players</label><input id="ev-f-min" class="ti" type="number" min="0" step="1" value="${e && e.min_players != null ? e.min_players : 0}"></div>` +
+      `<div class="ev-field"><label>Max players (blank = unlimited)</label><input id="ev-f-max" class="ti" type="number" min="1" step="1" value="${e && e.max_players != null ? e.max_players : ""}"></div>` +
+    `</div>` +
+    `<div class="ev-field"><label>Desired roles &amp; how many of each</label>` +
+      `<div class="ev-roster" id="ev-f-roster">${rosterRows}</div>` +
+      `<button class="ev-btn" id="ev-f-addrole" style="align-self:flex-start;margin-top:4px;">+ add role</button></div>` +
+    `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea></div>` +
+    `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${e ? "Save changes" : "Create event"}</button>` +
+      `<button class="ev-btn" id="ev-f-cancel">Cancel</button>` +
+      `<span id="ev-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+}
+
+function collectEventForm() {
+  const start = $("ev-f-start").value;
+  const title = $("ev-f-title").value.trim();
+  if (!title) return { error: "Give the event a title." };
+  if (!start) return { error: "Pick a start date & time." };
+  const roles = [...document.querySelectorAll("#ev-f-roster .ev-roster-row")].map(row => ({
+    role: row.querySelector(".ev-rr-role").value,
+    needed: parseInt(row.querySelector(".ev-rr-needed").value || "0", 10) || 0,
+  })).filter(r => r.role);
+  const seen = new Set();
+  for (const r of roles) { if (seen.has(r.role)) return { error: `Role "${r.role}" is listed twice.` }; seen.add(r.role); }
+  const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
+  return { payload: {
+    title, type: $("ev-f-type").value, category: $("ev-f-cat").value,
+    start_at: new Date(start).toISOString(),
+    duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
+    location: $("ev-f-loc").value.trim(),
+    min_players: parseInt($("ev-f-min").value || "0", 10) || 0,
+    max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
+    roles, description: $("ev-f-desc").value.trim(),
+  } };
+}
+
+function bindEventForm(tax, editId, onCancel) {
+  $("ev-f-addrole").onclick = () => {
+    $("ev-f-roster").insertAdjacentHTML("beforeend", rosterRowHtml(tax, "", 1));
+    bindRosterDeletes();
+  };
+  bindRosterDeletes();
+  $("ev-f-cancel").onclick = onCancel;
+  $("ev-f-save").onclick = async () => {
+    const { error, payload } = collectEventForm();
+    const msg = $("ev-f-msg");
+    if (error) { msg.textContent = error; return; }
+    msg.textContent = "Saving…";
+    try {
+      const r = await fetch(editId ? `/api/events/${editId}` : "/api/events", {
+        method: editId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      const saved = await r.json();
+      location.hash = `#/events/${saved.id}`;
+      if (editId && eventsSubRoute().id === saved.id) renderEventDetail(saved.id);  // hash unchanged → re-render
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+}
+
+function bindRosterDeletes() {
+  document.querySelectorAll("#ev-f-roster .ev-row-del").forEach(x => {
+    x.onclick = () => { if (document.querySelectorAll("#ev-f-roster .ev-roster-row").length > 1) x.closest(".ev-roster-row").remove(); };
+  });
+}
+
+async function renderEventForm() {
+  const tax = await loadEventsTaxonomy();
+  $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
+    `<h2>CREATE EVENT</h2>${eventFormHtml(tax, null)}</div>`;
+  bindEventForm(tax, null, () => { location.hash = "#/events"; });
+}
+
+async function renderEditForm(e) {
+  const tax = await loadEventsTaxonomy();
+  $("ev-detail-body").innerHTML = `<h2>EDIT EVENT</h2>${eventFormHtml(tax, e)}`;
+  bindEventForm(tax, e.id, () => renderDetailBody(e));
+}
+
 // ---------- view router (app launcher + apps + dedicated sub-pages) ----------
 // One SPA; the URL hash picks the view (fragment never hits the server, so
 // StaticFiles still serves the single index.html). The launcher (#/) is home and
 // hosts the app picker; the Resource Navigator lives at #/nav; #/settings, #/setup,
 // #/leaderboard and #/stats are account/app sub-pages. Empty/unknown hash → home.
-const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner", "#/": "Home" };
+const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
+  "#/events": "Events", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
-const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner" };
+const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
+  "#/events": "Event Planner" };
 // The app a sub-page should return to (persisted so a reload on a sub-page keeps it).
 let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch { return null; } })() || "#/nav";
 function applyView() {
@@ -3502,6 +3992,9 @@ function applyView() {
   const h = location.hash;
   const nav = h === "#/nav" && authed;
   const route = h === "#/route" && authed;
+  // The event planner owns a small sub-route family (board / new / detail), so
+  // any hash under #/events counts as being in the app.
+  const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
   const settings = h === "#/settings" && authed;
   const setup = h === "#/setup" && authed;
   const leaderboard = h === "#/leaderboard" && authed;
@@ -3515,8 +4008,11 @@ function applyView() {
   const privacy = h === "#/privacy";
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !route && !settings && !setup && !leaderboard
+  const launcher = authed && !nav && !route && !events && !settings && !setup && !leaderboard
     && !stats && !cargoLeaderboard && !cargoStats && !legal;
+  // Normalize the event sub-routes (#/events/new, #/events/123) to the app root
+  // for the header indicator and the "remember last app" jump.
+  const appHash = events ? "#/events" : h;
 
   // The sign-in gate covers everything for anonymous users, except a legal page.
   $("login-gate").hidden = authed || legal;
@@ -3526,6 +4022,7 @@ function applyView() {
   $("launcher-view").hidden = !launcher;
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
+  $("events-view").hidden = !events;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   $("leaderboard-view").hidden = !leaderboard;
@@ -3535,7 +4032,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup/Stats/
   // Leaderboard) can offer a "← back to that app" link.
-  if (nav || route) { lastApp = h; try { sessionStorage.setItem("scLastApp", h); } catch {} }
+  if (nav || route || events) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); } catch {} }
   // App contexts = each app plus its own Stats/Leaderboard sub-pages. The Stats/
   // Leaderboard header toggles stay visible across both and point at whichever
   // app's analytics you're currently in.
@@ -3548,11 +4045,11 @@ function applyView() {
   // own link stays visible but marked active (so the set doesn't appear to swap).
   // Current-app indicator (gold): shown while in an app view. Driven purely by
   // APP_TITLE, so a future app only needs a row added there to appear here.
-  const appTitle = authed ? APP_TITLE[h] : null;
+  const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || inCargo || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || legal;
+  $("where").hidden = launcher || route || events || inCargo || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || events || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   $("nav-toggle").hidden = !authed || launcher;
@@ -3583,6 +4080,8 @@ function applyView() {
     loadCargoStats();
   } else if (route) {
     loadRoutePlanner();
+  } else if (events) {
+    loadEvents();
   } else if (nav && lastState) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.

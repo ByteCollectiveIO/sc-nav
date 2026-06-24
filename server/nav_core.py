@@ -2111,3 +2111,57 @@ def derive_guild_cargo_stats(nav: NavData, runs, limit: int = 15) -> dict:
              for s, c in sorted(ship_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
     return {**base, "num_haulers": len(haulers), "top_commodities": commodities,
             "top_lanes": lanes, "top_ships": ships}
+
+
+def derive_event_fill(event: dict, signups) -> dict:
+    """Fill of an event against its target roster (design: docs/event-planner.md).
+
+    `event` carries `min_players`, `max_players` (None ⇒ unlimited) and a target
+    roster `roles=[{role, needed}]`; `signups` is the list of signups, each with
+    a `roles` list and a `status` (going | maybe | withdrawn; missing ⇒ going).
+
+    The one rule the headline and the bars disagree on, on purpose: a member
+    counts toward **every role they list** for the per-role bars (a medic who'll
+    also escort fills both), but `total_going` counts **distinct members** — so a
+    5-person op where two people each cover Medical and Escort shows `5 players`
+    up top and full Medical *and* Escort bars below, and neither figure lies.
+    Pure derivation; the list endpoint embeds this so cards render without N+1."""
+    going = [s for s in signups if (s.get("status") or "going") == "going"]
+
+    # Distinct members. UNIQUE(event_id, discord_id) should already guarantee one
+    # signup per member, but de-dupe defensively so a stray double never inflates
+    # the headcount (or any role bar).
+    seen, members = set(), []
+    for s in going:
+        did = s.get("discord_id")
+        if did in seen:
+            continue
+        seen.add(did)
+        members.append(s)
+    total = len(members)
+
+    min_players = int(event.get("min_players") or 0)
+    max_players = event.get("max_players")
+    max_players = int(max_players) if max_players is not None else None
+
+    role_filled: dict[str, int] = {}
+    for s in members:
+        for role in {r for r in (s.get("roles") or []) if r}:   # per-member set
+            role_filled[role] = role_filled.get(role, 0) + 1
+
+    roster = []
+    for r in (event.get("roles") or []):
+        needed = int(r.get("needed") or 0)
+        filled = role_filled.get(r.get("role"), 0)
+        roster.append({"role": r.get("role"), "needed": needed, "filled": filled,
+                       "short": max(0, needed - filled)})
+
+    return {
+        "total_going": total,
+        "min_players": min_players,
+        "max_players": max_players,
+        "spots_left": None if max_players is None else max(0, max_players - total),
+        "min_met": total >= min_players,
+        "is_full": max_players is not None and total >= max_players,
+        "roster": roster,
+    }

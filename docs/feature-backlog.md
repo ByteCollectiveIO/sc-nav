@@ -882,3 +882,50 @@ become app-scoped since the planner has its own analytics.
   `user_ships` + `runs` tables keyed on `discord_id`.
 - `server/static/index.html` — app launcher + navigator re-parented to `#/nav` +
   new `#/route` view, all branches in `applyView()` (~l.1951).
+
+## 13. Guild event planner
+
+**Status:** designed + **v1 BUILT 2026-06-23** (uncommitted). Full spec in
+[`docs/event-planner.md`](event-planner.md) — this is a pointer so it isn't lost
+in the backlog.
+
+### Problem
+
+Star Citizen is a social game and this is a guild webapp, but nothing helps
+members organize in-game events — raids, mining/salvage ops, meetups, and
+especially **survey & exploration expeditions**. Organizers need to post an event
+(type, time, start location, roster targets); members need to sign up for the
+role(s) they'll fill; each event should track its fill against the targets
+(`3/5 players`, `Surveyor 1/3`).
+
+### Decision (summary — see the design doc for detail)
+
+Two layers: **Author/Browse** (CRUD on `/api/events` — create + a calendar/cards
+board) and **Signup/Track** (`/api/events/{id}/signup` upsert + a pure
+`derive_event_fill` in `nav_core.py`). Third app in the SPA, but the app shell
+already exists, so it's one launcher card + an `#/events` view family — no shell
+work.
+
+Key decisions: the signup is the atom and carries a **list** of roles; fill math
+counts a signup toward *every* role it lists but the headline counts *distinct
+players* (the rule the tests pin down). Taxonomy (types/categories/roles) is
+**curated in code**, served like `/api/ships`. **Any org member** can create;
+organizer-or-admin edits/cancels. Times stored **UTC**, rendered local. v1 is
+**web-only** — recurring events, Discord announcements, and attendance leaderboards
+are deferred (cheap paths noted in the doc).
+
+The org-specific hook: **Survey Op** and **Exploration** event types feed the
+navigator's own dataset, and the four survey roles map 1:1 onto the app's capture
+domains — Surveyor→cells/ores/hotspots, Naturalist→fauna/harvestables/biomes,
+Cartographer→POIs/position, Pathfinder/Scout→recon.
+
+### Relevant code
+
+- `server/nav_core.py` — add `derive_event_fill` (pure, unit-tested); pattern off
+  `derive_run_stats` / `derive_guild_leaderboard`.
+- `server/db.py` — `CREATE TABLE IF NOT EXISTS` + `_ensure_column` pattern; new
+  `events` + `event_signups` tables keyed on `discord_id`.
+- `server/app.py` — `require_session`/`require_admin` + organizer-guard; taxonomy
+  served like `/api/ships`; JSON-blob columns as in `/api/route/*`.
+- `server/static/index.html` — launcher card + new `#/events` view as branches in
+  `applyView()`; calendar/cards CSS in the spirit of `#/stats`.
