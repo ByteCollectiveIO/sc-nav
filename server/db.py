@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     organizer_id TEXT NOT NULL,         -- Discord member id of the creator
     title TEXT, description TEXT,
-    type TEXT, category TEXT,           -- category: JSON list of flavors
+    type TEXT, category TEXT,           -- type & category: JSON lists (1+ each)
     start_at TEXT,                      -- event start, UTC ISO8601
     duration_min INTEGER,
     location TEXT,                       -- rally point
@@ -464,12 +464,13 @@ _EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
                    "min_players", "max_players", "roles")
 
 # Columns the create/edit layer hands us as Python lists; stored as JSON text.
-_EVENT_JSON = ("roles", "category")
+_EVENT_JSON = ("roles", "category", "type")
 
 
-def _event_categories(raw) -> list:
-    """Parse the stored `category` into a list. Tolerates both the new JSON-list
-    form and legacy single-string rows written before events were multi-category."""
+def _event_json_list(raw) -> list:
+    """Parse a stored multi-value column (`type` / `category`) into a list.
+    Tolerates both the new JSON-list form and legacy single-string rows written
+    before these axes went multi-value."""
     if not raw:
         return []
     try:
@@ -484,7 +485,8 @@ def _event_categories(raw) -> list:
 def _event_row_to_dict(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["roles"] = _u(d.get("roles")) or []
-    d["category"] = _event_categories(d.get("category"))
+    d["category"] = _event_json_list(d.get("category"))
+    d["type"] = _event_json_list(d.get("type"))
     return d
 
 
@@ -504,7 +506,7 @@ def create_event(d: dict) -> int:
             "max_players, roles, status, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["organizer_id"]), d.get("title"), d.get("description"),
-             d.get("type"), _j(d.get("category") or []), d.get("start_at"),
+             _j(d.get("type") or []), _j(d.get("category") or []), d.get("start_at"),
              d.get("duration_min"), d.get("location"), d.get("event_location"),
              d.get("min_players"), d.get("max_players"), _j(d.get("roles") or []),
              d.get("status", "scheduled"), d.get("created_at"), d.get("updated_at")),

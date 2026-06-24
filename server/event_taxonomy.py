@@ -18,8 +18,9 @@ TYPES = [
 ]
 
 # The flavor, for filtering. Survey/Exploration are Types, not a category —
-# deliberately not duplicated onto this axis (they're just PvE).
-CATEGORIES = ["PvP", "PvE", "Social", "Logistics", "Mixed"]
+# deliberately not duplicated onto this axis (they're just PvE). "Event" tags the
+# special/seasonal happenings; "Race" the competitive runs.
+CATEGORIES = ["PvP", "PvE", "Social", "Logistics", "Mixed", "Event", "Race"]
 
 # What a signup fills. The four Survey & Exploration roles map 1:1 onto the
 # navigator's capture domains (Surveyor→cells/ores/hotspots,

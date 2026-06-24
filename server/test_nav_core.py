@@ -1354,6 +1354,9 @@ class EventTaxonomyTests(unittest.TestCase):
         self.assertEqual(set(t), {"types", "categories", "role_groups", "roles"})
         self.assertIn("Survey Op", t["types"])
         self.assertIn("Surveyor", t["roles"])
+        # "Event" and "Race" categories were added in the multi-type pass.
+        self.assertIn("Event", t["categories"])
+        self.assertIn("Race", t["categories"])
 
 
 if __name__ == "__main__":

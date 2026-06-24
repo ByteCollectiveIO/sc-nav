@@ -571,6 +571,10 @@
   .ev-head { display: flex; align-items: center; justify-content: space-between;
     flex-wrap: wrap; gap: 10px; }
   .ev-head h2 { margin: 0; }
+  /* Pronounced screen/form header (overrides the dim, tiny default panel h2).
+     Shared by the EVENTS board header and the CREATE/EDIT EVENT form title. */
+  h2.ev-screen-h { font-size: 22px; font-weight: 700; letter-spacing: 1px;
+    color: var(--sel); text-transform: none; }
   .ev-btn { font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--border); background: none; color: var(--text); text-decoration: none; }
   .ev-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -590,6 +594,8 @@
   .ev-chip.cat-social { color: var(--mate); border-color: var(--mate); }
   .ev-chip.cat-logistics { color: var(--warn); border-color: var(--warn); }
   .ev-chip.cat-mixed { color: var(--node); border-color: var(--node); }
+  .ev-chip.cat-event { color: var(--sel); border-color: var(--sel); }
+  .ev-chip.cat-race { color: var(--harvest); border-color: var(--harvest); }
   /* event card */
   .ev-card { display: block; text-decoration: none; color: var(--text);
     padding: 12px 0; border-top: 1px solid var(--border); }
@@ -668,6 +674,12 @@
   /* create/edit form */
   .ev-form { display: flex; flex-direction: column; gap: 14px; }
   .ev-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  /* One uniform control height across the grid: native date/time/number controls
+     and the .poi-pick-wrapped text inputs otherwise render taller/shorter than
+     the plain .ti boxes, leaving the grid ragged. */
+  .ev-form-grid .ti, .ev-form-grid select { box-sizing: border-box; height: 38px; }
+  .ev-form-grid .poi-pick { min-width: 0; align-items: stretch; }
+  .ev-form-grid .poi-pick .ti { height: 38px; }
   .ev-field { display: flex; flex-direction: column; gap: 4px; }
   .ev-field label { font-size: 11px; color: var(--dim); letter-spacing: .5px; }
   .ev-field input, .ev-field select, .ev-field textarea { width: 100%; }
@@ -3663,9 +3675,11 @@ function loadEvents() {
 
 function catClass(cat) { return "cat-" + String(cat || "").toLowerCase().replace(/[^a-z]/g, ""); }
 
-// An event's chips: its single type plus each of its (possibly several) categories.
+// An event's chips: each of its (possibly several) types plus each of its
+// (possibly several) categories.
 function eventChips(e) {
-  return `<span class="ev-chip type">${esc(e.type)}</span>` +
+  return (e.types || []).map(t =>
+      `<span class="ev-chip type">${esc(t)}</span>`).join("") +
     (e.categories || []).map(c =>
       `<span class="ev-chip ${catClass(c)}">${esc(c)}</span>`).join("");
 }
@@ -3760,13 +3774,13 @@ function renderBoardList() {
 async function renderEventBoard() {
   const root = $("events-root");
   root.innerHTML =
-    `<div class="panel"><div class="ev-head"><h2>EVENTS</h2>` +
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">EVENTS</h2>` +
     `<a class="ev-btn primary" href="#/events/new">+ Create event</a></div>` +
     `<p class="ev-intro">Plan and rally the org around in-game events — raids, mining ` +
     `and salvage ops, survey expeditions, cargo runs, bounty hunts and meetups. ` +
     `Pick a day on the calendar to see what's scheduled, sign up for the role you'll ` +
-    `fill, or <a href="#/events/new">create your own event</a> and gather a crew.</p>` +
-    `<div id="ev-cal"></div></div>` +
+    `fill, or <a href="#/events/new">create your own event</a> and gather a crew.</p></div>` +
+    `<div class="panel"><div id="ev-cal"></div></div>` +
     `<div id="ev-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   let data;
   try { data = await fetch("/api/events?range=upcoming").then(r => r.json()); }
@@ -3934,7 +3948,10 @@ function rosterRowHtml(tax, role, needed) {
 }
 
 function eventFormHtml(tax, e) {
-  const typeOpts = tax.types.map(t => `<option ${e && e.type === t ? "selected" : ""}>${esc(t)}</option>`).join("");
+  const evTypes = new Set(e ? (e.types || []) : []);
+  const typeChips = tax.types.map(t =>
+    `<label class="ev-cat-chip${evTypes.has(t) ? " on" : ""}">` +
+    `<input type="checkbox" class="ev-f-type" value="${esc(t)}" ${evTypes.has(t) ? "checked" : ""}>${esc(t)}</label>`).join("");
   const evCats = new Set(e ? (e.categories || []) : []);
   const catChips = tax.categories.map(c =>
     `<label class="ev-cat-chip${evCats.has(c) ? " on" : ""}">` +
@@ -3943,10 +3960,11 @@ function eventFormHtml(tax, e) {
     .map(r => rosterRowHtml(tax, r.role, r.needed)).join("");
   return `<div class="ev-form">` +
     `<div class="ev-field"><label>Title</label><input id="ev-f-title" class="ti" maxlength="120" value="${e ? esc(e.title) : ""}" placeholder="e.g. Daymar survey sweep"></div>` +
+    `<div class="ev-field"><label>Type (pick one or more)</label>` +
+      `<div class="ev-cat-grid" id="ev-f-types">${typeChips}</div></div>` +
     `<div class="ev-field"><label>Category (pick one or more)</label>` +
       `<div class="ev-cat-grid" id="ev-f-cats">${catChips}</div></div>` +
     `<div class="ev-form-grid">` +
-      `<div class="ev-field"><label>Type</label><select id="ev-f-type">${typeOpts}</select></div>` +
       `<div class="ev-field"><label>Date</label><input id="ev-f-date" class="ti" type="date" value="${e ? toLocalDate(e.start_at) : ""}"></div>` +
       `<div class="ev-field"><label>Time</label><input id="ev-f-time" class="ti" type="time" value="${e ? toLocalTime(e.start_at) : ""}">` +
         `<span class="ev-hint">Shown in your timezone — ${esc(localTzName())}. Everyone sees it in their own.</span></div>` +
@@ -3970,6 +3988,8 @@ function collectEventForm() {
   const title = $("ev-f-title").value.trim();
   if (!title) return { error: "Give the event a title." };
   if (!date || !time) return { error: "Pick a start date & time." };
+  const types = [...document.querySelectorAll("#ev-f-types .ev-f-type:checked")].map(i => i.value);
+  if (!types.length) return { error: "Pick at least one type." };
   const categories = [...document.querySelectorAll("#ev-f-cats .ev-f-cat:checked")].map(i => i.value);
   if (!categories.length) return { error: "Pick at least one category." };
   const roles = [...document.querySelectorAll("#ev-f-roster .ev-roster-row")].map(row => ({
@@ -3980,7 +4000,7 @@ function collectEventForm() {
   for (const r of roles) { if (seen.has(r.role)) return { error: `Role "${r.role}" is listed twice.` }; seen.add(r.role); }
   const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
   return { payload: {
-    title, type: $("ev-f-type").value, categories,
+    title, types, categories,
     start_at: new Date(`${date}T${time}`).toISOString(),
     duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
     location: $("ev-f-loc").value.trim(),
@@ -3997,8 +4017,8 @@ function bindEventForm(tax, editId, onCancel) {
     bindRosterDeletes();
   };
   bindRosterDeletes();
-  // Category chips: reflect the checkbox state in the chip's highlight.
-  document.querySelectorAll("#ev-f-cats .ev-cat-chip").forEach(chip => {
+  // Type & category chips: reflect the checkbox state in the chip's highlight.
+  document.querySelectorAll(".ev-cat-grid .ev-cat-chip").forEach(chip => {
     const box = chip.querySelector("input");
     box.addEventListener("change", () => chip.classList.toggle("on", box.checked));
   });
@@ -4031,13 +4051,13 @@ function bindRosterDeletes() {
 async function renderEventForm() {
   const tax = await loadEventsTaxonomy();
   $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
-    `<h2>CREATE EVENT</h2>${eventFormHtml(tax, null)}</div>`;
+    `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, null)}</div>`;
   bindEventForm(tax, null, () => { location.hash = "#/events"; });
 }
 
 async function renderEditForm(e) {
   const tax = await loadEventsTaxonomy();
-  $("ev-detail-body").innerHTML = `<h2>EDIT EVENT</h2>${eventFormHtml(tax, e)}`;
+  $("ev-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT EVENT</h2>${eventFormHtml(tax, e)}`;
   bindEventForm(tax, e.id, () => renderDetailBody(e));
 }
 
