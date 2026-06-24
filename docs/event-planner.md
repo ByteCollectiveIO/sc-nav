@@ -70,8 +70,8 @@ Signup/Track    join with role(s), compute fill     /api/events/{id}/signup
 
 ```
 event   = { id, organizer_id, title, description,
-            type, category, start_at(UTC), duration_min?,
-            location, min_players, max_players?,
+            type, category(JSON list), start_at(UTC), duration_min?,
+            location(rally point), event_location?, min_players, max_players?,
             roles: [{role, needed}],   status, created_at, updated_at }
 
 signup  = { id, event_id, discord_id, roles: [role, ...],
@@ -86,6 +86,11 @@ signup  = { id, event_id, discord_id, roles: [role, ...],
   rejected.
 - `max_players` nullable = unlimited; `min_players` drives the "minimum met?"
   gate. `start_at` is **UTC** (store UTC, render each viewer's local time).
+- `category` is a **list** — an event can carry several flavors at once (a PvP +
+  PvE op). Legacy single-string rows parse back as a one-element list.
+- `location` is the **rally point** (where the org forms up); `event_location` is
+  the optional spot where the activity actually happens. Both are freeform text
+  with POI-search autocomplete in the form.
 - `status`: `scheduled → cancelled | completed`. Cancelling keeps the row (and its
   roster) rather than deleting, so a mistaken cancel is recoverable and history is
   intact.
@@ -104,7 +109,8 @@ Survey Op · Exploration · Racing · Combat Patrol · Medical Op ·
 Industrial · Meetup / Social · Training
 ```
 
-**Category** — the flavor, for filtering:
+**Category** — the flavor(s), for filtering. An event may carry **several** (a
+raid that's both PvP and PvE):
 ```
 PvP · PvE · Social · Logistics · Mixed
 ```
@@ -180,8 +186,10 @@ New tables in `server/db.py`, keyed on the Discord member id, following the
 existing `CREATE TABLE IF NOT EXISTS` + `_ensure_column` pattern:
 
 - **`events`** — `(id, organizer_id, title, description, type, category,
-  start_at, duration_min, location, min_players, max_players, roles, status,
-  created_at, updated_at)`; `roles` is the JSON target-roster blob.
+  start_at, duration_min, location, event_location, min_players, max_players,
+  roles, status, created_at, updated_at)`; `roles` and `category` are JSON blobs
+  (`category` is the list of flavors). `event_location` is added via `_ensure_column`
+  for DBs predating multi-location.
 - **`event_signups`** — `(id, event_id, discord_id, roles, status, note,
   created_at)` with `UNIQUE(event_id, discord_id)` (one signup per member per
   event — joining again upserts the role list) and an index on `event_id`.
@@ -215,15 +223,18 @@ Launcher gets an **Events** card → `#/events`. Hand-rolled CSS to match the
 existing SPA; the calendar is a CSS month grid (same spirit as the hand-rolled
 charts on `#/stats`).
 
-- **Board (`#/events`)** — a month **calendar** with dots on event days, above a
-  scrollable list of upcoming **event cards**. Card = title, type/category chips,
+- **Board (`#/events`)** — an intro blurb, then a month **calendar** with
+  pronounced dots on event days, above a scrollable list of upcoming **event
+  cards**. Card = gold title, type + category chips (one per category),
   *local* start time (UTC stored, rendered local with a UTC tooltip), location,
   and the fill bars: headline `3/5 players` + per-role mini-bars
   `Medical 2/2 ✓ · Surveyor 1/3`. Filter by category/type.
-- **Create** (modal or `#/events/new`) — title, description, type & category
-  pickers (from taxonomy), date/time (entered local, stored UTC), location
-  (freeform now; POI-autocomplete later), min/max players, and a repeatable
-  `role + needed` target-roster builder.
+- **Create** (`#/events/new`) — title, a multi-select **category** chip row, type
+  picker (from taxonomy), **separate Date + Time** inputs (entered local with a
+  timezone hint, stored UTC), **rally point** + optional **event location** (both
+  freeform with POI-search autocomplete), min/max players, and a repeatable
+  `role + needed` target-roster builder. Native pickers render dark
+  (`color-scheme`) to match the site.
 - **Detail (`#/event/{id}`)** — full description, roster grouped by role, and a
   **role multi-select** to join (the grouped taxonomy). Organizer/admin sees edit
   + cancel.
@@ -256,8 +267,9 @@ Suite grows ~79 → ~90 with the `derive_event_fill` tests.
 - **Discord announcements** — web-only first. An admin-configured channel
   **webhook URL** (org setting) posting an embed on create/update is the
   lightweight path — no bot token. Full bot RSVP/reminders is a much larger build.
-- **Location → POI link** — freeform text now; later autocomplete against the
-  starmap POIs the navigator already serves, and link the event to a POI id.
+- **Location → POI link** — rally point + event location now have POI-search
+  autocomplete (against the starmap POIs the navigator serves) but still store
+  freeform text; linking the event to a stable POI id is the remaining step.
 - **Attendance credit / organizer leaderboard** — completed events with their
   rosters could feed a "most active organizer / most attended" board like the
   guild hauling leaderboard. Not v1.

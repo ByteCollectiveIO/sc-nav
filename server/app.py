@@ -1704,10 +1704,12 @@ class EventIn(BaseModel):
     title: str = Field(min_length=1, max_length=_NAME_MAX)
     description: str = Field(default="", max_length=_DESC_MAX)
     type: str = Field(max_length=_TYPE_MAX)
-    category: str = Field(max_length=_TYPE_MAX)
+    # An event can carry several flavors at once (e.g. both PvP and PvE).
+    categories: list[str] = Field(default_factory=list, max_length=12)
     start_at: str = Field(max_length=_META_MAX)   # ISO8601 UTC; validated below
     duration_min: int | None = Field(default=None, ge=0, le=100_000)
-    location: str = Field(default="", max_length=_NAME_MAX)
+    location: str = Field(default="", max_length=_NAME_MAX)         # rally point
+    event_location: str = Field(default="", max_length=_NAME_MAX)   # where it happens
     min_players: int = Field(default=0, ge=0, le=_MAX_PLAYERS)
     max_players: int | None = Field(default=None, ge=1, le=_MAX_PLAYERS)
     roles: list[RoleTargetIn] = Field(default_factory=list, max_length=_MAX_ROSTER_ROLES)
@@ -1719,9 +1721,10 @@ class SignupIn(BaseModel):
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
 
 
-_EVENT_PUBLIC = ("id", "organizer_id", "title", "description", "type", "category",
-                 "start_at", "duration_min", "location", "min_players",
-                 "max_players", "roles", "status", "created_at", "updated_at")
+_EVENT_PUBLIC = ("id", "organizer_id", "title", "description", "type",
+                 "start_at", "duration_min", "location", "event_location",
+                 "min_players", "max_players", "roles", "status",
+                 "created_at", "updated_at")
 
 
 def _normalize_event_start(s: str) -> str:
@@ -1741,8 +1744,15 @@ def _validate_event(body: EventIn) -> dict:
     into the column dict db.create_event / db.update_event expect."""
     if body.type not in event_taxonomy.TYPES:
         raise HTTPException(status_code=400, detail="unknown event type")
-    if body.category not in event_taxonomy.CATEGORIES:
-        raise HTTPException(status_code=400, detail="unknown event category")
+    categories, cat_seen = [], set()
+    for c in body.categories:
+        if c not in event_taxonomy.CATEGORIES:
+            raise HTTPException(status_code=400, detail=f"unknown event category: {c}")
+        if c not in cat_seen:
+            cat_seen.add(c)
+            categories.append(c)
+    if not categories:
+        raise HTTPException(status_code=400, detail="pick at least one category")
     roster, seen = [], set()
     for r in body.roles:
         if r.role not in event_taxonomy.ROLES:
@@ -1756,10 +1766,11 @@ def _validate_event(body: EventIn) -> dict:
     return {
         "title": body.title.strip(),
         "description": (body.description or "").strip(),
-        "type": body.type, "category": body.category,
+        "type": body.type, "category": categories,
         "start_at": _normalize_event_start(body.start_at),
         "duration_min": body.duration_min,
         "location": (body.location or "").strip(),
+        "event_location": (body.event_location or "").strip(),
         "min_players": body.min_players, "max_players": body.max_players,
         "roles": roster,
     }
@@ -1793,6 +1804,7 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
     mine = next((s for s in signups
                  if s["discord_id"] == user["id"] and s["status"] != "withdrawn"), None)
     view = {k: ev.get(k) for k in _EVENT_PUBLIC}
+    view["categories"] = ev.get("category") or []
     view["organizer_name"] = _resolve_member_name(ev["organizer_id"], None)
     view["is_organizer"] = ev["organizer_id"] == user["id"]
     view["can_edit"] = view["is_organizer"] or bool(user.get("is_admin"))

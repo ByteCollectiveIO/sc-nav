@@ -100,16 +100,20 @@ CREATE INDEX IF NOT EXISTS runs_owner_status ON runs(discord_id, status);
 -- Event planner: guild-organized in-game events (raids, ops, survey/exploration
 -- expeditions, meetups). `organizer_id` is the creating member; `roles` is the
 -- JSON target roster [{role, needed}]; `start_at` is UTC ISO8601 (rendered local
--- in the client). Cancelling sets status rather than deleting, so a mistaken
--- cancel is recoverable and the roster history survives.
+-- in the client). `category` is a JSON list of flavors (an event can be both PvP
+-- and PvE). `location` is the rally point (where the org forms up); the optional
+-- `event_location` is where the activity actually happens. Cancelling sets status
+-- rather than deleting, so a mistaken cancel is recoverable and the roster history
+-- survives.
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
     organizer_id TEXT NOT NULL,         -- Discord member id of the creator
     title TEXT, description TEXT,
-    type TEXT, category TEXT,
+    type TEXT, category TEXT,           -- category: JSON list of flavors
     start_at TEXT,                      -- event start, UTC ISO8601
     duration_min INTEGER,
-    location TEXT,
+    location TEXT,                       -- rally point
+    event_location TEXT,                 -- where the activity happens (optional)
     min_players INTEGER, max_players INTEGER,   -- max NULL = unlimited
     roles TEXT,                         -- JSON target roster: [{role, needed}]
     status TEXT NOT NULL DEFAULT 'scheduled',   -- scheduled | cancelled | completed
@@ -148,6 +152,7 @@ def init(db_path) -> None:
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
         _ensure_column("observations", "shard_id", "TEXT")
+        _ensure_column("events", "event_location", "TEXT")
 
 
 def _ensure_column(table: str, column: str, decl: str) -> None:
@@ -451,16 +456,35 @@ def set_cargo_session_start(discord_id: str, ts: str) -> None:
 
 # --- event planner (events + signups) --------------------------------------
 
-# Columns a create/edit writes; `roles` is the JSON target roster. organizer_id,
+# Columns a create/edit writes; `roles` and `category` are JSON. organizer_id,
 # status and created_at are set on insert and never edited here (status flips via
 # cancel_event); updated_at is stamped on every write.
 _EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
-                   "duration_min", "location", "min_players", "max_players", "roles")
+                   "duration_min", "location", "event_location",
+                   "min_players", "max_players", "roles")
+
+# Columns the create/edit layer hands us as Python lists; stored as JSON text.
+_EVENT_JSON = ("roles", "category")
+
+
+def _event_categories(raw) -> list:
+    """Parse the stored `category` into a list. Tolerates both the new JSON-list
+    form and legacy single-string rows written before events were multi-category."""
+    if not raw:
+        return []
+    try:
+        parsed = _u(raw)
+    except (ValueError, TypeError):
+        parsed = None        # legacy plain-string row (not JSON)
+    if isinstance(parsed, list):
+        return parsed
+    return [raw] if isinstance(raw, str) else []
 
 
 def _event_row_to_dict(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["roles"] = _u(d.get("roles")) or []
+    d["category"] = _event_categories(d.get("category"))
     return d
 
 
@@ -476,12 +500,13 @@ def create_event(d: dict) -> int:
     with _lock, _conn:
         cur = _conn.execute(
             "INSERT INTO events (organizer_id, title, description, type, category, "
-            "start_at, duration_min, location, min_players, max_players, roles, "
-            "status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "start_at, duration_min, location, event_location, min_players, "
+            "max_players, roles, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["organizer_id"]), d.get("title"), d.get("description"),
-             d.get("type"), d.get("category"), d.get("start_at"),
-             d.get("duration_min"), d.get("location"), d.get("min_players"),
-             d.get("max_players"), _j(d.get("roles") or []),
+             d.get("type"), _j(d.get("category") or []), d.get("start_at"),
+             d.get("duration_min"), d.get("location"), d.get("event_location"),
+             d.get("min_players"), d.get("max_players"), _j(d.get("roles") or []),
              d.get("status", "scheduled"), d.get("created_at"), d.get("updated_at")),
         )
     return cur.lastrowid
@@ -512,7 +537,7 @@ def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
     """Replace the editable columns of an event (organizer/admin check is the
     caller's job). Returns whether a row matched."""
     sets = ", ".join(f"{c}=?" for c in _EVENT_EDITABLE)
-    vals = [_j(fields.get("roles") or []) if c == "roles" else fields.get(c)
+    vals = [_j(fields.get(c) or []) if c in _EVENT_JSON else fields.get(c)
             for c in _EVENT_EDITABLE]
     with _lock, _conn:
         cur = _conn.execute(

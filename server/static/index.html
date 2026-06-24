@@ -11,6 +11,9 @@
     --good: #66bb6a; --bad: #ef5350; --border: #243044;
     --node: #b39ddb; --fauna: #81c784; --mate: #f06292; --harvest: #cddc39;
     --sel: #ffd54f;  /* gold: currently-selected destination (map ring + row) */
+    /* Render native controls (date/time pickers, <select> dropdowns) dark so
+       they match the site instead of the OS default gray/white menus. */
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -594,7 +597,7 @@
   .ev-card:hover .ev-title { color: var(--accent); }
   .ev-card-top { display: flex; align-items: baseline; justify-content: space-between;
     gap: 10px; flex-wrap: wrap; }
-  .ev-title { font-size: 16px; font-weight: 600; }
+  .ev-title { font-size: 16px; font-weight: 600; color: var(--sel); }
   .ev-chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .ev-meta { font-size: 12px; color: var(--dim); margin: 4px 0 8px; }
   .ev-fill { display: flex; flex-direction: column; gap: 5px; }
@@ -612,6 +615,11 @@
   .ev-role.done .ev-role-bar > span { background: var(--good); }
   .ev-role-ct { font-variant-numeric: tabular-nums; color: var(--dim); text-align: right; }
   .ev-role.done .ev-role-ct { color: var(--good); }
+  /* board intro blurb */
+  .ev-intro { font-size: 13px; line-height: 1.6; color: var(--dim);
+    margin: 0 0 14px; max-width: 760px; }
+  .ev-intro a { color: var(--accent); text-decoration: none; }
+  .ev-intro a:hover { text-decoration: underline; }
   /* calendar */
   .ev-cal-head { display: flex; align-items: center; justify-content: center; gap: 16px;
     margin-bottom: 8px; }
@@ -629,14 +637,15 @@
   .ev-cal-cell.has:hover { border-color: var(--accent); }
   .ev-cal-cell.sel { border-color: var(--accent); color: var(--accent); }
   .ev-cal-cell.empty { border-color: transparent; }
-  .ev-dot { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
-    width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-  .ev-cal-cell.sel .ev-dot { background: var(--accent); }
+  .ev-dot { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 6px var(--accent); }
+  .ev-cal-cell.sel .ev-dot { background: var(--sel); box-shadow: 0 0 6px var(--sel); }
   .ev-filter-note { display: flex; align-items: center; gap: 10px; font-size: 12px;
     color: var(--dim); margin-bottom: 8px; }
   /* detail */
   .ev-detail-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  .ev-detail-title h2 { margin: 0; }
+  .ev-detail-title h2 { margin: 0; color: var(--sel); }
   .ev-detail-meta { font-size: 13px; color: var(--dim); margin: 8px 0; line-height: 1.7; }
   .ev-detail-meta b { color: var(--text); font-weight: 600; }
   .ev-desc { font-size: 14px; line-height: 1.6; margin: 10px 0; white-space: pre-wrap; }
@@ -662,7 +671,25 @@
   .ev-field { display: flex; flex-direction: column; gap: 4px; }
   .ev-field label { font-size: 11px; color: var(--dim); letter-spacing: .5px; }
   .ev-field input, .ev-field select, .ev-field textarea { width: 100%; }
+  /* Dark form controls so <select> and <textarea> match the .ti inputs and the
+     rest of the site instead of the browser's default white boxes. */
+  .ev-field select, .ev-field textarea, .ev-roster-row select, #ev-status,
+  .ev-cat-grid select {
+    padding: 8px 10px; font: inherit; font-size: 13px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .ev-field select:focus, .ev-field textarea:focus, .ev-roster-row select:focus,
+  #ev-status:focus { outline: none; border-color: var(--accent); }
   .ev-field textarea { min-height: 80px; resize: vertical; font-family: inherit; }
+  .ev-field .ev-hint { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  /* category multi-select: a grid of toggle chips (an event can be several) */
+  .ev-cat-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ev-cat-chip { font-size: 12px; padding: 5px 12px; border-radius: 14px;
+    border: 1px solid var(--border); color: var(--dim); cursor: pointer;
+    user-select: none; background: var(--panel2); }
+  .ev-cat-chip:hover { border-color: var(--accent); color: var(--text); }
+  .ev-cat-chip.on { border-color: var(--accent); color: var(--accent);
+    background: rgba(79,195,247,.12); font-weight: 600; }
+  .ev-cat-chip input { display: none; }
   .ev-roster { display: flex; flex-direction: column; gap: 8px; }
   .ev-roster-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .ev-roster-row select { flex: 1; min-width: 140px; }
@@ -3636,6 +3663,20 @@ function loadEvents() {
 
 function catClass(cat) { return "cat-" + String(cat || "").toLowerCase().replace(/[^a-z]/g, ""); }
 
+// An event's chips: its single type plus each of its (possibly several) categories.
+function eventChips(e) {
+  return `<span class="ev-chip type">${esc(e.type)}</span>` +
+    (e.categories || []).map(c =>
+      `<span class="ev-chip ${catClass(c)}">${esc(c)}</span>`).join("");
+}
+
+// The viewer's resolved IANA timezone (e.g. "Europe/Berlin"), for the form hint
+// and detail meta so it's clear whose clock the times are shown in.
+function localTzName() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "your local time"; }
+  catch { return "your local time"; }
+}
+
 function fmtEventTime(iso) {
   const d = new Date(iso);
   return d.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric",
@@ -3659,13 +3700,12 @@ function roleBar(r) {
 function eventCard(e) {
   const f = e.fill;
   const cap = e.max_players == null ? "∞" : e.max_players;
-  const chips = `<span class="ev-chip type">${esc(e.type)}</span>` +
-    `<span class="ev-chip ${catClass(e.category)}">${esc(e.category)}</span>`;
   const roles = (f.roster || []).map(roleBar).join("");
+  const where = e.event_location || e.location;
   return `<a class="ev-card" href="#/events/${e.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(e.title)}</div>` +
-    `<div class="ev-chips">${chips}</div></div>` +
-    `<div class="ev-meta">🕓 ${esc(fmtEventTime(e.start_at))} · 📍 ${esc(e.location || "—")} · ` +
+    `<div class="ev-chips">${eventChips(e)}</div></div>` +
+    `<div class="ev-meta">🕓 ${esc(fmtEventTime(e.start_at))} · 📍 ${esc(where || "—")} · ` +
     `by ${esc(e.organizer_name)}</div>` +
     `<div class="ev-fill"><div class="ev-players ${f.min_met ? "met" : ""}">` +
     `${f.total_going}/${cap} players` +
@@ -3722,6 +3762,10 @@ async function renderEventBoard() {
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2>EVENTS</h2>` +
     `<a class="ev-btn primary" href="#/events/new">+ Create event</a></div>` +
+    `<p class="ev-intro">Plan and rally the org around in-game events — raids, mining ` +
+    `and salvage ops, survey expeditions, cargo runs, bounty hunts and meetups. ` +
+    `Pick a day on the calendar to see what's scheduled, sign up for the role you'll ` +
+    `fill, or <a href="#/events/new">create your own event</a> and gather a crew.</p>` +
     `<div id="ev-cal"></div></div>` +
     `<div id="ev-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   let data;
@@ -3766,13 +3810,13 @@ async function renderDetailBody(e) {
   const tax = await loadEventsTaxonomy();
   const f = e.fill, cap = e.max_players == null ? "∞" : e.max_players;
   const cancelled = e.status === "cancelled";
-  const chips = `<span class="ev-chip type">${esc(e.type)}</span>` +
-    `<span class="ev-chip ${catClass(e.category)}">${esc(e.category)}</span>` +
+  const chips = eventChips(e) +
     (cancelled ? ` <span class="ev-cancelled">CANCELLED</span>` : "");
   const meta = [
-    `🕓 <b title="${esc(new Date(e.start_at).toUTCString())}">${esc(fmtEventTime(e.start_at))}</b> (your local time)`,
+    `🕓 <b title="${esc(new Date(e.start_at).toUTCString())}">${esc(fmtEventTime(e.start_at))}</b> (${esc(localTzName())})`,
     e.duration_min ? `⏱ ${e.duration_min} min` : "",
-    `📍 <b>${esc(e.location || "—")}</b>`,
+    `🚩 Rally: <b>${esc(e.location || "—")}</b>`,
+    e.event_location ? `📍 Event: <b>${esc(e.event_location)}</b>` : "",
     `👤 organized by <b>${esc(e.organizer_name)}</b>`,
     `👥 <b class="${f.min_met ? "ev-players met" : ""}">${f.total_going}/${cap}</b> signed up` +
       (f.min_players ? ` (min ${f.min_players})` : ""),
@@ -3868,9 +3912,17 @@ function bindSignup(e) {
 }
 
 // --- create / edit form ---
-function toLocalInput(iso) {
+// Start is split into separate <input type=date> + <input type=time> so the time
+// field is always visible (a single datetime-local hides the time behind a tiny
+// inline spinner). Both read/write the viewer's local clock; collectEventForm
+// recombines them and new Date(...).toISOString() converts to the UTC we store.
+function toLocalDate(iso) {
   const d = new Date(iso), p = n => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function toLocalTime(iso) {
+  const d = new Date(iso), p = n => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 function rosterRowHtml(tax, role, needed) {
@@ -3883,17 +3935,24 @@ function rosterRowHtml(tax, role, needed) {
 
 function eventFormHtml(tax, e) {
   const typeOpts = tax.types.map(t => `<option ${e && e.type === t ? "selected" : ""}>${esc(t)}</option>`).join("");
-  const catOpts = tax.categories.map(c => `<option ${e && e.category === c ? "selected" : ""}>${esc(c)}</option>`).join("");
+  const evCats = new Set(e ? (e.categories || []) : []);
+  const catChips = tax.categories.map(c =>
+    `<label class="ev-cat-chip${evCats.has(c) ? " on" : ""}">` +
+    `<input type="checkbox" class="ev-f-cat" value="${esc(c)}" ${evCats.has(c) ? "checked" : ""}>${esc(c)}</label>`).join("");
   const rosterRows = (e && e.roles && e.roles.length ? e.roles : [{ role: "", needed: 1 }])
     .map(r => rosterRowHtml(tax, r.role, r.needed)).join("");
   return `<div class="ev-form">` +
     `<div class="ev-field"><label>Title</label><input id="ev-f-title" class="ti" maxlength="120" value="${e ? esc(e.title) : ""}" placeholder="e.g. Daymar survey sweep"></div>` +
+    `<div class="ev-field"><label>Category (pick one or more)</label>` +
+      `<div class="ev-cat-grid" id="ev-f-cats">${catChips}</div></div>` +
     `<div class="ev-form-grid">` +
       `<div class="ev-field"><label>Type</label><select id="ev-f-type">${typeOpts}</select></div>` +
-      `<div class="ev-field"><label>Category</label><select id="ev-f-cat">${catOpts}</select></div>` +
-      `<div class="ev-field"><label>Start (your local time)</label><input id="ev-f-start" class="ti" type="datetime-local" value="${e ? toLocalInput(e.start_at) : ""}"></div>` +
+      `<div class="ev-field"><label>Date</label><input id="ev-f-date" class="ti" type="date" value="${e ? toLocalDate(e.start_at) : ""}"></div>` +
+      `<div class="ev-field"><label>Time</label><input id="ev-f-time" class="ti" type="time" value="${e ? toLocalTime(e.start_at) : ""}">` +
+        `<span class="ev-hint">Shown in your timezone — ${esc(localTzName())}. Everyone sees it in their own.</span></div>` +
       `<div class="ev-field"><label>Duration (min, optional)</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}"></div>` +
-      `<div class="ev-field"><label>Start location</label><input id="ev-f-loc" class="ti" maxlength="120" value="${e ? esc(e.location || "") : ""}" placeholder="e.g. Everus Harbor"></div>` +
+      `<div class="ev-field"><label>Rally point</label><span class="poi-pick"><input id="ev-f-loc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.location || "") : ""}" placeholder="where the org forms up"></span></div>` +
+      `<div class="ev-field"><label>Event location (optional)</label><span class="poi-pick"><input id="ev-f-evloc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.event_location || "") : ""}" placeholder="where the activity happens"></span></div>` +
       `<div class="ev-field"><label>Min players</label><input id="ev-f-min" class="ti" type="number" min="0" step="1" value="${e && e.min_players != null ? e.min_players : 0}"></div>` +
       `<div class="ev-field"><label>Max players (blank = unlimited)</label><input id="ev-f-max" class="ti" type="number" min="1" step="1" value="${e && e.max_players != null ? e.max_players : ""}"></div>` +
     `</div>` +
@@ -3907,10 +3966,12 @@ function eventFormHtml(tax, e) {
 }
 
 function collectEventForm() {
-  const start = $("ev-f-start").value;
+  const date = $("ev-f-date").value, time = $("ev-f-time").value;
   const title = $("ev-f-title").value.trim();
   if (!title) return { error: "Give the event a title." };
-  if (!start) return { error: "Pick a start date & time." };
+  if (!date || !time) return { error: "Pick a start date & time." };
+  const categories = [...document.querySelectorAll("#ev-f-cats .ev-f-cat:checked")].map(i => i.value);
+  if (!categories.length) return { error: "Pick at least one category." };
   const roles = [...document.querySelectorAll("#ev-f-roster .ev-roster-row")].map(row => ({
     role: row.querySelector(".ev-rr-role").value,
     needed: parseInt(row.querySelector(".ev-rr-needed").value || "0", 10) || 0,
@@ -3919,10 +3980,11 @@ function collectEventForm() {
   for (const r of roles) { if (seen.has(r.role)) return { error: `Role "${r.role}" is listed twice.` }; seen.add(r.role); }
   const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
   return { payload: {
-    title, type: $("ev-f-type").value, category: $("ev-f-cat").value,
-    start_at: new Date(start).toISOString(),
+    title, type: $("ev-f-type").value, categories,
+    start_at: new Date(`${date}T${time}`).toISOString(),
     duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
     location: $("ev-f-loc").value.trim(),
+    event_location: $("ev-f-evloc").value.trim(),
     min_players: parseInt($("ev-f-min").value || "0", 10) || 0,
     max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
     roles, description: $("ev-f-desc").value.trim(),
@@ -3935,6 +3997,13 @@ function bindEventForm(tax, editId, onCancel) {
     bindRosterDeletes();
   };
   bindRosterDeletes();
+  // Category chips: reflect the checkbox state in the chip's highlight.
+  document.querySelectorAll("#ev-f-cats .ev-cat-chip").forEach(chip => {
+    const box = chip.querySelector("input");
+    box.addEventListener("change", () => chip.classList.toggle("on", box.checked));
+  });
+  // Type-to-search POI suggestions on the location fields (free text still allowed).
+  document.querySelectorAll(".ev-form .poi-pick").forEach(w => attachPoiPicker(w));
   $("ev-f-cancel").onclick = onCancel;
   $("ev-f-save").onclick = async () => {
     const { error, payload } = collectEventForm();
