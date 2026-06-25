@@ -202,6 +202,53 @@ CREATE TABLE IF NOT EXISTS inventory_allocations (
 );
 CREATE INDEX IF NOT EXISTS inv_alloc_holding ON inventory_allocations(inventory_id);
 CREATE INDEX IF NOT EXISTS inv_alloc_goal ON inventory_allocations(goal_id);
+
+-- Org marketplace (design: docs/marketplace.md). SC has no auction house or item
+-- API, so a listing is a *coordination board entry*, not an exchange: the app
+-- records that two members agreed on terms; the goods + aUEC move in-game on
+-- trust. aUEC only — never real money (fan project under CIG's IP). One row per
+-- listing across all three modes (`mode` discriminator); offers/bids live in the
+-- child table. `item_name`/`unit` are denormalized off the catalog at write time
+-- (like events.roles / inventory) so a feed change can't strand a listing.
+CREATE TABLE IF NOT EXISTS listings (
+    id INTEGER PRIMARY KEY,
+    seller_id TEXT NOT NULL,            -- Discord member id of the seller
+    item_id TEXT NOT NULL,             -- catalog id (commodity:/ship:/custom:)
+    item_name TEXT, unit TEXT,
+    qty REAL NOT NULL DEFAULT 1,
+    mode TEXT NOT NULL DEFAULT 'sale', -- sale | auction | barter
+    price_auec REAL,                   -- sale: fixed ask (aUEC)
+    start_price REAL,                  -- auction: opening bid
+    buyout_auec REAL,                  -- auction: optional instant-win price
+    ends_at TEXT,                      -- auction: close time, UTC ISO8601
+    want TEXT,                         -- barter: what the seller wants (free text)
+    status TEXT NOT NULL DEFAULT 'open',   -- open | pending | completed | cancelled | expired
+    note TEXT,
+    buyer_id TEXT,                     -- set when a deal is struck (pending+)
+    seller_confirmed INTEGER NOT NULL DEFAULT 0,   -- handoff confirmed by seller
+    buyer_confirmed INTEGER NOT NULL DEFAULT 0,     -- handoff confirmed by buyer
+    created_at TEXT, updated_at TEXT, completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS listings_status ON listings(status);
+CREATE INDEX IF NOT EXISTS listings_seller ON listings(seller_id);
+CREATE INDEX IF NOT EXISTS listings_item ON listings(item_id);
+
+-- One row per bid / offer / barter counter against a listing. For sale+auction
+-- `amount_auec` is the aUEC bid/offer; for barter `offer_item_id` + `offer_note`
+-- is the counter-item. The seller accepts one (→ the listing goes pending); the
+-- rest are marked 'lost'. Bidders can withdraw an active offer.
+CREATE TABLE IF NOT EXISTS listing_offers (
+    id INTEGER PRIMARY KEY,
+    listing_id INTEGER NOT NULL,
+    bidder_id TEXT NOT NULL,           -- Discord member id of the bidder
+    amount_auec REAL,                  -- sale/auction: aUEC bid/offer
+    offer_item_id TEXT,                -- barter: catalog id of the counter-item
+    offer_item_name TEXT,              -- denormalized name of the counter-item
+    offer_note TEXT,
+    status TEXT NOT NULL DEFAULT 'active',  -- active | accepted | withdrawn | lost
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS listing_offers_listing ON listing_offers(listing_id);
 """
 
 
@@ -1029,6 +1076,185 @@ def delete_goal(goal_id: int) -> bool:
     return cur.rowcount > 0
 
 
+# --- marketplace listings + offers -----------------------------------------
+
+
+_LISTING_EDITABLE = ("qty", "price_auec", "start_price", "buyout_auec", "ends_at",
+                      "want", "note", "status")
+
+
+def _listing_row_to_dict(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["seller_confirmed"] = bool(d.get("seller_confirmed"))
+    d["buyer_confirmed"] = bool(d.get("buyer_confirmed"))
+    return d
+
+
+def create_listing(d: dict) -> int:
+    """Insert a listing (caller supplies validated fields + seller_id + timestamps)."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO listings (seller_id, item_id, item_name, unit, qty, mode, "
+            "price_auec, start_price, buyout_auec, ends_at, want, status, note, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(d["seller_id"]), d["item_id"], d.get("item_name"), d.get("unit"),
+             d.get("qty", 1), d.get("mode", "sale"), d.get("price_auec"),
+             d.get("start_price"), d.get("buyout_auec"), d.get("ends_at"),
+             d.get("want"), d.get("status", "open"), d.get("note"),
+             d.get("created_at"), d.get("updated_at")),
+        )
+    return cur.lastrowid
+
+
+def get_listing(listing_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
+    return _listing_row_to_dict(row) if row else None
+
+
+def list_listings(mode: str | None = None, item_id: str | None = None,
+                  seller_id: str | None = None, status: str | None = None,
+                  open_only: bool = False) -> list[dict]:
+    """Listings, optionally filtered by mode / item / seller / status. `open_only`
+    is a convenience for the browse board (status='open'). Freshest first."""
+    q, where, params = "SELECT * FROM listings", [], []
+    if mode:
+        where.append("mode=?"); params.append(mode)
+    if item_id:
+        where.append("item_id=?"); params.append(item_id)
+    if seller_id:
+        where.append("seller_id=?"); params.append(str(seller_id))
+    if status:
+        where.append("status=?"); params.append(status)
+    elif open_only:
+        where.append("status='open'")
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    q += " ORDER BY created_at DESC, id DESC"
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    return [_listing_row_to_dict(r) for r in rows]
+
+
+def update_listing(listing_id: int, fields: dict, updated_at: str) -> bool:
+    """Replace editable columns of a listing (seller/admin check is the caller's
+    job). Only keys present in `fields` (and in the editable set) are written."""
+    cols = [c for c in _LISTING_EDITABLE if c in fields]
+    if not cols:
+        return False
+    sets = ", ".join(f"{c}=?" for c in cols)
+    vals = [fields[c] for c in cols]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE listings SET {sets}, updated_at=? WHERE id=?",
+            (*vals, updated_at, listing_id))
+    return cur.rowcount > 0
+
+
+def settle_listing(listing_id: int, buyer_id: str | None, status: str,
+                   updated_at: str) -> bool:
+    """Move a listing to `pending` with its buyer (a deal struck), or flip status
+    for an expiry/cancel. Resets the dual-confirm flags when a new deal starts."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE listings SET status=?, buyer_id=?, seller_confirmed=0, "
+            "buyer_confirmed=0, updated_at=? WHERE id=?",
+            (status, str(buyer_id) if buyer_id is not None else None,
+             updated_at, listing_id))
+    return cur.rowcount > 0
+
+
+def confirm_listing(listing_id: int, side: str, updated_at: str,
+                    completed_at: str | None = None) -> bool:
+    """Record one side's handoff confirmation (`side` is 'seller' or 'buyer'); when
+    `completed_at` is given the listing is also flipped to completed (the caller
+    decides that once both flags are set)."""
+    col = "seller_confirmed" if side == "seller" else "buyer_confirmed"
+    sets = f"{col}=1, updated_at=?"
+    params: list = [updated_at]
+    if completed_at is not None:
+        sets += ", status='completed', completed_at=?"
+        params.append(completed_at)
+    params.append(listing_id)
+    with _lock, _conn:
+        cur = _conn.execute(f"UPDATE listings SET {sets} WHERE id=?", params)
+    return cur.rowcount > 0
+
+
+def set_listing_status(listing_id: int, status: str, updated_at: str) -> bool:
+    """Flip just the status (used by the lazy auction-expiry recompute on read)."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE listings SET status=?, updated_at=? WHERE id=?",
+            (status, updated_at, listing_id))
+    return cur.rowcount > 0
+
+
+def delete_listing(listing_id: int) -> bool:
+    """Hard-delete a listing and its offers."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM listing_offers WHERE listing_id=?", (listing_id,))
+        cur = _conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
+    return cur.rowcount > 0
+
+
+def completed_deals_count(member_id: str) -> int:
+    """How many listings a member has completed as seller or buyer — the only
+    reputation signal in v1 (derived, never stored)."""
+    did = str(member_id)
+    with _lock:
+        row = _conn.execute(
+            "SELECT COUNT(*) AS c FROM listings WHERE status='completed' "
+            "AND (seller_id=? OR buyer_id=?)", (did, did)).fetchone()
+    return int(row["c"] or 0)
+
+
+def add_offer(listing_id: int, bidder_id: str, amount_auec: float | None,
+              offer_item_id: str | None, offer_item_name: str | None,
+              offer_note: str | None, created_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO listing_offers (listing_id, bidder_id, amount_auec, "
+            "offer_item_id, offer_item_name, offer_note, status, created_at) "
+            "VALUES (?,?,?,?,?,?,'active',?)",
+            (listing_id, str(bidder_id), amount_auec, offer_item_id,
+             offer_item_name, offer_note, created_at))
+    return cur.lastrowid
+
+
+def get_offer(offer_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM listing_offers WHERE id=?", (offer_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_offers(listing_id: int) -> list[dict]:
+    """All offers on a listing, oldest first (so equal-amount bids tie-break by
+    arrival — the rule derive_auction_state pins)."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM listing_offers WHERE listing_id=? "
+            "ORDER BY created_at ASC, id ASC", (listing_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_offer_status(offer_id: int, status: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE listing_offers SET status=? WHERE id=?", (status, offer_id))
+    return cur.rowcount > 0
+
+
+def reject_other_offers(listing_id: int, keep_offer_id: int) -> None:
+    """Mark every active offer on a listing 'lost' except the accepted one (called
+    when a deal is struck so the losing bids stop showing as open)."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE listing_offers SET status='lost' WHERE listing_id=? "
+            "AND id!=? AND status='active'", (listing_id, keep_offer_id))
+
+
 # --- account deletion (privacy: erase a member) ----------------------------
 
 
@@ -1078,6 +1304,18 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
             "UPDATE goals SET creator_id='' WHERE creator_id=?", (did,)).rowcount
         _conn.execute(
             "UPDATE catalog_items SET creator_id='' WHERE creator_id=?", (did,))
+        # Marketplace listings are personal member-to-member sales — hard-delete the
+        # member's own listings (and their offers), and their bids on others'.
+        # Where they were merely a buyer, de-identify rather than delete the seller's
+        # record (mirrors how shared POIs are anonymized, not removed).
+        _conn.execute(
+            "DELETE FROM listing_offers WHERE listing_id IN "
+            "(SELECT id FROM listings WHERE seller_id=?)", (did,))
+        _conn.execute("DELETE FROM listing_offers WHERE bidder_id=?", (did,))
+        counts["listings"] = _conn.execute(
+            "DELETE FROM listings WHERE seller_id=?", (did,)).rowcount
+        _conn.execute(
+            "UPDATE listings SET buyer_id=NULL WHERE buyer_id=?", (did,))
         _conn.execute("DELETE FROM meta WHERE key=?",
                       (f"cargo_session_start:{did}",))
     return counts

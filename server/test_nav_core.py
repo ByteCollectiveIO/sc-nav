@@ -1531,5 +1531,83 @@ class GoalProgressTests(unittest.TestCase):
         self.assertFalse(p["is_met"])                   # but an empty goal isn't "met"
 
 
+class AuctionStateTests(unittest.TestCase):
+    NOW = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+
+    def _auction(self, **over):
+        a = {"mode": "auction", "status": "open", "start_price": 100,
+             "buyout_auec": None, "ends_at": "2026-06-25T18:00:00+00:00"}
+        a.update(over)
+        return a
+
+    def _bid(self, oid, bidder, amount, created_at, status="active"):
+        return {"id": oid, "bidder_id": bidder, "amount_auec": amount,
+                "status": status, "created_at": created_at}
+
+    def test_high_bid_and_next_min(self):
+        offers = [self._bid(1, "A", 100, "2026-06-25T10:00:00+00:00"),
+                  self._bid(2, "B", 250, "2026-06-25T10:05:00+00:00")]
+        s = nav_core.derive_auction_state(self._auction(), offers, self.NOW)
+        self.assertEqual((s["high_bid"], s["high_bidder"]), (250, "B"))
+        self.assertEqual(s["bid_count"], 2)
+        self.assertEqual(s["next_min_bid"], 251)
+        self.assertFalse(s["is_closed"])
+
+    def test_next_min_is_start_price_with_no_bids(self):
+        s = nav_core.derive_auction_state(self._auction(start_price=150), [], self.NOW)
+        self.assertIsNone(s["high_bid"])
+        self.assertEqual(s["next_min_bid"], 150)
+
+    def test_equal_amount_ties_to_earliest(self):
+        offers = [self._bid(1, "A", 200, "2026-06-25T10:00:00+00:00"),
+                  self._bid(2, "B", 200, "2026-06-25T10:05:00+00:00")]
+        s = nav_core.derive_auction_state(self._auction(), offers, self.NOW)
+        self.assertEqual(s["high_bidder"], "A")          # earliest holds the lead
+
+    def test_withdrawn_and_lost_bids_ignored(self):
+        offers = [self._bid(1, "A", 500, "2026-06-25T10:00:00+00:00", "withdrawn"),
+                  self._bid(2, "B", 300, "2026-06-25T10:05:00+00:00", "lost"),
+                  self._bid(3, "C", 200, "2026-06-25T10:06:00+00:00")]
+        s = nav_core.derive_auction_state(self._auction(), offers, self.NOW)
+        self.assertEqual((s["high_bid"], s["high_bidder"]), (200, "C"))
+        self.assertEqual(s["bid_count"], 1)
+
+    def test_buyout_short_circuits_before_end(self):
+        offers = [self._bid(1, "A", 300, "2026-06-25T10:00:00+00:00"),
+                  self._bid(2, "B", 1000, "2026-06-25T10:05:00+00:00")]   # >= buyout
+        s = nav_core.derive_auction_state(
+            self._auction(buyout_auec=1000), offers, self.NOW)
+        self.assertTrue(s["bought_out"])
+        self.assertTrue(s["is_closed"])                  # closed though ends_at is future
+        self.assertEqual((s["winner_id"], s["winning_amount"]), ("B", 1000))
+
+    def test_buyout_winner_is_earliest_to_hit_it(self):
+        offers = [self._bid(1, "A", 1200, "2026-06-25T10:00:00+00:00"),
+                  self._bid(2, "B", 1500, "2026-06-25T10:05:00+00:00")]
+        s = nav_core.derive_auction_state(
+            self._auction(buyout_auec=1000), offers, self.NOW)
+        self.assertEqual(s["winner_id"], "A")            # first past the buyout wins
+
+    def test_closes_and_picks_winner_at_end_time(self):
+        offers = [self._bid(1, "A", 100, "2026-06-25T10:00:00+00:00"),
+                  self._bid(2, "B", 250, "2026-06-25T10:05:00+00:00")]
+        past = datetime(2026, 6, 25, 19, 0, tzinfo=timezone.utc)   # after ends_at
+        s = nav_core.derive_auction_state(self._auction(), offers, past)
+        self.assertTrue(s["time_up"])
+        self.assertTrue(s["is_closed"])
+        self.assertEqual((s["winner_id"], s["winning_amount"]), ("B", 250))
+
+    def test_expired_with_no_bids_has_no_winner(self):
+        past = datetime(2026, 6, 25, 19, 0, tzinfo=timezone.utc)
+        s = nav_core.derive_auction_state(self._auction(), [], past)
+        self.assertTrue(s["is_closed"])
+        self.assertIsNone(s["winner_id"])
+
+    def test_terminal_status_is_closed(self):
+        s = nav_core.derive_auction_state(
+            self._auction(status="completed"), [], self.NOW)
+        self.assertTrue(s["is_closed"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

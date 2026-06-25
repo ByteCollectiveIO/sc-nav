@@ -1,6 +1,19 @@
 # Org marketplace — design
 
-**Status:** designed 2026-06-24; **not built.** This doc captures the decisions
+**Status:** designed 2026-06-24; **v1 BUILT 2026-06-25** (uncommitted) — the
+**fifth app** in the SPA. All four build steps landed in one pass: `listings` +
+`listing_offers` tables (`db.py`) with sale/auction/barter on one `mode`
+discriminator; `nav_core.derive_auction_state` (tie-break-by-arrival + buyout
+short-circuit, 9 new unit tests, suite 138 green); the full `/api/market`
+endpoint family (browse/detail/create/edit-cancel, `offer` for buy/bid/counter,
+`offer/{id}` accept/withdraw, `confirm` dual-handshake, lazy auction expiry on
+read); and the `#/market` SPA (launcher card, board with mode-filter tabs +
+"My listings", detail with per-mode action blocks + bid/offer list + dual-confirm
+handshake + completed-deals reputation, new/edit form with mode toggle), plus the
+persistent aUEC-only banner. `delete_member` hard-deletes a member's listings +
+bids and de-identifies buyer rows. **Needs /deploy.** Deferred items below are
+still deferred (inventory bridge, Discord announce, WTB, price history). This doc
+captures the decisions
 agreed before any code, matching the cargo planner
 ([`docs/cargo-hauling-planner.md`](cargo-hauling-planner.md)) and event planner
 ([`docs/event-planner.md`](event-planner.md)). It is the **fifth app** in the SPA

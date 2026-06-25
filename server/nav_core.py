@@ -2350,3 +2350,85 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
         "is_met": bool(lines) and all_met,
         "per_contributor": per_contributor,
     }
+
+
+# Smallest raise (aUEC) a new bid must clear over the standing high bid, so the
+# next-minimum the UI shows and the endpoint enforces agree.
+MIN_BID_INCREMENT = 1
+
+
+def derive_auction_state(listing: dict, offers, now: datetime) -> dict:
+    """Live state of a marketplace listing's bidding (design: docs/marketplace.md).
+
+    `listing` carries `mode`, `start_price`, `buyout_auec`, `ends_at`, `status`;
+    `offers` is the child rows ([{id, bidder_id, amount_auec, status, created_at}]).
+    Returns the standing high bid + bidder, whether the listing is closed, the
+    computed winner (auctions only), and the next minimum acceptable bid.
+
+    Two rules the tests pin:
+      * **Tie-break by arrival** — equal aUEC amounts never displace an earlier
+        bid, so the first to reach a price holds the lead (bids are scanned oldest
+        first and a later equal amount doesn't beat the standing high).
+      * **Buyout short-circuit** — if any bid meets `buyout_auec`, the auction is
+        closed instantly and won by the *earliest* bid that hit the buyout, even
+        before `ends_at`.
+
+    Pure derivation; the endpoints embed it (and lazily flip a closed auction to
+    pending/expired on read, like the cargo run's arrival check) so there's no
+    background job. Non-auction modes get a usable `bid_count` / `high_bid` too."""
+    mode = listing.get("mode")
+    status = listing.get("status")
+    # A struck or dead listing is closed regardless of the clock.
+    terminal = status in ("pending", "completed", "cancelled", "expired")
+
+    # Standing bids: active (or already-accepted) aUEC offers, oldest first so the
+    # tie-break favors the earliest bid at any given amount.
+    bids = [o for o in (offers or [])
+            if o.get("amount_auec") is not None
+            and (o.get("status") or "active") in ("active", "accepted")]
+    bids.sort(key=lambda o: (o.get("created_at") or "", o.get("id") or 0))
+
+    high = None
+    for o in bids:
+        # Strictly greater, so a later equal amount can't unseat the earlier bid.
+        if high is None or _qty(o.get("amount_auec")) > _qty(high.get("amount_auec")):
+            high = o
+    high_bid = _qty(high.get("amount_auec")) if high else None
+    high_bidder = high.get("bidder_id") if high else None
+
+    buyout = listing.get("buyout_auec")
+    buyout = _qty(buyout) if buyout is not None else None
+    bought_out, buyout_winner = False, None
+    if buyout is not None and buyout > 0:
+        for o in bids:                      # oldest first → earliest to hit it wins
+            if _qty(o.get("amount_auec")) >= buyout:
+                bought_out, buyout_winner = True, o
+                break
+
+    ends = _parse_event_dt(listing.get("ends_at"))
+    time_up = ends is not None and now >= ends
+    is_closed = terminal or bought_out or time_up
+
+    winner_id, winning_amount = None, None
+    if is_closed and mode == "auction":
+        win = buyout_winner or high
+        if win is not None:
+            winner_id = win.get("bidder_id")
+            winning_amount = _qty(win.get("amount_auec"))
+
+    start = listing.get("start_price")
+    start = _qty(start) if start is not None else 0.0
+    next_min_bid = high_bid + MIN_BID_INCREMENT if high_bid is not None else start
+
+    return {
+        "bid_count": len(bids),
+        "high_bid": high_bid,
+        "high_bidder": high_bidder,
+        "is_closed": is_closed,
+        "bought_out": bought_out,
+        "time_up": time_up,
+        "winner_id": winner_id,
+        "winning_amount": winning_amount,
+        "next_min_bid": next_min_bid,
+        "ends_at": listing.get("ends_at"),
+    }

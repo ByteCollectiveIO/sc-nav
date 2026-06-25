@@ -10,4 +10,4 @@ Bump rules for this app:
   * PATCH — a bug fix / internal change, no new surface.
 """
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"

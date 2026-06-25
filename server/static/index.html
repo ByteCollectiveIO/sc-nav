@@ -791,6 +791,65 @@
   .rm-edit-item { align-self: center; white-space: nowrap; }
   .rm-intro { font-size: 13px; line-height: 1.6; color: var(--dim); margin: 0 0 14px; max-width: 760px; }
   .rm-intro a { color: var(--accent); text-decoration: none; }
+
+  /* ---- org marketplace (#/market) ---- */
+  #market-view, #market-root { display: contents; }
+  #market-view[hidden] { display: none; }
+  /* aUEC-only / coordination-board disclaimer (form + listings) */
+  .mk-banner { font-size: 12px; line-height: 1.5; color: var(--warn); border: 1px solid var(--warn);
+    border-radius: 6px; padding: 8px 12px; margin: 10px 0; background: rgba(255,179,0,.06); }
+  .mk-banner b { color: var(--warn); }
+  /* mode chip — color-coded like the event categories */
+  .mk-mode { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 7px; border: 1px solid currentColor; }
+  .mk-mode.sale { color: var(--good); }
+  .mk-mode.auction { color: var(--accent); }
+  .mk-mode.barter { color: #c08af0; }
+  .mk-status { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 7px; border: 1px solid var(--border); color: var(--dim); }
+  .mk-status.open { color: var(--good); border-color: var(--good); }
+  .mk-status.pending { color: var(--warn); border-color: var(--warn); }
+  .mk-status.completed { color: var(--dim); }
+  .mk-status.expired, .mk-status.cancelled { color: var(--bad); border-color: var(--bad); }
+  .mk-qty { font-size: 12px; color: var(--dim); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .mk-price { color: var(--text); font-variant-numeric: tabular-nums; }
+  .mk-ends { font-size: 12px; color: var(--dim); }
+  .mk-ends.soon { color: var(--warn); }
+  .mk-ends.over { color: var(--bad); }
+  .mk-deals { color: var(--good); font-size: 12px; }
+  /* board filter tabs */
+  .mk-filter { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
+  .mk-filter .mk-spacer { flex: 1; }
+  .mk-tab { font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); color: var(--dim); background: transparent; }
+  .mk-tab:hover { border-color: var(--accent); color: var(--accent); }
+  .mk-tab.on { border-color: var(--accent); color: var(--accent); background: rgba(79,195,247,.12);
+    font-weight: 600; }
+  /* listing detail state block */
+  .mk-state { border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin: 12px 0;
+    background: var(--panel2); }
+  .mk-state.pending { border-color: var(--warn); }
+  .mk-state.done { border-color: var(--good); }
+  .mk-bigprice { font-size: 24px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+  .mk-bigprice .muted { font-size: 13px; font-weight: 400; }
+  .mk-want { font-size: 15px; color: var(--text); }
+  .mk-actions { margin: 10px 0; display: flex; gap: 8px; flex-wrap: wrap; }
+  .mk-offerform { margin-top: 12px; }
+  .mk-deal { font-size: 15px; color: var(--text); margin-bottom: 6px; }
+  .mk-confirm-status { font-size: 13px; color: var(--dim); margin: 8px 0; font-variant-numeric: tabular-nums; }
+  .mk-msg { display: block; margin-top: 8px; font-size: 12px; }
+  /* offer / bid list */
+  .mk-offers { display: flex; flex-direction: column; }
+  .mk-offer-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 10px;
+    align-items: center; font-size: 13px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .mk-offer-who { color: var(--text); }
+  .mk-offer-what { font-variant-numeric: tabular-nums; }
+  .mk-offer-when { font-size: 11px; }
+  .mk-ostatus { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+  .mk-ostatus.accepted { color: var(--good); }
+  .mk-ostatus.withdrawn, .mk-ostatus.lost { color: var(--dim); }
+  .ev-btn.sm { padding: 3px 10px; font-size: 12px; }
+  .mk-mode-fields[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -863,6 +922,12 @@
         <div class="app-name">Resource Manager</div>
         <div class="app-desc">Set org procurement goals with deadlines &amp; priorities, log what
           members are holding, and watch contributions fill each target.</div>
+      </a>
+      <a class="app-card" href="#/market">
+        <img class="app-logo" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+        <div class="app-name">Org Marketplace</div>
+        <div class="app-desc">Sell, auction &amp; barter items with your org — priced in aUEC only.
+          Post a listing, buy or bid, then settle the handoff in-game.</div>
       </a>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
@@ -1510,6 +1575,13 @@
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div><!-- /inventory-view -->
+
+  <div id="market-view" hidden>
+    <div id="market-root"></div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /market-view -->
 
   <!-- ============================================================
        Legal pages. STARTER TEXT drafted to fit this app — have a
@@ -4723,18 +4795,422 @@ function openInvEdit(id) {
   };
 }
 
+// ---------- org marketplace (#/market) ----------
+// A coordination board, not an exchange: SC has no auction house, so the app only
+// records that two members agreed on terms — the goods + aUEC move in-game on
+// trust. Three modes (sale / auction / barter) over the shared item catalog;
+// aUEC ONLY, never real money. Sub-route family board / new / detail like events.
+
+function fmtAuec(n) {
+  return (Math.round(Number(n) || 0)).toLocaleString() + " aUEC";
+}
+
+function mkModeChip(mode) {
+  const lbl = { sale: "Sale", auction: "Auction", barter: "Barter" }[mode] || mode;
+  return `<span class="mk-mode ${esc(mode)}">${esc(lbl)}</span>`;
+}
+
+function mkStatusBadge(s) {
+  const lbl = { open: "Open", pending: "Pending", completed: "Completed",
+    cancelled: "Cancelled", expired: "Expired" }[s] || s;
+  return `<span class="mk-status ${esc(s)}">${esc(lbl)}</span>`;
+}
+
+// Auction countdown: amber within the last hour, "ended" once past.
+function mkCountdown(iso) {
+  if (!iso) return "";
+  const ms = new Date(iso) - new Date();
+  if (ms <= 0) return `<span class="mk-ends over">ended</span>`;
+  const mins = Math.floor(ms / 60000);
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const txt = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return `<span class="mk-ends ${mins <= 60 ? "soon" : ""}">ends in ${txt}</span>`;
+}
+
+// Completed-deals count — the only reputation signal in v1.
+function mkDeals(n) {
+  return n > 0 ? ` · <span class="mk-deals" title="completed deals">✔ ${n} deal${n === 1 ? "" : "s"}</span>` : "";
+}
+
+function mkBanner() {
+  return `<p class="mk-banner">⚠ In-game <b>aUEC only</b> — never real money. The app just records the ` +
+    `agreement; you settle the handoff in-game on trust.</p>`;
+}
+
+function mkQtyTag(l) {
+  return `<span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>`;
+}
+
+function mkPriceLine(l) {
+  if (l.mode === "sale") return `<b class="mk-price">${fmtAuec(l.price_auec)}</b>`;
+  if (l.mode === "auction") {
+    const a = l.auction || {};
+    const cur = a.high_bid != null
+      ? `${fmtAuec(a.high_bid)} <span class="muted">high bid</span>`
+      : `${fmtAuec(l.start_price)} <span class="muted">start</span>`;
+    return `<b class="mk-price">${cur}</b> · ${a.bid_count || 0} bid${a.bid_count === 1 ? "" : "s"} · ${mkCountdown(l.ends_at)}`;
+  }
+  return `<span class="muted">wants:</span> ${esc(l.want || "")}`;
+}
+
+function listingCard(l) {
+  return `<a class="ev-card" href="#/market/${l.id}">` +
+    `<div class="ev-card-top"><div class="ev-title">${esc(l.item_name)} ${mkQtyTag(l)}</div>` +
+    `<div class="ev-chips">${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div></div>` +
+    `<div class="ev-meta">${mkPriceLine(l)}</div>` +
+    `<div class="ev-meta">by ${esc(l.seller_name)}${mkDeals(l.seller_deals)}</div></a>`;
+}
+
+function marketSubRoute() {
+  const rest = location.hash.slice("#/market".length).replace(/^\//, "");
+  if (rest === "new") return { view: "new" };
+  if (/^\d+$/.test(rest)) return { view: "detail", id: parseInt(rest, 10) };
+  return { view: "board" };
+}
+
+function loadMarket() {
+  const r = marketSubRoute();
+  if (r.view === "new") return renderMarketForm();
+  if (r.view === "detail") return renderMarketDetail(r.id);
+  return renderMarketBoard();
+}
+
+let mktFilter = { mode: "", mine: false };
+
+async function renderMarketBoard() {
+  const root = $("market-root");
+  const tabLbl = { "": "All", sale: "Sales", auction: "Auctions", barter: "Barter" };
+  const tabs = ["", "sale", "auction", "barter"].map(m =>
+    `<button class="mk-tab ${mktFilter.mode === m && !mktFilter.mine ? "on" : ""}" data-mode="${m}">${tabLbl[m]}</button>`).join("");
+  root.innerHTML =
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG MARKETPLACE</h2>` +
+    `<a class="ev-btn primary" href="#/market/new">+ New listing</a></div>` +
+    `<p class="rm-intro">Sell, auction &amp; barter items with your org — priced in <b>aUEC only</b>. ` +
+    `Post a listing; another member buys, bids or makes an offer; you both settle the handoff in-game ` +
+    `and mark it done. A closed, trusted market — no strangers, no real money.</p>` +
+    `<div class="mk-filter">${tabs}<span class="mk-spacer"></span>` +
+    `<button class="mk-tab ${mktFilter.mine ? "on" : ""}" data-mine="1">My listings</button></div>` +
+    mkBanner() + `</div>` +
+    `<div id="market-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
+  root.querySelectorAll(".mk-tab").forEach(b => b.onclick = () => {
+    if (b.dataset.mine) mktFilter.mine = !mktFilter.mine;
+    else { mktFilter.mode = b.dataset.mode; mktFilter.mine = false; }
+    renderMarketBoard();
+  });
+  const qs = mktFilter.mine ? "?seller=me" : (mktFilter.mode ? `?mode=${mktFilter.mode}` : "");
+  let data;
+  try { data = await fetch(`/api/market${qs}`).then(r => r.json()); }
+  catch { $("market-list").innerHTML = `<p class="stat-empty">Couldn't load the marketplace.</p>`; return; }
+  const ls = data.listings || [];
+  $("market-list").innerHTML = ls.length
+    ? ls.map(listingCard).join("")
+    : `<p class="stat-empty">${mktFilter.mine ? "You haven't listed anything yet." : "No open listings."} ` +
+      `<a href="#/market/new">Post one →</a></p>`;
+}
+
+async function renderMarketDetail(id) {
+  $("market-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/market">← All listings</a>` +
+    `<div id="market-detail-body"><p class="stat-empty">Loading…</p></div></div>`;
+  let l;
+  try { const r = await fetch(`/api/market/${id}`); if (!r.ok) throw 0; l = await r.json(); }
+  catch { $("market-detail-body").innerHTML = `<p class="stat-empty">Listing not found.</p>`; return; }
+  renderMarketDetailBody(l);
+}
+
+function mkBidderName(l, id) {
+  const o = (l.offers || []).find(o => o.bidder_id === id);
+  return o ? o.bidder_name : "someone";
+}
+
+function mkOpenBlock(l) {
+  if (l.mode === "sale") {
+    let h = `<div class="mk-state"><div class="mk-bigprice">${fmtAuec(l.price_auec)}</div>`;
+    if (l.is_seller) h += `<p class="muted">Your listing is live — waiting for a buyer.</p>`;
+    else {
+      h += `<div class="mk-actions"><button class="ev-btn primary" id="mk-buy">Buy now · ${fmtAuec(l.price_auec)}</button></div>` +
+        `<div class="mk-offerform"><span class="ev-hint">…or make an offer below the asking price:</span>` +
+        `<div class="rm-row"><input id="mk-offer-amt" class="ti rm-qty" type="number" min="0" step="any" placeholder="your offer (aUEC)">` +
+        `<button class="ev-btn" id="mk-offer">Make offer</button></div>`;
+      if (l.my_offer && l.my_offer.amount_auec != null)
+        h += `<span class="muted">You offered ${fmtAuec(l.my_offer.amount_auec)}.</span>`;
+      h += `</div>`;
+    }
+    return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+  }
+  if (l.mode === "auction") {
+    const a = l.auction || {};
+    const head = a.high_bid != null
+      ? `<div class="mk-bigprice">${fmtAuec(a.high_bid)} <span class="muted">high bid · ${esc(mkBidderName(l, a.high_bidder))}</span></div>`
+      : `<div class="mk-bigprice">${fmtAuec(l.start_price)} <span class="muted">starting bid</span></div>`;
+    let h = `<div class="mk-state">${head}` +
+      `<div class="ev-meta">${a.bid_count || 0} bid${a.bid_count === 1 ? "" : "s"} · ${mkCountdown(l.ends_at)}` +
+      (l.buyout_auec != null ? ` · buyout ${fmtAuec(l.buyout_auec)}` : "") + `</div>`;
+    if (l.is_seller) h += `<p class="muted">Your auction is live.</p>`;
+    else {
+      h += `<div class="rm-row"><input id="mk-bid-amt" class="ti rm-qty" type="number" min="0" step="any" ` +
+        `placeholder="min ${Math.round(a.next_min_bid)} aUEC"><button class="ev-btn primary" id="mk-bid">Place bid</button>` +
+        (l.buyout_auec != null ? `<button class="ev-btn" id="mk-buyout">Buy out · ${fmtAuec(l.buyout_auec)}</button>` : "") + `</div>`;
+      if (l.my_offer && l.my_offer.amount_auec != null)
+        h += `<span class="muted">Your current bid: ${fmtAuec(l.my_offer.amount_auec)}.</span>`;
+    }
+    return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+  }
+  // barter
+  let h = `<div class="mk-state"><div class="mk-want"><span class="muted">Wants in return:</span> ${esc(l.want || "")}</div>`;
+  if (l.is_seller) h += `<p class="muted">Waiting for barter offers.</p>`;
+  else {
+    h += `<div class="mk-offerform"><span class="ev-hint">Offer an item and/or a note:</span>` +
+      `<div class="rm-row"><span class="poi-pick" style="flex:1;min-width:160px"><input id="mk-barter-item" class="ti" ` +
+      `placeholder="item you'll trade (optional)" autocomplete="off"></span>` +
+      `<input id="mk-barter-note" class="ti" maxlength="500" placeholder="note (optional)" style="flex:1;min-width:140px">` +
+      `<button class="ev-btn primary" id="mk-barter">Make offer</button></div></div>`;
+  }
+  return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+}
+
+function mkPendingBlock(l) {
+  const sc = l.seller_confirmed, bc = l.buyer_confirmed;
+  let h = `<div class="mk-state pending"><div class="mk-deal">Deal struck with <b>${esc(l.buyer_name || "buyer")}</b>` +
+    (l.is_buyer ? ` (you)` : "") + `.</div>` +
+    `<p class="ev-hint">Arrange the handoff in-game. Once it's done, <b>both</b> sides confirm here — ` +
+    `the app never moves goods or aUEC.</p>` +
+    `<div class="mk-confirm-status">Seller ${sc ? "✓ confirmed" : "… pending"} · Buyer ${bc ? "✓ confirmed" : "… pending"}</div>`;
+  if (l.can_confirm) {
+    const mine = l.is_seller ? sc : bc;
+    h += !mine
+      ? `<div class="mk-actions"><button class="ev-btn primary" id="mk-confirm">Confirm handoff</button></div>`
+      : `<p class="muted">You've confirmed — waiting on the other side.</p>`;
+  }
+  return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+}
+
+function mkClosedBlock(l) {
+  if (l.status === "completed") {
+    const when = l.completed_at ? new Date(l.completed_at).toLocaleString() : "";
+    return `<div class="mk-state done"><div class="mk-deal">✓ Deal completed with <b>${esc(l.buyer_name || "buyer")}</b>.</div>` +
+      (when ? `<div class="ev-meta">${esc(when)}</div>` : "") + `</div>`;
+  }
+  if (l.status === "expired")
+    return `<div class="mk-state"><p class="muted">This auction ended with no bids.</p></div>`;
+  return `<div class="mk-state"><p class="muted">This listing was cancelled.</p></div>`;
+}
+
+function mkOfferRow(l, o) {
+  let what;
+  if (o.amount_auec != null) what = `<b>${fmtAuec(o.amount_auec)}</b>`;
+  else what = [o.offer_item_name ? esc(o.offer_item_name) : "",
+    o.offer_note ? `“${esc(o.offer_note)}”` : ""].filter(Boolean).join(" · ") || "(offer)";
+  const st = o.status !== "active" ? ` <span class="mk-ostatus ${esc(o.status)}">${esc(o.status)}</span>` : "";
+  const when = o.created_at ? new Date(o.created_at).toLocaleString() : "";
+  let btns = "";
+  if (l.status === "open" && o.status === "active") {
+    if (l.can_edit) btns += `<button class="ev-btn sm mk-accept" data-oid="${o.id}">Accept</button>`;
+    if (o.is_mine) btns += `<button class="ev-btn sm mk-withdraw" data-oid="${o.id}">Withdraw</button>`;
+  }
+  return `<div class="mk-offer-row"><span class="mk-offer-who">${esc(o.bidder_name)}</span>` +
+    `<span class="mk-offer-what">${what}${st}</span>` +
+    `<span class="mk-offer-when muted">${esc(when)}</span>` +
+    `<span class="mk-offer-act">${btns}</span></div>`;
+}
+
+function mkOffersBlock(l) {
+  const offers = l.offers || [];
+  if (!offers.length) return "";
+  const title = l.mode === "auction" ? "Bids" : "Offers";
+  return `<div class="ev-section-h">${title}</div><div class="mk-offers">${offers.map(o => mkOfferRow(l, o)).join("")}</div>`;
+}
+
+function mkSellerControls(l) {
+  let btns = "";
+  if (l.status === "open") btns += `<button class="ev-btn" id="mk-edit">Edit</button>`;
+  if (l.status === "open" || l.status === "pending") btns += `<button class="ev-btn danger" id="mk-cancel">Cancel listing</button>`;
+  return btns ? `<div class="ev-form-actions">${btns}</div>` : "";
+}
+
+function renderMarketDetailBody(l) {
+  let html = `<div class="ev-detail-title"><h2>${esc(l.item_name)} ${mkQtyTag(l)}</h2>${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div>` +
+    `<div class="ev-detail-meta">listed by <b>${esc(l.seller_name)}</b>${mkDeals(l.seller_deals)}</div>` +
+    (l.note ? `<div class="ev-desc">${esc(l.note)}</div>` : "") + mkBanner();
+  if (l.status === "open") html += mkOpenBlock(l);
+  else if (l.status === "pending") html += mkPendingBlock(l);
+  else html += mkClosedBlock(l);
+  html += mkOffersBlock(l);
+  if (l.can_edit) html += mkSellerControls(l);
+  $("market-detail-body").innerHTML = html;
+  wireMarketDetail(l);
+}
+
+function wireMarketDetail(l) {
+  const id = l.id;
+  const setMsg = (t) => { const m = $("mk-msg"); if (m) m.textContent = t; };
+  async function act(url, body, method) {
+    setMsg("Working…");
+    try {
+      const r = await fetch(url, { method: method || "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body != null ? JSON.stringify(body) : undefined });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      renderMarketDetailBody(await r.json());   // endpoints return the full detail view
+    } catch (err) { setMsg((err && err.detail) || "Couldn't complete that."); }
+  }
+  const bItem = $("mk-barter-item");
+  if (bItem) attachCatalogPicker(bItem.parentElement);
+  const on = (eid, fn) => { const el = $(eid); if (el) el.onclick = fn; };
+  on("mk-buy", () => act(`/api/market/${id}/offer`, {}));
+  on("mk-offer", () => {
+    const amt = Number($("mk-offer-amt").value);
+    if (!(amt > 0)) return setMsg("Enter an offer greater than 0.");
+    act(`/api/market/${id}/offer`, { amount_auec: amt });
+  });
+  on("mk-bid", () => {
+    const amt = Number($("mk-bid-amt").value);
+    if (!(amt > 0)) return setMsg("Enter a bid amount.");
+    act(`/api/market/${id}/offer`, { amount_auec: amt });
+  });
+  on("mk-buyout", () => act(`/api/market/${id}/offer`, { amount_auec: l.buyout_auec }));
+  on("mk-barter", () => {
+    const item_id = bItem ? bItem.dataset.itemId : null;
+    const note = $("mk-barter-note").value.trim();
+    if (!item_id && !note) return setMsg("Offer an item or a note.");
+    act(`/api/market/${id}/offer`, { offer_item_id: item_id || null, offer_note: note || null });
+  });
+  on("mk-confirm", () => act(`/api/market/${id}/confirm`, null));
+  document.querySelectorAll(".mk-accept").forEach(b =>
+    b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "accept" }, "PATCH"));
+  document.querySelectorAll(".mk-withdraw").forEach(b =>
+    b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "withdraw" }, "PATCH"));
+  on("mk-edit", () => renderMarketEditForm(l));
+  on("mk-cancel", () => { if (confirm("Cancel this listing?")) act(`/api/market/${id}`, { status: "cancelled" }, "PATCH"); });
+}
+
+// --- listing create / edit form ---
+function marketFormHtml(l) {
+  const mode = l ? l.mode : "sale";
+  const picked = l && l.item_id ? ` data-item-id="${esc(l.item_id)}" data-unit="${esc(l.unit || "")}"` : "";
+  const modeOpts = { sale: "Sale (fixed price)", auction: "Auction (timed bids)", barter: "Barter (trade)" };
+  return `<div class="ev-form">` +
+    `<div class="ev-field"><label>Item</label><span class="poi-pick"><input id="mk-f-item" class="ti" ` +
+      `placeholder="search the catalog…" autocomplete="off"${picked} value="${l ? esc(l.item_name || "") : ""}"></span>` +
+      `<span class="ev-hint">Pick from the suggestions so it resolves to a catalog item.</span></div>` +
+    `<div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Quantity</label><input id="mk-f-qty" class="ti" type="number" min="0" step="any" ` +
+        `value="${l ? fmtQty(l.qty) : "1"}"></div>` +
+      `<div class="ev-field"><label>Listing type</label><select id="mk-f-mode" ${l ? "disabled" : ""}>` +
+        ["sale", "auction", "barter"].map(m =>
+          `<option value="${m}" ${mode === m ? "selected" : ""}>${modeOpts[m]}</option>`).join("") +
+      `</select>${l ? `<span class="ev-hint">Type can't change after posting.</span>` : ""}</div>` +
+    `</div>` +
+    `<div class="mk-mode-fields" data-mode="sale">` +
+      `<div class="ev-field"><label>Price (aUEC)</label><input id="mk-f-price" class="ti" type="number" min="0" step="any" ` +
+        `value="${l && l.price_auec != null ? fmtQty(l.price_auec) : ""}"></div></div>` +
+    `<div class="mk-mode-fields" data-mode="auction"><div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Starting bid (aUEC)</label><input id="mk-f-start" class="ti" type="number" min="0" step="any" ` +
+        `value="${l && l.start_price != null ? fmtQty(l.start_price) : ""}" ${l ? "disabled" : ""}>` +
+        `${l ? `<span class="ev-hint">Set at posting.</span>` : ""}</div>` +
+      `<div class="ev-field"><label>Buyout (aUEC)</label><input id="mk-f-buyout" class="ti" type="number" min="0" step="any" ` +
+        `value="${l && l.buyout_auec != null ? fmtQty(l.buyout_auec) : ""}"><span class="ev-hint">Optional instant-win price.</span></div>` +
+      `<div class="ev-field"><label>End date</label><input id="mk-f-end-date" class="ti" type="date" ` +
+        `value="${l && l.ends_at ? toLocalDate(l.ends_at) : ""}"></div>` +
+      `<div class="ev-field"><label>End time</label><input id="mk-f-end-time" class="ti" type="time" ` +
+        `value="${l && l.ends_at ? toLocalTime(l.ends_at) : ""}"><span class="ev-hint">Blank ⇒ end of day.</span></div>` +
+    `</div></div>` +
+    `<div class="mk-mode-fields" data-mode="barter">` +
+      `<div class="ev-field"><label>What you want in return</label><input id="mk-f-want" class="ti" maxlength="500" ` +
+        `value="${l && l.want ? esc(l.want) : ""}" placeholder="e.g. 200 SCU Quantanium, or a Cutlass Black"></div></div>` +
+    `<div class="ev-field"><label>Note (optional)</label><textarea id="mk-f-note" maxlength="500" ` +
+      `placeholder="Condition, location, timing…">${l ? esc(l.note || "") : ""}</textarea></div>` +
+    `<p class="mk-banner">In-game <b>aUEC only</b> — never real money.</p>` +
+    `<div class="ev-form-actions"><button id="mk-f-save" class="ev-btn primary">${l ? "Save changes" : "Post listing"}</button>` +
+      `<button class="ev-btn" id="mk-f-cancel">Cancel</button>` +
+      `<span id="mk-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+}
+
+function mkSyncModeFields() {
+  const mode = $("mk-f-mode").value;
+  document.querySelectorAll(".mk-mode-fields").forEach(el => { el.hidden = el.dataset.mode !== mode; });
+}
+
+function collectMarketForm() {
+  const itemEl = $("mk-f-item");
+  const item_id = itemEl.dataset.itemId;
+  if (!item_id) return { error: `Pick "${itemEl.value.trim()}" from the suggestions so it resolves to a catalog item.` };
+  const qty = Number($("mk-f-qty").value);
+  if (!(qty > 0)) return { error: "Quantity must be greater than 0." };
+  const mode = $("mk-f-mode").value;
+  const payload = { item_id, qty, mode, unit: itemEl.dataset.unit || undefined,
+    note: $("mk-f-note").value.trim() || null };
+  if (mode === "sale") {
+    if ($("mk-f-price").value === "" || !(Number($("mk-f-price").value) >= 0)) return { error: "Enter a sale price." };
+    payload.price_auec = Number($("mk-f-price").value);
+  } else if (mode === "auction") {
+    if ($("mk-f-start").value === "" || !(Number($("mk-f-start").value) >= 0)) return { error: "Enter a starting bid." };
+    const start = Number($("mk-f-start").value);
+    const date = $("mk-f-end-date").value, time = $("mk-f-end-time").value;
+    if (!date) return { error: "Auctions need an end date." };
+    const ends = new Date(`${date}T${time || "23:59"}`);
+    if (ends <= new Date()) return { error: "The auction end must be in the future." };
+    payload.start_price = start;
+    payload.ends_at = ends.toISOString();
+    if ($("mk-f-buyout").value !== "") {
+      const buyout = Number($("mk-f-buyout").value);
+      if (buyout < start) return { error: "Buyout must be at or above the starting bid." };
+      payload.buyout_auec = buyout;
+    }
+  } else {
+    const want = $("mk-f-want").value.trim();
+    if (!want) return { error: "Say what you want in return." };
+    payload.want = want;
+  }
+  return { payload };
+}
+
+function bindMarketForm(editId, onCancel) {
+  attachCatalogPicker($("mk-f-item").parentElement, it => { $("mk-f-item").dataset.unit = it.unit || ""; });
+  mkSyncModeFields();
+  const modeSel = $("mk-f-mode");
+  if (modeSel) modeSel.onchange = mkSyncModeFields;
+  $("mk-f-cancel").onclick = onCancel;
+  $("mk-f-save").onclick = async () => {
+    const { error, payload } = collectMarketForm();
+    const msg = $("mk-f-msg");
+    if (error) { msg.textContent = error; return; }
+    msg.textContent = "Saving…";
+    try {
+      const r = await fetch(editId ? `/api/market/${editId}` : "/api/market", {
+        method: editId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      const saved = await r.json();
+      if (editId && marketSubRoute().id === saved.id) renderMarketDetail(saved.id);   // hash unchanged
+      else location.hash = `#/market/${saved.id}`;
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+}
+
+function renderMarketForm() {
+  $("market-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/market">← All listings</a>` +
+    `<h2 class="ev-screen-h">NEW LISTING</h2>${marketFormHtml(null)}</div>`;
+  bindMarketForm(null, () => { location.hash = "#/market"; });
+}
+
+function renderMarketEditForm(l) {
+  $("market-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT LISTING</h2>${marketFormHtml(l)}`;
+  bindMarketForm(l.id, () => renderMarketDetail(l.id));
+}
+
 // ---------- view router (app launcher + apps + dedicated sub-pages) ----------
 // One SPA; the URL hash picks the view (fragment never hits the server, so
 // StaticFiles still serves the single index.html). The launcher (#/) is home and
 // hosts the app picker; the Resource Navigator lives at #/nav; #/settings, #/setup,
 // #/leaderboard and #/stats are account/app sub-pages. Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
-  "#/events": "Events", "#/goals": "Resource Manager", "#/": "Home" };
+  "#/events": "Events", "#/goals": "Resource Manager", "#/market": "Marketplace",
+  "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
   "#/events": "Event Planner", "#/goals": "Resource Manager",
-  "#/inventory": "Resource Manager" };
+  "#/inventory": "Resource Manager", "#/market": "Org Marketplace" };
 // The app a sub-page should return to (persisted so a reload on a sub-page keeps it).
 let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch { return null; } })() || "#/nav";
 function applyView() {
@@ -4752,6 +5228,8 @@ function applyView() {
   const goals = (h === "#/goals" || h.startsWith("#/goals/")) && authed;
   const inventory = h === "#/inventory" && authed;
   const resourceMgr = goals || inventory;
+  // Marketplace owns a sub-route family (board / new / detail), like the events app.
+  const market = (h === "#/market" || h.startsWith("#/market/")) && authed;
   const settings = h === "#/settings" && authed;
   const setup = h === "#/setup" && authed;
   const leaderboard = h === "#/leaderboard" && authed;
@@ -4765,11 +5243,11 @@ function applyView() {
   const privacy = h === "#/privacy";
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !route && !events && !resourceMgr && !settings && !setup
+  const launcher = authed && !nav && !route && !events && !resourceMgr && !market && !settings && !setup
     && !leaderboard && !stats && !cargoLeaderboard && !cargoStats && !legal;
-  // Normalize sub-routes (#/events/123, #/goals/new, #/inventory) to their app
-  // root for the header indicator and the "remember last app" jump.
-  const appHash = events ? "#/events" : resourceMgr ? "#/goals" : h;
+  // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/market/12) to
+  // their app root for the header indicator and the "remember last app" jump.
+  const appHash = events ? "#/events" : resourceMgr ? "#/goals" : market ? "#/market" : h;
 
   // The sign-in gate covers everything for anonymous users, except a legal page.
   $("login-gate").hidden = authed || legal;
@@ -4782,6 +5260,7 @@ function applyView() {
   $("events-view").hidden = !events;
   $("goals-view").hidden = !goals;
   $("inventory-view").hidden = !inventory;
+  $("market-view").hidden = !market;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   $("leaderboard-view").hidden = !leaderboard;
@@ -4791,7 +5270,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup/Stats/
   // Leaderboard) can offer a "← back to that app" link.
-  if (nav || route || events || resourceMgr) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); } catch {} }
+  if (nav || route || events || resourceMgr || market) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); } catch {} }
   // App contexts = each app plus its own Stats/Leaderboard sub-pages. The Stats/
   // Leaderboard header toggles stay visible across both and point at whichever
   // app's analytics you're currently in.
@@ -4807,8 +5286,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || events || resourceMgr || inCargo || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || legal;
+  $("where").hidden = launcher || route || events || resourceMgr || market || inCargo || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || market || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   $("nav-toggle").hidden = !authed || launcher;
@@ -4845,6 +5324,8 @@ function applyView() {
     loadGoals();
   } else if (inventory) {
     loadInventory();
+  } else if (market) {
+    loadMarket();
   } else if (nav) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.

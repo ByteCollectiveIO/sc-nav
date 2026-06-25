@@ -2302,6 +2302,346 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
                       db.list_goal_contributions(goal_id=goal_id), user, detail=True)
 
 
+# --- org marketplace (shares the item catalog) -----------------------------
+# A coordination board, not an exchange: SC has no auction house or item API, so
+# the app only records that two members agreed on terms — the goods + aUEC move
+# in-game on trust. aUEC ONLY, never real money (fan project under CIG's IP).
+
+
+_LISTING_MODES = ("sale", "auction", "barter")
+
+
+class ListingIn(BaseModel):
+    item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
+    qty: float = Field(default=1, gt=0, le=_MAX_QTY)
+    mode: str = Field(default="sale", max_length=16)            # sale | auction | barter
+    price_auec: float | None = Field(default=None, ge=0, le=_MAX_QTY)    # sale
+    start_price: float | None = Field(default=None, ge=0, le=_MAX_QTY)   # auction
+    buyout_auec: float | None = Field(default=None, ge=0, le=_MAX_QTY)   # auction
+    ends_at: str | None = Field(default=None, max_length=_META_MAX)      # auction
+    want: str | None = Field(default=None, max_length=_NOTE_MAX)         # barter
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
+    unit: str | None = Field(default=None, max_length=_UNIT_MAX)
+
+
+class ListingPatchIn(BaseModel):
+    status: str | None = Field(default=None, max_length=16)     # 'cancelled' only
+    qty: float | None = Field(default=None, gt=0, le=_MAX_QTY)
+    price_auec: float | None = Field(default=None, ge=0, le=_MAX_QTY)
+    buyout_auec: float | None = Field(default=None, ge=0, le=_MAX_QTY)
+    ends_at: str | None = Field(default=None, max_length=_META_MAX)
+    want: str | None = Field(default=None, max_length=_NOTE_MAX)
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
+
+
+class OfferIn(BaseModel):
+    amount_auec: float | None = Field(default=None, ge=0, le=_MAX_QTY)   # sale/auction
+    offer_item_id: str | None = Field(default=None, max_length=_ITEM_ID_MAX)  # barter
+    offer_note: str | None = Field(default=None, max_length=_NOTE_MAX)
+
+
+class OfferActionIn(BaseModel):
+    action: str = Field(max_length=16)                         # accept | withdraw
+
+
+_LISTING_PUBLIC = ("id", "seller_id", "item_id", "item_name", "unit", "qty", "mode",
+                   "price_auec", "start_price", "buyout_auec", "ends_at", "want",
+                   "status", "note", "buyer_id", "seller_confirmed", "buyer_confirmed",
+                   "created_at", "updated_at", "completed_at")
+
+
+def _validate_listing(body: ListingIn) -> dict:
+    """Validate a new listing against the catalog + its mode, normalizing into the
+    db column fields. The item's name/unit are stamped from the catalog (not
+    trusted from the client). Each mode requires its own fields; aUEC only."""
+    item = _resolve_or_400(body.item_id)
+    if body.mode not in _LISTING_MODES:
+        raise HTTPException(status_code=400, detail=f"unknown listing mode: {body.mode}")
+    fields = {"item_id": item["item_id"], "item_name": item["name"],
+              "unit": catalog.valid_unit(body.unit) or item["unit"],
+              "qty": body.qty, "mode": body.mode,
+              "note": (body.note or "").strip() or None,
+              "price_auec": None, "start_price": None, "buyout_auec": None,
+              "ends_at": None, "want": None}
+    if body.mode == "sale":
+        if body.price_auec is None:
+            raise HTTPException(status_code=400, detail="a sale listing needs a price")
+        fields["price_auec"] = float(body.price_auec)
+    elif body.mode == "auction":
+        if body.start_price is None:
+            raise HTTPException(status_code=400, detail="an auction needs a start price")
+        if not body.ends_at:
+            raise HTTPException(status_code=400, detail="an auction needs an end time")
+        ends_at = _normalize_event_start(body.ends_at)       # reuse UTC canonicalizer
+        if datetime.fromisoformat(ends_at) <= datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="auction end time must be in the future")
+        fields["start_price"] = float(body.start_price)
+        fields["ends_at"] = ends_at
+        if body.buyout_auec is not None:
+            if float(body.buyout_auec) < float(body.start_price):
+                raise HTTPException(status_code=400,
+                                    detail="buyout must be at or above the start price")
+            fields["buyout_auec"] = float(body.buyout_auec)
+    else:   # barter
+        want = (body.want or "").strip()
+        if not want:
+            raise HTTPException(status_code=400, detail="a barter listing needs what you want in return")
+        fields["want"] = want
+    return fields
+
+
+def _resolve_listing_expiry(listing: dict, offers, now: datetime) -> dict:
+    """Lazily settle a closed auction on read — no background job. An open auction
+    past its end (or one a buyout has cleared) becomes `pending` with the winning
+    bidder (their bid accepted, the rest marked lost), or `expired` if nobody bid.
+    Other modes are returned unchanged. Returns the (reloaded) listing."""
+    if listing["mode"] != "auction" or listing["status"] != "open":
+        return listing
+    state = nav_core.derive_auction_state(listing, offers, now)
+    if not state["is_closed"]:
+        return listing
+    ts = now.isoformat()
+    if state["winner_id"]:
+        win = next((o for o in offers if o["bidder_id"] == state["winner_id"]
+                    and float(o.get("amount_auec") or 0) == state["winning_amount"]), None)
+        db.settle_listing(listing["id"], state["winner_id"], "pending", ts)
+        if win:
+            db.set_offer_status(win["id"], "accepted")
+            db.reject_other_offers(listing["id"], win["id"])
+    else:
+        db.set_listing_status(listing["id"], "expired", ts)
+    return db.get_listing(listing["id"])
+
+
+def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
+    """Serialize a listing: its fields, the seller's name + completed-deals count,
+    the derived auction state (auctions), the caller's own standing offer, and the
+    caller's permissions. `detail=True` adds the full offer/bid list. Lazily
+    settles a lapsed auction first so the board never shows a stale 'open'."""
+    now = datetime.now(timezone.utc)
+    listing = _resolve_listing_expiry(listing, db.list_offers(listing["id"]), now)
+    offers = db.list_offers(listing["id"])
+    state = nav_core.derive_auction_state(listing, offers, now)
+    view = {k: listing.get(k) for k in _LISTING_PUBLIC}
+    view["seller_name"] = _resolve_member_name(listing["seller_id"], None)
+    view["seller_deals"] = db.completed_deals_count(listing["seller_id"])
+    view["is_seller"] = listing["seller_id"] == user["id"]
+    view["can_edit"] = view["is_seller"] or bool(user.get("is_admin"))
+    view["auction"] = state if listing["mode"] == "auction" else None
+    view["offer_count"] = state["bid_count"]
+    mine = next((o for o in offers
+                 if o["bidder_id"] == user["id"] and o["status"] == "active"), None)
+    view["my_offer"] = ({"id": mine["id"], "amount_auec": mine["amount_auec"],
+                         "offer_item_name": mine.get("offer_item_name"),
+                         "offer_note": mine.get("offer_note")} if mine else None)
+    if listing.get("buyer_id"):
+        view["buyer_name"] = _resolve_member_name(listing["buyer_id"], None)
+        view["is_buyer"] = listing["buyer_id"] == user["id"]
+        view["can_confirm"] = (listing["status"] == "pending"
+                               and (view["is_seller"] or view["is_buyer"]))
+    else:
+        view["buyer_name"], view["is_buyer"], view["can_confirm"] = None, False, False
+    if detail:
+        view["offers"] = [
+            {"id": o["id"], "bidder_id": o["bidder_id"],
+             "bidder_name": _resolve_member_name(o["bidder_id"], None),
+             "amount_auec": o["amount_auec"], "offer_item_id": o.get("offer_item_id"),
+             "offer_item_name": o.get("offer_item_name"), "offer_note": o.get("offer_note"),
+             "status": o["status"], "created_at": o["created_at"],
+             "is_mine": o["bidder_id"] == user["id"]}
+            for o in offers]
+    return view
+
+
+@app.get("/api/market")
+async def list_market(mode: str | None = None, item: str | None = None,
+                      seller: str | None = None, user: dict = Depends(require_session)):
+    """The marketplace board. By default lists open listings (filterable by
+    `mode`/`item`); `seller=me` lists all of the caller's own listings (any
+    status). Each carries its derived auction state so cards render without an
+    N+1."""
+    if seller == "me":
+        rows = db.list_listings(mode=mode, item_id=item, seller_id=user["id"])
+    else:
+        rows = db.list_listings(mode=mode, item_id=item, open_only=True)
+    return {"listings": [_listing_view(r, user) for r in rows]}
+
+
+@app.post("/api/market")
+async def create_listing(body: ListingIn, user: dict = Depends(require_session)):
+    """Post a listing (any org member). aUEC only — never real money."""
+    fields = _validate_listing(body)
+    now = datetime.now(timezone.utc).isoformat()
+    lid = db.create_listing({**fields, "seller_id": user["id"], "status": "open",
+                             "created_at": now, "updated_at": now})
+    return _listing_view(db.get_listing(lid), user, detail=True)
+
+
+@app.get("/api/market/{listing_id}")
+async def get_market_listing(listing_id: int, user: dict = Depends(require_session)):
+    """One listing with its offer/bid list + derived auction state."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="unknown listing")
+    return _listing_view(listing, user, detail=True)
+
+
+@app.patch("/api/market/{listing_id}")
+async def edit_listing(listing_id: int, body: ListingPatchIn,
+                       user: dict = Depends(require_session)):
+    """Edit or cancel a listing (seller or admin). `status='cancelled'` calls it
+    off (allowed before it completes); otherwise the mode's own fields can be
+    tweaked while it's still open."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="unknown listing")
+    if listing["seller_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="only the seller or an admin can change this listing")
+    ts = datetime.now(timezone.utc).isoformat()
+    if body.status is not None:
+        if body.status != "cancelled":
+            raise HTTPException(status_code=400, detail="the only status you can set is 'cancelled'")
+        if listing["status"] in ("completed", "cancelled"):
+            raise HTTPException(status_code=400, detail="this listing is already closed")
+        db.set_listing_status(listing_id, "cancelled", ts)
+        return _listing_view(db.get_listing(listing_id), user, detail=True)
+    if listing["status"] != "open":
+        raise HTTPException(status_code=400, detail="only an open listing can be edited")
+    fields: dict = {}
+    if body.qty is not None:
+        fields["qty"] = body.qty
+    if body.note is not None:
+        fields["note"] = body.note.strip() or None
+    if listing["mode"] == "sale" and body.price_auec is not None:
+        fields["price_auec"] = float(body.price_auec)
+    if listing["mode"] == "barter" and body.want is not None:
+        want = body.want.strip()
+        if not want:
+            raise HTTPException(status_code=400, detail="a barter listing needs what you want in return")
+        fields["want"] = want
+    if listing["mode"] == "auction":
+        if body.ends_at:
+            ends_at = _normalize_event_start(body.ends_at)
+            if datetime.fromisoformat(ends_at) <= datetime.now(timezone.utc):
+                raise HTTPException(status_code=400, detail="auction end time must be in the future")
+            fields["ends_at"] = ends_at
+        if body.buyout_auec is not None:
+            if float(body.buyout_auec) < float(listing["start_price"] or 0):
+                raise HTTPException(status_code=400, detail="buyout must be at or above the start price")
+            fields["buyout_auec"] = float(body.buyout_auec)
+    if fields:
+        db.update_listing(listing_id, fields, ts)
+    return _listing_view(db.get_listing(listing_id), user, detail=True)
+
+
+@app.post("/api/market/{listing_id}/offer")
+async def place_offer(listing_id: int, body: OfferIn,
+                      user: dict = Depends(require_session)):
+    """Buy / bid / make an offer / counter a barter (any member but the seller).
+    For a sale, an offer at or above the ask is an instant buy (→ pending); a lower
+    one waits for the seller to accept. An auction bid must clear the next minimum
+    and instantly wins on a buyout. A barter offer is a counter-item and/or note."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="unknown listing")
+    now = datetime.now(timezone.utc)
+    listing = _resolve_listing_expiry(listing, db.list_offers(listing_id), now)
+    if listing["seller_id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="you can't bid on your own listing")
+    if listing["status"] != "open":
+        raise HTTPException(status_code=400, detail="this listing is no longer open")
+    ts = now.isoformat()
+    mode = listing["mode"]
+    if mode == "auction":
+        if body.amount_auec is None:
+            raise HTTPException(status_code=400, detail="a bid amount is required")
+        state = nav_core.derive_auction_state(listing, db.list_offers(listing_id), now)
+        if float(body.amount_auec) < state["next_min_bid"]:
+            raise HTTPException(status_code=400,
+                                detail=f"bid must be at least {state['next_min_bid']:g} aUEC")
+        oid = db.add_offer(listing_id, user["id"], float(body.amount_auec),
+                           None, None, None, ts)
+        state = nav_core.derive_auction_state(listing, db.list_offers(listing_id), now)
+        if state["bought_out"] and state["winner_id"] == user["id"]:
+            db.settle_listing(listing_id, user["id"], "pending", ts)
+            db.set_offer_status(oid, "accepted")
+            db.reject_other_offers(listing_id, oid)
+    elif mode == "sale":
+        price = float(listing["price_auec"] or 0)
+        amount = float(body.amount_auec) if body.amount_auec is not None else price
+        oid = db.add_offer(listing_id, user["id"], amount, None, None,
+                           (body.offer_note or "").strip() or None, ts)
+        if amount >= price:                  # buy at (or above) the ask → instant deal
+            db.settle_listing(listing_id, user["id"], "pending", ts)
+            db.set_offer_status(oid, "accepted")
+            db.reject_other_offers(listing_id, oid)
+    else:   # barter
+        item_id = item_name = None
+        if body.offer_item_id:
+            it = _resolve_or_400(body.offer_item_id)
+            item_id, item_name = it["item_id"], it["name"]
+        note = (body.offer_note or "").strip() or None
+        if not item_id and not note:
+            raise HTTPException(status_code=400, detail="offer an item or a note")
+        db.add_offer(listing_id, user["id"], None, item_id, item_name, note, ts)
+    return _listing_view(db.get_listing(listing_id), user, detail=True)
+
+
+@app.patch("/api/market/{listing_id}/offer/{offer_id}")
+async def act_on_offer(listing_id: int, offer_id: int, body: OfferActionIn,
+                       user: dict = Depends(require_session)):
+    """Accept an offer (seller or admin → the listing goes pending with that
+    bidder, the rest are dropped) or withdraw your own active offer."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="unknown listing")
+    offer = db.get_offer(offer_id)
+    if offer is None or offer["listing_id"] != listing_id:
+        raise HTTPException(status_code=404, detail="unknown offer")
+    ts = datetime.now(timezone.utc).isoformat()
+    if body.action == "withdraw":
+        if offer["bidder_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="you can only withdraw your own offer")
+        if offer["status"] != "active":
+            raise HTTPException(status_code=400, detail="that offer is no longer active")
+        db.set_offer_status(offer_id, "withdrawn")
+    elif body.action == "accept":
+        if listing["seller_id"] != user["id"] and not user.get("is_admin"):
+            raise HTTPException(status_code=403, detail="only the seller can accept an offer")
+        if listing["status"] != "open":
+            raise HTTPException(status_code=400, detail="this listing is no longer open")
+        if offer["status"] != "active":
+            raise HTTPException(status_code=400, detail="that offer is no longer active")
+        db.settle_listing(listing_id, offer["bidder_id"], "pending", ts)
+        db.set_offer_status(offer_id, "accepted")
+        db.reject_other_offers(listing_id, offer_id)
+    else:
+        raise HTTPException(status_code=400, detail="unknown action")
+    return _listing_view(db.get_listing(listing_id), user, detail=True)
+
+
+@app.post("/api/market/{listing_id}/confirm")
+async def confirm_handoff(listing_id: int, user: dict = Depends(require_session)):
+    """Confirm the in-game handoff happened (buyer or seller). When both sides have
+    confirmed, the deal is `completed` — the app never touches goods or aUEC, it
+    only records that both parties agree it's done."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="unknown listing")
+    if listing["status"] != "pending":
+        raise HTTPException(status_code=400, detail="no pending deal to confirm")
+    is_seller = listing["seller_id"] == user["id"]
+    is_buyer = listing["buyer_id"] == user["id"]
+    if not (is_seller or is_buyer):
+        raise HTTPException(status_code=403, detail="only the buyer or seller can confirm this deal")
+    ts = datetime.now(timezone.utc).isoformat()
+    side = "seller" if is_seller else "buyer"
+    other_confirmed = listing["buyer_confirmed"] if is_seller else listing["seller_confirmed"]
+    db.confirm_listing(listing_id, side, ts, completed_at=ts if other_confirmed else None)
+    return _listing_view(db.get_listing(listing_id), user, detail=True)
+
+
 @app.get("/api/biomes")
 async def list_biomes():
     """Biome lookups (by_body / by_system / all) for the biome datalist; the
