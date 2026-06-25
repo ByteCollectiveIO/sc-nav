@@ -1991,12 +1991,13 @@ class InventoryIn(BaseModel):
     qty: float = Field(ge=0, le=_MAX_QTY)
     location: str = Field(default="", max_length=_LOCATION_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
-    goal_id: int | None = Field(default=None, ge=1)
+    unit: str | None = Field(default=None, max_length=_UNIT_MAX)
 
 
 class GoalLineIn(BaseModel):
     item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
     qty_needed: float = Field(ge=0, le=_MAX_QTY)
+    unit: str | None = Field(default=None, max_length=_UNIT_MAX)
 
 
 class GoalIn(BaseModel):
@@ -2043,17 +2044,39 @@ def _enrich_owner_names(entries: list[dict], key: str = "owner_id") -> list[dict
     return entries
 
 
+def _holding_view(row: dict) -> dict:
+    """Enrich a holding with how much of it is committed to goals and what's left
+    free. `available = qty - Σ allocations`; a goal contribution can't exceed it."""
+    committed = db.committed_for_holding(row["id"])
+    return {**row, "committed": committed,
+            "available": round(float(row.get("qty") or 0) - committed, 6)}
+
+
 @app.get("/api/inventory")
 async def get_inventory(owner: str | None = None, goal: int | None = None,
                         user: dict = Depends(require_session)):
-    """The inventory ledger. `owner=me` lists the caller's own rows; `goal=<id>`
-    lists a goal's contributions; with neither, returns the org-wide rollup
-    (derived `SUM(qty) GROUP BY item`, never a stored total)."""
+    """The inventory ledger. `owner=me` lists the caller's own holdings with their
+    goal commitments nested (each holding shows committed vs. available); `goal=<id>`
+    lists a goal's contributions; with neither, the org-wide rollup (derived
+    `SUM(qty) GROUP BY item` over holdings, each counted once — never a stored
+    total)."""
     if owner == "me":
         rows = db.list_inventory(owner_id=user["id"])
-        return {"scope": "mine", "rows": rows}
+        by_holding: dict[int, list] = {}
+        for a in db.allocations_for_owner(user["id"]):
+            by_holding.setdefault(a["inventory_id"], []).append(a)
+        out = []
+        for r in rows:
+            allocs = by_holding.get(r["id"], [])
+            committed = sum(float(a["qty"] or 0) for a in allocs)
+            out.append({**r, "committed": committed,
+                        "available": round(float(r.get("qty") or 0) - committed, 6),
+                        "allocations": [{"goal_id": a["goal_id"],
+                                         "goal_title": a.get("goal_title"),
+                                         "qty": a["qty"]} for a in allocs]})
+        return {"scope": "mine", "rows": out}
     if goal is not None:
-        rows = db.list_inventory(goal_id=goal)
+        rows = db.list_goal_contributions(goal_id=goal)
         return {"scope": "goal", "goal_id": goal,
                 "contributors": _enrich_owner_names(
                     nav_core.derive_inventory_rollup(rows))}
@@ -2065,22 +2088,55 @@ async def get_inventory(owner: str | None = None, goal: int | None = None,
 
 @app.post("/api/inventory")
 async def log_inventory(body: InventoryIn, user: dict = Depends(require_session)):
-    """Log/adjust the caller's holding of an item (optionally earmarked to a goal).
-    One row per (owner, item, location, goal) — re-logging SETS the quantity."""
+    """Log/adjust the caller's holding of an item. One row per (owner, item,
+    location) — re-logging SETS the quantity. A holding is a general pledge;
+    earmarking part of it to a goal is a separate allocation (see the contribute
+    endpoint), so what's logged here is never double-counted as a contribution."""
     item = _resolve_or_400(body.item_id)
-    if body.goal_id is not None and db.get_goal(body.goal_id) is None:
-        raise HTTPException(status_code=400, detail="unknown goal")
+    unit = catalog.valid_unit(body.unit) or item["unit"]
     now = datetime.now(timezone.utc).isoformat()
     row = db.upsert_inventory(
-        user["id"], item["item_id"], item["name"], item["unit"], body.qty,
+        user["id"], item["item_id"], item["name"], unit, body.qty,
         body.location.strip() or None, (body.note or "").strip() or None,
-        body.goal_id, now)
-    return row
+        None, now)
+    return _holding_view(row)
+
+
+class InventoryEditIn(BaseModel):
+    qty: float = Field(ge=0, le=_MAX_QTY)
+    location: str = Field(default="", max_length=_LOCATION_MAX)
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
+    unit: str | None = Field(default=None, max_length=_UNIT_MAX)
+
+
+@app.patch("/api/inventory/{inv_id}")
+async def edit_inventory(inv_id: int, body: InventoryEditIn,
+                         user: dict = Depends(require_session)):
+    """Edit a holding's qty / location / note / unit (owner-or-admin). The item
+    can't be changed here (delete + re-add for that). Quantity can't drop below
+    what's already committed to goals from this holding."""
+    row = db.get_inventory(inv_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown inventory row")
+    if row["owner_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="you can only edit your own holdings")
+    committed = db.committed_for_holding(inv_id)
+    if body.qty < committed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{committed:g} is committed to goals; quantity can't go below that")
+    fields = {"qty": body.qty,
+              "location": body.location.strip() or None,
+              "note": (body.note or "").strip() or None,
+              "unit": catalog.valid_unit(body.unit) or row.get("unit")}
+    db.update_inventory(inv_id, fields, datetime.now(timezone.utc).isoformat())
+    return _holding_view(db.get_inventory(inv_id))
 
 
 @app.delete("/api/inventory/{inv_id}")
 async def delete_inventory(inv_id: int, user: dict = Depends(require_session)):
-    """Remove an inventory row (owner-or-admin)."""
+    """Remove a holding (owner-or-admin). Any goal allocations drawn from it are
+    withdrawn with it."""
     row = db.get_inventory(inv_id)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown inventory row")
@@ -2101,8 +2157,9 @@ def _validate_goal(body: GoalIn) -> dict:
         if item["item_id"] in seen:
             raise HTTPException(status_code=400, detail=f"duplicate line item: {item['name']}")
         seen.add(item["item_id"])
+        unit = catalog.valid_unit(li.unit) or item["unit"]
         lines.append({"item_id": item["item_id"], "item_name": item["name"],
-                      "unit": item["unit"], "qty_needed": li.qty_needed})
+                      "unit": unit, "qty_needed": li.qty_needed})
     if not lines:
         raise HTTPException(status_code=400, detail="add at least one line item")
     deadline = None
@@ -2150,10 +2207,8 @@ async def list_goals(status: str | None = None, user: dict = Depends(require_ses
     and grouped by goal)."""
     goals = db.list_goals(status)
     contributions: dict[int, list] = {}
-    for row in db.list_inventory():
-        gid = row.get("goal_id")
-        if gid is not None:
-            contributions.setdefault(gid, []).append(row)
+    for row in db.list_goal_contributions():
+        contributions.setdefault(row["goal_id"], []).append(row)
     return {"goals": [_goal_view(g, contributions.get(g["id"], []), user) for g in goals]}
 
 
@@ -2165,7 +2220,7 @@ async def create_goal(body: GoalIn, user: dict = Depends(require_session)):
     gid = db.create_goal({**fields, "creator_id": user["id"], "status": "active",
                           "created_at": now, "updated_at": now})
     goal = db.get_goal(gid)
-    return _goal_view(goal, db.list_inventory(goal_id=gid), user, detail=True)
+    return _goal_view(goal, db.list_goal_contributions(goal_id=gid), user, detail=True)
 
 
 @app.get("/api/goals/{goal_id}")
@@ -2174,7 +2229,7 @@ async def get_goal(goal_id: int, user: dict = Depends(require_session)):
     goal = db.get_goal(goal_id)
     if goal is None:
         raise HTTPException(status_code=404, detail="unknown goal")
-    return _goal_view(goal, db.list_inventory(goal_id=goal_id), user, detail=True)
+    return _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user, detail=True)
 
 
 @app.patch("/api/goals/{goal_id}")
@@ -2191,19 +2246,60 @@ async def edit_goal(goal_id: int, body: GoalIn, user: dict = Depends(require_ses
         fields["status"] = body.status
     db.update_goal(goal_id, fields, datetime.now(timezone.utc).isoformat())
     goal = db.get_goal(goal_id)
-    return _goal_view(goal, db.list_inventory(goal_id=goal_id), user, detail=True)
+    return _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user, detail=True)
 
 
 @app.delete("/api/goals/{goal_id}")
 async def remove_goal(goal_id: int, user: dict = Depends(require_session)):
-    """Delete a goal (creator or admin). Its contributions survive as general
-    (goal-less) inventory rather than vanishing with the goal."""
+    """Delete a goal (creator or admin). The parent holdings survive as general
+    inventory; only this goal's allocations against them are dropped."""
     goal = db.get_goal(goal_id)
     if goal is None:
         raise HTTPException(status_code=404, detail="unknown goal")
     _require_goal_owner(goal, user)
     db.delete_goal(goal_id)
     return {"ok": True}
+
+
+class ContributeIn(BaseModel):
+    item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
+    qty: float = Field(gt=0, le=_MAX_QTY)
+    location: str = Field(default="", max_length=_LOCATION_MAX)
+
+
+@app.post("/api/goals/{goal_id}/contribute")
+async def contribute_to_goal(goal_id: int, body: ContributeIn,
+                             user: dict = Depends(require_session)):
+    """Commit some of the caller's holding toward a goal. The commitment is an
+    *allocation* drawn from the member's (item, location) holding — not a duplicate
+    ledger row — so it never double-counts in the org rollup. If the holding
+    doesn't hold enough free quantity, it's topped up to cover the commitment (the
+    member is declaring they have at least that much on hand)."""
+    goal = db.get_goal(goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="unknown goal")
+    item = _resolve_or_400(body.item_id)
+    loc = body.location.strip() or None
+    now = datetime.now(timezone.utc).isoformat()
+    holding = db.get_holding(user["id"], item["item_id"], loc)
+    if holding is None:
+        # No matching holding yet: the contribution itself declares the holding.
+        holding = db.upsert_inventory(
+            user["id"], item["item_id"], item["name"], item["unit"], body.qty,
+            loc, None, None, now)
+    existing = db.find_allocation(holding["id"], goal_id)
+    # Free quantity must cover the (new portion of the) commitment; bump the
+    # holding up if the member is committing more than they'd declared on hand.
+    committed = db.committed_for_holding(holding["id"])
+    new_committed = committed - float((existing or {}).get("qty") or 0) + body.qty
+    if new_committed > float(holding["qty"] or 0):
+        db.update_inventory(holding["id"], {"qty": new_committed}, now)
+    if existing:
+        db.update_allocation(existing["id"], float(existing["qty"] or 0) + body.qty, now)
+    else:
+        db.add_allocation(holding["id"], goal_id, body.qty, now)
+    return _goal_view(db.get_goal(goal_id),
+                      db.list_goal_contributions(goal_id=goal_id), user, detail=True)
 
 
 @app.get("/api/biomes")

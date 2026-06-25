@@ -187,6 +187,21 @@ CREATE TABLE IF NOT EXISTS goals (
     created_at TEXT, updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS goals_status ON goals(status);
+
+-- Goal contributions are *allocations drawn from a parent holding*, not duplicate
+-- inventory rows. Committing 30 of a 50-unit holding records one allocation here
+-- (qty 30) and leaves the holding's `available = qty - SUM(allocations)` at 20, so
+-- a contribution is never double-counted in the org rollup. One allocation per
+-- (holding, goal); deleting either the holding or the goal removes it.
+CREATE TABLE IF NOT EXISTS inventory_allocations (
+    id INTEGER PRIMARY KEY,
+    inventory_id INTEGER NOT NULL,      -- parent holding (inventory.id)
+    goal_id INTEGER NOT NULL,
+    qty REAL NOT NULL DEFAULT 0,
+    created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS inv_alloc_holding ON inventory_allocations(inventory_id);
+CREATE INDEX IF NOT EXISTS inv_alloc_goal ON inventory_allocations(goal_id);
 """
 
 
@@ -206,6 +221,26 @@ def init(db_path) -> None:
         _ensure_column("observations", "shard_id", "TEXT")
         _ensure_column("events", "event_location", "TEXT")
         _ensure_column("events", "signup_deadline", "TEXT")
+        _migrate_inventory_allocations()
+
+
+def _migrate_inventory_allocations() -> None:
+    """Convert legacy goal-tagged inventory rows into the allocation model.
+
+    The pre-v1.1 ledger stored a goal contribution as a *separate* inventory row
+    with `goal_id` set, which double-counted against the org rollup and had no
+    link to the holding it came from. Convert each such row into a plain holding
+    (clear `goal_id`) plus one allocation of its full quantity against that goal.
+    Idempotent: after it runs no goal-tagged inventory rows remain to convert."""
+    rows = _conn.execute(
+        "SELECT id, goal_id, qty, updated_at FROM inventory "
+        "WHERE goal_id IS NOT NULL").fetchall()
+    for r in rows:
+        _conn.execute(
+            "INSERT INTO inventory_allocations "
+            "(inventory_id, goal_id, qty, created_at, updated_at) VALUES (?,?,?,?,?)",
+            (r["id"], r["goal_id"], r["qty"], r["updated_at"], r["updated_at"]))
+        _conn.execute("UPDATE inventory SET goal_id=NULL WHERE id=?", (r["id"],))
 
 
 def _ensure_column(table: str, column: str, decl: str) -> None:
@@ -789,10 +824,126 @@ def get_inventory(inv_id: int) -> dict | None:
     return _inventory_row_to_dict(row) if row else None
 
 
-def delete_inventory(inv_id: int) -> bool:
+def get_holding(owner_id: str, item_id: str, location: str | None) -> dict | None:
+    """A member's general (goal-less) holding of an item at a location, if any —
+    the parent a goal contribution draws from. Mirrors the upsert match key."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM inventory WHERE owner_id=? AND item_id=? "
+            "AND COALESCE(location,'')=COALESCE(?,'') AND goal_id IS NULL",
+            (str(owner_id), item_id, location)).fetchone()
+    return _inventory_row_to_dict(row) if row else None
+
+
+_INV_EDITABLE = ("qty", "location", "note", "unit")
+
+
+def update_inventory(inv_id: int, fields: dict, updated_at: str) -> bool:
+    """Edit an existing holding's qty/location/note/unit (owner/admin check is the
+    caller's job). Only keys present in `fields` are written."""
+    cols = [c for c in _INV_EDITABLE if c in fields]
+    if not cols:
+        return False
+    sets = ", ".join(f"{c}=?" for c in cols)
+    vals = [fields[c] for c in cols]
     with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE inventory SET {sets}, updated_at=? WHERE id=?",
+            (*vals, updated_at, inv_id))
+    return cur.rowcount > 0
+
+
+def delete_inventory(inv_id: int) -> bool:
+    """Delete a holding and any goal allocations drawn from it (so removing a
+    holding withdraws its contributions rather than orphaning them)."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM inventory_allocations WHERE inventory_id=?", (inv_id,))
         cur = _conn.execute("DELETE FROM inventory WHERE id=?", (inv_id,))
     return cur.rowcount > 0
+
+
+# --- goal allocations (contributions drawn from a holding) ------------------
+
+
+def committed_for_holding(inv_id: int) -> float:
+    """Total quantity of a holding already committed to goals (Σ allocations)."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT COALESCE(SUM(qty),0) AS c FROM inventory_allocations "
+            "WHERE inventory_id=?", (inv_id,)).fetchone()
+    return float(row["c"] or 0)
+
+
+def get_allocation(alloc_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM inventory_allocations WHERE id=?", (alloc_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def find_allocation(inv_id: int, goal_id: int) -> dict | None:
+    """The existing allocation from a holding to a goal, if any (contributing again
+    to the same goal from the same holding tops it up rather than duplicating)."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM inventory_allocations WHERE inventory_id=? AND goal_id=?",
+            (inv_id, goal_id)).fetchone()
+    return dict(row) if row else None
+
+
+def add_allocation(inv_id: int, goal_id: int, qty: float, now: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO inventory_allocations "
+            "(inventory_id, goal_id, qty, created_at, updated_at) VALUES (?,?,?,?,?)",
+            (inv_id, goal_id, qty, now, now))
+    return cur.lastrowid
+
+
+def update_allocation(alloc_id: int, qty: float, now: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE inventory_allocations SET qty=?, updated_at=? WHERE id=?",
+            (qty, now, alloc_id))
+    return cur.rowcount > 0
+
+
+def delete_allocation(alloc_id: int) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM inventory_allocations WHERE id=?", (alloc_id,))
+    return cur.rowcount > 0
+
+
+def list_goal_contributions(goal_id: int | None = None) -> list[dict]:
+    """Goal contributions as flat rows the fill math consumes — each allocation
+    joined to its parent holding so it carries item/owner/location. Shaped like the
+    old goal-tagged inventory rows ({item_id, item_name, unit, qty, owner_id,
+    location, goal_id}) plus allocation/holding ids, so derive_goal_progress is
+    unchanged. `goal_id` None returns every goal's contributions (board grouping)."""
+    q = ("SELECT a.id AS allocation_id, a.goal_id, a.qty AS qty, "
+         "a.inventory_id AS holding_id, i.owner_id, i.item_id, i.item_name, "
+         "i.unit, i.location FROM inventory_allocations a "
+         "JOIN inventory i ON i.id = a.inventory_id")
+    params: list = []
+    if goal_id is not None:
+        q += " WHERE a.goal_id=?"
+        params.append(goal_id)
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def allocations_for_owner(owner_id: str) -> list[dict]:
+    """A member's goal commitments, keyed to the holding they're drawn from, with
+    the goal title — powers the nested parent→child render in 'my holdings'."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT a.id, a.inventory_id, a.goal_id, a.qty, g.title AS goal_title "
+            "FROM inventory_allocations a JOIN inventory i ON i.id = a.inventory_id "
+            "LEFT JOIN goals g ON g.id = a.goal_id WHERE i.owner_id=? "
+            "ORDER BY a.id", (str(owner_id),)).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --- goals -----------------------------------------------------------------
@@ -870,10 +1021,10 @@ def set_goal_status(goal_id: int, status: str, updated_at: str) -> bool:
 
 
 def delete_goal(goal_id: int) -> bool:
-    """Hard-delete a goal and unlink its contributions (the inventory rows survive
-    as general holdings rather than vanishing with the goal)."""
+    """Hard-delete a goal and drop its allocations (the parent holdings survive as
+    general inventory; only the earmarks against this goal go away)."""
     with _lock, _conn:
-        _conn.execute("UPDATE inventory SET goal_id=NULL WHERE goal_id=?", (goal_id,))
+        _conn.execute("DELETE FROM inventory_allocations WHERE goal_id=?", (goal_id,))
         cur = _conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
     return cur.rowcount > 0
 
@@ -914,8 +1065,11 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
             "DELETE FROM runs WHERE discord_id=?", (did,)).rowcount
         counts["handles"] = _conn.execute(
             "DELETE FROM handles WHERE discord_id=?", (did,)).rowcount
-        # Inventory pledges are personal holdings — hard-delete them (and unlink
-        # them from any goal first so a stale goal_id can't dangle).
+        # Inventory pledges are personal holdings — hard-delete them, withdrawing
+        # any goal allocations drawn from them first so none dangle.
+        _conn.execute(
+            "DELETE FROM inventory_allocations WHERE inventory_id IN "
+            "(SELECT id FROM inventory WHERE owner_id=?)", (did,))
         counts["inventory"] = _conn.execute(
             "DELETE FROM inventory WHERE owner_id=?", (did,)).rowcount
         # Goals and custom catalog items are org reference data — keep them but

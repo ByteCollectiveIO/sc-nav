@@ -107,16 +107,23 @@ sit on.
 
 ### 2. Inventory (per-member ledger)
 
-`inventory` rows: `(id, owner_id, item_id, qty, location, note, goal_id NULL,
-updated_at)`.
+`inventory` rows: `(id, owner_id, item_id, qty, location, note, updated_at)`.
 
-- A row is one member's holding of one item, optionally **earmarked to a goal**
-  (`goal_id`) or **general** (`goal_id NULL` = free pool, allocatable later).
+- A row is one member's **holding** of one item at a location — a general pledge.
 - `location` is free text (e.g. "Area18 hangar", "Hull-A onboard") — useful for
-  logistics but not validated.
+  logistics but not validated; it autocompletes from the POI dataset (v1.1).
+- `unit` is denormalized off the catalog at write time but **member-overridable**
+  from a short allow-list (`catalog.UNITS`) — fauna parts / gear count "each", not
+  "SCU" (v1.1).
 - The member owns their rows (create/edit/delete); admins can see all and adjust.
 - **Org inventory view** (`#/inventory`) = `derive_inventory_rollup`: total per
-  item across all members, expandable to per-member/per-location breakdown.
+  item across all members (each holding counted **once**), expandable to
+  per-member/per-location breakdown.
+
+> **v1.1 model change (2026-06-25):** a goal contribution is **not** a duplicate
+> inventory row. It's an **allocation drawn from a holding** — see Goals below.
+> The old `inventory.goal_id` column is retired (a one-time migration converts any
+> legacy goal-tagged rows into holding + allocation pairs).
 
 ### 3. Goals (targets with deadline + priority)
 
@@ -131,9 +138,14 @@ plus a JSON `line_items` blob `[{item_id, qty_needed}]` (same pattern as
   nullable for open-ended goals.
 - **status** `active` | `met` | `archived`; auto-flips to `met` when every line
   item's contributions ≥ need (display-only; admin can reopen).
-- **Contributions** are just `inventory` rows with `goal_id` set, so there's **one
-  ledger** — a contribution *is* attributed inventory pointed at a goal. Logging a
-  contribution = insert an inventory row with that `goal_id`.
+- **Contributions** are **allocations drawn from a holding** (v1.1), tracked in an
+  `inventory_allocations` table `(id, inventory_id FK, goal_id, qty, …)`. Committing
+  30 of a 50-unit holding records one allocation (qty 30) and leaves the holding's
+  `available = qty − Σ allocations` at 20 — never a second ledger row, so the org
+  rollup never double-counts. `POST /api/goals/{id}/contribute` finds-or-creates the
+  member's (item, location) holding, tops it up only if they commit more than they'd
+  declared on hand, then adds/tops-up the allocation. "My holdings" renders each
+  holding with its commitments nested (parent→child) and a "free" remainder.
 
 `derive_goal_progress(goal, inventory_rows)` (pure, tested) returns per-line
 `{item_id, needed, have, pct}` + an overall `pct` (the rule the tests pin:
@@ -148,9 +160,11 @@ overall = total have / total needed across lines, capped at 100%), plus a
 |---|---|---|
 | `GET` | `/api/catalog?q=` | item search; feed items + custom. Shared with marketplace. |
 | `POST` | `/api/catalog` | add a custom item (admin or any member — TBD, default member). |
-| `GET` | `/api/inventory` | org rollup; `?owner=me` for mine, `?goal=<id>` for a goal's contributions. |
-| `POST` | `/api/inventory` | log/adjust my holding `{item_id, qty, location?, goal_id?}`. |
-| `DELETE` | `/api/inventory/{id}` | owner-or-admin. |
+| `GET` | `/api/inventory` | org rollup; `?owner=me` for mine (holdings + nested allocations), `?goal=<id>` for a goal's contributions. |
+| `POST` | `/api/inventory` | log/adjust my **holding** `{item_id, qty, unit?, location?, note?}` (no goal — see contribute). |
+| `PATCH` | `/api/inventory/{id}` | edit qty/location/note/unit (owner-or-admin); qty can't drop below committed (v1.1). |
+| `DELETE` | `/api/inventory/{id}` | owner-or-admin; withdraws any allocations drawn from it. |
+| `POST` | `/api/goals/{id}/contribute` | commit `{item_id, qty, location?}` as an allocation drawn from my holding (v1.1). |
 | `GET` | `/api/goals` | list, sorted priority↑ then deadline↑; `?status=`. |
 | `POST` | `/api/goals` | create (admin, or any member — configurable like events). |
 | `PATCH` | `/api/goals/{id}` | creator-or-admin; edit fields/line items/status. |

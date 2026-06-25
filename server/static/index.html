@@ -768,6 +768,7 @@
   .rm-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .rm-row .poi-pick { flex: 1; min-width: 160px; }
   .rm-row input.rm-qty { width: 110px; }
+  .rm-row select.rm-unit { width: 84px; flex: 0 0 auto; }
   .rm-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
   /* inventory rollup table */
   .rm-inv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -779,9 +780,15 @@
   .rm-inv-detail td { background: var(--panel2); font-size: 12px; color: var(--dim); }
   .rm-inv-detail .rm-breakdown { display: flex; flex-wrap: wrap; gap: 6px 16px; }
   .rm-num { font-variant-numeric: tabular-nums; text-align: right; }
-  .rm-mine-row { display: flex; align-items: center; gap: 10px; justify-content: space-between;
+  .rm-mine-row { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between;
     padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
+  .rm-mine-main { flex: 1; min-width: 220px; }
+  .rm-mine-actions { display: flex; gap: 6px; flex: 0 0 auto; }
   .rm-mine-row .rm-mine-loc { color: var(--dim); font-size: 12px; }
+  .rm-avail { color: var(--good); font-size: 12px; font-variant-numeric: tabular-nums; }
+  /* nested goal commitments under a holding (parent→child) */
+  .rm-mine-alloc { color: var(--dim); font-size: 12px; margin: 3px 0 0 14px; }
+  .rm-edit-item { align-self: center; white-space: nowrap; }
   .rm-intro { font-size: 13px; line-height: 1.6; color: var(--dim); margin: 0 0 14px; max-width: 760px; }
   .rm-intro a { color: var(--accent); text-decoration: none; }
 </style>
@@ -4217,6 +4224,19 @@ function fmtQty(n) {
   return Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toString();
 }
 
+// Unit allow-list (mirrors catalog.UNITS server-side). Not every item is bulk
+// cargo — fauna parts / harvestables / gear are counted individually — so the
+// member picks the counting unit, defaulting to the catalog item's.
+const RM_UNITS = ["SCU", "each", "unit", "L", "mg"];
+function unitSelect(cls, selected) {
+  const sel = (selected || "").trim();
+  const opts = RM_UNITS.map(u =>
+    `<option value="${u}" ${u === sel ? "selected" : ""}>${u}</option>`).join("");
+  // An unknown stored unit (e.g. a custom item's) stays selectable as a head option.
+  const head = sel && !RM_UNITS.includes(sel) ? `<option value="${esc(sel)}" selected>${esc(sel)}</option>` : "";
+  return `<select class="sel rm-unit ${cls}" title="unit">${head}${opts}</select>`;
+}
+
 // Sub-nav tabs shared by both screens.
 function rmTabs(active) {
   return `<div class="rm-tabs">` +
@@ -4393,26 +4413,28 @@ function renderGoalDetailBody(g) {
       `<div class="rm-row">` +
         `<select id="goal-c-item" class="sel" style="flex:1;min-width:180px">${lineSel}</select>` +
         `<input id="goal-c-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
-        `<input id="goal-c-loc" class="ti" style="flex:1;min-width:140px" maxlength="120" placeholder="location (optional)" autocomplete="off">` +
+        `<span class="poi-pick" style="flex:1;min-width:140px"><input id="goal-c-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
         `<button class="ev-btn primary" id="goal-c-save">Contribute</button>` +
-      `</div><span id="goal-c-msg" class="muted"></span></div>` +
+      `</div><span class="ev-hint">Committing draws from your holding at that location — it isn't a separate stash.</span>` +
+      `<span id="goal-c-msg" class="muted"></span></div>` +
     `<div class="ev-section-h">Contributors</div><div class="ev-roster-names">${contribList}</div>` +
     `<div class="ev-form-actions">${editBtns}</div>`;
 
   document.querySelectorAll("#goal-detail-body .rm-finder-link").forEach(a => {
     a.onclick = () => { rmFinderPrefill = a.dataset.finder; };
   });
+  attachPoiPicker($("goal-c-loc").parentElement);   // location autocompletes from POIs
   $("goal-c-save").onclick = async () => {
     const item_id = $("goal-c-item").value;
     const qty = Number($("goal-c-qty").value);
     const msg = $("goal-c-msg");
     if (!item_id) { msg.textContent = "This goal has no line items."; return; }
-    if (!(qty >= 0) || $("goal-c-qty").value === "") { msg.textContent = "Enter an amount."; return; }
+    if (!(qty > 0) || $("goal-c-qty").value === "") { msg.textContent = "Enter an amount greater than 0."; return; }
     msg.textContent = "Saving…";
     try {
-      const r = await fetch("/api/inventory", { method: "POST",
+      const r = await fetch(`/api/goals/${g.id}/contribute`, { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id, qty, location: $("goal-c-loc").value.trim(), goal_id: g.id }) });
+        body: JSON.stringify({ item_id, qty, location: $("goal-c-loc").value.trim() }) });
       if (!r.ok) throw await r.json().catch(() => ({}));
       renderGoalDetail(g.id);   // re-fetch so fill + contributors refresh
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
@@ -4435,6 +4457,7 @@ function goalLineEditRow(li) {
     `${picked} value="${li ? esc(li.item_name || "") : ""}"></span>` +
     `<input class="ti rm-qty rm-li-qty" type="number" min="0" step="any" placeholder="qty needed"` +
     ` value="${li && li.qty_needed != null ? fmtQty(li.qty_needed) : ""}">` +
+    unitSelect("rm-li-unit", li ? li.unit : "") +
     `<span class="ev-row-del rm-li-del" title="remove item">✕</span></div>`;
 }
 
@@ -4483,7 +4506,8 @@ function collectGoalForm() {
     if (!input.value.trim() && !id) continue;        // blank row, skip
     if (!id) return { error: `Pick "${input.value.trim()}" from the suggestions so it resolves to a catalog item.` };
     if (!(qty > 0)) return { error: "Each line item needs a quantity greater than 0." };
-    line_items.push({ item_id: id, qty_needed: qty });
+    const unitEl = row.querySelector(".rm-li-unit");
+    line_items.push({ item_id: id, qty_needed: qty, unit: unitEl ? unitEl.value : undefined });
   }
   if (!line_items.length) return { error: "Add at least one line item." };
   const seen = new Set();
@@ -4500,7 +4524,13 @@ function collectGoalForm() {
 
 function bindGoalForm(editId, onCancel) {
   const wirePickers = () => document.querySelectorAll("#goal-f-lines .poi-pick").forEach(w => {
-    if (!w.dataset.wired) { w.dataset.wired = "1"; attachCatalogPicker(w); }
+    if (!w.dataset.wired) {
+      w.dataset.wired = "1";
+      attachCatalogPicker(w, it => {   // prefill this row's unit from the catalog item
+        const u = w.closest(".rm-row").querySelector(".rm-li-unit");
+        if (u && it && it.unit) u.value = it.unit;
+      });
+    }
   });
   const wireDeletes = () => document.querySelectorAll("#goal-f-lines .rm-li-del").forEach(x => {
     x.onclick = () => { if (document.querySelectorAll("#goal-f-lines .rm-row").length > 1) x.closest(".rm-row").remove(); };
@@ -4557,7 +4587,8 @@ async function renderInventory() {
     `<div class="rm-row" style="margin-top:10px">` +
       `<span class="poi-pick"><input id="inv-item" class="ti" placeholder="item" autocomplete="off"></span>` +
       `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
-      `<input id="inv-loc" class="ti" style="flex:1;min-width:140px" maxlength="120" placeholder="location (optional)" autocomplete="off">` +
+      unitSelect("inv-unit", "") +
+      `<span class="poi-pick" style="flex:1;min-width:140px"><input id="inv-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
       `<button class="ev-btn primary" id="inv-save">Log holding</button>` +
     `</div><span id="inv-msg" class="muted"></span></div>` +
     `<div class="panel"><div class="ev-head"><div class="rm-tabs">` +
@@ -4565,7 +4596,9 @@ async function renderInventory() {
       `<button class="rm-tab ${rmInvScope === "mine" ? "on" : ""}" id="inv-scope-mine">My holdings</button>` +
     `</div></div><div id="inv-body"><p class="stat-empty">Loading…</p></div></div>`;
 
-  attachCatalogPicker($("inv-item").parentElement);
+  // Picking an item prefills the unit from the catalog (overridable).
+  attachCatalogPicker($("inv-item").parentElement, it => { if (it && it.unit) $("inv-unit").value = it.unit; });
+  attachPoiPicker($("inv-loc").parentElement);   // location autocompletes from POIs (free text ok)
   $("inv-save").onclick = logHolding;
   $("inv-scope-org").onclick = () => { rmInvScope = "org"; renderInventory(); };
   $("inv-scope-mine").onclick = () => { rmInvScope = "mine"; renderInventory(); };
@@ -4581,7 +4614,7 @@ async function logHolding() {
   try {
     const r = await fetch("/api/inventory", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id, qty, location: $("inv-loc").value.trim() }) });
+      body: JSON.stringify({ item_id, qty, unit: $("inv-unit").value, location: $("inv-loc").value.trim() }) });
     if (!r.ok) throw await r.json().catch(() => ({}));
     input.value = ""; delete input.dataset.itemId; $("inv-qty").value = ""; $("inv-loc").value = "";
     msg.textContent = "Logged ✓";
@@ -4612,24 +4645,82 @@ async function renderInvOrg() {
   });
 }
 
+let rmMineRows = [];
 async function renderInvMine() {
   let data;
   try { data = await fetch("/api/inventory?owner=me").then(r => r.json()); }
   catch { $("inv-body").innerHTML = `<p class="stat-empty">Couldn't load your holdings.</p>`; return; }
-  const rows = data.rows || [];
-  if (!rows.length) { $("inv-body").innerHTML = `<p class="stat-empty">You haven't logged any holdings yet.</p>`; return; }
-  $("inv-body").innerHTML = rows.map(r =>
-    `<div class="rm-mine-row"><div><b>${esc(r.item_name)}</b> · ${fmtQty(r.qty)} ${esc(r.unit || "")}` +
-    `${r.location ? ` <span class="rm-mine-loc">📍 ${esc(r.location)}</span>` : ""}` +
-    `${r.goal_id ? ` <span class="rm-status">→ goal #${r.goal_id}</span>` : ""}</div>` +
-    `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></div>`).join("");
+  rmMineRows = data.rows || [];
+  if (!rmMineRows.length) { $("inv-body").innerHTML = `<p class="stat-empty">You haven't logged any holdings yet.</p>`; return; }
+  $("inv-body").innerHTML = rmMineRows.map(invMineRowHtml).join("");
+  wireInvMine();
+}
+
+// A holding shows its quantity, and — when some of it is committed to goals —
+// the free remainder plus a nested sub-row per goal commitment (parent→child),
+// so a contribution reads as a portion of the holding, not a separate stash.
+function invMineRowHtml(r) {
+  const unit = esc(r.unit || "");
+  const committed = Number(r.committed) || 0;
+  const avail = committed > 0 ? ` <span class="rm-avail">${fmtQty(r.available)} ${unit} free</span>` : "";
+  const sub = (r.allocations || []).map(a =>
+    `<div class="rm-mine-alloc">↳ ${fmtQty(a.qty)} ${unit} → ${a.goal_title ? esc(a.goal_title) : "goal #" + a.goal_id}</div>`).join("");
+  return `<div class="rm-mine-row" data-id="${r.id}"><div class="rm-mine-main">` +
+    `<div><b>${esc(r.item_name)}</b> · ${fmtQty(r.qty)} ${unit}` +
+    `${r.location ? ` <span class="rm-mine-loc">📍 ${esc(r.location)}</span>` : ""}${avail}` +
+    `${r.note ? ` <span class="muted">— ${esc(r.note)}</span>` : ""}</div>${sub}</div>` +
+    `<div class="rm-mine-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
+    `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></div></div>`;
+}
+
+function wireInvMine() {
   $("inv-body").querySelectorAll(".rm-inv-del").forEach(b => {
     b.onclick = async () => {
-      if (!confirm("Remove this holding?")) return;
-      const r = await fetch(`/api/inventory/${b.dataset.id}`, { method: "DELETE" });
-      if (r.ok) renderInvMine();
+      const r = rmMineRows.find(x => String(x.id) === b.dataset.id);
+      const warn = r && Number(r.committed) > 0
+        ? "Remove this holding? Its goal contributions will be withdrawn too."
+        : "Remove this holding?";
+      if (!confirm(warn)) return;
+      const res = await fetch(`/api/inventory/${b.dataset.id}`, { method: "DELETE" });
+      if (res.ok) renderInvMine();
     };
   });
+  $("inv-body").querySelectorAll(".rm-inv-edit").forEach(b => { b.onclick = () => openInvEdit(b.dataset.id); });
+}
+
+// Inline edit of a holding (item is fixed — delete + re-add to change it). Qty
+// can't drop below what's committed to goals; the server enforces it too.
+function openInvEdit(id) {
+  const r = rmMineRows.find(x => String(x.id) === String(id));
+  const rowEl = $("inv-body").querySelector(`.rm-mine-row[data-id="${id}"]`);
+  if (!r || !rowEl) return;
+  rowEl.innerHTML =
+    `<div class="rm-row" style="flex:1">` +
+      `<span class="rm-edit-item"><b>${esc(r.item_name)}</b></span>` +
+      `<input class="ti rm-qty rm-e-qty" type="number" min="0" step="any" value="${fmtQty(r.qty)}">` +
+      unitSelect("rm-e-unit", r.unit) +
+      `<span class="poi-pick" style="flex:1;min-width:120px"><input class="ti rm-e-loc" maxlength="120" placeholder="location" autocomplete="off" value="${esc(r.location || "")}"></span>` +
+      `<input class="ti rm-e-note" maxlength="500" placeholder="note (optional)" value="${esc(r.note || "")}" style="flex:1;min-width:120px">` +
+      `<button class="ev-btn primary rm-e-save">Save</button>` +
+      `<button class="ev-btn rm-e-cancel">Cancel</button>` +
+    `</div><span class="rm-e-msg muted"></span>`;
+  attachPoiPicker(rowEl.querySelector(".rm-e-loc").parentElement);
+  rowEl.querySelector(".rm-e-cancel").onclick = () => renderInvMine();
+  rowEl.querySelector(".rm-e-save").onclick = async () => {
+    const qty = Number(rowEl.querySelector(".rm-e-qty").value);
+    const msg = rowEl.querySelector(".rm-e-msg");
+    if (!(qty >= 0) || rowEl.querySelector(".rm-e-qty").value === "") { msg.textContent = "Enter an amount."; return; }
+    msg.textContent = "Saving…";
+    try {
+      const res = await fetch(`/api/inventory/${id}`, { method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ qty, unit: rowEl.querySelector(".rm-e-unit").value,
+          location: rowEl.querySelector(".rm-e-loc").value.trim(),
+          note: rowEl.querySelector(".rm-e-note").value.trim() }) });
+      if (!res.ok) throw await res.json().catch(() => ({}));
+      renderInvMine();
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
 }
 
 // ---------- view router (app launcher + apps + dedicated sub-pages) ----------

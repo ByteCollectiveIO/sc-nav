@@ -32,6 +32,19 @@ KINDS = ("commodity", "ship", "component", "gear")
 _DEFAULT_UNIT = {"commodity": "SCU", "ship": "each", "component": "each",
                  "gear": "each"}
 
+# Unit allow-list a member may pick when logging a holding / goal line item. The
+# catalog stamps every commodity "SCU", but fauna parts / harvestables / gear are
+# counted individually ("each"/"unit"), so the member can override the default.
+# Kept deliberately short — these are the only sane counting units in-game.
+UNITS = ("SCU", "each", "unit", "L", "mg")
+
+
+def valid_unit(unit):
+    """A member-supplied unit if it's in the allow-list, else None (caller then
+    falls back to the catalog item's default)."""
+    u = (unit or "").strip()
+    return u if u in UNITS else None
+
 
 def slug(name: str) -> str:
     """A url/id-safe slug of an item name: lowercased, non-alphanumerics collapsed

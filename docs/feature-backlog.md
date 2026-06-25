@@ -1031,3 +1031,164 @@ for free via the existing one-guild `auth_gate`. **aUEC-only** is a hard constra
   local-rendered; lazy expiry like the run arrival check.
 - `server/static/index.html` — launcher card + `#/market` views; mode chips +
   countdown reuse the event CSS; persistent aUEC-only disclaimer.
+
+---
+
+## 16. Resource Manager (inventory) — v1.1 fixes & refinements
+
+**Status:** **ALL FIVE BUILT 2026-06-25** (uncommitted, needs /deploy). Five
+follow-ups on the shipped Resource Manager (org inventory & goals, v0.5.0).
+Built in order 2 → 3 → 4 → 5 as planned. Verified end-to-end over real HTTP
+(catalog → log holding w/ unit → contribute as allocation → nested my-holdings →
+edit w/ committed-floor guard → cascade deletes → legacy migration); nav_core
+suite still 129 green, frontend JS syntax-checked. **Original plan below.**
+
+### 16.1 Logo transparency — DONE 2026-06-24
+
+The `resource_manager_logo.png` / `marketplace_logo.png` had a non-transparent
+background. User re-exported both with a clear background; resized to 700px (to
+match the other app-chooser logos) and copied into `server/static/images/`. **Note:**
+the `?v={{APP_VERSION}}` cache-bust means the new file only reaches users on the
+**next version bump** (the URL is unchanged until then — same caching gotcha as the
+0.2.x logo saga). So this rides the next release with 16.2–16.5; no standalone
+deploy needed.
+
+### 16.2 Pick the unit when logging — DONE 2026-06-25
+
+Built as designed. `catalog.UNITS = (SCU, each, unit, L, mg)` + `catalog.valid_unit`;
+`unit` field on `InventoryIn` + `GoalLineIn` (validated, falls back to the catalog
+default); a `unitSelect()` `<select>` next to qty in the inventory log form and each
+goal line-item row, prefilled from the catalog item's unit on pick, overridable. An
+unknown stored unit stays selectable as a head option.
+
+**Problem.** The catalog assigns every commodity-feed item `unit = "SCU"`
+(`catalog.feed_items`), but not all items are bulk cargo — fauna parts / harvestables
+/ gear are counted **individually**. So "8 SCU of Iron" is right but "8 SCU of
+Kopion Horns" is wrong; it should be "8 Kopion Horns (each)". The stored row already
+has a `unit` column and the log endpoint already stamps the catalog item's unit — the
+gap is that the unit is *fixed by kind* with no way for the member to choose.
+
+**Decision.** Expose a **unit picker** in the log-holding form (and the goal
+line-item form), defaulting to the catalog item's unit but **overridable**. Small
+allow-list (`SCU`, `each`, `unit`, plus maybe `L`/`mg` if useful) — keep it short.
+
+**Implementation.**
+- `server/app.py` — add `unit: str | None` to `InventoryIn` and `GoalLineIn`;
+  when present + in the allow-list, use it instead of the catalog default
+  (`_resolve_or_400` still resolves name; unit becomes member-chosen). Validate
+  against a `catalog.UNITS` allow-list.
+- `server/static/index.html` — add a small `<select>` unit control next to the qty
+  field in the log form (`renderInventory`) and each goal line-item row
+  (`goalLineEditRow`); the catalog picker's `onPick` prefills it from `it.unit`,
+  member can change it. Show the chosen unit in the rollup/“my holdings”/goal-line
+  displays (already rendered from the row's `unit`).
+- Consider per-item unit memory later (remember the unit a member last logged for an
+  item) — deferred.
+
+### 16.3 Location field should autocomplete from POIs — DONE 2026-06-25
+
+Built as designed (frontend-only). The inventory log-form location, the goal-detail
+contribute-form location, and the inline holding-edit location are each wrapped in a
+`.poi-pick` span with `attachPoiPicker(...)`; free text still allowed. No schema
+change — `location` stays free text.
+
+**Problem.** The log-holding **location** is a plain free-text input, unlike the
+rally-point / event-location / cargo from→to fields, which all autocomplete against
+the POI/location dataset via `attachPoiPicker`.
+
+**Decision/Implementation.** Wrap the inventory location input in a `.poi-pick`
+span and call `attachPoiPicker(wrap)` on it (free text still allowed, like the event
+rally point). Applies to both the `#/inventory` log form and the goal-detail
+contribute form's location field. Frontend-only — no schema change (`location` stays
+free text). Reuse is one-liner-ish: the picker already exists and is used in
+`bindEventForm` (`document.querySelectorAll(".ev-form .poi-pick").forEach(attachPoiPicker)`).
+
+### 16.4 Edit an inventory entry — DONE 2026-06-25
+
+Built as designed. `db.update_inventory(id, fields, updated_at)` (qty/location/note/
+unit); `PATCH /api/inventory/{id}` with `InventoryEditIn`, owner-or-admin guard, and
+a floor check — qty can't drop below what's committed to goals from that holding.
+"My holdings" gained an inline Edit form per row (item fixed; delete + re-add to
+change it) that PATCHes and re-renders.
+
+**Problem.** "My holdings" only offers **Remove**. Fixing a typo, adjusting a
+quantity, or moving a holding to a different location forces a delete + re-add.
+(The POST upsert is keyed on (owner, item, location, goal), so changing the location
+or item via POST silently creates a *new* row instead of editing.)
+
+**Decision.** Add a real **edit** path: a `PATCH /api/inventory/{id}` (owner-or-admin)
+that updates qty / location / note / unit on an existing row, plus an inline edit
+affordance in "my holdings" (mirror the custom-POI inline-edit pattern, backlog #2).
+Item identity (`item_id`) edits are out of scope — to change the item, delete + re-add.
+
+**Implementation.**
+- `server/db.py` — `update_inventory(id, fields)` helper (UPDATE of the editable
+  columns + `updated_at`).
+- `server/app.py` — `PATCH /api/inventory/{id}` with an `InventoryEditIn`
+  (qty/location/note/unit), owner-or-admin guard like `delete_inventory`.
+- `server/static/index.html` — an "Edit" button per row in `renderInvMine` opening a
+  small inline form (or prompt-based, matching the custom-POI note edit), PATCH, then
+  re-render.
+
+### 16.5 Goal contributions as child allocations — DONE 2026-06-25
+
+Built with **option (b)** — a separate `inventory_allocations` table
+`(id, inventory_id FK, goal_id, qty, created_at, updated_at)`; holdings stay clean.
+A contribution is now an allocation drawn from a parent holding: `available = qty −
+Σ allocations`. New `POST /api/goals/{id}/contribute` finds-or-creates the member's
+(item, location) holding and tops it up only if committing more than declared on
+hand, then adds/updates one allocation per (holding, goal). `POST /api/inventory`
+is holdings-only (no `goal_id`). `derive_goal_progress` / `derive_inventory_rollup`
+are unchanged — the goal endpoints feed them allocation-joined rows via
+`db.list_goal_contributions()`, and the rollup now counts each holding once (no
+double-count). `GET /api/inventory?owner=me` returns holdings with `committed`/
+`available` + nested `allocations` (goal title + qty); the `#/inventory` "my
+holdings" view renders parent→child with a "free" chip. Deleting a holding withdraws
+its allocations; deleting a goal drops its allocations but keeps the holdings;
+member-deletion cascades both. **Migration** (`db._migrate_inventory_allocations`,
+run in `init`): each legacy `goal_id`-tagged inventory row → a holding (goal_id
+cleared) + an allocation of its full qty; idempotent. Verified incl. the migration
+on a seeded DB. Doc `docs/org-inventory-goals.md` updated.
+
+**Problem.** Contributing to a goal **inserts a second inventory row** (`goal_id`
+set) that is *independent* of the general holding it came from. Example: 50 Kopion
+Horns at Baijini Point + donate 30 to a goal → the ledger shows a 50 row **and** a
+separate 30-row, with no visible relationship and a misleading double-count in the
+rollup (it reads 80 total). The member expects the 30 to be a **portion of** the 50,
+shown as a nested commitment, with **20 still available**.
+
+**Decision (the model change).** A goal contribution becomes an **allocation drawn
+from a parent holding**, not a free-standing row:
+
+- An inventory **holding** is `(owner, item, location, total qty)` — the parent.
+- A goal **commitment** references a parent holding + a goal + a committed qty
+  (a child). `committed ≤ total`; **available = total − Σ committed**.
+- The `#/inventory` "my holdings" view shows each holding with its child commitments
+  nested (parent→children), e.g. `Kopion Horn @ Baijini Point — 50 (20 available)`
+  with a sub-row `↳ 30 → "Fund the Hull-C"`.
+- `derive_goal_progress` reads the **allocations** (per goal), not the parent rows;
+  `derive_inventory_rollup` counts each holding **once** (no double-count) and can
+  surface committed-vs-available.
+- The goal-detail **contribute** form lets the member pick **which holding/location**
+  the commitment draws from (or create a holding if none), capping at available.
+
+**Open design choice for build time (pick one):**
+- (a) **`parent_id` on `inventory`** — a commitment is an inventory row with
+  `parent_id` + `goal_id`; the parent's available is derived. Fewer tables, but the
+  "row is sometimes a holding, sometimes an allocation" overloads the table.
+- (b) **separate `inventory_allocations` table** `(id, inventory_id FK, goal_id,
+  qty, created_at)` — holdings stay clean; allocations are their own thing. Cleaner
+  invariant (Σ alloc ≤ holding.qty), one more table. **Leaning (b).**
+
+**Migration note.** Existing goal-tagged inventory rows (the current "duplicate"
+form) need a one-time convert into allocations against a matching/auto-created parent
+holding, or a documented reset. Decide at build time; the dataset is young so a
+guarded backfill is feasible.
+
+**Touches.** `derive_goal_progress` + `derive_inventory_rollup` (read allocations /
+de-dupe), the `inventory` schema (+ `inventory_allocations` or `parent_id` migration),
+`/api/inventory` (POST split into "log holding" vs "commit to goal"; the goal
+contribute path), and the `#/inventory` + goal-detail UI (nested parent→child render,
+available cap). This is the largest of the five and supersedes the current
+"contribution = inventory row with goal_id" shortcut documented in
+`docs/org-inventory-goals.md` (update that doc when built).
