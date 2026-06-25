@@ -1427,5 +1427,109 @@ class EventTaxonomyTests(unittest.TestCase):
         self.assertIn("Race", t["categories"])
 
 
+class CatalogTests(unittest.TestCase):
+    def test_feed_id_synthesis_and_dedupe(self):
+        import catalog
+        items = catalog.feed_items(
+            ["Titanium", "Medical Supplies", "Titanium"],   # dup collapses
+            [{"name": "Argo MOLE", "scu": 96}])
+        ids = {it["item_id"] for it in items}
+        self.assertIn("commodity:titanium", ids)
+        self.assertIn("commodity:medical-supplies", ids)
+        self.assertIn("ship:argo-mole", ids)
+        self.assertEqual(sum(1 for it in items if it["item_id"] == "commodity:titanium"), 1)
+        com = next(it for it in items if it["item_id"] == "commodity:titanium")
+        self.assertEqual(com["unit"], "SCU")
+        ship = next(it for it in items if it["item_id"] == "ship:argo-mole")
+        self.assertEqual((ship["kind"], ship["unit"]), ("ship", "each"))
+
+    def test_custom_item_and_build_override(self):
+        import catalog
+        cust = catalog.custom_item({"id": 7, "name": "Size 3 Shield", "kind": "component"})
+        self.assertEqual(cust["item_id"], "custom:7")
+        self.assertEqual(cust["unit"], "each")          # default for component
+        cat = catalog.build(["Titanium"], [], [{"id": 7, "name": "Aaa Gear", "kind": "gear"}])
+        self.assertEqual(cat[0]["name"], "Aaa Gear")    # sorts ahead of Titanium
+
+    def test_search_prefix_ranks_above_contains(self):
+        import catalog
+        cat = catalog.build(["Titanium", "Astatine", "Quantanium"], [], [])
+        hits = catalog.search(cat, "tan")
+        names = [h["name"] for h in hits]
+        self.assertTrue(names)
+        self.assertTrue(all("tan" in n.lower() for n in names))
+        self.assertEqual(len(catalog.search(cat, "", limit=2)), 2)
+
+
+class InventoryRollupTests(unittest.TestCase):
+    def test_rollup_sums_and_breaks_down(self):
+        rows = [
+            {"item_id": "commodity:titanium", "item_name": "Titanium", "unit": "SCU",
+             "qty": 80, "owner_id": "A", "location": "Area18"},
+            {"item_id": "commodity:titanium", "item_name": "Titanium", "unit": "SCU",
+             "qty": 40, "owner_id": "B", "location": "Area18"},
+            {"item_id": "commodity:titanium", "item_name": "Titanium", "unit": "SCU",
+             "qty": 30, "owner_id": "A", "location": "Lorville"},
+            {"item_id": "commodity:laranite", "item_name": "Laranite", "unit": "SCU",
+             "qty": 10, "owner_id": "A", "location": ""},
+        ]
+        roll = nav_core.derive_inventory_rollup(rows)
+        self.assertEqual(roll[0]["item_id"], "commodity:titanium")
+        self.assertEqual(roll[0]["total"], 150)
+        self.assertEqual(roll[0]["holders"], 2)         # A and B
+        self.assertEqual(roll[0]["by_owner"][0], {"owner_id": "A", "qty": 110})
+        self.assertEqual(roll[1]["by_location"][0]["location"], "—")
+
+    def test_empty(self):
+        self.assertEqual(nav_core.derive_inventory_rollup([]), [])
+
+
+class GoalProgressTests(unittest.TestCase):
+    GOAL = {"line_items": [
+        {"item_id": "commodity:titanium", "item_name": "Titanium", "unit": "SCU",
+         "qty_needed": 500},
+        {"item_id": "commodity:laranite", "item_name": "Laranite", "unit": "SCU",
+         "qty_needed": 300},
+    ]}
+
+    def test_per_line_and_overall(self):
+        rows = [
+            {"item_id": "commodity:titanium", "qty": 320, "owner_id": "A"},
+            {"item_id": "commodity:titanium", "qty": 80, "owner_id": "B"},
+            {"item_id": "commodity:laranite", "qty": 150, "owner_id": "A"},
+        ]
+        p = nav_core.derive_goal_progress(self.GOAL, rows)
+        tit = next(l for l in p["lines"] if l["item_id"] == "commodity:titanium")
+        self.assertEqual((tit["have"], tit["needed"]), (400, 500))
+        self.assertEqual(tit["pct"], 80.0)
+        self.assertEqual(tit["short"], 100)
+        self.assertEqual(p["overall_pct"], 68.8)        # (400+150)/(500+300)
+        self.assertFalse(p["is_met"])
+        self.assertEqual(p["per_contributor"][0], {"owner_id": "A", "qty": 470})
+
+    def test_oversupply_one_line_does_not_mask_shortfall(self):
+        rows = [
+            {"item_id": "commodity:titanium", "qty": 5000, "owner_id": "A"},  # way over
+            {"item_id": "commodity:laranite", "qty": 0, "owner_id": "A"},
+        ]
+        p = nav_core.derive_goal_progress(self.GOAL, rows)
+        self.assertEqual(p["overall_pct"], 62.5)        # 500/800, capped line
+        self.assertFalse(p["is_met"])
+
+    def test_met_when_all_lines_full(self):
+        rows = [
+            {"item_id": "commodity:titanium", "qty": 500, "owner_id": "A"},
+            {"item_id": "commodity:laranite", "qty": 300, "owner_id": "B"},
+        ]
+        p = nav_core.derive_goal_progress(self.GOAL, rows)
+        self.assertEqual(p["overall_pct"], 100.0)
+        self.assertTrue(p["is_met"])
+
+    def test_no_line_items_is_not_met(self):
+        p = nav_core.derive_goal_progress({"line_items": []}, [])
+        self.assertEqual(p["overall_pct"], 100.0)       # vacuous need → 100%
+        self.assertFalse(p["is_met"])                   # but an empty goal isn't "met"
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

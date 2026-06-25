@@ -136,6 +136,57 @@ CREATE TABLE IF NOT EXISTS event_signups (
     UNIQUE(event_id, discord_id)
 );
 CREATE INDEX IF NOT EXISTS event_signups_event ON event_signups(event_id);
+
+-- Org inventory & goals + marketplace: a shared item catalog of anything not in
+-- the uexcorp commodity/vehicle feeds (components, FPS gear, …). Feed items are
+-- synthesized in catalog.py from the cached feeds and aren't stored here; only
+-- the hand-entered customs live in this table (catalog id `custom:<id>`).
+CREATE TABLE IF NOT EXISTS catalog_items (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,                 -- commodity | ship | component | gear
+    unit TEXT,                          -- SCU | each | …
+    creator_id TEXT,                    -- Discord member who added it
+    created_at TEXT
+);
+
+-- Per-member inventory ledger. SC has no shared org storage, so a holding is an
+-- *attributed pledge*, never a pooled vault — every row is owned by a member.
+-- A row earmarked to a goal (`goal_id` set) IS that member's contribution toward
+-- it; `goal_id NULL` is a general (allocatable) holding. `item_name`/`unit` are
+-- denormalized off the catalog at write time (like events.roles stores names) so
+-- a later feed change can't strand a row. One row per (owner, item, location,
+-- goal) — re-logging sets the quantity rather than stacking duplicates.
+CREATE TABLE IF NOT EXISTS inventory (
+    id INTEGER PRIMARY KEY,
+    owner_id TEXT NOT NULL,             -- Discord member id
+    item_id TEXT NOT NULL,             -- catalog id (commodity:/ship:/custom:)
+    item_name TEXT, unit TEXT,
+    qty REAL NOT NULL DEFAULT 0,
+    location TEXT,                      -- free text (e.g. "Area18 hangar")
+    note TEXT,
+    goal_id INTEGER,                   -- earmarked goal, or NULL = general pool
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS inventory_owner ON inventory(owner_id);
+CREATE INDEX IF NOT EXISTS inventory_goal ON inventory(goal_id);
+CREATE INDEX IF NOT EXISTS inventory_item ON inventory(item_id);
+
+-- Org procurement goals: a target with a deadline + priority and a JSON list of
+-- line items [{item_id, item_name, unit, qty_needed}] (same JSON-blob pattern as
+-- events.roles). Contributions are inventory rows pointed at the goal, so fill is
+-- derived (derive_goal_progress), never stored. `priority` 1–10, 1 = highest.
+CREATE TABLE IF NOT EXISTS goals (
+    id INTEGER PRIMARY KEY,
+    creator_id TEXT NOT NULL,           -- Discord member id of the creator
+    title TEXT, description TEXT,
+    priority INTEGER NOT NULL DEFAULT 5,
+    deadline TEXT,                      -- optional UTC ISO8601; rendered local
+    status TEXT NOT NULL DEFAULT 'active',   -- active | met | archived
+    line_items TEXT,                    -- JSON: [{item_id, item_name, unit, qty_needed}]
+    created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS goals_status ON goals(status);
 """
 
 
@@ -649,6 +700,184 @@ def clear_run_history() -> int:
     return cur.rowcount
 
 
+# --- catalog (custom items) ------------------------------------------------
+
+
+def add_catalog_item(name: str, kind: str, unit: str | None,
+                     creator_id: str, created_at: str) -> int:
+    """Insert a custom catalog item (anything not in a feed). Returns its row id;
+    the catalog id surfaced to clients is `custom:<id>`."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO catalog_items (name, kind, unit, creator_id, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (name, kind, unit, str(creator_id), created_at),
+        )
+    return cur.lastrowid
+
+
+def list_catalog_items() -> list[dict]:
+    """All custom catalog rows (catalog.py merges these with the feed items)."""
+    with _lock:
+        rows = _conn.execute("SELECT * FROM catalog_items ORDER BY name").fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- inventory ledger ------------------------------------------------------
+
+
+def _inventory_row_to_dict(r: sqlite3.Row) -> dict:
+    return dict(r)
+
+
+def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | None,
+                     qty: float, location: str | None, note: str | None,
+                     goal_id: int | None, updated_at: str) -> dict:
+    """Log a member's holding. One row per (owner, item, location, goal): an
+    existing match has its quantity/note SET (not summed) to the new value, so
+    re-logging "I hold 80 SCU here" is idempotent rather than stacking. Returns
+    the resulting row. (SQLite treats NULLs as distinct in a UNIQUE, so the match
+    is done explicitly here with COALESCE rather than via an upsert conflict.)"""
+    with _lock, _conn:
+        existing = _conn.execute(
+            "SELECT id FROM inventory WHERE owner_id=? AND item_id=? "
+            "AND COALESCE(location,'')=COALESCE(?,'') "
+            "AND COALESCE(goal_id,0)=COALESCE(?,0)",
+            (str(owner_id), item_id, location, goal_id),
+        ).fetchone()
+        if existing:
+            _conn.execute(
+                "UPDATE inventory SET qty=?, item_name=?, unit=?, note=?, updated_at=? "
+                "WHERE id=?",
+                (qty, item_name, unit, note, updated_at, existing["id"]),
+            )
+            rid = existing["id"]
+        else:
+            cur = _conn.execute(
+                "INSERT INTO inventory (owner_id, item_id, item_name, unit, qty, "
+                "location, note, goal_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (str(owner_id), item_id, item_name, unit, qty, location, note,
+                 goal_id, updated_at),
+            )
+            rid = cur.lastrowid
+        row = _conn.execute("SELECT * FROM inventory WHERE id=?", (rid,)).fetchone()
+    return _inventory_row_to_dict(row)
+
+
+def list_inventory(owner_id: str | None = None, goal_id: int | None = None) -> list[dict]:
+    """Inventory rows, optionally scoped to one member (`owner_id`) and/or one
+    goal's contributions (`goal_id`). Freshest first."""
+    q, params = "SELECT * FROM inventory", []
+    where = []
+    if owner_id is not None:
+        where.append("owner_id=?")
+        params.append(str(owner_id))
+    if goal_id is not None:
+        where.append("goal_id=?")
+        params.append(goal_id)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    q += " ORDER BY updated_at DESC, id DESC"
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    return [_inventory_row_to_dict(r) for r in rows]
+
+
+def get_inventory(inv_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM inventory WHERE id=?", (inv_id,)).fetchone()
+    return _inventory_row_to_dict(row) if row else None
+
+
+def delete_inventory(inv_id: int) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM inventory WHERE id=?", (inv_id,))
+    return cur.rowcount > 0
+
+
+# --- goals -----------------------------------------------------------------
+
+
+def _goal_row_to_dict(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["line_items"] = _u(d.get("line_items")) or []
+    return d
+
+
+def create_goal(d: dict) -> int:
+    """Insert a goal (caller supplies validated fields + creator_id + timestamps)."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO goals (creator_id, title, description, priority, deadline, "
+            "status, line_items, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (str(d["creator_id"]), d.get("title"), d.get("description"),
+             d.get("priority", 5), d.get("deadline"), d.get("status", "active"),
+             _j(d.get("line_items") or []), d.get("created_at"), d.get("updated_at")),
+        )
+    return cur.lastrowid
+
+
+def get_goal(goal_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
+    return _goal_row_to_dict(row) if row else None
+
+
+def list_goals(status: str | None = None) -> list[dict]:
+    """Goals sorted priority ascending (1 = highest) then soonest deadline, open-
+    ended (NULL deadline) last. `status` filters when given."""
+    q = "SELECT * FROM goals"
+    params: list = []
+    if status:
+        q += " WHERE status=?"
+        params.append(status)
+    # NULL deadlines sort last within a priority; SQLite orders NULL first, so key
+    # on (deadline IS NULL) before deadline.
+    q += " ORDER BY priority ASC, deadline IS NULL, deadline ASC, id DESC"
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    return [_goal_row_to_dict(r) for r in rows]
+
+
+_GOAL_EDITABLE = ("title", "description", "priority", "deadline", "status", "line_items")
+_GOAL_JSON = ("line_items",)
+
+
+def update_goal(goal_id: int, fields: dict, updated_at: str) -> bool:
+    """Replace the editable columns of a goal (creator/admin check is the caller's
+    job). Only the keys present in `fields` are written."""
+    cols = [c for c in _GOAL_EDITABLE if c in fields]
+    if not cols:
+        return False
+    sets = ", ".join(f"{c}=?" for c in cols)
+    vals = [_j(fields.get(c) or []) if c in _GOAL_JSON else fields.get(c) for c in cols]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE goals SET {sets}, updated_at=? WHERE id=?",
+            (*vals, updated_at, goal_id),
+        )
+    return cur.rowcount > 0
+
+
+def set_goal_status(goal_id: int, status: str, updated_at: str) -> bool:
+    """Flip just the status (used by the auto met/active recompute on read)."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE goals SET status=?, updated_at=? WHERE id=?",
+            (status, updated_at, goal_id),
+        )
+    return cur.rowcount > 0
+
+
+def delete_goal(goal_id: int) -> bool:
+    """Hard-delete a goal and unlink its contributions (the inventory rows survive
+    as general holdings rather than vanishing with the goal)."""
+    with _lock, _conn:
+        _conn.execute("UPDATE inventory SET goal_id=NULL WHERE goal_id=?", (goal_id,))
+        cur = _conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
+    return cur.rowcount > 0
+
+
 # --- account deletion (privacy: erase a member) ----------------------------
 
 
@@ -685,6 +914,16 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
             "DELETE FROM runs WHERE discord_id=?", (did,)).rowcount
         counts["handles"] = _conn.execute(
             "DELETE FROM handles WHERE discord_id=?", (did,)).rowcount
+        # Inventory pledges are personal holdings — hard-delete them (and unlink
+        # them from any goal first so a stale goal_id can't dangle).
+        counts["inventory"] = _conn.execute(
+            "DELETE FROM inventory WHERE owner_id=?", (did,)).rowcount
+        # Goals and custom catalog items are org reference data — keep them but
+        # de-identify the creator (mirrors how shared POIs are anonymized).
+        counts["goals_anonymized"] = _conn.execute(
+            "UPDATE goals SET creator_id='' WHERE creator_id=?", (did,)).rowcount
+        _conn.execute(
+            "UPDATE catalog_items SET creator_id='' WHERE creator_id=?", (did,))
         _conn.execute("DELETE FROM meta WHERE key=?",
                       (f"cargo_session_start:{did}",))
     return counts

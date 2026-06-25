@@ -929,3 +929,105 @@ Cartographer→POIs/position, Pathfinder/Scout→recon.
   served like `/api/ships`; JSON-blob columns as in `/api/route/*`.
 - `server/static/index.html` — launcher card + new `#/events` view as branches in
   `applyView()`; calendar/cards CSS in the spirit of `#/stats`.
+
+---
+
+## 14. Org inventory & goals (resource procurement campaigns)
+
+**Status:** **BUILT 2026-06-24** (uncommitted) — full doc
+[`docs/org-inventory-goals.md`](org-inventory-goals.md). Fourth app in the SPA
+("Resource Manager"); the shared **item catalog** half of a two-app pair with the
+[Marketplace](#15-org-marketplace-auec-only-sellauctiontrade).
+
+Built as designed: `catalog.py` (slug-based id synthesis `commodity:`/`ship:`/
+`custom:<n>`, feed+custom merge, prefix-ranked search) + `catalog_items`/
+`inventory`/`goals` tables (`db.py`) + pure `derive_inventory_rollup` /
+`derive_goal_progress` in `nav_core.py` (12 new tests, suite 129 green; overall
+fill caps each line at its need so over-supply can't mask a shortfall). Endpoints:
+`GET/POST /api/catalog`, `/api/inventory` GET(rollup/mine/goal)+POST(idempotent
+upsert per owner+item+location+goal)+DELETE, `/api/goals` CRUD+detail. Inventory
+rows + goal line items denormalize item name/unit off the catalog at write time
+(picker validates, not a hard FK). Frontend: launcher card, `#/goals` board+
+detail+create/edit form (catalog autocomplete line items, priority 1–10 hue chip,
+deadline countdown, per-line + overall fill bars, contribute form, per-contributor
+breakdown) and `#/inventory` (org rollup table expandable to per-owner/per-
+location + "my holdings" with delete). Goal line items deep-link into the navigator
+finder (`rmFinderPrefill` → `consumeFinderPrefill`). Logos copied to
+`static/images/resource_manager_logo.png`. Member-deletion erases inventory +
+anonymizes goals/catalog. Verified over real HTTP (shell, logo, catalog). Auto
+met/active flip is lazy on read. **Unreleased — needs /deploy.**
+
+### Original plan below (for reference).
+
+### Problem
+
+The org gathers commodities/resources toward shared goals (e.g. "500 SCU Titanium
++ 300 Laranite to fund the Hull-C"), but nothing tracks **what we hold** or **what
+we still need by when**. Members need to log contributions; leaders need fill,
+deadlines, and priority at a glance.
+
+### Decision (summary — see the design doc for detail)
+
+Three layers over a shared **item catalog**: **Catalog** (uexcorp commodities +
+ships feeds + custom items, served like `/api/ships`), **Inventory** (a *per-member
+ledger* — SC has no shared storage, so holdings are attributed pledges, not a
+vault), and **Goals** (title + **priority 1–10, 1=high** + **deadline** + JSON
+`line_items`). A contribution *is* an `inventory` row earmarked to a goal
+(`goal_id`), so there's **one ledger**. Fill math (`derive_goal_progress`,
+`derive_inventory_rollup`) is pure + unit-tested, patterned off
+`derive_event_fill`. Catalog is the **shared dependency** the marketplace also
+needs — **build it first.**
+
+The org-specific hook: each goal line item deep-links into the Resource Navigator's
+finder ("where's Titanium near me"), so procurement campaigns hand their shopping
+list straight to the org's own map.
+
+### Relevant code
+
+- `server/nav_core.py` — `derive_goal_progress` + `derive_inventory_rollup` (pure,
+  tested); pattern off `derive_event_fill` / `derive_run_stats`.
+- `server/db.py` — new `catalog_items`, `inventory`, `goals` tables;
+  `_ensure_column` migrations; `owner_id`/`discord_id` keys.
+- `server/app.py` — catalog served like `/api/ships` over `load_all_commodities` +
+  `load_ships` + custom rows; JSON-blob `line_items` as in `events.roles`.
+- `server/static/index.html` — launcher card + `#/goals` / `#/inventory` views;
+  priority chips + fill bars reuse the event CSS.
+
+---
+
+## 15. Org marketplace (aUEC-only sell/auction/trade)
+
+**Status:** designed 2026-06-24 — full doc [`docs/marketplace.md`](marketplace.md).
+**Not built.** Fifth app in the SPA; **sibling** of
+[Inventory & Goals](#14-org-inventory--goals-resource-procurement-campaigns),
+sharing its **item catalog**.
+
+### Problem
+
+SC has **no built-in auction house.** Org members want to sell/auction/trade
+in-game items among themselves — **aUEC only, never real money** — without leaving
+the org's tooling.
+
+### Decision (summary — see the design doc for detail)
+
+A **coordination board**, not an exchange: SC has no escrow/API, so the app records
+**agreements** (listing `open → pending → completed` via a dual-confirm handshake);
+the actual handoff is in-game on social trust. One `listings` table with a `mode`
+discriminator — **sale** (fixed/offer), **auction** (timed bids + buyout), **barter**
+(counter-items) — plus a `listing_offers` child for all three response flows.
+Auction resolution (`derive_auction_state`) is pure + unit-tested; expiry is lazy
+on read (no background job). Listings reference the **shared catalog** from app #14
+(build it first). Reputation v1 = a derived completed-deals count. Closed/trusted
+for free via the existing one-guild `auth_gate`. **aUEC-only** is a hard constraint
+(fan project under CIG IP) surfaced as a persistent banner.
+
+### Relevant code
+
+- `server/nav_core.py` — `derive_auction_state` (+ completed-deals helper), pure +
+  tested.
+- `server/db.py` — new `listings` + `listing_offers` tables; **`catalog_items`
+  shared** with #14; `_ensure_column` migrations.
+- `server/app.py` — seller-guard + `require_admin`; UTC `ends_at` stored,
+  local-rendered; lazy expiry like the run arrival check.
+- `server/static/index.html` — launcher card + `#/market` views; mode chips +
+  countdown reuse the event CSS; persistent aUEC-only disclaimer.

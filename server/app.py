@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
+import catalog
 import db
 import event_taxonomy
 import nav_core
@@ -539,6 +540,33 @@ harvestable_names = load_harvestable_names()
 ships = load_ships()
 fauna_names = load_fauna_names()
 biomes = load_biomes()
+
+
+def rebuild_catalog() -> list[dict]:
+    """The merged item catalog (commodity + ship feeds + custom rows), shared by
+    the inventory/goals and marketplace apps. Rebuilt at startup and whenever a
+    custom item is added or the feeds are refreshed."""
+    return catalog.build(commodity_names, ships, db.list_catalog_items())
+
+
+item_catalog = rebuild_catalog()
+item_catalog_by_id = {it["item_id"]: it for it in item_catalog}
+
+
+def resolve_catalog_item(item_id: str) -> dict | None:
+    """A catalog id → its canonical item ({item_id, name, kind, unit}), or None.
+    Endpoints resolve the client's chosen id here to stamp the authoritative
+    name/unit onto a stored row, rather than trusting a client-sent name."""
+    return item_catalog_by_id.get(item_id)
+
+
+def refresh_catalog() -> None:
+    """Rebuild the in-memory catalog + its id index after the custom rows or feeds
+    change. Cheap (a few hundred items); called from the custom-item + refresh
+    endpoints."""
+    global item_catalog, item_catalog_by_id
+    item_catalog = rebuild_catalog()
+    item_catalog_by_id = {it["item_id"]: it for it in item_catalog}
 nav_core.merge_custom_pois(nav, db.list_custom_pois())
 merge_all_observations(nav)
 nav_core.assign_qt_markers(nav)
@@ -629,6 +657,11 @@ _DESC_MAX = 2000     # event description free-text
 _MAX_ROSTER_ROLES = 20   # target roles on one event
 _MAX_SIGNUP_ROLES = 10   # roles one member claims on a signup
 _MAX_PLAYERS = 10_000    # sanity cap on min/max player counts
+_ITEM_ID_MAX = 120       # catalog id, e.g. "commodity:medical-supplies"
+_UNIT_MAX = 16           # SCU / each / …
+_LOCATION_MAX = 120      # free-text holding location
+_MAX_QTY = 1e12          # sanity cap on a single inventory/goal quantity
+_MAX_LINE_ITEMS = 50     # line items on one goal
 # How far back the upcoming board reaches to keep live/ongoing events visible
 # (their start has passed but they aren't finished); finished ones are then filtered
 # out by derived phase. Generous enough to cover most op lengths + the live grace.
@@ -1944,6 +1977,235 @@ async def withdraw_signup(event_id: int, user: dict = Depends(require_session)):
     return _event_view(db.get_event(event_id), user, detail=True)
 
 
+# --- org inventory & goals (shared item catalog) ---------------------------
+
+
+class CatalogItemIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    kind: str = Field(default="gear", max_length=_TYPE_MAX)
+    unit: str | None = Field(default=None, max_length=_UNIT_MAX)
+
+
+class InventoryIn(BaseModel):
+    item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
+    qty: float = Field(ge=0, le=_MAX_QTY)
+    location: str = Field(default="", max_length=_LOCATION_MAX)
+    note: str | None = Field(default=None, max_length=_NOTE_MAX)
+    goal_id: int | None = Field(default=None, ge=1)
+
+
+class GoalLineIn(BaseModel):
+    item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
+    qty_needed: float = Field(ge=0, le=_MAX_QTY)
+
+
+class GoalIn(BaseModel):
+    title: str = Field(min_length=1, max_length=_NAME_MAX)
+    description: str = Field(default="", max_length=_DESC_MAX)
+    priority: int = Field(default=5, ge=1, le=10)
+    deadline: str | None = Field(default=None, max_length=_META_MAX)
+    status: str | None = Field(default=None, max_length=16)
+    line_items: list[GoalLineIn] = Field(default_factory=list, max_length=_MAX_LINE_ITEMS)
+
+
+@app.get("/api/catalog")
+async def get_catalog(q: str = "", user: dict = Depends(require_session)):
+    """Item search over the merged catalog (commodity + ship feeds + custom rows),
+    debounced from the picker. Empty `q` returns the head of the list. Shared by
+    the inventory/goals forms and the marketplace listing form."""
+    return {"items": catalog.search(item_catalog, q, limit=50)}
+
+
+@app.post("/api/catalog")
+async def add_catalog_item(body: CatalogItemIn, user: dict = Depends(require_session)):
+    """Add a custom catalog item (any member) — for anything not in a feed
+    (components, FPS gear, …). Feed items already exist and need no entry."""
+    kind = body.kind if body.kind in catalog.KINDS else "gear"
+    name = body.name.strip()
+    unit = (body.unit or "").strip() or catalog.default_unit(kind)
+    now = datetime.now(timezone.utc).isoformat()
+    cid = db.add_catalog_item(name, kind, unit, user["id"], now)
+    refresh_catalog()
+    return resolve_catalog_item(f"custom:{cid}")
+
+
+def _resolve_or_400(item_id: str) -> dict:
+    it = resolve_catalog_item(item_id)
+    if it is None:
+        raise HTTPException(status_code=400, detail=f"unknown item: {item_id}")
+    return it
+
+
+def _enrich_owner_names(entries: list[dict], key: str = "owner_id") -> list[dict]:
+    """Stamp a display_name onto rollup/contributor entries keyed by Discord id."""
+    for e in entries:
+        e["display_name"] = _resolve_member_name(e.get(key), None)
+    return entries
+
+
+@app.get("/api/inventory")
+async def get_inventory(owner: str | None = None, goal: int | None = None,
+                        user: dict = Depends(require_session)):
+    """The inventory ledger. `owner=me` lists the caller's own rows; `goal=<id>`
+    lists a goal's contributions; with neither, returns the org-wide rollup
+    (derived `SUM(qty) GROUP BY item`, never a stored total)."""
+    if owner == "me":
+        rows = db.list_inventory(owner_id=user["id"])
+        return {"scope": "mine", "rows": rows}
+    if goal is not None:
+        rows = db.list_inventory(goal_id=goal)
+        return {"scope": "goal", "goal_id": goal,
+                "contributors": _enrich_owner_names(
+                    nav_core.derive_inventory_rollup(rows))}
+    rollup = nav_core.derive_inventory_rollup(db.list_inventory())
+    for it in rollup:
+        _enrich_owner_names(it["by_owner"])
+    return {"scope": "org", "items": rollup}
+
+
+@app.post("/api/inventory")
+async def log_inventory(body: InventoryIn, user: dict = Depends(require_session)):
+    """Log/adjust the caller's holding of an item (optionally earmarked to a goal).
+    One row per (owner, item, location, goal) — re-logging SETS the quantity."""
+    item = _resolve_or_400(body.item_id)
+    if body.goal_id is not None and db.get_goal(body.goal_id) is None:
+        raise HTTPException(status_code=400, detail="unknown goal")
+    now = datetime.now(timezone.utc).isoformat()
+    row = db.upsert_inventory(
+        user["id"], item["item_id"], item["name"], item["unit"], body.qty,
+        body.location.strip() or None, (body.note or "").strip() or None,
+        body.goal_id, now)
+    return row
+
+
+@app.delete("/api/inventory/{inv_id}")
+async def delete_inventory(inv_id: int, user: dict = Depends(require_session)):
+    """Remove an inventory row (owner-or-admin)."""
+    row = db.get_inventory(inv_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown inventory row")
+    if row["owner_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="you can only remove your own holdings")
+    db.delete_inventory(inv_id)
+    return {"ok": True}
+
+
+def _validate_goal(body: GoalIn) -> dict:
+    """Validate a goal against the catalog and normalize into db column fields.
+    Each line item's id must resolve; its name/unit are stamped from the catalog
+    (not trusted from the client) and duplicate items are rejected."""
+    title = body.title.strip()
+    lines, seen = [], set()
+    for li in body.line_items:
+        item = _resolve_or_400(li.item_id)
+        if item["item_id"] in seen:
+            raise HTTPException(status_code=400, detail=f"duplicate line item: {item['name']}")
+        seen.add(item["item_id"])
+        lines.append({"item_id": item["item_id"], "item_name": item["name"],
+                      "unit": item["unit"], "qty_needed": li.qty_needed})
+    if not lines:
+        raise HTTPException(status_code=400, detail="add at least one line item")
+    deadline = None
+    if body.deadline:
+        deadline = _normalize_event_start(body.deadline)   # reuse UTC canonicalizer
+    return {"title": title, "description": (body.description or "").strip(),
+            "priority": body.priority, "deadline": deadline, "line_items": lines}
+
+
+def _require_goal_owner(goal: dict, user: dict) -> None:
+    if goal["creator_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="only the creator or an admin can change this goal")
+
+
+def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> dict:
+    """Serialize a goal with its derived progress. `contributions` is the list of
+    inventory rows earmarked to it. Auto-flips a fully-covered active goal to
+    'met' (and a no-longer-met one back to active) lazily on read — display state
+    follows the ledger without a background job; an admin can still archive."""
+    progress = nav_core.derive_goal_progress(goal, contributions)
+    status = goal.get("status")
+    if status in ("active", "met"):
+        target = "met" if progress["is_met"] else "active"
+        if target != status:
+            db.set_goal_status(goal["id"], target, datetime.now(timezone.utc).isoformat())
+            status = target
+    view = {k: goal.get(k) for k in
+            ("id", "creator_id", "title", "description", "priority", "deadline",
+             "line_items", "created_at", "updated_at")}
+    view["status"] = status
+    view["creator_name"] = _resolve_member_name(goal["creator_id"], None)
+    view["can_edit"] = goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
+    view["progress"] = progress
+    if detail:
+        view["progress"]["per_contributor"] = _enrich_owner_names(
+            progress["per_contributor"])
+    return view
+
+
+@app.get("/api/goals")
+async def list_goals(status: str | None = None, user: dict = Depends(require_session)):
+    """The goals board, sorted priority↑ then deadline↑. Each carries its derived
+    overall fill so cards render without an N+1 (contributions are fetched once
+    and grouped by goal)."""
+    goals = db.list_goals(status)
+    contributions: dict[int, list] = {}
+    for row in db.list_inventory():
+        gid = row.get("goal_id")
+        if gid is not None:
+            contributions.setdefault(gid, []).append(row)
+    return {"goals": [_goal_view(g, contributions.get(g["id"], []), user) for g in goals]}
+
+
+@app.post("/api/goals")
+async def create_goal(body: GoalIn, user: dict = Depends(require_session)):
+    """Create a procurement goal (any org member)."""
+    fields = _validate_goal(body)
+    now = datetime.now(timezone.utc).isoformat()
+    gid = db.create_goal({**fields, "creator_id": user["id"], "status": "active",
+                          "created_at": now, "updated_at": now})
+    goal = db.get_goal(gid)
+    return _goal_view(goal, db.list_inventory(goal_id=gid), user, detail=True)
+
+
+@app.get("/api/goals/{goal_id}")
+async def get_goal(goal_id: int, user: dict = Depends(require_session)):
+    """One goal with per-line fill + the per-contributor breakdown."""
+    goal = db.get_goal(goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="unknown goal")
+    return _goal_view(goal, db.list_inventory(goal_id=goal_id), user, detail=True)
+
+
+@app.patch("/api/goals/{goal_id}")
+async def edit_goal(goal_id: int, body: GoalIn, user: dict = Depends(require_session)):
+    """Edit a goal (creator or admin) — full replace of the editable fields. A
+    `status` of 'archived' parks it; 'active' reopens it (the met/active flip is
+    otherwise automatic)."""
+    goal = db.get_goal(goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="unknown goal")
+    _require_goal_owner(goal, user)
+    fields = _validate_goal(body)
+    if body.status in ("active", "met", "archived"):
+        fields["status"] = body.status
+    db.update_goal(goal_id, fields, datetime.now(timezone.utc).isoformat())
+    goal = db.get_goal(goal_id)
+    return _goal_view(goal, db.list_inventory(goal_id=goal_id), user, detail=True)
+
+
+@app.delete("/api/goals/{goal_id}")
+async def remove_goal(goal_id: int, user: dict = Depends(require_session)):
+    """Delete a goal (creator or admin). Its contributions survive as general
+    (goal-less) inventory rather than vanishing with the goal."""
+    goal = db.get_goal(goal_id)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="unknown goal")
+    _require_goal_owner(goal, user)
+    db.delete_goal(goal_id)
+    return {"ok": True}
+
+
 @app.get("/api/biomes")
 async def list_biomes():
     """Biome lookups (by_body / by_system / all) for the biome datalist; the
@@ -2341,6 +2603,7 @@ async def refresh_data(admin: dict = Depends(require_admin)):
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
+    refresh_catalog()   # feeds changed → rebuild the shared item catalog
     await _rebuild_nav()
     return {
         "ok": True,

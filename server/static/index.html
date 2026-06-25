@@ -724,6 +724,66 @@
   .ev-roster-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
   .ev-form-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
     border-top: 1px solid var(--border); padding-top: 14px; }
+
+  /* ---- resource manager (#/goals + #/inventory) ---- */
+  #goals-view, #goals-root, #inventory-view, #inventory-root { display: contents; }
+  #goals-view[hidden], #inventory-view[hidden] { display: none; }
+  /* sub-nav tabs shared by the Goals + Inventory screens */
+  .rm-tabs { display: flex; gap: 8px; }
+  .rm-tab { font-size: 13px; padding: 6px 14px; border-radius: 6px; text-decoration: none;
+    border: 1px solid var(--border); color: var(--dim); }
+  .rm-tab:hover { border-color: var(--accent); color: var(--accent); }
+  .rm-tab.on { border-color: var(--accent); color: var(--accent); background: rgba(79,195,247,.12);
+    font-weight: 600; }
+  /* priority chip: 1 (highest) is hot, 10 (lowest) is cool. Ramp set inline. */
+  .rm-prio { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 7px; border: 1px solid currentColor; }
+  /* deadline countdown */
+  .rm-due { font-size: 12px; color: var(--dim); }
+  .rm-due.soon { color: var(--warn); }
+  .rm-due.over { color: var(--bad); font-weight: 600; }
+  .rm-status { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 7px; border: 1px solid var(--border); color: var(--dim); }
+  .rm-status.met { color: var(--good); border-color: var(--good); }
+  .rm-status.archived { color: var(--dim); }
+  /* overall fill bar (bigger than the per-line bars) */
+  .rm-bar { height: 10px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 5px; overflow: hidden; margin-top: 6px; }
+  .rm-bar > span { display: block; height: 100%; background: var(--accent); }
+  .rm-bar.met > span { background: var(--good); }
+  .rm-pct { font-variant-numeric: tabular-nums; color: var(--text); font-size: 13px; }
+  /* per-line rows (reuse the event role-bar grid shape) */
+  .rm-line { display: grid; grid-template-columns: 160px 1fr 110px; gap: 9px;
+    align-items: center; font-size: 12px; margin-bottom: 7px; }
+  .rm-line-n { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rm-line-n a { color: inherit; text-decoration: none; }
+  .rm-line-n a:hover { color: var(--accent); }
+  .rm-line-bar { height: 8px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden; }
+  .rm-line-bar > span { display: block; height: 100%; background: var(--accent); }
+  .rm-line.done .rm-line-bar > span { background: var(--good); }
+  .rm-line-ct { font-variant-numeric: tabular-nums; color: var(--dim); text-align: right; }
+  .rm-line.done .rm-line-ct { color: var(--good); }
+  /* contribute + line-item editor rows */
+  .rm-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .rm-row .poi-pick { flex: 1; min-width: 160px; }
+  .rm-row input.rm-qty { width: 110px; }
+  .rm-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
+  /* inventory rollup table */
+  .rm-inv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .rm-inv-table th { text-align: left; font-size: 11px; color: var(--dim); letter-spacing: .5px;
+    text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .rm-inv-table td { padding: 8px; border-bottom: 1px solid var(--border); }
+  .rm-inv-row { cursor: pointer; }
+  .rm-inv-row:hover td { background: var(--panel2); }
+  .rm-inv-detail td { background: var(--panel2); font-size: 12px; color: var(--dim); }
+  .rm-inv-detail .rm-breakdown { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .rm-num { font-variant-numeric: tabular-nums; text-align: right; }
+  .rm-mine-row { display: flex; align-items: center; gap: 10px; justify-content: space-between;
+    padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
+  .rm-mine-row .rm-mine-loc { color: var(--dim); font-size: 12px; }
+  .rm-intro { font-size: 13px; line-height: 1.6; color: var(--dim); margin: 0 0 14px; max-width: 760px; }
+  .rm-intro a { color: var(--accent); text-decoration: none; }
 </style>
 </head>
 <body>
@@ -790,6 +850,12 @@
         <div class="app-name">Event Planner</div>
         <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
           sign up your org, and track who's filling each slot.</div>
+      </a>
+      <a class="app-card" href="#/goals">
+        <img class="app-logo" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+        <div class="app-name">Resource Manager</div>
+        <div class="app-desc">Set org procurement goals with deadlines &amp; priorities, log what
+          members are holding, and watch contributions fill each target.</div>
       </a>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
@@ -1423,6 +1489,20 @@
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div><!-- /events-view -->
+
+  <div id="goals-view" hidden>
+    <div id="goals-root"></div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /goals-view -->
+
+  <div id="inventory-view" hidden>
+    <div id="inventory-root"></div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /inventory-view -->
 
   <!-- ============================================================
        Legal pages. STARTER TEXT drafted to fit this app — have a
@@ -4128,17 +4208,442 @@ async function renderEditForm(e) {
   bindEventForm(tax, e.id, () => renderDetailBody(e));
 }
 
+// ---------- resource manager (#/goals + #/inventory) ----------
+// Two screens of one app over a shared item catalog: Goals (procurement targets
+// + derived fill) and Inventory (the org rollup of members' attributed holdings).
+
+function fmtQty(n) {
+  n = Number(n) || 0;
+  return Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toString();
+}
+
+// Sub-nav tabs shared by both screens.
+function rmTabs(active) {
+  return `<div class="rm-tabs">` +
+    `<a class="rm-tab ${active === "goals" ? "on" : ""}" href="#/goals">Goals</a>` +
+    `<a class="rm-tab ${active === "inventory" ? "on" : ""}" href="#/inventory">Inventory</a></div>`;
+}
+
+// Priority chip: 1 (highest) reads hot, 10 (lowest) reads cool. Hue ramps red→blue.
+function prioChip(p) {
+  p = Math.max(1, Math.min(10, parseInt(p, 10) || 5));
+  const hue = Math.round((p - 1) / 9 * 210);
+  return `<span class="rm-prio" style="color:hsl(${hue},75%,62%)">P${p}</span>`;
+}
+
+function rmStatusBadge(s) {
+  const lbl = { active: "Active", met: "Met", archived: "Archived" }[s] || s;
+  return `<span class="rm-status ${esc(s)}">${esc(lbl)}</span>`;
+}
+
+// Deadline countdown: green-ish default, amber within 3 days, red overdue.
+function rmDue(iso) {
+  if (!iso) return `<span class="rm-due">no deadline</span>`;
+  const ms = new Date(iso) - new Date();
+  const days = Math.ceil(ms / 86400000);
+  const when = new Date(iso).toLocaleDateString(undefined,
+    { month: "short", day: "numeric", year: "numeric" });
+  if (ms < 0) return `<span class="rm-due over">overdue · was ${esc(when)}</span>`;
+  let txt;
+  if (days <= 1) { const hrs = Math.max(1, Math.round(ms / 3600000)); txt = `${hrs}h left`; }
+  else txt = `${days} days left`;
+  return `<span class="rm-due ${days <= 3 ? "soon" : ""}">${esc(txt)} · ${esc(when)}</span>`;
+}
+
+// --- shared catalog picker (debounced server search, resolves an item_id) ---
+// Attaches to a .poi-pick wrapper; a pick stashes item_id/unit on the input's
+// dataset. Mirrors attachShipPicker, but fetches /api/catalog per keystroke.
+function attachCatalogPicker(wrap, onPick) {
+  const input = wrap.querySelector("input");
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true;
+  wrap.appendChild(drop);
+  let timer = null, seq = 0;
+  const clearPick = () => { delete input.dataset.itemId; delete input.dataset.unit; wrap.classList.remove("picked"); };
+  async function refresh() {
+    const q = input.value.trim();
+    const mine = ++seq;
+    let items = [];
+    try { items = ((await fetch(`/api/catalog?q=${encodeURIComponent(q)}`).then(r => r.json())) || {}).items || []; }
+    catch { items = []; }
+    if (mine !== seq) return;   // a newer keystroke already superseded this fetch
+    drop.innerHTML = "";
+    for (const it of items.slice(0, 12)) {
+      const opt = document.createElement("div");
+      opt.className = "poi-opt";
+      const tag = it.kind === "ship" ? "ship" : (it.unit || "");
+      opt.innerHTML = `${esc(it.name)} <span class="muted">${esc(tag)}</span>`;
+      opt.onmousedown = (e) => {
+        e.preventDefault();
+        input.value = it.name;
+        input.dataset.itemId = it.item_id;
+        input.dataset.unit = it.unit || "";
+        wrap.classList.add("picked");
+        drop.hidden = true;
+        if (onPick) onPick(it);
+      };
+      drop.appendChild(opt);
+    }
+    drop.hidden = items.length === 0;
+  }
+  input.addEventListener("input", () => { clearPick(); clearTimeout(timer); timer = setTimeout(refresh, 180); });
+  input.addEventListener("focus", refresh);   // shows suggestions without clearing a prior pick
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 150));
+}
+
+function goalsSubRoute() {
+  const rest = location.hash.slice("#/goals".length).replace(/^\//, "");
+  if (rest === "new") return { view: "new" };
+  if (/^\d+$/.test(rest)) return { view: "detail", id: parseInt(rest, 10) };
+  return { view: "board" };
+}
+
+function loadGoals() {
+  const r = goalsSubRoute();
+  if (r.view === "new") return renderGoalForm(null);
+  if (r.view === "detail") return renderGoalDetail(r.id);
+  return renderGoalBoard();
+}
+
+function goalCard(g) {
+  const pr = g.progress, met = pr.is_met || g.status === "met";
+  const n = pr.lines.length;
+  return `<a class="ev-card" href="#/goals/${g.id}">` +
+    `<div class="ev-card-top"><div class="ev-title">${esc(g.title)}</div>` +
+    `<div class="ev-chips">${rmStatusBadge(g.status)}${prioChip(g.priority)}</div></div>` +
+    `<div class="ev-meta">${rmDue(g.deadline)} · ${n} item${n === 1 ? "" : "s"} · by ${esc(g.creator_name)}</div>` +
+    `<div class="rm-pct">${Math.round(pr.overall_pct)}% filled</div>` +
+    `<div class="rm-bar ${met ? "met" : ""}"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div></a>`;
+}
+
+async function renderGoalBoard() {
+  const root = $("goals-root");
+  root.innerHTML =
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">RESOURCE GOALS</h2>` +
+    `<a class="ev-btn primary" href="#/goals/new">+ New goal</a></div>` +
+    `<div style="margin:12px 0 6px">${rmTabs("goals")}</div>` +
+    `<p class="rm-intro">Set the org's procurement targets — what to gather, how much, by when, and ` +
+    `how urgently. Members log contributions and each goal fills toward its line items; every ` +
+    `item links straight into the <a href="#/nav">navigator's resource finder</a>.</p></div>` +
+    `<div id="goals-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
+  let data;
+  try { data = await fetch("/api/goals").then(r => r.json()); }
+  catch { $("goals-list").innerHTML = `<p class="stat-empty">Couldn't load goals.</p>`; return; }
+  const goals = data.goals || [];
+  $("goals-list").innerHTML = goals.length
+    ? goals.map(goalCard).join("")
+    : `<p class="stat-empty">No goals yet. <a href="#/goals/new">Create the first one →</a></p>`;
+}
+
+// Deep-link target for a goal line item → the navigator's Element Finder.
+let rmFinderPrefill = null;
+async function consumeFinderPrefill() {
+  if (!rmFinderPrefill) return;
+  const name = rmFinderPrefill; rmFinderPrefill = null;
+  await loadFinderOres();
+  const sel = $("finder-ore");
+  const opt = [...sel.options].find(o => o.value.toLowerCase() === name.toLowerCase());
+  if (opt) {
+    sel.value = opt.value; syncFinderSelection(); runFinder();
+    sel.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+function goalLineRow(l) {
+  const pct = l.needed ? Math.min(100, Math.round(100 * l.have / l.needed)) : 100;
+  const done = l.needed && l.have >= l.needed;
+  return `<div class="rm-line ${done ? "done" : ""}">` +
+    `<span class="rm-line-n"><a class="rm-finder-link" href="#/nav" data-finder="${esc(l.name)}" ` +
+    `title="find ${esc(l.name)} in the navigator">${esc(l.name)}</a></span>` +
+    `<span class="rm-line-bar"><span style="width:${pct}%"></span></span>` +
+    `<span class="rm-line-ct">${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")}${done ? " ✓" : ""}</span></div>`;
+}
+
+async function renderGoalDetail(id) {
+  const root = $("goals-root");
+  root.innerHTML = `<div class="panel"><a class="ev-back" href="#/goals">← All goals</a>` +
+    `<div id="goal-detail-body"><p class="stat-empty">Loading…</p></div></div>`;
+  let g;
+  try {
+    const r = await fetch(`/api/goals/${id}`);
+    if (!r.ok) throw 0;
+    g = await r.json();
+  } catch { $("goal-detail-body").innerHTML = `<p class="stat-empty">Goal not found.</p>`; return; }
+  renderGoalDetailBody(g);
+}
+
+function renderGoalDetailBody(g) {
+  const pr = g.progress, met = pr.is_met || g.status === "met";
+  const lineSel = pr.lines.map(l =>
+    `<option value="${esc(l.item_id)}">${esc(l.name)} (${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")})</option>`).join("");
+  const contributors = pr.per_contributor || [];
+  const contribList = contributors.length
+    ? contributors.map(c => `<span class="ev-name">${esc(c.display_name)} · ${fmtQty(c.qty)}</span>`).join("")
+    : `<span class="muted">No contributions logged yet.</span>`;
+  const editBtns = g.can_edit
+    ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "";
+  $("goal-detail-body").innerHTML =
+    `<div class="ev-detail-title"><h2>${esc(g.title)}</h2>${rmStatusBadge(g.status)}${prioChip(g.priority)}</div>` +
+    `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b></div>` +
+    (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
+    `<div class="rm-pct">Overall: ${Math.round(pr.overall_pct)}% filled${met ? " ✓" : ""}</div>` +
+    `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
+    `<div class="ev-section-h">Line items</div>${pr.lines.map(goalLineRow).join("")}` +
+    `<div class="ev-signup"><h3>Log a contribution</h3>` +
+      `<div class="rm-row">` +
+        `<select id="goal-c-item" class="sel" style="flex:1;min-width:180px">${lineSel}</select>` +
+        `<input id="goal-c-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
+        `<input id="goal-c-loc" class="ti" style="flex:1;min-width:140px" maxlength="120" placeholder="location (optional)" autocomplete="off">` +
+        `<button class="ev-btn primary" id="goal-c-save">Contribute</button>` +
+      `</div><span id="goal-c-msg" class="muted"></span></div>` +
+    `<div class="ev-section-h">Contributors</div><div class="ev-roster-names">${contribList}</div>` +
+    `<div class="ev-form-actions">${editBtns}</div>`;
+
+  document.querySelectorAll("#goal-detail-body .rm-finder-link").forEach(a => {
+    a.onclick = () => { rmFinderPrefill = a.dataset.finder; };
+  });
+  $("goal-c-save").onclick = async () => {
+    const item_id = $("goal-c-item").value;
+    const qty = Number($("goal-c-qty").value);
+    const msg = $("goal-c-msg");
+    if (!item_id) { msg.textContent = "This goal has no line items."; return; }
+    if (!(qty >= 0) || $("goal-c-qty").value === "") { msg.textContent = "Enter an amount."; return; }
+    msg.textContent = "Saving…";
+    try {
+      const r = await fetch("/api/inventory", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id, qty, location: $("goal-c-loc").value.trim(), goal_id: g.id }) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      renderGoalDetail(g.id);   // re-fetch so fill + contributors refresh
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+  if (g.can_edit) {
+    $("goal-edit").onclick = () => renderGoalEditForm(g);
+    $("goal-del").onclick = async () => {
+      if (!confirm(`Delete the goal "${g.title}"? Contributions stay as general inventory.`)) return;
+      const r = await fetch(`/api/goals/${g.id}`, { method: "DELETE" });
+      if (r.ok) location.hash = "#/goals";
+    };
+  }
+}
+
+// --- goal create / edit form ---
+function goalLineEditRow(li) {
+  const picked = li && li.item_id ? ' data-item-id="' + esc(li.item_id) + '"' : "";
+  return `<div class="rm-row">` +
+    `<span class="poi-pick"><input class="ti rm-li-item" placeholder="item" autocomplete="off"` +
+    `${picked} value="${li ? esc(li.item_name || "") : ""}"></span>` +
+    `<input class="ti rm-qty rm-li-qty" type="number" min="0" step="any" placeholder="qty needed"` +
+    ` value="${li && li.qty_needed != null ? fmtQty(li.qty_needed) : ""}">` +
+    `<span class="ev-row-del rm-li-del" title="remove item">✕</span></div>`;
+}
+
+function goalFormHtml(g) {
+  const prio = g ? g.priority : 5;
+  const lines = (g && g.line_items && g.line_items.length ? g.line_items : [null])
+    .map(goalLineEditRow).join("");
+  const statusSel = g
+    ? `<div class="ev-field"><label>Status</label><select id="goal-f-status">` +
+      ["active", "met", "archived"].map(s =>
+        `<option value="${s}" ${g.status === s ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("") +
+      `</select><span class="ev-hint">Met/Active flips on its own as the fill changes.</span></div>`
+    : "";
+  return `<div class="ev-form">` +
+    `<div class="ev-field"><label>Title</label><input id="goal-f-title" class="ti" maxlength="120" ` +
+      `value="${g ? esc(g.title) : ""}" placeholder="e.g. Fund the org Hull-C"></div>` +
+    `<div class="ev-field"><label>Description</label><textarea id="goal-f-desc" maxlength="2000" ` +
+      `placeholder="What's this campaign for?">${g ? esc(g.description || "") : ""}</textarea></div>` +
+    `<div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Priority (1 = highest)</label><select id="goal-f-prio">` +
+        Array.from({ length: 10 }, (_, i) => i + 1).map(n =>
+          `<option value="${n}" ${n === prio ? "selected" : ""}>${n}</option>`).join("") +
+      `</select></div>` +
+      `<div class="ev-field"><label>Deadline date</label><input id="goal-f-dl-date" class="ti" type="date" ` +
+        `value="${g && g.deadline ? toLocalDate(g.deadline) : ""}"><span class="ev-hint">Optional.</span></div>` +
+      `<div class="ev-field"><label>Deadline time</label><input id="goal-f-dl-time" class="ti" type="time" ` +
+        `value="${g && g.deadline ? toLocalTime(g.deadline) : ""}"><span class="ev-hint">Blank ⇒ end of day.</span></div>` +
+      statusSel +
+    `</div>` +
+    `<div class="ev-field"><label>Line items — what to gather &amp; how much</label>` +
+      `<div class="ev-roster" id="goal-f-lines">${lines}</div>` +
+      `<button class="ev-btn" id="goal-f-addline" style="align-self:flex-start;margin-top:4px;">+ add item</button></div>` +
+    `<div class="ev-form-actions"><button id="goal-f-save" class="ev-btn primary">${g ? "Save changes" : "Create goal"}</button>` +
+      `<button class="ev-btn" id="goal-f-cancel">Cancel</button>` +
+      `<span id="goal-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+}
+
+function collectGoalForm() {
+  const title = $("goal-f-title").value.trim();
+  if (!title) return { error: "Give the goal a title." };
+  const line_items = [];
+  for (const row of document.querySelectorAll("#goal-f-lines .rm-row")) {
+    const input = row.querySelector(".rm-li-item");
+    const id = input.dataset.itemId;
+    const qty = Number(row.querySelector(".rm-li-qty").value);
+    if (!input.value.trim() && !id) continue;        // blank row, skip
+    if (!id) return { error: `Pick "${input.value.trim()}" from the suggestions so it resolves to a catalog item.` };
+    if (!(qty > 0)) return { error: "Each line item needs a quantity greater than 0." };
+    line_items.push({ item_id: id, qty_needed: qty });
+  }
+  if (!line_items.length) return { error: "Add at least one line item." };
+  const seen = new Set();
+  for (const li of line_items) { if (seen.has(li.item_id)) return { error: "An item is listed twice." }; seen.add(li.item_id); }
+  const dlDate = $("goal-f-dl-date").value, dlTime = $("goal-f-dl-time").value;
+  let deadline = null;
+  if (dlDate) deadline = new Date(`${dlDate}T${dlTime || "23:59"}`).toISOString();
+  const payload = { title, description: $("goal-f-desc").value.trim(),
+    priority: parseInt($("goal-f-prio").value, 10) || 5, deadline, line_items };
+  const statusEl = $("goal-f-status");
+  if (statusEl) payload.status = statusEl.value;
+  return { payload };
+}
+
+function bindGoalForm(editId, onCancel) {
+  const wirePickers = () => document.querySelectorAll("#goal-f-lines .poi-pick").forEach(w => {
+    if (!w.dataset.wired) { w.dataset.wired = "1"; attachCatalogPicker(w); }
+  });
+  const wireDeletes = () => document.querySelectorAll("#goal-f-lines .rm-li-del").forEach(x => {
+    x.onclick = () => { if (document.querySelectorAll("#goal-f-lines .rm-row").length > 1) x.closest(".rm-row").remove(); };
+  });
+  wirePickers(); wireDeletes();
+  $("goal-f-addline").onclick = () => {
+    $("goal-f-lines").insertAdjacentHTML("beforeend", goalLineEditRow(null));
+    wirePickers(); wireDeletes();
+  };
+  $("goal-f-cancel").onclick = onCancel;
+  $("goal-f-save").onclick = async () => {
+    const { error, payload } = collectGoalForm();
+    const msg = $("goal-f-msg");
+    if (error) { msg.textContent = error; return; }
+    msg.textContent = "Saving…";
+    try {
+      const r = await fetch(editId ? `/api/goals/${editId}` : "/api/goals", {
+        method: editId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      const saved = await r.json();
+      if (editId && goalsSubRoute().id === saved.id) renderGoalDetail(saved.id);  // hash unchanged
+      else location.hash = `#/goals/${saved.id}`;
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+}
+
+function renderGoalForm() {
+  $("goals-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/goals">← All goals</a>` +
+    `<h2 class="ev-screen-h">NEW GOAL</h2>${goalFormHtml(null)}</div>`;
+  bindGoalForm(null, () => { location.hash = "#/goals"; });
+}
+
+function renderGoalEditForm(g) {
+  $("goal-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT GOAL</h2>${goalFormHtml(g)}`;
+  bindGoalForm(g.id, () => renderGoalDetail(g.id));
+}
+
+// --- inventory screen (#/inventory) ---
+let rmInvScope = "org";   // "org" rollup | "mine"
+
+function loadInventory() {
+  renderInventory();
+}
+
+async function renderInventory() {
+  const root = $("inventory-root");
+  root.innerHTML =
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG INVENTORY</h2></div>` +
+    `<div style="margin:12px 0 6px">${rmTabs("inventory")}</div>` +
+    `<p class="rm-intro">SC has no shared org storage, so this is a ledger of what members are ` +
+    `<em>holding for the org</em> — attributed pledges, not a vault. Log your holdings below; the ` +
+    `org view rolls them up per item.</p>` +
+    `<div class="rm-row" style="margin-top:10px">` +
+      `<span class="poi-pick"><input id="inv-item" class="ti" placeholder="item" autocomplete="off"></span>` +
+      `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
+      `<input id="inv-loc" class="ti" style="flex:1;min-width:140px" maxlength="120" placeholder="location (optional)" autocomplete="off">` +
+      `<button class="ev-btn primary" id="inv-save">Log holding</button>` +
+    `</div><span id="inv-msg" class="muted"></span></div>` +
+    `<div class="panel"><div class="ev-head"><div class="rm-tabs">` +
+      `<button class="rm-tab ${rmInvScope === "org" ? "on" : ""}" id="inv-scope-org">Org rollup</button>` +
+      `<button class="rm-tab ${rmInvScope === "mine" ? "on" : ""}" id="inv-scope-mine">My holdings</button>` +
+    `</div></div><div id="inv-body"><p class="stat-empty">Loading…</p></div></div>`;
+
+  attachCatalogPicker($("inv-item").parentElement);
+  $("inv-save").onclick = logHolding;
+  $("inv-scope-org").onclick = () => { rmInvScope = "org"; renderInventory(); };
+  $("inv-scope-mine").onclick = () => { rmInvScope = "mine"; renderInventory(); };
+  rmInvScope === "mine" ? renderInvMine() : renderInvOrg();
+}
+
+async function logHolding() {
+  const input = $("inv-item"), item_id = input.dataset.itemId;
+  const qty = Number($("inv-qty").value), msg = $("inv-msg");
+  if (!item_id) { msg.textContent = "Pick an item from the suggestions."; return; }
+  if (!(qty >= 0) || $("inv-qty").value === "") { msg.textContent = "Enter an amount."; return; }
+  msg.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/inventory", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id, qty, location: $("inv-loc").value.trim() }) });
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    input.value = ""; delete input.dataset.itemId; $("inv-qty").value = ""; $("inv-loc").value = "";
+    msg.textContent = "Logged ✓";
+    rmInvScope === "mine" ? renderInvMine() : renderInvOrg();
+  } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+}
+
+async function renderInvOrg() {
+  let data;
+  try { data = await fetch("/api/inventory").then(r => r.json()); }
+  catch { $("inv-body").innerHTML = `<p class="stat-empty">Couldn't load inventory.</p>`; return; }
+  const items = data.items || [];
+  if (!items.length) { $("inv-body").innerHTML = `<p class="stat-empty">Nothing logged yet.</p>`; return; }
+  const rows = items.map((it, i) =>
+    `<tr class="rm-inv-row" data-i="${i}"><td>${esc(it.name)}</td>` +
+    `<td class="rm-num">${fmtQty(it.total)} ${esc(it.unit || "")}</td>` +
+    `<td class="rm-num">${it.holders}</td></tr>` +
+    `<tr class="rm-inv-detail" data-d="${i}" hidden><td colspan="3"><div class="rm-breakdown">` +
+      it.by_owner.map(o => `<span>${esc(o.display_name)}: ${fmtQty(o.qty)}</span>`).join("") +
+    `</div><div class="rm-breakdown" style="margin-top:6px;opacity:.8">` +
+      it.by_location.map(l => `<span>📍 ${esc(l.location)}: ${fmtQty(l.qty)}</span>`).join("") +
+    `</div></td></tr>`).join("");
+  $("inv-body").innerHTML = `<table class="rm-inv-table"><thead><tr>` +
+    `<th>Item</th><th class="rm-num">Total</th><th class="rm-num">Holders</th></tr></thead>` +
+    `<tbody>${rows}</tbody></table>`;
+  $("inv-body").querySelectorAll(".rm-inv-row").forEach(tr => {
+    tr.onclick = () => { const d = $("inv-body").querySelector(`.rm-inv-detail[data-d="${tr.dataset.i}"]`); if (d) d.hidden = !d.hidden; };
+  });
+}
+
+async function renderInvMine() {
+  let data;
+  try { data = await fetch("/api/inventory?owner=me").then(r => r.json()); }
+  catch { $("inv-body").innerHTML = `<p class="stat-empty">Couldn't load your holdings.</p>`; return; }
+  const rows = data.rows || [];
+  if (!rows.length) { $("inv-body").innerHTML = `<p class="stat-empty">You haven't logged any holdings yet.</p>`; return; }
+  $("inv-body").innerHTML = rows.map(r =>
+    `<div class="rm-mine-row"><div><b>${esc(r.item_name)}</b> · ${fmtQty(r.qty)} ${esc(r.unit || "")}` +
+    `${r.location ? ` <span class="rm-mine-loc">📍 ${esc(r.location)}</span>` : ""}` +
+    `${r.goal_id ? ` <span class="rm-status">→ goal #${r.goal_id}</span>` : ""}</div>` +
+    `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></div>`).join("");
+  $("inv-body").querySelectorAll(".rm-inv-del").forEach(b => {
+    b.onclick = async () => {
+      if (!confirm("Remove this holding?")) return;
+      const r = await fetch(`/api/inventory/${b.dataset.id}`, { method: "DELETE" });
+      if (r.ok) renderInvMine();
+    };
+  });
+}
+
 // ---------- view router (app launcher + apps + dedicated sub-pages) ----------
 // One SPA; the URL hash picks the view (fragment never hits the server, so
 // StaticFiles still serves the single index.html). The launcher (#/) is home and
 // hosts the app picker; the Resource Navigator lives at #/nav; #/settings, #/setup,
 // #/leaderboard and #/stats are account/app sub-pages. Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
-  "#/events": "Events", "#/": "Home" };
+  "#/events": "Events", "#/goals": "Resource Manager", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
-  "#/events": "Event Planner" };
+  "#/events": "Event Planner", "#/goals": "Resource Manager",
+  "#/inventory": "Resource Manager" };
 // The app a sub-page should return to (persisted so a reload on a sub-page keeps it).
 let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch { return null; } })() || "#/nav";
 function applyView() {
@@ -4151,6 +4656,11 @@ function applyView() {
   // The event planner owns a small sub-route family (board / new / detail), so
   // any hash under #/events counts as being in the app.
   const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
+  // Resource Manager: the Goals screen owns a sub-route family (board/new/detail);
+  // Inventory is a peer screen. Both are the one "Resource Manager" app.
+  const goals = (h === "#/goals" || h.startsWith("#/goals/")) && authed;
+  const inventory = h === "#/inventory" && authed;
+  const resourceMgr = goals || inventory;
   const settings = h === "#/settings" && authed;
   const setup = h === "#/setup" && authed;
   const leaderboard = h === "#/leaderboard" && authed;
@@ -4164,11 +4674,11 @@ function applyView() {
   const privacy = h === "#/privacy";
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !route && !events && !settings && !setup && !leaderboard
-    && !stats && !cargoLeaderboard && !cargoStats && !legal;
-  // Normalize the event sub-routes (#/events/new, #/events/123) to the app root
-  // for the header indicator and the "remember last app" jump.
-  const appHash = events ? "#/events" : h;
+  const launcher = authed && !nav && !route && !events && !resourceMgr && !settings && !setup
+    && !leaderboard && !stats && !cargoLeaderboard && !cargoStats && !legal;
+  // Normalize sub-routes (#/events/123, #/goals/new, #/inventory) to their app
+  // root for the header indicator and the "remember last app" jump.
+  const appHash = events ? "#/events" : resourceMgr ? "#/goals" : h;
 
   // The sign-in gate covers everything for anonymous users, except a legal page.
   $("login-gate").hidden = authed || legal;
@@ -4179,6 +4689,8 @@ function applyView() {
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
   $("events-view").hidden = !events;
+  $("goals-view").hidden = !goals;
+  $("inventory-view").hidden = !inventory;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   $("leaderboard-view").hidden = !leaderboard;
@@ -4188,7 +4700,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup/Stats/
   // Leaderboard) can offer a "← back to that app" link.
-  if (nav || route || events) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); } catch {} }
+  if (nav || route || events || resourceMgr) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); } catch {} }
   // App contexts = each app plus its own Stats/Leaderboard sub-pages. The Stats/
   // Leaderboard header toggles stay visible across both and point at whichever
   // app's analytics you're currently in.
@@ -4204,8 +4716,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || events || inCargo || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || events || legal;
+  $("where").hidden = launcher || route || events || resourceMgr || inCargo || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   $("nav-toggle").hidden = !authed || launcher;
@@ -4238,10 +4750,15 @@ function applyView() {
     loadRoutePlanner();
   } else if (events) {
     loadEvents();
-  } else if (nav && lastState) {
+  } else if (goals) {
+    loadGoals();
+  } else if (inventory) {
+    loadInventory();
+  } else if (nav) {
     // Back to the map: the canvas had zero size while hidden (drawMap bails on a
     // 0-dimension canvas), so redraw now that it has layout again.
-    drawMap();
+    if (lastState) drawMap();
+    consumeFinderPrefill();   // honor a goal line item's "find in navigator" jump
   }
 }
 window.addEventListener("hashchange", applyView);

@@ -2232,3 +2232,121 @@ def derive_event_phase(event: dict, now_dt: datetime) -> dict:
         "signup_close": signup_close.isoformat() if signup_close else None,
         "end_at": end_at.isoformat() if end_at else None,
     }
+
+
+def _qty(v) -> float:
+    """Coerce a stored quantity to a float, treating junk as 0."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def derive_inventory_rollup(rows) -> list[dict]:
+    """Org inventory rollup (design: docs/org-inventory-goals.md).
+
+    SC has no shared org storage, so the "org inventory" is never a stored total —
+    it's this derived `SUM(qty) GROUP BY item` over every member's attributed
+    pledges. `rows` is the inventory ledger ([{item_id, item_name, unit, qty,
+    owner_id, location, ...}]). Returns one entry per item, biggest total first:
+
+      {item_id, name, unit, total, holders (distinct owners),
+       by_owner: [{owner_id, qty}], by_location: [{location, qty}]}
+
+    Pure derivation so the endpoint can fan it out without an N+1; the per-owner /
+    per-location breakdowns power the expandable rows in the #/inventory view."""
+    items: dict[str, dict] = {}
+    for r in rows or []:
+        iid = r.get("item_id")
+        if not iid:
+            continue
+        it = items.get(iid)
+        if it is None:
+            it = items[iid] = {
+                "item_id": iid,
+                "name": r.get("item_name") or iid,
+                "unit": r.get("unit"),
+                "total": 0.0,
+                "by_owner": {},
+                "by_location": {},
+            }
+        qty = _qty(r.get("qty"))
+        it["total"] += qty
+        owner = r.get("owner_id")
+        it["by_owner"][owner] = it["by_owner"].get(owner, 0.0) + qty
+        loc = (r.get("location") or "").strip() or "—"
+        it["by_location"][loc] = it["by_location"].get(loc, 0.0) + qty
+
+    out = []
+    for it in items.values():
+        by_owner = sorted(({"owner_id": o, "qty": q} for o, q in it["by_owner"].items()),
+                          key=lambda x: x["qty"], reverse=True)
+        by_location = sorted(({"location": l, "qty": q} for l, q in it["by_location"].items()),
+                             key=lambda x: x["qty"], reverse=True)
+        out.append({
+            "item_id": it["item_id"], "name": it["name"], "unit": it["unit"],
+            "total": it["total"], "holders": len(it["by_owner"]),
+            "by_owner": by_owner, "by_location": by_location,
+        })
+    out.sort(key=lambda x: x["total"], reverse=True)
+    return out
+
+
+def derive_goal_progress(goal: dict, inventory_rows) -> dict:
+    """Fill of a procurement goal against its line items (design:
+    docs/org-inventory-goals.md).
+
+    `goal` carries `line_items=[{item_id, item_name, unit, qty_needed}]`;
+    `inventory_rows` are the contributions earmarked to this goal (the ledger rows
+    with `goal_id == goal id`). Returns per-line `{item_id, name, unit, needed,
+    have, pct, short}` plus an overall `pct` and a `per_contributor` breakdown.
+
+    The pinned rule: a line's `pct` is `have/needed` capped at 100, but the
+    headline `overall_pct` is `total have / total needed` summed *across lines*
+    (also capped) — so a goal one line over and one line short doesn't read as
+    "done" off the average. `have` per line sums only contributions of that item,
+    so a stray contribution of an off-list item doesn't inflate any line.
+    `is_met` is true when every line is fully covered."""
+    # Sum contributed quantity per item, and total contributed per member.
+    have_by_item: dict[str, float] = {}
+    by_contributor: dict[str, float] = {}
+    for r in inventory_rows or []:
+        iid = r.get("item_id")
+        qty = _qty(r.get("qty"))
+        if iid:
+            have_by_item[iid] = have_by_item.get(iid, 0.0) + qty
+        owner = r.get("owner_id")
+        by_contributor[owner] = by_contributor.get(owner, 0.0) + qty
+
+    lines, total_need, total_have, all_met = [], 0.0, 0.0, True
+    for li in (goal.get("line_items") or []):
+        iid = li.get("item_id")
+        needed = _qty(li.get("qty_needed"))
+        have = have_by_item.get(iid, 0.0)
+        # A line counts at most its need toward the overall fill, so over-supplying
+        # one item can't paper over a shortfall on another.
+        total_need += needed
+        total_have += min(have, needed) if needed > 0 else have
+        pct = 100.0 if needed <= 0 else min(100.0, have / needed * 100.0)
+        if needed > 0 and have < needed:
+            all_met = False
+        lines.append({
+            "item_id": iid,
+            "name": li.get("item_name") or iid,
+            "unit": li.get("unit"),
+            "needed": needed,
+            "have": have,
+            "pct": round(pct, 1),
+            "short": max(0.0, needed - have),
+        })
+
+    overall = 100.0 if total_need <= 0 else min(100.0, total_have / total_need * 100.0)
+    per_contributor = sorted(
+        ({"owner_id": o, "qty": q} for o, q in by_contributor.items()),
+        key=lambda x: x["qty"], reverse=True)
+    return {
+        "lines": lines,
+        "overall_pct": round(overall, 1),
+        "is_met": bool(lines) and all_met,
+        "per_contributor": per_contributor,
+    }
