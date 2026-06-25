@@ -4597,7 +4597,7 @@ async function renderInventory() {
     `</div></div><div id="inv-body"><p class="stat-empty">Loading…</p></div></div>`;
 
   // Picking an item prefills the unit from the catalog (overridable).
-  attachCatalogPicker($("inv-item").parentElement, it => { if (it && it.unit) $("inv-unit").value = it.unit; });
+  attachCatalogPicker($("inv-item").parentElement, it => { if (it && it.unit) document.querySelector(".inv-unit").value = it.unit; });
   attachPoiPicker($("inv-loc").parentElement);   // location autocompletes from POIs (free text ok)
   $("inv-save").onclick = logHolding;
   $("inv-scope-org").onclick = () => { rmInvScope = "org"; renderInventory(); };
@@ -4614,7 +4614,7 @@ async function logHolding() {
   try {
     const r = await fetch("/api/inventory", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id, qty, unit: $("inv-unit").value, location: $("inv-loc").value.trim() }) });
+      body: JSON.stringify({ item_id, qty, unit: document.querySelector(".inv-unit").value, location: $("inv-loc").value.trim() }) });
     if (!r.ok) throw await r.json().catch(() => ({}));
     input.value = ""; delete input.dataset.itemId; $("inv-qty").value = ""; $("inv-loc").value = "";
     msg.textContent = "Logged ✓";
