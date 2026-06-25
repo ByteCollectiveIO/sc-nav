@@ -997,10 +997,15 @@ list straight to the org's own map.
 
 ## 15. Org marketplace (aUEC-only sell/auction/trade)
 
-**Status:** designed 2026-06-24 — full doc [`docs/marketplace.md`](marketplace.md).
-**Not built.** Fifth app in the SPA; **sibling** of
+**Status:** **BUILT 2026-06-25 (v0.6.0)** — full doc
+[`docs/marketplace.md`](marketplace.md). Fifth app in the SPA; **sibling** of
 [Inventory & Goals](#14-org-inventory--goals-resource-procurement-campaigns),
-sharing its **item catalog**.
+sharing its **item catalog**. All four build steps landed in one pass: tables,
+`derive_auction_state` (+ tests), the `/api/market` endpoint family, and the
+`#/market` SPA (board / detail / form). The shared catalog also gained an
+**equipment / ship-parts feed** (uexcorp `items_prices_all`, kind `item`,
+~2.8k names) so listings aren't limited to commodities + ships — shipped
+alongside in the same release window.
 
 ### Problem
 
@@ -1031,6 +1036,27 @@ for free via the existing one-guild `auth_gate`. **aUEC-only** is a hard constra
   local-rendered; lazy expiry like the run arrival check.
 - `server/static/index.html` — launcher card + `#/market` views; mode chips +
   countdown reuse the event CSS; persistent aUEC-only disclaimer.
+
+### 15.x Future enhancements (planned 2026-06-25, not built)
+
+- **Suggested / market-value price.** The uexcorp `items_prices_all` feed (now
+  backing the equipment catalog) carries `price_buy` / `price_sell` per item, and
+  the commodities feed carries commodity prices. Surface a reference **market value**
+  on the listing form (+ a one-click "use market price") so a seller can anchor their
+  aUEC ask. Cheap path: stamp an optional `price` onto each in-memory catalog item
+  (median buy/sell, computed when the feed loads) — no new table; it rides the
+  catalog like `unit`. Then prefill the form's price field.
+- **Crafted-item quality annotation (SC 4.8 crafting).** As of SC 4.8, crafting
+  attaches a **quality** to items — source ores carry a quality **1–1000** in **8
+  bands** (Band 8 = premium) that propagates through refining → crafting into the
+  finished component's stats (power plants, coolers, shields, weapons). Let a seller
+  **annotate quality on a listing** (quality value / band + free-form per-stat
+  attributes) so a custom-crafted item can advertise what makes it better. Cheap
+  path: a JSON `attributes` blob on `listings` (like `events.roles`), a "Crafted ·
+  Qn" badge on the card, a stats table on detail. **Research first:** confirm what a
+  crafted item *instance* actually exposes in-game (single quality scalar vs.
+  per-stat, band vs. raw 1–1000) before fixing the schema. See `docs/marketplace.md`
+  → Deferred for the same notes.
 
 ---
 

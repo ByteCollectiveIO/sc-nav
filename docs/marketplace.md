@@ -214,6 +214,28 @@ The two apps are **siblings over one catalog**, not stacked:
 - **Price history** — completed `sale`/`auction` rows already hold cleared prices;
   `derive_*` a rolling median per item for a "fair price" hint. No new data.
 - **Richer reputation** — ratings beyond a completed-deals count, if abuse appears.
+- **Suggested / market-value price** *(planned 2026-06-25)* — the uexcorp
+  `items_prices_all` feed (now backing the equipment side of the shared catalog)
+  carries `price_buy` / `price_sell` per item, and the commodities feed carries
+  commodity prices. Surface a reference **"market value"** on the listing form (and
+  a one-click "use market price") so a seller can anchor their aUEC ask against the
+  current in-game economy. Cheap path: have the catalog item carry an optional
+  `price` (today it's name-only — `{item_id, name, kind, unit}`); compute a per-item
+  median buy/sell when the feed is loaded and stamp it on the item, then prefill the
+  form. No new table — the value rides the in-memory catalog like `unit` does.
+- **Crafted-item quality annotation (SC 4.8 crafting)** *(planned 2026-06-25)* —
+  as of Star Citizen 4.8, crafting attaches a **quality** to items: source materials
+  (ores) carry a quality value **1–1000** in **8 static bands** (Band 8 = 1000 =
+  premium), and that quality propagates through refining → crafting into the finished
+  component's stats (power plants, coolers, shield generators, weapons). A member
+  selling a *crafted* item will want to advertise its quality, so let the seller
+  **annotate quality properties on a listing**: an optional quality value (1–1000)
+  and/or band (1–8), plus free-form per-stat attributes. Cheap path: a JSON
+  `attributes` blob on `listings` (same pattern as `events.roles` / goal
+  `line_items`) rendered as a "Crafted · Qn" badge on the card + a stats table on the
+  detail. **Open research before fixing the schema:** confirm exactly what a crafted
+  item *instance* exposes in-game (a single quality scalar vs. per-component-stat
+  values, and whether band or raw 1–1000 is the player-facing number).
 
 ---
 

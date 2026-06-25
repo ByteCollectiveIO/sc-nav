@@ -1443,6 +1443,18 @@ class CatalogTests(unittest.TestCase):
         ship = next(it for it in items if it["item_id"] == "ship:argo-mole")
         self.assertEqual((ship["kind"], ship["unit"]), ("ship", "each"))
 
+    def test_equipment_items_in_feed(self):
+        import catalog
+        items = catalog.feed_items(
+            ["Titanium"], [],
+            ["Omnisky III Cannon", "Omnisky III Cannon"])   # dup collapses
+        eq = next(it for it in items if it["item_id"] == "item:omnisky-iii-cannon")
+        self.assertEqual((eq["kind"], eq["unit"]), ("item", "each"))
+        self.assertEqual(sum(1 for it in items if it["item_id"] == "item:omnisky-iii-cannon"), 1)
+        # the equipment names also flow through build() + are searchable
+        cat = catalog.build(["Titanium"], [], [], ["Omnisky III Cannon"])
+        self.assertTrue(any(h["name"] == "Omnisky III Cannon" for h in catalog.search(cat, "omni")))
+
     def test_custom_item_and_build_override(self):
         import catalog
         cust = catalog.custom_item({"id": 7, "name": "Size 3 Shield", "kind": "component"})

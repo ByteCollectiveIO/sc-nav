@@ -4363,7 +4363,9 @@ function attachCatalogPicker(wrap, onPick) {
     for (const it of items.slice(0, 12)) {
       const opt = document.createElement("div");
       opt.className = "poi-opt";
-      const tag = it.kind === "ship" ? "ship" : (it.unit || "");
+      // Tag the kind for ships/equipment (so a commodity and a same-named item are
+      // distinguishable in the picker); otherwise show the counting unit.
+      const tag = it.kind === "ship" ? "ship" : it.kind === "item" ? "equipment" : (it.unit || "");
       opt.innerHTML = `${esc(it.name)} <span class="muted">${esc(tag)}</span>`;
       opt.onmousedown = (e) => {
         e.preventDefault();

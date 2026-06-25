@@ -74,6 +74,10 @@ OC_URL = os.environ.get("SC_NAV_OC_URL", "https://starmap.space/api/v3/oc/index.
 POI_URL = os.environ.get("SC_NAV_POI_URL", "https://starmap.space/api/v3/pois/index.php")
 COMMODITIES_URL = os.environ.get("SC_NAV_COMMODITIES_URL", "https://api.uexcorp.uk/2.0/commodities")
 SHIPS_URL = os.environ.get("SC_NAV_SHIPS_URL", "https://api.uexcorp.uk/2.0/vehicles")
+# Equipment / ship parts (weapons, components, armor, attachments, …). The feed
+# lists prices per terminal; we only consume the distinct item names for the
+# shared catalog. One row per (item, terminal), so it's large — cached to disk.
+ITEMS_URL = os.environ.get("SC_NAV_ITEMS_URL", "https://api.uexcorp.space/2.0/items_prices_all/")
 OFFLINE = os.environ.get("SC_NAV_OFFLINE") == "1"
 
 # Canonical public URL (e.g. https://nav.bytecollective.io). When set it is the
@@ -175,6 +179,7 @@ def load_nav_data() -> nav_core.NavData:
 
 COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
 SHIPS_FILE = DATA_DIR / "ships.json"               # cached uexcorp vehicles
+ITEMS_FILE = DATA_DIR / "items.json"               # cached uexcorp items_prices_all
 DB_FILE = DATA_DIR / "sc_nav.db"                   # user-contributed data (Phase 2)
 
 
@@ -314,6 +319,27 @@ def load_commodity_names() -> list[str]:
     if not rows:
         rows = _load_json_list(COMMODITIES_FILE)
     return sorted({r["name"] for r in rows if r.get("name")})
+
+
+def load_item_names() -> list[str]:
+    """Distinct equipment / ship-part names from the uexcorp items_prices_all feed
+    (weapons, components, armor, attachments, …) for the shared item catalog, so
+    the inventory/goals + marketplace apps can reference gear that isn't a bulk
+    commodity or a vehicle. The feed lists one row per item *per terminal*, so the
+    same item recurs many times — we keep the distinct `item_name` set. Fetched
+    live with an on-disk cache fallback, mirroring the commodities loader."""
+    rows = None
+    if not OFFLINE:
+        try:
+            resp = _fetch_json(ITEMS_URL, timeout=30)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            if rows:
+                _save_json_list(ITEMS_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] items fetch failed, using cache: {exc}")
+    if not rows:
+        rows = _load_json_list(ITEMS_FILE)
+    return sorted({r["item_name"] for r in rows if r.get("item_name")})
 
 
 def load_harvestable_names() -> list[str]:
@@ -538,15 +564,16 @@ raw_commodity_names = load_raw_commodity_names()
 commodity_names = load_commodity_names()
 harvestable_names = load_harvestable_names()
 ships = load_ships()
+item_names = load_item_names()
 fauna_names = load_fauna_names()
 biomes = load_biomes()
 
 
 def rebuild_catalog() -> list[dict]:
-    """The merged item catalog (commodity + ship feeds + custom rows), shared by
-    the inventory/goals and marketplace apps. Rebuilt at startup and whenever a
-    custom item is added or the feeds are refreshed."""
-    return catalog.build(commodity_names, ships, db.list_catalog_items())
+    """The merged item catalog (commodity + ship + equipment feeds + custom rows),
+    shared by the inventory/goals and marketplace apps. Rebuilt at startup and
+    whenever a custom item is added or the feeds are refreshed."""
+    return catalog.build(commodity_names, ships, db.list_catalog_items(), item_names)
 
 
 item_catalog = rebuild_catalog()
@@ -3035,10 +3062,11 @@ async def _rebuild_nav() -> None:
 async def refresh_data(admin: dict = Depends(require_admin)):
     """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
     without restarting. Admin only."""
-    global raw_commodity_names, commodity_names, ships
+    global raw_commodity_names, commodity_names, ships, item_names
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
+    item_names = await asyncio.to_thread(load_item_names)
     refresh_catalog()   # feeds changed → rebuild the shared item catalog
     await _rebuild_nav()
     return {
@@ -3050,6 +3078,7 @@ async def refresh_data(admin: dict = Depends(require_admin)):
         "raw_commodities": len(raw_commodity_names),
         "harvestables": len(harvestable_names),
         "ships": len(ships),
+        "items": len(item_names),
     }
 
 

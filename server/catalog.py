@@ -2,14 +2,17 @@
 (design: docs/org-inventory-goals.md + docs/marketplace.md).
 
 One canonical reference of items both apps point at, each with a stable
-`item_id`, a `name`, a `kind`, and a `unit`. Three sources merge into one list:
+`item_id`, a `name`, a `kind`, and a `unit`. Four sources merge into one list:
 
   * commodity feed — every uexcorp commodity (names from load_commodity_names),
     kind="commodity", unit="SCU".
   * vehicle feed   — uexcorp ships (the trimmed `load_ships` rows), kind="ship",
     unit="each".
+  * item feed      — uexcorp items_prices_all names (weapons, components, armor,
+    attachments, …) — the in-game equipment + ship parts that aren't bulk cargo
+    or a vehicle; kind="item", unit="each".
   * custom items   — admin/member-added rows in the `catalog_items` table for
-    anything not in a feed (components, FPS gear, …); their own kind/unit.
+    anything still not in a feed; their own kind/unit.
 
 The id is synthesized from the name (`commodity:<slug>`, `ship:<slug>`,
 `custom:<n>`) so it stays stable across a feed refresh that reorders the numeric
@@ -24,13 +27,13 @@ passes them in, the same "reference data lives in code" shape as event_taxonomy.
 
 import re
 
-# Catalog `kind` allow-list. Feed items are commodity/ship; custom items pick one
-# of these (gear/component cover everything not in a feed).
-KINDS = ("commodity", "ship", "component", "gear")
+# Catalog `kind` allow-list. Feed items are commodity/ship/item; custom items pick
+# one of these (gear/component cover anything still not in a feed).
+KINDS = ("commodity", "ship", "item", "component", "gear")
 
 # Default unit per kind when a custom item doesn't state one.
-_DEFAULT_UNIT = {"commodity": "SCU", "ship": "each", "component": "each",
-                 "gear": "each"}
+_DEFAULT_UNIT = {"commodity": "SCU", "ship": "each", "item": "each",
+                 "component": "each", "gear": "each"}
 
 # Unit allow-list a member may pick when logging a holding / goal line item. The
 # catalog stamps every commodity "SCU", but fauna parts / harvestables / gear are
@@ -58,11 +61,12 @@ def default_unit(kind: str) -> str:
     return _DEFAULT_UNIT.get(kind, "each")
 
 
-def feed_items(commodity_names, ships) -> list[dict]:
-    """Canonical catalog items from the two uexcorp feeds.
+def feed_items(commodity_names, ships, item_names=None) -> list[dict]:
+    """Canonical catalog items from the uexcorp feeds.
 
     `commodity_names` is the flat name list (load_commodity_names); `ships` is the
-    trimmed ship rows (load_ships, each `{name, company, scu}`). De-duped by
+    trimmed ship rows (load_ships, each `{name, company, scu}`); `item_names` is
+    the flat equipment/ship-part name list (load_item_names). De-duped by
     synthesized id so two feed rows that slug the same collapse to one item."""
     out, seen = [], set()
     for name in commodity_names or []:
@@ -82,6 +86,14 @@ def feed_items(commodity_names, ships) -> list[dict]:
             continue
         seen.add(iid)
         out.append({"item_id": iid, "name": name, "kind": "ship", "unit": "each"})
+    for name in item_names or []:
+        if not name:
+            continue
+        iid = f"item:{slug(name)}"
+        if iid in seen:
+            continue
+        seen.add(iid)
+        out.append({"item_id": iid, "name": name, "kind": "item", "unit": "each"})
     return out
 
 
@@ -96,10 +108,10 @@ def custom_item(row: dict) -> dict:
     }
 
 
-def build(commodity_names, ships, custom_rows) -> list[dict]:
+def build(commodity_names, ships, custom_rows, item_names=None) -> list[dict]:
     """The full merged catalog (feeds + custom), sorted by name. Custom items win
     on an id clash so an org can override a feed name if they ever need to."""
-    by_id = {it["item_id"]: it for it in feed_items(commodity_names, ships)}
+    by_id = {it["item_id"]: it for it in feed_items(commodity_names, ships, item_names)}
     for r in custom_rows or []:
         it = custom_item(r)
         by_id[it["item_id"]] = it
