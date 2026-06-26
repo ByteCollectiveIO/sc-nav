@@ -796,8 +796,10 @@
   #market-view, #market-root { display: contents; }
   #market-view[hidden] { display: none; }
   /* aUEC-only / coordination-board disclaimer (form + listings) */
-  .mk-banner { font-size: 11px; line-height: 1.4; color: var(--dim); padding: 2px 0; margin: 2px 0 8px; }
-  .mk-banner b { color: var(--text); font-weight: 600; }
+  .mk-banner { font-size: 12px; line-height: 1.45; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 11px; margin: 4px 0 10px;
+    background: rgba(255,179,0,.05); }
+  .mk-banner b { color: var(--warn); font-weight: 600; }
   /* mode chip — color-coded like the event categories */
   .mk-mode { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
     border-radius: 3px; padding: 1px 7px; border: 1px solid currentColor; }
