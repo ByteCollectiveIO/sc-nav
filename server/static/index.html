@@ -880,6 +880,15 @@
   .mk-search input.mk-q { flex: 1; min-width: 160px; }
   .mk-search input.mk-pr { width: 92px; font-variant-numeric: tabular-nums; }
   .mk-search .mk-prsep { color: var(--dim); }
+  /* crafted-quality filter row (collapsible) */
+  .mk-craftfilter { margin: 2px 0; }
+  .mk-craftfilter summary { cursor: pointer; font-size: 12px; color: #e0a64f; padding: 4px 0; width: max-content; }
+  .mk-craftrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
+  .mk-craftrow input, .mk-craftrow select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
+  .mk-craftrow input:focus, .mk-craftrow select:focus { outline: none; border-color: var(--accent); }
+  .mk-craftrow .mk-qmin, .mk-craftrow .mk-qmax { width: 104px; font-variant-numeric: tabular-nums; }
+  .mk-craftrow .mk-statf { flex: 1; min-width: 150px; }
   /* "listings from <seller>" filter chip */
   .mk-sellerchip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim);
     margin: 8px 0 2px; }
@@ -897,6 +906,7 @@
     padding: 9px 14px; border-bottom: 1px solid var(--border); text-decoration: none; color: var(--text); }
   .mk-row:hover { background: var(--panel2); }
   .mk-row-item { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mk-row-item .mk-craft { margin-left: 8px; vertical-align: middle; }
   .mk-row-price { font-variant-numeric: tabular-nums; text-align: right; }
   .mk-row-seller { color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mk-row-time { font-size: 12px; text-align: right; }
@@ -4978,9 +4988,7 @@ function listingRow(l) {
 async function loadEndingSoon() {
   const el = $("mk-endingsoon");
   if (!el) return;
-  const plain = !mktFilter.mine && !mktFilter.seller && !mktFilter.mode && !mktFilter.q
-    && !mktFilter.kind && mktFilter.min === "" && mktFilter.max === "";
-  if (!plain) { el.hidden = true; el.innerHTML = ""; return; }
+  if (!mktUnfiltered()) { el.hidden = true; el.innerHTML = ""; return; }
   let data;
   try { data = await fetch("/api/market?mode=auction&sort=ending&limit=8").then(r => r.json()); }
   catch { el.hidden = true; return; }
@@ -5017,7 +5025,8 @@ function loadMarket() {
 // detail round-trip. `mine` and `seller` are mutually exclusive (My listings vs.
 // "from this seller").
 let mktFilter = { mode: "", mine: false, q: "", sort: "recent", kind: "",
-                  min: "", max: "", seller: "", sellerName: "" };
+                  min: "", max: "", seller: "", sellerName: "",
+                  qmin: "", qmax: "", band: "", stat: "" };
 let mktOffset = 0, mktSearchTimer = null;
 let mktView = localStorage.getItem("mktView") || "card";   // card grid | compact rows
 const MKT_PAGE = 25;
@@ -5031,16 +5040,28 @@ function mktQuery() {
   if (mktFilter.kind) p.set("kind", mktFilter.kind);
   if (mktFilter.min !== "") p.set("min_price", mktFilter.min);
   if (mktFilter.max !== "") p.set("max_price", mktFilter.max);
+  if (mktFilter.qmin !== "") p.set("min_quality", mktFilter.qmin);
+  if (mktFilter.qmax !== "") p.set("max_quality", mktFilter.qmax);
+  if (mktFilter.band !== "") p.set("band", mktFilter.band);
+  if (mktFilter.stat) p.set("stat", mktFilter.stat);
   if (mktFilter.sort && mktFilter.sort !== "recent") p.set("sort", mktFilter.sort);
   p.set("limit", MKT_PAGE);
   p.set("offset", mktOffset);
   return p.toString();
 }
 
+// True when no filter is narrowing the board (drives the empty message + whether
+// the "ending soon" strip shows).
+function mktUnfiltered() {
+  return !mktFilter.mine && !mktFilter.seller && !mktFilter.mode && !mktFilter.q
+    && !mktFilter.kind && mktFilter.min === "" && mktFilter.max === ""
+    && mktFilter.qmin === "" && mktFilter.qmax === "" && mktFilter.band === ""
+    && !mktFilter.stat;
+}
+
 function mktEmptyMsg() {
   if (mktFilter.mine) return "You haven't listed anything yet.";
-  if (mktFilter.q || mktFilter.kind || mktFilter.min !== "" || mktFilter.max !== ""
-      || mktFilter.mode || mktFilter.seller) return "No listings match those filters.";
+  if (!mktUnfiltered()) return "No listings match those filters.";
   return "No open listings.";
 }
 
@@ -5080,6 +5101,9 @@ async function renderMarketBoard() {
     ["price_desc", "Price ↓"], ["ending", "Ending soon"]], mktFilter.sort);
   const kindOpts = opts([["", "Any type"], ["commodity", "Commodities"], ["ship", "Ships"],
     ["item", "Equipment"], ["custom", "Custom"]], mktFilter.kind);
+  const bandOpts = opts([["", "Any band"]].concat(
+    [1, 2, 3, 4, 5, 6, 7, 8].map(n => [String(n), `Band ${n}`])), mktFilter.band);
+  const craftOpen = mktFilter.qmin !== "" || mktFilter.qmax !== "" || mktFilter.band !== "" || mktFilter.stat;
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG MARKETPLACE</h2>` +
     `<a class="ev-btn primary" href="#/market/new">+ New listing</a></div>` +
@@ -5096,6 +5120,13 @@ async function renderMarketBoard() {
       `<span class="mk-prsep">–</span>` +
       `<input class="mk-pr mk-max" type="number" min="0" placeholder="max" title="max aUEC">` +
       `<button class="mk-viewtog" id="mk-viewtog" title="Toggle layout"></button></div>` +
+    `<details class="mk-craftfilter"${craftOpen ? " open" : ""}><summary>⚒ Crafted filters</summary>` +
+      `<div class="mk-craftrow">` +
+        `<input class="mk-pr mk-qmin" type="number" min="1" max="1000" placeholder="quality ≥" title="min quality (1–1000)">` +
+        `<input class="mk-pr mk-qmax" type="number" min="1" max="1000" placeholder="quality ≤" title="max quality (1–1000)">` +
+        `<select class="mk-bandsel" title="Quality band">${bandOpts}</select>` +
+        `<input class="mk-statf" type="search" placeholder="stat name or value…" title="crafted stat" autocomplete="off">` +
+      `</div></details>` +
     `<div id="mk-sellerchip"></div>` +
     mkBanner() + `</div>` +
     `<div id="mk-endingsoon" hidden></div>` +
@@ -5122,6 +5153,20 @@ async function renderMarketBoard() {
     clearTimeout(mktSearchTimer); mktSearchTimer = setTimeout(() => loadMarketPage(true), 320);
   };
   minEl.oninput = onPrice; maxEl.oninput = onPrice;
+  const qminEl = root.querySelector(".mk-qmin"), qmaxEl = root.querySelector(".mk-qmax");
+  qminEl.value = mktFilter.qmin; qmaxEl.value = mktFilter.qmax;
+  const onQual = () => {
+    mktFilter.qmin = qminEl.value.trim(); mktFilter.qmax = qmaxEl.value.trim();
+    clearTimeout(mktSearchTimer); mktSearchTimer = setTimeout(() => loadMarketPage(true), 320);
+  };
+  qminEl.oninput = onQual; qmaxEl.oninput = onQual;
+  const bandEl = root.querySelector(".mk-bandsel");
+  bandEl.onchange = () => { mktFilter.band = bandEl.value; loadMarketPage(true); };
+  const statEl = root.querySelector(".mk-statf"); statEl.value = mktFilter.stat;
+  statEl.oninput = () => {
+    mktFilter.stat = statEl.value.trim();
+    clearTimeout(mktSearchTimer); mktSearchTimer = setTimeout(() => loadMarketPage(true), 220);
+  };
   const viewBtn = root.querySelector("#mk-viewtog");
   const syncViewBtn = () => { viewBtn.textContent = mktView === "compact" ? "▦ Cards" : "▤ Compact"; };
   syncViewBtn();

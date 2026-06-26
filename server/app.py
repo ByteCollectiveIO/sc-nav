@@ -2616,22 +2616,26 @@ async def list_market(mode: str | None = None, item: str | None = None,
                       kind: str | None = None, min_price: float | None = None,
                       max_price: float | None = None, sort: str = "recent",
                       limit: int = _MARKET_PAGE, offset: int = 0,
+                      min_quality: float | None = None, max_quality: float | None = None,
+                      band: int | None = None, stat: str | None = None,
                       user: dict = Depends(require_session)):
     """The marketplace board — a paged, filterable, sortable slice of listings.
     Defaults to open listings; `seller=me` lists all of the caller's own (any
     status), `seller=<id>` another member's open listings. Filters: `mode`, exact
     `item`, free-text `q` over the item name, `kind` (commodity/ship/item/custom),
-    and a `min_price`/`max_price` band. `sort` ∈ recent|oldest|price_asc|price_desc|
-    ending. Returns a lightweight card per listing (no N+1) plus `total` for paging.
-    A lapsed auction the page surfaces is settled lazily here (per-page, so only
-    lapsed ones touch their offers) and then drops off the open board."""
+    a `min_price`/`max_price` band, and the crafted-quality filters
+    `min_quality`/`max_quality`/`band`/`stat`. `sort` ∈ recent|oldest|price_asc|
+    price_desc|ending. Returns a lightweight card per listing (no N+1) plus `total`
+    for paging. A lapsed auction the page surfaces is settled lazily here (per-page,
+    so only lapsed ones touch their offers) and then drops off the open board."""
     limit = max(1, min(int(limit), _MARKET_PAGE_MAX))
     offset = max(0, int(offset))
     mine = seller == "me"
     rows, total = db.list_listings(
         mode=mode, item_id=item, seller_id=user["id"] if mine else seller,
         open_only=not mine, q=q, kind=kind, min_price=min_price,
-        max_price=max_price, sort=sort, limit=limit, offset=offset)
+        max_price=max_price, sort=sort, limit=limit, offset=offset,
+        min_quality=min_quality, max_quality=max_quality, band=band, stat=stat)
     now = datetime.now(timezone.utc)
     cards = []
     for r in rows:

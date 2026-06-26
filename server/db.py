@@ -1206,10 +1206,21 @@ _LISTING_KIND_PREFIX = {"commodity": "commodity:", "ship": "ship:",
                         "item": "item:", "custom": "custom:"}
 
 
+def _like_needle(s: str) -> str:
+    """A `%…%` LIKE pattern with the metacharacters in `s` escaped (backslash first,
+    then % and _), paired with `ESCAPE '\\'` in the SQL so a literal % or _ in a
+    search term doesn't act as a wildcard."""
+    body = s.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{body}%"
+
+
 def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
-                        q, kind, min_price, max_price):
+                        q, kind, min_price, max_price,
+                        min_quality=None, max_quality=None, band=None, stat=None):
     """Build the shared WHERE clause (+ params) for list_listings / count_listings
-    so the browse and count queries can never drift apart."""
+    so the browse and count queries can never drift apart. Crafted-quality filters
+    (`min_quality`/`max_quality`/`band`/`stat`) read the JSON `attributes` blob with
+    SQLite's json functions; a NULL blob (non-crafted listing) never matches them."""
     where, params = [], []
     if mode:
         where.append("mode=?"); params.append(mode)
@@ -1222,11 +1233,7 @@ def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
     elif open_only:
         where.append("status='open'")
     if q:
-        # Escape LIKE metacharacters so a literal % or _ in the query doesn't act as
-        # a wildcard (escape the backslash first, then % and _).
-        needle = (q.strip().lower().replace("\\", "\\\\")
-                  .replace("%", "\\%").replace("_", "\\_"))
-        where.append("LOWER(item_name) LIKE ? ESCAPE '\\'"); params.append(f"%{needle}%")
+        where.append("LOWER(item_name) LIKE ? ESCAPE '\\'"); params.append(_like_needle(q))
     prefix = _LISTING_KIND_PREFIX.get(kind)
     if prefix:
         where.append("item_id LIKE ?"); params.append(f"{prefix}%")
@@ -1236,6 +1243,24 @@ def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
         where.append("sort_price IS NOT NULL AND sort_price >= ?"); params.append(min_price)
     if max_price is not None:
         where.append("sort_price IS NOT NULL AND sort_price <= ?"); params.append(max_price)
+    # Crafted-quality filters over the JSON attributes blob.
+    if min_quality is not None:
+        where.append("CAST(json_extract(attributes,'$.quality') AS REAL) >= ?")
+        params.append(min_quality)
+    if max_quality is not None:
+        where.append("CAST(json_extract(attributes,'$.quality') AS REAL) <= ?")
+        params.append(max_quality)
+    if band is not None:
+        where.append("json_extract(attributes,'$.band') = ?"); params.append(band)
+    if stat:
+        # Match a listing that carries a crafted stat whose name or value contains the
+        # text. IFNULL(...,'[]') makes json_each a no-op on a missing/NULL stats array.
+        needle = _like_needle(stat)
+        where.append(
+            "EXISTS (SELECT 1 FROM json_each(IFNULL(json_extract(listings.attributes,"
+            "'$.stats'),'[]')) je WHERE LOWER(json_extract(je.value,'$.name')) LIKE ? "
+            "ESCAPE '\\' OR LOWER(json_extract(je.value,'$.value')) LIKE ? ESCAPE '\\')")
+        params += [needle, needle]
     return (" WHERE " + " AND ".join(where) if where else ""), params
 
 
@@ -1244,15 +1269,20 @@ def list_listings(mode: str | None = None, item_id: str | None = None,
                   open_only: bool = False, q: str | None = None,
                   kind: str | None = None, min_price: float | None = None,
                   max_price: float | None = None, sort: str = "recent",
-                  limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
+                  limit: int | None = None, offset: int = 0,
+                  min_quality: float | None = None, max_quality: float | None = None,
+                  band: int | None = None, stat: str | None = None) -> tuple[list[dict], int]:
     """Browse listings with optional filters, a sort, and paging. Filters: mode /
     exact item / seller / status (or `open_only`), free-text `q` over the item name,
-    item `kind` (catalog-id prefix), and a `min_price`/`max_price` band over the
-    denormalized sort_price. `sort` is one of `_LISTING_SORTS` (default freshest).
-    `limit`/`offset` page the result. Returns `(rows, total)` where `total` is the
-    full unpaged match count, so the board can show "1–25 of N"."""
+    item `kind` (catalog-id prefix), a `min_price`/`max_price` band over the
+    denormalized sort_price, and the crafted-quality filters
+    `min_quality`/`max_quality`/`band`/`stat` over the JSON attributes blob. `sort`
+    is one of `_LISTING_SORTS` (default freshest). `limit`/`offset` page the result.
+    Returns `(rows, total)` where `total` is the full unpaged match count, so the
+    board can show "1–25 of N"."""
     clause, params = _listing_filter_sql(mode, item_id, seller_id, status,
-                                         open_only, q, kind, min_price, max_price)
+                                         open_only, q, kind, min_price, max_price,
+                                         min_quality, max_quality, band, stat)
     order = _LISTING_SORTS.get(sort, _LISTING_SORTS["recent"])
     sql = f"SELECT * FROM listings{clause} ORDER BY {order}"
     if limit is not None:
