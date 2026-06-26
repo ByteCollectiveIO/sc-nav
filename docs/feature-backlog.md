@@ -1037,16 +1037,22 @@ for free via the existing one-guild `auth_gate`. **aUEC-only** is a hard constra
 - `server/static/index.html` — launcher card + `#/market` views; mode chips +
   countdown reuse the event CSS; persistent aUEC-only disclaimer.
 
-### 15.x Future enhancements (planned 2026-06-25, not built)
+### 15.x Future enhancements (planned 2026-06-25)
 
-- **Suggested / market-value price.** The uexcorp `items_prices_all` feed (now
+**Update 2026-06-26 — the next pass shipped four of these (uncommitted, needs
+/deploy):** *Suggested market-value price*, *Crafted-item quality annotation*,
+*Listing search / filter / sort*, and *Board scalability — UI at volume* are all
+**BUILT**. See `docs/marketplace.md` (Deferred + "Scaling the board") for the
+shipped details. The rest below stay deferred.
+
+- **Suggested / market-value price** — **BUILT 2026-06-26.** The uexcorp `items_prices_all` feed (now
   backing the equipment catalog) carries `price_buy` / `price_sell` per item, and
   the commodities feed carries commodity prices. Surface a reference **market value**
   on the listing form (+ a one-click "use market price") so a seller can anchor their
   aUEC ask. Cheap path: stamp an optional `price` onto each in-memory catalog item
   (median buy/sell, computed when the feed loads) — no new table; it rides the
   catalog like `unit`. Then prefill the form's price field.
-- **Crafted-item quality annotation (SC 4.8 crafting).** As of SC 4.8, crafting
+- **Crafted-item quality annotation (SC 4.8 crafting)** — **BUILT 2026-06-26.** As of SC 4.8, crafting
   attaches a **quality** to items — source ores carry a quality **1–1000** in **8
   bands** (Band 8 = premium) that propagates through refining → crafting into the
   finished component's stats (power plants, coolers, shields, weapons). Let a seller
@@ -1057,6 +1063,38 @@ for free via the existing one-guild `auth_gate`. **aUEC-only** is a hard constra
   crafted item *instance* actually exposes in-game (single quality scalar vs.
   per-stat, band vs. raw 1–1000) before fixing the schema. See `docs/marketplace.md`
   → Deferred for the same notes.
+- **Listing search / filter / sort** — **BUILT 2026-06-26.** Today the board only filters by `mode`
+  (Sale/Auction/Barter tabs) + a "My listings" toggle; `GET /api/market` already
+  takes `?mode=` / `?item=` (exact id) / `?seller=me`. Extend to real discovery:
+  - **Text search by item name** *(minimum)* — `?q=` substring (case-insensitive)
+    over the denormalized `item_name` on `listings`. SQL `LIKE`, no new data.
+  - **Filter by poster** — generalize `?seller=` to any member id (not just `me`),
+    and make a listing's seller name a "show all from this seller" link.
+  - **Filter by equipment type** — by catalog `kind` (commodity / ship / item /
+    custom). The listing stores `item_id`; derive the kind from its prefix
+    (`commodity:` / `ship:` / `item:` / `custom:`) — no schema change.
+  - **Price range** — `?min_price=` / `?max_price=`. Note the per-mode price is
+    *resolved* (sale = `price_auec`; auction = current high bid or `start_price`;
+    barter = none), so this filters **after** `_listing_view` derives it, in Python —
+    the same post-derivation pattern the events board uses to filter phases.
+  - **Sort** — `?sort=` over post time (`created_at`, default desc), expiration
+    (`ends_at`, auctions), or resolved price; asc/desc. Pure-SQL for `created_at` /
+    `ends_at`; price sort rides the same post-derivation pass as the price filter.
+
+  UI: a search box + a sort `<select>` in the board header, plus optional
+  type/price-range controls; mostly query-param plumbing on the existing
+  `db.list_listings` (which already has the filter scaffolding) + the `#/market`
+  board. See `docs/marketplace.md` → Deferred for the same note.
+- **Board scalability — UI at volume** — **BUILT 2026-06-26.** The v1 board renders *every* open listing as
+  a card and derives each via a per-listing query (N+1); fine for dozens, not for a
+  market with thousands of equipment listings. Plan: server-side paging
+  (`?limit`/`?offset` + `total`, "Load more"); search-first navigation (filters
+  narrow before paging); **kill the N+1 by denormalizing `sort_price` + `offer_count`
+  onto `listings`** so the board is pure SQL read by a lightweight serializer (the
+  rich `_listing_view` stays on detail); a dense list/table view alongside the card
+  grid; and an "ending soon" strip for perishable auctions. This is the load-bearing
+  prerequisite for the search/filter/sort feature above to scale. **Full design
+  worked through in `docs/marketplace.md` → "Scaling the board".**
 
 ---
 

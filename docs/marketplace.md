@@ -203,6 +203,74 @@ The two apps are **siblings over one catalog**, not stacked:
 
 ---
 
+## Scaling the board (staying usable as listings grow)
+
+*(design note added 2026-06-25; **BUILT 2026-06-26** — all six items shipped:
+denormalized `sort_price`/`offer_count` on `listings` kept current by
+`db.refresh_listing_denorm` inside every mutation, with a startup
+`_backfill_listing_denorm` reconcile; `GET /api/market` now pages (`?limit`/`?offset`
++ `total`), filters (`?q`/`?kind`/`?min_price`/`?max_price`/any-`?seller`), and
+sorts (`?sort=recent|oldest|price_asc|price_desc|ending`) in `db.list_listings`,
+read by a lightweight `_listing_card` serializer with no per-listing N+1; the
+`#/market` board got a search/sort/type/price-range row, a "Load more" pager, a
+card⇄compact-row layout toggle (remembered in `localStorage`), an "ending soon"
+strip, and a "show all from this seller" link. Lapsed auctions still settle lazily
+per-page in `list_market`. Uncommitted — needs /deploy.)*
+
+The v1 board renders **every** open listing as a card in one panel, and
+`_listing_view` derives each listing's auction state from a per-listing
+`db.list_offers` + `db.completed_deals_count` query. That's fine for an org's first
+dozens of listings; it degrades on three fronts as volume grows — **payload size**
+(every open listing serialized at once), an **N+1 query per board load** (offers +
+deal-count per listing), and a **wall of cards** no one can scan. The fixes, in
+rough priority — none change the data model except the two denormalized columns in
+(3), which `_ensure_column` adds in place:
+
+1. **Server-side paging.** `GET /api/market` returns a bounded page
+   (`?limit=` / `?offset=`, default ~25) plus a `total`; the board shows
+   "1–25 of 142" with **Load more** (or numbered pages). Bounds payload + per-request
+   work regardless of how big the market gets. Pairs with the
+   [search/filter/sort](#deferred-cheap-paths-noted) work so a page is over a
+   *narrowed* set, not the whole market.
+
+2. **Search-first, not scroll-first.** At volume people *find*, they don't browse —
+   so the board's primary control becomes the item-name search + filters, with a
+   sensible default slice (recent open listings) behind it. Filters run in SQL and
+   narrow *before* paging, so the common case ("Omnisky cannons under 20k") returns
+   one short page, not thousands of cards.
+
+3. **Kill the board N+1 by denormalizing the sort price.** The board doesn't need
+   full derivation — it needs each listing's *display* price + offer count. Store a
+   `sort_price` (sale = `price_auec`; auction = current high bid, else `start_price`)
+   and an `offer_count` on `listings`, updated when an offer lands / a deal settles /
+   an auction lapses. Then the board is **pure SQL** (filter + sort + page, zero
+   per-row queries) read by a **lightweight board serializer** (columns only); the
+   rich `_listing_view` (offers list, my-offer, confirm state) stays on the **detail**
+   page. This also turns price *sort/filter* into pure SQL instead of the Python
+   post-derivation pass the [filter/sort note](#deferred-cheap-paths-noted) describes.
+
+4. **Denser, scannable layout.** Cards are space-hungry. Offer a **compact list /
+   table view** (one row per listing: item · mode · price/high-bid · seller ·
+   time-left) as the default-at-scale, with the card grid as the roomy alternative —
+   remembered per member. A table also makes click-to-sort columns obvious.
+
+5. **Surface the time-sensitive.** Auctions **ending soon** are perishable, so a
+   deadline shouldn't get buried on page 4. A small **"ending soon" strip** above the
+   general list (a `sort=ends_at` slice of open auctions closing within N hours) keeps
+   them visible without the user hunting.
+
+6. **Lazy expiry stays per-page.** `_resolve_listing_expiry` only fires on the
+   listings actually read, so paging keeps it cheap; a never-viewed lapsed auction
+   just settles the next time it surfaces in a page (acceptable — it can't strand a
+   deal because nothing references it until it's read).
+
+**Build order if/when this is taken on:** paging + the board serializer (1, 3)
+first — they're the load-bearing change and unblock everything else; then the dense
+layout (4) and ending-soon strip (5) as UI passes; search/filter/sort lands
+naturally alongside (1)–(3) since they share the `db.list_listings` query path.
+
+---
+
 ## Deferred (cheap paths noted)
 
 - **Inventory bridge** — list from / decrement `inventory` rows; surplus from `met`
@@ -214,7 +282,14 @@ The two apps are **siblings over one catalog**, not stacked:
 - **Price history** — completed `sale`/`auction` rows already hold cleared prices;
   `derive_*` a rolling median per item for a "fair price" hint. No new data.
 - **Richer reputation** — ratings beyond a completed-deals count, if abuse appears.
-- **Suggested / market-value price** *(planned 2026-06-25)* — the uexcorp
+- **Suggested / market-value price** *(planned 2026-06-25; **BUILT 2026-06-26**)* —
+  `build_item_prices()` computes a per-item median buy/sell (commodities feed is
+  one-row-per-commodity, items feed is medianed across terminals) and stamps an
+  optional `price` `{buy, sell}` onto each catalog item via `catalog.build(..., prices=)`,
+  refreshed with the feeds. The listing form shows a "Market value: N buy · N sell
+  aUEC" hint with a one-click **use** that fills the price field. No new table — the
+  value rides the in-memory catalog like `unit`. (Ships left unpriced — inconsistent
+  aUEC pricing.) Original note: the uexcorp
   `items_prices_all` feed (now backing the equipment side of the shared catalog)
   carries `price_buy` / `price_sell` per item, and the commodities feed carries
   commodity prices. Surface a reference **"market value"** on the listing form (and
@@ -223,7 +298,16 @@ The two apps are **siblings over one catalog**, not stacked:
   `price` (today it's name-only — `{item_id, name, kind, unit}`); compute a per-item
   median buy/sell when the feed is loaded and stamp it on the item, then prefill the
   form. No new table — the value rides the in-memory catalog like `unit` does.
-- **Crafted-item quality annotation (SC 4.8 crafting)** *(planned 2026-06-25)* —
+- **Crafted-item quality annotation (SC 4.8 crafting)** *(planned 2026-06-25;
+  **BUILT 2026-06-26**)* — a JSON `attributes` blob on `listings`
+  (`{quality:1-1000, band:1-8, stats:[{name,value}]}`, `_ensure_column` migration,
+  `_clean_crafted` normalizer, `CraftedIn`/`CraftStatIn` models) rendered as a
+  "⚒ Qn" badge on cards + detail header and a stats table on the detail; the form
+  has a collapsible quality/band + add-stat editor. Research (below) confirmed 4.8
+  material quality (1-1000, 8 bands) propagates into a crafted component's *per-stat*
+  values with buff/debuff trade-offs, so the free-form blob is the right shape — the
+  exact player-facing instance number is still unpinned, which the blob tolerates.
+  Original note: —
   as of Star Citizen 4.8, crafting attaches a **quality** to items: source materials
   (ores) carry a quality value **1–1000** in **8 static bands** (Band 8 = 1000 =
   premium), and that quality propagates through refining → crafting into the finished
@@ -236,6 +320,22 @@ The two apps are **siblings over one catalog**, not stacked:
   detail. **Open research before fixing the schema:** confirm exactly what a crafted
   item *instance* exposes in-game (a single quality scalar vs. per-component-stat
   values, and whether band or raw 1–1000 is the player-facing number).
+- **Listing search / filter / sort** *(planned 2026-06-25; **BUILT 2026-06-26**
+  alongside the board-scaling work above — text `?q=`, any-`?seller=`, `?kind=`,
+  `?min_price`/`?max_price`, and `?sort=`; price filter/sort is now pure SQL over
+  the denormalized `sort_price`, not a post-derivation pass)* — the board ships with
+  only a `mode` filter (Sale/Auction/Barter) + "My listings"; `GET /api/market`
+  already takes `?mode=` / `?item=` / `?seller=me`. Extend for real discovery:
+  **text search by item name** (`?q=` substring over the denormalized `item_name` —
+  the minimum ask), **filter by poster** (generalize `?seller=` to any member +
+  a "show all from this seller" link off the seller name), **filter by equipment
+  type** (catalog `kind`, derived from the `item_id` prefix — no schema change),
+  **price range** (`?min_price`/`?max_price` — applied *after* `_listing_view`
+  resolves the per-mode price: sale `price_auec`, auction high-bid-or-`start_price`,
+  barter none), and **sort** (`?sort=` over post time / `ends_at` / resolved price,
+  asc/desc). Mostly query-param plumbing on the existing `db.list_listings` filter
+  scaffolding; the price filter/sort rides a Python post-derivation pass (like the
+  events board's phase filter), the rest is pure SQL.
 
 ---
 

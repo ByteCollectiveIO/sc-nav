@@ -850,6 +850,73 @@
   .mk-ostatus.withdrawn, .mk-ostatus.lost { color: var(--dim); }
   .ev-btn.sm { padding: 3px 10px; font-size: 12px; }
   .mk-mode-fields[hidden] { display: none; }
+  /* crafted-item quality (SC 4.8) — badge, detail table, form editor */
+  .mk-craft { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    border-radius: 3px; padding: 1px 7px; border: 1px solid #e0a64f; color: #e0a64f; }
+  .mk-craftbox { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0;
+    background: var(--panel2); }
+  .mk-craft-h { font-size: 13px; font-weight: 600; color: #e0a64f; margin-bottom: 6px; }
+  .mk-craft-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .mk-craft-tbl td { padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .mk-craft-tbl td:first-child { color: var(--dim); width: 45%; }
+  .mk-craft-tbl td:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+  .mk-craft-form { margin: 4px 0 12px; border: 1px solid var(--border); border-radius: 8px; padding: 4px 12px; }
+  .mk-craft-form summary { cursor: pointer; font-size: 13px; color: var(--accent); padding: 6px 0; }
+  .mk-craft-form[open] summary { margin-bottom: 6px; }
+  .mk-stat-lbl { display: block; font-size: 13px; color: var(--dim); margin: 8px 0 4px; }
+  .mk-statrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 6px; }
+  /* suggested market value (listing form) */
+  .mk-mv { font-size: 12px; color: var(--dim); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .mk-mv b { color: var(--text); }
+  .mk-mv-lbl { color: var(--accent); }
+  .mk-mv-use { cursor: pointer; margin-left: 6px; font-size: 11px; padding: 1px 8px; border-radius: 5px;
+    border: 1px solid var(--border); background: transparent; color: var(--accent); }
+  .mk-mv-use:hover { border-color: var(--accent); }
+  /* board search / sort / filter row */
+  .mk-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
+  .mk-search input, .mk-search select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
+  .mk-search input:focus, .mk-search select:focus { outline: none; border-color: var(--accent); }
+  .mk-search input.mk-q { flex: 1; min-width: 160px; }
+  .mk-search input.mk-pr { width: 92px; font-variant-numeric: tabular-nums; }
+  .mk-search .mk-prsep { color: var(--dim); }
+  /* "listings from <seller>" filter chip */
+  .mk-sellerchip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim);
+    margin: 8px 0 2px; }
+  .mk-sellerchip b { color: var(--text); }
+  .mk-sellerchip .mk-clear { cursor: pointer; color: var(--accent); border: 1px solid var(--border);
+    border-radius: 6px; padding: 2px 9px; background: transparent; font-size: 12px; }
+  .mk-sellerlink { color: var(--accent); cursor: pointer; }
+  /* layout toggle (card grid ⇄ compact rows) */
+  .mk-viewtog { font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+    border: 1px solid var(--border); color: var(--dim); background: transparent; }
+  .mk-viewtog:hover { border-color: var(--accent); color: var(--accent); }
+  /* compact list view — one scannable row per listing */
+  #market-list.mk-compact { display: flex; flex-direction: column; padding: 0; }
+  .mk-row { display: grid; grid-template-columns: 1fr auto 130px 150px 96px; gap: 12px; align-items: center;
+    padding: 9px 14px; border-bottom: 1px solid var(--border); text-decoration: none; color: var(--text); }
+  .mk-row:hover { background: var(--panel2); }
+  .mk-row-item { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mk-row-price { font-variant-numeric: tabular-nums; text-align: right; }
+  .mk-row-seller { color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mk-row-time { font-size: 12px; text-align: right; }
+  @media (max-width: 640px) {
+    .mk-row { grid-template-columns: 1fr auto; row-gap: 4px; }
+    .mk-row-seller, .mk-row-time { display: none; }
+  }
+  /* "ending soon" strip */
+  .mk-soon { margin-bottom: 12px; }
+  .mk-soon-h { font-size: 13px; font-weight: 600; color: var(--warn); margin-bottom: 8px; }
+  .mk-soon-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .mk-soon-card { display: flex; flex-direction: column; gap: 2px; min-width: 150px; padding: 8px 12px;
+    border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text);
+    background: var(--panel2); }
+  .mk-soon-card:hover { border-color: var(--warn); }
+  .mk-soon-item { font-weight: 600; font-size: 13px; }
+  .mk-soon-bid { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--dim); }
+  /* board pager */
+  .mk-pager { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: 14px; }
+  .mk-count { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -4834,6 +4901,28 @@ function mkDeals(n) {
   return n > 0 ? ` · <span class="mk-deals" title="completed deals">✔ ${n} deal${n === 1 ? "" : "s"}</span>` : "";
 }
 
+// Crafted-item quality (SC 4.8): a compact badge for cards/detail headers, and a
+// full stats table for the detail body. Driven by the optional `attributes` blob
+// ({quality:1-1000, band:1-8, stats:[{name,value}]}).
+function mkCraftBadge(l) {
+  const a = l.attributes;
+  if (!a || (a.quality == null && a.band == null && !(a.stats || []).length)) return "";
+  const tag = a.quality != null ? `Q${a.quality}` : a.band != null ? `Band ${a.band}` : "Crafted";
+  return `<span class="mk-craft" title="Crafted item quality">⚒ ${esc(String(tag))}</span>`;
+}
+
+function mkCraftBlock(l) {
+  const a = l.attributes;
+  if (!a) return "";
+  let rows = "";
+  if (a.quality != null) rows += `<tr><td>Quality</td><td>${esc(String(a.quality))} <span class="muted">/ 1000</span></td></tr>`;
+  if (a.band != null) rows += `<tr><td>Quality band</td><td>${esc(String(a.band))} <span class="muted">/ 8</span></td></tr>`;
+  (a.stats || []).forEach(s => { rows += `<tr><td>${esc(s.name)}</td><td>${esc(s.value)}</td></tr>`; });
+  if (!rows) return "";
+  return `<div class="mk-craftbox"><div class="mk-craft-h">⚒ Crafted item</div>` +
+    `<table class="mk-craft-tbl">${rows}</table></div>`;
+}
+
 function mkBanner() {
   return `<p class="mk-banner">⚠ In-game <b>aUEC only</b> — never real money. The app just records the ` +
     `agreement; you settle the handoff in-game on trust.</p>`;
@@ -4858,9 +4947,56 @@ function mkPriceLine(l) {
 function listingCard(l) {
   return `<a class="ev-card" href="#/market/${l.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(l.item_name)} ${mkQtyTag(l)}</div>` +
-    `<div class="ev-chips">${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div></div>` +
+    `<div class="ev-chips">${mkCraftBadge(l)}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div></div>` +
     `<div class="ev-meta">${mkPriceLine(l)}</div>` +
     `<div class="ev-meta">by ${esc(l.seller_name)}${mkDeals(l.seller_deals)}</div></a>`;
+}
+
+// A listing's resolved display price (sale ask / auction high-or-start / barter —).
+function mkRowPrice(l) {
+  if (l.mode === "sale") return fmtAuec(l.price_auec);
+  if (l.mode === "auction") {
+    const a = l.auction || {};
+    return a.high_bid != null ? fmtAuec(a.high_bid) : fmtAuec(l.start_price);
+  }
+  return `<span class="muted">barter</span>`;
+}
+
+// Compact one-line row — the dense, scannable layout at volume.
+function listingRow(l) {
+  return `<a class="mk-row" href="#/market/${l.id}">` +
+    `<span class="mk-row-item">${esc(l.item_name)} <span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>${mkCraftBadge(l)}</span>` +
+    `<span class="mk-row-mode">${mkModeChip(l.mode)}</span>` +
+    `<span class="mk-row-price">${mkRowPrice(l)}</span>` +
+    `<span class="mk-row-seller">${esc(l.seller_name)}</span>` +
+    `<span class="mk-row-time">${l.mode === "auction" ? mkCountdown(l.ends_at) : ""}</span></a>`;
+}
+
+// "Ending soon" strip — perishable open auctions closing within 24h, surfaced above
+// the board so a deadline doesn't get buried on a later page. Only on the plain,
+// unfiltered board (it would be noise once the user is searching/filtering).
+async function loadEndingSoon() {
+  const el = $("mk-endingsoon");
+  if (!el) return;
+  const plain = !mktFilter.mine && !mktFilter.seller && !mktFilter.mode && !mktFilter.q
+    && !mktFilter.kind && mktFilter.min === "" && mktFilter.max === "";
+  if (!plain) { el.hidden = true; el.innerHTML = ""; return; }
+  let data;
+  try { data = await fetch("/api/market?mode=auction&sort=ending&limit=8").then(r => r.json()); }
+  catch { el.hidden = true; return; }
+  const soon = (data.listings || []).filter(l => {
+    if (!l.ends_at) return false;
+    const ms = new Date(l.ends_at) - new Date();
+    return ms > 0 && ms <= 24 * 3600 * 1000;
+  }).slice(0, 6);
+  if (!soon.length) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  el.innerHTML = `<div class="panel mk-soon"><div class="mk-soon-h">⏳ Ending soon</div>` +
+    `<div class="mk-soon-row">` + soon.map(l =>
+      `<a class="mk-soon-card" href="#/market/${l.id}">` +
+      `<span class="mk-soon-item">${esc(l.item_name)}</span>` +
+      `<span class="mk-soon-bid">${mkRowPrice(l)}</span>${mkCountdown(l.ends_at)}</a>`).join("") +
+    `</div></div>`;
 }
 
 function marketSubRoute() {
@@ -4877,13 +5013,73 @@ function loadMarket() {
   return renderMarketBoard();
 }
 
-let mktFilter = { mode: "", mine: false };
+// Board filter/sort/page state, persisted across re-renders so a search survives a
+// detail round-trip. `mine` and `seller` are mutually exclusive (My listings vs.
+// "from this seller").
+let mktFilter = { mode: "", mine: false, q: "", sort: "recent", kind: "",
+                  min: "", max: "", seller: "", sellerName: "" };
+let mktOffset = 0, mktSearchTimer = null;
+let mktView = localStorage.getItem("mktView") || "card";   // card grid | compact rows
+const MKT_PAGE = 25;
+
+function mktQuery() {
+  const p = new URLSearchParams();
+  if (mktFilter.mine) p.set("seller", "me");
+  else if (mktFilter.seller) p.set("seller", mktFilter.seller);
+  if (mktFilter.mode) p.set("mode", mktFilter.mode);
+  if (mktFilter.q) p.set("q", mktFilter.q);
+  if (mktFilter.kind) p.set("kind", mktFilter.kind);
+  if (mktFilter.min !== "") p.set("min_price", mktFilter.min);
+  if (mktFilter.max !== "") p.set("max_price", mktFilter.max);
+  if (mktFilter.sort && mktFilter.sort !== "recent") p.set("sort", mktFilter.sort);
+  p.set("limit", MKT_PAGE);
+  p.set("offset", mktOffset);
+  return p.toString();
+}
+
+function mktEmptyMsg() {
+  if (mktFilter.mine) return "You haven't listed anything yet.";
+  if (mktFilter.q || mktFilter.kind || mktFilter.min !== "" || mktFilter.max !== ""
+      || mktFilter.mode || mktFilter.seller) return "No listings match those filters.";
+  return "No open listings.";
+}
+
+// Jump to the board filtered to one seller (from the "show all from this seller"
+// link on a detail page).
+function mktFilterBySeller(id, name) {
+  mktFilter.seller = id; mktFilter.sellerName = name || "";
+  mktFilter.mine = false; mktFilter.mode = "";
+  if (location.hash === "#/market") renderMarketBoard();   // already here → force reload
+  else location.hash = "#/market";
+}
+
+function syncMktControls(root) {
+  root.querySelectorAll(".mk-tab").forEach(b => {
+    if (b.dataset.mine) b.classList.toggle("on", mktFilter.mine);
+    else b.classList.toggle("on", mktFilter.mode === b.dataset.mode && !mktFilter.mine && !mktFilter.seller);
+  });
+  const chip = $("mk-sellerchip");
+  if (mktFilter.seller && !mktFilter.mine) {
+    chip.innerHTML = `<span class="mk-sellerchip">Listings from <b>${esc(mktFilter.sellerName || "this seller")}</b>` +
+      `<button class="mk-clear" id="mk-clearseller">clear ✕</button></span>`;
+    $("mk-clearseller").onclick = () => {
+      mktFilter.seller = ""; mktFilter.sellerName = "";
+      syncMktControls(root); loadMarketPage(true);
+    };
+  } else chip.innerHTML = "";
+}
 
 async function renderMarketBoard() {
   const root = $("market-root");
   const tabLbl = { "": "All", sale: "Sales", auction: "Auctions", barter: "Barter" };
   const tabs = ["", "sale", "auction", "barter"].map(m =>
-    `<button class="mk-tab ${mktFilter.mode === m && !mktFilter.mine ? "on" : ""}" data-mode="${m}">${tabLbl[m]}</button>`).join("");
+    `<button class="mk-tab" data-mode="${m}">${tabLbl[m]}</button>`).join("");
+  const opts = (pairs, cur) => pairs.map(([v, l]) =>
+    `<option value="${v}"${v === cur ? " selected" : ""}>${l}</option>`).join("");
+  const sortOpts = opts([["recent", "Newest"], ["oldest", "Oldest"], ["price_asc", "Price ↑"],
+    ["price_desc", "Price ↓"], ["ending", "Ending soon"]], mktFilter.sort);
+  const kindOpts = opts([["", "Any type"], ["commodity", "Commodities"], ["ship", "Ships"],
+    ["item", "Equipment"], ["custom", "Custom"]], mktFilter.kind);
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG MARKETPLACE</h2>` +
     `<a class="ev-btn primary" href="#/market/new">+ New listing</a></div>` +
@@ -4891,23 +5087,86 @@ async function renderMarketBoard() {
     `Post a listing; another member buys, bids or makes an offer; you both settle the handoff in-game ` +
     `and mark it done. A closed, trusted market — no strangers, no real money.</p>` +
     `<div class="mk-filter">${tabs}<span class="mk-spacer"></span>` +
-    `<button class="mk-tab ${mktFilter.mine ? "on" : ""}" data-mine="1">My listings</button></div>` +
+    `<button class="mk-tab" data-mine="1">My listings</button></div>` +
+    `<div class="mk-search">` +
+      `<input class="mk-q" type="search" placeholder="Search items…" autocomplete="off">` +
+      `<select class="mk-sort" title="Sort">${sortOpts}</select>` +
+      `<select class="mk-kind" title="Item type">${kindOpts}</select>` +
+      `<input class="mk-pr mk-min" type="number" min="0" placeholder="min" title="min aUEC">` +
+      `<span class="mk-prsep">–</span>` +
+      `<input class="mk-pr mk-max" type="number" min="0" placeholder="max" title="max aUEC">` +
+      `<button class="mk-viewtog" id="mk-viewtog" title="Toggle layout"></button></div>` +
+    `<div id="mk-sellerchip"></div>` +
     mkBanner() + `</div>` +
-    `<div id="market-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
+    `<div id="mk-endingsoon" hidden></div>` +
+    `<div id="market-list" class="panel"><p class="stat-empty">Loading…</p></div>` +
+    `<div id="mk-pager" class="mk-pager" hidden></div>`;
   root.querySelectorAll(".mk-tab").forEach(b => b.onclick = () => {
-    if (b.dataset.mine) mktFilter.mine = !mktFilter.mine;
-    else { mktFilter.mode = b.dataset.mode; mktFilter.mine = false; }
-    renderMarketBoard();
+    if (b.dataset.mine) { mktFilter.mine = !mktFilter.mine; if (mktFilter.mine) mktFilter.seller = ""; }
+    else { mktFilter.mode = b.dataset.mode; mktFilter.mine = false; mktFilter.seller = ""; }
+    syncMktControls(root); loadMarketPage(true);
   });
-  const qs = mktFilter.mine ? "?seller=me" : (mktFilter.mode ? `?mode=${mktFilter.mode}` : "");
+  const qEl = root.querySelector(".mk-q"); qEl.value = mktFilter.q;
+  qEl.oninput = () => {
+    mktFilter.q = qEl.value.trim();
+    clearTimeout(mktSearchTimer); mktSearchTimer = setTimeout(() => loadMarketPage(true), 220);
+  };
+  const sortEl = root.querySelector(".mk-sort");
+  sortEl.onchange = () => { mktFilter.sort = sortEl.value; loadMarketPage(true); };
+  const kindEl = root.querySelector(".mk-kind");
+  kindEl.onchange = () => { mktFilter.kind = kindEl.value; loadMarketPage(true); };
+  const minEl = root.querySelector(".mk-min"), maxEl = root.querySelector(".mk-max");
+  minEl.value = mktFilter.min; maxEl.value = mktFilter.max;
+  const onPrice = () => {
+    mktFilter.min = minEl.value.trim(); mktFilter.max = maxEl.value.trim();
+    clearTimeout(mktSearchTimer); mktSearchTimer = setTimeout(() => loadMarketPage(true), 320);
+  };
+  minEl.oninput = onPrice; maxEl.oninput = onPrice;
+  const viewBtn = root.querySelector("#mk-viewtog");
+  const syncViewBtn = () => { viewBtn.textContent = mktView === "compact" ? "▦ Cards" : "▤ Compact"; };
+  syncViewBtn();
+  viewBtn.onclick = () => {
+    mktView = mktView === "compact" ? "card" : "compact";
+    localStorage.setItem("mktView", mktView);
+    syncViewBtn(); loadMarketPage(true);
+  };
+  syncMktControls(root);
+  loadMarketPage(true);
+}
+
+async function loadMarketPage(reset) {
+  if (reset) { mktOffset = 0; loadEndingSoon(); }
+  const listEl = $("market-list"), pager = $("mk-pager");
+  if (!listEl) return;
+  listEl.classList.toggle("mk-compact", mktView === "compact");
+  if (reset) listEl.innerHTML = `<p class="stat-empty">Loading…</p>`;
   let data;
-  try { data = await fetch(`/api/market${qs}`).then(r => r.json()); }
-  catch { $("market-list").innerHTML = `<p class="stat-empty">Couldn't load the marketplace.</p>`; return; }
-  const ls = data.listings || [];
-  $("market-list").innerHTML = ls.length
-    ? ls.map(listingCard).join("")
-    : `<p class="stat-empty">${mktFilter.mine ? "You haven't listed anything yet." : "No open listings."} ` +
-      `<a href="#/market/new">Post one →</a></p>`;
+  try { data = await fetch(`/api/market?${mktQuery()}`).then(r => r.json()); }
+  catch {
+    listEl.innerHTML = `<p class="stat-empty">Couldn't load the marketplace.</p>`;
+    if (pager) pager.hidden = true; return;
+  }
+  const ls = data.listings || [], total = data.total || 0;
+  const render = mktView === "compact" ? listingRow : listingCard;
+  const cards = ls.map(render).join("");
+  if (reset) {
+    listEl.innerHTML = ls.length ? cards
+      : `<p class="stat-empty">${mktEmptyMsg()} <a href="#/market/new">Post one →</a></p>`;
+  } else if (cards) {
+    listEl.insertAdjacentHTML("beforeend", cards);
+  }
+  mktOffset += ls.length;
+  if (pager) {
+    if (mktOffset < total) {
+      pager.hidden = false;
+      pager.innerHTML = `<span class="mk-count">Showing ${mktOffset} of ${total}</span>` +
+        `<button class="ev-btn sm" id="mk-more">Load more</button>`;
+      $("mk-more").onclick = () => loadMarketPage(false);
+    } else if (total > MKT_PAGE) {
+      pager.hidden = false;
+      pager.innerHTML = `<span class="mk-count">Showing all ${total}</span>`;
+    } else pager.hidden = true;
+  }
 }
 
 async function renderMarketDetail(id) {
@@ -5030,12 +5289,13 @@ function mkSellerControls(l) {
 }
 
 function renderMarketDetailBody(l) {
-  let html = `<div class="ev-detail-title"><h2>${esc(l.item_name)} ${mkQtyTag(l)}</h2>${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div>` +
-    `<div class="ev-detail-meta">listed by <b>${esc(l.seller_name)}</b>${mkDeals(l.seller_deals)}</div>` +
+  let html = `<div class="ev-detail-title"><h2>${esc(l.item_name)} ${mkQtyTag(l)}</h2>${mkCraftBadge(l)}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div>` +
+    `<div class="ev-detail-meta">listed by <b class="mk-sellerlink" id="mk-seller" title="Show all from this seller">${esc(l.seller_name)}</b>${mkDeals(l.seller_deals)}</div>` +
     (l.note ? `<div class="ev-desc">${esc(l.note)}</div>` : "") + mkBanner();
   if (l.status === "open") html += mkOpenBlock(l);
   else if (l.status === "pending") html += mkPendingBlock(l);
   else html += mkClosedBlock(l);
+  html += mkCraftBlock(l);
   html += mkOffersBlock(l);
   if (l.can_edit) html += mkSellerControls(l);
   $("market-detail-body").innerHTML = html;
@@ -5058,6 +5318,7 @@ function wireMarketDetail(l) {
   const bItem = $("mk-barter-item");
   if (bItem) attachCatalogPicker(bItem.parentElement);
   const on = (eid, fn) => { const el = $(eid); if (el) el.onclick = fn; };
+  on("mk-seller", () => mktFilterBySeller(l.seller_id, l.seller_name));
   on("mk-buy", () => act(`/api/market/${id}/offer`, {}));
   on("mk-offer", () => {
     const amt = Number($("mk-offer-amt").value);
@@ -5093,7 +5354,8 @@ function marketFormHtml(l) {
   return `<div class="ev-form">` +
     `<div class="ev-field"><label>Item</label><span class="poi-pick"><input id="mk-f-item" class="ti" ` +
       `placeholder="search the catalog…" autocomplete="off"${picked} value="${l ? esc(l.item_name || "") : ""}"></span>` +
-      `<span class="ev-hint">Pick from the suggestions so it resolves to a catalog item.</span></div>` +
+      `<span class="ev-hint">Pick from the suggestions so it resolves to a catalog item.</span>` +
+      `<div id="mk-mv" class="mk-mv" hidden></div></div>` +
     `<div class="ev-form-grid">` +
       `<div class="ev-field"><label>Quantity</label><input id="mk-f-qty" class="ti" type="number" min="0" step="any" ` +
         `value="${l ? fmtQty(l.qty) : "1"}"></div>` +
@@ -5121,6 +5383,7 @@ function marketFormHtml(l) {
         `value="${l && l.want ? esc(l.want) : ""}" placeholder="e.g. 200 SCU Quantanium, or a Cutlass Black"></div></div>` +
     `<div class="ev-field"><label>Note (optional)</label><textarea id="mk-f-note" maxlength="500" ` +
       `placeholder="Condition, location, timing…">${l ? esc(l.note || "") : ""}</textarea></div>` +
+    mkCraftedFields(l) +
     `<p class="mk-banner">In-game <b>aUEC only</b> — never real money.</p>` +
     `<div class="ev-form-actions"><button id="mk-f-save" class="ev-btn primary">${l ? "Save changes" : "Post listing"}</button>` +
       `<button class="ev-btn" id="mk-f-cancel">Cancel</button>` +
@@ -5132,6 +5395,46 @@ function mkSyncModeFields() {
   document.querySelectorAll(".mk-mode-fields").forEach(el => { el.hidden = el.dataset.mode !== mode; });
 }
 
+// Optional crafted-item quality editor (SC 4.8): overall quality/band + free-form
+// stat rows. Collapsed unless the listing already carries an annotation.
+function mkStatRow(name, value) {
+  return `<div class="mk-statrow">` +
+    `<input class="ti mk-stat-name" placeholder="stat (e.g. Power output)" maxlength="40" value="${name ? esc(name) : ""}">` +
+    `<input class="ti mk-stat-val" placeholder="value (e.g. 12.5 MW)" maxlength="40" value="${value ? esc(value) : ""}">` +
+    `<button type="button" class="ev-btn sm mk-stat-rm" title="Remove">✕</button></div>`;
+}
+
+function mkCraftedFields(l) {
+  const a = (l && l.attributes) || {};
+  const has = a.quality != null || a.band != null || (a.stats || []).length > 0;
+  const rows = (a.stats || []).map(s => mkStatRow(s.name, s.value)).join("");
+  return `<details class="mk-craft-form"${has ? " open" : ""}><summary>Crafted item quality (optional)</summary>` +
+    `<p class="ev-hint">For SC 4.8 crafted components — advertise the quality your materials carried into the finished item.</p>` +
+    `<div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Quality (1–1000)</label><input id="mk-f-q" class="ti" type="number" min="1" max="1000" ` +
+        `value="${a.quality != null ? a.quality : ""}"></div>` +
+      `<div class="ev-field"><label>Band (1–8)</label><input id="mk-f-band" class="ti" type="number" min="1" max="8" ` +
+        `value="${a.band != null ? a.band : ""}"></div>` +
+    `</div>` +
+    `<label class="mk-stat-lbl">Stats</label><div id="mk-f-stats">${rows}</div>` +
+    `<button type="button" class="ev-btn sm" id="mk-f-addstat">+ Add stat</button></details>`;
+}
+
+function mkCollectCrafted() {
+  const crafted = {};
+  const q = $("mk-f-q"), band = $("mk-f-band");
+  if (q && q.value !== "") crafted.quality = Number(q.value);
+  if (band && band.value !== "") crafted.band = Number(band.value);
+  const stats = [];
+  document.querySelectorAll("#mk-f-stats .mk-statrow").forEach(r => {
+    const n = r.querySelector(".mk-stat-name").value.trim();
+    const v = r.querySelector(".mk-stat-val").value.trim();
+    if (n && v) stats.push({ name: n, value: v });
+  });
+  if (stats.length) crafted.stats = stats;
+  return crafted;   // always returned (even if empty) so an edit can clear it
+}
+
 function collectMarketForm() {
   const itemEl = $("mk-f-item");
   const item_id = itemEl.dataset.itemId;
@@ -5139,8 +5442,13 @@ function collectMarketForm() {
   const qty = Number($("mk-f-qty").value);
   if (!(qty > 0)) return { error: "Quantity must be greater than 0." };
   const mode = $("mk-f-mode").value;
+  const crafted = mkCollectCrafted();
+  if (crafted.quality != null && !(crafted.quality >= 1 && crafted.quality <= 1000))
+    return { error: "Crafted quality must be between 1 and 1000." };
+  if (crafted.band != null && !(crafted.band >= 1 && crafted.band <= 8))
+    return { error: "Crafted band must be between 1 and 8." };
   const payload = { item_id, qty, mode, unit: itemEl.dataset.unit || undefined,
-    note: $("mk-f-note").value.trim() || null };
+    note: $("mk-f-note").value.trim() || null, crafted };
   if (mode === "sale") {
     if ($("mk-f-price").value === "" || !(Number($("mk-f-price").value) >= 0)) return { error: "Enter a sale price." };
     payload.price_auec = Number($("mk-f-price").value);
@@ -5166,8 +5474,44 @@ function collectMarketForm() {
   return { payload };
 }
 
+// Suggested market value: a reference aUEC buy/sell carried on the picked catalog
+// item (from the in-game feeds), with a one-click "use" that fills the price field.
+function mkShowMarketValue(it) {
+  const mv = $("mk-mv");
+  if (!mv) return;
+  const p = it && it.price;
+  if (!p || (!p.buy && !p.sell)) { mv.hidden = true; mv.innerHTML = ""; return; }
+  const parts = [];
+  if (p.buy) parts.push(`<b>${Number(p.buy).toLocaleString()}</b> buy`);
+  if (p.sell) parts.push(`<b>${Number(p.sell).toLocaleString()}</b> sell`);
+  mv.innerHTML = `<span class="mk-mv-lbl">Market value:</span> ${parts.join(" · ")} aUEC` +
+    `<button type="button" class="mk-mv-use" id="mk-mv-use">use</button>`;
+  mv.hidden = false;
+  $("mk-mv-use").onclick = () => mkUseMarketPrice(p.buy || p.sell);
+}
+
+function mkUseMarketPrice(v) {
+  if (!v) return;
+  const mode = $("mk-f-mode").value;
+  const el = mode === "sale" ? $("mk-f-price") : mode === "auction" ? $("mk-f-start") : null;
+  if (el && !el.disabled) el.value = v;
+}
+
 function bindMarketForm(editId, onCancel) {
-  attachCatalogPicker($("mk-f-item").parentElement, it => { $("mk-f-item").dataset.unit = it.unit || ""; });
+  const itemEl = $("mk-f-item");
+  attachCatalogPicker(itemEl.parentElement, it => {
+    itemEl.dataset.unit = it.unit || "";
+    mkShowMarketValue(it);              // surface the feed's reference price
+  });
+  // Retyping a new search (without re-picking) drops the stale value hint.
+  itemEl.addEventListener("input", () => { if (!itemEl.dataset.itemId) mkShowMarketValue(null); });
+  const addStat = $("mk-f-addstat");
+  if (addStat) addStat.onclick = () => $("mk-f-stats").insertAdjacentHTML("beforeend", mkStatRow("", ""));
+  const stats = $("mk-f-stats");
+  if (stats) stats.addEventListener("click", e => {
+    const rm = e.target.closest(".mk-stat-rm");
+    if (rm) rm.closest(".mk-statrow").remove();
+  });
   mkSyncModeFields();
   const modeSel = $("mk-f-mode");
   if (modeSel) modeSel.onchange = mkSyncModeFields;

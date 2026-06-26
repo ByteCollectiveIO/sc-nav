@@ -108,13 +108,22 @@ def custom_item(row: dict) -> dict:
     }
 
 
-def build(commodity_names, ships, custom_rows, item_names=None) -> list[dict]:
+def build(commodity_names, ships, custom_rows, item_names=None,
+          prices=None) -> list[dict]:
     """The full merged catalog (feeds + custom), sorted by name. Custom items win
-    on an id clash so an org can override a feed name if they ever need to."""
+    on an id clash so an org can override a feed name if they ever need to. When
+    `prices` ({item_id: {"buy", "sell"}}) is given, each matching item is stamped
+    with a `price` reference — the marketplace's suggested market value (aUEC); the
+    value rides the in-memory catalog like `unit`, no new table."""
     by_id = {it["item_id"]: it for it in feed_items(commodity_names, ships, item_names)}
     for r in custom_rows or []:
         it = custom_item(r)
         by_id[it["item_id"]] = it
+    if prices:
+        for iid, it in by_id.items():
+            p = prices.get(iid)
+            if p and (p.get("buy") or p.get("sell")):
+                it["price"] = p
     return sorted(by_id.values(), key=lambda it: (it["name"] or "").lower())
 
 

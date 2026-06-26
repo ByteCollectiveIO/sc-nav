@@ -227,11 +227,24 @@ CREATE TABLE IF NOT EXISTS listings (
     buyer_id TEXT,                     -- set when a deal is struck (pending+)
     seller_confirmed INTEGER NOT NULL DEFAULT 0,   -- handoff confirmed by seller
     buyer_confirmed INTEGER NOT NULL DEFAULT 0,     -- handoff confirmed by buyer
+    -- Denormalized board columns (refresh_listing_denorm keeps them current) so the
+    -- browse board is pure SQL — filter/sort/page with no per-listing derivation.
+    sort_price REAL,                   -- display/sort price: sale=price_auec,
+                                       -- auction=high bid or start_price, barter=NULL
+    offer_count INTEGER NOT NULL DEFAULT 0,         -- active offers/bids on the listing
+    -- Optional crafted-item quality annotation (SC 4.8): JSON
+    -- {quality:1-1000, band:1-8, stats:[{name,value}]} so a seller can advertise a
+    -- crafted component's quality + per-stat values. Free-form like goals.line_items.
+    attributes TEXT,
     created_at TEXT, updated_at TEXT, completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS listings_status ON listings(status);
 CREATE INDEX IF NOT EXISTS listings_seller ON listings(seller_id);
 CREATE INDEX IF NOT EXISTS listings_item ON listings(item_id);
+-- NB: the listings_sort_price index is created in init() *after* _ensure_column
+-- adds sort_price — it can't live here, since on an upgrade this script runs before
+-- the column exists (the listings table is already present, so CREATE TABLE is a
+-- no-op and the column would be missing when the index references it).
 
 -- One row per bid / offer / barter counter against a listing. For sale+auction
 -- `amount_auec` is the aUEC bid/offer; for barter `offer_item_id` + `offer_note`
@@ -268,7 +281,15 @@ def init(db_path) -> None:
         _ensure_column("observations", "shard_id", "TEXT")
         _ensure_column("events", "event_location", "TEXT")
         _ensure_column("events", "signup_deadline", "TEXT")
+        denorm_added = _ensure_column("listings", "sort_price", "REAL")
+        denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column("listings", "attributes", "TEXT")
+        # Index the board's sort column now that it's guaranteed to exist (see the
+        # note in SCHEMA — it can't be created inside the schema script on upgrade).
+        _conn.execute("CREATE INDEX IF NOT EXISTS listings_sort_price ON listings(sort_price)")
         _migrate_inventory_allocations()
+        if denorm_added:                        # only on the boot that adds the columns
+            _backfill_listing_denorm()
 
 
 def _migrate_inventory_allocations() -> None:
@@ -290,10 +311,15 @@ def _migrate_inventory_allocations() -> None:
         _conn.execute("UPDATE inventory SET goal_id=NULL WHERE id=?", (r["id"],))
 
 
-def _ensure_column(table: str, column: str, decl: str) -> None:
+def _ensure_column(table: str, column: str, decl: str) -> bool:
+    """Add a column to an existing table if it's missing. Returns True when it
+    actually added it (i.e. this is the migration boot), so a caller can run a
+    one-time backfill only when the column was just introduced."""
     cols = {r["name"] for r in _conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
         _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        return True
+    return False
 
 
 def _j(v):
@@ -1080,14 +1106,63 @@ def delete_goal(goal_id: int) -> bool:
 
 
 _LISTING_EDITABLE = ("qty", "price_auec", "start_price", "buyout_auec", "ends_at",
-                      "want", "note", "status")
+                      "want", "note", "status", "attributes")
+_LISTING_JSON = ("attributes",)
 
 
 def _listing_row_to_dict(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["seller_confirmed"] = bool(d.get("seller_confirmed"))
     d["buyer_confirmed"] = bool(d.get("buyer_confirmed"))
+    d["attributes"] = _u(d.get("attributes"))     # JSON crafted-quality blob → dict
     return d
+
+
+def _recompute_denorm(listing_id: int) -> None:
+    """Recompute a listing's denormalized board columns from its current offers
+    (caller must hold _lock). `sort_price` is the board's display/sort price —
+    sale: the fixed ask; auction: the highest standing bid, else the start price
+    (matches derive_auction_state.high_bid, which is the plain max); barter: NULL
+    (no aUEC price). `offer_count` is the count of still-active offers."""
+    row = _conn.execute(
+        "SELECT mode, price_auec, start_price FROM listings WHERE id=?",
+        (listing_id,)).fetchone()
+    if row is None:
+        return
+    cnt = _conn.execute(
+        "SELECT COUNT(*) AS c FROM listing_offers WHERE listing_id=? AND status='active'",
+        (listing_id,)).fetchone()["c"]
+    if row["mode"] == "sale":
+        sort_price = row["price_auec"]
+    elif row["mode"] == "auction":
+        high = _conn.execute(
+            "SELECT MAX(amount_auec) AS m FROM listing_offers WHERE listing_id=? "
+            "AND status IN ('active','accepted')", (listing_id,)).fetchone()["m"]
+        sort_price = high if high is not None else row["start_price"]
+    else:                                       # barter — no aUEC price
+        sort_price = None
+    _conn.execute("UPDATE listings SET sort_price=?, offer_count=? WHERE id=?",
+                  (sort_price, int(cnt or 0), listing_id))
+
+
+def refresh_listing_denorm(listing_id: int) -> None:
+    """Public entry the endpoints call after any mutation (offer placed/withdrawn,
+    deal settled, auction lapsed, listing created/price-edited) to keep the board's
+    denormalized sort_price/offer_count current. Cheap; lets the board read stay
+    pure SQL with no per-listing derivation."""
+    with _lock, _conn:
+        _recompute_denorm(listing_id)
+
+
+def _backfill_listing_denorm() -> None:
+    """One-time reconcile of the denorm columns for listings created before the
+    columns existed — run only on the migration boot that adds them (init gates on
+    `_ensure_column`'s return). Recomputes from the offers, the source of truth.
+    Idempotent, but per-mutation maintenance keeps the columns current afterward, so
+    this never runs again."""
+    ids = [r["id"] for r in _conn.execute("SELECT id FROM listings").fetchall()]
+    for lid in ids:
+        _recompute_denorm(lid)
 
 
 def create_listing(d: dict) -> int:
@@ -1096,13 +1171,14 @@ def create_listing(d: dict) -> int:
         cur = _conn.execute(
             "INSERT INTO listings (seller_id, item_id, item_name, unit, qty, mode, "
             "price_auec, start_price, buyout_auec, ends_at, want, status, note, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "attributes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["seller_id"]), d["item_id"], d.get("item_name"), d.get("unit"),
              d.get("qty", 1), d.get("mode", "sale"), d.get("price_auec"),
              d.get("start_price"), d.get("buyout_auec"), d.get("ends_at"),
              d.get("want"), d.get("status", "open"), d.get("note"),
-             d.get("created_at"), d.get("updated_at")),
+             _j(d.get("attributes")), d.get("created_at"), d.get("updated_at")),
         )
+        _recompute_denorm(cur.lastrowid)        # seed the board columns
     return cur.lastrowid
 
 
@@ -1112,12 +1188,29 @@ def get_listing(listing_id: int) -> dict | None:
     return _listing_row_to_dict(row) if row else None
 
 
-def list_listings(mode: str | None = None, item_id: str | None = None,
-                  seller_id: str | None = None, status: str | None = None,
-                  open_only: bool = False) -> list[dict]:
-    """Listings, optionally filtered by mode / item / seller / status. `open_only`
-    is a convenience for the browse board (status='open'). Freshest first."""
-    q, where, params = "SELECT * FROM listings", [], []
+# Board sort modes → SQL ORDER BY. Price/expiry push their NULLs (barter has no
+# price; non-auctions have no end time) to the bottom regardless of direction so a
+# sort never buries real rows under blanks. Every clause ends with `id` for a
+# stable, deterministic page boundary.
+_LISTING_SORTS = {
+    "recent":     "created_at DESC, id DESC",
+    "oldest":     "created_at ASC, id ASC",
+    "price_asc":  "sort_price IS NULL, sort_price ASC, id DESC",
+    "price_desc": "sort_price IS NULL, sort_price DESC, id DESC",
+    "ending":     "ends_at IS NULL, ends_at ASC, id DESC",
+}
+
+# Item-kind filter values → the catalog id prefix they map to (the board filters by
+# the listing's `item_id` prefix — no catalog join needed, no schema change).
+_LISTING_KIND_PREFIX = {"commodity": "commodity:", "ship": "ship:",
+                        "item": "item:", "custom": "custom:"}
+
+
+def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
+                        q, kind, min_price, max_price):
+    """Build the shared WHERE clause (+ params) for list_listings / count_listings
+    so the browse and count queries can never drift apart."""
+    where, params = [], []
     if mode:
         where.append("mode=?"); params.append(mode)
     if item_id:
@@ -1128,12 +1221,51 @@ def list_listings(mode: str | None = None, item_id: str | None = None,
         where.append("status=?"); params.append(status)
     elif open_only:
         where.append("status='open'")
-    if where:
-        q += " WHERE " + " AND ".join(where)
-    q += " ORDER BY created_at DESC, id DESC"
+    if q:
+        # Escape LIKE metacharacters so a literal % or _ in the query doesn't act as
+        # a wildcard (escape the backslash first, then % and _).
+        needle = (q.strip().lower().replace("\\", "\\\\")
+                  .replace("%", "\\%").replace("_", "\\_"))
+        where.append("LOWER(item_name) LIKE ? ESCAPE '\\'"); params.append(f"%{needle}%")
+    prefix = _LISTING_KIND_PREFIX.get(kind)
+    if prefix:
+        where.append("item_id LIKE ?"); params.append(f"{prefix}%")
+    # Price range rides the denormalized sort_price (pure SQL — no post-derivation).
+    # A min/max necessarily excludes barter, which has no price.
+    if min_price is not None:
+        where.append("sort_price IS NOT NULL AND sort_price >= ?"); params.append(min_price)
+    if max_price is not None:
+        where.append("sort_price IS NOT NULL AND sort_price <= ?"); params.append(max_price)
+    return (" WHERE " + " AND ".join(where) if where else ""), params
+
+
+def list_listings(mode: str | None = None, item_id: str | None = None,
+                  seller_id: str | None = None, status: str | None = None,
+                  open_only: bool = False, q: str | None = None,
+                  kind: str | None = None, min_price: float | None = None,
+                  max_price: float | None = None, sort: str = "recent",
+                  limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
+    """Browse listings with optional filters, a sort, and paging. Filters: mode /
+    exact item / seller / status (or `open_only`), free-text `q` over the item name,
+    item `kind` (catalog-id prefix), and a `min_price`/`max_price` band over the
+    denormalized sort_price. `sort` is one of `_LISTING_SORTS` (default freshest).
+    `limit`/`offset` page the result. Returns `(rows, total)` where `total` is the
+    full unpaged match count, so the board can show "1–25 of N"."""
+    clause, params = _listing_filter_sql(mode, item_id, seller_id, status,
+                                         open_only, q, kind, min_price, max_price)
+    order = _LISTING_SORTS.get(sort, _LISTING_SORTS["recent"])
+    sql = f"SELECT * FROM listings{clause} ORDER BY {order}"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"; params = [*params, int(limit), int(max(0, offset))]
     with _lock:
-        rows = _conn.execute(q, params).fetchall()
-    return [_listing_row_to_dict(r) for r in rows]
+        rows = _conn.execute(sql, params).fetchall()
+        if limit is None:
+            total = len(rows)
+        else:
+            cparams = params[:-2]               # drop LIMIT/OFFSET for the count
+            total = _conn.execute(
+                f"SELECT COUNT(*) AS c FROM listings{clause}", cparams).fetchone()["c"]
+    return [_listing_row_to_dict(r) for r in rows], int(total)
 
 
 def update_listing(listing_id: int, fields: dict, updated_at: str) -> bool:
@@ -1143,11 +1275,12 @@ def update_listing(listing_id: int, fields: dict, updated_at: str) -> bool:
     if not cols:
         return False
     sets = ", ".join(f"{c}=?" for c in cols)
-    vals = [fields[c] for c in cols]
+    vals = [_j(fields[c]) if c in _LISTING_JSON else fields[c] for c in cols]
     with _lock, _conn:
         cur = _conn.execute(
             f"UPDATE listings SET {sets}, updated_at=? WHERE id=?",
             (*vals, updated_at, listing_id))
+        _recompute_denorm(listing_id)           # price/start edits move sort_price
     return cur.rowcount > 0
 
 
@@ -1161,6 +1294,7 @@ def settle_listing(listing_id: int, buyer_id: str | None, status: str,
             "buyer_confirmed=0, updated_at=? WHERE id=?",
             (status, str(buyer_id) if buyer_id is not None else None,
              updated_at, listing_id))
+        _recompute_denorm(listing_id)           # keep the board count/price in step
     return cur.rowcount > 0
 
 
@@ -1178,6 +1312,7 @@ def confirm_listing(listing_id: int, side: str, updated_at: str,
     params.append(listing_id)
     with _lock, _conn:
         cur = _conn.execute(f"UPDATE listings SET {sets} WHERE id=?", params)
+        _recompute_denorm(listing_id)
     return cur.rowcount > 0
 
 
@@ -1187,6 +1322,7 @@ def set_listing_status(listing_id: int, status: str, updated_at: str) -> bool:
         cur = _conn.execute(
             "UPDATE listings SET status=?, updated_at=? WHERE id=?",
             (status, updated_at, listing_id))
+        _recompute_denorm(listing_id)
     return cur.rowcount > 0
 
 
@@ -1209,6 +1345,28 @@ def completed_deals_count(member_id: str) -> int:
     return int(row["c"] or 0)
 
 
+def completed_deals_counts(member_ids) -> dict:
+    """Completed-deals count for several members in one query — the board's
+    reputation signal without an N+1 (one query for the whole page's sellers).
+    Returns {member_id: count}; a member with no completed deals maps to 0."""
+    ids = [str(m) for m in dict.fromkeys(member_ids) if m]
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT seller_id, buyer_id FROM listings WHERE status='completed' "
+            f"AND (seller_id IN ({ph}) OR buyer_id IN ({ph}))", (*ids, *ids)).fetchall()
+    counts = {i: 0 for i in ids}
+    idset = set(ids)
+    for r in rows:
+        if r["seller_id"] in idset:
+            counts[r["seller_id"]] += 1
+        if r["buyer_id"] in idset:
+            counts[r["buyer_id"]] += 1
+    return counts
+
+
 def add_offer(listing_id: int, bidder_id: str, amount_auec: float | None,
               offer_item_id: str | None, offer_item_name: str | None,
               offer_note: str | None, created_at: str) -> int:
@@ -1219,6 +1377,7 @@ def add_offer(listing_id: int, bidder_id: str, amount_auec: float | None,
             "VALUES (?,?,?,?,?,?,'active',?)",
             (listing_id, str(bidder_id), amount_auec, offer_item_id,
              offer_item_name, offer_note, created_at))
+        _recompute_denorm(listing_id)           # offer_count++ / auction high bid
     return cur.lastrowid
 
 
@@ -1243,6 +1402,10 @@ def set_offer_status(offer_id: int, status: str) -> bool:
     with _lock, _conn:
         cur = _conn.execute(
             "UPDATE listing_offers SET status=? WHERE id=?", (status, offer_id))
+        row = _conn.execute(
+            "SELECT listing_id FROM listing_offers WHERE id=?", (offer_id,)).fetchone()
+        if row is not None:
+            _recompute_denorm(row["listing_id"])    # withdraw/accept moves count/bid
     return cur.rowcount > 0
 
 
@@ -1253,6 +1416,7 @@ def reject_other_offers(listing_id: int, keep_offer_id: int) -> None:
         _conn.execute(
             "UPDATE listing_offers SET status='lost' WHERE listing_id=? "
             "AND id!=? AND status='active'", (listing_id, keep_offer_id))
+        _recompute_denorm(listing_id)
 
 
 # --- account deletion (privacy: erase a member) ----------------------------

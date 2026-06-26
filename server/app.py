@@ -342,6 +342,55 @@ def load_item_names() -> list[str]:
     return sorted({r["item_name"] for r in rows if r.get("item_name")})
 
 
+def _price_map_from_rows(rows, name_key: str) -> dict:
+    """Median buy/sell aUEC price per item name across a feed's rows — the items
+    feed lists one row per terminal, so the same item recurs at many prices; the
+    median is a robust central reference. Zero/blank prices are ignored. Returns
+    `{name: {"buy": int|None, "sell": int|None}}`."""
+    from statistics import median
+    buys, sells = {}, {}
+    for r in rows or []:
+        nm = r.get(name_key)
+        if not nm:
+            continue
+        b, s = r.get("price_buy"), r.get("price_sell")
+        if b:
+            buys.setdefault(nm, []).append(float(b))
+        if s:
+            sells.setdefault(nm, []).append(float(s))
+    out = {}
+    for nm in set(buys) | set(sells):
+        out[nm] = {"buy": round(median(buys[nm])) if buys.get(nm) else None,
+                   "sell": round(median(sells[nm])) if sells.get(nm) else None}
+    return out
+
+
+def load_item_prices() -> dict:
+    """Reference buy/sell price per equipment item from the cached items feed (the
+    name loader refreshed the cache, so this reads it without a second fetch). For
+    the marketplace 'market value' anchor — aUEC only."""
+    return _price_map_from_rows(_load_json_list(ITEMS_FILE), "item_name")
+
+
+def load_commodity_prices() -> dict:
+    """Reference buy/sell price per commodity from the cached commodities feed (one
+    row per commodity, so no median needed — but routed through the same shaper)."""
+    return _price_map_from_rows(_load_json_list(COMMODITIES_FILE), "name")
+
+
+def build_item_prices() -> dict:
+    """Catalog `item_id` → {buy, sell} aUEC reference, merged from the commodity and
+    equipment feeds, for the marketplace's suggested 'market value'. Keyed by the
+    same synthesized ids catalog.build uses, so a listing's item_id looks up here.
+    (Ships are priced inconsistently in aUEC and are left without a hint.)"""
+    out = {}
+    for nm, p in load_commodity_prices().items():
+        out[f"commodity:{catalog.slug(nm)}"] = p
+    for nm, p in load_item_prices().items():
+        out[f"item:{catalog.slug(nm)}"] = p
+    return out
+
+
 def load_harvestable_names() -> list[str]:
     """Sorted names of harvestable flora/natural commodities (uexcorp
     kind=="Natural" and is_harvestable==1) for the Add Fauna & Harvestables
@@ -565,6 +614,7 @@ commodity_names = load_commodity_names()
 harvestable_names = load_harvestable_names()
 ships = load_ships()
 item_names = load_item_names()
+item_prices = build_item_prices()
 fauna_names = load_fauna_names()
 biomes = load_biomes()
 
@@ -572,8 +622,11 @@ biomes = load_biomes()
 def rebuild_catalog() -> list[dict]:
     """The merged item catalog (commodity + ship + equipment feeds + custom rows),
     shared by the inventory/goals and marketplace apps. Rebuilt at startup and
-    whenever a custom item is added or the feeds are refreshed."""
-    return catalog.build(commodity_names, ships, db.list_catalog_items(), item_names)
+    whenever a custom item is added or the feeds are refreshed. Each item carries an
+    optional `price` reference (aUEC buy/sell from the feeds) for the marketplace's
+    suggested market value."""
+    return catalog.build(commodity_names, ships, db.list_catalog_items(), item_names,
+                         prices=item_prices)
 
 
 item_catalog = rebuild_catalog()
@@ -2338,6 +2391,22 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
 _LISTING_MODES = ("sale", "auction", "barter")
 
 
+class CraftStatIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)              # e.g. "Power output"
+    value: str = Field(min_length=1, max_length=40)            # free-form, e.g. "12.5 MW"
+
+
+class CraftedIn(BaseModel):
+    """Optional crafted-item quality annotation (SC 4.8 crafting). A crafted
+    component's quality rides from its materials (1–1000, in 8 bands) into its
+    per-stat values, so a seller can advertise an overall quality and/or band plus
+    a few finished-stat rows. Stored as a free-form JSON blob — no fixed schema, so
+    it survives whatever the in-game model turns out to expose."""
+    quality: int | None = Field(default=None, ge=1, le=1000)
+    band: int | None = Field(default=None, ge=1, le=8)
+    stats: list[CraftStatIn] = Field(default_factory=list, max_length=12)
+
+
 class ListingIn(BaseModel):
     item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
     qty: float = Field(default=1, gt=0, le=_MAX_QTY)
@@ -2349,6 +2418,7 @@ class ListingIn(BaseModel):
     want: str | None = Field(default=None, max_length=_NOTE_MAX)         # barter
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
+    crafted: CraftedIn | None = None                            # crafted-quality blob
 
 
 class ListingPatchIn(BaseModel):
@@ -2359,6 +2429,7 @@ class ListingPatchIn(BaseModel):
     ends_at: str | None = Field(default=None, max_length=_META_MAX)
     want: str | None = Field(default=None, max_length=_NOTE_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
+    crafted: CraftedIn | None = None       # present (even if empty) ⇒ replace/clear
 
 
 class OfferIn(BaseModel):
@@ -2374,7 +2445,34 @@ class OfferActionIn(BaseModel):
 _LISTING_PUBLIC = ("id", "seller_id", "item_id", "item_name", "unit", "qty", "mode",
                    "price_auec", "start_price", "buyout_auec", "ends_at", "want",
                    "status", "note", "buyer_id", "seller_confirmed", "buyer_confirmed",
-                   "created_at", "updated_at", "completed_at")
+                   "attributes", "created_at", "updated_at", "completed_at")
+
+# The columns a board card needs — a subset of _LISTING_PUBLIC, served without the
+# per-listing offer query (auction high-bid/count ride the denormalized columns).
+# `attributes` rides along so a card can show the "Crafted · Qn" badge.
+_LISTING_CARD = ("id", "seller_id", "item_id", "item_name", "unit", "qty", "mode",
+                 "price_auec", "start_price", "ends_at", "want", "status",
+                 "sort_price", "offer_count", "attributes", "created_at")
+
+
+def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
+    """Normalize a crafted-quality annotation into the stored JSON blob, or None if
+    it carries nothing. Drops blank stat rows; keeps quality/band only when set."""
+    if crafted is None:
+        return None
+    out: dict = {}
+    if crafted.quality is not None:
+        out["quality"] = int(crafted.quality)
+    if crafted.band is not None:
+        out["band"] = int(crafted.band)
+    stats = [{"name": s.name.strip(), "value": s.value.strip()}
+             for s in (crafted.stats or []) if s.name.strip() and s.value.strip()]
+    if stats:
+        out["stats"] = stats
+    return out or None
+
+_MARKET_PAGE = 25          # default board page size
+_MARKET_PAGE_MAX = 100     # cap a client-supplied ?limit=
 
 
 def _validate_listing(body: ListingIn) -> dict:
@@ -2388,6 +2486,7 @@ def _validate_listing(body: ListingIn) -> dict:
               "unit": catalog.valid_unit(body.unit) or item["unit"],
               "qty": body.qty, "mode": body.mode,
               "note": (body.note or "").strip() or None,
+              "attributes": _clean_crafted(body.crafted),
               "price_auec": None, "start_price": None, "buyout_auec": None,
               "ends_at": None, "want": None}
     if body.mode == "sale":
@@ -2480,18 +2579,71 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
     return view
 
 
+def _auction_time_up(listing: dict, now: datetime) -> bool:
+    """Whether an auction's clock has run out (a buyout is settled synchronously at
+    bid time, so time expiry is the only state the board has to resolve lazily)."""
+    ends = listing.get("ends_at")
+    if not ends:
+        return False
+    try:
+        return now >= datetime.fromisoformat(ends)
+    except ValueError:
+        return False
+
+
+def _listing_card(listing: dict, user: dict, deals: dict) -> dict:
+    """Lightweight board serializer: only the columns a card draws, with no
+    per-listing offer query. An auction's high bid / bid count come from the
+    denormalized `sort_price` / `offer_count` (kept current by
+    db.refresh_listing_denorm), so the board read is pure SQL."""
+    card = {k: listing.get(k) for k in _LISTING_CARD}
+    card["seller_name"] = _resolve_member_name(listing["seller_id"], None)
+    card["seller_deals"] = deals.get(str(listing["seller_id"]), 0)
+    card["is_seller"] = listing["seller_id"] == user["id"]
+    if listing["mode"] == "auction":
+        cnt = int(listing.get("offer_count") or 0)
+        # sort_price is the high bid once anyone has bid, else the start price.
+        card["auction"] = {"high_bid": listing.get("sort_price") if cnt else None,
+                           "bid_count": cnt}
+    else:
+        card["auction"] = None
+    return card
+
+
 @app.get("/api/market")
 async def list_market(mode: str | None = None, item: str | None = None,
-                      seller: str | None = None, user: dict = Depends(require_session)):
-    """The marketplace board. By default lists open listings (filterable by
-    `mode`/`item`); `seller=me` lists all of the caller's own listings (any
-    status). Each carries its derived auction state so cards render without an
-    N+1."""
-    if seller == "me":
-        rows = db.list_listings(mode=mode, item_id=item, seller_id=user["id"])
-    else:
-        rows = db.list_listings(mode=mode, item_id=item, open_only=True)
-    return {"listings": [_listing_view(r, user) for r in rows]}
+                      seller: str | None = None, q: str | None = None,
+                      kind: str | None = None, min_price: float | None = None,
+                      max_price: float | None = None, sort: str = "recent",
+                      limit: int = _MARKET_PAGE, offset: int = 0,
+                      user: dict = Depends(require_session)):
+    """The marketplace board — a paged, filterable, sortable slice of listings.
+    Defaults to open listings; `seller=me` lists all of the caller's own (any
+    status), `seller=<id>` another member's open listings. Filters: `mode`, exact
+    `item`, free-text `q` over the item name, `kind` (commodity/ship/item/custom),
+    and a `min_price`/`max_price` band. `sort` ∈ recent|oldest|price_asc|price_desc|
+    ending. Returns a lightweight card per listing (no N+1) plus `total` for paging.
+    A lapsed auction the page surfaces is settled lazily here (per-page, so only
+    lapsed ones touch their offers) and then drops off the open board."""
+    limit = max(1, min(int(limit), _MARKET_PAGE_MAX))
+    offset = max(0, int(offset))
+    mine = seller == "me"
+    rows, total = db.list_listings(
+        mode=mode, item_id=item, seller_id=user["id"] if mine else seller,
+        open_only=not mine, q=q, kind=kind, min_price=min_price,
+        max_price=max_price, sort=sort, limit=limit, offset=offset)
+    now = datetime.now(timezone.utc)
+    cards = []
+    for r in rows:
+        if r["mode"] == "auction" and r["status"] == "open" and _auction_time_up(r, now):
+            r = _resolve_listing_expiry(r, db.list_offers(r["id"]), now)
+            if not mine and r["status"] != "open":   # left the open board
+                total -= 1
+                continue
+        cards.append(r)
+    deals = db.completed_deals_counts([r["seller_id"] for r in cards])
+    return {"listings": [_listing_card(r, user, deals) for r in cards],
+            "total": total, "limit": limit, "offset": offset}
 
 
 @app.post("/api/market")
@@ -2540,6 +2692,8 @@ async def edit_listing(listing_id: int, body: ListingPatchIn,
         fields["qty"] = body.qty
     if body.note is not None:
         fields["note"] = body.note.strip() or None
+    if body.crafted is not None:           # present (even if empty) ⇒ replace/clear
+        fields["attributes"] = _clean_crafted(body.crafted)
     if listing["mode"] == "sale" and body.price_auec is not None:
         fields["price_auec"] = float(body.price_auec)
     if listing["mode"] == "barter" and body.want is not None:
@@ -3062,11 +3216,12 @@ async def _rebuild_nav() -> None:
 async def refresh_data(admin: dict = Depends(require_admin)):
     """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
     without restarting. Admin only."""
-    global raw_commodity_names, commodity_names, ships, item_names
+    global raw_commodity_names, commodity_names, ships, item_names, item_prices
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
     item_names = await asyncio.to_thread(load_item_names)
+    item_prices = await asyncio.to_thread(build_item_prices)   # fresh price refs
     refresh_catalog()   # feeds changed → rebuild the shared item catalog
     await _rebuild_nav()
     return {
