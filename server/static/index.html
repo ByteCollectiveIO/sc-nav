@@ -796,9 +796,8 @@
   #market-view, #market-root { display: contents; }
   #market-view[hidden] { display: none; }
   /* aUEC-only / coordination-board disclaimer (form + listings) */
-  .mk-banner { font-size: 12px; line-height: 1.5; color: var(--warn); border: 1px solid var(--warn);
-    border-radius: 6px; padding: 8px 12px; margin: 10px 0; background: rgba(255,179,0,.06); }
-  .mk-banner b { color: var(--warn); }
+  .mk-banner { font-size: 11px; line-height: 1.4; color: var(--dim); padding: 2px 0; margin: 2px 0 8px; }
+  .mk-banner b { color: var(--text); font-weight: 600; }
   /* mode chip — color-coded like the event categories */
   .mk-mode { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
     border-radius: 3px; padding: 1px 7px; border: 1px solid currentColor; }
@@ -905,8 +904,9 @@
   .mk-row { display: grid; grid-template-columns: 1fr auto 130px 150px 96px; gap: 12px; align-items: center;
     padding: 9px 14px; border-bottom: 1px solid var(--border); text-decoration: none; color: var(--text); }
   .mk-row:hover { background: var(--panel2); }
-  .mk-row-item { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mk-row-item .mk-craft { margin-left: 8px; vertical-align: middle; }
+  .mk-row-item { font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .mk-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .mk-row-item .mk-qty, .mk-row-item .mk-craft { flex: none; }
   .mk-row-price { font-variant-numeric: tabular-nums; text-align: right; }
   .mk-row-seller { color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mk-row-time { font-size: 12px; text-align: right; }
@@ -4975,7 +4975,8 @@ function mkRowPrice(l) {
 // Compact one-line row — the dense, scannable layout at volume.
 function listingRow(l) {
   return `<a class="mk-row" href="#/market/${l.id}">` +
-    `<span class="mk-row-item">${esc(l.item_name)} <span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>${mkCraftBadge(l)}</span>` +
+    `<span class="mk-row-item"><span class="mk-row-name">${esc(l.item_name)}</span>` +
+      `<span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>${mkCraftBadge(l)}</span>` +
     `<span class="mk-row-mode">${mkModeChip(l.mode)}</span>` +
     `<span class="mk-row-price">${mkRowPrice(l)}</span>` +
     `<span class="mk-row-seller">${esc(l.seller_name)}</span>` +
@@ -5110,6 +5111,7 @@ async function renderMarketBoard() {
     `<p class="rm-intro">Sell, auction &amp; barter items with your org — priced in <b>aUEC only</b>. ` +
     `Post a listing; another member buys, bids or makes an offer; you both settle the handoff in-game ` +
     `and mark it done. A closed, trusted market — no strangers, no real money.</p>` +
+    mkBanner() +
     `<div class="mk-filter">${tabs}<span class="mk-spacer"></span>` +
     `<button class="mk-tab" data-mine="1">My listings</button></div>` +
     `<div class="mk-search">` +
@@ -5128,7 +5130,7 @@ async function renderMarketBoard() {
         `<input class="mk-statf" type="search" placeholder="stat name or value…" title="crafted stat" autocomplete="off">` +
       `</div></details>` +
     `<div id="mk-sellerchip"></div>` +
-    mkBanner() + `</div>` +
+    `</div>` +
     `<div id="mk-endingsoon" hidden></div>` +
     `<div id="market-list" class="panel"><p class="stat-empty">Loading…</p></div>` +
     `<div id="mk-pager" class="mk-pager" hidden></div>`;
