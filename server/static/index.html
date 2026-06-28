@@ -958,6 +958,27 @@
     .mk-skel-bar { animation: none; background: var(--border); }
     #market-list.mk-busy { transition: none; }
   }
+  /* Coarse-pointer (touch) devices: lift small controls to a ~44px tap target
+     without disturbing the compact desktop instrument density (WCAG 2.5.5). The
+     dense table rows already clear the 24px AA floor, so they're left alone. */
+  @media (pointer: coarse) {
+    button, .ev-btn, .mk-tab, .seg button, .range-toggle button,
+    .mk-viewtog, .mk-mv-use, .mk-clear, .mk-tab, #nav-toggle {
+      min-height: 44px;
+    }
+    input.ti, select.sel, textarea,
+    .mk-search input, .mk-search select, .mk-craftrow input, .mk-craftrow select,
+    .ev-field input, .ev-field select, .rm-row input, .rm-row select {
+      min-height: 44px;
+    }
+    /* chips & icon-only affordances: grow the hit area, keep the glyph centred */
+    .ev-cat-chip, .route-chip,
+    .del, .edit, .ev-row-del, .pkg-del, .pick-del {
+      min-height: 44px; min-width: 44px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .poi-opt { padding-top: 12px; padding-bottom: 12px; }
+  }
 </style>
 </head>
 <body>
