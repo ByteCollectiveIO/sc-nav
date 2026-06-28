@@ -451,6 +451,22 @@
      bare-id display would otherwise override. */
   #route-run, #route-result { display: contents; }
   #route-run[hidden], #route-result[hidden] { display: none; }
+  /* first-run intro (teaches the 3-step flow; auto-hides once you have history) */
+  .route-intro { border-color: var(--accent); }
+  .route-intro .ri-head { display: flex; align-items: baseline; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; }
+  .route-intro .ri-head h2 { margin: 0; color: var(--accent); }
+  .route-intro .ri-dismiss { font-size: 12px; padding: 4px 10px; }
+  .route-intro .ri-lead { font-size: 13px; color: var(--text); line-height: 1.5; margin: 8px 0 0; }
+  .route-intro .ri-steps { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0 2px;
+    padding: 0; list-style: none; counter-reset: ri; }
+  .route-intro .ri-steps li { flex: 1 1 190px; counter-increment: ri; position: relative;
+    padding-left: 30px; font-size: 12px; color: var(--dim); line-height: 1.5; }
+  .route-intro .ri-steps li::before { content: counter(ri); position: absolute; left: 0; top: -1px;
+    width: 22px; height: 22px; border-radius: 50%; background: var(--panel2);
+    border: 1px solid var(--accent); color: var(--accent); font-size: 11px;
+    display: flex; align-items: center; justify-content: center; }
+  .route-intro .ri-steps b { color: var(--text); font-weight: 600; }
   .route-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .route-hint { font-size: 12px; margin: 6px 0 0; line-height: 1.5; }
   .route-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
@@ -526,11 +542,28 @@
   [role="button"]:focus-visible, [role="option"]:focus-visible {
     outline: 2px solid var(--accent); outline-offset: -2px; }
   .poi-opt .muted { font-size: 11px; }
-  /* plan result */
-  .route-summary { display: flex; flex-wrap: wrap; gap: 18px; align-items: baseline; }
-  .route-summary .metric { display: flex; flex-direction: column; }
-  .route-summary .metric .v { font-size: 22px; color: var(--accent); }
-  .route-summary .metric .l { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
+  /* plan result — one primary readout leads the glance (the hauler's bottom line),
+     logistics figures demote to a quiet strip, peak load reads as a capacity gauge. */
+  .metric { display: flex; flex-direction: column; }
+  .metric .v { font-variant-numeric: tabular-nums; }
+  .metric .l { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
+  .route-headline { display: flex; align-items: baseline; gap: 8px 18px; flex-wrap: wrap; }
+  .route-headline .rh-primary .v { font-size: 40px; line-height: 1; color: var(--accent); }
+  .route-headline .rh-primary .l { margin-top: 4px; }
+  .route-headline .rh-sub { font-size: 13px; color: var(--dim); }
+  .route-headline .rh-sub b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .route-substats { display: flex; flex-wrap: wrap; gap: 12px 22px; margin: 12px 0 2px; }
+  .route-substats .metric .v { font-size: 16px; color: var(--text); }   /* demoted: not cyan */
+  .route-substats .metric .l { font-size: 10px; }
+  .route-cap { margin: 12px 0 2px; max-width: 320px; }
+  .route-cap .cap-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .route-cap .cap-label { font-size: 10px; color: var(--dim); letter-spacing: 1px; }
+  .route-cap .cap-val { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .route-cap .cap-val b { font-size: 13px; }
+  .route-cap .cap-track { height: 6px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden; margin-top: 5px; }
+  .route-cap .cap-fill { height: 100%; background: var(--good); }
+  .route-cap.over .cap-fill { background: var(--warn); }
   .route-feasible { color: var(--good); } .route-infeasible { color: var(--bad); }
   .route-warn { color: var(--warn); }
   .route-stop { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
@@ -573,7 +606,7 @@
   .run-skip { font-size: 12px; margin-top: 6px; }
   /* contract grouping (display-only colour coding) */
   .contract-chip { display: inline-block; font-size: 10px; letter-spacing: .5px; padding: 0 6px;
-    border-radius: 10px; color: var(--cc); border: 1px solid var(--cc); vertical-align: middle;
+    border-radius: 8px; color: var(--cc); border: 1px solid var(--cc); vertical-align: middle;
     margin-left: 4px; white-space: nowrap; }
   .completes { font-size: 12px; color: var(--good); margin-top: 4px; }
   .run-hold { font-size: 12px; margin: 8px 0 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -1652,6 +1685,19 @@
 
   <div id="route-view" hidden>
     <div id="route-run" hidden></div>
+    <div id="route-intro" class="panel route-intro" hidden>
+      <div class="ri-head"><h2>PLAN A CARGO RUN</h2>
+        <button id="route-intro-dismiss" class="ri-dismiss" title="hide this">Got it ✕</button></div>
+      <p class="ri-lead">Turn your hauling contracts into one optimized run — the best stop
+        order, whether it all fits your ship, and what it pays.</p>
+      <ol class="ri-steps">
+        <li><b>Set your ship</b> — pick it and confirm usable SCU, so we know what fits.</li>
+        <li><b>Add a package per contract line</b> — commodity, amount, and from → to, straight
+          off the in-game contract.</li>
+        <li><b>Plan</b> — get the stop order, a capacity check, and the payout. Then run it
+          stop-by-stop in the navigator.</li>
+      </ol>
+    </div>
     <div class="panel">
       <h2>SHIP</h2>
       <div class="route-row">
@@ -1666,8 +1712,7 @@
         <button id="route-ship-save" title="remember this usable SCU for the ship">remember</button>
         <span id="route-ship-msg" class="muted" style="font-size:12px;"></span>
       </div>
-      <p class="muted route-hint">Stated cargo grid is prefilled; override it with what you can
-        actually stuff, and we'll remember it for this ship.</p>
+      <p class="muted route-hint">Override the prefilled SCU with what actually fits — remembered per ship.</p>
     </div>
 
     <div class="panel">
@@ -1681,22 +1726,20 @@
         <button id="route-here">📍 my current location</button>
         <span id="route-start-msg" class="muted" style="font-size:12px;"></span>
       </div>
-      <p class="muted route-hint">Where the route begins, so the first hop is from where you actually
-        are. Leave blank to begin at the most efficient first stop.</p>
+      <p class="muted route-hint">Leave blank to begin at the most efficient first stop.</p>
     </div>
 
     <div class="panel">
       <h2>PACKAGES</h2>
-      <p class="muted route-hint">One row per cargo line. <b>From</b> → <b>To</b> reads straight
-        off the in-game contract; we visit shared stops once. For the rare contract that gives a
-        commodity total spread over several pickup spots without saying how much is at each, use
-        <b>multi-pickup</b> — enter the total once and list every pickup.</p>
+      <p class="muted route-hint">One row per contract line — <b>from</b> → <b>to</b> straight off
+        the contract. Shared stops are visited once.</p>
       <div id="route-pkgs"></div>
       <datalist id="route-commodities"></datalist>
       <datalist id="route-contracts"></datalist>
       <div class="route-add-row" style="margin-top:8px;">
         <button id="route-add-pkg">+ add package</button>
-        <button id="route-add-group">+ add multi-pickup delivery</button>
+        <button id="route-add-group"
+          title="For a contract that gives a commodity total across several pickup spots without saying how much is at each — enter the total once, then list every pickup.">+ add multi-pickup delivery</button>
       </div>
       <div id="route-rewards" hidden></div>
       <div class="route-actions">
@@ -3245,6 +3288,7 @@ async function loadRoutePlanner() {
   }
   if (!routeWired) wireRoutePlanner();
   if (!$("route-pkgs").children.length) addPkgRow();
+  renderRouteIntro();
   loadRouteHistory();
   // Restore an in-progress run (resumes across reload / device switch).
   try {
@@ -3260,7 +3304,20 @@ async function loadRouteHistory() {
     routeHistory = await fetch("/api/route/history").then(r => r.json());
   } catch { return; }
   renderRouteHistory();
+  renderRouteIntro();       // a returning hauler (has history) doesn't need the intro
   rebuildCommodityList();   // float the player's most-hauled commodities to the top
+}
+
+// The first-run guide: shown to a hauler with no run history who hasn't dismissed
+// it. Once you've completed a run (or have frequent lanes), the RECENT HAULS panel
+// is the faster entry point, so the intro steps out of the way for good.
+function renderRouteIntro() {
+  const el = $("route-intro");
+  if (!el) return;
+  const dismissed = localStorage.getItem("route_intro_dismissed");
+  const hasHistory = routeHistory && ((routeHistory.runs && routeHistory.runs.length)
+    || (routeHistory.picks && routeHistory.picks.lanes && routeHistory.picks.lanes.length));
+  el.hidden = !!dismissed || !!hasHistory;
 }
 
 // Rebuild the commodity datalist as: the player's most-hauled commodities first,
@@ -3397,6 +3454,10 @@ function wireRoutePlanner() {
   $("route-add-group").onclick = () => addGroupRow();
   $("route-plan").onclick = planRoute;
   $("route-clear").onclick = clearRoute;
+  $("route-intro-dismiss").onclick = () => {
+    localStorage.setItem("route_intro_dismissed", "1");
+    $("route-intro").hidden = true;
+  };
   // Start-from controls: a POI picker and a "use my live position" toggle (the
   // two are mutually exclusive — choosing a POI cancels an armed/live start).
   attachPoiPicker($("route-start-poi").parentElement, cancelStartHere);
@@ -3805,8 +3866,11 @@ function routeStepper(stops, active) {
 
 // Contract grouping is display-only: each distinct label gets a stable colour so
 // the player can eyeball which packages belong together and which contract a
-// dropoff completes.
-const CONTRACT_PALETTE = ["#4fc3f7", "#ffb74d", "#66bb6a", "#ba68c8", "#f06292", "#4db6ac", "#ff8a65", "#9575cd"];
+// dropoff completes. This is its own "contract identity" colour axis — the hues
+// only tell contracts apart, so they deliberately avoid the semantic vocabulary:
+// none alias cyan (the live/action voice), good-green (load), warn-amber, bad-red
+// or sel-gold, which would muddy those fixed meanings on a chip.
+const CONTRACT_PALETTE = ["#7e9cff", "#ff8a65", "#4db6ac", "#ba68c8", "#ec88b0", "#9575cd", "#a1887f", "#90a4ae"];
 let contractColors = {};
 function assignContractColors(stops) {
   contractColors = {};
@@ -3818,7 +3882,7 @@ function assignContractColors(stops) {
 }
 function contractChip(label) {
   if (!label) return "";
-  return ` <span class="contract-chip" style="--cc:${contractColors[label] || "#7b8a9e"}">${esc(label)}</span>`;
+  return ` <span class="contract-chip" style="--cc:${contractColors[label] || "var(--dim)"}">${esc(label)}</span>`;
 }
 // Cargo descriptor for a package line. A multi-pickup group shows its delivery
 // total (collected across several stops) rather than the per-row 0 SCU: at a
@@ -3858,15 +3922,28 @@ function renderPlan(res) {
     out.innerHTML = h; out.hidden = false; return;
   }
   const peakClass = sm.peak_load_scu > sm.usable_scu ? "route-warn" : "route-feasible";
-  h += `<div class="route-summary">`
-    + metric(sm.num_stops, "STOPS")
-    + metric(sm.num_packages, "PACKAGES")
-    + metric(`<span class="${peakClass}">${sm.peak_load_scu}</span><span class="l" style="display:inline"> / ${sm.usable_scu}</span>`, "PEAK SCU")
-    + metric(fmtGm(sm.total_distance_m), "QT DISTANCE")
-    + metric(fmtDur(sm.total_time_s), "EST. TIME")
-    + (sm.total_reward ? metric(fmtAuec(sm.total_reward), "PAYOUT") : "")
-    + (sm.auec_per_hour ? metric(fmtAuec(sm.auec_per_hour), "aUEC / HR") : "")
+  const overCap = sm.peak_load_scu > sm.usable_scu;
+  // Lead with the one number a hauler plans for: the payout when contracts have
+  // rewards, otherwise the trip's time cost. Everything else is supporting detail.
+  const primary = sm.total_reward
+    ? { v: fmtAuec(sm.total_reward), l: "PAYOUT" }
+    : { v: fmtDur(sm.total_time_s), l: "EST. TIME" };
+  h += `<div class="route-headline"><div class="rh-primary metric">`
+    + `<span class="v">${primary.v}</span><span class="l">${primary.l}</span></div>`
+    + (sm.total_reward && sm.auec_per_hour
+        ? `<div class="rh-sub"><b>${fmtAuec(sm.auec_per_hour)}</b> aUEC/hr</div>` : "")
     + `</div>`;
+  // Secondary logistics strip (quiet, tabular). Omit whichever figure is primary.
+  const sub = [metric(sm.num_stops, "STOPS"), metric(sm.num_packages, "PACKAGES"),
+               metric(fmtGm(sm.total_distance_m), "QT DISTANCE")];
+  if (sm.total_reward) sub.push(metric(fmtDur(sm.total_time_s), "EST. TIME"));
+  h += `<div class="route-substats">` + sub.join("") + `</div>`;
+  // Peak load reads as the capacity constraint it is — a gauge, not a headline.
+  const capPct = sm.usable_scu ? Math.min(100, Math.round(sm.peak_load_scu / sm.usable_scu * 100)) : 0;
+  h += `<div class="route-cap${overCap ? " over" : ""}">`
+    + `<div class="cap-row"><span class="cap-label">PEAK LOAD</span>`
+    + `<span class="cap-val"><b class="${peakClass}">${sm.peak_load_scu}</b> / ${sm.usable_scu} SCU</span></div>`
+    + `<div class="cap-track"><div class="cap-fill" style="width:${capPct}%"></div></div></div>`;
   if (sm.start)
     h += `<p class="route-hint muted">Starting from <b>${esc(sm.start)}</b>.</p>`;
   if (sm.min_capacity_scu < sm.peak_load_scu)
