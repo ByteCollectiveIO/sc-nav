@@ -13,6 +13,7 @@
     --sel: #ffd54f;  /* gold: currently-selected destination (map ring + row) */
     --barter: #c08af0; /* marketplace: barter listing mode */
     --craft: #e0a64f;  /* marketplace: crafted-item quality accents */
+    --ink-on-accent: #07101a; /* near-black ink laid over cyan/gold/red fills */
     /* Render native controls (date/time pickers, <select> dropdowns) dark so
        they match the site instead of the OS default gray/white menus. */
     color-scheme: dark;
@@ -72,7 +73,7 @@
 
   /* destructive action button (e.g. delete account) */
   .danger-btn { border-color: var(--bad); color: var(--bad); }
-  .danger-btn:hover { background: var(--bad); color: #07101a; border-color: var(--bad); }
+  .danger-btn:hover { background: var(--bad); color: var(--ink-on-accent); border-color: var(--bad); }
 
   /* small Terms/Privacy links under the login splash disclaimer */
   .login-card .legal-links { margin-top: 12px; font-size: 12px; }
@@ -98,7 +99,7 @@
   button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 12px; cursor: pointer; }
   button:hover { border-color: var(--accent); }
-  button.active { background: var(--accent); color: #07101a; border-color: var(--accent); }
+  button.active { background: var(--accent); color: var(--ink-on-accent); border-color: var(--accent); }
 
   input.ti, select.sel { padding: 8px 10px; font: inherit; font-size: 13px;
     background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
@@ -124,7 +125,7 @@
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .seg button { border: none; border-radius: 0; border-right: 1px solid var(--border); }
   .seg button:last-child { border-right: none; }
-  .seg button.on { background: var(--accent); color: #07101a; }
+  .seg button.on { background: var(--accent); color: var(--ink-on-accent); }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: var(--dim); font-weight: normal; font-size: 11px;
@@ -202,7 +203,7 @@
   .range-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .range-toggle button { background: var(--panel2); border: 0; border-radius: 0; color: var(--dim);
     padding: 5px 12px; font-size: 12px; cursor: pointer; }
-  .range-toggle button.active { background: var(--accent); color: #06223a; cursor: default; }
+  .range-toggle button.active { background: var(--accent); color: var(--ink-on-accent); cursor: default; }
   .lb-head-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
   .lb-seg.auec { background: var(--warn); }
   .lb-seg.rate { background: var(--accent); }
@@ -283,7 +284,7 @@
   #heatmap-legend { font-size: 11px; color: var(--dim); display: none; gap: 12px;
     flex-wrap: wrap; align-items: center; margin-top: 6px; }
   .hm-key { display: inline-flex; align-items: center; gap: 5px; }
-  .hm-key i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+  .hm-key i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
   .hm-grad { display: inline-block; width: 90px; height: 11px; border-radius: 3px; }
 
   /* account + login */
@@ -407,7 +408,7 @@
   .setup pre { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
     padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
   .setup pre code { background: none; border: none; padding: 0; color: var(--good); }
-  .setup .dl-btn { display: inline-block; background: var(--accent); color: #06222e;
+  .setup .dl-btn { display: inline-block; background: var(--accent); color: var(--ink-on-accent);
     border: none; border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
     font-weight: bold; cursor: pointer; text-decoration: none; margin: 4px 0; }
   .kbd { background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px;
@@ -510,7 +511,7 @@
     font-size: 12px; margin-bottom: 4px; }
   #route-session-reset { font-size: 12px; padding: 5px 12px; font-weight: 600;
     color: var(--accent); border-color: var(--accent); }
-  #route-session-reset:hover { background: var(--accent); color: #07101a; }
+  #route-session-reset:hover { background: var(--accent); color: var(--ink-on-accent); }
   /* POI autocomplete */
   .poi-pick { position: relative; flex: 1; min-width: 150px; display: flex; }
   .poi-pick .ti { width: 100%; }
@@ -563,7 +564,7 @@
   .run-stop .seq { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--panel2);
     border: 1px solid var(--border); color: var(--accent); display: flex; align-items: center;
     justify-content: center; font-size: 12px; }
-  .run-stop.active .seq { background: var(--accent); color: #07101a; border-color: var(--accent); }
+  .run-stop.active .seq { background: var(--accent); color: var(--ink-on-accent); border-color: var(--accent); }
   .run-stop.past .seq { color: var(--good); }
   .run-arrived { color: var(--warn); font-size: 13px; margin: 8px 0 4px; }
   .run-check { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 5px 0; cursor: pointer; }
@@ -593,7 +594,7 @@
   .route-stepper .step::before { content: ""; position: absolute; top: 13px; left: -50%;
     width: 100%; height: 2px; background: var(--border); z-index: 0; }
   .route-stepper .step:first-child::before { display: none; }
-  .route-stepper .step.past .dot { background: var(--good); border-color: var(--good); color: #07101a; }
+  .route-stepper .step.past .dot { background: var(--good); border-color: var(--good); color: var(--ink-on-accent); }
   .route-stepper .step.past::before { background: var(--good); }
   .route-stepper .step.active .dot { border-color: var(--accent); color: var(--accent);
     box-shadow: 0 0 0 3px rgba(79, 195, 247, .2); }
@@ -613,9 +614,9 @@
     border: 1px solid var(--border); background: none; color: var(--text); text-decoration: none; }
   .ev-btn:hover { border-color: var(--accent); color: var(--accent); }
   .ev-btn.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-  .ev-btn.primary:hover { background: var(--accent); color: #07101a; }
+  .ev-btn.primary:hover { background: var(--accent); color: var(--ink-on-accent); }
   .ev-btn.danger { border-color: var(--bad); color: var(--bad); }
-  .ev-btn.danger:hover { background: var(--bad); color: #07101a; }
+  .ev-btn.danger:hover { background: var(--bad); color: var(--ink-on-accent); }
   .ev-back { display: inline-block; font-size: 12px; color: var(--dim);
     text-decoration: none; margin-bottom: 10px; }
   .ev-back:hover { color: var(--accent); }
@@ -636,11 +637,14 @@
     border: 1px solid var(--border); }
   .ev-phase-open { color: var(--good); border-color: var(--good); }
   .ev-phase-closed { color: var(--warn); border-color: var(--warn); }
-  .ev-phase-live { color: #07101a; background: var(--accent); border-color: var(--accent);
+  .ev-phase-live { color: var(--ink-on-accent); background: var(--accent); border-color: var(--accent);
     animation: ev-live-pulse 1.6s ease-in-out infinite; }
   .ev-phase-ended { color: var(--dim); border-color: var(--border); }
   .ev-phase-cancelled { color: var(--bad); border-color: var(--bad); }
   @keyframes ev-live-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+  /* the LIVE badge is a filled cyan chip on its own — the pulse is pure emphasis,
+     so it's safe to simply stop it for reduced-motion users (badge stays legible) */
+  @media (prefers-reduced-motion: reduce) { .ev-phase-live { animation: none; } }
   /* event card */
   .ev-card { display: block; text-decoration: none; color: var(--text);
     padding: 12px 0; border-top: 1px solid var(--border); }
