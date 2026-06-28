@@ -14,6 +14,7 @@
     --barter: #c08af0; /* marketplace: barter listing mode */
     --craft: #e0a64f;  /* marketplace: crafted-item quality accents */
     --ink-on-accent: #07101a; /* near-black ink laid over cyan/gold/red fills */
+    --accent-wash: rgba(79, 195, 247, 0.12); /* 12% cyan — active tab/pill fill */
     /* Render native controls (date/time pickers, <select> dropdowns) dark so
        they match the site instead of the OS default gray/white menus. */
     color-scheme: dark;
@@ -301,7 +302,15 @@
   /* app launcher (home) */
   .launcher { max-width: 760px; margin: 0 auto; }
   .launcher-head { color: var(--accent); letter-spacing: 2px; font-size: 18px;
-    margin: 4px 0 18px; text-align: center; }
+    margin: 4px 0 6px; text-align: center; }
+  .launcher-sub { color: var(--dim); font-size: 13px; line-height: 1.6; text-align: center;
+    max-width: 520px; margin: 0 auto 14px; }
+  /* returning-user accelerator: jump straight back into the last app you used */
+  .launcher-resume { display: block; width: max-content; max-width: 100%; margin: 0 auto 18px;
+    font-size: 13px; padding: 6px 14px; border: 1px solid var(--accent); border-radius: 6px;
+    color: var(--accent); text-decoration: none; }
+  .launcher-resume:hover { background: var(--accent-wash); }
+  .launcher-resume[hidden] { display: none; }
   .app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 18px; }
   .app-card { position: relative; display: flex; flex-direction: column; align-items: center;
@@ -311,13 +320,28 @@
     transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s; }
   a.app-card:hover { border-color: var(--accent); transform: translateY(-2px);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
-  .app-logo { width: 160px; height: auto; border-radius: 10px; }
+  .app-logo { width: 160px; height: auto; border-radius: 8px; }
   .app-name { font-size: 16px; letter-spacing: 1px; color: var(--accent); }
   .app-desc { font-size: 12px; color: var(--dim); line-height: 1.55; }
   .app-card.disabled { cursor: default; opacity: 0.55; filter: grayscale(0.6); }
   .app-badge { position: absolute; top: 10px; right: 10px; font-size: 10px;
-    letter-spacing: 1px; text-transform: uppercase; padding: 2px 8px; border-radius: 10px;
+    letter-spacing: 1px; text-transform: uppercase; padding: 2px 8px; border-radius: 8px;
     background: var(--panel2); border: 1px solid var(--border); color: var(--warn); }
+  /* "Start here" cue on the primary app — accent, top-left so it clears the soon badge */
+  .app-badge.start { left: 10px; right: auto; color: var(--accent); border-color: var(--accent); }
+  /* restrained entrance for the first-impression surfaces (login card + launcher
+     cards). Default end-state is visible, so content never ships blank if motion
+     is suppressed; the keyframe only adds a fade + small rise on appearance. */
+  .login-card { animation: entrance-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .app-card { animation: entrance-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .app-grid > .app-card:nth-child(2) { animation-delay: 0.05s; }
+  .app-grid > .app-card:nth-child(3) { animation-delay: 0.10s; }
+  .app-grid > .app-card:nth-child(4) { animation-delay: 0.15s; }
+  .app-grid > .app-card:nth-child(5) { animation-delay: 0.20s; }
+  @keyframes entrance-rise { from { opacity: 0; transform: translateY(8px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .login-card, .app-card { animation: none; }
+  }
   /* unofficial-fansite / CIG trademark disclaimer (login splash + launcher) */
   .fansite-disclaimer { max-width: 620px; margin: 28px auto 0; text-align: center;
     font-size: 10px; line-height: 1.6; color: var(--dim); }
@@ -642,7 +666,7 @@
   /* Pronounced screen/form header (overrides the dim, tiny default panel h2).
      Shared by the EVENTS board header and the CREATE/EDIT EVENT form title. */
   h2.ev-screen-h { font-size: 22px; font-weight: 700; letter-spacing: 1px;
-    color: var(--sel); text-transform: none; }
+    color: var(--accent); text-transform: none; }
   .ev-btn { font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--border); background: none; color: var(--text); text-decoration: none; }
   .ev-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -685,13 +709,20 @@
   .ev-card:hover .ev-title { color: var(--accent); }
   .ev-card-top { display: flex; align-items: baseline; justify-content: space-between;
     gap: 10px; flex-wrap: wrap; }
-  .ev-title { font-size: 16px; font-weight: 600; color: var(--sel); }
+  .ev-title { font-size: 16px; font-weight: 600; color: var(--text); }
   .ev-chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .ev-meta { font-size: 12px; color: var(--dim); margin: 4px 0 8px; }
   .ev-fill { display: flex; flex-direction: column; gap: 5px; }
   .ev-players { font-size: 13px; color: var(--text); }
   .ev-players.met { color: var(--good); }
   .ev-players .ev-min { color: var(--dim); font-size: 11px; }
+  /* board card: one summary fill bar + a "needs" line (per-role bars live on detail) */
+  .ev-card-bar { height: 6px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden; max-width: 320px; }
+  .ev-card-bar > span { display: block; height: 100%; background: var(--accent); }
+  .ev-card-bar.met > span { background: var(--good); }
+  .ev-card-needs { font-size: 12px; color: var(--warn); }
+  .ev-card-needs.full { color: var(--good); }
   .ev-cancelled { color: var(--bad); font-weight: 600; }
   /* per-role mini bars */
   .ev-role { display: grid; grid-template-columns: 130px 1fr 56px; gap: 9px;
@@ -717,8 +748,8 @@
   .ev-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
   .ev-cal-dow { font-size: 10px; color: var(--dim); text-align: center; padding: 2px 0;
     letter-spacing: .5px; }
-  .ev-cal-cell { position: relative; aspect-ratio: 1; display: flex; align-items: center;
-    justify-content: center; font-size: 12px; color: var(--dim); border-radius: 5px;
+  .ev-cal-cell { position: relative; min-height: 46px; display: flex; align-items: center;
+    justify-content: center; font-size: 12px; color: var(--dim); border-radius: 4px;
     border: 1px solid transparent; }
   .ev-cal-cell.has { color: var(--text); cursor: pointer; border-color: var(--border);
     background: var(--panel2); }
@@ -733,9 +764,17 @@
     color: var(--dim); margin-bottom: 8px; }
   /* detail */
   .ev-detail-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  .ev-detail-title h2 { margin: 0; color: var(--sel); }
-  .ev-detail-meta { font-size: 13px; color: var(--dim); margin: 8px 0; line-height: 1.7; }
-  .ev-detail-meta b { color: var(--text); font-weight: 600; }
+  .ev-detail-title h2 { margin: 0; color: var(--text); }
+  /* detail meta: a scannable grid of glyph + value items, leading with when/where/
+     crew; secondary facts (signups-close/duration/organizer) sit quieter below.
+     Restrained monochrome glyphs (aria-hidden) replace the old colourful emoji. */
+  .ev-meta-grid { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 8px 0 2px; font-size: 13px; }
+  .ev-meta-grid.secondary { font-size: 12px; margin: 4px 0 8px; }
+  .ev-m { color: var(--dim); }
+  .ev-m b { color: var(--text); font-weight: 600; }
+  .ev-mi { font-style: normal; color: var(--dim); margin-right: 6px; display: inline-block;
+    width: 1em; text-align: center; }
+  .ev-m-tz { color: var(--dim); font-size: 11px; }
   .ev-desc { font-size: 14px; line-height: 1.6; margin: 10px 0; white-space: pre-wrap; }
   .ev-section-h { font-size: 11px; color: var(--dim); letter-spacing: 1px; text-transform: uppercase;
     margin: 16px 0 8px; }
@@ -786,7 +825,7 @@
     user-select: none; background: var(--panel2); }
   .ev-cat-chip:hover { border-color: var(--accent); color: var(--text); }
   .ev-cat-chip.on { border-color: var(--accent); color: var(--accent);
-    background: rgba(79,195,247,.12); font-weight: 600; }
+    background: var(--accent-wash); font-weight: 600; }
   .ev-cat-chip input { display: none; }
   .ev-roster { display: flex; flex-direction: column; gap: 8px; }
   .ev-roster-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -804,11 +843,14 @@
   .rm-tab { font-size: 13px; padding: 6px 14px; border-radius: 6px; text-decoration: none;
     border: 1px solid var(--border); color: var(--dim); }
   .rm-tab:hover { border-color: var(--accent); color: var(--accent); }
-  .rm-tab.on { border-color: var(--accent); color: var(--accent); background: rgba(79,195,247,.12);
+  .rm-tab.on { border-color: var(--accent); color: var(--accent); background: var(--accent-wash);
     font-weight: 600; }
-  /* priority chip: 1 (highest) is hot, 10 (lowest) is cool. Ramp set inline. */
+  /* priority tier chip: High = caution-amber (the "attention" register), Med/Low
+     stay quiet. Never red — red is reserved for overdue, so the two don't blur. */
   .rm-prio { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
-    border-radius: 3px; padding: 1px 7px; border: 1px solid currentColor; }
+    border-radius: 3px; padding: 1px 7px; border: 1px solid var(--border); color: var(--dim); }
+  .rm-prio.high { color: var(--warn); border-color: var(--warn); }
+  .rm-prio.low { opacity: .75; }
   /* deadline countdown */
   .rm-due { font-size: 12px; color: var(--dim); }
   .rm-due.soon { color: var(--warn); }
@@ -819,10 +861,20 @@
   .rm-status.archived { color: var(--dim); }
   /* overall fill bar (bigger than the per-line bars) */
   .rm-bar { height: 10px; background: var(--panel2); border: 1px solid var(--border);
-    border-radius: 5px; overflow: hidden; margin-top: 6px; }
+    border-radius: 4px; overflow: hidden; margin-top: 6px; }
   .rm-bar > span { display: block; height: 100%; background: var(--accent); }
   .rm-bar.met > span { background: var(--good); }
   .rm-pct { font-variant-numeric: tabular-nums; color: var(--text); font-size: 13px; }
+  /* goal detail headline: the "am I done?" number, promoted to a primary readout */
+  .rm-headline { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 0; }
+  .rm-headline-v { font-size: 34px; line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .rm-headline-v.met { color: var(--good); }
+  .rm-headline-l { font-size: 11px; color: var(--dim); letter-spacing: 1px; text-transform: uppercase; }
+  /* rollup expand affordance: a caret that rotates open (was: invisible click) */
+  .rm-caret { display: inline-block; color: var(--dim); font-size: 10px; margin-right: 8px;
+    transition: transform .12s ease-out; }
+  .rm-inv-row.open .rm-caret { transform: rotate(90deg); color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .rm-caret { transition: none; } }
   /* per-line rows (reuse the event role-bar grid shape) */
   .rm-line { display: grid; grid-template-columns: 160px 1fr 110px; gap: 9px;
     align-items: center; font-size: 12px; margin-bottom: 7px; }
@@ -895,7 +947,7 @@
   .mk-tab { font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--border); color: var(--dim); background: transparent; }
   .mk-tab:hover { border-color: var(--accent); color: var(--accent); }
-  .mk-tab.on { border-color: var(--accent); color: var(--accent); background: rgba(79,195,247,.12);
+  .mk-tab.on { border-color: var(--accent); color: var(--accent); background: var(--accent-wash);
     font-weight: 600; }
   /* listing detail state block */
   .mk-state { border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin: 12px 0;
@@ -1055,7 +1107,8 @@
       <img id="login-org-logo" alt="org logo" hidden>
     </div>
     <h1>Org Navigator</h1>
-    <p class="muted">Sign in with your Discord account to access your organization's navigation data.</p>
+    <p class="muted">Your org's command deck — live navigation, cargo routes, event planning,
+      shared resources, and an aUEC marketplace.</p>
     <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. All content not authored by its host or
@@ -1090,10 +1143,14 @@
 </header>
 
 <main>
-  <div id="launcher-view" hidden>
-    <h2 class="launcher-head">Choose an app</h2>
+  <div id="launcher-view" class="launcher" hidden>
+    <h2 class="launcher-head">Your org toolkit</h2>
+    <p class="launcher-sub">Five tools, one org. New here? Start with the Resource Navigator —
+      the rest build on it.</p>
+    <a id="launcher-resume" class="launcher-resume" hidden></a>
     <div class="app-grid">
       <a class="app-card" href="#/nav">
+        <span class="app-badge start">Start here</span>
         <img class="app-logo" src="/images/resource_navigator_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
         <div class="app-name">Resource Navigator</div>
         <div class="app-desc">Find POIs, resources &amp; wildlife and get live turn-by-turn
@@ -4247,20 +4304,35 @@ function roleBar(r) {
     `<span class="ev-role-ct">${r.filled}/${r.needed || "—"}${done ? " ✓" : ""}</span></div>`;
 }
 
+// Restrained monochrome glyph (aria-hidden) — quiet wayfinding, not colourful emoji.
+function evGlyph(g) { return `<i class="ev-mi" aria-hidden="true">${g}</i>`; }
+
 function eventCard(e) {
   const f = e.fill;
-  const cap = e.max_players == null ? "∞" : e.max_players;
-  const roles = (f.roster || []).map(roleBar).join("");
+  const capNum = e.max_players;
+  const cap = capNum == null ? "∞" : capNum;
   const where = e.event_location || e.location;
+  // The board card stays a scan summary: one overall fill bar + which roles still
+  // need people. The full per-role breakdown lives on the detail page.
+  const roster = f.roster || [];
+  const needs = roster.filter(r => r.needed && r.filled < r.needed).map(r => r.role);
+  const needLine = roster.length
+    ? (needs.length
+        ? `<div class="ev-card-needs">needs ${needs.map(esc).join(", ")}</div>`
+        : `<div class="ev-card-needs full">roster full ✓</div>`)
+    : "";
+  const pct = capNum ? Math.min(100, Math.round(100 * f.total_going / capNum)) : (f.total_going ? 100 : 0);
+  const bar = capNum
+    ? `<div class="ev-card-bar ${f.min_met ? "met" : ""}"><span style="width:${pct}%"></span></div>` : "";
   return `<a class="ev-card" href="#/events/${e.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(e.title)}</div>` +
     `<div class="ev-chips">${phaseBadge(e)}${eventChips(e)}</div></div>` +
-    `<div class="ev-meta">🕓 ${esc(fmtEventTime(e.start_at))} · 📍 ${esc(where || "—")} · ` +
-    `by ${esc(e.organizer_name)}</div>` +
+    `<div class="ev-meta">${evGlyph("◷")}${esc(fmtEventTime(e.start_at))} &nbsp;·&nbsp; ` +
+    `${evGlyph("◎")}${esc(where || "—")} &nbsp;·&nbsp; by ${esc(e.organizer_name)}</div>` +
     `<div class="ev-fill"><div class="ev-players ${f.min_met ? "met" : ""}">` +
     `${f.total_going}/${cap} players` +
     `${f.min_players ? ` <span class="ev-min">(min ${f.min_players})</span>` : ""}</div>` +
-    `${roles}</div></a>`;
+    `${bar}${needLine}</div></a>`;
 }
 
 function renderCalendar() {
@@ -4312,10 +4384,8 @@ async function renderEventBoard() {
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">EVENTS</h2>` +
     `<a class="ev-btn primary" href="#/events/new">+ Create event</a></div>` +
-    `<p class="ev-intro">Plan and rally the org around in-game events — raids, mining ` +
-    `and salvage ops, survey expeditions, cargo runs, bounty hunts and meetups. ` +
-    `Pick a day on the calendar to see what's scheduled, sign up for the role you'll ` +
-    `fill, or <a href="#/events/new">create your own event</a> and gather a crew.</p></div>` +
+    `<p class="ev-intro">Rally the org around in-game ops, expeditions, and meetups. Pick a day ` +
+    `to see what's scheduled, or <a href="#/events/new">create your own</a> and gather a crew.</p></div>` +
     `<div class="panel"><div id="ev-cal"></div></div>` +
     `<div id="ev-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   let data;
@@ -4361,16 +4431,22 @@ async function renderDetailBody(e) {
   const f = e.fill, cap = e.max_players == null ? "∞" : e.max_players;
   const cancelled = e.status === "cancelled";
   const chips = phaseBadge(e) + eventChips(e);
-  const meta = [
-    `🕓 <b title="${esc(new Date(e.start_at).toUTCString())}">${esc(fmtEventTime(e.start_at))}</b> (${esc(localTzName())})`,
-    e.signup_deadline ? `🔒 Signups close: <b>${esc(fmtEventTime(e.signup_deadline))}</b>` : "",
-    e.duration_min ? `⏱ ${e.duration_min} min` : "",
-    `🚩 Rally: <b>${esc(e.location || "—")}</b>`,
-    e.event_location ? `📍 Event: <b>${esc(e.event_location)}</b>` : "",
-    `👤 organized by <b>${esc(e.organizer_name)}</b>`,
-    `👥 <b class="${f.min_met ? "ev-players met" : ""}">${f.total_going}/${cap}</b> signed up` +
+  // Lead with when / where / crew; quieter facts (signups-close, duration, by) sit
+  // in a secondary row. Restrained monochrome glyphs (aria-hidden) replace emoji.
+  const primary = [
+    evGlyph("◷") + `<b title="${esc(new Date(e.start_at).toUTCString())}">${esc(fmtEventTime(e.start_at))}</b> <span class="ev-m-tz">${esc(localTzName())}</span>`,
+    evGlyph("⚑") + `Rally <b>${esc(e.location || "—")}</b>`,
+    e.event_location ? evGlyph("◎") + `Event <b>${esc(e.event_location)}</b>` : "",
+    evGlyph("▣") + `<b class="${f.min_met ? "ev-players met" : ""}">${f.total_going}/${cap}</b> signed up` +
       (f.min_players ? ` (min ${f.min_players})` : ""),
-  ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+  ].filter(Boolean);
+  const secondary = [
+    e.signup_deadline ? evGlyph("⊘") + `Signups close <b>${esc(fmtEventTime(e.signup_deadline))}</b>` : "",
+    e.duration_min ? evGlyph("⧗") + `${e.duration_min} min` : "",
+    `by <b>${esc(e.organizer_name)}</b>`,
+  ].filter(Boolean);
+  const meta = `<div class="ev-meta-grid">${primary.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` +
+    `<div class="ev-meta-grid secondary">${secondary.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>`;
 
   // Roster grouped by role, each with its fill bar + the members filling it.
   const grouped = attendeesByRole(e.attendees || [], e.roles || []);
@@ -4411,7 +4487,7 @@ async function renderDetailBody(e) {
 
   $("ev-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
-    `<div class="ev-detail-meta">${meta}</div>` +
+    meta +
     (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
     maybeRow +
@@ -4672,11 +4748,18 @@ function rmTabs(active) {
     `<a class="rm-tab ${active === "inventory" ? "on" : ""}" href="#/inventory">Inventory</a></div>`;
 }
 
-// Priority chip: 1 (highest) reads hot, 10 (lowest) reads cool. Hue ramps red→blue.
-function prioChip(p) {
+// Priority reads as three tiers, not a 10-hue rainbow (which collided with the
+// semantic palette — P1 looked like an error). High takes the caution-amber
+// "attention" register; Med/Low stay quiet. Red is reserved for overdue.
+// Stored priority stays an int 1–10; the tiers just band it for display + entry.
+function prioTier(p) {
   p = Math.max(1, Math.min(10, parseInt(p, 10) || 5));
-  const hue = Math.round((p - 1) / 9 * 210);
-  return `<span class="rm-prio" style="color:hsl(${hue},75%,62%)">P${p}</span>`;
+  return p <= 3 ? "high" : p <= 7 ? "med" : "low";
+}
+const PRIO_TIERS = [["high", "High", 2], ["med", "Med", 5], ["low", "Low", 8]];
+function prioChip(p) {
+  const t = prioTier(p);
+  return `<span class="rm-prio ${t}">${{ high: "High", med: "Med", low: "Low" }[t]}</span>`;
 }
 
 function rmStatusBadge(s) {
@@ -4775,9 +4858,9 @@ async function renderGoalBoard() {
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">RESOURCE GOALS</h2>` +
     `<a class="ev-btn primary" href="#/goals/new">+ New goal</a></div>` +
     `<div style="margin:12px 0 6px">${rmTabs("goals")}</div>` +
-    `<p class="rm-intro">Set the org's procurement targets — what to gather, how much, by when, and ` +
-    `how urgently. Members log contributions and each goal fills toward its line items; every ` +
-    `item links straight into the <a href="#/nav">navigator's resource finder</a>.</p></div>` +
+    `<p class="rm-intro">The org's procurement targets — what to gather, how much, by when. Each ` +
+    `goal fills as members log contributions; every item links into the ` +
+    `<a href="#/nav">resource finder</a>.</p></div>` +
     `<div id="goals-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   let data;
   try { data = await fetch("/api/goals").then(r => r.json()); }
@@ -4839,7 +4922,8 @@ function renderGoalDetailBody(g) {
     `<div class="ev-detail-title"><h2>${esc(g.title)}</h2>${rmStatusBadge(g.status)}${prioChip(g.priority)}</div>` +
     `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b></div>` +
     (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
-    `<div class="rm-pct">Overall: ${Math.round(pr.overall_pct)}% filled${met ? " ✓" : ""}</div>` +
+    `<div class="rm-headline"><span class="rm-headline-v ${met ? "met" : ""}">${Math.round(pr.overall_pct)}%</span>` +
+    `<span class="rm-headline-l">filled${met ? " · met ✓" : ""}</span></div>` +
     `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
     `<div class="ev-section-h">Line items</div>${pr.lines.map(goalLineRow).join("")}` +
     `<div class="ev-signup"><h3>Log a contribution</h3>` +
@@ -4912,9 +4996,9 @@ function goalFormHtml(g) {
     `<div class="ev-field"><label>Description</label><textarea id="goal-f-desc" maxlength="2000" ` +
       `placeholder="What's this campaign for?">${g ? esc(g.description || "") : ""}</textarea></div>` +
     `<div class="ev-form-grid">` +
-      `<div class="ev-field"><label>Priority (1 = highest)</label><select id="goal-f-prio">` +
-        Array.from({ length: 10 }, (_, i) => i + 1).map(n =>
-          `<option value="${n}" ${n === prio ? "selected" : ""}>${n}</option>`).join("") +
+      `<div class="ev-field"><label>Priority</label><select id="goal-f-prio">` +
+        PRIO_TIERS.map(([t, lbl, val]) =>
+          `<option value="${val}" ${t === prioTier(prio) ? "selected" : ""}>${lbl}</option>`).join("") +
       `</select></div>` +
       `<div class="ev-field"><label>Deadline date</label><input id="goal-f-dl-date" class="ti" type="date" ` +
         `value="${g && g.deadline ? toLocalDate(g.deadline) : ""}"><span class="ev-hint">Optional.</span></div>` +
@@ -5016,9 +5100,9 @@ async function renderInventory() {
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG INVENTORY</h2></div>` +
     `<div style="margin:12px 0 6px">${rmTabs("inventory")}</div>` +
-    `<p class="rm-intro">SC has no shared org storage, so this is a ledger of what members are ` +
-    `<em>holding for the org</em> — attributed pledges, not a vault. Log your holdings below; the ` +
-    `org view rolls them up per item.</p>` +
+    `<p class="rm-intro">A ledger of what members are <em>holding for the org</em> — attributed ` +
+    `pledges, not a vault (SC has no shared storage). Log yours below; the org view rolls them ` +
+    `up per item.</p>` +
     `<div class="rm-row" style="margin-top:10px">` +
       `<span class="poi-pick"><input id="inv-item" class="ti" placeholder="item" autocomplete="off"></span>` +
       `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
@@ -5064,10 +5148,11 @@ async function renderInvOrg() {
   const items = data.items || [];
   if (!items.length) { $("inv-body").innerHTML = `<p class="stat-empty">Nothing logged yet.</p>`; return; }
   const rows = items.map((it, i) =>
-    `<tr class="rm-inv-row" data-i="${i}"><td>${esc(it.name)}</td>` +
+    `<tr class="rm-inv-row" data-i="${i}" aria-expanded="false" aria-controls="inv-d-${i}">` +
+    `<td><span class="rm-caret" aria-hidden="true">▸</span>${esc(it.name)}</td>` +
     `<td class="rm-num">${fmtQty(it.total)} ${esc(it.unit || "")}</td>` +
     `<td class="rm-num">${it.holders}</td></tr>` +
-    `<tr class="rm-inv-detail" data-d="${i}" hidden><td colspan="3"><div class="rm-breakdown">` +
+    `<tr class="rm-inv-detail" id="inv-d-${i}" data-d="${i}" hidden><td colspan="3"><div class="rm-breakdown">` +
       it.by_owner.map(o => `<span>${esc(o.display_name)}: ${fmtQty(o.qty)}</span>`).join("") +
     `</div><div class="rm-breakdown" style="margin-top:6px;opacity:.8">` +
       it.by_location.map(l => `<span>📍 ${esc(l.location)}: ${fmtQty(l.qty)}</span>`).join("") +
@@ -5076,7 +5161,14 @@ async function renderInvOrg() {
     `<th>Item</th><th class="rm-num">Total</th><th class="rm-num">Holders</th></tr></thead>` +
     `<tbody>${rows}</tbody></table>`;
   $("inv-body").querySelectorAll(".rm-inv-row").forEach(tr => {
-    clickable(tr, () => { const d = $("inv-body").querySelector(`.rm-inv-detail[data-d="${tr.dataset.i}"]`); if (d) d.hidden = !d.hidden; }, "button");
+    clickable(tr, () => {
+      const d = $("inv-body").querySelector(`.rm-inv-detail[data-d="${tr.dataset.i}"]`);
+      if (!d) return;
+      const open = d.hidden;            // about to open
+      d.hidden = !open;
+      tr.setAttribute("aria-expanded", open ? "true" : "false");
+      tr.classList.toggle("open", open);
+    }, "button");
   });
 }
 
@@ -5956,6 +6048,20 @@ const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
   "#/events": "Event Planner", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/market": "Org Marketplace" };
+// Returning-user accelerator: if you've opened an app before, the launcher offers a
+// one-click jump back into it (persisted across sessions, unlike the in-session lastApp).
+function renderLauncherResume() {
+  const el = $("launcher-resume");
+  if (!el) return;
+  let last = null;
+  try { last = localStorage.getItem("scLastAppPersist"); } catch {}
+  const label = last && APP_TITLE[last];
+  if (label) {
+    el.textContent = "↩ Jump back into " + label;
+    el.setAttribute("href", last);
+    el.hidden = false;
+  } else { el.hidden = true; }
+}
 // The app a sub-page should return to (persisted so a reload on a sub-page keeps it).
 let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch { return null; } })() || "#/nav";
 function applyView() {
@@ -6000,6 +6106,7 @@ function applyView() {
   $("terms-view").hidden = !terms;
   $("privacy-view").hidden = !privacy;
   $("launcher-view").hidden = !launcher;
+  if (launcher) renderLauncherResume();
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
   $("events-view").hidden = !events;
@@ -6015,7 +6122,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup/Stats/
   // Leaderboard) can offer a "← back to that app" link.
-  if (nav || route || events || resourceMgr || market) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); } catch {} }
+  if (nav || route || events || resourceMgr || market) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
   // App contexts = each app plus its own Stats/Leaderboard sub-pages. The Stats/
   // Leaderboard header toggles stay visible across both and point at whichever
   // app's analytics you're currently in.
