@@ -5399,20 +5399,26 @@ function renderMarketDetailBody(l) {
 
 function wireMarketDetail(l) {
   const id = l.id;
-  // type: "" (cleared) | "work" (in-flight, dim) | "err" (failure, red). The span
-  // is an aria-live region so screen readers announce the result.
-  const setMsg = (t, type) => {
+  // type: "" (cleared) | "work" (in-flight, dim) | "err" (failure, red). The span is
+  // an aria-live region; when an action element is given we move it next to that
+  // control so feedback lands beside what the user clicked (accept/withdraw/cancel
+  // live in their own blocks, away from the default slot).
+  const setMsg = (t, type, srcEl) => {
     const m = $("mk-msg"); if (!m) return;
+    if (srcEl) {
+      const host = srcEl.closest(".mk-actions, .rm-row, .mk-offer-row, .ev-form-actions");
+      if (host) host.insertAdjacentElement("afterend", m);
+    }
     m.textContent = t || "";
     m.className = "mk-msg" + (type ? " " + type : "");
   };
   let busy = false;   // one market action in flight at a time → no double-submit
-  async function act(url, body, method) {
+  async function act(url, body, method, srcEl) {
     if (busy) return;
     busy = true;
     const btns = document.querySelectorAll("#market-detail-body button");
     btns.forEach(b => { b.disabled = true; });
-    setMsg("Working…", "work");
+    setMsg("Working…", "work", srcEl);
     try {
       const r = await fetch(url, { method: method || "POST",
         headers: { "Content-Type": "application/json" },
@@ -5420,45 +5426,58 @@ function wireMarketDetail(l) {
       if (!r.ok) throw await r.json().catch(() => ({}));
       renderMarketDetailBody(await r.json());   // success re-renders with fresh, enabled controls
     } catch (err) {
-      setMsg((err && err.detail) || "That didn't go through — check your connection and try again.", "err");
+      setMsg((err && err.detail) || "That didn't go through — check your connection and try again.", "err", srcEl);
       btns.forEach(b => { b.disabled = false; });   // restore so the user can retry
     } finally { busy = false; }
   }
   const bItem = $("mk-barter-item");
   if (bItem) attachCatalogPicker(bItem.parentElement);
-  const on = (eid, fn) => { const el = $(eid); if (el) el.onclick = fn; };
+  const on = (eid, fn) => { const el = $(eid); if (el) el.onclick = () => fn(el); };
+  // Let Enter in an amount/note field fire its action, so a bid/offer doesn't need
+  // a reach for the mouse. (The catalog-picker item field keeps Enter for its list.)
+  const submitOnEnter = (inputId, btnId) => {
+    const i = $(inputId); if (!i) return;
+    i.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const b = $(btnId); if (b && !b.disabled) b.click();
+    });
+  };
   on("mk-seller", () => mktFilterBySeller(l.seller_id, l.seller_name));
-  on("mk-buy", () => act(`/api/market/${id}/offer`, {}));
-  on("mk-offer", () => {
+  on("mk-buy", (btn) => act(`/api/market/${id}/offer`, {}, "POST", btn));
+  on("mk-offer", (btn) => {
     const amt = Number($("mk-offer-amt").value);
-    if (!(amt > 0)) return setMsg("Enter an offer amount greater than 0.", "err");
-    act(`/api/market/${id}/offer`, { amount_auec: amt });
+    if (!(amt > 0)) return setMsg("Enter an offer amount greater than 0.", "err", btn);
+    act(`/api/market/${id}/offer`, { amount_auec: amt }, "POST", btn);
   });
-  on("mk-bid", () => {
+  on("mk-bid", (btn) => {
     const amt = Number($("mk-bid-amt").value);
-    if (!(amt > 0)) return setMsg("Enter a bid amount greater than 0.", "err");
-    act(`/api/market/${id}/offer`, { amount_auec: amt });
+    if (!(amt > 0)) return setMsg("Enter a bid amount greater than 0.", "err", btn);
+    act(`/api/market/${id}/offer`, { amount_auec: amt }, "POST", btn);
   });
-  on("mk-buyout", () => act(`/api/market/${id}/offer`, { amount_auec: l.buyout_auec }));
-  on("mk-barter", () => {
+  on("mk-buyout", (btn) => act(`/api/market/${id}/offer`, { amount_auec: l.buyout_auec }, "POST", btn));
+  on("mk-barter", (btn) => {
     const item_id = bItem ? bItem.dataset.itemId : null;
     const note = $("mk-barter-note").value.trim();
-    if (!item_id && !note) return setMsg("Offer an item or a note before sending.", "err");
-    act(`/api/market/${id}/offer`, { offer_item_id: item_id || null, offer_note: note || null });
+    if (!item_id && !note) return setMsg("Offer an item or a note before sending.", "err", btn);
+    act(`/api/market/${id}/offer`, { offer_item_id: item_id || null, offer_note: note || null }, "POST", btn);
   });
-  on("mk-confirm", () => act(`/api/market/${id}/confirm`, null));
+  on("mk-confirm", (btn) => act(`/api/market/${id}/confirm`, null, "POST", btn));
+  submitOnEnter("mk-offer-amt", "mk-offer");
+  submitOnEnter("mk-bid-amt", "mk-bid");
+  submitOnEnter("mk-barter-note", "mk-barter");
   // Accept strikes the deal and binds both parties → guard it like the app's other
   // commit/destructive actions (confirm()), which Cancel below already uses.
   document.querySelectorAll(".mk-accept").forEach(b =>
     b.onclick = () => {
       const who = b.dataset.who ? ` from ${b.dataset.who}` : "";
       if (!confirm(`Accept this offer${who}? This strikes the deal — both sides then confirm the handoff in-game.`)) return;
-      act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "accept" }, "PATCH");
+      act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "accept" }, "PATCH", b);
     });
   document.querySelectorAll(".mk-withdraw").forEach(b =>
-    b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "withdraw" }, "PATCH"));
+    b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "withdraw" }, "PATCH", b));
   on("mk-edit", () => renderMarketEditForm(l));
-  on("mk-cancel", () => { if (confirm("Cancel this listing? It'll be closed and removed from the board. This can't be undone.")) act(`/api/market/${id}`, { status: "cancelled" }, "PATCH"); });
+  on("mk-cancel", (btn) => { if (confirm("Cancel this listing? It'll be closed and removed from the board. This can't be undone.")) act(`/api/market/${id}`, { status: "cancelled" }, "PATCH", btn); });
 }
 
 // --- listing create / edit form ---
