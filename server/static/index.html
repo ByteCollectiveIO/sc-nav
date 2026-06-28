@@ -491,7 +491,11 @@
     background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
     margin-top: 2px; max-height: 240px; overflow-y: auto; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
   .poi-opt { padding: 7px 10px; cursor: pointer; font-size: 13px; }
-  .poi-opt:hover { background: var(--panel); }
+  .poi-opt:hover, .poi-opt.active { background: var(--panel); }
+  /* visible keyboard focus for the non-native controls made operable via clickable()
+     / role=button|option (rows, calendar cells, icon affordances, picker options) */
+  [role="button"]:focus-visible, [role="option"]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: -2px; }
   .poi-opt .muted { font-size: 11px; }
   /* plan result */
   .route-summary { display: flex; flex-wrap: wrap; gap: 18px; align-items: baseline; }
@@ -1889,6 +1893,64 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 
+// --- keyboard accessibility (WCAG 2.1.1) ---------------------------------
+// The app wires .onclick onto whatever element is handy (rows, cells, icon
+// spans), which leaves keyboard/screen-reader users stranded. clickable() makes
+// such an element behave like a button (focusable + role + click), and one
+// global handler turns Enter/Space on any marked non-native control into a click.
+function clickable(el, fn, role) {
+  if (!el) return el;
+  el.tabIndex = 0;
+  el.setAttribute("role", role || "button");
+  el.onclick = fn;
+  return el;
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+  const t = e.target;
+  if (!t || !t.getAttribute) return;
+  const role = t.getAttribute("role");
+  if (role !== "button" && role !== "option") return;
+  const tag = t.tagName;
+  if (tag === "BUTTON" || tag === "A" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  e.preventDefault();
+  t.click();   // fires the existing click/delegated handler (and bubbles)
+});
+
+// Shared keyboard nav for the autocomplete drops (.poi-drop of .poi-opt items):
+// ↓/↑ move the active option, Enter picks it, Esc closes. Options expose _pick().
+// Mouse keeps using onmousedown (lands before the input's blur hides the drop).
+function attachPickerKeys(input, drop) {
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-expanded", "false");
+  drop.setAttribute("role", "listbox");
+  let active = -1;
+  const opts = () => [...drop.querySelectorAll(".poi-opt")];
+  const paint = (list) => list.forEach((o, i) => {
+    o.setAttribute("role", "option");
+    o.classList.toggle("active", i === active);
+    o.setAttribute("aria-selected", i === active ? "true" : "false");
+    if (i === active) {
+      if (!o.id) o.id = "poiopt-" + Math.random().toString(36).slice(2, 8);
+      input.setAttribute("aria-activedescendant", o.id);
+      o.scrollIntoView({ block: "nearest" });
+    }
+  });
+  const close = () => { drop.hidden = true; active = -1;
+    input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); };
+  input.addEventListener("input", () => { active = -1; });   // list rebuilt → drop highlight
+  input.addEventListener("keydown", (e) => {
+    const list = opts();
+    input.setAttribute("aria-expanded", (!drop.hidden && list.length) ? "true" : "false");
+    if (drop.hidden || !list.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); active = (active + 1) % list.length; paint(list); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); active = (active - 1 + list.length) % list.length; paint(list); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); list[active]._pick(); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  });
+}
+
 const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESC_MAP[c]);
 const BAND_QUALITY = (b) =>
@@ -1939,8 +2001,8 @@ function entDetail(e) {
   if (e.private)
     detail += ` <span class="poi-private" title="private — only you can see this">🔒</span>`;
   if (e.custom) {
-    detail += ` <span class="edit" title="edit note" data-edit-poi="${e.id}" data-note="${esc(e.note || "")}">✎</span>`;
-    detail += ` <span class="edit" title="${e.private ? "make shared (visible to the org)" : "make private (only you)"}"`
+    detail += ` <span class="edit" tabindex="0" role="button" aria-label="edit note" title="edit note" data-edit-poi="${e.id}" data-note="${esc(e.note || "")}">✎</span>`;
+    detail += ` <span class="edit" tabindex="0" role="button" aria-label="${e.private ? "make shared (visible to the org)" : "make private (only you)"}" title="${e.private ? "make shared (visible to the org)" : "make private (only you)"}"`
             + ` data-priv-poi="${e.id}" data-private="${e.private ? 1 : 0}">${e.private ? "🔓" : "🔒"}</span>`;
   }
   return detail;
@@ -2230,7 +2292,7 @@ function renderNearby() {
       `<td class="num">${fmtDist(e.surface_distance_m ?? e.distance_m)}</td>` +
       `<td class="num">${fmtBearing(e.bearing_deg)}</td>` +
       `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
-    tr.onclick = () => setDestination(e.id);
+    clickable(tr, () => setDestination(e.id));
     if (selId != null && e.id === selId) tr.classList.add("selected");
     wireDelete(tr);
     tbody.appendChild(tr);
@@ -2239,9 +2301,9 @@ function renderNearby() {
 
 function delSpan(e) {
   if (e.kind === "resource" || e.kind === "wildlife")
-    return `<span class="del" title="delete observation" data-del-obs="${e.id}">✕</span>`;
+    return `<span class="del" tabindex="0" role="button" aria-label="delete observation" title="delete observation" data-del-obs="${e.id}">✕</span>`;
   if (e.custom)
-    return `<span class="del" title="delete custom POI" data-del-poi="${e.id}">✕</span>`;
+    return `<span class="del" tabindex="0" role="button" aria-label="delete custom POI" title="delete custom POI" data-del-poi="${e.id}">✕</span>`;
   return "";
 }
 
@@ -2764,7 +2826,7 @@ async function runSearch() {
       `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td><td class="muted">${entDetail(e)}</td>` +
       `<td class="muted">${esc(e.container)}</td><td>${qtLabel(e)}</td>` +
       `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
-    tr.onclick = () => setDestination(e.id);
+    clickable(tr, () => setDestination(e.id));
     wireDelete(tr);
     tbody.appendChild(tr);
   }
@@ -2859,7 +2921,7 @@ async function runFinder() {
       `<td><b>${esc(h.body)}</b> <span class="muted">${esc(h.system)}</span></td>` +
       `<td>${qt}</td><td class="num">${travel}</td><td>${band}</td>` +
       `<td class="num muted">${h.n_ore}/${h.n}</td>`;
-    if (h.nearest_qt_id != null) tr.onclick = () => setDestination(h.nearest_qt_id);
+    if (h.nearest_qt_id != null) clickable(tr, () => setDestination(h.nearest_qt_id));
     else tr.style.cursor = "default";
     tbody.appendChild(tr);
   }
@@ -3300,7 +3362,9 @@ function attachShipPicker() {
       const it = document.createElement("div");
       it.className = "poi-opt";
       it.innerHTML = `${esc(s.name)} <span class="muted">${s.scu} SCU${s.company ? " · " + esc(s.company) : ""}</span>`;
-      it.onmousedown = (e) => { e.preventDefault(); input.value = s.name; drop.hidden = true; prefillScu(); };
+      it.setAttribute("role", "option");
+      it._pick = () => { input.value = s.name; drop.hidden = true; prefillScu(); input.focus(); };
+      it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
       drop.appendChild(it);
     }
     drop.hidden = hits.length === 0;
@@ -3309,6 +3373,7 @@ function attachShipPicker() {
   input.addEventListener("input", refresh);
   input.addEventListener("focus", () => { if (input.value.trim()) refresh(); });
   input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+  attachPickerKeys(input, drop);
 }
 
 function savedScuFor(name) {
@@ -3361,7 +3426,7 @@ function addPkgRow(pre) {
   const cinput = row.querySelector(".pkg-contract");
   cinput.addEventListener("input", refreshContractList);
   cinput.addEventListener("blur", refreshContractList);
-  row.querySelector(".pkg-del").onclick = () => { row.remove(); refreshContractList(); };
+  clickable(row.querySelector(".pkg-del"), () => { row.remove(); refreshContractList(); });
   if (pre) {
     if (pre.commodity) row.querySelector(".pkg-commodity").value = pre.commodity;
     if (pre.scu) row.querySelector(".pkg-scu").value = pre.scu;
@@ -3399,7 +3464,7 @@ function addGroupRow(pre) {
   const cinput = row.querySelector(".pkg-contract");
   cinput.addEventListener("input", refreshContractList);
   cinput.addEventListener("blur", refreshContractList);
-  row.querySelector(".pkg-del").onclick = () => { row.remove(); refreshContractList(); };
+  clickable(row.querySelector(".pkg-del"), () => { row.remove(); refreshContractList(); });
   const picks = row.querySelector(".grp-picks");
   row.querySelector(".grp-add-pick").onclick = () => addPickupRow(picks);
   if (pre) {
@@ -3423,7 +3488,7 @@ function addPickupRow(picks, pre) {
     + `<span class="pick-del" title="remove">✕</span>`;
   picks.appendChild(r);
   attachPoiPicker(r.querySelector(".pkg-pickup"), refreshRewardRows);
-  r.querySelector(".pick-del").onclick = () => { r.remove(); refreshRewardRows(); };
+  clickable(r.querySelector(".pick-del"), () => { r.remove(); refreshRewardRows(); });
   if (pre) setPickedPoi(r.querySelector(".pkg-pickup"), pre.from_id, pre.from_name);
   return r;
 }
@@ -3545,20 +3610,23 @@ function attachPoiPicker(wrap, onPick) {
       for (const p of pois) {
         const it = document.createElement("div");
         it.className = "poi-opt";
+        it.setAttribute("role", "option");
         it.innerHTML = `${esc(p.name)} <span class="muted">${esc(p.container)} · ${esc(p.system)}</span>`;
-        // mousedown (not click) so the pick lands before the input's blur hides the drop.
-        it.onmousedown = (e) => {
-          e.preventDefault();
+        it._pick = () => {
           input.value = p.name; input.dataset.poiId = p.id;
           wrap.classList.add("picked"); drop.hidden = true;
           if (onPick) onPick(p);
+          input.focus();
         };
+        // mousedown (not click) so the pick lands before the input's blur hides the drop.
+        it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
         drop.appendChild(it);
       }
       drop.hidden = pois.length === 0;
     }, 160);
   });
   input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+  attachPickerKeys(input, drop);
 }
 
 async function planRoute() {
@@ -4040,7 +4108,7 @@ function bindCalendar() {
   $("ev-cal-prev").onclick = () => { evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth() - 1, 1); bindCalendar(); };
   $("ev-cal-next").onclick = () => { evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth() + 1, 1); bindCalendar(); };
   $("ev-cal").querySelectorAll(".ev-cal-cell.has").forEach(c => {
-    c.onclick = () => { evFilterDay = (evFilterDay === c.dataset.day) ? null : c.dataset.day; bindCalendar(); renderBoardList(); };
+    clickable(c, () => { evFilterDay = (evFilterDay === c.dataset.day) ? null : c.dataset.day; bindCalendar(); renderBoardList(); });
   });
 }
 
@@ -4374,7 +4442,7 @@ function bindEventForm(tax, editId, onCancel) {
 
 function bindRosterDeletes() {
   document.querySelectorAll("#ev-f-roster .ev-row-del").forEach(x => {
-    x.onclick = () => { if (document.querySelectorAll("#ev-f-roster .ev-roster-row").length > 1) x.closest(".ev-roster-row").remove(); };
+    clickable(x, () => { if (document.querySelectorAll("#ev-f-roster .ev-roster-row").length > 1) x.closest(".ev-roster-row").remove(); });
   });
 }
 
@@ -4470,16 +4538,18 @@ function attachCatalogPicker(wrap, onPick) {
       // Tag the kind for ships/equipment (so a commodity and a same-named item are
       // distinguishable in the picker); otherwise show the counting unit.
       const tag = it.kind === "ship" ? "ship" : it.kind === "item" ? "equipment" : (it.unit || "");
+      opt.setAttribute("role", "option");
       opt.innerHTML = `${esc(it.name)} <span class="muted">${esc(tag)}</span>`;
-      opt.onmousedown = (e) => {
-        e.preventDefault();
+      opt._pick = () => {
         input.value = it.name;
         input.dataset.itemId = it.item_id;
         input.dataset.unit = it.unit || "";
         wrap.classList.add("picked");
         drop.hidden = true;
         if (onPick) onPick(it);
+        input.focus();
       };
+      opt.onmousedown = (e) => { e.preventDefault(); opt._pick(); };
       drop.appendChild(opt);
     }
     drop.hidden = items.length === 0;
@@ -4487,6 +4557,7 @@ function attachCatalogPicker(wrap, onPick) {
   input.addEventListener("input", () => { clearPick(); clearTimeout(timer); timer = setTimeout(refresh, 180); });
   input.addEventListener("focus", refresh);   // shows suggestions without clearing a prior pick
   input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 150));
+  attachPickerKeys(input, drop);
 }
 
 function goalsSubRoute() {
@@ -4711,7 +4782,7 @@ function bindGoalForm(editId, onCancel) {
     }
   });
   const wireDeletes = () => document.querySelectorAll("#goal-f-lines .rm-li-del").forEach(x => {
-    x.onclick = () => { if (document.querySelectorAll("#goal-f-lines .rm-row").length > 1) x.closest(".rm-row").remove(); };
+    clickable(x, () => { if (document.querySelectorAll("#goal-f-lines .rm-row").length > 1) x.closest(".rm-row").remove(); });
   });
   wirePickers(); wireDeletes();
   $("goal-f-addline").onclick = () => {
@@ -4819,7 +4890,7 @@ async function renderInvOrg() {
     `<th>Item</th><th class="rm-num">Total</th><th class="rm-num">Holders</th></tr></thead>` +
     `<tbody>${rows}</tbody></table>`;
   $("inv-body").querySelectorAll(".rm-inv-row").forEach(tr => {
-    tr.onclick = () => { const d = $("inv-body").querySelector(`.rm-inv-detail[data-d="${tr.dataset.i}"]`); if (d) d.hidden = !d.hidden; };
+    clickable(tr, () => { const d = $("inv-body").querySelector(`.rm-inv-detail[data-d="${tr.dataset.i}"]`); if (d) d.hidden = !d.hidden; }, "button");
   });
 }
 
@@ -5443,7 +5514,7 @@ function wireMarketDetail(l) {
       const b = $(btnId); if (b && !b.disabled) b.click();
     });
   };
-  on("mk-seller", () => mktFilterBySeller(l.seller_id, l.seller_name));
+  clickable($("mk-seller"), () => mktFilterBySeller(l.seller_id, l.seller_name));
   on("mk-buy", (btn) => act(`/api/market/${id}/offer`, {}, "POST", btn));
   on("mk-offer", (btn) => {
     const amt = Number($("mk-offer-amt").value);
@@ -6332,7 +6403,7 @@ async function loadTokens() {
       `<td>${esc(t.label)}</td>` +
       `<td class="muted">${esc((t.created || "").slice(0, 10))}</td>` +
       `<td class="muted">${t.last_used ? esc(t.last_used.slice(0, 16).replace("T", " ")) : "never"}</td>` +
-      `<td><span class="del" title="revoke">✕</span></td>`;
+      `<td><span class="del" tabindex="0" role="button" aria-label="revoke" title="revoke">✕</span></td>`;
     tr.querySelector(".del").onclick = async () => {
       await fetch(`/api/tokens/${t.id}`, { method: "DELETE" }); loadTokens();
     };
