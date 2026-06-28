@@ -349,6 +349,34 @@
     cursor: pointer; text-decoration: none; margin-top: 14px; }
   #token-new code { color: var(--good); }
 
+  /* themed confirm() — a focus-managed, Esc-dismissable, announced dark dialog
+     that replaces the native browser confirm across the app. Renders in the
+     top layer (native <dialog>), so it clears every app z-index without one. */
+  dialog.confirm {
+    width: min(420px, calc(100vw - 32px)); padding: 0; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
+  dialog.confirm::backdrop { background: rgba(8, 11, 16, 0.72); backdrop-filter: blur(3px); }
+  .confirm-body { padding: 20px 22px 8px; }
+  .confirm-title { font-size: 15px; letter-spacing: 1px; color: var(--text); margin: 0 0 8px; }
+  dialog.confirm.danger .confirm-title { color: var(--bad); }
+  .confirm-msg { font-size: 13px; line-height: 1.55; color: var(--dim);
+    margin: 0; white-space: pre-line; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 10px;
+    padding: 16px 22px 20px; margin: 0; }
+  .confirm-actions button { padding: 7px 16px; }
+  .confirm-ok { border-color: var(--accent); color: var(--accent); }
+  .confirm-ok:hover { background: var(--accent); color: var(--ink-on-accent); border-color: var(--accent); }
+  dialog.confirm.danger .confirm-ok { border-color: var(--bad); color: var(--bad); }
+  dialog.confirm.danger .confirm-ok:hover { background: var(--bad); color: var(--ink-on-accent); border-color: var(--bad); }
+  dialog.confirm[open] { animation: confirm-in 0.16s cubic-bezier(0.22, 1, 0.36, 1); }
+  dialog.confirm[open]::backdrop { animation: confirm-fade 0.16s ease-out; }
+  @keyframes confirm-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+  @keyframes confirm-fade { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    dialog.confirm[open], dialog.confirm[open]::backdrop { animation: none; }
+  }
+
   /* setup guide */
   #setup-toggle, #leaderboard-toggle, #stats-toggle, #back-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
     text-decoration: none; white-space: nowrap; }
@@ -1938,6 +1966,54 @@ document.addEventListener("keydown", (e) => {
   t.click();   // fires the existing click/delegated handler (and bubbles)
 });
 
+// Themed replacement for the native window.confirm(): a dark, in-universe modal
+// that matches the cockpit identity instead of the OS chrome. Built on native
+// <dialog>.showModal() so focus is trapped + restored, Esc dismisses, the page
+// behind goes inert, and screen readers announce it (implicit role=dialog +
+// aria-modal). Returns a Promise<boolean>. opts: { title, confirmLabel,
+// cancelLabel, danger }. Destructive calls pass danger:true → red accent + the
+// safe choice (Cancel) takes initial focus.
+let _confirmDialogEl = null;
+function confirmDialog(message, opts = {}) {
+  const { title = "Confirm", confirmLabel = "Confirm",
+          cancelLabel = "Cancel", danger = false } = opts;
+  let dlg = _confirmDialogEl;
+  if (!dlg) {
+    dlg = _confirmDialogEl = document.createElement("dialog");
+    dlg.className = "confirm";
+    dlg.innerHTML =
+      '<form method="dialog" class="confirm-form">' +
+        '<div class="confirm-body">' +
+          '<h2 class="confirm-title"></h2>' +
+          '<p class="confirm-msg"></p>' +
+        '</div>' +
+        '<menu class="confirm-actions">' +
+          '<button value="cancel" class="confirm-cancel"></button>' +
+          '<button value="ok" class="confirm-ok"></button>' +
+        '</menu>' +
+      '</form>';
+    document.body.appendChild(dlg);
+    // Click on the backdrop (outside the form) dismisses as Cancel, matching Esc.
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close("cancel"); });
+  }
+  dlg.classList.toggle("danger", !!danger);
+  dlg.querySelector(".confirm-title").textContent = title;
+  dlg.querySelector(".confirm-msg").textContent = message;
+  const okBtn = dlg.querySelector(".confirm-ok");
+  const cancelBtn = dlg.querySelector(".confirm-cancel");
+  okBtn.textContent = confirmLabel;
+  cancelBtn.textContent = cancelLabel;
+  dlg.setAttribute("aria-label", title);
+  return new Promise((resolve) => {
+    const onClose = () => { dlg.removeEventListener("close", onClose);
+      resolve(dlg.returnValue === "ok"); };
+    dlg.addEventListener("close", onClose);
+    dlg.showModal();
+    // Default focus to the safe choice for destructive actions, else the action.
+    (danger ? cancelBtn : okBtn).focus();
+  });
+}
+
 // Shared keyboard nav for the autocomplete drops (.poi-drop of .poi-opt items):
 // ↓/↑ move the active option, Enter picks it, Esc closes. Options expose _pick().
 // Mouse keeps using onmousedown (lands before the input's blur hides the drop).
@@ -3275,7 +3351,9 @@ function renderRouteHistory() {
 
 // Stamp a fresh hauling session, then reload so the session stats zero out.
 async function startNewSession() {
-  if (!confirm("Start a new session? Your session stats reset to zero (run history is kept).")) return;
+  if (!(await confirmDialog(
+      "Your session stats reset to zero. Run history is kept.",
+      { title: "Start a new session?", confirmLabel: "Start new session", danger: true }))) return;
   try { await fetch("/api/route/session/reset", { method: "POST" }); } catch { return; }
   routeStatsScope = "session";
   loadRouteHistory();
@@ -3866,7 +3944,9 @@ function clearRoute() {
 }
 
 async function abandonRun() {
-  if (!confirm("Abandon this run? Your progress will be discarded.")) return;
+  if (!(await confirmDialog(
+      "Your progress will be discarded.",
+      { title: "Abandon this run?", confirmLabel: "Abandon run", danger: true }))) return;
   try { await fetch("/api/route/run", { method: "DELETE" }); } catch {}
   renderRun(null);
 }
@@ -4261,7 +4341,9 @@ async function renderDetailBody(e) {
   if (e.can_edit) {
     const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
     const cn = $("ev-cancel"); if (cn) cn.onclick = async () => {
-      if (!confirm("Cancel this event? Signups are kept but it's hidden from the board.")) return;
+      if (!(await confirmDialog(
+          "Signups are kept, but it's hidden from the board.",
+          { title: "Cancel this event?", confirmLabel: "Cancel event", danger: true }))) return;
       const r = await fetch(`/api/events/${e.id}`, { method: "DELETE" });
       if (r.ok) renderEventDetail(e.id);
     };
@@ -4712,7 +4794,9 @@ function renderGoalDetailBody(g) {
   if (g.can_edit) {
     $("goal-edit").onclick = () => renderGoalEditForm(g);
     $("goal-del").onclick = async () => {
-      if (!confirm(`Delete the goal "${g.title}"? Contributions stay as general inventory.`)) return;
+      if (!(await confirmDialog(
+          "Contributions stay as general inventory.",
+          { title: `Delete the goal "${g.title}"?`, confirmLabel: "Delete goal", danger: true }))) return;
       const r = await fetch(`/api/goals/${g.id}`, { method: "DELETE" });
       if (r.ok) location.hash = "#/goals";
     };
@@ -4948,9 +5032,10 @@ function wireInvMine() {
     b.onclick = async () => {
       const r = rmMineRows.find(x => String(x.id) === b.dataset.id);
       const warn = r && Number(r.committed) > 0
-        ? "Remove this holding? Its goal contributions will be withdrawn too."
-        : "Remove this holding?";
-      if (!confirm(warn)) return;
+        ? "Its goal contributions will be withdrawn too."
+        : "This holding will be removed from your inventory.";
+      if (!(await confirmDialog(warn,
+          { title: "Remove this holding?", confirmLabel: "Remove", danger: true }))) return;
       const res = await fetch(`/api/inventory/${b.dataset.id}`, { method: "DELETE" });
       if (res.ok) renderInvMine();
     };
@@ -5559,17 +5644,24 @@ function wireMarketDetail(l) {
   submitOnEnter("mk-bid-amt", "mk-bid");
   submitOnEnter("mk-barter-note", "mk-barter");
   // Accept strikes the deal and binds both parties → guard it like the app's other
-  // commit/destructive actions (confirm()), which Cancel below already uses.
+  // commit/destructive actions (confirmDialog), which Cancel below already uses.
   document.querySelectorAll(".mk-accept").forEach(b =>
-    b.onclick = () => {
+    b.onclick = async () => {
       const who = b.dataset.who ? ` from ${b.dataset.who}` : "";
-      if (!confirm(`Accept this offer${who}? This strikes the deal — both sides then confirm the handoff in-game.`)) return;
+      if (!(await confirmDialog(
+          "This strikes the deal — both sides then confirm the handoff in-game.",
+          { title: `Accept this offer${who}?`, confirmLabel: "Accept offer" }))) return;
       act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "accept" }, "PATCH", b);
     });
   document.querySelectorAll(".mk-withdraw").forEach(b =>
     b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "withdraw" }, "PATCH", b));
   on("mk-edit", () => renderMarketEditForm(l));
-  on("mk-cancel", (btn) => { if (confirm("Cancel this listing? It'll be closed and removed from the board. This can't be undone.")) act(`/api/market/${id}`, { status: "cancelled" }, "PATCH", btn); });
+  on("mk-cancel", async (btn) => {
+    if (await confirmDialog(
+        "It'll be closed and removed from the board. This can't be undone.",
+        { title: "Cancel this listing?", confirmLabel: "Cancel listing", danger: true }))
+      act(`/api/market/${id}`, { status: "cancelled" }, "PATCH", btn);
+  });
 }
 
 // --- listing create / edit form ---
@@ -6214,7 +6306,9 @@ $("org-logo-upload").onclick = async () => {
 };
 
 $("org-logo-remove").onclick = async () => {
-  if (!confirm("Remove the org logo? The Org Navigator logo stays.")) return;
+  if (!(await confirmDialog(
+      "The Org Navigator logo stays.",
+      { title: "Remove the org logo?", confirmLabel: "Remove logo", danger: true }))) return;
   const st = $("org-logo-status");
   st.textContent = "removing…";
   try {
@@ -6272,8 +6366,10 @@ async function saveAdmins(next, okMsg) {
   }
 }
 
-function removeAdmin(id) {
-  if (!confirm(`Remove admin ${id}? They lose admin access immediately.`)) return;
+async function removeAdmin(id) {
+  if (!(await confirmDialog(
+      "They lose admin access immediately.",
+      { title: `Remove admin ${id}?`, confirmLabel: "Remove admin", danger: true }))) return;
   saveAdmins(extraAdmins.filter(x => x !== id), `removed ${id}`);
 }
 
@@ -6333,9 +6429,10 @@ $("member-role-save").onclick = async () => {
 };
 $("starmap-toggle").onchange = async (e) => {
   const enabled = e.target.checked;
-  if (!enabled && !confirm(
-      "Start from a blank POI database? The starmap.space POIs will be removed " +
-      "from the dataset (your custom POIs are kept). You can re-enable this later.")) {
+  if (!enabled && !(await confirmDialog(
+      "The starmap.space POIs will be removed from the dataset (your custom POIs " +
+      "are kept). You can re-enable this later.",
+      { title: "Start from a blank POI database?", confirmLabel: "Use blank database", danger: true }))) {
     e.target.checked = true;
     return;
   }
@@ -6357,10 +6454,11 @@ $("starmap-toggle").onchange = async (e) => {
 
 // ---------- clear statistics (admin, destructive) ----------
 $("clear-resource-stats").onclick = async () => {
-  if (!confirm(
-      "Delete EVERY resource, fauna, and harvestable sighting for the whole org?\n\n" +
-      "The Statistics page contributions and the resource leaderboard reset to " +
-      "zero. Your custom POIs and QT markers are kept. This can't be undone.")) return;
+  if (!(await confirmDialog(
+      "Every resource, fauna, and harvestable sighting for the whole org will be " +
+      "deleted. The Statistics page contributions and the resource leaderboard " +
+      "reset to zero. Your custom POIs and QT markers are kept. This can't be undone.",
+      { title: "Clear all resource sightings?", confirmLabel: "Delete sightings", danger: true }))) return;
   const st = $("clear-stats-status");
   st.textContent = "clearing resource statistics…";
   try {
@@ -6376,10 +6474,11 @@ $("clear-resource-stats").onclick = async () => {
 };
 
 $("clear-cargo-stats").onclick = async () => {
-  if (!confirm(
-      "Delete EVERY member's completed hauling run for the whole org?\n\n" +
+  if (!(await confirmDialog(
+      "Every member's completed hauling run for the whole org will be deleted. " +
       "The cargo leaderboard, hauling stats, and run history reset to zero. " +
-      "In-progress hauls keep running. This can't be undone.")) return;
+      "In-progress hauls keep running. This can't be undone.",
+      { title: "Clear all hauling runs?", confirmLabel: "Delete runs", danger: true }))) return;
   const st = $("clear-stats-status");
   st.textContent = "clearing cargo statistics…";
   try {
@@ -6394,12 +6493,12 @@ $("clear-cargo-stats").onclick = async () => {
 
 // ---------- delete account (self-service, all members) ----------
 $("delete-account").onclick = async () => {
-  if (!confirm(
-      "Permanently delete your account?\n\n" +
+  if (!(await confirmDialog(
       "Your watcher tokens, saved ships, cargo runs, and hauling history are " +
       "erased. The POIs and sightings you contributed stay on the org map but " +
       "are stripped of your name. This can't be undone.\n\n" +
-      "You'll be signed out immediately.")) return;
+      "You'll be signed out immediately.",
+      { title: "Permanently delete your account?", confirmLabel: "Delete account", danger: true }))) return;
   const st = $("delete-account-status");
   st.textContent = "deleting your account…";
   try {
