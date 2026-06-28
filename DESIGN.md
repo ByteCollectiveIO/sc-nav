@@ -6,7 +6,7 @@ colors:
   panel: "#141a23"
   panel2: "#1b2330"
   text: "#d8e1ee"
-  dim: "#7b8a9e"
+  dim: "#8693a6"
   accent: "#4fc3f7"
   warn: "#ffb74d"
   good: "#66bb6a"
@@ -179,7 +179,8 @@ nowhere else.
   cooler layer for controls, inputs, and inset cards.
 - **Readout Ink** (`#d8e1ee`, `--text`): primary text, just off-white and
   faintly cool.
-- **Dim Label** (`#7b8a9e`, `--dim`): labels, captions, secondary metadata.
+- **Dim Label** (`#8693a6`, `--dim`): labels, captions, secondary metadata. Tuned to
+  clear WCAG AA (≥4.5:1) even on the raised `--panel2` layer.
 - **Hairline** (`#243044`, `--border`): the 1px borders and dividers that do
   the structural work shadows would do elsewhere.
 - **Track** (`#0c1119`) / **Console Black** (`#080b10`): the recessed wells
