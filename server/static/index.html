@@ -11,6 +11,8 @@
     --good: #66bb6a; --bad: #ef5350; --border: #243044;
     --node: #b39ddb; --fauna: #81c784; --mate: #f06292; --harvest: #cddc39;
     --sel: #ffd54f;  /* gold: currently-selected destination (map ring + row) */
+    --barter: #c08af0; /* marketplace: barter listing mode */
+    --craft: #e0a64f;  /* marketplace: crafted-item quality accents */
     /* Render native controls (date/time pickers, <select> dropdowns) dark so
        they match the site instead of the OS default gray/white menus. */
     color-scheme: dark;
@@ -805,7 +807,7 @@
     border-radius: 3px; padding: 1px 7px; border: 1px solid currentColor; }
   .mk-mode.sale { color: var(--good); }
   .mk-mode.auction { color: var(--accent); }
-  .mk-mode.barter { color: #c08af0; }
+  .mk-mode.barter { color: var(--barter); }
   .mk-status { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
     border-radius: 3px; padding: 1px 7px; border: 1px solid var(--border); color: var(--dim); }
   .mk-status.open { color: var(--good); border-color: var(--good); }
@@ -838,7 +840,11 @@
   .mk-offerform { margin-top: 12px; }
   .mk-deal { font-size: 15px; color: var(--text); margin-bottom: 6px; }
   .mk-confirm-status { font-size: 13px; color: var(--dim); margin: 8px 0; font-variant-numeric: tabular-nums; }
+  /* action feedback: dim while working, red on failure (announced via aria-live) */
   .mk-msg { display: block; margin-top: 8px; font-size: 12px; }
+  .mk-msg:empty { margin-top: 0; }
+  .mk-msg.work { color: var(--dim); }
+  .mk-msg.err { color: var(--bad); }
   /* offer / bid list */
   .mk-offers { display: flex; flex-direction: column; }
   .mk-offer-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 10px;
@@ -853,10 +859,10 @@
   .mk-mode-fields[hidden] { display: none; }
   /* crafted-item quality (SC 4.8) — badge, detail table, form editor */
   .mk-craft { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
-    border-radius: 3px; padding: 1px 7px; border: 1px solid #e0a64f; color: #e0a64f; }
+    border-radius: 3px; padding: 1px 7px; border: 1px solid var(--craft); color: var(--craft); }
   .mk-craftbox { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0;
     background: var(--panel2); }
-  .mk-craft-h { font-size: 13px; font-weight: 600; color: #e0a64f; margin-bottom: 6px; }
+  .mk-craft-h { font-size: 13px; font-weight: 600; color: var(--craft); margin-bottom: 6px; }
   .mk-craft-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .mk-craft-tbl td { padding: 4px 0; border-bottom: 1px solid var(--border); }
   .mk-craft-tbl td:first-child { color: var(--dim); width: 45%; }
@@ -870,7 +876,7 @@
   .mk-mv { font-size: 12px; color: var(--dim); margin-top: 6px; font-variant-numeric: tabular-nums; }
   .mk-mv b { color: var(--text); }
   .mk-mv-lbl { color: var(--accent); }
-  .mk-mv-use { cursor: pointer; margin-left: 6px; font-size: 11px; padding: 1px 8px; border-radius: 5px;
+  .mk-mv-use { cursor: pointer; margin-left: 6px; font-size: 11px; padding: 1px 8px; border-radius: 6px;
     border: 1px solid var(--border); background: transparent; color: var(--accent); }
   .mk-mv-use:hover { border-color: var(--accent); }
   /* board search / sort / filter row */
@@ -879,11 +885,15 @@
     border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
   .mk-search input:focus, .mk-search select:focus { outline: none; border-color: var(--accent); }
   .mk-search input.mk-q { flex: 1; min-width: 160px; }
-  .mk-search input.mk-pr { width: 92px; font-variant-numeric: tabular-nums; }
-  .mk-search .mk-prsep { color: var(--dim); }
-  /* crafted-quality filter row (collapsible) */
-  .mk-craftfilter { margin: 2px 0; }
-  .mk-craftfilter summary { cursor: pointer; font-size: 12px; color: #e0a64f; padding: 4px 0; width: max-content; }
+  /* price inputs + separator live in the Filters disclosure now, so scope them to
+     the market panel rather than .mk-search */
+  .mk-pr { width: 92px; font-variant-numeric: tabular-nums; }
+  .mk-prsep { color: var(--dim); }
+  /* secondary filters (type, price, crafted quality) — collapsed by default */
+  .mk-morefilters { margin: 2px 0; }
+  .mk-morefilters summary { cursor: pointer; font-size: 12px; color: var(--dim); padding: 4px 0; width: max-content; }
+  .mk-morefilters summary:hover { color: var(--accent); }
+  .mk-morefilters[open] summary { margin-bottom: 4px; }
   .mk-craftrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
   .mk-craftrow input, .mk-craftrow select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
@@ -929,6 +939,21 @@
   /* board pager */
   .mk-pager { display: flex; align-items: center; gap: 12px; justify-content: center; margin-top: 14px; }
   .mk-count { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  /* loading: skeleton placeholders on first load; dim-in-place when refiltering an
+     already-populated board (so results don't blink to empty on every keystroke) */
+  #market-list.mk-busy { opacity: .55; transition: opacity .15s; pointer-events: none; }
+  .mk-skel { border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+    background: var(--panel2); margin-bottom: 8px; }
+  #market-list.mk-compact .mk-skel { border-radius: 0; border-width: 0 0 1px; margin: 0; }
+  .mk-skel-bar { height: 12px; border-radius: 4px; background: linear-gradient(
+    90deg, var(--panel2) 0%, var(--border) 50%, var(--panel2) 100%);
+    background-size: 200% 100%; animation: mk-shimmer 1.2s ease-in-out infinite; }
+  .mk-skel-bar + .mk-skel-bar { margin-top: 8px; }
+  @keyframes mk-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .mk-skel-bar { animation: none; background: var(--border); }
+    #market-list.mk-busy { transition: none; }
+  }
 </style>
 </head>
 <body>
@@ -5063,9 +5088,10 @@ function mktUnfiltered() {
 }
 
 function mktEmptyMsg() {
-  if (mktFilter.mine) return "You haven't listed anything yet.";
-  if (!mktUnfiltered()) return "No listings match those filters.";
-  return "No open listings.";
+  if (mktFilter.mine) return "You haven't posted any listings yet.";
+  if (mktFilter.seller) return "Nothing on the board from this seller right now.";
+  if (!mktUnfiltered()) return "No listings match those filters. Try widening them.";
+  return "The market's empty right now — be the first to list something.";
 }
 
 // Jump to the board filtered to one seller (from the "show all from this seller"
@@ -5106,35 +5132,38 @@ async function renderMarketBoard() {
     ["item", "Equipment"], ["custom", "Custom"]], mktFilter.kind);
   const bandOpts = opts([["", "Any band"]].concat(
     [1, 2, 3, 4, 5, 6, 7, 8].map(n => [String(n), `Band ${n}`])), mktFilter.band);
-  const craftOpen = mktFilter.qmin !== "" || mktFilter.qmax !== "" || mktFilter.band !== "" || mktFilter.stat;
+  // Secondary filters (type, price, crafted quality) live behind one disclosure so
+  // the board leads with listings, not chrome. It springs open if any are active.
+  const filtersOn = !!(mktFilter.kind || mktFilter.min !== "" || mktFilter.max !== ""
+    || mktFilter.qmin !== "" || mktFilter.qmax !== "" || mktFilter.band !== "" || mktFilter.stat);
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG MARKETPLACE</h2>` +
     `<a class="ev-btn primary" href="#/market/new">+ New listing</a></div>` +
-    `<p class="rm-intro">Sell, auction &amp; barter items with your org — priced in <b>aUEC only</b>. ` +
-    `Post a listing; another member buys, bids or makes an offer; you both settle the handoff in-game ` +
-    `and mark it done. A closed, trusted market — no strangers, no real money.</p>` +
-    mkBanner() +
+    `<p class="rm-intro">Buy, auction &amp; barter with your org in <b>aUEC only</b> — post a listing, ` +
+    `settle the handoff in-game, mark it done. No strangers, no real money.</p>` +
     `<div class="mk-filter">${tabs}<span class="mk-spacer"></span>` +
     `<button class="mk-tab" data-mine="1">My listings</button></div>` +
     `<div class="mk-search">` +
       `<input class="mk-q" type="search" placeholder="Search items…" autocomplete="off">` +
       `<select class="mk-sort" title="Sort">${sortOpts}</select>` +
-      `<select class="mk-kind" title="Item type">${kindOpts}</select>` +
-      `<input class="mk-pr mk-min" type="number" min="0" placeholder="min" title="min aUEC">` +
-      `<span class="mk-prsep">–</span>` +
-      `<input class="mk-pr mk-max" type="number" min="0" placeholder="max" title="max aUEC">` +
       `<button class="mk-viewtog" id="mk-viewtog" title="Toggle layout"></button></div>` +
-    `<details class="mk-craftfilter"${craftOpen ? " open" : ""}><summary>⚒ Crafted filters</summary>` +
+    `<details class="mk-morefilters"${filtersOn ? " open" : ""}><summary>⚙ Filters${filtersOn ? " · active" : ""}</summary>` +
+      `<div class="mk-craftrow">` +
+        `<select class="mk-kind" title="Item type">${kindOpts}</select>` +
+        `<input class="mk-pr mk-min" type="number" min="0" placeholder="min aUEC" title="min aUEC">` +
+        `<span class="mk-prsep">–</span>` +
+        `<input class="mk-pr mk-max" type="number" min="0" placeholder="max aUEC" title="max aUEC">` +
+      `</div>` +
       `<div class="mk-craftrow">` +
         `<input class="mk-pr mk-qmin" type="number" min="1" max="1000" placeholder="quality ≥" title="min quality (1–1000)">` +
         `<input class="mk-pr mk-qmax" type="number" min="1" max="1000" placeholder="quality ≤" title="max quality (1–1000)">` +
         `<select class="mk-bandsel" title="Quality band">${bandOpts}</select>` +
-        `<input class="mk-statf" type="search" placeholder="stat name or value…" title="crafted stat" autocomplete="off">` +
+        `<input class="mk-statf" type="search" placeholder="crafted stat name or value…" title="crafted stat" autocomplete="off">` +
       `</div></details>` +
     `<div id="mk-sellerchip"></div>` +
     `</div>` +
     `<div id="mk-endingsoon" hidden></div>` +
-    `<div id="market-list" class="panel"><p class="stat-empty">Loading…</p></div>` +
+    `<div id="market-list" class="panel"></div>` +
     `<div id="mk-pager" class="mk-pager" hidden></div>`;
   root.querySelectorAll(".mk-tab").forEach(b => b.onclick = () => {
     if (b.dataset.mine) { mktFilter.mine = !mktFilter.mine; if (mktFilter.mine) mktFilter.seller = ""; }
@@ -5183,24 +5212,41 @@ async function renderMarketBoard() {
   loadMarketPage(true);
 }
 
+// Skeleton placeholders shaped to the active view, shown only on a cold load.
+function mktSkeleton(n) {
+  const block = mktView === "compact"
+    ? `<div class="mk-skel"><div class="mk-skel-bar" style="width:45%"></div></div>`
+    : `<div class="mk-skel"><div class="mk-skel-bar" style="width:60%"></div><div class="mk-skel-bar" style="width:35%"></div></div>`;
+  return block.repeat(n || 6);
+}
+
 async function loadMarketPage(reset) {
   if (reset) { mktOffset = 0; loadEndingSoon(); }
   const listEl = $("market-list"), pager = $("mk-pager");
   if (!listEl) return;
   listEl.classList.toggle("mk-compact", mktView === "compact");
-  if (reset) listEl.innerHTML = `<p class="stat-empty">Loading…</p>`;
+  if (reset) {
+    // Already showing results (a re-filter) → dim them in place. Cold load → skeletons.
+    if (listEl.querySelector(".ev-card, .mk-row")) listEl.classList.add("mk-busy");
+    else listEl.innerHTML = mktSkeleton(6);
+  }
   let data;
   try { data = await fetch(`/api/market?${mktQuery()}`).then(r => r.json()); }
   catch {
-    listEl.innerHTML = `<p class="stat-empty">Couldn't load the marketplace.</p>`;
+    listEl.classList.remove("mk-busy");
+    listEl.innerHTML = `<p class="stat-empty">Couldn't load the marketplace — check your connection and try again.</p>`;
     if (pager) pager.hidden = true; return;
   }
+  listEl.classList.remove("mk-busy");
   const ls = data.listings || [], total = data.total || 0;
   const render = mktView === "compact" ? listingRow : listingCard;
   const cards = ls.map(render).join("");
   if (reset) {
+    // Offer "Post one" only when posting actually answers the emptiness (not when a
+    // filter is simply too narrow — there the next step is to relax the filter).
+    const cta = mktUnfiltered() || mktFilter.mine ? ` <a href="#/market/new">Post one →</a>` : "";
     listEl.innerHTML = ls.length ? cards
-      : `<p class="stat-empty">${mktEmptyMsg()} <a href="#/market/new">Post one →</a></p>`;
+      : `<p class="stat-empty">${mktEmptyMsg()}${cta}</p>`;
   } else if (cards) {
     listEl.insertAdjacentHTML("beforeend", cards);
   }
@@ -5245,7 +5291,7 @@ function mkOpenBlock(l) {
         h += `<span class="muted">You offered ${fmtAuec(l.my_offer.amount_auec)}.</span>`;
       h += `</div>`;
     }
-    return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+    return h + `<span id="mk-msg" class="mk-msg" role="status" aria-live="polite"></span></div>`;
   }
   if (l.mode === "auction") {
     const a = l.auction || {};
@@ -5263,7 +5309,7 @@ function mkOpenBlock(l) {
       if (l.my_offer && l.my_offer.amount_auec != null)
         h += `<span class="muted">Your current bid: ${fmtAuec(l.my_offer.amount_auec)}.</span>`;
     }
-    return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+    return h + `<span id="mk-msg" class="mk-msg" role="status" aria-live="polite"></span></div>`;
   }
   // barter
   let h = `<div class="mk-state"><div class="mk-want"><span class="muted">Wants in return:</span> ${esc(l.want || "")}</div>`;
@@ -5275,7 +5321,7 @@ function mkOpenBlock(l) {
       `<input id="mk-barter-note" class="ti" maxlength="500" placeholder="note (optional)" style="flex:1;min-width:140px">` +
       `<button class="ev-btn primary" id="mk-barter">Make offer</button></div></div>`;
   }
-  return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+  return h + `<span id="mk-msg" class="mk-msg" role="status" aria-live="polite"></span></div>`;
 }
 
 function mkPendingBlock(l) {
@@ -5291,7 +5337,7 @@ function mkPendingBlock(l) {
       ? `<div class="mk-actions"><button class="ev-btn primary" id="mk-confirm">Confirm handoff</button></div>`
       : `<p class="muted">You've confirmed — waiting on the other side.</p>`;
   }
-  return h + `<span id="mk-msg" class="mk-msg muted"></span></div>`;
+  return h + `<span id="mk-msg" class="mk-msg" role="status" aria-live="polite"></span></div>`;
 }
 
 function mkClosedBlock(l) {
@@ -5314,7 +5360,7 @@ function mkOfferRow(l, o) {
   const when = o.created_at ? new Date(o.created_at).toLocaleString() : "";
   let btns = "";
   if (l.status === "open" && o.status === "active") {
-    if (l.can_edit) btns += `<button class="ev-btn sm mk-accept" data-oid="${o.id}">Accept</button>`;
+    if (l.can_edit) btns += `<button class="ev-btn sm mk-accept" data-oid="${o.id}" data-who="${esc(o.bidder_name)}">Accept</button>`;
     if (o.is_mine) btns += `<button class="ev-btn sm mk-withdraw" data-oid="${o.id}">Withdraw</button>`;
   }
   return `<div class="mk-offer-row"><span class="mk-offer-who">${esc(o.bidder_name)}</span>` +
@@ -5353,16 +5399,30 @@ function renderMarketDetailBody(l) {
 
 function wireMarketDetail(l) {
   const id = l.id;
-  const setMsg = (t) => { const m = $("mk-msg"); if (m) m.textContent = t; };
+  // type: "" (cleared) | "work" (in-flight, dim) | "err" (failure, red). The span
+  // is an aria-live region so screen readers announce the result.
+  const setMsg = (t, type) => {
+    const m = $("mk-msg"); if (!m) return;
+    m.textContent = t || "";
+    m.className = "mk-msg" + (type ? " " + type : "");
+  };
+  let busy = false;   // one market action in flight at a time → no double-submit
   async function act(url, body, method) {
-    setMsg("Working…");
+    if (busy) return;
+    busy = true;
+    const btns = document.querySelectorAll("#market-detail-body button");
+    btns.forEach(b => { b.disabled = true; });
+    setMsg("Working…", "work");
     try {
       const r = await fetch(url, { method: method || "POST",
         headers: { "Content-Type": "application/json" },
         body: body != null ? JSON.stringify(body) : undefined });
       if (!r.ok) throw await r.json().catch(() => ({}));
-      renderMarketDetailBody(await r.json());   // endpoints return the full detail view
-    } catch (err) { setMsg((err && err.detail) || "Couldn't complete that."); }
+      renderMarketDetailBody(await r.json());   // success re-renders with fresh, enabled controls
+    } catch (err) {
+      setMsg((err && err.detail) || "That didn't go through — check your connection and try again.", "err");
+      btns.forEach(b => { b.disabled = false; });   // restore so the user can retry
+    } finally { busy = false; }
   }
   const bItem = $("mk-barter-item");
   if (bItem) attachCatalogPicker(bItem.parentElement);
@@ -5371,28 +5431,34 @@ function wireMarketDetail(l) {
   on("mk-buy", () => act(`/api/market/${id}/offer`, {}));
   on("mk-offer", () => {
     const amt = Number($("mk-offer-amt").value);
-    if (!(amt > 0)) return setMsg("Enter an offer greater than 0.");
+    if (!(amt > 0)) return setMsg("Enter an offer amount greater than 0.", "err");
     act(`/api/market/${id}/offer`, { amount_auec: amt });
   });
   on("mk-bid", () => {
     const amt = Number($("mk-bid-amt").value);
-    if (!(amt > 0)) return setMsg("Enter a bid amount.");
+    if (!(amt > 0)) return setMsg("Enter a bid amount greater than 0.", "err");
     act(`/api/market/${id}/offer`, { amount_auec: amt });
   });
   on("mk-buyout", () => act(`/api/market/${id}/offer`, { amount_auec: l.buyout_auec }));
   on("mk-barter", () => {
     const item_id = bItem ? bItem.dataset.itemId : null;
     const note = $("mk-barter-note").value.trim();
-    if (!item_id && !note) return setMsg("Offer an item or a note.");
+    if (!item_id && !note) return setMsg("Offer an item or a note before sending.", "err");
     act(`/api/market/${id}/offer`, { offer_item_id: item_id || null, offer_note: note || null });
   });
   on("mk-confirm", () => act(`/api/market/${id}/confirm`, null));
+  // Accept strikes the deal and binds both parties → guard it like the app's other
+  // commit/destructive actions (confirm()), which Cancel below already uses.
   document.querySelectorAll(".mk-accept").forEach(b =>
-    b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "accept" }, "PATCH"));
+    b.onclick = () => {
+      const who = b.dataset.who ? ` from ${b.dataset.who}` : "";
+      if (!confirm(`Accept this offer${who}? This strikes the deal — both sides then confirm the handoff in-game.`)) return;
+      act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "accept" }, "PATCH");
+    });
   document.querySelectorAll(".mk-withdraw").forEach(b =>
     b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "withdraw" }, "PATCH"));
   on("mk-edit", () => renderMarketEditForm(l));
-  on("mk-cancel", () => { if (confirm("Cancel this listing?")) act(`/api/market/${id}`, { status: "cancelled" }, "PATCH"); });
+  on("mk-cancel", () => { if (confirm("Cancel this listing? It'll be closed and removed from the board. This can't be undone.")) act(`/api/market/${id}`, { status: "cancelled" }, "PATCH"); });
 }
 
 // --- listing create / edit form ---
