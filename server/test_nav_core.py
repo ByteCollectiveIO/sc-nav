@@ -1242,6 +1242,61 @@ class GuildCargoStatsTests(unittest.TestCase):
                          [("P0", "P1")])
 
 
+class MarketStatsTests(unittest.TestCase):
+    def _deal(self, seller, buyer, mode, qty, final_auec, item="Gold"):
+        return {"seller_id": seller, "buyer_id": buyer, "mode": mode, "qty": qty,
+                "final_auec": final_auec, "item_name": item}
+
+    def test_totals_and_trader_count(self):
+        deals = [
+            self._deal("a", "b", "sale", 2, 1000),
+            self._deal("a", "c", "auction", 1, 5000),
+        ]
+        s = nav_core.derive_market_stats(deals)
+        self.assertEqual(s["num_deals"], 2)
+        self.assertEqual(s["auec_volume"], 6000.0)
+        self.assertEqual(s["items_moved"], 3.0)
+        self.assertEqual(s["num_traders"], 3)        # a, b, c
+        self.assertEqual(s["auec_deals"], 2)
+
+    def test_barter_excluded_from_auec_but_counted(self):
+        deals = [
+            self._deal("a", "b", "sale", 1, 2000),
+            self._deal("a", "c", "barter", 1, None, item="Iron"),
+        ]
+        s = nav_core.derive_market_stats(deals)
+        self.assertEqual(s["auec_volume"], 2000.0)   # barter contributes no aUEC
+        self.assertEqual(s["barter_deals"], 1)
+        self.assertEqual(s["auec_deals"], 1)
+        self.assertEqual(s["items_moved"], 2.0)      # but its qty still moved
+
+    def test_top_sellers_ranked_by_auec(self):
+        deals = [
+            self._deal("a", "x", "sale", 1, 1000),
+            self._deal("b", "x", "sale", 1, 9000),
+            self._deal("a", "x", "sale", 1, 500),
+        ]
+        s = nav_core.derive_market_stats(deals)
+        self.assertEqual([t["discord_id"] for t in s["top_sellers"]], ["b", "a"])
+        self.assertEqual(s["top_sellers"][1]["auec"], 1500.0)
+        self.assertEqual(s["top_sellers"][1]["deals"], 2)
+
+    def test_top_items_ranked_by_qty(self):
+        deals = [
+            self._deal("a", "x", "sale", 3, 100, item="Gold"),
+            self._deal("a", "x", "sale", 8, 100, item="Iron"),
+        ]
+        s = nav_core.derive_market_stats(deals)
+        self.assertEqual([i["item"] for i in s["top_items"]], ["Iron", "Gold"])
+        self.assertEqual(s["top_items"][0]["qty"], 8.0)
+
+    def test_empty(self):
+        s = nav_core.derive_market_stats([])
+        self.assertEqual(s["num_deals"], 0)
+        self.assertEqual(s["auec_volume"], 0)
+        self.assertEqual(s["top_sellers"], [])
+
+
 class EventFillTests(unittest.TestCase):
     def _event(self, roster, min_players=0, max_players=None):
         return {"min_players": min_players, "max_players": max_players,

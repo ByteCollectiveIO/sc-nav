@@ -128,6 +128,34 @@
   .seg button:last-child { border-right: none; }
   .seg button.on { background: var(--accent); color: var(--ink-on-accent); }
 
+  /* Org Intel: the shell wrapper manages its own panel rhythm (main uses grid gap,
+     but these panels are nested a level down) — mirror main's 14px gap. */
+  #intel-view, #intel-market { display: grid; gap: 14px; align-content: start; }
+  #intel-view[hidden], #intel-market[hidden] { display: none; }   /* author display: beats UA [hidden] */
+  /* Org Intel: section nav (segmented anchors) + cross-cutting overview */
+  .intel-nav { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%;
+    border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .intel-nav a { padding: 8px 18px; font-size: 12px; letter-spacing: .5px; color: var(--dim);
+    text-decoration: none; background: var(--panel2); border-right: 1px solid var(--border);
+    transition: color .12s, background .12s; }
+  .intel-nav a:last-child { border-right: none; }
+  .intel-nav a:hover { color: var(--text); }
+  .intel-nav a.active { background: var(--accent); color: var(--ink-on-accent); cursor: default; }
+  .intel-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+  .intel-glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .intel-stat { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    text-decoration: none; transition: border-color .12s; }
+  .intel-stat:hover { border-color: var(--accent); }
+  .intel-stat:focus-visible { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(79,195,247,.2); }
+  .intel-stat .n { font-size: 30px; font-variant-numeric: tabular-nums; color: var(--text); }
+  .intel-stat .n.accent { color: var(--accent); }
+  .intel-stat .n.warn { color: var(--warn); }
+  .intel-stat .k { font-size: 11px; letter-spacing: 1px; color: var(--dim); }
+  .intel-glance-foot { margin-top: 12px; font-size: 12px; color: var(--dim); }
+  @media (max-width: 520px) { .intel-nav { width: 100%; } .intel-nav a { flex: 1; text-align: center; padding: 8px 6px; } }
+
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: var(--dim); font-weight: normal; font-size: 11px;
     letter-spacing: 1px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
@@ -462,13 +490,12 @@
   }
 
   /* setup guide */
-  #setup-toggle, #leaderboard-toggle, #stats-toggle, #back-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
+  #setup-toggle, #back-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
     text-decoration: none; white-space: nowrap; }
-  #setup-toggle:hover, #leaderboard-toggle:hover, #stats-toggle:hover, #back-toggle:hover { text-decoration: underline; }
+  #setup-toggle:hover, #back-toggle:hover { text-decoration: underline; }
   /* the current sub-page's own header link: shown but marked active, not hidden,
      so the link set doesn't appear to swap as you move between sub-pages */
-  #nav-toggle.nav-active, #setup-toggle.nav-active, #stats-toggle.nav-active,
-  #leaderboard-toggle.nav-active { color: var(--warn); cursor: default; text-decoration: none; }
+  #nav-toggle.nav-active, #setup-toggle.nav-active { color: var(--warn); cursor: default; text-decoration: none; }
   #back-toggle { font-weight: 600; }
   .setup { max-width: 760px; margin: 0 auto; }
   .setup > h2 { color: var(--accent); letter-spacing: 2px; font-size: 18px; margin: 0 0 6px; }
@@ -1193,8 +1220,6 @@
   <div class="header-right">
     <div id="where">waiting for /showlocation&hellip;</div>
     <a id="back-toggle" href="#/nav" hidden></a>
-    <a id="stats-toggle" href="#/stats" hidden>📊 Stats</a>
-    <a id="leaderboard-toggle" href="#/leaderboard" hidden>🏆 Leaderboard</a>
     <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
     <a id="nav-toggle" href="#/settings" hidden></a>
     <div id="account"></div>
@@ -1238,6 +1263,12 @@
         <div class="app-name">Org Marketplace</div>
         <div class="app-desc">Sell, auction &amp; barter items with your org — priced in aUEC only.
           Post a listing, buy or bid, then settle the handoff in-game.</div>
+      </a>
+      <a class="app-card" href="#/intel">
+        <img class="app-logo" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+        <div class="app-name">Org Intel</div>
+        <div class="app-desc">Your org's analytics deck — mapping coverage, hauling and
+          marketplace activity, and the contributor leaderboards, all in one place.</div>
       </a>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
@@ -1663,6 +1694,56 @@
     </p>
   </div>
   </div><!-- /setup-view -->
+
+  <!-- Org Intel: one analytics app. This shell holds the section nav + the two new
+       sections (Overview, Market); the Mapping/Hauling/Leaderboard sections reuse the
+       existing views below (siblings, shown under the nav per the active section). -->
+  <div id="intel-view" hidden>
+    <nav class="intel-nav" id="intel-nav" aria-label="Org Intel sections">
+      <a href="#/intel" data-sec="overview">Overview</a>
+      <a href="#/intel/mapping" data-sec="mapping">Mapping</a>
+      <a href="#/intel/hauling" data-sec="hauling">Hauling</a>
+      <a href="#/intel/market" data-sec="market">Market</a>
+      <a href="#/intel/boards" data-sec="boards">Leaderboards</a>
+    </nav>
+    <div id="intel-overview" hidden></div>
+    <div id="intel-market" hidden>
+      <div class="panel">
+        <div class="lb-head-row">
+          <h2 style="margin:0;">GUILD MARKETPLACE <span class="muted" id="intel-market-sub"></span></h2>
+          <div class="range-toggle" id="intel-market-range">
+            <button data-range="all" class="active">All-time</button>
+            <button data-range="week">This week</button>
+          </div>
+        </div>
+        <div class="stat-cards" id="intel-market-cards" style="margin-top:12px;"></div>
+        <div class="stat-more" id="intel-market-note"></div>
+      </div>
+      <div class="panel">
+        <h2>aUEC TRADED OVER TIME <span class="muted">(per week · last 16 weeks)</span></h2>
+        <div class="colchart" id="intel-market-activity"></div>
+        <div class="colchart-x" id="intel-market-activity-x"></div>
+        <div class="stat-empty" id="intel-market-activity-empty" hidden>No confirmed deals yet.</div>
+      </div>
+      <div class="stat-grid">
+        <div class="panel">
+          <h2>TOP SELLERS <span class="muted">(by aUEC · confirmed deals)</span></h2>
+          <div class="lb-chart" id="intel-market-sellers"></div>
+          <div class="muted" id="intel-market-sellers-empty" hidden style="padding:8px 0;">No confirmed sales yet.</div>
+        </div>
+        <div class="panel">
+          <h2>MOST-TRADED ITEMS <span class="muted">(by quantity)</span></h2>
+          <div class="hbars" id="intel-market-items"></div>
+        </div>
+      </div>
+    </div>
+    <div class="intel-boards-bar" id="intel-boards-bar" hidden>
+      <div class="seg" id="intel-board-toggle">
+        <button data-board="mapping">Mapping</button>
+        <button data-board="hauling">Hauling</button>
+      </div>
+    </div>
+  </div>
 
   <div id="leaderboard-view" hidden>
   <div class="panel">
@@ -6105,16 +6186,18 @@ function renderMarketEditForm(l) {
 // ---------- view router (app launcher + apps + dedicated sub-pages) ----------
 // One SPA; the URL hash picks the view (fragment never hits the server, so
 // StaticFiles still serves the single index.html). The launcher (#/) is home and
-// hosts the app picker; the Resource Navigator lives at #/nav; #/settings, #/setup,
-// #/leaderboard and #/stats are account/app sub-pages. Empty/unknown hash → home.
+// hosts the app picker; the Resource Navigator lives at #/nav; #/settings + #/setup
+// are account sub-pages; all analytics live under the Org Intel app (#/intel/*).
+// Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
   "#/events": "Events", "#/goals": "Resource Manager", "#/market": "Marketplace",
-  "#/": "Home" };
+  "#/intel": "Org Intel", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
   "#/events": "Event Planner", "#/goals": "Resource Manager",
-  "#/inventory": "Resource Manager", "#/market": "Org Marketplace" };
+  "#/inventory": "Resource Manager", "#/market": "Org Marketplace",
+  "#/intel": "Org Intel" };
 // Returning-user accelerator: if you've opened an app before, the launcher offers a
 // one-click jump back into it (persisted across sessions, unlike the in-session lastApp).
 function renderLauncherResume() {
@@ -6131,11 +6214,21 @@ function renderLauncherResume() {
 }
 // The app a sub-page should return to (persisted so a reload on a sub-page keeps it).
 let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch { return null; } })() || "#/nav";
+// Org Intel consolidated the four old standalone analytics routes. Map legacy
+// bookmarks → [destination section, board to pre-select (boards section only)].
+const INTEL_ALIAS = {
+  "#/stats": ["#/intel/mapping", null], "#/cargo-stats": ["#/intel/hauling", null],
+  "#/leaderboard": ["#/intel/boards", "mapping"], "#/cargo-leaderboard": ["#/intel/boards", "hauling"],
+};
+let intelBoard = "mapping";   // which leaderboard the Boards section shows
 function applyView() {
   // Every view requires sign-in; the login gate covers anonymous users, but guard
   // here too so a stray deep-link can't leave a view exposed behind the gate.
   const authed = !!currentMe;
   const h = location.hash;
+  // Redirect legacy analytics bookmarks into Org Intel (the hashchange re-runs us).
+  const aliased = INTEL_ALIAS[h];
+  if (aliased) { if (aliased[1]) intelBoard = aliased[1]; location.hash = aliased[0]; return; }
   const nav = h === "#/nav" && authed;
   const route = h === "#/route" && authed;
   // The event planner owns a small sub-route family (board / new / detail), so
@@ -6150,10 +6243,11 @@ function applyView() {
   const market = (h === "#/market" || h.startsWith("#/market/")) && authed;
   const settings = h === "#/settings" && authed;
   const setup = h === "#/setup" && authed;
-  const leaderboard = h === "#/leaderboard" && authed;
-  const stats = h === "#/stats" && authed;
-  const cargoLeaderboard = h === "#/cargo-leaderboard" && authed;
-  const cargoStats = h === "#/cargo-stats" && authed;
+  // Org Intel: one analytics app whose section is selected by the sub-route.
+  const intelSec = h === "#/intel" ? "overview" : h === "#/intel/mapping" ? "mapping"
+    : h === "#/intel/hauling" ? "hauling" : h === "#/intel/market" ? "market"
+    : h === "#/intel/boards" ? "boards" : null;
+  const intel = !!intelSec && authed;
   // Legal pages are public — readable before sign-in (linked from the login
   // splash), so they are NOT gated on `authed`. They also suppress the sign-in
   // overlay so an anonymous visitor can actually read them.
@@ -6162,10 +6256,11 @@ function applyView() {
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
   const launcher = authed && !nav && !route && !events && !resourceMgr && !market && !settings && !setup
-    && !leaderboard && !stats && !cargoLeaderboard && !cargoStats && !legal;
-  // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/market/12) to
+    && !intel && !legal;
+  // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/intel/market) to
   // their app root for the header indicator and the "remember last app" jump.
-  const appHash = events ? "#/events" : resourceMgr ? "#/goals" : market ? "#/market" : h;
+  const appHash = events ? "#/events" : resourceMgr ? "#/goals" : market ? "#/market"
+    : intel ? "#/intel" : h;
 
   // The sign-in gate covers everything for anonymous users, except a legal page.
   $("login-gate").hidden = authed || legal;
@@ -6182,31 +6277,29 @@ function applyView() {
   $("market-view").hidden = !market;
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
-  $("leaderboard-view").hidden = !leaderboard;
-  $("stats-view").hidden = !stats;
-  $("cargo-leaderboard-view").hidden = !cargoLeaderboard;
-  $("cargo-stats-view").hidden = !cargoStats;
+  // Org Intel shell + its reused section views. Hide all four reused views by
+  // default; renderIntel un-hides + loads the active section.
+  $("intel-view").hidden = !intel;
+  $("leaderboard-view").hidden = true;
+  $("stats-view").hidden = true;
+  $("cargo-leaderboard-view").hidden = true;
+  $("cargo-stats-view").hidden = true;
+  if (intel) renderIntel(intelSec);
 
-  // Remember which app you're in, so the sub-pages (Settings/Setup/Stats/
-  // Leaderboard) can offer a "← back to that app" link.
-  if (nav || route || events || resourceMgr || market) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
-  // App contexts = each app plus its own Stats/Leaderboard sub-pages. The Stats/
-  // Leaderboard header toggles stay visible across both and point at whichever
-  // app's analytics you're currently in.
-  const inNav = nav || stats || leaderboard;
-  const inCargo = route || cargoStats || cargoLeaderboard;
+  // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
+  // "← back to that app" link.
+  if (nav || route || events || resourceMgr || market || intel) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
 
   // Header chrome. The logo/title (a.home-link) is the universal Home; the back
-  // link returns to the app you came from. ⚙ Settings + 📖 Setup are global (both
-  // apps); 📊 Stats + 🏆 Leaderboard are navigator-scoped. The current sub-page's
-  // own link stays visible but marked active (so the set doesn't appear to swap).
+  // link returns to the app you came from. ⚙ Settings + 📖 Setup are global. Org
+  // Intel now owns all analytics, reached via its launcher card + in-app section nav.
   // Current-app indicator (gold): shown while in an app view. Driven purely by
   // APP_TITLE, so a future app only needs a row added there to appear here.
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || events || resourceMgr || market || inCargo || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || market || legal;
+  $("where").hidden = launcher || route || events || resourceMgr || market || intel || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || market || intel || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   $("nav-toggle").hidden = !authed || launcher;
@@ -6214,27 +6307,11 @@ function applyView() {
   $("nav-toggle").classList.toggle("nav-active", settings);
   $("setup-toggle").hidden = !authed || launcher;
   $("setup-toggle").classList.toggle("nav-active", setup);
-  // Stats/Leaderboard toggles serve both apps; in the cargo context they point
-  // at the guild-hauling analytics, otherwise the navigator's dataset pages.
-  $("stats-toggle").hidden = !authed || (!inNav && !inCargo);
-  $("stats-toggle").setAttribute("href", inCargo ? "#/cargo-stats" : "#/stats");
-  $("stats-toggle").classList.toggle("nav-active", stats || cargoStats);
-  $("leaderboard-toggle").hidden = !authed || (!inNav && !inCargo);
-  $("leaderboard-toggle").setAttribute("href", inCargo ? "#/cargo-leaderboard" : "#/leaderboard");
-  $("leaderboard-toggle").classList.toggle("nav-active", leaderboard || cargoLeaderboard);
 
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
     loadTokens();
     if (currentMe.is_admin) loadSettings();
-  } else if (leaderboard) {
-    loadLeaderboard();
-  } else if (stats) {
-    loadStats();
-  } else if (cargoLeaderboard) {
-    loadCargoLeaderboard();
-  } else if (cargoStats) {
-    loadCargoStats();
   } else if (route) {
     loadRoutePlanner();
   } else if (events) {
@@ -6542,6 +6619,95 @@ async function loadCargoStats() {
     { items: (d.top_lanes || []).map(l => ({ name: `${l.from_name} → ${l.to_name}`, count: l.count })) });
   statBars("cargo-stat-ships",
     { items: (d.top_ships || []).map(s => ({ name: s.ship, count: s.count })) });
+}
+
+// ---------- Org Intel (analytics app shell) ----------
+// Drives the section nav active state, shows the active section's view (Overview
+// + Market live inside #intel-view; Mapping / Hauling / Leaderboards reuse the
+// existing views as siblings below the nav), and loads that section's data.
+function renderIntel(section) {
+  document.querySelectorAll("#intel-nav a").forEach(a =>
+    a.classList.toggle("active", a.dataset.sec === section));
+  $("intel-overview").hidden = section !== "overview";
+  $("intel-market").hidden = section !== "market";
+  $("stats-view").hidden = section !== "mapping";
+  $("cargo-stats-view").hidden = section !== "hauling";
+  const boards = section === "boards";
+  $("intel-boards-bar").hidden = !boards;
+  $("leaderboard-view").hidden = !(boards && intelBoard === "mapping");
+  $("cargo-leaderboard-view").hidden = !(boards && intelBoard === "hauling");
+  if (section === "overview") loadIntelOverview();
+  else if (section === "mapping") loadStats();
+  else if (section === "hauling") loadCargoStats();
+  else if (section === "market") loadMarketStats();
+  else if (boards) {
+    document.querySelectorAll("#intel-board-toggle button").forEach(b => {
+      b.classList.toggle("on", b.dataset.board === intelBoard);
+      b.onclick = () => { intelBoard = b.dataset.board; renderIntel("boards"); };
+    });
+    if (intelBoard === "mapping") loadLeaderboard(); else loadCargoLeaderboard();
+  }
+}
+
+// Overview: a cross-cutting "org at a glance" — the headline number from each
+// domain, each a deep-link into its section. Three small fetches in parallel.
+async function loadIntelOverview() {
+  $("intel-overview").innerHTML = `<div class="panel"><h2>ORG AT A GLANCE</h2>` +
+    `<div class="intel-glance" id="intel-glance"></div>` +
+    `<div class="intel-glance-foot" id="intel-glance-foot"></div></div>`;
+  const [stats, cargo, market] = await Promise.all([
+    fetch("/api/stats").then(r => r.json()).catch(() => ({})),
+    fetch("/api/cargo/stats").then(r => r.json()).catch(() => ({})),
+    fetch("/api/market/stats").then(r => r.json()).catch(() => ({})),
+  ]);
+  const t = stats.totals || {};
+  const cells = [
+    ["#/intel/mapping", "accent", (t.records || 0).toLocaleString(), "GUILD RECORDS"],
+    ["#/intel/hauling", "warn", Math.round(cargo.total_reward || 0).toLocaleString(), "aUEC HAULED"],
+    ["#/intel/market", "warn", Math.round(market.auec_volume || 0).toLocaleString(), "aUEC TRADED"],
+    ["#/intel/boards", "", (t.contributors || 0).toLocaleString(), "CONTRIBUTORS"],
+  ];
+  $("intel-glance").innerHTML = cells.map(([href, cls, n, k]) =>
+    `<a class="intel-stat" href="${href}"><span class="n ${cls}">${n}</span><span class="k">${k}</span></a>`).join("");
+  const top = (market.top_sellers || [])[0];
+  $("intel-glance-foot").textContent = top
+    ? `Top trader: ${top.display_name} (${fmtAuec(top.auec)}). Pick a section above for the full breakdown.`
+    : `Pick a section above for the full breakdown.`;
+}
+
+// Market: guild marketplace stats over confirmed deals. Mirrors loadCargoStats.
+let intelMarketRange = "all";
+async function loadMarketStats() {
+  $("intel-market-sub").textContent = intelMarketRange === "week" ? "(this week)" : "(all-time)";
+  wireRangeToggle("intel-market-range", intelMarketRange, r => { intelMarketRange = r; loadMarketStats(); });
+  let d;
+  try { d = await fetch(`/api/market/stats?range=${intelMarketRange}`).then(r => r.json()); }
+  catch { return; }
+  $("intel-market-cards").innerHTML = [
+    [d.num_deals || 0, "DEALS"],
+    [Math.round(d.auec_volume || 0).toLocaleString(), "aUEC VOLUME"],
+    [Math.round(d.items_moved || 0).toLocaleString(), "ITEMS MOVED"],
+    [d.num_traders || 0, "TRADERS"],
+  ].map(([n, k]) => `<div class="stat-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
+  $("intel-market-note").textContent = (d.barter_deals
+    ? `Includes ${d.barter_deals} barter deal${d.barter_deals === 1 ? "" : "s"} (goods-for-goods, no aUEC). `
+    : "") + "Counts confirmed deals only; expired or cancelled listings aren't included.";
+  // Weekly aUEC volume (mirrors the Hauling chart).
+  const act = d.activity || [];
+  $("intel-market-activity-empty").hidden = act.length > 0;
+  const aMax = act.reduce((m, w) => Math.max(m, w.count), 0) || 1;
+  $("intel-market-activity").innerHTML = act.map(w => {
+    const hh = (w.count / aMax) * 100;
+    return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)}">
+        <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
+        <span class="bar" style="height:${hh}%"></span>
+      </div>`;
+  }).join("");
+  $("intel-market-activity-x").innerHTML = act.map(w => `<span>${esc(w.label)}</span>`).join("");
+  cargoBoard("intel-market-sellers", "intel-market-sellers-empty", d.top_sellers || [],
+    r => r.auec, v => fmtAuec(v), "auec");
+  statBars("intel-market-items",
+    { items: (d.top_items || []).map(i => ({ name: i.item, count: i.qty })) });
 }
 
 // Mark the active button in a range toggle and (re)bind its clicks. Idempotent —

@@ -236,6 +236,10 @@ CREATE TABLE IF NOT EXISTS listings (
     -- {quality:1-1000, band:1-8, stats:[{name,value}]} so a seller can advertise a
     -- crafted component's quality + per-stat values. Free-form like goals.line_items.
     attributes TEXT,
+    -- Agreed aUEC frozen at completion (sale/auction = the accepted offer amount;
+    -- barter stays NULL). Denormalized here so guild market stats are a pure
+    -- listings query with no offer join.
+    final_auec REAL,
     created_at TEXT, updated_at TEXT, completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS listings_status ON listings(status);
@@ -284,6 +288,7 @@ def init(db_path) -> None:
         denorm_added = _ensure_column("listings", "sort_price", "REAL")
         denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("listings", "attributes", "TEXT")
+        _ensure_column("listings", "final_auec", "REAL")
         # Index the board's sort column now that it's guaranteed to exist (see the
         # note in SCHEMA — it can't be created inside the schema script on upgrade).
         _conn.execute("CREATE INDEX IF NOT EXISTS listings_sort_price ON listings(sort_price)")
@@ -1336,11 +1341,16 @@ def confirm_listing(listing_id: int, side: str, updated_at: str,
     col = "seller_confirmed" if side == "seller" else "buyer_confirmed"
     sets = f"{col}=1, updated_at=?"
     params: list = [updated_at]
-    if completed_at is not None:
-        sets += ", status='completed', completed_at=?"
-        params.append(completed_at)
-    params.append(listing_id)
     with _lock, _conn:
+        if completed_at is not None:
+            # Freeze the agreed aUEC: every struck sale/auction leaves one accepted
+            # offer holding the price; barter's accepted offer carries no amount.
+            row = _conn.execute(
+                "SELECT amount_auec FROM listing_offers WHERE listing_id=? "
+                "AND status='accepted' ORDER BY id DESC LIMIT 1", (listing_id,)).fetchone()
+            sets += ", status='completed', completed_at=?, final_auec=?"
+            params += [completed_at, row["amount_auec"] if row else None]
+        params.append(listing_id)
         cur = _conn.execute(f"UPDATE listings SET {sets} WHERE id=?", params)
         _recompute_denorm(listing_id)
     return cur.rowcount > 0
@@ -1362,6 +1372,21 @@ def delete_listing(listing_id: int) -> bool:
         _conn.execute("DELETE FROM listing_offers WHERE listing_id=?", (listing_id,))
         cur = _conn.execute("DELETE FROM listings WHERE id=?", (listing_id,))
     return cur.rowcount > 0
+
+
+def list_completed_listings(since: str | None = None) -> list[dict]:
+    """Completed marketplace deals for guild market stats. `since` (ISO ts) limits
+    to deals completed on/after it; None = all-time. Freshest first. Mirrors
+    list_all_completed_runs — the derivation lives in nav_core."""
+    sql = "SELECT * FROM listings WHERE status='completed'"
+    params: list = []
+    if since:
+        sql += " AND completed_at >= ?"
+        params.append(since)
+    sql += " ORDER BY completed_at DESC"
+    with _lock:
+        rows = _conn.execute(sql, params).fetchall()
+    return [_listing_row_to_dict(r) for r in rows]
 
 
 def completed_deals_count(member_id: str) -> int:

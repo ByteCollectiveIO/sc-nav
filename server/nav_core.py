@@ -2113,6 +2113,64 @@ def derive_guild_cargo_stats(nav: NavData, runs, limit: int = 15) -> dict:
             "top_lanes": lanes, "top_ships": ships}
 
 
+def derive_market_stats(listings, limit: int = 15) -> dict:
+    """Guild marketplace aggregates for the Org Intel Market section, over
+    *completed* deals only (the dual-confirm handshake; expired/cancelled
+    listings never reach here, so this measures confirmed trades, not ads).
+    aUEC volume and the seller board cover sale + auction deals (`final_auec`
+    frozen at completion); barter deals are counted on their own — goods-for-
+    goods, no aUEC. Pure derivation: returns seller member ids for the endpoint
+    to name + rank, and the weekly volume series is added there."""
+    auec_volume = items_moved = 0.0
+    barter_deals = 0
+    traders: set[str] = set()
+    seller_auec: dict[str, float] = {}
+    seller_deals: dict[str, int] = {}
+    item_qty: dict[str, float] = {}
+    item_ct: dict[str, int] = {}
+    for lst in listings:
+        sid = str(lst.get("seller_id") or "")
+        bid = str(lst.get("buyer_id") or "")
+        if sid:
+            traders.add(sid)
+        if bid:
+            traders.add(bid)
+        qty = float(lst.get("qty") or 0)
+        items_moved += qty
+        name = (lst.get("item_name") or "").strip()
+        if name:
+            item_qty[name] = item_qty.get(name, 0.0) + qty
+            item_ct[name] = item_ct.get(name, 0) + 1
+        if lst.get("mode") == "barter":
+            barter_deals += 1
+            continue
+        amt = lst.get("final_auec")
+        amt = float(amt) if amt is not None else 0.0
+        auec_volume += amt
+        if sid:
+            seller_auec[sid] = seller_auec.get(sid, 0.0) + amt
+            seller_deals[sid] = seller_deals.get(sid, 0) + 1
+    top_sellers = [
+        {"discord_id": sid, "auec": round(seller_auec[sid], 2),
+         "deals": seller_deals.get(sid, 0)}
+        for sid in sorted(seller_auec, key=lambda k: (-seller_auec[k], k))[:limit]
+    ]
+    top_items = [
+        {"item": n, "qty": round(item_qty[n], 2), "count": item_ct[n]}
+        for n in sorted(item_qty, key=lambda k: (-item_qty[k], k))[:limit]
+    ]
+    return {
+        "num_deals": len(listings),
+        "auec_volume": round(auec_volume, 2),
+        "items_moved": round(items_moved, 2),
+        "num_traders": len(traders),
+        "barter_deals": barter_deals,
+        "auec_deals": len(listings) - barter_deals,
+        "top_sellers": top_sellers,
+        "top_items": top_items,
+    }
+
+
 def derive_event_fill(event: dict, signups) -> dict:
     """Fill of an event against its target roster (design: docs/event-planner.md).
 
