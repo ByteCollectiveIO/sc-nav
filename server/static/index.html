@@ -3569,6 +3569,11 @@ function renderAccount(me) {
   const admin = me.is_admin ? ` <span class="muted">(admin)</span>` : "";
   el.innerHTML = `<span class="muted">signed in as</span> <b>${esc(me.display_name || me.username || "member")}</b>${admin} · <a id="logout">log out</a>`;
   $("logout").onclick = async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); };
+  // Cache the member's identity from this /api/me payload *before* rendering the
+  // identity panel — renderIdentityPanel reads myIdentity, so it has to be set
+  // here (renderAccount is the single place that receives the full me object).
+  myIdentity = { handles: me.handles || [], primary_handle: me.primary_handle || null,
+                 directory_opt_out: !!me.directory_opt_out };
   // The watcher-token panel is for any member; the org-administration panels are
   // admin-only. Both groups live inside #settings-view, shown by the hash router
   // (applyView); #admin-section wraps the admin-only group as one visibility unit.
@@ -7412,8 +7417,7 @@ async function boot() {
   renderAccount(me);
   if (me) {
     myId = me.id;
-    myIdentity = { handles: me.handles || [], primary_handle: me.primary_handle || null,
-                   directory_opt_out: !!me.directory_opt_out };
+    // myIdentity is set inside renderAccount(me) above (it owns the me payload).
     sharePresence = me.share_presence !== false;   // default share-on
     $("share-toggle").checked = sharePresence;
     renderRoster();   // reveal the (empty) teammates panel before the WS roster lands
