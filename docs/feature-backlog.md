@@ -1256,3 +1256,19 @@ contribute path), and the `#/inventory` + goal-detail UI (nested parent→child 
 available cap). This is the largest of the five and supersedes the current
 "contribution = inventory row with goal_id" shortcut documented in
 `docs/org-inventory-goals.md` (update that doc when built).
+
+## 17. Member identity, primary handle & directory
+
+**Status:** **ALL FOUR STEPS BUILT 2026-06-29** (uncommitted, needs /deploy). Full design:
+[`docs/member-identity-and-directory.md`](member-identity-and-directory.md).
+
+Closes the identity inconsistency where the Marketplace shows no in-game handle
+while POIs and the leaderboard do. Introduces a persistent `members` table
+(discord_id, display_name, guild_nick, primary_handle, directory_opt_out) upserted
+at login, a per-account **primary handle**, a denormalized `listings.seller_handle`
+(unverified-allowed, verified computed live from the handle registry), and an
+admin-only **member directory** cross-walking Discord display name ↔ in-game
+handle(s). Privacy: admin-only, opt-out is cosmetic vs admins (the Discord↔handle
+link already exists in the `handles` registry; this surfaces it). Build order:
+1) `members` table + login upsert + `_resolve_member_name` rewrite, 2) primary
+handle, 3) marketplace `seller_handle`, 4) directory + opt-out.

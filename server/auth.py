@@ -117,6 +117,7 @@ def fetch_member_profile(access_token: str, required_role_id: str = "",
         "id": uid,
         "username": me.get("username"),
         "display_name": me.get("global_name") or me.get("username"),
+        "guild_nick": member.get("nick"),   # per-org nickname, if the member set one
         "avatar": me.get("avatar"),
         "is_admin": is_admin,
     }, None

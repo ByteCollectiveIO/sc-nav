@@ -459,6 +459,23 @@ class HandleRegistry:
         return {e["player_id"] for e in self.by_handle.values()
                 if e.get("discord_id") == discord_id}
 
+    def handles_for(self, discord_id: str) -> list[str]:
+        """The in-game handles a Discord member has had a watcher bind to them,
+        most-recently-seen first. These are the *verified* handles — the picker's
+        options and the set a marketplace handle is checked against."""
+        owned = [e for e in self.by_handle.values()
+                 if e.get("discord_id") == discord_id]
+        owned.sort(key=lambda e: e.get("last_seen") or "", reverse=True)
+        return [e["handle"] for e in owned]
+
+    def owns_handle(self, discord_id: str, handle: str) -> bool:
+        """Whether `handle` is currently bound to this Discord member (the live
+        verification check behind a listing's `handle_verified`)."""
+        if not handle:
+            return False
+        return any(e["handle"] == handle and e.get("discord_id") == discord_id
+                   for e in self.by_handle.values())
+
     def handle_for(self, player_id: int) -> str | None:
         """Current handle for a PlayerID (latest known after any rename)."""
         for e in self.by_handle.values():
@@ -468,6 +485,55 @@ class HandleRegistry:
 
     def list(self) -> list[dict]:
         return sorted(self.by_handle.values(), key=lambda e: e["handle"].lower())
+
+
+class MemberDirectory:
+    """Persisted Discord identities (DB-backed, cached in memory), keyed by
+    discord_id. Backs display-name resolution everywhere a member is shown and the
+    admin directory. Loaded at boot; kept current on login (upsert) and on the
+    member's own primary-handle / opt-out edits."""
+
+    def __init__(self):
+        self.by_id = {m["discord_id"]: m for m in db.all_members()}
+
+    def upsert(self, profile: dict) -> None:
+        rec = {"now": datetime.now(timezone.utc).isoformat(), **profile}
+        db.upsert_member(rec)
+        did = str(profile["id"])
+        cur = self.by_id.get(did, {"discord_id": did})
+        cur.update({"username": profile.get("username"),
+                    "display_name": profile.get("display_name"),
+                    "guild_nick": profile.get("guild_nick"),
+                    "last_login": rec["now"]})
+        cur.setdefault("first_login", rec["now"])
+        cur.setdefault("primary_handle", None)
+        cur.setdefault("directory_opt_out", 0)
+        self.by_id[did] = cur
+
+    def get(self, discord_id: str) -> dict | None:
+        return self.by_id.get(str(discord_id))
+
+    def set_primary_handle(self, discord_id: str, handle: str | None) -> None:
+        did = str(discord_id)
+        db.set_primary_handle(did, handle)
+        self.by_id.setdefault(did, {"discord_id": did})["primary_handle"] = handle
+
+    def set_opt_out(self, discord_id: str, opt_out: bool) -> None:
+        did = str(discord_id)
+        db.set_directory_opt_out(did, opt_out)
+        self.by_id.setdefault(did, {"discord_id": did})["directory_opt_out"] = 1 if opt_out else 0
+
+    def forget(self, discord_id: str) -> None:
+        self.by_id.pop(str(discord_id), None)
+
+    def display_name(self, discord_id: str) -> str | None:
+        """The member's preferred display label: org nickname, then Discord
+        display name. None if we've never persisted this member (caller falls
+        back to a handle or id stub)."""
+        m = self.by_id.get(str(discord_id))
+        if not m:
+            return None
+        return m.get("guild_nick") or m.get("display_name")
 
 
 class TokenStore:
@@ -609,6 +675,7 @@ db.import_legacy_json(DATA_DIR, nav_core.OBSERVATION_CATEGORIES)  # one-time JSO
 nav = load_nav_data()
 handles = HandleRegistry()
 tokens = TokenStore()
+members_dir = MemberDirectory()
 raw_commodity_names = load_raw_commodity_names()
 commodity_names = load_commodity_names()
 harvestable_names = load_harvestable_names()
@@ -1733,19 +1800,25 @@ async def reset_route_session(user: dict = Depends(require_session)):
 
 
 def _resolve_member_name(discord_id: str, stored: str | None) -> str:
-    """A display name for a member on the cargo leaderboard. Prefers the name the
-    run was stamped with; otherwise falls back to a watcher token's name, then a
-    linked SC handle, then a short id stub. Keeps the board labelled even for
-    runs that predate name capture or members who never minted a token."""
+    """A display name for a member anywhere one is shown (leaderboards, listings,
+    stats). Prefers a name a row was stamped with; then the persisted Discord
+    identity (org nick → display name) from the member directory; then a watcher
+    token's name; then the member's primary or any bound handle; finally a short
+    id stub. Keeps every surface labelled even for legacy rows or members who
+    never minted a token."""
     if stored:
         return stored
+    name = members_dir.display_name(discord_id)
+    if name:
+        return name
     for t in tokens.items:
         if t.get("discord_id") == discord_id and t.get("display_name"):
             return t["display_name"]
-    for pid in handles.player_ids_for(discord_id):
-        h = handles.handle_for(pid)
-        if h:
-            return h
+    member = members_dir.get(discord_id)
+    if member and member.get("primary_handle"):
+        return member["primary_handle"]
+    for h in handles.handles_for(discord_id):
+        return h
     return f"Member {str(discord_id)[-4:]}"
 
 
@@ -2419,6 +2492,7 @@ class ListingIn(BaseModel):
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
     crafted: CraftedIn | None = None                            # crafted-quality blob
+    seller_handle: str | None = Field(default=None, max_length=_HANDLE_MAX)  # in-game meetup name
 
 
 class ListingPatchIn(BaseModel):
@@ -2442,17 +2516,18 @@ class OfferActionIn(BaseModel):
     action: str = Field(max_length=16)                         # accept | withdraw
 
 
-_LISTING_PUBLIC = ("id", "seller_id", "item_id", "item_name", "unit", "qty", "mode",
-                   "price_auec", "start_price", "buyout_auec", "ends_at", "want",
-                   "status", "note", "buyer_id", "seller_confirmed", "buyer_confirmed",
-                   "attributes", "created_at", "updated_at", "completed_at")
+_LISTING_PUBLIC = ("id", "seller_id", "seller_handle", "item_id", "item_name", "unit",
+                   "qty", "mode", "price_auec", "start_price", "buyout_auec", "ends_at",
+                   "want", "status", "note", "buyer_id", "seller_confirmed",
+                   "buyer_confirmed", "attributes", "created_at", "updated_at",
+                   "completed_at")
 
 # The columns a board card needs — a subset of _LISTING_PUBLIC, served without the
 # per-listing offer query (auction high-bid/count ride the denormalized columns).
 # `attributes` rides along so a card can show the "Crafted · Qn" badge.
-_LISTING_CARD = ("id", "seller_id", "item_id", "item_name", "unit", "qty", "mode",
-                 "price_auec", "start_price", "ends_at", "want", "status",
-                 "sort_price", "offer_count", "attributes", "created_at")
+_LISTING_CARD = ("id", "seller_id", "seller_handle", "item_id", "item_name", "unit",
+                 "qty", "mode", "price_auec", "start_price", "ends_at", "want",
+                 "status", "sort_price", "offer_count", "attributes", "created_at")
 
 
 def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
@@ -2550,6 +2625,10 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
     state = nav_core.derive_auction_state(listing, offers, now)
     view = {k: listing.get(k) for k in _LISTING_PUBLIC}
     view["seller_name"] = _resolve_member_name(listing["seller_id"], None)
+    # Verified iff the meetup handle is currently bound to the seller (live, so a
+    # listing typed before the seller ran the watcher self-upgrades once it binds).
+    view["handle_verified"] = handles.owns_handle(
+        listing["seller_id"], listing.get("seller_handle"))
     view["seller_deals"] = db.completed_deals_count(listing["seller_id"])
     view["is_seller"] = listing["seller_id"] == user["id"]
     view["can_edit"] = view["is_seller"] or bool(user.get("is_admin"))
@@ -2562,11 +2641,15 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
                          "offer_note": mine.get("offer_note")} if mine else None)
     if listing.get("buyer_id"):
         view["buyer_name"] = _resolve_member_name(listing["buyer_id"], None)
+        # The buyer's meetup handle so the seller knows who to look for in-game
+        # (and vice-versa) once a deal is pending.
+        view["buyer_handle"] = _meetup_handle(listing["buyer_id"])
         view["is_buyer"] = listing["buyer_id"] == user["id"]
         view["can_confirm"] = (listing["status"] == "pending"
                                and (view["is_seller"] or view["is_buyer"]))
     else:
         view["buyer_name"], view["is_buyer"], view["can_confirm"] = None, False, False
+        view["buyer_handle"] = None
     if detail:
         view["offers"] = [
             {"id": o["id"], "bidder_id": o["bidder_id"],
@@ -2598,6 +2681,8 @@ def _listing_card(listing: dict, user: dict, deals: dict) -> dict:
     db.refresh_listing_denorm), so the board read is pure SQL."""
     card = {k: listing.get(k) for k in _LISTING_CARD}
     card["seller_name"] = _resolve_member_name(listing["seller_id"], None)
+    card["handle_verified"] = handles.owns_handle(
+        listing["seller_id"], listing.get("seller_handle"))
     card["seller_deals"] = deals.get(str(listing["seller_id"]), 0)
     card["is_seller"] = listing["seller_id"] == user["id"]
     if listing["mode"] == "auction":
@@ -2650,13 +2735,24 @@ async def list_market(mode: str | None = None, item: str | None = None,
             "total": total, "limit": limit, "offset": offset}
 
 
+def _meetup_handle(discord_id: str) -> str | None:
+    """The in-game handle to show as a member's meetup name: their chosen primary
+    handle, else the most-recent watcher-bound one, else None."""
+    return _member_identity(discord_id)["primary_handle"]
+
+
 @app.post("/api/market")
 async def create_listing(body: ListingIn, user: dict = Depends(require_session)):
-    """Post a listing (any org member). aUEC only — never real money."""
+    """Post a listing (any org member). aUEC only — never real money. The listing
+    carries a `seller_handle` (the in-game meetup name): the seller's typed value,
+    else their primary handle. It may be unverified — `handle_verified` is computed
+    live at read time from the handle registry, so it self-upgrades once a watcher
+    binds the handle."""
     fields = _validate_listing(body)
+    handle = (body.seller_handle or "").strip() or _meetup_handle(user["id"])
     now = datetime.now(timezone.utc).isoformat()
-    lid = db.create_listing({**fields, "seller_id": user["id"], "status": "open",
-                             "created_at": now, "updated_at": now})
+    lid = db.create_listing({**fields, "seller_id": user["id"], "seller_handle": handle,
+                             "status": "open", "created_at": now, "updated_at": now})
     return _listing_view(db.get_listing(lid), user, detail=True)
 
 
@@ -3571,6 +3667,12 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
         _clear_oauth_state_cookie(resp)
         return resp
     request.session["user"] = profile
+    # Persist the Discord identity so display names survive past the session cookie
+    # and back the member directory (step: docs/member-identity-and-directory.md).
+    try:
+        members_dir.upsert(profile)
+    except Exception as exc:                       # never block sign-in on this
+        print(f"[sc-nav] member upsert failed: {exc!r}", flush=True)
     resp = RedirectResponse("/")
     _clear_oauth_state_cookie(resp)
     return resp
@@ -3582,14 +3684,30 @@ async def auth_logout(request: Request):
     return {"ok": True}
 
 
+def _member_identity(discord_id: str) -> dict:
+    """The member's identity block for the UI: their verified (watcher-bound)
+    handles, the chosen primary handle (defaulting to the most-recent bound one
+    when unset), and the directory opt-out. Read-only — picking a primary is an
+    explicit PUT, so the default here never writes."""
+    owned = handles.handles_for(discord_id)
+    member = members_dir.get(discord_id) or {}
+    primary = member.get("primary_handle")
+    if primary not in owned:                    # unset, or stale after a rename
+        primary = owned[0] if owned else None
+    return {"handles": owned, "primary_handle": primary,
+            "directory_opt_out": bool(member.get("directory_opt_out"))}
+
+
 @app.get("/api/me")
 async def api_me(request: Request):
     """The signed-in org member (or 401). Drives the UI's account state. Carries
-    the live presence-share flag so the UI's toggle reflects the current state."""
+    the live presence-share flag so the UI's toggle reflects the current state,
+    plus the member's handles + primary-handle + directory preference."""
     user = require_session(request)
     return {**user, "share_presence": hub.get(user).share_presence,
             "org_logo": bool(db.get_setting("org_logo_ext")),
-            "ships": db.list_user_ships(user["id"])}
+            "ships": db.list_user_ships(user["id"]),
+            **_member_identity(user["id"])}
 
 
 class ProfileIn(BaseModel):
@@ -3613,6 +3731,65 @@ async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
             sess.share_presence = body.share_presence
             hub.touch_presence(sess)   # re-publish, or drop if now off / not on a body
         return {"ok": True, "share_presence": sess.share_presence}
+
+
+class PrimaryHandleIn(BaseModel):
+    handle: str | None = Field(default=None, max_length=_HANDLE_MAX)
+
+
+@app.put("/api/me/primary-handle")
+async def set_primary_handle(body: PrimaryHandleIn, user: dict = Depends(require_session)):
+    """Choose which of the caller's in-game handles is shown across the apps. Must
+    be one a watcher has bound to them (a verified handle), or null to clear back
+    to the default. Rejecting unowned handles keeps the picker honest — you can't
+    claim a handle that isn't yours."""
+    handle = (body.handle or "").strip() or None
+    if handle is not None and not handles.owns_handle(user["id"], handle):
+        raise HTTPException(status_code=400,
+                            detail="that handle isn't bound to your account")
+    members_dir.set_primary_handle(user["id"], handle)
+    return {"ok": True, **_member_identity(user["id"])}
+
+
+class DirectoryOptIn(BaseModel):
+    opt_out: bool
+
+
+@app.put("/api/me/directory-opt-out")
+async def set_directory_opt_out(body: DirectoryOptIn, user: dict = Depends(require_session)):
+    """Hide the caller from member-facing directory surfaces. Cosmetic with
+    respect to admins, who always see everyone (the Discord<->handle link already
+    exists in the handle registry); the UI says so plainly."""
+    members_dir.set_opt_out(user["id"], body.opt_out)
+    return {"ok": True, "directory_opt_out": body.opt_out}
+
+
+@app.get("/api/intel/directory")
+async def member_directory(admin: dict = Depends(require_admin)):
+    """Admin-only member directory: the cross-walk between each member's Discord
+    identity (org nick / display name) and their watcher-bound in-game handle(s).
+    Admin-only by design; a member's `opt_out` is surfaced here (admins always see
+    everyone — the link already exists in the handle registry) so the UI can flag
+    opted-out rows, and it filters them out of any future member-facing view.
+    docs/member-identity-and-directory.md."""
+    rows = []
+    for did, m in members_dir.by_id.items():
+        owned = handles.handles_for(did)
+        primary = m.get("primary_handle")
+        if primary not in owned:
+            primary = owned[0] if owned else None
+        rows.append({
+            "discord_id": did,
+            "display_name": m.get("guild_nick") or m.get("display_name"),
+            "username": m.get("username"),
+            "handles": owned,
+            "primary_handle": primary,
+            "opt_out": bool(m.get("directory_opt_out")),
+            "last_login": m.get("last_login"),
+            "is_admin": did in admin_ids(),
+        })
+    rows.sort(key=lambda r: (r["display_name"] or r["username"] or r["discord_id"]).lower())
+    return {"members": rows, "total": len(rows)}
 
 
 @app.delete("/api/me")
@@ -3645,6 +3822,7 @@ async def delete_me(request: Request, user: dict = Depends(require_session)):
         handles.by_handle = {h: e for h, e in handles.by_handle.items()
                              if e.get("discord_id") != uid}
         tokens.items = [t for t in tokens.items if t["discord_id"] != uid]
+        members_dir.forget(uid)
         # 3) Drop their live presence + session so teammates see them leave.
         hub.drop_presence(uid)
         hub.sessions.pop(uid, None)

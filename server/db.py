@@ -64,6 +64,23 @@ CREATE TABLE IF NOT EXISTS handles (
     discord_id TEXT          -- owning member; bound when a watcher posts the handle
 );
 
+-- Persistent member directory: the Discord identity captured at login (id +
+-- display name + org nickname), the member's chosen primary in-game handle (for
+-- display across the apps), and their directory opt-out. Previously this lived
+-- only in the session cookie and was guessed at by _resolve_member_name; this
+-- table makes display names durable and gives every surface one handle to show.
+-- The Discord<->handle link itself lives in `handles` (bound by the watcher);
+-- this table just persists the Discord-side names and the display preference.
+CREATE TABLE IF NOT EXISTS members (
+    discord_id     TEXT PRIMARY KEY,
+    username       TEXT,              -- discord username
+    display_name   TEXT,              -- discord global_name
+    guild_nick     TEXT,              -- per-org nickname (member.nick)
+    primary_handle TEXT,              -- chosen in-game handle for display
+    directory_opt_out INTEGER NOT NULL DEFAULT 0,
+    first_login TEXT, last_login TEXT
+);
+
 CREATE TABLE IF NOT EXISTS watcher_tokens (
     id TEXT PRIMARY KEY,
     hash TEXT UNIQUE,
@@ -289,6 +306,8 @@ def init(db_path) -> None:
         denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("listings", "attributes", "TEXT")
         _ensure_column("listings", "final_auec", "REAL")
+        # Marketplace meetup handle (display only; ownership stays on seller_id).
+        _ensure_column("listings", "seller_handle", "TEXT")
         # Index the board's sort column now that it's guaranteed to exist (see the
         # note in SCHEMA — it can't be created inside the schema script on upgrade).
         _conn.execute("CREATE INDEX IF NOT EXISTS listings_sort_price ON listings(sort_price)")
@@ -483,6 +502,64 @@ def upsert_handle(entry: dict) -> None:
             (entry["player_id"], entry["handle"], entry.get("first_seen"),
              entry.get("last_seen"), entry.get("discord_id")),
         )
+
+
+# --- members (Discord identity directory) ----------------------------------
+
+
+def upsert_member(profile: dict) -> None:
+    """Persist the Discord-side identity captured at login. Stamps `first_login`
+    once (kept on re-login via COALESCE) and refreshes name fields + `last_login`
+    every time. Never touches `primary_handle`/`directory_opt_out` — those are the
+    member's own choices, set through their dedicated setters."""
+    did = str(profile["id"])
+    now = profile.get("now")
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, username, display_name, guild_nick, "
+            "first_login, last_login) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET "
+            "  username=excluded.username, display_name=excluded.display_name, "
+            "  guild_nick=excluded.guild_nick, "
+            "  first_login=COALESCE(members.first_login, excluded.first_login), "
+            "  last_login=excluded.last_login",
+            (did, profile.get("username"), profile.get("display_name"),
+             profile.get("guild_nick"), now, now),
+        )
+
+
+def get_member(discord_id: str) -> dict | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM members WHERE discord_id=?", (str(discord_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def all_members() -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM members").fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_primary_handle(discord_id: str, handle: str | None) -> None:
+    """Set (or clear) a member's chosen display handle. The caller validates that
+    `handle` is one the member actually owns; this just stores it, creating a stub
+    member row if they somehow have none yet (deletion-then-reuse edge)."""
+    did = str(discord_id)
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, primary_handle) VALUES (?,?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET primary_handle=excluded.primary_handle",
+            (did, handle))
+
+
+def set_directory_opt_out(discord_id: str, opt_out: bool) -> None:
+    did = str(discord_id)
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, directory_opt_out) VALUES (?,?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET directory_opt_out=excluded.directory_opt_out",
+            (did, 1 if opt_out else 0))
 
 
 # --- watcher tokens --------------------------------------------------------
@@ -1174,13 +1251,14 @@ def create_listing(d: dict) -> int:
     """Insert a listing (caller supplies validated fields + seller_id + timestamps)."""
     with _lock, _conn:
         cur = _conn.execute(
-            "INSERT INTO listings (seller_id, item_id, item_name, unit, qty, mode, "
-            "price_auec, start_price, buyout_auec, ends_at, want, status, note, "
-            "attributes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (str(d["seller_id"]), d["item_id"], d.get("item_name"), d.get("unit"),
-             d.get("qty", 1), d.get("mode", "sale"), d.get("price_auec"),
-             d.get("start_price"), d.get("buyout_auec"), d.get("ends_at"),
-             d.get("want"), d.get("status", "open"), d.get("note"),
+            "INSERT INTO listings (seller_id, seller_handle, item_id, item_name, unit, "
+            "qty, mode, price_auec, start_price, buyout_auec, ends_at, want, status, "
+            "note, attributes, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(d["seller_id"]), d.get("seller_handle"), d["item_id"],
+             d.get("item_name"), d.get("unit"), d.get("qty", 1), d.get("mode", "sale"),
+             d.get("price_auec"), d.get("start_price"), d.get("buyout_auec"),
+             d.get("ends_at"), d.get("want"), d.get("status", "open"), d.get("note"),
              _j(d.get("attributes")), d.get("created_at"), d.get("updated_at")),
         )
         _recompute_denorm(cur.lastrowid)        # seed the board columns
@@ -1537,6 +1615,10 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
             "UPDATE listings SET buyer_id=NULL WHERE buyer_id=?", (did,))
         _conn.execute("DELETE FROM meta WHERE key=?",
                       (f"cargo_session_start:{did}",))
+        # Drop the persisted Discord identity row (names + primary handle +
+        # directory preference). Re-login re-creates a fresh stub via upsert_member.
+        counts["member"] = _conn.execute(
+            "DELETE FROM members WHERE discord_id=?", (did,)).rowcount
     return counts
 
 
