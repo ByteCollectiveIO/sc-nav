@@ -433,9 +433,12 @@
   .fansite-disclaimer { max-width: 620px; margin: 28px auto 0; text-align: center;
     font-size: 10px; line-height: 1.6; color: var(--dim); }
   .login-card .fansite-disclaimer { margin-top: 20px; }
-  .data-credit { text-align: center; font-size: 11px; color: var(--dim); margin: 10px auto 0; }
-  .data-credit a, .fansite-disclaimer a { color: var(--accent); text-decoration: none; }
-  .data-credit a:hover, .fansite-disclaimer a:hover { text-decoration: underline; }
+  .data-credit { text-align: center; font-size: 11px; color: var(--dim); margin: 14px auto 0; }
+  .fansite-disclaimer a { color: var(--accent); text-decoration: none; }
+  .fansite-disclaimer a:hover { text-decoration: underline; }
+  .uex-badge { height: 28px; width: auto; display: inline-block; vertical-align: middle;
+    opacity: .85; transition: opacity .12s; }
+  .data-credit a:hover .uex-badge { opacity: 1; }
 
   .login-gate { position: fixed; inset: 0; background: var(--bg);
     display: grid; place-items: center; z-index: 50; padding: 20px; }
@@ -1278,8 +1281,10 @@
       with the Cloud Imperium group of companies. All content not authored by its host or
       users is property of their respective owners. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
-    <p class="data-credit">Ship, commodity &amp; item data
-      <a href="https://uexcorp.space" target="_blank" rel="noopener">Powered by UEX</a></p>
+    <p class="data-credit"><a href="https://uexcorp.space" target="_blank" rel="noopener"
+        title="Ship, commodity & item data powered by the UEX Corp API">
+        <img class="uex-badge" src="/images/uex-api-badge-powered.png?v={{APP_VERSION}}"
+          alt="Powered by UEX" width="480" height="142"></a></p>
   </div>
 
   <div id="main-view">
