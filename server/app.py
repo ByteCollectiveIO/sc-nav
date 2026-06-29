@@ -2660,6 +2660,47 @@ async def create_listing(body: ListingIn, user: dict = Depends(require_session))
     return _listing_view(db.get_listing(lid), user, detail=True)
 
 
+# NB: must be declared BEFORE /api/market/{listing_id} — FastAPI matches in order,
+# and "stats" would otherwise bind to {listing_id:int} and 422.
+@app.get("/api/market/stats")
+async def market_stats(range: str = "all", user: dict = Depends(require_session)):
+    """Guild marketplace statistics for the Org Intel Market section: confirmed-
+    deal totals (aUEC volume, items moved, deal + trader counts), the top sellers
+    by aUEC, the most-traded items, and a weekly aUEC-volume sparkline. Only
+    completed deals count — expired/cancelled ads never appear, so this measures
+    confirmed trades. `range=week` scopes the totals/breakdowns to the trailing 7
+    days; the sparkline always spans the trailing weeks so the trend stays read."""
+    listings = db.list_completed_listings(_cargo_window_start(range))
+    stats = nav_core.derive_market_stats(listings)
+    for s in stats["top_sellers"]:
+        s["display_name"] = _resolve_member_name(s["discord_id"], None)
+        s["mine"] = s["discord_id"] == user["id"]
+    # Weekly aUEC volume (mirrors cargo/stats' sparkline). Always all-time so the
+    # trend doesn't collapse to a single bar under the 'week' range.
+    spark = listings if range != "week" else db.list_completed_listings(None)
+    weeks: Counter = Counter()
+    for lst in spark:
+        ts = lst.get("completed_at")
+        amt = lst.get("final_auec")
+        if not ts or not amt:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        weeks[_iso_week_start(dt)] += float(amt)
+    activity = []
+    if weeks:
+        end = _iso_week_start(datetime.now(timezone.utc))
+        start = end - timedelta(weeks=_STATS_WEEKS - 1)
+        wk = start
+        while wk <= end:
+            activity.append({"label": wk.strftime("%b %d"),
+                             "count": round(weeks.get(wk, 0), 2)})
+            wk += timedelta(weeks=1)
+    return {"range": range, **stats, "activity": activity}
+
+
 @app.get("/api/market/{listing_id}")
 async def get_market_listing(listing_id: int, user: dict = Depends(require_session)):
     """One listing with its offer/bid list + derived auction state."""
@@ -2825,45 +2866,6 @@ async def confirm_handoff(listing_id: int, user: dict = Depends(require_session)
     other_confirmed = listing["buyer_confirmed"] if is_seller else listing["seller_confirmed"]
     db.confirm_listing(listing_id, side, ts, completed_at=ts if other_confirmed else None)
     return _listing_view(db.get_listing(listing_id), user, detail=True)
-
-
-@app.get("/api/market/stats")
-async def market_stats(range: str = "all", user: dict = Depends(require_session)):
-    """Guild marketplace statistics for the Org Intel Market section: confirmed-
-    deal totals (aUEC volume, items moved, deal + trader counts), the top sellers
-    by aUEC, the most-traded items, and a weekly aUEC-volume sparkline. Only
-    completed deals count — expired/cancelled ads never appear, so this measures
-    confirmed trades. `range=week` scopes the totals/breakdowns to the trailing 7
-    days; the sparkline always spans the trailing weeks so the trend stays read."""
-    listings = db.list_completed_listings(_cargo_window_start(range))
-    stats = nav_core.derive_market_stats(listings)
-    for s in stats["top_sellers"]:
-        s["display_name"] = _resolve_member_name(s["discord_id"], None)
-        s["mine"] = s["discord_id"] == user["id"]
-    # Weekly aUEC volume (mirrors cargo/stats' sparkline). Always all-time so the
-    # trend doesn't collapse to a single bar under the 'week' range.
-    spark = listings if range != "week" else db.list_completed_listings(None)
-    weeks: Counter = Counter()
-    for lst in spark:
-        ts = lst.get("completed_at")
-        amt = lst.get("final_auec")
-        if not ts or not amt:
-            continue
-        try:
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            continue
-        weeks[_iso_week_start(dt)] += float(amt)
-    activity = []
-    if weeks:
-        end = _iso_week_start(datetime.now(timezone.utc))
-        start = end - timedelta(weeks=_STATS_WEEKS - 1)
-        wk = start
-        while wk <= end:
-            activity.append({"label": wk.strftime("%b %d"),
-                             "count": round(weeks.get(wk, 0), 2)})
-            wk += timedelta(weeks=1)
-    return {"range": range, **stats, "activity": activity}
 
 
 @app.get("/api/biomes")
