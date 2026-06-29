@@ -130,8 +130,12 @@
 
   /* Org Intel: the shell wrapper manages its own panel rhythm (main uses grid gap,
      but these panels are nested a level down) — mirror main's 14px gap. */
-  #intel-view, #intel-market { display: grid; gap: 14px; align-content: start; }
-  #intel-view[hidden], #intel-market[hidden] { display: none; }   /* author display: beats UA [hidden] */
+  #intel-view { display: grid; gap: 14px; align-content: start; }
+  /* Section body wrappers (status overlay sits beside them): each manages its own
+     panel rhythm since main's grid gap doesn't reach a level down. */
+  #stats-body, #cargo-stats-body, #intel-market-body { display: grid; gap: 14px; align-content: start; }
+  #intel-view[hidden], #stats-body[hidden], #cargo-stats-body[hidden],
+  #intel-market-body[hidden] { display: none; }   /* author display: beats UA [hidden] */
   /* Org Intel: section nav (segmented anchors) + cross-cutting overview */
   .intel-nav { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%;
     border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
@@ -1718,6 +1722,8 @@
     </nav>
     <div id="intel-overview" hidden></div>
     <div id="intel-market" hidden>
+      <div id="intel-market-status" class="stats-status" hidden></div>
+      <div id="intel-market-body">
       <div class="panel">
         <div class="lb-head-row">
           <h2 style="margin:0;">GUILD MARKETPLACE <span class="muted" id="intel-market-sub"></span></h2>
@@ -1746,6 +1752,7 @@
           <div class="hbars" id="intel-market-items"></div>
         </div>
       </div>
+      </div><!-- /intel-market-body -->
     </div>
     <div class="intel-boards-bar" id="intel-boards-bar" hidden>
       <div class="seg" id="intel-board-toggle">
@@ -1866,6 +1873,8 @@
   </div><!-- /cargo-leaderboard-view -->
 
   <div id="cargo-stats-view" hidden>
+  <div id="cargo-stats-status" class="stats-status" hidden></div>
+  <div id="cargo-stats-body">
   <div class="panel">
     <div class="lb-head-row">
       <h2 style="margin:0;">GUILD HAULING OVERVIEW <span class="muted" id="cargo-stat-sub"></span></h2>
@@ -1896,6 +1905,7 @@
       <div class="hbars" id="cargo-stat-ships"></div>
     </div>
   </div>
+  </div><!-- /cargo-stats-body -->
   </div><!-- /cargo-stats-view -->
 
   <div id="route-view" hidden>
@@ -6423,48 +6433,62 @@ function statBars(elId, block, cls = "") {
   el.innerHTML = html;
 }
 
-async function loadStats() {
-  const status = $("stats-status"), body = $("stats-body");
-  // Loading skeleton. The LAN call is usually fast, but a slow or failed fetch
-  // must never leave a silent blank page (the old `catch { return }` did).
-  body.hidden = true; status.hidden = false;
-  status.innerHTML = `<div class="stats-skel" aria-hidden="true">` +
+// ---------- shared analytics-section status (skeleton → error+retry → render) ----------
+// Every Org Intel section loads through loadSection so they're resilient the same
+// way: a loading skeleton, an error panel with Retry, an optional teaching empty
+// state, else render. No section silent-fails to a blank page or a row of zeros.
+function sectionSkeleton() {
+  return `<div class="stats-skel" aria-hidden="true">` +
     `<div class="sk sk-hero"></div>` +
     `<div class="sk-row">${'<div class="sk sk-card"></div>'.repeat(5)}</div>` +
     `<div class="sk sk-chart"></div></div>`;
-
+}
+function sectionMsg(title, sub, action) {
+  let cta = "";
+  if (action && action.retry) cta = `<button class="cta" data-retry>Retry</button>`;
+  else if (action && action.href) cta = `<a class="cta" href="${action.href}">${esc(action.label)}</a>`;
+  return `<div class="stats-msg"><div class="stats-msg-title">${esc(title)}</div>` +
+    `<p class="stats-msg-sub">${esc(sub)}</p>${cta}</div>`;
+}
+async function loadSection(statusId, bodyId, opts) {
+  const status = $(statusId), body = $(bodyId);
+  body.hidden = true; status.hidden = false;
+  status.innerHTML = sectionSkeleton();
   let d;
   try {
-    const r = await fetch("/api/stats");
+    const r = await fetch(opts.url);
     if (!r.ok) throw new Error(r.status);
     d = await r.json();
   } catch {
-    status.innerHTML = `<div class="stats-msg">` +
-      `<div class="stats-msg-title">Couldn't load statistics</div>` +
-      `<p class="stats-msg-sub">Check your connection to the nav server and try again.</p>` +
-      `<button class="cta" id="stats-retry">Retry</button></div>`;
-    $("stats-retry").onclick = loadStats;
+    status.innerHTML = sectionMsg("Couldn't load this section",
+      "Check your connection to the nav server and try again.", { retry: true });
+    status.querySelector("[data-retry]").onclick = () => loadSection(statusId, bodyId, opts);
     return;
   }
-
-  const t = d.totals || {};
-  // Imported = the starmap POI catalog (admin opt-in). Shown only when loaded,
-  // distinct from the guild's own POIs.
-  const imported = t.poi_imported || 0;
-  const hasImported = !!d.catalog_enabled && imported > 0;
-
-  // Fresh org: nothing mapped and no catalog. Teach the page rather than stack
-  // ten "No data yet" panels under a row of zeros.
-  if (!(t.records || 0) && !(d.top_bodies || []).length && !imported) {
-    status.innerHTML = `<div class="stats-msg">` +
-      `<div class="stats-msg-title">No dataset yet</div>` +
-      `<p class="stats-msg-sub">Statistics build as your org maps the 'verse. Record POIs and ` +
-      `resource nodes from the navigator and your guild's coverage, ore quality, and weekly ` +
-      `activity will appear here.</p>` +
-      `<a class="cta" href="#/nav">Open the navigator →</a></div>`;
+  if (opts.isEmpty && opts.isEmpty(d)) {
+    status.innerHTML = sectionMsg(opts.empty.title, opts.empty.sub, opts.empty.action);
     return;
   }
   status.hidden = true; body.hidden = false;
+  opts.render(d);
+}
+
+// Mapping section (resource dataset overview). Teaching empty state for fresh orgs.
+function loadStats() {
+  return loadSection("stats-status", "stats-body", {
+    url: "/api/stats",
+    isEmpty: d => { const t = d.totals || {}; return !(t.records || 0) && !(d.top_bodies || []).length && !(t.poi_imported || 0); },
+    empty: { title: "No dataset yet",
+      sub: "Statistics build as your org maps the 'verse. Record POIs and resource nodes from the navigator and your guild's coverage, ore quality, and weekly activity will appear here.",
+      action: { href: "#/nav", label: "Open the navigator →" } },
+    render: renderStats,
+  });
+}
+function renderStats(d) {
+  const t = d.totals || {};
+  // Imported = the starmap POI catalog (admin opt-in); distinct from guild POIs.
+  const imported = t.poi_imported || 0;
+  const hasImported = !!d.catalog_enabled && imported > 0;
 
   // Hero: total guild records — the single glance value the page is built around.
   // Contributor / system / body counts ride beside it as meta context.
@@ -6598,13 +6622,13 @@ async function loadCargoLeaderboard() {
     r => r.auec_per_hour, v => fmtAuec(v) + "/hr", "rate");
 }
 
-async function loadCargoStats() {
+function loadCargoStats() {
+  return loadSection("cargo-stats-status", "cargo-stats-body", {
+    url: `/api/cargo/stats?range=${cargoStatRange}`, render: renderCargoStats });
+}
+function renderCargoStats(d) {
   $("cargo-stat-sub").textContent = cargoStatRange === "week" ? "(this week)" : "(all-time)";
   wireRangeToggle("cargo-stat-range", cargoStatRange, r => { cargoStatRange = r; loadCargoStats(); });
-  let d;
-  try {
-    d = await fetch(`/api/cargo/stats?range=${cargoStatRange}`).then(r => r.json());
-  } catch { return; }
   $("cargo-stat-cards").innerHTML = [
     [d.num_haulers || 0, "HAULERS"], [d.num_runs || 0, "RUNS"],
     [fmtAuec(d.total_reward || 0), "aUEC EARNED"], [fmtAuec(d.total_scu || 0), "SCU MOVED"],
@@ -6690,12 +6714,13 @@ async function loadIntelOverview() {
 
 // Market: guild marketplace stats over confirmed deals. Mirrors loadCargoStats.
 let intelMarketRange = "all";
-async function loadMarketStats() {
+function loadMarketStats() {
+  return loadSection("intel-market-status", "intel-market-body", {
+    url: `/api/market/stats?range=${intelMarketRange}`, render: renderMarketStats });
+}
+function renderMarketStats(d) {
   $("intel-market-sub").textContent = intelMarketRange === "week" ? "(this week)" : "(all-time)";
   wireRangeToggle("intel-market-range", intelMarketRange, r => { intelMarketRange = r; loadMarketStats(); });
-  let d;
-  try { d = await fetch(`/api/market/stats?range=${intelMarketRange}`).then(r => r.json()); }
-  catch { return; }
   $("intel-market-cards").innerHTML = [
     [d.num_deals || 0, "DEALS"],
     [Math.round(d.auec_volume || 0).toLocaleString(), "aUEC VOLUME"],
