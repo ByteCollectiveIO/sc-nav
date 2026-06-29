@@ -89,9 +89,25 @@
 
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
   .panel h2 { margin: 0 0 8px; font-size: 12px; color: var(--dim); letter-spacing: 1px; }
-  /* Org Settings is one long panel of many sections — rule off each section
+  /* Admin panels group several related settings — rule off each sub-section
      (after the first) so they stop blending into one another. */
-  #admin-panel h2 ~ h2 { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .admin-grp h2 ~ h2 { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+
+  /* ---- settings layout: group panels under "Your account" vs "Org administration" ---- */
+  /* Wrapper is layout-transparent so its panels stay direct grid items of <main>
+     (keeping the 14px gap); the [hidden] rule beats display:contents to hide it. */
+  #admin-section { display: contents; }
+  #admin-section[hidden] { display: none; }
+  /* Group label binds to the panels below it: a little extra air above (group
+     break), a little less below (header hugs its first panel). */
+  .settings-grp-h { font-size: 11px; letter-spacing: 2px; color: var(--dim);
+    text-transform: uppercase; margin: 6px 2px -4px; }
+  #settings-view > .settings-grp-h:first-child { margin-top: 0; }
+  .settings-grp-h .muted { letter-spacing: 0; text-transform: none; font-size: 12px; }
+  /* The one panel that wipes org-wide data is fenced in red so it can't be
+     mistaken for an everyday setting. */
+  .danger-zone { border-color: var(--bad); }
+  .danger-zone h2 { color: var(--bad); }
   .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 
   #dest-card { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
@@ -1511,12 +1527,13 @@
   </div><!-- /main-view -->
 
   <div id="settings-view" hidden>
+  <div class="settings-grp-h">Your account</div>
   <div class="panel" id="token-panel" hidden>
     <h2>WATCHER TOKEN <span class="muted">(authenticates the desktop watcher)</span></h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <input id="token-label" class="ti" placeholder="label (e.g. gaming-pc)" style="min-width:160px;">
+      <input id="token-label" class="ti" placeholder="label (e.g. gaming-pc)" aria-label="Watcher token label" style="min-width:160px;">
       <button id="token-gen">Generate token</button>
-      <span class="muted" id="token-status"></span>
+      <span class="muted" id="token-status" role="status" aria-live="polite"></span>
     </div>
     <div id="token-new" class="armed" hidden style="margin-top:8px;"></div>
     <div class="table-x" style="margin-top:8px;">
@@ -1524,6 +1541,9 @@
       <thead><tr><th>LABEL</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
+    </div>
+    <div class="muted" id="token-empty" hidden style="font-size:12px; margin-top:8px;">
+      No watcher tokens yet — generate one and paste it into the watcher on your gaming PC.
     </div>
   </div>
 
@@ -1538,28 +1558,18 @@
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <button id="delete-account" class="danger-btn">Delete my account</button>
-      <span class="muted" id="delete-account-status"></span>
+      <span class="muted" id="delete-account-status" role="status" aria-live="polite"></span>
     </div>
   </div>
 
-  <div class="panel" id="admin-panel" hidden>
-    <h2>ORG SETTINGS <span class="muted">(admin)</span></h2>
-    <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
-      <input type="checkbox" id="starmap-toggle"> Import the starmap.space POI catalog
-    </label>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Off by default — your org starts from a blank POI database (only your own
-      custom POIs and QT markers). Check this to import the full starmap.space
-      catalog right now (no restart needed); once imported it re-fetches the
-      latest on every restart. Uncheck to remove it and go back to a clean
-      database immediately — your custom POIs are kept. Celestial bodies are
-      always loaded.
-    </div>
+  <div id="admin-section" hidden>
+  <div class="settings-grp-h">Org administration <span class="muted">— these settings affect everyone in your org</span></div>
 
+  <div class="panel admin-grp" id="access-panel">
     <h2>ACCESS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <input id="member-role" class="ti" placeholder="(empty = any server member)"
-             style="min-width:220px;" inputmode="numeric">
+             aria-label="Required Discord role ID" style="min-width:220px;" inputmode="numeric">
       <button id="member-role-save">Save role gate</button>
     </div>
     <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -1568,7 +1578,7 @@
       the role → <b>Copy Role ID</b> and paste it here. Admins always have access; a
       change takes effect at each member's next sign-in.
     </div>
-    <div class="muted" id="admin-status" style="margin-top:6px;"></div>
+    <div class="muted" id="admin-status" role="status" aria-live="polite" style="margin-top:6px;"></div>
 
     <h2>ADMINS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -1580,9 +1590,22 @@
     <div id="admin-list" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;"></div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <input id="admin-add" class="ti" placeholder="Discord user ID"
-             style="min-width:220px;" inputmode="numeric">
+             aria-label="Discord user ID to add as admin" style="min-width:220px;" inputmode="numeric">
       <button id="admin-add-btn">Add admin</button>
-      <span class="muted" id="admin-ids-status"></span>
+      <span class="muted" id="admin-ids-status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <div class="panel admin-grp" id="dataset-panel">
+    <h2>POI CATALOG</h2>
+    <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
+      <input type="checkbox" id="starmap-toggle"> Import the starmap.space POI catalog
+    </label>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Off by default: your org starts blank (just your own POIs and QT markers;
+      celestial bodies always load). Check to import the full starmap.space catalog
+      now — no restart needed, and it refreshes on each restart. Uncheck to drop it
+      and return to a clean database; your custom POIs stay.
     </div>
 
     <h2>OBSERVATION FRESHNESS</h2>
@@ -1592,12 +1615,11 @@
       <button id="fresh-window-save">Save</button>
     </div>
     <div class="muted" style="font-size:12px; margin-top:4px;">
-      Resource nodes and fauna are ephemeral — SC respawns them. The map markers
-      and NEARBY list hide sightings older than this (the map's "fresh only"
-      toggle is the per-view escape hatch; the ore heatmap always uses every
-      sighting). Tune this as you learn SC's respawn cadence.
+      SC respawns resource nodes and fauna, so the map and NEARBY list hide
+      sightings older than this. (The map's "fresh only" toggle overrides per view;
+      the ore heatmap always uses every sighting.) Tune it to SC's respawn cadence.
     </div>
-    <div class="muted" id="fresh-window-status" style="font-size:12px; margin-top:4px;"></div>
+    <div class="muted" id="fresh-window-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
     <h2>BRANDING</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -1611,18 +1633,20 @@
       <input type="file" id="org-logo-file" accept="image/png,image/jpeg,image/webp">
       <button id="org-logo-upload">Upload</button>
       <button id="org-logo-remove" hidden>Remove logo</button>
-      <span class="muted" id="org-logo-status"></span>
+      <span class="muted" id="org-logo-status" role="status" aria-live="polite"></span>
     </div>
+  </div>
 
+  <div class="panel admin-grp danger-zone" id="danger-panel">
     <h2>CLEAR STATISTICS <span class="muted">(danger)</span></h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Permanently wipe the data behind a Statistics page. There's no undo, so
       each button asks you to confirm first.
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <button id="clear-resource-stats">Clear resource statistics</button>
-      <button id="clear-cargo-stats">Clear cargo statistics</button>
-      <span class="muted" id="clear-stats-status"></span>
+      <button id="clear-resource-stats" class="danger-btn">Clear resource statistics</button>
+      <button id="clear-cargo-stats" class="danger-btn">Clear cargo statistics</button>
+      <span class="muted" id="clear-stats-status" role="status" aria-live="polite"></span>
     </div>
     <div class="muted" style="font-size:12px; margin-top:4px;">
       <b>Resource</b> deletes every resource, fauna, and harvestable sighting
@@ -1633,6 +1657,7 @@
       running).
     </div>
   </div>
+  </div><!-- /admin-section -->
   </div><!-- /settings-view -->
 
   <div id="setup-view" hidden>
@@ -3469,10 +3494,11 @@ function renderAccount(me) {
   const admin = me.is_admin ? ` <span class="muted">(admin)</span>` : "";
   el.innerHTML = `<span class="muted">signed in as</span> <b>${esc(me.display_name || me.username || "member")}</b>${admin} · <a id="logout">log out</a>`;
   $("logout").onclick = async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); };
-  // The watcher-token panel is for any member; ORG SETTINGS is admin-only. Both
-  // now live inside #settings-view, shown by the hash router (applyView).
+  // The watcher-token panel is for any member; the org-administration panels are
+  // admin-only. Both groups live inside #settings-view, shown by the hash router
+  // (applyView); #admin-section wraps the admin-only group as one visibility unit.
   $("token-panel").hidden = false;
-  $("admin-panel").hidden = !me.is_admin;
+  $("admin-section").hidden = !me.is_admin;
   // Show the real server address in the Setup guide.
   $("setup-server").textContent = location.origin;
   $("setup-cmd").textContent =
@@ -6835,6 +6861,8 @@ function renderAdmins() {
       const x = document.createElement("button");
       x.textContent = "✕";
       x.title = "Remove admin";
+      x.setAttribute("aria-label", `Remove admin ${id}`);
+      x.className = "danger-btn";
       x.style.cssText = "padding:0 5px; line-height:1;";
       x.onclick = () => removeAdmin(id);
       el.append(x);
@@ -6887,6 +6915,11 @@ $("admin-add-btn").onclick = () => {
   saveAdmins([...extraAdmins, id], `added ${id}`);
   $("admin-add").value = "";
 };
+// Enter in a settings field commits its action, so saving never needs the mouse.
+$("admin-add").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("admin-add-btn").click(); } });
+$("member-role").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("member-role-save").click(); } });
+$("fresh-window").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fresh-window-save").click(); } });
+$("token-label").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("token-gen").click(); } });
 
 $("fresh-window-save").onclick = async () => {
   const h = parseInt($("fresh-window").value, 10);
@@ -7026,11 +7059,22 @@ async function loadTokens() {
       `<td class="muted">${t.last_used ? esc(t.last_used.slice(0, 16).replace("T", " ")) : "never"}</td>` +
       `<td><span class="del" tabindex="0" role="button" aria-label="revoke" title="revoke">✕</span></td>`;
     tr.querySelector(".del").onclick = async () => {
-      await fetch(`/api/tokens/${t.id}`, { method: "DELETE" }); loadTokens();
+      if (!(await confirmDialog(
+          "The watcher using this token stops reporting until you give it a new one.",
+          { title: `Revoke token "${t.label}"?`, confirmLabel: "Revoke token", danger: true }))) return;
+      const st = $("token-status");
+      st.textContent = "revoking…";
+      try {
+        const r = await fetch(`/api/tokens/${t.id}`, { method: "DELETE" });
+        if (!r.ok) throw new Error();
+        st.textContent = "token revoked";
+        loadTokens();
+      } catch { st.textContent = "failed to revoke — try again"; }
     };
     tbody.appendChild(tr);
   }
   $("token-table").hidden = list.length === 0;
+  $("token-empty").hidden = list.length !== 0;
 }
 $("token-gen").onclick = async () => {
   const label = $("token-label").value.trim() || "watcher";
