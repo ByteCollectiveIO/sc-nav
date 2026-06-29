@@ -433,6 +433,9 @@
   .fansite-disclaimer { max-width: 620px; margin: 28px auto 0; text-align: center;
     font-size: 10px; line-height: 1.6; color: var(--dim); }
   .login-card .fansite-disclaimer { margin-top: 20px; }
+  .data-credit { text-align: center; font-size: 11px; color: var(--dim); margin: 10px auto 0; }
+  .data-credit a, .fansite-disclaimer a { color: var(--accent); text-decoration: none; }
+  .data-credit a:hover, .fansite-disclaimer a:hover { text-decoration: underline; }
 
   .login-gate { position: fixed; inset: 0; background: var(--bg);
     display: grid; place-items: center; z-index: 50; padding: 20px; }
@@ -1229,7 +1232,7 @@
 <main>
   <div id="launcher-view" class="launcher" hidden>
     <h2 class="launcher-head">Your org toolkit</h2>
-    <p class="launcher-sub">Five tools, one org. New here? Start with the Resource Navigator —
+    <p class="launcher-sub">Six tools, one org. New here? Start with the Resource Navigator —
       the rest build on it.</p>
     <a id="launcher-resume" class="launcher-resume" hidden></a>
     <div class="app-grid">
@@ -1275,6 +1278,8 @@
       with the Cloud Imperium group of companies. All content not authored by its host or
       users is property of their respective owners. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+    <p class="data-credit">Ship, commodity &amp; item data
+      <a href="https://uexcorp.space" target="_blank" rel="noopener">Powered by UEX</a></p>
   </div>
 
   <div id="main-view">
@@ -1958,7 +1963,8 @@
 
     <div id="route-history" class="panel" hidden></div>
 
-    <p class="fansite-disclaimer">Ship &amp; commodity data via the uexcorp fan API. This is an
+    <p class="fansite-disclaimer">Ship &amp; commodity data
+      <a href="https://uexcorp.space" target="_blank" rel="noopener">Powered by UEX</a>. This is an
       unofficial Star Citizen fansite, not affiliated with the Cloud Imperium group of companies.
       Star Citizen®, Roberts Space Industries® and Cloud Imperium® are registered trademarks of
       Cloud Imperium Rights LLC.</p>
@@ -6302,10 +6308,12 @@ function applyView() {
   $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || market || intel || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
-  $("nav-toggle").hidden = !authed || launcher;
+  // Settings + Setup are global utilities — available whenever signed in, including
+  // on the launcher (so you don't have to enter an app to reach them).
+  $("nav-toggle").hidden = !authed;
   $("nav-toggle").textContent = "⚙ Settings";
   $("nav-toggle").classList.toggle("nav-active", settings);
-  $("setup-toggle").hidden = !authed || launcher;
+  $("setup-toggle").hidden = !authed;
   $("setup-toggle").classList.toggle("nav-active", setup);
 
   if (settings) {
