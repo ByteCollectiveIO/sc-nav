@@ -1,6 +1,6 @@
 ---
 name: SC Nav
-description: A dark cockpit-instrument UI for a Star Citizen org companion suite.
+description: A cockpit-instrument UI for a Star Citizen org companion suite — canonical dark theme with a tinted light (day) mode from one token set.
 colors:
   bg: "#0b0e13"
   panel: "#141a23"
@@ -129,11 +129,19 @@ chrome or gratuitous glow.
 This system explicitly rejects the **toy / gamified UI** (no cartoon badges,
 confetti, achievement spam — people are mid-mission) and the **cluttered
 fan-wiki** (no dense, ad-heavy, unstyled wall of text). It is not a generic
-rounded-card SaaS dashboard, and it is never light, cream, or flat — that would
-break the cockpit-at-night feel that is the whole point.
+rounded-card SaaS dashboard.
+
+Dark is the **canonical** theme — the cockpit at night — but the instrument
+also ships a **light (day) mode** built from the same CSS-variable token set
+(see §2, *Theming Contract*). What is non-negotiable in either theme is the
+**tinted-neutral discipline**: no pure black, no pure white, no cream, no flat
+SaaS white — every neutral is tinted along the navy/cyan brand axis so the
+light mode reads as the same instrument in daylight, never as a generic white
+dashboard.
 
 **Key Characteristics:**
-- Near-black navy hull with cyan as the single voice of "live / actionable".
+- Near-black navy hull (day mode: navy-tinted off-white) with cyan as the single
+  voice of "live / actionable" — never pure black or pure white in either theme.
 - Monospace throughout; tabular numerals on every figure.
 - Flat, bordered panels; shadow is reserved for lift and focus, never decoration.
 - A fixed, meaning-bearing color vocabulary (each hue *is* a category).
@@ -199,6 +207,108 @@ is never the *only* carrier — pair it with an icon, glyph, label, or position.
 **The One Voice Rule.** Cyan is the only accent. It marks what is live or
 actionable and nothing else. Its scarcity is the point.
 
+### Theming Contract — Dark & Light
+
+SC Nav supports **two themes from one set of CSS variables**. Dark is the
+canonical instrument ("the cockpit at night"); **Light is the same instrument
+on a lit hangar deck** — identical layout, hierarchy, and category vocabulary,
+re-toned for a bright environment. Light mode is *not* a generic white SaaS
+skin and it is *not* an inversion of dark; it is a deliberately re-designed
+day mode that obeys every rule below.
+
+**The Tinted-Neutral Law (both themes, non-negotiable).** No surface, text, or
+border is ever pure black (`#000`) or pure white (`#fff`). Every neutral carries
+a faint cold tint toward the brand hue (the navy/cyan axis, ~hue 215–230) so the
+hull and the readouts feel cut from the same material. Dark neutrals are
+navy-tinted near-blacks; light neutrals are navy-tinted off-whites and slate
+inks. A flat `#fff` panel or `#000` text instantly breaks the instrument feel
+and is treated as a bug.
+
+#### Token architecture (the contract)
+
+Two layers, and the theme switch only ever touches the second:
+
+1. **Semantic tokens** — the named roles the whole UI reads: `--bg`, `--panel`,
+   `--panel2`, `--text`, `--dim`, `--border`, `--accent`, `--ink-on-accent`,
+   `--track`, and the category hues (`--sel`, `--warn`, `--good`, `--bad`,
+   `--node`, `--fauna`, `--harvest`, `--mate`, `--barter`, `--craft`).
+   **Components reference only these — never a raw hex.** This is what makes one
+   stylesheet serve two themes.
+2. **Theme blocks** — `:root` defines the dark (default) values. A
+   `[data-theme="light"]` block (and a matching `@media (prefers-color-scheme:
+   light)` fallback for users who haven't chosen) redefines *only the semantic
+   tokens*. No component CSS is duplicated per theme; if a rule needs a literal
+   color, that color is wrong — promote it to a token.
+
+`color-scheme` is set per theme (`dark` under `:root`, `light` under the light
+block) so native controls (date/time pickers, selects, scrollbars) follow the
+hull instead of fighting it. Theme selection persists in `localStorage` and
+defaults to the OS preference on first load.
+
+#### Light-mode semantic values (starter ramp, tuned for AA)
+
+Same roles, re-toned. These are the contract's reference values — tune for
+contrast, never reach for `#fff`/`#000`:
+
+| Token | Dark (canonical) | Light (day mode) | Role |
+|-------|------------------|------------------|------|
+| `--bg` | `#0b0e13` | `#e8ecf2` | the hull / page |
+| `--panel` | `#141a23` | `#f2f5f9` | content panel surface |
+| `--panel2` | `#1b2330` | `#f8fafc` | raised controls / inset cards |
+| `--track` | `#0c1119` | `#dbe2ec` | recessed wells (bars, map, charts) |
+| `--text` | `#d8e1ee` | `#11151c` | primary ink |
+| `--dim` | `#8693a6` | `#586277` | labels / secondary metadata |
+| `--border` | `#243044` | `#cfd7e3` | 1px hairlines |
+| `--accent` | `#4fc3f7` | `#0c84c4` | the single cyan voice |
+| `--ink-on-accent` | `#07101a` | `#f2f5f9` | text over an accent fill |
+
+In dark mode, raised surfaces get *lighter* (hull → panel → panel2). In light
+mode the same ladder still climbs toward white but the steps are gentler, so
+**control definition leans on the hairline border (and a faint shadow) rather
+than on tonal contrast alone** — see Elevation.
+
+#### Category hues across themes (hue identity is preserved)
+
+A category's *identity* (node = violet, fauna = green, gold = selection, …) is
+the same in both themes — the Category-Color Rule outranks the theme. What
+changes is **luminance for contrast**: the bright dark-mode hues (`--sel`
+`#ffd54f`, `--warn` `#ffb74d`, etc.) fail AA as text on a light surface, so in
+light mode each category token resolves to a **darker on-light variant** (gold ≈
+`#9a6a00`, amber ≈ `#b3631a`, good ≈ `#2e7d32`, bad ≈ `#c62828`, node ≈
+`#6a4fb0`, …) used wherever the hue is *opaque* — text, icons, 1px borders, and
+solid fills alike. A solid fill then pairs with the light `--ink-on-accent`
+(`#f2f5f9`), exactly as the dark theme pairs its bright fills with near-black
+ink. Only the **low-alpha washes and rings keep the bright hue** (`--sel-wash`,
+`--accent-wash`, `--focus-ring`), because there the surface beneath carries the
+contrast. Hue still never travels alone — it is always paired with an icon,
+glyph, label, or position (the accessibility half of the Category-Color Rule),
+which is what makes a luminance shift between themes safe.
+
+**The dark-scope exception.** Two element classes stay dark in *both* themes
+and are deliberately omitted from the light override: the **map / radar canvas**
+(`--map-bg`, a recessed scope that reads as a screen inside a light panel, the
+way game MFDs and chart embeds do) and the **shadow / scrim vocabulary**
+(drop shadows, the modal backdrop) — shadow is an absence of light, not a
+neutral surface, so it is dark regardless of theme. CSS data-track wells
+(`--track`, behind bars and charts) *do* flip with the theme; only the canvas
+scope does not.
+
+#### Theming laws
+
+- **One token set, two themes.** Components read semantic tokens only; the theme
+  block redefines those tokens and nothing else. A literal hex in a component is
+  a contract violation.
+- **No pure black or pure white, ever, in either theme.** All neutrals are
+  navy/cyan-tinted. (The Tinted-Neutral Law.)
+- **Re-tone, don't invert.** Light mode is re-designed for daylight legibility —
+  surface ladder, accent luminance, and category-hue darkness are tuned per
+  theme, not algorithmically flipped.
+- **Contrast holds in both.** Body text, dim labels, placeholders, and accent-
+  as-text clear WCAG AA (≥4.5:1) on whichever surface they sit on, in both
+  themes. The dim label is verified against its *raised* layer in each theme.
+- **Hue identity is theme-invariant.** A category means the same thing in both
+  modes; only its luminance shifts to stay legible.
+
 ## 3. Typography
 
 **Display / Body / Label Font:** `"SF Mono", "Cascadia Code", Consolas,
@@ -260,6 +370,14 @@ Shadow is therefore *meaningful*: it appears only as a response to state
 1px hairline. A drop shadow on a resting element is forbidden — if it isn't
 hovered, floating, focused, or live, it casts no shadow.
 
+**Theme note.** Dark mode reads depth from the tonal ladder; the hairline does
+the structural work and resting shadows stay absent. Light mode's surface steps
+are gentler, so the **hairline carries even more of the load** and a *very*
+faint resting shadow on panels/cards is permissible to keep surfaces from
+flattening into the page — but it stays subtle (depth still comes from tone +
+border, not from soft drop shadows), and the hover-lift / overlay / focus /
+live-glow vocabulary above is identical in both themes.
+
 ## 5. Components
 
 ### Buttons
@@ -297,9 +415,10 @@ hovered, floating, focused, or live, it casts no shadow.
   small "soon" badge.
 
 ### Inputs / Fields
-- **Style:** raised layer (`#1b2330`) background, 1px hairline border, 6px
-  radius, `8px 10px` padding, body-size monospace. Native controls inherit
-  `color-scheme: dark` so date/time/select menus match the hull.
+- **Style:** raised layer (`var(--panel2)`) background, 1px hairline border, 6px
+  radius, `8px 10px` padding, body-size monospace. Native controls inherit the
+  theme's `color-scheme` (`dark` / `light`) so date/time/select menus and
+  scrollbars match the hull in either mode.
 - **Focus:** outline removed, border shifts to cyan; composite controls add the
   soft cyan focus-ring glow. No layout shift on focus.
 - **Placeholder:** must meet the same 4.5:1 contrast as body text — not a faint
@@ -317,6 +436,12 @@ hovered, floating, focused, or live, it casts no shadow.
 - The header is a single flat bar: logo + title (doubles as home → launcher),
   a connection dot (green ok / red down), the current-app title in amber, and
   account controls pushed right. It wraps gracefully on narrow screens.
+- **Theme toggle (`#theme-toggle`):** a compact bordered icon button in the
+  header-right cluster that flips dark ↔ light. Its glyph shows the mode you'd
+  switch *to* (☀ while dark is active, ☾ while light is active) and carries an
+  `aria-pressed` + `aria-label`. The choice persists in `localStorage`
+  (`scTheme`); with no stored choice the UI follows the OS via CSS
+  `prefers-color-scheme` and the button just mirrors the resolved theme.
 - App-level navigation is the launcher grid (`auto-fit, minmax(220px, 1fr)`)
   and hash routes (`#/nav`, `#/route`, `#/market`, …).
 
@@ -341,8 +466,11 @@ category color. No charting library; the instrument draws its own gauges.
   an icon/glyph/label so meaning never depends on color alone.
 - **Do** set every number in `tabular-nums` so live-updating figures align and
   don't jitter.
-- **Do** build depth from tonal layers (`#0b0e13` → `#141a23` → `#1b2330`) and
-  1px `#243044` hairlines; keep surfaces flat at rest.
+- **Do** build depth from tonal layers (dark: `#0b0e13` → `#141a23` → `#1b2330`)
+  and 1px hairlines; keep surfaces flat at rest.
+- **Do** drive both themes from one semantic token set (`--bg`, `--panel`,
+  `--text`, `--accent`, …); redefine those tokens under `[data-theme="light"]`
+  and never duplicate component CSS or hard-code a hex.
 - **Do** lead each screen with one large primary value the eye finds instantly —
   glance, don't read.
 - **Do** keep state transitions fast and functional (≈`0.12s`); animate to
@@ -354,8 +482,12 @@ category color. No charting library; the instrument draws its own gauges.
   people mid-mission.
 - **Don't** drift toward a **cluttered fan-wiki** — no dense, ad-heavy,
   unstyled wall of text. Information is curated and laid out.
-- **Don't** go light, cream, or flat-white anywhere; the cockpit-at-night base
-  is non-negotiable.
+- **Don't** use pure black (`#000`) or pure white (`#fff`) anywhere, in either
+  theme — every neutral is tinted along the navy/cyan brand axis. Cream, generic
+  warm-tint off-white, and flat SaaS white are all forbidden; light mode is a
+  tinted *instrument* in daylight, not a white dashboard.
+- **Don't** invert dark mode to make light mode, hard-code a hex inside a
+  component, or fork component CSS per theme — re-tone the semantic tokens only.
 - **Don't** turn this into a generic rounded-card SaaS dashboard, and never nest
   cards.
 - **Don't** introduce a second font family or a non-monospace UI face "for

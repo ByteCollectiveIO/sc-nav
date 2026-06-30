@@ -13,19 +13,79 @@
    *   org marketplace (#/market).
    * Design tokens & component rules are documented in /DESIGN.md.
    * ======================================================================== */
+  /* ----------------------------------------------------------------------
+   * THEME TOKENS — see /DESIGN.md §2 "Theming Contract".
+   * Components read these semantic vars ONLY; never a raw hex. Dark is the
+   * canonical theme (:root); light mode redefines ONLY these tokens. No token
+   * is ever pure #000 or #fff — every neutral is navy/cyan-tinted. The light
+   * values live in TWO selectors that MUST stay in sync: [data-theme="light"]
+   * (explicit user choice) and the prefers-color-scheme media query (OS
+   * default, applied with no JS so there's no flash on first paint).
+   * Native controls follow each theme via `color-scheme`.
+   * -------------------------------------------------------------------- */
   :root {
+    /* neutrals — surface ladder + ink (these flip per theme) */
     --bg: #0b0e13; --panel: #141a23; --panel2: #1b2330;
-    --text: #d8e1ee; --dim: #8693a6; --accent: #4fc3f7; --warn: #ffb74d;
-    --good: #66bb6a; --bad: #ef5350; --border: #243044;
+    --text: #d8e1ee; --dim: #8693a6; --border: #243044;
+    --border-soft: #1a2230;  /* faint table-row divider */
+    --track: #0c1119;        /* recessed CSS wells: bars, charts */
+    --map-bg: #080b10;       /* radar/scope canvas — stays dark in BOTH themes */
+    /* the single accent voice + the ink that rides on accent/category fills */
+    --accent: #4fc3f7; --ink-on-accent: #07101a;
+    /* category hues — identity is theme-invariant; luminance shifts in light */
+    --warn: #ffb74d; --good: #66bb6a; --bad: #ef5350;
     --node: #b39ddb; --fauna: #81c784; --mate: #f06292; --harvest: #cddc39;
-    --sel: #ffd54f;  /* gold: currently-selected destination (map ring + row) */
+    --sel: #ffd54f;    /* gold: currently-selected destination (map ring + row) */
     --barter: #c08af0; /* marketplace: barter listing mode */
     --craft: #e0a64f;  /* marketplace: crafted-item quality accents */
-    --ink-on-accent: #07101a; /* near-black ink laid over cyan/gold/red fills */
-    --accent-wash: rgba(79, 195, 247, 0.12); /* 12% cyan — active tab/pill fill */
-    /* Render native controls (date/time pickers, <select> dropdowns) dark so
-       they match the site instead of the OS default gray/white menus. */
+    /* low-alpha washes/rings — bright hue, the surface carries the contrast */
+    --accent-wash: rgba(79,195,247,.12); /* active tab/pill fill */
+    --sel-wash: rgba(255,213,79,.12);    /* selected table row */
+    --warn-wash: rgba(255,179,0,.05);    /* armed/pending row tint */
+    --focus-ring: rgba(79,195,247,.2);   /* soft cyan focus halo */
+    --shimmer: rgba(216,225,238,.07);    /* skeleton-loading sweep */
+    --inset-tint: rgba(255,255,255,.02); /* faint raised-inset lift */
     color-scheme: dark;
+  }
+
+  /* Light (day) mode — explicit user choice. KEEP IN SYNC with the
+     prefers-color-scheme block below. --map-bg is intentionally NOT listed
+     here: the map stays a dark radar well in both themes. */
+  [data-theme="light"] {
+    --bg: #e8ecf2; --panel: #f2f5f9; --panel2: #f8fafc;
+    --text: #11151c; --dim: #586277; --border: #cfd7e3;
+    --border-soft: #dde4ee; --track: #dbe2ec;
+    --accent: #0c84c4; --ink-on-accent: #f2f5f9;
+    --warn: #b3631a; --good: #2e7d32; --bad: #c62828;
+    --node: #6a4fb0; --fauna: #3f7a43; --mate: #c2185b; --harvest: #6f7d12;
+    --sel: #9a6a00; --barter: #7b3fc0; --craft: #9a6a1f;
+    --accent-wash: rgba(12,132,196,.12);
+    --sel-wash: rgba(176,124,0,.16);
+    --warn-wash: rgba(179,99,26,.08);
+    --focus-ring: rgba(12,132,196,.32);
+    --shimmer: rgba(17,21,28,.06);
+    --inset-tint: rgba(17,21,28,.03);
+    color-scheme: light;
+  }
+  /* OS default when the user has made no explicit choice (no JS → no flash).
+     MUST mirror [data-theme="light"] above. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      --bg: #e8ecf2; --panel: #f2f5f9; --panel2: #f8fafc;
+      --text: #11151c; --dim: #586277; --border: #cfd7e3;
+      --border-soft: #dde4ee; --track: #dbe2ec;
+      --accent: #0c84c4; --ink-on-accent: #f2f5f9;
+      --warn: #b3631a; --good: #2e7d32; --bad: #c62828;
+      --node: #6a4fb0; --fauna: #3f7a43; --mate: #c2185b; --harvest: #6f7d12;
+      --sel: #9a6a00; --barter: #7b3fc0; --craft: #9a6a1f;
+      --accent-wash: rgba(12,132,196,.12);
+      --sel-wash: rgba(176,124,0,.16);
+      --warn-wash: rgba(179,99,26,.08);
+      --focus-ring: rgba(12,132,196,.32);
+      --shimmer: rgba(17,21,28,.06);
+      --inset-tint: rgba(17,21,28,.03);
+      color-scheme: light;
+    }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -176,7 +236,7 @@
     text-decoration: none; transition: border-color .12s; }
   .intel-stat:hover { border-color: var(--accent); }
   .intel-stat:focus-visible { outline: none; border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(79,195,247,.2); }
+    box-shadow: 0 0 0 3px var(--focus-ring); }
   .intel-stat .n { font-size: 30px; font-variant-numeric: tabular-nums; color: var(--text); }
   .intel-stat .n.accent { color: var(--accent); }
   .intel-stat .n.warn { color: var(--warn); }
@@ -187,10 +247,10 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: var(--dim); font-weight: normal; font-size: 11px;
     letter-spacing: 1px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 6px 8px; border-bottom: 1px solid #1a2230; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: var(--panel2); }
-  tbody tr.selected { background: rgba(255,213,79,.12); box-shadow: inset 2px 0 0 var(--sel); }
+  tbody tr.selected { background: var(--sel-wash); box-shadow: inset 2px 0 0 var(--sel); }
   tbody tr.selected td, tbody tr.selected td.muted { color: var(--sel); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* scrollable table window so a long browse list doesn't stretch the page */
@@ -208,7 +268,7 @@
   #map-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
   #map-controls label { font-size: 12px; color: var(--dim); display: inline-flex; gap: 4px; align-items: center; }
   #map-wrap { position: relative; }
-  #map { width: 100%; height: 440px; display: block; background: #080b10;
+  #map { width: 100%; height: 440px; display: block; background: var(--map-bg);
     border: 1px solid var(--border); border-radius: 6px; cursor: grab; touch-action: none; }
   #map.dragging { cursor: grabbing; }
   #map-msg { position: absolute; right: 8px; bottom: 8px; max-width: 55%;
@@ -247,7 +307,7 @@
   .lb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lb-name.me { color: var(--warn); }
   .lb-total { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--dim); white-space: nowrap; }
-  .lb-bar { display: flex; height: 20px; border-radius: 4px; overflow: hidden; background: #0c1119; }
+  .lb-bar { display: flex; height: 20px; border-radius: 4px; overflow: hidden; background: var(--track); }
   .lb-seg { height: 100%; min-width: 0; transition: filter .1s; }
   .lb-seg:hover { filter: brightness(1.25); }
   .lb-seg.poi { background: var(--accent); }
@@ -278,7 +338,7 @@
   .hbars { display: flex; flex-direction: column; gap: 7px; }
   .hbar { display: grid; grid-template-columns: 130px 1fr 42px; gap: 9px; align-items: center; font-size: 13px; }
   .hbar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .hbar-track { background: #0c1119; border-radius: 4px; height: 14px; overflow: hidden; }
+  .hbar-track { background: var(--track); border-radius: 4px; height: 14px; overflow: hidden; }
   .hbar-fill { display: block; height: 100%; border-radius: 4px; background: var(--accent); min-width: 2px; }
   .hbar-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
   .bn-imp { display: block; font-size: 10px; color: var(--dim); opacity: 0.8; }
@@ -309,7 +369,7 @@
   /* stacked body bars reuse the leaderboard segment colors. Each category also
      carries a distinct weave so the stack is decodable without relying on hue
      (color-blind contract): POI solid, resource ↗, fauna ↘, harvestable ▏. */
-  .stat-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: #0c1119; }
+  .stat-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: var(--track); }
   .stat-seg { height: 100%; min-width: 0; }
   .stat-seg.poi { background: var(--accent); }
   .stat-seg.resource { background: var(--node);
@@ -353,7 +413,7 @@
     position: relative; overflow: hidden; }
   .sk-hero { height: 64px; } .sk-card { height: 58px; } .sk-chart { height: 150px; }
   .sk::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
-    background: linear-gradient(90deg, transparent, rgba(216,225,238,.07), transparent);
+    background: linear-gradient(90deg, transparent, var(--shimmer), transparent);
     animation: sk-shimmer 1.2s ease-in-out infinite; }
   @keyframes sk-shimmer { to { transform: translateX(100%); } }
   @media (prefers-reduced-motion: reduce) { .sk::after { animation: none; } }
@@ -411,6 +471,14 @@
   #nav-toggle { font-size: 12px; color: var(--accent); cursor: pointer;
     text-decoration: none; white-space: nowrap; }
   #nav-toggle:hover { text-decoration: underline; }
+  /* theme switch (dark ↔ light); glyph is set by JS to the active theme */
+  #theme-toggle { font-family: inherit; font-size: 14px; line-height: 1;
+    background: var(--panel2); color: var(--text); cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+    transition: border-color .12s; }
+  #theme-toggle:hover { border-color: var(--accent); }
+  #theme-toggle:focus-visible { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring); }
   /* logo + title double as the "home" control → back to the app launcher */
   .home-link { display: flex; align-items: center; gap: 12px; text-decoration: none; }
 
@@ -656,7 +724,7 @@
   /* multi-pickup delivery: a boxed block (commodity + total + dest on top, a
      list of pickup locations below) so it reads as one delivery, not loose rows. */
   .route-pkg-group { display: block; border: 1px solid var(--border); border-radius: 6px;
-    padding: 10px; margin: 8px 0; background: rgba(255,255,255,.02); }
+    padding: 10px; margin: 8px 0; background: var(--inset-tint); }
   .route-pkg-group .grp-head { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .route-pkg-group .grp-tag { font-size: 10px; letter-spacing: .5px; color: var(--accent);
     border: 1px solid var(--accent); border-radius: 3px; padding: 0 5px; text-transform: uppercase; }
@@ -807,7 +875,7 @@
   .route-stepper .step.past .dot { background: var(--good); border-color: var(--good); color: var(--ink-on-accent); }
   .route-stepper .step.past::before { background: var(--good); }
   .route-stepper .step.active .dot { border-color: var(--accent); color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(79, 195, 247, .2); }
+    box-shadow: 0 0 0 3px var(--focus-ring); }
   .route-stepper .step.active .lbl { color: var(--accent); }
 
   /* ---- event planner (#/events) ---- */
@@ -1074,7 +1142,7 @@
   /* aUEC-only / coordination-board disclaimer (form + listings) */
   .mk-banner { font-size: 12px; line-height: 1.45; color: var(--dim);
     border: 1px solid var(--border); border-radius: 6px; padding: 6px 11px; margin: 4px 0 10px;
-    background: rgba(255,179,0,.05); }
+    background: var(--warn-wash); }
   .mk-banner b { color: var(--warn); font-weight: 600; }
   /* mode chip — color-coded like the event categories */
   .mk-mode { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
@@ -1303,6 +1371,8 @@
     <a id="back-toggle" href="#/nav" hidden></a>
     <a id="setup-toggle" href="#/setup" hidden>📖 Setup</a>
     <a id="nav-toggle" href="#/settings" hidden></a>
+    <button id="theme-toggle" type="button" title="Toggle light / dark theme"
+            aria-label="Toggle light or dark theme"></button>
     <div id="account"></div>
   </div>
 </header>
@@ -2319,9 +2389,45 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 
+// --- theme (dark / light) -----------------------------------------------
+// Dark is the canonical theme; light is a re-toned day mode (see /DESIGN.md
+// §2 "Theming Contract"). The OS preference is honored by CSS alone
+// (prefers-color-scheme) so an OS-default load has no first-paint flash. JS
+// only pins an EXPLICIT user choice onto <html data-theme>, persisted in
+// localStorage; clearing the choice falls back to the OS default.
+const THEME_KEY = "scTheme";
+const getThemePref = () => { try { return localStorage.getItem(THEME_KEY); } catch { return null; } };
+const osTheme = () => matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+const resolvedTheme = () => { const p = getThemePref(); return (p === "light" || p === "dark") ? p : osTheme(); };
+function applyTheme(pref) {
+  const root = document.documentElement;
+  if (pref === "light" || pref === "dark") root.setAttribute("data-theme", pref);
+  else root.removeAttribute("data-theme");   // null → let CSS use the OS default
+  const btn = $("theme-toggle");
+  if (btn) {
+    const active = resolvedTheme();
+    btn.textContent = active === "dark" ? "☀" : "☾";   // glyph = the mode you'd switch TO
+    btn.setAttribute("aria-label", active === "dark" ? "Switch to light theme" : "Switch to dark theme");
+    btn.setAttribute("aria-pressed", active === "light" ? "true" : "false");
+  }
+}
+(function initTheme() {
+  applyTheme(getThemePref());   // pin an explicit choice; otherwise just sync the button glyph
+  const btn = $("theme-toggle");
+  if (btn) btn.addEventListener("click", () => {
+    const next = resolvedTheme() === "dark" ? "light" : "dark";
+    try { localStorage.setItem(THEME_KEY, next); } catch {}
+    applyTheme(next);
+  });
+  // track OS changes, but only while the user hasn't pinned a choice
+  matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    if (!getThemePref()) applyTheme(null);
+  });
+})();
+
 /* ============================================================================
  * SCRIPT MAP — grep `// ----` to jump to any section (ranges drift; grep wins).
- *   keyboard a11y · formatting · ore colors · resource forecast · state ·
+ *   theme (dark/light) · keyboard a11y · formatting · ore colors · resource forecast · state ·
  *   freshness · shard · nearby · captures · destination · path controls · map ·
  *   search · element finder · teammate presence · online count · websocket ·
  *   constrained <select> · auth gate · cargo planner (#/route) + run mode ·
