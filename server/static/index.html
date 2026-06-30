@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Org Navigator</title>
 <style>
+  /* ==========================================================================
+   * STYLE MAP — grep `/* ----` to jump (ranges drift; grep wins).
+   *   :root tokens · base/layout · legal pages · site footer · settings layout ·
+   *   small-screen (phone) overrides · cargo planner (#/route) ·
+   *   event planner (#/events) · resource manager (#/goals + #/inventory) ·
+   *   org marketplace (#/market).
+   * Design tokens & component rules are documented in /DESIGN.md.
+   * ======================================================================== */
   :root {
     --bg: #0b0e13; --panel: #141a23; --panel2: #1b2330;
     --text: #d8e1ee; --dim: #8693a6; --accent: #4fc3f7; --warn: #ffb74d;
@@ -2310,6 +2318,20 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+
+/* ============================================================================
+ * SCRIPT MAP — grep `// ----` to jump to any section (ranges drift; grep wins).
+ *   keyboard a11y · formatting · ore colors · resource forecast · state ·
+ *   freshness · shard · nearby · captures · destination · path controls · map ·
+ *   search · element finder · teammate presence · online count · websocket ·
+ *   constrained <select> · auth gate · cargo planner (#/route) + run mode ·
+ *   event planner (#/events) · resource manager (#/goals + #/inventory:
+ *     catalog picker / goal form / inventory) · marketplace (#/market) ·
+ *   view router · leaderboard · statistics · analytics-section status ·
+ *   guild hauling · Org Intel · org settings · org logo · admins ·
+ *   clear statistics · delete account · watcher tokens · setup guide · init.
+ * Backend routes that mirror these live in server/app.py; see /CLAUDE.md.
+ * ========================================================================== */
 
 // --- keyboard accessibility (WCAG 2.1.1) ---------------------------------
 // The app wires .onclick onto whatever element is handy (rows, cells, icon
