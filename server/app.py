@@ -3950,7 +3950,9 @@ def _index_response(request: Request) -> HTMLResponse:
         # current version; the string is our own SemVer, so no escaping needed).
         .replace("{{APP_VERSION}}", APP_VERSION)
     )
-    return HTMLResponse(html)
+    # Never cache the shell: a cached document would pin a stale nonce that no
+    # longer matches the per-request CSP header, dead-scripting the app.
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/", response_class=HTMLResponse)

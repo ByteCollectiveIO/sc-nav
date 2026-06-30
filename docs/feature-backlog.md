@@ -606,9 +606,19 @@ existing routes is less surface area than four new ones.
 
 ## 9. Nonce-based CSP for `script-src` (XSS containment, not just escaping)
 
-**Status:** designed, not built. Follow-up to the 2026-06-19 security batch
-(input length caps, host-header pinning, WS origin check, security-headers
-middleware, logo magic-byte check — all shipped).
+**Status:** **DONE 2026-06-30.** Built as designed, closing out the 2026-06-19
+security batch (input length caps, host-header pinning, WS origin check,
+security-headers middleware, logo magic-byte check). `_csp(nonce)` emits
+`script-src 'self' 'nonce-{nonce}'` (no `'unsafe-inline'`); the `security_headers`
+middleware mints a fresh `secrets.token_urlsafe(16)` per request onto
+`request.state.csp_nonce`; the SPA shell is served by explicit `/` + `/index.html`
+routes (registered before the `StaticFiles` mount) that stamp the nonce onto the
+one inline `<script>` and set `Cache-Control: no-store` so a cached document can't
+pin a stale nonce. `style-src 'unsafe-inline'` left as-is per the scope decision.
+New `server/test_app.py` (TestClient) pins the property — body nonce == CSP nonce
+(middleware-before-route ordering), no `'unsafe-inline'`, fresh per request,
+no-store — wired into CI as its own deps-installing step. Verified: index.html has
+exactly one bare `<script>` and zero inline `on*=` handlers.
 
 ### Problem / why
 
@@ -1272,3 +1282,79 @@ handle(s). Privacy: admin-only, opt-out is cosmetic vs admins (the Discord↔han
 link already exists in the `handles` registry; this surfaces it). Build order:
 1) `members` table + login upsert + `_resolve_member_name` rewrite, 2) primary
 handle, 3) marketplace `seller_handle`, 4) directory + opt-out.
+
+## Engagement & org-ops batch (2026-06-30) — priority order
+
+User brainstorm 2026-06-30; ranked by user interest. #18–20 scoped (own docs);
+#21–23 parked (interesting but lower priority / not org-specific).
+
+## 18. Discord notifications (push integration)
+
+**Status:** scoped, not built (2026-06-30). Full design:
+[`docs/discord-notifications.md`](discord-notifications.md). **Priority #1.**
+
+Highest engagement-per-effort: everything shipped so far is pull-only; this makes
+the app push to where the org lives. Key constraint: **no bot** (OAuth scopes are
+`identify guilds guilds.members.read`). Decision: ship **admin incoming-webhook
+URL** (channel posts, ~zero cost) first; defer DMs/bot indefinitely. Fires on
+event lifecycle (+ scheduled T-30 reminders via an `events.reminded_at` loop
+modeled on `presence_broadcaster`), marketplace offers/confirms (with `<@id>`
+mentions), goal-100%, and new hauling records. New `server/notify.py` dispatcher
+(threaded, never raises, rate-limited); webhook URL stored masked + validated as a
+`discord.com/api/webhooks` URL (anti-SSRF). Build: dispatcher+settings+test-send →
+inline event pings → scheduled reminders → marketplace → goals/records.
+
+## 19. Who's online + group finder (LFG / "rally now")
+
+**Status:** scoped, not built (2026-06-30). Full design:
+[`docs/who-is-online-lfg.md`](who-is-online-lfg.md). **Priority #2.**
+
+Social glue for spontaneous play. Today's two online signals are insufficient:
+`online_count` is faceless, `hub.presence` is **surface-only** + watcher-gated.
+Add an identity-bearing, location-optional **online roster** (hub `online` map
+keyed by discord_id, WS connect + heartbeat lifecycle like `presence` but not
+surface-gated) with member-set **status/activity** ("available", "hauling",
+"need 2 for a bunker run") + an "appear offline" consent separate from position
+sharing. Plus a first-class **LFG feature**: two-direction entries (**looking for
+members** w/ slots vs. **looking to join**), **playstyle tags** (PvE/PvP/FPS/
+mining/…), an ephemeral in-memory store (auto-expire, don't overload `events`), a
+**connect dashboard** (`#/lfg`) grouping groups-needing-players vs. players-
+looking-to-join w/ playstyle filters + Join/Ping, and a per-entry **"announce to
+Discord"** opt-in (rate-limited, via #18's webhook). New views `#/online` + `#/lfg`
++ launcher "🟢 N online" / "🔎 N LFG" badges. Build: roster → manual status →
+LFG dashboard → Discord announce → suggested matches/promote-to-event.
+
+## 20. Fleet roster / squad organizer (event group planning)
+
+**Status:** scoped, not built (2026-06-30). Full design:
+[`docs/fleet-roster-squad-organizer.md`](fleet-roster-squad-organizer.md).
+**Priority #3.**
+
+Turns "12 people signed up" into an op plan. Additive layer over the event
+planner: two new tables — `event_groups` (id, event_id, parent_id for hierarchy,
+name, kind=squad|squadron|crew|section|wing, ship, capacity, leader_id) and
+`event_assignments` (event_id, discord_id, group_id, slot) — keeping
+`events`/`event_signups` untouched. Organizer slots signed-up members into named
+units (FPS squads, flight squadrons, ship crews with seats), with capacity +
+target-roster (`events.roles`) cross-checks and a per-member "your assignment"
+view. Endpoints under `/api/events/{id}/groups|assignments|manifest`; UI is an
+unassigned-pool → group-cards board on the event detail. Manifest export → Discord
+(#18). v1.1: ship-aware seat templates + saved group templates.
+
+## Parked (lower priority — revisit later)
+
+### 21. Trade-route finder (buy-low/sell-high on live terminal prices)
+Pure commodity trading using the UEX feed (complements the *contract*-based cargo
+planner): "given my ship SCU + location, top profit-per-SCU routes now." **Parked
+— good idea but several non-org-specific tools already do this** (it duplicates
+external sites and isn't org-differentiated). Revisit if we want a one-stop hub.
+
+### 22. Refinery job tracker
+Log refinery work orders (ore, station, yield, real-world ETA) → countdown →
+Discord ping when ready (would lean on #18). Real SC pain point and fits the
+Resource Manager. **Parked — not org-oriented** (per-player utility); save for
+later.
+
+### 23. Recognition badges
+Milestone badges (aUEC hauled, events led) on the member directory. **Parked —
+liked but can get tacky fast**; revisit with restraint (few, earned, tasteful).

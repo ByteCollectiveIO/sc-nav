@@ -17,8 +17,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The suite is pure stdlib and reads the committed poi/ dataset, so no
-      # dependency install is needed.
+      # The nav_core suite is pure stdlib and reads the committed poi/ dataset,
+      # so no dependency install is needed.
       - name: Run nav_core tests
         working-directory: server
         run: python test_nav_core.py
+
+      # The app suite drives the FastAPI shell through a TestClient to pin the
+      # CSP nonce backstop, so it needs the runtime deps. It boots offline (the
+      # feed loaders fall back to the committed poi/ cache).
+      - name: Install runtime deps
+        working-directory: server
+        run: pip install -r requirements.txt httpx  # httpx: TestClient transport
+
+      - name: Run app (HTTP) tests
+        working-directory: server
+        run: python test_app.py
