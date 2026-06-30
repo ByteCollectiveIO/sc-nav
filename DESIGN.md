@@ -252,14 +252,14 @@ contrast, never reach for `#fff`/`#000`:
 
 | Token | Dark (canonical) | Light (day mode) | Role |
 |-------|------------------|------------------|------|
-| `--bg` | `#0b0e13` | `#e8ecf2` | the hull / page |
-| `--panel` | `#141a23` | `#f2f5f9` | content panel surface |
-| `--panel2` | `#1b2330` | `#f8fafc` | raised controls / inset cards |
-| `--track` | `#0c1119` | `#dbe2ec` | recessed wells (bars, map, charts) |
+| `--bg` | `#0b0e13` | `#dbe1ea` | the hull / page |
+| `--panel` | `#141a23` | `#e6ebf2` | content panel surface |
+| `--panel2` | `#1b2330` | `#eef2f8` | raised controls / inset cards |
+| `--track` | `#0c1119` | `#ccd4e1` | recessed wells (bars, map, charts) |
 | `--text` | `#d8e1ee` | `#11151c` | primary ink |
-| `--dim` | `#8693a6` | `#586277` | labels / secondary metadata |
-| `--border` | `#243044` | `#cfd7e3` | 1px hairlines |
-| `--accent` | `#4fc3f7` | `#0c84c4` | the single cyan voice |
+| `--dim` | `#8693a6` | `#525c70` | labels / secondary metadata |
+| `--border` | `#243044` | `#aebbce` | 1px hairlines |
+| `--accent` | `#4fc3f7` | `#0a6694` | the single cyan voice |
 | `--ink-on-accent` | `#07101a` | `#f2f5f9` | text over an accent fill |
 
 In dark mode, raised surfaces get *lighter* (hull → panel → panel2). In light
@@ -274,8 +274,9 @@ the same in both themes — the Category-Color Rule outranks the theme. What
 changes is **luminance for contrast**: the bright dark-mode hues (`--sel`
 `#ffd54f`, `--warn` `#ffb74d`, etc.) fail AA as text on a light surface, so in
 light mode each category token resolves to a **darker on-light variant** (gold ≈
-`#9a6a00`, amber ≈ `#b3631a`, good ≈ `#2e7d32`, bad ≈ `#c62828`, node ≈
-`#6a4fb0`, …) used wherever the hue is *opaque* — text, icons, 1px borders, and
+`#835a00`, amber ≈ `#955010`, good ≈ `#2a6e2d`, bad ≈ `#c62828`, node ≈
+`#6a4fb0`, …), each tuned to clear AA (≥4.5:1) as text even on the darkest
+light surface (`--bg`), used wherever the hue is *opaque* — text, icons, 1px borders, and
 solid fills alike. A solid fill then pairs with the light `--ink-on-accent`
 (`#f2f5f9`), exactly as the dark theme pairs its bright fills with near-black
 ink. Only the **low-alpha washes and rings keep the bright hue** (`--sel-wash`,
@@ -436,12 +437,15 @@ live-glow vocabulary above is identical in both themes.
 - The header is a single flat bar: logo + title (doubles as home → launcher),
   a connection dot (green ok / red down), the current-app title in amber, and
   account controls pushed right. It wraps gracefully on narrow screens.
-- **Theme toggle (`#theme-toggle`):** a compact bordered icon button in the
-  header-right cluster that flips dark ↔ light. Its glyph shows the mode you'd
-  switch *to* (☀ while dark is active, ☾ while light is active) and carries an
-  `aria-pressed` + `aria-label`. The choice persists in `localStorage`
-  (`scTheme`); with no stored choice the UI follows the OS via CSS
-  `prefers-color-scheme` and the button just mirrors the resolved theme.
+- **Theme toggle (`#theme-toggle`):** a compact 2-segment sun/moon control in
+  the header-right cluster (reusing the `.seg` vocabulary): a sun segment
+  (light) and a moon segment (dark), with the **active** theme's segment filled
+  cyan and the other left dim. Both modes are always visible and labelled with
+  crisp 17px line-icons, so the meaning is unambiguous — there is no "which mode
+  does the glyph mean" guesswork. Clicking the unlit segment switches to it;
+  each segment carries `aria-pressed` + `aria-label`. The choice persists in
+  `localStorage` (`scTheme`); with no stored choice the UI follows the OS via
+  CSS `prefers-color-scheme` and the lit segment just mirrors the resolved theme.
 - App-level navigation is the launcher grid (`auto-fit, minmax(220px, 1fr)`)
   and hash routes (`#/nav`, `#/route`, `#/market`, …).
 

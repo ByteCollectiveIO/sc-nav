@@ -31,8 +31,8 @@ banner — don't scroll.
 - **app.py routes**:  `grep -nE "^@app\.(get|post|put|patch|delete)" server/app.py`
 - **db tables**:      `grep -n "CREATE TABLE" server/db.py`
 
-## index.html section index (~7440 lines; ranges drift — confirm by grep)
-`<style>` lines 7–1258 · body 1259–2309 · `<script>` 2310–7438.
+## index.html section index (~7594 lines; ranges drift — confirm by grep)
+`<style>` lines 7–1341 · body 1344–2410 · `<script>` 2411–7592.
 
 Body views (each a `#…-view` container, hash-routed):
 launcher, main (navigator), settings, setup, intel, leaderboard, stats,
