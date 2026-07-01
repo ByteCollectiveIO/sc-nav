@@ -528,5 +528,130 @@ class GoalRecordNotifyTests(unittest.TestCase):
             db.set_setting(notify._webhook_key("records"), _GOOD_WEBHOOK)
 
 
+class OnlineRosterTests(unittest.TestCase):
+    """Backlog #19 step 1 — the who's-online roster: join/heartbeat/leave
+    lifecycle, visibility gating (the seam "appear offline" plugs into), and the
+    available-first ordering, plus the GET /api/online snapshot."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Temp DB: step 2 persists online prefs, so keep it off the real members table.
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.online.clear()   # isolate from any live connections
+        db.set_online_prefs("1", "available", None, False)   # reset member 1's prefs
+
+    @staticmethod
+    def _sess(uid, name=None):
+        return app.Session({"id": uid, "display_name": name, "is_admin": False})
+
+    def test_mark_add_then_heartbeat(self):
+        s = self._sess("7", "Zoe")
+        self.assertTrue(app.hub.mark_online(s))    # first call = arrival
+        self.assertFalse(app.hub.mark_online(s))   # second = heartbeat, not a re-add
+        self.assertEqual(app.hub.online_count(), 1)
+
+    def test_drop_removes_and_reports(self):
+        app.hub.mark_online(self._sess("7"))
+        self.assertTrue(app.hub.drop_online("7"))
+        self.assertFalse(app.hub.drop_online("7"))  # already gone
+        self.assertEqual(app.hub.online_count(), 0)
+
+    def test_invisible_member_excluded_from_roster_and_count(self):
+        app.hub.mark_online(self._sess("7", "Zoe"))
+        app.hub.mark_online(self._sess("8", "Amy"))
+        app.hub.online["8"]["visible"] = False     # the "appear offline" seam
+        roster = app.hub.online_roster()
+        self.assertEqual([r["discord_id"] for r in roster], ["7"])
+        self.assertEqual(app.hub.online_count(), 1)
+
+    def test_roster_orders_available_before_busy_before_afk(self):
+        for uid in ("2", "3", "4"):
+            app.hub.mark_online(self._sess(uid))
+        app.hub.online["2"]["status"] = "afk"
+        app.hub.online["3"]["status"] = "busy"
+        app.hub.online["4"]["status"] = "available"
+        order = [r["discord_id"] for r in app.hub.online_roster()]
+        self.assertEqual(order, ["4", "3", "2"])
+
+    def test_location_only_when_sharing_presence(self):
+        app.hub.mark_online(self._sess("7", "Zoe"))
+        self.assertNotIn("location", app.hub.online_roster()[0])
+        app.hub.presence["7"] = {"system": "Stanton", "body": "Daymar",
+                                 "shard": "abc", "lat": 0, "lon": 0,
+                                 "heading": None, "last_update": 0}
+        loc = app.hub.online_roster()[0]["location"]
+        self.assertEqual(loc["body"], "Daymar")
+        app.hub.presence.pop("7", None)
+
+    def test_api_online_snapshot(self):
+        app.hub.mark_online(self._sess("7", "Zoe"))
+        r = self.client.get("/api/online")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["users"][0]["discord_id"], "7")
+        self.assertEqual(body["me"], {"status": "available", "activity": None,
+                                      "appear_offline": False})
+
+    # --- step 2: manual status / activity / appear-offline ------------------
+    def test_status_persists_and_applies_to_live_record(self):
+        app.hub.mark_online(self._sess("1", "Me"))   # caller is member "1"
+        r = self.client.post("/api/online/status",
+                             json={"status": "busy", "activity": "hauling to A18"})
+        self.assertEqual(r.status_code, 200)
+        # Applied to the live roster record ...
+        rec = app.hub.online["1"]
+        self.assertEqual((rec["status"], rec["activity"]), ("busy", "hauling to A18"))
+        # ... and persisted so a reconnect (fresh mark_online) restores it.
+        app.hub.online.clear()
+        app.hub.mark_online(self._sess("1", "Me"))
+        self.assertEqual(app.hub.online["1"]["status"], "busy")
+        self.assertEqual(app.hub.online["1"]["activity"], "hauling to A18")
+
+    def test_bad_status_falls_back_to_available(self):
+        self.client.post("/api/online/status", json={"status": "party"})
+        self.assertEqual(self._my_prefs()["status"], "available")
+
+    def test_blank_activity_stored_as_null(self):
+        self.client.post("/api/online/status", json={"status": "afk", "activity": "   "})
+        self.assertIsNone(self._my_prefs()["activity"])
+
+    def test_appear_offline_hides_from_roster_and_count(self):
+        app.hub.mark_online(self._sess("1", "Me"))
+        app.hub.mark_online(self._sess("9", "Bo"))
+        self.client.post("/api/online/status",
+                        json={"status": "available", "appear_offline": True})
+        ids = [u["discord_id"] for u in app.hub.online_roster()]
+        self.assertEqual(ids, ["9"])              # caller "1" is hidden
+        self.assertEqual(app.hub.online_count(), 1)
+        # The choice sticks across reconnect (visible stays False).
+        app.hub.online.pop("1", None)
+        app.hub.mark_online(self._sess("1", "Me"))
+        self.assertFalse(app.hub.online["1"]["visible"])
+
+    def test_playstyles_served(self):
+        tags = self.client.get("/api/playstyles").json()["tags"]
+        self.assertIn("mining", tags)
+        self.assertIn("PvP", tags)
+
+    def _my_prefs(self):
+        return self.client.get("/api/online").json()["me"]
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

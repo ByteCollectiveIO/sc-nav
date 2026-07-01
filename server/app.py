@@ -911,6 +911,24 @@ PRESENCE_TICK_S = 1.0     # broadcaster cadence (coalesced upserts, ~1 Hz)
 PRESENCE_STALE_S = 120.0  # drop a teammate after this long with no new position
 PRESENCE_MOVE_M = 5.0     # only recompute heading once actually moving
 
+# Online roster (who's-online layer, backlog #19). Identity-bearing and NOT
+# surface-gated — a member is "online" the moment a tab connects, wherever they
+# are. Records are refreshed by the client's ~20s WS ping; this stale window is a
+# backstop for a half-open socket that never fired a clean disconnect.
+ONLINE_STALE_S = 90.0
+# Manual availability states a member can set (#19 step 2); anything else falls
+# back to "available". Ordering (available→busy→afk) lives in Hub._ONLINE_ORDER.
+ONLINE_STATUSES = ("available", "busy", "afk")
+_ACTIVITY_MAX = 60   # free-text "what I'm up to" on the online roster
+# Shared playstyle / activity vocabulary — the one list reused as online-status
+# activity quick-picks (step 2) and LFG entry tags (step 3). Served at
+# /api/playstyles so both surfaces draw from the same source of truth.
+PLAYSTYLE_TAGS = [
+    "hauling", "mining", "salvage", "trading", "bunkers", "bounty",
+    "PvE", "PvP", "FPS", "flight", "exploration", "medical/rescue",
+    "RP", "casual", "serious", "new-player-friendly",
+]
+
 # How often the scheduled event-reminder loop scans for due events.
 REMINDER_TICK_S = 60.0
 
@@ -1076,6 +1094,10 @@ class SessionHub:
         self.presence: dict[str, dict] = {}   # uid -> internal record (w/ last_update)
         self._dirty: set[str] = set()          # uids with a pending upsert
         self._removed: set[str] = set()        # uids with a pending remove
+        # Who's-online roster (backlog #19): uid -> {status, activity, visible,
+        # since, last_seen}. Decoupled from `presence` — it's identity-bearing and
+        # works in space / at a station / before the game is even launched.
+        self.online: dict[str, dict] = {}
 
     def get(self, user: dict) -> Session:
         sess = self.sessions.get(user["id"])
@@ -1151,6 +1173,71 @@ class SessionHub:
     def roster(self) -> list[dict]:
         return [self._public_presence(r) for r in self.presence.values()]
 
+    # --- online roster (who's online, #19) ----------------------------------
+    def mark_online(self, sess: "Session") -> bool:
+        """Register (or refresh the heartbeat of) a member in the online roster.
+        Returns True when this call actually *adds* the member — a fresh arrival
+        or a re-add after a stale prune — so the caller knows to broadcast. A plain
+        heartbeat on an already-present member returns False. Call under the lock."""
+        uid = sess.user["id"]
+        rec = self.online.get(uid)
+        if rec is None:
+            now = time.time()
+            # Seed from the member's persisted prefs so a refresh/reconnect keeps
+            # their chosen status/activity and "appear offline" choice (read once
+            # per arrival, not on the per-ping heartbeat below).
+            prefs = db.get_member(uid) or {}
+            status = prefs.get("online_status")
+            self.online[uid] = {
+                "status": status if status in ONLINE_STATUSES else "available",
+                "activity": prefs.get("online_activity"),
+                "visible": not prefs.get("appear_offline"),
+                "since": now,
+                "last_seen": now,
+            }
+            return True
+        rec["last_seen"] = time.time()
+        return False
+
+    def drop_online(self, uid: str) -> bool:
+        """Remove a member from the online roster (last tab closed / stale).
+        Returns True if a record was actually removed. Call under the lock."""
+        return self.online.pop(uid, None) is not None
+
+    def _public_online(self, uid: str, rec: dict) -> dict:
+        """Wire form for one online member: resolved name, status/activity, how
+        long they've been online, and a coarse location — but only when they're
+        already sharing presence (never blocks on position)."""
+        out = {
+            "discord_id": uid,
+            "name": _resolve_member_name(uid, None),
+            "status": rec["status"],
+            "activity": rec["activity"],
+            "since_s": max(0.0, time.time() - rec["since"]),
+        }
+        pres = self.presence.get(uid)
+        if pres:
+            out["location"] = {
+                "system": pres["system"], "body": pres["body"], "shard": pres["shard"],
+            }
+        return out
+
+    _ONLINE_ORDER = {"available": 0, "busy": 1, "afk": 2}
+
+    def online_roster(self) -> list[dict]:
+        """Visible online members, available-first then alphabetical."""
+        recs = [self._public_online(uid, r) for uid, r in self.online.items()
+                if r["visible"]]
+        recs.sort(key=lambda r: (self._ONLINE_ORDER.get(r["status"], 9),
+                                 r["name"].lower()))
+        return recs
+
+    async def broadcast_online_roster(self) -> None:
+        """Push the full identity-bearing online roster to every tab. Cheap at org
+        scale (dozens of members); sent on arrivals/departures/stale prunes."""
+        await self.send_to_all_clients(
+            {"type": "online_roster", "users": self.online_roster()})
+
     async def send_to_all_clients(self, message: dict) -> None:
         text = json.dumps(message)
         for s in list(self.sessions.values()):   # copy: get() may add a session mid-send
@@ -1161,10 +1248,12 @@ class SessionHub:
                     s.ws_clients.discard(ws)
 
     def online_count(self) -> int:
-        """Members with at least one open tab right now. Counts people, not tabs
-        (one member with three tabs is one online player). Approximate: a tab
-        that dies without a clean close lingers until a failed send prunes it."""
-        return sum(1 for s in self.sessions.values() if s.ws_clients)
+        """Members shown as online right now — the size of the *visible* online
+        roster. Counts people, not tabs (one member with three tabs is one online
+        player), and a member who set themselves to "appear offline" (#19 step 2,
+        visible=False) drops out. Approximate: a half-open tab lingers until the
+        stale-prune sweeps it (see ONLINE_STALE_S)."""
+        return sum(1 for r in self.online.values() if r["visible"])
 
     async def broadcast_online(self) -> None:
         """Push the current online-player count to every tab. Cheap; called on
@@ -1208,12 +1297,23 @@ async def presence_broadcaster():
                 removes = list(hub._removed)
                 hub._dirty.clear()
                 hub._removed.clear()
+                # Backstop for the online roster: sweep members whose WS ping went
+                # quiet (a half-open socket that never fired a clean disconnect).
+                stale = [uid for uid, r in list(hub.online.items())
+                         if now - r["last_seen"] > ONLINE_STALE_S]
+                online_dropped = False
+                for uid in stale:
+                    online_dropped |= hub.drop_online(uid)
                 if upserts:
                     await hub.send_to_all_clients(
                         {"type": "presence", "op": "upsert", "users": upserts})
                 for uid in removes:
                     await hub.send_to_all_clients(
                         {"type": "presence", "op": "remove", "discord_id": uid})
+                if online_dropped:
+                    await hub.send_to_all_clients(
+                        {"type": "online", "count": hub.online_count()})
+                    await hub.broadcast_online_roster()
         except Exception as exc:   # never let the loop die on a transient error
             print(f"[sc-nav] presence broadcaster error: {exc}")
 
@@ -3863,6 +3963,65 @@ def _ws_origin_ok(ws: WebSocket) -> bool:
     return False
 
 
+def _my_online_prefs(uid: str) -> dict:
+    """A member's own persisted who's-online prefs (for the #/online control bar).
+    Defaults for a member who never set them: available, no activity, visible."""
+    prefs = db.get_member(uid) or {}
+    status = prefs.get("online_status")
+    return {
+        "status": status if status in ONLINE_STATUSES else "available",
+        "activity": prefs.get("online_activity"),
+        "appear_offline": bool(prefs.get("appear_offline")),
+    }
+
+
+@app.get("/api/online")
+async def online_snapshot(user: dict = Depends(require_session)):
+    """Who's-online roster snapshot (#19): visible members with an open tab right
+    now, available-first, plus the caller's own prefs (`me`) to seed the status
+    control. The live view is WS-driven (`online_roster` deltas); this is the
+    initial paint for the #/online view and any non-WS consumer."""
+    async with hub.lock:
+        users, count = hub.online_roster(), hub.online_count()
+    return {"users": users, "count": count, "me": _my_online_prefs(user["id"])}
+
+
+@app.get("/api/playstyles")
+async def playstyles(user: dict = Depends(require_session)):
+    """The shared activity/playstyle vocabulary (#19): online-status activity
+    quick-picks (step 2) and LFG entry tags (step 3) draw from this one list."""
+    return {"tags": PLAYSTYLE_TAGS}
+
+
+class OnlineStatusIn(BaseModel):
+    status: str = Field(default="available", max_length=_UNIT_MAX)
+    activity: str | None = Field(default=None, max_length=_ACTIVITY_MAX)
+    appear_offline: bool = False
+
+
+@app.post("/api/online/status")
+async def set_online_status(body: OnlineStatusIn, user: dict = Depends(require_session)):
+    """Set the caller's who's-online status / activity / visibility (#19 step 2).
+    Persisted (survives reconnect) AND applied to their live roster record, then
+    the roster + count are rebroadcast so every tab reflects it. "Appear offline"
+    drops them from the visible roster — a lighter consent, independent of the
+    navigator's position-sharing toggle."""
+    uid = user["id"]
+    status = body.status if body.status in ONLINE_STATUSES else "available"
+    activity = (body.activity or "").strip()[:_ACTIVITY_MAX] or None
+    db.set_online_prefs(uid, status, activity, body.appear_offline)
+    async with hub.lock:
+        rec = hub.online.get(uid)
+        if rec is not None:
+            rec["status"] = status
+            rec["activity"] = activity
+            rec["visible"] = not body.appear_offline
+    await hub.broadcast_online()
+    await hub.broadcast_online_roster()
+    return {"status": status, "activity": activity,
+            "appear_offline": body.appear_offline}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     # Browsers only; require a logged-in org member (session loaded from cookie).
@@ -3877,6 +4036,8 @@ async def websocket_endpoint(ws: WebSocket):
     sess = hub.get(user)
     was_offline = not sess.ws_clients   # first tab for this member?
     sess.ws_clients.add(ws)
+    async with hub.lock:
+        hub.mark_online(sess)           # join the who's-online roster (#19)
     try:
         # Send this member's current state immediately so the UI isn't blank
         # until their next /showlocation.
@@ -3890,24 +4051,37 @@ async def websocket_endpoint(ws: WebSocket):
             )
         )
         # Initial teammate snapshot so the new tab's map/roster start populated
-        # (later changes arrive as throttled presence deltas).
+        # (later changes arrive as throttled presence deltas). The who's-online
+        # roster ships alongside so the new tab can render #/online immediately.
         async with hub.lock:
             roster = hub.roster()
+            online = hub.online_roster()
         await ws.send_text(json.dumps({"type": "roster", "users": roster}))
+        await ws.send_text(json.dumps({"type": "online_roster", "users": online}))
         # Tell the new tab the current count immediately; tell everyone else only
-        # when this member actually came online (a 2nd/3rd tab doesn't change it).
+        # when this member actually came online (a 2nd/3rd tab doesn't change it,
+        # but their arrival does add them to everyone's online roster).
         if was_offline:
             await hub.broadcast_online()
+            await hub.broadcast_online_roster()
         else:
             await ws.send_text(json.dumps({"type": "online", "count": hub.online_count()}))
         while True:
-            await ws.receive_text()  # client pings; content ignored
+            await ws.receive_text()  # client pings: bump the online heartbeat
+            async with hub.lock:
+                readded = hub.mark_online(sess)   # re-add if a stale prune dropped us
+            if readded:
+                await hub.broadcast_online()
+                await hub.broadcast_online_roster()
     except WebSocketDisconnect:
         pass
     finally:
         sess.ws_clients.discard(ws)
         if not sess.ws_clients:   # member's last tab closed — they went offline
+            async with hub.lock:
+                hub.drop_online(user["id"])
             await hub.broadcast_online()
+            await hub.broadcast_online_roster()
 
 
 # ---------------------------------------------------------------------------

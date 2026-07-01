@@ -297,6 +297,11 @@ def init(db_path) -> None:
         # Migrate DBs created before a column existed (CREATE TABLE IF NOT EXISTS
         # won't add columns to an already-present table).
         _ensure_column("handles", "discord_id", "TEXT")
+        # Who's-online prefs (#19): persisted so a refresh/reconnect doesn't wipe a
+        # member's chosen status/activity or their "appear offline" privacy choice.
+        _ensure_column("members", "online_status", "TEXT")
+        _ensure_column("members", "online_activity", "TEXT")
+        _ensure_column("members", "appear_offline", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
         _ensure_column("observations", "shard_id", "TEXT")
@@ -563,6 +568,22 @@ def set_directory_opt_out(discord_id: str, opt_out: bool) -> None:
             "INSERT INTO members (discord_id, directory_opt_out) VALUES (?,?) "
             "ON CONFLICT(discord_id) DO UPDATE SET directory_opt_out=excluded.directory_opt_out",
             (did, 1 if opt_out else 0))
+
+
+def set_online_prefs(discord_id: str, status: str, activity: str | None,
+                     appear_offline: bool) -> None:
+    """Persist a member's who's-online prefs (#19 step 2) so they survive a
+    reconnect. Creates a stub member row if none exists yet (deletion-then-reuse
+    edge), mirroring the other member-pref setters."""
+    did = str(discord_id)
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, online_status, online_activity, appear_offline) "
+            "VALUES (?,?,?,?) ON CONFLICT(discord_id) DO UPDATE SET "
+            "  online_status=excluded.online_status, "
+            "  online_activity=excluded.online_activity, "
+            "  appear_offline=excluded.appear_offline",
+            (did, status, activity, 1 if appear_offline else 0))
 
 
 # --- watcher tokens --------------------------------------------------------
