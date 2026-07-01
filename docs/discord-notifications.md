@@ -169,7 +169,22 @@ A single module `server/notify.py`:
    Content-injection safe (mentions locked to real snowflakes; barter offers carry
    no aUEC). `MarketNotifyTests` in `test_app.py` (8 tests). Auction "ending soon"
    ping deferred (needs a scheduled loop, out of offer/confirm scope).
-5. Goals-100% + hauling-record pings.
+5. ✅ **DONE (built 2026-06-30, awaiting /deploy).** Goals-100% + hauling-record
+   pings. **Goals** (gated on the `goals` webhook): `_notify_goal_met(goal,
+   contributions)` — a communal 🎯 "Goal reached" broadcast that pings the goal's
+   **creator** and names the contributor count, dedup `goal-met:{id}`. Fired from
+   `POST /api/goals/{id}/contribute` only on the not-met→met edge (captures
+   `was_met` before the allocation, re-derives after; skips archived goals) so the
+   single contribution that tips it to 100% pings once. **Records** (gated on the
+   `records` webhook): `nav_core.derive_run_record(run, prior_runs)` (pure) returns
+   which org-wide records a just-finished run set — `total` (single-run aUEC) and/or
+   `rate` (aUEC/hr) — only when it *strictly* beats an established prior best (the
+   first qualifying haul isn't a record). `_notify_hauling_record(hauler_id, run,
+   records)` bragged a 🏆 broadcast pinging the **hauler**, dedup
+   `hauling-record:{run id}`. Fired from `PATCH /api/route/run` at completion,
+   comparing against `db.list_all_completed_runs()` minus this run.
+   `GoalRecordNotifyTests` in `test_app.py` (5) + `RunRecordTests` in
+   `test_nav_core.py` (5). Suite 180 green.
 6. ✅ **Per-category channel routing** — done early as part of step 1 (see above),
    not deferred to v1.1.
 

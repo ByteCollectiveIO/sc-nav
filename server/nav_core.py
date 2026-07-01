@@ -1991,6 +1991,32 @@ def derive_run_stats(runs) -> dict:
     }
 
 
+def _run_rate(run: dict):
+    """A run's aUEC/hour, or None when it lacks a positive reward+time to derive one."""
+    reward = run_total_reward(run)
+    t = float(run.get("total_time_s") or 0)
+    return (reward / (t / 3600.0)) if (reward > 0 and t > 0) else None
+
+
+def derive_run_record(run: dict, prior_runs) -> dict:
+    """Which org-wide hauling records a just-completed `run` set against every
+    `prior_run` (all other completed runs, org-wide). Returns
+    `{"total": auec, "rate": auec_per_hour}` with a key present only when this run
+    *strictly* beats an established prior best on that metric — the very first
+    qualifying run doesn't count as a record (there's nothing to beat), so the
+    channel isn't pinged for a lone haul. Pure derivation over the stored blobs."""
+    out: dict = {}
+    reward = run_total_reward(run)
+    prior_rewards = [r for r in (run_total_reward(p) for p in prior_runs) if r > 0]
+    if reward > 0 and prior_rewards and reward > max(prior_rewards):
+        out["total"] = reward
+    rate = _run_rate(run)
+    prior_rates = [r for r in (_run_rate(p) for p in prior_runs) if r]
+    if rate is not None and prior_rates and rate > max(prior_rates):
+        out["rate"] = rate
+    return out
+
+
 def derive_quick_picks(nav: NavData, runs, limit: int = 12) -> dict:
     """Frequency-ranked data-entry priors from a member's completed runs: the
     lanes (from->to) they haul most, the commodities they carry (with the SCU

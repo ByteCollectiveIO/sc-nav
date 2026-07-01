@@ -1749,6 +1749,12 @@ async def patch_run(body: RunPatchIn, user: dict = Depends(require_session)):
         if completed:
             db.complete_run(user["id"], run["id"],
                             datetime.now(timezone.utc).isoformat(), run)
+            # Ping the channel if this haul just set a new org record. Compare
+            # against every other completed run org-wide (exclude this one, now in db).
+            prior = [r for r in db.list_all_completed_runs() if r.get("id") != run["id"]]
+            records = nav_core.derive_run_record(run, prior)
+            if records:
+                _notify_bg(_notify_hauling_record(user["id"], run, records))
             sess.run = None
             sess.destination_id = None
         else:
@@ -2230,6 +2236,42 @@ async def _notify_market_completed(listing: dict) -> None:
         mentions=mentions, dedup_key=f"market-complete:{listing['id']}")
 
 
+async def _notify_goal_met(goal: dict, contributions) -> None:
+    """Celebrate a procurement goal crossing 100% — a communal win, so it broadcasts
+    to the channel and pings the goal's creator so they know it's fulfilled."""
+    if not notify.is_configured("goals"):
+        return
+    mentions, ping = _mentions(goal["creator_id"])
+    contributors = len({r.get("owner_id") for r in (contributions or []) if r.get("owner_id")})
+    who = f"\n{contributors} contributor{'s' if contributors != 1 else ''} chipped in." if contributors else ""
+    await notify.send(
+        "goals",
+        f"🎯 **Goal reached: {goal['title']}**\nFully stocked — 100%.{who}"
+        f"{_deep_link('#/goals')}{ping}",
+        mentions=mentions, dedup_key=f"goal-met:{goal['id']}")
+
+
+async def _notify_hauling_record(hauler_id: str, run: dict, records: dict) -> None:
+    """Brag a just-completed run that set a new org hauling record (single-run total
+    and/or aUEC/hour). Broadcasts to the channel and pings the hauler."""
+    if not notify.is_configured("records"):
+        return
+    mentions, ping = _mentions(hauler_id)
+    who = _resolve_member_name(hauler_id, None)
+    lines = []
+    if records.get("total") is not None:
+        lines.append(f"💰 single-run haul: **{_auec(records['total'])}**")
+    if records.get("rate") is not None:
+        lines.append(f"⚡ efficiency: **{_auec(records['rate'])}/hr**")
+    if not lines:
+        return
+    await notify.send(
+        "records",
+        f"🏆 **New org hauling record — {who}!**\n" + "\n".join(lines) +
+        f"{_deep_link('#/route')}{ping}",
+        mentions=mentions, dedup_key=f"hauling-record:{run.get('id')}")
+
+
 @app.get("/api/events/taxonomy")
 async def events_taxonomy(user: dict = Depends(require_session)):
     """Curated types / categories / grouped roles for the create form."""
@@ -2636,6 +2678,8 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
     item = _resolve_or_400(body.item_id)
     loc = body.location.strip() or None
     now = datetime.now(timezone.utc).isoformat()
+    was_met = nav_core.derive_goal_progress(
+        goal, db.list_goal_contributions(goal_id=goal_id))["is_met"]
     holding = db.get_holding(user["id"], item["item_id"], loc)
     if holding is None:
         # No matching holding yet: the contribution itself declares the holding.
@@ -2653,8 +2697,13 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
         db.update_allocation(existing["id"], float(existing["qty"] or 0) + body.qty, now)
     else:
         db.add_allocation(holding["id"], goal_id, body.qty, now)
-    return _goal_view(db.get_goal(goal_id),
-                      db.list_goal_contributions(goal_id=goal_id), user, detail=True)
+    contributions = db.list_goal_contributions(goal_id=goal_id)
+    # Ping when this contribution is the one that tips the goal to 100% (and it
+    # wasn't already met, and it's not an archived/parked goal).
+    if (not was_met and goal.get("status") != "archived"
+            and nav_core.derive_goal_progress(goal, contributions)["is_met"]):
+        _notify_bg(_notify_goal_met(goal, contributions))
+    return _goal_view(db.get_goal(goal_id), contributions, user, detail=True)
 
 
 # --- org marketplace (shares the item catalog) -----------------------------

@@ -448,5 +448,85 @@ class MarketNotifyTests(unittest.TestCase):
             db.set_setting(notify._webhook_key("marketplace"), _GOOD_WEBHOOK)
 
 
+class GoalRecordNotifyTests(unittest.TestCase):
+    """Step 5 — the goals-100% and org-hauling-record pings: each fires only when
+    its category webhook is set, directs the ping with an `<@id>` mention, and
+    stays silent otherwise."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("goals"), _GOOD_WEBHOOK)
+        db.set_setting(notify._webhook_key("records"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    _GOAL = {"id": 4, "creator_id": "111", "title": "Fund the Idris"}
+    _CONTRIB = [{"owner_id": "111", "qty": 5}, {"owner_id": "222", "qty": 3}]
+
+    def test_goal_met_pings_the_creator(self):
+        asyncio.run(app._notify_goal_met(self._GOAL, self._CONTRIB))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "goals")
+        self.assertIn("Fund the Idris", msg["text"])
+        self.assertIn("2 contributors", msg["text"])
+        self.assertIn("<@111>", msg["text"])            # the creator is pinged
+        self.assertEqual(msg["mentions"], ["111"])
+        self.assertEqual(msg["dedup_key"], "goal-met:4")
+
+    def test_goal_met_silent_when_no_webhook(self):
+        db.set_setting(notify._webhook_key("goals"), "")
+        try:
+            asyncio.run(app._notify_goal_met(self._GOAL, self._CONTRIB))
+            self.assertEqual(self.sent, [])
+        finally:
+            db.set_setting(notify._webhook_key("goals"), _GOOD_WEBHOOK)
+
+    def test_record_brags_both_metrics(self):
+        run = {"id": 8, "total_reward": 900000, "total_time_s": 1800}
+        asyncio.run(app._notify_hauling_record(
+            "111", run, {"total": 900000, "rate": 1800000}))
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "records")
+        self.assertIn("record", msg["text"].lower())
+        self.assertIn("900,000 aUEC", msg["text"])       # single-run total
+        self.assertIn("1,800,000 aUEC/hr", msg["text"])  # efficiency
+        self.assertIn("<@111>", msg["text"])             # the hauler is pinged
+        self.assertEqual(msg["mentions"], ["111"])
+        self.assertEqual(msg["dedup_key"], "hauling-record:8")
+
+    def test_record_only_the_broken_metric_shows(self):
+        run = {"id": 9, "total_reward": 500000}
+        asyncio.run(app._notify_hauling_record("111", run, {"total": 500000}))
+        text = self.sent[0]["text"]
+        self.assertIn("single-run", text)
+        self.assertNotIn("efficiency", text)
+
+    def test_record_silent_when_no_webhook(self):
+        db.set_setting(notify._webhook_key("records"), "")
+        try:
+            asyncio.run(app._notify_hauling_record(
+                "111", {"id": 1}, {"total": 1}))
+            self.assertEqual(self.sent, [])
+        finally:
+            db.set_setting(notify._webhook_key("records"), _GOOD_WEBHOOK)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

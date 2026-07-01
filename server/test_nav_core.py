@@ -1171,6 +1171,46 @@ class RunStatsTests(unittest.TestCase):
         self.assertIsNone(s["auec_per_hour"])
 
 
+class RunRecordTests(unittest.TestCase):
+    """derive_run_record: a run only sets a record when it strictly beats an
+    established prior best — the first qualifying haul isn't a 'record'."""
+
+    def test_beats_prior_total_and_rate(self):
+        run = {"total_reward": 900000, "total_time_s": 1800}   # 1.8M/hr
+        prior = [{"total_reward": 500000, "total_time_s": 3600},   # 500k/hr
+                 {"total_reward": 700000, "total_time_s": 1800}]   # 1.4M/hr
+        rec = nav_core.derive_run_record(run, prior)
+        self.assertEqual(rec["total"], 900000)
+        self.assertEqual(rec["rate"], 1800000.0)
+
+    def test_only_the_metric_that_wins_is_reported(self):
+        # Big total but slow -> a total record but no rate record.
+        run = {"total_reward": 1000000, "total_time_s": 36000}   # 100k/hr
+        prior = [{"total_reward": 500000, "total_time_s": 1800}]  # 1M/hr
+        rec = nav_core.derive_run_record(run, prior)
+        self.assertEqual(rec["total"], 1000000)
+        self.assertNotIn("rate", rec)
+
+    def test_ties_do_not_break_a_record(self):
+        run = {"total_reward": 500000, "total_time_s": 3600}
+        prior = [{"total_reward": 500000, "total_time_s": 3600}]
+        self.assertEqual(nav_core.derive_run_record(run, prior), {})
+
+    def test_first_qualifying_run_is_not_a_record(self):
+        # Nothing to beat -> no ping, even though the run has a positive reward/rate.
+        run = {"total_reward": 400000, "total_time_s": 1800}
+        self.assertEqual(nav_core.derive_run_record(run, []), {})
+        # Priors with no usable reward/time still don't establish a baseline.
+        self.assertEqual(nav_core.derive_run_record(run, [{"total_reward": 0}]), {})
+
+    def test_rate_needs_time_to_qualify(self):
+        run = {"total_reward": 999999}   # no time -> no rate
+        prior = [{"total_reward": 100, "total_time_s": 3600}]
+        rec = nav_core.derive_run_record(run, prior)
+        self.assertEqual(rec["total"], 999999)
+        self.assertNotIn("rate", rec)
+
+
 class GuildLeaderboardTests(unittest.TestCase):
     def _run(self, did, name, reward, time_s, pkgs):
         return {"discord_id": did, "display_name": name, "total_reward": reward,
