@@ -493,7 +493,10 @@
   .lfg-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
     margin-bottom: 10px; background: var(--panel2); }
   .lfg-card.mine { border-color: var(--accent); }
-  .lfg-card.stale { background: var(--warn-wash); }
+  .lfg-card.match { background: var(--accent-wash); }   /* suggested match (#19 step 5) */
+  .lfg-card.stale { background: var(--warn-wash); }     /* stale wins over match tint */
+  .lfg-match-tag { font-size: 10px; font-weight: 600; color: var(--accent);
+    text-transform: uppercase; letter-spacing: .04em; }
   .lfg-stale-tag { color: var(--warn); font-weight: 600; }
   .lfg-card-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
   .lfg-card-head .on-name { font-size: 14px; }
@@ -3939,6 +3942,23 @@ const lfgComposeTags = new Set();   // selected playstyle tags in the composer
 let lfgFilterDir = "all";           // board filter: all | lfm | lfj
 let lfgFilterTag = null;            // board filter: one playstyle tag, or null
 let lfgOpenOnly = false;            // board filter: only LFM posts with open slots
+let lfgMatchOnly = false;           // board filter: only posts that match my own posts (#19 step 5)
+// Suggested matches (#19 step 5): my own posts declare my intent, so an opposite-
+// direction post that shares a playstyle tag is someone I could group with — an LFM
+// group matches my LFJ (I want in), an LFJ player matches my LFM (I need players).
+function lfgMyTagsByDir() {
+  const dirs = { lfm: new Set(), lfj: new Set() };
+  for (const e of lfgBoard) if (e.poster_id === myId)
+    for (const t of (e.tags || [])) dirs[e.direction] && dirs[e.direction].add(t);
+  return dirs;
+}
+function lfgIHavePosts() { return lfgBoard.some(e => e.poster_id === myId); }
+function lfgIsMatch(e) {
+  if (!myId || e.poster_id === myId) return false;
+  const mine = lfgMyTagsByDir();
+  const want = e.direction === "lfm" ? mine.lfj : mine.lfm;   // opposite direction
+  return want.size > 0 && (e.tags || []).some(t => want.has(t));
+}
 function fmtLeft(s) {   // "expires in 2h" companion to fmtSince's "online" phrasing
   s = Math.max(0, Math.round(s || 0));
   if (s < 60) return "expiring";
@@ -4006,6 +4026,37 @@ async function joinLfg(id) {
 async function closeLfg(id) {
   try { await fetch(`/api/lfg/${id}`, { method: "DELETE" }); } catch {}
 }
+// Promote an ephemeral LFG post into a scheduled event (#19 step 5). We map playstyle
+// tags onto the event taxonomy as a best-effort prefill; the organizer confirms the
+// rest (date/time is required, so they must finish the form). Ships nothing until they
+// hit "Create event" — the LFG post stays put in the meantime.
+const LFG_TAG_TYPE = {
+  hauling: "Cargo Haul", trading: "Cargo Haul", mining: "Mining Op",
+  salvage: "Salvage Op", bounty: "Bounty Hunt", bunkers: "Combat Patrol",
+  FPS: "Combat Patrol", exploration: "Exploration", "medical/rescue": "Medical Op",
+};
+const LFG_TAG_CAT = {
+  PvE: "PvE", PvP: "PvP", RP: "Social", casual: "Social",
+  hauling: "Logistics", trading: "Logistics", mining: "Logistics", salvage: "Logistics",
+};
+let lfgEventSeed = null;   // prefill handed to the event create form, consumed once
+function promoteLfgToEvent(id) {
+  const e = lfgBoard.find(x => x.id === id);
+  if (!e) return;
+  const tags = e.tags || [];
+  const uniq = arr => [...new Set(arr)];
+  lfgEventSeed = {
+    title: (e.note ? e.note.split("\n")[0].trim().slice(0, 120) : "") ||
+      (tags.length ? tags.slice(0, 3).join(" / ") + " op" : "Group op"),
+    description: e.note || "",
+    types: uniq(tags.map(t => LFG_TAG_TYPE[t]).filter(Boolean)),
+    categories: uniq(tags.map(t => LFG_TAG_CAT[t]).filter(Boolean)),
+    location: e.rally || "",
+    // LFM "slots" is players *needed*; the crew is those plus the organizer.
+    max_players: (e.direction === "lfm" && e.slots) ? e.slots + 1 : null,
+  };
+  location.hash = "#/events/new";
+}
 // Filter bar: direction, one playstyle tag, and "open slots only".
 function renderLfgFilters() {
   const el = $("lfg-filters");
@@ -4016,9 +4067,16 @@ function renderLfgFilters() {
   const tagBtns = playstyleTags.map(t =>
     `<button type="button" class="on-tag${lfgFilterTag === t ? " active" : ""}" ` +
     `data-ftag="${esc(t)}">${esc(t)}</button>`).join("");
+  // "My matches" is only meaningful once I've posted — it needs my tags to match against.
+  const haveMine = lfgIHavePosts();
+  if (!haveMine) lfgMatchOnly = false;   // no posts ⇒ no basis to match; don't strand the filter
+  const matchBtn = haveMine
+    ? `<button type="button" class="on-tag${lfgMatchOnly ? " active" : ""}" data-fmatch="1">✨ My matches</button>`
+    : "";
   el.innerHTML = dirBtn("all", "All") + dirBtn("lfm", "Need players") +
     dirBtn("lfj", "Want to join") +
     `<button type="button" class="on-tag${lfgOpenOnly ? " active" : ""}" data-fopen="1">Open slots</button>` +
+    matchBtn +
     `<span class="lfg-hint">·</span>` + tagBtns;
   el.querySelectorAll("[data-fdir]").forEach(b =>
     b.onclick = () => { lfgFilterDir = b.dataset.fdir; renderLfgFilters(); renderLfgBoard(); });
@@ -4027,6 +4085,8 @@ function renderLfgFilters() {
       renderLfgFilters(); renderLfgBoard(); });
   el.querySelector("[data-fopen]").onclick = () => {
     lfgOpenOnly = !lfgOpenOnly; renderLfgFilters(); renderLfgBoard(); };
+  const mb = el.querySelector("[data-fmatch]");
+  if (mb) mb.onclick = () => { lfgMatchOnly = !lfgMatchOnly; renderLfgFilters(); renderLfgBoard(); };
 }
 function lfgStatusClass(s) {
   return ["available", "busy", "afk"].includes(s) ? s : "afk";
@@ -4053,9 +4113,11 @@ function lfgCard(e) {
   meta.push(e.stale
     ? `<span class="lfg-stale-tag">⏳ stale · ${fmtLeft(e.expires_s)}</span>`
     : fmtLeft(e.expires_s));
+  const match = lfgIsMatch(e);
   let action = "";
   if (mine) {
-    action = `<button type="button" data-close="${e.id}">Close post</button>`;
+    action = `<button type="button" data-promote="${e.id}">Promote to event</button>` +
+      `<button type="button" data-close="${e.id}">Close post</button>`;
   } else if (e.direction === "lfm") {
     action = iResponded
       ? `<button type="button" data-join="${e.id}">Leave</button>`
@@ -4064,9 +4126,10 @@ function lfgCard(e) {
     action = `<button type="button" data-join="${e.id}">${iResponded ? "Un-ping" : "Ping"}</button>`;
   }
   const note = e.note ? `<div class="lfg-note">${esc(e.note)}</div>` : "";
-  return `<div class="lfg-card${mine ? " mine" : ""}${e.stale ? " stale" : ""}">` +
+  const matchTag = match ? ' <span class="lfg-match-tag" title="Shares a playstyle with one of your posts">✨ matches you</span>' : "";
+  return `<div class="lfg-card${mine ? " mine" : ""}${match ? " match" : ""}${e.stale ? " stale" : ""}">` +
     `<div class="lfg-card-head"><span class="on-dot ${st}"></span>` +
-    `<span class="on-name">${esc(e.poster)}</span>${mine ? ' <span class="on-where">(you)</span>' : ""}` +
+    `<span class="on-name">${esc(e.poster)}</span>${mine ? ' <span class="on-where">(you)</span>' : ""}${matchTag}` +
     slots + `</div>` +
     (chips ? `<div class="lfg-chips">${chips}</div>` : "") +
     note +
@@ -4077,12 +4140,15 @@ function lfgCard(e) {
 function lfgMatchesFilter(e) {
   if (lfgOpenOnly && !(e.direction === "lfm" && (!e.slots || e.filled < e.slots))) return false;
   if (lfgFilterTag && !(e.tags || []).includes(lfgFilterTag)) return false;
+  if (lfgMatchOnly && !lfgIsMatch(e)) return false;
   return true;
 }
 function renderLfgBoard() {
   const lfmBody = $("lfg-lfm-body"), lfjBody = $("lfg-lfj-body");
   if (!lfmBody || !lfjBody) return;
-  const shown = lfgBoard.filter(lfgMatchesFilter);
+  // Suggested matches float to the top of their column (board is otherwise newest-first).
+  const shown = lfgBoard.filter(lfgMatchesFilter)
+    .sort((a, b) => (lfgIsMatch(b) ? 1 : 0) - (lfgIsMatch(a) ? 1 : 0));
   const lfm = shown.filter(e => e.direction === "lfm");
   const lfj = shown.filter(e => e.direction === "lfj");
   $("lfg-hint").textContent = lfgBoard.length ? `(${lfgBoard.length} open)` : "";
@@ -4098,6 +4164,7 @@ function renderLfgBoard() {
   for (const body of [lfmBody, lfjBody]) {
     body.querySelectorAll("[data-join]").forEach(b => b.onclick = () => joinLfg(+b.dataset.join));
     body.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeLfg(+b.dataset.close));
+    body.querySelectorAll("[data-promote]").forEach(b => b.onclick = () => promoteLfgToEvent(+b.dataset.promote));
   }
 }
 // Show the composer's "announce to Discord" opt-in only when the org actually has an
@@ -5586,8 +5653,8 @@ function eventFormHtml(tax, e) {
         `<span class="ev-hint">Optional — after this, signups lock.</span></div>` +
       `<div class="ev-field"><label>Signup deadline time</label><input id="ev-f-dl-time" class="ti" type="time" value="${e && e.signup_deadline ? toLocalTime(e.signup_deadline) : ""}">` +
         `<span class="ev-hint">Blank ⇒ signups close at start.</span></div>` +
-      `<div class="ev-field"><label>Event Date</label><input id="ev-f-date" class="ti" type="date" value="${e ? toLocalDate(e.start_at) : ""}"></div>` +
-      `<div class="ev-field"><label>Event Time</label><input id="ev-f-time" class="ti" type="time" value="${e ? toLocalTime(e.start_at) : ""}">` +
+      `<div class="ev-field"><label>Event Date</label><input id="ev-f-date" class="ti" type="date" value="${e && e.start_at ? toLocalDate(e.start_at) : ""}"></div>` +
+      `<div class="ev-field"><label>Event Time</label><input id="ev-f-time" class="ti" type="time" value="${e && e.start_at ? toLocalTime(e.start_at) : ""}">` +
         `<span class="ev-hint">Your timezone — ${esc(localTzName())}. Everyone sees their own.</span></div>` +
       `<div class="ev-field"><label>Duration</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}">` +
         `<span class="ev-hint">Minutes, optional.</span></div>` +
@@ -5607,7 +5674,7 @@ function eventFormHtml(tax, e) {
       `<div class="ev-roster" id="ev-f-roster">${rosterRows}</div>` +
       `<button class="ev-btn" id="ev-f-addrole" style="align-self:flex-start;margin-top:4px;">+ add role</button></div>` +
     `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea></div>` +
-    `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${e ? "Save changes" : "Create event"}</button>` +
+    `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${e && e.id ? "Save changes" : "Create event"}</button>` +
       `<button class="ev-btn" id="ev-f-cancel">Cancel</button>` +
       `<span id="ev-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
 }
@@ -5687,8 +5754,10 @@ function bindRosterDeletes() {
 
 async function renderEventForm() {
   const tax = await loadEventsTaxonomy();
+  const seed = lfgEventSeed;    // a promote-from-LFG prefill, consumed once
+  lfgEventSeed = null;
   $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
-    `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, null)}</div>`;
+    `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, seed)}</div>`;
   bindEventForm(tax, null, () => { location.hash = "#/events"; });
 }
 

@@ -237,7 +237,29 @@ LFJ per member is a sane cap).
    roster. The `🟢 N online` badge is unchanged (→ `#/online`); the `🔎 N looking for group`
    badge now points to `#/lfg`. Playstyle-tag fetch extracted to `ensurePlaystyleTags()`
    (shared, lazy) so either view works when opened cold.
-5. (nice-to-have) suggested matches; "promote LFG → scheduled event" shortcut.
+5. suggested matches; "promote LFG → scheduled event" shortcut. **BUILT 2026-07-01
+   — frontend-only (no new endpoints/tests; the board WS frame + `POST /api/events`
+   already carry everything).**
+   - **Suggested matches** (client-side, in `#/lfg`): my own posts declare my intent,
+     so an *opposite-direction* post that shares a playstyle tag is a candidate to
+     group with — an LFM group matches my LFJ ("I want in"), an LFJ player matches my
+     LFM ("I need players"). `lfgMyTagsByDir()` (my tags per direction) + `lfgIsMatch(e)`
+     compute this off the already-broadcast board (no per-viewer server work — matching
+     is inherently per-viewer, and the board frame is one-to-all). Matching cards get a
+     `✨ matches you` badge + `.lfg-card.match` accent-wash tint and float to the top of
+     their column (stable sort; stale tint still wins). A `✨ My matches` filter chip
+     appears only once I've posted (`lfgIHavePosts()`), and auto-clears if I close my
+     last post so it can't strand the board.
+   - **Promote to event**: my own LFG card gets a `Promote to event` action beside
+     `Close post`. `promoteLfgToEvent(id)` builds a prefill seed (title from the note's
+     first line or the tags; description = note; rally → location; LFM slots → max_players
+     = slots+1 [+ organizer]; playstyle tags mapped onto the event taxonomy via
+     `LFG_TAG_TYPE`/`LFG_TAG_CAT` best-effort) into module-level `lfgEventSeed`, then
+     routes to `#/events/new`. `renderEventForm()` consumes the seed once; `eventFormHtml`
+     now prefills from any seed object but only shows "Save changes" for a real edit
+     (`e.id`), and guards the date/time fields for a seed with no `start_at`. Nothing is
+     created until the organizer completes the required date/time and hits Create — the
+     LFG post is left untouched (they close it themselves).
 
 ## Relevant code
 - `server/app.py` — `hub`, `presence`/`online_count`/`broadcast_online`,
