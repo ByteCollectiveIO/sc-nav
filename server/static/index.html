@@ -1138,6 +1138,50 @@
   .ev-roster-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
   .ev-form-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
     border-top: 1px solid var(--border); padding-top: 14px; }
+  /* ---- fleet roster / squad organizer (#20) ---- */
+  .ev-fleet { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 14px; }
+  .ev-fleet-head { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; }
+  /* your-assignment callout: front-and-centre for the signed-up member */
+  .ev-mine { display: flex; align-items: center; gap: 8px; font-size: 13px;
+    border: 1px solid var(--accent); background: var(--accent-wash); color: var(--text);
+    border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+  .ev-mine b { color: var(--accent); }
+  .ev-fleet-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 12px; margin-top: 10px; }
+  .ev-grp { border: 1px solid var(--border); border-radius: 8px; background: var(--panel2);
+    padding: 10px 12px; }
+  .ev-grp.mine { border-color: var(--accent); }
+  .ev-grp-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .ev-grp-name { font-size: 13px; font-weight: 600; }
+  .ev-grp-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--dim); }
+  .ev-grp-ship { font-size: 12px; color: var(--dim); margin-top: 1px; }
+  .ev-grp-fill { font-size: 11px; color: var(--dim); }
+  .ev-grp-fill.short { color: var(--warn); }
+  .ev-grp-fill.full { color: var(--good); }
+  .ev-grp-members { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 0; }
+  .ev-seat { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .ev-seat .ev-seat-slot { color: var(--dim); }
+  .ev-seat .ev-lead { color: var(--accent); }
+  .ev-seat-x { margin-left: auto; color: var(--bad); cursor: pointer; opacity: .6;
+    padding: 0 4px; }
+  .ev-seat-x:hover { opacity: 1; }
+  .ev-grp-empty { font-size: 12px; color: var(--dim); font-style: italic; margin-top: 6px; }
+  .ev-grp-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .ev-grp-actions .ev-btn { font-size: 11px; padding: 3px 9px; }
+  .ev-pool { margin-top: 12px; }
+  .ev-pool-names { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .ev-pool .ev-name { cursor: default; }
+  .ev-assign-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin-top: 8px; }
+  .ev-assign-row select, .ev-assign-row input { padding: 6px 8px; font: inherit;
+    font-size: 12px; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; }
+  .ev-manifest { width: 100%; box-sizing: border-box; min-height: 120px; font-family: ui-monospace,
+    SFMono-Regular, Menlo, monospace; font-size: 12px; margin-top: 8px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+    resize: vertical; }
 
   /* ---- resource manager (#/goals + #/inventory) ---- */
   #goals-view, #goals-root, #inventory-view, #inventory-root { display: contents; }
@@ -5537,10 +5581,12 @@ async function renderDetailBody(e) {
     (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
     maybeRow +
+    `<div id="ev-fleet"></div>` +
     signupSection +
     (editControls ? `<div class="ev-form-actions">${editControls}</div>` : "");
 
   if (!cancelled) bindSignup(e);
+  if (!cancelled) renderFleetSection(e);
   if (e.can_edit) {
     const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
     const cn = $("ev-cancel"); if (cn) cn.onclick = async () => {
@@ -5606,6 +5652,231 @@ function bindSignup(e) {
   if (wd) wd.onclick = async () => {
     const r = await fetch(`/api/events/${e.id}/signup`, { method: "DELETE" });
     if (r.ok) renderDetailBody(await r.json());
+  };
+}
+
+// --- fleet roster / squad organizer (#20) ---
+// The organizer slots signed-up members into named units (squads/squadrons/ship
+// crews). The board comes from GET /api/events/{id}/groups; writes re-fetch it.
+// State per open detail: the current board + which group's inline form is open
+// ("new", a group id, or null).
+const EV_GROUP_KINDS = ["squad", "squadron", "crew", "section", "wing"];
+let fleetBoard = null, fleetFormFor = null;
+
+// Every going member = the seated ones (across groups) + the unassigned pool.
+function fleetGoingMembers(b) {
+  const out = [];
+  (b.groups || []).forEach(g => g.members.forEach(
+    m => out.push({ discord_id: m.discord_id, name: m.name })));
+  (b.unassigned || []).forEach(m => out.push({ discord_id: m.discord_id, name: m.name }));
+  return out.sort((a, x) => a.name.toLowerCase().localeCompare(x.name.toLowerCase()));
+}
+
+async function renderFleetSection(e) {
+  const host = $("ev-fleet");
+  if (!host) return;
+  fleetFormFor = null;   // full detail redraw: start with the form closed
+  try {
+    const r = await fetch(`/api/events/${e.id}/groups`);
+    if (!r.ok) throw 0;
+    fleetBoard = await r.json();
+  } catch { host.innerHTML = ""; return; }
+  drawFleet(e);
+}
+
+function drawFleet(e) {
+  const host = $("ev-fleet");
+  const b = fleetBoard;
+  const canEdit = b.can_edit;
+  // Nothing to show a plain member until an organizer starts a plan.
+  if (!canEdit && !(b.groups || []).length && !b.my_assignment) { host.innerHTML = ""; return; }
+
+  const mineCallout = b.my_assignment
+    ? `<div class="ev-mine"><span aria-hidden="true">◆</span> Your assignment: ` +
+      `<b>${esc(b.my_assignment.group_name)}</b>` +
+      (b.my_assignment.slot ? ` — ${esc(b.my_assignment.slot)}` : "") + `</div>`
+    : "";
+
+  const cards = (b.groups || []).map(g => groupCard(g, canEdit, b)).join("");
+  const board = cards
+    ? `<div class="ev-fleet-board">${cards}</div>`
+    : `<p class="stat-empty" style="margin:8px 0;">No units yet.${canEdit ? " Add one to start the plan." : ""}</p>`;
+
+  const pool = canEdit ? poolSection(b) : "";
+  const formCard = (canEdit && fleetFormFor !== null) ? groupFormCard(b) : "";
+  const controls = canEdit
+    ? `<div class="ev-grp-actions">` +
+      (fleetFormFor === null ? `<button class="ev-btn" id="ev-grp-add">+ Add unit</button>` : "") +
+      (cards ? `<button class="ev-btn" id="ev-manifest-btn">Manifest</button>` : "") +
+      `</div>`
+    : "";
+
+  host.innerHTML = `<div class="ev-fleet">` +
+    `<div class="ev-fleet-head"><div class="ev-section-h" style="margin:0;">Fleet roster` +
+    (b.groups && b.groups.length ? ` · ${b.assigned_count}/${b.total_going} assigned` : "") +
+    `</div></div>` +
+    mineCallout + board + pool + formCard + controls +
+    `<div id="ev-manifest-box"></div></div>`;
+
+  bindFleet(e);
+}
+
+function groupCard(g, canEdit, b) {
+  const fillCls = g.capacity == null ? "" : (g.short === 0 ? "full" : "short");
+  const fill = g.capacity == null ? `${g.filled}` : `${g.filled}/${g.capacity}`;
+  const mine = b.my_assignment && b.my_assignment.group_id === g.id;
+  const seats = g.members.length
+    ? `<div class="ev-grp-members">${g.members.map(m =>
+        `<div class="ev-seat"><span>${esc(m.name)}</span>` +
+        (m.slot ? `<span class="ev-seat-slot">— ${esc(m.slot)}</span>` : "") +
+        (m.is_leader ? `<span class="ev-lead" title="unit leader" aria-hidden="true">★</span>` : "") +
+        (canEdit ? `<span class="ev-seat-x" title="remove from unit" data-unassign="${esc(m.discord_id)}">✕</span>` : "") +
+        `</div>`).join("")}</div>`
+    : `<div class="ev-grp-empty">— empty —</div>`;
+  const actions = canEdit
+    ? `<div class="ev-grp-actions">` +
+      `<button class="ev-btn" data-grp-edit="${g.id}">Edit</button>` +
+      `<button class="ev-btn danger" data-grp-del="${g.id}">Delete</button></div>`
+    : "";
+  return `<div class="ev-grp${mine ? " mine" : ""}">` +
+    `<div class="ev-grp-h"><span class="ev-grp-name">${esc(g.name)}</span>` +
+    `<span class="ev-grp-fill ${fillCls}">${fill}</span></div>` +
+    `<div class="ev-grp-kind">${esc(g.kind)}${g.ship ? "" : ""}</div>` +
+    (g.ship ? `<div class="ev-grp-ship">${esc(g.ship)}</div>` : "") +
+    seats + actions + `</div>`;
+}
+
+// Unassigned pool + an assign row (member → unit → optional seat).
+function poolSection(b) {
+  const pool = b.unassigned || [];
+  const names = pool.length
+    ? `<div class="ev-pool-names">${pool.map(m => `<span class="ev-name">${esc(m.name)}</span>`).join("")}</div>`
+    : `<p class="stat-empty" style="margin:6px 0;">Everyone's assigned.</p>`;
+  let assignRow = "";
+  if (pool.length && (b.groups || []).length) {
+    const memOpts = pool.map(m => `<option value="${esc(m.discord_id)}">${esc(m.name)}</option>`).join("");
+    const grpOpts = b.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join("");
+    assignRow = `<div class="ev-assign-row">` +
+      `<select id="ev-asn-mem">${memOpts}</select>` +
+      `<span class="ev-grp-kind">→</span>` +
+      `<select id="ev-asn-grp">${grpOpts}</select>` +
+      `<input id="ev-asn-slot" type="text" placeholder="seat (optional)" maxlength="40">` +
+      `<button class="ev-btn primary" id="ev-asn-go">Assign</button>` +
+      `<span id="ev-asn-msg" class="muted" style="font-size:12px;"></span></div>`;
+  }
+  return `<div class="ev-pool"><div class="ev-section-h">Unassigned (${pool.length})</div>${names}${assignRow}</div>`;
+}
+
+// Inline add/edit form for one group. `fleetFormFor` is "new" or a group id.
+function groupFormCard(b) {
+  const editing = fleetFormFor !== "new";
+  const g = editing ? (b.groups || []).find(x => x.id === fleetFormFor) : null;
+  const kindOpts = EV_GROUP_KINDS.map(k =>
+    `<option value="${k}" ${g && g.kind === k ? "selected" : ""}>${k}</option>`).join("");
+  const leaderOpts = `<option value="">— no leader —</option>` +
+    fleetGoingMembers(b).map(m =>
+      `<option value="${esc(m.discord_id)}" ${g && g.leader_id === m.discord_id ? "selected" : ""}>${esc(m.name)}</option>`).join("");
+  return `<div class="ev-grp" style="margin-top:12px;">` +
+    `<div class="ev-section-h" style="margin:0 0 8px;">${editing ? "Edit unit" : "New unit"}</div>` +
+    `<div class="ev-assign-row">` +
+    `<input id="ev-grp-name" type="text" placeholder="unit name" maxlength="120" value="${g ? esc(g.name) : ""}">` +
+    `<select id="ev-grp-kind">${kindOpts}</select>` +
+    `<input id="ev-grp-ship" type="text" placeholder="ship (optional)" maxlength="120" value="${g && g.ship ? esc(g.ship) : ""}">` +
+    `<input id="ev-grp-cap" type="number" min="0" step="1" placeholder="size" style="width:80px;" value="${g && g.capacity != null ? g.capacity : ""}">` +
+    `<select id="ev-grp-leader">${leaderOpts}</select></div>` +
+    `<div class="ev-grp-actions">` +
+    `<button class="ev-btn primary" id="ev-grp-save">${editing ? "Save" : "Add unit"}</button>` +
+    `<button class="ev-btn" id="ev-grp-cancel">Cancel</button>` +
+    `<span id="ev-grp-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+}
+
+function bindFleet(e) {
+  const add = $("ev-grp-add");
+  if (add) add.onclick = () => { fleetFormFor = "new"; drawFleet(e); };
+  const cancel = $("ev-grp-cancel");
+  if (cancel) cancel.onclick = () => { fleetFormFor = null; drawFleet(e); };
+  const save = $("ev-grp-save");
+  if (save) save.onclick = () => saveGroup(e);
+  const manifest = $("ev-manifest-btn");
+  if (manifest) manifest.onclick = () => showManifest(e);
+
+  document.querySelectorAll("[data-grp-edit]").forEach(el =>
+    el.onclick = () => { fleetFormFor = Number(el.dataset.grpEdit); drawFleet(e); });
+  document.querySelectorAll("[data-grp-del]").forEach(el =>
+    el.onclick = () => delGroup(e, Number(el.dataset.grpDel)));
+  document.querySelectorAll("[data-unassign]").forEach(el =>
+    el.onclick = () => assignMember(e, el.dataset.unassign, null, null));
+
+  const go = $("ev-asn-go");
+  if (go) go.onclick = () => assignMember(e, $("ev-asn-mem").value,
+    Number($("ev-asn-grp").value), $("ev-asn-slot").value, $("ev-asn-msg"));
+}
+
+async function saveGroup(e) {
+  const msg = $("ev-grp-msg");
+  const name = $("ev-grp-name").value.trim();
+  if (!name) { msg.textContent = "Name required."; return; }
+  const capRaw = $("ev-grp-cap").value.trim();
+  const body = {
+    name, kind: $("ev-grp-kind").value, ship: $("ev-grp-ship").value.trim() || null,
+    capacity: capRaw === "" ? null : Number(capRaw),
+    leader_id: $("ev-grp-leader").value || null,
+  };
+  const editing = fleetFormFor !== "new";
+  const url = editing ? `/api/events/${e.id}/groups/${fleetFormFor}` : `/api/events/${e.id}/groups`;
+  msg.textContent = "Saving…";
+  try {
+    const r = await fetch(url, { method: editing ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    fleetBoard = await r.json(); fleetFormFor = null; drawFleet(e);
+  } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+}
+
+async function delGroup(e, gid) {
+  if (!(await confirmDialog("Members in this unit go back to the unassigned pool.",
+      { title: "Delete this unit?", confirmLabel: "Delete", danger: true }))) return;
+  const r = await fetch(`/api/events/${e.id}/groups/${gid}`, { method: "DELETE" });
+  if (r.ok) { fleetBoard = await r.json(); if (fleetFormFor === gid) fleetFormFor = null; drawFleet(e); }
+}
+
+async function assignMember(e, discord_id, group_id, slot, msgEl) {
+  if (msgEl) msgEl.textContent = "…";
+  try {
+    const r = await fetch(`/api/events/${e.id}/assignments`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discord_id, group_id, slot: slot || null }) });
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    fleetBoard = await r.json(); drawFleet(e);
+  } catch (err) { if (msgEl) msgEl.textContent = (err && err.detail) || "Couldn't assign."; }
+}
+
+async function showManifest(e) {
+  const box = $("ev-manifest-box");
+  box.innerHTML = `<p class="muted" style="font-size:12px;">Loading…</p>`;
+  let data;
+  try {
+    const r = await fetch(`/api/events/${e.id}/manifest`);
+    if (!r.ok) throw 0;
+    data = await r.json();
+  } catch { box.innerHTML = `<p class="stat-empty">Couldn't build manifest.</p>`; return; }
+  box.innerHTML =
+    `<textarea class="ev-manifest" readonly>${esc(data.text)}</textarea>` +
+    `<div class="ev-grp-actions">` +
+    `<button class="ev-btn" id="ev-man-copy">Copy</button>` +
+    (data.can_post ? `<button class="ev-btn primary" id="ev-man-post">Post to Discord</button>` : "") +
+    `<span id="ev-man-msg" class="muted" style="font-size:12px;"></span></div>`;
+  $("ev-man-copy").onclick = async () => {
+    const ta = box.querySelector(".ev-manifest");
+    try { await navigator.clipboard.writeText(ta.value); }
+    catch { ta.select(); document.execCommand("copy"); }
+    $("ev-man-msg").textContent = "Copied.";
+  };
+  const post = $("ev-man-post");
+  if (post) post.onclick = async () => {
+    const msg = $("ev-man-msg"); msg.textContent = "Posting…";
+    const r = await fetch(`/api/events/${e.id}/manifest/post`, { method: "POST" });
+    msg.textContent = r.ok ? "Posted to Discord." : "Couldn't post.";
   };
 }
 

@@ -1505,6 +1505,121 @@ class DeriveEventPhaseTests(unittest.TestCase):
         self.assertEqual(p["signup_close"], self._ev(120)["start_at"])
 
 
+class RosterBoardTests(unittest.TestCase):
+    def _signup(self, did, roles=None, status="going"):
+        return {"discord_id": did, "roles": roles or [], "status": status}
+
+    def _group(self, gid, name="Alpha", **kw):
+        g = {"id": gid, "parent_id": None, "name": name, "kind": "squad",
+             "ship": None, "capacity": None, "leader_id": None, "notes": None, "sort": 0}
+        g.update(kw)
+        return g
+
+    def test_members_land_in_their_group_pool_gets_the_rest(self):
+        groups = [self._group(1), self._group(2, name="Bravo")]
+        signups = [self._signup("a"), self._signup("b"), self._signup("c")]
+        assignments = [{"discord_id": "a", "group_id": 1, "slot": "pilot"},
+                       {"discord_id": "b", "group_id": 2, "slot": None}]
+        b = nav_core.derive_roster_board(groups, assignments, signups)
+        g1 = next(g for g in b["groups"] if g["id"] == 1)
+        self.assertEqual([m["discord_id"] for m in g1["members"]], ["a"])
+        self.assertEqual(g1["members"][0]["slot"], "pilot")
+        self.assertEqual([m["discord_id"] for m in b["unassigned"]], ["c"])
+        self.assertEqual(b["assigned_count"], 2)
+        self.assertEqual(b["total_going"], 3)
+
+    def test_withdrawn_or_unknown_assignment_is_dropped(self):
+        # 'b' withdrew, 'z' was never a signup: both fall out of the plan.
+        groups = [self._group(1)]
+        signups = [self._signup("a"), self._signup("b", status="withdrawn")]
+        assignments = [{"discord_id": "a", "group_id": 1, "slot": None},
+                       {"discord_id": "b", "group_id": 1, "slot": None},
+                       {"discord_id": "z", "group_id": 1, "slot": None}]
+        b = nav_core.derive_roster_board(groups, assignments, signups)
+        g1 = b["groups"][0]
+        self.assertEqual([m["discord_id"] for m in g1["members"]], ["a"])
+        self.assertEqual(b["assigned_count"], 1)
+        self.assertEqual(b["unassigned"], [])
+
+    def test_capacity_and_short(self):
+        groups = [self._group(1, capacity=3)]
+        signups = [self._signup("a"), self._signup("b")]
+        assignments = [{"discord_id": "a", "group_id": 1, "slot": None},
+                       {"discord_id": "b", "group_id": 1, "slot": None}]
+        g1 = nav_core.derive_roster_board(groups, assignments, signups)["groups"][0]
+        self.assertEqual(g1["filled"], 2)
+        self.assertEqual(g1["capacity"], 3)
+        self.assertEqual(g1["short"], 1)
+
+    def test_no_capacity_leaves_short_none(self):
+        g1 = nav_core.derive_roster_board([self._group(1)], [], [])["groups"][0]
+        self.assertIsNone(g1["capacity"])
+        self.assertIsNone(g1["short"])
+
+    def test_leader_sorts_first_and_is_flagged(self):
+        groups = [self._group(1, leader_id="b")]
+        signups = [self._signup("a"), self._signup("b")]
+        names = {"a": "Aaron", "b": "Zed"}
+        assignments = [{"discord_id": "a", "group_id": 1, "slot": None},
+                       {"discord_id": "b", "group_id": 1, "slot": None}]
+        g1 = nav_core.derive_roster_board(groups, assignments, signups, names)["groups"][0]
+        self.assertEqual([m["discord_id"] for m in g1["members"]], ["b", "a"])
+        self.assertTrue(g1["members"][0]["is_leader"])
+
+    def test_names_map_used_else_stub(self):
+        b = nav_core.derive_roster_board(
+            [self._group(1)],
+            [{"discord_id": "123456789", "group_id": 1, "slot": None}],
+            [self._signup("123456789")], {"123456789": "Ace"})
+        self.assertEqual(b["groups"][0]["members"][0]["name"], "Ace")
+        b2 = nav_core.derive_roster_board(
+            [], [], [self._signup("987654321")])
+        self.assertEqual(b2["unassigned"][0]["name"], "Member 4321")
+
+    def test_duplicate_assignment_seats_member_once(self):
+        # A stray double (member somehow in two groups): first wins, no double count.
+        groups = [self._group(1), self._group(2)]
+        signups = [self._signup("a")]
+        assignments = [{"discord_id": "a", "group_id": 1, "slot": None},
+                       {"discord_id": "a", "group_id": 2, "slot": None}]
+        b = nav_core.derive_roster_board(groups, assignments, signups)
+        self.assertEqual(b["assigned_count"], 1)
+        seated = sum(len(g["members"]) for g in b["groups"])
+        self.assertEqual(seated, 1)
+
+
+class EventManifestTests(unittest.TestCase):
+    def test_manifest_renders_groups_seats_leader_and_pool(self):
+        ev = {"title": "Bunker Op", "location": "Everus Harbor"}
+        board = {
+            "groups": [
+                {"id": 1, "name": "Alpha", "ship": "Cutlass", "capacity": 3,
+                 "filled": 2, "members": [
+                     {"name": "Zed", "slot": "pilot", "is_leader": True},
+                     {"name": "Ana", "slot": "gunner", "is_leader": False}]},
+                {"id": 2, "name": "Bravo", "ship": None, "capacity": None,
+                 "filled": 0, "members": []},
+            ],
+            "unassigned": [{"name": "Cid"}],
+        }
+        text = nav_core.build_event_manifest(ev, board)
+        self.assertIn("**Bunker Op — Fleet Manifest**", text)
+        self.assertIn("Rally: Everus Harbor", text)
+        self.assertIn("__Alpha (Cutlass, 2/3)__", text)
+        self.assertIn("• Zed — pilot ⭐", text)
+        self.assertIn("• Ana — gunner", text)
+        self.assertIn("_(empty)_", text)
+        self.assertIn("__Unassigned (1)__", text)
+        self.assertIn("• Cid", text)
+
+    def test_manifest_omits_empty_pool_and_rally(self):
+        text = nav_core.build_event_manifest(
+            {"title": "Solo"}, {"groups": [], "unassigned": []})
+        self.assertIn("**Solo — Fleet Manifest**", text)
+        self.assertNotIn("Rally:", text)
+        self.assertNotIn("Unassigned", text)
+
+
 class EventTaxonomyTests(unittest.TestCase):
     def test_flat_roles_match_groups(self):
         import event_taxonomy

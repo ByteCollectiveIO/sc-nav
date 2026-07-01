@@ -299,6 +299,38 @@ CREATE TABLE IF NOT EXISTS lfg (
     responders TEXT,                   -- json list of member ids (joiners/pings)
     created REAL NOT NULL              -- epoch seconds; drives age/stale/age-off
 );
+
+-- Fleet roster / squad organizer (#20): a plan layer over event signups. Groups
+-- are named units (squads/squadrons/ship crews) an organizer builds for an event;
+-- assignments slot a signed-up member into exactly one group + seat. `events` and
+-- `event_signups` stay untouched — the plan is organizer-owned, signups member-owned.
+CREATE TABLE IF NOT EXISTS event_groups (
+    id INTEGER PRIMARY KEY,
+    event_id INTEGER NOT NULL,          -- -> events.id
+    parent_id INTEGER,                  -- -> event_groups.id (NULL = top-level)
+    name TEXT NOT NULL,                 -- "Alpha Squad", "Drake Caterpillar #1"
+    kind TEXT NOT NULL DEFAULT 'squad', -- squad | squadron | crew | section | wing
+    ship TEXT,                          -- optional; for crew groups (from ships feed)
+    capacity INTEGER,                   -- optional target size (drives "needs N more")
+    leader_id TEXT,                     -- optional; a signup's discord_id
+    notes TEXT,
+    sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS event_groups_event ON event_groups(event_id);
+
+-- A member's seat in the plan. UNIQUE(event_id, discord_id) enforces "one member,
+-- one leaf group". Rows are deleted (not soft-flagged) on unassign — the plan is
+-- freely re-drawn and carries no history worth keeping.
+CREATE TABLE IF NOT EXISTS event_assignments (
+    id INTEGER PRIMARY KEY,
+    event_id INTEGER NOT NULL,
+    discord_id TEXT NOT NULL,
+    group_id INTEGER NOT NULL,          -- -> event_groups.id
+    slot TEXT,                          -- role/seat within the group (pilot, gunner…)
+    created_at TEXT,
+    UNIQUE(event_id, discord_id)
+);
+CREATE INDEX IF NOT EXISTS event_assignments_event ON event_assignments(event_id);
 """
 
 
@@ -896,6 +928,110 @@ def withdraw_signup(event_id: int, discord_id: str) -> bool:
     with _lock, _conn:
         cur = _conn.execute(
             "UPDATE event_signups SET status='withdrawn' WHERE event_id=? AND discord_id=?",
+            (event_id, str(discord_id)),
+        )
+    return cur.rowcount > 0
+
+
+# --- fleet roster / squad organizer (#20) ----------------------------------
+# Groups + assignments are a plan layer over signups. All reads/writes are keyed
+# by event_id so a plan can never leak across events.
+
+_GROUP_EDITABLE = ("name", "kind", "ship", "capacity", "leader_id", "notes", "sort")
+
+
+def _group_row_to_dict(r: sqlite3.Row) -> dict:
+    return dict(r)
+
+
+def list_event_groups(event_id: int) -> list[dict]:
+    """All groups for an event, ordered by sort then id (stable board order)."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM event_groups WHERE event_id=? ORDER BY sort, id",
+            (event_id,),
+        ).fetchall()
+    return [_group_row_to_dict(r) for r in rows]
+
+
+def get_event_group(gid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM event_groups WHERE id=?", (gid,)).fetchone()
+    return _group_row_to_dict(row) if row else None
+
+
+def create_event_group(event_id: int, fields: dict) -> int:
+    """Insert a group for an event (caller validates fields). Returns the id."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO event_groups (event_id, parent_id, name, kind, ship, "
+            "capacity, leader_id, notes, sort) VALUES (?,?,?,?,?,?,?,?,?)",
+            (event_id, fields.get("parent_id"), fields["name"],
+             fields.get("kind", "squad"), fields.get("ship"), fields.get("capacity"),
+             fields.get("leader_id"), fields.get("notes"), fields.get("sort", 0)),
+        )
+    return cur.lastrowid
+
+
+def update_event_group(event_id: int, gid: int, fields: dict) -> bool:
+    """Update a group's editable columns (scoped to its event). Only keys present
+    in `fields` are written. Returns whether a row matched."""
+    cols = [c for c in _GROUP_EDITABLE if c in fields]
+    if not cols:
+        return False
+    sets = ", ".join(f"{c}=?" for c in cols)
+    vals = [fields[c] for c in cols]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE event_groups SET {sets} WHERE id=? AND event_id=?",
+            (*vals, gid, event_id),
+        )
+    return cur.rowcount > 0
+
+
+def delete_event_group(event_id: int, gid: int) -> bool:
+    """Delete a group and any assignments into it (members fall back to the
+    unassigned pool). Child groups are re-parented to top-level so the plan stays
+    reachable. Returns whether the group existed."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM event_assignments WHERE event_id=? AND group_id=?",
+                      (event_id, gid))
+        _conn.execute("UPDATE event_groups SET parent_id=NULL "
+                      "WHERE event_id=? AND parent_id=?", (event_id, gid))
+        cur = _conn.execute("DELETE FROM event_groups WHERE id=? AND event_id=?",
+                            (gid, event_id))
+    return cur.rowcount > 0
+
+
+def list_event_assignments(event_id: int) -> list[dict]:
+    """All seat assignments for an event."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM event_assignments WHERE event_id=? ORDER BY id",
+            (event_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_event_assignment(event_id: int, discord_id: str, group_id: int,
+                         slot: str | None, created_at: str) -> None:
+    """Assign (or move) a member to a group + seat. UNIQUE(event_id, discord_id)
+    makes a re-assign move them; created_at is preserved on first assign."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO event_assignments (event_id, discord_id, group_id, slot, "
+            "created_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(event_id, discord_id) DO UPDATE SET "
+            "group_id=excluded.group_id, slot=excluded.slot",
+            (event_id, str(discord_id), group_id, slot, created_at),
+        )
+
+
+def clear_event_assignment(event_id: int, discord_id: str) -> bool:
+    """Unassign a member back to the pool. Returns whether they had an assignment."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM event_assignments WHERE event_id=? AND discord_id=?",
             (event_id, str(discord_id)),
         )
     return cur.rowcount > 0

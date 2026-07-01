@@ -52,7 +52,7 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 - Reference data: `/api/handles`, `/api/commodities`, `/api/raw_commodities`, `/api/ships`, `/api/harvestables`, `/api/fauna`, `/api/resource_*`, `/api/biomes`, `/api/custom_pois`, `/api/observations`
 - Cargo planner: `/api/route/plan|run|history|session/reset`
 - Cargo analytics: `/api/cargo/leaderboard`, `/api/cargo/stats`
-- Events: `/api/events*`, `/api/events/{id}/signup`
+- Events: `/api/events*`, `/api/events/{id}/signup`; **fleet roster (#20)** `/api/events/{id}/groups[/{gid}]` (board + group CRUD), `/api/events/{id}/assignments` (PUT assign/move/unassign, group_id null = unassign), `/api/events/{id}/manifest` (+ `/post` → Discord). Plan is organizer/admin-owned; nav-side logic `nav_core.derive_roster_board`/`build_event_manifest`
 - Resource manager: `/api/catalog`, `/api/inventory*`, `/api/goals*`
 - Marketplace: `/api/market*` (offers, confirm)
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`
@@ -62,8 +62,8 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 
 ## db.py tables
 meta · custom_pois · observations · handles · members · watcher_tokens ·
-user_ships · runs · events · event_signups · catalog_items · inventory · goals ·
-inventory_allocations · listings · listing_offers.
+user_ships · runs · events · event_signups · event_groups · event_assignments ·
+catalog_items · inventory · goals · inventory_allocations · listings · listing_offers.
 
 ## Guardrails (don't regress these)
 - **Security**: CSP/nonce + defense-in-depth headers (app.py `_csp`, http middleware);

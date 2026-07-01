@@ -2668,6 +2668,187 @@ async def withdraw_signup(event_id: int, user: dict = Depends(require_session)):
     return _event_view(db.get_event(event_id), user, detail=True)
 
 
+# --- fleet roster / squad organizer (#20) ----------------------------------
+# A plan layer over signups: the organizer (or an admin) builds named groups and
+# slots signed-up members into them. All routes are scoped to the event and the
+# write routes reuse _require_event_owner, so the plan is organizer-owned while
+# signups stay member-owned.
+
+_MAX_EVENT_GROUPS = 60       # sanity cap on units in one event's plan
+_SLOT_MAX = 40               # seat/role label within a group
+
+
+class GroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    kind: str = Field(default="squad", max_length=_TYPE_MAX)
+    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    capacity: int | None = Field(default=None, ge=0, le=_MAX_PLAYERS)
+    parent_id: int | None = Field(default=None)
+    leader_id: str | None = Field(default=None, max_length=_META_MAX)
+    notes: str | None = Field(default=None, max_length=_NOTE_MAX)
+    sort: int = Field(default=0, ge=0, le=100_000)
+
+
+class AssignmentIn(BaseModel):
+    discord_id: str = Field(min_length=1, max_length=_META_MAX)
+    # group_id None ⇒ unassign the member back to the pool.
+    group_id: int | None = Field(default=None)
+    slot: str | None = Field(default=None, max_length=_SLOT_MAX)
+
+
+def _going_signup_ids(event_id: int) -> set[str]:
+    """discord_ids of members currently `going` — the only members who may lead or
+    hold a seat in the plan."""
+    return {str(s["discord_id"]) for s in db.list_signups(event_id)
+            if s.get("status") == "going"}
+
+
+def _validate_group(body: GroupIn, event_id: int, going: set[str]) -> dict:
+    """Normalize a group payload into the column dict db expects, validating kind,
+    an optional same-event parent, and an optional leader who must be `going`."""
+    kind = body.kind if body.kind in nav_core.GROUP_KINDS else "squad"
+    parent_id = body.parent_id
+    if parent_id is not None:
+        parent = db.get_event_group(parent_id)
+        if parent is None or parent["event_id"] != event_id:
+            raise HTTPException(status_code=400, detail="parent group not in this event")
+    leader = (body.leader_id or "").strip() or None
+    if leader is not None and leader not in going:
+        raise HTTPException(status_code=400, detail="leader must be a signed-up member")
+    return {
+        "name": body.name.strip(), "kind": kind,
+        "ship": (body.ship or "").strip() or None,
+        "capacity": body.capacity, "parent_id": parent_id,
+        "leader_id": leader, "notes": (body.notes or "").strip() or None,
+        "sort": body.sort,
+    }
+
+
+def _roster_board_view(ev: dict, user: dict) -> dict:
+    """Serialize the plan for an event: the derived board (groups + members +
+    unassigned pool) plus the caller's own assignment and edit permission."""
+    groups = db.list_event_groups(ev["id"])
+    assignments = db.list_event_assignments(ev["id"])
+    signups = db.list_signups(ev["id"])
+    ids = {str(s["discord_id"]) for s in signups}
+    ids.update(str(g["leader_id"]) for g in groups if g.get("leader_id"))
+    names = {did: _resolve_member_name(did, None) for did in ids}
+    board = nav_core.derive_roster_board(groups, assignments, signups, names)
+    board["can_edit"] = ev["organizer_id"] == user["id"] or bool(user.get("is_admin"))
+    mine = next((a for a in assignments if str(a["discord_id"]) == user["id"]), None)
+    if mine:
+        grp = next((g for g in board["groups"] if g["id"] == mine["group_id"]), None)
+        board["my_assignment"] = ({"group_id": mine["group_id"],
+                                   "group_name": grp["name"] if grp else None,
+                                   "slot": mine.get("slot") or ""} if grp else None)
+    else:
+        board["my_assignment"] = None
+    return board
+
+
+@app.get("/api/events/{event_id}/groups")
+async def event_roster(event_id: int, user: dict = Depends(require_session)):
+    """The roster board: groups with their assigned members + the unassigned pool.
+    Any member may view; only the organizer/admin sees editable controls."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    return _roster_board_view(ev, user)
+
+
+@app.post("/api/events/{event_id}/groups")
+async def create_group(event_id: int, body: GroupIn,
+                       user: dict = Depends(require_session)):
+    """Add a group (unit) to an event's plan (organizer or admin)."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    if len(db.list_event_groups(event_id)) >= _MAX_EVENT_GROUPS:
+        raise HTTPException(status_code=400, detail="too many groups for one event")
+    fields = _validate_group(body, event_id, _going_signup_ids(event_id))
+    db.create_event_group(event_id, fields)
+    return _roster_board_view(ev, user)
+
+
+@app.patch("/api/events/{event_id}/groups/{gid}")
+async def edit_group(event_id: int, gid: int, body: GroupIn,
+                     user: dict = Depends(require_session)):
+    """Edit a group (organizer or admin) — full replace of its editable fields."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    fields = _validate_group(body, event_id, _going_signup_ids(event_id))
+    if not db.update_event_group(event_id, gid, fields):
+        raise HTTPException(status_code=404, detail="unknown group")
+    return _roster_board_view(ev, user)
+
+
+@app.delete("/api/events/{event_id}/groups/{gid}")
+async def delete_group(event_id: int, gid: int,
+                       user: dict = Depends(require_session)):
+    """Delete a group (organizer or admin). Its members fall back to the pool."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    if not db.delete_event_group(event_id, gid):
+        raise HTTPException(status_code=404, detail="unknown group")
+    return _roster_board_view(ev, user)
+
+
+@app.put("/api/events/{event_id}/assignments")
+async def set_assignment(event_id: int, body: AssignmentIn,
+                         user: dict = Depends(require_session)):
+    """Assign/move a member into a group + seat, or unassign (group_id null).
+    Organizer or admin only; the member must be a `going` signup."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    did = body.discord_id.strip()
+    if body.group_id is None:
+        db.clear_event_assignment(event_id, did)
+    else:
+        if did not in _going_signup_ids(event_id):
+            raise HTTPException(status_code=400, detail="member isn't signed up")
+        grp = db.get_event_group(body.group_id)
+        if grp is None or grp["event_id"] != event_id:
+            raise HTTPException(status_code=400, detail="unknown group")
+        slot = (body.slot or "").strip() or None
+        db.set_event_assignment(event_id, did, body.group_id, slot,
+                                datetime.now(timezone.utc).isoformat())
+    return _roster_board_view(ev, user)
+
+
+@app.get("/api/events/{event_id}/manifest")
+async def event_manifest(event_id: int, user: dict = Depends(require_session)):
+    """The plan rendered as Discord-flavored markdown (the op order to paste)."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    board = _roster_board_view(ev, user)
+    return {"text": nav_core.build_event_manifest(ev, board),
+            "can_post": notify.is_configured("events")}
+
+
+@app.post("/api/events/{event_id}/manifest/post")
+async def post_manifest(event_id: int, user: dict = Depends(require_session)):
+    """Post the manifest to the org's Discord channel (organizer or admin)."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    if not notify.is_configured("events"):
+        raise HTTPException(status_code=400, detail="Discord notifications aren't configured")
+    board = _roster_board_view(ev, user)
+    text = nav_core.build_event_manifest(ev, board)
+    _notify_bg(notify.send("events", f"{text}{_deep_link('#/events')}",
+                           dedup_key=None))
+    return {"ok": True}
+
+
 # --- org inventory & goals (shared item catalog) ---------------------------
 
 

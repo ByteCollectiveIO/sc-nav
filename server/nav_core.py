@@ -2318,6 +2318,125 @@ def derive_event_phase(event: dict, now_dt: datetime) -> dict:
     }
 
 
+# --- fleet roster / squad organizer (#20) ----------------------------------
+# The plan (groups + assignments) is a layer over the signups. These pure helpers
+# turn the three stored lists (groups, assignments, going-signups) into the board
+# the client renders and the Discord manifest — no DB, no I/O.
+
+GROUP_KINDS = ("squad", "squadron", "crew", "section", "wing")
+
+
+def derive_roster_board(groups, assignments, signups, names=None) -> dict:
+    """Assemble the organizer's roster board (design: docs/fleet-roster-squad-organizer.md).
+
+    Inputs are the three stored lists for one event:
+      `groups`      — [{id, parent_id, name, kind, ship, capacity, leader_id, notes, sort}]
+      `assignments` — [{discord_id, group_id, slot}]
+      `signups`     — event signups ([{discord_id, roles, status}])
+    `names` optionally maps discord_id → display name (else a short stub is used).
+
+    Only members who are a *going* signup can hold a seat, so an assignment whose
+    member has withdrawn (or was never a signup) is dropped — the plan self-heals
+    as the roster changes. Returns:
+
+      {groups: [{...group, members: [{discord_id, name, slot, is_leader}],
+                 filled, capacity, short}],
+       unassigned: [{discord_id, name, roles}],   # going members with no seat
+       assigned_count, total_going}
+
+    Groups keep their stored order; each carries its members (leader first) and a
+    fill/capacity readout. Pure derivation so the endpoint fans it out N+1-free."""
+    names = names or {}
+
+    def nm(did):
+        return names.get(did) or f"Member {str(did)[-4:]}"
+
+    going = {}
+    for s in signups:
+        if (s.get("status") or "going") == "going":
+            going[s.get("discord_id")] = s        # UNIQUE keeps this one-per-member
+
+    by_group: dict[int, list] = {}
+    seated = set()
+    for a in assignments:
+        did = a.get("discord_id")
+        if did not in going or did in seated:      # withdrawn / stray double
+            continue
+        seated.add(did)
+        by_group.setdefault(a.get("group_id"), []).append(a)
+
+    out_groups = []
+    for g in groups:
+        gid = g.get("id")
+        leader = g.get("leader_id")
+        members = []
+        for a in by_group.get(gid, []):
+            did = a.get("discord_id")
+            members.append({"discord_id": did, "name": nm(did),
+                            "slot": a.get("slot") or "", "is_leader": did == leader})
+        # Leader first, then by name for a stable, readable order.
+        members.sort(key=lambda m: (not m["is_leader"], m["name"].lower()))
+        cap = g.get("capacity")
+        cap = int(cap) if cap not in (None, "") else None
+        filled = len(members)
+        out_groups.append({
+            "id": gid, "parent_id": g.get("parent_id"), "name": g.get("name"),
+            "kind": g.get("kind"), "ship": g.get("ship"), "notes": g.get("notes"),
+            "leader_id": leader, "sort": g.get("sort") or 0,
+            "members": members, "filled": filled, "capacity": cap,
+            "short": None if cap is None else max(0, cap - filled),
+        })
+
+    unassigned = [
+        {"discord_id": did, "name": nm(did), "roles": s.get("roles") or []}
+        for did, s in going.items() if did not in seated
+    ]
+    unassigned.sort(key=lambda m: m["name"].lower())
+
+    return {
+        "groups": out_groups,
+        "unassigned": unassigned,
+        "assigned_count": len(seated),
+        "total_going": len(going),
+    }
+
+
+def build_event_manifest(event, board) -> str:
+    """Render a roster board as Discord-flavored markdown — the op order at a
+    glance, ready to paste or auto-post (#18). `event` supplies the header
+    (title/start/rally); `board` is a derive_roster_board() result. Pure text."""
+    lines = [f"**{event.get('title') or 'Event'} — Fleet Manifest**"]
+    where = event.get("location")
+    if where:
+        lines.append(f"Rally: {where}")
+    lines.append("")
+
+    for g in board.get("groups", []):
+        head = g["name"]
+        bits = []
+        if g.get("ship"):
+            bits.append(g["ship"])
+        cap = g.get("capacity")
+        bits.append(f"{g['filled']}/{cap}" if cap is not None else f"{g['filled']}")
+        head += f" ({', '.join(bits)})"
+        lines.append(f"__{head}__")
+        if g["members"]:
+            for m in g["members"]:
+                tag = " ⭐" if m["is_leader"] else ""
+                seat = f" — {m['slot']}" if m["slot"] else ""
+                lines.append(f"• {m['name']}{seat}{tag}")
+        else:
+            lines.append("• _(empty)_")
+        lines.append("")
+
+    pool = board.get("unassigned", [])
+    if pool:
+        lines.append(f"__Unassigned ({len(pool)})__")
+        for m in pool:
+            lines.append(f"• {m['name']}")
+    return "\n".join(lines).rstrip()
+
+
 def _qty(v) -> float:
     """Coerce a stored quantity to a float, treating junk as 0."""
     try:

@@ -1326,7 +1326,8 @@ LFG dashboard → Discord announce → suggested matches/promote-to-event.
 
 ## 20. Fleet roster / squad organizer (event group planning)
 
-**Status:** scoped, not built (2026-06-30). Full design:
+**Status:** **v1 BUILT 2026-07-01** (steps 1–4; ship-seat-templates + saved group
+templates deferred to v1.1). Needs `/deploy`. Full design:
 [`docs/fleet-roster-squad-organizer.md`](fleet-roster-squad-organizer.md).
 **Priority #3.**
 
