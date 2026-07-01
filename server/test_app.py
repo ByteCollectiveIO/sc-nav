@@ -18,6 +18,7 @@ import asyncio
 import re
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -264,6 +265,85 @@ class EventNotifyTests(unittest.TestCase):
         self.assertEqual(app._discord_ts("not-a-date"), "not-a-date")
         # No SC_NAV_PUBLIC_URL configured in the test env -> no link fragment.
         self.assertEqual(app._deep_link("#/events"), "")
+
+
+class EventReminderTests(unittest.TestCase):
+    """Step 3 — the scheduled 'starting soon' reminder: its due-window query, the
+    atomic reminded_at claim (idempotency), and the attendee-pinging message."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    def _mk_event(self, start_at, **extra):
+        now = datetime.now(timezone.utc).isoformat()
+        return db.create_event({"organizer_id": "1", "title": extra.pop("title", "Op"),
+                                "start_at": start_at, "status": "scheduled",
+                                "created_at": now, "updated_at": now, **extra})
+
+    def test_due_window_selects_only_in_window_scheduled(self):
+        now = datetime.now(timezone.utc)
+        soon_id = self._mk_event((now + timedelta(minutes=10)).isoformat(), title="Soon")
+        self._mk_event((now + timedelta(hours=5)).isoformat(), title="Far")   # outside lead
+        self._mk_event((now - timedelta(minutes=10)).isoformat(), title="Past")  # already started
+        until = (now + timedelta(minutes=30)).isoformat()
+        due = db.events_due_for_reminder(now.isoformat(), until)
+        self.assertEqual([e["id"] for e in due], [soon_id])
+
+    def test_mark_reminded_is_an_atomic_claim(self):
+        now = datetime.now(timezone.utc)
+        eid = self._mk_event((now + timedelta(minutes=5)).isoformat())
+        self.assertTrue(db.mark_event_reminded(eid, now.isoformat()))    # first claim wins
+        self.assertFalse(db.mark_event_reminded(eid, now.isoformat()))   # racing tick loses
+        until = (now + timedelta(minutes=30)).isoformat()
+        due_ids = [e["id"] for e in db.events_due_for_reminder(now.isoformat(), until)]
+        self.assertNotIn(eid, due_ids)   # a claimed event no longer surfaces as due
+
+    def test_reminder_pings_active_signups_only(self):
+        now = datetime.now(timezone.utc)
+        eid = self._mk_event((now + timedelta(minutes=5)).isoformat(),
+                             title="Bounty Run", event_location="Grim HEX")
+        db.upsert_signup(eid, "111", ["dps"], "going", None, now.isoformat())
+        db.upsert_signup(eid, "222", ["medic"], "withdrawn", None, now.isoformat())
+        asyncio.run(app._notify_event_reminder(db.get_event(eid)))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "events")
+        self.assertIn("Bounty Run", msg["text"])
+        self.assertIn("Grim HEX", msg["text"])
+        self.assertIn("<t:", msg["text"])                 # timezone-aware timestamp
+        self.assertIn("<@111>", msg["text"])              # active attendee pinged
+        self.assertNotIn("<@222>", msg["text"])           # withdrawn -> not pinged
+        self.assertEqual(msg["mentions"], ["111"])
+        self.assertEqual(msg["dedup_key"], f"event-reminder:{eid}")
+
+    def test_reminder_suppressed_when_no_webhook(self):
+        db.set_setting(notify._webhook_key("events"), "")
+        try:
+            now = datetime.now(timezone.utc)
+            eid = self._mk_event((now + timedelta(minutes=5)).isoformat())
+            asyncio.run(app._notify_event_reminder(db.get_event(eid)))
+            self.assertEqual(self.sent, [])
+        finally:
+            db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
 
 
 if __name__ == "__main__":

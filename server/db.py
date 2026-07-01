@@ -302,6 +302,9 @@ def init(db_path) -> None:
         _ensure_column("observations", "shard_id", "TEXT")
         _ensure_column("events", "event_location", "TEXT")
         _ensure_column("events", "signup_deadline", "TEXT")
+        # Scheduled Discord reminders: stamped when the T-minus ping fires so a
+        # restart or a slow tick can never double-ping (see events_due_for_reminder).
+        _ensure_column("events", "reminded_at", "TEXT")
         denorm_added = _ensure_column("listings", "sort_price", "REAL")
         denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("listings", "attributes", "TEXT")
@@ -777,6 +780,29 @@ def list_events(scope: str, now_iso: str) -> list[dict]:
     with _lock:
         rows = _conn.execute(sql, (now_iso,)).fetchall()
     return [_event_row_to_dict(r) for r in rows]
+
+
+def events_due_for_reminder(now_iso: str, until_iso: str) -> list[dict]:
+    """Scheduled events starting within (now, until] that haven't been reminded
+    yet. Past-start events fall out (start_at >= now), so unreminded rows for
+    events the server missed while down never linger or fire a stale 'starts in
+    -5 min' ping — they simply never remind."""
+    sql = ("SELECT * FROM events WHERE status='scheduled' AND reminded_at IS NULL "
+           "AND start_at >= ? AND start_at <= ? ORDER BY start_at ASC")
+    with _lock:
+        rows = _conn.execute(sql, (now_iso, until_iso)).fetchall()
+    return [_event_row_to_dict(r) for r in rows]
+
+
+def mark_event_reminded(event_id: int, ts: str) -> bool:
+    """Stamp an event's reminder as sent. The `reminded_at IS NULL` guard makes
+    this the atomic claim: only the first caller to stamp it returns True, so a
+    racing tick can't re-fire. Returns whether this call did the stamping."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE events SET reminded_at=? WHERE id=? AND reminded_at IS NULL",
+            (ts, event_id))
+    return cur.rowcount > 0
 
 
 def update_event(event_id: int, fields: dict, updated_at: str) -> bool:

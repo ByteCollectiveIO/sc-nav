@@ -911,6 +911,9 @@ PRESENCE_TICK_S = 1.0     # broadcaster cadence (coalesced upserts, ~1 Hz)
 PRESENCE_STALE_S = 120.0  # drop a teammate after this long with no new position
 PRESENCE_MOVE_M = 5.0     # only recompute heading once actually moving
 
+# How often the scheduled event-reminder loop scans for due events.
+REMINDER_TICK_S = 60.0
+
 
 class Session:
     """One org member's live state: position cursor, destination, capture
@@ -1215,9 +1218,31 @@ async def presence_broadcaster():
             print(f"[sc-nav] presence broadcaster error: {exc}")
 
 
+async def event_reminder_loop():
+    """Marquee scheduled-reminder loop. Every REMINDER_TICK_S, ping the events
+    channel for scheduled events whose start is within the org's reminder lead.
+    Each event is claimed (its `reminded_at` stamped) BEFORE we send, so a
+    restart, a slow tick, or two overlapping ticks can never double-ping. Idle
+    (no query) whenever the `events` webhook isn't configured."""
+    while True:
+        await asyncio.sleep(REMINDER_TICK_S)
+        try:
+            if not notify.is_configured("events"):
+                continue
+            now = datetime.now(timezone.utc)
+            until = now + timedelta(minutes=notify.reminder_lead_min())
+            for ev in db.events_due_for_reminder(now.isoformat(), until.isoformat()):
+                # Claim first: only the caller that stamps reminded_at sends.
+                if db.mark_event_reminded(ev["id"], now.isoformat()):
+                    await _notify_event_reminder(ev)
+        except Exception as exc:   # never let the loop die on a transient error
+            print(f"[sc-nav] event reminder loop error: {exc}")
+
+
 @app.on_event("startup")
 async def _start_presence_broadcaster():
     asyncio.create_task(presence_broadcaster())
+    asyncio.create_task(event_reminder_loop())
     # v0.13.0 stored one shared Discord webhook; move it to the new per-category
     # settings so notifications keep flowing after this upgrade (one-time, no-op
     # thereafter).
@@ -2093,6 +2118,26 @@ async def _notify_event_cancelled(ev: dict) -> None:
         f"🚫 **Event cancelled: {ev['title']}**\n"
         f"Was set for {_discord_ts(ev['start_at'])}.{_deep_link('#/events')}",
         dedup_key=f"event-cancelled:{ev['id']}")
+
+
+async def _notify_event_reminder(ev: dict) -> None:
+    """The marquee "starting soon" ping. Pings each signed-up member by id so the
+    reminder actually pulls them back in-game (the whole point of the feature)."""
+    if not notify.is_configured("events"):
+        return
+    where = (ev.get("event_location") or ev.get("location") or "").strip()
+    loc = f"\n📍 {where}" if where else ""
+    attendees = [str(s["discord_id"]) for s in db.list_signups(ev["id"])
+                 if s.get("status") != "withdrawn"
+                 and str(s.get("discord_id") or "").isdigit()]
+    pings = ("\n" + " ".join(f"<@{d}>" for d in attendees)) if attendees else ""
+    await notify.send(
+        "events",
+        f"⏰ **Starting soon: {ev['title']}**\n"
+        f"Begins {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
+        f"{loc}{_deep_link('#/events')}{pings}",
+        mentions=attendees,
+        dedup_key=f"event-reminder:{ev['id']}")
 
 
 @app.get("/api/events/taxonomy")
