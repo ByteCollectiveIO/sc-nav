@@ -441,7 +441,12 @@
     border: 1px solid var(--border); color: var(--dim); white-space: nowrap; }
   .mate-shard.same { border-color: var(--good); color: var(--good); }
   .mate-row.same-shard b { color: var(--good); }
+  /* A teammate whose last /showlocation fix has aged out: keep them listed (their
+     spot is still the best we know) but fade the row + flag the age as stale. */
+  .mate-row.stale { opacity: 0.6; }
+  .mate-row.stale .mate-dot { box-shadow: none; }
   .mate-age { margin-left: auto; color: var(--dim); font-size: 11px; }
+  .mate-row.stale .mate-age { color: var(--warn); }
   /* Who's-online roster (#19) */
   .online-blurb { margin: 0 0 12px; font-size: 12px; }
   .on-row { display: flex; gap: 10px; align-items: center; padding: 7px 0;
@@ -1628,6 +1633,10 @@
       <label>view radius
         <input id="map-zoom" type="range" min="0.5" max="50" step="0.5" value="5">
         <span id="map-zoom-val">5 km</span>
+      </label>
+      <label title="Scale the node markers and their labels on the map — bump it up if the text is hard to read.">labels
+        <input id="map-label" type="range" min="0.8" max="2.5" step="0.1" value="1.3">
+        <span id="map-label-val">1.3×</span>
       </label>
       <label><input type="checkbox" class="layer" data-layer="path" checked> path</label>
       <label><input type="checkbox" class="layer" data-layer="poi" checked> POIs</label>
@@ -3463,6 +3472,21 @@ $("map-zoom").oninput = () => {
   $("map-zoom-val").textContent = `${viewRadiusKm} km`;
   drawMap();
 };
+// Marker/label size multiplier, independent of zoom, so small node text can be
+// bumped up for readability without changing how far the map sees. Persisted.
+let mapLabelScale = 1.3;
+try { const v = parseFloat(localStorage.getItem("mapLabelScale")); if (v >= 0.8 && v <= 2.5) mapLabelScale = v; } catch {}
+function applyLabelScaleUI() {
+  $("map-label").value = mapLabelScale;
+  $("map-label-val").textContent = `${mapLabelScale.toFixed(1)}×`;
+}
+$("map-label").oninput = () => {
+  mapLabelScale = parseFloat($("map-label").value);
+  $("map-label-val").textContent = `${mapLabelScale.toFixed(1)}×`;
+  try { localStorage.setItem("mapLabelScale", mapLabelScale); } catch {}
+  drawMap();
+};
+applyLabelScaleUI();
 window.addEventListener("resize", drawMap);
 
 // pan: drag the map; pan offset (px) shifts the projection origin off-center.
@@ -3627,6 +3651,10 @@ function drawMap() {
   // clickable, since the node may still be there.
   mapHits = [];
   const destId = lastState.destination && lastState.destination.id;
+  // Marker + label sizes scale with the user's label slider (readability control).
+  const ms = mapLabelScale;
+  const labelFont = `${Math.round(11 * ms)}px monospace`;
+  const labelDX = Math.round(6 * ms), labelDY = Math.round(3 * ms);
   const drawEntities = (list) => {
     for (const e of list) {
       if (!layers[e.kind] || e.latitude == null) continue;
@@ -3634,14 +3662,15 @@ function drawMap() {
       if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
       mapHits.push({ id: e.id, x, y });
       ctx.globalAlpha = obsCurrentThisSession(e) ? 1 : 0.3;
-      if (e.kind === "resource") { ctx.fillStyle = "#b39ddb"; diamond(ctx, x, y, 4); }
-      else if (e.kind === "wildlife") { ctx.fillStyle = "#81c784"; triangle(ctx, x, y, 4); }
-      else if (e.kind === "harvestable") { ctx.fillStyle = "#cddc39"; square(ctx, x, y, 3.5); }
-      else { ctx.fillStyle = "#4fc3f7"; ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fill(); }
-      ctx.fillStyle = "#7b8a9e"; ctx.fillText(e.name, x + 6, y + 3);
+      if (e.kind === "resource") { ctx.fillStyle = "#b39ddb"; diamond(ctx, x, y, 4 * ms); }
+      else if (e.kind === "wildlife") { ctx.fillStyle = "#81c784"; triangle(ctx, x, y, 4 * ms); }
+      else if (e.kind === "harvestable") { ctx.fillStyle = "#cddc39"; square(ctx, x, y, 3.5 * ms); }
+      else { ctx.fillStyle = "#4fc3f7"; ctx.beginPath(); ctx.arc(x, y, 3 * ms, 0, 7); ctx.fill(); }
+      ctx.font = labelFont;
+      ctx.fillStyle = "#7b8a9e"; ctx.fillText(e.name, x + labelDX, y + labelDY);
       if (destId != null && e.id === destId) {   // selection ring (full opacity)
         ctx.globalAlpha = 1; ctx.strokeStyle = SEL_GOLD; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 8 * ms, 0, 7); ctx.stroke();
       }
       ctx.globalAlpha = 1;
     }
@@ -3651,18 +3680,35 @@ function drawMap() {
 
   // teammates on this same body (north-up, like everything else)
   if (layers.teammates) {
+    ctx.font = labelFont;
     for (const m of presence.values()) {
       if (m.system !== s.system || m.body !== s.container.name
           || m.lat == null) continue;
+      // A fix that hasn't refreshed in a while is faded (not dropped) — the last
+      // known spot is still useful, but shouldn't read as a live position.
+      const stale = mateAge(m) > MATE_STALE_S;
+      // Teammate breadcrumb trail: shows where they've already mapped so the org
+      // doesn't re-scout the same ground. Follows the map's "path" layer toggle.
+      if (layers.path && m.path && m.path.length > 1) {
+        const pts = m.path.map(c => toXY(c.lat, c.lon));
+        ctx.globalAlpha = stale ? 0.25 : 0.5;
+        ctx.strokeStyle = "#f06292"; ctx.lineWidth = 1.5; ctx.beginPath();
+        pts.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+        ctx.stroke();
+      }
       const [x, y] = toXY(m.lat, m.lon);
-      if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
-      if (m.heading != null) {   // short heading tick, same convention as the player
+      if (x < -20 || x > w + 20 || y < -20 || y > h + 20) { ctx.globalAlpha = 1; continue; }
+      ctx.globalAlpha = stale ? 0.4 : 1;
+      if (m.heading != null && !stale) {   // short heading tick, same convention as the player
         ctx.save(); ctx.translate(x, y); ctx.rotate(m.heading * DEG);
         ctx.strokeStyle = "#f06292"; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -11); ctx.stroke(); ctx.restore();
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -11 * ms); ctx.stroke(); ctx.restore();
       }
-      ctx.fillStyle = "#f06292"; ctx.beginPath(); ctx.arc(x, y, 4, 0, 7); ctx.fill();
-      ctx.fillStyle = "#f8bbd0"; ctx.fillText(m.handle || m.display_name || "", x + 7, y + 3);
+      ctx.fillStyle = "#f06292"; ctx.beginPath(); ctx.arc(x, y, 4 * ms, 0, 7); ctx.fill();
+      ctx.fillStyle = "#f8bbd0";
+      const tag = (m.handle || m.display_name || "") + (stale ? ` · ${fmtAge(mateAge(m))}` : "");
+      ctx.fillText(tag, x + Math.round(7 * ms), y + labelDY);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -3811,6 +3857,10 @@ async function runFinder() {
 let myId = null;
 let presence = new Map();
 let sharePresence = true;
+// A teammate's position updates only when they run /showlocation, so a fix older
+// than this reads as "stale" — faded on the map + roster, but kept around (their
+// last known spot still helps) until the server ages it off entirely.
+const MATE_STALE_S = 90;
 // The signed-in member's identity (from /api/me): verified in-game handles, the
 // chosen primary handle, and the directory opt-out. Drives the marketplace handle
 // picker and the settings identity panel.
@@ -3851,10 +3901,11 @@ function renderRoster() {
     const here = lastState && lastState.container
       && m.system === lastState.system && m.body === lastState.container.name;
     const mine = sameShard(m);
+    const stale = mateAge(m) > MATE_STALE_S;
     const chip = (!currentShard || !m.shard) ? ""
       : `<span class="mate-shard${mine ? " same" : ""}" title="${esc(m.shard)}">` +
         `${mine ? "same shard" : "other shard"}</span>`;
-    return `<div class="mate-row${mine ? " same-shard" : ""}">` +
+    return `<div class="mate-row${mine ? " same-shard" : ""}${stale ? " stale" : ""}">` +
       `<span class="mate-dot${here ? " here" : ""}" title="${here ? "on your body" : "elsewhere"}"></span>` +
       `<b>${esc(m.handle || m.display_name || "member")}</b>` +
       `<span class="mate-where">${esc(m.body)} · ${esc(m.system)}</span>` +
@@ -3862,8 +3913,9 @@ function renderRoster() {
       `<span class="mate-age">${fmtAge(mateAge(m))}</span></div>`;
   }).join("");
 }
-// Tick the roster ages without waiting on a server delta.
-setInterval(() => { if (presence.size) renderRoster(); }, 5000);
+// Tick the roster ages (and the map, so stale teammates fade) without waiting on
+// a server delta — positions are sparse, so aging is driven locally.
+setInterval(() => { if (presence.size) { renderRoster(); drawMap(); } }, 5000);
 
 $("share-toggle").onchange = async (e) => {
   sharePresence = e.target.checked;
@@ -4245,6 +4297,7 @@ async function loadLfg() {
 
 // ---------- websocket ----------
 let ws = null;
+let datasetRefreshTimer = null;
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -4260,6 +4313,12 @@ function connect() {
       if (msg.op === "upsert") for (const u of msg.users) rememberMate(u);
       else if (msg.op === "remove") presence.delete(msg.discord_id);
       renderRoster(); drawMap();
+    } else if (msg.type === "dataset") {
+      // The shared POI/observation set changed (someone captured or deleted) —
+      // refetch the whole-dataset rows so the filtered NEARBY view + contributor
+      // dropdown catch up, not just the live map. Debounced against bursts.
+      clearTimeout(datasetRefreshTimer);
+      datasetRefreshTimer = setTimeout(loadAll, 400);
     } else if (msg.type === "online") {
       renderOnline(msg.count);
     } else if (msg.type === "online_roster") {

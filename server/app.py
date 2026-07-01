@@ -948,6 +948,7 @@ class RoutePlanIn(BaseModel):
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
 PATH_MIN_MOVE_M = 250.0   # don't record a crumb until you've moved this far
 PATH_MAX = 5000           # cap so a long session can't grow unbounded
+SHARED_PATH_MAX = 500     # crumbs shared with teammates per presence upsert (payload cap)
 
 # Cargo-run arrival thresholds. Generous on purpose: arrival only surfaces the
 # stop's package checklist for the player to confirm — it never auto-completes —
@@ -957,7 +958,12 @@ ARRIVAL_SPACE_M = 50_000.0     # everything else (station / space approach)
 
 # Live presence tuning.
 PRESENCE_TICK_S = 1.0     # broadcaster cadence (coalesced upserts, ~1 Hz)
-PRESENCE_STALE_S = 120.0  # drop a teammate after this long with no new position
+# Positions arrive only when a player manually runs /showlocation (the watcher has
+# no position heartbeat), so a fix can be many minutes old yet still the best known
+# spot. Keep a teammate on the map for a long window and let the client fade the
+# marker as it ages (see MATE_STALE_S), rather than dropping them after a couple of
+# minutes of not re-copying their coords.
+PRESENCE_STALE_S = 1800.0  # drop a teammate only after this long with no new position
 PRESENCE_MOVE_M = 5.0     # only recompute heading once actually moving
 
 # Online roster (who's-online layer, backlog #19). Identity-bearing and NOT
@@ -1202,13 +1208,21 @@ class SessionHub:
             radius = cont.get("body_radius_m") or 1.0
             dist, bearing = nav_core.great_circle(prev["lat"], prev["lon"], lat, lon, radius)
             heading = bearing if dist > PRESENCE_MOVE_M else prev.get("heading")
+        # Share the current body's breadcrumb trail so teammates can see where this
+        # member has already mapped (cuts duplicate scouting). Only crumbs on the
+        # body they're standing on are drawable on the shared local map; cap the
+        # payload so a long trail can't bloat the ~1 Hz upsert.
+        trail = [{"lat": c["lat"], "lon": c["lon"]}
+                 for c in sess.path if c["container"] == body]
+        if len(trail) > SHARED_PATH_MAX:
+            trail = trail[len(trail) - SHARED_PATH_MAX:]
         return {
             "discord_id": uid,
             "display_name": sess.user.get("display_name"),
             "handle": sess.owner["handle"] if sess.owner else None,
             "shard": sess.shard,
             "system": system, "body": body, "lat": lat, "lon": lon,
-            "heading": heading, "last_update": time.time(),
+            "heading": heading, "path": trail, "last_update": time.time(),
         }
 
     @staticmethod
@@ -1219,6 +1233,7 @@ class SessionHub:
             "handle": rec["handle"], "shard": rec["shard"],
             "system": rec["system"], "body": rec["body"],
             "lat": rec["lat"], "lon": rec["lon"], "heading": rec["heading"],
+            "path": rec.get("path", []),
             "age_s": max(0.0, time.time() - rec["last_update"]),
         }
 
@@ -1447,6 +1462,12 @@ class SessionHub:
         for s in self.sessions.values():
             s.recompute()
             await s.broadcast()
+        # The per-session `state` push refreshes each viewer's live nearest lists,
+        # but the whole-dataset browse/filter view (and the contributor dropdown)
+        # is fed by a separate /api/pois + /api/observations fetch. Nudge every tab
+        # to refetch it so another member's new POI/observation shows up in the
+        # filtered NEARBY list, not just on the map.
+        await self.send_to_all_clients({"type": "dataset"})
 
 
 hub = SessionHub()

@@ -654,6 +654,47 @@ class OnlineRosterTests(unittest.TestCase):
         return self.client.get("/api/online").json()["me"]
 
 
+class PresenceTrailTests(unittest.TestCase):
+    """Teammate presence now carries the member's current-body breadcrumb trail so
+    everyone can see where the org has already scouted (avoids duplicate mapping)."""
+
+    @staticmethod
+    def _sess(uid):
+        s = app.Session({"id": uid, "display_name": "Scout", "is_admin": False})
+        s.nav_state = {
+            "system": "Stanton",
+            "container": {"name": "Daymar", "is_body": True, "body_radius_m": 295000.0},
+            "latitude": 1.0, "longitude": 2.0,
+        }
+        s.shard = "shard-1"
+        return s
+
+    def setUp(self):
+        app.hub.presence.clear()
+        app.hub._dirty.clear()
+        app.hub._removed.clear()
+
+    def test_shares_only_current_body_crumbs(self):
+        s = self._sess("9")
+        s.path = [
+            {"lat": 1.0, "lon": 2.0, "container": "Daymar"},
+            {"lat": 1.1, "lon": 2.1, "container": "Daymar"},
+            {"lat": 5.0, "lon": 5.0, "container": "Yela"},   # other body — excluded
+        ]
+        rec = app.hub._presence_record(s)
+        self.assertEqual(rec["path"], [{"lat": 1.0, "lon": 2.0}, {"lat": 1.1, "lon": 2.1}])
+        # The wire form (what tabs actually receive) carries the trail through.
+        self.assertEqual(app.hub._public_presence(rec)["path"], rec["path"])
+
+    def test_trail_capped_to_most_recent(self):
+        s = self._sess("9")
+        n = app.SHARED_PATH_MAX + 50
+        s.path = [{"lat": i, "lon": i, "container": "Daymar"} for i in range(n)]
+        rec = app.hub._presence_record(s)
+        self.assertEqual(len(rec["path"]), app.SHARED_PATH_MAX)
+        self.assertEqual(rec["path"][-1], {"lat": n - 1, "lon": n - 1})  # keeps the tail
+
+
 class LFGBoardTests(unittest.TestCase):
     """Backlog #19 step 3 — the looking-for-group board: the two directions
     (LFM/LFJ), post-supersede, join/ping toggle + slot cap, close permissions,
