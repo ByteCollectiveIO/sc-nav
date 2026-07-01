@@ -929,6 +929,17 @@ PLAYSTYLE_TAGS = [
     "RP", "casual", "serious", "new-player-friendly",
 ]
 
+# Looking-for-group entries (#19 step 3): transient, in-memory, matching-oriented
+# — NOT the scheduled `events` table. Two directions: "lfm" (I'm hosting / starting
+# a group, need players — carries slots) and "lfj" (I'm solo, want in — a raised
+# hand). Auto-expire so a stale board self-cleans; dropped when the poster goes
+# offline. One active LFM + one active LFJ per member (re-posting supersedes).
+LFG_TTL_S = 3 * 3600.0        # entries expire 3h after posting
+LFG_DIRECTIONS = ("lfm", "lfj")
+_LFG_NOTE_MAX = 280
+_LFG_MAX_SLOTS = 40           # LFM slots-needed upper bound
+_LFG_MAX_TAGS = 6             # playstyle chips per entry
+
 # How often the scheduled event-reminder loop scans for due events.
 REMINDER_TICK_S = 60.0
 
@@ -1098,6 +1109,11 @@ class SessionHub:
         # since, last_seen}. Decoupled from `presence` — it's identity-bearing and
         # works in space / at a station / before the game is even launched.
         self.online: dict[str, dict] = {}
+        # Looking-for-group board (#19 step 3): id -> entry. In-memory + ephemeral
+        # like `online`; one active LFM + one active LFJ per member (re-posting in a
+        # direction supersedes), auto-expiring and dropped when the poster goes offline.
+        self.lfg: dict[int, dict] = {}
+        self._lfg_seq = 0
 
     def get(self, user: dict) -> Session:
         sess = self.sessions.get(user["id"])
@@ -1260,6 +1276,95 @@ class SessionHub:
         connect/disconnect so the top-bar count tracks comings and goings."""
         await self.send_to_all_clients({"type": "online", "count": self.online_count()})
 
+    # --- looking-for-group board (who wants to group, #19 step 3) ------------
+    def post_lfg(self, poster: str, direction: str, tags: list[str],
+                 slots: int | None, note: str, rally: str | None,
+                 comms: bool) -> dict:
+        """Create this member's LFG entry in the given direction. One active entry
+        per direction per member — a re-post supersedes the previous one. Returns the
+        new internal record. Call under the lock."""
+        for eid, e in list(self.lfg.items()):    # supersede same-direction post
+            if e["poster"] == poster and e["direction"] == direction:
+                del self.lfg[eid]
+        self._lfg_seq += 1
+        now = time.time()
+        entry = {
+            "id": self._lfg_seq, "poster": poster, "direction": direction,
+            "tags": tags, "slots": slots if direction == "lfm" else None,
+            "note": note, "rally": rally, "comms": comms,
+            "responders": [],   # joiners (lfm) / interested pings (lfj)
+            "created": now, "expires": now + LFG_TTL_S,
+        }
+        self.lfg[entry["id"]] = entry
+        return entry
+
+    def join_lfg(self, entry_id: int, uid: str) -> dict | None:
+        """Toggle a member's response: Join/Leave (LFM) or Ping/Un-ping (LFJ). A member
+        can't respond to their own post; LFM joins are capped at the slot count (a full
+        entry ignores new joins). Returns the updated entry, or None if it's gone.
+        Call under the lock."""
+        e = self.lfg.get(entry_id)
+        if e is None or uid == e["poster"]:
+            return e
+        if uid in e["responders"]:
+            e["responders"].remove(uid)                     # leave / un-ping
+        elif not (e["direction"] == "lfm" and e["slots"]
+                  and len(e["responders"]) >= e["slots"]):  # join unless full
+            e["responders"].append(uid)
+        return e
+
+    def close_lfg(self, entry_id: int, uid: str, is_admin: bool) -> bool:
+        """Remove an entry — only its poster (or an admin) may close it. Returns True
+        if one was actually removed. Call under the lock."""
+        e = self.lfg.get(entry_id)
+        if e is None or (e["poster"] != uid and not is_admin):
+            return False
+        del self.lfg[entry_id]
+        return True
+
+    def drop_lfg_for(self, uid: str) -> bool:
+        """Drop every entry a member posted (they went offline / last tab closed).
+        Returns True if anything was removed. Call under the lock."""
+        gone = [eid for eid, e in self.lfg.items() if e["poster"] == uid]
+        for eid in gone:
+            del self.lfg[eid]
+        return bool(gone)
+
+    def prune_lfg(self, now: float) -> bool:
+        """Sweep expired entries. Returns True if any were removed. Call under the lock."""
+        gone = [eid for eid, e in self.lfg.items() if e["expires"] <= now]
+        for eid in gone:
+            del self.lfg[eid]
+        return bool(gone)
+
+    def _public_lfg(self, e: dict) -> dict:
+        """Wire form for one entry: resolved poster name + their live online status,
+        responder names, filled count, and age / time-left."""
+        now = time.time()
+        prec = self.online.get(e["poster"])
+        return {
+            "id": e["id"], "poster_id": e["poster"],
+            "poster": _resolve_member_name(e["poster"], None),
+            "poster_status": prec["status"] if prec else "offline",
+            "direction": e["direction"], "tags": e["tags"], "slots": e["slots"],
+            "note": e["note"], "rally": e["rally"], "comms": e["comms"],
+            "responders": [{"id": r, "name": _resolve_member_name(r, None)}
+                           for r in e["responders"]],
+            "filled": len(e["responders"]),
+            "age_s": max(0.0, now - e["created"]),
+            "expires_s": max(0.0, e["expires"] - now),
+        }
+
+    def lfg_board(self) -> list[dict]:
+        """All active LFG entries, newest first. The frontend splits them by direction."""
+        return [self._public_lfg(e) for e in
+                sorted(self.lfg.values(), key=lambda e: e["created"], reverse=True)]
+
+    async def broadcast_lfg(self) -> None:
+        """Push the full LFG board to every tab — org-scale cheap, mirrors the online
+        roster. Sent on post / join / close / expire."""
+        await self.send_to_all_clients({"type": "lfg", "entries": self.lfg_board()})
+
     def forget_entity(self, entity_id: int) -> None:
         """A deleted/refreshed-away POI/observation must stop being any member's
         destination or last-capture reference."""
@@ -1304,6 +1409,11 @@ async def presence_broadcaster():
                 online_dropped = False
                 for uid in stale:
                     online_dropped |= hub.drop_online(uid)
+                # LFG board self-cleans: drop expired entries + any posted by a member
+                # we just swept as stale (they went quiet, so their post goes with them).
+                lfg_changed = hub.prune_lfg(now)
+                for uid in stale:
+                    lfg_changed |= hub.drop_lfg_for(uid)
                 if upserts:
                     await hub.send_to_all_clients(
                         {"type": "presence", "op": "upsert", "users": upserts})
@@ -1314,6 +1424,8 @@ async def presence_broadcaster():
                     await hub.send_to_all_clients(
                         {"type": "online", "count": hub.online_count()})
                     await hub.broadcast_online_roster()
+                if lfg_changed:
+                    await hub.broadcast_lfg()
         except Exception as exc:   # never let the loop die on a transient error
             print(f"[sc-nav] presence broadcaster error: {exc}")
 
@@ -4022,6 +4134,66 @@ async def set_online_status(body: OnlineStatusIn, user: dict = Depends(require_s
             "appear_offline": body.appear_offline}
 
 
+class LFGPostIn(BaseModel):
+    direction: str = Field(default="lfm", max_length=_UNIT_MAX)   # lfm | lfj
+    tags: list[str] = Field(default_factory=list, max_length=_LFG_MAX_TAGS)
+    slots: int | None = Field(default=None, ge=1, le=_LFG_MAX_SLOTS)   # lfm only
+    note: str = Field(default="", max_length=_LFG_NOTE_MAX)
+    rally: str | None = Field(default=None, max_length=_NAME_MAX)   # optional rally point
+    comms: bool = False   # voice/comms expected
+
+
+@app.get("/api/lfg")
+async def lfg_snapshot(user: dict = Depends(require_session)):
+    """Looking-for-group board snapshot (#19 step 3): all active LFM/LFJ entries,
+    newest first. Live updates arrive over WS as `lfg`; this is the initial paint."""
+    async with hub.lock:
+        entries = hub.lfg_board()
+    return {"entries": entries, "count": len(entries)}
+
+
+@app.post("/api/lfg")
+async def create_lfg(body: LFGPostIn, user: dict = Depends(require_session)):
+    """Post an LFG entry (#19 step 3). `lfm` = hosting / starting a group, needs
+    players (carries slots); `lfj` = solo, wants in (a raised hand). Tags are filtered
+    to the shared playstyle vocabulary. One active entry per direction per member —
+    re-posting supersedes the previous one."""
+    direction = body.direction if body.direction in LFG_DIRECTIONS else "lfm"
+    tags = [t for t in dict.fromkeys(body.tags) if t in PLAYSTYLE_TAGS][:_LFG_MAX_TAGS]
+    note = (body.note or "").strip()[:_LFG_NOTE_MAX]
+    rally = (body.rally or "").strip()[:_NAME_MAX] or None
+    slots = body.slots if direction == "lfm" else None
+    async with hub.lock:
+        entry = hub.post_lfg(user["id"], direction, tags, slots, note, rally, bool(body.comms))
+        pub = hub._public_lfg(entry)
+    await hub.broadcast_lfg()
+    return pub
+
+
+@app.post("/api/lfg/{entry_id}/join")
+async def respond_lfg(entry_id: int, user: dict = Depends(require_session)):
+    """Respond to an entry (#19 step 3): Join/Leave an LFM (fills a slot) or Ping/Un-ping
+    an LFJ. Idempotent toggle; responding to your own post is a no-op."""
+    async with hub.lock:
+        entry = hub.join_lfg(entry_id, user["id"])
+        if entry is None:
+            raise HTTPException(status_code=404, detail="That LFG post is gone.")
+        pub = hub._public_lfg(entry)
+    await hub.broadcast_lfg()
+    return pub
+
+
+@app.delete("/api/lfg/{entry_id}")
+async def delete_lfg(entry_id: int, user: dict = Depends(require_session)):
+    """Close an LFG entry (#19 step 3) — poster or admin only."""
+    async with hub.lock:
+        ok = hub.close_lfg(entry_id, user["id"], bool(user.get("is_admin")))
+    if not ok:
+        raise HTTPException(status_code=404, detail="No such LFG post (or not yours).")
+    await hub.broadcast_lfg()
+    return {"ok": True}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     # Browsers only; require a logged-in org member (session loaded from cookie).
@@ -4056,8 +4228,10 @@ async def websocket_endpoint(ws: WebSocket):
         async with hub.lock:
             roster = hub.roster()
             online = hub.online_roster()
+            board = hub.lfg_board()
         await ws.send_text(json.dumps({"type": "roster", "users": roster}))
         await ws.send_text(json.dumps({"type": "online_roster", "users": online}))
+        await ws.send_text(json.dumps({"type": "lfg", "entries": board}))
         # Tell the new tab the current count immediately; tell everyone else only
         # when this member actually came online (a 2nd/3rd tab doesn't change it,
         # but their arrival does add them to everyone's online roster).
@@ -4080,8 +4254,11 @@ async def websocket_endpoint(ws: WebSocket):
         if not sess.ws_clients:   # member's last tab closed — they went offline
             async with hub.lock:
                 hub.drop_online(user["id"])
+                lfg_gone = hub.drop_lfg_for(user["id"])   # their LFG posts go with them
             await hub.broadcast_online()
             await hub.broadcast_online_roster()
+            if lfg_gone:
+                await hub.broadcast_lfg()
 
 
 # ---------------------------------------------------------------------------

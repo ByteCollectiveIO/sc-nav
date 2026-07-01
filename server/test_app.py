@@ -17,6 +17,7 @@ What it pins down — the things a pure unit test can't:
 import asyncio
 import re
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -651,6 +652,149 @@ class OnlineRosterTests(unittest.TestCase):
 
     def _my_prefs(self):
         return self.client.get("/api/online").json()["me"]
+
+
+class LFGBoardTests(unittest.TestCase):
+    """Backlog #19 step 3 — the looking-for-group board: the two directions
+    (LFM/LFJ), post-supersede, join/ping toggle + slot cap, close permissions,
+    offline + expiry cleanup, and the REST surface."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.lfg.clear()
+        app.hub._lfg_seq = 0
+        self._member["is_admin"] = False
+
+    def test_post_lfm_and_lfj_coexist_per_member(self):
+        app.hub.post_lfg("7", "lfm", ["bunkers"], 2, "need 2", None, False)
+        app.hub.post_lfg("7", "lfj", ["mining"], None, "solo", None, False)
+        dirs = sorted(e["direction"] for e in app.hub.lfg.values())
+        self.assertEqual(dirs, ["lfj", "lfm"])   # one of each survives
+
+    def test_repost_same_direction_supersedes(self):
+        first = app.hub.post_lfg("7", "lfm", [], 1, "v1", None, False)
+        second = app.hub.post_lfg("7", "lfm", [], 3, "v2", None, False)
+        entries = [e for e in app.hub.lfg.values() if e["poster"] == "7"
+                   and e["direction"] == "lfm"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["id"], second["id"])
+        self.assertNotIn(first["id"], app.hub.lfg)
+
+    def test_lfj_never_carries_slots(self):
+        e = app.hub.post_lfg("7", "lfj", [], 5, "", None, False)
+        self.assertIsNone(e["slots"])
+
+    def test_join_toggles_and_caps_at_slots(self):
+        e = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        app.hub.join_lfg(e["id"], "8")
+        self.assertEqual(e["responders"], ["8"])
+        app.hub.join_lfg(e["id"], "9")            # full (slots=1) — ignored
+        self.assertEqual(e["responders"], ["8"])
+        app.hub.join_lfg(e["id"], "8")            # toggle off = leave
+        self.assertEqual(e["responders"], [])
+
+    def test_cannot_join_own_post(self):
+        e = app.hub.post_lfg("7", "lfm", [], 3, "", None, False)
+        app.hub.join_lfg(e["id"], "7")
+        self.assertEqual(e["responders"], [])
+
+    def test_lfj_ping_has_no_cap(self):
+        e = app.hub.post_lfg("7", "lfj", [], None, "", None, False)
+        for uid in ("8", "9", "10"):
+            app.hub.join_lfg(e["id"], uid)
+        self.assertEqual(e["responders"], ["8", "9", "10"])
+
+    def test_close_is_poster_or_admin_only(self):
+        e = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        self.assertFalse(app.hub.close_lfg(e["id"], "8", False))   # stranger
+        self.assertTrue(app.hub.close_lfg(e["id"], "8", True))      # admin
+        self.assertNotIn(e["id"], app.hub.lfg)
+        e2 = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        self.assertTrue(app.hub.close_lfg(e2["id"], "7", False))    # poster
+
+    def test_drop_lfg_for_clears_all_of_a_members_posts(self):
+        app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        app.hub.post_lfg("7", "lfj", [], None, "", None, False)
+        app.hub.post_lfg("8", "lfm", [], 1, "", None, False)
+        self.assertTrue(app.hub.drop_lfg_for("7"))
+        self.assertEqual([e["poster"] for e in app.hub.lfg.values()], ["8"])
+        self.assertFalse(app.hub.drop_lfg_for("7"))   # nothing left
+
+    def test_prune_removes_only_expired(self):
+        live = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        stale = app.hub.post_lfg("8", "lfm", [], 1, "", None, False)
+        stale["expires"] = time.time() - 1
+        self.assertTrue(app.hub.prune_lfg(time.time()))
+        self.assertEqual(list(app.hub.lfg), [live["id"]])
+        self.assertFalse(app.hub.prune_lfg(time.time()))
+
+    def test_public_form_resolves_and_counts(self):
+        e = app.hub.post_lfg("7", "lfm", ["bunkers"], 2, "run", "Daymar", True)
+        app.hub.join_lfg(e["id"], "8")
+        pub = app.hub._public_lfg(e)
+        self.assertEqual(pub["direction"], "lfm")
+        self.assertEqual(pub["filled"], 1)
+        self.assertEqual(pub["slots"], 2)
+        self.assertTrue(pub["comms"])
+        self.assertEqual(pub["rally"], "Daymar")
+        self.assertEqual([r["id"] for r in pub["responders"]], ["8"])
+
+    # --- REST surface -------------------------------------------------------
+    def test_api_post_filters_tags_to_vocabulary(self):
+        r = self.client.post("/api/lfg", json={
+            "direction": "lfm", "tags": ["mining", "not-a-real-tag", "PvP"],
+            "slots": 2, "note": "come along"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["tags"], ["mining", "PvP"])
+
+    def test_api_bad_direction_falls_back_to_lfm(self):
+        r = self.client.post("/api/lfg", json={"direction": "party"})
+        self.assertEqual(r.json()["direction"], "lfm")
+
+    def test_api_snapshot_lists_open_entries(self):
+        app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        app.hub.post_lfg("8", "lfj", [], None, "", None, False)
+        body = self.client.get("/api/lfg").json()
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(len(body["entries"]), 2)
+
+    def test_api_join_toggles_via_endpoint(self):
+        e = app.hub.post_lfg("7", "lfm", [], 3, "", None, False)   # caller "1" != poster
+        r = self.client.post(f"/api/lfg/{e['id']}/join")
+        self.assertEqual(r.json()["filled"], 1)
+        r = self.client.post(f"/api/lfg/{e['id']}/join")           # toggle off
+        self.assertEqual(r.json()["filled"], 0)
+
+    def test_api_join_missing_entry_404s(self):
+        self.assertEqual(self.client.post("/api/lfg/999/join").status_code, 404)
+
+    def test_api_delete_requires_ownership(self):
+        e = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)   # someone else's
+        self.assertEqual(self.client.delete(f"/api/lfg/{e['id']}").status_code, 404)
+        self._member["is_admin"] = True
+        self.assertEqual(self.client.delete(f"/api/lfg/{e['id']}").status_code, 200)
+
+    def test_api_delete_own_post(self):
+        r = self.client.post("/api/lfg", json={"direction": "lfj"})
+        eid = r.json()["id"]
+        self.assertEqual(self.client.delete(f"/api/lfg/{eid}").status_code, 200)
+        self.assertNotIn(eid, app.hub.lfg)
 
 
 if __name__ == "__main__":

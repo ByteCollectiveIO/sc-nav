@@ -472,6 +472,40 @@
   .on-tag { font-size: 12px; padding: 3px 9px; border-radius: 14px; cursor: pointer;
     border: 1px solid var(--border); color: var(--dim); background: none; }
   .on-tag:hover { border-color: var(--accent); color: var(--accent); }
+  .on-tag.active { border-color: var(--accent); color: var(--ink-on-accent); background: var(--accent); }
+  /* looking-for-group board (#19 step 3) */
+  .lfg-blurb { margin: 0 0 12px; font-size: 12px; }
+  .lfg-compose { display: flex; flex-direction: column; gap: 10px; }
+  .lfg-dir { display: flex; gap: 8px; }
+  .lfg-dir button { flex: 1; padding: 8px 10px; }
+  .lfg-dir small { display: block; font-size: 10px; color: var(--dim); font-weight: 400;
+    text-transform: none; letter-spacing: 0; margin-top: 2px; }
+  .lfg-dir button.active small { color: var(--ink-on-accent); }
+  .lfg-fields { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .lfg-note-in { width: 100%; }
+  .lfg-post-row { display: flex; gap: 10px; align-items: center; }
+  .lfg-hint { color: var(--dim); font-size: 11px; }
+  .lfg-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) { .lfg-cols { grid-template-columns: 1fr; } }
+  .lfg-col-h { margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--dim); }
+  .lfg-col-h .n { color: var(--accent); }
+  .lfg-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    margin-bottom: 10px; background: var(--panel2); }
+  .lfg-card.mine { border-color: var(--accent); }
+  .lfg-card-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .lfg-card-head .on-name { font-size: 14px; }
+  .lfg-slots { margin-left: auto; font-size: 12px; color: var(--dim); white-space: nowrap; }
+  .lfg-slots.full { color: var(--warn); }
+  .lfg-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }
+  .lfg-chip { font-size: 11px; padding: 2px 8px; border-radius: 12px;
+    border: 1px solid var(--border); color: var(--dim); }
+  .lfg-note { font-size: 13px; margin: 6px 0; white-space: pre-wrap; word-break: break-word; }
+  .lfg-meta { font-size: 11px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 10px; }
+  .lfg-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .lfg-empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
+  .lfg-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+  .lfg-joined { font-size: 11px; color: var(--dim); }
 
   /* resource forecast */
   .fc-row { display: grid; grid-template-columns: 130px 1fr 46px 56px;
@@ -537,6 +571,7 @@
     color: var(--good); text-decoration: none; }
   .online-badge:hover { background: var(--accent-wash); }
   .online-badge[hidden] { display: none; }
+  .lfg-badge { border-color: var(--warn); color: var(--warn); margin-top: -4px; }
   .app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 18px; }
   .app-card { position: relative; display: flex; flex-direction: column; align-items: center;
@@ -1441,6 +1476,7 @@
     <p class="launcher-sub">Six tools, one org. New here? Start with the Resource Navigator —
       the rest build on it.</p>
     <a id="online-badge" class="online-badge" href="#/online" hidden></a>
+    <a id="lfg-badge" class="online-badge lfg-badge" href="#/online" hidden></a>
     <a id="launcher-resume" class="launcher-resume" hidden></a>
     <div class="app-grid">
       <a class="app-card" href="#/nav">
@@ -2288,6 +2324,52 @@
       <p class="muted online-blurb">Org members with the app open right now. Location shows only
         for members already sharing their position on the navigator.</p>
       <div id="online-body"></div>
+    </div>
+    <div class="panel" id="lfg-compose-panel">
+      <h2>LOOKING FOR GROUP</h2>
+      <p class="muted lfg-blurb">Rally a group right now, no schedule needed. Post that you're
+        hosting and need players, or that you're solo and want in. Posts expire in a few hours or
+        when you close the app.</p>
+      <div class="lfg-compose">
+        <div class="lfg-dir" id="lfg-dir">
+          <button type="button" data-dir="lfm" class="active">Need players
+            <small>I'm hosting / starting a group</small></button>
+          <button type="button" data-dir="lfj">Want to join
+            <small>I'm solo, looking for a group</small></button>
+        </div>
+        <div class="on-tags" id="lfg-tags"></div>
+        <div class="lfg-fields">
+          <label class="on-field" id="lfg-slots-field">Players needed
+            <input id="lfg-slots" class="ti" type="number" min="1" max="40" step="1"
+              placeholder="e.g. 2" style="width:110px">
+          </label>
+          <label class="on-field on-field-grow">Rally point (optional)
+            <input id="lfg-rally" class="ti" type="text" maxlength="120"
+              placeholder="system / station / POI">
+          </label>
+          <label class="on-invis"><input id="lfg-comms" type="checkbox"> Voice comms expected</label>
+        </div>
+        <textarea id="lfg-note" class="ti lfg-note-in" rows="2" maxlength="280"
+          placeholder="What / where? Comms expectations? (optional)"></textarea>
+        <div class="lfg-post-row">
+          <button id="lfg-post" type="button">Post to the board</button>
+          <span class="lfg-hint" id="lfg-post-hint"></span>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>THE BOARD <span class="muted" id="lfg-hint"></span></h2>
+      <div class="lfg-filters" id="lfg-filters"></div>
+      <div class="lfg-cols">
+        <div class="lfg-col">
+          <p class="lfg-col-h">Groups needing players <span class="n" id="lfg-lfm-n"></span></p>
+          <div id="lfg-lfm-body"></div>
+        </div>
+        <div class="lfg-col">
+          <p class="lfg-col-h">Players looking to join <span class="n" id="lfg-lfj-n"></span></p>
+          <div id="lfg-lfj-body"></div>
+        </div>
+      </div>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
@@ -3803,6 +3885,186 @@ async function loadOnline() {
     if (r.ok) { const d = await r.json(); onlineRoster = d.users || []; if (d.me) myOnlinePrefs = d.me; }
   } catch {}
   renderOnlineMe(); renderOnlineView(); renderOnlineBadge();
+  loadLfg();
+}
+
+// ---------- looking for group (#19 step 3) ----------
+// The two-direction connect board. LFM = "I'm hosting, need players"; LFJ = "I'm
+// solo, want in". Ephemeral + WS-driven (server pushes the full board as `lfg`);
+// GET /api/lfg seeds the initial paint. Composer + board both live on #/online.
+let lfgBoard = [];
+let lfgDir = "lfm";                 // composer direction
+const lfgComposeTags = new Set();   // selected playstyle tags in the composer
+let lfgFilterDir = "all";           // board filter: all | lfm | lfj
+let lfgFilterTag = null;            // board filter: one playstyle tag, or null
+let lfgOpenOnly = false;            // board filter: only LFM posts with open slots
+function fmtLeft(s) {   // "expires in 2h" companion to fmtSince's "online" phrasing
+  s = Math.max(0, Math.round(s || 0));
+  if (s < 60) return "expiring";
+  if (s < 3600) return `${Math.floor(s / 60)}m left`;
+  return `${Math.floor(s / 3600)}h left`;
+}
+function renderLfgBadge() {
+  const el = $("lfg-badge");
+  if (!el) return;
+  el.hidden = !lfgBoard.length;
+  el.textContent = `🔎 ${lfgBoard.length} looking for group`;
+}
+// Selectable playstyle chips for the composer (multi-select, toggles .active).
+function renderLfgComposeTags() {
+  const el = $("lfg-tags");
+  if (!el) return;
+  el.innerHTML = playstyleTags.map(t =>
+    `<button type="button" class="on-tag${lfgComposeTags.has(t) ? " active" : ""}" ` +
+    `data-tag="${esc(t)}">${esc(t)}</button>`).join("");
+  el.querySelectorAll(".on-tag").forEach(b => b.onclick = () => {
+    const t = b.dataset.tag;
+    if (lfgComposeTags.has(t)) lfgComposeTags.delete(t); else lfgComposeTags.add(t);
+    b.classList.toggle("active");
+  });
+}
+function setLfgDir(dir) {
+  lfgDir = dir === "lfj" ? "lfj" : "lfm";
+  $("lfg-dir").querySelectorAll("button").forEach(b =>
+    b.classList.toggle("active", b.dataset.dir === lfgDir));
+  $("lfg-slots-field").style.display = lfgDir === "lfm" ? "" : "none";   // slots are LFM-only
+}
+async function postLfg() {
+  const slots = parseInt($("lfg-slots").value, 10);
+  const body = {
+    direction: lfgDir,
+    tags: [...lfgComposeTags],
+    slots: (lfgDir === "lfm" && slots > 0) ? slots : null,
+    note: $("lfg-note").value.trim(),
+    rally: $("lfg-rally").value.trim() || null,
+    comms: $("lfg-comms").checked,
+  };
+  const hint = $("lfg-post-hint");
+  try {
+    const r = await fetch("/api/lfg", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    if (r.ok) {
+      $("lfg-note").value = ""; $("lfg-rally").value = ""; $("lfg-slots").value = "";
+      $("lfg-comms").checked = false;
+      lfgComposeTags.clear(); renderLfgComposeTags();
+      hint.textContent = "✓ Posted"; clearTimeout(postLfg._t);
+      postLfg._t = setTimeout(() => { hint.textContent = ""; }, 2500);
+    } else { hint.textContent = "Couldn't post — try again."; }
+  } catch { hint.textContent = "Couldn't post — try again."; }
+}
+async function joinLfg(id) {
+  try { await fetch(`/api/lfg/${id}/join`, { method: "POST" }); } catch {}
+}
+async function closeLfg(id) {
+  try { await fetch(`/api/lfg/${id}`, { method: "DELETE" }); } catch {}
+}
+// Filter bar: direction, one playstyle tag, and "open slots only".
+function renderLfgFilters() {
+  const el = $("lfg-filters");
+  if (!el) return;
+  const dirBtn = (v, label) =>
+    `<button type="button" class="on-tag${lfgFilterDir === v ? " active" : ""}" ` +
+    `data-fdir="${v}">${label}</button>`;
+  const tagBtns = playstyleTags.map(t =>
+    `<button type="button" class="on-tag${lfgFilterTag === t ? " active" : ""}" ` +
+    `data-ftag="${esc(t)}">${esc(t)}</button>`).join("");
+  el.innerHTML = dirBtn("all", "All") + dirBtn("lfm", "Need players") +
+    dirBtn("lfj", "Want to join") +
+    `<button type="button" class="on-tag${lfgOpenOnly ? " active" : ""}" data-fopen="1">Open slots</button>` +
+    `<span class="lfg-hint">·</span>` + tagBtns;
+  el.querySelectorAll("[data-fdir]").forEach(b =>
+    b.onclick = () => { lfgFilterDir = b.dataset.fdir; renderLfgFilters(); renderLfgBoard(); });
+  el.querySelectorAll("[data-ftag]").forEach(b =>
+    b.onclick = () => { lfgFilterTag = lfgFilterTag === b.dataset.ftag ? null : b.dataset.ftag;
+      renderLfgFilters(); renderLfgBoard(); });
+  el.querySelector("[data-fopen]").onclick = () => {
+    lfgOpenOnly = !lfgOpenOnly; renderLfgFilters(); renderLfgBoard(); };
+}
+function lfgStatusClass(s) {
+  return ["available", "busy", "afk"].includes(s) ? s : "afk";
+}
+function lfgCard(e) {
+  const mine = e.poster_id === myId;
+  const st = lfgStatusClass(e.poster_status);
+  const chips = (e.tags || []).map(t => `<span class="lfg-chip">${esc(t)}</span>`).join("");
+  const full = e.direction === "lfm" && e.slots && e.filled >= e.slots;
+  let slots = "";
+  if (e.direction === "lfm") {
+    const label = e.slots ? `${e.filled}/${e.slots} joined` : `${e.filled} joined`;
+    slots = `<span class="lfg-slots${full ? " full" : ""}">${label}</span>`;
+  } else if (e.filled) {
+    slots = `<span class="lfg-slots">${e.filled} interested</span>`;
+  }
+  const iResponded = (e.responders || []).some(r => r.id === myId);
+  const names = (e.responders || []).map(r => esc(r.name)).join(", ");
+  const roster = names
+    ? `<div class="lfg-joined">${e.direction === "lfm" ? "Joined" : "Interested"}: ${names}</div>` : "";
+  const meta = [];
+  if (e.rally) meta.push(`📍 ${esc(e.rally)}`);
+  if (e.comms) meta.push("🎙 voice");
+  meta.push(fmtLeft(e.expires_s));
+  let action = "";
+  if (mine) {
+    action = `<button type="button" data-close="${e.id}">Close post</button>`;
+  } else if (e.direction === "lfm") {
+    action = iResponded
+      ? `<button type="button" data-join="${e.id}">Leave</button>`
+      : `<button type="button" data-join="${e.id}"${full ? " disabled" : ""}>${full ? "Full" : "Join"}</button>`;
+  } else {
+    action = `<button type="button" data-join="${e.id}">${iResponded ? "Un-ping" : "Ping"}</button>`;
+  }
+  const note = e.note ? `<div class="lfg-note">${esc(e.note)}</div>` : "";
+  return `<div class="lfg-card${mine ? " mine" : ""}">` +
+    `<div class="lfg-card-head"><span class="on-dot ${st}"></span>` +
+    `<span class="on-name">${esc(e.poster)}</span>${mine ? ' <span class="on-where">(you)</span>' : ""}` +
+    slots + `</div>` +
+    (chips ? `<div class="lfg-chips">${chips}</div>` : "") +
+    note +
+    `<div class="lfg-meta">${meta.map(m => `<span>${m}</span>`).join("")}</div>` +
+    roster +
+    `<div class="lfg-actions">${action}</div></div>`;
+}
+function lfgMatchesFilter(e) {
+  if (lfgOpenOnly && !(e.direction === "lfm" && (!e.slots || e.filled < e.slots))) return false;
+  if (lfgFilterTag && !(e.tags || []).includes(lfgFilterTag)) return false;
+  return true;
+}
+function renderLfgBoard() {
+  const lfmBody = $("lfg-lfm-body"), lfjBody = $("lfg-lfj-body");
+  if (!lfmBody || !lfjBody) return;
+  const shown = lfgBoard.filter(lfgMatchesFilter);
+  const lfm = shown.filter(e => e.direction === "lfm");
+  const lfj = shown.filter(e => e.direction === "lfj");
+  $("lfg-hint").textContent = lfgBoard.length ? `(${lfgBoard.length} open)` : "";
+  $("lfg-lfm-n").textContent = lfm.length || "";
+  $("lfg-lfj-n").textContent = lfj.length || "";
+  const dirHidden = lfgFilterDir !== "all";
+  lfmBody.innerHTML = (dirHidden && lfgFilterDir !== "lfm") ? ""
+    : (lfm.length ? lfm.map(lfgCard).join("")
+       : `<div class="lfg-empty">No groups looking for players right now.</div>`);
+  lfjBody.innerHTML = (dirHidden && lfgFilterDir !== "lfj") ? ""
+    : (lfj.length ? lfj.map(lfgCard).join("")
+       : `<div class="lfg-empty">Nobody's raised a hand to join yet.</div>`);
+  for (const body of [lfmBody, lfjBody]) {
+    body.querySelectorAll("[data-join]").forEach(b => b.onclick = () => joinLfg(+b.dataset.join));
+    body.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeLfg(+b.dataset.close));
+  }
+}
+// Seed + wire the LFG surface. Called from loadOnline (after playstyle tags load);
+// WS `lfg` frames keep the board live thereafter.
+async function loadLfg() {
+  $("lfg-post").onclick = postLfg;   // idempotent re-bind
+  $("lfg-dir").querySelectorAll("button").forEach(b =>
+    b.onclick = () => setLfgDir(b.dataset.dir));
+  setLfgDir(lfgDir);
+  renderLfgComposeTags();
+  renderLfgFilters();
+  try {
+    const r = await fetch("/api/lfg");
+    if (r.ok) { lfgBoard = (await r.json()).entries || []; }
+  } catch {}
+  renderLfgBoard(); renderLfgBadge();
 }
 
 // ---------- websocket ----------
@@ -3827,6 +4089,9 @@ function connect() {
     } else if (msg.type === "online_roster") {
       onlineRoster = msg.users || [];
       renderOnlineView(); renderOnlineBadge();
+    } else if (msg.type === "lfg") {
+      lfgBoard = msg.entries || [];
+      renderLfgBoard(); renderLfgBadge();
     }
   };
   ws.onclose = () => { $("conn").classList.remove("ok"); $("online").classList.add("off"); renderSetupConn(); setTimeout(connect, 2000); };
@@ -6822,7 +7087,7 @@ function applyView() {
   $("terms-view").hidden = !terms;
   $("privacy-view").hidden = !privacy;
   $("launcher-view").hidden = !launcher;
-  if (launcher) { renderLauncherResume(); renderOnlineBadge(); }
+  if (launcher) { renderLauncherResume(); renderOnlineBadge(); renderLfgBadge(); }
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
   $("events-view").hidden = !events;

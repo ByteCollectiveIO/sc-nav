@@ -192,6 +192,32 @@ LFJ per member is a sane cap).
    blank-activity→null, appear-offline hides+sticks, playstyles served) — suite 191 green.
 3. LFG dashboard: in-memory entries (LFM + LFJ, playstyle tags, slots) + Join/Close
    + the two-direction connect board, WS-driven.
+   **BUILT 2026-07-01 (uncommitted, needs /deploy).** In-memory + ephemeral like the
+   online roster (NOT the `events` table): `hub.lfg` dict keyed by a monotonic id,
+   `_lfg_seq`. Two directions — `lfm` (hosting, needs players, carries `slots`) and
+   `lfj` (solo, wants in, a raised hand). One active entry per direction per member
+   (`post_lfg` supersedes a same-direction re-post). `LFG_TTL_S=3h` auto-expiry;
+   `LFG_DIRECTIONS`, `_LFG_NOTE_MAX=280`, `_LFG_MAX_SLOTS=40`, `_LFG_MAX_TAGS=6`.
+   Hub methods: `post_lfg`/`join_lfg` (toggle Join/Leave for LFM capped at slots,
+   Ping/Un-ping for LFJ, can't respond to own post)/`close_lfg` (poster-or-admin)/
+   `drop_lfg_for` (poster went offline)/`prune_lfg` (expiry sweep)/`_public_lfg`
+   (resolves poster name + live online status + responder names + filled/needed +
+   age/time-left)/`lfg_board` (newest-first)/`broadcast_lfg`. Lifecycle: board frame
+   sent to a new tab on WS connect; poster's entries dropped on last-tab disconnect;
+   `presence_broadcaster` tick prunes expired + drops entries of stale-swept members,
+   rebroadcasting on change. REST: `GET /api/lfg` (snapshot), `POST /api/lfg`
+   (`LFGPostIn`: direction/tags/slots/note/rally/comms; tags filtered to
+   `PLAYSTYLE_TAGS`), `POST /api/lfg/{id}/join` (toggle), `DELETE /api/lfg/{id}`
+   (close). WS msg type `lfg` (full board, org-scale cheap). Frontend: folded into
+   the `#/online` view as LOOKING FOR GROUP composer (direction toggle, multi-select
+   playstyle chips, slots [LFM-only], rally, voice-comms, note) + THE BOARD (filter
+   bar: direction / one playstyle tag / open-slots-only; two columns "Groups needing
+   players" vs "Players looking to join"; per-card poster status dot, chips, note,
+   rally/comms/time-left meta, responder roster, Join/Leave·Ping·Close action).
+   Launcher `🔎 N looking for group` badge (warn-accented) → `#/online`, kept live
+   off WS even when not on the view. Tests: `LFGBoardTests` in test_app.py (17) —
+   suite 208 green. **Deferred:** announce-to-Discord (step 4), suggested matches +
+   promote-to-event (step 5).
 4. "Announce to Discord" per entry → #18 dispatcher (rate-limited).
 5. (nice-to-have) suggested matches; "promote LFG → scheduled event" shortcut.
 
