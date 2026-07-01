@@ -30,8 +30,14 @@ Channel broadcasts cover ~80% of the value (event reminders, "roster filled",
 (Option B) indefinitely** — a bot is a whole new deployable surface and the org
 already gets pinged in-channel. Revisit only if members ask for private alerts.
 
-One webhook is enough for v1. v1.1 can add a small set of named webhooks so the
-org can route categories to different channels (e.g. `#events`, `#market`).
+**Per-category webhooks (done in v1, 2026-06-30).** Originally scoped as one
+shared webhook with v1.1 adding named webhooks per channel — but per-category
+routing was pulled forward into v1: each category (events / marketplace / goals /
+records) has its own webhook URL, so an org can route on-topic messages to
+on-topic channels (`#events`, `#market`, …). Reusing the same URL across
+categories collapses to one channel, so the single-channel case still works. A
+category is "on" exactly when it has a valid webhook — there's no separate enable
+toggle; clearing the URL turns it off.
 
 ---
 
@@ -71,16 +77,22 @@ Group by the feature that owns the event. Each is a toggle in settings.
 
 ### Settings (admin-only)
 Store in the existing settings/`meta` mechanism (`/api/settings`, `db.meta`):
-- `discord_webhook_url` — **secret**. Never returned in any API response; the
-  settings GET returns only a boolean `discord_webhook_set` + a masked tail.
-- `notify_<category>` booleans (events / marketplace / goals / records).
+- `discord_webhook_<category>` — **secret**, one per category (events /
+  marketplace / goals / records). Never returned in any API response; settings
+  GET returns `discord_webhooks: {<category>: {set: bool, tail: "…xxxx"}}` only.
+  A category fires iff its URL is a valid Discord webhook (presence = enabled;
+  no separate `notify_<category>` toggle). `notify.set_webhook`/`webhook_status`.
+- `discord_webhook_url` (legacy, v0.13.0's single shared URL) — migrated to every
+  unset per-category key at startup by `notify.migrate_legacy_webhook`, then
+  consumed. Kept only as a migration source.
 - Optional `discord_reminder_lead_min` (default 30).
 
 ### Dispatcher
 A single module `server/notify.py`:
-- `async def send(text, *, allowed_mentions=...)` — POSTs the Discord webhook
-  JSON (`{content, allowed_mentions}`) via `httpx`/`urllib` **in a thread**, so a
-  slow/broken webhook never blocks a request or the event loop.
+- `async def send(category, text, *, mentions=..., dedup_key=...)` — looks up
+  `category`'s webhook and POSTs `{content, allowed_mentions}` via `urllib`
+  **in a thread** (`asyncio.to_thread`), so a slow/broken webhook never blocks a
+  request or the event loop.
 - **Never raises into the caller.** Log and swallow; a notification failing must
   not fail the user action that triggered it.
 - Light **rate-limit / dedup**: an in-memory recent-key set so a double-submit or
@@ -112,25 +124,39 @@ A single module `server/notify.py`:
 ---
 
 ## Build order
-1. ✅ **DONE (2026-06-30, uncommitted).** `notify.py` dispatcher (async `send()`
-   that POSTs in a worker thread, never raises, in-memory dedup, single 429
-   retry, locked-down `allowed_mentions`; URL validate/mask/`is_configured`/
-   `category_enabled` helpers) + admin settings (`discord_webhook_url` stored in
-   `meta` and validated against real Discord hosts on write, never echoed back —
-   GET returns only `discord_webhook_set` + a masked tail + the `notify_*`
-   toggles + `discord_reminder_lead_min`) + a DISCORD NOTIFICATIONS section in
-   ORG SETTINGS (URL field, per-category toggles, reminder-lead minutes, Save,
-   and a rate-limited "Send test" via `POST /api/settings/discord/test`).
-   Nothing fires from app events yet — this proves delivery. Tests in
-   `server/test_app.py` (`NotifyValidationTests`, `DiscordSettingsTests`) pin the
-   anti-SSRF validation, the mask never leaking the URL, and the store/never-echo
-   round-trip.
-2. Inline event notifications (create / cancel) — smallest surface, validates the
-   inline pattern.
+1. ✅ **DONE (2026-06-30). Shipped v0.13.0, then reworked to per-category (below,
+   uncommitted).** `notify.py` dispatcher (async `send(category, text, …)` that
+   POSTs in a worker thread, never raises, in-memory dedup, single 429 retry,
+   locked-down `allowed_mentions`; URL validate/mask/`is_configured(category)`/
+   `webhook_status`/`set_webhook`/`migrate_legacy_webhook` helpers) + admin
+   settings (per-category `discord_webhook_<cat>` stored in `meta`, validated
+   against real Discord hosts on write, never echoed back — GET returns
+   `discord_webhooks: {cat: {set, tail}}` + `discord_reminder_lead_min`) + a
+   DISCORD NOTIFICATIONS section in ORG SETTINGS: one row per category (URL input,
+   Save, per-category "Test" via `POST /api/settings/discord/test {category}`, and
+   an explicit Clear — blank-on-Save leaves a category unchanged rather than
+   wiping it), plus reminder-lead minutes. Tests in `test_app.py`
+   (`NotifyValidationTests`, `DiscordSettingsTests`) pin anti-SSRF validation, the
+   mask never leaking the URL, the per-category store/never-echo round-trip, and
+   the legacy→per-category migration.
+2. ✅ **DONE (2026-06-30, uncommitted).** Inline event notifications
+   (create / cancel), gated on the `events` toggle. Shared helpers in `app.py`:
+   `_deep_link('#/events')`, `_discord_ts()` (emits Discord `<t:unix:F/R>` tags so
+   each member sees the start time in their own timezone), and `_notify_bg()`
+   which fires the coroutine as a background task so the POST never delays the
+   request. `_notify_event_created` / `_notify_event_cancelled` build the
+   messages (dedup_key `event-created:<id>` / `event-cancelled:<id>`, no
+   mentions — a broadcast). Wired into `POST /api/events` and
+   `DELETE /api/events/{id}`. Content-injection safe: a hostile title can't ping
+   because `notify.send` locks `allowed_mentions` (parse:[], users only).
+   `EventNotifyTests` in `test_app.py` cover fire-when-on, silent-when-off, the
+   cancel message, and the timestamp/deep-link helpers. Edit/start-time-change
+   notification deferred (not in step 2 scope).
 3. Scheduled reminders (the `events.reminded_at` loop) — the marquee feature.
 4. Marketplace offer/confirm pings (with `<@id>` mentions).
 5. Goals-100% + hauling-record pings.
-6. (v1.1) multiple named webhooks → per-category channel routing.
+6. ✅ **Per-category channel routing** — done early as part of step 1 (see above),
+   not deferred to v1.1.
 
 ## Relevant code
 - `server/auth.py` — OAuth scopes (why there's no bot).

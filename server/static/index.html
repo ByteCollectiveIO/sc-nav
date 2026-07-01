@@ -1793,27 +1793,18 @@
 
     <h2>DISCORD NOTIFICATIONS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      Push alerts to a Discord channel: events, the marketplace, goals, and org
-      records. Create an <b>Incoming Webhook</b> in your channel's settings
-      (Integrations → Webhooks) and paste its URL here. We never post
-      <code>@everyone</code>; the URL is stored as a secret and never shown again.
+      Route each kind of alert to its own channel. Create an <b>Incoming Webhook</b>
+      in a channel's settings (Integrations → Webhooks) and paste its URL into the
+      matching box. Leave a box empty to keep that kind off; reuse the same URL in
+      several boxes to send them to one channel. We never post <code>@everyone</code>;
+      URLs are stored as secrets and never shown again.
     </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <input id="discord-webhook" type="url" placeholder="https://discord.com/api/webhooks/…"
-             style="flex:1; min-width:220px;" autocomplete="off">
-      <button id="discord-webhook-save">Save</button>
-      <button id="discord-test">Send test</button>
-    </div>
-    <div class="muted" id="discord-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <div id="discord-toggles" style="margin-top:8px; display:flex; flex-direction:column; gap:4px; font-size:13px;">
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-events"> Events: created, cancelled, and start reminders</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-marketplace"> Marketplace: offers and confirmed trades</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-goals"> Goals: a procurement goal hits 100%</label>
-      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-records"> Records: a new org hauling record</label>
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px;">
+    <div id="discord-rows"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
       Remind before an event starts
       <input id="discord-lead" type="number" min="1" max="1440" step="1" style="width:80px;"> minutes
+      <button id="discord-lead-save">Save</button>
+      <span class="muted" id="discord-lead-status" role="status" aria-live="polite" style="font-size:12px;"></span>
     </div>
 
     <h2>BRANDING</h2>
@@ -7203,25 +7194,103 @@ async function loadSettings() {
 }
 
 // ---------- Discord notifications (admin) ----------
-// The webhook URL is a secret: the server only ever returns whether one is set
-// and a masked tail, so we never repopulate the input — placeholder text shows
-// the current state instead.
+// Each category routes to its own channel via its own webhook. A URL is a secret:
+// the server returns only whether each is set + a masked tail, so inputs stay
+// blank (placeholder shows the current state). Blank-on-Save means "leave this
+// category unchanged"; clearing is the explicit Clear button.
+const DISCORD_CATS = [
+  { key: "events",      label: "Events",      desc: "created, cancelled, and start reminders" },
+  { key: "marketplace", label: "Marketplace", desc: "offers and confirmed trades" },
+  { key: "goals",       label: "Goals",       desc: "a procurement goal hits 100%" },
+  { key: "records",     label: "Records",     desc: "a new org hauling record" },
+];
+const WEBHOOK_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//;
+const discSt = (key) => $("dwh-st-" + key);
+
+function renderDiscordRows(webhooks) {
+  const box = $("discord-rows");
+  box.innerHTML = "";
+  for (const c of DISCORD_CATS) {
+    const st = (webhooks && webhooks[c.key]) || { set: false, tail: "" };
+    const row = document.createElement("div");
+    row.style.marginTop = "10px";
+    row.innerHTML =
+      `<div><b>${c.label}</b> <span class="muted" style="font-size:12px;">${c.desc}</span></div>` +
+      `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:4px;">` +
+        `<input id="dwh-${c.key}" type="url" autocomplete="off" style="flex:1; min-width:220px;" placeholder="${st.set ? "connected (" + esc(st.tail) + "); paste a new URL to replace" : "https://discord.com/api/webhooks/… (off)"}">` +
+        `<button class="disc-save">Save</button>` +
+        `<button class="disc-test"${st.set ? "" : " disabled"}>Test</button>` +
+        `<button class="disc-clear danger-btn"${st.set ? "" : " hidden"}>Clear</button>` +
+      `</div>` +
+      `<div class="muted" id="dwh-st-${c.key}" role="status" aria-live="polite" style="font-size:12px; margin-top:2px;"></div>`;
+    row.querySelector(".disc-save").onclick = () => saveDiscordWebhook(c.key);
+    row.querySelector(".disc-test").onclick = () => testDiscordWebhook(c.key);
+    row.querySelector(".disc-clear").onclick = () => clearDiscordWebhook(c.key);
+    box.appendChild(row);
+  }
+}
+
 function applyDiscordSettings(s) {
-  const inp = $("discord-webhook"), st = $("discord-status"), test = $("discord-test");
-  if (document.activeElement !== inp) inp.value = "";
-  inp.placeholder = s.discord_webhook_set
-    ? `connected (${s.discord_webhook_tail}); paste a new URL to replace`
-    : "https://discord.com/api/webhooks/…";
-  st.textContent = s.discord_webhook_set ? "Webhook connected." : "No webhook configured.";
-  test.disabled = !s.discord_webhook_set;
-  const n = s.discord_notify || {};
-  $("notify-events").checked = !!n.events;
-  $("notify-marketplace").checked = !!n.marketplace;
-  $("notify-goals").checked = !!n.goals;
-  $("notify-records").checked = !!n.records;
+  renderDiscordRows(s.discord_webhooks);
   if (document.activeElement !== $("discord-lead"))
     $("discord-lead").value = s.discord_reminder_lead_min || 30;
 }
+
+async function postDiscordWebhooks(patch, key, workMsg) {
+  discSt(key).textContent = workMsg;
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discord_webhooks: patch }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
+    applyDiscordSettings(await r.json());   // re-render clears inputs + refreshes state
+    return true;
+  } catch (e) {
+    discSt(key).textContent = (e && e.message) || "failed to save — try again";
+    return false;
+  }
+}
+
+async function saveDiscordWebhook(key) {
+  const url = $("dwh-" + key).value.trim();
+  if (!url) { discSt(key).textContent = "enter a webhook URL (or use Clear to turn it off)"; return; }
+  if (!WEBHOOK_RE.test(url)) { discSt(key).textContent = "that doesn't look like a Discord webhook URL"; return; }
+  if (await postDiscordWebhooks({ [key]: url }, key, "saving…")) discSt(key).textContent = "saved";
+}
+
+async function clearDiscordWebhook(key) {
+  if (!(await confirmDialog(
+      `${key} alerts will stop until you set a webhook again.`,
+      { title: `Turn off ${key} notifications?`, confirmLabel: "Turn off", danger: true }))) return;
+  if (await postDiscordWebhooks({ [key]: "" }, key, "clearing…")) discSt(key).textContent = "turned off";
+}
+
+async function testDiscordWebhook(key) {
+  discSt(key).textContent = "sending test…";
+  try {
+    const r = await fetch("/api/settings/discord/test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: key }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
+    discSt(key).textContent = "test sent — check that channel";
+  } catch (e) {
+    discSt(key).textContent = (e && e.message) || "test failed — try again";
+  }
+}
+
+$("discord-lead-save").onclick = async () => {
+  const st = $("discord-lead-status");
+  const lead = parseInt($("discord-lead").value, 10);
+  if (!(lead >= 1 && lead <= 1440)) { st.textContent = "enter 1–1440 minutes"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discord_reminder_lead_min: lead }) });
+    if (!r.ok) throw new Error();
+    st.textContent = "saved";
+  } catch { st.textContent = "failed to save — try again"; }
+};
 
 // ---------- org logo (custom guild branding) ----------
 // The header image (every signed-in member) and the admin panel's preview share
@@ -7357,47 +7426,6 @@ $("fresh-window-save").onclick = async () => {
   } catch {
     $("fresh-window-status").textContent = "failed to update — try again";
     loadSettings();
-  }
-};
-
-$("discord-webhook-save").onclick = async () => {
-  const url = $("discord-webhook").value.trim();
-  const st = $("discord-status");
-  if (url && !/^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//.test(url)) {
-    st.textContent = "that doesn't look like a Discord webhook URL";
-    return;
-  }
-  st.textContent = "saving…";
-  try {
-    const r = await fetch("/api/settings", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        discord_webhook_url: url,
-        discord_notify: {
-          events: $("notify-events").checked,
-          marketplace: $("notify-marketplace").checked,
-          goals: $("notify-goals").checked,
-          records: $("notify-records").checked,
-        },
-        discord_reminder_lead_min: parseInt($("discord-lead").value, 10) || 30,
-      }) });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
-    applyDiscordSettings(await r.json());
-    st.textContent = "saved";
-  } catch (e) {
-    st.textContent = (e && e.message) || "failed to save — try again";
-  }
-};
-
-$("discord-test").onclick = async () => {
-  const st = $("discord-status");
-  st.textContent = "sending test…";
-  try {
-    const r = await fetch("/api/settings/discord/test", { method: "POST" });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
-    st.textContent = "test sent — check your Discord channel";
-  } catch (e) {
-    st.textContent = (e && e.message) || "test failed — try again";
   }
 };
 

@@ -1218,6 +1218,10 @@ async def presence_broadcaster():
 @app.on_event("startup")
 async def _start_presence_broadcaster():
     asyncio.create_task(presence_broadcaster())
+    # v0.13.0 stored one shared Discord webhook; move it to the new per-category
+    # settings so notifications keep flowing after this upgrade (one-time, no-op
+    # thereafter).
+    notify.migrate_legacy_webhook()
 
 
 @app.post("/api/position")
@@ -2032,6 +2036,65 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
     return view
 
 
+# --- Discord notifications: shared helpers + message builders ----------------
+# The dispatcher lives in notify.py; here we build the human-facing messages and
+# fire them WITHOUT blocking the request that triggered them. notify.send already
+# offloads the HTTP to a thread and never raises, but awaiting it would still make
+# the caller wait on Discord — so app-event notifications are fired as background
+# tasks. (The scheduled reminders in a later step call notify.send directly from
+# their own loop.)
+
+def _deep_link(hash_path: str) -> str:
+    """A one-click link back into the SPA for a notification, or '' if we don't
+    know our public URL (SC_NAV_PUBLIC_URL). `hash_path` is like '#/events'."""
+    return f"\n{PUBLIC_BASE_URL}/{hash_path}" if PUBLIC_BASE_URL else ""
+
+
+def _discord_ts(iso: str, style: str = "F") -> str:
+    """Render an ISO8601 UTC time as a Discord `<t:unix:style>` tag so every
+    member sees it in their own timezone. Falls back to the raw string."""
+    try:
+        dt = datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+        return f"<t:{int(dt.timestamp())}:{style}>"
+    except (ValueError, AttributeError, TypeError):
+        return iso or ""
+
+
+def _notify_bg(coro) -> None:
+    """Fire a notification coroutine as a background task so it can't delay the
+    request. Any error is logged and swallowed — a notification must never break
+    the action that triggered it."""
+    async def _run():
+        try:
+            await coro
+        except Exception as exc:   # defensive: notify.send already swallows, but the builders read settings
+            print(f"[sc-nav] notify task failed: {exc}")
+    asyncio.create_task(_run())
+
+
+async def _notify_event_created(ev: dict) -> None:
+    if not notify.is_configured("events"):
+        return
+    where = (ev.get("event_location") or ev.get("location") or "").strip()
+    loc = f"\n📍 {where}" if where else ""
+    await notify.send(
+        "events",
+        f"📅 **New event: {ev['title']}**\n"
+        f"Starts {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
+        f"{loc}{_deep_link('#/events')}",
+        dedup_key=f"event-created:{ev['id']}")
+
+
+async def _notify_event_cancelled(ev: dict) -> None:
+    if not notify.is_configured("events"):
+        return
+    await notify.send(
+        "events",
+        f"🚫 **Event cancelled: {ev['title']}**\n"
+        f"Was set for {_discord_ts(ev['start_at'])}.{_deep_link('#/events')}",
+        dedup_key=f"event-cancelled:{ev['id']}")
+
+
 @app.get("/api/events/taxonomy")
 async def events_taxonomy(user: dict = Depends(require_session)):
     """Curated types / categories / grouped roles for the create form."""
@@ -2067,7 +2130,9 @@ async def create_event(body: EventIn, user: dict = Depends(require_session)):
     now = datetime.now(timezone.utc).isoformat()
     eid = db.create_event({**fields, "organizer_id": user["id"],
                            "status": "scheduled", "created_at": now, "updated_at": now})
-    return _event_view(db.get_event(eid), user, detail=True)
+    ev = db.get_event(eid)
+    _notify_bg(_notify_event_created(ev))
+    return _event_view(ev, user, detail=True)
 
 
 @app.get("/api/events/{event_id}")
@@ -2099,6 +2164,7 @@ async def cancel_event(event_id: int, user: dict = Depends(require_session)):
         raise HTTPException(status_code=404, detail="unknown event")
     _require_event_owner(ev, user)
     db.cancel_event(event_id, datetime.now(timezone.utc).isoformat())
+    _notify_bg(_notify_event_cancelled(ev))
     return {"ok": True, "status": "cancelled"}
 
 
@@ -3410,11 +3476,9 @@ async def get_settings(user: dict = Depends(require_session)):
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
-        # Discord webhook: never echo the URL (it's a credential). Surface only
-        # whether one is set, a masked tail to confirm which, and the toggles.
-        "discord_webhook_set": notify.is_configured(),
-        "discord_webhook_tail": notify.mask(notify.webhook_url()),
-        "discord_notify": {c: notify.category_enabled(c) for c in notify.CATEGORIES},
+        # Per-category Discord webhooks: never echo a URL (it's a credential) —
+        # surface only whether each category has one set + a masked tail.
+        "discord_webhooks": notify.webhook_status(),
         "discord_reminder_lead_min": notify.reminder_lead_min(),
     }
 
@@ -3426,10 +3490,10 @@ class SettingsIn(BaseModel):
     # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
     # be used to stuff the meta table. Each id is validated (isdigit) below.
     extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
-    # Discord webhook URL ("" clears it); validated against real Discord hosts
-    # in the handler (anti-SSRF). Toggles are a partial dict of category->bool.
-    discord_webhook_url: str | None = Field(default=None, max_length=512)
-    discord_notify: dict[str, bool] | None = None
+    # Per-category Discord webhook URLs, e.g. {"events": "https://…", "goals": ""}
+    # ("" clears one). Each is validated against real Discord hosts in the handler
+    # (anti-SSRF). A category is "on" iff it has a valid webhook.
+    discord_webhooks: dict[str, str] | None = None
     discord_reminder_lead_min: int | None = Field(default=None, ge=1, le=1440)
 
 
@@ -3464,16 +3528,16 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
-    if body.discord_webhook_url is not None:
-        url = body.discord_webhook_url.strip()
-        if url and not notify.is_valid_webhook_url(url):
-            raise HTTPException(status_code=400,
-                                detail="not a valid Discord webhook URL")
-        db.set_setting(notify.WEBHOOK_KEY, url)   # "" clears it
-    if body.discord_notify is not None:
-        for cat, on in body.discord_notify.items():
-            if cat in notify.CATEGORIES:
-                db.set_setting(f"notify_{cat}", "1" if on else "0")
+    if body.discord_webhooks is not None:
+        for cat, url in body.discord_webhooks.items():
+            if cat not in notify.CATEGORIES:
+                raise HTTPException(status_code=400,
+                                    detail=f"unknown notification category: {cat}")
+            url = (url or "").strip()
+            if url and not notify.is_valid_webhook_url(url):
+                raise HTTPException(status_code=400,
+                                    detail=f"not a valid Discord webhook URL for {cat}")
+            notify.set_webhook(cat, url)   # "" clears it
     if body.discord_reminder_lead_min is not None:
         db.set_setting(notify.REMINDER_LEAD_KEY, str(body.discord_reminder_lead_min))
     return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
@@ -3481,30 +3545,37 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "obs_fresh_window_h": obs_fresh_window_h(),
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
-            "discord_webhook_set": notify.is_configured(),
-            "discord_webhook_tail": notify.mask(notify.webhook_url()),
-            "discord_notify": {c: notify.category_enabled(c) for c in notify.CATEGORIES},
+            "discord_webhooks": notify.webhook_status(),
             "discord_reminder_lead_min": notify.reminder_lead_min()}
 
 
 _test_send_at = 0.0   # last admin test-send, for a light cooldown
 
 
+class DiscordTestIn(BaseModel):
+    category: str = Field(max_length=_TYPE_MAX)
+
+
 @app.post("/api/settings/discord/test")
-async def test_discord_webhook(admin: dict = Depends(require_admin)):
-    """Fire a test message at the configured webhook so an admin can confirm
-    delivery before relying on it. Rate-limited to once every few seconds."""
+async def test_discord_webhook(body: DiscordTestIn, admin: dict = Depends(require_admin)):
+    """Fire a test message at a category's webhook so an admin can confirm that
+    channel's routing before relying on it. Rate-limited to once every few
+    seconds across all categories."""
     global _test_send_at
-    if not notify.is_configured():
-        raise HTTPException(status_code=400, detail="no Discord webhook configured")
+    if body.category not in notify.CATEGORIES:
+        raise HTTPException(status_code=400, detail="unknown notification category")
+    if not notify.is_configured(body.category):
+        raise HTTPException(status_code=400,
+                            detail=f"no Discord webhook set for {body.category}")
     now = time.monotonic()
     if now - _test_send_at < 5:
         raise HTTPException(status_code=429, detail="slow down — try again in a moment")
     _test_send_at = now
     who = admin.get("username") or "an admin"
-    link = f"\n{PUBLIC_BASE_URL}/" if PUBLIC_BASE_URL else ""
     ok = await notify.send(
-        f"✅ **Org Navigator** is connected. Test message sent by {who}.{link}")
+        body.category,
+        f"✅ **Org Navigator** — the **{body.category}** channel is connected. "
+        f"Test sent by {who}.{_deep_link('')}")
     if not ok:
         raise HTTPException(status_code=502,
                             detail="Discord rejected the message — check the webhook URL")

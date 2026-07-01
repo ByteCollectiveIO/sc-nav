@@ -30,12 +30,19 @@ import urllib.request
 import db
 
 # --- settings keys (meta table) ----------------------------------------------
-WEBHOOK_KEY = "discord_webhook_url"
-# Per-feature toggles. Off by default for goals milestones (noise); the rest
-# default on once a webhook is configured. The route layer owns the defaults;
-# here we just read the stored "1"/"0".
+# Each category has its OWN webhook URL, so an org can route on-topic messages to
+# on-topic channels (e.g. events -> #events, marketplace -> #market). Putting the
+# same URL in several categories is fine — they'll all post to that one channel.
+# A category is "on" exactly when it has a valid webhook, so there's no separate
+# enable toggle: clearing the URL turns that category off.
 CATEGORIES = ("events", "marketplace", "goals", "records")
+_WEBHOOK_PREFIX = "discord_webhook_"          # + category, e.g. discord_webhook_events
+_LEGACY_WEBHOOK_KEY = "discord_webhook_url"   # v0.13.0's single shared webhook
 REMINDER_LEAD_KEY = "discord_reminder_lead_min"
+
+
+def _webhook_key(category: str) -> str:
+    return f"{_WEBHOOK_PREFIX}{category}"
 
 
 # --- webhook URL validation / masking ----------------------------------------
@@ -62,19 +69,48 @@ def mask(url: str) -> str:
     return "…" + tail[-4:] if len(tail) >= 4 else "…"
 
 
-def webhook_url() -> str:
-    return (db.get_setting(WEBHOOK_KEY, "") or "").strip()
+def webhook_url(category: str) -> str:
+    """The configured webhook URL for a category, or '' if none/unknown."""
+    if category not in CATEGORIES:
+        return ""
+    return (db.get_setting(_webhook_key(category), "") or "").strip()
 
 
-def is_configured() -> bool:
-    return is_valid_webhook_url(webhook_url())
+def is_configured(category: str) -> bool:
+    """Whether a category will fire — i.e. it has a valid webhook set."""
+    return is_valid_webhook_url(webhook_url(category))
 
 
-def category_enabled(category: str) -> bool:
-    """Whether a category fires. Defaults: everything on except 'goals'
-    milestones, which are noisy. Only meaningful once a webhook is set."""
-    default = "0" if category == "goals" else "1"
-    return db.get_setting(f"notify_{category}", default) == "1"
+def any_configured() -> bool:
+    return any(is_configured(c) for c in CATEGORIES)
+
+
+def webhook_status() -> dict[str, dict]:
+    """Per-category webhook state for the settings API: whether one is set and a
+    masked tail to confirm which. NEVER exposes the raw URL (it's a credential)."""
+    return {c: {"set": is_configured(c), "tail": mask(webhook_url(c))}
+            for c in CATEGORIES}
+
+
+def migrate_legacy_webhook() -> None:
+    """v0.13.0 stored ONE `discord_webhook_url` shared by every category. Now each
+    category has its own. On upgrade, seed every still-unset category from the
+    legacy value (so notifications don't silently stop after the update) and then
+    consume the legacy key. Idempotent: a no-op once the legacy key is gone."""
+    legacy = (db.get_setting(_LEGACY_WEBHOOK_KEY, "") or "").strip()
+    if not legacy:
+        return
+    if is_valid_webhook_url(legacy):
+        for c in CATEGORIES:
+            if not webhook_url(c):
+                db.set_setting(_webhook_key(c), legacy)
+    db.set_setting(_LEGACY_WEBHOOK_KEY, "")   # consumed — don't migrate twice
+
+
+def set_webhook(category: str, url: str) -> None:
+    """Store (or clear, with '') a category's webhook URL. Caller validates."""
+    if category in CATEGORIES:
+        db.set_setting(_webhook_key(category), (url or "").strip())
 
 
 def reminder_lead_min() -> int:
@@ -132,17 +168,18 @@ def _post(url: str, payload: dict) -> None:
             raise
 
 
-async def send(text: str, *, mentions: list[str] | None = None,
+async def send(category: str, text: str, *, mentions: list[str] | None = None,
                dedup_key: str | None = None) -> bool:
-    """Post ``text`` to the configured Discord webhook. Returns True on a
-    best-effort success, False if not configured / deduped / failed. NEVER
-    raises — a notification problem must not break the caller's action.
+    """Post ``text`` to ``category``'s Discord webhook. Returns True on a
+    best-effort success, False if that category has no webhook / deduped /
+    failed. NEVER raises — a notification problem must not break the caller's
+    action.
 
     ``mentions`` is a list of Discord user-id strings; prefix the relevant id in
     the text with ``<@id>`` to actually ping them. We scope allowed_mentions to
     exactly those ids and never allow @everyone/@here/role pings.
     """
-    url = webhook_url()
+    url = webhook_url(category)
     if not is_valid_webhook_url(url):
         return False
     if dedup_key and _dedup_seen(dedup_key):

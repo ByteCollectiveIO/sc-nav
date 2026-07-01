@@ -14,6 +14,7 @@ What it pins down — the things a pure unit test can't:
   * the shell is served no-store so a cached document can't pin a stale nonce.
 """
 
+import asyncio
 import re
 import tempfile
 import unittest
@@ -147,36 +148,122 @@ class DiscordSettingsTests(unittest.TestCase):
         app.token_user = cls._orig_token_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
-    def test_store_mask_validate_roundtrip(self):
+    def setUp(self):
+        # Clean webhook state per test (the shared temp DB carries over otherwise).
+        for c in notify.CATEGORIES:
+            db.set_setting(notify._webhook_key(c), "")
+        db.set_setting(notify._LEGACY_WEBHOOK_KEY, "")
+
+    def test_per_category_store_mask_validate_roundtrip(self):
         # Reject a non-Discord URL (anti-SSRF) ...
         bad = self.client.post("/api/settings",
-                               json={"discord_webhook_url": "https://evil.com/x"})
+                               json={"discord_webhooks": {"events": "https://evil.com/x"}})
         self.assertEqual(bad.status_code, 400)
+        # ... and an unknown category.
+        self.assertEqual(self.client.post(
+            "/api/settings", json={"discord_webhooks": {"bogus": _GOOD_WEBHOOK}}).status_code, 400)
 
-        # ... accept a real one and flip the toggles.
-        ok = self.client.post("/api/settings", json={
-            "discord_webhook_url": _GOOD_WEBHOOK,
-            "discord_notify": {"events": True, "goals": False},
-        })
+        # Route events to one channel; leave the others off.
+        ok = self.client.post("/api/settings",
+                              json={"discord_webhooks": {"events": _GOOD_WEBHOOK}})
         self.assertEqual(ok.status_code, 200)
 
         s = self.client.get("/api/settings").json()
-        self.assertTrue(s["discord_webhook_set"])
+        wh = s["discord_webhooks"]
+        self.assertTrue(wh["events"]["set"])
+        self.assertFalse(wh["marketplace"]["set"])
         # The raw secret must NEVER appear in any response.
         self.assertNotIn(_GOOD_WEBHOOK, ok.text)
         self.assertNotIn(_GOOD_WEBHOOK, self.client.get("/api/settings").text)
-        self.assertTrue(s["discord_webhook_tail"].startswith("…"))
-        self.assertTrue(s["discord_notify"]["events"])
-        self.assertFalse(s["discord_notify"]["goals"])
+        self.assertTrue(wh["events"]["tail"].startswith("…"))
 
-        # Clearing it ("") turns the feature off.
-        self.client.post("/api/settings", json={"discord_webhook_url": ""})
-        self.assertFalse(self.client.get("/api/settings").json()["discord_webhook_set"])
+        # A blank patch for one category leaves others untouched; "" clears just it.
+        self.client.post("/api/settings", json={"discord_webhooks": {"events": ""}})
+        self.assertFalse(self.client.get("/api/settings").json()["discord_webhooks"]["events"]["set"])
 
-    def test_test_send_blocked_without_webhook(self):
-        self.client.post("/api/settings", json={"discord_webhook_url": ""})
-        r = self.client.post("/api/settings/discord/test")
+    def test_test_send_requires_category_and_webhook(self):
+        self.client.post("/api/settings", json={"discord_webhooks": {"events": ""}})
+        # No webhook for the category -> 400.
+        r = self.client.post("/api/settings/discord/test", json={"category": "events"})
         self.assertEqual(r.status_code, 400)
+        # Unknown category -> 400.
+        r = self.client.post("/api/settings/discord/test", json={"category": "bogus"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_legacy_webhook_migrates_to_all_categories(self):
+        # Simulate a v0.13.0 install: one shared key, no per-category keys.
+        for c in notify.CATEGORIES:
+            db.set_setting(notify._webhook_key(c), "")
+        db.set_setting(notify._LEGACY_WEBHOOK_KEY, _GOOD_WEBHOOK)
+        notify.migrate_legacy_webhook()
+        wh = self.client.get("/api/settings").json()["discord_webhooks"]
+        self.assertTrue(all(wh[c]["set"] for c in notify.CATEGORIES))
+        # Legacy key consumed -> a second run is a no-op.
+        self.assertEqual(db.get_setting(notify._LEGACY_WEBHOOK_KEY), "")
+
+
+class EventNotifyTests(unittest.TestCase):
+    """The inline event notifications: fire when the toggle is on, stay silent
+    when off / no webhook, and format a member-friendly, timezone-aware message."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        # The events builder gates on a valid webhook for the 'events' category;
+        # set one so the enabled path fires. We flip it off in the disabled test.
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    _EV = {"id": 7, "title": "Xenothreat Push", "start_at": "2026-07-01T18:00:00+00:00",
+           "event_location": "Pyro Gateway", "location": "Everus Harbor"}
+
+    def test_created_fires_when_configured(self):
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        asyncio.run(app._notify_event_created(self._EV))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "events")       # routed to the events channel
+        self.assertIn("Xenothreat Push", msg["text"])
+        self.assertIn("Pyro Gateway", msg["text"])       # event_location preferred
+        self.assertIn("<t:", msg["text"])                 # timezone-aware Discord timestamp
+        self.assertEqual(msg["dedup_key"], "event-created:7")
+        self.assertIsNone(msg["mentions"])                # a broadcast, pings nobody
+
+    def test_suppressed_when_no_webhook(self):
+        db.set_setting(notify._webhook_key("events"), "")
+        asyncio.run(app._notify_event_created(self._EV))
+        asyncio.run(app._notify_event_cancelled(self._EV))
+        self.assertEqual(self.sent, [])
+
+    def test_cancelled_message(self):
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        asyncio.run(app._notify_event_cancelled(self._EV))
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0]["category"], "events")
+        self.assertIn("cancelled", self.sent[0]["text"].lower())
+        self.assertEqual(self.sent[0]["dedup_key"], "event-cancelled:7")
+
+    def test_discord_ts_and_deep_link(self):
+        self.assertTrue(app._discord_ts("2026-07-01T18:00:00+00:00").startswith("<t:"))
+        self.assertEqual(app._discord_ts("not-a-date"), "not-a-date")
+        # No SC_NAV_PUBLIC_URL configured in the test env -> no link fragment.
+        self.assertEqual(app._deep_link("#/events"), "")
 
 
 if __name__ == "__main__":
