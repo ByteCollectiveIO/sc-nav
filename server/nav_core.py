@@ -2325,6 +2325,44 @@ def derive_event_phase(event: dict, now_dt: datetime) -> dict:
 
 GROUP_KINDS = ("squad", "squadron", "crew", "section", "wing")
 
+# uexcorp is_* role flags → the specialist seat they imply, in priority order.
+# A role-specialized ship gets one flavored seat in its default template.
+SHIP_ROLE_FLAGS = (
+    ("is_medical", "Medic"), ("is_mining", "Mining Op"),
+    ("is_salvage", "Salvage Op"), ("is_refuel", "Fuel Op"),
+    ("is_repair", "Repair Op"), ("is_science", "Science Op"),
+    ("is_datarunner", "Data Op"),
+)
+
+
+def ship_seat_template(crew, traits=()) -> list[str]:
+    """A default seat layout for a `crew`-size ship (design:
+    docs/fleet-roster-squad-organizer.md, #20 v1.1). `traits` is a set of the
+    ship's uexcorp is_* role flags, which flavor one specialist seat (a medical
+    ship gets a Medic, a mining ship a Mining Op). Pure + deterministic so the
+    ships feed, the endpoint, and the tests share one source of truth.
+
+    Returns exactly `crew` seat labels: Pilot, Co-Pilot (crew>=2), an optional
+    specialist seat, then Turret 1..N to fill the rest. Suggestions only — the
+    organizer freely renames a seat when assigning."""
+    try:
+        n = int(crew)
+    except (TypeError, ValueError):
+        n = 1
+    n = max(1, min(n, 50))
+    traits = set(traits)
+    seats = ["Pilot"]
+    if n >= 2:
+        seats.append("Co-Pilot")
+    specialist = next((label for flag, label in SHIP_ROLE_FLAGS if flag in traits), None)
+    if specialist and len(seats) < n:
+        seats.append(specialist)
+    turret = 1
+    while len(seats) < n:
+        seats.append(f"Turret {turret}")
+        turret += 1
+    return seats[:n]
+
 
 def derive_roster_board(groups, assignments, signups, names=None) -> dict:
     """Assemble the organizer's roster board (design: docs/fleet-roster-squad-organizer.md).

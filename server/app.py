@@ -326,6 +326,31 @@ def load_ships() -> list[dict]:
     return ships
 
 
+def load_fleet_ships() -> list[dict]:
+    """All spaceships (name + crew size + a default seat template) for the fleet
+    organizer's ship picker — a superset of the cargo `ships` list (combat
+    multicrew ships have no SCU but very much have crews). Reads the full
+    vehicle rows that `load_ships` persists to `SHIPS_FILE`, so it needs no extra
+    fetch; the seat template is derived by the pure `nav_core.ship_seat_template`."""
+    rows = _load_json_list(SHIPS_FILE)
+    flags = [f for f, _ in nav_core.SHIP_ROLE_FLAGS]
+    out = []
+    for r in rows:
+        name = r.get("name_full") or r.get("name")
+        if not name or r.get("is_spaceship") not in (1, "1", True):
+            continue
+        try:
+            crew = int(float(r.get("crew") or 0))
+        except (TypeError, ValueError):
+            crew = 0
+        crew = max(1, crew)
+        traits = {f for f in flags if r.get(f) in (1, "1", True)}
+        out.append({"name": name, "crew": crew,
+                    "seats": nav_core.ship_seat_template(crew, traits)})
+    out.sort(key=lambda s: s["name"].lower())
+    return out
+
+
 def load_commodity_names() -> list[str]:
     """All commodity names from uexcorp (every kind, not just is_raw ores) for
     the cargo-planner commodity picker — hauling contracts carry Medical
@@ -704,6 +729,7 @@ raw_commodity_names = load_raw_commodity_names()
 commodity_names = load_commodity_names()
 harvestable_names = load_harvestable_names()
 ships = load_ships()
+fleet_ships = load_fleet_ships()
 item_names = load_item_names()
 item_prices = build_item_prices()
 fauna_names = load_fauna_names()
@@ -1747,6 +1773,13 @@ async def list_ships():
     """Cargo-capable ships (name + stated SCU) for the cargo-planner ship
     picker, from the uexcorp vehicles feed."""
     return ships
+
+
+@app.get("/api/fleet/ships")
+async def list_fleet_ships():
+    """All spaceships with crew size + a default seat template, for the fleet
+    organizer's ship picker (#20 v1.1). Superset of /api/ships."""
+    return fleet_ships
 
 
 @app.get("/api/harvestables")
@@ -2847,6 +2880,112 @@ async def post_manifest(event_id: int, user: dict = Depends(require_session)):
     _notify_bg(notify.send("events", f"{text}{_deep_link('#/events')}",
                            dedup_key=None))
     return {"ok": True}
+
+
+# --- saved group templates (#20 v1.1) --------------------------------------
+# Org-shared unit layouts: an organizer snapshots an event's groups (structure
+# only, no members) into a named template, then stamps it onto a future event.
+
+_MAX_TEMPLATES = 60          # sanity cap on org-shared templates
+
+
+class TemplateSaveIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    event_id: int            # the event whose current groups to snapshot
+
+
+class ApplyTemplateIn(BaseModel):
+    template_id: int
+
+
+def _snapshot_event_groups(event_id: int) -> list[dict]:
+    """The reusable structure of an event's plan: each group's name/kind/ship/
+    capacity, in board order. Members, leaders, notes and hierarchy are dropped
+    — a template is a blank unit layout, not a roster."""
+    out = []
+    for g in db.list_event_groups(event_id):
+        out.append({"name": g.get("name"), "kind": g.get("kind") or "squad",
+                    "ship": g.get("ship"), "capacity": g.get("capacity")})
+    return out
+
+
+def _template_to_dict(t: dict, user: dict) -> dict:
+    """Serialize a stored template; `groups` is decoded, `can_delete` reflects
+    the caller (author or admin)."""
+    try:
+        groups = json.loads(t.get("groups") or "[]")
+    except (ValueError, TypeError):
+        groups = []
+    return {"id": t["id"], "name": t.get("name"), "groups": groups,
+            "group_count": len(groups),
+            "can_delete": t.get("created_by") == user["id"] or bool(user.get("is_admin"))}
+
+
+@app.get("/api/group-templates")
+async def list_templates(user: dict = Depends(require_session)):
+    """All saved group templates (org-shared)."""
+    return [_template_to_dict(t, user) for t in db.list_group_templates()]
+
+
+@app.post("/api/group-templates")
+async def save_template(body: TemplateSaveIn, user: dict = Depends(require_session)):
+    """Snapshot an event's current groups into a named, reusable template.
+    Organizer or admin of that event (the plan is theirs to reuse)."""
+    ev = db.get_event(body.event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    if len(db.list_group_templates()) >= _MAX_TEMPLATES:
+        raise HTTPException(status_code=400, detail="too many saved templates")
+    groups = _snapshot_event_groups(body.event_id)
+    if not groups:
+        raise HTTPException(status_code=400, detail="this event has no units to save")
+    db.create_group_template(body.name.strip(), json.dumps(groups), user["id"],
+                             datetime.now(timezone.utc).isoformat())
+    return [_template_to_dict(t, user) for t in db.list_group_templates()]
+
+
+@app.delete("/api/group-templates/{tid}")
+async def delete_template(tid: int, user: dict = Depends(require_session)):
+    """Delete a saved template (author or admin)."""
+    t = db.get_group_template(tid)
+    if t is None:
+        raise HTTPException(status_code=404, detail="unknown template")
+    if t.get("created_by") != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="not your template")
+    db.delete_group_template(tid)
+    return [_template_to_dict(x, user) for x in db.list_group_templates()]
+
+
+@app.post("/api/events/{event_id}/groups/apply-template")
+async def apply_template(event_id: int, body: ApplyTemplateIn,
+                         user: dict = Depends(require_session)):
+    """Stamp a saved template's units onto an event's plan (organizer or admin).
+    Groups are appended (existing units are untouched); the event's group cap
+    still applies."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    t = db.get_group_template(body.template_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail="unknown template")
+    try:
+        tgroups = json.loads(t.get("groups") or "[]")
+    except (ValueError, TypeError):
+        tgroups = []
+    existing = len(db.list_event_groups(event_id))
+    if existing + len(tgroups) > _MAX_EVENT_GROUPS:
+        raise HTTPException(status_code=400, detail="too many groups for one event")
+    for i, g in enumerate(tgroups):
+        kind = g.get("kind") if g.get("kind") in nav_core.GROUP_KINDS else "squad"
+        cap = g.get("capacity")
+        db.create_event_group(event_id, {
+            "name": (g.get("name") or "Unit").strip()[:_NAME_MAX], "kind": kind,
+            "ship": (g.get("ship") or None), "capacity": cap,
+            "sort": existing + i,
+        })
+    return _roster_board_view(ev, user)
 
 
 # --- org inventory & goals (shared item catalog) ---------------------------
@@ -4093,10 +4232,11 @@ async def _rebuild_nav() -> None:
 async def refresh_data(admin: dict = Depends(require_admin)):
     """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
     without restarting. Admin only."""
-    global raw_commodity_names, commodity_names, ships, item_names, item_prices
+    global raw_commodity_names, commodity_names, ships, fleet_ships, item_names, item_prices
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
+    fleet_ships = await asyncio.to_thread(load_fleet_ships)
     item_names = await asyncio.to_thread(load_item_names)
     item_prices = await asyncio.to_thread(build_item_prices)   # fresh price refs
     refresh_catalog()   # feeds changed → rebuild the shared item catalog

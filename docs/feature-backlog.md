@@ -844,7 +844,11 @@ architecture change — almost entirely CSS.
 
 ## 12. Cargo-hauling route planner
 
-**Status:** designed, not built (2026-06-20). Full spec in
+**Status:** **v1 SHIPPED 2026-06-21** (app launcher, solver, ships feed +
+user_ships, entry→plan UI, run/execute mode, history + quick-picks, reward
+capture + hauling stats, guild hauling leaderboard/stats). One piece remains
+blocked: the CIG drive-catalog range/refuel overlay (erkul rejected for
+CC BY-NC-ND; needs a reuse-permitted drive-data source). Full spec in
 [`docs/cargo-hauling-planner.md`](cargo-hauling-planner.md) — this is a pointer
 so it isn't lost in the backlog.
 
@@ -1290,8 +1294,12 @@ User brainstorm 2026-06-30; ranked by user interest. #18–20 scoped (own docs);
 
 ## 18. Discord notifications (push integration)
 
-**Status:** scoped, not built (2026-06-30). Full design:
-[`docs/discord-notifications.md`](discord-notifications.md). **Priority #1.**
+**Status:** **FEATURE-COMPLETE + DEPLOYED 2026-06-30.** All steps shipped:
+dispatcher+settings+test-send / inline event pings / scheduled T-30 reminders
+(steps 1/2/6 v0.14.0), event reminders (step 3 v0.15.0), marketplace pings
+(step 4 v0.16.0), goals-100% + hauling-record (step 5 v0.17.0). Webhook-only,
+no bot, as designed. Full design:
+[`docs/discord-notifications.md`](discord-notifications.md). **Was priority #1.**
 
 Highest engagement-per-effort: everything shipped so far is pull-only; this makes
 the app push to where the org lives. Key constraint: **no bot** (OAuth scopes are
@@ -1306,8 +1314,13 @@ inline event pings → scheduled reminders → marketplace → goals/records.
 
 ## 19. Who's online + group finder (LFG / "rally now")
 
-**Status:** scoped, not built (2026-06-30). Full design:
-[`docs/who-is-online-lfg.md`](who-is-online-lfg.md). **Priority #2.**
+**Status:** **FEATURE-COMPLETE + DEPLOYED (thru v0.22.0).** All 5 steps +
+SQLite persistence shipped: roster + manual status (steps 1–2 v0.18.0), LFG
+board (step 3 v0.19.0), own `#/lfg` app + Discord announce (step 4 v0.20.0),
+LFG persistence + configurable green→stale→age-off lifecycle (v0.21.0),
+suggested matches + promote-to-event (step 5 v0.22.0, commit 950a425). Group
+Finder is its own `#/lfg` app. Full design:
+[`docs/who-is-online-lfg.md`](who-is-online-lfg.md). **Was priority #2.**
 
 Social glue for spontaneous play. Today's two online signals are insufficient:
 `online_count` is faceless, `hub.presence` is **surface-only** + watcher-gated.
@@ -1326,8 +1339,13 @@ LFG dashboard → Discord announce → suggested matches/promote-to-event.
 
 ## 20. Fleet roster / squad organizer (event group planning)
 
-**Status:** **v1 BUILT 2026-07-01** (steps 1–4; ship-seat-templates + saved group
-templates deferred to v1.1). Needs `/deploy`. Full design:
+**Status:** **v1 SHIPPED 2026-07-01 (v0.23.0, commit 259456a)** (steps 1–4).
+**v1.1 (step 5) BUILT 2026-07-01 — uncommitted, needs /deploy:** ship-aware
+seat templates (`nav_core.ship_seat_template` + `GET /api/fleet/ships` +
+group-form ship picker w/ crew auto-fill + assign-row seat suggestions) and
+saved group templates (`group_templates` table + `/api/group-templates` CRUD +
+`POST /api/events/{id}/groups/apply-template` + a Templates panel in the fleet
+section). Full design:
 [`docs/fleet-roster-squad-organizer.md`](fleet-roster-squad-organizer.md).
 **Priority #3.**
 

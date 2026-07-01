@@ -1620,6 +1620,39 @@ class EventManifestTests(unittest.TestCase):
         self.assertNotIn("Unassigned", text)
 
 
+class ShipSeatTemplateTests(unittest.TestCase):
+    def test_single_seat_is_just_pilot(self):
+        self.assertEqual(nav_core.ship_seat_template(1), ["Pilot"])
+
+    def test_two_seat_adds_copilot(self):
+        self.assertEqual(nav_core.ship_seat_template(2), ["Pilot", "Co-Pilot"])
+
+    def test_length_always_matches_crew(self):
+        for n in range(1, 12):
+            self.assertEqual(len(nav_core.ship_seat_template(n)), n)
+
+    def test_extra_seats_become_turrets(self):
+        self.assertEqual(nav_core.ship_seat_template(4),
+                         ["Pilot", "Co-Pilot", "Turret 1", "Turret 2"])
+
+    def test_role_flag_flavors_one_specialist_seat(self):
+        # A 3-crew medical ship gets a Medic seat in place of a turret.
+        self.assertEqual(nav_core.ship_seat_template(3, {"is_medical"}),
+                         ["Pilot", "Co-Pilot", "Medic"])
+
+    def test_specialist_only_when_room_and_first_flag_wins(self):
+        # 2-crew has no room for a specialist; priority order is deterministic.
+        self.assertEqual(nav_core.ship_seat_template(2, {"is_medical"}),
+                         ["Pilot", "Co-Pilot"])
+        self.assertEqual(nav_core.ship_seat_template(4, {"is_salvage", "is_mining"}),
+                         ["Pilot", "Co-Pilot", "Mining Op", "Turret 1"])
+
+    def test_junk_crew_coerces_to_one(self):
+        self.assertEqual(nav_core.ship_seat_template(None), ["Pilot"])
+        self.assertEqual(nav_core.ship_seat_template("x"), ["Pilot"])
+        self.assertEqual(nav_core.ship_seat_template(0), ["Pilot"])
+
+
 class EventTaxonomyTests(unittest.TestCase):
     def test_flat_roles_match_groups(self):
         import event_taxonomy

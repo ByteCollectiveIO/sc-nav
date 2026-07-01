@@ -1168,6 +1168,11 @@
     padding: 0 4px; }
   .ev-seat-x:hover { opacity: 1; }
   .ev-grp-empty { font-size: 12px; color: var(--dim); font-style: italic; margin-top: 6px; }
+  .ev-tpl-list { display: flex; flex-direction: column; gap: 6px; }
+  .ev-tpl-row { display: flex; align-items: center; gap: 10px; }
+  .ev-tpl-row .ev-tpl-nm { font-weight: 600; }
+  .ev-tpl-row .ev-btn { font-size: 11px; padding: 3px 9px; }
+  .ev-tpl-row .ev-btn.danger { margin-left: auto; }
   .ev-grp-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
   .ev-grp-actions .ev-btn { font-size: 11px; padding: 3px 9px; }
   .ev-pool { margin-top: 12px; }
@@ -5662,6 +5667,27 @@ function bindSignup(e) {
 // ("new", a group id, or null).
 const EV_GROUP_KINDS = ["squad", "squadron", "crew", "section", "wing"];
 let fleetBoard = null, fleetFormFor = null;
+// v1.1: ship-aware seat templates + saved group templates.
+let fleetShips = null, fleetShipMap = null;   // /api/fleet/ships (name→{crew,seats})
+let groupTemplates = null, tplPanelOpen = false;
+
+// Lazy-load the ship catalog (name + crew + default seats) once per session; the
+// picker/capacity-autofill and the assign-row seat suggestions read from it.
+async function ensureFleetShips() {
+  if (fleetShips) return;
+  try {
+    const r = await fetch("/api/fleet/ships");
+    fleetShips = r.ok ? await r.json() : [];
+  } catch { fleetShips = []; }
+  fleetShipMap = new Map(fleetShips.map(s => [s.name.toLowerCase(), s]));
+}
+
+// The default seats for a named ship (from the catalog), or null if unknown.
+function fleetShipSeats(name) {
+  if (!name || !fleetShipMap) return null;
+  const s = fleetShipMap.get(name.trim().toLowerCase());
+  return s ? s.seats : null;
+}
 
 // Every going member = the seated ones (across groups) + the unassigned pool.
 function fleetGoingMembers(b) {
@@ -5676,11 +5702,14 @@ async function renderFleetSection(e) {
   const host = $("ev-fleet");
   if (!host) return;
   fleetFormFor = null;   // full detail redraw: start with the form closed
+  tplPanelOpen = false;
+  groupTemplates = null; // refetch the org-shared templates on next panel open
   try {
     const r = await fetch(`/api/events/${e.id}/groups`);
     if (!r.ok) throw 0;
     fleetBoard = await r.json();
   } catch { host.innerHTML = ""; return; }
+  if (fleetBoard.can_edit) await ensureFleetShips();   // ship picker + seat hints
   drawFleet(e);
 }
 
@@ -5707,15 +5736,17 @@ function drawFleet(e) {
   const controls = canEdit
     ? `<div class="ev-grp-actions">` +
       (fleetFormFor === null ? `<button class="ev-btn" id="ev-grp-add">+ Add unit</button>` : "") +
+      `<button class="ev-btn" id="ev-tpl-toggle">${tplPanelOpen ? "Hide templates" : "Templates"}</button>` +
       (cards ? `<button class="ev-btn" id="ev-manifest-btn">Manifest</button>` : "") +
       `</div>`
     : "";
+  const tplPanel = (canEdit && tplPanelOpen) ? templatePanel(b) : "";
 
   host.innerHTML = `<div class="ev-fleet">` +
     `<div class="ev-fleet-head"><div class="ev-section-h" style="margin:0;">Fleet roster` +
     (b.groups && b.groups.length ? ` · ${b.assigned_count}/${b.total_going} assigned` : "") +
     `</div></div>` +
-    mineCallout + board + pool + formCard + controls +
+    mineCallout + board + pool + formCard + controls + tplPanel +
     `<div id="ev-manifest-box"></div></div>`;
 
   bindFleet(e);
@@ -5760,7 +5791,8 @@ function poolSection(b) {
       `<select id="ev-asn-mem">${memOpts}</select>` +
       `<span class="ev-grp-kind">→</span>` +
       `<select id="ev-asn-grp">${grpOpts}</select>` +
-      `<input id="ev-asn-slot" type="text" placeholder="seat (optional)" maxlength="40">` +
+      `<input id="ev-asn-slot" type="text" placeholder="seat (optional)" maxlength="40" list="ev-seat-list">` +
+      `<datalist id="ev-seat-list"></datalist>` +
       `<button class="ev-btn primary" id="ev-asn-go">Assign</button>` +
       `<span id="ev-asn-msg" class="muted" style="font-size:12px;"></span></div>`;
   }
@@ -5776,14 +5808,18 @@ function groupFormCard(b) {
   const leaderOpts = `<option value="">— no leader —</option>` +
     fleetGoingMembers(b).map(m =>
       `<option value="${esc(m.discord_id)}" ${g && g.leader_id === m.discord_id ? "selected" : ""}>${esc(m.name)}</option>`).join("");
+  const shipOpts = (fleetShips || []).map(s =>
+    `<option value="${esc(s.name)}">${s.crew} crew</option>`).join("");
   return `<div class="ev-grp" style="margin-top:12px;">` +
     `<div class="ev-section-h" style="margin:0 0 8px;">${editing ? "Edit unit" : "New unit"}</div>` +
     `<div class="ev-assign-row">` +
     `<input id="ev-grp-name" type="text" placeholder="unit name" maxlength="120" value="${g ? esc(g.name) : ""}">` +
     `<select id="ev-grp-kind">${kindOpts}</select>` +
-    `<input id="ev-grp-ship" type="text" placeholder="ship (optional)" maxlength="120" value="${g && g.ship ? esc(g.ship) : ""}">` +
+    `<input id="ev-grp-ship" type="text" placeholder="ship (optional)" maxlength="120" list="ev-ship-list" value="${g && g.ship ? esc(g.ship) : ""}">` +
+    `<datalist id="ev-ship-list">${shipOpts}</datalist>` +
     `<input id="ev-grp-cap" type="number" min="0" step="1" placeholder="size" style="width:80px;" value="${g && g.capacity != null ? g.capacity : ""}">` +
     `<select id="ev-grp-leader">${leaderOpts}</select></div>` +
+    `<p class="muted" style="font-size:11px;margin:6px 0 0;">Pick a ship to auto-fill crew size; seats are then suggested when you assign.</p>` +
     `<div class="ev-grp-actions">` +
     `<button class="ev-btn primary" id="ev-grp-save">${editing ? "Save" : "Add unit"}</button>` +
     `<button class="ev-btn" id="ev-grp-cancel">Cancel</button>` +
@@ -5810,6 +5846,32 @@ function bindFleet(e) {
   const go = $("ev-asn-go");
   if (go) go.onclick = () => assignMember(e, $("ev-asn-mem").value,
     Number($("ev-asn-grp").value), $("ev-asn-slot").value, $("ev-asn-msg"));
+
+  // Ship → crew-size auto-fill: choosing a known ship fills an empty size box.
+  const shipInp = $("ev-grp-ship");
+  if (shipInp) shipInp.oninput = () => {
+    const s = fleetShipMap && fleetShipMap.get(shipInp.value.trim().toLowerCase());
+    const cap = $("ev-grp-cap");
+    if (s && cap && cap.value.trim() === "") cap.value = s.crew;
+  };
+
+  // Assign-row seat suggestions follow the selected unit's ship.
+  const grpSel = $("ev-asn-grp");
+  if (grpSel) { grpSel.onchange = () => fillSeatList(); fillSeatList(); }
+
+  // Template panel controls.
+  const tplToggle = $("ev-tpl-toggle");
+  if (tplToggle) tplToggle.onclick = () => { tplPanelOpen = !tplPanelOpen; drawFleet(e); };
+  bindTemplatePanel(e);
+}
+
+// Populate the assign-row seat datalist from the currently-selected unit's ship.
+function fillSeatList() {
+  const dl = $("ev-seat-list"), grpSel = $("ev-asn-grp");
+  if (!dl || !grpSel || !fleetBoard) return;
+  const g = (fleetBoard.groups || []).find(x => String(x.id) === grpSel.value);
+  const seats = g ? fleetShipSeats(g.ship) : null;
+  dl.innerHTML = (seats || []).map(s => `<option value="${esc(s)}"></option>`).join("");
 }
 
 async function saveGroup(e) {
@@ -5849,6 +5911,88 @@ async function assignMember(e, discord_id, group_id, slot, msgEl) {
     if (!r.ok) throw await r.json().catch(() => ({}));
     fleetBoard = await r.json(); drawFleet(e);
   } catch (err) { if (msgEl) msgEl.textContent = (err && err.detail) || "Couldn't assign."; }
+}
+
+// --- saved group templates (#20 v1.1) ---
+// Org-shared unit layouts. templatePanel renders a save row (snapshot the current
+// plan) + the list of saved templates with Apply/Delete. `groupTemplates` caches
+// the last fetch; a null value means "not loaded yet" and triggers a lazy fetch.
+function templatePanel(b) {
+  const hasGroups = (b.groups || []).length > 0;
+  const saveRow = hasGroups
+    ? `<div class="ev-assign-row" style="margin-bottom:8px;">` +
+      `<input id="ev-tpl-name" type="text" placeholder="template name" maxlength="120">` +
+      `<button class="ev-btn primary" id="ev-tpl-save">Save current units</button>` +
+      `<span id="ev-tpl-msg" class="muted" style="font-size:12px;"></span></div>`
+    : `<p class="muted" style="font-size:12px;margin:0 0 8px;">Add units, then save them as a reusable template.</p>`;
+  let list;
+  if (groupTemplates === null) {
+    list = `<p class="muted" style="font-size:12px;">Loading templates…</p>`;
+  } else if (!groupTemplates.length) {
+    list = `<p class="stat-empty" style="margin:6px 0;">No saved templates yet.</p>`;
+  } else {
+    list = `<div class="ev-tpl-list">` + groupTemplates.map(t =>
+      `<div class="ev-tpl-row">` +
+      `<span class="ev-tpl-nm">${esc(t.name)}</span>` +
+      `<span class="muted" style="font-size:12px;">${t.group_count} unit${t.group_count === 1 ? "" : "s"}</span>` +
+      `<button class="ev-btn" data-tpl-apply="${t.id}">Apply</button>` +
+      (t.can_delete ? `<button class="ev-btn danger" data-tpl-del="${t.id}">Delete</button>` : "") +
+      `</div>`).join("") + `</div>`;
+  }
+  return `<div class="ev-grp" style="margin-top:12px;">` +
+    `<div class="ev-section-h" style="margin:0 0 8px;">Group templates</div>` +
+    saveRow + list + `</div>`;
+}
+
+function bindTemplatePanel(e) {
+  if (!tplPanelOpen) return;
+  if (groupTemplates === null) { loadTemplates(e); return; }   // lazy first fetch
+  const save = $("ev-tpl-save");
+  if (save) save.onclick = () => saveTemplate(e);
+  document.querySelectorAll("[data-tpl-apply]").forEach(el =>
+    el.onclick = () => applyTemplate(e, Number(el.dataset.tplApply)));
+  document.querySelectorAll("[data-tpl-del]").forEach(el =>
+    el.onclick = () => deleteTemplate(e, Number(el.dataset.tplDel)));
+}
+
+async function loadTemplates(e) {
+  try {
+    const r = await fetch("/api/group-templates");
+    groupTemplates = r.ok ? await r.json() : [];
+  } catch { groupTemplates = []; }
+  if (tplPanelOpen) drawFleet(e);
+}
+
+async function saveTemplate(e) {
+  const msg = $("ev-tpl-msg"), name = ($("ev-tpl-name").value || "").trim();
+  if (!name) { msg.textContent = "Name required."; return; }
+  msg.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/group-templates", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, event_id: e.id }) });
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    groupTemplates = await r.json(); drawFleet(e);
+  } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+}
+
+async function applyTemplate(e, tid) {
+  try {
+    const r = await fetch(`/api/events/${e.id}/groups/apply-template`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template_id: tid }) });
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    fleetBoard = await r.json(); tplPanelOpen = false; drawFleet(e);
+  } catch (err) {
+    const msg = $("ev-tpl-msg"); if (msg) msg.textContent = (err && err.detail) || "Couldn't apply.";
+  }
+}
+
+async function deleteTemplate(e, tid) {
+  if (!(await confirmDialog("Delete this saved template? Events already using it are unaffected.",
+      { title: "Delete template?", confirmLabel: "Delete", danger: true }))) return;
+  const r = await fetch(`/api/group-templates/${tid}`, { method: "DELETE" });
+  if (r.ok) { groupTemplates = await r.json(); drawFleet(e); }
 }
 
 async function showManifest(e) {

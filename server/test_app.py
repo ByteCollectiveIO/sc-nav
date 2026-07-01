@@ -926,5 +926,84 @@ class LFGAnnounceTests(unittest.TestCase):
         self.assertNotIn("1", app._lfg_announce_at)
 
 
+class FleetTemplateTests(unittest.TestCase):
+    """#20 v1.1: the ship seat-template feed + the saved-group-template lifecycle
+    (snapshot an event's units → apply onto another event → delete)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def _make_event(self, title):
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        r = self.client.post("/api/events",
+                             json={"title": title, "start_at": start,
+                                   "types": ["Raid"], "categories": ["PvE"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def test_fleet_ships_feed_carries_crew_and_seats(self):
+        r = self.client.get("/api/fleet/ships")
+        self.assertEqual(r.status_code, 200)
+        ships = r.json()
+        self.assertTrue(ships, "expected ships from the committed cache")
+        s = ships[0]
+        self.assertEqual(set(s), {"name", "crew", "seats"})
+        self.assertEqual(len(s["seats"]), s["crew"])   # one label per seat
+        self.assertEqual(s["seats"][0], "Pilot")
+
+    def test_template_snapshot_apply_and_delete(self):
+        src = self._make_event("Source Op")
+        for name, kind, cap in [("Alpha", "squad", 4), ("Gold", "squadron", 3)]:
+            r = self.client.post(f"/api/events/{src}/groups",
+                                 json={"name": name, "kind": kind, "capacity": cap})
+            self.assertEqual(r.status_code, 200, r.text)
+
+        # Snapshot the two units into a named, reusable template.
+        r = self.client.post("/api/group-templates",
+                             json={"name": "Standard Wing", "event_id": src})
+        self.assertEqual(r.status_code, 200, r.text)
+        tpls = r.json()
+        tpl = next(t for t in tpls if t["name"] == "Standard Wing")
+        self.assertEqual(tpl["group_count"], 2)
+        self.assertTrue(tpl["can_delete"])          # author may delete
+
+        # Apply it onto a fresh event: two units appear, members not carried.
+        dst = self._make_event("Target Op")
+        r = self.client.post(f"/api/events/{dst}/groups/apply-template",
+                             json={"template_id": tpl["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        board = r.json()
+        names = sorted(g["name"] for g in board["groups"])
+        self.assertEqual(names, ["Alpha", "Gold"])
+        caps = {g["name"]: g["capacity"] for g in board["groups"]}
+        self.assertEqual(caps["Alpha"], 4)
+        self.assertEqual(board["assigned_count"], 0)
+
+        # Delete the template; it leaves the list.
+        r = self.client.delete(f"/api/group-templates/{tpl['id']}")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn(tpl["id"], [t["id"] for t in r.json()])
+
+    def test_save_template_rejects_empty_plan(self):
+        empty = self._make_event("No Units Op")
+        r = self.client.post("/api/group-templates",
+                             json={"name": "Nope", "event_id": empty})
+        self.assertEqual(r.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -331,6 +331,17 @@ CREATE TABLE IF NOT EXISTS event_assignments (
     UNIQUE(event_id, discord_id)
 );
 CREATE INDEX IF NOT EXISTS event_assignments_event ON event_assignments(event_id);
+
+-- Reusable, org-shared group structures (#20 v1.1). A template snapshots a
+-- plan's units (name/kind/ship/capacity — not members) as a JSON blob so an
+-- organizer can stamp a standard squadron/squad layout onto a future event.
+CREATE TABLE IF NOT EXISTS group_templates (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    groups TEXT NOT NULL,               -- JSON: [{name, kind, ship, capacity}]
+    created_by TEXT,                    -- discord_id of the author
+    created_at TEXT
+);
 """
 
 
@@ -1034,6 +1045,40 @@ def clear_event_assignment(event_id: int, discord_id: str) -> bool:
             "DELETE FROM event_assignments WHERE event_id=? AND discord_id=?",
             (event_id, str(discord_id)),
         )
+    return cur.rowcount > 0
+
+
+def list_group_templates() -> list[dict]:
+    """All saved group templates (org-shared), freshest first."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM group_templates ORDER BY id DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_group_template(tid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM group_templates WHERE id=?", (tid,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_group_template(name: str, groups_json: str, created_by: str,
+                          created_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO group_templates (name, groups, created_by, created_at) "
+            "VALUES (?,?,?,?)", (name, groups_json, str(created_by), created_at),
+        )
+    return cur.lastrowid
+
+
+def delete_group_template(tid: int) -> bool:
+    """Delete a template by id (caller enforces creator/admin permission)."""
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM group_templates WHERE id=?", (tid,))
     return cur.rowcount > 0
 
 

@@ -1,7 +1,7 @@
 # Fleet roster / squad organizer (event group planning)
 
-**Status:** **v1 BUILT 2026-07-01** (steps 1–4; step 5 ship-seat-templates + saved
-templates deferred to v1.1). Backlog #20. Needs `/deploy`.
+**Status:** **v1 SHIPPED 2026-07-01 — v0.23.0 (commit 259456a)** (steps 1–4).
+**v1.1 (step 5) BUILT 2026-07-01 — uncommitted, needs /deploy.** Backlog #20.
 Tables `event_groups` + `event_assignments`; `nav_core.derive_roster_board` /
 `build_event_manifest` (pure, tested — `RosterBoardTests` + `EventManifestTests`);
 endpoints `GET/POST/PATCH/DELETE /api/events/{id}/groups[/{gid}]`,
@@ -9,7 +9,31 @@ endpoints `GET/POST/PATCH/DELETE /api/events/{id}/groups[/{gid}]`,
 `POST .../manifest/post`; UI = a **Fleet roster** section on the event detail
 (`renderFleetSection`/`drawFleet`): unit cards + unassigned pool + assign row +
 inline group form + per-member "your assignment" callout + copy/post-to-Discord
-manifest. Backlog #20 (below) marked done.
+manifest.
+
+### v1.1 (built 2026-07-01, uncommitted)
+Two additions, both from step 5 of the build order:
+
+**Ship-aware seat templates.** `nav_core.ship_seat_template(crew, traits)` (pure,
+7 tests in `ShipSeatTemplateTests`) derives a default seat layout — Pilot,
+Co-Pilot, one role-flavored specialist seat (`SHIP_ROLE_FLAGS`: medical→Medic,
+mining→Mining Op, …), then Turret N. New `load_fleet_ships()` reads the full
+uexcorp vehicle rows `load_ships` already caches (no extra fetch), yielding all
+spaceships as `{name, crew, seats}` at `GET /api/fleet/ships` (superset of the
+cargo `/api/ships`). Frontend: the group form's ship field is now a datalist
+picker; choosing a known ship auto-fills the unit size (crew), and the assign
+row's seat input offers that unit's ship seats as a datalist.
+
+**Saved group templates.** New org-shared `group_templates` table (JSON blob of
+`[{name, kind, ship, capacity}]` — structure, not members) + `db` CRUD.
+Endpoints: `GET /api/group-templates`, `POST /api/group-templates`
+(snapshot an event's units; organizer/admin of that event),
+`DELETE /api/group-templates/{tid}` (author or admin),
+`POST /api/events/{id}/groups/apply-template` (stamp a template's units onto an
+event; organizer/admin). Frontend: a "Templates" toggle in the fleet controls
+opens a panel to save the current plan and apply/delete saved templates.
+Integration coverage in `test_app.FleetTemplateTests` (feed shape, snapshot→
+apply→delete lifecycle, empty-plan rejection). Suite 165 nav_core + 73 app green.
 
 Original scope follows.
 **Priority:** #3 — turns "12 people signed up" into an actual operational plan.
