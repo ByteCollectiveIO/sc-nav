@@ -1791,6 +1791,31 @@
     </div>
     <div class="muted" id="fresh-window-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
+    <h2>DISCORD NOTIFICATIONS</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      Push alerts to a Discord channel: events, the marketplace, goals, and org
+      records. Create an <b>Incoming Webhook</b> in your channel's settings
+      (Integrations → Webhooks) and paste its URL here. We never post
+      <code>@everyone</code>; the URL is stored as a secret and never shown again.
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input id="discord-webhook" type="url" placeholder="https://discord.com/api/webhooks/…"
+             style="flex:1; min-width:220px;" autocomplete="off">
+      <button id="discord-webhook-save">Save</button>
+      <button id="discord-test">Send test</button>
+    </div>
+    <div class="muted" id="discord-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <div id="discord-toggles" style="margin-top:8px; display:flex; flex-direction:column; gap:4px; font-size:13px;">
+      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-events"> Events: created, cancelled, and start reminders</label>
+      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-marketplace"> Marketplace: offers and confirmed trades</label>
+      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-goals"> Goals: a procurement goal hits 100%</label>
+      <label style="display:flex; gap:8px; align-items:center;"><input type="checkbox" id="notify-records"> Records: a new org hauling record</label>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px;">
+      Remind before an event starts
+      <input id="discord-lead" type="number" min="1" max="1440" step="1" style="width:80px;"> minutes
+    </div>
+
     <h2>BRANDING</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
@@ -7173,7 +7198,29 @@ async function loadSettings() {
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
     applyOrgLogoAdmin(!!s.org_logo);
+    applyDiscordSettings(s);
   } catch {}
+}
+
+// ---------- Discord notifications (admin) ----------
+// The webhook URL is a secret: the server only ever returns whether one is set
+// and a masked tail, so we never repopulate the input — placeholder text shows
+// the current state instead.
+function applyDiscordSettings(s) {
+  const inp = $("discord-webhook"), st = $("discord-status"), test = $("discord-test");
+  if (document.activeElement !== inp) inp.value = "";
+  inp.placeholder = s.discord_webhook_set
+    ? `connected (${s.discord_webhook_tail}); paste a new URL to replace`
+    : "https://discord.com/api/webhooks/…";
+  st.textContent = s.discord_webhook_set ? "Webhook connected." : "No webhook configured.";
+  test.disabled = !s.discord_webhook_set;
+  const n = s.discord_notify || {};
+  $("notify-events").checked = !!n.events;
+  $("notify-marketplace").checked = !!n.marketplace;
+  $("notify-goals").checked = !!n.goals;
+  $("notify-records").checked = !!n.records;
+  if (document.activeElement !== $("discord-lead"))
+    $("discord-lead").value = s.discord_reminder_lead_min || 30;
 }
 
 // ---------- org logo (custom guild branding) ----------
@@ -7310,6 +7357,47 @@ $("fresh-window-save").onclick = async () => {
   } catch {
     $("fresh-window-status").textContent = "failed to update — try again";
     loadSettings();
+  }
+};
+
+$("discord-webhook-save").onclick = async () => {
+  const url = $("discord-webhook").value.trim();
+  const st = $("discord-status");
+  if (url && !/^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//.test(url)) {
+    st.textContent = "that doesn't look like a Discord webhook URL";
+    return;
+  }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        discord_webhook_url: url,
+        discord_notify: {
+          events: $("notify-events").checked,
+          marketplace: $("notify-marketplace").checked,
+          goals: $("notify-goals").checked,
+          records: $("notify-records").checked,
+        },
+        discord_reminder_lead_min: parseInt($("discord-lead").value, 10) || 30,
+      }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
+    applyDiscordSettings(await r.json());
+    st.textContent = "saved";
+  } catch (e) {
+    st.textContent = (e && e.message) || "failed to save — try again";
+  }
+};
+
+$("discord-test").onclick = async () => {
+  const st = $("discord-status");
+  st.textContent = "sending test…";
+  try {
+    const r = await fetch("/api/settings/discord/test", { method: "POST" });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
+    st.textContent = "test sent — check your Discord channel";
+  } catch (e) {
+    st.textContent = (e && e.message) || "test failed — try again";
   }
 };
 

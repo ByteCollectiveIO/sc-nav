@@ -35,6 +35,7 @@ import catalog
 import db
 import event_taxonomy
 import nav_core
+import notify
 from version import __version__ as APP_VERSION
 
 DATA_DIR = Path(os.environ.get("SC_NAV_DATA", Path(__file__).parent.parent / "poi"))
@@ -3409,6 +3410,12 @@ async def get_settings(user: dict = Depends(require_session)):
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
+        # Discord webhook: never echo the URL (it's a credential). Surface only
+        # whether one is set, a masked tail to confirm which, and the toggles.
+        "discord_webhook_set": notify.is_configured(),
+        "discord_webhook_tail": notify.mask(notify.webhook_url()),
+        "discord_notify": {c: notify.category_enabled(c) for c in notify.CATEGORIES},
+        "discord_reminder_lead_min": notify.reminder_lead_min(),
     }
 
 
@@ -3419,6 +3426,11 @@ class SettingsIn(BaseModel):
     # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
     # be used to stuff the meta table. Each id is validated (isdigit) below.
     extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
+    # Discord webhook URL ("" clears it); validated against real Discord hosts
+    # in the handler (anti-SSRF). Toggles are a partial dict of category->bool.
+    discord_webhook_url: str | None = Field(default=None, max_length=512)
+    discord_notify: dict[str, bool] | None = None
+    discord_reminder_lead_min: int | None = Field(default=None, ge=1, le=1440)
 
 
 @app.post("/api/settings")
@@ -3452,11 +3464,51 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
+    if body.discord_webhook_url is not None:
+        url = body.discord_webhook_url.strip()
+        if url and not notify.is_valid_webhook_url(url):
+            raise HTTPException(status_code=400,
+                                detail="not a valid Discord webhook URL")
+        db.set_setting(notify.WEBHOOK_KEY, url)   # "" clears it
+    if body.discord_notify is not None:
+        for cat, on in body.discord_notify.items():
+            if cat in notify.CATEGORIES:
+                db.set_setting(f"notify_{cat}", "1" if on else "0")
+    if body.discord_reminder_lead_min is not None:
+        db.set_setting(notify.REMINDER_LEAD_KEY, str(body.discord_reminder_lead_min))
     return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
             "member_role_id": member_role_id(),
             "obs_fresh_window_h": obs_fresh_window_h(),
             "extra_admin_ids": extra_admin_ids(),
-            "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois)}
+            "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
+            "discord_webhook_set": notify.is_configured(),
+            "discord_webhook_tail": notify.mask(notify.webhook_url()),
+            "discord_notify": {c: notify.category_enabled(c) for c in notify.CATEGORIES},
+            "discord_reminder_lead_min": notify.reminder_lead_min()}
+
+
+_test_send_at = 0.0   # last admin test-send, for a light cooldown
+
+
+@app.post("/api/settings/discord/test")
+async def test_discord_webhook(admin: dict = Depends(require_admin)):
+    """Fire a test message at the configured webhook so an admin can confirm
+    delivery before relying on it. Rate-limited to once every few seconds."""
+    global _test_send_at
+    if not notify.is_configured():
+        raise HTTPException(status_code=400, detail="no Discord webhook configured")
+    now = time.monotonic()
+    if now - _test_send_at < 5:
+        raise HTTPException(status_code=429, detail="slow down — try again in a moment")
+    _test_send_at = now
+    who = admin.get("username") or "an admin"
+    link = f"\n{PUBLIC_BASE_URL}/" if PUBLIC_BASE_URL else ""
+    ok = await notify.send(
+        f"✅ **Org Navigator** is connected. Test message sent by {who}.{link}")
+    if not ok:
+        raise HTTPException(status_code=502,
+                            detail="Discord rejected the message — check the webhook URL")
+    return {"ok": True}
 
 
 @app.get("/api/org-logo")
