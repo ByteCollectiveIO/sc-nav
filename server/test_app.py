@@ -797,5 +797,93 @@ class LFGBoardTests(unittest.TestCase):
         self.assertNotIn(eid, app.hub.lfg)
 
 
+class LFGAnnounceTests(unittest.TestCase):
+    """Backlog #19 step 4 — opt-in 'announce to Discord' for a new LFG post: a channel
+    broadcast (no @mentions), rate-limited per member, silent when the webhook is unset,
+    and surfaced to the composer via `announce_available` on the snapshot."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("lfg"), _GOOD_WEBHOOK)
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.lfg.clear()
+        app.hub._lfg_seq = 0
+        app._lfg_announce_at.clear()
+        db.set_setting(notify._webhook_key("lfg"), _GOOD_WEBHOOK)   # restore after silent test
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    _LFM = {"id": 3, "poster_id": "7", "poster": "Ace", "direction": "lfm",
+            "tags": ["bunkers", "PvE"], "slots": 2, "filled": 1,
+            "note": "need 2 for a bunker", "rally": "Daymar", "comms": True}
+    _LFJ = {"id": 4, "poster_id": "8", "poster": "Nova", "direction": "lfj",
+            "tags": ["mining"], "slots": None, "filled": 0,
+            "note": "solo, down for anything", "rally": None, "comms": False}
+
+    def test_announce_broadcasts_with_no_mentions(self):
+        asyncio.run(app._notify_lfg_posted(self._LFM))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "lfg")
+        self.assertIsNone(msg["mentions"])          # an open call, not a directed ping
+        self.assertIn("Looking for members", msg["text"])
+        self.assertIn("Ace", msg["text"])
+        self.assertIn("bunkers", msg["text"])
+        self.assertIn("need 2 for a bunker", msg["text"])
+        self.assertIn("Daymar", msg["text"])
+        self.assertEqual(msg["dedup_key"], "lfg-posted:3")
+
+    def test_lfj_announce_reads_as_looking_to_join(self):
+        asyncio.run(app._notify_lfg_posted(self._LFJ))
+        self.assertIn("Looking to join", self.sent[0]["text"])
+        self.assertNotIn("Needs", self.sent[0]["text"])   # slots line is LFM-only
+
+    def test_announce_silent_when_no_webhook(self):
+        db.set_setting(notify._webhook_key("lfg"), "")
+        asyncio.run(app._notify_lfg_posted(self._LFM))
+        self.assertEqual(self.sent, [])
+
+    def test_announce_is_rate_limited_per_member(self):
+        self.assertTrue(app._lfg_announce_ok("7"))    # first arms the cooldown
+        self.assertFalse(app._lfg_announce_ok("7"))   # second within cooldown is blocked
+        self.assertTrue(app._lfg_announce_ok("8"))    # a different member is independent
+
+    def test_snapshot_exposes_announce_available(self):
+        self.assertTrue(self.client.get("/api/lfg").json()["announce_available"])
+        db.set_setting(notify._webhook_key("lfg"), "")
+        self.assertFalse(self.client.get("/api/lfg").json()["announce_available"])
+
+    def test_api_announce_arms_the_rate_limit(self):
+        r = self.client.post("/api/lfg", json={"direction": "lfj", "announce": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("1", app._lfg_announce_at)   # caller "1" armed via the route
+
+    def test_api_no_announce_leaves_rate_limit_untouched(self):
+        self.client.post("/api/lfg", json={"direction": "lfj", "announce": False})
+        self.assertNotIn("1", app._lfg_announce_at)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

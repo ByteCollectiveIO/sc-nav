@@ -1473,10 +1473,10 @@
 <main>
   <div id="launcher-view" class="launcher" hidden>
     <h2 class="launcher-head">Your org toolkit</h2>
-    <p class="launcher-sub">Six tools, one org. New here? Start with the Resource Navigator —
+    <p class="launcher-sub">Seven tools, one org. New here? Start with the Resource Navigator —
       the rest build on it.</p>
     <a id="online-badge" class="online-badge" href="#/online" hidden></a>
-    <a id="lfg-badge" class="online-badge lfg-badge" href="#/online" hidden></a>
+    <a id="lfg-badge" class="online-badge lfg-badge" href="#/lfg" hidden></a>
     <a id="launcher-resume" class="launcher-resume" hidden></a>
     <div class="app-grid">
       <a class="app-card" href="#/nav">
@@ -1515,6 +1515,12 @@
         <div class="app-name">Org Intel</div>
         <div class="app-desc">Your org's analytics deck — mapping coverage, hauling and
           marketplace activity, and the contributor leaderboards, all in one place.</div>
+      </a>
+      <a class="app-card" href="#/lfg">
+        <img class="app-logo" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+        <div class="app-name">Group Finder</div>
+        <div class="app-desc">Rally a crew right now — post that you need players or want to
+          join, filter by playstyle, and group up without waiting for a scheduled event.</div>
       </a>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
@@ -2325,6 +2331,17 @@
         for members already sharing their position on the navigator.</p>
       <div id="online-body"></div>
     </div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /online-view -->
+
+  <!-- ============================================================
+       Group Finder (#19) — its own app: the two-direction LFG connect board,
+       lifted out of Who's Online so the launcher card lands on a Group-Finder
+       surface. Ephemeral + WS-driven; poster status dots come from the roster.
+       ============================================================ -->
+  <div id="lfg-view" hidden>
     <div class="panel" id="lfg-compose-panel">
       <h2>LOOKING FOR GROUP</h2>
       <p class="muted lfg-blurb">Rally a group right now, no schedule needed. Post that you're
@@ -2352,6 +2369,8 @@
         <textarea id="lfg-note" class="ti lfg-note-in" rows="2" maxlength="280"
           placeholder="What / where? Comms expectations? (optional)"></textarea>
         <div class="lfg-post-row">
+          <label class="on-invis lfg-announce" id="lfg-announce-row" hidden>
+            <input id="lfg-announce" type="checkbox"> 📣 Announce to the org's Discord</label>
           <button id="lfg-post" type="button">Post to the board</button>
           <span class="lfg-hint" id="lfg-post-hint"></span>
         </div>
@@ -2374,7 +2393,7 @@
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
-  </div><!-- /online-view -->
+  </div><!-- /lfg-view -->
 
   <!-- ============================================================
        Legal pages. STARTER TEXT drafted to fit this app — have a
@@ -3871,27 +3890,31 @@ async function saveOnlineStatus() {
 }
 // Seed the #/online view on entry; live updates thereafter arrive over WS. If the
 // socket already delivered a roster this is redundant but cheap and covers a cold open.
+// The shared playstyle vocabulary seeds both the Who's Online activity chips and the
+// Group Finder composer/filter chips — fetch it once, whichever view opens first.
+async function ensurePlaystyleTags() {
+  if (playstyleTags.length) return;
+  try {
+    const r = await fetch("/api/playstyles");
+    if (r.ok) { playstyleTags = (await r.json()).tags || []; }
+  } catch {}
+}
 async function loadOnline() {
   $("on-save").onclick = saveOnlineStatus;   // idempotent re-bind
-  if (!playstyleTags.length) {
-    try {
-      const r = await fetch("/api/playstyles");
-      if (r.ok) { playstyleTags = (await r.json()).tags || []; }
-    } catch {}
-    renderOnlineTags();
-  }
+  await ensurePlaystyleTags();
+  renderOnlineTags();
   try {
     const r = await fetch("/api/online");
     if (r.ok) { const d = await r.json(); onlineRoster = d.users || []; if (d.me) myOnlinePrefs = d.me; }
   } catch {}
   renderOnlineMe(); renderOnlineView(); renderOnlineBadge();
-  loadLfg();
 }
 
 // ---------- looking for group (#19 step 3) ----------
 // The two-direction connect board. LFM = "I'm hosting, need players"; LFJ = "I'm
 // solo, want in". Ephemeral + WS-driven (server pushes the full board as `lfg`);
-// GET /api/lfg seeds the initial paint. Composer + board both live on #/online.
+// GET /api/lfg seeds the initial paint. Composer + board live in the Group Finder app
+// (#/lfg); the badge stays live off WS even when that view isn't open.
 let lfgBoard = [];
 let lfgDir = "lfm";                 // composer direction
 const lfgComposeTags = new Set();   // selected playstyle tags in the composer
@@ -3931,6 +3954,8 @@ function setLfgDir(dir) {
 }
 async function postLfg() {
   const slots = parseInt($("lfg-slots").value, 10);
+  const announceEl = $("lfg-announce");
+  const announced = !!(announceEl && announceEl.checked);
   const body = {
     direction: lfgDir,
     tags: [...lfgComposeTags],
@@ -3938,6 +3963,7 @@ async function postLfg() {
     note: $("lfg-note").value.trim(),
     rally: $("lfg-rally").value.trim() || null,
     comms: $("lfg-comms").checked,
+    announce: announced,
   };
   const hint = $("lfg-post-hint");
   try {
@@ -3947,9 +3973,11 @@ async function postLfg() {
     if (r.ok) {
       $("lfg-note").value = ""; $("lfg-rally").value = ""; $("lfg-slots").value = "";
       $("lfg-comms").checked = false;
+      if (announceEl) announceEl.checked = false;
       $("lfg-rally").parentElement.classList.remove("picked");   // drop the POI-pick green border
       lfgComposeTags.clear(); renderLfgComposeTags();
-      hint.textContent = "✓ Posted"; clearTimeout(postLfg._t);
+      hint.textContent = announced ? "✓ Posted & announced" : "✓ Posted";
+      clearTimeout(postLfg._t);
       postLfg._t = setTimeout(() => { hint.textContent = ""; }, 2500);
     } else { hint.textContent = "Couldn't post — try again."; }
   } catch { hint.textContent = "Couldn't post — try again."; }
@@ -4052,9 +4080,16 @@ function renderLfgBoard() {
     body.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeLfg(+b.dataset.close));
   }
 }
-// Seed + wire the LFG surface. Called from loadOnline (after playstyle tags load);
-// WS `lfg` frames keep the board live thereafter.
+// Show the composer's "announce to Discord" opt-in only when the org actually has an
+// LFG webhook configured (the snapshot returns a bool, never the URL).
+function setLfgAnnounceAvail(on) {
+  const row = $("lfg-announce-row");
+  if (row) row.hidden = !on;
+}
+// Seed + wire the Group Finder view (#/lfg). Playstyle tags load lazily here too, so
+// the app works when opened directly. WS `lfg` frames keep the board live thereafter.
 async function loadLfg() {
+  await ensurePlaystyleTags();
   $("lfg-post").onclick = postLfg;   // idempotent re-bind
   const rallyWrap = $("lfg-rally").parentElement;   // rally autocompletes from POIs (free text ok)
   if (!rallyWrap.querySelector(".poi-drop")) attachPoiPicker(rallyWrap);   // attach once
@@ -4065,7 +4100,7 @@ async function loadLfg() {
   renderLfgFilters();
   try {
     const r = await fetch("/api/lfg");
-    if (r.ok) { lfgBoard = (await r.json()).entries || []; }
+    if (r.ok) { const d = await r.json(); lfgBoard = d.entries || []; setLfgAnnounceAvail(d.announce_available); }
   } catch {}
   renderLfgBoard(); renderLfgBadge();
 }
@@ -7012,13 +7047,14 @@ function renderMarketEditForm(l) {
 // Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
   "#/events": "Events", "#/goals": "Resource Manager", "#/market": "Marketplace",
-  "#/online": "Who's Online", "#/intel": "Org Intel", "#/": "Home" };
+  "#/online": "Who's Online", "#/lfg": "Group Finder", "#/intel": "Org Intel",
+  "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
   "#/events": "Event Planner", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/market": "Org Marketplace",
-  "#/online": "Who's Online", "#/intel": "Org Intel" };
+  "#/online": "Who's Online", "#/lfg": "Group Finder", "#/intel": "Org Intel" };
 // Returning-user accelerator: if you've opened an app before, the launcher offers a
 // one-click jump back into it (persisted across sessions, unlike the in-session lastApp).
 function renderLauncherResume() {
@@ -7063,6 +7099,7 @@ function applyView() {
   // Marketplace owns a sub-route family (board / new / detail), like the events app.
   const market = (h === "#/market" || h.startsWith("#/market/")) && authed;
   const online = h === "#/online" && authed;
+  const lfg = h === "#/lfg" && authed;   // Group Finder — its own app (LFG board)
   const settings = h === "#/settings" && authed;
   const setup = h === "#/setup" && authed;
   // Org Intel: one analytics app whose section is selected by the sub-route.
@@ -7078,7 +7115,7 @@ function applyView() {
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
   const launcher = authed && !nav && !route && !events && !resourceMgr && !market && !online
-    && !settings && !setup && !intel && !legal;
+    && !lfg && !settings && !setup && !intel && !legal;
   // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/intel/market) to
   // their app root for the header indicator and the "remember last app" jump.
   const appHash = events ? "#/events" : resourceMgr ? "#/goals" : market ? "#/market"
@@ -7099,6 +7136,8 @@ function applyView() {
   $("market-view").hidden = !market;
   $("online-view").hidden = !online;
   if (online) loadOnline();   // seed initial paint; WS keeps it live thereafter
+  $("lfg-view").hidden = !lfg;
+  if (lfg) loadLfg();         // seed the board + composer; WS keeps the board live
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   if (setup) renderSetupConn();   // reflect current watcher state on entry
@@ -7113,7 +7152,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
   // "← back to that app" link.
-  if (nav || route || events || resourceMgr || market || intel) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
+  if (nav || route || events || resourceMgr || market || intel || lfg) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
 
   // Header chrome. The logo/title (a.home-link) is the universal Home; the back
   // link returns to the app you came from. ⚙ Settings + 📖 Setup are global. Org
@@ -7123,8 +7162,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || events || resourceMgr || market || online || intel || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || market || intel || legal;
+  $("where").hidden = launcher || route || events || resourceMgr || market || online || lfg || intel || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || market || lfg || intel || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   // Settings + Setup are global utilities — available whenever signed in, including
@@ -7641,6 +7680,7 @@ const DISCORD_CATS = [
   { key: "marketplace", label: "Marketplace", desc: "offers and confirmed trades" },
   { key: "goals",       label: "Goals",       desc: "a procurement goal hits 100%" },
   { key: "records",     label: "Records",     desc: "a new org hauling record" },
+  { key: "lfg",         label: "Group Finder", desc: "new looking-for-group posts (opt-in per post)" },
 ];
 const WEBHOOK_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//;
 const discSt = (key) => $("dwh-st-" + key);

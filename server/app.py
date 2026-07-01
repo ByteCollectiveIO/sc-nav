@@ -939,6 +939,10 @@ LFG_DIRECTIONS = ("lfm", "lfj")
 _LFG_NOTE_MAX = 280
 _LFG_MAX_SLOTS = 40           # LFM slots-needed upper bound
 _LFG_MAX_TAGS = 6             # playstyle chips per entry
+# "Announce to Discord" (#19 step 4) is opt-in per post and rate-limited per member
+# so one person can't blast the channel. Arming the cooldown is what gates it.
+LFG_ANNOUNCE_COOLDOWN_S = 600.0
+_lfg_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
 # How often the scheduled event-reminder loop scans for due events.
 REMINDER_TICK_S = 60.0
@@ -2356,6 +2360,42 @@ async def _notify_event_reminder(ev: dict) -> None:
         f"{loc}{_deep_link('#/events')}{pings}",
         mentions=attendees,
         dedup_key=f"event-reminder:{ev['id']}")
+
+
+async def _notify_lfg_posted(pub: dict) -> None:
+    """Announce a new looking-for-group post to the org's Discord (#19 step 4, opt-in
+    per post). A channel shout with NO @mentions — it's an open call, not a directed
+    ping; members funnel back through the deep link to actually join."""
+    if not notify.is_configured("lfg"):
+        return
+    lfm = pub["direction"] == "lfm"
+    lines = [f"🔎 **Looking for members** — {pub['poster']}" if lfm
+             else f"🙋 **Looking to join** — {pub['poster']}"]
+    if lfm and pub.get("slots"):
+        lines.append(f"Needs {pub['slots']} (filled {pub['filled']}/{pub['slots']})")
+    if pub.get("tags"):
+        lines.append(" ".join(f"`{t}`" for t in pub["tags"]))
+    if pub.get("note"):
+        lines.append(pub["note"])
+    meta = []
+    if pub.get("rally"):
+        meta.append(f"📍 {pub['rally']}")
+    if pub.get("comms"):
+        meta.append("🎙 voice comms")
+    if meta:
+        lines.append(" · ".join(meta))
+    await notify.send("lfg", "\n".join(lines) + _deep_link("#/lfg"),
+                      dedup_key=f"lfg-posted:{pub['id']}")
+
+
+def _lfg_announce_ok(poster_id: str) -> bool:
+    """Anti-spam gate for 'announce to Discord': one announced LFG post per member per
+    cooldown. Returns True (and arms the cooldown) only when allowed."""
+    now = time.monotonic()
+    if now - _lfg_announce_at.get(poster_id, 0.0) < LFG_ANNOUNCE_COOLDOWN_S:
+        return False
+    _lfg_announce_at[poster_id] = now
+    return True
 
 
 def _mentions(*discord_ids) -> tuple[list[str], str]:
@@ -4141,6 +4181,7 @@ class LFGPostIn(BaseModel):
     note: str = Field(default="", max_length=_LFG_NOTE_MAX)
     rally: str | None = Field(default=None, max_length=_NAME_MAX)   # optional rally point
     comms: bool = False   # voice/comms expected
+    announce: bool = False   # opt-in: also broadcast this post to the org's Discord
 
 
 @app.get("/api/lfg")
@@ -4149,7 +4190,10 @@ async def lfg_snapshot(user: dict = Depends(require_session)):
     newest first. Live updates arrive over WS as `lfg`; this is the initial paint."""
     async with hub.lock:
         entries = hub.lfg_board()
-    return {"entries": entries, "count": len(entries)}
+    # `announce_available` lets the composer show its "announce to Discord" opt-in
+    # only when the org has actually configured an LFG webhook (a bool, never the URL).
+    return {"entries": entries, "count": len(entries),
+            "announce_available": notify.is_configured("lfg")}
 
 
 @app.post("/api/lfg")
@@ -4167,6 +4211,9 @@ async def create_lfg(body: LFGPostIn, user: dict = Depends(require_session)):
         entry = hub.post_lfg(user["id"], direction, tags, slots, note, rally, bool(body.comms))
         pub = hub._public_lfg(entry)
     await hub.broadcast_lfg()
+    # Opt-in Discord shout (rate-limited per member so nobody can blast the channel).
+    if body.announce and notify.is_configured("lfg") and _lfg_announce_ok(user["id"]):
+        _notify_bg(_notify_lfg_posted(pub))
     return pub
 
 

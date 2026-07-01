@@ -219,6 +219,24 @@ LFJ per member is a sane cap).
    suite 208 green. **Deferred:** announce-to-Discord (step 4), suggested matches +
    promote-to-event (step 5).
 4. "Announce to Discord" per entry → #18 dispatcher (rate-limited).
+   **BUILT 2026-07-01 (uncommitted, needs /deploy).** New `notify` category `lfg`
+   (added to `notify.CATEGORIES` + the data-driven ORG SETTINGS webhook rows and the
+   frontend `DISCORD_CATS`). `LFGPostIn.announce` (opt-in bool). `_notify_lfg_posted(pub)`
+   builder — a **channel broadcast with NO @mentions** (it's an open call; members funnel
+   back via the `#/lfg` deep link), gated on `notify.is_configured("lfg")`, dedup
+   `lfg-posted:{id}`. Per-member anti-spam: `LFG_ANNOUNCE_COOLDOWN_S=600` + `_lfg_announce_ok`
+   (arms a monotonic cooldown; `_lfg_announce_at` dict), checked in `create_lfg` before
+   `_notify_bg(_notify_lfg_posted(pub))`. `GET /api/lfg` now returns `announce_available`
+   (bool, never the URL) so the composer only shows its "📣 Announce to the org's Discord"
+   opt-in when a webhook is set. Tests: `LFGAnnounceTests` in test_app.py (8) — suite 215 green.
+
+   **Also this pass — Group Finder promoted to its own app (discoverability fix).** The LFG
+   composer + board moved out of `#/online` into a dedicated **Group Finder** app at `#/lfg`
+   (own launcher card w/ `group_finder_logo.png`, `APP_TITLE`/`APP_LABEL`, router branch,
+   `lastApp` persistence — treated like Marketplace). `#/online` keeps YOUR STATUS + the
+   roster. The `🟢 N online` badge is unchanged (→ `#/online`); the `🔎 N looking for group`
+   badge now points to `#/lfg`. Playstyle-tag fetch extracted to `ensurePlaystyleTags()`
+   (shared, lazy) so either view works when opened cold.
 5. (nice-to-have) suggested matches; "promote LFG → scheduled event" shortcut.
 
 ## Relevant code

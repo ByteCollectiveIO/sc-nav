@@ -37,7 +37,7 @@ banner — don't scroll.
 Body views (each a `#…-view` container, hash-routed):
 launcher, main (navigator), settings, setup, intel, leaderboard, stats,
 cargo-leaderboard, cargo-stats, route (cargo planner), events, goals, inventory,
-market, online (who's online, #19), terms, privacy.
+market, online (who's online, #19), lfg (group finder / LFG board, #19), terms, privacy.
 
 JS modules (by `// ----` banner): formatting · resource forecast · state ·
 freshness · shard · nearby · captures · destination · path/map · search ·
@@ -48,7 +48,7 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 
 ## app.py endpoint groups (grep the route to get the exact line)
 - Nav/live: `/api/position`, `/api/state`, `/api/pois`, `/api/destination`, `/api/capture/*`, `/api/path/{action}`, `/api/refresh`
-- Who's online (#19): `/api/online` (roster snapshot + `me` prefs), `/api/online/status` (set status/activity/appear-offline), `/api/playstyles` (shared activity/LFG vocab); LFG board `/api/lfg` (snapshot + post), `/api/lfg/{id}/join` (toggle), `/api/lfg/{id}` (close) — in-memory, WS `lfg` frame, surfaced in `#/online`
+- Who's online (#19): `/api/online` (roster snapshot + `me` prefs), `/api/online/status` (set status/activity/appear-offline), `/api/playstyles` (shared activity/LFG vocab); LFG board `/api/lfg` (snapshot + post), `/api/lfg/{id}/join` (toggle), `/api/lfg/{id}` (close) — in-memory, WS `lfg` frame, surfaced in its own **Group Finder** app (`#/lfg`); `/api/lfg` snapshot carries `announce_available`; `POST /api/lfg` takes an `announce` flag → rate-limited Discord shout (`notify` category `lfg`, #19 step 4)
 - Reference data: `/api/handles`, `/api/commodities`, `/api/raw_commodities`, `/api/ships`, `/api/harvestables`, `/api/fauna`, `/api/resource_*`, `/api/biomes`, `/api/custom_pois`, `/api/observations`
 - Cargo planner: `/api/route/plan|run|history|session/reset`
 - Cargo analytics: `/api/cargo/leaderboard`, `/api/cargo/stats`
