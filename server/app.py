@@ -2140,6 +2140,96 @@ async def _notify_event_reminder(ev: dict) -> None:
         dedup_key=f"event-reminder:{ev['id']}")
 
 
+def _mentions(*discord_ids) -> tuple[list[str], str]:
+    """(allowed-mentions list, trailing ping text) for one or more members, deduped
+    and order-preserving. Only real Discord snowflakes can be pinged — legacy or
+    synthetic ids are dropped so a message never carries a dead `<@id>`."""
+    valid = list(dict.fromkeys(str(i) for i in discord_ids if str(i or "").isdigit()))
+    ping = ("\n" + " ".join(f"<@{d}>" for d in valid)) if valid else ""
+    return valid, ping
+
+
+def _auec(n) -> str:
+    """Format an aUEC amount for a notification (thousands-separated, no decimals)."""
+    return f"{float(n):,.0f} aUEC"
+
+
+def _offer_amount_text(offer: dict) -> str:
+    """How an offer reads in a ping: an aUEC bid/price for sale+auction, or the
+    countered item / note for a barter."""
+    if offer.get("amount_auec") is not None:
+        return f"offered {_auec(offer['amount_auec'])}"
+    parts = [p for p in (offer.get("offer_item_name"),
+                         f"“{offer['offer_note']}”" if offer.get("offer_note") else None) if p]
+    return "offered " + (" — ".join(parts) if parts else "a trade")
+
+
+async def _notify_market_offer(listing: dict, offer: dict, *, deal: bool) -> None:
+    """Tell the seller activity landed on their listing — a standing offer/bid, or
+    an instant buy/buyout that already struck the deal (`deal=True`)."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(listing["seller_id"])
+    who = _resolve_member_name(offer["bidder_id"], None)
+    item = listing.get("item_name") or "your listing"
+    if deal:
+        body = (f"🎉 **{item} sold!**\n"
+                f"{who} bought it for {_auec(offer['amount_auec'])} — confirm the "
+                f"handoff once you meet up in-game.")
+    else:
+        body = f"💰 **New offer on {item}**\n{who} {_offer_amount_text(offer)}."
+    await notify.send("marketplace", f"{body}{_deep_link('#/market')}{ping}",
+                      mentions=mentions, dedup_key=f"market-offer:{offer['id']}")
+
+
+async def _notify_market_accepted(listing: dict, offer: dict) -> None:
+    """Tell the bidder the seller accepted their offer — the deal is now pending."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(offer["bidder_id"])
+    seller = _resolve_member_name(listing["seller_id"], None)
+    item = listing.get("item_name") or "a listing"
+    amount = f" — {_auec(offer['amount_auec'])}" if offer.get("amount_auec") is not None else ""
+    await notify.send(
+        "marketplace",
+        f"🤝 **Your offer was accepted**\n{seller} accepted your offer on {item}"
+        f"{amount}. Coordinate the handoff.{_deep_link('#/market')}{ping}",
+        mentions=mentions, dedup_key=f"market-accept:{offer['id']}")
+
+
+async def _notify_market_confirm_needed(listing: dict, confirmed_by: str) -> None:
+    """One side confirmed the handoff — nudge the other to confirm so it closes."""
+    if not notify.is_configured("marketplace"):
+        return
+    other_id = listing["buyer_id"] if confirmed_by == "seller" else listing["seller_id"]
+    mentions, ping = _mentions(other_id)
+    who = _resolve_member_name(listing["seller_id"] if confirmed_by == "seller"
+                               else listing["buyer_id"], None)
+    item = listing.get("item_name") or "your deal"
+    await notify.send(
+        "marketplace",
+        f"📦 **{who} confirmed the handoff for {item}**\n"
+        f"Confirm on your side to close the deal.{_deep_link('#/market')}{ping}",
+        mentions=mentions,
+        dedup_key=f"market-confirm:{listing['id']}:{confirmed_by}")
+
+
+async def _notify_market_completed(listing: dict) -> None:
+    """Both sides confirmed — the trade is done. Ping buyer and seller."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(listing["seller_id"], listing["buyer_id"])
+    seller = _resolve_member_name(listing["seller_id"], None)
+    buyer = _resolve_member_name(listing["buyer_id"], None)
+    item = listing.get("item_name") or "a listing"
+    amount = f", {_auec(listing['final_auec'])}" if listing.get("final_auec") is not None else ""
+    await notify.send(
+        "marketplace",
+        f"✅ **Deal complete: {item}**\n{seller} ↔ {buyer}{amount}. Nice doing "
+        f"business.{_deep_link('#/market')}{ping}",
+        mentions=mentions, dedup_key=f"market-complete:{listing['id']}")
+
+
 @app.get("/api/events/taxonomy")
 async def events_taxonomy(user: dict = Depends(require_session)):
     """Curated types / categories / grouped roles for the create form."""
@@ -3018,8 +3108,12 @@ async def place_offer(listing_id: int, body: OfferIn,
         note = (body.offer_note or "").strip() or None
         if not item_id and not note:
             raise HTTPException(status_code=400, detail="offer an item or a note")
-        db.add_offer(listing_id, user["id"], None, item_id, item_name, note, ts)
-    return _listing_view(db.get_listing(listing_id), user, detail=True)
+        oid = db.add_offer(listing_id, user["id"], None, item_id, item_name, note, ts)
+    final = db.get_listing(listing_id)
+    _notify_bg(_notify_market_offer(
+        final, db.get_offer(oid),
+        deal=final["status"] == "pending" and final.get("buyer_id") == user["id"]))
+    return _listing_view(final, user, detail=True)
 
 
 @app.patch("/api/market/{listing_id}/offer/{offer_id}")
@@ -3050,6 +3144,7 @@ async def act_on_offer(listing_id: int, offer_id: int, body: OfferActionIn,
         db.settle_listing(listing_id, offer["bidder_id"], "pending", ts)
         db.set_offer_status(offer_id, "accepted")
         db.reject_other_offers(listing_id, offer_id)
+        _notify_bg(_notify_market_accepted(db.get_listing(listing_id), offer))
     else:
         raise HTTPException(status_code=400, detail="unknown action")
     return _listing_view(db.get_listing(listing_id), user, detail=True)
@@ -3073,7 +3168,12 @@ async def confirm_handoff(listing_id: int, user: dict = Depends(require_session)
     side = "seller" if is_seller else "buyer"
     other_confirmed = listing["buyer_confirmed"] if is_seller else listing["seller_confirmed"]
     db.confirm_listing(listing_id, side, ts, completed_at=ts if other_confirmed else None)
-    return _listing_view(db.get_listing(listing_id), user, detail=True)
+    final = db.get_listing(listing_id)
+    if final["status"] == "completed":
+        _notify_bg(_notify_market_completed(final))
+    else:
+        _notify_bg(_notify_market_confirm_needed(final, confirmed_by=side))
+    return _listing_view(final, user, detail=True)
 
 
 @app.get("/api/biomes")

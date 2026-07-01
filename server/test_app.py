@@ -346,5 +346,107 @@ class EventReminderTests(unittest.TestCase):
             db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
 
 
+class MarketNotifyTests(unittest.TestCase):
+    """Step 4 — the inline marketplace pings: a new offer / instant buy alerts the
+    seller, an accept alerts the bidder, and the dual-confirm handshake nudges the
+    other party then celebrates completion. Each directs the ping with an `<@id>`
+    mention, and all stay silent when the marketplace webhook is unset."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("marketplace"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    # seller / buyer / bidder are real Discord snowflakes so they're pingable.
+    _LISTING = {"id": 5, "seller_id": "111", "buyer_id": "222",
+                "item_name": "Quantanium", "final_auec": 250000}
+    _OFFER = {"id": 9, "bidder_id": "222", "amount_auec": 120000}
+
+    def test_new_offer_alerts_the_seller(self):
+        asyncio.run(app._notify_market_offer(self._LISTING, self._OFFER, deal=False))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "marketplace")
+        self.assertIn("New offer", msg["text"])
+        self.assertIn("Quantanium", msg["text"])
+        self.assertIn("120,000 aUEC", msg["text"])
+        self.assertIn("<@111>", msg["text"])           # the seller is pinged
+        self.assertEqual(msg["mentions"], ["111"])
+        self.assertEqual(msg["dedup_key"], "market-offer:9")
+
+    def test_instant_buy_reads_as_a_sale(self):
+        asyncio.run(app._notify_market_offer(self._LISTING, self._OFFER, deal=True))
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("sold", self.sent[0]["text"].lower())
+        self.assertEqual(self.sent[0]["mentions"], ["111"])   # still the seller
+
+    def test_barter_offer_has_no_auec(self):
+        offer = {"id": 3, "bidder_id": "222", "amount_auec": None,
+                 "offer_item_name": "Titanium", "offer_note": "swap?"}
+        asyncio.run(app._notify_market_offer(self._LISTING, offer, deal=False))
+        text = self.sent[0]["text"]
+        self.assertIn("Titanium", text)
+        self.assertNotIn("aUEC", text)
+
+    def test_accept_alerts_the_bidder(self):
+        asyncio.run(app._notify_market_accepted(self._LISTING, self._OFFER))
+        msg = self.sent[0]
+        self.assertIn("accepted", msg["text"].lower())
+        self.assertIn("<@222>", msg["text"])           # the bidder, not the seller
+        self.assertEqual(msg["mentions"], ["222"])
+        self.assertEqual(msg["dedup_key"], "market-accept:9")
+
+    def test_confirm_nudges_the_other_side(self):
+        asyncio.run(app._notify_market_confirm_needed(self._LISTING, confirmed_by="seller"))
+        msg = self.sent[0]
+        self.assertIn("Confirm", msg["text"])
+        self.assertEqual(msg["mentions"], ["222"])      # seller confirmed -> nudge buyer
+        self.assertEqual(msg["dedup_key"], "market-confirm:5:seller")
+
+    def test_completed_pings_both_parties(self):
+        asyncio.run(app._notify_market_completed(self._LISTING))
+        msg = self.sent[0]
+        self.assertIn("Deal complete", msg["text"])
+        self.assertIn("250,000 aUEC", msg["text"])
+        self.assertIn("<@111>", msg["text"])
+        self.assertIn("<@222>", msg["text"])
+        self.assertEqual(msg["mentions"], ["111", "222"])
+        self.assertEqual(msg["dedup_key"], "market-complete:5")
+
+    def test_legacy_ids_are_not_pinged(self):
+        # A non-numeric (legacy/synthetic) id can't be a Discord mention -> dropped.
+        listing = {**self._LISTING, "seller_id": "legacy-seller"}
+        asyncio.run(app._notify_market_offer(listing, self._OFFER, deal=False))
+        self.assertEqual(self.sent[0]["mentions"], [])
+        self.assertNotIn("<@", self.sent[0]["text"])
+
+    def test_silent_when_no_webhook(self):
+        db.set_setting(notify._webhook_key("marketplace"), "")
+        try:
+            asyncio.run(app._notify_market_offer(self._LISTING, self._OFFER, deal=False))
+            asyncio.run(app._notify_market_accepted(self._LISTING, self._OFFER))
+            asyncio.run(app._notify_market_completed(self._LISTING))
+            self.assertEqual(self.sent, [])
+        finally:
+            db.set_setting(notify._webhook_key("marketplace"), _GOOD_WEBHOOK)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

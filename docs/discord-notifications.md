@@ -152,8 +152,23 @@ A single module `server/notify.py`:
    `EventNotifyTests` in `test_app.py` cover fire-when-on, silent-when-off, the
    cancel message, and the timestamp/deep-link helpers. Edit/start-time-change
    notification deferred (not in step 2 scope).
-3. Scheduled reminders (the `events.reminded_at` loop) — the marquee feature.
-4. Marketplace offer/confirm pings (with `<@id>` mentions).
+3. ✅ **DONE (v0.15.0).** Scheduled reminders (the `events.reminded_at` loop) — the
+   marquee feature. Claim-before-send atomic idempotency, single-stage T-lead.
+4. ✅ **DONE (built 2026-06-30, awaiting /deploy).** Marketplace offer/confirm pings,
+   gated on the `marketplace` webhook, each directed with an `<@id>` mention.
+   Builders in `app.py` (all read `notify.is_configured("marketplace")` and use the
+   shared `_mentions(*ids)`/`_auec`/`_deep_link('#/market')` helpers):
+   `_notify_market_offer(listing, offer, deal=)` (a standing offer/bid **or** an
+   instant buy/buyout, pings the **seller**), `_notify_market_accepted` (pings the
+   **bidder** the seller took their offer), `_notify_market_confirm_needed` (one
+   side confirmed → nudge the other), `_notify_market_completed` (both confirmed →
+   ping both). Wired via `_notify_bg` into `POST /api/market/{id}/offer` (deal iff
+   the listing is now `pending` with this bidder), `PATCH …/offer/{oid}` (accept
+   branch only), `POST …/{id}/confirm`. Dedup keys `market-offer:{oid}` /
+   `market-accept:{oid}` / `market-confirm:{lid}:{side}` / `market-complete:{lid}`.
+   Content-injection safe (mentions locked to real snowflakes; barter offers carry
+   no aUEC). `MarketNotifyTests` in `test_app.py` (8 tests). Auction "ending soon"
+   ping deferred (needs a scheduled loop, out of offer/confirm scope).
 5. Goals-100% + hauling-record pings.
 6. ✅ **Per-category channel routing** — done early as part of step 1 (see above),
    not deferred to v1.1.
