@@ -1183,6 +1183,8 @@
   .ev-assign-row select, .ev-assign-row input { padding: 6px 8px; font: inherit;
     font-size: 12px; background: var(--panel2); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; }
+  .ev-assign-row .poi-pick { flex: 1 1 160px; }
+  .ev-assign-row .poi-pick input { width: 100%; }
   .ev-manifest { width: 100%; box-sizing: border-box; min-height: 120px; font-family: ui-monospace,
     SFMono-Regular, Menlo, monospace; font-size: 12px; margin-top: 8px; background: var(--panel2);
     color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
@@ -5689,6 +5691,50 @@ function fleetShipSeats(name) {
   return s ? s.seats : null;
 }
 
+// Turn the group form's ship input into a searchable combobox over the UEX
+// ship catalog: focus opens the full list, typing filters it, a pick (mouse or
+// keyboard) or a case-insensitive blur snaps the value to the canonical UEX
+// name for uniformity — while still allowing a custom ship not in the feed.
+// Reuses the shared .poi-drop styling + attachPickerKeys keyboard nav.
+function attachShipCombo(input) {
+  const wrap = input.parentElement;   // the .poi-pick span
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true;
+  wrap.appendChild(drop);
+  // A known ship fills an empty size box with its crew count.
+  const autofill = () => {
+    const s = fleetShipMap && fleetShipMap.get(input.value.trim().toLowerCase());
+    const cap = $("ev-grp-cap");
+    if (s && cap && cap.value.trim() === "") cap.value = s.crew;
+  };
+  const render = () => {
+    const q = input.value.trim().toLowerCase();
+    const ships = fleetShips || [];
+    const rows = (q ? ships.filter(s => s.name.toLowerCase().includes(q)) : ships).slice(0, 80);
+    drop.innerHTML = "";
+    for (const s of rows) {
+      const it = document.createElement("div");
+      it.className = "poi-opt";
+      it.innerHTML = `${esc(s.name)} <span class="muted">${s.crew} crew</span>`;
+      it._pick = () => {
+        input.value = s.name; drop.hidden = true; autofill(); input.focus();
+      };
+      // mousedown (not click) so the pick lands before the input's blur hides the drop.
+      it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
+      drop.appendChild(it);
+    }
+    drop.hidden = rows.length === 0;
+  };
+  input.addEventListener("focus", render);
+  input.addEventListener("input", () => { render(); autofill(); });
+  input.addEventListener("blur", () => setTimeout(() => {
+    drop.hidden = true;
+    const s = fleetShipMap && fleetShipMap.get(input.value.trim().toLowerCase());
+    if (s && input.value !== s.name) input.value = s.name;   // snap to canonical name
+  }, 120));
+  attachPickerKeys(input, drop);
+}
+
 // Every going member = the seated ones (across groups) + the unassigned pool.
 function fleetGoingMembers(b) {
   const out = [];
@@ -5808,15 +5854,12 @@ function groupFormCard(b) {
   const leaderOpts = `<option value="">— no leader —</option>` +
     fleetGoingMembers(b).map(m =>
       `<option value="${esc(m.discord_id)}" ${g && g.leader_id === m.discord_id ? "selected" : ""}>${esc(m.name)}</option>`).join("");
-  const shipOpts = (fleetShips || []).map(s =>
-    `<option value="${esc(s.name)}">${s.crew} crew</option>`).join("");
   return `<div class="ev-grp" style="margin-top:12px;">` +
     `<div class="ev-section-h" style="margin:0 0 8px;">${editing ? "Edit unit" : "New unit"}</div>` +
     `<div class="ev-assign-row">` +
     `<input id="ev-grp-name" type="text" placeholder="unit name" maxlength="120" value="${g ? esc(g.name) : ""}">` +
     `<select id="ev-grp-kind">${kindOpts}</select>` +
-    `<input id="ev-grp-ship" type="text" placeholder="ship (optional)" maxlength="120" list="ev-ship-list" value="${g && g.ship ? esc(g.ship) : ""}">` +
-    `<datalist id="ev-ship-list">${shipOpts}</datalist>` +
+    `<span class="poi-pick ev-ship-pick"><input id="ev-grp-ship" type="text" placeholder="ship (optional)" maxlength="120" autocomplete="off" value="${g && g.ship ? esc(g.ship) : ""}"></span>` +
     `<input id="ev-grp-cap" type="number" min="0" step="1" placeholder="size" style="width:80px;" value="${g && g.capacity != null ? g.capacity : ""}">` +
     `<select id="ev-grp-leader">${leaderOpts}</select></div>` +
     `<p class="muted" style="font-size:11px;margin:6px 0 0;">Pick a ship to auto-fill crew size; seats are then suggested when you assign.</p>` +
@@ -5847,13 +5890,10 @@ function bindFleet(e) {
   if (go) go.onclick = () => assignMember(e, $("ev-asn-mem").value,
     Number($("ev-asn-grp").value), $("ev-asn-slot").value, $("ev-asn-msg"));
 
-  // Ship → crew-size auto-fill: choosing a known ship fills an empty size box.
+  // Searchable ship combobox: click opens the full UEX list, typing filters,
+  // blur snaps to the canonical name. Also auto-fills the size box on pick.
   const shipInp = $("ev-grp-ship");
-  if (shipInp) shipInp.oninput = () => {
-    const s = fleetShipMap && fleetShipMap.get(shipInp.value.trim().toLowerCase());
-    const cap = $("ev-grp-cap");
-    if (s && cap && cap.value.trim() === "") cap.value = s.crew;
-  };
+  if (shipInp) attachShipCombo(shipInp);
 
   // Assign-row seat suggestions follow the selected unit's ship.
   const grpSel = $("ev-asn-grp");
