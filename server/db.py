@@ -283,6 +283,22 @@ CREATE TABLE IF NOT EXISTS listing_offers (
     created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS listing_offers_listing ON listing_offers(listing_id);
+
+-- Group Finder / LFG board (#19). Persisted so a redeploy or restart no longer
+-- wipes active posts; the green→stale→age-off lifecycle is purely time-based off
+-- `created` (the age-off + stale windows are live org settings, not stored here).
+CREATE TABLE IF NOT EXISTS lfg (
+    id INTEGER PRIMARY KEY,
+    poster TEXT NOT NULL,              -- Discord member id of the poster
+    direction TEXT NOT NULL,           -- lfm (hosting) | lfj (want in)
+    tags TEXT,                         -- json list of playstyle tags
+    slots INTEGER,                     -- lfm only: players needed
+    note TEXT,
+    rally TEXT,                        -- optional rally point
+    comms INTEGER NOT NULL DEFAULT 0,  -- voice/comms expected
+    responders TEXT,                   -- json list of member ids (joiners/pings)
+    created REAL NOT NULL              -- epoch seconds; drives age/stale/age-off
+);
 """
 
 
@@ -1670,6 +1686,53 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
 
 
 # --- one-time migration from the legacy JSON files -------------------------
+
+
+# --- Group Finder / LFG board (#19) -----------------------------------------
+
+
+def _lfg_row_to_dict(r: sqlite3.Row) -> dict:
+    return {
+        "id": r["id"], "poster": r["poster"], "direction": r["direction"],
+        "tags": _u(r["tags"]) or [], "slots": r["slots"], "note": r["note"] or "",
+        "rally": r["rally"], "comms": bool(r["comms"]),
+        "responders": _u(r["responders"]) or [], "created": r["created"],
+    }
+
+
+def lfg_all() -> list[dict]:
+    """Every persisted LFG entry, for seeding the in-memory board at boot."""
+    with _lock:
+        rows = _conn.execute("SELECT * FROM lfg").fetchall()
+    return [_lfg_row_to_dict(r) for r in rows]
+
+
+def lfg_upsert(e: dict) -> None:
+    """Persist one entry (insert on post, replace on join/leave)."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT OR REPLACE INTO lfg "
+            "(id,poster,direction,tags,slots,note,rally,comms,responders,created) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (e["id"], e["poster"], e["direction"], _j(e.get("tags") or []),
+             e.get("slots"), e.get("note") or "", e.get("rally"),
+             1 if e.get("comms") else 0, _j(e.get("responders") or []), e["created"]),
+        )
+
+
+def lfg_delete(ids) -> None:
+    """Remove one entry (int) or several (iterable of ids)."""
+    ids = [ids] if isinstance(ids, int) else list(ids)
+    if not ids:
+        return
+    with _lock, _conn:
+        _conn.executemany("DELETE FROM lfg WHERE id=?", [(i,) for i in ids])
+
+
+def lfg_delete_for(poster: str) -> None:
+    """Remove every entry a member posted."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM lfg WHERE poster=?", (poster,))
 
 
 def _meta_get(key: str):

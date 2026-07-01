@@ -678,6 +678,7 @@ class LFGBoardTests(unittest.TestCase):
 
     def setUp(self):
         app.hub.lfg.clear()
+        db.lfg_delete([e["id"] for e in db.lfg_all()])   # wipe the persisted board too
         app.hub._lfg_seq = 0
         self._member["is_admin"] = False
 
@@ -736,13 +737,53 @@ class LFGBoardTests(unittest.TestCase):
         self.assertEqual([e["poster"] for e in app.hub.lfg.values()], ["8"])
         self.assertFalse(app.hub.drop_lfg_for("7"))   # nothing left
 
-    def test_prune_removes_only_expired(self):
+    def test_prune_removes_only_aged_off(self):
         live = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
-        stale = app.hub.post_lfg("8", "lfm", [], 1, "", None, False)
-        stale["expires"] = time.time() - 1
+        aged = app.hub.post_lfg("8", "lfm", [], 1, "", None, False)
+        aged["created"] = time.time() - (app.lfg_ageoff_min() * 60 + 1)   # past age-off
         self.assertTrue(app.hub.prune_lfg(time.time()))
         self.assertEqual(list(app.hub.lfg), [live["id"]])
         self.assertFalse(app.hub.prune_lfg(time.time()))
+
+    def test_board_persists_and_reloads(self):
+        e = app.hub.post_lfg("7", "lfm", ["bunkers"], 2, "need 2", "Daymar", True)
+        app.hub.join_lfg(e["id"], "8")
+        # Simulate a restart: drop the in-memory board, re-seed from the DB.
+        app.hub.lfg.clear()
+        for row in db.lfg_all():
+            app.hub.lfg[row["id"]] = row
+        again = app.hub.lfg[e["id"]]
+        self.assertEqual(again["poster"], "7")
+        self.assertEqual(again["tags"], ["bunkers"])
+        self.assertEqual(again["responders"], ["8"])   # join survived the reload
+        self.assertTrue(again["comms"])
+        self.assertEqual(again["rally"], "Daymar")
+
+    def test_close_and_supersede_clear_the_db(self):
+        e = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        app.hub.post_lfg("7", "lfm", [], 3, "", None, False)   # supersedes e
+        self.assertNotIn(e["id"], [r["id"] for r in db.lfg_all()])
+        [row] = db.lfg_all()
+        app.hub.close_lfg(row["id"], "7", False)
+        self.assertEqual(db.lfg_all(), [])
+
+    def test_stale_setting_is_clamped_below_ageoff(self):
+        db.set_setting("lfg_ageoff_min", "60")
+        db.set_setting("lfg_stale_min", "90")     # nonsensical: stale after age-off
+        try:
+            self.assertEqual(app.lfg_ageoff_min(), 60)
+            self.assertLess(app.lfg_stale_min(), 60)   # forced below so green exists
+        finally:
+            db.set_setting("lfg_ageoff_min", "180")
+            db.set_setting("lfg_stale_min", "120")
+
+    def test_public_form_flags_stale_by_age(self):
+        e = app.hub.post_lfg("7", "lfm", [], 1, "", None, False)
+        self.assertFalse(app.hub._public_lfg(e)["stale"])       # fresh at post time
+        e["created"] = time.time() - (app.lfg_stale_min() * 60 + 1)
+        pub = app.hub._public_lfg(e)
+        self.assertTrue(pub["stale"])                            # past the stale window
+        self.assertGreater(pub["expires_s"], 0)                 # but not yet aged off
 
     def test_public_form_resolves_and_counts(self):
         e = app.hub.post_lfg("7", "lfm", ["bunkers"], 2, "run", "Daymar", True)

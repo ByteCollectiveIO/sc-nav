@@ -139,6 +139,29 @@ def obs_fresh_window_h() -> int:
         return 48
 
 
+def lfg_ageoff_min() -> int:
+    """Minutes a Group Finder post lives before it ages off the board (removed).
+    DB-backed + admin-editable so an org can tune how "right now" the board feels
+    without a redeploy; applies live to existing posts (the lifecycle is computed
+    from `created`, not frozen at post time). Default 180 (3h)."""
+    try:
+        return max(1, int(db.get_setting("lfg_ageoff_min", "180")))
+    except (TypeError, ValueError):
+        return 180
+
+
+def lfg_stale_min() -> int:
+    """Minutes a Group Finder post stays "fresh" (green) before it's flagged stale
+    (yellow). Always kept strictly below the age-off so every post has a green
+    phase. Default 120 (2h)."""
+    ageoff = lfg_ageoff_min()
+    try:
+        v = int(db.get_setting("lfg_stale_min", "120"))
+    except (TypeError, ValueError):
+        v = 120
+    return max(1, min(v, ageoff - 1)) if ageoff > 1 else 1
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
@@ -932,9 +955,10 @@ PLAYSTYLE_TAGS = [
 # Looking-for-group entries (#19 step 3): transient, in-memory, matching-oriented
 # — NOT the scheduled `events` table. Two directions: "lfm" (I'm hosting / starting
 # a group, need players — carries slots) and "lfj" (I'm solo, want in — a raised
-# hand). Auto-expire so a stale board self-cleans; dropped when the poster goes
-# offline. One active LFM + one active LFJ per member (re-posting supersedes).
-LFG_TTL_S = 3 * 3600.0        # entries expire 3h after posting
+# hand). Persisted (survives restarts) with a purely time-based lifecycle:
+# fresh (green) → stale (yellow) → aged off, driven by the org's lfg_ageoff_min /
+# lfg_stale_min settings off each post's `created`. One active LFM + one active
+# LFJ per member (re-posting supersedes). Long-lived plans belong in Events.
 LFG_DIRECTIONS = ("lfm", "lfj")
 _LFG_NOTE_MAX = 280
 _LFG_MAX_SLOTS = 40           # LFM slots-needed upper bound
@@ -1287,19 +1311,21 @@ class SessionHub:
         """Create this member's LFG entry in the given direction. One active entry
         per direction per member — a re-post supersedes the previous one. Returns the
         new internal record. Call under the lock."""
-        for eid, e in list(self.lfg.items()):    # supersede same-direction post
-            if e["poster"] == poster and e["direction"] == direction:
-                del self.lfg[eid]
+        superseded = [eid for eid, e in self.lfg.items()
+                      if e["poster"] == poster and e["direction"] == direction]
+        for eid in superseded:
+            del self.lfg[eid]
+        db.lfg_delete(superseded)
         self._lfg_seq += 1
-        now = time.time()
         entry = {
             "id": self._lfg_seq, "poster": poster, "direction": direction,
             "tags": tags, "slots": slots if direction == "lfm" else None,
             "note": note, "rally": rally, "comms": comms,
             "responders": [],   # joiners (lfm) / interested pings (lfj)
-            "created": now, "expires": now + LFG_TTL_S,
+            "created": time.time(),
         }
         self.lfg[entry["id"]] = entry
+        db.lfg_upsert(entry)
         return entry
 
     def join_lfg(self, entry_id: int, uid: str) -> dict | None:
@@ -1315,6 +1341,7 @@ class SessionHub:
         elif not (e["direction"] == "lfm" and e["slots"]
                   and len(e["responders"]) >= e["slots"]):  # join unless full
             e["responders"].append(uid)
+        db.lfg_upsert(e)
         return e
 
     def close_lfg(self, entry_id: int, uid: str, is_admin: bool) -> bool:
@@ -1324,21 +1351,27 @@ class SessionHub:
         if e is None or (e["poster"] != uid and not is_admin):
             return False
         del self.lfg[entry_id]
+        db.lfg_delete(entry_id)
         return True
 
     def drop_lfg_for(self, uid: str) -> bool:
-        """Drop every entry a member posted (they went offline / last tab closed).
-        Returns True if anything was removed. Call under the lock."""
+        """Drop every entry a member posted. Returns True if anything was removed.
+        Call under the lock. (Not tied to presence anymore — posts age off by the
+        clock — but kept for an explicit purge, e.g. an admin removing a member.)"""
         gone = [eid for eid, e in self.lfg.items() if e["poster"] == uid]
         for eid in gone:
             del self.lfg[eid]
+        db.lfg_delete_for(uid)
         return bool(gone)
 
     def prune_lfg(self, now: float) -> bool:
-        """Sweep expired entries. Returns True if any were removed. Call under the lock."""
-        gone = [eid for eid, e in self.lfg.items() if e["expires"] <= now]
+        """Sweep aged-off entries (older than the org's age-off window). Returns True
+        if any were removed. Call under the lock."""
+        ageoff_s = lfg_ageoff_min() * 60
+        gone = [eid for eid, e in self.lfg.items() if now - e["created"] >= ageoff_s]
         for eid in gone:
             del self.lfg[eid]
+        db.lfg_delete(gone)
         return bool(gone)
 
     def _public_lfg(self, e: dict) -> dict:
@@ -1346,6 +1379,9 @@ class SessionHub:
         responder names, filled count, and age / time-left."""
         now = time.time()
         prec = self.online.get(e["poster"])
+        age = max(0.0, now - e["created"])
+        ageoff_s = lfg_ageoff_min() * 60
+        stale_s = lfg_stale_min() * 60
         return {
             "id": e["id"], "poster_id": e["poster"],
             "poster": _resolve_member_name(e["poster"], None),
@@ -1355,8 +1391,9 @@ class SessionHub:
             "responders": [{"id": r, "name": _resolve_member_name(r, None)}
                            for r in e["responders"]],
             "filled": len(e["responders"]),
-            "age_s": max(0.0, now - e["created"]),
-            "expires_s": max(0.0, e["expires"] - now),
+            "age_s": age,
+            "expires_s": max(0.0, ageoff_s - age),
+            "stale": age >= stale_s,   # → yellow card; nearing age-off
         }
 
     def lfg_board(self) -> list[dict]:
@@ -1413,11 +1450,10 @@ async def presence_broadcaster():
                 online_dropped = False
                 for uid in stale:
                     online_dropped |= hub.drop_online(uid)
-                # LFG board self-cleans: drop expired entries + any posted by a member
-                # we just swept as stale (they went quiet, so their post goes with them).
+                # LFG board self-cleans purely by the clock: sweep aged-off posts.
+                # (No longer tied to presence — a post lives its full age-off window
+                # even if the poster steps away, and survives restarts.)
                 lfg_changed = hub.prune_lfg(now)
-                for uid in stale:
-                    lfg_changed |= hub.drop_lfg_for(uid)
                 if upserts:
                     await hub.send_to_all_clients(
                         {"type": "presence", "op": "upsert", "users": upserts})
@@ -1457,6 +1493,12 @@ async def event_reminder_loop():
 
 @app.on_event("startup")
 async def _start_presence_broadcaster():
+    # Re-hydrate the Group Finder board so a redeploy/restart no longer wipes it.
+    # Aged-off posts self-clean on the first broadcaster tick; the id sequence
+    # resumes past the highest persisted id so a new post never collides.
+    for e in db.lfg_all():
+        hub.lfg[e["id"]] = e
+    hub._lfg_seq = max([0, *hub.lfg])
     asyncio.create_task(presence_broadcaster())
     asyncio.create_task(event_reminder_loop())
     # v0.13.0 stored one shared Discord webhook; move it to the new per-category
@@ -3919,6 +3961,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "starmap_pois_enabled": starmap_pois_enabled(),
         "member_role_id": member_role_id(),
         "obs_fresh_window_h": obs_fresh_window_h(),
+        "lfg_ageoff_min": lfg_ageoff_min(),
+        "lfg_stale_min": lfg_stale_min(),
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
@@ -3933,6 +3977,11 @@ class SettingsIn(BaseModel):
     starmap_pois_enabled: bool | None = None
     member_role_id: str | None = Field(default=None, max_length=_META_MAX)
     obs_fresh_window_h: int | None = Field(default=None, ge=1, le=8760)  # 1h .. 1yr
+    # Group Finder lifecycle (minutes): posts turn stale (yellow) at lfg_stale_min
+    # and age off the board at lfg_ageoff_min. Capped at a week; stale < age-off is
+    # enforced in the handler.
+    lfg_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
+    lfg_stale_min: int | None = Field(default=None, ge=1, le=10080)
     # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
     # be used to stuff the meta table. Each id is validated (isdigit) below.
     extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
@@ -3971,6 +4020,16 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting("extra_admin_ids", ",".join(cleaned))
     if body.obs_fresh_window_h is not None:
         db.set_setting("obs_fresh_window_h", str(max(1, body.obs_fresh_window_h)))
+    if body.lfg_ageoff_min is not None or body.lfg_stale_min is not None:
+        # Resolve the pair against current values, then enforce stale < age-off so a
+        # post always has a green phase before it goes yellow.
+        ageoff = body.lfg_ageoff_min if body.lfg_ageoff_min is not None else lfg_ageoff_min()
+        stale = body.lfg_stale_min if body.lfg_stale_min is not None else lfg_stale_min()
+        if stale >= ageoff:
+            raise HTTPException(status_code=400,
+                                detail="Stale time must be less than the age-off time.")
+        db.set_setting("lfg_ageoff_min", str(ageoff))
+        db.set_setting("lfg_stale_min", str(stale))
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
@@ -3989,6 +4048,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
             "member_role_id": member_role_id(),
             "obs_fresh_window_h": obs_fresh_window_h(),
+            "lfg_ageoff_min": lfg_ageoff_min(), "lfg_stale_min": lfg_stale_min(),
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),
@@ -4301,11 +4361,10 @@ async def websocket_endpoint(ws: WebSocket):
         if not sess.ws_clients:   # member's last tab closed — they went offline
             async with hub.lock:
                 hub.drop_online(user["id"])
-                lfg_gone = hub.drop_lfg_for(user["id"])   # their LFG posts go with them
             await hub.broadcast_online()
             await hub.broadcast_online_roster()
-            if lfg_gone:
-                await hub.broadcast_lfg()
+            # LFG posts intentionally persist past a disconnect — they age off by the
+            # clock (green→stale→gone), so closing a tab no longer drops them.
 
 
 # ---------------------------------------------------------------------------

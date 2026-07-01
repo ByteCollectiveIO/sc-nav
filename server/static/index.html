@@ -493,6 +493,8 @@
   .lfg-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
     margin-bottom: 10px; background: var(--panel2); }
   .lfg-card.mine { border-color: var(--accent); }
+  .lfg-card.stale { background: var(--warn-wash); }
+  .lfg-stale-tag { color: var(--warn); font-weight: 600; }
   .lfg-card-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
   .lfg-card-head .on-name { font-size: 14px; }
   .lfg-slots { margin-left: auto; font-size: 12px; color: var(--dim); white-space: nowrap; }
@@ -1868,6 +1870,22 @@
       the ore heatmap always uses every sighting.) Tune it to SC's respawn cadence.
     </div>
     <div class="muted" id="fresh-window-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+
+    <h2>GROUP FINDER (LFG)</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Posts turn <span style="color:var(--warn);">stale</span> after
+      <input id="lfg-stale" type="number" min="1" step="1" style="width:70px;"> min,
+      and age off the board after
+      <input id="lfg-ageoff" type="number" min="1" step="1" style="width:70px;"> min
+      <button id="lfg-life-save">Save</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      The Group Finder board is for grouping up <b>right now</b>. A post shows green
+      while fresh, goes yellow once it's stale, then drops off entirely at the age-off
+      time. Stale must be less than age-off. For scheduled or longer-lived plans, use
+      the <b>Event Planner</b> instead.
+    </div>
+    <div class="muted" id="lfg-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
     <h2>DISCORD NOTIFICATIONS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -4032,7 +4050,9 @@ function lfgCard(e) {
   const meta = [];
   if (e.rally) meta.push(`📍 ${esc(e.rally)}`);
   if (e.comms) meta.push("🎙 voice");
-  meta.push(fmtLeft(e.expires_s));
+  meta.push(e.stale
+    ? `<span class="lfg-stale-tag">⏳ stale · ${fmtLeft(e.expires_s)}</span>`
+    : fmtLeft(e.expires_s));
   let action = "";
   if (mine) {
     action = `<button type="button" data-close="${e.id}">Close post</button>`;
@@ -4044,7 +4064,7 @@ function lfgCard(e) {
     action = `<button type="button" data-join="${e.id}">${iResponded ? "Un-ping" : "Ping"}</button>`;
   }
   const note = e.note ? `<div class="lfg-note">${esc(e.note)}</div>` : "";
-  return `<div class="lfg-card${mine ? " mine" : ""}">` +
+  return `<div class="lfg-card${mine ? " mine" : ""}${e.stale ? " stale" : ""}">` +
     `<div class="lfg-card-head"><span class="on-dot ${st}"></span>` +
     `<span class="on-name">${esc(e.poster)}</span>${mine ? ' <span class="on-where">(you)</span>' : ""}` +
     slots + `</div>` +
@@ -7662,6 +7682,10 @@ async function loadSettings() {
       if (document.activeElement !== $("fresh-window"))
         $("fresh-window").value = s.obs_fresh_window_h;
     }
+    if (s.lfg_ageoff_min && document.activeElement !== $("lfg-ageoff"))
+      $("lfg-ageoff").value = s.lfg_ageoff_min;
+    if (s.lfg_stale_min && document.activeElement !== $("lfg-stale"))
+      $("lfg-stale").value = s.lfg_stale_min;
     rootAdmins = s.root_admin_ids || [];
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
@@ -7886,6 +7910,8 @@ $("admin-add-btn").onclick = () => {
 $("admin-add").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("admin-add-btn").click(); } });
 $("member-role").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("member-role-save").click(); } });
 $("fresh-window").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fresh-window-save").click(); } });
+$("lfg-stale").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("lfg-life-save").click(); } });
+$("lfg-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("lfg-life-save").click(); } });
 $("token-label").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("token-gen").click(); } });
 
 $("fresh-window-save").onclick = async () => {
@@ -7903,6 +7929,26 @@ $("fresh-window-save").onclick = async () => {
     renderNearby(); drawMap();
   } catch {
     $("fresh-window-status").textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+
+$("lfg-life-save").onclick = async () => {
+  const st = $("lfg-life-status");
+  const stale = parseInt($("lfg-stale").value, 10);
+  const ageoff = parseInt($("lfg-ageoff").value, 10);
+  if (!(stale >= 1) || !(ageoff >= 1)) { st.textContent = "enter minutes (≥ 1) for both"; return; }
+  if (stale >= ageoff) { st.textContent = "stale time must be less than age-off"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lfg_stale_min: stale, lfg_ageoff_min: ageoff }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `saved — stale after ${d.lfg_stale_min}m, aged off after ${d.lfg_ageoff_min}m`;
+  } catch {
+    st.textContent = "failed to update — try again";
     loadSettings();
   }
 };
