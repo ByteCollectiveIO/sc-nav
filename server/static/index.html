@@ -2344,8 +2344,8 @@
               placeholder="e.g. 2" style="width:110px">
           </label>
           <label class="on-field on-field-grow">Rally point (optional)
-            <input id="lfg-rally" class="ti" type="text" maxlength="120"
-              placeholder="system / station / POI">
+            <span class="poi-pick"><input id="lfg-rally" class="ti" type="text" maxlength="120"
+              autocomplete="off" placeholder="system / station / POI"></span>
           </label>
           <label class="on-invis"><input id="lfg-comms" type="checkbox"> Voice comms expected</label>
         </div>
@@ -3947,6 +3947,7 @@ async function postLfg() {
     if (r.ok) {
       $("lfg-note").value = ""; $("lfg-rally").value = ""; $("lfg-slots").value = "";
       $("lfg-comms").checked = false;
+      $("lfg-rally").parentElement.classList.remove("picked");   // drop the POI-pick green border
       lfgComposeTags.clear(); renderLfgComposeTags();
       hint.textContent = "✓ Posted"; clearTimeout(postLfg._t);
       postLfg._t = setTimeout(() => { hint.textContent = ""; }, 2500);
@@ -4055,6 +4056,8 @@ function renderLfgBoard() {
 // WS `lfg` frames keep the board live thereafter.
 async function loadLfg() {
   $("lfg-post").onclick = postLfg;   // idempotent re-bind
+  const rallyWrap = $("lfg-rally").parentElement;   // rally autocompletes from POIs (free text ok)
+  if (!rallyWrap.querySelector(".poi-drop")) attachPoiPicker(rallyWrap);   // attach once
   $("lfg-dir").querySelectorAll("button").forEach(b =>
     b.onclick = () => setLfgDir(b.dataset.dir));
   setLfgDir(lfgDir);
