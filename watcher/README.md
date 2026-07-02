@@ -38,6 +38,7 @@ a three-keystroke action. A programmable keyboard/mouse macro can make it one.
 |---|---|---|
 | `--server URL` | — | Nav server base URL (required unless `--dry-run`) |
 | `--interval N` | 0.25 | Clipboard poll interval, seconds |
+| `--heartbeat N` | 60 | Re-send your last position every N seconds so you stay live on teammates' maps even while parked (a shard change re-sends instantly). `0` disables the timed re-send |
 | `--timeout N` | 3.0 | HTTP timeout, seconds |
 | `--dry-run` | off | Print payloads instead of sending |
 | `--once` | off | Read clipboard once, send if valid, exit (connectivity test) |
@@ -56,6 +57,13 @@ were seen on, so the web UI uses this to hide nodes that aren't on your server
 and to flag which teammates share your shard. If no `Game.log` is found (and
 `--game-log` isn't given) the watcher still runs — captures just go out untagged
 and aren't shard-filtered.
+
+Because the game only copies coordinates when you run `/showlocation`, the watcher
+also sends a **heartbeat** (`--heartbeat`, default 60s) that re-sends your last
+known position so you don't age off teammates' maps while parked or AFK. The shard
+is re-read from `Game.log` on every heartbeat, and any change (a relog or server
+mesh handoff) re-sends immediately so the server re-tags you to the new server
+without waiting for the interval.
 
 Failed sends are queued (last 50) and retried automatically, so a nav-server
 restart mid-session loses nothing.

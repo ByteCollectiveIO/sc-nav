@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from sc_nav_watcher import GameLogShardReader, parse_showlocation
+from sc_nav_watcher import GameLogShardReader, heartbeat_due, parse_showlocation
 
 _JOIN = ("<2026-06-20T00:30:29.237Z> [Notice] <Join PU> address[34.21.5.134] "
          "port[64317] shard[pub_use1b_12030094_130] locationId[562954248454145] "
@@ -107,6 +107,32 @@ class GameLogShardReaderTests(unittest.TestCase):
 
     def test_missing_file(self):
         self.assertIsNone(GameLogShardReader("/no/such/Game.log").poll())
+
+
+class HeartbeatDueTests(unittest.TestCase):
+    def test_not_due_before_interval(self):
+        # 30s elapsed, 60s interval, shard unchanged -> nothing to send.
+        self.assertEqual(heartbeat_due(30.0, 0.0, 60.0, "s1", "s1"), "")
+
+    def test_due_after_interval(self):
+        self.assertEqual(heartbeat_due(60.0, 0.0, 60.0, "s1", "s1"), "interval")
+        self.assertEqual(heartbeat_due(75.0, 0.0, 60.0, "s1", "s1"), "interval")
+
+    def test_shard_change_sends_immediately(self):
+        # Only 1s elapsed, but the shard changed -> send now, don't wait.
+        self.assertEqual(heartbeat_due(1.0, 0.0, 60.0, "s2", "s1"), "shard")
+
+    def test_shard_change_wins_over_interval(self):
+        self.assertEqual(heartbeat_due(999.0, 0.0, 60.0, "s2", "s1"), "shard")
+
+    def test_zero_interval_disables_timed_but_not_shard(self):
+        self.assertEqual(heartbeat_due(999.0, 0.0, 0.0, "s1", "s1"), "")
+        self.assertEqual(heartbeat_due(1.0, 0.0, 0.0, "s2", "s1"), "shard")
+
+    def test_no_shard_both_none_is_not_a_change(self):
+        # Shard tagging off (no Game.log): None == None, so no spurious sends.
+        self.assertEqual(heartbeat_due(10.0, 0.0, 60.0, None, None), "")
+        self.assertEqual(heartbeat_due(60.0, 0.0, 60.0, None, None), "interval")
 
 
 if __name__ == "__main__":

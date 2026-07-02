@@ -326,6 +326,25 @@ def build_payload(coords, raw_text, handle=None, shard=None):
     }
 
 
+def heartbeat_due(now, last_send, interval, shard, last_sent_shard):
+    """Decide whether to re-send the last known position as a heartbeat.
+
+    The game only copies coordinates when the player runs /showlocation, so a
+    stationary player's position (and shard) would otherwise go stale on the
+    server and they'd drop off teammates' maps. Returns a reason string:
+      * "shard"    — the Game.log shard changed since we last transmitted (relog
+                     or server mesh handoff); send immediately so the server
+                     re-tags the player to the new server without waiting.
+      * "interval" — `interval` seconds have elapsed since the last send.
+      * ""         — nothing due.
+    `interval <= 0` disables the timed heartbeat (shard changes still send)."""
+    if shard != last_sent_shard:
+        return "shard"
+    if interval > 0 and (now - last_send) >= interval:
+        return "interval"
+    return ""
+
+
 # Sticky config: --handle and --token are remembered here so future runs
 # (e.g. the double-click .bat) don't need to re-specify them.
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watcher_config.json")
@@ -397,12 +416,21 @@ def run(args):
 
     last_seq = clipboard.sequence_number()
     last_text = None
+    last_coords = None            # most recent successfully-parsed location
+    last_raw = ""                 # its raw clipboard text (for the payload)
+    last_sent_shard = None        # shard value last transmitted to the server
+    last_send_t = time.monotonic()  # drives the heartbeat cadence
     sent_count = 0
 
     log(
         f"watching clipboard every {args.interval}s -> "
         + ("dry-run" if args.dry_run else sender.url)
     )
+    if not args.once:
+        log(
+            f"heartbeat: re-sending last position every {args.heartbeat:g}s"
+            if args.heartbeat > 0 else "heartbeat: disabled (timed re-send off)"
+        )
 
     while True:
         shard = shard_reader.poll() if shard_reader else None
@@ -416,15 +444,17 @@ def run(args):
             # No sequence numbers on this platform; detect by text diff below.
             changed = True
 
+        sent_this_loop = False
         if changed:
             text = clipboard.read_text()
             if text is not None and text != last_text:
                 last_text = text
                 coords = parse_showlocation(text)
                 if coords:
-                    payload = build_payload(coords, text, handle, shard)
-                    sender.send(payload)
+                    last_coords, last_raw = coords, text
+                    sender.send(build_payload(coords, text, handle, shard))
                     sent_count += 1
+                    sent_this_loop = True
                     log(
                         f"position #{sent_count}: "
                         f"x={coords['x']:.1f} y={coords['y']:.1f} z={coords['z']:.1f}"
@@ -433,12 +463,31 @@ def run(args):
                     log(f"clipboard changed, not a location ({len(text)} chars)")
             elif seq is not None:
                 # New copy event with identical text (e.g. /showlocation while
-                # stationary) — forward it as a heartbeat so an armed capture
-                # still fires and late-joining UIs get the current position.
+                # stationary) — forward it so an armed capture still fires and
+                # late-joining UIs get the current position.
                 if last_text and (coords := parse_showlocation(last_text)):
+                    last_coords, last_raw = coords, last_text
                     sender.send(build_payload(coords, last_text, handle, shard))
+                    sent_this_loop = True
                     if args.verbose:
                         log("re-copy of same position forwarded")
+
+        # Heartbeat: keep a stationary player fresh on the server (they only copy
+        # coords on /showlocation) and re-tag them the instant their shard changes.
+        if last_coords and not args.once and not sent_this_loop:
+            reason = heartbeat_due(time.monotonic(), last_send_t, args.heartbeat,
+                                   shard, last_sent_shard)
+            if reason:
+                sender.send(build_payload(last_coords, last_raw, handle, shard))
+                sent_this_loop = True
+                if reason == "shard":
+                    log(f"heartbeat: shard changed -> {shard}")
+                elif args.verbose:
+                    log("heartbeat: re-sent last position")
+
+        if sent_this_loop:
+            last_send_t = time.monotonic()
+            last_sent_shard = shard
 
         if args.once:
             return 0 if sent_count else 1
@@ -457,6 +506,12 @@ def main():
     )
     parser.add_argument(
         "--interval", type=float, default=0.25, help="Poll interval seconds (default 0.25)"
+    )
+    parser.add_argument(
+        "--heartbeat", type=float, default=60.0,
+        help="Re-send the last known position every N seconds so a stationary "
+        "player stays live on teammates' maps (a shard change always re-sends "
+        "immediately). 0 disables the timed re-send. Default 60.",
     )
     parser.add_argument(
         "--timeout", type=float, default=3.0, help="HTTP timeout seconds (default 3)"
