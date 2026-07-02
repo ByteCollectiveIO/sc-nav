@@ -176,6 +176,10 @@
      mistaken for an everyday setting. */
   .danger-zone { border-color: var(--bad); }
   .danger-zone h2 { color: var(--bad); }
+  /* admin ID chips: neutral raised pills (gold is reserved for selection/armed) */
+  .admin-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
+    border-radius: 4px; border: 1px solid var(--border); background: var(--panel2);
+    font-size: 12px; color: var(--text); }
   .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 
   #dest-card { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
@@ -564,8 +568,9 @@
   /* logo + title double as the "home" control → back to the app launcher */
   .home-link { display: flex; align-items: center; gap: 12px; text-decoration: none; }
 
-  /* app launcher (home) */
-  .launcher { max-width: 760px; margin: 0 auto; }
+  /* app launcher (home). Width is sized to the card count: 7 apps × minmax(220px)
+     + 18px gaps wrap 4+3 at this cap (760px orphaned the 7th card as 3+3+1). */
+  .launcher { max-width: 970px; margin: 0 auto; }
   .launcher-head { color: var(--accent); letter-spacing: 2px; font-size: 18px;
     margin: 4px 0 6px; text-align: center; }
   .launcher-sub { color: var(--dim); font-size: 13px; line-height: 1.6; text-align: center;
@@ -582,6 +587,10 @@
   .online-badge:hover { background: var(--accent-wash); }
   .online-badge[hidden] { display: none; }
   .lfg-badge { border-color: var(--warn); color: var(--warn); margin-top: -4px; }
+  /* the two live badges share one centred row instead of stacking as loose pills */
+  .launcher-badges { display: flex; justify-content: center; align-items: center;
+    gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+  .launcher-badges .online-badge { margin: 0; }
   .app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 18px; }
   .app-card { position: relative; display: flex; flex-direction: column; align-items: center;
@@ -609,6 +618,8 @@
   .app-grid > .app-card:nth-child(3) { animation-delay: 0.10s; }
   .app-grid > .app-card:nth-child(4) { animation-delay: 0.15s; }
   .app-grid > .app-card:nth-child(5) { animation-delay: 0.20s; }
+  .app-grid > .app-card:nth-child(6) { animation-delay: 0.25s; }
+  .app-grid > .app-card:nth-child(7) { animation-delay: 0.30s; }
   @keyframes entrance-rise { from { opacity: 0; transform: translateY(8px); } }
   @media (prefers-reduced-motion: reduce) {
     .login-card, .app-card { animation: none; }
@@ -646,7 +657,7 @@
   #org-logo { height: 40px; width: auto; max-width: 140px; flex: none; display: block; }
   /* the explicit display above overrides the [hidden] attribute, so restore it */
   #org-logo[hidden] { display: none; }
-  .btn-discord { display: inline-block; background: #5865F2; color: #fff; border: none;
+  .btn-discord { display: inline-block; background: #5865F2; color: #f2f5f9; border: none;
     border-radius: 6px; padding: 10px 20px; font: inherit; font-size: 14px;
     cursor: pointer; text-decoration: none; margin-top: 14px; }
   #token-new code { color: var(--good); }
@@ -656,7 +667,7 @@
      top layer (native <dialog>), so it clears every app z-index without one. */
   dialog.confirm {
     width: min(420px, calc(100vw - 32px)); padding: 0; color: var(--text);
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
   dialog.confirm::backdrop { background: rgba(8, 11, 16, 0.72); backdrop-filter: blur(3px); }
   .confirm-body { padding: 20px 22px 8px; }
@@ -1481,8 +1492,8 @@
       <img id="login-org-logo" alt="org logo" hidden>
     </div>
     <h1>Org Navigator</h1>
-    <p class="muted">Your org's command deck — live navigation, cargo routes, event planning,
-      shared resources, and an aUEC marketplace.</p>
+    <p class="muted">Your org's command deck — seven tools covering live navigation, cargo
+      hauling, events, shared resources, aUEC trading, group finding, and org intel.</p>
     <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. All content not authored by its host or
@@ -1536,8 +1547,10 @@
     <h2 class="launcher-head">Your org toolkit</h2>
     <p class="launcher-sub">Seven tools, one org. New here? Start with the Resource Navigator —
       the rest build on it.</p>
-    <a id="online-badge" class="online-badge" href="#/online" hidden></a>
-    <a id="lfg-badge" class="online-badge lfg-badge" href="#/lfg" hidden></a>
+    <div class="launcher-badges">
+      <a id="online-badge" class="online-badge" href="#/online" hidden></a>
+      <a id="lfg-badge" class="online-badge lfg-badge" href="#/lfg" hidden></a>
+    </div>
     <a id="launcher-resume" class="launcher-resume" hidden></a>
     <div class="app-grid">
       <a class="app-card" href="#/nav">
@@ -1857,6 +1870,10 @@
     </div>
     <div class="muted" id="token-empty" hidden style="font-size:12px; margin-top:8px;">
       No watcher tokens yet — generate one and paste it into the watcher on your gaming PC.
+    </div>
+    <div class="muted" id="token-error" hidden style="font-size:12px; margin-top:8px;">
+      Couldn't load your tokens — check the connection.
+      <button id="token-retry" style="margin-left:6px;">Retry</button>
     </div>
   </div>
 
@@ -4515,7 +4532,15 @@ async function loadRoutePlanner() {
 async function loadRouteHistory() {
   try {
     routeHistory = await fetch("/api/route/history").then(r => r.json());
-  } catch { return; }
+  } catch {
+    // Don't vanish silently — a returning hauler plans from this panel.
+    const el = $("route-history");
+    el.innerHTML = `<p class="muted" style="font-size:12px; margin:0;">Couldn't load your ` +
+      `recent hauls. <button class="route-chip" id="route-hist-retry">Retry</button></p>`;
+    el.hidden = false;
+    $("route-hist-retry").onclick = loadRouteHistory;
+    return;
+  }
   renderRouteHistory();
   renderRouteIntro();       // a returning hauler (has history) doesn't need the intro
   rebuildCommodityList();   // float the player's most-hauled commodities to the top
@@ -5507,9 +5532,9 @@ function renderCalendar() {
   const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     .map(x => `<div class="ev-cal-dow">${x}</div>`).join("");
   const label = month.toLocaleString(undefined, { month: "long", year: "numeric" });
-  return `<div class="ev-cal-head"><button id="ev-cal-prev" class="ev-cal-nav">‹</button>` +
+  return `<div class="ev-cal-head"><button id="ev-cal-prev" class="ev-cal-nav" aria-label="Previous month">‹</button>` +
     `<span class="ev-cal-label">${esc(label)}</span>` +
-    `<button id="ev-cal-next" class="ev-cal-nav">›</button></div>` +
+    `<button id="ev-cal-next" class="ev-cal-nav" aria-label="Next month">›</button></div>` +
     `<div class="ev-cal-grid">${dow}${cells.join("")}</div>`;
 }
 
@@ -5546,7 +5571,12 @@ async function renderEventBoard() {
     `<div id="ev-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   let data;
   try { data = await fetch("/api/events?range=upcoming").then(r => r.json()); }
-  catch { $("ev-list").innerHTML = `<p class="stat-empty">Couldn't load events.</p>`; return; }
+  catch {
+    $("ev-list").innerHTML = `<p class="stat-empty">Couldn't load events. ` +
+      `<button class="ev-btn" id="ev-retry">Retry</button></p>`;
+    $("ev-retry").onclick = renderEventBoard;
+    return;
+  }
   evBoardEvents = data.events || [];
   evCalMonth = new Date(); evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth(), 1);
   evFilterDay = null;
@@ -5576,9 +5606,15 @@ async function renderEventDetail(id) {
   let e;
   try {
     const r = await fetch(`/api/events/${id}`);
-    if (!r.ok) throw 0;
+    if (!r.ok) { $("ev-detail-body").innerHTML = `<p class="stat-empty">Event not found.</p>`; return; }
     e = await r.json();
-  } catch { $("ev-detail-body").innerHTML = `<p class="stat-empty">Event not found.</p>`; return; }
+  } catch {
+    // Network failure ≠ missing event — say which it was, and offer a way back.
+    $("ev-detail-body").innerHTML = `<p class="stat-empty">Couldn't load this event. ` +
+      `<button class="ev-btn" id="ev-retry">Retry</button></p>`;
+    $("ev-retry").onclick = () => renderEventDetail(id);
+    return;
+  }
   renderDetailBody(e);
 }
 
@@ -6426,7 +6462,12 @@ async function renderGoalBoard() {
     `<div id="goals-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   let data;
   try { data = await fetch("/api/goals").then(r => r.json()); }
-  catch { $("goals-list").innerHTML = `<p class="stat-empty">Couldn't load goals.</p>`; return; }
+  catch {
+    $("goals-list").innerHTML = `<p class="stat-empty">Couldn't load goals. ` +
+      `<button class="ev-btn" id="goals-retry">Retry</button></p>`;
+    $("goals-retry").onclick = renderGoalBoard;
+    return;
+  }
   const goals = data.goals || [];
   $("goals-list").innerHTML = goals.length
     ? goals.map(goalCard).join("")
@@ -6464,9 +6505,15 @@ async function renderGoalDetail(id) {
   let g;
   try {
     const r = await fetch(`/api/goals/${id}`);
-    if (!r.ok) throw 0;
+    if (!r.ok) { $("goal-detail-body").innerHTML = `<p class="stat-empty">Goal not found.</p>`; return; }
     g = await r.json();
-  } catch { $("goal-detail-body").innerHTML = `<p class="stat-empty">Goal not found.</p>`; return; }
+  } catch {
+    // Network failure ≠ missing goal — say which it was, and offer a way back.
+    $("goal-detail-body").innerHTML = `<p class="stat-empty">Couldn't load this goal. ` +
+      `<button class="ev-btn" id="goal-retry">Retry</button></p>`;
+    $("goal-retry").onclick = () => renderGoalDetail(id);
+    return;
+  }
   renderGoalDetailBody(g);
 }
 
@@ -6706,7 +6753,12 @@ async function logHolding() {
 async function renderInvOrg() {
   let data;
   try { data = await fetch("/api/inventory").then(r => r.json()); }
-  catch { $("inv-body").innerHTML = `<p class="stat-empty">Couldn't load inventory.</p>`; return; }
+  catch {
+    $("inv-body").innerHTML = `<p class="stat-empty">Couldn't load inventory. ` +
+      `<button class="ev-btn" id="inv-retry">Retry</button></p>`;
+    $("inv-retry").onclick = renderInvOrg;
+    return;
+  }
   const items = data.items || [];
   if (!items.length) { $("inv-body").innerHTML = `<p class="stat-empty">Nothing logged yet.</p>`; return; }
   const rows = items.map((it, i) =>
@@ -6738,7 +6790,12 @@ let rmMineRows = [];
 async function renderInvMine() {
   let data;
   try { data = await fetch("/api/inventory?owner=me").then(r => r.json()); }
-  catch { $("inv-body").innerHTML = `<p class="stat-empty">Couldn't load your holdings.</p>`; return; }
+  catch {
+    $("inv-body").innerHTML = `<p class="stat-empty">Couldn't load your holdings. ` +
+      `<button class="ev-btn" id="inv-retry">Retry</button></p>`;
+    $("inv-retry").onclick = renderInvMine;
+    return;
+  }
   rmMineRows = data.rows || [];
   if (!rmMineRows.length) { $("inv-body").innerHTML = `<p class="stat-empty">You haven't logged any holdings yet.</p>`; return; }
   $("inv-body").innerHTML = rmMineRows.map(invMineRowHtml).join("");
@@ -8274,7 +8331,16 @@ async function loadSettings() {
     renderAdmins();
     applyOrgLogoAdmin(!!s.org_logo);
     applyDiscordSettings(s);
-  } catch {}
+    const st = $("admin-status");
+    if (st.dataset.loadFailed) { st.dataset.loadFailed = ""; st.textContent = ""; }
+  } catch {
+    // Say so instead of silently rendering a blank admin panel.
+    const st = $("admin-status");
+    st.dataset.loadFailed = "1";
+    st.innerHTML = `couldn't load org settings — <button id="settings-retry">Retry</button>`;
+    const b = $("settings-retry");
+    if (b) b.onclick = loadSettings;
+  }
 }
 
 // ---------- Discord notifications (admin) ----------
@@ -8428,8 +8494,7 @@ function renderAdmins() {
   box.innerHTML = "";
   const chip = (id, removable) => {
     const el = document.createElement("span");
-    el.className = "armed";
-    el.style.cssText = "display:inline-flex; align-items:center; gap:6px; padding:3px 8px; border-radius:4px;";
+    el.className = "admin-chip";
     el.append(document.createTextNode(removable ? id : id + " (root)"));
     if (removable) {
       const x = document.createElement("button");
@@ -8643,8 +8708,17 @@ $("delete-account").onclick = async () => {
 
 // ---------- watcher tokens ----------
 async function loadTokens() {
-  let list = [];
+  // A fetch failure must not masquerade as the "no tokens yet" teaching empty
+  // state — that would tell the member to generate a token they may already have.
+  let list = null;
   try { const r = await fetch("/api/tokens"); if (r.ok) list = await r.json(); } catch {}
+  if (list === null) {
+    $("token-table").hidden = true;
+    $("token-empty").hidden = true;
+    $("token-error").hidden = false;
+    return;
+  }
+  $("token-error").hidden = true;
   const tbody = $("token-table").querySelector("tbody");
   tbody.innerHTML = "";
   for (const t of list) {
@@ -8674,16 +8748,22 @@ async function loadTokens() {
 }
 $("token-gen").onclick = async () => {
   const label = $("token-label").value.trim() || "watcher";
-  const r = await fetch("/api/tokens", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label }) });
-  if (!r.ok) return;
-  const d = await r.json();
-  $("token-label").value = "";
-  show("token-new", `New token — copy it now, it won't be shown again:<br>` +
-    `<code style="word-break:break-all">${esc(d.token)}</code><br>` +
-    `<span class="muted">Put it in the watcher config as the auth token.</span>`);
-  loadTokens();
+  const st = $("token-status");
+  st.textContent = "generating…";
+  try {
+    const r = await fetch("/api/tokens", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = "";
+    $("token-label").value = "";
+    show("token-new", `New token — copy it now, it won't be shown again:<br>` +
+      `<code style="word-break:break-all">${esc(d.token)}</code><br>` +
+      `<span class="muted">Put it in the watcher config as the auth token.</span>`);
+    loadTokens();
+  } catch { st.textContent = "couldn't generate — try again"; }
 };
+$("token-retry").onclick = loadTokens;
 
 // ---------- setup guide: download a pre-configured watcher ----------
 // POST (not a plain link) so the server can mint a token and bake it into the
