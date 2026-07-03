@@ -79,6 +79,13 @@ SHIPS_URL = os.environ.get("SC_NAV_SHIPS_URL", "https://api.uexcorp.uk/2.0/vehic
 # lists prices per terminal; we only consume the distinct item names for the
 # shared catalog. One row per (item, terminal), so it's large — cached to disk.
 ITEMS_URL = os.environ.get("SC_NAV_ITEMS_URL", "https://api.uexcorp.space/2.0/items_prices_all/")
+# Commodity trading (trade-route planner, #21): per-terminal buy/sell prices +
+# the terminal catalog that places them. Both are large (one row per commodity
+# per terminal / one row per terminal) so they're cached to disk like the feeds
+# above. Terminals carry no game-file x/y/z — nav_core.match_terminals resolves
+# each to a routable POI by name.
+TERMINALS_URL = os.environ.get("SC_NAV_TERMINALS_URL", "https://api.uexcorp.space/2.0/terminals")
+TRADE_PRICES_URL = os.environ.get("SC_NAV_TRADE_PRICES_URL", "https://api.uexcorp.space/2.0/commodities_prices_all")
 OFFLINE = os.environ.get("SC_NAV_OFFLINE") == "1"
 
 # Canonical public URL (e.g. https://nav.bytecollective.io). When set it is the
@@ -204,6 +211,8 @@ def load_nav_data() -> nav_core.NavData:
 COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
 SHIPS_FILE = DATA_DIR / "ships.json"               # cached uexcorp vehicles
 ITEMS_FILE = DATA_DIR / "items.json"               # cached uexcorp items_prices_all
+TERMINALS_FILE = DATA_DIR / "trade_terminals.json" # cached uexcorp terminals
+TRADE_PRICES_FILE = DATA_DIR / "trade_prices.json" # cached uexcorp commodities_prices_all
 DB_FILE = DATA_DIR / "sc_nav.db"                   # user-contributed data (Phase 2)
 
 
@@ -462,6 +471,45 @@ def load_harvestable_names() -> list[str]:
         and r.get("name")
     }
     return sorted(names)
+
+
+def load_trade_terminals() -> list[dict]:
+    """UEX commodity terminals (one row per terminal), for the trade-route planner
+    (#21). Filtered to live, commodity-type terminals — the only ones that buy/sell
+    bulk cargo. Fetched live with an on-disk cache fallback, same as the other feeds.
+    Placement onto the map happens later, in nav_core.match_terminals."""
+    rows = None
+    if not OFFLINE:
+        try:
+            resp = _fetch_json(TERMINALS_URL, timeout=30)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            if rows:
+                _save_json_list(TERMINALS_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] terminals fetch failed, using cache: {exc}")
+    if not rows:
+        rows = _load_json_list(TERMINALS_FILE)
+    return [r for r in rows
+            if r.get("type") == "commodity" and r.get("is_available_live")]
+
+
+def load_trade_prices() -> list[dict]:
+    """UEX per-terminal commodity prices (commodities_prices_all — one row per
+    commodity per terminal), the live buy/sell feed the trade planner ranks over.
+    Each row joins to a terminal via `id_terminal` and to a commodity by
+    `commodity_name`. Cached to disk like the rest; large (~2.5k rows)."""
+    rows = None
+    if not OFFLINE:
+        try:
+            resp = _fetch_json(TRADE_PRICES_URL, timeout=40)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            if rows:
+                _save_json_list(TRADE_PRICES_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] trade prices fetch failed, using cache: {exc}")
+    if not rows:
+        rows = _load_json_list(TRADE_PRICES_FILE)
+    return rows or []
 
 
 class HandleRegistry:
@@ -767,6 +815,60 @@ def refresh_catalog() -> None:
 nav_core.merge_custom_pois(nav, db.list_custom_pois())
 merge_all_observations(nav)
 nav_core.assign_qt_markers(nav)
+
+
+# --- trade-route planner feeds (#21) ---------------------------------------
+trade_terminals_raw = load_trade_terminals()   # cached UEX commodity terminals
+trade_prices = load_trade_prices()             # cached per-terminal buy/sell rows
+trade_terminals: list[dict] = []               # resolved onto routable POIs
+trade_terminals_by_id: dict[int, dict] = {}
+trade_price_points: list[dict] = []            # live prices joined to resolved terminals
+
+
+def _serialize_trade_price(row: dict, term: dict) -> dict:
+    """One live price row joined to its routable terminal. `buy` = what the
+    terminal sells to you (you buy there); `sell` = what it pays you (you sell
+    there) — UEX's price_buy/price_sell are from the player's side. Supply/demand
+    stock + status flags pass through from UEX; `updated_at` is the scrape time
+    (unix s) for the 'as of Xh ago' freshness label (advisory, no age-off)."""
+    return {
+        "commodity": row.get("commodity_name"),
+        "terminal_id": term["id"],
+        "terminal": term["name"],
+        "system": term["system"],
+        "poi_id": term["poi_id"],
+        "buy": row.get("price_buy") or None,
+        "sell": row.get("price_sell") or None,
+        "scu_buy": row.get("scu_buy") or 0,
+        "scu_sell_stock": row.get("scu_sell_stock") or 0,
+        "status_buy": row.get("status_buy") or 0,
+        "status_sell": row.get("status_sell") or 0,
+        "updated_at": row.get("date_modified") or row.get("date_added"),
+    }
+
+
+def rebuild_trade_terminals() -> None:
+    """Resolve the cached UEX commodity terminals onto routable nav POIs via the
+    name-match crosswalk, then join the price feed onto those terminals. Run at
+    startup and after /api/refresh — the match depends on the live nav POI catalog.
+    Terminals that don't resolve are dropped from routing (never mis-placed) and
+    their count logged; price rows at an unresolved terminal are likewise dropped."""
+    global trade_terminals, trade_terminals_by_id, trade_price_points
+    resolved, unmatched = nav_core.match_terminals(nav, trade_terminals_raw)
+    trade_terminals = resolved
+    trade_terminals_by_id = {t["id"]: t for t in resolved}
+    trade_price_points = [
+        _serialize_trade_price(row, trade_terminals_by_id[tid])
+        for row in trade_prices
+        if (tid := row.get("id_terminal")) in trade_terminals_by_id
+    ]
+    if trade_terminals_raw:
+        print(f"[sc-nav] trade terminals resolved {len(resolved)}/"
+              f"{len(trade_terminals_raw)} ({len(unmatched)} unplaced); "
+              f"{len(trade_price_points)} routable price rows")
+
+
+rebuild_trade_terminals()
 
 
 # --- auth dependencies (defined before the endpoints that use them) ---------
@@ -1814,6 +1916,99 @@ async def list_harvestables():
 async def list_fauna():
     """Curated fauna/species names for the Add Fauna datalist."""
     return fauna_names
+
+
+# --- Trade-route planner (#21): terminals, prices, best-single-trade ranking -
+@app.get("/api/trade/terminals")
+async def list_trade_terminals():
+    """Commodity terminals resolved onto routable POIs (id, name, system, poi_id),
+    for the trade-planner terminal pickers. Unresolved terminals are omitted."""
+    return trade_terminals
+
+
+@app.get("/api/trade/prices")
+async def list_trade_prices(commodity: str | None = None, terminal: int | None = None):
+    """Live per-terminal buy/sell prices for resolved terminals, optionally sliced
+    to one `commodity` (name) or `terminal` (id). Rows at terminals that didn't
+    resolve to a POI are dropped — the planner can't route to them."""
+    cnorm = (commodity or "").strip().lower()
+    return [
+        p for p in trade_price_points
+        if (terminal is None or p["terminal_id"] == terminal)
+        and (not cnorm or (p["commodity"] or "").strip().lower() == cnorm)
+    ]
+
+
+@app.get("/api/trade/trades")
+async def list_trade_trades(
+    commodity: str | None = None, system: str | None = None,
+    capacity_scu: float | None = None, min_margin: int = 0,
+    sort: str = "auto", limit: int = 50,
+):
+    """Best single buy→sell trades over the live price feed, richest first — the
+    manual-mode suggestion list and the seed set for the multi-leg solver (#21).
+    `capacity_scu` (usually the member's ship's usable SCU) unlocks the throughput
+    fields (max_scu, trade_profit, profit_per_hour) and the per-hour ranking."""
+    return nav_core.rank_trades(
+        nav, trade_price_points, commodity=commodity, system=system,
+        capacity_scu=capacity_scu, min_margin=max(0, min_margin),
+        sort=sort, limit=max(1, min(limit, 200)),
+    )
+
+
+class TradeLegIn(BaseModel):
+    commodity: str = Field(max_length=_NAME_MAX)
+    buy_terminal_id: int
+    sell_terminal_id: int
+    scu: float | None = Field(default=None, gt=0, le=100_000)
+
+
+class TradePlanIn(BaseModel):
+    mode: str = "auto"                                  # auto | filtered | manual
+    usable_scu: float = Field(gt=0, le=100_000)
+    start_id: int | None = None                         # POI to start from
+    start_here: bool = False                            # start from live position
+    max_stops: int = Field(default=6, ge=2, le=12)
+    commodities: list[str] = Field(default_factory=list, max_length=50)  # filtered mode
+    system: str | None = Field(default=None, max_length=_NAME_MAX)       # intra-system lock
+    sort: str = "per_hour"                              # per_hour | profit
+    legs: list[TradeLegIn] = Field(default_factory=list, max_length=24)  # manual mode
+    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+
+
+@app.post("/api/trade/plan")
+async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_session)):
+    """Stateless trade-route planner (#21). `mode`:
+      auto      — the solver picks commodities + route for max profit/hour,
+      filtered  — same, restricted to `commodities`,
+      manual    — cost the player's chosen `legs` in order (no solver).
+    Start from a POI (`start_id`) or the caller's live position (`start_here`).
+    Returns {summary, legs, start} — feasibility, per-leg buy/sell + travel, and
+    route totals (profit, capital needed, aUEC/hour)."""
+    sess = hub.sessions.get(user["id"])
+    if body.start_id is not None and body.start_id not in nav.pois:
+        raise HTTPException(status_code=404, detail="unknown start_id")
+    start_pos = None
+    if body.start_here:
+        if sess is None or sess.pos is None:
+            raise HTTPException(status_code=400,
+                                detail="no live position yet — run /showlocation, or pick a start POI")
+        start_pos = sess.pos
+    t_ref = sess.t if sess else None
+    try:
+        if body.mode == "manual":
+            plan = nav_core.cost_trade_legs(
+                nav, trade_price_points, [lg.model_dump() for lg in body.legs],
+                body.usable_scu, start_id=body.start_id, start_pos=start_pos, t_ref=t_ref)
+        else:
+            plan = nav_core.plan_trade_route(
+                nav, trade_price_points, body.usable_scu,
+                start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
+                commodities=(body.commodities if body.mode == "filtered" else None),
+                system=body.system, sort=body.sort, t_ref=t_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return plan
 
 
 # The forecast/finder/heatmap endpoints work for any mappable observation
@@ -4252,6 +4447,7 @@ async def _rebuild_nav() -> None:
                     and s.destination_id not in nav.observations):
                 s.destination_id = None
         await hub.broadcast_all()
+    rebuild_trade_terminals()   # re-resolve the crosswalk against the new POI set
 
 
 @app.post("/api/refresh")
@@ -4259,14 +4455,17 @@ async def refresh_data(admin: dict = Depends(require_admin)):
     """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
     without restarting. Admin only."""
     global raw_commodity_names, commodity_names, ships, fleet_ships, item_names, item_prices
+    global trade_terminals_raw, trade_prices
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
     fleet_ships = await asyncio.to_thread(load_fleet_ships)
     item_names = await asyncio.to_thread(load_item_names)
     item_prices = await asyncio.to_thread(build_item_prices)   # fresh price refs
+    trade_terminals_raw = await asyncio.to_thread(load_trade_terminals)
+    trade_prices = await asyncio.to_thread(load_trade_prices)
     refresh_catalog()   # feeds changed → rebuild the shared item catalog
-    await _rebuild_nav()
+    await _rebuild_nav()   # also re-runs the trade-terminal crosswalk
     return {
         "ok": True,
         "data": data_info,
@@ -4277,6 +4476,8 @@ async def refresh_data(admin: dict = Depends(require_admin)):
         "harvestables": len(harvestable_names),
         "ships": len(ships),
         "items": len(item_names),
+        "trade_terminals": len(trade_terminals),
+        "trade_prices": len(trade_prices),
     }
 
 
@@ -4497,6 +4698,8 @@ async def health():
         "raw_commodities": len(raw_commodity_names),
         "harvestables": len(harvestable_names),
         "ships": len(ships),
+        "trade_terminals": len(trade_terminals),
+        "trade_prices": len(trade_prices),
         "active_sessions": sum(1 for s in hub.sessions.values() if s.pos is not None),
         "data": data_info,
     }

@@ -654,6 +654,16 @@
   a.app-card:hover { border-color: var(--accent); transform: translateY(-2px);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
   .app-logo { width: 160px; height: auto; border-radius: 8px; }
+  /* Trade Router has no photographic logo — a self-drawn route-loop emblem stands
+     in, styled entirely from design tokens so it tracks the active theme. */
+  .trade-logo .tl-plate { fill: var(--panel2); stroke: var(--border); stroke-width: 2; }
+  .trade-logo .tl-orbit { fill: none; stroke: var(--accent); stroke-width: 2.5;
+    stroke-dasharray: 4 7; opacity: 0.5; }
+  .trade-logo .tl-route { fill: none; stroke: var(--accent); stroke-width: 3;
+    stroke-linejoin: round; stroke-linecap: round; }
+  .trade-logo .tl-node { fill: var(--accent); }
+  .trade-logo .tl-mark { fill: var(--accent);
+    font: 700 20px "SF Mono", "Cascadia Code", Consolas, monospace; letter-spacing: 1px; }
   .app-name { font-size: 16px; letter-spacing: 1px; color: var(--accent); }
   .app-desc { font-size: 12px; color: var(--dim); line-height: 1.55; }
   .app-card.disabled { cursor: default; opacity: 0.55; filter: grayscale(0.6); }
@@ -1029,6 +1039,66 @@
   .route-stepper .step.active .dot { border-color: var(--accent); color: var(--accent);
     box-shadow: 0 0 0 3px var(--focus-ring); }
   .route-stepper .step.active .lbl { color: var(--accent); }
+
+  /* ---- trade router (#/trade) ---- */
+  /* Mode toggle: Auto / Pick commodities / Manual legs. */
+  .trade-tabs { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 12px;
+    padding: 4px; background: var(--panel2); width: fit-content; max-width: 100%; flex-wrap: wrap; }
+  .trade-tab { border: 1px solid transparent; background: none; color: var(--dim);
+    font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer; }
+  .trade-tab:hover { color: var(--text); }
+  .trade-tab.active { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); }
+  /* Segmented optimizer choice (aUEC/hr vs total profit). */
+  .trade-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .trade-seg button { border: none; background: none; color: var(--dim); font-size: 12px;
+    padding: 6px 12px; cursor: pointer; }
+  .trade-seg button + button { border-left: 1px solid var(--border); }
+  .trade-seg button.active { background: var(--accent-wash); color: var(--accent); }
+  .trade-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .trade-check input { accent-color: var(--accent); }
+  /* Commodity filter chips. */
+  .trade-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .trade-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 3px 6px 3px 10px; border-radius: 12px; border: 1px solid var(--accent);
+    color: var(--accent); background: var(--accent-wash); }
+  .trade-chip button { border: none; background: none; color: inherit; cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 0; }
+  /* Manual leg builder rows. */
+  .trade-leg-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    padding: 8px 0; border-top: 1px solid var(--border-soft); }
+  .trade-leg-row:first-child { border-top: none; }
+  .trade-leg-row .tl-seq { flex: none; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; }
+  .trade-leg-row .tl-live { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .trade-leg-row .tl-live b { color: var(--good); }
+  .trade-leg-row .tl-del { color: var(--bad); border-color: var(--border); font-size: 12px; padding: 4px 9px; }
+  /* Planned leg cards (plan output). */
+  .trade-leg-card { display: flex; gap: 12px; padding: 14px 0; border-top: 1px solid var(--border); }
+  .trade-leg-card .seq { flex: none; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .trade-leg-card .body { flex: 1; min-width: 0; }
+  .trade-leg-card .tl-flow { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+  .trade-leg-card .tl-commodity { font-size: 15px; color: var(--text); }
+  .trade-leg-card .tl-scu { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .trade-leg-card .tl-side { font-size: 13px; }
+  .trade-leg-card .tl-buy b { color: var(--warn); } .trade-leg-card .tl-sell b { color: var(--good); }
+  .trade-leg-card .tl-arrow { color: var(--dim); }
+  .trade-leg-card .tl-econ { font-size: 12px; color: var(--dim); margin-top: 4px;
+    font-variant-numeric: tabular-nums; }
+  .trade-leg-card .tl-econ b { color: var(--good); }
+  .trade-leg-card .tl-move { font-size: 11px; color: var(--dim); margin-top: 3px; }
+  .trade-leg-card .tl-move .gate { color: var(--warn); }
+  /* Live "best trades right now" suggestion board (manual-mode helper). */
+  .trade-sug-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--border-soft); font-size: 13px; }
+  .trade-sug-row:first-of-type { border-top: none; }
+  .trade-sug-row .sg-name { color: var(--text); min-width: 120px; }
+  .trade-sug-row .sg-econ { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .trade-sug-row .sg-econ b { color: var(--good); }
+  .trade-sug-row .sg-lane { color: var(--dim); font-size: 12px; flex: 1; min-width: 160px; }
+  .trade-price-note { font-size: 11px; color: var(--dim); margin-top: 2px; }
 
   /* ---- event planner (#/events) ---- */
   #events-view, #events-root { display: contents; }
@@ -1636,6 +1706,20 @@
         <div class="app-name">Org Marketplace</div>
         <div class="app-desc">Sell, auction &amp; barter items with your org — priced in aUEC only.
           Post a listing, buy or bid, then settle the handoff in-game.</div>
+      </a>
+      <a class="app-card" href="#/trade">
+        <svg class="app-logo trade-logo" viewBox="0 0 160 160" width="160" height="160" role="img" aria-label="Trade Router">
+          <rect x="5" y="5" width="150" height="150" rx="20" class="tl-plate"/>
+          <ellipse cx="80" cy="86" rx="54" ry="42" class="tl-orbit"/>
+          <path d="M36 100 L78 48 L124 100" class="tl-route"/>
+          <circle cx="36" cy="100" r="8" class="tl-node"/>
+          <circle cx="124" cy="100" r="8" class="tl-node"/>
+          <circle cx="80" cy="48" r="8" class="tl-node"/>
+          <text x="80" y="122" text-anchor="middle" class="tl-mark">aUEC</text>
+        </svg>
+        <div class="app-name">Trade Router</div>
+        <div class="app-desc">Buy low, sell high on live UEX prices — the most profitable buy→sell
+          loop your ship can carry, planned and run leg-by-leg.</div>
       </a>
       <a class="app-card" href="#/intel">
         <img class="app-logo" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
@@ -2439,6 +2523,107 @@
       Star Citizen®, Roberts Space Industries® and Cloud Imperium® are registered trademarks of
       Cloud Imperium Rights LLC.</p>
   </div><!-- /route-view -->
+
+  <div id="trade-view" hidden>
+    <div id="trade-intro" class="panel route-intro" hidden>
+      <div class="ri-head"><h2>PLAN A TRADE RUN</h2>
+        <button id="trade-intro-dismiss" class="ri-dismiss" title="hide this">Got it ✕</button></div>
+      <p class="ri-lead">Buy low, sell high across the system. We read live UEX terminal prices,
+        then build the most profitable buy→sell loop your ship can carry.</p>
+      <ol class="ri-steps">
+        <li><b>Set your ship</b> — usable SCU is how much you can move per leg.</li>
+        <li><b>Choose how much to steer</b> — let us pick everything, narrow to certain
+          commodities, or build each buy→sell leg by hand.</li>
+        <li><b>Plan</b> — get the buy/sell chain, the capital you'll need up front, and aUEC/hour.</li>
+      </ol>
+    </div>
+
+    <div class="panel">
+      <h2>SHIP</h2>
+      <div class="route-row">
+        <span class="poi-pick" style="flex:2; min-width:160px;">
+          <input id="trade-ship" class="ti" list="trade-ships"
+                 placeholder="ship — type a name (e.g. C2 Hercules)" autocomplete="off">
+        </span>
+        <datalist id="trade-ships"></datalist>
+        <label class="muted" style="font-size:12px;">usable SCU
+          <input id="trade-scu" class="ti" type="number" min="0" step="1" style="width:90px;">
+        </label>
+        <span id="trade-ship-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <p class="muted route-hint">Bigger holds move more per leg. Set what actually fits.</p>
+    </div>
+
+    <div class="panel">
+      <h2>START FROM</h2>
+      <div class="route-row">
+        <span class="poi-pick" style="flex:2; min-width:160px;">
+          <input id="trade-start-poi" class="ti" placeholder="a station / POI you're at (optional)"
+                 autocomplete="off">
+        </span>
+        <span class="muted" style="font-size:12px;">or</span>
+        <button id="trade-here">📍 my current location</button>
+        <span id="trade-start-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <p class="muted route-hint">Leave blank to begin wherever the richest first buy is.</p>
+    </div>
+
+    <div class="panel">
+      <h2>HOW TO PLAN</h2>
+      <div class="trade-tabs" id="trade-mode-tabs" role="tablist">
+        <button class="trade-tab active" data-mode="auto" role="tab">Auto</button>
+        <button class="trade-tab" data-mode="filtered" role="tab">Pick commodities</button>
+        <button class="trade-tab" data-mode="manual" role="tab">Manual legs</button>
+      </div>
+
+      <div id="trade-solver-opts">
+        <div class="route-row" style="margin-top:12px;">
+          <label class="muted" style="font-size:12px;">max stops
+            <input id="trade-stops" class="ti" type="number" min="2" max="12" step="1" value="6"
+                   style="width:70px;">
+          </label>
+          <label class="muted" style="font-size:12px;">system
+            <select id="trade-system" class="sel"></select>
+          </label>
+          <span class="trade-seg" id="trade-sort">
+            <button class="active" data-sort="per_hour" type="button">Best aUEC/hr</button>
+            <button data-sort="profit" type="button">Most profit</button>
+          </span>
+        </div>
+        <div id="trade-filter-row" class="route-row" hidden style="margin-top:10px;">
+          <span class="poi-pick" style="flex:1; min-width:180px;">
+            <input id="trade-commodity-add" class="ti" list="trade-commodities"
+                   placeholder="add a commodity (e.g. Gold)" autocomplete="off">
+          </span>
+          <button id="trade-commodity-btn" type="button">+ add</button>
+          <div id="trade-commodity-chips" class="trade-chips"></div>
+        </div>
+      </div>
+
+      <div id="trade-manual" hidden style="margin-top:12px;">
+        <div id="trade-legs"></div>
+        <button id="trade-add-leg" type="button" style="margin-top:8px;">+ add leg</button>
+        <p class="muted route-hint">Pick a commodity, then a terminal to buy at and one to sell at.
+          Live prices and profit fill in as you go.</p>
+      </div>
+
+      <datalist id="trade-commodities"></datalist>
+      <div class="route-actions">
+        <button id="trade-plan" class="active">Plan trade run</button>
+        <button id="trade-clear" title="reset the planner">Clear</button>
+        <span id="trade-plan-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+    </div>
+
+    <div id="trade-result" hidden></div>
+    <div id="trade-suggest" class="panel" hidden></div>
+
+    <p class="fansite-disclaimer">Terminal &amp; commodity prices
+      <a href="https://uexcorp.space" target="_blank" rel="noopener">Powered by UEX</a>, at UEX's own
+      polling cadence. This is an unofficial Star Citizen fansite, not affiliated with the Cloud
+      Imperium group of companies. Star Citizen®, Roberts Space Industries® and Cloud Imperium® are
+      registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /trade-view -->
 
   <div id="events-view" hidden>
     <div id="events-root"></div>
@@ -5708,6 +5893,341 @@ function renderStop(s, i, completes) {
     + `</div></div>`;
 }
 
+// ---------- trade router (#/trade) ----------
+// Commodity-arbitrage planner (#21): buy low / sell high across terminals on live
+// UEX prices. Three modes — Auto (solver picks commodities + route), Filtered
+// (solver, restricted to chosen commodities), Manual (you pick each buy/sell leg).
+// Reuses the cargo planner's plan-panel visual language + POI picker + ship list.
+let tradeWired = false;
+let tradeShips = null, tradeShipsByName = {};
+let tradeTerminals = null;               // resolved commodity terminals (pickers + systems)
+let tradeTermById = {};
+let tradeMode = "auto";                  // auto | filtered | manual
+let tradeSort = "per_hour";              // per_hour | profit
+let tradeFilter = [];                    // commodity names (filtered mode)
+let tradeStartHere = false;              // start from the caller's live position
+let tradeLastInput = null;               // last plan payload (feeds run mode in step 5)
+const tradePriceCache = {};              // commodity -> {tid: {buy, sell}} for manual live margins
+
+async function loadTradePlanner() {
+  if (!tradeShips) {
+    tradeShips = await fetch("/api/ships").then(r => r.json()).catch(() => []);
+    const dl = $("trade-ships"); dl.innerHTML = "";
+    for (const s of tradeShips) {
+      tradeShipsByName[s.name.toLowerCase()] = s;
+      const o = document.createElement("option");
+      o.value = s.name; o.label = `${s.scu} SCU`; dl.appendChild(o);
+    }
+    fetch("/api/commodities").then(r => r.json()).then(names => {
+      const cd = $("trade-commodities"); cd.innerHTML = "";
+      for (const n of (names || [])) { const o = document.createElement("option"); o.value = n; cd.appendChild(o); }
+    }).catch(() => {});
+    tradeTerminals = await fetch("/api/trade/terminals").then(r => r.json()).catch(() => []);
+    tradeTermById = {}; for (const t of tradeTerminals) tradeTermById[t.id] = t;
+    populateTradeSystems();
+  }
+  if (!tradeWired) wireTradePlanner();
+  if (tradeMode === "manual" && !$("trade-legs").children.length) addTradeLegRow();
+  renderTradeIntro();
+  renderTradeSuggest();
+}
+
+// Default the system lock to the busiest system (trading concentrates in one),
+// with "Any system" a click away — the design's lean toward a single-system default.
+function populateTradeSystems() {
+  const sel = $("trade-system"); if (!sel) return;
+  const counts = {};
+  for (const t of (tradeTerminals || [])) counts[t.system] = (counts[t.system] || 0) + 1;
+  const systems = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  sel.innerHTML = `<option value="">Any system</option>`
+    + systems.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+  if (systems.length) sel.value = systems[0];
+}
+
+function renderTradeIntro() {
+  const el = $("trade-intro"); if (!el) return;
+  el.hidden = !!localStorage.getItem("trade_intro_dismissed");
+}
+
+function wireTradePlanner() {
+  tradeWired = true;
+  for (const b of $("trade-mode-tabs").querySelectorAll(".trade-tab"))
+    b.onclick = () => setTradeMode(b.dataset.mode);
+  for (const b of $("trade-sort").querySelectorAll("button"))
+    b.onclick = () => { tradeSort = b.dataset.sort;
+      for (const x of $("trade-sort").children) x.classList.toggle("active", x === b); };
+  const shipEl = $("trade-ship");
+  shipEl.addEventListener("change", () => {
+    const s = tradeShipsByName[shipEl.value.trim().toLowerCase()];
+    if (s) { $("trade-scu").value = s.scu; $("trade-ship-msg").textContent = `stated ${s.scu} SCU`; }
+  });
+  attachPoiPicker($("trade-start-poi").parentElement, () => cancelTradeHere());
+  $("trade-here").onclick = toggleTradeHere;
+  $("trade-commodity-btn").onclick = addTradeCommodity;
+  $("trade-commodity-add").addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); addTradeCommodity(); } });
+  $("trade-add-leg").onclick = () => addTradeLegRow();
+  $("trade-plan").onclick = planTrade;
+  $("trade-clear").onclick = clearTrade;
+  $("trade-intro-dismiss").onclick = () => {
+    try { localStorage.setItem("trade_intro_dismissed", "1"); } catch {} renderTradeIntro(); };
+}
+
+function setTradeMode(mode) {
+  tradeMode = mode;
+  for (const b of $("trade-mode-tabs").querySelectorAll(".trade-tab"))
+    b.classList.toggle("active", b.dataset.mode === mode);
+  $("trade-solver-opts").hidden = mode === "manual";
+  $("trade-filter-row").hidden = mode !== "filtered";
+  $("trade-manual").hidden = mode !== "manual";
+  if (mode === "manual" && !$("trade-legs").children.length) addTradeLegRow();
+}
+
+// --- start-from: live position vs picked POI (live wins), mirrors cargo planner ---
+function toggleTradeHere() {
+  tradeStartHere = !tradeStartHere;
+  const inp = $("trade-start-poi");
+  if (tradeStartHere) { inp.value = ""; inp.dataset.poiId = ""; inp.parentElement.classList.remove("picked"); }
+  $("trade-here").classList.toggle("active", tradeStartHere);
+  $("trade-start-msg").textContent = tradeStartHere
+    ? "start: " + (typeof currentLocLabel === "function" && lastState ? currentLocLabel() : "your live position") + " ✓" : "";
+}
+function cancelTradeHere() {
+  if (!tradeStartHere) return;
+  tradeStartHere = false; $("trade-here").classList.remove("active"); $("trade-start-msg").textContent = "";
+}
+function tradeStartPayload() {
+  if (tradeStartHere) return { start_here: true };
+  const pid = $("trade-start-poi").dataset.poiId;
+  return pid ? { start_id: Number(pid) } : {};
+}
+
+// --- filtered-mode commodity chips ---
+function addTradeCommodity() {
+  const inp = $("trade-commodity-add");
+  const name = inp.value.trim();
+  if (!name) return;
+  if (!tradeFilter.some(c => c.toLowerCase() === name.toLowerCase())) tradeFilter.push(name);
+  inp.value = ""; renderTradeChips();
+}
+function renderTradeChips() {
+  const box = $("trade-commodity-chips");
+  box.innerHTML = tradeFilter.map((c, i) =>
+    `<span class="trade-chip">${esc(c)}<button data-rm="${i}" title="remove" type="button">✕</button></span>`).join("");
+  box.querySelectorAll("[data-rm]").forEach(b =>
+    b.onclick = () => { tradeFilter.splice(+b.dataset.rm, 1); renderTradeChips(); });
+}
+
+// --- manual leg builder ---
+function addTradeLegRow(pre) {
+  pre = pre || {};
+  const wrap = document.createElement("div");
+  wrap.className = "trade-leg-row";
+  wrap.innerHTML =
+    `<span class="tl-seq"></span>`
+    + `<span class="poi-pick" style="flex:1; min-width:120px;"><input class="ti tl-commodity" list="trade-commodities" placeholder="commodity" autocomplete="off"></span>`
+    + `<span class="poi-pick" style="flex:1; min-width:130px;"><input class="ti tl-buy" placeholder="buy at…" autocomplete="off"></span>`
+    + `<span class="tl-arrow">→</span>`
+    + `<span class="poi-pick" style="flex:1; min-width:130px;"><input class="ti tl-sell" placeholder="sell at…" autocomplete="off"></span>`
+    + `<input class="ti tl-scu" type="number" min="1" step="1" placeholder="SCU" style="width:72px;">`
+    + `<span class="tl-live"></span>`
+    + `<button class="tl-del" title="remove leg" type="button">✕</button>`;
+  $("trade-legs").appendChild(wrap);
+  const buy = wrap.querySelector(".tl-buy"), sell = wrap.querySelector(".tl-sell");
+  const commodity = wrap.querySelector(".tl-commodity");
+  attachTerminalPicker(buy.parentElement, () => updateLegLive(wrap));
+  attachTerminalPicker(sell.parentElement, () => updateLegLive(wrap));
+  commodity.addEventListener("change", () => updateLegLive(wrap));
+  wrap.querySelector(".tl-scu").addEventListener("input", () => updateLegLive(wrap));
+  wrap.querySelector(".tl-del").onclick = () => { wrap.remove(); renumberLegs(); };
+  if (pre.commodity) commodity.value = pre.commodity;
+  if (pre.buy_terminal_id) { buy.value = pre.buy_terminal; buy.dataset.tid = pre.buy_terminal_id; buy.parentElement.classList.add("picked"); }
+  if (pre.sell_terminal_id) { sell.value = pre.sell_terminal; sell.dataset.tid = pre.sell_terminal_id; sell.parentElement.classList.add("picked"); }
+  renumberLegs();
+  if (pre.commodity) updateLegLive(wrap);
+  return wrap;
+}
+function renumberLegs() {
+  [...$("trade-legs").children].forEach((r, i) => r.querySelector(".tl-seq").textContent = i + 1);
+}
+
+// Terminal typeahead — client-side over the bounded resolved-terminal list.
+function attachTerminalPicker(wrap, onPick) {
+  const input = wrap.querySelector("input");
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true; wrap.appendChild(drop);
+  input.addEventListener("input", () => {
+    wrap.classList.remove("picked"); input.dataset.tid = ""; if (onPick) onPick(null);
+    const q = input.value.trim().toLowerCase();
+    if (q.length < 1) { drop.hidden = true; return; }
+    const hits = (tradeTerminals || []).filter(t => t.name.toLowerCase().includes(q)).slice(0, 12);
+    drop.innerHTML = "";
+    for (const t of hits) {
+      const it = document.createElement("div");
+      it.className = "poi-opt"; it.setAttribute("role", "option");
+      it.innerHTML = `${esc(t.name)} <span class="muted">${esc(t.system)}</span>`;
+      it.onmousedown = (e) => { e.preventDefault();
+        input.value = t.name; input.dataset.tid = t.id; wrap.classList.add("picked");
+        drop.hidden = true; if (onPick) onPick(t); input.focus(); };
+      drop.appendChild(it);
+    }
+    drop.hidden = hits.length === 0;
+  });
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+  attachPickerKeys(input, drop);
+}
+
+// Lazy per-commodity price map (cached) for the manual row's live margin readout.
+async function tradeCommodityPrices(name) {
+  const key = name.toLowerCase();
+  if (tradePriceCache[key]) return tradePriceCache[key];
+  const rows = await fetch(`/api/trade/prices?commodity=${encodeURIComponent(name)}`).then(r => r.json()).catch(() => []);
+  const map = {};
+  for (const r of rows) map[r.terminal_id] = { buy: r.buy, sell: r.sell };
+  tradePriceCache[key] = map; return map;
+}
+async function updateLegLive(wrap) {
+  const commodity = wrap.querySelector(".tl-commodity").value.trim();
+  const buyTid = Number(wrap.querySelector(".tl-buy").dataset.tid || 0);
+  const sellTid = Number(wrap.querySelector(".tl-sell").dataset.tid || 0);
+  const live = wrap.querySelector(".tl-live");
+  if (!commodity || !buyTid || !sellTid) { live.textContent = ""; return; }
+  const map = await tradeCommodityPrices(commodity);
+  const b = map[buyTid] && map[buyTid].buy, s = map[sellTid] && map[sellTid].sell;
+  if (!b) { live.innerHTML = `<span class="route-warn">not sold there</span>`; return; }
+  if (!s) { live.innerHTML = `<span class="route-warn">not bought there</span>`; return; }
+  const m = s - b;
+  live.innerHTML = m > 0 ? `<b>+${fmtAuec(m)}</b>/SCU` : `<span class="route-warn">${fmtAuec(m)}/SCU</span>`;
+}
+
+async function planTrade() {
+  const usable = Number($("trade-scu").value);
+  const msg = $("trade-plan-msg");
+  if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return; }
+  const body = { mode: tradeMode, usable_scu: usable, ...tradeStartPayload() };
+  if (tradeMode === "manual") {
+    const legs = [];
+    for (const row of $("trade-legs").children) {
+      const commodity = row.querySelector(".tl-commodity").value.trim();
+      const buyTid = Number(row.querySelector(".tl-buy").dataset.tid || 0);
+      const sellTid = Number(row.querySelector(".tl-sell").dataset.tid || 0);
+      const scu = Number(row.querySelector(".tl-scu").value) || null;
+      if (!commodity || !buyTid || !sellTid) continue;
+      legs.push({ commodity, buy_terminal_id: buyTid, sell_terminal_id: sellTid, scu });
+    }
+    if (!legs.length) { msg.textContent = "add a leg: commodity + a buy terminal + a sell terminal"; return; }
+    body.legs = legs;
+  } else {
+    body.max_stops = Number($("trade-stops").value) || 6;
+    body.system = $("trade-system").value || null;
+    body.sort = tradeSort;
+    if (tradeMode === "filtered") {
+      if (!tradeFilter.length) { msg.textContent = "add at least one commodity, or switch to Auto"; return; }
+      body.commodities = tradeFilter;
+    }
+  }
+  tradeLastInput = body;
+  msg.textContent = "planning…";
+  let res;
+  try {
+    const r = await fetch("/api/trade/plan", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
+    res = await r.json();
+  } catch { msg.textContent = "⚠ network error"; return; }
+  msg.textContent = "";
+  renderTradePlan(res);
+}
+
+function clearTrade() {
+  $("trade-legs").innerHTML = ""; tradeFilter = []; renderTradeChips();
+  $("trade-result").hidden = true; $("trade-plan-msg").textContent = "";
+  cancelTradeHere();
+  $("trade-start-poi").value = ""; $("trade-start-poi").dataset.poiId = "";
+  if (tradeMode === "manual") addTradeLegRow();
+}
+
+function renderTradePlan(res) {
+  const out = $("trade-result"), sm = res.summary || {};
+  let h = `<div class="panel"><h2>TRADE PLAN</h2>`;
+  if (!sm.feasible) {
+    h += `<p class="route-infeasible">⚠ ${esc(sm.reason || "No profitable trade found for these filters.")}`
+      + ` Try widening the commodity filter, allowing cross-system legs, or a bigger stop budget.</p></div>`;
+    out.innerHTML = h; out.hidden = false; return;
+  }
+  const primary = { v: fmtAuec(sm.total_profit), l: "TOTAL PROFIT" };
+  h += `<div class="route-headline"><div class="rh-primary metric">`
+    + `<span class="v">${primary.v}</span><span class="l">${primary.l}</span></div>`
+    + (sm.profit_per_hour ? `<div class="rh-sub"><b>${fmtAuec(sm.profit_per_hour)}</b> aUEC/hr</div>` : "")
+    + `</div>`;
+  const sub = [metric(sm.legs, "TRADES"), metric(sm.stops, "STOPS"),
+               metric(fmtGm(sm.total_distance_m), "QT DISTANCE"),
+               metric(fmtDur(sm.total_time_s), "EST. TIME"),
+               metric(fmtAuec(sm.peak_capital), "CAPITAL NEEDED")];
+  h += `<div class="route-substats">` + sub.join("") + `</div>`;
+  if (res.start) h += `<p class="route-hint muted">Starting from <b>${esc(res.start.name)}</b>.</p>`;
+  h += `<p class="trade-price-note">Prices are UEX's latest scrape, not live in-game — confirm at the terminal.</p>`;
+  h += `</div><div class="panel"><h2>LEGS</h2>`;
+  (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
+  h += `</div>`;
+  out.innerHTML = h; out.hidden = false;
+  window.scrollTo({ top: out.offsetTop - 20, behavior: "smooth" });
+}
+
+function renderTradeLeg(lg, i) {
+  const move = [];
+  if (lg.to_buy && lg.to_buy.distance_m != null && i > 0)
+    move.push(`reposition ${fmtGm(lg.to_buy.distance_m)}`);
+  if (lg.haul && lg.haul.distance_m != null) {
+    let hl = `haul ${fmtGm(lg.haul.distance_m)}`;
+    if (lg.haul.cross_system) hl += ` <span class="gate">· via ${(lg.haul.via_gate || []).join(" → ")}</span>`;
+    move.push(hl);
+  }
+  return `<div class="trade-leg-card"><span class="seq">${i + 1}</span><div class="body">`
+    + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
+    + `<span class="tl-scu">${lg.scu} SCU</span></div>`
+    + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
+    + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span></div>`
+    + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
+    + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span></div>`
+    + `<div class="tl-econ">+${fmtAuec(lg.profit_per_scu)}/SCU · profit <b>${fmtAuec(lg.profit)}</b>`
+    + ` · ${fmtAuec(lg.buy_cost)} capital</div>`
+    + (move.length ? `<div class="tl-move">${move.join(" · ")}</div>` : "")
+    + `</div></div>`;
+}
+
+// Live "best trades right now" board — a standing price signal + the fast path
+// into manual mode (each row seeds a leg). Uses the ship's SCU when set.
+async function renderTradeSuggest() {
+  const el = $("trade-suggest"); if (!el) return;
+  const scu = Number($("trade-scu").value) || 0;
+  const sys = $("trade-system") ? $("trade-system").value : "";
+  const qs = new URLSearchParams({ sort: scu ? "per_hour" : "margin", limit: "8" });
+  if (scu) qs.set("capacity_scu", String(scu));
+  if (sys) qs.set("system", sys);
+  let rows;
+  try { rows = await fetch(`/api/trade/trades?${qs}`).then(r => r.json()); }
+  catch { el.hidden = true; return; }
+  if (!rows || !rows.length) { el.hidden = true; return; }
+  let h = `<h2>BEST TRADES RIGHT NOW</h2><p class="muted route-hint">Top single buy→sell trades on `
+    + `current prices${sys ? " in " + esc(sys) : ""}. Tap one to start a manual leg.</p>`;
+  rows.forEach((r, i) => {
+    const hr = r.profit_per_hour ? ` · <b>${fmtAuec(r.profit_per_hour)}</b>/hr` : "";
+    h += `<div class="trade-sug-row"><span class="sg-name">${esc(r.commodity)}</span>`
+      + `<span class="sg-econ">+${fmtAuec(r.profit_per_scu)}/SCU${hr}</span>`
+      + `<span class="sg-lane">${esc(r.buy_terminal)} → ${esc(r.sell_terminal)}</span>`
+      + `<button class="route-chip" data-use="${i}" type="button">use</button></div>`;
+  });
+  el.innerHTML = h; el.hidden = false;
+  el.querySelectorAll("[data-use]").forEach(b => b.onclick = () => {
+    const r = rows[+b.dataset.use];
+    setTradeMode("manual");
+    addTradeLegRow({ commodity: r.commodity, buy_terminal_id: r.buy_terminal_id,
+      buy_terminal: r.buy_terminal, sell_terminal_id: r.sell_terminal_id, sell_terminal: r.sell_terminal });
+    window.scrollTo({ top: $("trade-manual").offsetTop - 40, behavior: "smooth" });
+  });
+}
+
 // ---------- event planner (#/events) ----------
 // One SPA view that owns three screens under #/events: the board (calendar +
 // upcoming cards), the create/edit form, and the detail+signup page. The screen
@@ -8003,13 +8523,13 @@ function renderMarketEditForm(l) {
 // are account sub-pages; all analytics live under the Org Intel app (#/intel/*).
 // Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
-  "#/events": "Events", "#/goals": "Resource Manager", "#/market": "Marketplace",
-  "#/online": "Who's Online", "#/lfg": "Group Finder", "#/intel": "Org Intel",
-  "#/": "Home" };
+  "#/trade": "Trade Router", "#/events": "Events", "#/goals": "Resource Manager",
+  "#/market": "Marketplace", "#/online": "Who's Online", "#/lfg": "Group Finder",
+  "#/intel": "Org Intel", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
-  "#/events": "Event Planner", "#/goals": "Resource Manager",
+  "#/trade": "Trade Router", "#/events": "Event Planner", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/market": "Org Marketplace",
   "#/online": "Who's Online", "#/lfg": "Group Finder", "#/intel": "Org Intel" };
 // Returning-user accelerator: if you've opened an app before, the launcher offers a
@@ -8045,6 +8565,7 @@ function applyView() {
   if (aliased) { if (aliased[1]) intelBoard = aliased[1]; location.hash = aliased[0]; return; }
   const nav = h === "#/nav" && authed;
   const route = h === "#/route" && authed;
+  const trade = h === "#/trade" && authed;   // Trade Router (commodity arbitrage)
   // The event planner owns a small sub-route family (board / new / detail), so
   // any hash under #/events counts as being in the app.
   const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
@@ -8071,7 +8592,7 @@ function applyView() {
   const privacy = h === "#/privacy";
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !route && !events && !resourceMgr && !market && !online
+  const launcher = authed && !nav && !route && !trade && !events && !resourceMgr && !market && !online
     && !lfg && !settings && !setup && !intel && !legal;
   // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/intel/market) to
   // their app root for the header indicator and the "remember last app" jump.
@@ -8087,6 +8608,7 @@ function applyView() {
   if (launcher) { renderLauncherResume(); renderOnlineBadge(); renderLfgBadge(); }
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
+  $("trade-view").hidden = !trade;
   $("events-view").hidden = !events;
   $("goals-view").hidden = !goals;
   $("inventory-view").hidden = !inventory;
@@ -8109,7 +8631,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
   // "← back to that app" link.
-  if (nav || route || events || resourceMgr || market || intel || lfg) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
+  if (nav || route || trade || events || resourceMgr || market || intel || lfg) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
 
   // Header chrome. The logo/title (a.home-link) is the universal Home; the back
   // link returns to the app you came from. ⚙ Settings + 📖 Setup are global. Org
@@ -8119,8 +8641,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || events || resourceMgr || market || online || lfg || intel || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || events || resourceMgr || market || lfg || intel || legal;
+  $("where").hidden = launcher || route || trade || events || resourceMgr || market || online || lfg || intel || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || trade || events || resourceMgr || market || lfg || intel || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   // Settings + Setup are global utilities — available whenever signed in, including
@@ -8137,6 +8659,8 @@ function applyView() {
     if (currentMe.is_admin) loadSettings();
   } else if (route) {
     loadRoutePlanner();
+  } else if (trade) {
+    loadTradePlanner();
   } else if (events) {
     loadEvents();
   } else if (goals) {

@@ -1364,9 +1364,19 @@ unassigned-pool → group-cards board on the event detail. Manifest export → D
 
 ### 21. Trade-route finder (buy-low/sell-high on live terminal prices)
 Pure commodity trading using the UEX feed (complements the *contract*-based cargo
-planner): "given my ship SCU + location, top profit-per-SCU routes now." **Parked
-— good idea but several non-org-specific tools already do this** (it duplicates
-external sites and isn't org-differentiated). Revisit if we want a one-stop hub.
+planner): "given my ship SCU + location, top profit-per-SCU routes now."
+**Un-parked 2026-07-03 — designing.** Full spec in
+[`docs/trade-route-planner.md`](trade-route-planner.md). The org-differentiation
+gap (below) is answered by live-position re-plan + teammate-lane-awareness, both
+things a generic external site can't do; nothing built yet.
+
+<details>
+<summary>Original parking note (2026-06-19)</summary>
+
+Parked — good idea but several non-org-specific tools already do this (it
+duplicates external sites and isn't org-differentiated). Revisit if we want a
+one-stop hub.
+</details>
 
 ### 22. Refinery job tracker
 Log refinery work orders (ore, station, yield, real-world ETA) → countdown →
