@@ -654,16 +654,6 @@
   a.app-card:hover { border-color: var(--accent); transform: translateY(-2px);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
   .app-logo { width: 160px; height: auto; border-radius: 8px; }
-  /* Trade Router has no photographic logo — a self-drawn route-loop emblem stands
-     in, styled entirely from design tokens so it tracks the active theme. */
-  .trade-logo .tl-plate { fill: var(--panel2); stroke: var(--border); stroke-width: 2; }
-  .trade-logo .tl-orbit { fill: none; stroke: var(--accent); stroke-width: 2.5;
-    stroke-dasharray: 4 7; opacity: 0.5; }
-  .trade-logo .tl-route { fill: none; stroke: var(--accent); stroke-width: 3;
-    stroke-linejoin: round; stroke-linecap: round; }
-  .trade-logo .tl-node { fill: var(--accent); }
-  .trade-logo .tl-mark { fill: var(--accent);
-    font: 700 20px "SF Mono", "Cascadia Code", Consolas, monospace; letter-spacing: 1px; }
   .app-name { font-size: 16px; letter-spacing: 1px; color: var(--accent); }
   .app-desc { font-size: 12px; color: var(--dim); line-height: 1.55; }
   .app-card.disabled { cursor: default; opacity: 0.55; filter: grayscale(0.6); }
@@ -1040,7 +1030,7 @@
     box-shadow: 0 0 0 3px var(--focus-ring); }
   .route-stepper .step.active .lbl { color: var(--accent); }
 
-  /* ---- trade router (#/trade) ---- */
+  /* ---- trade route planner (#/trade) ---- */
   /* Mode toggle: Auto / Pick commodities / Manual legs. */
   .trade-tabs { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 12px;
     padding: 4px; background: var(--panel2); width: fit-content; max-width: 100%; flex-wrap: wrap; }
@@ -1090,14 +1080,25 @@
   .trade-leg-card .tl-econ b { color: var(--good); }
   .trade-leg-card .tl-move { font-size: 11px; color: var(--dim); margin-top: 3px; }
   .trade-leg-card .tl-move .gate { color: var(--warn); }
-  /* Live "best trades right now" suggestion board (manual-mode helper). */
-  .trade-sug-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 8px 0; border-top: 1px solid var(--border-soft); font-size: 13px; }
+  /* Live "best trades right now" suggestion board (manual-mode helper). Each row
+     decomposes the economics — buy/sell prices, the per-SCU spread, and (with a
+     ship set) the per-run throughput — so the headline number is never ambiguous. */
+  .trade-sug-note { font-size: 12px; color: var(--dim); line-height: 1.5; margin: 2px 0 10px; }
+  .trade-sug-note b { color: var(--text); }
+  .trade-sug-row { display: flex; align-items: flex-start; gap: 10px;
+    padding: 10px 0; border-top: 1px solid var(--border-soft); font-size: 13px; }
   .trade-sug-row:first-of-type { border-top: none; }
-  .trade-sug-row .sg-name { color: var(--text); min-width: 120px; }
+  .trade-sug-row .sg-rank { color: var(--dim); font-variant-numeric: tabular-nums;
+    min-width: 16px; text-align: right; padding-top: 1px; }
+  .trade-sug-row .sg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .trade-sug-row .sg-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .trade-sug-row .sg-name { color: var(--text); font-weight: 600; }
+  .trade-sug-row .sg-head { margin-left: auto; color: var(--dim);
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .trade-sug-row .sg-head b { color: var(--good); }
   .trade-sug-row .sg-econ { color: var(--dim); font-variant-numeric: tabular-nums; }
-  .trade-sug-row .sg-econ b { color: var(--good); }
-  .trade-sug-row .sg-lane { color: var(--dim); font-size: 12px; flex: 1; min-width: 160px; }
+  .trade-sug-row .sg-econ b { color: var(--text); }
+  .trade-sug-row .sg-lane { color: var(--dim); font-size: 12px; }
   .trade-price-note { font-size: 11px; color: var(--dim); margin-top: 2px; }
 
   /* ---- event planner (#/events) ---- */
@@ -1708,16 +1709,8 @@
           Post a listing, buy or bid, then settle the handoff in-game.</div>
       </a>
       <a class="app-card" href="#/trade">
-        <svg class="app-logo trade-logo" viewBox="0 0 160 160" width="160" height="160" role="img" aria-label="Trade Router">
-          <rect x="5" y="5" width="150" height="150" rx="20" class="tl-plate"/>
-          <ellipse cx="80" cy="86" rx="54" ry="42" class="tl-orbit"/>
-          <path d="M36 100 L78 48 L124 100" class="tl-route"/>
-          <circle cx="36" cy="100" r="8" class="tl-node"/>
-          <circle cx="124" cy="100" r="8" class="tl-node"/>
-          <circle cx="80" cy="48" r="8" class="tl-node"/>
-          <text x="80" y="122" text-anchor="middle" class="tl-mark">aUEC</text>
-        </svg>
-        <div class="app-name">Trade Router</div>
+        <img class="app-logo" src="/images/trade_route_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+        <div class="app-name">Trade Route Planner</div>
         <div class="app-desc">Buy low, sell high on live UEX prices — the most profitable buy→sell
           loop your ship can carry, planned and run leg-by-leg.</div>
       </a>
@@ -2542,10 +2535,9 @@
       <h2>SHIP</h2>
       <div class="route-row">
         <span class="poi-pick" style="flex:2; min-width:160px;">
-          <input id="trade-ship" class="ti" list="trade-ships"
+          <input id="trade-ship" class="ti"
                  placeholder="ship — type a name (e.g. C2 Hercules)" autocomplete="off">
         </span>
-        <datalist id="trade-ships"></datalist>
         <label class="muted" style="font-size:12px;">usable SCU
           <input id="trade-scu" class="ti" type="number" min="0" step="1" style="width:90px;">
         </label>
@@ -5893,7 +5885,7 @@ function renderStop(s, i, completes) {
     + `</div></div>`;
 }
 
-// ---------- trade router (#/trade) ----------
+// ---------- trade route planner (#/trade) ----------
 // Commodity-arbitrage planner (#21): buy low / sell high across terminals on live
 // UEX prices. Three modes — Auto (solver picks commodities + route), Filtered
 // (solver, restricted to chosen commodities), Manual (you pick each buy/sell leg).
@@ -5912,12 +5904,7 @@ const tradePriceCache = {};              // commodity -> {tid: {buy, sell}} for 
 async function loadTradePlanner() {
   if (!tradeShips) {
     tradeShips = await fetch("/api/ships").then(r => r.json()).catch(() => []);
-    const dl = $("trade-ships"); dl.innerHTML = "";
-    for (const s of tradeShips) {
-      tradeShipsByName[s.name.toLowerCase()] = s;
-      const o = document.createElement("option");
-      o.value = s.name; o.label = `${s.scu} SCU`; dl.appendChild(o);
-    }
+    for (const s of tradeShips) tradeShipsByName[s.name.toLowerCase()] = s;
     fetch("/api/commodities").then(r => r.json()).then(names => {
       const cd = $("trade-commodities"); cd.innerHTML = "";
       for (const n of (names || [])) { const o = document.createElement("option"); o.value = n; cd.appendChild(o); }
@@ -5956,11 +5943,12 @@ function wireTradePlanner() {
   for (const b of $("trade-sort").querySelectorAll("button"))
     b.onclick = () => { tradeSort = b.dataset.sort;
       for (const x of $("trade-sort").children) x.classList.toggle("active", x === b); };
-  const shipEl = $("trade-ship");
-  shipEl.addEventListener("change", () => {
-    const s = tradeShipsByName[shipEl.value.trim().toLowerCase()];
-    if (s) { $("trade-scu").value = s.scu; $("trade-ship-msg").textContent = `stated ${s.scu} SCU`; }
-  });
+  attachTradeShipPicker();
+  // Re-rank the "best trades" board whenever the ship (SCU) or system changes so
+  // it reflects the same profit/hour objective the Auto planner optimizes — a bare
+  // SCU edit shouldn't leave a stale margin-only board (see renderTradeSuggest).
+  $("trade-scu").addEventListener("input", renderTradeSuggest);
+  $("trade-system").addEventListener("change", renderTradeSuggest);
   attachPoiPicker($("trade-start-poi").parentElement, () => cancelTradeHere());
   $("trade-here").onclick = toggleTradeHere;
   $("trade-commodity-btn").onclick = addTradeCommodity;
@@ -5971,6 +5959,47 @@ function wireTradePlanner() {
   $("trade-clear").onclick = clearTrade;
   $("trade-intro-dismiss").onclick = () => {
     try { localStorage.setItem("trade_intro_dismissed", "1"); } catch {} renderTradeIntro(); };
+}
+
+// Ship typeahead — the same custom combobox the cargo planner uses (a native
+// <datalist> rendered nothing as you typed), so both apps behave identically:
+// filter the /api/ships catalog, show name + stated SCU, and prefill usable SCU
+// (honoring a saved per-ship override) on pick or exact type.
+function attachTradeShipPicker() {
+  const input = $("trade-ship");
+  const wrap = input.parentElement;            // .poi-pick (position: relative)
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true;
+  wrap.appendChild(drop);
+  function refresh() {
+    const q = input.value.trim().toLowerCase();
+    drop.innerHTML = "";
+    const hits = q ? (tradeShips || []).filter(s => s.name.toLowerCase().includes(q)).slice(0, 12) : [];
+    for (const s of hits) {
+      const it = document.createElement("div");
+      it.className = "poi-opt";
+      it.innerHTML = `${esc(s.name)} <span class="muted">${s.scu} SCU${s.company ? " · " + esc(s.company) : ""}</span>`;
+      it.setAttribute("role", "option");
+      it._pick = () => { input.value = s.name; drop.hidden = true; prefillTradeScu(); input.focus(); };
+      it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
+      drop.appendChild(it);
+    }
+    drop.hidden = hits.length === 0;
+    prefillTradeScu();   // also handle an exact name typed without picking
+  }
+  input.addEventListener("input", refresh);
+  input.addEventListener("focus", () => { if (input.value.trim()) refresh(); });
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+  attachPickerKeys(input, drop);
+}
+function prefillTradeScu() {
+  const name = $("trade-ship").value.trim();
+  const cat = tradeShipsByName[name.toLowerCase()];
+  if (!cat) { $("trade-ship-msg").textContent = ""; return; }
+  const saved = savedScuFor(name);
+  $("trade-scu").value = saved != null ? saved : cat.scu;
+  $("trade-ship-msg").textContent = saved != null ? "your saved override" : `stated ${cat.scu} SCU`;
+  renderTradeSuggest();   // re-rank the board for the new hold size
 }
 
 function setTradeMode(mode) {
@@ -6202,20 +6231,40 @@ async function renderTradeSuggest() {
   const el = $("trade-suggest"); if (!el) return;
   const scu = Number($("trade-scu").value) || 0;
   const sys = $("trade-system") ? $("trade-system").value : "";
-  const qs = new URLSearchParams({ sort: scu ? "per_hour" : "margin", limit: "8" });
-  if (scu) qs.set("capacity_scu", String(scu));
+  const perHour = scu > 0;   // a ship's hold unlocks throughput + the per-hour ranking
+  const qs = new URLSearchParams({ sort: perHour ? "per_hour" : "margin", limit: "8" });
+  if (perHour) qs.set("capacity_scu", String(scu));
   if (sys) qs.set("system", sys);
   let rows;
   try { rows = await fetch(`/api/trade/trades?${qs}`).then(r => r.json()); }
   catch { el.hidden = true; return; }
   if (!rows || !rows.length) { el.hidden = true; return; }
-  let h = `<h2>BEST TRADES RIGHT NOW</h2><p class="muted route-hint">Top single buy→sell trades on `
-    + `current prices${sys ? " in " + esc(sys) : ""}. Tap one to start a manual leg.</p>`;
+  const where = sys ? " in " + esc(sys) : "";
+  // The note makes the ranking basis explicit — and why it can disagree with Auto.
+  // Margin-per-SCU ignores how much you can carry and how far it is; Auto optimizes
+  // profit/hour. Set a ship and the board switches to that same measure and aligns.
+  const note = perHour
+    ? `Ranked by <b>profit / hour</b> for your ${scu.toLocaleString()}-SCU hold — the same measure `
+      + `<b>Auto</b> uses, so the top rows are close to what Auto plans${where}. Figures are gross `
+      + `(before fuel), for one buy→sell leg. Tap “use” to seed a manual leg.`
+    : `Ranked by <b>margin per SCU</b> — the raw buy→sell price spread${where}, ignoring how much you `
+      + `can carry and how far the haul is. <b>Set a ship above</b> to rank by profit / hour instead — `
+      + `that's what <b>Auto</b> optimizes, which is why Auto may pick a different commodity than the top spread here.`;
+  let h = `<h2>BEST TRADES RIGHT NOW</h2><p class="trade-sug-note">${note}</p>`;
+  const money = n => (Number(n) || 0).toLocaleString();
   rows.forEach((r, i) => {
-    const hr = r.profit_per_hour ? ` · <b>${fmtAuec(r.profit_per_hour)}</b>/hr` : "";
-    h += `<div class="trade-sug-row"><span class="sg-name">${esc(r.commodity)}</span>`
-      + `<span class="sg-econ">+${fmtAuec(r.profit_per_scu)}/SCU${hr}</span>`
-      + `<span class="sg-lane">${esc(r.buy_terminal)} → ${esc(r.sell_terminal)}</span>`
+    const head = (perHour && r.profit_per_hour)
+      ? `<b>${money(r.profit_per_hour)}</b> aUEC/hr`
+      : `<b>+${money(r.profit_per_scu)}</b> aUEC/SCU`;
+    let econ = `buy <b>${money(r.buy_price)}</b> → sell <b>${money(r.sell_price)}</b> aUEC`
+      + ` · spread <b>+${money(r.profit_per_scu)}</b>/SCU`;
+    if (r.max_scu && r.trade_profit)
+      econ += ` · move <b>${money(r.max_scu)}</b> SCU = <b>${money(r.trade_profit)}</b> aUEC/run`;
+    h += `<div class="trade-sug-row"><span class="sg-rank">${i + 1}</span>`
+      + `<div class="sg-main"><div class="sg-top"><span class="sg-name">${esc(r.commodity)}</span>`
+      + `<span class="sg-head">${head}</span></div>`
+      + `<div class="sg-econ">${econ}</div>`
+      + `<div class="sg-lane">${esc(r.buy_terminal)} → ${esc(r.sell_terminal)}</div></div>`
       + `<button class="route-chip" data-use="${i}" type="button">use</button></div>`;
   });
   el.innerHTML = h; el.hidden = false;
@@ -8523,13 +8572,13 @@ function renderMarketEditForm(l) {
 // are account sub-pages; all analytics live under the Org Intel app (#/intel/*).
 // Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
-  "#/trade": "Trade Router", "#/events": "Events", "#/goals": "Resource Manager",
+  "#/trade": "Trade Route Planner", "#/events": "Events", "#/goals": "Resource Manager",
   "#/market": "Marketplace", "#/online": "Who's Online", "#/lfg": "Group Finder",
   "#/intel": "Org Intel", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
-  "#/trade": "Trade Router", "#/events": "Event Planner", "#/goals": "Resource Manager",
+  "#/trade": "Trade Route Planner", "#/events": "Event Planner", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/market": "Org Marketplace",
   "#/online": "Who's Online", "#/lfg": "Group Finder", "#/intel": "Org Intel" };
 // Returning-user accelerator: if you've opened an app before, the launcher offers a
@@ -8565,7 +8614,7 @@ function applyView() {
   if (aliased) { if (aliased[1]) intelBoard = aliased[1]; location.hash = aliased[0]; return; }
   const nav = h === "#/nav" && authed;
   const route = h === "#/route" && authed;
-  const trade = h === "#/trade" && authed;   // Trade Router (commodity arbitrage)
+  const trade = h === "#/trade" && authed;   // Trade Route Planner (commodity arbitrage)
   // The event planner owns a small sub-route family (board / new / detail), so
   // any hash under #/events counts as being in the app.
   const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
