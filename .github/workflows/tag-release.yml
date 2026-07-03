@@ -1,0 +1,53 @@
+name: tag-release
+
+# Auto-tag a release once it lands on main. Closes the gap where tagging used to be
+# a manual second `/deploy` pass that was easy to forget (v0.28.0 and v0.28.1 both
+# shipped to main untagged before this existed).
+#
+# It fires only after the `tests` workflow succeeds on main, reads the version from
+# server/version.py (robust against the squash-merge "(#N)" suffix that trips
+# commit-subject parsing), and pushes vX.Y.Z if that tag doesn't exist yet. The tag
+# is pure bookkeeping — the server is still rebuilt by hand — so auto-creating it is
+# safe. The manual PR merge stays the deliberate review gate; the tag is not a gate.
+on:
+  workflow_run:
+    workflows: ["tests"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    # Only when tests actually passed on the merged commit.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tag the exact commit tests ran on, and fetch tags to check existence.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Read version from server/version.py
+        id: ver
+        run: |
+          v=$(python -c "import re,pathlib; \
+            print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', \
+            pathlib.Path('server/version.py').read_text()).group(1))")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Create + push tag if missing
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            echo "v$V already tagged — nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$V" -m "v$V"
+          git push origin "v$V"
+          echo "Tagged and pushed v$V."
