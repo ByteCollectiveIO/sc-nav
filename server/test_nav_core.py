@@ -1864,5 +1864,233 @@ class AuctionStateTests(unittest.TestCase):
         self.assertTrue(s["is_closed"])
 
 
+class TradeTerminalCrosswalkTests(unittest.TestCase):
+    """nav_core.match_terminals resolves UEX commodity terminals onto routable
+    nav POIs by name (the trade-route planner's placement step, #21)."""
+
+    def _nav(self):
+        nav = nav_core.NavData()
+
+        def poi(pid, name, system="Stanton"):
+            nav.pois[pid] = nav_core.Poi(
+                id=pid, name=name, system=system, container_name=None, type="Station",
+                local_km=None, global_m=(float(pid), 0.0, 0.0), latitude=None,
+                longitude=None, height_m=None, qt_marker=True)
+
+        poi(1, "Wide Forest Station (ARC-L1)")   # synth_container_pois' Lagrange fold
+        poi(2, "Everus Harbor")                  # plain station, exact match
+        poi(3, "Gateway Station Pyro")           # gateway, word-order flipped vs UEX
+        poi(4, "Area18")                         # city
+        return nav
+
+    def _term(self, **kw):
+        # Minimal UEX terminal row shape (only the fields the matcher reads).
+        row = {"id": kw.get("id", 100), "type": "commodity", "star_system_name": "Stanton",
+               "displayname": None, "space_station_name": None, "outpost_name": None,
+               "city_name": None, "nickname": None, "name": None}
+        row.update(kw)
+        return row
+
+    def test_lagrange_word_order_flip(self):
+        # UEX 'ARC-L1 Wide Forest Station' -> synth 'Wide Forest Station (ARC-L1)'.
+        rows = [self._term(id=1, name="Admin - ARC-L1",
+                           displayname="ARC-L1 Wide Forest Station",
+                           space_station_name="ARC-L1 Wide Forest Station")]
+        resolved, unmatched = nav_core.match_terminals(self._nav(), rows)
+        self.assertEqual(unmatched, [])
+        self.assertEqual(resolved[0]["poi_id"], 1)
+        self.assertEqual(resolved[0]["id"], 1)
+
+    def test_shop_prefix_in_name_is_ignored(self):
+        # The `name` field carries a shop-type prefix ('Admin - ...'); the physical
+        # location must come from the place-name fields, and several shops at one
+        # station all resolve to the same POI.
+        rows = [self._term(id=10, name="Admin - Everus Harbor",
+                           space_station_name="Everus Harbor"),
+                self._term(id=11, name="Platinum Bay - Everus Harbor",
+                           space_station_name="Everus Harbor")]
+        resolved, unmatched = nav_core.match_terminals(self._nav(), rows)
+        self.assertEqual(unmatched, [])
+        self.assertEqual({r["poi_id"] for r in resolved}, {2})
+
+    def test_gateway_word_order_flip(self):
+        rows = [self._term(id=20, name="Admin - Pyro Gateway (Stanton)",
+                           displayname="Pyro Gateway",
+                           space_station_name="Pyro Gateway (Stanton)")]
+        resolved, _ = nav_core.match_terminals(self._nav(), rows)
+        self.assertEqual(resolved[0]["poi_id"], 3)
+
+    def test_city_exact_match(self):
+        rows = [self._term(id=30, name="TDD - Area18", city_name="Area18")]
+        resolved, _ = nav_core.match_terminals(self._nav(), rows)
+        self.assertEqual(resolved[0]["poi_id"], 4)
+
+    def test_unresolved_terminal_is_reported_not_placed(self):
+        rows = [self._term(id=40, name="Admin - Rat's Nest",
+                           displayname="Rat's Nest", space_station_name="Rat's Nest")]
+        resolved, unmatched = nav_core.match_terminals(self._nav(), rows)
+        self.assertEqual(resolved, [])
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(unmatched[0]["id"], 40)
+
+    def test_resolved_record_shape(self):
+        rows = [self._term(id=50, displayname="Everus Harbor",
+                           space_station_name="Everus Harbor")]
+        resolved, _ = nav_core.match_terminals(self._nav(), rows)
+        self.assertEqual(set(resolved[0]), {"id", "name", "system", "poi_id", "poi_name"})
+        self.assertEqual(resolved[0]["poi_name"], "Everus Harbor")
+
+
+class TradeRankingTests(unittest.TestCase):
+    """nav_core.rank_trades — best buy->sell trades over the live price feed (#21
+    step 2). Price points use the shape /api/trade/prices emits."""
+
+    def _pt(self, commodity, terminal_id, poi_id, system="Stanton", buy=None,
+            sell=None, scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": system, "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock}
+
+    def test_pairs_buy_low_sell_high(self):
+        pts = [self._pt("Gold", 1, 101, buy=100),    # buy here for 100
+               self._pt("Gold", 2, 102, sell=180),   # best sell
+               self._pt("Gold", 3, 103, sell=150)]   # weaker sell
+        out = nav_core.rank_trades(nav_core.NavData(), pts, sort="margin")
+        self.assertEqual(out[0]["profit_per_scu"], 80)
+        self.assertEqual(out[0]["sell_terminal_id"], 2)
+        self.assertEqual(out[0]["buy_terminal_id"], 1)
+        self.assertEqual(out[1]["profit_per_scu"], 50)
+
+    def test_no_positive_margin_returns_empty(self):
+        pts = [self._pt("Gold", 1, 101, buy=200), self._pt("Gold", 2, 102, sell=150)]
+        self.assertEqual(nav_core.rank_trades(nav_core.NavData(), pts), [])
+
+    def test_same_dock_is_not_a_trade(self):
+        pts = [self._pt("Gold", 1, 101, buy=100), self._pt("Gold", 2, 101, sell=200)]
+        self.assertEqual(nav_core.rank_trades(nav_core.NavData(), pts), [])
+
+    def test_min_margin_filter(self):
+        pts = [self._pt("Gold", 1, 101, buy=100), self._pt("Gold", 2, 102, sell=140)]
+        self.assertEqual(nav_core.rank_trades(nav_core.NavData(), pts, min_margin=50), [])
+        self.assertEqual(len(nav_core.rank_trades(nav_core.NavData(), pts, min_margin=40)), 1)
+
+    def test_commodity_filter(self):
+        pts = [self._pt("Gold", 1, 101, buy=100), self._pt("Gold", 2, 102, sell=200),
+               self._pt("Iron", 3, 103, buy=10), self._pt("Iron", 4, 104, sell=90)]
+        out = nav_core.rank_trades(nav_core.NavData(), pts, commodity="Iron")
+        self.assertEqual({r["commodity"] for r in out}, {"Iron"})
+
+    def test_system_filter_excludes_cross_system_pairs(self):
+        pts = [self._pt("Gold", 1, 101, system="Stanton", buy=100),
+               self._pt("Gold", 2, 102, system="Pyro", sell=300)]
+        self.assertEqual(nav_core.rank_trades(nav_core.NavData(), pts, system="Stanton"), [])
+
+    def test_capacity_clamps_to_supply_and_demand(self):
+        pts = [self._pt("Gold", 1, 101, buy=100, scu_buy=30),
+               self._pt("Gold", 2, 102, sell=200, scu_sell_stock=50)]
+        out = nav_core.rank_trades(nav_core.NavData(), pts, capacity_scu=96, sort="margin")
+        self.assertEqual(out[0]["max_scu"], 30)          # min(96, 30, 50)
+        self.assertEqual(out[0]["trade_profit"], 30 * 100)
+        self.assertEqual(out[0]["buy_cost"], 30 * 100)
+
+    def test_unknown_stock_does_not_clamp(self):
+        pts = [self._pt("Gold", 1, 101, buy=100), self._pt("Gold", 2, 102, sell=200)]
+        out = nav_core.rank_trades(nav_core.NavData(), pts, capacity_scu=96, sort="margin")
+        self.assertEqual(out[0]["max_scu"], 96)          # 0 stock = unknown, hold caps it
+
+    def test_per_hour_folds_in_travel_and_capacity(self):
+        # Two real Stanton space POIs -> travel_cost yields a finite leg + ETA.
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:2]
+        a, b = spc[0], spc[1]
+        pts = [self._pt("Gold", 1, a.id, buy=100, scu_buy=100),
+               self._pt("Gold", 2, b.id, sell=300, scu_sell_stock=100)]
+        out = nav_core.rank_trades(NAV, pts, capacity_scu=96, sort="per_hour")
+        self.assertEqual(len(out), 1)
+        self.assertIsNotNone(out[0]["distance_m"])
+        self.assertGreater(out[0]["profit_per_hour"], 0)
+
+
+class TradeSolverTests(unittest.TestCase):
+    """nav_core.plan_trade_route + cost_trade_legs — the multi-leg trade solver
+    and manual coster (#21 step 3). Uses three real Stanton space POIs so the
+    reused travel_cost yields finite legs."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock}
+
+    def _prices(self):
+        # Gold: buy @A 100 -> sell @B 300.  Iron: buy @B 50 -> sell @C 200.
+        return [self._pt("Gold", 1, self.A, buy=100, scu_buy=500),
+                self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500),
+                self._pt("Iron", 3, self.B, buy=50, scu_buy=500),
+                self._pt("Iron", 4, self.C, sell=200, scu_sell_stock=500)]
+
+    def test_auto_chains_two_legs(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="profit")
+        s = plan["summary"]
+        self.assertTrue(s["feasible"])
+        self.assertEqual(s["legs"], 2)
+        # (300-100)*100 + (200-50)*100
+        self.assertEqual(s["total_profit"], 35000)
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Gold", "Iron"})
+
+    def test_buying_where_you_just_sold_merges_the_stop(self):
+        # Sell Gold at B then buy Iron at B -> B is one physical stop, not two.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="profit")
+        self.assertEqual(plan["summary"]["stops"], 3)   # A(buy) B(sell+buy) C(sell)
+
+    def test_filtered_mode_restricts_commodities(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, commodities=["Gold"], sort="profit")
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Gold"})
+
+    def test_max_stops_caps_legs(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=2, sort="profit")
+        self.assertEqual(plan["summary"]["legs"], 1)    # max_stops//2
+
+    def test_no_trades_is_infeasible(self):
+        losing = [self._pt("Gold", 1, self.A, buy=300, scu_buy=500),
+                  self._pt("Gold", 2, self.B, sell=100, scu_sell_stock=500)]
+        plan = nav_core.plan_trade_route(NAV, losing, 100, start_id=self.A)
+        self.assertFalse(plan["summary"]["feasible"])
+        self.assertEqual(plan["legs"], [])
+
+    def test_start_ref_reports_origin(self):
+        plan = nav_core.plan_trade_route(NAV, self._prices(), 100, start_id=self.A)
+        self.assertEqual(plan["start"]["id"], self.A)
+
+    def test_manual_costs_given_legs(self):
+        legs = [{"commodity": "Gold", "buy_terminal_id": 1, "sell_terminal_id": 2},
+                {"commodity": "Iron", "buy_terminal_id": 3, "sell_terminal_id": 4}]
+        plan = nav_core.cost_trade_legs(
+            NAV, self._prices(), legs, 100, start_id=self.A)
+        self.assertEqual(plan["summary"]["legs"], 2)
+        self.assertEqual(plan["summary"]["total_profit"], 35000)
+
+    def test_manual_honors_scu_cap(self):
+        legs = [{"commodity": "Gold", "buy_terminal_id": 1, "sell_terminal_id": 2, "scu": 10}]
+        plan = nav_core.cost_trade_legs(NAV, self._prices(), legs, 100, start_id=self.A)
+        self.assertEqual(plan["legs"][0]["scu"], 10)
+        self.assertEqual(plan["summary"]["total_profit"], 2000)   # (300-100)*10
+
+    def test_manual_rejects_unknown_terminal(self):
+        legs = [{"commodity": "Gold", "buy_terminal_id": 999, "sell_terminal_id": 2}]
+        with self.assertRaises(ValueError):
+            nav_core.cost_trade_legs(NAV, self._prices(), legs, 100, start_id=self.A)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
