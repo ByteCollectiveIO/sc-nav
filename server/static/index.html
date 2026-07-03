@@ -215,6 +215,7 @@
   .seg button { border: none; border-radius: 0; border-right: 1px solid var(--border); }
   .seg button:last-child { border-right: none; }
   .seg button.on { background: var(--accent); color: var(--ink-on-accent); }
+  .seg button:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); z-index: 1; }
 
   /* Org Intel: the shell wrapper manages its own panel rhythm (main uses grid gap,
      but these panels are nested a level down) — mirror main's 14px gap. */
@@ -234,6 +235,14 @@
   .intel-nav a:hover { color: var(--text); }
   .intel-nav a.active { background: var(--accent); color: var(--ink-on-accent); cursor: default; }
   .intel-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+  .intel-hero { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px; margin-bottom: 12px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    text-decoration: none; transition: border-color .12s; }
+  .intel-hero:hover { border-color: var(--accent); }
+  .intel-hero:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+  .intel-hero .n { font-size: 52px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--accent); }
+  .intel-hero .k { font-size: 12px; letter-spacing: 1.5px; color: var(--dim); margin-top: 4px; }
+  .intel-hero-cta { font-size: 12px; color: var(--accent); margin-top: 8px; opacity: .85; }
   .intel-glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .intel-stat { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px;
     background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
@@ -246,6 +255,10 @@
   .intel-stat .n.warn { color: var(--warn); }
   .intel-stat .k { font-size: 11px; letter-spacing: 1px; color: var(--dim); }
   .intel-glance-foot { margin-top: 12px; font-size: 12px; color: var(--dim); }
+  .intel-intro { margin: 10px 0 0; font-size: 12px; max-width: 70ch; }
+  .intel-fresh { color: var(--dim); white-space: nowrap; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   @media (max-width: 520px) { .intel-nav { width: 100%; } .intel-nav a { flex: 1; text-align: center; padding: 8px 6px; } }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -271,6 +284,22 @@
   /* map */
   #map-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
   #map-controls label { font-size: 12px; color: var(--dim); display: inline-flex; gap: 4px; align-items: center; }
+  .map-more { position: relative; }
+  .map-more > summary { list-style: none; cursor: pointer; font-size: 12px; color: var(--dim);
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2);
+    user-select: none; white-space: nowrap; }
+  .map-more > summary::-webkit-details-marker { display: none; }
+  .map-more > summary::after { content: " ▾"; opacity: .7; }
+  .map-more[open] > summary::after { content: " ▴"; }
+  .map-more > summary:hover { color: var(--text); border-color: var(--accent); }
+  .map-more-active { color: var(--accent); }
+  .map-more > summary:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+  .map-more-body { display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel2); }
+  .nearby-msg { padding: 14px 12px; color: var(--dim); text-align: center; }
+  .kbd-hint { font-size: 11px; letter-spacing: .5px; margin-left: 6px; cursor: help; }
+  @media (max-width: 560px) { .kbd-hint { display: none; } }
   #map-wrap { position: relative; }
   #map { width: 100%; height: 440px; display: block; background: var(--map-bg);
     border: 1px solid var(--border); border-radius: 6px; cursor: grab; touch-action: none; }
@@ -325,6 +354,7 @@
   .range-toggle button { background: var(--panel2); border: 0; border-radius: 0; color: var(--dim);
     padding: 5px 12px; font-size: 12px; cursor: pointer; }
   .range-toggle button.active { background: var(--accent); color: var(--ink-on-accent); cursor: default; }
+  .range-toggle button:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); z-index: 1; }
   .lb-head-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
   .lb-seg.auec { background: var(--warn); }
   .lb-seg.rate { background: var(--accent); }
@@ -453,7 +483,7 @@
   .mate-row.stale .mate-age { color: var(--warn); }
   /* Who's-online roster (#19) */
   .online-blurb { margin: 0 0 12px; font-size: 12px; }
-  .on-row { display: flex; gap: 10px; align-items: center; padding: 7px 0;
+  .on-row { display: flex; gap: 10px; align-items: center; padding: 7px 0; flex-wrap: wrap;
     border-top: 1px solid var(--border); font-size: 14px; }
   .on-row:first-child { border-top: 0; }
   .on-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good);
@@ -464,7 +494,7 @@
   .on-status { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     padding: 1px 6px; border-radius: 8px; border: 1px solid var(--good); color: var(--good); }
   .on-status.busy { border-color: var(--warn); color: var(--warn); }
-  .on-status.afk { border-color: var(--border); color: var(--dim); }
+  .on-status.afk { border-color: var(--border); color: var(--text); opacity: .82; }
   .on-activity { color: var(--dim); }
   .on-where { color: var(--dim); font-size: 12px; }
   .on-age { margin-left: auto; color: var(--dim); font-size: 11px; white-space: nowrap; }
@@ -477,10 +507,14 @@
     color: var(--text); font-size: 14px; }
   .on-invis { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
   .on-saved { color: var(--good); font-size: 13px; }
-  .on-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .on-saved.bad { color: var(--bad); }
+  .on-help { font-size: 12px; margin: 12px 0 0; max-width: 68ch; }
+  .on-tags-label { font-size: 11px; margin-top: 14px; letter-spacing: .04em; }
+  .on-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .on-tag { font-size: 12px; padding: 3px 9px; border-radius: 14px; cursor: pointer;
     border: 1px solid var(--border); color: var(--dim); background: none; }
   .on-tag:hover { border-color: var(--accent); color: var(--accent); }
+  .on-tag:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
   .on-tag.active { border-color: var(--accent); color: var(--ink-on-accent); background: var(--accent); }
   /* looking-for-group board (#19 step 3) */
   .lfg-blurb { margin: 0 0 12px; font-size: 12px; }
@@ -492,8 +526,19 @@
   .lfg-dir button.active small { color: var(--ink-on-accent); }
   .lfg-fields { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
   .lfg-note-in { width: 100%; }
+  .lfg-note-count { font-size: 11px; text-align: right; margin-top: 2px; }
+  .lfg-note-count.near { color: var(--warn); }
+  /* undo toast sits above the modal layer (z 50), below the native-dialog top layer */
+  .lfg-undo-toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px);
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; color: var(--text); display: flex; gap: 12px; align-items: center;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); opacity: 0; pointer-events: none; z-index: 60;
+    transition: opacity .2s ease-out, transform .2s ease-out; }
+  .lfg-undo-toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  @media (prefers-reduced-motion: reduce) { .lfg-undo-toast { transition: opacity .2s; transform: translate(-50%, 0); } }
   .lfg-post-row { display: flex; gap: 10px; align-items: center; }
   .lfg-hint { color: var(--dim); font-size: 11px; }
+  .lfg-hint.bad { color: var(--bad); }
   .lfg-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 640px) { .lfg-cols { grid-template-columns: 1fr; } }
   .lfg-col-h { margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
@@ -516,9 +561,17 @@
     border: 1px solid var(--border); color: var(--dim); }
   .lfg-note { font-size: 13px; margin: 6px 0; white-space: pre-wrap; word-break: break-word; }
   .lfg-meta { font-size: 11px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 10px; }
-  .lfg-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .lfg-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  .lfg-err { font-size: 12px; color: var(--bad); }
   .lfg-empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
   .lfg-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+  .lfg-tagfilter { position: relative; }
+  .lfg-tagfilter > summary { list-style: none; cursor: pointer; }
+  .lfg-tagfilter > summary::-webkit-details-marker { display: none; }
+  .lfg-tagfilter > summary::after { content: " ▾"; opacity: .7; }
+  .lfg-tagfilter[open] > summary::after { content: " ▴"; }
+  .lfg-tagfilter-body { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
   .lfg-joined { font-size: 11px; color: var(--dim); }
 
   /* resource forecast */
@@ -1513,7 +1566,7 @@
     </div>
     <h1>Org Navigator</h1>
   </a>
-  <div id="conn" title="server connection"></div>
+  <div id="conn" role="status" aria-live="polite" title="Connecting to server…" aria-label="Connecting to server"></div>
   <div id="online" title="players online in the app" hidden></div>
   <div id="app-title" hidden></div>
   <div class="header-right">
@@ -1638,38 +1691,46 @@
   </div>
 
   <div class="panel" id="map-panel" hidden>
-    <h2>MAP <span class="muted">(north up · drag to pan)</span></h2>
+    <h2>MAP <span class="muted">(north up · drag to pan)</span>
+      <span class="kbd-hint muted" title="Keyboard: R recenter · T toggle path tracking · C capture a POI">⌨ R · T · C</span></h2>
     <div id="map-controls">
       <button id="track-toggle">Start Tracking Path</button>
       <button id="track-clear">Clear Path</button>
       <button id="map-recenter">Recenter</button>
       <label>view radius
-        <input id="map-zoom" type="range" min="0.5" max="50" step="0.5" value="5">
+        <input id="map-zoom" type="range" min="0.5" max="50" step="0.5" value="5"
+          aria-label="map view radius in kilometers" aria-valuetext="5 km">
         <span id="map-zoom-val">5 km</span>
       </label>
-      <label title="Scale the node markers and their labels on the map — bump it up if the text is hard to read.">labels
-        <input id="map-label" type="range" min="0.8" max="2.5" step="0.1" value="1.3">
-        <span id="map-label-val">1.3×</span>
-      </label>
-      <label><input type="checkbox" class="layer" data-layer="path" checked> path</label>
-      <label><input type="checkbox" class="layer" data-layer="poi" checked> POIs</label>
-      <label><input type="checkbox" class="layer" data-layer="resource" checked> resources</label>
-      <label><input type="checkbox" class="layer" data-layer="wildlife" checked> wildlife</label>
-      <label><input type="checkbox" class="layer" data-layer="harvestable" checked> harvestables</label>
-      <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
-      <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
-      <label title="Ephemeral nodes only exist on the shard they were seen on. Checked hides nodes known to be on a different SC server than yours (needs the watcher's Game.log shard); uncheck to show every shard's nodes."><input type="checkbox" id="shard-toggle" checked> this shard</label>
-      <label>heatmap
-        <select id="heatmap-mode" class="sel">
-          <option value="off">off</option>
-          <optgroup label="Ores" id="hm-grp-resource">
-            <option value="resource:dominant">most likely</option>
-          </optgroup>
-          <optgroup label="Harvestables" id="hm-grp-harvestable" hidden>
-            <option value="harvestable:dominant">most likely</option>
-          </optgroup>
-        </select>
-      </label>
+      <details class="map-more" id="map-more">
+        <summary id="map-more-sum" title="Layers, freshness, shard and heatmap options">Layers &amp; settings</summary>
+        <div class="map-more-body">
+          <label title="Scale the node markers and their labels on the map — bump it up if the text is hard to read.">labels
+            <input id="map-label" type="range" min="0.8" max="2.5" step="0.1" value="1.3"
+              aria-label="map label scale">
+            <span id="map-label-val">1.3×</span>
+          </label>
+          <label><input type="checkbox" class="layer" data-layer="path" checked> path</label>
+          <label><input type="checkbox" class="layer" data-layer="poi" checked> POIs</label>
+          <label><input type="checkbox" class="layer" data-layer="resource" checked> resources</label>
+          <label><input type="checkbox" class="layer" data-layer="wildlife" checked> wildlife</label>
+          <label><input type="checkbox" class="layer" data-layer="harvestable" checked> harvestables</label>
+          <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
+          <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
+          <label title="Ephemeral nodes only exist on the shard they were seen on. Checked hides nodes known to be on a different SC server than yours (needs the watcher's Game.log shard); uncheck to show every shard's nodes."><input type="checkbox" id="shard-toggle" checked> this shard</label>
+          <label>heatmap
+            <select id="heatmap-mode" class="sel">
+              <option value="off">off</option>
+              <optgroup label="Ores" id="hm-grp-resource">
+                <option value="resource:dominant">most likely</option>
+              </optgroup>
+              <optgroup label="Harvestables" id="hm-grp-harvestable" hidden>
+                <option value="harvestable:dominant">most likely</option>
+              </optgroup>
+            </select>
+          </label>
+        </div>
+      </details>
     </div>
     <div id="map-wrap">
       <canvas id="map"></canvas>
@@ -1748,7 +1809,8 @@
       <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <select id="node-ore" class="sel" style="flex:1; min-width:130px;"></select>
         <input id="node-ore-other" class="ti" placeholder="other ore" hidden style="flex:1; min-width:110px;">
-        <label class="muted" style="font-size:12px;">band
+        <label class="muted" style="font-size:12px;"
+               title="Scan quality band 1–8 (higher = richer deposit); Unk if you didn't read it off the scanner.">band
           <select id="node-band" class="sel">
             <option value="Unk">Unk</option>
             <option>1</option><option>2</option><option>3</option><option>4</option>
@@ -2108,6 +2170,10 @@
       <a href="#/intel/boards" data-sec="boards">Leaderboards</a>
       <a href="#/intel/directory" data-sec="directory" id="intel-nav-directory" hidden>Directory</a>
     </nav>
+    <p class="intel-intro muted">Your guild's activity at a glance — mapping coverage, cargo hauling,
+      marketplace trade, and contributor leaderboards. Read-only; use ← → to move between sections.
+      <span id="intel-fresh" class="intel-fresh"></span></p>
+    <div id="intel-live" class="sr-only" role="status" aria-live="polite"></div>
     <div id="intel-overview" hidden></div>
     <div id="intel-directory" hidden></div>
     <div id="intel-market" hidden>
@@ -2144,9 +2210,9 @@
       </div><!-- /intel-market-body -->
     </div>
     <div class="intel-boards-bar" id="intel-boards-bar" hidden>
-      <div class="seg" id="intel-board-toggle">
-        <button data-board="mapping">Mapping</button>
-        <button data-board="hauling">Hauling</button>
+      <div class="seg" id="intel-board-toggle" role="group" aria-label="Leaderboard type">
+        <button data-board="mapping" title="Top contributors by POIs and resource nodes mapped">Contributors</button>
+        <button data-board="hauling" title="Top haulers by aUEC earned">Earners</button>
       </div>
     </div>
   </div>
@@ -2417,10 +2483,14 @@
           <input id="on-activity" class="ti" type="text" maxlength="60"
             placeholder="what you're up to (optional)">
         </label>
-        <label class="on-invis"><input id="on-invisible" type="checkbox"> Appear offline</label>
+        <label class="on-invis" title="Hides you from the Who's Online list for everyone else. You still see the roster; your location stays private too.">
+          <input id="on-invisible" type="checkbox"> Appear offline</label>
         <button id="on-save" type="button">Save status</button>
-        <span id="on-saved" class="on-saved" hidden>✓ Saved</span>
+        <span id="on-saved" class="on-saved" role="status" aria-live="polite" hidden>✓ Saved</span>
       </div>
+      <p class="on-help muted">“Appear offline” hides you from this list for everyone else — you
+        still see the roster, and your location stays private.</p>
+      <div class="on-tags-label muted">Quick picks — tap to fill “Doing”:</div>
       <div class="on-tags" id="on-tags"></div>
     </div>
     <div class="panel">
@@ -2428,6 +2498,7 @@
       <p class="muted online-blurb">Org members with the app open right now. Location shows only
         for members already sharing their position on the navigator.</p>
       <div id="online-body"></div>
+      <div id="online-live" class="sr-only" role="status" aria-live="polite"></div>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
@@ -2465,7 +2536,9 @@
           <label class="on-invis"><input id="lfg-comms" type="checkbox"> Voice comms expected</label>
         </div>
         <textarea id="lfg-note" class="ti lfg-note-in" rows="2" maxlength="280"
+          aria-describedby="lfg-note-count"
           placeholder="What / where? Comms expectations? (optional)"></textarea>
+        <div class="lfg-note-count muted" id="lfg-note-count">0 / 280</div>
         <div class="lfg-post-row">
           <label class="on-invis lfg-announce" id="lfg-announce-row" hidden>
             <input id="lfg-announce" type="checkbox"> 📣 Announce to the org's Discord</label>
@@ -2770,6 +2843,23 @@ document.addEventListener("keydown", (e) => {
   if (tag === "BUTTON" || tag === "A" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   e.preventDefault();
   t.click();   // fires the existing click/delegated handler (and bubbles)
+
+});
+
+// Power-user shortcuts on the navigator: the three actions repeated every session
+// (recenter, toggle path tracking, arm a POI capture). Ignored while typing and on
+// every other view, so they never fight a form field. Discoverable via the ⌨ hint.
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const mv = $("main-view");
+  if (!mv || mv.hidden) return;                       // navigator only
+  const tag = e.target && e.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+      || (e.target && e.target.isContentEditable)) return;
+  const k = e.key.toLowerCase();
+  if (k === "r") { e.preventDefault(); $("map-recenter").click(); }
+  else if (k === "t") { e.preventDefault(); $("track-toggle").click(); }
+  else if (k === "c") { e.preventDefault(); $("poi-arm").click(); }
 });
 
 // Themed replacement for the native window.confirm(): a dark, in-universe modal
@@ -3089,15 +3179,16 @@ let kindFilter = "all";
 let allRows = null;
 const TABLE_CAP = 50;    // max rows rendered in the dataset view (scrolls within)
 
+let datasetLoadFailed = false;   // /api/pois|observations failed → say so, don't blank silently
 async function loadAll() {
   try {
+    const j = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.json(); };
     const [pois, obs] = await Promise.all([
-      fetch("/api/pois?limit=5000").then(r => r.json()),
-      fetch("/api/observations?limit=5000").then(r => r.json()),
-    ]);
+      j("/api/pois?limit=5000"), j("/api/observations?limit=5000")]);
     allRows = pois.concat(obs);
-    renderNearby();
-  } catch {}
+    datasetLoadFailed = false;
+  } catch { datasetLoadFailed = true; }
+  renderNearby();
 }
 
 function matchKind(r) {
@@ -3185,6 +3276,13 @@ function renderNearby() {
 
   const tbody = $("nearby-body");
   tbody.innerHTML = "";
+  // A failed dataset load looks identical to "nothing here" unless we say so.
+  if (!shown.length && datasetLoadFailed) {
+    tbody.innerHTML = `<tr><td colspan="9" class="nearby-msg">Couldn't load POIs &amp; observations. ` +
+      `<button type="button" id="nearby-retry">Retry</button></td></tr>`;
+    const b = $("nearby-retry"); if (b) b.onclick = loadAll;
+    return;
+  }
   const selId = lastState && lastState.destination ? lastState.destination.id : null;
   for (const e of shown) {
     const tr = document.createElement("tr");
@@ -3237,9 +3335,14 @@ async function afterDelete() {
 function wireDelete(tr) {
   const dp = tr.querySelector("[data-del-poi]");
   if (dp) dp.onclick = async (ev) => { ev.stopPropagation();
+    // A ✕ sits one row-click away from "set destination" — confirm before it's gone.
+    if (!await confirmDialog("Delete this custom POI? This can't be undone.",
+      { title: "Delete POI", confirmLabel: "Delete", danger: true })) return;
     await fetch(`/api/custom_pois/${dp.dataset.delPoi}`, { method: "DELETE" }); afterDelete(); };
   const dn = tr.querySelector("[data-del-obs]");
   if (dn) dn.onclick = async (ev) => { ev.stopPropagation();
+    if (!await confirmDialog("Delete this observation? This can't be undone.",
+      { title: "Delete observation", confirmLabel: "Delete", danger: true })) return;
     await fetch(`/api/observations/${dn.dataset.delObs}`, { method: "DELETE" }); afterDelete(); };
   const ep = tr.querySelector("[data-edit-poi]");
   if (ep) ep.onclick = async (ev) => { ev.stopPropagation();
@@ -3259,9 +3362,14 @@ function wireDelete(tr) {
 }
 
 $("kind-seg").querySelectorAll("button").forEach(b => {
+  b.setAttribute("aria-pressed", b.classList.contains("on") ? "true" : "false");
   b.onclick = () => {
     kindFilter = b.dataset.kind;
-    $("kind-seg").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    $("kind-seg").querySelectorAll("button").forEach(x => {
+      const on = x === b;
+      x.classList.toggle("on", on);
+      x.setAttribute("aria-pressed", on ? "true" : "false");
+    });
     renderNearby();
   };
 });
@@ -3392,14 +3500,34 @@ $("track-clear").onclick = () => fetch("/api/path/clear", { method: "POST" });
 // ---------- map ----------
 const layers = { path: true, poi: true, resource: true, wildlife: true, harvestable: true, teammates: true };
 document.querySelectorAll(".layer").forEach(cb => {
-  cb.onchange = () => { layers[cb.dataset.layer] = cb.checked; drawMap(); };
+  cb.onchange = () => { layers[cb.dataset.layer] = cb.checked; drawMap(); updateMapMoreSummary(); };
 });
 $("fresh-toggle").onchange = (e) => {
-  freshOnly = e.target.checked; renderNearby(); drawMap();
+  freshOnly = e.target.checked; renderNearby(); drawMap(); updateMapMoreSummary();
 };
 $("shard-toggle").onchange = (e) => {
-  shardOnly = e.target.checked; renderNearby(); drawMap();
+  shardOnly = e.target.checked; renderNearby(); drawMap(); updateMapMoreSummary();
 };
+
+// The map's secondary controls live behind a "Layers & settings" disclosure so the
+// bar stays glanceable. Persist its open state (a power user who wants the toggles
+// keeps them), and surface any active non-default setting on the summary so a
+// collapsed panel never hides that (say) the heatmap is on or a layer is off.
+const mapMore = $("map-more"), mapMoreSum = $("map-more-sum");
+try { if (localStorage.getItem("mapMoreOpen") === "1") mapMore.open = true; } catch {}
+mapMore.addEventListener("toggle", () => {
+  try { localStorage.setItem("mapMoreOpen", mapMore.open ? "1" : "0"); } catch {}
+});
+function updateMapMoreSummary() {
+  const offLayers = [...document.querySelectorAll(".layer")].filter(cb => !cb.checked).length;
+  const bits = [];
+  if (heatmapMode !== "off") bits.push("heatmap on");
+  if (offLayers) bits.push(`${offLayers} layer${offLayers > 1 ? "s" : ""} hidden`);
+  if (!$("fresh-toggle").checked) bits.push("all history");
+  if (!$("shard-toggle").checked) bits.push("all shards");
+  mapMoreSum.innerHTML = "Layers &amp; settings" +
+    (bits.length ? ` <span class="map-more-active">· ${esc(bits.join(", "))}</span>` : "");
+}
 
 // Heatmap overlay: per-cell type composition for the current body. Works for
 // ores (by ore) or harvestables (by name); the selected option encodes the
@@ -3419,7 +3547,9 @@ $("heatmap-mode").onchange = () => {
   if (heatmapMode !== "off") ensureCells();
   renderHeatmapLegend();
   drawMap();
+  updateMapMoreSummary();
 };
+updateMapMoreSummary();   // reflect any restored/default state on first paint
 async function ensureCells() {
   const s = lastState;
   if (!(s && s.container && s.container.is_body)) return;
@@ -3487,6 +3617,7 @@ let viewRadiusKm = 5;
 $("map-zoom").oninput = () => {
   viewRadiusKm = parseFloat($("map-zoom").value);
   $("map-zoom-val").textContent = `${viewRadiusKm} km`;
+  $("map-zoom").setAttribute("aria-valuetext", `${viewRadiusKm} km`);   // SR announces the value, not just a number
   drawMap();
 };
 // Marker/label size multiplier, independent of zoom, so small node text can be
@@ -3496,10 +3627,12 @@ try { const v = parseFloat(localStorage.getItem("mapLabelScale")); if (v >= 0.8 
 function applyLabelScaleUI() {
   $("map-label").value = mapLabelScale;
   $("map-label-val").textContent = `${mapLabelScale.toFixed(1)}×`;
+  $("map-label").setAttribute("aria-valuetext", `${mapLabelScale.toFixed(1)}×`);
 }
 $("map-label").oninput = () => {
   mapLabelScale = parseFloat($("map-label").value);
   $("map-label-val").textContent = `${mapLabelScale.toFixed(1)}×`;
+  $("map-label").setAttribute("aria-valuetext", `${mapLabelScale.toFixed(1)}×`);
   try { localStorage.setItem("mapLabelScale", mapLabelScale); } catch {}
   drawMap();
 };
@@ -3824,12 +3957,19 @@ async function runFinder() {
   if (!finderOre) { table.hidden = true; status.textContent = ""; return; }
   const sort = $("finder-sort").value;
   let data;
+  status.textContent = "finding…";
   try {
-    data = await fetch(
+    const r = await fetch(
       `/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&sort=${sort}&limit=15` +
-      `&category=${finderCategory}`
-    ).then(r => r.json());
-  } catch { return; }
+      `&category=${finderCategory}`);
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+  } catch {
+    table.hidden = true;
+    status.innerHTML = `couldn't load — <button type="button" id="finder-retry">Retry</button>`;
+    const b = $("finder-retry"); if (b) b.onclick = runFinder;
+    return;
+  }
   const hs = data.hotspots || [];
   if (!hs.length) {
     table.hidden = true;
@@ -3956,6 +4096,7 @@ function renderOnline(n) {
 // Identity-bearing online roster, pushed live over WS as `online_roster` and
 // seeded by GET /api/online on view entry. Rendered in the #/online view.
 let onlineRoster = [];
+let onlineLoadFailed = false;   // seed fetch failed → tell them, don't fake "nobody online"
 let myOnlinePrefs = { status: "available", activity: null, appear_offline: false };
 let playstyleTags = [];   // shared activity/LFG vocabulary, fetched once
 function renderOnlineBadge(n) {
@@ -3965,12 +4106,29 @@ function renderOnlineBadge(n) {
   el.hidden = !count;
   el.textContent = `🟢 ${count} online — see who`;
 }
+let lastOnlineAnnounced = -1;
 function renderOnlineView() {
   const body = $("online-body");
   if (!body) return;
   $("online-hint").textContent = onlineRoster.length ? `(${onlineRoster.length})` : "";
+  // Announce only the count, and only when it changes — re-reading the whole roster
+  // on every WS push would flood a screen reader for a list that updates often.
+  const live = $("online-live");
+  if (live && onlineRoster.length !== lastOnlineAnnounced) {
+    lastOnlineAnnounced = onlineRoster.length;
+    live.textContent = `${onlineRoster.length} member${onlineRoster.length === 1 ? "" : "s"} online`;
+  }
   if (!onlineRoster.length) {
-    body.innerHTML = `<div class="online-empty">Nobody else has the app open right now.</div>`;
+    // A failed seed fetch is not the same as an empty org — say which it is, and
+    // offer a way back. A live WS roster clears the flag, so this only shows when
+    // we genuinely have nothing.
+    if (onlineLoadFailed) {
+      body.innerHTML = `<div class="online-empty">Couldn't reach the nav server. ` +
+        `<button type="button" id="online-retry">Retry</button></div>`;
+      const b = $("online-retry"); if (b) b.onclick = loadOnline;
+    } else {
+      body.innerHTML = `<div class="online-empty">Nobody else has the app open right now.</div>`;
+    }
     return;
   }
   body.innerHTML = onlineRoster.map(u => {
@@ -4016,18 +4174,27 @@ async function saveOnlineStatus() {
     activity: $("on-activity").value.trim() || null,
     appear_offline: $("on-invisible").checked,
   };
+  const btn = $("on-save");
+  if (btn.disabled) return;                 // guard against a double-submit
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "Saving…";
   try {
     const r = await fetch("/api/online/status", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
-    if (r.ok) {
-      myOnlinePrefs = await r.json();
-      renderOnlineMe();
-      const saved = $("on-saved"); saved.hidden = false;
-      clearTimeout(saveOnlineStatus._t);
-      saveOnlineStatus._t = setTimeout(() => { saved.hidden = true; }, 2000);
-    }
-  } catch {}
+    if (!r.ok) throw new Error(r.status);
+    myOnlinePrefs = await r.json();
+    renderOnlineMe();
+    const saved = $("on-saved");
+    saved.hidden = false; saved.textContent = "✓ Saved"; saved.classList.remove("bad");
+    clearTimeout(saveOnlineStatus._t);
+    saveOnlineStatus._t = setTimeout(() => { saved.hidden = true; }, 2000);
+  } catch {
+    // Don't leave the member thinking their status went out when it didn't.
+    const saved = $("on-saved");
+    saved.hidden = false; saved.textContent = "Couldn't save — try again"; saved.classList.add("bad");
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
 }
 // Seed the #/online view on entry; live updates thereafter arrive over WS. If the
 // socket already delivered a roster this is redundant but cheap and covers a cold open.
@@ -4042,12 +4209,21 @@ async function ensurePlaystyleTags() {
 }
 async function loadOnline() {
   $("on-save").onclick = saveOnlineStatus;   // idempotent re-bind
+  $("on-activity").onkeydown = (e) => {      // power-user accelerator: Enter saves
+    if (e.key === "Enter") { e.preventDefault(); saveOnlineStatus(); }
+  };
+  // Only show a loading line on a genuinely cold open — if WS already seeded the
+  // roster, keep it on screen rather than flashing "Loading…" over live data.
+  if (!onlineRoster.length && !onlineLoadFailed)
+    $("online-body").innerHTML = `<div class="online-empty">Loading roster…</div>`;
   await ensurePlaystyleTags();
   renderOnlineTags();
   try {
     const r = await fetch("/api/online");
-    if (r.ok) { const d = await r.json(); onlineRoster = d.users || []; if (d.me) myOnlinePrefs = d.me; }
-  } catch {}
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json(); onlineRoster = d.users || []; if (d.me) myOnlinePrefs = d.me;
+    onlineLoadFailed = false;
+  } catch { onlineLoadFailed = true; }
   renderOnlineMe(); renderOnlineView(); renderOnlineBadge();
 }
 
@@ -4057,6 +4233,7 @@ async function loadOnline() {
 // GET /api/lfg seeds the initial paint. Composer + board live in the Group Finder app
 // (#/lfg); the badge stays live off WS even when that view isn't open.
 let lfgBoard = [];
+let lfgLoadFailed = false;          // seed fetch failed → distinguish from an empty board
 let lfgDir = "lfm";                 // composer direction
 const lfgComposeTags = new Set();   // selected playstyle tags in the composer
 let lfgFilterDir = "all";           // board filter: all | lfm | lfj
@@ -4097,17 +4274,31 @@ function renderLfgComposeTags() {
   if (!el) return;
   el.innerHTML = playstyleTags.map(t =>
     `<button type="button" class="on-tag${lfgComposeTags.has(t) ? " active" : ""}" ` +
-    `data-tag="${esc(t)}">${esc(t)}</button>`).join("");
+    `aria-pressed="${lfgComposeTags.has(t)}" data-tag="${esc(t)}">${esc(t)}</button>`).join("");
   el.querySelectorAll(".on-tag").forEach(b => b.onclick = () => {
     const t = b.dataset.tag;
-    if (lfgComposeTags.has(t)) lfgComposeTags.delete(t); else lfgComposeTags.add(t);
-    b.classList.toggle("active");
+    const on = !lfgComposeTags.has(t);
+    if (on) lfgComposeTags.add(t); else lfgComposeTags.delete(t);
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
   });
+}
+// Live note counter — the textarea hard-caps at 280, so show remaining chars and
+// warn as it fills, rather than silently truncating a pasted note.
+function updateLfgNoteCount() {
+  const el = $("lfg-note-count"), ta = $("lfg-note");
+  if (!el || !ta) return;
+  const n = ta.value.length;
+  el.textContent = `${n} / 280`;
+  el.classList.toggle("near", n >= 250);
 }
 function setLfgDir(dir) {
   lfgDir = dir === "lfj" ? "lfj" : "lfm";
-  $("lfg-dir").querySelectorAll("button").forEach(b =>
-    b.classList.toggle("active", b.dataset.dir === lfgDir));
+  $("lfg-dir").querySelectorAll("button").forEach(b => {
+    const on = b.dataset.dir === lfgDir;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
   $("lfg-slots-field").style.display = lfgDir === "lfm" ? "" : "none";   // slots are LFM-only
 }
 async function postLfg() {
@@ -4124,12 +4315,21 @@ async function postLfg() {
     announce: announced,
   };
   const hint = $("lfg-post-hint");
+  // A post with no tags, note, rally, or slot count tells nobody anything — guard it.
+  if (!body.tags.length && !body.note && !body.rally && !(lfgDir === "lfm" && body.slots)) {
+    hint.textContent = "Add a tag, a note, or a rally point so people know what you're after.";
+    hint.classList.add("bad");
+    clearTimeout(postLfg._t);
+    postLfg._t = setTimeout(() => { hint.textContent = ""; hint.classList.remove("bad"); }, 3200);
+    return;
+  }
+  hint.classList.remove("bad");
   try {
     const r = await fetch("/api/lfg", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
     if (r.ok) {
-      $("lfg-note").value = ""; $("lfg-rally").value = ""; $("lfg-slots").value = "";
+      $("lfg-note").value = ""; $("lfg-rally").value = ""; $("lfg-slots").value = ""; updateLfgNoteCount();
       $("lfg-comms").checked = false;
       if (announceEl) announceEl.checked = false;
       $("lfg-rally").parentElement.classList.remove("picked");   // drop the POI-pick green border
@@ -4140,11 +4340,76 @@ async function postLfg() {
     } else { hint.textContent = "Couldn't post — try again."; }
   } catch { hint.textContent = "Couldn't post — try again."; }
 }
-async function joinLfg(id) {
-  try { await fetch(`/api/lfg/${id}/join`, { method: "POST" }); } catch {}
+// These actions repaint from the WS `lfg` frame, so on success the board just
+// updates. On failure there's no frame — surface the notice *on the tapped card*
+// (a header flash is off-screen for a mobile user who tapped a card down-column).
+function lfgCardError(btn, msg) {
+  const actions = btn && btn.closest(".lfg-actions");
+  if (!actions) return;
+  let err = actions.querySelector(".lfg-err");
+  if (!err) { err = document.createElement("span"); err.className = "lfg-err";
+    err.setAttribute("role", "alert"); actions.appendChild(err); }
+  err.textContent = msg;
+  // Auto-dismiss so a stale alert doesn't linger after the situation resolves.
+  clearTimeout(err._t);
+  err._t = setTimeout(() => { if (err.isConnected) err.remove(); }, 5000);
 }
-async function closeLfg(id) {
-  try { await fetch(`/api/lfg/${id}`, { method: "DELETE" }); } catch {}
+// Give the tapped button an immediate busy state — on a laggy 2nd-device link the
+// action otherwise waits silently for the WS repaint and the button looks dead.
+// On success the WS `lfg` frame rebuilds the card (discarding this button); on
+// failure we restore it and show the reason on the card.
+function lfgBusy(btn) {
+  if (!btn) return () => {};
+  const label = btn.textContent; btn.disabled = true; btn.textContent = "…";
+  return () => { if (btn.isConnected) { btn.disabled = false; btn.textContent = label; } };
+}
+async function joinLfg(id, btn) {
+  if (btn && btn.disabled) return;
+  const done = lfgBusy(btn);
+  try { const r = await fetch(`/api/lfg/${id}/join`, { method: "POST" }); if (!r.ok) throw new Error(r.status); }
+  catch { done(); lfgCardError(btn, "Couldn't reach the server — try again"); }
+}
+async function closeLfg(id, btn) {
+  if (!await confirmDialog("Close this post? It's removed from the board for everyone.",
+    { title: "Close post", confirmLabel: "Close post", danger: true })) return;
+  const entry = lfgBoard.find(e => e.id === id);   // snapshot so a regretted close can be undone
+  const done = lfgBusy(btn);
+  try {
+    const r = await fetch(`/api/lfg/${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(r.status);
+    if (entry) lfgUndoToast(entry);
+  }
+  catch { done(); lfgCardError(btn, "Couldn't reach the server — try again"); }
+}
+// Recovery net after a confirmed close: a brief toast re-posts the same content
+// (a fresh post, since the original id is gone) if the member changes their mind.
+function lfgRepostBody(e) {
+  return { direction: e.direction, tags: e.tags || [],
+    slots: e.direction === "lfm" ? (e.slots || null) : null,
+    note: e.note || "", rally: e.rally || null, comms: !!e.comms, announce: false };
+}
+function lfgUndoToast(entry) {
+  let t = $("lfg-undo-toast");
+  if (!t) { t = document.createElement("div"); t.id = "lfg-undo-toast";
+    t.className = "lfg-undo-toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+  t.innerHTML = `Post closed. <button type="button" id="lfg-undo-btn">Undo</button>`;
+  t.classList.add("show");
+  clearTimeout(lfgUndoToast._t);
+  lfgUndoToast._t = setTimeout(() => t.classList.remove("show"), 6000);
+  $("lfg-undo-btn").onclick = async () => {
+    try {
+      const r = await fetch("/api/lfg", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(lfgRepostBody(entry)) });
+      if (!r.ok) throw new Error(r.status);
+      t.classList.remove("show");
+    } catch {
+      // Don't let the undo fail silently — tell them it didn't take.
+      t.innerHTML = `Couldn't restore the post — <button type="button" id="lfg-undo-btn2">Retry</button>`;
+      $("lfg-undo-btn2").onclick = () => lfgUndoToast(entry);
+      clearTimeout(lfgUndoToast._t);
+      lfgUndoToast._t = setTimeout(() => t.classList.remove("show"), 6000);
+    }
+  };
 }
 // Promote an ephemeral LFG post into a scheduled event (#19 step 5). We map playstyle
 // tags onto the event taxonomy as a best-effort prefill; the organizer confirms the
@@ -4183,21 +4448,27 @@ function renderLfgFilters() {
   if (!el) return;
   const dirBtn = (v, label) =>
     `<button type="button" class="on-tag${lfgFilterDir === v ? " active" : ""}" ` +
-    `data-fdir="${v}">${label}</button>`;
+    `aria-pressed="${lfgFilterDir === v}" data-fdir="${v}">${label}</button>`;
   const tagBtns = playstyleTags.map(t =>
     `<button type="button" class="on-tag${lfgFilterTag === t ? " active" : ""}" ` +
-    `data-ftag="${esc(t)}">${esc(t)}</button>`).join("");
+    `aria-pressed="${lfgFilterTag === t}" data-ftag="${esc(t)}">${esc(t)}</button>`).join("");
   // "My matches" is only meaningful once I've posted — it needs my tags to match against.
   const haveMine = lfgIHavePosts();
   if (!haveMine) lfgMatchOnly = false;   // no posts ⇒ no basis to match; don't strand the filter
   const matchBtn = haveMine
-    ? `<button type="button" class="on-tag${lfgMatchOnly ? " active" : ""}" data-fmatch="1">✨ My matches</button>`
+    ? `<button type="button" class="on-tag${lfgMatchOnly ? " active" : ""}" aria-pressed="${lfgMatchOnly}" data-fmatch="1">✨ My matches</button>`
     : "";
+  // Primary toggles stay inline; the ~10 playstyle chips fold into a disclosure so
+  // the board isn't buried under a wall of same-weight controls. The summary names
+  // the active playstyle so a set filter is never hidden.
+  const tagSummary = lfgFilterTag ? `Playstyle: ${esc(lfgFilterTag)}` : "Filter by playstyle";
   el.innerHTML = dirBtn("all", "All") + dirBtn("lfm", "Need players") +
     dirBtn("lfj", "Want to join") +
-    `<button type="button" class="on-tag${lfgOpenOnly ? " active" : ""}" data-fopen="1">Open slots</button>` +
+    `<button type="button" class="on-tag${lfgOpenOnly ? " active" : ""}" aria-pressed="${lfgOpenOnly}" data-fopen="1">Open slots</button>` +
     matchBtn +
-    `<span class="lfg-hint">·</span>` + tagBtns;
+    `<details class="lfg-tagfilter"${lfgFilterTag ? " open" : ""}>` +
+    `<summary class="on-tag${lfgFilterTag ? " active" : ""}">${tagSummary}</summary>` +
+    `<div class="lfg-tagfilter-body">${tagBtns}</div></details>`;
   el.querySelectorAll("[data-fdir]").forEach(b =>
     b.onclick = () => { lfgFilterDir = b.dataset.fdir; renderLfgFilters(); renderLfgBoard(); });
   el.querySelectorAll("[data-ftag]").forEach(b =>
@@ -4243,12 +4514,13 @@ function lfgCard(e) {
       ? `<button type="button" data-join="${e.id}">Leave</button>`
       : `<button type="button" data-join="${e.id}"${full ? " disabled" : ""}>${full ? "Full" : "Join"}</button>`;
   } else {
-    action = `<button type="button" data-join="${e.id}">${iResponded ? "Un-ping" : "Ping"}</button>`;
+    action = `<button type="button" data-join="${e.id}">${iResponded ? "Interested ✓" : "I'm interested"}</button>`;
   }
   const note = e.note ? `<div class="lfg-note">${esc(e.note)}</div>` : "";
   const matchTag = match ? ' <span class="lfg-match-tag" title="Shares a playstyle with one of your posts">✨ matches you</span>' : "";
+  const stLabel = st === "afk" ? "AFK" : st;
   return `<div class="lfg-card${mine ? " mine" : ""}${match ? " match" : ""}${e.stale ? " stale" : ""}">` +
-    `<div class="lfg-card-head"><span class="on-dot ${st}"></span>` +
+    `<div class="lfg-card-head"><span class="on-dot ${st}" title="Poster is ${esc(stLabel)}" aria-label="Poster status: ${esc(stLabel)}"></span>` +
     `<span class="on-name">${esc(e.poster)}</span>${mine ? ' <span class="on-where">(you)</span>' : ""}${matchTag}` +
     slots + `</div>` +
     (chips ? `<div class="lfg-chips">${chips}</div>` : "") +
@@ -4266,6 +4538,15 @@ function lfgMatchesFilter(e) {
 function renderLfgBoard() {
   const lfmBody = $("lfg-lfm-body"), lfjBody = $("lfg-lfj-body");
   if (!lfmBody || !lfjBody) return;
+  // A failed seed with nothing to show is a connection problem, not a quiet night.
+  if (lfgLoadFailed && !lfgBoard.length) {
+    $("lfg-hint").textContent = "";
+    lfmBody.innerHTML = `<div class="lfg-empty">Couldn't reach the nav server. ` +
+      `<button type="button" id="lfg-retry">Retry</button></div>`;
+    lfjBody.innerHTML = "";
+    const b = $("lfg-retry"); if (b) b.onclick = loadLfg;
+    return;
+  }
   // Suggested matches float to the top of their column (board is otherwise newest-first).
   const shown = lfgBoard.filter(lfgMatchesFilter)
     .sort((a, b) => (lfgIsMatch(b) ? 1 : 0) - (lfgIsMatch(a) ? 1 : 0));
@@ -4282,8 +4563,8 @@ function renderLfgBoard() {
     : (lfj.length ? lfj.map(lfgCard).join("")
        : `<div class="lfg-empty">Nobody's raised a hand to join yet.</div>`);
   for (const body of [lfmBody, lfjBody]) {
-    body.querySelectorAll("[data-join]").forEach(b => b.onclick = () => joinLfg(+b.dataset.join));
-    body.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeLfg(+b.dataset.close));
+    body.querySelectorAll("[data-join]").forEach(b => b.onclick = () => joinLfg(+b.dataset.join, b));
+    body.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeLfg(+b.dataset.close, b));
     body.querySelectorAll("[data-promote]").forEach(b => b.onclick = () => promoteLfgToEvent(+b.dataset.promote));
   }
 }
@@ -4298,6 +4579,8 @@ function setLfgAnnounceAvail(on) {
 async function loadLfg() {
   await ensurePlaystyleTags();
   $("lfg-post").onclick = postLfg;   // idempotent re-bind
+  $("lfg-note").oninput = updateLfgNoteCount;   // live counter so a long note isn't silently truncated
+  updateLfgNoteCount();
   const rallyWrap = $("lfg-rally").parentElement;   // rally autocompletes from POIs (free text ok)
   if (!rallyWrap.querySelector(".poi-drop")) attachPoiPicker(rallyWrap);   // attach once
   $("lfg-dir").querySelectorAll("button").forEach(b =>
@@ -4305,10 +4588,18 @@ async function loadLfg() {
   setLfgDir(lfgDir);
   renderLfgComposeTags();
   renderLfgFilters();
+  // Cold open with nothing yet → a brief loading line so an empty board doesn't
+  // read as "nobody posted" before the seed (or first WS frame) lands.
+  if (!lfgBoard.length && !lfgLoadFailed) {
+    $("lfg-lfm-body").innerHTML = `<div class="lfg-empty">Loading board…</div>`;
+    $("lfg-lfj-body").innerHTML = "";
+  }
   try {
     const r = await fetch("/api/lfg");
-    if (r.ok) { const d = await r.json(); lfgBoard = d.entries || []; setLfgAnnounceAvail(d.announce_available); }
-  } catch {}
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json(); lfgBoard = d.entries || []; setLfgAnnounceAvail(d.announce_available);
+    lfgLoadFailed = false;
+  } catch { lfgLoadFailed = true; }
   renderLfgBoard(); renderLfgBadge();
 }
 
@@ -4318,7 +4609,9 @@ let datasetRefreshTimer = null;
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => { $("conn").classList.add("ok"); $("online").classList.remove("off"); renderSetupConn(); };
+  ws.onopen = () => { const c = $("conn"); c.classList.add("ok");
+    c.title = "Connected to server"; c.setAttribute("aria-label", "Connected to server");
+    $("online").classList.remove("off"); renderSetupConn(); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); renderSetupConn(); }
@@ -4340,13 +4633,17 @@ function connect() {
       renderOnline(msg.count);
     } else if (msg.type === "online_roster") {
       onlineRoster = msg.users || [];
+      onlineLoadFailed = false;   // a live roster supersedes any earlier seed failure
       renderOnlineView(); renderOnlineBadge();
     } else if (msg.type === "lfg") {
       lfgBoard = msg.entries || [];
+      lfgLoadFailed = false;   // a live board supersedes any earlier seed failure
       renderLfgBoard(); renderLfgBadge();
     }
   };
-  ws.onclose = () => { $("conn").classList.remove("ok"); $("online").classList.add("off"); renderSetupConn(); setTimeout(connect, 2000); };
+  ws.onclose = () => { const c = $("conn"); c.classList.remove("ok");
+    c.title = "Disconnected — reconnecting…"; c.setAttribute("aria-label", "Disconnected from server, reconnecting");
+    $("online").classList.add("off"); renderSetupConn(); setTimeout(connect, 2000); };
 }
 setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
 
@@ -7861,8 +8158,16 @@ window.addEventListener("hashchange", applyView);
 async function loadLeaderboard() {
   let data;
   try {
-    data = await fetch("/api/leaderboard").then(r => r.json());
-  } catch { return; }
+    const r = await fetch("/api/leaderboard");
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+  } catch {
+    const c = $("lb-cards");
+    c.innerHTML = sectionMsg("Couldn't load the leaderboard",
+      "Check your connection to the nav server and try again.", { retry: true });
+    c.querySelector("[data-retry]").onclick = loadLeaderboard;
+    return;
+  }
   const { categories, contributors, totals, grand_total } = data;
 
   // Summary cards: one per category plus the grand total.
@@ -7906,6 +8211,7 @@ async function loadLeaderboard() {
        <td class="num">${r.counts.harvestable || 0}</td>
        <td class="num"><b>${r.total}</b></td>
      </tr>`).join("");
+  stampIntelFresh();
 }
 
 // ---------- statistics ----------
@@ -7916,7 +8222,14 @@ function statBars(elId, block, cls = "") {
   const el = $(elId);
   if (!el) return;
   const items = (block && block.items) || [];
-  if (!items.length) { el.innerHTML = `<div class="stat-empty">No data yet.</div>`; return; }
+  if (!items.length) {
+    el.removeAttribute("role"); el.removeAttribute("aria-label");
+    el.innerHTML = `<div class="stat-empty">No data yet.</div>`; return;
+  }
+  // Screen readers can't parse a div-and-width bar chart — give them the numbers.
+  el.setAttribute("role", "img");
+  el.setAttribute("aria-label", "Ranked bars — " + items.map(it =>
+    `${it.name}: ${it.guild === undefined ? it.count : it.guild + " of " + it.count}`).join("; "));
   const max = items.reduce((m, it) => Math.max(m, it.count), 0) || 1;
   let html = items.map(it => {
     const pct = (it.count / max) * 100;
@@ -7970,16 +8283,31 @@ async function loadSection(statusId, bodyId, opts) {
   }
   if (opts.isEmpty && opts.isEmpty(d)) {
     status.innerHTML = sectionMsg(opts.empty.title, opts.empty.sub, opts.empty.action);
+    announceIntel(opts.label ? `${opts.label}: no data yet` : "");
     return;
   }
   status.hidden = true; body.hidden = false;
   opts.render(d);
+  // Tell a screen reader the skeleton was replaced with real data (it can't see the swap).
+  announceIntel(opts.label ? `${opts.label} loaded` : "");
+  stampIntelFresh();
+}
+function announceIntel(msg) {
+  const el = $("intel-live");
+  if (el && msg) el.textContent = msg;
+}
+// Freshness stamp: a live second-device monitor needs to tell current data from a
+// stale tab. Set whenever a section finishes loading its data.
+function stampIntelFresh() {
+  const el = $("intel-fresh");
+  if (el) el.textContent = "· updated " +
+    new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 // Mapping section (resource dataset overview). Teaching empty state for fresh orgs.
 function loadStats() {
   return loadSection("stats-status", "stats-body", {
-    url: "/api/stats",
+    url: "/api/stats", label: "Mapping",
     isEmpty: d => { const t = d.totals || {}; return !(t.records || 0) && !(d.top_bodies || []).length && !(t.poi_imported || 0); },
     empty: { title: "No dataset yet",
       sub: "Statistics build as your org maps the 'verse. Record POIs and resource nodes from the navigator and your guild's coverage, ore quality, and weekly activity will appear here.",
@@ -8107,8 +8435,16 @@ async function loadCargoLeaderboard() {
   wireRangeToggle("cargo-lb-range", cargoLbRange, r => { cargoLbRange = r; loadCargoLeaderboard(); });
   let d;
   try {
-    d = await fetch(`/api/cargo/leaderboard?range=${cargoLbRange}`).then(r => r.json());
-  } catch { return; }
+    const r = await fetch(`/api/cargo/leaderboard?range=${cargoLbRange}`);
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch {
+    const c = $("cargo-lb-cards");
+    c.innerHTML = sectionMsg("Couldn't load the leaderboard",
+      "Check your connection to the nav server and try again.", { retry: true });
+    c.querySelector("[data-retry]").onclick = loadCargoLeaderboard;
+    return;
+  }
   const earners = d.earners || [], efficient = d.efficient || [];
   const topReward = earners.reduce((m, r) => Math.max(m, r.total_reward), 0);
   $("cargo-lb-cards").innerHTML = [
@@ -8123,11 +8459,12 @@ async function loadCargoLeaderboard() {
     r => r.total_reward, v => fmtAuec(v) + " aUEC", "auec");
   cargoBoard("cargo-lb-efficient", "cargo-lb-efficient-empty", efficient,
     r => r.auec_per_hour, v => fmtAuec(v) + "/hr", "rate");
+  stampIntelFresh();
 }
 
 function loadCargoStats() {
   return loadSection("cargo-stats-status", "cargo-stats-body", {
-    url: `/api/cargo/stats?range=${cargoStatRange}`, render: renderCargoStats });
+    url: `/api/cargo/stats?range=${cargoStatRange}`, label: "Hauling", render: renderCargoStats });
 }
 function renderCargoStats(d) {
   $("cargo-stat-sub").textContent = cargoStatRange === "week" ? "(this week)" : "(all-time)";
@@ -8143,7 +8480,12 @@ function renderCargoStats(d) {
   const act = d.activity || [];
   $("cargo-stat-activity-empty").hidden = act.length > 0;
   const aMax = act.reduce((m, w) => Math.max(m, w.count), 0) || 1;
-  $("cargo-stat-activity").innerHTML = act.map(w => {
+  const cActEl = $("cargo-stat-activity");
+  cActEl.setAttribute("role", "img");
+  cActEl.setAttribute("aria-label", act.length
+    ? "Weekly aUEC hauled — " + act.map(w => `${w.label}: ${fmtAuec(w.count)}`).join("; ")
+    : "No weekly hauling activity yet");
+  cActEl.innerHTML = act.map(w => {
     const h = (w.count / aMax) * 100;
     return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)} aUEC">
         <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
@@ -8166,8 +8508,11 @@ function renderCargoStats(d) {
 // + Market live inside #intel-view; Mapping / Hauling / Leaderboards reuse the
 // existing views as siblings below the nav), and loads that section's data.
 function renderIntel(section) {
-  document.querySelectorAll("#intel-nav a").forEach(a =>
-    a.classList.toggle("active", a.dataset.sec === section));
+  document.querySelectorAll("#intel-nav a").forEach(a => {
+    const on = a.dataset.sec === section;
+    a.classList.toggle("active", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
   $("intel-overview").hidden = section !== "overview";
   $("intel-directory").hidden = section !== "directory";
   $("intel-market").hidden = section !== "market";
@@ -8184,7 +8529,9 @@ function renderIntel(section) {
   else if (section === "market") loadMarketStats();
   else if (boards) {
     document.querySelectorAll("#intel-board-toggle button").forEach(b => {
-      b.classList.toggle("on", b.dataset.board === intelBoard);
+      const on = b.dataset.board === intelBoard;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
       b.onclick = () => { intelBoard = b.dataset.board; renderIntel("boards"); };
     });
     if (intelBoard === "mapping") loadLeaderboard(); else loadCargoLeaderboard();
@@ -8238,37 +8585,77 @@ async function loadDirectory() {
     `</div>`;
 }
 
-// Overview: a cross-cutting "org at a glance" — the headline number from each
-// domain, each a deep-link into its section. Three small fetches in parallel.
+// Overview: a cross-cutting "org at a glance". One primary reading (guild
+// records) leads; the money/people metrics ride below as demoted deep-links, so
+// this isn't four equal cards. Three fetches in parallel — but if every one of
+// them fails we say so with a Retry instead of silently rendering zeros, and a
+// brand-new org gets a teaching empty state, not a wall of goose eggs.
 async function loadIntelOverview() {
-  $("intel-overview").innerHTML = `<div class="panel"><h2>ORG AT A GLANCE</h2>` +
+  const root = $("intel-overview");
+  root.innerHTML = `<div class="panel"><h2>ORG AT A GLANCE</h2>` +
+    `<div class="intel-ov-status" id="intel-ov-status">${sectionSkeleton()}</div>` +
+    `<div id="intel-ov-body" hidden>` +
+    `<a class="intel-hero" id="intel-hero" href="#/intel/mapping" title="POIs, resource nodes, fauna and harvestables your guild has recorded. Open the Mapping section."></a>` +
     `<div class="intel-glance" id="intel-glance"></div>` +
-    `<div class="intel-glance-foot" id="intel-glance-foot"></div></div>`;
-  const [stats, cargo, market] = await Promise.all([
-    fetch("/api/stats").then(r => r.json()).catch(() => ({})),
-    fetch("/api/cargo/stats").then(r => r.json()).catch(() => ({})),
-    fetch("/api/market/stats").then(r => r.json()).catch(() => ({})),
-  ]);
+    `<div class="intel-glance-foot" id="intel-glance-foot"></div></div></div>`;
+  const status = $("intel-ov-status"), body = $("intel-ov-body");
+  const j = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.json(); };
+  const [statsR, cargoR, marketR, boardR, cargoBoardR] = await Promise.allSettled([
+    j("/api/stats"), j("/api/cargo/stats"), j("/api/market/stats"),
+    j("/api/leaderboard"), j("/api/cargo/leaderboard")]);
+  // Every domain unreachable → this is a connection failure, not an empty org.
+  if (statsR.status === "rejected" && cargoR.status === "rejected" && marketR.status === "rejected") {
+    status.innerHTML = sectionMsg("Couldn't load the overview",
+      "Check your connection to the nav server and try again.", { retry: true });
+    status.querySelector("[data-retry]").onclick = loadIntelOverview;
+    return;
+  }
+  const stats = statsR.value || {}, cargo = cargoR.value || {}, market = marketR.value || {};
   const t = stats.totals || {};
+  const records = t.records || 0, hauled = Math.round(cargo.total_reward || 0);
+  const traded = Math.round(market.auec_volume || 0), contributors = t.contributors || 0;
+  // Nothing anywhere → teach the first action rather than show four zeros.
+  if (!records && !hauled && !traded && !contributors) {
+    status.innerHTML = sectionMsg("Your org's story starts here",
+      "Intel fills in as your guild plays — map POIs and resource nodes, run cargo, and trade on the "
+      + "marketplace. Record your first find from the navigator and this overview comes to life.",
+      { href: "#/nav", label: "Open the navigator →" });
+    return;
+  }
+  status.hidden = true; body.hidden = false;
+  stampIntelFresh();
+  // Primary reading: guild records, the one number this whole tool is built on.
+  $("intel-hero").innerHTML =
+    `<span class="n">${records.toLocaleString()}</span>` +
+    `<span class="k">GUILD RECORDS MAPPED</span>` +
+    `<span class="intel-hero-cta">See the mapping breakdown →</span>`;
+  // Demoted trio: money + people, each a deep-link, visibly secondary to the hero.
   const cells = [
-    ["#/intel/mapping", "accent", (t.records || 0).toLocaleString(), "GUILD RECORDS"],
-    ["#/intel/hauling", "warn", Math.round(cargo.total_reward || 0).toLocaleString(), "aUEC HAULED"],
-    ["#/intel/market", "warn", Math.round(market.auec_volume || 0).toLocaleString(), "aUEC TRADED"],
-    ["#/intel/boards", "", (t.contributors || 0).toLocaleString(), "CONTRIBUTORS"],
+    ["#/intel/hauling", "warn", hauled.toLocaleString(), "aUEC HAULED", "Total cargo-run payouts. Open the Hauling section."],
+    ["#/intel/market", "warn", traded.toLocaleString(), "aUEC TRADED", "aUEC volume across confirmed marketplace deals. Open the Market section."],
+    ["#/intel/boards", "", contributors.toLocaleString(), "CONTRIBUTORS", "Members who've recorded at least one thing. Open the Leaderboards."],
   ];
-  $("intel-glance").innerHTML = cells.map(([href, cls, n, k]) =>
-    `<a class="intel-stat" href="${href}"><span class="n ${cls}">${n}</span><span class="k">${k}</span></a>`).join("");
-  const top = (market.top_sellers || [])[0];
-  $("intel-glance-foot").textContent = top
-    ? `Top trader: ${top.display_name} (${fmtAuec(top.auec)}). Pick a section above for the full breakdown.`
-    : `Pick a section above for the full breakdown.`;
+  $("intel-glance").innerHTML = cells.map(([href, cls, n, k, tip]) =>
+    `<a class="intel-stat" href="${href}" title="${esc(tip)}"><span class="n ${cls}">${n}</span><span class="k">${k}</span></a>`).join("");
+  // Round out the leaders line: the top name from each domain, not just trading.
+  const board = boardR.value || {}, cargoBoard = cargoBoardR.value || {};
+  const topContrib = (board.contributors || [])[0] || null;
+  const topHauler = (cargoBoard.earners || [])[0] || null;
+  const topTrader = (market.top_sellers || [])[0] || null;
+  const leaders = [];
+  if (topContrib && topContrib.handle) leaders.push(`Top contributor: <b>${esc(topContrib.handle)}</b>`);
+  if (topHauler && topHauler.display_name) leaders.push(`Top hauler: <b>${esc(topHauler.display_name)}</b>`);
+  if (topTrader && topTrader.display_name) leaders.push(`Top trader: <b>${esc(topTrader.display_name)}</b> (${fmtAuec(topTrader.auec)})`);
+  $("intel-glance-foot").innerHTML = leaders.length
+    ? leaders.join(' <span class="sep">·</span> ')
+    : "Pick a section above for the full breakdown.";
 }
 
 // Market: guild marketplace stats over confirmed deals. Mirrors loadCargoStats.
 let intelMarketRange = "all";
 function loadMarketStats() {
   return loadSection("intel-market-status", "intel-market-body", {
-    url: `/api/market/stats?range=${intelMarketRange}`, render: renderMarketStats });
+    url: `/api/market/stats?range=${intelMarketRange}`, label: "Market", render: renderMarketStats });
 }
 function renderMarketStats(d) {
   $("intel-market-sub").textContent = intelMarketRange === "week" ? "(this week)" : "(all-time)";
@@ -8286,7 +8673,12 @@ function renderMarketStats(d) {
   const act = d.activity || [];
   $("intel-market-activity-empty").hidden = act.length > 0;
   const aMax = act.reduce((m, w) => Math.max(m, w.count), 0) || 1;
-  $("intel-market-activity").innerHTML = act.map(w => {
+  const actEl = $("intel-market-activity");
+  actEl.setAttribute("role", "img");
+  actEl.setAttribute("aria-label", act.length
+    ? "Weekly aUEC traded — " + act.map(w => `${w.label}: ${fmtAuec(w.count)}`).join("; ")
+    : "No weekly trade activity yet");
+  actEl.innerHTML = act.map(w => {
     const hh = (w.count / aMax) * 100;
     return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)}">
         <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
@@ -8305,10 +8697,30 @@ function renderMarketStats(d) {
 function wireRangeToggle(elId, current, onPick) {
   const el = $(elId);
   el.querySelectorAll("button").forEach(b => {
-    b.classList.toggle("active", b.dataset.range === current);
+    const on = b.dataset.range === current;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
     b.onclick = () => { if (b.dataset.range !== current) onPick(b.dataset.range); };
   });
 }
+
+// Keyboard accelerator: ← / → step between Org Intel sections (skipping hidden
+// ones), so an analyst can sweep the tabs without reaching for the mouse.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const iv = $("intel-view");
+  if (!iv || iv.hidden) return;
+  const tag = e.target && e.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  const links = [...$("intel-nav").querySelectorAll("a")].filter(a => !a.hidden);
+  const cur = links.findIndex(a => a.classList.contains("active"));
+  if (cur < 0) return;
+  const ni = e.key === "ArrowRight" ? Math.min(cur + 1, links.length - 1) : Math.max(cur - 1, 0);
+  if (ni === cur) return;
+  e.preventDefault();
+  location.hash = links[ni].getAttribute("href");
+  links[ni].focus();
+});
 
 // ---------- org settings (admin) ----------
 async function loadSettings() {
