@@ -2488,7 +2488,12 @@ def _lfg_announce_ok(poster_id: str) -> bool:
     """Anti-spam gate for 'announce to Discord': one announced LFG post per member per
     cooldown. Returns True (and arms the cooldown) only when allowed."""
     now = time.monotonic()
-    if now - _lfg_announce_at.get(poster_id, 0.0) < LFG_ANNOUNCE_COOLDOWN_S:
+    # A never-announced member must never read as rate-limited. Don't use 0.0 as the
+    # "never" sentinel: monotonic() can be < the cooldown shortly after boot, so
+    # `now - 0.0 < cooldown` would wrongly gate a member's first announce for the
+    # server's first LFG_ANNOUNCE_COOLDOWN_S seconds of uptime. Check membership.
+    last = _lfg_announce_at.get(poster_id)
+    if last is not None and now - last < LFG_ANNOUNCE_COOLDOWN_S:
         return False
     _lfg_announce_at[poster_id] = now
     return True
