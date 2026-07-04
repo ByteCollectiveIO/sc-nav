@@ -681,9 +681,9 @@
   /* logo + title double as the "home" control → back to the app launcher */
   .home-link { display: flex; align-items: center; gap: 12px; text-decoration: none; }
 
-  /* app launcher (home). Width is sized to the card count: 7 apps × minmax(220px)
-     + 18px gaps wrap 4+3 at this cap (760px orphaned the 7th card as 3+3+1). */
-  .launcher { max-width: 970px; margin: 0 auto; }
+  /* app launcher (home). Nine apps in three themed groups of three; the cap keeps
+     each group's grid to one tidy 3-across row (was 970px for a flat 4+3 wrap). */
+  .launcher { max-width: 1040px; margin: 0 auto; }
   .launcher-head { color: var(--accent); letter-spacing: 2px; font-size: 18px;
     margin: 4px 0 6px; text-align: center; }
   .launcher-sub { color: var(--dim); font-size: 13px; line-height: 1.6; text-align: center;
@@ -706,6 +706,13 @@
   .launcher-badges { display: flex; justify-content: center; align-items: center;
     gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
   .launcher-badges .online-badge { margin: 0; }
+  /* each themed group is its own labeled section + 3-across grid */
+  .app-group { margin-top: 26px; }
+  .app-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px;
+    margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    color: var(--accent); font-size: 13px; letter-spacing: 2px; text-transform: uppercase; }
+  .app-group-sub { color: var(--dim); font-size: 12px; letter-spacing: 0.5px;
+    text-transform: none; font-weight: 400; }
   .app-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 18px; }
   .app-card { position: relative; display: flex; flex-direction: column; align-items: center;
@@ -1806,71 +1813,90 @@
 <main>
   <div id="launcher-view" class="launcher" hidden>
     <h2 class="launcher-head">Your org toolkit</h2>
-    <p class="launcher-sub">Nine tools, one org. New here? Start with the Resource Navigator —
-      the rest build on it.</p>
+    <p class="launcher-sub">Nine tools, one org — grouped by what you're up to. New here? Start
+      with the Resource Navigator; the rest build on it.</p>
     <div class="launcher-badges">
       <a id="online-badge" class="online-badge" href="#/online" hidden></a>
       <a id="lfg-badge" class="online-badge lfg-badge" href="#/lfg" hidden></a>
       <a id="warn-badge" class="online-badge warn-badge" href="#/pirates" hidden></a>
     </div>
     <a id="launcher-resume" class="launcher-resume" hidden></a>
-    <div class="app-grid">
-      <a class="app-card" href="#/nav">
-        <span class="app-badge start">Start here</span>
-        <img class="app-logo" src="/images/resource_navigator_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Resource Navigator</div>
-        <div class="app-desc">Find POIs, resources &amp; wildlife and get live turn-by-turn
-          guidance with your org.</div>
-      </a>
-      <a class="app-card" href="#/route">
-        <img class="app-logo" src="/images/cargo_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Cargo Planner</div>
-        <div class="app-desc">Plan efficient multi-stop hauling routes under your ship's
-          cargo capacity, then run them turn-by-turn.</div>
-      </a>
-      <a class="app-card" href="#/events">
-        <img class="app-logo" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Event Planner</div>
-        <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
-          sign up your org, and track who's filling each slot.</div>
-      </a>
-      <a class="app-card" href="#/goals">
-        <img class="app-logo" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Resource Manager</div>
-        <div class="app-desc">Set org procurement goals with deadlines &amp; priorities, log what
-          members are holding, and watch contributions fill each target.</div>
-      </a>
-      <a class="app-card" href="#/market">
-        <img class="app-logo" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Org Marketplace</div>
-        <div class="app-desc">Sell, auction &amp; barter items with your org — priced in aUEC only.
-          Post a listing, buy or bid, then settle the handoff in-game.</div>
-      </a>
-      <a class="app-card" href="#/trade">
-        <img class="app-logo" src="/images/trade_route_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Trade Route Planner</div>
-        <div class="app-desc">Buy low, sell high on live UEX prices — the most profitable buy→sell
-          loop your ship can carry, planned and run leg-by-leg.</div>
-      </a>
-      <a class="app-card" href="#/intel">
-        <img class="app-logo" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Org Intel</div>
-        <div class="app-desc">Your org's analytics deck — mapping coverage, hauling and
-          marketplace activity, and the contributor leaderboards, all in one place.</div>
-      </a>
-      <a class="app-card" href="#/lfg">
-        <img class="app-logo" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Group Finder</div>
-        <div class="app-desc">Rally a crew right now — post that you need players or want to
-          join, filter by playstyle, and group up without waiting for a scheduled event.</div>
-      </a>
-      <a class="app-card" href="#/pirates">
-        <img class="app-logo" src="/images/danger_zone_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-        <div class="app-name">Danger Board</div>
-        <div class="app-desc">Warn your org about pirate snares and camped stations — post a danger
-          zone, watch live threats on your trade lanes, or go hunt the pirates yourself.</div>
-      </a>
-    </div>
+
+    <section class="app-group">
+      <h3 class="app-group-head">Out in the 'Verse
+        <span class="app-group-sub">Navigate, haul &amp; trade across the 'verse</span></h3>
+      <div class="app-grid">
+        <a class="app-card" href="#/nav">
+          <span class="app-badge start">Start here</span>
+          <img class="app-logo" src="/images/resource_navigator_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Resource Navigator</div>
+          <div class="app-desc">Find POIs, resources &amp; wildlife and get live turn-by-turn
+            guidance with your org.</div>
+        </a>
+        <a class="app-card" href="#/route">
+          <img class="app-logo" src="/images/cargo_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Cargo Planner</div>
+          <div class="app-desc">Plan efficient multi-stop hauling routes under your ship's
+            cargo capacity, then run them turn-by-turn.</div>
+        </a>
+        <a class="app-card" href="#/trade">
+          <img class="app-logo" src="/images/trade_route_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Trade Route Planner</div>
+          <div class="app-desc">Buy low, sell high on live UEX prices — the most profitable buy→sell
+            loop your ship can carry, planned and run leg-by-leg.</div>
+        </a>
+      </div>
+    </section>
+
+    <section class="app-group">
+      <h3 class="app-group-head">Rally the Org
+        <span class="app-group-sub">Coordinate people — schedule, group up &amp; stay safe</span></h3>
+      <div class="app-grid">
+        <a class="app-card" href="#/events">
+          <img class="app-logo" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Event Planner</div>
+          <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
+            sign up your org, and track who's filling each slot.</div>
+        </a>
+        <a class="app-card" href="#/lfg">
+          <img class="app-logo" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Group Finder</div>
+          <div class="app-desc">Rally a crew right now — post that you need players or want to
+            join, filter by playstyle, and group up without waiting for a scheduled event.</div>
+        </a>
+        <a class="app-card" href="#/pirates">
+          <img class="app-logo" src="/images/danger_zone_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Danger Board</div>
+          <div class="app-desc">Warn your org about pirate snares and camped stations — post a danger
+            zone, watch live threats on your trade lanes, or go hunt the pirates yourself.</div>
+        </a>
+      </div>
+    </section>
+
+    <section class="app-group">
+      <h3 class="app-group-head">Run the Org
+        <span class="app-group-sub">Manage assets, the internal market &amp; insight</span></h3>
+      <div class="app-grid">
+        <a class="app-card" href="#/goals">
+          <img class="app-logo" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Resource Manager</div>
+          <div class="app-desc">Set org procurement goals with deadlines &amp; priorities, log what
+            members are holding, and watch contributions fill each target.</div>
+        </a>
+        <a class="app-card" href="#/market">
+          <img class="app-logo" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Org Marketplace</div>
+          <div class="app-desc">Sell, auction &amp; barter items with your org — priced in aUEC only.
+            Post a listing, buy or bid, then settle the handoff in-game.</div>
+        </a>
+        <a class="app-card" href="#/intel">
+          <img class="app-logo" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Org Intel</div>
+          <div class="app-desc">Your org's analytics deck — mapping coverage, hauling and
+            marketplace activity, and the contributor leaderboards, all in one place.</div>
+        </a>
+      </div>
+    </section>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. All content not authored by its host or
       users is property of their respective owners. Star Citizen®, Roberts Space Industries®
