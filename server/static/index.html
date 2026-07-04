@@ -1115,6 +1115,8 @@
   .trade-sug-row .sg-econ { color: var(--dim); font-variant-numeric: tabular-nums; }
   .trade-sug-row .sg-econ b { color: var(--text); }
   .trade-sug-row .sg-lane { color: var(--dim); font-size: 12px; }
+  .trade-sug-row .sg-age { font-variant-numeric: tabular-nums; }
+  .trade-sug-row .sg-age.warn { color: var(--warn); }
   .trade-price-note { font-size: 11px; color: var(--dim); margin-top: 2px; }
   .trade-pref-row { flex-wrap: wrap; gap: 8px 18px; align-items: center; }
   .trade-pref { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
@@ -2680,10 +2682,10 @@
         <div class="route-row trade-pref-row" style="margin-top:10px;">
           <label class="trade-pref" title="Weigh empty-hold repositioning more heavily so the plan keeps you loaded, even if it gives up some profit.">
             <input id="trade-deadhead" type="checkbox"> minimize empty-hold flight</label>
-          <label class="trade-pref" title="UEX prices are community-scraped and can lag. Skip any terminal whose price hasn't been updated within this many days.">
-            <input id="trade-fresh-on" type="checkbox"> only prices newer than
+          <label class="trade-pref" title="UEX prices are community-scraped and can lag. Skip any terminal whose price hasn't been updated within this many days. On by default at 2 days so stale terminals stay out of the plan and the best-trades board.">
+            <input id="trade-fresh-on" type="checkbox" checked> only prices newer than
             <input id="trade-fresh-days" class="ti" type="number" min="1" max="365" step="1"
-                   value="7" disabled style="width:56px;"> days</label>
+                   value="2" style="width:56px;"> days</label>
         </div>
         <div id="trade-filter-row" class="route-row" hidden style="margin-top:10px;">
           <span class="poi-pick" style="flex:1; min-width:180px;">
@@ -6632,7 +6634,7 @@ function buildTradePlanBody(msg) {
     body.sort = tradeSort;
     if ($("trade-deadhead").checked) body.minimize_deadhead = true;
     if ($("trade-fresh-on").checked)
-      body.max_price_age_days = Math.max(1, Number($("trade-fresh-days").value) || 7);
+      body.max_price_age_days = Math.max(1, Number($("trade-fresh-days").value) || 2);
     if (tradeMode === "filtered") {
       if (!tradeFilter.length) { msg.textContent = "add at least one commodity, or switch to Auto"; return null; }
       body.commodities = tradeFilter;
@@ -6668,12 +6670,18 @@ function clearTrade() {
 
 // Freshness of UEX price points. Anything older than the user's freshness-days
 // setting (default 7) reads as stale — badged on the leg and flagged on the plan.
-function tradeStaleDays() { return Math.max(1, Number($("trade-fresh-days").value) || 7); }
+function tradeStaleDays() { return Math.max(1, Number($("trade-fresh-days").value) || 2); }
 function tradeAgeInfo(ts) {
   if (ts == null) return { txt: "age unknown", stale: true };
   const days = (Date.now() / 1000 - ts) / 86400;
   const txt = days < 1 ? `${Math.max(1, Math.round(days * 24))}h old` : `${Math.round(days)}d old`;
   return { txt, stale: days > tradeStaleDays() };
+}
+// A board row's freshness = its older side (an unknown timestamp counts as stale).
+function tradeRowAge(r) {
+  const bu = r.buy_updated_at, su = r.sell_updated_at;
+  if (bu == null || su == null) return tradeAgeInfo(null);
+  return tradeAgeInfo(Math.min(bu, su));
 }
 
 function renderTradePlan(res) {
@@ -6752,8 +6760,9 @@ async function renderTradeSuggest() {
   if (sys) qs.set("system", sys);
   const budget = Number($("trade-budget").value);
   if (budget > 0) qs.set("budget", String(Math.round(budget)));
-  if ($("trade-fresh-on").checked)
-    qs.set("max_price_age_days", String(Math.max(1, Number($("trade-fresh-days").value) || 7)));
+  const freshOn = $("trade-fresh-on").checked;
+  const freshDays = tradeStaleDays();
+  if (freshOn) qs.set("max_price_age_days", String(freshDays));
   let rows;
   try { rows = await fetch(`/api/trade/trades?${qs}`).then(r => r.json()); }
   catch { el.hidden = true; return; }
@@ -6769,7 +6778,14 @@ async function renderTradeSuggest() {
     : `Ranked by <b>margin per SCU</b> — the raw buy→sell price spread${where}, ignoring how much you `
       + `can carry and how far the haul is. <b>Set a ship above</b> to rank by profit / hour instead — `
       + `that's what <b>Auto</b> optimizes, which is why Auto may pick a different commodity than the top spread here.`;
-  let h = `<h2>BEST TRADES RIGHT NOW</h2><p class="trade-sug-note">${note}</p>`;
+  // Freshness banner: make the age basis of the board explicit. On, it names the
+  // window (and how to change it); off, it warns the ranking spans prices of any age.
+  const freshLine = freshOn
+    ? `Ranked over prices updated within <b>${freshDays} day${freshDays === 1 ? "" : "s"}</b>. `
+      + `Change “only prices newer than” above to re-rank.`
+    : `⚠ Ranking over <b>all prices regardless of age</b> — tick “only prices newer than” above to drop stale terminals.`;
+  let h = `<h2>BEST TRADES RIGHT NOW</h2><p class="trade-sug-note">${note}</p>`
+    + `<p class="trade-fresh-line${freshOn ? "" : " warn"}">${freshLine}</p>`;
   const money = n => (Number(n) || 0).toLocaleString();
   rows.forEach((r, i) => {
     const head = (perHour && r.profit_per_hour)
@@ -6779,11 +6795,13 @@ async function renderTradeSuggest() {
       + ` · spread <b>+${money(r.profit_per_scu)}</b>/SCU`;
     if (r.max_scu && r.trade_profit)
       econ += ` · move <b>${money(r.max_scu)}</b> SCU = <b>${money(r.trade_profit)}</b> aUEC/run`;
+    const age = tradeRowAge(r);   // older side's scrape age; always shown, filter on or off
     h += `<div class="trade-sug-row"><span class="sg-rank">${i + 1}</span>`
       + `<div class="sg-main"><div class="sg-top"><span class="sg-name">${esc(r.commodity)}</span>`
       + `<span class="sg-head">${head}</span></div>`
       + `<div class="sg-econ">${econ}</div>`
-      + `<div class="sg-lane">${esc(r.buy_terminal)} → ${esc(r.sell_terminal)}</div></div>`
+      + `<div class="sg-lane">${esc(r.buy_terminal)} → ${esc(r.sell_terminal)}`
+      + ` <span class="sg-age${age.stale ? " warn" : ""}">· ${age.txt}</span></div></div>`
       + `<button class="route-chip" data-use="${i}" type="button">use</button></div>`;
   });
   el.innerHTML = h; el.hidden = false;
