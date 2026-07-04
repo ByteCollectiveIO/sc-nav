@@ -1944,15 +1944,20 @@ async def list_trade_trades(
     commodity: str | None = None, system: str | None = None,
     capacity_scu: float | None = None, min_margin: int = 0,
     sort: str = "auto", limit: int = 50,
+    budget: int | None = None, max_price_age_days: int | None = None,
 ):
     """Best single buy→sell trades over the live price feed, richest first — the
     manual-mode suggestion list and the seed set for the multi-leg solver (#21).
     `capacity_scu` (usually the member's ship's usable SCU) unlocks the throughput
-    fields (max_scu, trade_profit, profit_per_hour) and the per-hour ranking."""
+    fields (max_scu, trade_profit, profit_per_hour) and the per-hour ranking.
+    `budget` caps each load to affordable aUEC; `max_price_age_days` drops stale
+    price points so the board matches the planner's freshness filter."""
+    max_age_s = max_price_age_days * 86400 if max_price_age_days else None
     return nav_core.rank_trades(
         nav, trade_price_points, commodity=commodity, system=system,
         capacity_scu=capacity_scu, min_margin=max(0, min_margin),
         sort=sort, limit=max(1, min(limit, 200)),
+        budget=(budget if budget and budget > 0 else None), max_age_s=max_age_s,
     )
 
 
@@ -1972,8 +1977,14 @@ class TradePlanIn(BaseModel):
     commodities: list[str] = Field(default_factory=list, max_length=50)  # filtered mode
     system: str | None = Field(default=None, max_length=_NAME_MAX)       # intra-system lock
     sort: str = "per_hour"                              # per_hour | profit
+    budget: int | None = Field(default=None, gt=0, le=10_000_000_000)    # aUEC on hand cap
+    minimize_deadhead: bool = False                     # trade profit for fuller holds
+    max_price_age_days: int | None = Field(default=None, ge=1, le=365)   # drop stale prices
     legs: list[TradeLegIn] = Field(default_factory=list, max_length=24)  # manual mode
     ship: str | None = Field(default=None, max_length=_NAME_MAX)
+
+
+_DEADHEAD_WEIGHT = 3.0   # empty-hold time multiplier when minimize_deadhead is on
 
 
 @app.post("/api/trade/plan")
@@ -1995,17 +2006,21 @@ async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_sessio
                                 detail="no live position yet — run /showlocation, or pick a start POI")
         start_pos = sess.pos
     t_ref = sess.t if sess else None
+    max_age_s = body.max_price_age_days * 86400 if body.max_price_age_days else None
+    dh_weight = _DEADHEAD_WEIGHT if body.minimize_deadhead else 1.0
     try:
         if body.mode == "manual":
             plan = nav_core.cost_trade_legs(
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
-                body.usable_scu, start_id=body.start_id, start_pos=start_pos, t_ref=t_ref)
+                body.usable_scu, start_id=body.start_id, start_pos=start_pos,
+                budget=body.budget, t_ref=t_ref)
         else:
             plan = nav_core.plan_trade_route(
                 nav, trade_price_points, body.usable_scu,
                 start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
                 commodities=(body.commodities if body.mode == "filtered" else None),
-                system=body.system, sort=body.sort, t_ref=t_ref)
+                system=body.system, sort=body.sort, budget=body.budget,
+                deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return plan

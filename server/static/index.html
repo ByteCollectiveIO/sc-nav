@@ -1100,6 +1100,13 @@
   .trade-sug-row .sg-econ b { color: var(--text); }
   .trade-sug-row .sg-lane { color: var(--dim); font-size: 12px; }
   .trade-price-note { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .trade-pref-row { flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+  .trade-pref { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+  .trade-pref input[type="checkbox"] { accent-color: var(--accent); }
+  .trade-fresh-line { font-size: 12px; margin: 8px 0 0; }
+  .trade-fresh-line.warn { color: var(--warn); } .trade-fresh-line b { color: var(--text); }
+  .tl-fresh { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .tl-fresh.stale { color: var(--warn); }
 
   /* ---- event planner (#/events) ---- */
   #events-view, #events-root { display: contents; }
@@ -2541,9 +2548,14 @@
         <label class="muted" style="font-size:12px;">usable SCU
           <input id="trade-scu" class="ti" type="number" min="0" step="1" style="width:90px;">
         </label>
+        <label class="muted" style="font-size:12px;">max spend (aUEC)
+          <input id="trade-budget" class="ti" type="number" min="0" step="1000"
+                 placeholder="unlimited" style="width:120px;">
+        </label>
         <span id="trade-ship-msg" class="muted" style="font-size:12px;"></span>
       </div>
-      <p class="muted route-hint">Bigger holds move more per leg. Set what actually fits.</p>
+      <p class="muted route-hint">Bigger holds move more per leg. Set what actually fits —
+        and cap <b>max spend</b> to the aUEC you have to trade with.</p>
     </div>
 
     <div class="panel">
@@ -2581,6 +2593,14 @@
             <button class="active" data-sort="per_hour" type="button">Best aUEC/hr</button>
             <button data-sort="profit" type="button">Most profit</button>
           </span>
+        </div>
+        <div class="route-row trade-pref-row" style="margin-top:10px;">
+          <label class="trade-pref" title="Weigh empty-hold repositioning more heavily so the plan keeps you loaded, even if it gives up some profit.">
+            <input id="trade-deadhead" type="checkbox"> minimize empty-hold flight</label>
+          <label class="trade-pref" title="UEX prices are community-scraped and can lag. Skip any terminal whose price hasn't been updated within this many days.">
+            <input id="trade-fresh-on" type="checkbox"> only prices newer than
+            <input id="trade-fresh-days" class="ti" type="number" min="1" max="365" step="1"
+                   value="7" disabled style="width:56px;"> days</label>
         </div>
         <div id="trade-filter-row" class="route-row" hidden style="margin-top:10px;">
           <span class="poi-pick" style="flex:1; min-width:180px;">
@@ -5949,6 +5969,12 @@ function wireTradePlanner() {
   // SCU edit shouldn't leave a stale margin-only board (see renderTradeSuggest).
   $("trade-scu").addEventListener("input", renderTradeSuggest);
   $("trade-system").addEventListener("change", renderTradeSuggest);
+  $("trade-budget").addEventListener("input", renderTradeSuggest);
+  // Freshness: the day count only matters while the filter is on; keep the board
+  // in sync with the same freshness the planner will apply.
+  $("trade-fresh-on").addEventListener("change", () => {
+    $("trade-fresh-days").disabled = !$("trade-fresh-on").checked; renderTradeSuggest(); });
+  $("trade-fresh-days").addEventListener("input", renderTradeSuggest);
   attachPoiPicker($("trade-start-poi").parentElement, () => cancelTradeHere());
   $("trade-here").onclick = toggleTradeHere;
   $("trade-commodity-btn").onclick = addTradeCommodity;
@@ -6134,6 +6160,8 @@ async function planTrade() {
   const msg = $("trade-plan-msg");
   if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return; }
   const body = { mode: tradeMode, usable_scu: usable, ...tradeStartPayload() };
+  const budget = Number($("trade-budget").value);
+  if (budget > 0) body.budget = Math.round(budget);
   if (tradeMode === "manual") {
     const legs = [];
     for (const row of $("trade-legs").children) {
@@ -6150,6 +6178,9 @@ async function planTrade() {
     body.max_stops = Number($("trade-stops").value) || 6;
     body.system = $("trade-system").value || null;
     body.sort = tradeSort;
+    if ($("trade-deadhead").checked) body.minimize_deadhead = true;
+    if ($("trade-fresh-on").checked)
+      body.max_price_age_days = Math.max(1, Number($("trade-fresh-days").value) || 7);
     if (tradeMode === "filtered") {
       if (!tradeFilter.length) { msg.textContent = "add at least one commodity, or switch to Auto"; return; }
       body.commodities = tradeFilter;
@@ -6176,6 +6207,16 @@ function clearTrade() {
   if (tradeMode === "manual") addTradeLegRow();
 }
 
+// Freshness of UEX price points. Anything older than the user's freshness-days
+// setting (default 7) reads as stale — badged on the leg and flagged on the plan.
+function tradeStaleDays() { return Math.max(1, Number($("trade-fresh-days").value) || 7); }
+function tradeAgeInfo(ts) {
+  if (ts == null) return { txt: "age unknown", stale: true };
+  const days = (Date.now() / 1000 - ts) / 86400;
+  const txt = days < 1 ? `${Math.max(1, Math.round(days * 24))}h old` : `${Math.round(days)}d old`;
+  return { txt, stale: days > tradeStaleDays() };
+}
+
 function renderTradePlan(res) {
   const out = $("trade-result"), sm = res.summary || {};
   let h = `<div class="panel"><h2>TRADE PLAN</h2>`;
@@ -6193,8 +6234,15 @@ function renderTradePlan(res) {
                metric(fmtGm(sm.total_distance_m), "QT DISTANCE"),
                metric(fmtDur(sm.total_time_s), "EST. TIME"),
                metric(fmtAuec(sm.peak_capital), "CAPITAL NEEDED")];
+  if (sm.loaded_pct != null) sub.push(metric(sm.loaded_pct + "%", "HOLD LOADED"));
   h += `<div class="route-substats">` + sub.join("") + `</div>`;
   if (res.start) h += `<p class="route-hint muted">Starting from <b>${esc(res.start.name)}</b>.</p>`;
+  if (sm.oldest_updated_at != null) {
+    const a = tradeAgeInfo(sm.oldest_updated_at);
+    h += `<p class="trade-fresh-line${a.stale ? " warn" : ""}">`
+      + `${a.stale ? "⚠ " : ""}Prices as old as <b>${a.txt}</b> feed this plan`
+      + `${a.stale ? " — some terminals may have moved. Enable the freshness filter to exclude them." : "."}</p>`;
+  }
   h += `<p class="trade-price-note">Prices are UEX's latest scrape, not live in-game — confirm at the terminal.</p>`;
   h += `</div><div class="panel"><h2>LEGS</h2>`;
   (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
@@ -6212,9 +6260,14 @@ function renderTradeLeg(lg, i) {
     if (lg.haul.cross_system) hl += ` <span class="gate">· via ${(lg.haul.via_gate || []).join(" → ")}</span>`;
     move.push(hl);
   }
+  // Age of the older of the two price sides drives the leg's freshness badge.
+  const ts = [lg.buy_updated_at, lg.sell_updated_at].filter(v => v != null);
+  const age = tradeAgeInfo(ts.length ? Math.min(...ts) : null);
+  const fresh = `<span class="tl-fresh${age.stale ? " stale" : ""}" title="UEX price age">`
+    + `${age.stale ? "⚠ " : ""}${age.txt}</span>`;
   return `<div class="trade-leg-card"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
-    + `<span class="tl-scu">${lg.scu} SCU</span></div>`
+    + `<span class="tl-scu">${lg.scu} SCU</span>${fresh}</div>`
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
     + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span></div>`
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
@@ -6235,6 +6288,10 @@ async function renderTradeSuggest() {
   const qs = new URLSearchParams({ sort: perHour ? "per_hour" : "margin", limit: "8" });
   if (perHour) qs.set("capacity_scu", String(scu));
   if (sys) qs.set("system", sys);
+  const budget = Number($("trade-budget").value);
+  if (budget > 0) qs.set("budget", String(Math.round(budget)));
+  if ($("trade-fresh-on").checked)
+    qs.set("max_price_age_days", String(Math.max(1, Number($("trade-fresh-days").value) || 7)));
   let rows;
   try { rows = await fetch(`/api/trade/trades?${qs}`).then(r => r.json()); }
   catch { el.hidden = true; return; }

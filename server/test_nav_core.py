@@ -1946,11 +1946,39 @@ class TradeRankingTests(unittest.TestCase):
     step 2). Price points use the shape /api/trade/prices emits."""
 
     def _pt(self, commodity, terminal_id, poi_id, system="Stanton", buy=None,
-            sell=None, scu_buy=0, scu_sell_stock=0):
+            sell=None, scu_buy=0, scu_sell_stock=0, updated_at=None):
         return {"commodity": commodity, "terminal_id": terminal_id,
                 "terminal": f"T{terminal_id}", "system": system, "poi_id": poi_id,
                 "buy": buy, "sell": sell, "scu_buy": scu_buy,
-                "scu_sell_stock": scu_sell_stock}
+                "scu_sell_stock": scu_sell_stock, "updated_at": updated_at}
+
+    def test_budget_caps_load_to_affordable(self):
+        pts = [self._pt("Gold", 1, 101, buy=100), self._pt("Gold", 2, 102, sell=200)]
+        out = nav_core.rank_trades(nav_core.NavData(), pts, capacity_scu=96,
+                                   sort="margin", budget=1000)
+        self.assertEqual(out[0]["max_scu"], 10)          # floor(1000 / 100 buy)
+        self.assertEqual(out[0]["buy_cost"], 1000)
+        self.assertEqual(out[0]["trade_profit"], 10 * 100)
+
+    def test_budget_below_one_unit_drops_trade(self):
+        pts = [self._pt("Gold", 1, 101, buy=100), self._pt("Gold", 2, 102, sell=200)]
+        out = nav_core.rank_trades(nav_core.NavData(), pts, capacity_scu=96, budget=50)
+        self.assertEqual(out[0]["max_scu"], None)        # can't afford a single SCU
+
+    def test_max_age_drops_stale_and_undated_points(self):
+        now = 1_000_000.0
+        fresh = [self._pt("Gold", 1, 101, buy=100, updated_at=now - 3600),
+                 self._pt("Gold", 2, 102, sell=200, updated_at=now - 3600)]
+        self.assertEqual(len(nav_core.rank_trades(nav_core.NavData(), fresh,
+                         max_age_s=7200, now_ts=now)), 1)
+        stale = [self._pt("Gold", 1, 101, buy=100, updated_at=now - 99999),
+                 self._pt("Gold", 2, 102, sell=200, updated_at=now - 3600)]
+        self.assertEqual(nav_core.rank_trades(nav_core.NavData(), stale,
+                         max_age_s=7200, now_ts=now), [])
+        undated = [self._pt("Gold", 1, 101, buy=100),          # updated_at None
+                   self._pt("Gold", 2, 102, sell=200, updated_at=now)]
+        self.assertEqual(nav_core.rank_trades(nav_core.NavData(), undated,
+                         max_age_s=7200, now_ts=now), [])
 
     def test_pairs_buy_low_sell_high(self):
         pts = [self._pt("Gold", 1, 101, buy=100),    # buy here for 100
@@ -2022,11 +2050,11 @@ class TradeSolverTests(unittest.TestCase):
         cls.A, cls.B, cls.C = (p.id for p in spc)
 
     def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
-            scu_buy=0, scu_sell_stock=0):
+            scu_buy=0, scu_sell_stock=0, updated_at=None):
         return {"commodity": commodity, "terminal_id": terminal_id,
                 "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
                 "buy": buy, "sell": sell, "scu_buy": scu_buy,
-                "scu_sell_stock": scu_sell_stock}
+                "scu_sell_stock": scu_sell_stock, "updated_at": updated_at}
 
     def _prices(self):
         # Gold: buy @A 100 -> sell @B 300.  Iron: buy @B 50 -> sell @C 200.
@@ -2090,6 +2118,63 @@ class TradeSolverTests(unittest.TestCase):
         legs = [{"commodity": "Gold", "buy_terminal_id": 999, "sell_terminal_id": 2}]
         with self.assertRaises(ValueError):
             nav_core.cost_trade_legs(NAV, self._prices(), legs, 100, start_id=self.A)
+
+    def test_budget_caps_solver_capital(self):
+        # Gold buy @100: budget 3000 affords 30 SCU even though the 100-SCU hold
+        # and 500-SCU supply would allow more -> peak capital never exceeds budget.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, budget=3000, sort="profit")
+        self.assertTrue(plan["summary"]["feasible"])
+        self.assertLessEqual(plan["summary"]["peak_capital"], 3000)
+        gold = next(lg for lg in plan["legs"] if lg["commodity"] == "Gold")
+        self.assertEqual(gold["scu"], 30)                # floor(3000 / 100)
+
+    def test_summary_splits_deadhead_and_loaded_time(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit")
+        s = plan["summary"]
+        self.assertIn("deadhead_time_s", s)
+        self.assertIn("loaded_time_s", s)
+        self.assertGreater(s["loaded_time_s"], 0)
+        self.assertGreaterEqual(s["deadhead_time_s"], 0)
+        # move time (deadhead + loaded) plus dwell must reconcile with the total.
+        self.assertAlmostEqual(
+            s["total_time_s"],
+            s["deadhead_time_s"] + s["loaded_time_s"] + 2 * nav_core.STOP_DWELL_S * s["legs"])
+        self.assertTrue(0 <= s["loaded_pct"] <= 100)
+
+    def test_legs_carry_price_freshness(self):
+        now = 1_000_000.0
+        prices = [self._pt("Gold", 1, self.A, buy=100, scu_buy=500, updated_at=now - 10),
+                  self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500, updated_at=now - 20)]
+        plan = nav_core.plan_trade_route(NAV, prices, 100, start_id=self.A, sort="profit")
+        lg = plan["legs"][0]
+        self.assertEqual(lg["buy_updated_at"], now - 10)
+        self.assertEqual(lg["sell_updated_at"], now - 20)
+        self.assertEqual(plan["summary"]["oldest_updated_at"], now - 20)
+
+    def test_max_age_filters_solver_candidates(self):
+        now = 1_000_000.0
+        prices = self._prices()
+        for p in prices:                                 # make the Gold sell stale
+            p["updated_at"] = now if p["terminal_id"] != 2 else now - 99999
+        plan = nav_core.plan_trade_route(
+            NAV, prices, 100, start_id=self.A, sort="profit",
+            max_age_s=7200, now_ts=now)
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Iron"})
+
+    def test_route_score_penalizes_empty_flight(self):
+        # Equal profit, different empty-hold time: weight>1 must rank the fuller
+        # (less deadhead) route higher; weight 1 leaves both objectives unchanged.
+        low = {"total_profit": 1000, "total_time_s": 4000, "deadhead_time_s": 500}
+        high = {"total_profit": 1000, "total_time_s": 4000, "deadhead_time_s": 2000}
+        self.assertEqual(nav_core._route_score(low, "profit", 1.0), 1000)
+        self.assertGreater(nav_core._route_score(low, "profit", 3.0),
+                           nav_core._route_score(high, "profit", 3.0))
+        base = nav_core._route_score(low, "per_hour", 1.0)
+        self.assertAlmostEqual(base, 1000 / (4000 / 3600.0))
+        self.assertGreater(nav_core._route_score(low, "per_hour", 3.0),
+                           nav_core._route_score(high, "per_hour", 3.0))
 
 
 if __name__ == "__main__":
