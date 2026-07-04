@@ -1290,7 +1290,7 @@ handle, 3) marketplace `seller_handle`, 4) directory + opt-out.
 ## Engagement & org-ops batch (2026-06-30) — priority order
 
 User brainstorm 2026-06-30; ranked by user interest. #18–20 scoped (own docs);
-#21 un-parked + **SHIPPED thru v0.30.0** (see below); #22–23 still parked
+#21 un-parked + **SHIPPED thru v0.31.0** (all 6 steps, see below); #22–23 still parked
 (interesting but lower priority / not org-specific).
 
 ## 18. Discord notifications (push integration)
@@ -1366,16 +1366,21 @@ unassigned-pool → group-cards board on the event detail. Manifest export → D
 ### 21. Trade-route finder (buy-low/sell-high on live terminal prices)
 Pure commodity trading using the UEX feed (complements the *contract*-based cargo
 planner): "given my ship SCU + location, top profit-per-SCU routes now."
-**SHIPPED + DEPLOYED thru v0.30.0 (2026-07-03).** Full spec + build-status table in
-[`docs/trade-route-planner.md`](trade-route-planner.md). Live at `#/trade`: feeds +
-terminal→POI crosswalk, single-trade ranking, multi-leg auto/filtered/manual solver
-(v0.28.x), budget/deadhead/staleness enhancement pass (v0.29.0), and **run/execute
-mode with re-plan-from-live-position + actual buy/sell figure capture** (v0.30.0).
-The org-differentiation gap (below) is answered by the live-position re-plan (a
+**SHIPPED + DEPLOYED thru v0.31.0 (all 6 build steps done, 2026-07-04).** Full spec +
+build-status table in [`docs/trade-route-planner.md`](trade-route-planner.md). Live at
+`#/trade`: feeds + terminal→POI crosswalk, single-trade ranking, multi-leg
+auto/filtered/manual solver (v0.28.x), budget/deadhead/staleness enhancement pass
+(v0.29.0), **run/execute mode with re-plan-from-live-position + actual buy/sell figure
+capture** (v0.30.0), and **step 6 History + trade stats** (v0.31.0) — a RECENT TRADES
+panel in `#/trade` (personal realized-profit stats + frequency quick-picks + run-again)
+plus an Org Intel **Trading** section (`#/intel/trading`) with guild totals, weekly
+sparkline, top commodities/lanes/ships, and a top-traders board, all over *realized*
+profit. The org-differentiation gap (below) is answered by the live-position re-plan (a
 generic external site can't seed from where you actually are) and by capturing real
-per-member earnings. Step 6 (**History + trade stats** — RECENT TRADES panel + Org
-Intel Trading section over realized profit) shipped too. **Only deferred:** favorite
-routes; teammate-lane-awareness remains a parked fast-follow.
+per-member earnings. **Favorite routes** (save a plan config → re-solve against live
+prices on load, `trade_favorites` + `/api/trade/favorites` + a SAVED ROUTES panel) are
+now built too, so the whole v1 scope is complete; only teammate-lane-awareness (and
+hazard markers) remain parked v2+ fast-follows.
 
 <details>
 <summary>Original parking note (2026-06-19)</summary>

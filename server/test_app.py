@@ -1172,5 +1172,79 @@ class TradeRunSummaryTests(unittest.TestCase):
         self.assertEqual(s["profit"], 8000)
 
 
+class TradeFavoritesTests(unittest.TestCase):
+    """Saved trade-route favorites (#21): persist a plan *config* (not resolved
+    legs), list freshest-first, overwrite by name, and delete — scoped per member."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "42", "username": "trader", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        for f in self.client.get("/api/trade/favorites").json()["favorites"]:
+            self.client.delete(f"/api/trade/favorites/{f['id']}")
+
+    def _save(self, name, config, **extra):
+        return self.client.post("/api/trade/favorites",
+                                json={"name": name, "config": config, **extra})
+
+    def test_save_list_roundtrip_keeps_config(self):
+        cfg = {"mode": "filtered", "usable_scu": 64, "ship": "C2 Hercules",
+               "commodities": ["Gold"], "system": "Stanton", "max_stops": 5}
+        r = self._save("Gold loop", cfg, start_label="Everus Harbor")
+        self.assertEqual(r.status_code, 200, r.text)
+        favs = self.client.get("/api/trade/favorites").json()["favorites"]
+        self.assertEqual(len(favs), 1)
+        got = favs[0]
+        self.assertEqual(got["name"], "Gold loop")
+        self.assertEqual(got["config"]["mode"], "filtered")
+        self.assertEqual(got["config"]["commodities"], ["Gold"])
+        self.assertEqual(got["config"]["ship"], "C2 Hercules")
+        self.assertEqual(got["config"]["start_label"], "Everus Harbor")
+
+    def test_resave_same_name_overwrites_in_place(self):
+        self._save("My route", {"mode": "auto", "usable_scu": 32})
+        self._save("My route", {"mode": "auto", "usable_scu": 96})
+        favs = self.client.get("/api/trade/favorites").json()["favorites"]
+        self.assertEqual(len(favs), 1)                       # not duplicated
+        self.assertEqual(favs[0]["config"]["usable_scu"], 96)
+
+    def test_delete_removes_only_that_favorite(self):
+        a = self._save("A", {"mode": "auto", "usable_scu": 32}).json()["id"]
+        self._save("B", {"mode": "auto", "usable_scu": 32})
+        r = self.client.delete(f"/api/trade/favorites/{a}")
+        self.assertEqual(r.status_code, 200)
+        names = [f["name"] for f in self.client.get("/api/trade/favorites").json()["favorites"]]
+        self.assertEqual(names, ["B"])
+        self.assertEqual(self.client.delete(f"/api/trade/favorites/{a}").status_code, 404)
+
+    def test_favorites_are_scoped_to_the_member(self):
+        self._save("Mine", {"mode": "auto", "usable_scu": 32})
+        # A different member sees none of it.
+        other = {"id": "99", "username": "other", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: other
+        try:
+            self.assertEqual(self.client.get("/api/trade/favorites").json()["favorites"], [])
+        finally:
+            app.app.dependency_overrides[app.require_session] = lambda: self._user
+
+    def test_invalid_config_is_rejected(self):
+        r = self._save("Bad", {"mode": "auto", "usable_scu": 0})   # SCU must be > 0
+        self.assertEqual(r.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

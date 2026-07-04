@@ -1,14 +1,17 @@
 # Trade Route Planner — design
 
-**Status:** SHIPPED through **v0.30.0** (2026-07-03, deployed). Backlog #21,
-previously parked; revisited with a concrete answer to the parking reason (see
-*Why revisit now* below). This doc began as the decision record; the build-status
-box below tracks what's actually landed. **What's live:** the full v1 scope —
-feeds/crosswalk, single-trade ranking, multi-leg auto/filtered/manual solver, the
-`#/trade` app, and **run/execute mode with re-plan-from-live-position** — plus a
-post-plan enhancement pass (budget cap / minimize-deadhead / price-staleness) and
-**actual buy/sell figure capture** at execution. Deferred: History + `#/trade-stats`
-(step 6) and favorite routes.
+**Status:** SHIPPED through **v0.31.0** (2026-07-04, deployed) — **all 6 build steps
+done.** Backlog #21, previously parked; revisited with a concrete answer to the
+parking reason (see *Why revisit now* below). This doc began as the decision record;
+the build-status box below tracks what's actually landed. **What's live:** the full v1
+scope — feeds/crosswalk, single-trade ranking, multi-leg auto/filtered/manual solver,
+the `#/trade` app, **run/execute mode with re-plan-from-live-position**, a post-plan
+enhancement pass (budget cap / minimize-deadhead / price-staleness), **actual buy/sell
+figure capture** at execution, **step 6 History + trade stats** (RECENT TRADES
+panel + Org Intel Trading section over realized profit), and **saved routes /
+favorites** (name a plan config, reload it to re-solve against live prices).
+Nothing from the v1 scope remains deferred; only the v2+ ideas (teammate-lane
+awareness, hazard markers) are still parked.
 
 ## Build status (what's landed)
 
@@ -21,8 +24,8 @@ post-plan enhancement pass (budget cap / minimize-deadhead / price-staleness) an
 | — | Enhancement pass: budget cap, minimize-deadhead, price-staleness filter/badges | ✅ v0.29.0 |
 | 5 | **Execute + re-plan** (`trade_runs` table, run/confirm/advance, sunk-cargo replan) | ✅ **v0.30.0** |
 | — | **Actual buy/sell figure capture** at execution (honest earnings vs UEX scrape) | ✅ **v0.30.0** |
-| 6 | History + trade stats (RECENT TRADES panel + Org Intel **Trading** section) | ✅ **next release** |
-| — | Favorite routes (save config, re-plan on load) | ⬜ deferred |
+| 6 | History + trade stats (RECENT TRADES panel + Org Intel **Trading** section) | ✅ **v0.31.0** |
+| — | **Favorite routes** (save config, re-plan on load) | ✅ **v0.32.0** |
 
 Key code (grep the banners per root `CLAUDE.md`): solver in `nav_core`
 (`plan_trade_route` / `cost_trade_legs` / `replan_trade_route` / `_solve_route` /
@@ -335,8 +338,38 @@ packages/precedence):
 - `GET  /api/trade/history` — completed runs + frequency-ranked quick-picks
   (best lanes/commodities), same spirit as the cargo planner's
   `derive_quick_picks`.
+- `GET/POST /api/trade/favorites` + `DELETE /api/trade/favorites/{id}` — saved
+  trade-route configs (see **Favorites** below).
 
 ---
+
+## Favorites (saved routes) — AS BUILT (v0.32.0)
+
+A frequent trader re-enters the same setup constantly (their ship, their
+commodity picks, their home system). A **favorite** saves that setup so it's one
+tap to reload. The key design call: **save the config, not the plan.** UEX prices
+move, so persisting resolved legs would go stale instantly; a favorite stores the
+*inputs* (`TradePlanIn`-shaped) and **re-solves against live prices every time
+it's loaded** — the same reason the design leaned on live-position re-planning
+over frozen routes elsewhere.
+
+- **Persistence** — `trade_favorites (id, discord_id, name, created_at, data)`,
+  `data` = the JSON plan config. Per-member cap (`db.TRADE_FAVORITES_MAX = 40`,
+  oldest culled). Re-saving under an existing name **overwrites in place** (no
+  duplicate). `db.list/save/delete_trade_favorite`.
+- **Config validated as a real plan** — `TradeFavoriteIn.config` is a full
+  `TradePlanIn`, so a saved favorite is always re-plannable; a bad config (e.g.
+  `usable_scu = 0`) 422s at save. One UI-only extra rides alongside:
+  `start_label`, the start POI's display name (the client can't resolve a name
+  from an id alone), used purely to repaint the picker on load.
+- **Frontend** — a **★ Save route** button in the plan actions captures the
+  current form via the shared `buildTradePlanBody` (so a favorite is exactly what
+  would be planned), prompting for a name (new `promptDialog`, a text-input
+  sibling of `confirmDialog`). A **SAVED ROUTES** panel (`#trade-favorites`, above
+  the pickers) lists them as chips; tapping one runs `applyTradeConfig` to repaint
+  every control, then `planTrade()` to re-solve live. Terminal/commodity names for
+  manual legs are resolved client-side from the loaded terminal catalog
+  (`tradeTermById`); only the start POI needs the stored label.
 
 ## UI integration
 

@@ -2049,6 +2049,16 @@ class TradeReplanIn(BaseModel):
     max_price_age_days: int | None = Field(default=None, ge=1, le=365)
 
 
+class TradeFavoriteIn(BaseModel):
+    """A saved trade-route favorite (#21): a member-named plan `config` (validated
+    as a full TradePlanIn so a loaded favorite is always re-plannable) plus an
+    optional `start_label` — the start POI's display name, which the client can't
+    resolve from an id alone, kept only to repaint the picker on load."""
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    config: TradePlanIn
+    start_label: str | None = Field(default=None, max_length=_NAME_MAX)
+
+
 _DEADHEAD_WEIGHT = 3.0   # empty-hold time multiplier when minimize_deadhead is on
 
 
@@ -2765,6 +2775,35 @@ async def reset_trade_session(user: dict = Depends(require_session)):
     ts = datetime.now(timezone.utc).isoformat()
     db.set_trade_session_start(user["id"], ts)
     return {"ok": True, "session_start": ts}
+
+
+@app.get("/api/trade/favorites")
+async def list_trade_favorites(user: dict = Depends(require_session)):
+    """The caller's saved trade-route favorites (freshest first). Each carries its
+    stored plan `config` so the client can restore the planner form and re-solve
+    against live prices."""
+    return {"favorites": db.list_trade_favorites(user["id"])}
+
+
+@app.post("/api/trade/favorites")
+async def save_trade_favorite(body: TradeFavoriteIn, user: dict = Depends(require_session)):
+    """Save the current planner setup as a named favorite. Only the *config* is
+    stored (not resolved legs/prices) — loading it re-plans against live UEX data.
+    Re-saving under an existing name overwrites it in place. Returns the row id."""
+    cfg = body.config.model_dump()
+    if body.start_label:
+        cfg["start_label"] = body.start_label
+    ts = datetime.now(timezone.utc).isoformat()
+    fid = db.save_trade_favorite(user["id"], body.name.strip(), cfg, ts)
+    return {"ok": True, "id": fid}
+
+
+@app.delete("/api/trade/favorites/{fav_id}")
+async def delete_trade_favorite(fav_id: int, user: dict = Depends(require_session)):
+    """Remove one of the caller's saved favorites."""
+    if not db.delete_trade_favorite(user["id"], fav_id):
+        raise HTTPException(status_code=404, detail="favorite not found")
+    return {"ok": True}
 
 
 @app.get("/api/trade/stats")
