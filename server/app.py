@@ -192,6 +192,18 @@ def warning_stale_min() -> int:
     return max(1, min(v, ageoff - 1)) if ageoff > 1 else 1
 
 
+def hazard_radius_km() -> int:
+    """Base hazard radius (km) a danger warning projects for snare-detour routing
+    (#24 v2) — the corridor the trade/cargo planners route around. Severity scales
+    it in code (sighted ×0.5, active ×1.0, deadly ×1.5). Admin-editable. Default
+    5000 km: far wider than a Mantis bubble, covering anchor imprecision + roaming
+    pirates, yet trivial at Gm leg scales."""
+    try:
+        return max(1, int(db.get_setting("hazard_radius_km", "5000")))
+    except (TypeError, ValueError):
+        return 5000
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
@@ -1068,6 +1080,13 @@ class RoutePlanIn(BaseModel):
     # ungrouped bucket). Display-only/advisory — never affects routing; the run's
     # total payout is the sum, the denominator for aUEC/hour.
     rewards: dict[str, float] = Field(default_factory=dict)
+    # Pirate danger board (#24 v2): snare-detour routing. `avoid` (the default) —
+    # route around dangers, stops never change; `warn` — flag legs that touch a
+    # danger; `ignore` — plan as-is. `avoid_poi_ids` is the caller's personal
+    # blacklist (localStorage), places to always route around; unknown ids are
+    # silently skipped (POIs can be refreshed away).
+    avoid_mode: str = "avoid"
+    avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
@@ -2205,9 +2224,14 @@ class TradePlanIn(BaseModel):
     legs: list[TradeLegIn] = Field(default_factory=list, max_length=24)  # manual mode
     ship: str | None = Field(default=None, max_length=_NAME_MAX)
     # Pirate danger board (#24): ignore = plan as-is; warn = plan normally but flag
-    # legs that touch an active warning; avoid = drop warned POIs / snared lanes from
-    # the solver (auto/filtered only — manual legs are the player's explicit choice).
-    avoid_mode: str = "ignore"                          # ignore | warn | avoid
+    # legs that touch (or fly past) an active warning; avoid = route around dangers —
+    # snared lanes are detoured, camped terminals dropped (auto/filtered only; manual
+    # legs are the player's explicit choice, only ever badged). Default avoid: danger
+    # handling is on unless overridden (#24 v2, decision 6).
+    avoid_mode: str = "avoid"                           # ignore | warn | avoid
+    # Personal blacklist (localStorage): POI ids to always route around, layered on
+    # top of the board as extra hazard volumes. Unknown ids silently skipped.
+    avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
 class TradeRunPatchIn(BaseModel):
@@ -2248,8 +2272,20 @@ class TradeFavoriteIn(BaseModel):
 _DEADHEAD_WEIGHT = 3.0   # empty-hold time multiplier when minimize_deadhead is on
 
 
-def _norm_avoid_mode(mode) -> str:
-    return mode if mode in ("ignore", "warn", "avoid") else "ignore"
+def _norm_avoid_mode(mode, default="ignore") -> str:
+    return mode if mode in ("ignore", "warn", "avoid") else default
+
+
+def _build_hazard_volumes(warnings, blacklist, t_ref):
+    """Hazard volumes for the snare-detour planners (#24 v2): the active danger
+    board plus the caller's personal blacklist, at the org's configured base
+    radius. Returns None when there's nothing to build (keeps the solver on its
+    zero-cost avoid=None fast path)."""
+    if not warnings and not blacklist:
+        return None
+    return nav_core.hazard_volumes(
+        nav, warnings, t_ref, radius_m=hazard_radius_km() * 1000.0,
+        extra_point_ids=blacklist or ()) or None
 
 
 def _leg_warning_view(w: dict) -> dict:
@@ -2267,16 +2303,73 @@ def _leg_warning_view(w: dict) -> dict:
             "severity": w.get("severity"), "where": where}
 
 
-def _annotate_trade_legs(plan: dict, warnings: list[dict], mode: str) -> dict:
-    """In warn/avoid mode, tag each costed leg with the active warnings touching it
-    (#24) so the client can badge the danger. No-op in ignore mode or with no
-    warnings. Mutates + returns the plan."""
+_SEVERITY_RANK = {"deadly": 0, "active": 1, "sighted": 2}
+
+
+def _annotate_trade_legs(plan: dict, warnings: list[dict], mode: str,
+                         volumes=None, t_ref=None) -> dict:
+    """Tag each costed leg with the active warnings around it (#24) so the client
+    can badge the danger. No-op in ignore mode or with no warnings. In warn mode,
+    with hazard `volumes`, also badges dangers the leg merely *flies past* (via
+    nav_core.leg_hazards) — not just those at its buy/sell endpoints. In avoid
+    mode, translates each leg's detour outcomes (`dodged`/`blocked` warning ids on
+    its haul/approach) into resolved view dicts. Mutates + returns the plan."""
     if mode == "ignore" or not warnings:
         return plan
+    wmap = {w.get("id"): w for w in warnings}
     for lg in plan.get("legs") or ():
         hits = nav_core.trade_leg_warnings(lg, warnings)
+        if mode == "warn" and volumes:
+            bp, sp = nav.pois.get(lg.get("buy_poi_id")), nav.pois.get(lg.get("sell_poi_id"))
+            if bp is not None and sp is not None and not lg.get("held"):
+                seen = {h.get("id") for h in hits}
+                for wid in nav_core.leg_hazards(nav, bp, sp, volumes, t_ref):
+                    w = wmap.get(wid)
+                    if w is not None and wid not in seen:
+                        hits.append(w)
+                        seen.add(wid)
+                hits.sort(key=lambda w: _SEVERITY_RANK.get(w.get("severity"), 9))
         if hits:
             lg["warnings"] = [_leg_warning_view(w) for w in hits]
+        # Detour outcomes (avoid mode): dodged/blocked ids ride on the leg's
+        # approach + haul sub-views; resolve them to named view dicts for badges.
+        dodged, blocked = [], []
+        for sub in (lg.get("to_buy"), lg.get("haul")):
+            if sub:
+                dodged += sub.get("dodged") or []
+                blocked += sub.get("blocked") or []
+        if dodged:
+            lg["dodged"] = [_leg_warning_view(wmap[i]) for i in dict.fromkeys(dodged) if i in wmap]
+        if blocked:
+            lg["blocked"] = [_leg_warning_view(wmap[i]) for i in dict.fromkeys(blocked) if i in wmap]
+    return plan
+
+
+def _annotate_cargo_stops(plan: dict, warnings: list[dict], mode: str) -> dict:
+    """Layer the danger board over a cargo plan (#24 v2). Cargo stops are
+    contractual (never dropped), so: `warn` badges stops sitting on a warned POI
+    (no reroute); `avoid` translates each arrival leg's detour outcomes
+    (`dodged`/`blocked`) into named view dicts on the stop. Mutates + returns."""
+    if mode == "ignore" or not warnings:
+        return plan
+    wmap = {w.get("id"): w for w in warnings}
+    if mode == "warn":
+        by_poi = {}
+        for w in warnings:
+            if w.get("kind") == "point" and w.get("anchor_a_poi") is not None:
+                by_poi.setdefault(w["anchor_a_poi"], []).append(w)
+        for s in plan.get("stops") or ():
+            hits = by_poi.get(s.get("stop_id"))
+            if hits:
+                hits = sorted(hits, key=lambda w: _SEVERITY_RANK.get(w.get("severity"), 9))
+                s["warnings"] = [_leg_warning_view(w) for w in hits]
+        return plan
+    for s in plan.get("stops") or ():           # avoid: resolve detour outcomes
+        leg = s.get("leg") or {}
+        if leg.get("dodged"):
+            s["dodged"] = [_leg_warning_view(wmap[i]) for i in leg["dodged"] if i in wmap]
+        if leg.get("blocked"):
+            s["blocked"] = [_leg_warning_view(wmap[i]) for i in leg["blocked"] if i in wmap]
     return plan
 
 
@@ -2313,18 +2406,28 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     t_ref = sess.t if sess else None
     max_age_s = body.max_price_age_days * 86400 if body.max_price_age_days else None
     dh_weight = _DEADHEAD_WEIGHT if body.minimize_deadhead else 1.0
-    mode = _norm_avoid_mode(body.avoid_mode)
+    mode = _norm_avoid_mode(body.avoid_mode, default="avoid")
     warnings = warnings or []
+    blacklist = list(body.avoid_poi_ids or ())
+    # Snare-detour volumes (#24 v2): built once per request when danger handling is
+    # on. Passed to the solver only in avoid mode (it routes around them); in warn
+    # mode they still feed the annotate pass so fly-past dangers get badged.
+    volumes = _build_hazard_volumes(warnings, blacklist, t_ref) if mode != "ignore" else None
     avoid_poi_ids, avoid_pairs = (nav_core.trade_avoid_sets(warnings)
                                   if mode == "avoid" else (None, None))
+    if mode == "avoid" and blacklist:
+        # A blacklisted terminal is a camped terminal — drop it as an endpoint too,
+        # not just as a fly-past volume (decision 4).
+        avoid_poi_ids = frozenset(avoid_poi_ids or ()) | set(blacklist)
+    solver_volumes = volumes if mode == "avoid" else None
     try:
         if body.mode == "manual":
             # Manual legs are the player's explicit choice — never silently dropped;
-            # they still get warn/avoid badges so a snared pick is at least flagged.
+            # they still get warn/avoid badges + costed detours so a snared pick is flagged.
             plan = nav_core.cost_trade_legs(
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
-                budget=body.budget, t_ref=t_ref)
+                budget=body.budget, t_ref=t_ref, avoid_volumes=solver_volumes)
         else:
             plan = nav_core.plan_trade_route(
                 nav, trade_price_points, body.usable_scu,
@@ -2332,10 +2435,11 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 commodities=(body.commodities if body.mode == "filtered" else None),
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
-                avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
+                avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
+                avoid_volumes=solver_volumes)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return _annotate_trade_legs(plan, warnings, mode)
+    return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
 
 
 def _initial_trade_states(legs: list[dict]) -> list[str]:
@@ -2384,7 +2488,8 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "system": body.system, "sort": body.sort, "budget": body.budget,
             "minimize_deadhead": body.minimize_deadhead,
             "max_price_age_days": body.max_price_age_days,
-            "avoid_mode": _norm_avoid_mode(body.avoid_mode),   # #24
+            "avoid_mode": _norm_avoid_mode(body.avoid_mode, default="avoid"),   # #24
+            "avoid_poi_ids": list(body.avoid_poi_ids or ()),                    # #24 v2 blacklist
         },
     }
 
@@ -2503,10 +2608,14 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         # Danger board (#24): re-plan honors the run's avoid_mode (or a body override).
         # A live re-plan is exactly when avoidance matters most — pirates just hit you.
         mode = _norm_avoid_mode(body.avoid_mode if body.avoid_mode is not None
-                                else p.get("avoid_mode"))
+                                else p.get("avoid_mode"), default="avoid")
         warnings = hub.active_trade_warnings()
+        blacklist = list(p.get("avoid_poi_ids") or ())
+        volumes = _build_hazard_volumes(warnings, blacklist, sess.t) if mode != "ignore" else None
         avoid_poi_ids, avoid_pairs = (nav_core.trade_avoid_sets(warnings)
                                       if mode == "avoid" else (None, None))
+        if mode == "avoid" and blacklist:
+            avoid_poi_ids = frozenset(avoid_poi_ids or ()) | set(blacklist)
         new_plan = nav_core.replan_trade_route(
             nav, trade_price_points, run["usable_scu"], start_pos=sess.pos, held=held,
             max_stops=(body.max_stops or p.get("max_stops") or 6),
@@ -2516,8 +2625,9 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
             budget=p.get("budget"),
             deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
             max_age_s=max_age_s, t_ref=sess.t,
-            avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
-        _annotate_trade_legs(new_plan, warnings, mode)
+            avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
+            avoid_volumes=(volumes if mode == "avoid" else None))
+        _annotate_trade_legs(new_plan, warnings, mode, volumes, sess.t)
         p["avoid_mode"] = mode                       # persist the mode used
         new_legs = new_plan.get("legs") or []
         if not new_legs:
@@ -2645,16 +2755,25 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
             raise HTTPException(status_code=400,
                                 detail="no live position yet — run /showlocation, or pick a start POI")
         start_pos = sess.pos
+    # Snare-detour routing (#24 v2): cargo stops are contractual so avoid can only
+    # add detours, never drop a stop — safe on by default.
+    mode = _norm_avoid_mode(body.avoid_mode, default="avoid")
+    warnings = []
+    if mode != "ignore":
+        async with hub.lock:
+            warnings = hub.active_trade_warnings()
+    volumes = (_build_hazard_volumes(warnings, list(body.avoid_poi_ids or ()),
+                                     sess.t if sess else None) if mode == "avoid" else None)
     try:
         plan = nav_core.plan_route(
             nav, [p.model_dump() for p in body.packages],
             usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
-            t_ref=sess.t if sess else None,
+            t_ref=sess.t if sess else None, avoid_volumes=volumes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     _apply_reward_summary(plan["summary"], rewards)
-    return plan
+    return _annotate_cargo_stops(plan, warnings, mode)
 
 
 # --- cargo run execution (stateful, persisted per member) -------------------
@@ -2716,11 +2835,17 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
                 raise HTTPException(status_code=400,
                                     detail="no live position yet — run /showlocation, or pick a start POI")
             start_pos = sess.pos
+        # Snare-detour routing (#24 v2): cargo stops are contractual, so avoid only
+        # ever adds detours. Snapshot the board (already under the lock) + build volumes.
+        mode = _norm_avoid_mode(body.avoid_mode, default="avoid")
+        warnings = hub.active_trade_warnings() if mode != "ignore" else []
+        volumes = (_build_hazard_volumes(warnings, list(body.avoid_poi_ids or ()), sess.t)
+                   if mode == "avoid" else None)
         try:
             plan = nav_core.plan_route(
                 nav, [p.model_dump() for p in body.packages],
                 usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
-                t_ref=sess.t,
+                t_ref=sess.t, avoid_volumes=volumes,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -2730,6 +2855,7 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
                 detail=f"route infeasible: needs {plan['summary']['min_capacity_scu']} usable SCU",
             )
         _apply_reward_summary(plan["summary"], rewards)
+        _annotate_cargo_stops(plan, warnings, mode)
         packages = {}
         for s in plan["stops"]:
             for p in s["pickups"]:
@@ -2742,6 +2868,8 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
             "display_name": user.get("display_name"),
             "started_at": datetime.now(timezone.utc).isoformat(),
             "stops": plan["stops"], "packages": packages, "active": 0,
+            # danger-handling knobs, kept so run-mode rerenders keep the mode (#24 v2)
+            "avoid_mode": mode, "avoid_poi_ids": list(body.avoid_poi_ids or ()),
             # frozen totals for history/stats (no need to re-solve completed runs)
             "rewards": rewards, "total_reward": sm["total_reward"],
             "total_time_s": sm["total_time_s"], "total_distance_m": sm["total_distance_m"],
@@ -5223,6 +5351,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "lfg_stale_min": lfg_stale_min(),
         "warning_ageoff_min": warning_ageoff_min(),
         "warning_stale_min": warning_stale_min(),
+        "hazard_radius_km": hazard_radius_km(),      # snare-detour base radius (#24 v2)
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
@@ -5246,6 +5375,9 @@ class SettingsIn(BaseModel):
     # and age off at warning_ageoff_min. Same stale < age-off rule, enforced below.
     warning_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
     warning_stale_min: int | None = Field(default=None, ge=1, le=10080)
+    # Base hazard radius (km) a warning projects for snare-detour routing (#24 v2);
+    # severity scales it in code. 100 km .. 200,000 km.
+    hazard_radius_km: int | None = Field(default=None, ge=100, le=200_000)
     # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
     # be used to stuff the meta table. Each id is validated (isdigit) below.
     extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
@@ -5302,6 +5434,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
                                 detail="Stale time must be less than the age-off time.")
         db.set_setting("warning_ageoff_min", str(ageoff))
         db.set_setting("warning_stale_min", str(stale))
+    if body.hazard_radius_km is not None:
+        db.set_setting("hazard_radius_km", str(body.hazard_radius_km))
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
@@ -5321,6 +5455,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "member_role_id": member_role_id(),
             "obs_fresh_window_h": obs_fresh_window_h(),
             "lfg_ageoff_min": lfg_ageoff_min(), "lfg_stale_min": lfg_stale_min(),
+            "warning_ageoff_min": warning_ageoff_min(), "warning_stale_min": warning_stale_min(),
+            "hazard_radius_km": hazard_radius_km(),
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),

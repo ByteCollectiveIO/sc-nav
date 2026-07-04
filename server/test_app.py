@@ -1290,6 +1290,131 @@ class TradeDangerWiringTests(unittest.TestCase):
             app.hub.warnings.clear()
 
 
+class SnareDetourWiringTests(unittest.TestCase):
+    """#24 v2 snare-detour glue in app.py: default flip to avoid, avoid_poi_ids
+    model caps, hazard-volume build, and the detour/fly-past annotate passes. The
+    geometry + solver behavior itself lives in test_nav_core."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._poi_id = next(iter(app.nav.pois))
+        cls._poi = app.nav.pois[cls._poi_id]
+
+    # --- model defaults + caps ---------------------------------------------
+    def test_avoid_mode_defaults_to_avoid(self):
+        self.assertEqual(app.TradePlanIn(usable_scu=100).avoid_mode, "avoid")
+        self.assertEqual(app.TradePlanIn(usable_scu=100).avoid_poi_ids, [])
+        self.assertEqual(app.RoutePlanIn(packages=[], usable_scu=100).avoid_mode, "avoid")
+
+    def test_avoid_poi_ids_cap(self):
+        import pydantic
+        app.TradePlanIn(usable_scu=100, avoid_poi_ids=list(range(50)))   # 50 ok
+        with self.assertRaises(pydantic.ValidationError):
+            app.TradePlanIn(usable_scu=100, avoid_poi_ids=list(range(51)))
+
+    def test_norm_avoid_mode_default_override(self):
+        self.assertEqual(app._norm_avoid_mode(None, default="avoid"), "avoid")
+        self.assertEqual(app._norm_avoid_mode("ignore", default="avoid"), "ignore")
+
+    # --- hazard-volume build ------------------------------------------------
+    def test_build_volumes_none_when_nothing(self):
+        self.assertIsNone(app._build_hazard_volumes([], [], None))
+
+    def test_build_volumes_from_warning(self):
+        w = {"id": 1, "kind": "point", "severity": "active",
+             "anchor_a_poi": self._poi_id, "anchor_b_poi": None}
+        vols = app._build_hazard_volumes([w], [], None)
+        self.assertEqual(len(vols), 1)
+        self.assertEqual(vols[0]["kind"], "sphere")
+        self.assertEqual(vols[0]["warning_id"], 1)
+
+    def test_build_volumes_unknown_blacklist_id_is_safe(self):
+        # A blacklist id that isn't a known POI contributes nothing (no crash).
+        self.assertIsNone(app._build_hazard_volumes([], [999_999_999], None))
+
+    # --- annotate: detour outcomes -> named views --------------------------
+    def test_annotate_avoid_resolves_dodged_and_blocked(self):
+        warnings = [
+            {"id": 42, "kind": "lane", "anchor_a_poi": self._poi_id, "anchor_b_poi": None,
+             "threat": "pvp", "severity": "deadly", "location": "the lane"},
+            {"id": 5, "kind": "point", "anchor_a_poi": self._poi_id, "anchor_b_poi": None,
+             "threat": "pve", "severity": "active", "location": ""},
+        ]
+        plan = {"legs": [{"buy_poi_id": self._poi_id, "sell_poi_id": None,
+                          "haul": {"dodged": [42], "blocked": [5]}}]}
+        out = app._annotate_trade_legs(plan, warnings, "avoid")
+        lg = out["legs"][0]
+        self.assertEqual([v["id"] for v in lg["dodged"]], [42])
+        self.assertEqual([v["id"] for v in lg["blocked"]], [5])
+
+    def test_annotate_warn_adds_flypast_via_volumes(self):
+        # Endpoint match finds nothing (the warned POI isn't this leg's buy/sell),
+        # but a hazard volume the leg crosses is surfaced via leg_hazards.
+        spc = [p for p in app.nav.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        a, mid, b = spc
+        w = {"id": 7, "kind": "point", "anchor_a_poi": mid.id, "anchor_b_poi": None,
+             "threat": "pvp", "severity": "deadly", "location": ""}
+        vols = app.nav_core.hazard_volumes(app.nav, [w], None, radius_m=5e14)  # huge -> guaranteed cross
+        plan = {"legs": [{"buy_poi_id": a.id, "sell_poi_id": b.id}]}
+        out = app._annotate_trade_legs(plan, [w], "warn", vols, None)
+        self.assertEqual([v["id"] for v in out["legs"][0]["warnings"]], [7])
+
+    def test_annotate_cargo_warn_badges_camped_stop(self):
+        warnings = [{"id": 3, "kind": "point", "anchor_a_poi": self._poi_id,
+                     "anchor_b_poi": None, "threat": "pvp", "severity": "deadly",
+                     "location": ""}]
+        plan = {"stops": [{"stop_id": self._poi_id, "leg": {}}]}
+        out = app._annotate_cargo_stops(plan, warnings, "warn")
+        self.assertEqual([v["id"] for v in out["stops"][0]["warnings"]], [3])
+
+    def test_annotate_cargo_avoid_resolves_leg_outcomes(self):
+        warnings = [{"id": 9, "kind": "lane", "anchor_a_poi": self._poi_id,
+                     "anchor_b_poi": None, "threat": "pvp", "severity": "active",
+                     "location": "x"}]
+        plan = {"stops": [{"stop_id": self._poi_id, "leg": {"dodged": [9]}}]}
+        out = app._annotate_cargo_stops(plan, warnings, "avoid")
+        self.assertEqual([v["id"] for v in out["stops"][0]["dodged"]], [9])
+
+
+class HazardRadiusSettingTests(unittest.TestCase):
+    """#24 v2: the admin-editable hazard_radius_km org setting round-trips through
+    /api/settings and defaults sanely."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._admin
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def test_default_is_5000(self):
+        db.set_setting("hazard_radius_km", "")           # unset -> default
+        self.assertEqual(app.hazard_radius_km(), 5000)
+        self.assertEqual(self.client.get("/api/settings").json()["hazard_radius_km"], 5000)
+
+    def test_round_trip(self):
+        r = self.client.post("/api/settings", json={"hazard_radius_km": 8000})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(app.hazard_radius_km(), 8000)
+        self.assertEqual(self.client.get("/api/settings").json()["hazard_radius_km"], 8000)
+
+    def test_out_of_range_rejected(self):
+        self.assertEqual(
+            self.client.post("/api/settings", json={"hazard_radius_km": 50}).status_code, 422)
+        self.assertEqual(
+            self.client.post("/api/settings", json={"hazard_radius_km": 999_999}).status_code, 422)
+
+
 class FleetTemplateTests(unittest.TestCase):
     """#20 v1.1: the ship seat-template feed + the saved-group-template lifecycle
     (snapshot an event's units → apply onto another event → delete)."""
