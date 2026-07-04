@@ -193,7 +193,17 @@ and go engage.
 
 ---
 
-## v2 — snare detour routing (your point 5, parked)
+## v2 — snare detour routing (your point 5)
+
+**No longer parked: full implementation-ready design in
+`docs/snare-detour-routing.md` (2026-07-04).** Headlines: no graph dependency
+(intra-system space is a complete graph over QT markers, so a detour is a
+bounded waypoint search, ~200 candidates); `travel_cost` gains an optional
+`avoid=` volumes param (default None = today's exact path) so both the trade
+planner AND the cargo planner inherit it; avoid mode stops dropping snared
+lanes and detours them instead; camped destinations flag `blocked`; personal
+blacklist + `hazard_radius_km` org setting ride along. The sketch below is the
+original parking note, kept for history — the new doc supersedes it.
 
 Documented now so the v1 data model doesn't paint us into a corner (it doesn't —
 anchors + severity are already captured).

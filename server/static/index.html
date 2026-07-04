@@ -1169,6 +1169,27 @@
   .route-danger { color: var(--bad); font-size: 13px; margin: 8px 0 0;
     border: 1px solid var(--bad); border-radius: 6px; padding: 8px 10px; background: var(--bad-wash); }
   .route-danger b { color: var(--bad); }
+  /* Snare-detour (#24 v2): the informational "rerouted around danger" callout (a
+     good outcome, so accent not alarm), the "dodge via …" accent span reuses .via,
+     and the shared AVOIDED LOCATIONS blacklist chips. */
+  .route-reroute { color: var(--accent); font-size: 13px; margin: 8px 0 0;
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+  .route-reroute .muted { color: var(--dim); }
+  .avoid-blk { margin-top: 10px; }
+  .avoid-blk-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .avoid-blk-add .fld-label { font-size: 11px; letter-spacing: .04em; color: var(--dim); }
+  .avoid-blk-add .poi-pick-wrap { position: relative; flex: 1; min-width: 200px; }
+  .avoid-blk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .avoid-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+    padding: 3px 6px 3px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); }
+  .avoid-chip .avoid-x { border: 0; background: none; color: var(--dim); cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 0 2px; }
+  .avoid-chip .avoid-x:hover { color: var(--bad); }
+  .reroute-nudge { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--bad); border-radius: 8px;
+    background: var(--bad-wash); font-size: 13px; color: var(--bad); font-weight: 600; }
+  .reroute-nudge .reroute-x { margin-left: auto; border: 0; background: none;
+    color: var(--dim); cursor: pointer; font-size: 16px; line-height: 1; }
   /* Live "best trades right now" suggestion board (manual-mode helper). Each row
      decomposes the economics — buy/sell prices, the per-SCU spread, and (with a
      ship set) the per-run throughput — so the headline number is never ambiguous. */
@@ -2243,6 +2264,17 @@
       someone confirms it's still active. Stale must be less than age-off.
     </div>
     <div class="muted" id="warn-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+      Route trade &amp; cargo runs around a danger within
+      <input id="hazard-radius" type="number" min="100" max="200000" step="100" style="width:90px;"> km
+      <button id="hazard-radius-save">Save</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      The berth the planners keep from a reported danger when routing around it. Wider than the
+      in-game snare bubble on purpose (anchors are approximate and pirates roam); at quantum
+      distances a generous berth costs almost nothing. Scales with severity automatically.
+    </div>
+    <div class="muted" id="hazard-radius-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
     <h2>DISCORD NOTIFICATIONS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -2682,6 +2714,17 @@
           title="For a contract that gives a commodity total across several pickup spots without saying how much is at each — enter the total once, then list every pickup.">+ add multi-pickup delivery</button>
       </div>
       <div id="route-rewards" hidden></div>
+      <div class="route-row trade-danger-row" style="margin-top:12px;">
+        <span class="muted" style="font-size:12px;">Pirate danger
+          <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
+        <span class="trade-seg" id="route-avoid" role="group" aria-label="Pirate danger handling">
+          <button data-avoid="ignore" type="button">Ignore</button>
+          <button data-avoid="warn" type="button">Warn</button>
+          <button class="active" data-avoid="avoid" type="button">Avoid</button>
+        </span>
+        <span class="muted trade-danger-hint" id="route-avoid-hint" style="font-size:11px;"></span>
+      </div>
+      <div class="avoid-blk" id="route-avoid-blk"></div>
       <div class="route-actions">
         <button id="route-plan" class="active">Plan route</button>
         <button id="route-clear" title="clear all cargo lines and start a fresh route">Clear route</button>
@@ -2803,12 +2846,13 @@
         <span class="muted" style="font-size:12px;">Pirate danger
           <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
         <span class="trade-seg" id="trade-avoid" role="group" aria-label="Pirate danger handling">
-          <button class="active" data-avoid="ignore" type="button">Ignore</button>
+          <button data-avoid="ignore" type="button">Ignore</button>
           <button data-avoid="warn" type="button">Warn</button>
-          <button data-avoid="avoid" type="button">Avoid</button>
+          <button class="active" data-avoid="avoid" type="button">Avoid</button>
         </span>
         <span class="muted trade-danger-hint" id="trade-avoid-hint" style="font-size:11px;"></span>
       </div>
+      <div class="avoid-blk" id="trade-avoid-blk"></div>
 
       <datalist id="trade-commodities"></datalist>
       <div class="route-actions">
@@ -5441,6 +5485,7 @@ function connect() {
       warnBoard = msg.entries || [];
       warnLoadFailed = false;   // a live board supersedes any earlier seed failure
       renderWarnBoard(); renderWarnBadge();
+      maybeTradeRerouteNudge();   // nudge a live trade run if the new danger hits its route
     }
   };
   ws.onclose = () => { const c = $("conn"); c.classList.remove("ok");
@@ -5791,6 +5836,11 @@ function wireRoutePlanner() {
   $("route-add-group").onclick = () => addGroupRow();
   $("route-plan").onclick = planRoute;
   $("route-clear").onclick = clearRoute;
+  // Pirate danger (#24 v2): 3-way seg + shared avoided-locations blacklist. Editing
+  // either re-plans if a plan is already on screen (a live danger change matters).
+  for (const b of $("route-avoid").querySelectorAll("button")) b.onclick = () => setRouteAvoid(b.dataset.avoid);
+  setRouteAvoid(routeAvoid);
+  mountAvoidBlacklist($("route-avoid-blk"), () => { if (lastPlanInput) planRoute(); });
   $("route-intro-dismiss").onclick = () => {
     localStorage.setItem("route_intro_dismissed", "1");
     $("route-intro").hidden = true;
@@ -6156,7 +6206,9 @@ async function planRoute() {
     packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
-  lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(), ...routeStartPayload() };
+  lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(),
+                    avoid_mode: routeAvoid, ...(avoidPoiIds().length ? { avoid_poi_ids: avoidPoiIds() } : {}),
+                    ...routeStartPayload() };
   msg.textContent = "planning…";
   let res;
   try {
@@ -6386,6 +6438,86 @@ function maybeRenderRun(run) {
 // Renders the active run (from HTTP responses and from live WS state). The WS
 // path adds the live `arrived` flag once a position is flowing; HTTP responses
 // drive it even before the watcher reports a position.
+// ---------- snare-detour render helpers (#24 v2) ----------
+// Shared by both planners: a "dodge via …" accent span for a leg-view carrying
+// detour waypoints, severity ranking for the worst danger, and threat labels.
+const SEV_RANK = { deadly: 0, active: 1, sighted: 2 };
+function worstSev(list) {
+  return (list || []).slice().sort((a, b) =>
+    (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9))[0];
+}
+function detourVia(leg) {
+  if (!leg || !leg.waypoints || !leg.waypoints.length) return "";
+  const names = leg.waypoints.map(w => esc(w.name)).join(" → ");
+  const add = leg.detour_m ? ` (+${fmtGm(leg.detour_m)})` : "";
+  return `<span class="via">dodge via ${names}${add}</span>`;
+}
+function threatLabel(w) { return w && w.threat === "pvp" ? "PvP" : "PvE"; }
+function threatIcon(w) { return w && w.threat === "pvp" ? "☠️" : "🤖"; }
+// Explicit waypoint pre-steps for run-mode guidance: "QT to OM-3 (dodge) · then".
+function waypointSteps(leg) {
+  if (!leg || !leg.waypoints || !leg.waypoints.length) return "";
+  return leg.waypoints.map(w => `QT to <b>${esc(w.name)}</b> (dodge)`).join(" · ") + " · then ";
+}
+
+// Shared "places I always avoid" blacklist (#24 v2): ONE localStorage list read by
+// both planners — it's "places I avoid", not per-planner — sent as avoid_poi_ids.
+const AVOID_POIS_KEY = "avoidPois";
+let avoidPois = (() => { try { return JSON.parse(localStorage.getItem(AVOID_POIS_KEY)) || []; } catch { return []; } })();
+function saveAvoidPois() { try { localStorage.setItem(AVOID_POIS_KEY, JSON.stringify(avoidPois)); } catch {} }
+function avoidPoiIds() { return avoidPois.map(p => p.id); }
+
+// Mount the AVOIDED LOCATIONS editor into `host` (idempotent): a POI-picker to add,
+// a removable chip per blacklisted place. `onChange` fires after any edit so the
+// caller can re-plan. The list is shared, so editing it in one planner shows in both.
+function mountAvoidBlacklist(host, onChange) {
+  if (!host) return;
+  host._onChange = onChange;
+  if (!host._built) {
+    host.innerHTML = `<div class="avoid-blk-add"><span class="fld-label">AVOIDED LOCATIONS</span>`
+      + `<div class="poi-pick-wrap"><input class="ti avoid-blk-input" placeholder="add a place to always route around…" aria-label="add an avoided location"></div></div>`
+      + `<div class="avoid-blk-chips"></div>`;
+    const wrap = host.querySelector(".poi-pick-wrap");
+    attachPoiPicker(wrap, (p) => {
+      if (!p) return;
+      if (!avoidPois.some(a => a.id === p.id)) { avoidPois.push({ id: p.id, name: p.name }); saveAvoidPois(); }
+      const input = wrap.querySelector("input");
+      input.value = ""; input.dataset.poiId = ""; wrap.classList.remove("picked");
+      renderAvoidChips(host); if (host._onChange) host._onChange();
+    });
+    host._built = true;
+  }
+  renderAvoidChips(host);
+}
+function renderAvoidChips(host) {
+  const box = host.querySelector(".avoid-blk-chips"); if (!box) return;
+  if (!avoidPois.length) {
+    box.innerHTML = `<span class="muted" style="font-size:12px;">none yet — the danger board still applies.</span>`;
+    return;
+  }
+  box.innerHTML = avoidPois.map(p =>
+    `<span class="avoid-chip">${esc(p.name)}<button class="avoid-x" data-id="${p.id}" aria-label="stop avoiding ${esc(p.name)}">×</button></span>`).join("");
+  box.querySelectorAll(".avoid-x").forEach(b => b.onclick = () => {
+    avoidPois = avoidPois.filter(p => p.id !== Number(b.dataset.id)); saveAvoidPois();
+    renderAvoidChips(host); if (host._onChange) host._onChange();
+  });
+}
+
+// Cargo danger handling (#24 v2) — mirrors the trade seg; default avoid (cargo
+// stops are contractual, so avoid only ever adds detours, never drops a stop).
+let routeAvoid = "avoid";                // ignore | warn | avoid
+const ROUTE_AVOID_HINT = {
+  ignore: "Plan without checking the danger board.",
+  warn: "Flag any stop reported as camped.",
+  avoid: "Detour around dangers — your stops never change.",
+};
+function setRouteAvoid(mode) {
+  routeAvoid = ["warn", "avoid"].includes(mode) ? mode : "ignore";
+  const seg = $("route-avoid");
+  if (seg) for (const x of seg.children) x.classList.toggle("active", x.dataset.avoid === routeAvoid);
+  const hint = $("route-avoid-hint"); if (hint) hint.textContent = ROUTE_AVOID_HINT[routeAvoid];
+}
+
 function renderRun(run) {
   const box = $("route-run");
   currentRun = run;
@@ -6415,8 +6547,12 @@ function renderRun(run) {
     if (active) {
       if (run.arrived) h += `<div class="run-arrived">⚑ You've arrived — confirm what you loaded / dropped.</div>`;
       else if (s.leg && s.leg.distance_m != null)
-        h += `<div class="route-leg">QT ${s.leg.qt_marker ? "to <b>" + esc(s.leg.qt_marker) + "</b> · " : ""}`
+        h += `<div class="route-leg">${waypointSteps(s.leg)}QT ${s.leg.qt_marker ? "to <b>" + esc(s.leg.qt_marker) + "</b> · " : ""}`
           + `${fmtGm(s.leg.distance_m)}${s.leg.cross_system ? ' · <span class="gate">⇆ ' + esc((s.leg.via_gate || []).join(" → ")) + "</span>" : ""}</div>`;
+      if ((s.blocked || []).length) {
+        const w0 = worstSev(s.blocked);
+        h += `<div class="route-danger">☠ reported camped (${esc(w0.severity)}, ${threatLabel(w0)}) — fly in ready.</div>`;
+      }
       s.pickups.forEach(p => { h += checkItem(p, "load"); });
       dedupeGroupDrops(s.dropoffs).forEach(p => { h += checkItem(p, "drop"); });
       h += `<button class="run-skip" data-advance="1">skip to next stop ▸</button>`;
@@ -6493,9 +6629,19 @@ function renderStop(s, i, completes) {
     if (s.leg.cross_system && s.leg.via_gate)
       extra += ` <span class="gate">⇆ ${esc(s.leg.via_gate.join(" → "))}${s.leg.partial ? " (approx)" : ""}</span>`;
     if (s.leg.via) extra += ` <span class="via">via ${esc(s.leg.via)}</span>`;
+    const dv = detourVia(s.leg); if (dv) extra += ` · ${dv}`;   // snare-detour (#24 v2)
     legHtml = `<div class="route-leg">${bits.join(" · ")}${extra}</div>`;
   } else if (i === 0) {
     legHtml = `<div class="route-leg">start here</div>`;
+  }
+  // Camped stop (avoid: blocked) or a reported danger at the stop (warn).
+  let stopDanger = "";
+  if ((s.blocked || []).length) {
+    const w0 = worstSev(s.blocked);
+    stopDanger = `<div class="route-danger">☠ this stop is reported camped (${esc(w0.severity)}, ${threatLabel(w0)}) — fly in expecting company.</div>`;
+  } else if ((s.warnings || []).length) {
+    const w0 = worstSev(s.warnings);
+    stopDanger = `<div class="route-danger">⚠ ${threatIcon(w0)} ${esc(w0.severity)} danger reported at this stop.</div>`;
   }
   const line = (p, dir) => `<div class="pkg-line"><span class="${dir === "up" ? "up" : "down"}">`
     + `${dir === "up" ? "▲ load" : "▼ drop"}</span> ${cargoDesc(p, dir === "up")}${contractChip(p.contract)}</div>`;
@@ -6505,7 +6651,7 @@ function renderStop(s, i, completes) {
     ? `<div class="completes">✓ completes${(completes).map(c => contractChip(c)).join("")}</div>` : "";
   return `<div class="route-stop"><div class="seq">${i + 1}</div><div class="body">`
     + `<div class="stop-name">${esc(s.name)} <span class="stop-sys">${esc(s.system)}${s.type ? " · " + esc(s.type) : ""}</span></div>`
-    + legHtml + pk + dp + done
+    + legHtml + stopDanger + pk + dp + done
     + `<div class="onboard">aboard after stop: <b>${s.onboard_scu}</b> SCU</div>`
     + `</div></div>`;
 }
@@ -6521,11 +6667,11 @@ let tradeTerminals = null;               // resolved commodity terminals (picker
 let tradeTermById = {};
 let tradeMode = "auto";                  // auto | filtered | manual
 let tradeSort = "per_hour";              // per_hour | profit
-let tradeAvoid = "ignore";               // ignore | warn | avoid — pirate danger board (#24)
+let tradeAvoid = "avoid";                // ignore | warn | avoid — pirate danger board (#24)
 const TRADE_AVOID_HINT = {
   ignore: "Plan without checking the danger board.",
-  warn: "Flag any leg that touches a reported danger.",
-  avoid: "Skip warned stations & snared lanes when planning.",
+  warn: "Flag any leg that touches or flies past a reported danger.",
+  avoid: "Route around dangers — detour past snared lanes, drop camped terminals.",
 };
 function setTradeAvoid(mode) {
   tradeAvoid = ["warn", "avoid"].includes(mode) ? mode : "ignore";
@@ -6538,6 +6684,7 @@ let tradeLastInput = null;               // last plan payload (feeds run mode)
 const tradePriceCache = {};              // commodity -> {tid: {buy, sell}} for manual live margins
 let tradeCurrentRun = null;              // active run blob the panel last rendered
 let tradeLastRunSig = null;              // de-dupe WS re-renders
+let tradeNudgeSeen = new Set();          // warning ids already accounted for (#24 v2 nudge)
 let tradeRunComplete = false;            // keep the completion card up until cleared
 let tradeHistory = null;                 // {runs, picks, stats, session_stats} for RECENT TRADES
 let tradeStatsScope = "session";         // session | recent — which totals the panel shows
@@ -6862,7 +7009,7 @@ function applyTradeConfig(cfg) {
     sp.parentElement.classList.add("picked");
   }
   setTradeMode(cfg.mode || "auto");
-  setTradeAvoid(cfg.avoid_mode || "ignore");   // danger handling applies in every mode (#24)
+  setTradeAvoid(cfg.avoid_mode || "avoid");   // danger handling applies in every mode (#24)
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
     if ($("trade-system")) $("trade-system").value = cfg.system || "";
@@ -6899,6 +7046,8 @@ function wireTradePlanner() {
   for (const b of $("trade-avoid").querySelectorAll("button"))
     b.onclick = () => setTradeAvoid(b.dataset.avoid);
   setTradeAvoid(tradeAvoid);
+  // Shared avoided-locations blacklist (#24 v2): re-plan on edit if a plan is showing.
+  mountAvoidBlacklist($("trade-avoid-blk"), () => { if (tradeLastInput) planTrade(); });
   attachTradeShipPicker();
   // Re-rank the "best trades" board whenever the ship (SCU) or system changes so
   // it reflects the same profit/hour objective the Auto planner optimizes — a bare
@@ -7101,6 +7250,7 @@ function buildTradePlanBody(msg) {
   const usable = Number($("trade-scu").value);
   if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return null; }
   const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid, ...tradeStartPayload() };
+  if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
   const ship = $("trade-ship").value.trim();
   if (ship) body.ship = ship;
   const budget = Number($("trade-budget").value);
@@ -7199,12 +7349,22 @@ function renderTradePlan(res) {
       + `${a.stale ? "⚠ " : ""}Prices as old as <b>${a.txt}</b> feed this plan`
       + `${a.stale ? " — some terminals may have moved. Enable the freshness filter to exclude them." : "."}</p>`;
   }
-  const dngrLegs = (res.legs || []).filter(lg => (lg.warnings || []).length);
-  if (dngrLegs.length) {
-    h += `<p class="route-danger">⚠ ${dngrLegs.length} leg${dngrLegs.length > 1 ? "s" : ""} on this route `
-      + `touch reported pirate danger. Check the flagged legs below`
+  // Route-level danger callout (#24 v2): rerouted-around (informational) split from
+  // touches-danger-can't-reroute (a warning that links the flagged legs below).
+  let reroutedN = 0, detourTotal = 0;
+  (res.legs || []).forEach(lg => {
+    let has = false;
+    for (const s of [lg.to_buy, lg.haul]) if (s && s.detour_m) { detourTotal += s.detour_m; has = true; }
+    if (has) reroutedN++;
+  });
+  if (reroutedN)
+    h += `<p class="route-reroute">↪ ${reroutedN} leg${reroutedN > 1 ? "s" : ""} rerouted around danger `
+      + `<span class="muted">(+${fmtGm(detourTotal)} added)</span>.</p>`;
+  const flagged = (res.legs || []).filter(lg => (lg.blocked || []).length || (lg.warnings || []).length);
+  if (flagged.length)
+    h += `<p class="route-danger">⚠ ${flagged.length} leg${flagged.length > 1 ? "s" : ""} touch danger `
+      + `that can't be routed around. Check the flagged legs below`
       + `${tradeAvoid === "avoid" ? "." : ", or switch danger to <b>Avoid</b> to route around it."}</p>`;
-  }
   h += `<p class="trade-price-note">Prices are UEX's latest scrape, not live in-game — confirm at the terminal.</p>`;
   h += `</div><div class="panel"><h2>LEGS</h2>`;
   (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
@@ -7225,6 +7385,8 @@ function renderTradeLeg(lg, i) {
     if (lg.haul.cross_system) hl += ` <span class="gate">· via ${(lg.haul.via_gate || []).join(" → ")}</span>`;
     move.push(hl);
   }
+  // Snare-detour (#24 v2): a "dodge via …" span on whichever sub-leg was rerouted.
+  for (const seg of [lg.to_buy, lg.haul]) { const d = detourVia(seg); if (d) move.push(d); }
   // Age of the older of the two price sides drives the leg's freshness badge.
   const ts = [lg.buy_updated_at, lg.sell_updated_at].filter(v => v != null);
   const age = tradeAgeInfo(ts.length ? Math.min(...ts) : null);
@@ -7238,9 +7400,17 @@ function renderTradeLeg(lg, i) {
     const w0 = warns[0];
     const label = warns.length === 1 ? w0.where : `${warns.length} active dangers`;
     dngr = `<div class="tl-danger sev-${esc(w0.severity)}" title="${esc(warns.map(w => w.where).join(" · "))}">`
-      + `⚠ ${w0.threat === "pvp" ? "☠️" : "🤖"} ${esc(w0.severity)} · ${esc(label)}</div>`;
+      + `⚠ ${threatIcon(w0)} ${esc(w0.severity)} · ${esc(label)}</div>`;
   }
-  return `<div class="trade-leg-card${warns.length ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
+  // A camped endpoint no waypoint can fix (avoid mode): escalate louder than a badge.
+  const blk = lg.blocked || [];
+  if (blk.length) {
+    const b0 = worstSev(blk);
+    dngr += `<div class="tl-danger sev-${esc(b0.severity)}" title="${esc(blk.map(w => w.where).join(" · "))}">`
+      + `☠ destination camped — no reroute exists `
+      + `<span class="muted">(${esc(b0.severity)} · ${threatLabel(b0)} at ${esc(b0.where)})</span></div>`;
+  }
+  return `<div class="trade-leg-card${(warns.length || blk.length) ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
     + `<span class="tl-scu">${lg.scu} SCU</span>${fresh}</div>`
     + dngr
@@ -7421,6 +7591,45 @@ function maybeRenderTradeRun(run) {
   renderTradeRun(run);
 }
 
+// Live reroute nudge (#24 v2): a warning frame arrived — if a *new* danger sits on
+// one of the trade run's remaining legs (endpoint match, ids are in the leg views),
+// offer a one-click re-plan. Endpoint match is enough here; the server does the
+// geometry on replan.
+function maybeTradeRerouteNudge() {
+  const run = tradeCurrentRun, box = $("trade-run");
+  if (!run || !box || box.hidden || run.done) return;
+  const ends = new Set();
+  (run.legs || []).forEach((lg, i) => {
+    if (i < run.active) return;                       // sold legs are history
+    if (lg.buy_poi_id != null) ends.add(lg.buy_poi_id);
+    if (lg.sell_poi_id != null) ends.add(lg.sell_poi_id);
+  });
+  const fresh = (warnBoard || []).filter(w => {
+    if (tradeNudgeSeen.has(w.id)) return false;
+    const a = w.anchor_a && w.anchor_a.id, b = w.anchor_b && w.anchor_b.id;
+    return (a != null && ends.has(a)) || (b != null && ends.has(b));
+  });
+  (warnBoard || []).forEach(w => tradeNudgeSeen.add(w.id));   // mark all as seen now
+  if (fresh.length) showTradeRerouteBanner();
+}
+
+function showTradeRerouteBanner() {
+  const box = $("trade-run"); if (!box) return;
+  let b = $("trade-reroute-nudge");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "trade-reroute-nudge";
+    b.className = "reroute-nudge";
+    box.parentNode.insertBefore(b, box);
+  }
+  b.innerHTML = `<span>☠ New danger reported on your route.</span>`
+    + `<button id="trade-reroute-go" class="active">Re-plan around it ▸</button>`
+    + `<button id="trade-reroute-x" class="reroute-x" aria-label="dismiss">×</button>`;
+  b.hidden = false;
+  $("trade-reroute-go").onclick = () => { b.hidden = true; replanTradeRun(); };
+  $("trade-reroute-x").onclick = () => { b.hidden = true; };
+}
+
 // Renders the active trade run (from HTTP responses and from live WS state). The
 // WS path adds the live `arrived` flag once a position is flowing.
 function renderTradeRun(run) {
@@ -7428,7 +7637,15 @@ function renderTradeRun(run) {
   tradeCurrentRun = run;
   tradeLastRunSig = tradeRunSig(run);
   if (run) tradeRunComplete = false;
-  if (!run) { box.hidden = true; box.innerHTML = ""; return; }
+  if (!run) {
+    box.hidden = true; box.innerHTML = "";
+    tradeNudgeSeen.clear();
+    const b = $("trade-reroute-nudge"); if (b) b.hidden = true;
+    return;
+  }
+  // Seed the nudge with the current board so only warnings posted *after* this
+  // render (a live threat that appears mid-run) can trigger a reroute prompt.
+  (warnBoard || []).forEach(w => tradeNudgeSeen.add(w.id));
   box.hidden = false;
   const cap = run.usable_scu || 0;
   const pct = cap ? Math.min(100, Math.round(run.onboard_scu / cap * 100)) : 0;
@@ -7493,8 +7710,14 @@ function renderTradeRunLeg(lg, i, run) {
     if (run.arrived) {
       h += `<div class="run-arrived">⚑ You've arrived — confirm the ${phase === "sell" ? "sale" : "purchase"}.</div>`;
     } else if (seg && seg.distance_m != null) {
-      h += `<div class="route-leg">QT ${fmtGm(seg.distance_m)}`
+      // Snare-detour (#24 v2): render dodge waypoints as explicit QT pre-steps.
+      h += `<div class="route-leg">${waypointSteps(seg)}QT ${fmtGm(seg.distance_m)}`
         + `${seg.cross_system ? ' · <span class="gate">⇆ ' + esc((seg.via_gate || []).join(" → ")) + "</span>" : ""}</div>`;
+    }
+    if (seg && (seg.blocked || []).length) {
+      const b0 = worstSev(seg.blocked);
+      h += `<div class="tl-danger sev-${esc(b0.severity)}">☠ ${esc(b0.severity)} ${threatLabel(b0)} danger at `
+        + `<b>${esc(b0.where)}</b> — no reroute exists, fly in ready.</div>`;
     }
     // Actuals: pre-fill with the plan's price/SCU so a plain confirm records the
     // planned figures; edit them to log what really happened at the terminal.
@@ -10610,6 +10833,8 @@ async function loadSettings() {
       $("warn-ageoff").value = s.warning_ageoff_min;
     if (s.warning_stale_min && document.activeElement !== $("warn-stale"))
       $("warn-stale").value = s.warning_stale_min;
+    if (s.hazard_radius_km && document.activeElement !== $("hazard-radius"))
+      $("hazard-radius").value = s.hazard_radius_km;
     rootAdmins = s.root_admin_ids || [];
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
@@ -10907,6 +11132,25 @@ $("warn-life-save").onclick = async () => {
     loadSettings();
   }
 };
+
+$("hazard-radius-save").onclick = async () => {
+  const st = $("hazard-radius-status");
+  const km = parseInt($("hazard-radius").value, 10);
+  if (!(km >= 100 && km <= 200000)) { st.textContent = "enter 100 – 200,000 km"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hazard_radius_km: km }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `saved — routing keeps ${d.hazard_radius_km.toLocaleString()} km from a danger`;
+  } catch {
+    st.textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+$("hazard-radius").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("hazard-radius-save").click(); } });
 
 $("member-role-save").onclick = async () => {
   const id = $("member-role").value.trim();

@@ -2502,5 +2502,273 @@ class TradeHistoryStatsTests(unittest.TestCase):
         self.assertEqual(rows["a"]["display_name"], "Ana")
 
 
+def _space_poi(pid, name, xyz, system="Test", qt=True):
+    """A directly-QT-able space POI at a fixed global position — the minimal
+    fixture for the snare-detour geometry tests (no rotating body involved)."""
+    return nav_core.Poi(
+        id=pid, name=name, system=system, container_name=None, type="Station",
+        local_km=None, global_m=(float(xyz[0]), float(xyz[1]), float(xyz[2])),
+        latitude=None, longitude=None, height_m=None, qt_marker=qt)
+
+
+def _synthetic_nav(pois, system="Test"):
+    nav = nav_core.NavData()
+    for p in pois:
+        nav.pois[p.id] = p
+    nav.systems = [system]
+    nav_core.index_qt_markers(nav)
+    return nav
+
+
+class SegmentGeometryTests(unittest.TestCase):
+    """Closed-form segment distance primitives behind snare-detour hazard tests
+    (#24 v2). Known-answer cases: parallel, crossing, skew, clamped, degenerate."""
+
+    def test_seg_point_perpendicular(self):
+        self.assertAlmostEqual(
+            nav_core._seg_point_dist((0, 0, 0), (10, 0, 0), (5, 5, 0)), 5.0)
+
+    def test_seg_point_on_segment_is_zero(self):
+        self.assertAlmostEqual(
+            nav_core._seg_point_dist((0, 0, 0), (10, 0, 0), (5, 0, 0)), 0.0)
+
+    def test_seg_point_clamps_past_each_end(self):
+        self.assertAlmostEqual(
+            nav_core._seg_point_dist((0, 0, 0), (10, 0, 0), (-5, 0, 0)), 5.0)
+        self.assertAlmostEqual(
+            nav_core._seg_point_dist((0, 0, 0), (10, 0, 0), (15, 0, 0)), 5.0)
+
+    def test_seg_point_degenerate_segment(self):
+        self.assertAlmostEqual(
+            nav_core._seg_point_dist((0, 0, 0), (0, 0, 0), (3, 4, 0)), 5.0)
+
+    def test_seg_seg_parallel(self):
+        self.assertAlmostEqual(
+            nav_core._seg_seg_dist((0, 0, 0), (10, 0, 0), (0, 5, 0), (10, 5, 0)), 5.0)
+
+    def test_seg_seg_crossing_is_zero(self):
+        self.assertAlmostEqual(
+            nav_core._seg_seg_dist((0, 0, 0), (10, 0, 0), (5, -5, 0), (5, 5, 0)), 0.0)
+
+    def test_seg_seg_skew(self):
+        # seg1 along x at z=0, seg2 along y at z=4 crossing over x=5 -> gap is 4.
+        self.assertAlmostEqual(
+            nav_core._seg_seg_dist((0, 0, 0), (10, 0, 0), (5, -5, 4), (5, 5, 4)), 4.0)
+
+    def test_seg_seg_clamped_endpoints(self):
+        self.assertAlmostEqual(
+            nav_core._seg_seg_dist((0, 0, 0), (10, 0, 0), (20, 0, 0), (20, 10, 0)), 10.0)
+
+    def test_seg_seg_both_degenerate(self):
+        self.assertAlmostEqual(
+            nav_core._seg_seg_dist((0, 0, 0), (0, 0, 0), (3, 4, 0), (3, 4, 0)), 5.0)
+
+
+class HazardVolumeTests(unittest.TestCase):
+    """nav_core.hazard_volumes — danger warnings + personal blacklist -> the
+    sphere/capsule volumes the detour engine tests against (#24 v2)."""
+
+    def setUp(self):
+        self.A = _space_poi(1, "A", (0, 0, 0))
+        self.B = _space_poi(2, "B", (20e6, 0, 0))
+        self.nav = _synthetic_nav([self.A, self.B])
+
+    def test_point_warning_is_a_sphere(self):
+        w = {"id": 7, "kind": "point", "severity": "active",
+             "anchor_a_poi": 1, "anchor_b_poi": None}
+        vols = nav_core.hazard_volumes(self.nav, [w], 0.0, radius_m=1e6)
+        self.assertEqual(len(vols), 1)
+        v = vols[0]
+        self.assertEqual(v["kind"], "sphere")
+        self.assertEqual(v["a"], (0.0, 0.0, 0.0))
+        self.assertIsNone(v["b"])
+        self.assertEqual(v["r"], 1e6)                  # active -> ×1.0
+        self.assertEqual(v["warning_id"], 7)
+        self.assertEqual(v["system"], "Test")
+
+    def test_lane_warning_is_a_capsule(self):
+        w = {"id": 8, "kind": "lane", "severity": "deadly",
+             "anchor_a_poi": 1, "anchor_b_poi": 2}
+        vols = nav_core.hazard_volumes(self.nav, [w], 0.0, radius_m=1e6)
+        v = vols[0]
+        self.assertEqual(v["kind"], "capsule")
+        self.assertEqual(v["a"], (0.0, 0.0, 0.0))
+        self.assertEqual(v["b"], (20e6, 0.0, 0.0))
+        self.assertEqual(v["r"], 1.5e6)                # deadly -> ×1.5
+
+    def test_severity_scaling(self):
+        def r(sev):
+            w = {"id": 1, "kind": "point", "severity": sev, "anchor_a_poi": 1}
+            return nav_core.hazard_volumes(self.nav, [w], 0.0, radius_m=1000.0)[0]["r"]
+        self.assertEqual(r("sighted"), 500.0)
+        self.assertEqual(r("active"), 1000.0)
+        self.assertEqual(r("deadly"), 1500.0)
+
+    def test_unanchored_and_unknown_contribute_nothing(self):
+        ws = [{"id": 1, "kind": "point", "severity": "active", "anchor_a_poi": None},
+              {"id": 2, "kind": "lane", "severity": "active",
+               "anchor_a_poi": 1, "anchor_b_poi": None},
+              {"id": 3, "kind": "point", "severity": "active", "anchor_a_poi": 999}]
+        self.assertEqual(nav_core.hazard_volumes(self.nav, ws, 0.0), [])
+
+    def test_blacklist_ids_become_spheres(self):
+        vols = nav_core.hazard_volumes(self.nav, [], 0.0, radius_m=1e6,
+                                       extra_point_ids=[2])
+        self.assertEqual(len(vols), 1)
+        self.assertEqual(vols[0]["kind"], "sphere")
+        self.assertEqual(vols[0]["a"], (20e6, 0.0, 0.0))
+        self.assertEqual(vols[0]["r"], 1e6)            # blacklist -> ×1.0
+        self.assertIsNone(vols[0]["warning_id"])
+
+
+class TravelCostAvoidTests(unittest.TestCase):
+    """travel_cost(avoid=, memo=) + _detour_via — the snare-detour engine (#24 v2).
+    Uses a synthetic 3-marker system so the geometry is exact and controllable."""
+
+    def setUp(self):
+        # A --- (capsule across the middle) --- B ; W is off to the side.
+        self.A = _space_poi(1, "A", (0, 0, 0))
+        self.B = _space_poi(2, "B", (20e6, 0, 0))
+        self.W = _space_poi(3, "W-marker", (10e6, 10e6, 0))
+        self.nav = _synthetic_nav([self.A, self.B, self.W])
+        # A vertical capsule at x=10e6 spanning y∈[-5e6,5e6], radius 2e6 — the
+        # direct A->B line pierces it; the A->W->B dogleg clears it.
+        self.capsule = {"kind": "capsule", "a": (10e6, -5e6, 0), "b": (10e6, 5e6, 0),
+                        "r": 2e6, "warning_id": 42, "system": "Test"}
+
+    def test_avoid_none_is_byte_identical(self):
+        base = nav_core._base_travel_cost(self.nav, self.A, self.B, 0.0)
+        self.assertEqual(nav_core.travel_cost(self.nav, self.A, self.B, 0.0), base)
+        self.assertEqual(
+            nav_core.travel_cost(self.nav, self.A, self.B, 0.0, avoid=[]), base)
+        # No detour keys leak onto the fast path.
+        for k in ("waypoints", "detour_m", "dodged", "blocked"):
+            self.assertNotIn(k, nav_core.travel_cost(self.nav, self.A, self.B, 0.0))
+
+    def test_avoid_none_matches_on_real_data(self):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:5]
+        for a in spc:
+            for b in spc:
+                if a is b:
+                    continue
+                self.assertEqual(
+                    nav_core.travel_cost(NAV, a, b, avoid=None),
+                    nav_core._base_travel_cost(NAV, a, b))
+
+    def test_detour_inserts_waypoint(self):
+        leg = nav_core.travel_cost(self.nav, self.A, self.B, 0.0, avoid=[self.capsule])
+        self.assertEqual([w["id"] for w in leg["waypoints"]], [3])
+        self.assertGreater(leg["detour_m"], 0)
+        self.assertEqual(leg["dodged"], [42])
+        self.assertNotIn("blocked", leg)
+        # distance_m folds in the honest detour distance.
+        direct = nav_core._base_travel_cost(self.nav, self.A, self.B, 0.0)["distance_m"]
+        self.assertAlmostEqual(leg["distance_m"], direct + leg["detour_m"])
+
+    def test_clear_leg_gets_no_detour(self):
+        far = {"kind": "sphere", "a": (0, -50e6, 0), "b": None, "r": 1e6,
+               "warning_id": 9, "system": "Test"}
+        leg = nav_core.travel_cost(self.nav, self.A, self.B, 0.0, avoid=[far])
+        for k in ("waypoints", "detour_m", "dodged", "blocked"):
+            self.assertNotIn(k, leg)
+
+    def test_endpoint_inside_volume_is_blocked(self):
+        camped = {"kind": "sphere", "a": (20e6, 0, 0), "b": None, "r": 3e6,
+                  "warning_id": 5, "system": "Test"}
+        leg = nav_core.travel_cost(self.nav, self.A, self.B, 0.0, avoid=[camped])
+        self.assertEqual(leg["blocked"], [5])
+        self.assertNotIn("waypoints", leg)
+        self.assertNotIn("dodged", leg)
+
+    def test_no_clearing_marker_is_blocked(self):
+        # Drop W: only A and B remain, and neither clears the capsule.
+        nav = _synthetic_nav([self.A, self.B])
+        leg = nav_core.travel_cost(nav, self.A, self.B, 0.0, avoid=[self.capsule])
+        self.assertEqual(leg["blocked"], [42])
+        self.assertNotIn("waypoints", leg)
+
+    def test_other_system_volumes_are_ignored(self):
+        elsewhere = dict(self.capsule, system="Pyro")
+        leg = nav_core.travel_cost(self.nav, self.A, self.B, 0.0, avoid=[elsewhere])
+        self.assertNotIn("blocked", leg)
+        self.assertNotIn("waypoints", leg)
+
+    def test_leg_hazards_flags_flypast_without_rerouting(self):
+        ids = nav_core.leg_hazards(self.nav, self.A, self.B, [self.capsule], 0.0)
+        self.assertEqual(ids, [42])
+        # blacklist volume (warning_id None) contributes no id.
+        anon = dict(self.capsule, warning_id=None)
+        self.assertEqual(nav_core.leg_hazards(self.nav, self.A, self.B, [anon], 0.0), [])
+
+
+class SnareDetourSolverTests(unittest.TestCase):
+    """Solver-level snare-detour behavior (#24 v2): trade legs detoured not
+    dropped, camped endpoints still dropped, manual/cargo blocked-badging, and
+    the avoid_volumes=None fast path staying byte-identical."""
+
+    def setUp(self):
+        self.A = _space_poi(1, "A", (0, 0, 0))
+        self.B = _space_poi(2, "B", (20e6, 0, 0))
+        self.W = _space_poi(3, "W-marker", (10e6, 10e6, 0))
+        self.nav = _synthetic_nav([self.A, self.B, self.W])
+        self.capsule = {"kind": "capsule", "a": (10e6, -5e6, 0), "b": (10e6, 5e6, 0),
+                        "r": 2e6, "warning_id": 42, "system": "Test"}
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Test", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": None}
+
+    def _prices(self):
+        # Gold: buy @A -> sell @B (the snared lane).
+        return [self._pt("Gold", 1, 1, buy=100, scu_buy=500),
+                self._pt("Gold", 2, 2, sell=300, scu_sell_stock=500)]
+
+    def test_snared_lane_detoured_not_dropped(self):
+        plan = nav_core.plan_trade_route(
+            self.nav, self._prices(), 100, start_id=1, sort="profit",
+            avoid_volumes=[self.capsule])
+        self.assertEqual([lg["commodity"] for lg in plan["legs"]], ["Gold"])
+        haul = plan["legs"][0]["haul"]
+        self.assertEqual([w["id"] for w in haul["waypoints"]], [3])
+        self.assertEqual(haul["dodged"], [42])
+
+    def test_camped_sell_endpoint_still_dropped(self):
+        # Sphere on B (the sell terminal) — no detour saves a camped destination,
+        # so the blocked haul is skipped and the plan is empty.
+        camped = {"kind": "sphere", "a": (20e6, 0, 0), "b": None, "r": 3e6,
+                  "warning_id": 5, "system": "Test"}
+        plan = nav_core.plan_trade_route(
+            self.nav, self._prices(), 100, start_id=1, sort="profit",
+            avoid_volumes=[camped])
+        self.assertEqual(plan["legs"], [])
+
+    def test_manual_leg_blocked_but_never_dropped(self):
+        camped = {"kind": "sphere", "a": (20e6, 0, 0), "b": None, "r": 3e6,
+                  "warning_id": 5, "system": "Test"}
+        legs = [{"commodity": "Gold", "buy_terminal_id": 1, "sell_terminal_id": 2}]
+        plan = nav_core.cost_trade_legs(
+            self.nav, self._prices(), legs, 100, start_id=1, avoid_volumes=[camped])
+        self.assertEqual(len(plan["legs"]), 1)               # never dropped
+        self.assertEqual(plan["legs"][0]["haul"]["blocked"], [5])
+
+    def test_cargo_plan_detours_and_flags(self):
+        pkgs = [{"id": 1, "commodity": "Gold", "scu": 10, "from_id": 1, "to_id": 2}]
+        plan = nav_core.plan_route(self.nav, pkgs, 100, start_id=1,
+                                   avoid_volumes=[self.capsule])
+        self.assertTrue(plan["summary"]["feasible"])
+        arrival = plan["stops"][-1]["leg"]                   # the A->B haul
+        self.assertEqual([w["id"] for w in arrival["waypoints"]], [3])
+        self.assertEqual(arrival["dodged"], [42])
+
+    def test_cargo_avoid_none_is_identical(self):
+        pkgs = [{"id": 1, "commodity": "Gold", "scu": 10, "from_id": 1, "to_id": 2}]
+        base = nav_core.plan_route(self.nav, pkgs, 100, start_id=1)
+        same = nav_core.plan_route(self.nav, pkgs, 100, start_id=1, avoid_volumes=None)
+        self.assertEqual(same, base)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

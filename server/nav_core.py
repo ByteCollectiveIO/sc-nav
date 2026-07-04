@@ -1505,6 +1505,144 @@ def _gate_poi(nav: NavData, from_system: str, to_system: str):
     return nav.pois.get(pid) if pid is not None else None
 
 
+# ---------------------------------------------------------------------------
+# Snare-detour routing (#24 v2) — hazard geometry.
+#
+# Upgrades danger handling from endpoint matching to flight-path geometry: a
+# danger warning becomes a *volume* (a sphere at a point warning's anchor, a
+# capsule along a lane warning's two anchors), and a QT leg's real jump
+# segments are tested against those volumes. A conflicting segment is either
+# routed around with an inserted waypoint (`_detour_via`) or, when an endpoint
+# we must visit sits inside a volume, flagged `blocked`. All pure geometry,
+# zero dependencies — see docs/snare-detour-routing.md.
+# ---------------------------------------------------------------------------
+
+# Severity-scaled hazard radius. Base is an org setting (hazard_radius_km);
+# these multipliers are fixed in code.
+HAZARD_SEVERITY_SCALE = {"sighted": 0.5, "active": 1.0, "deadly": 1.5}
+DEFAULT_HAZARD_RADIUS_M = 5_000_000.0    # 5,000 km — a berth wide enough to
+                                         # cover anchor imprecision + roaming
+                                         # pirates; trivial at Gm leg scales.
+_DETOUR_BUDGET = 1.5                      # give up past +50% distance -> blocked
+
+
+def _seg_point_dist(p0, p1, c) -> float:
+    """Minimum distance from segment p0->p1 to point c (clamped projection)."""
+    dx, dy, dz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
+    L2 = dx * dx + dy * dy + dz * dz
+    if L2 == 0.0:
+        return dist3(p0, c)
+    t = ((c[0] - p0[0]) * dx + (c[1] - p0[1]) * dy + (c[2] - p0[2]) * dz) / L2
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    proj = (p0[0] + t * dx, p0[1] + t * dy, p0[2] + t * dz)
+    return dist3(proj, c)
+
+
+def _seg_seg_dist(p0, p1, q0, q1) -> float:
+    """Minimum distance between segments p0->p1 and q0->q1 (Ericson's clamped
+    closest-point-of-two-segments; handles parallel + degenerate cases)."""
+    d1 = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+    d2 = (q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2])
+    r = (p0[0] - q0[0], p0[1] - q0[1], p0[2] - q0[2])
+    a = d1[0] * d1[0] + d1[1] * d1[1] + d1[2] * d1[2]     # |d1|^2
+    e = d2[0] * d2[0] + d2[1] * d2[1] + d2[2] * d2[2]     # |d2|^2
+    f = d2[0] * r[0] + d2[1] * r[1] + d2[2] * r[2]
+    EPS = 1e-9
+    if a <= EPS and e <= EPS:                             # both are points
+        return dist3(p0, q0)
+    if a <= EPS:                                          # seg1 is a point
+        s = 0.0
+        t = min(1.0, max(0.0, f / e))
+    else:
+        c = d1[0] * r[0] + d1[1] * r[1] + d1[2] * r[2]
+        if e <= EPS:                                      # seg2 is a point
+            t = 0.0
+            s = min(1.0, max(0.0, -c / a))
+        else:
+            b = d1[0] * d2[0] + d1[1] * d2[1] + d1[2] * d2[2]
+            denom = a * e - b * b
+            s = min(1.0, max(0.0, (b * f - c * e) / denom)) if denom > EPS else 0.0
+            t = (b * s + f) / e
+            if t < 0.0:
+                t = 0.0
+                s = min(1.0, max(0.0, -c / a))
+            elif t > 1.0:
+                t = 1.0
+                s = min(1.0, max(0.0, (b - c) / a))
+    c1 = (p0[0] + s * d1[0], p0[1] + s * d1[1], p0[2] + s * d1[2])
+    c2 = (q0[0] + t * d2[0], q0[1] + t * d2[1], q0[2] + t * d2[2])
+    return dist3(c1, c2)
+
+
+def _point_in_volume(c, vol) -> bool:
+    if vol["kind"] == "capsule" and vol.get("b") is not None:
+        return _seg_point_dist(vol["a"], vol["b"], c) < vol["r"]
+    return dist3(vol["a"], c) < vol["r"]
+
+
+def segment_hits(p0, p1, volumes) -> list[dict]:
+    """The volumes that segment p0->p1 enters (sphere: seg->point < r; capsule:
+    seg->seg < r). Caller should pre-filter volumes to the segment's system."""
+    hits = []
+    for v in volumes:
+        if v["kind"] == "capsule" and v.get("b") is not None:
+            d = _seg_seg_dist(p0, p1, v["a"], v["b"])
+        else:
+            d = _seg_point_dist(p0, p1, v["a"])
+        if d < v["r"]:
+            hits.append(v)
+    return hits
+
+
+def hazard_volumes(nav: NavData, warnings, t_ref, *,
+                   radius_m=DEFAULT_HAZARD_RADIUS_M, extra_point_ids=()) -> list[dict]:
+    """Turn active danger warnings (#24) + a personal blacklist into hazard
+    volumes for the detour engine. Each volume is {kind: 'sphere'|'capsule',
+    a, b, r, warning_id, system}. A `point` warning with a resolvable anchor ->
+    sphere; a `lane` warning with both anchors -> capsule; un-anchored warnings
+    contribute nothing (same rule as trade_avoid_sets). `extra_point_ids`
+    (blacklisted POI ids) become spheres with warning_id=None at base radius.
+    Radius scales with severity for warnings, ×1.0 for the blacklist."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    vols = []
+    for w in warnings or ():
+        scale = HAZARD_SEVERITY_SCALE.get(w.get("severity"), 1.0)
+        r = radius_m * scale
+        a_id, b_id = w.get("anchor_a_poi"), w.get("anchor_b_poi")
+        if w.get("kind") == "lane":
+            if a_id is None or b_id is None or a_id == b_id:
+                continue
+            pa, pb = nav.pois.get(a_id), nav.pois.get(b_id)
+            if pa is None or pb is None:
+                continue
+            ga, gb = poi_global_m(nav, pa, t_ref), poi_global_m(nav, pb, t_ref)
+            if ga is None or gb is None:
+                continue
+            vols.append({"kind": "capsule", "a": ga, "b": gb, "r": r,
+                         "warning_id": w.get("id"), "system": pa.system})
+        else:
+            if a_id is None:
+                continue
+            pa = nav.pois.get(a_id)
+            if pa is None:
+                continue
+            ga = poi_global_m(nav, pa, t_ref)
+            if ga is None:
+                continue
+            vols.append({"kind": "sphere", "a": ga, "b": None, "r": r,
+                         "warning_id": w.get("id"), "system": pa.system})
+    for pid in extra_point_ids or ():
+        p = nav.pois.get(pid)
+        if p is None:
+            continue
+        g = poi_global_m(nav, p, t_ref)
+        if g is None:
+            continue
+        vols.append({"kind": "sphere", "a": g, "b": None, "r": radius_m,
+                     "warning_id": None, "system": p.system})
+    return vols
+
+
 def system_path(from_system: str, to_system: str) -> list[str] | None:
     """Shortest chain of systems through the functioning gate network, inclusive
     of both ends (e.g. Stanton -> Nyx == [Stanton, Pyro, Nyx]). None if
@@ -1525,7 +1663,32 @@ def system_path(from_system: str, to_system: str) -> list[str] | None:
     return None
 
 
-def travel_cost(nav: NavData, src, dst, t_ref: float | None = None) -> dict:
+def travel_cost(nav: NavData, src, dst, t_ref: float | None = None, *,
+                avoid=None, memo=None) -> dict:
+    """QT travel cost from `src` to `dst`, with optional snare-detour handling.
+
+    With `avoid=None` (the default) this is the pure straight-line QT cost — the
+    behavior and returned dict are byte-for-byte identical to the legacy model,
+    so every existing caller is unaffected. With `avoid` = a list of hazard
+    volumes (see hazard_volumes), the leg's real jump segments are tested and,
+    on conflict, a detour waypoint is synthesized (#24 v2); the returned dict
+    then also carries `waypoints`/`detour_m`/`dodged`/`blocked` and `distance_m`
+    includes the added detour distance. `memo` (an optional per-solve dict keyed
+    by (src, dst)) caches results so the greedy inner loop re-costs each POI pair
+    at most once."""
+    if not avoid:
+        return _base_travel_cost(nav, src, dst, t_ref)
+    key = (getattr(src, "id", id(src)), getattr(dst, "id", id(dst))) if memo is not None else None
+    if memo is not None and key in memo:
+        return memo[key]
+    result = _base_travel_cost(nav, src, dst, t_ref)
+    _apply_detours(nav, src, dst, t_ref, avoid, result)
+    if memo is not None:
+        memo[key] = result
+    return result
+
+
+def _base_travel_cost(nav: NavData, src, dst, t_ref: float | None = None) -> dict:
     """QT travel cost from stop `src` to stop `dst` (both Poi). Returns a dict:
 
         distance_m    total QT distance for the leg
@@ -1580,6 +1743,129 @@ def travel_cost(nav: NavData, src, dst, t_ref: float | None = None) -> dict:
         partial = True
     return {"distance_m": total, "qt_marker": marker, "via": via,
             "cross_system": True, "via_gate": path, "partial": partial}
+
+
+def _intra_segments(nav: NavData, from_pos, dst, system: str, t_ref: float) -> list[dict]:
+    """The real QT jump segments of an in-system hop from a global position to
+    `dst`, mirroring _intra_leg's geometry (planet->moon two-hop included) but
+    returning the segment endpoints for hazard testing. Each = {a, b, system}."""
+    cont = nav.container_of(dst)
+    if getattr(dst, "qt_marker", False) or cont is None:
+        ref = entity_global_m(nav, dst, t_ref)
+    else:
+        marker = _nearest_qt_poi(nav, dst, t_ref)
+        ref = entity_global_m(nav, marker, t_ref) if marker is not None else cont.pos
+    if ref is None:
+        return []
+    parent = parent_planet(nav, cont) if cont is not None else None
+    in_local = parent is not None and nearest_planet(nav, dst.system, from_pos) is parent
+    if parent is not None and not in_local:
+        return [{"a": from_pos, "b": parent.pos, "system": system},
+                {"a": parent.pos, "b": ref, "system": system}]
+    return [{"a": from_pos, "b": ref, "system": system}]
+
+
+def _leg_segments(nav: NavData, src, dst, t_ref: float) -> list[dict]:
+    """Decompose a travel_cost leg into its testable QT jump segments (global
+    endpoints tagged by system) for snare-detour hazard testing. Mirrors
+    travel_cost's own decomposition; the gate tunnel itself is not testable
+    space (a camped gate is a point warning caught by the approach segment's
+    endpoint test)."""
+    from_pos = entity_global_m(nav, src, t_ref)
+    if from_pos is None:
+        return []
+    if src.system == dst.system:
+        return _intra_segments(nav, from_pos, dst, src.system, t_ref)
+    path = system_path(src.system, dst.system)
+    if path is None:
+        return []
+    segs = []
+    out_gate = _gate_poi(nav, src.system, path[1])
+    if out_gate is not None:
+        segs += _intra_segments(nav, from_pos, out_gate, src.system, t_ref)
+    in_gate = _gate_poi(nav, dst.system, path[-2])
+    if in_gate is not None:
+        gate_pos = entity_global_m(nav, in_gate, t_ref)
+        if gate_pos is not None:
+            segs += _intra_segments(nav, gate_pos, dst, dst.system, t_ref)
+    return segs
+
+
+def _detour_via(nav: NavData, p0, p1, volumes, system: str, t_ref: float):
+    """Cheapest single QT marker W in `system` whose two hops p0->W and W->p1
+    both clear every volume. Returns (Poi|None, added_distance_m). Pruned by the
+    ellipse bound d(p0,W)+d(W,p1) < _DETOUR_BUDGET·d(p0,p1) before the (more
+    expensive) segment tests."""
+    direct = dist3(p0, p1)
+    budget = _DETOUR_BUDGET * direct
+    best, best_total = None, math.inf
+    for w in nav.qt_markers:
+        if w.system != system:
+            continue
+        wp = entity_global_m(nav, w, t_ref)
+        if wp is None:
+            continue
+        total = dist3(p0, wp) + dist3(wp, p1)
+        if total >= budget or total >= best_total:
+            continue
+        # A segment ending inside a volume registers as a hit, so this also
+        # rejects a candidate marker that itself sits in the hazard.
+        if segment_hits(p0, wp, volumes) or segment_hits(wp, p1, volumes):
+            continue
+        best, best_total = w, total
+    # v2.1: two-waypoint fallback for heavily overlapping capsules — deferred.
+    if best is None:
+        return None, 0.0
+    return best, best_total - direct
+
+
+def _apply_detours(nav: NavData, src, dst, t_ref, volumes, result) -> None:
+    """Augment a base travel_cost result with snare-detour analysis (#24 v2):
+    test each real jump segment against the hazard volumes and, per conflict,
+    insert a detour waypoint or flag the danger `blocked` (an endpoint we must
+    visit sits inside a volume, or no clearing marker exists within budget).
+    Mutates `result` in place — detour distance folds into `distance_m`."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    waypoints, dodged, blocked = [], [], []
+    detour_m = 0.0
+    for seg in _leg_segments(nav, src, dst, t_ref):
+        vols = [v for v in volumes if v["system"] == seg["system"]]
+        hits = segment_hits(seg["a"], seg["b"], vols) if vols else []
+        if not hits:
+            continue
+        pending = []
+        for v in hits:
+            if _point_in_volume(seg["a"], v) or _point_in_volume(seg["b"], v):
+                if v.get("warning_id") is not None:
+                    blocked.append(v["warning_id"])   # camped endpoint — no reroute
+            else:
+                pending.append(v)
+        if not pending:
+            continue
+        W, added = _detour_via(nav, seg["a"], seg["b"], pending, seg["system"], t_ref)
+        if W is None:
+            for v in pending:
+                if v.get("warning_id") is not None:
+                    blocked.append(v["warning_id"])
+        else:
+            waypoints.append({"id": W.id, "name": W.name})
+            detour_m += added
+            for v in pending:
+                if v.get("warning_id") is not None:
+                    dodged.append(v["warning_id"])
+    if detour_m and result.get("distance_m") is not None:
+        result["distance_m"] += detour_m
+    if waypoints:
+        result["waypoints"] = waypoints
+    if detour_m:
+        result["detour_m"] = detour_m
+    blocked = list(dict.fromkeys(blocked))
+    bset = set(blocked)
+    dodged = [w for w in dict.fromkeys(dodged) if w not in bset]
+    if dodged:
+        result["dodged"] = dodged
+    if blocked:
+        result["blocked"] = blocked
 
 
 def resource_hotspots(
@@ -1741,10 +2027,16 @@ def _pkg_view(p):
 def _leg_view(leg):
     if leg is None:
         return None
-    return {"distance_m": leg["distance_m"], "eta_s": _leg_time_s(leg["distance_m"]),
-            "qt_marker": leg["qt_marker"], "via": leg["via"],
-            "cross_system": leg["cross_system"], "via_gate": leg["via_gate"],
-            "partial": leg["partial"]}
+    v = {"distance_m": leg["distance_m"], "eta_s": _leg_time_s(leg["distance_m"]),
+         "qt_marker": leg["qt_marker"], "via": leg["via"],
+         "cross_system": leg["cross_system"], "via_gate": leg["via_gate"],
+         "partial": leg["partial"]}
+    # Snare-detour extras (#24 v2), present only when the leg was costed with
+    # hazard volumes and something actually conflicted.
+    for k in ("waypoints", "detour_m", "dodged", "blocked"):
+        if leg.get(k):
+            v[k] = leg[k]
+    return v
 
 
 def _stop_delta(stops, gpick, gdrop, gtot, j, seen):
@@ -1765,7 +2057,7 @@ def _stop_delta(stops, gpick, gdrop, gtot, j, seen):
 
 
 def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None,
-               t_ref=None) -> dict:
+               t_ref=None, *, avoid_volumes=None) -> dict:
     """Order accepted cargo packages into an efficient run.
 
     Returns {summary, stops}. `summary` carries feasibility (peak load vs.
@@ -1843,13 +2135,17 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
         gdrop[info["drop"]].append(g)
 
     # --- cost matrix ---
+    # A shared memo makes the snare-detour search run at most once per POI pair
+    # per solve (no-op when avoid_volumes is None — the fast path).
+    memo = {}
     legs = [[None] * n for _ in range(n)]
     dmat = [[math.inf] * n for _ in range(n)]
     for a in range(n):
         for b in range(n):
             if a == b:
                 continue
-            leg = travel_cost(nav, stops[a]["poi"], stops[b]["poi"], t_ref)
+            leg = travel_cost(nav, stops[a]["poi"], stops[b]["poi"], t_ref,
+                              avoid=avoid_volumes, memo=memo)
             legs[a][b] = leg
             if leg["distance_m"] is not None:
                 dmat[a][b] = leg["distance_m"]
@@ -1865,7 +2161,8 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     start_d = [0.0] * n
     if start_poi is not None:
         for b in range(n):
-            leg = travel_cost(nav, start_poi, stops[b]["poi"], t_ref)
+            leg = travel_cost(nav, start_poi, stops[b]["poi"], t_ref,
+                              avoid=avoid_volumes, memo=memo)
             start_legs[b] = leg
             start_d[b] = leg["distance_m"] if leg["distance_m"] is not None else math.inf
 
@@ -2432,10 +2729,28 @@ def trade_leg_warnings(leg: dict, warnings) -> list[dict]:
     return hits
 
 
-def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> dict:
+def leg_hazards(nav: NavData, src, dst, volumes, t_ref) -> list:
+    """Warning ids whose hazard volumes the *direct* (un-detoured) leg src->dst
+    crosses (#24 v2). Warn mode uses this to badge fly-past dangers the endpoint
+    match (trade_leg_warnings) can't see — the leg merely passing near a snare,
+    not buying/selling in it — without changing the route. Deadliest-first order
+    isn't guaranteed here (ids only); the caller resolves + ranks."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    ids = []
+    for seg in _leg_segments(nav, src, dst, t_ref):
+        vols = [v for v in volumes if v["system"] == seg["system"]]
+        for v in segment_hits(seg["a"], seg["b"], vols) if vols else ():
+            if v.get("warning_id") is not None:
+                ids.append(v["warning_id"])
+    return list(dict.fromkeys(ids))
+
+
+def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
+                *, avoid=None, memo=None) -> dict:
     """Walk an ordered list of trade rows from `start`, costing the QT legs
     (reposition to each buy terminal, then the loaded haul to its sell terminal)
-    and accumulating profit/time/distance. Returns {summary, legs}."""
+    and accumulating profit/time/distance. Returns {summary, legs}. `avoid`
+    (hazard volumes) + `memo` thread snare-detour costing into every leg."""
     legs, pos, prev_sell = [], start, None
     total_profit = total_dist = total_time = 0.0
     deadhead_time = loaded_time = 0.0
@@ -2450,8 +2765,10 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
         # approach or extra buy-stop.
         bp = start if held else nav.pois.get(row["buy_poi_id"])
         sp = nav.pois.get(row["sell_poi_id"])
-        approach = travel_cost(nav, pos, bp, t_ref) if (pos is not None and bp is not None) else None
-        haul = travel_cost(nav, bp, sp, t_ref) if (bp is not None and sp is not None) else None
+        approach = (travel_cost(nav, pos, bp, t_ref, avoid=avoid, memo=memo)
+                    if (pos is not None and bp is not None) else None)
+        haul = (travel_cost(nav, bp, sp, t_ref, avoid=avoid, memo=memo)
+                if (bp is not None and sp is not None) else None)
         if haul is None or haul["distance_m"] is None:
             feasible = False
         if not held and row["buy_poi_id"] != prev_sell:   # buying where we just sold = one stop
@@ -2501,13 +2818,15 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
 
 
 def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
-                  deadhead_weight=1.0) -> list[dict]:
+                  deadhead_weight=1.0, *, avoid=None, memo=None) -> list[dict]:
     """Build a trade chain by repeatedly taking the best-scoring reachable trade
     from the current position. `optimize` = 'profit' (raw) or 'per_hour'
     (throughput). `deadhead_weight` > 1 penalizes empty-hold repositioning: it
     scales the approach (empty) leg's time in the per-hour score, and in profit
     mode shrinks a trade's score by its approach time — so a fuller-hold chain wins
-    even at some profit cost. `first` forces the opening leg (multi-start seed)."""
+    even at some profit cost. `first` forces the opening leg (multi-start seed).
+    With `avoid` (hazard volumes) a candidate whose haul can't be routed around a
+    danger (`blocked`) is skipped — the snare-aware analog of avoid mode."""
     chosen, pos, used = [], start, set()
     key = lambda r: (r["commodity"], r["buy_poi_id"], r["sell_poi_id"])
     while len(chosen) < max_legs:
@@ -2520,11 +2839,13 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
             sp = nav.pois.get(r["sell_poi_id"])
             if bp is None or sp is None:
                 continue
-            haul = travel_cost(nav, bp, sp, t_ref)
+            haul = travel_cost(nav, bp, sp, t_ref, avoid=avoid, memo=memo)
             if haul["distance_m"] is None:
                 continue
+            if avoid and haul.get("blocked"):
+                continue                      # camped haul with no reroute — skip
             profit = r["trade_profit"] or 0
-            approach = (travel_cost(nav, pos, bp, t_ref)
+            approach = (travel_cost(nav, pos, bp, t_ref, avoid=avoid, memo=memo)
                         if (pos is not None and (optimize != "profit" or deadhead_weight > 1.0))
                         else None)
             approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
@@ -2557,22 +2878,26 @@ def _route_score(summary, optimize, deadhead_weight) -> float:
     return summary["total_profit"] / eff_hours if eff_hours > 0 else 0.0
 
 
-def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight) -> list[dict]:
+def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
+                 *, avoid=None, memo=None) -> list[dict]:
     """Multi-start greedy over the candidate pool: an unforced chain plus one
     forced from each of the top seeds, keeping the best-scoring complete route.
-    Returns the chosen trade rows (empty if nothing chains)."""
+    Returns the chosen trade rows (empty if nothing chains). `avoid`/`memo`
+    thread snare-detour costing into every leg cost."""
     if not cands or max_legs < 1:
         return []
     routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
-                            deadhead_weight=deadhead_weight)]
+                            deadhead_weight=deadhead_weight, avoid=avoid, memo=memo)]
     for seed in cands[:_TRADE_RESTARTS]:
         routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
-                                    first=seed, deadhead_weight=deadhead_weight))
+                                    first=seed, deadhead_weight=deadhead_weight,
+                                    avoid=avoid, memo=memo))
     best, best_score = [], -1.0
     for chosen in routes:
         if not chosen:
             continue
-        score = _route_score(_cost_route(nav, chosen, start, t_ref)["summary"],
+        score = _route_score(_cost_route(nav, chosen, start, t_ref,
+                                         avoid=avoid, memo=memo)["summary"],
                              optimize, deadhead_weight)
         if score > best_score:
             best, best_score = chosen, score
@@ -2583,7 +2908,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      start_pos=None, max_stops=6, commodities=None, system=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
-                     avoid_poi_ids=None, avoid_pairs=None) -> dict:
+                     avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None) -> dict:
     """Auto / filtered trade-route solver: pick and order the buy->sell trades that
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
     `usable_scu` hold, starting from a POI (`start_id`) or live position
@@ -2596,15 +2921,21 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     optimize = "profit" if sort == "profit" else "per_hour"
     avoid_poi_ids = frozenset(avoid_poi_ids or ())
     avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))
+    memo = {}
     start = None
     if start_id is not None:
         start = nav.pois.get(start_id)
     elif start_pos is not None:
         start = position_start(nav, start_pos)
 
+    # Decision 5 (#24 v2): with hazard volumes, a snared lane is usually still
+    # viable via a detour, so we stop dropping it (`avoid_pairs`) and let the
+    # solver pay the honest detour distance in each leg's score instead. Camped
+    # endpoints (`avoid_poi_ids`) still drop — no geometry fixes a camped terminal.
+    cand_pairs = frozenset() if avoid_volumes else avoid_pairs
     cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
                               budget=budget, max_age_s=max_age_s, now_ts=now_ts,
-                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
+                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs)
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -2613,21 +2944,23 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
         empty["start"] = _start_ref(start)
         return empty
 
-    chosen = _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight)
-    best = _cost_route(nav, chosen, start, t_ref)
+    chosen = _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
+                          avoid=avoid_volumes, memo=memo)
+    best = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo=memo)
     best["summary"]["usable_scu"] = float(usable_scu)
     best["start"] = _start_ref(start)
     return best
 
 
 def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
-                    start_pos=None, budget=None, t_ref=None) -> dict:
+                    start_pos=None, budget=None, t_ref=None, avoid_volumes=None) -> dict:
     """Manual mode: cost a player-chosen ordered list of legs (each
     {commodity, buy_terminal_id, sell_terminal_id, scu?}) into the same
     {summary, legs, start} shape the solver returns — no route selection, just live
     prices + running profit/time. A leg's `scu` optionally caps the load below the
     supply/demand/hold maximum; `budget` caps each fill to affordable aUEC. Raises
-    ValueError on an unknown/unpriced leg."""
+    ValueError on an unknown/unpriced leg. Manual legs are never dropped, but with
+    `avoid_volumes` they get costed detours + `blocked` badges (#24 v2)."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     idx = {(p["commodity"], p["terminal_id"]): p for p in prices}
     chosen = []
@@ -2651,14 +2984,14 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
         start = nav.pois.get(start_id)
     elif start_pos is not None:
         start = position_start(nav, start_pos)
-    costed = _cost_route(nav, chosen, start, t_ref)
+    costed = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo={})
     costed["summary"]["usable_scu"] = float(usable_scu)
     costed["start"] = _start_ref(start)
     return costed
 
 
 def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
-                   optimize) -> tuple[dict | None, "Poi | None"]:
+                   optimize, avoid=None, memo=None) -> tuple[dict | None, "Poi | None"]:
     """The best buyer for cargo the player is already carrying (sunk cost), as a
     sell-only leg. The buy is already paid for, so buy_cost going forward is 0 and
     profit is the realized spread over the recorded buy price. Prefers a buyer in
@@ -2690,7 +3023,7 @@ def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
     best, best_score, best_poi = None, -1e18, None
     for p in pts:
         sp = nav.pois.get(p["poi_id"])
-        leg = travel_cost(nav, start, sp, t_ref) if start is not None else None
+        leg = travel_cost(nav, start, sp, t_ref, avoid=avoid, memo=memo) if start is not None else None
         eta = _leg_time_s(leg["distance_m"]) if (leg and leg["distance_m"] is not None) else None
         revenue = int(p["sell"]) * scu
         if optimize == "profit":
@@ -2723,7 +3056,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        start_pos=None, held=None, max_stops=6, commodities=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
-                       t_ref=None, avoid_poi_ids=None, avoid_pairs=None) -> dict:
+                       t_ref=None, avoid_poi_ids=None, avoid_pairs=None,
+                       avoid_volumes=None) -> dict:
     """Re-solve a trade route from the player's *current* position mid-run,
     carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
     already loaded with cargo that's been paid for but not yet sold. The new plan
@@ -2738,6 +3072,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     now = now_ts if now_ts is not None else time.time()
     avoid_poi_ids = frozenset(avoid_poi_ids or ())
     avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))
+    memo = {}
 
     held_scu = float(held.get("scu")) if (held and held.get("scu")) else 0.0
     if held_scu <= 0:
@@ -2745,7 +3080,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             nav, prices, usable_scu, start_id=start_id, start_pos=start_pos,
             max_stops=max_stops, commodities=commodities, system=system, sort=sort,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
-            now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
+            now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids,
+            avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes)
 
     start = None
     if start_id is not None:
@@ -2753,9 +3089,11 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     elif start_pos is not None:
         start = position_start(nav, start_pos)
 
+    # The held-cargo sell leg is costed with volumes too — you're already loaded,
+    # so a detour on the sell approach is exactly what a mid-run reroute is for.
     held_row, sell_poi = _held_sell_leg(
         nav, prices, held, start, system=system, max_age_s=max_age_s, now=now,
-        t_ref=t_ref, optimize=optimize)
+        t_ref=t_ref, optimize=optimize, avoid=avoid_volumes, memo=memo)
     if held_row is None:
         empty = _cost_route(nav, [], start, t_ref)
         empty["summary"]["reason"] = f"no known buyer for held {held.get('commodity')}"
@@ -2768,14 +3106,15 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     # Chain further trades from the sell terminal with the freed (full) hold. The
     # held-cargo sell leg above is left unfiltered — a sunk load must be offloadable
     # even if its only buyer sits in a warned zone — but the continuation avoids danger.
+    cand_pairs = frozenset() if avoid_volumes else avoid_pairs
     cands = _trade_candidates(prices, usable_scu, system=system,
                               commodities=commodities, budget=budget,
                               max_age_s=max_age_s, now_ts=now,
-                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
+                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs)
     cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,
-                        deadhead_weight) if cont_legs else []
-    best = _cost_route(nav, [held_row] + cont, start, t_ref)
+                        deadhead_weight, avoid=avoid_volumes, memo=memo) if cont_legs else []
+    best = _cost_route(nav, [held_row] + cont, start, t_ref, avoid=avoid_volumes, memo=memo)
     best["summary"]["usable_scu"] = float(usable_scu)
     best["summary"]["carried_commodity"] = held.get("commodity")
     best["summary"]["carried_scu"] = held_scu
