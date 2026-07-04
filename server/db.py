@@ -114,6 +114,22 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_owner_status ON runs(discord_id, status);
 
+-- Trade Route Planner run mode (#21, step 5). Same shape as `runs`, kept a
+-- separate table because a trade run's blob differs from a cargo run's: it's an
+-- ordered list of buy->sell *legs* (each with a per-leg buy/sell phase), not
+-- packages/precedence. `data` is the JSON blob (legs + per-leg state + active
+-- cursor + running profit); at most one active trade run per member.
+CREATE TABLE IF NOT EXISTS trade_runs (
+    id INTEGER PRIMARY KEY,
+    discord_id TEXT NOT NULL,
+    status TEXT NOT NULL,          -- active | completed | abandoned
+    ship TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    data TEXT
+);
+CREATE INDEX IF NOT EXISTS trade_runs_owner_status ON trade_runs(discord_id, status);
+
 -- Event planner: guild-organized in-game events (raids, ops, survey/exploration
 -- expeditions, meetups). `organizer_id` is the creating member; `roles` is the
 -- JSON target roster [{role, needed}]; `start_at` is UTC ISO8601 (rendered local
@@ -764,6 +780,69 @@ def abandon_run(discord_id: str) -> bool:
     with _lock, _conn:
         cur = _conn.execute(
             "UPDATE runs SET status='abandoned' WHERE discord_id=? AND status='active'",
+            (str(discord_id),),
+        )
+    return cur.rowcount > 0
+
+
+def get_active_trade_run(discord_id: str) -> dict | None:
+    """The member's in-progress trade run as the parsed blob (with the row id),
+    or None. At most one active trade run exists per member."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT id, ship, started_at, data FROM trade_runs "
+            "WHERE discord_id=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (str(discord_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    run = _u(row["data"]) or {}
+    run["id"] = row["id"]
+    return run
+
+
+def start_trade_run(discord_id: str, ship: str | None, started_at: str, run: dict) -> int:
+    """Persist a fresh active trade run, abandoning any prior active one (a member
+    trades one route at a time). Returns the new run id."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE trade_runs SET status='abandoned' WHERE discord_id=? AND status='active'",
+            (str(discord_id),),
+        )
+        cur = _conn.execute(
+            "INSERT INTO trade_runs (discord_id, status, ship, started_at, data) "
+            "VALUES (?, 'active', ?, ?, ?)",
+            (str(discord_id), ship, started_at, _j(run)),
+        )
+    return cur.lastrowid
+
+
+def update_trade_run(discord_id: str, run_id: int, run: dict) -> None:
+    """Persist progress on the active trade run (leg states / active cursor /
+    replanned legs)."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE trade_runs SET data=? WHERE id=? AND discord_id=? AND status='active'",
+            (_j(run), run_id, str(discord_id)),
+        )
+
+
+def complete_trade_run(discord_id: str, run_id: int, completed_at: str, run: dict) -> None:
+    """Mark the active trade run completed, freezing its final blob for history."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE trade_runs SET status='completed', completed_at=?, data=? "
+            "WHERE id=? AND discord_id=? AND status='active'",
+            (completed_at, _j(run), run_id, str(discord_id)),
+        )
+
+
+def abandon_trade_run(discord_id: str) -> bool:
+    """Drop the member's active trade run (they bailed). Returns whether one
+    existed."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE trade_runs SET status='abandoned' WHERE discord_id=? AND status='active'",
             (str(discord_id),),
         )
     return cur.rowcount > 0

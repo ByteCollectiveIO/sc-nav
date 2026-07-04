@@ -1119,6 +1119,7 @@ class Session:
         self.prev_t = None
         self.destination_id = None
         self.run = None            # active cargo-planner run blob (or None)
+        self.trade_run = None      # active trade-route run blob (or None)
         self.nav_state = None
         # capture_pending: {"kind": "poi"} or
         # {"kind": "observation", "category", "data", "biome", "note"} while armed
@@ -1157,6 +1158,7 @@ class Session:
         self.nav_state["shard"] = self.shard
         self._attach_breadcrumbs()
         self.nav_state["run"] = self.run_view()
+        self.nav_state["trade_run"] = self.trade_run_view()
 
     def _arrived_at_active(self) -> bool:
         """Whether the guidance distance to the active stop is within the
@@ -1208,6 +1210,39 @@ class Session:
             "arrived": active < len(run["stops"]) and self._arrived_at_active(),
             "onboard_scu": round(self.onboard_scu(), 2),
             "stops": stops,
+        }
+
+    def trade_run_view(self) -> dict | None:
+        """The active trade run as the client renders it: ordered legs with per-leg
+        state (pending → bought → sold), the active-leg cursor, the current phase
+        (buy vs sell — which POI guidance is pointing at), running realized profit,
+        the SCU currently aboard, and the arrival flag for the active waypoint."""
+        run = self.trade_run
+        if not run:
+            return None
+        legs, states = run["legs"], run["leg_states"]
+        active = run["active"]
+        n = len(legs)
+        done = active >= n
+        phase = None if done else ("sell" if states[active] == "bought" else "buy")
+        # Aboard = the actual SCU bought on the active leg if the player entered it,
+        # else the planned load.
+        onboard = 0.0
+        if not done and states[active] == "bought":
+            a = legs[active]
+            onboard = float(a.get("actual_buy_scu") or a.get("scu") or 0)
+        realized = sum(nav_core.trade_leg_realized(l) or 0
+                       for l, st in zip(legs, states) if st == "sold")
+        return {
+            "id": run["id"], "ship": run.get("ship"), "usable_scu": run.get("usable_scu"),
+            "active": active, "phase": phase, "done": done,
+            "arrived": (not done) and self._arrived_at_active(),
+            "onboard_scu": round(onboard, 2),
+            "realized_profit": realized,
+            "legs": [{**l, "state": st,
+                      "realized": nav_core.trade_leg_realized(l) if st == "sold" else None}
+                     for l, st in zip(legs, states)],
+            "summary": run.get("summary"),
         }
 
     def record_crumb(self):
@@ -1288,6 +1323,12 @@ class SessionHub:
             if run:
                 sess.run = run
                 _point_at_active_stop(sess)
+            # Resume an in-progress trade run too; when both exist the trade run
+            # (re-pointed last) owns the single guidance destination.
+            trade_run = db.get_active_trade_run(user["id"])
+            if trade_run:
+                sess.trade_run = trade_run
+                _point_at_active_trade_leg(sess)
         else:
             sess.user = user           # refresh display name / admin flag
         return sess
@@ -1984,6 +2025,30 @@ class TradePlanIn(BaseModel):
     ship: str | None = Field(default=None, max_length=_NAME_MAX)
 
 
+class TradeRunPatchIn(BaseModel):
+    action: str                                         # buy | sell | advance
+    # target leg (defaults to the active one); guards against a stale click
+    # confirming the wrong leg after the cursor moved.
+    leg: int | None = Field(default=None, ge=0, le=100)
+    # Actuals entered at the terminal (optional): the real aUEC/SCU price and SCU
+    # moved on this buy or sell. Recorded so earnings stats reflect what actually
+    # happened rather than UEX's scrape; unset falls back to the plan's figures.
+    price: float | None = Field(default=None, ge=0, le=100_000_000)
+    scu: float | None = Field(default=None, gt=0, le=100_000)
+
+
+class TradeReplanIn(BaseModel):
+    """Re-solve from the caller's live position. Sunk cargo (the active leg if
+    it's mid-trade, i.e. bought-not-sold) is carried forward automatically from the
+    run's own state. Optional knobs override the run's stored plan params."""
+    max_stops: int | None = Field(default=None, ge=2, le=12)
+    system: str | None = Field(default=None, max_length=_NAME_MAX)
+    sort: str | None = None                             # per_hour | profit
+    budget: int | None = Field(default=None, gt=0, le=10_000_000_000)
+    minimize_deadhead: bool | None = None
+    max_price_age_days: int | None = Field(default=None, ge=1, le=365)
+
+
 _DEADHEAD_WEIGHT = 3.0   # empty-hold time multiplier when minimize_deadhead is on
 
 
@@ -1996,7 +2061,13 @@ async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_sessio
     Start from a POI (`start_id`) or the caller's live position (`start_here`).
     Returns {summary, legs, start} — feasibility, per-leg buy/sell + travel, and
     route totals (profit, capital needed, aUEC/hour)."""
-    sess = hub.sessions.get(user["id"])
+    return _solve_trade_plan(body, hub.sessions.get(user["id"]))
+
+
+def _solve_trade_plan(body: TradePlanIn, sess: "Session | None") -> dict:
+    """Resolve start (POI or live position) and run the right solver for the
+    requested mode. Shared by /api/trade/plan (stateless) and /api/trade/run
+    (persisted). Raises HTTPException on bad input / missing live position."""
     if body.start_id is not None and body.start_id not in nav.pois:
         raise HTTPException(status_code=404, detail="unknown start_id")
     start_pos = None
@@ -2010,20 +2081,216 @@ async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_sessio
     dh_weight = _DEADHEAD_WEIGHT if body.minimize_deadhead else 1.0
     try:
         if body.mode == "manual":
-            plan = nav_core.cost_trade_legs(
+            return nav_core.cost_trade_legs(
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
                 budget=body.budget, t_ref=t_ref)
-        else:
-            plan = nav_core.plan_trade_route(
-                nav, trade_price_points, body.usable_scu,
-                start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
-                commodities=(body.commodities if body.mode == "filtered" else None),
-                system=body.system, sort=body.sort, budget=body.budget,
-                deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref)
+        return nav_core.plan_trade_route(
+            nav, trade_price_points, body.usable_scu,
+            start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
+            commodities=(body.commodities if body.mode == "filtered" else None),
+            system=body.system, sort=body.sort, budget=body.budget,
+            deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return plan
+
+
+def _initial_trade_states(legs: list[dict]) -> list[str]:
+    """Per-leg starting state: a `held` leg (sunk cargo already aboard from a
+    re-plan) begins 'bought' — heading to its sell; every other leg begins
+    'pending' — heading to its buy."""
+    return ["bought" if lg.get("held") else "pending" for lg in legs]
+
+
+def _point_at_active_trade_leg(sess: "Session") -> None:
+    """Point guidance at the active leg's current-phase waypoint: its buy terminal
+    while 'pending', its sell terminal once 'bought'. Clears when the run is done."""
+    run = sess.trade_run
+    if run and run["active"] < len(run["legs"]):
+        leg = run["legs"][run["active"]]
+        st = run["leg_states"][run["active"]]
+        sess.destination_id = leg.get("sell_poi_id") if st == "bought" else leg.get("buy_poi_id")
+    else:
+        sess.destination_id = None
+
+
+def _advance_trade_run(sess: "Session") -> bool:
+    """Skip the cursor past any fully-sold legs and re-point guidance. Returns True
+    when the run is now complete."""
+    run = sess.trade_run
+    while run["active"] < len(run["legs"]) and run["leg_states"][run["active"]] == "sold":
+        run["active"] += 1
+    _point_at_active_trade_leg(sess)
+    return run["active"] >= len(run["legs"])
+
+
+def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
+    """Build the persisted trade-run blob from a fresh plan: ordered legs, parallel
+    per-leg states, the active cursor, and the plan params (so a later re-plan can
+    reuse the same knobs). Frozen summary totals ride along for history."""
+    legs = plan.get("legs") or []
+    sm = plan.get("summary") or {}
+    return {
+        "ship": body.ship, "usable_scu": body.usable_scu,
+        "display_name": user.get("display_name"),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "legs": legs, "leg_states": _initial_trade_states(legs), "active": 0,
+        "summary": sm,
+        "params": {
+            "max_stops": body.max_stops, "commodities": body.commodities,
+            "system": body.system, "sort": body.sort, "budget": body.budget,
+            "minimize_deadhead": body.minimize_deadhead,
+            "max_price_age_days": body.max_price_age_days,
+        },
+    }
+
+
+@app.post("/api/trade/run")
+async def start_trade_run(body: TradePlanIn, user: dict = Depends(require_session)):
+    """Start (and persist) an active trade run from the same input as /plan.
+    Re-solves server-side, points guidance at the first leg's buy terminal, and
+    replaces any prior active trade run. 409 if the plan yields no feasible legs."""
+    async with hub.lock:
+        sess = hub.get(user)
+        plan = _solve_trade_plan(body, sess)
+        if not plan["summary"].get("feasible") or not plan.get("legs"):
+            reason = plan["summary"].get("reason") or "no profitable trades for these filters"
+            raise HTTPException(status_code=409, detail=f"trade route infeasible: {reason}")
+        run = _new_trade_run(user, body, plan)
+        run["id"] = db.start_trade_run(user["id"], body.ship, run["started_at"], run)
+        sess.trade_run = run
+        _point_at_active_trade_leg(sess)
+        sess.recompute()
+        await sess.broadcast()
+        return {"ok": True, "trade_run": sess.trade_run_view()}
+
+
+@app.get("/api/trade/run")
+async def get_trade_run(user: dict = Depends(require_session)):
+    """The caller's active trade run (or null) — for the UI to load / resume."""
+    async with hub.lock:
+        return {"trade_run": hub.get(user).trade_run_view()}
+
+
+@app.patch("/api/trade/run")
+async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_session)):
+    """Advance the active trade run. `action`:
+      buy      — confirm the buy at the active leg (pending → bought; guidance
+                 flips to its sell terminal),
+      sell     — confirm the sell (bought → sold; cursor advances to the next leg),
+      advance  — skip the active leg (bailed on it).
+    `leg` optionally pins the target index to guard a stale click. Completing the
+    last leg finishes the run."""
+    async with hub.lock:
+        sess = hub.get(user)
+        run = sess.trade_run
+        if not run:
+            raise HTTPException(status_code=404, detail="no active trade run")
+        active = run["active"]
+        if active >= len(run["legs"]):
+            raise HTTPException(status_code=409, detail="trade run already complete")
+        if body.leg is not None and body.leg != active:
+            raise HTTPException(status_code=409, detail="stale leg — the run has moved on")
+        st = run["leg_states"][active]
+        leg = run["legs"][active]
+        if body.action == "buy":
+            if st != "pending":
+                raise HTTPException(status_code=409, detail="active leg is not awaiting a buy")
+            if body.price is not None:
+                leg["actual_buy_price"] = body.price
+            if body.scu is not None:
+                leg["actual_buy_scu"] = body.scu
+            run["leg_states"][active] = "bought"
+        elif body.action == "sell":
+            if st != "bought":
+                raise HTTPException(status_code=409, detail="active leg is not awaiting a sell")
+            if body.price is not None:
+                leg["actual_sell_price"] = body.price
+            if body.scu is not None:
+                leg["actual_sell_scu"] = body.scu
+            run["leg_states"][active] = "sold"
+        elif body.action == "advance":
+            run["leg_states"][active] = "sold"     # abandon the leg, move on
+        else:
+            raise HTTPException(status_code=400, detail="bad action")
+        _point_at_active_trade_leg(sess)
+        completed = _advance_trade_run(sess)
+        if completed:
+            run["completed_at"] = datetime.now(timezone.utc).isoformat()
+            db.complete_trade_run(user["id"], run["id"], run["completed_at"], run)
+            sess.trade_run = None
+            sess.destination_id = None
+        else:
+            db.update_trade_run(user["id"], run["id"], run)
+        sess.recompute()
+        await sess.broadcast()
+        return {"ok": True, "completed": completed, "trade_run": sess.trade_run_view()}
+
+
+@app.post("/api/trade/run/replan")
+async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_session)):
+    """Re-solve the active run from the caller's live position (pirates knocked
+    them off course). Legs already sold stay as history; the active leg's sunk
+    cargo — if it's been bought but not yet sold — is carried forward and offloaded
+    first, then fresh trades chain onto the freed hold. Optional knobs override the
+    run's stored plan params."""
+    async with hub.lock:
+        sess = hub.get(user)
+        run = sess.trade_run
+        if not run:
+            raise HTTPException(status_code=404, detail="no active trade run")
+        if sess.pos is None:
+            raise HTTPException(status_code=400,
+                                detail="no live position yet — run /showlocation")
+        active = run["active"]
+        legs, states = run["legs"], run["leg_states"]
+        done_legs = legs[:active]                  # everything before the cursor is sold
+        held = None
+        if active < len(legs) and states[active] == "bought":
+            lg = legs[active]
+            held = {"commodity": lg["commodity"], "scu": lg["scu"],
+                    "buy_price": lg["buy_price"]}
+        p = run.get("params") or {}
+        max_age_days = (body.max_price_age_days if body.max_price_age_days is not None
+                        else p.get("max_price_age_days"))
+        max_age_s = max_age_days * 86400 if max_age_days else None
+        minimize = (body.minimize_deadhead if body.minimize_deadhead is not None
+                    else p.get("minimize_deadhead"))
+        new_plan = nav_core.replan_trade_route(
+            nav, trade_price_points, run["usable_scu"], start_pos=sess.pos, held=held,
+            max_stops=(body.max_stops or p.get("max_stops") or 6),
+            commodities=(p.get("commodities") or None),
+            system=(body.system if body.system is not None else p.get("system")),
+            sort=(body.sort or p.get("sort") or "per_hour"),
+            budget=p.get("budget"),
+            deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
+            max_age_s=max_age_s, t_ref=sess.t)
+        new_legs = new_plan.get("legs") or []
+        if not new_legs:
+            reason = new_plan["summary"].get("reason") or "no profitable continuation from here"
+            raise HTTPException(status_code=409, detail=f"re-plan infeasible: {reason}")
+        run["legs"] = done_legs + new_legs
+        run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)
+        run["active"] = len(done_legs)
+        run["summary"] = new_plan.get("summary") or {}
+        _point_at_active_trade_leg(sess)
+        db.update_trade_run(user["id"], run["id"], run)
+        sess.recompute()
+        await sess.broadcast()
+        return {"ok": True, "trade_run": sess.trade_run_view()}
+
+
+@app.delete("/api/trade/run")
+async def abandon_trade_run(user: dict = Depends(require_session)):
+    """Abandon the caller's active trade run and release the guidance destination."""
+    async with hub.lock:
+        sess = hub.get(user)
+        had = db.abandon_trade_run(user["id"])
+        sess.trade_run = None
+        sess.destination_id = None
+        sess.recompute()
+        await sess.broadcast()
+        return {"ok": True, "abandoned": had}
 
 
 # The forecast/finder/heatmap endpoints work for any mappable observation

@@ -1046,5 +1046,92 @@ class FleetTemplateTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class TradeRunStateTests(unittest.TestCase):
+    """The trade-run leg/phase state machine (#21 step 5): guidance points at the
+    active leg's buy terminal until the buy is confirmed, then its sell terminal;
+    the cursor advances leg-by-leg and the run finishes on the last sell."""
+
+    def _run(self):
+        legs = [
+            {"commodity": "Gold", "buy_poi_id": 11, "sell_poi_id": 12,
+             "buy_terminal": "A", "sell_terminal": "B", "buy_price": 100,
+             "sell_price": 300, "scu": 40, "profit": 8000, "held": False},
+            {"commodity": "Iron", "buy_poi_id": 12, "sell_poi_id": 13,
+             "buy_terminal": "B", "sell_terminal": "C", "buy_price": 50,
+             "sell_price": 200, "scu": 40, "profit": 6000, "held": False},
+        ]
+        return {"id": 1, "ship": "C2", "usable_scu": 64, "legs": legs,
+                "leg_states": app._initial_trade_states(legs), "active": 0,
+                "summary": {"total_profit": 14000}}
+
+    def _sess(self):
+        s = app.Session({"id": "1", "display_name": "Trader"})
+        s.trade_run = self._run()
+        return s
+
+    def test_guidance_points_at_buy_then_sell(self):
+        s = self._sess()
+        app._point_at_active_trade_leg(s)
+        self.assertEqual(s.destination_id, 11)          # active leg's buy terminal
+        s.trade_run["leg_states"][0] = "bought"
+        app._point_at_active_trade_leg(s)
+        self.assertEqual(s.destination_id, 12)          # flips to the sell terminal
+
+    def test_view_reports_phase_and_onboard(self):
+        s = self._sess()
+        v = s.trade_run_view()
+        self.assertEqual(v["phase"], "buy")
+        self.assertEqual(v["onboard_scu"], 0)
+        s.trade_run["leg_states"][0] = "bought"
+        v = s.trade_run_view()
+        self.assertEqual(v["phase"], "sell")
+        self.assertEqual(v["onboard_scu"], 40)          # holding the bought leg
+
+    def test_advance_skips_sold_legs_and_completes(self):
+        s = self._sess()
+        s.trade_run["leg_states"][0] = "sold"
+        self.assertFalse(app._advance_trade_run(s))
+        self.assertEqual(s.trade_run["active"], 1)
+        self.assertEqual(s.destination_id, 12)          # leg 1's buy terminal
+        s.trade_run["leg_states"][1] = "sold"
+        self.assertTrue(app._advance_trade_run(s))
+        self.assertIsNone(s.destination_id)
+
+    def test_realized_profit_sums_sold_legs(self):
+        s = self._sess()
+        s.trade_run["leg_states"][0] = "sold"
+        self.assertEqual(s.trade_run_view()["realized_profit"], 8000)
+
+    def test_held_leg_starts_in_sell_phase(self):
+        s = self._sess()
+        s.trade_run["legs"][0]["held"] = True
+        s.trade_run["leg_states"] = app._initial_trade_states(s.trade_run["legs"])
+        self.assertEqual(s.trade_run["leg_states"][0], "bought")
+        self.assertEqual(s.trade_run_view()["phase"], "sell")
+
+    def test_actuals_drive_realized_profit(self):
+        # Enter real figures on leg 0: bought 40 @120, sold 40 @350.
+        s = self._sess()
+        lg = s.trade_run["legs"][0]
+        lg["actual_buy_price"] = 120; lg["actual_buy_scu"] = 40
+        lg["actual_sell_price"] = 350; lg["actual_sell_scu"] = 40
+        s.trade_run["leg_states"][0] = "sold"
+        v = s.trade_run_view()
+        self.assertEqual(v["realized_profit"], (350 - 120) * 40)     # not the 8000 plan
+        self.assertEqual(v["legs"][0]["realized"], (350 - 120) * 40)
+
+    def test_onboard_uses_actual_bought_scu(self):
+        s = self._sess()
+        lg = s.trade_run["legs"][0]
+        lg["actual_buy_scu"] = 25                                    # short fill
+        s.trade_run["leg_states"][0] = "bought"
+        self.assertEqual(s.trade_run_view()["onboard_scu"], 25)
+
+    def test_realized_falls_back_to_plan_without_actuals(self):
+        s = self._sess()
+        s.trade_run["leg_states"][0] = "sold"
+        self.assertEqual(s.trade_run_view()["realized_profit"], 8000)   # planned profit
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

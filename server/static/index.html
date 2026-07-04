@@ -1107,6 +1107,24 @@
   .trade-fresh-line.warn { color: var(--warn); } .trade-fresh-line b { color: var(--text); }
   .tl-fresh { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
   .tl-fresh.stale { color: var(--warn); }
+  /* trade run mode (execute) — reuses .route-run-panel/.run-* from the cargo run. */
+  .trade-run-tally { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 2px;
+    font-size: 13px; font-variant-numeric: tabular-nums; }
+  .trade-run-tally b { color: var(--good); }
+  .trade-run-step { font-size: 13px; padding: 4px 0; color: var(--dim); }
+  .trade-run-step b { color: var(--text); }
+  .trade-run-step.now { color: var(--text); }
+  .trade-run-step.done { color: var(--dim); text-decoration: line-through; }
+  .trade-run-do { margin-top: 8px; background: var(--accent); color: var(--ink-on-accent);
+    border-color: var(--accent); }
+  /* Actuals entry at the active leg — the real price/SCU moved, for honest stats. */
+  .trade-actual { display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    margin: 8px 0 2px; font-size: 12px; color: var(--dim); }
+  .trade-actual .ta-label { text-transform: uppercase; letter-spacing: .04em; }
+  .trade-actual input { width: 78px; font-variant-numeric: tabular-nums; }
+  .trade-actual .ta-x { color: var(--dim); }
+  .tl-actual-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--accent); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
 
   /* ---- event planner (#/events) ---- */
   #events-view, #events-root { display: contents; }
@@ -2538,6 +2556,8 @@
       </ol>
     </div>
 
+    <div id="trade-run" hidden></div>
+
     <div class="panel">
       <h2>SHIP</h2>
       <div class="route-row">
@@ -3318,6 +3338,7 @@ function render(state) {
   // Live run updates (arrival flag, onboard SCU) ride on the nav state. Only
   // re-render when something actually changed, so the checklist doesn't thrash.
   if ("run" in state) maybeRenderRun(state.run);
+  if ("trade_run" in state) maybeRenderTradeRun(state.trade_run);
   const shardChanged = currentShard !== (state.shard || null);
   currentShard = state.shard || null;
   if (shardChanged) renderRoster();   // re-sort/relabel teammates by the new shard
@@ -5918,8 +5939,11 @@ let tradeMode = "auto";                  // auto | filtered | manual
 let tradeSort = "per_hour";              // per_hour | profit
 let tradeFilter = [];                    // commodity names (filtered mode)
 let tradeStartHere = false;              // start from the caller's live position
-let tradeLastInput = null;               // last plan payload (feeds run mode in step 5)
+let tradeLastInput = null;               // last plan payload (feeds run mode)
 const tradePriceCache = {};              // commodity -> {tid: {buy, sell}} for manual live margins
+let tradeCurrentRun = null;              // active run blob the panel last rendered
+let tradeLastRunSig = null;              // de-dupe WS re-renders
+let tradeRunComplete = false;            // keep the completion card up until cleared
 
 async function loadTradePlanner() {
   if (!tradeShips) {
@@ -5937,6 +5961,12 @@ async function loadTradePlanner() {
   if (tradeMode === "manual" && !$("trade-legs").children.length) addTradeLegRow();
   renderTradeIntro();
   renderTradeSuggest();
+  // Resume an in-progress run (survives reload / navigating away and back). The
+  // live WS frame keeps it fresh after this initial paint.
+  if (!tradeCurrentRun && !tradeRunComplete)
+    fetch("/api/trade/run").then(r => r.json()).then(d => {
+      if (d && d.trade_run) renderTradeRun(d.trade_run);
+    }).catch(() => {});
 }
 
 // Default the system lock to the busiest system (trading concentrates in one),
@@ -6246,8 +6276,11 @@ function renderTradePlan(res) {
   h += `<p class="trade-price-note">Prices are UEX's latest scrape, not live in-game — confirm at the terminal.</p>`;
   h += `</div><div class="panel"><h2>LEGS</h2>`;
   (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
+  h += `<div class="route-actions"><button id="trade-start" class="active">Start this run ▸</button>`
+    + `<span class="muted" style="font-size:12px;">guides you buy-by-sell in the navigator</span></div>`;
   h += `</div>`;
   out.innerHTML = h; out.hidden = false;
+  $("trade-start").onclick = startTradeRun;
   window.scrollTo({ top: out.offsetTop - 20, behavior: "smooth" });
 }
 
@@ -6332,6 +6365,200 @@ async function renderTradeSuggest() {
       buy_terminal: r.buy_terminal, sell_terminal_id: r.sell_terminal_id, sell_terminal: r.sell_terminal });
     window.scrollTo({ top: $("trade-manual").offsetTop - 40, behavior: "smooth" });
   });
+}
+
+// ---- run mode (execute) ----
+// A trade run walks the planned legs, each with a buy phase then a sell phase.
+// Guidance (server-side) points at the active leg's buy terminal until you
+// confirm the buy, then its sell terminal. "Re-plan from here" re-solves from the
+// live position, carrying forward any cargo already aboard (sunk-cost aware).
+async function startTradeRun() {
+  if (!tradeLastInput) return;
+  const msg = $("trade-plan-msg");
+  const ship = $("trade-ship").value.trim() || null;
+  try {
+    const r = await fetch("/api/trade/run", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...tradeLastInput, ship }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "could not start run"); return; }
+    const d = await r.json();
+    $("trade-result").hidden = true;        // collapse the plan; run mode takes over
+    renderTradeRun(d.trade_run);
+    window.scrollTo(0, 0);
+  } catch { msg.textContent = "⚠ network error"; }
+}
+
+async function patchTradeRun(body) {
+  try {
+    const r = await fetch("/api/trade/run", { method: "PATCH",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.completed) { showTradeRunComplete(); return; }
+    renderTradeRun(d.trade_run);
+  } catch {}
+}
+
+// Confirm a buy/sell, folding in the actual aUEC/SCU price + SCU the player
+// entered at the terminal (pre-filled from the plan, so an unedited confirm just
+// records the planned figures — and the stats stay honest either way).
+function submitTradeLeg(action, leg, btn) {
+  const stop = btn.closest(".run-stop");
+  const priceEl = stop && stop.querySelector(".ta-price");
+  const scuEl = stop && stop.querySelector(".ta-scu");
+  const body = { action, leg };
+  if (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0) body.price = Number(priceEl.value);
+  if (scuEl && scuEl.value !== "" && Number(scuEl.value) > 0) body.scu = Number(scuEl.value);
+  patchTradeRun(body);
+}
+
+async function replanTradeRun() {
+  const box = $("trade-run");
+  const btn = box.querySelector("#trade-replan");
+  if (btn) { btn.disabled = true; btn.textContent = "re-planning…"; }
+  try {
+    const r = await fetch("/api/trade/run/replan", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      if (btn) { btn.disabled = false; btn.textContent = "↻ re-plan from here"; }
+      const note = box.querySelector("#trade-replan-msg");
+      if (note) note.textContent = "⚠ " + (d.detail || "re-plan failed");
+      return;
+    }
+    const d = await r.json();
+    renderTradeRun(d.trade_run);
+  } catch {
+    if (btn) { btn.disabled = false; btn.textContent = "↻ re-plan from here"; }
+  }
+}
+
+async function abandonTradeRun() {
+  if (!(await confirmDialog(
+      "Your progress will be discarded.",
+      { title: "Abandon this trade run?", confirmLabel: "Abandon run", danger: true }))) return;
+  try { await fetch("/api/trade/run", { method: "DELETE" }); } catch {}
+  renderTradeRun(null);
+}
+
+function showTradeRunComplete() {
+  tradeRunComplete = true; tradeLastRunSig = "complete";
+  const box = $("trade-run");
+  box.hidden = false;
+  box.innerHTML = `<div class="panel route-run-panel"><div class="run-head"><h2>TRADE RUN COMPLETE</h2></div>`
+    + `<p class="route-feasible">✓ Every leg closed out. Nice trading.</p>`
+    + `<button id="trade-run-clear" class="active">Plan another run</button></div>`;
+  $("trade-run-clear").onclick = clearTradeRun;
+}
+function clearTradeRun() {
+  tradeRunComplete = false; tradeCurrentRun = null; tradeLastRunSig = null;
+  $("trade-run").hidden = true; $("trade-run").innerHTML = "";
+}
+
+// De-dupe WS re-renders (position samples fire the run frame constantly).
+function tradeRunSig(run) {
+  if (!run) return "none";
+  return [run.id, run.active, run.phase, run.arrived, run.onboard_scu, run.done,
+    (run.legs || []).map(l => l.state).join("")].join(":");
+}
+function maybeRenderTradeRun(run) {
+  if (tradeRunComplete && !run) return;   // keep the completion card up until cleared
+  if (tradeRunSig(run) === tradeLastRunSig) return;
+  renderTradeRun(run);
+}
+
+// Renders the active trade run (from HTTP responses and from live WS state). The
+// WS path adds the live `arrived` flag once a position is flowing.
+function renderTradeRun(run) {
+  const box = $("trade-run");
+  tradeCurrentRun = run;
+  tradeLastRunSig = tradeRunSig(run);
+  if (run) tradeRunComplete = false;
+  if (!run) { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  const cap = run.usable_scu || 0;
+  const pct = cap ? Math.min(100, Math.round(run.onboard_scu / cap * 100)) : 0;
+  const planned = (run.summary && run.summary.total_profit) || 0;
+  let h = `<div class="panel route-run-panel"><div class="run-head"><h2>TRADE RUN IN PROGRESS</h2>`
+    + `<button id="trade-run-abandon">abandon</button></div>`;
+  h += `<div class="run-onboard"><span class="muted">${esc(run.ship || "ship")}</span>`
+    + `<div class="run-bar"><div class="run-bar-fill" style="width:${pct}%"></div></div>`
+    + `<span><b>${run.onboard_scu}</b> / ${cap} SCU aboard</span></div>`;
+  h += `<div class="trade-run-tally"><span>realized <b>${fmtAuec(run.realized_profit || 0)}</b></span>`
+    + (planned ? `<span class="muted">of ${fmtAuec(planned)} planned</span>` : "") + `</div>`;
+  if (run.done) {
+    h += `<p class="route-feasible">✓ Trade run complete. Fly safe.</p></div>`;
+    box.innerHTML = h;
+    const ab = $("trade-run-abandon"); if (ab) ab.remove();
+    return;
+  }
+  // Re-plan front-and-center — the point-8 differentiator (pirates knocked you off).
+  h += `<div class="route-actions"><button id="trade-replan">↻ re-plan from here</button>`
+    + `<span class="muted" style="font-size:12px;">re-solve from your live position, keeping cargo aboard</span>`
+    + `<span id="trade-replan-msg" class="route-warn" style="font-size:12px;"></span></div>`;
+  (run.legs || []).forEach((lg, i) => { h += renderTradeRunLeg(lg, i, run); });
+  h += `</div>`;
+  box.innerHTML = h;
+  $("trade-run-abandon").onclick = abandonTradeRun;
+  $("trade-replan").onclick = replanTradeRun;
+  box.querySelectorAll("[data-buy]").forEach(b => b.onclick = () => submitTradeLeg("buy", +b.dataset.buy, b));
+  box.querySelectorAll("[data-sell]").forEach(b => b.onclick = () => submitTradeLeg("sell", +b.dataset.sell, b));
+  box.querySelectorAll("[data-skip]").forEach(b => b.onclick = () => patchTradeRun({ action: "advance", leg: +b.dataset.skip }));
+}
+
+// One leg in the run checklist: a buy step then a sell step. State drives which is
+// active and which action button shows. A `held` leg (from a re-plan) has no buy.
+function renderTradeRunLeg(lg, i, run) {
+  const active = i === run.active;
+  const past = lg.state === "sold";
+  const seq = past ? "✓" : i + 1;
+  let h = `<div class="run-stop${active ? " active" : ""}${past ? " past" : ""}">`
+    + `<div class="run-stop-head"><span class="seq">${seq}</span>`
+    + `<span class="stop-name">${esc(lg.commodity)} <span class="stop-sys">${lg.scu} SCU</span></span></div>`;
+  // Buy side (skipped for held cargo already aboard).
+  if (lg.held) {
+    h += `<div class="trade-run-step done">▲ carried aboard from re-plan</div>`;
+  } else {
+    const bought = lg.state === "bought" || lg.state === "sold";
+    h += `<div class="trade-run-step${bought ? " done" : (active ? " now" : "")}">`
+      + `▲ Buy <b>${esc(lg.commodity)}</b> at <b>${esc(lg.buy_terminal)}</b> `
+      + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span></div>`;
+  }
+  // Sell side. A sold leg shows its realized profit (from actuals when entered).
+  const sold = lg.state === "sold";
+  const selling = lg.state === "bought";
+  const profitShown = (sold && lg.realized != null) ? lg.realized : lg.profit;
+  const actualTag = (sold && lg.realized != null && lg.realized !== lg.profit)
+    ? ` <span class="tl-actual-tag">actual</span>` : "";
+  h += `<div class="trade-run-step${sold ? " done" : (active && selling ? " now" : "")}">`
+    + `▼ Sell at <b>${esc(lg.sell_terminal)}</b> <span class="muted">@ ${fmtAuec(lg.sell_price)}</span>`
+    + ` · profit <b>${fmtAuec(profitShown)}</b>${actualTag}</div>`;
+  if (active) {
+    const phase = run.phase;   // "buy" | "sell"
+    const seg = phase === "sell" ? lg.haul : lg.to_buy;
+    if (run.arrived) {
+      h += `<div class="run-arrived">⚑ You've arrived — confirm the ${phase === "sell" ? "sale" : "purchase"}.</div>`;
+    } else if (seg && seg.distance_m != null) {
+      h += `<div class="route-leg">QT ${fmtGm(seg.distance_m)}`
+        + `${seg.cross_system ? ' · <span class="gate">⇆ ' + esc((seg.via_gate || []).join(" → ")) + "</span>" : ""}</div>`;
+    }
+    // Actuals: pre-fill with the plan's price/SCU so a plain confirm records the
+    // planned figures; edit them to log what really happened at the terminal.
+    const isBuy = phase === "buy";
+    const price = isBuy ? lg.buy_price : lg.sell_price;
+    h += `<div class="trade-actual"><span class="ta-label">${isBuy ? "paid" : "got"}</span>`
+      + `<input class="ti ta-price" type="number" min="0" step="1" value="${price}" aria-label="actual price aUEC per SCU">`
+      + `<span class="ta-x">aUEC/SCU ×</span>`
+      + `<input class="ti ta-scu" type="number" min="0" step="1" value="${lg.scu}" aria-label="actual SCU">`
+      + `<span class="ta-x">SCU</span></div>`;
+    if (isBuy)
+      h += `<button class="trade-run-do" data-buy="${i}">✓ Bought — head to sell ▸</button>`;
+    else
+      h += `<button class="trade-run-do" data-sell="${i}">✓ Sold — next leg ▸</button>`;
+    h += `<button class="run-skip" data-skip="${i}">skip this leg ▸</button>`;
+  }
+  h += `</div>`;
+  return h;
 }
 
 // ---------- event planner (#/events) ----------

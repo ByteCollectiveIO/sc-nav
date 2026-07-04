@@ -2394,13 +2394,17 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
     feasible = bool(chosen)
     stops = 0
     for row in chosen:
-        bp = nav.pois.get(row["buy_poi_id"])
+        held = bool(row.get("held"))              # cargo already aboard (mid-run re-plan)
+        # A held leg has no buy terminal to fly to — you start already loaded, so
+        # the "buy" position is the current position (`start`) and there's no empty
+        # approach or extra buy-stop.
+        bp = start if held else nav.pois.get(row["buy_poi_id"])
         sp = nav.pois.get(row["sell_poi_id"])
         approach = travel_cost(nav, pos, bp, t_ref) if (pos is not None and bp is not None) else None
         haul = travel_cost(nav, bp, sp, t_ref) if (bp is not None and sp is not None) else None
         if haul is None or haul["distance_m"] is None:
             feasible = False
-        if row["buy_poi_id"] != prev_sell:        # buying where we just sold = one stop
+        if not held and row["buy_poi_id"] != prev_sell:   # buying where we just sold = one stop
             stops += 1
         stops += 1
         total_profit += row["trade_profit"] or 0
@@ -2422,7 +2426,8 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
                 "buy_updated_at", "sell_updated_at")
         } | {
             "scu": row["max_scu"], "profit": row["trade_profit"], "buy_cost": row["buy_cost"],
-            "to_buy": _leg_view(approach) if approach else None,
+            "held": held,
+            "to_buy": None if held else (_leg_view(approach) if approach else None),
             "haul": _leg_view(haul) if haul else None,
         })
         pos = sp if sp is not None else pos
@@ -2502,6 +2507,28 @@ def _route_score(summary, optimize, deadhead_weight) -> float:
     return summary["total_profit"] / eff_hours if eff_hours > 0 else 0.0
 
 
+def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight) -> list[dict]:
+    """Multi-start greedy over the candidate pool: an unforced chain plus one
+    forced from each of the top seeds, keeping the best-scoring complete route.
+    Returns the chosen trade rows (empty if nothing chains)."""
+    if not cands or max_legs < 1:
+        return []
+    routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
+                            deadhead_weight=deadhead_weight)]
+    for seed in cands[:_TRADE_RESTARTS]:
+        routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
+                                    first=seed, deadhead_weight=deadhead_weight))
+    best, best_score = [], -1.0
+    for chosen in routes:
+        if not chosen:
+            continue
+        score = _route_score(_cost_route(nav, chosen, start, t_ref)["summary"],
+                             optimize, deadhead_weight)
+        if score > best_score:
+            best, best_score = chosen, score
+    return best
+
+
 def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      start_pos=None, max_stops=6, commodities=None, system=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
@@ -2532,23 +2559,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
         empty["start"] = _start_ref(start)
         return empty
 
-    # multi-start greedy: an unforced chain plus one forced from each top seed.
-    routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
-                            deadhead_weight=deadhead_weight)]
-    for seed in cands[:_TRADE_RESTARTS]:
-        routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
-                                    first=seed, deadhead_weight=deadhead_weight))
-
-    best, best_score = None, -1.0
-    for chosen in routes:
-        if not chosen:
-            continue
-        costed = _cost_route(nav, chosen, start, t_ref)
-        score = _route_score(costed["summary"], optimize, deadhead_weight)
-        if score > best_score:
-            best, best_score = costed, score
-    if best is None:
-        best = _cost_route(nav, [], start, t_ref)
+    chosen = _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight)
+    best = _cost_route(nav, chosen, start, t_ref)
     best["summary"]["usable_scu"] = float(usable_scu)
     best["start"] = _start_ref(start)
     return best
@@ -2589,6 +2601,146 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
     costed["summary"]["usable_scu"] = float(usable_scu)
     costed["start"] = _start_ref(start)
     return costed
+
+
+def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
+                   optimize) -> tuple[dict | None, "Poi | None"]:
+    """The best buyer for cargo the player is already carrying (sunk cost), as a
+    sell-only leg. The buy is already paid for, so buy_cost going forward is 0 and
+    profit is the realized spread over the recorded buy price. Prefers a buyer in
+    the locked `system`, but a held load must be offloadable somewhere — falls back
+    to any system if the lock strands it. Returns (leg_row, sell_poi) or
+    (None, None) when nothing buys the commodity."""
+    name = held.get("commodity")
+    scu = int(round(float(held.get("scu") or 0)))
+    buy_price = int(held.get("buy_price") or 0)
+    cnorm = (name or "").strip().lower()
+
+    def buyers(locked):
+        out = []
+        for p in prices:
+            if (p.get("commodity") or "").strip().lower() != cnorm:
+                continue
+            if locked and system and p.get("system") != system:
+                continue
+            if not p.get("sell") or not _price_fresh(p, max_age_s, now):
+                continue
+            if nav.pois.get(p.get("poi_id")) is None:
+                continue
+            out.append(p)
+        return out
+
+    pts = buyers(True) or buyers(False)
+    if not pts or scu <= 0:
+        return None, None
+    best, best_score, best_poi = None, -1e18, None
+    for p in pts:
+        sp = nav.pois.get(p["poi_id"])
+        leg = travel_cost(nav, start, sp, t_ref) if start is not None else None
+        eta = _leg_time_s(leg["distance_m"]) if (leg and leg["distance_m"] is not None) else None
+        revenue = int(p["sell"]) * scu
+        if optimize == "profit":
+            score = revenue
+        else:
+            hours = ((eta or 0.0) + STOP_DWELL_S) / 3600.0
+            score = revenue / hours if hours > 0 else float(revenue)
+        if score > best_score:
+            best, best_score, best_poi = p, score, sp
+    margin = int(best["sell"]) - buy_price
+    row = {
+        "commodity": name,
+        "buy_terminal_id": None, "buy_terminal": "carried cargo",
+        "buy_poi_id": (start.id if start is not None else None),
+        "buy_system": (start.system if start is not None else None),
+        "sell_terminal_id": best.get("terminal_id"), "sell_terminal": best.get("terminal"),
+        "sell_poi_id": best.get("poi_id"), "sell_system": best.get("system"),
+        "buy_price": buy_price, "sell_price": int(best["sell"]),
+        "profit_per_scu": margin,
+        "supply_scu": 0, "demand_scu": best.get("scu_sell_stock") or 0,
+        "buy_updated_at": None, "sell_updated_at": best.get("updated_at"),
+        "distance_m": None, "eta_s": None, "cross_system": None, "via_gate": None,
+        "max_scu": scu, "trade_profit": int(round(margin * scu)), "buy_cost": 0,
+        "profit_per_hour": None, "held": True,
+    }
+    return row, best_poi
+
+
+def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
+                       start_pos=None, held=None, max_stops=6, commodities=None,
+                       system=None, sort="per_hour", budget=None,
+                       deadhead_weight=1.0, max_age_s=None, now_ts=None,
+                       t_ref=None) -> dict:
+    """Re-solve a trade route from the player's *current* position mid-run,
+    carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
+    already loaded with cargo that's been paid for but not yet sold. The new plan
+    must offload it first (best reachable buyer for that commodity — the sell leg
+    is flagged `held`, has no buy approach, and needs no forward capital), then
+    chain further trades with the freed hold. Without `held` this is just
+    plan_trade_route from the live position. Returns the {summary, legs, start}
+    shape; the summary carries `carried_commodity`/`carried_scu` when a sunk load
+    was folded in."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    optimize = "profit" if sort == "profit" else "per_hour"
+    now = now_ts if now_ts is not None else time.time()
+
+    held_scu = float(held.get("scu")) if (held and held.get("scu")) else 0.0
+    if held_scu <= 0:
+        return plan_trade_route(
+            nav, prices, usable_scu, start_id=start_id, start_pos=start_pos,
+            max_stops=max_stops, commodities=commodities, system=system, sort=sort,
+            budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
+            now_ts=now_ts, t_ref=t_ref)
+
+    start = None
+    if start_id is not None:
+        start = nav.pois.get(start_id)
+    elif start_pos is not None:
+        start = position_start(nav, start_pos)
+
+    held_row, sell_poi = _held_sell_leg(
+        nav, prices, held, start, system=system, max_age_s=max_age_s, now=now,
+        t_ref=t_ref, optimize=optimize)
+    if held_row is None:
+        empty = _cost_route(nav, [], start, t_ref)
+        empty["summary"]["reason"] = f"no known buyer for held {held.get('commodity')}"
+        empty["summary"]["usable_scu"] = float(usable_scu)
+        empty["summary"]["carried_commodity"] = held.get("commodity")
+        empty["summary"]["carried_scu"] = held_scu
+        empty["start"] = _start_ref(start)
+        return empty
+
+    # Chain further trades from the sell terminal with the freed (full) hold.
+    cands = _trade_candidates(prices, usable_scu, system=system,
+                              commodities=commodities, budget=budget,
+                              max_age_s=max_age_s, now_ts=now)
+    cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
+    cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,
+                        deadhead_weight) if cont_legs else []
+    best = _cost_route(nav, [held_row] + cont, start, t_ref)
+    best["summary"]["usable_scu"] = float(usable_scu)
+    best["summary"]["carried_commodity"] = held.get("commodity")
+    best["summary"]["carried_scu"] = held_scu
+    best["start"] = _start_ref(start)
+    return best
+
+
+def trade_leg_realized(leg: dict) -> int | None:
+    """Realized profit for a completed leg. Prefers the actual buy/sell figures the
+    player entered at the terminal (`actual_buy_price`/`actual_buy_scu`,
+    `actual_sell_price`/`actual_sell_scu`) over the plan's — so earnings stats
+    reflect what really happened, not UEX's possibly-stale scrape. Each side falls
+    back to its planned value when unentered; a held leg's buy is the sunk
+    `buy_price`/`scu`. Returns the plan's `profit` when nothing was entered."""
+    bp, bs = leg.get("actual_buy_price"), leg.get("actual_buy_scu")
+    sp, ss = leg.get("actual_sell_price"), leg.get("actual_sell_scu")
+    if bp is None and bs is None and sp is None and ss is None:
+        return leg.get("profit")                       # nothing entered — planned
+    buy_price = bp if bp is not None else leg.get("buy_price")
+    buy_scu = bs if bs is not None else leg.get("scu")
+    sell_price = sp if sp is not None else leg.get("sell_price")
+    sell_scu = ss if ss is not None else leg.get("scu")
+    return int(round((sell_price or 0) * (sell_scu or 0)
+                     - (buy_price or 0) * (buy_scu or 0)))
 
 
 def derive_guild_leaderboard(runs) -> list[dict]:
