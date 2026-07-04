@@ -1,17 +1,19 @@
 # Trade Route Planner — design
 
-**Status:** SHIPPED through **v0.31.0** (2026-07-04, deployed) — **all 6 build steps
-done.** Backlog #21, previously parked; revisited with a concrete answer to the
-parking reason (see *Why revisit now* below). This doc began as the decision record;
-the build-status box below tracks what's actually landed. **What's live:** the full v1
-scope — feeds/crosswalk, single-trade ranking, multi-leg auto/filtered/manual solver,
-the `#/trade` app, **run/execute mode with re-plan-from-live-position**, a post-plan
-enhancement pass (budget cap / minimize-deadhead / price-staleness), **actual buy/sell
-figure capture** at execution, **step 6 History + trade stats** (RECENT TRADES
-panel + Org Intel Trading section over realized profit), and **saved routes /
-favorites** (name a plan config, reload it to re-solve against live prices).
-Nothing from the v1 scope remains deferred; only the v2+ ideas (teammate-lane
-awareness, hazard markers) are still parked.
+**Status:** SHIPPED through **v0.33.0** (2026-07-04, deployed) — **all 6 build steps
+done**, plus a v0.33.0 freshness-UX polish pass. Backlog #21, previously parked;
+revisited with a concrete answer to the parking reason (see *Why revisit now* below).
+This doc began as the decision record; the build-status box below tracks what's
+actually landed. **What's live:** the full v1 scope — feeds/crosswalk, single-trade
+ranking, multi-leg auto/filtered/manual solver, the `#/trade` app, **run/execute mode
+with re-plan-from-live-position**, a post-plan enhancement pass (budget cap /
+minimize-deadhead / price-staleness), **actual buy/sell figure capture** at execution,
+**step 6 History + trade stats** (RECENT TRADES panel + Org Intel Trading section over
+realized profit), **saved routes / favorites** (name a plan config, reload it to
+re-solve against live prices), and a **freshness-UX polish** (price-age filter on by
+default at 2 days, down from opt-in at 7; per-row scrape age + staleness banner on the
+best-trades board). Nothing from the v1 scope remains deferred; only the v2+ ideas
+(teammate-lane awareness, hazard markers) are still parked.
 
 ## Build status (what's landed)
 
@@ -26,6 +28,7 @@ awareness, hazard markers) are still parked.
 | — | **Actual buy/sell figure capture** at execution (honest earnings vs UEX scrape) | ✅ **v0.30.0** |
 | 6 | History + trade stats (RECENT TRADES panel + Org Intel **Trading** section) | ✅ **v0.31.0** |
 | — | **Favorite routes** (save config, re-plan on load) | ✅ **v0.32.0** |
+| — | **Freshness-UX polish** (age filter on by default @ 2d, per-row age + staleness banner) | ✅ **v0.33.0** |
 
 Key code (grep the banners per root `CLAUDE.md`): solver in `nav_core`
 (`plan_trade_route` / `cost_trade_legs` / `replan_trade_route` / `_solve_route` /

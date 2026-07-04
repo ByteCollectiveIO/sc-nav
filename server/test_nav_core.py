@@ -2177,6 +2177,103 @@ class TradeSolverTests(unittest.TestCase):
                            nav_core._route_score(high, "per_hour", 3.0))
 
 
+class TradeDangerAvoidTests(unittest.TestCase):
+    """nav_core pirate danger-board avoidance (#24): the avoid_poi_ids / avoid_pairs
+    solver filter and the trade_avoid_sets / trade_leg_warnings pure helpers. Reuses
+    the Gold A->B, Iron B->C fixture from the solver tests."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": None}
+
+    def _prices(self):
+        return [self._pt("Gold", 1, self.A, buy=100, scu_buy=500),
+                self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500),
+                self._pt("Iron", 3, self.B, buy=50, scu_buy=500),
+                self._pt("Iron", 4, self.C, sell=200, scu_sell_stock=500)]
+
+    # --- trade_avoid_sets ---------------------------------------------------
+    def test_avoid_sets_split_point_and_lane(self):
+        warnings = [{"kind": "point", "anchor_a_poi": self.A, "anchor_b_poi": None},
+                    {"kind": "lane", "anchor_a_poi": self.B, "anchor_b_poi": self.C}]
+        pois, pairs = nav_core.trade_avoid_sets(warnings)
+        self.assertEqual(pois, frozenset({self.A}))
+        self.assertEqual(pairs, frozenset({frozenset({self.B, self.C})}))
+
+    def test_avoid_sets_skip_unanchored_and_degenerate(self):
+        warnings = [{"kind": "point", "anchor_a_poi": None, "anchor_b_poi": None},
+                    {"kind": "lane", "anchor_a_poi": self.A, "anchor_b_poi": None},
+                    {"kind": "lane", "anchor_a_poi": self.A, "anchor_b_poi": self.A}]
+        self.assertEqual(nav_core.trade_avoid_sets(warnings), (frozenset(), frozenset()))
+
+    def test_avoid_sets_empty_input(self):
+        self.assertEqual(nav_core.trade_avoid_sets(None), (frozenset(), frozenset()))
+        self.assertEqual(nav_core.trade_avoid_sets([]), (frozenset(), frozenset()))
+
+    # --- avoid in the solver ------------------------------------------------
+    def test_avoid_poi_drops_every_trade_touching_it(self):
+        # B is Gold's sell and Iron's buy — warning at B kills both trades.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_poi_ids={self.B})
+        self.assertEqual(plan["legs"], [])
+
+    def test_avoid_poi_keeps_unaffected_trades(self):
+        # C is only Iron's sell — warning at C drops Iron, Gold A->B survives.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_poi_ids={self.C})
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Gold"})
+
+    def test_avoid_pair_drops_only_the_snared_lane(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_pairs={frozenset({self.B, self.C})})
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Gold"})
+
+    def test_no_avoid_matches_baseline(self):
+        base = nav_core.plan_trade_route(NAV, self._prices(), 100,
+                                         start_id=self.A, sort="profit")
+        same = nav_core.plan_trade_route(NAV, self._prices(), 100, start_id=self.A,
+                                         sort="profit", avoid_poi_ids=None, avoid_pairs=None)
+        self.assertEqual(same["summary"]["total_profit"], base["summary"]["total_profit"])
+        self.assertEqual(len(same["legs"]), len(base["legs"]))
+
+    # --- trade_leg_warnings -------------------------------------------------
+    def test_leg_warnings_point_touches_an_endpoint(self):
+        leg = {"buy_poi_id": self.A, "sell_poi_id": self.B}
+        w = {"id": 1, "kind": "point", "anchor_a_poi": self.B, "anchor_b_poi": None,
+             "severity": "deadly"}
+        self.assertEqual([h["id"] for h in nav_core.trade_leg_warnings(leg, [w])], [1])
+
+    def test_leg_warnings_lane_needs_both_endpoints(self):
+        leg = {"buy_poi_id": self.A, "sell_poi_id": self.B}
+        exact = {"id": 1, "kind": "lane", "anchor_a_poi": self.B, "anchor_b_poi": self.A,
+                 "severity": "active"}   # same pair, order-independent
+        partial = {"id": 2, "kind": "lane", "anchor_a_poi": self.A, "anchor_b_poi": self.C,
+                   "severity": "active"}  # shares only A -> no transit modeling in v1
+        self.assertEqual([h["id"] for h in nav_core.trade_leg_warnings(leg, [exact, partial])], [1])
+
+    def test_leg_warnings_deadliest_first(self):
+        leg = {"buy_poi_id": self.A, "sell_poi_id": self.B}
+        ws = [{"id": 1, "kind": "point", "anchor_a_poi": self.A, "severity": "sighted"},
+              {"id": 2, "kind": "point", "anchor_a_poi": self.B, "severity": "deadly"}]
+        self.assertEqual([h["id"] for h in nav_core.trade_leg_warnings(leg, ws)], [2, 1])
+
+    def test_leg_warnings_none_when_untouched(self):
+        leg = {"buy_poi_id": self.A, "sell_poi_id": self.B}
+        w = {"id": 1, "kind": "point", "anchor_a_poi": self.C, "severity": "deadly"}
+        self.assertEqual(nav_core.trade_leg_warnings(leg, [w]), [])
+
+
 class TradeReplanTests(unittest.TestCase):
     """nav_core.replan_trade_route — mid-run re-solve from the live position,
     carrying forward sunk (bought-not-sold) cargo (#21 step 5). Uses real Stanton

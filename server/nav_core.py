@@ -2344,12 +2344,16 @@ def _price_fresh(p, max_age_s, now) -> bool:
 
 
 def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
-                      budget=None, max_age_s=None, now_ts=None) -> list[dict]:
+                      budget=None, max_age_s=None, now_ts=None,
+                      avoid_poi_ids=frozenset(), avoid_pairs=frozenset()) -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
     name set) restricts to filtered mode; `system` keeps both ends in-system.
     `budget` caps each load to what the player can afford; `max_age_s` drops price
-    points older than that (stale-data opt-out)."""
+    points older than that (stale-data opt-out). `avoid_poi_ids` drops any trade
+    that buys or sells at a warned POI (a camped station); `avoid_pairs` (a set of
+    frozenset({buy_poi, sell_poi})) drops the exact snared lane — both from the
+    pirate danger board (#24)."""
     now = now_ts if now_ts is not None else time.time()
     cset = {c.strip().lower() for c in commodities} if commodities else None
     buyers: dict[str, list] = {}
@@ -2370,8 +2374,13 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     for name, srcs in buyers.items():
         for dst in sellers.get(name, ()):
             for src in srcs:
-                if src.get("poi_id") == dst.get("poi_id"):
+                sid, did = src.get("poi_id"), dst.get("poi_id")
+                if sid == did:
                     continue
+                if sid in avoid_poi_ids or did in avoid_poi_ids:
+                    continue            # a camped buy/sell POI (avoid mode, #24)
+                if avoid_pairs and frozenset((sid, did)) in avoid_pairs:
+                    continue            # a snared buy->sell lane (avoid mode, #24)
                 margin = int(dst["sell"]) - int(src["buy"])
                 if margin <= 0:
                     continue
@@ -2380,6 +2389,47 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                     rows.append(row)
     rows.sort(key=lambda r: -(r["trade_profit"] or 0))
     return rows
+
+
+def trade_avoid_sets(warnings) -> tuple[frozenset, frozenset]:
+    """Turn active anchored danger warnings (#24) into the two exclusion sets the
+    trade solver understands: `avoid_poi_ids` (POIs never to buy/sell at — a camped
+    `point` warning's anchor) and `avoid_pairs` (exact snared buy<->sell lanes — a
+    `lane` warning's two anchors as a frozenset). A warning missing the anchor(s) it
+    needs is board-only intel and contributes nothing. Order-independent; safe on an
+    empty/None list."""
+    poi_ids, pairs = set(), set()
+    for w in warnings or ():
+        a, b = w.get("anchor_a_poi"), w.get("anchor_b_poi")
+        if w.get("kind") == "lane":
+            if a is not None and b is not None and a != b:
+                pairs.add(frozenset((a, b)))
+        elif a is not None:                     # point (a lane missing an end is inert)
+            poi_ids.add(a)
+    return frozenset(poi_ids), frozenset(pairs)
+
+
+def trade_leg_warnings(leg: dict, warnings) -> list[dict]:
+    """The active danger warnings (#24) that touch one costed trade leg — for the
+    'warn' planner mode's per-leg badges. A `point` warning touches a leg when its
+    anchor is the leg's buy or sell POI (loading/unloading at a camped station); a
+    `lane` warning touches when its two anchors ARE the leg's buy and sell POIs
+    (flying the exact snared lane). Deadliest first. Detecting a snare the leg merely
+    flies *past* (between other POIs) is v2 — the straight-line nav model has no
+    waypoints to test against."""
+    ends = {leg.get("buy_poi_id"), leg.get("sell_poi_id")}
+    ends.discard(None)
+    hits = []
+    for w in warnings or ():
+        a, b = w.get("anchor_a_poi"), w.get("anchor_b_poi")
+        if w.get("kind") == "lane":
+            if a is not None and b is not None and len(ends) == 2 and {a, b} == ends:
+                hits.append(w)
+        elif a is not None and a in ends:
+            hits.append(w)
+    rank = {"deadly": 0, "active": 1, "sighted": 2}
+    hits.sort(key=lambda w: rank.get(w.get("severity"), 9))
+    return hits
 
 
 def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> dict:
@@ -2532,7 +2582,8 @@ def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight) 
 def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      start_pos=None, max_stops=6, commodities=None, system=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
-                     max_age_s=None, now_ts=None, t_ref=None) -> dict:
+                     max_age_s=None, now_ts=None, t_ref=None,
+                     avoid_poi_ids=None, avoid_pairs=None) -> dict:
     """Auto / filtered trade-route solver: pick and order the buy->sell trades that
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
     `usable_scu` hold, starting from a POI (`start_id`) or live position
@@ -2543,6 +2594,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     {summary, legs, start} — the same shape cost_trade_legs produces for manual mode."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     optimize = "profit" if sort == "profit" else "per_hour"
+    avoid_poi_ids = frozenset(avoid_poi_ids or ())
+    avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))
     start = None
     if start_id is not None:
         start = nav.pois.get(start_id)
@@ -2550,7 +2603,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
         start = position_start(nav, start_pos)
 
     cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
-                              budget=budget, max_age_s=max_age_s, now_ts=now_ts)
+                              budget=budget, max_age_s=max_age_s, now_ts=now_ts,
+                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -2669,7 +2723,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        start_pos=None, held=None, max_stops=6, commodities=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
-                       t_ref=None) -> dict:
+                       t_ref=None, avoid_poi_ids=None, avoid_pairs=None) -> dict:
     """Re-solve a trade route from the player's *current* position mid-run,
     carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
     already loaded with cargo that's been paid for but not yet sold. The new plan
@@ -2682,6 +2736,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     optimize = "profit" if sort == "profit" else "per_hour"
     now = now_ts if now_ts is not None else time.time()
+    avoid_poi_ids = frozenset(avoid_poi_ids or ())
+    avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))
 
     held_scu = float(held.get("scu")) if (held and held.get("scu")) else 0.0
     if held_scu <= 0:
@@ -2689,7 +2745,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             nav, prices, usable_scu, start_id=start_id, start_pos=start_pos,
             max_stops=max_stops, commodities=commodities, system=system, sort=sort,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
-            now_ts=now_ts, t_ref=t_ref)
+            now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
 
     start = None
     if start_id is not None:
@@ -2709,10 +2765,13 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
         empty["start"] = _start_ref(start)
         return empty
 
-    # Chain further trades from the sell terminal with the freed (full) hold.
+    # Chain further trades from the sell terminal with the freed (full) hold. The
+    # held-cargo sell leg above is left unfiltered — a sunk load must be offloadable
+    # even if its only buyer sits in a warned zone — but the continuation avoids danger.
     cands = _trade_candidates(prices, usable_scu, system=system,
                               commodities=commodities, budget=budget,
-                              max_age_s=max_age_s, now_ts=now)
+                              max_age_s=max_age_s, now_ts=now,
+                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
     cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,
                         deadhead_weight) if cont_legs else []

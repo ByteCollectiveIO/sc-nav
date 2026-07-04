@@ -42,6 +42,7 @@
     --accent-wash: rgba(79,195,247,.12); /* active tab/pill fill */
     --sel-wash: rgba(255,213,79,.12);    /* selected table row */
     --warn-wash: rgba(255,179,0,.05);    /* armed/pending row tint */
+    --bad-wash: rgba(239,83,80,.10);     /* danger hover/wash tint (#24) */
     --focus-ring: rgba(79,195,247,.2);   /* soft cyan focus halo */
     --shimmer: rgba(216,225,238,.07);    /* skeleton-loading sweep */
     --inset-tint: rgba(255,255,255,.02); /* faint raised-inset lift */
@@ -62,6 +63,7 @@
     --accent-wash: rgba(12,132,196,.12);
     --sel-wash: rgba(176,124,0,.16);
     --warn-wash: rgba(179,99,26,.08);
+    --bad-wash: rgba(198,40,40,.10);
     --focus-ring: rgba(12,132,196,.32);
     --shimmer: rgba(17,21,28,.06);
     --inset-tint: rgba(17,21,28,.03);
@@ -81,6 +83,7 @@
       --accent-wash: rgba(12,132,196,.12);
       --sel-wash: rgba(176,124,0,.16);
       --warn-wash: rgba(179,99,26,.08);
+      --bad-wash: rgba(198,40,40,.10);
       --focus-ring: rgba(12,132,196,.32);
       --shimmer: rgba(17,21,28,.06);
       --inset-tint: rgba(17,21,28,.03);
@@ -194,6 +197,9 @@
     background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
   #search { width: 100%; }
   input.ti:focus, select.sel:focus { outline: none; border-color: var(--accent); }
+  /* Placeholders must meet the same contrast bar as body text (DESIGN.md), not the
+     UA faint-gray default. --dim is the AA-tuned muted token in both themes. */
+  input.ti::placeholder, textarea.ti::placeholder { color: var(--dim); opacity: 1; }
 
   .custom-star { color: var(--warn); }
   .node-dot { color: var(--node); }
@@ -574,6 +580,60 @@
     padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
   .lfg-joined { font-size: 11px; color: var(--dim); }
 
+  /* pirate danger board (#24) */
+  .warn-blurb { margin: 0 0 12px; font-size: 12px; }
+  .warn-compose { display: flex; flex-direction: column; gap: 10px; }
+  .warn-seg { display: flex; gap: 8px; }
+  .warn-seg button { flex: 1; padding: 8px 10px; }
+  .warn-seg small { display: block; font-size: 10px; color: var(--dim); font-weight: 400;
+    text-transform: none; letter-spacing: 0; margin-top: 2px; }
+  .warn-seg button.active small { color: var(--ink-on-accent); }
+  .warn-seg-sm button { flex: 0 0 auto; padding: 6px 12px; min-height: 34px; }
+  .warn-fields { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+  .warn-choice { display: flex; flex-direction: column; gap: 4px; }
+  .warn-choice-h { font-size: 11px; letter-spacing: .04em; color: var(--dim);
+    text-transform: uppercase; }
+  .warn-note-in { width: 100%; }
+  .warn-note-count { font-size: 11px; text-align: right; margin-top: 2px; }
+  .warn-note-count.near { color: var(--warn); }
+  .warn-post-row { display: flex; gap: 10px; align-items: center; }
+  .warn-hint { color: var(--dim); font-size: 11px; }
+  .warn-hint.bad { color: var(--bad); }
+  .warn-hint.ok { color: var(--good); }
+  /* glance-read strip: one big tabular count leads the board (the system's readout signature) */
+  .warn-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; }
+  .warn-stats .readout { min-width: 96px; }
+  .warn-stats .readout.bad .value { color: var(--bad); }
+  .warn-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+  .warn-fgroup { display: inline-flex; gap: 6px; align-items: center; }
+  .warn-fgroup-h { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .warn-fsep { width: 1px; align-self: stretch; min-height: 20px; background: var(--border); margin: 0 4px; }
+  .warn-empty { color: var(--dim); font-size: 13px; padding: 6px 0; }
+  .warn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  /* card: severity is carried by the badge; tint deepens once stale */
+  .warn-card { border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; background: var(--panel2); }
+  .warn-card.mine { border-color: var(--accent); }
+  .warn-card.stale { background: var(--warn-wash); }
+  .warn-card-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+  .warn-where { font-size: 15px; color: var(--text); word-break: break-word; }
+  .warn-sev { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+    padding: 3px 8px; border-radius: 12px; white-space: nowrap; }
+  .warn-sev.sev-sighted { color: var(--dim); border: 1px solid var(--border); }
+  .warn-sev.sev-active { color: var(--warn); border: 1px solid var(--warn); }
+  .warn-sev.sev-deadly { color: var(--ink-on-accent); background: var(--bad); }
+  .warn-sub { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  .warn-note { font-size: 13px; margin: 6px 0; white-space: pre-wrap; word-break: break-word; }
+  .warn-meta { font-size: 11px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .warn-stale-tag { color: var(--warn); font-weight: 600; }
+  .warn-confirms { color: var(--good); }
+  .warn-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  .warn-actions button { min-height: 34px; }
+  /* the offensive CTA — turn a warning into a hunt op; accent-outlined as the focal action */
+  .warn-actions .warn-hunt { border-color: var(--accent); color: var(--accent); }
+  .warn-actions .warn-hunt:hover { background: var(--accent-wash); }
+  .warn-err { font-size: 12px; color: var(--bad); }
+
   /* resource forecast */
   .fc-row { display: grid; grid-template-columns: 130px 1fr 46px 56px;
     gap: 10px; align-items: center; padding: 3px 0; font-size: 13px; }
@@ -640,6 +700,8 @@
   .online-badge:hover { background: var(--accent-wash); }
   .online-badge[hidden] { display: none; }
   .lfg-badge { border-color: var(--warn); color: var(--warn); margin-top: -4px; }
+  .warn-badge { border-color: var(--bad); color: var(--bad); }
+  .warn-badge:hover { background: var(--bad-wash); }
   /* the two live badges share one centred row instead of stacking as loose pills */
   .launcher-badges { display: flex; justify-content: center; align-items: center;
     gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
@@ -1096,6 +1158,17 @@
   .trade-leg-card .tl-econ b { color: var(--good); }
   .trade-leg-card .tl-move { font-size: 11px; color: var(--dim); margin-top: 3px; }
   .trade-leg-card .tl-move .gate { color: var(--warn); }
+  /* Pirate danger board (#24): the danger toggle, a per-leg warning line, and the
+     route-level callout. Severity color matches the Danger Board's ramp. */
+  .trade-danger-row { align-items: center; }
+  .trade-danger-link { color: var(--accent); }
+  .trade-leg-card.danger { background: var(--bad-wash); }
+  .trade-leg-card .tl-danger { font-size: 12px; font-weight: 600; color: var(--warn); margin: 4px 0; }
+  .trade-leg-card .tl-danger.sev-deadly { color: var(--bad); }
+  .trade-leg-card .tl-danger.sev-sighted { color: var(--dim); font-weight: 400; }
+  .route-danger { color: var(--bad); font-size: 13px; margin: 8px 0 0;
+    border: 1px solid var(--bad); border-radius: 6px; padding: 8px 10px; background: var(--bad-wash); }
+  .route-danger b { color: var(--bad); }
   /* Live "best trades right now" suggestion board (manual-mode helper). Each row
      decomposes the economics — buy/sell prices, the per-SCU spread, and (with a
      ship set) the per-run throughput — so the headline number is never ambiguous. */
@@ -1712,11 +1785,12 @@
 <main>
   <div id="launcher-view" class="launcher" hidden>
     <h2 class="launcher-head">Your org toolkit</h2>
-    <p class="launcher-sub">Seven tools, one org. New here? Start with the Resource Navigator —
+    <p class="launcher-sub">Nine tools, one org. New here? Start with the Resource Navigator —
       the rest build on it.</p>
     <div class="launcher-badges">
       <a id="online-badge" class="online-badge" href="#/online" hidden></a>
       <a id="lfg-badge" class="online-badge lfg-badge" href="#/lfg" hidden></a>
+      <a id="warn-badge" class="online-badge warn-badge" href="#/pirates" hidden></a>
     </div>
     <a id="launcher-resume" class="launcher-resume" hidden></a>
     <div class="app-grid">
@@ -1768,6 +1842,12 @@
         <div class="app-name">Group Finder</div>
         <div class="app-desc">Rally a crew right now — post that you need players or want to
           join, filter by playstyle, and group up without waiting for a scheduled event.</div>
+      </a>
+      <a class="app-card" href="#/pirates">
+        <img class="app-logo" src="/images/danger_zone_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+        <div class="app-name">Danger Board</div>
+        <div class="app-desc">Warn your org about pirate snares and camped stations — post a danger
+          zone, watch live threats on your trade lanes, or go hunt the pirates yourself.</div>
       </a>
     </div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
@@ -2148,6 +2228,21 @@
       the <b>Event Planner</b> instead.
     </div>
     <div class="muted" id="lfg-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+
+    <h2>DANGER BOARD</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Warnings turn <span style="color:var(--warn);">stale</span> after
+      <input id="warn-stale" type="number" min="1" step="1" style="width:70px;"> min,
+      and age off the board after
+      <input id="warn-ageoff" type="number" min="1" step="1" style="width:70px;"> min
+      <button id="warn-life-save">Save</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Pirate danger warnings are meant to be <b>right now</b>, so they age off fast by default
+      (an hour). A warning shows fresh, goes stale as it nears the age-off, then drops off unless
+      someone confirms it's still active. Stale must be less than age-off.
+    </div>
+    <div class="muted" id="warn-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
     <h2>DISCORD NOTIFICATIONS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -2704,6 +2799,17 @@
           Live prices and profit fill in as you go.</p>
       </div>
 
+      <div class="route-row trade-danger-row" style="margin-top:12px;">
+        <span class="muted" style="font-size:12px;">Pirate danger
+          <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
+        <span class="trade-seg" id="trade-avoid" role="group" aria-label="Pirate danger handling">
+          <button class="active" data-avoid="ignore" type="button">Ignore</button>
+          <button data-avoid="warn" type="button">Warn</button>
+          <button data-avoid="avoid" type="button">Avoid</button>
+        </span>
+        <span class="muted trade-danger-hint" id="trade-avoid-hint" style="font-size:11px;"></span>
+      </div>
+
       <datalist id="trade-commodities"></datalist>
       <div class="route-actions">
         <button id="trade-plan" class="active">Plan trade run</button>
@@ -2849,6 +2955,69 @@
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div><!-- /lfg-view -->
+
+  <div id="pirates-view" hidden>
+    <div class="panel" id="warn-compose-panel">
+      <h2>REPORT A DANGER ZONE</h2>
+      <p class="muted warn-blurb">Pirates snare popular buy&rarr;sell lanes and camp busy
+        stations. Warn your org, or browse the board to go hunt them. Warnings expire on their
+        own; anyone can confirm one that's still active to keep it up.</p>
+      <div class="warn-compose">
+        <div class="warn-seg" id="warn-kind" role="group" aria-label="Danger type">
+          <button type="button" data-kind="point" class="active">A location
+            <small>camped station or POI</small></button>
+          <button type="button" data-kind="lane">A trade lane
+            <small>a snare between two points</small></button>
+        </div>
+        <div class="warn-fields">
+          <label class="on-field on-field-grow" id="warn-a-field"><span id="warn-a-lbl">Where's the danger?</span>
+            <span class="poi-pick"><input id="warn-a" class="ti" type="text" maxlength="120"
+              autocomplete="off" placeholder="pick a POI, or just type where"></span>
+          </label>
+          <label class="on-field on-field-grow" id="warn-b-field" hidden>&hellip; and the other end
+            <span class="poi-pick"><input id="warn-b" class="ti" type="text" maxlength="120"
+              autocomplete="off" placeholder="the destination end of the lane"></span>
+          </label>
+        </div>
+        <div class="warn-fields">
+          <div class="warn-choice">
+            <span class="warn-choice-h">Who</span>
+            <div class="warn-seg warn-seg-sm" id="warn-threat" role="group" aria-label="Threat type">
+              <button type="button" data-threat="pvp" class="active">☠️ Players</button>
+              <button type="button" data-threat="pve">🤖 NPCs</button>
+            </div>
+          </div>
+          <div class="warn-choice">
+            <span class="warn-choice-h">How bad</span>
+            <div class="warn-seg warn-seg-sm" id="warn-severity" role="group" aria-label="Severity">
+              <button type="button" data-sev="sighted">Sighted</button>
+              <button type="button" data-sev="active" class="active">Active</button>
+              <button type="button" data-sev="deadly">Deadly</button>
+            </div>
+          </div>
+        </div>
+        <textarea id="warn-note" class="ti warn-note-in" rows="2" maxlength="280"
+          aria-describedby="warn-note-count"
+          placeholder="What did you see? Ships, how many, a snare? (optional)"></textarea>
+        <div class="warn-note-count muted" id="warn-note-count">0 / 280</div>
+        <div class="warn-post-row">
+          <label class="on-invis warn-announce" id="warn-announce-row" hidden>
+            <input id="warn-announce" type="checkbox"> 📣 Announce to the org's Discord</label>
+          <button id="warn-post" type="button">Post warning</button>
+          <span class="warn-hint" id="warn-post-hint" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>ACTIVE DANGERS <span class="muted" id="warn-hint"></span></h2>
+      <div class="warn-stats" id="warn-stats" hidden></div>
+      <div class="warn-filters" id="warn-filters"></div>
+      <div id="warn-body"></div>
+    </div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /pirates-view -->
 
   <!-- ============================================================
        Legal pages. STARTER TEXT drafted to fit this app — have a
@@ -4752,13 +4921,14 @@ const LFG_TAG_CAT = {
   PvE: "PvE", PvP: "PvP", RP: "Social", casual: "Social",
   hauling: "Logistics", trading: "Logistics", mining: "Logistics", salvage: "Logistics",
 };
-let lfgEventSeed = null;   // prefill handed to the event create form, consumed once
+let eventSeed = null;   // prefill handed to the event create form, consumed once
+                        // (set by an LFG promote or a Danger Board "organize hunt", #24)
 function promoteLfgToEvent(id) {
   const e = lfgBoard.find(x => x.id === id);
   if (!e) return;
   const tags = e.tags || [];
   const uniq = arr => [...new Set(arr)];
-  lfgEventSeed = {
+  eventSeed = {
     title: (e.note ? e.note.split("\n")[0].trim().slice(0, 120) : "") ||
       (tags.length ? tags.slice(0, 3).join(" / ") + " op" : "Group op"),
     description: e.note || "",
@@ -4931,6 +5101,306 @@ async function loadLfg() {
   renderLfgBoard(); renderLfgBadge();
 }
 
+// ---------- pirate danger board (#24) ----------
+// A community danger layer for trade routes: post a pirate snare (a lane between two
+// POIs) or a camped location (a point), tagged pvp/pve at a severity. Ephemeral +
+// WS-driven (server pushes the full board as `warnings`); GET /api/warnings seeds the
+// first paint. Composer + board live in the Danger Board app (#/pirates); it doubles
+// as a pirate-finder for members who'd rather go hunt the campers.
+let warnBoard = [];
+let warnLoadFailed = false;         // seed fetch failed → distinguish from an empty board
+let warnKind = "point";             // composer: point | lane
+let warnThreat = "pvp";             // composer: pvp | pve
+let warnSeverity = "active";        // composer: sighted | active | deadly
+let warnFilterThreat = "all";       // board filter: all | pvp | pve
+let warnFilterSev = "all";          // board filter: all | deadly | active | sighted
+let warnHideStale = false;          // board filter: drop near-expiry warnings
+
+function warnIsAdmin() { return !!(currentMe && currentMe.is_admin); }
+function renderWarnBadge() {
+  const el = $("warn-badge");
+  if (!el) return;
+  el.hidden = !warnBoard.length;
+  el.textContent = `☠️ ${warnBoard.length} danger${warnBoard.length === 1 ? "" : "s"}`;
+}
+// The human "where" for a warning: a lane names both ends, a point names one, and the
+// free-text location is the fallback when anchors didn't resolve to known POIs.
+function warnWhere(e) {
+  const a = e.anchor_a && e.anchor_a.name;
+  const b = e.anchor_b && e.anchor_b.name;
+  if (e.kind === "lane" && (a || b)) return `${a || "?"} ↔ ${b || "?"}`;
+  if (a) return a;
+  return e.location || (e.kind === "lane" ? "A trade lane" : "A location");
+}
+function updateWarnNoteCount() {
+  const el = $("warn-note-count"), ta = $("warn-note");
+  if (!el || !ta) return;
+  const n = ta.value.length;
+  el.textContent = `${n} / 280`;
+  el.classList.toggle("near", n >= 250);
+}
+function setWarnKind(kind) {
+  warnKind = kind === "lane" ? "lane" : "point";
+  $("warn-kind").querySelectorAll("button").forEach(b => {
+    const on = b.dataset.kind === warnKind;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  $("warn-b-field").hidden = warnKind !== "lane";   // second anchor is lane-only
+  const lbl = $("warn-a-lbl");
+  if (lbl) lbl.textContent = warnKind === "lane" ? "Lane start (buy end)" : "Where's the danger?";
+}
+function setWarnThreat(t) {
+  warnThreat = t === "pve" ? "pve" : "pvp";
+  $("warn-threat").querySelectorAll("button").forEach(b => {
+    const on = b.dataset.threat === warnThreat;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+function setWarnSeverity(s) {
+  warnSeverity = ["sighted", "active", "deadly"].includes(s) ? s : "active";
+  $("warn-severity").querySelectorAll("button").forEach(b => {
+    const on = b.dataset.sev === warnSeverity;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+// A survivor escaping a snare rarely stops to pick exact POIs — compose the readable
+// location from whatever they typed (a lane joins both ends), and send anchor ids only
+// when they actually picked a POI. An unanchored warning is still valid board intel.
+function warnComposeLocation(aInput, bInput) {
+  const at = aInput.value.trim();
+  if (warnKind === "lane") return [at, bInput.value.trim()].filter(Boolean).join(" ↔ ");
+  return at;
+}
+async function postWarning() {
+  const aInput = $("warn-a"), bInput = $("warn-b");
+  const announceEl = $("warn-announce");
+  const announced = !!(announceEl && announceEl.checked);
+  const anchorA = aInput.dataset.poiId ? +aInput.dataset.poiId : null;
+  const anchorB = (warnKind === "lane" && bInput.dataset.poiId) ? +bInput.dataset.poiId : null;
+  const location = warnComposeLocation(aInput, bInput);
+  const hint = $("warn-post-hint");
+  const flash = (msg, cls) => {
+    hint.textContent = msg; hint.className = "warn-hint " + cls;
+    clearTimeout(postWarning._t);
+    postWarning._t = setTimeout(() => { hint.textContent = ""; hint.className = "warn-hint"; }, cls === "ok" ? 2500 : 3200);
+  };
+  if (!anchorA && !location) { flash("Pick a POI or type where the danger is.", "bad"); return; }
+  const body = {
+    kind: warnKind, threat: warnThreat, severity: warnSeverity,
+    anchor_a: anchorA, anchor_b: anchorB, location,
+    note: $("warn-note").value.trim(), announce: announced,
+  };
+  try {
+    const r = await fetch("/api/warnings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(r.status);
+    aInput.value = ""; bInput.value = ""; aInput.dataset.poiId = ""; bInput.dataset.poiId = "";
+    aInput.parentElement.classList.remove("picked"); bInput.parentElement.classList.remove("picked");
+    $("warn-note").value = ""; updateWarnNoteCount();
+    if (announceEl) announceEl.checked = false;
+    flash(announced ? "✓ Posted & announced" : "✓ Posted", "ok");
+  } catch { flash("Couldn't post — try again.", "bad"); }
+}
+// Give a tapped action an immediate busy state; the WS `warnings` frame rebuilds the
+// card on success, so on failure we restore the button and show the reason on the card.
+function warnBusy(btn) {
+  if (!btn) return () => {};
+  const label = btn.textContent; btn.disabled = true; btn.textContent = "…";
+  return () => { if (btn.isConnected) { btn.disabled = false; btn.textContent = label; } };
+}
+function warnCardError(btn, msg) {
+  const actions = btn && btn.closest(".warn-actions");
+  if (!actions) return;
+  let err = actions.querySelector(".warn-err");
+  if (!err) { err = document.createElement("span"); err.className = "warn-err";
+    err.setAttribute("role", "alert"); actions.appendChild(err); }
+  err.textContent = msg;
+  clearTimeout(err._t);
+  err._t = setTimeout(() => { if (err.isConnected) err.remove(); }, 5000);
+}
+async function confirmWarn(id, btn) {
+  if (btn && btn.disabled) return;
+  const done = warnBusy(btn);
+  try { const r = await fetch(`/api/warnings/${id}/confirm`, { method: "POST" }); if (!r.ok) throw new Error(r.status); }
+  catch { done(); warnCardError(btn, "Couldn't reach the server — try again"); }
+}
+async function closeWarn(id, btn) {
+  if (!await confirmDialog("Clear this warning? It's removed from the board for everyone.",
+    { title: "Sound the all-clear", confirmLabel: "Clear warning", danger: true })) return;
+  const done = warnBusy(btn);
+  try { const r = await fetch(`/api/warnings/${id}`, { method: "DELETE" }); if (!r.ok) throw new Error(r.status); }
+  catch { done(); warnCardError(btn, "Couldn't reach the server — try again"); }
+}
+// The other side of the danger board (#24): not everyone wants to route around a
+// snare — some want to go kill it. "Organize hunt" turns a warning into a prefilled
+// CREATE EVENT (reusing the shared `eventSeed` + `POST /api/events`, same path as the
+// LFG promote). The organizer still fills in date/time and confirms.
+const WARN_HUNT_TYPE = { pvp: "Combat Patrol", pve: "Bounty Hunt" };
+function promoteWarningToEvent(id) {
+  const e = warnBoard.find(x => x.id === id);
+  if (!e) return;
+  const where = warnWhere(e);
+  const threatLabel = e.threat === "pvp" ? "player pirates" : "NPC pirates";
+  const desc = [`Reported ${e.severity} ${threatLabel} danger at ${where}.`];
+  if (e.note) desc.push(e.note);
+  desc.push("Rally up and go clear it.");
+  eventSeed = {
+    title: `Pirate hunt: ${where}`.slice(0, 120),
+    description: desc.join(" "),
+    types: [WARN_HUNT_TYPE[e.threat] || "Combat Patrol"],
+    categories: [e.threat === "pvp" ? "PvP" : "PvE"],
+    event_location: where,                     // where the fight happens
+    roles: [{ role: "Combat (Ship)", needed: 3 }],   // a starting roster the organizer tunes
+  };
+  location.hash = "#/events/new";
+}
+function warningCard(e) {
+  const mine = e.poster_id === myId;
+  const sev = e.severity;
+  const sevLabel = sev.charAt(0).toUpperCase() + sev.slice(1);
+  // Threat is stated once, in the sub-line (icon + full label) — the badge is left to
+  // carry severity alone so the go/no-go read isn't split across two chips.
+  const threatIcon = e.threat === "pvp" ? "☠️" : "🤖";
+  const threatLabel = e.threat === "pvp" ? "Players (PvP)" : "NPC pirates (PvE)";
+  const kindLabel = e.kind === "lane" ? "Lane snare" : "Camped location";
+  const sysTag = e.system ? ` · ${esc(e.system)}` : "";
+  const note = e.note ? `<div class="warn-note">${esc(e.note)}</div>` : "";
+  const confirms = e.confirm_count
+    ? `<span class="warn-confirms">✓ ${e.confirm_count} confirmed</span>` : "";
+  const left = e.stale
+    ? `<span class="warn-stale-tag">⏳ stale · ${fmtLeft(e.expires_s)}</span>`
+    : fmtLeft(e.expires_s);
+  const iConfirmed = (e.confirmed_ids || []).includes(myId);
+  let actions = `<button type="button" data-confirm="${e.id}"${iConfirmed ? " disabled" : ""}>` +
+    `${iConfirmed ? "Confirmed ✓" : "Still there?"}</button>` +
+    `<button type="button" class="warn-hunt" data-hunt="${e.id}" ` +
+    `title="Organize an org op to go clear this danger">⚔ Organize hunt</button>`;
+  if (mine || warnIsAdmin()) actions += `<button type="button" data-clear="${e.id}">All clear</button>`;
+  return `<div class="warn-card sev-${sev}${mine ? " mine" : ""}${e.stale ? " stale" : ""}">` +
+    `<div class="warn-card-head">` +
+      `<span class="warn-sev sev-${sev}">${esc(sevLabel)}</span>` +
+      `<span class="warn-where">${esc(warnWhere(e))}</span>` +
+    `</div>` +
+    `<div class="warn-sub">${threatIcon} ${esc(threatLabel)} · ${esc(kindLabel)}${sysTag} · by ${esc(e.poster)}${mine ? " (you)" : ""}</div>` +
+    note +
+    `<div class="warn-meta"><span>${left}</span>${confirms}</div>` +
+    `<div class="warn-actions">${actions}</div>` +
+  `</div>`;
+}
+function warnMatchesFilter(e) {
+  if (warnFilterThreat !== "all" && e.threat !== warnFilterThreat) return false;
+  if (warnFilterSev !== "all" && e.severity !== warnFilterSev) return false;
+  if (warnHideStale && e.stale) return false;
+  return true;
+}
+function renderWarnFilters() {
+  const el = $("warn-filters");
+  if (!el) return;
+  const chip = (attr, v, cur, label) =>
+    `<button type="button" class="on-tag${cur === v ? " active" : ""}" ` +
+    `aria-pressed="${cur === v}" data-${attr}="${v}">${label}</button>`;
+  // Two independent axes (threat, severity) — label + separate them so the row doesn't
+  // read as one undifferentiated wall of eight pills.
+  el.innerHTML =
+    `<span class="warn-fgroup"><span class="warn-fgroup-h">Threat</span>` +
+    chip("wt", "all", warnFilterThreat, "All") +
+    chip("wt", "pvp", warnFilterThreat, "☠️ Players") +
+    chip("wt", "pve", warnFilterThreat, "🤖 NPCs") +
+    `</span><span class="warn-fsep" aria-hidden="true"></span>` +
+    `<span class="warn-fgroup"><span class="warn-fgroup-h">Severity</span>` +
+    chip("ws", "all", warnFilterSev, "Any") +
+    chip("ws", "deadly", warnFilterSev, "Deadly") +
+    chip("ws", "active", warnFilterSev, "Active") +
+    chip("ws", "sighted", warnFilterSev, "Sighted") +
+    `</span><span class="warn-fsep" aria-hidden="true"></span>` +
+    `<button type="button" class="on-tag${warnHideStale ? " active" : ""}" ` +
+    `aria-pressed="${warnHideStale}" data-whide="1">Hide stale</button>`;
+  el.querySelectorAll("[data-wt]").forEach(b =>
+    b.onclick = () => { warnFilterThreat = b.dataset.wt; renderWarnFilters(); renderWarnBoard(); });
+  el.querySelectorAll("[data-ws]").forEach(b =>
+    b.onclick = () => { warnFilterSev = b.dataset.ws; renderWarnFilters(); renderWarnBoard(); });
+  el.querySelector("[data-whide]").onclick = () => {
+    warnHideStale = !warnHideStale; renderWarnFilters(); renderWarnBoard(); };
+}
+// Glance-read strip: lead the board with one big tabular count (the system's readout
+// signature), plus the two numbers that drive a go/no-go — deadly and player threats.
+// Reflects the whole board, not the active filter.
+function renderWarnStats() {
+  const el = $("warn-stats");
+  if (!el) return;
+  const n = warnBoard.length;
+  el.hidden = !n;
+  if (!n) { el.innerHTML = ""; return; }
+  const deadly = warnBoard.filter(w => w.severity === "deadly").length;
+  const pvp = warnBoard.filter(w => w.threat === "pvp").length;
+  const tile = (cls, label, val) =>
+    `<div class="readout${cls}"><div class="label">${label}</div><div class="value">${val}</div></div>`;
+  el.innerHTML =
+    tile(" primary", "ACTIVE", n) +
+    tile(" bad", "DEADLY", deadly) +
+    tile("", "PLAYERS", pvp);
+}
+function renderWarnBoard() {
+  const body = $("warn-body");
+  if (!body) return;
+  renderWarnStats();
+  // A failed seed with nothing to show is a connection problem, not a quiet night.
+  if (warnLoadFailed && !warnBoard.length) {
+    $("warn-hint").textContent = "";
+    body.innerHTML = `<div class="warn-empty">Couldn't reach the nav server. ` +
+      `<button type="button" id="warn-retry">Retry</button></div>`;
+    const b = $("warn-retry"); if (b) b.onclick = loadWarnings;
+    return;
+  }
+  $("warn-hint").textContent = "";   // count now lives in the readout strip
+  if (!warnBoard.length) {
+    body.innerHTML = `<div class="warn-empty">No dangers reported right now. Fly safe — ` +
+      `and if you spot pirates, warn the org.</div>`;
+    return;
+  }
+  const shown = warnBoard.filter(warnMatchesFilter);   // server already ranks deadliest→freshest
+  body.innerHTML = shown.length
+    ? `<div class="warn-grid">${shown.map(warningCard).join("")}</div>`
+    : `<div class="warn-empty">No warnings match this filter.</div>`;
+  body.querySelectorAll("[data-confirm]").forEach(b => b.onclick = () => confirmWarn(+b.dataset.confirm, b));
+  body.querySelectorAll("[data-hunt]").forEach(b => b.onclick = () => promoteWarningToEvent(+b.dataset.hunt));
+  body.querySelectorAll("[data-clear]").forEach(b => b.onclick = () => closeWarn(+b.dataset.clear, b));
+}
+// Show the composer's "announce to Discord" opt-in only when the org actually has a
+// pirates webhook configured (the snapshot returns a bool, never the URL).
+function setWarnAnnounceAvail(on) {
+  const row = $("warn-announce-row");
+  if (row) row.hidden = !on;
+}
+// Seed + wire the Danger Board view (#/pirates). WS `warnings` frames keep it live after.
+async function loadWarnings() {
+  $("warn-post").onclick = postWarning;   // idempotent re-bind
+  $("warn-note").oninput = updateWarnNoteCount;
+  updateWarnNoteCount();
+  const aWrap = $("warn-a").parentElement, bWrap = $("warn-b").parentElement;
+  if (!aWrap.querySelector(".poi-drop")) attachPoiPicker(aWrap);   // free-text-tolerant, attach once
+  if (!bWrap.querySelector(".poi-drop")) attachPoiPicker(bWrap);
+  $("warn-kind").querySelectorAll("button").forEach(b => b.onclick = () => setWarnKind(b.dataset.kind));
+  $("warn-threat").querySelectorAll("button").forEach(b => b.onclick = () => setWarnThreat(b.dataset.threat));
+  $("warn-severity").querySelectorAll("button").forEach(b => b.onclick = () => setWarnSeverity(b.dataset.sev));
+  setWarnKind(warnKind); setWarnThreat(warnThreat); setWarnSeverity(warnSeverity);
+  renderWarnFilters();
+  if (!warnBoard.length && !warnLoadFailed) {
+    $("warn-body").innerHTML = `<div class="warn-empty">Loading board…</div>`;
+  }
+  try {
+    const r = await fetch("/api/warnings");
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json(); warnBoard = d.entries || []; setWarnAnnounceAvail(d.announce_available);
+    warnLoadFailed = false;
+  } catch { warnLoadFailed = true; }
+  renderWarnBoard(); renderWarnBadge();
+}
+
 // ---------- websocket ----------
 let ws = null;
 let datasetRefreshTimer = null;
@@ -4967,6 +5437,10 @@ function connect() {
       lfgBoard = msg.entries || [];
       lfgLoadFailed = false;   // a live board supersedes any earlier seed failure
       renderLfgBoard(); renderLfgBadge();
+    } else if (msg.type === "warnings") {
+      warnBoard = msg.entries || [];
+      warnLoadFailed = false;   // a live board supersedes any earlier seed failure
+      renderWarnBoard(); renderWarnBadge();
     }
   };
   ws.onclose = () => { const c = $("conn"); c.classList.remove("ok");
@@ -6047,6 +6521,17 @@ let tradeTerminals = null;               // resolved commodity terminals (picker
 let tradeTermById = {};
 let tradeMode = "auto";                  // auto | filtered | manual
 let tradeSort = "per_hour";              // per_hour | profit
+let tradeAvoid = "ignore";               // ignore | warn | avoid — pirate danger board (#24)
+const TRADE_AVOID_HINT = {
+  ignore: "Plan without checking the danger board.",
+  warn: "Flag any leg that touches a reported danger.",
+  avoid: "Skip warned stations & snared lanes when planning.",
+};
+function setTradeAvoid(mode) {
+  tradeAvoid = ["warn", "avoid"].includes(mode) ? mode : "ignore";
+  for (const x of $("trade-avoid").children) x.classList.toggle("active", x.dataset.avoid === tradeAvoid);
+  const hint = $("trade-avoid-hint"); if (hint) hint.textContent = TRADE_AVOID_HINT[tradeAvoid];
+}
 let tradeFilter = [];                    // commodity names (filtered mode)
 let tradeStartHere = false;              // start from the caller's live position
 let tradeLastInput = null;               // last plan payload (feeds run mode)
@@ -6377,6 +6862,7 @@ function applyTradeConfig(cfg) {
     sp.parentElement.classList.add("picked");
   }
   setTradeMode(cfg.mode || "auto");
+  setTradeAvoid(cfg.avoid_mode || "ignore");   // danger handling applies in every mode (#24)
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
     if ($("trade-system")) $("trade-system").value = cfg.system || "";
@@ -6410,6 +6896,9 @@ function wireTradePlanner() {
   for (const b of $("trade-sort").querySelectorAll("button"))
     b.onclick = () => { tradeSort = b.dataset.sort;
       for (const x of $("trade-sort").children) x.classList.toggle("active", x === b); };
+  for (const b of $("trade-avoid").querySelectorAll("button"))
+    b.onclick = () => setTradeAvoid(b.dataset.avoid);
+  setTradeAvoid(tradeAvoid);
   attachTradeShipPicker();
   // Re-rank the "best trades" board whenever the ship (SCU) or system changes so
   // it reflects the same profit/hour objective the Auto planner optimizes — a bare
@@ -6611,7 +7100,7 @@ async function updateLegLive(wrap) {
 function buildTradePlanBody(msg) {
   const usable = Number($("trade-scu").value);
   if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return null; }
-  const body = { mode: tradeMode, usable_scu: usable, ...tradeStartPayload() };
+  const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid, ...tradeStartPayload() };
   const ship = $("trade-ship").value.trim();
   if (ship) body.ship = ship;
   const budget = Number($("trade-budget").value);
@@ -6710,6 +7199,12 @@ function renderTradePlan(res) {
       + `${a.stale ? "⚠ " : ""}Prices as old as <b>${a.txt}</b> feed this plan`
       + `${a.stale ? " — some terminals may have moved. Enable the freshness filter to exclude them." : "."}</p>`;
   }
+  const dngrLegs = (res.legs || []).filter(lg => (lg.warnings || []).length);
+  if (dngrLegs.length) {
+    h += `<p class="route-danger">⚠ ${dngrLegs.length} leg${dngrLegs.length > 1 ? "s" : ""} on this route `
+      + `touch reported pirate danger. Check the flagged legs below`
+      + `${tradeAvoid === "avoid" ? "." : ", or switch danger to <b>Avoid</b> to route around it."}</p>`;
+  }
   h += `<p class="trade-price-note">Prices are UEX's latest scrape, not live in-game — confirm at the terminal.</p>`;
   h += `</div><div class="panel"><h2>LEGS</h2>`;
   (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
@@ -6735,9 +7230,20 @@ function renderTradeLeg(lg, i) {
   const age = tradeAgeInfo(ts.length ? Math.min(...ts) : null);
   const fresh = `<span class="tl-fresh${age.stale ? " stale" : ""}" title="UEX price age">`
     + `${age.stale ? "⚠ " : ""}${age.txt}</span>`;
-  return `<div class="trade-leg-card"><span class="seq">${i + 1}</span><div class="body">`
+  // Pirate danger board (#24): warn/avoid mode tags a leg with the warnings touching
+  // it (deadliest first). One line names the worst; a title lists them all.
+  const warns = lg.warnings || [];
+  let dngr = "";
+  if (warns.length) {
+    const w0 = warns[0];
+    const label = warns.length === 1 ? w0.where : `${warns.length} active dangers`;
+    dngr = `<div class="tl-danger sev-${esc(w0.severity)}" title="${esc(warns.map(w => w.where).join(" · "))}">`
+      + `⚠ ${w0.threat === "pvp" ? "☠️" : "🤖"} ${esc(w0.severity)} · ${esc(label)}</div>`;
+  }
+  return `<div class="trade-leg-card${warns.length ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
     + `<span class="tl-scu">${lg.scu} SCU</span>${fresh}</div>`
+    + dngr
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
     + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span></div>`
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
@@ -7902,8 +8408,8 @@ function bindRosterDeletes() {
 
 async function renderEventForm() {
   const tax = await loadEventsTaxonomy();
-  const seed = lfgEventSeed;    // a promote-from-LFG prefill, consumed once
-  lfgEventSeed = null;
+  const seed = eventSeed;    // a promote-from-LFG prefill, consumed once
+  eventSeed = null;
   $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
     `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, seed)}</div>`;
   bindEventForm(tax, null, () => { location.hash = "#/events"; });
@@ -9306,13 +9812,14 @@ function renderMarketEditForm(l) {
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
   "#/trade": "Trade Route Planner", "#/events": "Events", "#/goals": "Resource Manager",
   "#/market": "Marketplace", "#/online": "Who's Online", "#/lfg": "Group Finder",
-  "#/intel": "Org Intel", "#/": "Home" };
+  "#/pirates": "Danger Board", "#/intel": "Org Intel", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
   "#/trade": "Trade Route Planner", "#/events": "Event Planner", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/market": "Org Marketplace",
-  "#/online": "Who's Online", "#/lfg": "Group Finder", "#/intel": "Org Intel" };
+  "#/online": "Who's Online", "#/lfg": "Group Finder", "#/pirates": "Danger Board",
+  "#/intel": "Org Intel" };
 // Returning-user accelerator: if you've opened an app before, the launcher offers a
 // one-click jump back into it (persisted across sessions, unlike the in-session lastApp).
 function renderLauncherResume() {
@@ -9360,6 +9867,7 @@ function applyView() {
   const market = (h === "#/market" || h.startsWith("#/market/")) && authed;
   const online = h === "#/online" && authed;
   const lfg = h === "#/lfg" && authed;   // Group Finder — its own app (LFG board)
+  const pirates = h === "#/pirates" && authed;   // Danger Board — pirate warning board (#24)
   const settings = h === "#/settings" && authed;
   const setup = h === "#/setup" && authed;
   // Org Intel: one analytics app whose section is selected by the sub-route.
@@ -9376,7 +9884,7 @@ function applyView() {
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
   const launcher = authed && !nav && !route && !trade && !events && !resourceMgr && !market && !online
-    && !lfg && !settings && !setup && !intel && !legal;
+    && !lfg && !pirates && !settings && !setup && !intel && !legal;
   // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/intel/market) to
   // their app root for the header indicator and the "remember last app" jump.
   const appHash = events ? "#/events" : resourceMgr ? "#/goals" : market ? "#/market"
@@ -9388,7 +9896,7 @@ function applyView() {
   $("terms-view").hidden = !terms;
   $("privacy-view").hidden = !privacy;
   $("launcher-view").hidden = !launcher;
-  if (launcher) { renderLauncherResume(); renderOnlineBadge(); renderLfgBadge(); }
+  if (launcher) { renderLauncherResume(); renderOnlineBadge(); renderLfgBadge(); renderWarnBadge(); }
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
   $("trade-view").hidden = !trade;
@@ -9400,6 +9908,8 @@ function applyView() {
   if (online) loadOnline();   // seed initial paint; WS keeps it live thereafter
   $("lfg-view").hidden = !lfg;
   if (lfg) loadLfg();         // seed the board + composer; WS keeps the board live
+  $("pirates-view").hidden = !pirates;
+  if (pirates) loadWarnings();   // seed the danger board + composer; WS keeps it live
   $("settings-view").hidden = !settings;
   $("setup-view").hidden = !setup;
   if (setup) renderSetupConn();   // reflect current watcher state on entry
@@ -9415,7 +9925,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
   // "← back to that app" link.
-  if (nav || route || trade || events || resourceMgr || market || intel || lfg) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
+  if (nav || route || trade || events || resourceMgr || market || intel || lfg || pirates) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
 
   // Header chrome. The logo/title (a.home-link) is the universal Home; the back
   // link returns to the app you came from. ⚙ Settings + 📖 Setup are global. Org
@@ -9425,8 +9935,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || trade || events || resourceMgr || market || online || lfg || intel || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || trade || events || resourceMgr || market || lfg || intel || legal;
+  $("where").hidden = launcher || route || trade || events || resourceMgr || market || online || lfg || pirates || intel || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || trade || events || resourceMgr || market || lfg || pirates || intel || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   // Settings + Setup are global utilities — available whenever signed in, including
@@ -10096,6 +10606,10 @@ async function loadSettings() {
       $("lfg-ageoff").value = s.lfg_ageoff_min;
     if (s.lfg_stale_min && document.activeElement !== $("lfg-stale"))
       $("lfg-stale").value = s.lfg_stale_min;
+    if (s.warning_ageoff_min && document.activeElement !== $("warn-ageoff"))
+      $("warn-ageoff").value = s.warning_ageoff_min;
+    if (s.warning_stale_min && document.activeElement !== $("warn-stale"))
+      $("warn-stale").value = s.warning_stale_min;
     rootAdmins = s.root_admin_ids || [];
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
@@ -10124,6 +10638,7 @@ const DISCORD_CATS = [
   { key: "goals",       label: "Goals",       desc: "a procurement goal hits 100%" },
   { key: "records",     label: "Records",     desc: "a new org hauling record" },
   { key: "lfg",         label: "Group Finder", desc: "new looking-for-group posts (opt-in per post)" },
+  { key: "pirates",     label: "Danger Board", desc: "new pirate danger warnings (opt-in per post)" },
 ];
 const WEBHOOK_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//;
 const discSt = (key) => $("dwh-st-" + key);
@@ -10330,6 +10845,8 @@ $("member-role").addEventListener("keydown", (e) => { if (e.key === "Enter") { e
 $("fresh-window").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fresh-window-save").click(); } });
 $("lfg-stale").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("lfg-life-save").click(); } });
 $("lfg-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("lfg-life-save").click(); } });
+$("warn-stale").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("warn-life-save").click(); } });
+$("warn-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("warn-life-save").click(); } });
 $("token-label").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("token-gen").click(); } });
 
 $("fresh-window-save").onclick = async () => {
@@ -10365,6 +10882,26 @@ $("lfg-life-save").onclick = async () => {
     if (!r.ok) throw new Error();
     const d = await r.json();
     st.textContent = `saved — stale after ${d.lfg_stale_min}m, aged off after ${d.lfg_ageoff_min}m`;
+  } catch {
+    st.textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+
+$("warn-life-save").onclick = async () => {
+  const st = $("warn-life-status");
+  const stale = parseInt($("warn-stale").value, 10);
+  const ageoff = parseInt($("warn-ageoff").value, 10);
+  if (!(stale >= 1) || !(ageoff >= 1)) { st.textContent = "enter minutes (≥ 1) for both"; return; }
+  if (stale >= ageoff) { st.textContent = "stale time must be less than age-off"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ warning_stale_min: stale, warning_ageoff_min: ageoff }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `saved — stale after ${d.warning_stale_min}m, aged off after ${d.warning_ageoff_min}m`;
   } catch {
     st.textContent = "failed to update — try again";
     loadSettings();

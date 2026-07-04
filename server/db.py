@@ -372,6 +372,28 @@ CREATE TABLE IF NOT EXISTS trade_favorites (
     data TEXT
 );
 CREATE INDEX IF NOT EXISTS trade_favorites_owner ON trade_favorites(discord_id);
+
+-- Pirate danger warnings (#24). A community-refreshable, time-bound danger board
+-- for trade routes, modelled on `lfg`: `created` drives the green→stale→age-off
+-- lifecycle (windows are live org settings, not stored here). A warning is either
+-- a `point` (danger around one POI) or a `lane` (a snare between two anchor POIs);
+-- `location` is always-kept free text so a survivor can post "Between Baijini and
+-- Orison" mid-escape without picking exact POIs. Only anchored warnings can steer
+-- the trade planner; unanchored ones are board-only intel.
+CREATE TABLE IF NOT EXISTS pirate_warnings (
+    id            INTEGER PRIMARY KEY,
+    poster        TEXT NOT NULL,      -- Discord member id of the reporter
+    kind          TEXT NOT NULL,      -- point (around a POI) | lane (between two)
+    threat        TEXT NOT NULL,      -- pvp (players) | pve (NPC pirates)
+    severity      TEXT NOT NULL,      -- sighted | active | deadly
+    system        TEXT,               -- resolved from anchors when available
+    anchor_a_poi  INTEGER,            -- endpoint / centre POI id (nav_core Poi.id)
+    anchor_b_poi  INTEGER,            -- second endpoint for lane; NULL for point
+    location      TEXT,               -- free text, always kept
+    note          TEXT,               -- optional detail
+    confirmations TEXT,               -- json list of member ids who re-verified
+    created       REAL NOT NULL       -- epoch seconds; a confirm/refresh bumps this
+);
 """
 
 
@@ -2127,6 +2149,56 @@ def lfg_delete_for(poster: str) -> None:
     """Remove every entry a member posted."""
     with _lock, _conn:
         _conn.execute("DELETE FROM lfg WHERE poster=?", (poster,))
+
+
+# --- Pirate danger warnings (#24) -------------------------------------------
+
+
+def _warning_row_to_dict(r: sqlite3.Row) -> dict:
+    return {
+        "id": r["id"], "poster": r["poster"], "kind": r["kind"],
+        "threat": r["threat"], "severity": r["severity"], "system": r["system"],
+        "anchor_a_poi": r["anchor_a_poi"], "anchor_b_poi": r["anchor_b_poi"],
+        "location": r["location"] or "", "note": r["note"] or "",
+        "confirmations": _u(r["confirmations"]) or [], "created": r["created"],
+    }
+
+
+def warnings_all() -> list[dict]:
+    """Every persisted warning, for seeding the in-memory board at boot."""
+    with _lock:
+        rows = _conn.execute("SELECT * FROM pirate_warnings").fetchall()
+    return [_warning_row_to_dict(r) for r in rows]
+
+
+def warning_upsert(e: dict) -> None:
+    """Persist one warning (insert on post, replace on confirm/refresh)."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT OR REPLACE INTO pirate_warnings "
+            "(id,poster,kind,threat,severity,system,anchor_a_poi,anchor_b_poi,"
+            "location,note,confirmations,created) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (e["id"], e["poster"], e["kind"], e["threat"], e["severity"],
+             e.get("system"), e.get("anchor_a_poi"), e.get("anchor_b_poi"),
+             e.get("location") or "", e.get("note") or "",
+             _j(e.get("confirmations") or []), e["created"]),
+        )
+
+
+def warning_delete(ids) -> None:
+    """Remove one warning (int) or several (iterable of ids)."""
+    ids = [ids] if isinstance(ids, int) else list(ids)
+    if not ids:
+        return
+    with _lock, _conn:
+        _conn.executemany("DELETE FROM pirate_warnings WHERE id=?", [(i,) for i in ids])
+
+
+def warning_delete_for(poster: str) -> None:
+    """Remove every warning a member posted (e.g. an admin purging a member)."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM pirate_warnings WHERE poster=?", (poster,))
 
 
 def _meta_get(key: str):
