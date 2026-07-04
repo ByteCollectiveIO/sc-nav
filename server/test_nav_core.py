@@ -2177,5 +2177,115 @@ class TradeSolverTests(unittest.TestCase):
                            nav_core._route_score(high, "per_hour", 3.0))
 
 
+class TradeReplanTests(unittest.TestCase):
+    """nav_core.replan_trade_route — mid-run re-solve from the live position,
+    carrying forward sunk (bought-not-sold) cargo (#21 step 5). Uses real Stanton
+    space POIs so the reused travel_cost yields finite legs."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:4]
+        cls.A, cls.B, cls.C, cls.D = (p.id for p in spc)
+        cls.posA = next(p for p in NAV.pois.values() if p.id == cls.A).global_m
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": None}
+
+    def test_no_held_cargo_is_a_plain_replan(self):
+        prices = [self._pt("Gold", 1, self.A, buy=100, scu_buy=500),
+                  self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500)]
+        plan = nav_core.replan_trade_route(NAV, prices, 100, start_pos=self.posA,
+                                           held=None, sort="profit")
+        self.assertTrue(plan["summary"]["feasible"])
+        self.assertFalse(any(lg.get("held") for lg in plan["legs"]))
+
+    def test_held_cargo_sold_first_at_richest_buyer(self):
+        # Holding 40 SCU of Gold bought @100; two buyers, the richer one wins.
+        prices = [self._pt("Gold", 2, self.B, sell=250, scu_sell_stock=500),
+                  self._pt("Gold", 3, self.C, sell=300, scu_sell_stock=500)]
+        held = {"commodity": "Gold", "scu": 40, "buy_price": 100}
+        plan = nav_core.replan_trade_route(NAV, prices, 100, start_pos=self.posA,
+                                           held=held, sort="profit")
+        first = plan["legs"][0]
+        self.assertTrue(first["held"])
+        self.assertEqual(first["commodity"], "Gold")
+        self.assertEqual(first["scu"], 40)
+        self.assertEqual(first["buy_cost"], 0)             # already paid — sunk
+        self.assertIsNone(first["to_buy"])                 # no empty approach to a buy
+        self.assertEqual(first["sell_price"], 300)         # richest reachable buyer
+        self.assertEqual(first["profit"], (300 - 100) * 40)
+        self.assertEqual(plan["summary"]["carried_commodity"], "Gold")
+        self.assertEqual(plan["summary"]["carried_scu"], 40)
+
+    def test_held_sell_then_chains_more_trades(self):
+        # After offloading Gold at C, an Iron trade (buy@C -> sell@D) chains on.
+        prices = [self._pt("Gold", 2, self.C, sell=300, scu_sell_stock=500),
+                  self._pt("Iron", 3, self.C, buy=50, scu_buy=500),
+                  self._pt("Iron", 4, self.D, sell=200, scu_sell_stock=500)]
+        held = {"commodity": "Gold", "scu": 40, "buy_price": 100}
+        plan = nav_core.replan_trade_route(NAV, prices, 100, start_pos=self.posA,
+                                           held=held, sort="profit")
+        self.assertTrue(plan["legs"][0]["held"])
+        self.assertGreaterEqual(len(plan["legs"]), 2)
+        self.assertIn("Iron", {lg["commodity"] for lg in plan["legs"]})
+
+    def test_held_leg_uses_no_forward_capital(self):
+        # peak_capital across the route ignores the sunk buy (buy already paid).
+        prices = [self._pt("Gold", 2, self.C, sell=300, scu_sell_stock=500)]
+        held = {"commodity": "Gold", "scu": 40, "buy_price": 100}
+        plan = nav_core.replan_trade_route(NAV, prices, 100, start_pos=self.posA,
+                                           held=held, sort="profit")
+        self.assertEqual(plan["summary"]["peak_capital"], 0)
+
+    def test_unsellable_held_cargo_reports_reason(self):
+        # Nobody buys Platinum -> the hold can't be cleared -> infeasible w/ reason.
+        prices = [self._pt("Iron", 3, self.C, buy=50, scu_buy=500),
+                  self._pt("Iron", 4, self.D, sell=200, scu_sell_stock=500)]
+        held = {"commodity": "Platinum", "scu": 40, "buy_price": 100}
+        plan = nav_core.replan_trade_route(NAV, prices, 100, start_pos=self.posA, held=held)
+        self.assertFalse(plan["summary"]["feasible"])
+        self.assertIn("Platinum", plan["summary"]["reason"])
+        self.assertEqual(plan["legs"], [])
+
+
+class TradeLegRealizedTests(unittest.TestCase):
+    """nav_core.trade_leg_realized — realized profit from entered actuals, falling
+    back to the plan when a side (or the whole leg) was left unentered (#21 step 5,
+    actual-figures pass)."""
+
+    def _leg(self, **over):
+        base = {"buy_price": 100, "sell_price": 300, "scu": 40, "profit": 8000}
+        base.update(over)
+        return base
+
+    def test_no_actuals_returns_planned(self):
+        self.assertEqual(nav_core.trade_leg_realized(self._leg()), 8000)
+
+    def test_full_actuals_override(self):
+        # bought 40 @110, sold 40 @320 -> (320-110)*40
+        leg = self._leg(actual_buy_price=110, actual_buy_scu=40,
+                        actual_sell_price=320, actual_sell_scu=40)
+        self.assertEqual(nav_core.trade_leg_realized(leg), (320 - 110) * 40)
+
+    def test_partial_actuals_fall_back_per_side(self):
+        # only the sell was entered (got 350); buy falls back to planned 100/40.
+        leg = self._leg(actual_sell_price=350)
+        self.assertEqual(nav_core.trade_leg_realized(leg), 350 * 40 - 100 * 40)
+
+    def test_actual_scu_only(self):
+        # moved only 25 SCU (short fill); prices planned.
+        leg = self._leg(actual_buy_scu=25, actual_sell_scu=25)
+        self.assertEqual(nav_core.trade_leg_realized(leg), (300 - 100) * 25)
+
+    def test_held_leg_buy_falls_back_to_sunk_price(self):
+        # held cargo: no actual buy entered -> sunk buy_price/scu; sell actual given.
+        leg = self._leg(held=True, buy_price=100, actual_sell_price=280, actual_sell_scu=40)
+        self.assertEqual(nav_core.trade_leg_realized(leg), 280 * 40 - 100 * 40)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

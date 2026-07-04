@@ -52,6 +52,7 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 - Reference data: `/api/handles`, `/api/commodities`, `/api/raw_commodities`, `/api/ships`, `/api/harvestables`, `/api/fauna`, `/api/resource_*`, `/api/biomes`, `/api/custom_pois`, `/api/observations`
 - Cargo planner: `/api/route/plan|run|history|session/reset`
 - Cargo analytics: `/api/cargo/leaderboard`, `/api/cargo/stats`
+- Trade Route Planner (#21): `/api/trade/terminals|prices|trades`, `/api/trade/plan` (auto/filtered/manual); **run mode (step 5)** `/api/trade/run` (POST start / GET resume / PATCH `action` buy|sell|advance / DELETE abandon) + `/api/trade/run/replan` (re-solve from live position, sunk-cargo-aware). Legs not stops: per-leg buy→sell phase; solver in `nav_core.plan_trade_route`/`cost_trade_legs`/`replan_trade_route`; session helpers `_point_at_active_trade_leg`/`_advance_trade_run`/`Session.trade_run_view`
 - Events: `/api/events*`, `/api/events/{id}/signup`; **fleet roster (#20)** `/api/events/{id}/groups[/{gid}]` (board + group CRUD), `/api/events/{id}/assignments` (PUT assign/move/unassign, group_id null = unassign), `/api/events/{id}/manifest` (+ `/post` → Discord). Plan is organizer/admin-owned; nav-side logic `nav_core.derive_roster_board`/`build_event_manifest`
 - Resource manager: `/api/catalog`, `/api/inventory*`, `/api/goals*`
 - Marketplace: `/api/market*` (offers, confirm)
@@ -62,8 +63,9 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 
 ## db.py tables
 meta · custom_pois · observations · handles · members · watcher_tokens ·
-user_ships · runs · events · event_signups · event_groups · event_assignments ·
-catalog_items · inventory · goals · inventory_allocations · listings · listing_offers.
+user_ships · runs · trade_runs · events · event_signups · event_groups ·
+event_assignments · catalog_items · inventory · goals · inventory_allocations ·
+listings · listing_offers.
 
 ## Guardrails (don't regress these)
 - **Security**: CSP/nonce + defense-in-depth headers (app.py `_csp`, http middleware);
