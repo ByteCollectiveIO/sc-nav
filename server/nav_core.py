@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -2189,12 +2190,15 @@ def _clamp_scu(capacity, supply, demand):
     return scu
 
 
-def _trade_row(name, src, dst, margin, capacity_scu) -> dict:
+def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
     """A single buy->sell trade record (no travel yet) from a buy price point
     `src` and sell price point `dst`. Travel fields (distance/eta/via_gate) and
     profit_per_hour are filled by the caller when a route/leg is costed. When
     `capacity_scu` is given, max_scu clamps to available supply/demand and the
-    profit/cost totals follow."""
+    profit/cost totals follow. `budget` (aUEC on hand) further clamps the load so
+    buy_cost never exceeds what the player can afford — trades are sequential, so
+    the binding capital constraint is one hold-fill at a time. `*_updated_at` carry
+    each side's UEX scrape time (unix s) for freshness badges."""
     row = {
         "commodity": name,
         "buy_terminal_id": src.get("terminal_id"), "buy_terminal": src.get("terminal"),
@@ -2205,10 +2209,13 @@ def _trade_row(name, src, dst, margin, capacity_scu) -> dict:
         "profit_per_scu": margin,
         "supply_scu": src.get("scu_buy") or 0,
         "demand_scu": dst.get("scu_sell_stock") or 0,
+        "buy_updated_at": src.get("updated_at"), "sell_updated_at": dst.get("updated_at"),
         "distance_m": None, "eta_s": None, "cross_system": None, "via_gate": None,
         "max_scu": None, "trade_profit": None, "buy_cost": None, "profit_per_hour": None,
     }
     max_scu = _clamp_scu(capacity_scu, row["supply_scu"], row["demand_scu"])
+    if max_scu and budget and row["buy_price"] > 0:
+        max_scu = min(max_scu, math.floor(budget / row["buy_price"]))
     if max_scu:
         row["max_scu"] = int(max_scu)
         row["trade_profit"] = int(round(margin * max_scu))
@@ -2218,7 +2225,7 @@ def _trade_row(name, src, dst, margin, capacity_scu) -> dict:
 
 def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
                 capacity_scu=None, min_margin=0, limit=50, sort="auto",
-                t_ref=None) -> list[dict]:
+                budget=None, max_age_s=None, now_ts=None, t_ref=None) -> list[dict]:
     """Best buy->sell trades over the live price feed, richest first.
 
     `prices` is the resolved per-terminal price list (the shape /api/trade/prices
@@ -2235,6 +2242,7 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
       "auto"      — per_hour when capacity is given, else margin.
     Returns up to `limit` trade dicts."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    now = now_ts if now_ts is not None else time.time()
     cnorm = (commodity or "").strip().lower()
 
     # bucket price points per commodity: buy-side (sells to you) / sell-side.
@@ -2245,6 +2253,8 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
         if not name or (cnorm and name.strip().lower() != cnorm):
             continue
         if system and p.get("system") != system:
+            continue
+        if not _price_fresh(p, max_age_s, now):
             continue
         if p.get("buy"):
             buyers.setdefault(name, []).append(p)
@@ -2272,7 +2282,7 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
 
     out = []
     for margin, name, src, dst in window:
-        row = _trade_row(name, src, dst, margin, capacity_scu)
+        row = _trade_row(name, src, dst, margin, capacity_scu, budget=budget)
         if want_hour:
             sp, dp = nav.pois.get(src.get("poi_id")), nav.pois.get(dst.get("poi_id"))
             if sp is not None and dp is not None:
@@ -2323,10 +2333,24 @@ def _dist_of(leg) -> float:
     return (leg["distance_m"] or 0.0) if leg else 0.0
 
 
-def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None) -> list[dict]:
+def _price_fresh(p, max_age_s, now) -> bool:
+    """Whether a price point is fresh enough to plan on. When `max_age_s` is set,
+    a point older than that — or one with no scrape timestamp at all (we can't
+    vouch for it) — is dropped."""
+    if not max_age_s:
+        return True
+    ts = p.get("updated_at")
+    return ts is not None and (now - ts) <= max_age_s
+
+
+def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
+                      budget=None, max_age_s=None, now_ts=None) -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
-    name set) restricts to filtered mode; `system` keeps both ends in-system."""
+    name set) restricts to filtered mode; `system` keeps both ends in-system.
+    `budget` caps each load to what the player can afford; `max_age_s` drops price
+    points older than that (stale-data opt-out)."""
+    now = now_ts if now_ts is not None else time.time()
     cset = {c.strip().lower() for c in commodities} if commodities else None
     buyers: dict[str, list] = {}
     sellers: dict[str, list] = {}
@@ -2335,6 +2359,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None) ->
         if not name or (cset and name.strip().lower() not in cset):
             continue
         if system and p.get("system") != system:
+            continue
+        if not _price_fresh(p, max_age_s, now):
             continue
         if p.get("buy"):
             buyers.setdefault(name, []).append(p)
@@ -2349,7 +2375,7 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None) ->
                 margin = int(dst["sell"]) - int(src["buy"])
                 if margin <= 0:
                     continue
-                row = _trade_row(name, src, dst, margin, capacity_scu)
+                row = _trade_row(name, src, dst, margin, capacity_scu, budget=budget)
                 if row["max_scu"]:            # need a movable quantity to be real
                     rows.append(row)
     rows.sort(key=lambda r: -(r["trade_profit"] or 0))
@@ -2362,7 +2388,9 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
     and accumulating profit/time/distance. Returns {summary, legs}."""
     legs, pos, prev_sell = [], start, None
     total_profit = total_dist = total_time = 0.0
+    deadhead_time = loaded_time = 0.0
     peak_capital = 0
+    oldest_ts = None
     feasible = bool(chosen)
     stops = 0
     for row in chosen:
@@ -2377,15 +2405,21 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
         stops += 1
         total_profit += row["trade_profit"] or 0
         total_dist += _dist_of(approach) + _dist_of(haul)
-        total_time += ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
-        total_time += (_leg_time_s(haul["distance_m"]) or 0.0) if haul else 0.0
-        total_time += 2 * STOP_DWELL_S
+        approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
+        haul_t = (_leg_time_s(haul["distance_m"]) or 0.0) if haul else 0.0
+        deadhead_time += approach_t          # flying to the buy = empty hold
+        loaded_time += haul_t                # flying the haul = loaded
+        total_time += approach_t + haul_t + 2 * STOP_DWELL_S
         peak_capital = max(peak_capital, row["buy_cost"] or 0)
+        for ts in (row.get("buy_updated_at"), row.get("sell_updated_at")):
+            if ts is not None and (oldest_ts is None or ts < oldest_ts):
+                oldest_ts = ts
         legs.append({
             k: row[k] for k in (
                 "commodity", "buy_terminal_id", "buy_terminal", "buy_poi_id", "buy_system",
                 "sell_terminal_id", "sell_terminal", "sell_poi_id", "sell_system",
-                "buy_price", "sell_price", "profit_per_scu", "supply_scu", "demand_scu")
+                "buy_price", "sell_price", "profit_per_scu", "supply_scu", "demand_scu",
+                "buy_updated_at", "sell_updated_at")
         } | {
             "scu": row["max_scu"], "profit": row["trade_profit"], "buy_cost": row["buy_cost"],
             "to_buy": _leg_view(approach) if approach else None,
@@ -2394,6 +2428,7 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
         pos = sp if sp is not None else pos
         prev_sell = row["sell_poi_id"]
     hours = total_time / 3600.0
+    move = deadhead_time + loaded_time
     summary = {
         "feasible": feasible and bool(legs),
         "legs": len(legs), "stops": stops,
@@ -2401,15 +2436,23 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref) -> d
         "peak_capital": int(peak_capital),
         "total_distance_m": total_dist,
         "total_time_s": total_time,
+        "deadhead_time_s": deadhead_time,
+        "loaded_time_s": loaded_time,
+        "loaded_pct": int(round(100 * loaded_time / move)) if move > 0 else None,
+        "oldest_updated_at": oldest_ts,
         "profit_per_hour": int(round(total_profit / hours)) if hours > 0 else None,
     }
     return {"summary": summary, "legs": legs}
 
 
-def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None) -> list[dict]:
+def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
+                  deadhead_weight=1.0) -> list[dict]:
     """Build a trade chain by repeatedly taking the best-scoring reachable trade
     from the current position. `optimize` = 'profit' (raw) or 'per_hour'
-    (throughput). `first` forces the opening leg (multi-start seed)."""
+    (throughput). `deadhead_weight` > 1 penalizes empty-hold repositioning: it
+    scales the approach (empty) leg's time in the per-hour score, and in profit
+    mode shrinks a trade's score by its approach time — so a fuller-hold chain wins
+    even at some profit cost. `first` forces the opening leg (multi-start seed)."""
     chosen, pos, used = [], start, set()
     key = lambda r: (r["commodity"], r["buy_poi_id"], r["sell_poi_id"])
     while len(chosen) < max_legs:
@@ -2426,11 +2469,15 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None) -> l
             if haul["distance_m"] is None:
                 continue
             profit = r["trade_profit"] or 0
+            approach = (travel_cost(nav, pos, bp, t_ref)
+                        if (pos is not None and (optimize != "profit" or deadhead_weight > 1.0))
+                        else None)
+            approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
             if optimize == "profit":
-                score = float(profit)
+                # empty-hold hours shrink the score; weight 1.0 => raw profit.
+                score = profit / (1.0 + (deadhead_weight - 1.0) * (approach_t / 3600.0))
             else:
-                approach = travel_cost(nav, pos, bp, t_ref) if pos is not None else None
-                eta = (((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
+                eta = (approach_t * deadhead_weight
                        + (_leg_time_s(haul["distance_m"]) or 0.0) + 2 * STOP_DWELL_S)
                 score = profit / (eta / 3600.0) if eta > 0 else 0.0
             if score > pick_score:
@@ -2444,14 +2491,28 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None) -> l
     return chosen
 
 
+def _route_score(summary, optimize, deadhead_weight) -> float:
+    """Rank a costed route. profit mode -> total profit shrunk by empty-hold hours;
+    per_hour mode -> profit over time with deadhead time up-weighted. weight 1.0
+    reduces to raw total_profit / profit_per_hour (unchanged behavior)."""
+    dh = summary.get("deadhead_time_s") or 0.0
+    if optimize == "profit":
+        return summary["total_profit"] / (1.0 + (deadhead_weight - 1.0) * (dh / 3600.0))
+    eff_hours = (summary["total_time_s"] + (deadhead_weight - 1.0) * dh) / 3600.0
+    return summary["total_profit"] / eff_hours if eff_hours > 0 else 0.0
+
+
 def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      start_pos=None, max_stops=6, commodities=None, system=None,
-                     sort="per_hour", t_ref=None) -> dict:
+                     sort="per_hour", budget=None, deadhead_weight=1.0,
+                     max_age_s=None, now_ts=None, t_ref=None) -> dict:
     """Auto / filtered trade-route solver: pick and order the buy->sell trades that
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
     `usable_scu` hold, starting from a POI (`start_id`) or live position
     (`start_pos`), within a `max_stops` budget. `commodities` (name list) restricts
-    to filtered mode; `system` locks to intra-system trades. Returns
+    to filtered mode; `system` locks to intra-system trades. `budget` caps each
+    hold-fill to affordable aUEC; `deadhead_weight` > 1 trades profit for less
+    empty-hold flight; `max_age_s` drops stale price points. Returns
     {summary, legs, start} — the same shape cost_trade_legs produces for manual mode."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     optimize = "profit" if sort == "profit" else "per_hour"
@@ -2461,7 +2522,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     elif start_pos is not None:
         start = position_start(nav, start_pos)
 
-    cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities)
+    cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
+                              budget=budget, max_age_s=max_age_s, now_ts=now_ts)
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -2471,17 +2533,18 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
         return empty
 
     # multi-start greedy: an unforced chain plus one forced from each top seed.
-    routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref)]
+    routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
+                            deadhead_weight=deadhead_weight)]
     for seed in cands[:_TRADE_RESTARTS]:
-        routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=seed))
+        routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
+                                    first=seed, deadhead_weight=deadhead_weight))
 
     best, best_score = None, -1.0
     for chosen in routes:
         if not chosen:
             continue
         costed = _cost_route(nav, chosen, start, t_ref)
-        s = costed["summary"]
-        score = s["total_profit"] if optimize == "profit" else (s["profit_per_hour"] or 0)
+        score = _route_score(costed["summary"], optimize, deadhead_weight)
         if score > best_score:
             best, best_score = costed, score
     if best is None:
@@ -2492,12 +2555,13 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
 
 
 def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
-                    start_pos=None, t_ref=None) -> dict:
+                    start_pos=None, budget=None, t_ref=None) -> dict:
     """Manual mode: cost a player-chosen ordered list of legs (each
     {commodity, buy_terminal_id, sell_terminal_id, scu?}) into the same
     {summary, legs, start} shape the solver returns — no route selection, just live
     prices + running profit/time. A leg's `scu` optionally caps the load below the
-    supply/demand/hold maximum. Raises ValueError on an unknown/unpriced leg."""
+    supply/demand/hold maximum; `budget` caps each fill to affordable aUEC. Raises
+    ValueError on an unknown/unpriced leg."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     idx = {(p["commodity"], p["terminal_id"]): p for p in prices}
     chosen = []
@@ -2508,7 +2572,7 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
         if src is None or dst is None or not src.get("buy") or not dst.get("sell"):
             raise ValueError(f"leg references an unknown or unpriced terminal for {name}")
         margin = int(dst["sell"]) - int(src["buy"])
-        row = _trade_row(name, src, dst, margin, usable_scu)
+        row = _trade_row(name, src, dst, margin, usable_scu, budget=budget)
         scu = lg.get("scu")
         if scu:                                   # honor an explicit per-leg cap
             capped = min(int(scu), row["max_scu"] or int(scu))
