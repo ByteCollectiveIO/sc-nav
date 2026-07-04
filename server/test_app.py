@@ -967,6 +967,329 @@ class LFGAnnounceTests(unittest.TestCase):
         self.assertNotIn("1", app._lfg_announce_at)
 
 
+class WarningBoardTests(unittest.TestCase):
+    """Backlog #24 — the pirate danger board: post (point/lane), same-danger
+    supersede, community confirm/refresh, close permissions, age-off prune,
+    persistence, anchor/system resolution, board ordering, and the REST surface."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+        # A real POI id so anchor + system resolution is exercised against nav data.
+        cls._poi_id = next(iter(app.nav.pois))
+        cls._poi = app.nav.pois[cls._poi_id]
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.warnings.clear()
+        db.warning_delete([w["id"] for w in db.warnings_all()])
+        app.hub._warning_seq = 0
+        self._member["is_admin"] = False
+
+    def test_post_resolves_system_from_anchor(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active",
+                                 self._poi_id, None, "near it", "2 Cutlass")
+        self.assertEqual(w["system"], self._poi.system)
+        self.assertEqual(w["anchor_a_poi"], self._poi_id)
+
+    def test_same_danger_supersedes_same_poster(self):
+        first = app.hub.post_warning("7", "point", "pvp", "sighted",
+                                     self._poi_id, None, "here", "")
+        second = app.hub.post_warning("7", "point", "pvp", "deadly",
+                                      self._poi_id, None, "here", "back again")
+        mine = [w for w in app.hub.warnings.values() if w["poster"] == "7"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["id"], second["id"])
+        self.assertNotIn(first["id"], app.hub.warnings)
+
+    def test_distinct_dangers_coexist(self):
+        app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "a", "")
+        app.hub.post_warning("7", "lane", "pve", "active", None, None, "Between X and Y", "")
+        self.assertEqual(len(app.hub.warnings), 2)
+
+    def test_confirm_records_confirmer_and_refreshes(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
+        w["created"] = time.time() - 100
+        again = app.hub.confirm_warning(w["id"], "8")
+        self.assertIn("8", again["confirmations"])
+        self.assertGreater(again["created"], time.time() - 5)   # clock reset
+
+    def test_confirm_by_poster_refreshes_without_self_credit(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
+        w["created"] = time.time() - 100
+        again = app.hub.confirm_warning(w["id"], "7")
+        self.assertEqual(again["confirmations"], [])            # poster isn't a confirmer
+        self.assertGreater(again["created"], time.time() - 5)   # but it still refreshes
+
+    def test_confirm_is_idempotent_per_member(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
+        app.hub.confirm_warning(w["id"], "8")
+        app.hub.confirm_warning(w["id"], "8")
+        self.assertEqual(app.hub.warnings[w["id"]]["confirmations"], ["8"])
+
+    def test_close_is_poster_or_admin_only(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
+        self.assertFalse(app.hub.close_warning(w["id"], "8", False))   # stranger
+        self.assertTrue(app.hub.close_warning(w["id"], "8", True))      # admin
+        self.assertNotIn(w["id"], app.hub.warnings)
+        w2 = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
+        self.assertTrue(app.hub.close_warning(w2["id"], "7", False))    # poster
+
+    def test_drop_warnings_for_clears_a_member(self):
+        app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "a", "")
+        app.hub.post_warning("7", "lane", "pve", "active", None, None, "b", "")
+        app.hub.post_warning("8", "point", "pvp", "active", self._poi_id, None, "c", "")
+        self.assertTrue(app.hub.drop_warnings_for("7"))
+        self.assertEqual([w["poster"] for w in app.hub.warnings.values()], ["8"])
+        self.assertFalse(app.hub.drop_warnings_for("7"))
+
+    def test_prune_removes_only_aged_off(self):
+        live = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "a", "")
+        aged = app.hub.post_warning("8", "point", "pvp", "active", self._poi_id, None, "b", "")
+        aged["created"] = time.time() - (app.warning_ageoff_min() * 60 + 1)
+        self.assertTrue(app.hub.prune_warnings(time.time()))
+        self.assertEqual(list(app.hub.warnings), [live["id"]])
+        self.assertFalse(app.hub.prune_warnings(time.time()))
+
+    def test_board_persists_and_reloads(self):
+        w = app.hub.post_warning("7", "lane", "pve", "deadly",
+                                 self._poi_id, None, "Between A and B", "snare + gank")
+        app.hub.confirm_warning(w["id"], "8")
+        app.hub.warnings.clear()
+        for row in db.warnings_all():
+            app.hub.warnings[row["id"]] = row
+        again = app.hub.warnings[w["id"]]
+        self.assertEqual(again["kind"], "lane")
+        self.assertEqual(again["threat"], "pve")
+        self.assertEqual(again["severity"], "deadly")
+        self.assertEqual(again["location"], "Between A and B")
+        self.assertEqual(again["confirmations"], ["8"])   # confirm survived the reload
+
+    def test_public_form_resolves_anchor_and_flags_stale(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
+        pub = app.hub._public_warning(w)
+        self.assertEqual(pub["anchor_a"]["name"], self._poi.name)
+        self.assertEqual(pub["anchor_a"]["system"], self._poi.system)
+        self.assertFalse(pub["stale"])
+        w["created"] = time.time() - (app.warning_stale_min() * 60 + 1)
+        pub = app.hub._public_warning(w)
+        self.assertTrue(pub["stale"])
+        self.assertGreater(pub["expires_s"], 0)
+
+    def test_public_form_unknown_anchor_is_unlabeled(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active", None, None, "somewhere", "")
+        # Simulate an anchor id the current nav dataset doesn't know.
+        w["anchor_a_poi"] = 999999999
+        pub = app.hub._public_warning(w)
+        self.assertIsNone(pub["anchor_a"]["name"])
+        self.assertEqual(pub["anchor_a"]["id"], 999999999)
+
+    def test_board_orders_deadliest_then_freshest(self):
+        sighted = app.hub.post_warning("7", "point", "pvp", "sighted", self._poi_id, None, "a", "")
+        deadly = app.hub.post_warning("8", "point", "pvp", "deadly", self._poi_id, None, "b", "")
+        order = [w["id"] for w in app.hub.warnings_board()]
+        self.assertEqual(order[0], deadly["id"])     # deadly outranks sighted
+        self.assertEqual(order[1], sighted["id"])
+
+    # --- REST surface -------------------------------------------------------
+    def test_api_post_point_with_anchor(self):
+        r = self.client.post("/api/warnings", json={
+            "kind": "point", "threat": "pvp", "severity": "deadly",
+            "anchor_a": self._poi_id, "note": "camped"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["anchor_a"]["id"], self._poi_id)
+        self.assertEqual(body["severity"], "deadly")
+
+    def test_api_post_requires_a_location(self):
+        r = self.client.post("/api/warnings", json={"kind": "point", "threat": "pvp"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_api_free_text_only_is_valid(self):
+        r = self.client.post("/api/warnings", json={
+            "kind": "lane", "location": "Between Baijini and Orison"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.json()["anchor_a"])
+
+    def test_api_bad_enums_fall_back(self):
+        r = self.client.post("/api/warnings", json={
+            "kind": "nonsense", "threat": "aliens", "severity": "spicy",
+            "location": "somewhere"})
+        body = r.json()
+        self.assertEqual(body["kind"], "point")
+        self.assertEqual(body["threat"], "pvp")
+        self.assertEqual(body["severity"], "active")
+
+    def test_api_snapshot_lists_warnings(self):
+        app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "a", "")
+        app.hub.post_warning("8", "lane", "pve", "active", None, None, "b", "")
+        body = self.client.get("/api/warnings").json()
+        self.assertEqual(body["count"], 2)
+
+    def test_api_confirm_and_delete(self):
+        w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "a", "")
+        r = self.client.post(f"/api/warnings/{w['id']}/confirm")   # caller "1" != poster
+        self.assertEqual(r.json()["confirm_count"], 1)
+        self.assertEqual(self.client.delete(f"/api/warnings/{w['id']}").status_code, 404)  # not owner
+        self._member["is_admin"] = True
+        self.assertEqual(self.client.delete(f"/api/warnings/{w['id']}").status_code, 200)
+
+    def test_api_confirm_missing_404s(self):
+        self.assertEqual(self.client.post("/api/warnings/999/confirm").status_code, 404)
+
+
+class WarningAnnounceTests(unittest.TestCase):
+    """Backlog #24 — opt-in 'announce to Discord' for a danger warning: a channel
+    broadcast (no @mentions), rate-limited per member, silent when the pirates webhook
+    is unset, and surfaced to the composer via `announce_available`."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("pirates"), _GOOD_WEBHOOK)
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.warnings.clear()
+        app.hub._warning_seq = 0
+        app._warning_announce_at.clear()
+        db.set_setting(notify._webhook_key("pirates"), _GOOD_WEBHOOK)
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    _LANE = {"id": 3, "poster_id": "7", "poster": "Ace", "kind": "lane",
+             "threat": "pvp", "severity": "deadly",
+             "anchor_a": {"id": 1, "name": "Baijini Point", "system": "Stanton"},
+             "anchor_b": {"id": 2, "name": "Orison", "system": "Stanton"},
+             "location": "", "note": "2 Cutlass + a snare"}
+    _POINT = {"id": 4, "poster_id": "8", "poster": "Nova", "kind": "point",
+              "threat": "pve", "severity": "active",
+              "anchor_a": {"id": 5, "name": "CRU-L1", "system": "Stanton"},
+              "anchor_b": None, "location": "", "note": ""}
+
+    def test_lane_announce_names_both_endpoints(self):
+        asyncio.run(app._notify_warning_posted(self._LANE))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "pirates")
+        self.assertIsNone(msg["mentions"])
+        self.assertIn("Baijini Point", msg["text"])
+        self.assertIn("Orison", msg["text"])
+        self.assertIn("DEADLY", msg["text"])
+        self.assertIn("players (PvP)", msg["text"])
+        self.assertEqual(msg["dedup_key"], "warning-posted:3")
+
+    def test_point_announce_reads_as_danger_near(self):
+        asyncio.run(app._notify_warning_posted(self._POINT))
+        self.assertIn("Danger near CRU-L1", self.sent[0]["text"])
+        self.assertIn("NPC pirates (PvE)", self.sent[0]["text"])
+
+    def test_announce_silent_when_no_webhook(self):
+        db.set_setting(notify._webhook_key("pirates"), "")
+        asyncio.run(app._notify_warning_posted(self._LANE))
+        self.assertEqual(self.sent, [])
+
+    def test_announce_is_rate_limited_per_member(self):
+        self.assertTrue(app._warning_announce_ok("7"))
+        self.assertFalse(app._warning_announce_ok("7"))
+        self.assertTrue(app._warning_announce_ok("8"))
+
+    def test_snapshot_exposes_announce_available(self):
+        self.assertTrue(self.client.get("/api/warnings").json()["announce_available"])
+        db.set_setting(notify._webhook_key("pirates"), "")
+        self.assertFalse(self.client.get("/api/warnings").json()["announce_available"])
+
+    def test_api_announce_arms_the_rate_limit(self):
+        r = self.client.post("/api/warnings", json={
+            "kind": "lane", "location": "Between A and B", "announce": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("1", app._warning_announce_at)
+
+
+class TradeDangerWiringTests(unittest.TestCase):
+    """#24 trade-planner glue in app.py: avoid_mode normalization, the leg-warning
+    serializer, and leg annotation. The nav_core avoid/annotate logic itself is
+    covered in test_nav_core.TradeDangerAvoidTests."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._poi_id = next(iter(app.nav.pois))
+        cls._poi = app.nav.pois[cls._poi_id]
+
+    def test_norm_avoid_mode(self):
+        self.assertEqual(app._norm_avoid_mode("avoid"), "avoid")
+        self.assertEqual(app._norm_avoid_mode("warn"), "warn")
+        self.assertEqual(app._norm_avoid_mode("bogus"), "ignore")
+        self.assertEqual(app._norm_avoid_mode(None), "ignore")
+
+    def test_leg_warning_view_resolves_poi_name(self):
+        w = {"id": 5, "kind": "point", "anchor_a_poi": self._poi_id, "anchor_b_poi": None,
+             "threat": "pvp", "severity": "deadly", "location": ""}
+        v = app._leg_warning_view(w)
+        self.assertEqual(v["where"], self._poi.name)
+        self.assertEqual((v["id"], v["severity"], v["threat"]), (5, "deadly", "pvp"))
+
+    def test_leg_warning_view_falls_back_to_location(self):
+        w = {"id": 6, "kind": "lane", "anchor_a_poi": None, "anchor_b_poi": None,
+             "threat": "pve", "severity": "active", "location": "Between A and B"}
+        self.assertEqual(app._leg_warning_view(w)["where"], "Between A and B")
+
+    def test_annotate_ignore_is_noop(self):
+        plan = {"legs": [{"buy_poi_id": self._poi_id, "sell_poi_id": None}]}
+        w = {"id": 1, "kind": "point", "anchor_a_poi": self._poi_id, "severity": "deadly"}
+        out = app._annotate_trade_legs(plan, [w], "ignore")
+        self.assertNotIn("warnings", out["legs"][0])
+
+    def test_annotate_warn_tags_touched_leg(self):
+        plan = {"legs": [{"buy_poi_id": self._poi_id, "sell_poi_id": None}]}
+        w = {"id": 1, "kind": "point", "anchor_a_poi": self._poi_id, "anchor_b_poi": None,
+             "threat": "pvp", "severity": "deadly", "location": ""}
+        out = app._annotate_trade_legs(plan, [w], "warn")
+        self.assertEqual([x["id"] for x in out["legs"][0]["warnings"]], [1])
+
+    def test_active_trade_warnings_snapshot(self):
+        app.hub.warnings.clear()
+        app.hub.warnings[1] = {"id": 1, "kind": "point", "anchor_a_poi": self._poi_id,
+                               "anchor_b_poi": None, "severity": "active", "threat": "pvp",
+                               "location": "", "note": "", "confirmations": [], "created": 0.0}
+        try:
+            snap = app.hub.active_trade_warnings()
+            self.assertEqual([w["id"] for w in snap], [1])
+        finally:
+            app.hub.warnings.clear()
+
+
 class FleetTemplateTests(unittest.TestCase):
     """#20 v1.1: the ship seat-template feed + the saved-group-template lifecycle
     (snapshot an event's units → apply onto another event → delete)."""

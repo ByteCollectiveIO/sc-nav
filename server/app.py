@@ -169,6 +169,29 @@ def lfg_stale_min() -> int:
     return max(1, min(v, ageoff - 1)) if ageoff > 1 else 1
 
 
+def warning_ageoff_min() -> int:
+    """Minutes a pirate danger warning lives before it ages off the board (#24).
+    Admin-editable; applies live to existing warnings (the lifecycle is computed
+    from `created`, not frozen at post time). Warnings are far more ephemeral than
+    LFG posts — a snare gets set up and abandoned within the hour. Default 60."""
+    try:
+        return max(1, int(db.get_setting("warning_ageoff_min", "60")))
+    except (TypeError, ValueError):
+        return 60
+
+
+def warning_stale_min() -> int:
+    """Minutes a warning stays "fresh" before it's flagged stale (nearing age-off,
+    "still there?"). Always kept strictly below the age-off so every warning has a
+    fresh phase. Default 40."""
+    ageoff = warning_ageoff_min()
+    try:
+        v = int(db.get_setting("warning_stale_min", "40"))
+    except (TypeError, ValueError):
+        v = 40
+    return max(1, min(v, ageoff - 1)) if ageoff > 1 else 1
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
@@ -1102,6 +1125,18 @@ _LFG_MAX_TAGS = 6             # playstyle chips per entry
 LFG_ANNOUNCE_COOLDOWN_S = 600.0
 _lfg_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
+# Pirate danger warnings (#24). A community-refreshable, time-bound danger board;
+# a warning is a `point` (around one POI) or a `lane` (a snare between two anchor
+# POIs), tagged pvp/pve at a severity. Same green→stale→age-off lifecycle as LFG
+# (off `created`), same opt-in per-member rate-limited Discord announce.
+WARNING_KINDS = ("point", "lane")
+WARNING_THREATS = ("pvp", "pve")
+WARNING_SEVERITIES = ("sighted", "active", "deadly")
+_WARNING_NOTE_MAX = 280
+_WARNING_LOCATION_MAX = 120
+WARNING_ANNOUNCE_COOLDOWN_S = 600.0
+_warning_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
+
 # How often the scheduled event-reminder loop scans for due events.
 REMINDER_TICK_S = 60.0
 
@@ -1311,6 +1346,10 @@ class SessionHub:
         # direction supersedes), auto-expiring and dropped when the poster goes offline.
         self.lfg: dict[int, dict] = {}
         self._lfg_seq = 0
+        # Pirate danger warnings (#24): id -> warning. Persisted (survives restart)
+        # and community-refreshable; ages off purely by the clock like `lfg`.
+        self.warnings: dict[int, dict] = {}
+        self._warning_seq = 0
 
     def get(self, user: dict) -> Session:
         sess = self.sessions.get(user["id"])
@@ -1590,6 +1629,141 @@ class SessionHub:
         roster. Sent on post / join / close / expire."""
         await self.send_to_all_clients({"type": "lfg", "entries": self.lfg_board()})
 
+    # --- pirate danger warnings (#24) ---------------------------------------
+    def post_warning(self, poster: str, kind: str, threat: str, severity: str,
+                     anchor_a: int | None, anchor_b: int | None,
+                     location: str, note: str) -> dict:
+        """Create a danger warning. A member re-posting the *same* danger (same kind
+        + same anchors + same free-text location) supersedes their previous one rather
+        than stacking duplicates; distinct dangers coexist. `system` is resolved from
+        the anchors when they map to known POIs. Returns the new record. Call under
+        the lock."""
+        system = None
+        for pid in (anchor_a, anchor_b):
+            p = nav.pois.get(pid) if pid else None
+            if p is not None:
+                system = p.system
+                break
+        key = (kind, anchor_a, anchor_b, location.strip().lower())
+        superseded = [wid for wid, w in self.warnings.items()
+                      if w["poster"] == poster and (
+                          w["kind"], w["anchor_a_poi"], w["anchor_b_poi"],
+                          (w["location"] or "").strip().lower()) == key]
+        for wid in superseded:
+            del self.warnings[wid]
+        db.warning_delete(superseded)
+        self._warning_seq += 1
+        entry = {
+            "id": self._warning_seq, "poster": poster, "kind": kind,
+            "threat": threat, "severity": severity, "system": system,
+            "anchor_a_poi": anchor_a, "anchor_b_poi": anchor_b,
+            "location": location, "note": note,
+            "confirmations": [], "created": time.time(),
+        }
+        self.warnings[entry["id"]] = entry
+        db.warning_upsert(entry)
+        return entry
+
+    def confirm_warning(self, warning_id: int, uid: str) -> dict | None:
+        """Community "still active" refresh: bump `created` (resetting the age-off
+        clock) and, for anyone other than the poster, record the confirmer. Returns the
+        updated warning, or None if it's gone. Call under the lock."""
+        w = self.warnings.get(warning_id)
+        if w is None:
+            return None
+        if uid != w["poster"] and uid not in w["confirmations"]:
+            w["confirmations"].append(uid)
+        w["created"] = time.time()
+        db.warning_upsert(w)
+        return w
+
+    def close_warning(self, warning_id: int, uid: str, is_admin: bool) -> bool:
+        """Clear a warning ("all clear") — poster or admin only. Returns True if one
+        was removed. Call under the lock."""
+        w = self.warnings.get(warning_id)
+        if w is None or (w["poster"] != uid and not is_admin):
+            return False
+        del self.warnings[warning_id]
+        db.warning_delete(warning_id)
+        return True
+
+    def drop_warnings_for(self, uid: str) -> bool:
+        """Drop every warning a member posted (e.g. an admin purge). Call under the
+        lock."""
+        gone = [wid for wid, w in self.warnings.items() if w["poster"] == uid]
+        for wid in gone:
+            del self.warnings[wid]
+        db.warning_delete_for(uid)
+        return bool(gone)
+
+    def prune_warnings(self, now: float) -> bool:
+        """Sweep aged-off warnings (older than the org's age-off window). Returns True
+        if any were removed. Call under the lock."""
+        ageoff_s = warning_ageoff_min() * 60
+        gone = [wid for wid, w in self.warnings.items()
+                if now - w["created"] >= ageoff_s]
+        for wid in gone:
+            del self.warnings[wid]
+        db.warning_delete(gone)
+        return bool(gone)
+
+    def _public_warning(self, w: dict) -> dict:
+        """Wire form for one warning: resolved poster + anchor POIs (name/system) +
+        confirmations + age / time-left. `anchor_*` resolve to None-name when the POI
+        id is unknown to the current nav dataset (still routable-intent, just unlabeled)."""
+        now = time.time()
+        age = max(0.0, now - w["created"])
+        ageoff_s = warning_ageoff_min() * 60
+        stale_s = warning_stale_min() * 60
+
+        def _anchor(pid):
+            if not pid:
+                return None
+            p = nav.pois.get(pid)
+            if p is None:
+                return {"id": pid, "name": None, "system": None, "container": None}
+            return {"id": pid, "name": p.name, "system": p.system,
+                    "container": p.container_name}
+
+        return {
+            "id": w["id"], "poster_id": w["poster"],
+            "poster": _resolve_member_name(w["poster"], None),
+            "kind": w["kind"], "threat": w["threat"], "severity": w["severity"],
+            "system": w["system"],
+            "anchor_a": _anchor(w["anchor_a_poi"]),
+            "anchor_b": _anchor(w["anchor_b_poi"]),
+            "location": w["location"], "note": w["note"],
+            "confirmations": [{"id": c, "name": _resolve_member_name(c, None)}
+                              for c in w["confirmations"]],
+            "confirmed_ids": list(w["confirmations"]),
+            "confirm_count": len(w["confirmations"]),
+            "age_s": age,
+            "expires_s": max(0.0, ageoff_s - age),
+            "stale": age >= stale_s,   # → yellow card; nearing age-off
+        }
+
+    def warnings_board(self) -> list[dict]:
+        """All active danger warnings. Deadliest first, then freshest — the ordering a
+        trader (avoid the worst) and a hunter (find the freshest) both want."""
+        rank = {"deadly": 0, "active": 1, "sighted": 2}
+        return [self._public_warning(w) for w in sorted(
+            self.warnings.values(),
+            key=lambda w: (rank.get(w["severity"], 9), -w["created"]))]
+
+    async def broadcast_warnings(self) -> None:
+        """Push the full danger board to every tab. Sent on post / confirm / clear /
+        expire."""
+        await self.send_to_all_clients(
+            {"type": "warnings", "entries": self.warnings_board()})
+
+    def active_trade_warnings(self) -> list[dict]:
+        """Snapshot of the live danger board as internal records, for the trade
+        planner's avoid/warn modes (#24). Call under the lock — the returned list is a
+        fresh copy, so the solve can read it without holding the lock. Un-anchored
+        (board-only) warnings are harmless: the nav_core avoid/annotate helpers skip
+        anything missing the anchor(s) it needs."""
+        return list(self.warnings.values())
+
     def forget_entity(self, entity_id: int) -> None:
         """A deleted/refreshed-away POI/observation must stop being any member's
         destination or last-capture reference."""
@@ -1644,6 +1818,7 @@ async def presence_broadcaster():
                 # (No longer tied to presence — a post lives its full age-off window
                 # even if the poster steps away, and survives restarts.)
                 lfg_changed = hub.prune_lfg(now)
+                warnings_changed = hub.prune_warnings(now)
                 if upserts:
                     await hub.send_to_all_clients(
                         {"type": "presence", "op": "upsert", "users": upserts})
@@ -1656,6 +1831,8 @@ async def presence_broadcaster():
                     await hub.broadcast_online_roster()
                 if lfg_changed:
                     await hub.broadcast_lfg()
+                if warnings_changed:
+                    await hub.broadcast_warnings()
         except Exception as exc:   # never let the loop die on a transient error
             print(f"[sc-nav] presence broadcaster error: {exc}")
 
@@ -1689,6 +1866,10 @@ async def _start_presence_broadcaster():
     for e in db.lfg_all():
         hub.lfg[e["id"]] = e
     hub._lfg_seq = max([0, *hub.lfg])
+    # Same re-hydration for the pirate danger board (#24).
+    for w in db.warnings_all():
+        hub.warnings[w["id"]] = w
+    hub._warning_seq = max([0, *hub.warnings])
     asyncio.create_task(presence_broadcaster())
     asyncio.create_task(event_reminder_loop())
     # v0.13.0 stored one shared Discord webhook; move it to the new per-category
@@ -2023,6 +2204,10 @@ class TradePlanIn(BaseModel):
     max_price_age_days: int | None = Field(default=None, ge=1, le=365)   # drop stale prices
     legs: list[TradeLegIn] = Field(default_factory=list, max_length=24)  # manual mode
     ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    # Pirate danger board (#24): ignore = plan as-is; warn = plan normally but flag
+    # legs that touch an active warning; avoid = drop warned POIs / snared lanes from
+    # the solver (auto/filtered only — manual legs are the player's explicit choice).
+    avoid_mode: str = "ignore"                          # ignore | warn | avoid
 
 
 class TradeRunPatchIn(BaseModel):
@@ -2047,6 +2232,7 @@ class TradeReplanIn(BaseModel):
     budget: int | None = Field(default=None, gt=0, le=10_000_000_000)
     minimize_deadhead: bool | None = None
     max_price_age_days: int | None = Field(default=None, ge=1, le=365)
+    avoid_mode: str | None = None                       # ignore | warn | avoid (#24)
 
 
 class TradeFavoriteIn(BaseModel):
@@ -2062,6 +2248,38 @@ class TradeFavoriteIn(BaseModel):
 _DEADHEAD_WEIGHT = 3.0   # empty-hold time multiplier when minimize_deadhead is on
 
 
+def _norm_avoid_mode(mode) -> str:
+    return mode if mode in ("ignore", "warn", "avoid") else "ignore"
+
+
+def _leg_warning_view(w: dict) -> dict:
+    """Compact wire form of one danger warning (#24) as it attaches to a trade leg:
+    id + threat/severity + a resolved "where" label the leg badge can render."""
+    def nm(pid):
+        p = nav.pois.get(pid) if pid else None
+        return p.name if p else None
+    a, b = nm(w.get("anchor_a_poi")), nm(w.get("anchor_b_poi"))
+    if w.get("kind") == "lane":
+        where = f"{a} ↔ {b}" if a and b else (w.get("location") or "a trade lane")
+    else:
+        where = a or (w.get("location") or "a location")
+    return {"id": w.get("id"), "kind": w.get("kind"), "threat": w.get("threat"),
+            "severity": w.get("severity"), "where": where}
+
+
+def _annotate_trade_legs(plan: dict, warnings: list[dict], mode: str) -> dict:
+    """In warn/avoid mode, tag each costed leg with the active warnings touching it
+    (#24) so the client can badge the danger. No-op in ignore mode or with no
+    warnings. Mutates + returns the plan."""
+    if mode == "ignore" or not warnings:
+        return plan
+    for lg in plan.get("legs") or ():
+        hits = nav_core.trade_leg_warnings(lg, warnings)
+        if hits:
+            lg["warnings"] = [_leg_warning_view(w) for w in hits]
+    return plan
+
+
 @app.post("/api/trade/plan")
 async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_session)):
     """Stateless trade-route planner (#21). `mode`:
@@ -2069,15 +2287,21 @@ async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_sessio
       filtered  — same, restricted to `commodities`,
       manual    — cost the player's chosen `legs` in order (no solver).
     Start from a POI (`start_id`) or the caller's live position (`start_here`).
-    Returns {summary, legs, start} — feasibility, per-leg buy/sell + travel, and
-    route totals (profit, capital needed, aUEC/hour)."""
-    return _solve_trade_plan(body, hub.sessions.get(user["id"]))
+    `avoid_mode` (#24) layers the pirate danger board over the result. Returns
+    {summary, legs, start} — feasibility, per-leg buy/sell + travel, route totals."""
+    async with hub.lock:
+        sess = hub.sessions.get(user["id"])
+        warnings = hub.active_trade_warnings()
+    return _solve_trade_plan(body, sess, warnings)
 
 
-def _solve_trade_plan(body: TradePlanIn, sess: "Session | None") -> dict:
+def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
+                      warnings: list[dict] | None = None) -> dict:
     """Resolve start (POI or live position) and run the right solver for the
     requested mode. Shared by /api/trade/plan (stateless) and /api/trade/run
-    (persisted). Raises HTTPException on bad input / missing live position."""
+    (persisted). `warnings` (active danger board records, #24) drive avoid_mode:
+    'avoid' drops warned POIs/snared lanes from the solver; 'warn' plans normally and
+    flags touched legs. Raises HTTPException on bad input / missing live position."""
     if body.start_id is not None and body.start_id not in nav.pois:
         raise HTTPException(status_code=404, detail="unknown start_id")
     start_pos = None
@@ -2089,20 +2313,29 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None") -> dict:
     t_ref = sess.t if sess else None
     max_age_s = body.max_price_age_days * 86400 if body.max_price_age_days else None
     dh_weight = _DEADHEAD_WEIGHT if body.minimize_deadhead else 1.0
+    mode = _norm_avoid_mode(body.avoid_mode)
+    warnings = warnings or []
+    avoid_poi_ids, avoid_pairs = (nav_core.trade_avoid_sets(warnings)
+                                  if mode == "avoid" else (None, None))
     try:
         if body.mode == "manual":
-            return nav_core.cost_trade_legs(
+            # Manual legs are the player's explicit choice — never silently dropped;
+            # they still get warn/avoid badges so a snared pick is at least flagged.
+            plan = nav_core.cost_trade_legs(
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
                 budget=body.budget, t_ref=t_ref)
-        return nav_core.plan_trade_route(
-            nav, trade_price_points, body.usable_scu,
-            start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
-            commodities=(body.commodities if body.mode == "filtered" else None),
-            system=body.system, sort=body.sort, budget=body.budget,
-            deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref)
+        else:
+            plan = nav_core.plan_trade_route(
+                nav, trade_price_points, body.usable_scu,
+                start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
+                commodities=(body.commodities if body.mode == "filtered" else None),
+                system=body.system, sort=body.sort, budget=body.budget,
+                deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
+                avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    return _annotate_trade_legs(plan, warnings, mode)
 
 
 def _initial_trade_states(legs: list[dict]) -> list[str]:
@@ -2151,6 +2384,7 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "system": body.system, "sort": body.sort, "budget": body.budget,
             "minimize_deadhead": body.minimize_deadhead,
             "max_price_age_days": body.max_price_age_days,
+            "avoid_mode": _norm_avoid_mode(body.avoid_mode),   # #24
         },
     }
 
@@ -2162,7 +2396,7 @@ async def start_trade_run(body: TradePlanIn, user: dict = Depends(require_sessio
     replaces any prior active trade run. 409 if the plan yields no feasible legs."""
     async with hub.lock:
         sess = hub.get(user)
-        plan = _solve_trade_plan(body, sess)
+        plan = _solve_trade_plan(body, sess, hub.active_trade_warnings())
         if not plan["summary"].get("feasible") or not plan.get("legs"):
             reason = plan["summary"].get("reason") or "no profitable trades for these filters"
             raise HTTPException(status_code=409, detail=f"trade route infeasible: {reason}")
@@ -2266,6 +2500,13 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         max_age_s = max_age_days * 86400 if max_age_days else None
         minimize = (body.minimize_deadhead if body.minimize_deadhead is not None
                     else p.get("minimize_deadhead"))
+        # Danger board (#24): re-plan honors the run's avoid_mode (or a body override).
+        # A live re-plan is exactly when avoidance matters most — pirates just hit you.
+        mode = _norm_avoid_mode(body.avoid_mode if body.avoid_mode is not None
+                                else p.get("avoid_mode"))
+        warnings = hub.active_trade_warnings()
+        avoid_poi_ids, avoid_pairs = (nav_core.trade_avoid_sets(warnings)
+                                      if mode == "avoid" else (None, None))
         new_plan = nav_core.replan_trade_route(
             nav, trade_price_points, run["usable_scu"], start_pos=sess.pos, held=held,
             max_stops=(body.max_stops or p.get("max_stops") or 6),
@@ -2274,7 +2515,10 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
             sort=(body.sort or p.get("sort") or "per_hour"),
             budget=p.get("budget"),
             deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
-            max_age_s=max_age_s, t_ref=sess.t)
+            max_age_s=max_age_s, t_ref=sess.t,
+            avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs)
+        _annotate_trade_legs(new_plan, warnings, mode)
+        p["avoid_mode"] = mode                       # persist the mode used
         new_legs = new_plan.get("legs") or []
         if not new_legs:
             reason = new_plan["summary"].get("reason") or "no profitable continuation from here"
@@ -3111,6 +3355,44 @@ def _lfg_announce_ok(poster_id: str) -> bool:
     if last is not None and now - last < LFG_ANNOUNCE_COOLDOWN_S:
         return False
     _lfg_announce_at[poster_id] = now
+    return True
+
+
+async def _notify_warning_posted(pub: dict) -> None:
+    """Announce a fresh pirate danger warning to the org's Discord (#24, opt-in per
+    post). A channel shout with NO @mentions — it warns traders off the lane and
+    rallies hunters onto the camper; both funnel back through the deep link."""
+    if not notify.is_configured("pirates"):
+        return
+    icon = "☠️" if pub["threat"] == "pvp" else "🤖"
+    threat = "players (PvP)" if pub["threat"] == "pvp" else "NPC pirates (PvE)"
+    a = (pub.get("anchor_a") or {}).get("name")
+    b = (pub.get("anchor_b") or {}).get("name")
+    if pub["kind"] == "lane":
+        where = f"{a} ↔ {b}" if a and b else (pub.get("location") or "a trade lane")
+        head = f"{icon} **Pirate snare — {where}**"
+    else:
+        where = a or (pub.get("location") or "a location")
+        head = f"{icon} **Danger near {where}**"
+    lines = [head,
+             f"{pub['severity'].upper()} · {threat} · reported by {pub['poster']}"]
+    loc = (pub.get("location") or "").strip()
+    if loc and loc != where:
+        lines.append(f"📍 {loc}")
+    if pub.get("note"):
+        lines.append(pub["note"])
+    await notify.send("pirates", "\n".join(lines) + _deep_link("#/pirates"),
+                      dedup_key=f"warning-posted:{pub['id']}")
+
+
+def _warning_announce_ok(poster_id: str) -> bool:
+    """Anti-spam gate for announcing a danger warning: one announced warning per
+    member per cooldown. Returns True (and arms the cooldown) only when allowed."""
+    now = time.monotonic()
+    last = _warning_announce_at.get(poster_id)
+    if last is not None and now - last < WARNING_ANNOUNCE_COOLDOWN_S:
+        return False
+    _warning_announce_at[poster_id] = now
     return True
 
 
@@ -4939,6 +5221,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "obs_fresh_window_h": obs_fresh_window_h(),
         "lfg_ageoff_min": lfg_ageoff_min(),
         "lfg_stale_min": lfg_stale_min(),
+        "warning_ageoff_min": warning_ageoff_min(),
+        "warning_stale_min": warning_stale_min(),
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
@@ -4958,6 +5242,10 @@ class SettingsIn(BaseModel):
     # enforced in the handler.
     lfg_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
     lfg_stale_min: int | None = Field(default=None, ge=1, le=10080)
+    # Pirate danger-board lifecycle (minutes): warnings turn stale at warning_stale_min
+    # and age off at warning_ageoff_min. Same stale < age-off rule, enforced below.
+    warning_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
+    warning_stale_min: int | None = Field(default=None, ge=1, le=10080)
     # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
     # be used to stuff the meta table. Each id is validated (isdigit) below.
     extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
@@ -5006,6 +5294,14 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
                                 detail="Stale time must be less than the age-off time.")
         db.set_setting("lfg_ageoff_min", str(ageoff))
         db.set_setting("lfg_stale_min", str(stale))
+    if body.warning_ageoff_min is not None or body.warning_stale_min is not None:
+        ageoff = body.warning_ageoff_min if body.warning_ageoff_min is not None else warning_ageoff_min()
+        stale = body.warning_stale_min if body.warning_stale_min is not None else warning_stale_min()
+        if stale >= ageoff:
+            raise HTTPException(status_code=400,
+                                detail="Stale time must be less than the age-off time.")
+        db.set_setting("warning_ageoff_min", str(ageoff))
+        db.set_setting("warning_stale_min", str(stale))
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
@@ -5279,6 +5575,85 @@ async def delete_lfg(entry_id: int, user: dict = Depends(require_session)):
     return {"ok": True}
 
 
+class WarningIn(BaseModel):
+    kind: str = Field(default="point", max_length=_UNIT_MAX)       # point | lane
+    threat: str = Field(default="pvp", max_length=_UNIT_MAX)       # pvp | pve
+    severity: str = Field(default="active", max_length=_UNIT_MAX)  # sighted|active|deadly
+    anchor_a: int | None = None      # POI id: the centre (point) / first endpoint (lane)
+    anchor_b: int | None = None      # POI id: lane second endpoint (ignored for point)
+    location: str = Field(default="", max_length=_WARNING_LOCATION_MAX)  # free text
+    note: str = Field(default="", max_length=_WARNING_NOTE_MAX)
+    announce: bool = False           # opt-in: also shout this warning to the org's Discord
+
+
+@app.get("/api/warnings")
+async def warnings_snapshot(user: dict = Depends(require_session)):
+    """Pirate danger board snapshot (#24): all active warnings, deadliest + freshest
+    first. Live updates arrive over WS as `warnings`; this is the initial paint.
+    `announce_available` gates the composer's Discord opt-in to when a pirates webhook
+    is configured (a bool, never the URL)."""
+    async with hub.lock:
+        entries = hub.warnings_board()
+    return {"entries": entries, "count": len(entries),
+            "announce_available": notify.is_configured("pirates")}
+
+
+@app.post("/api/warnings")
+async def create_warning(body: WarningIn, user: dict = Depends(require_session)):
+    """Post a pirate danger warning (#24). `point` = danger around one POI; `lane` = a
+    snare between two anchor POIs. Anchors must resolve to known POIs to steer the
+    planner later; a warning with only free-text `location` is still valid board-only
+    intel (a survivor posting mid-escape). Re-posting the same danger supersedes your
+    previous one rather than stacking duplicates."""
+    kind = body.kind if body.kind in WARNING_KINDS else "point"
+    threat = body.threat if body.threat in WARNING_THREATS else "pvp"
+    severity = body.severity if body.severity in WARNING_SEVERITIES else "active"
+    location = (body.location or "").strip()[:_WARNING_LOCATION_MAX]
+    note = (body.note or "").strip()[:_WARNING_NOTE_MAX]
+    anchor_a = body.anchor_a if body.anchor_a in nav.pois else None
+    anchor_b = body.anchor_b if (kind == "lane" and body.anchor_b in nav.pois) else None
+    if anchor_b is not None and anchor_b == anchor_a:
+        anchor_b = None
+    if anchor_a is None and not location:
+        raise HTTPException(
+            status_code=400,
+            detail="A warning needs a location — pick a POI or describe where.")
+    async with hub.lock:
+        entry = hub.post_warning(user["id"], kind, threat, severity,
+                                 anchor_a, anchor_b, location, note)
+        pub = hub._public_warning(entry)
+    await hub.broadcast_warnings()
+    # Opt-in Discord shout (rate-limited per member so nobody can blast the channel).
+    if body.announce and notify.is_configured("pirates") and _warning_announce_ok(user["id"]):
+        _notify_bg(_notify_warning_posted(pub))
+    return pub
+
+
+@app.post("/api/warnings/{warning_id}/confirm")
+async def warning_confirm(warning_id: int, user: dict = Depends(require_session)):
+    """Community "still active" refresh (#24): resets the age-off clock and records you
+    as a confirmer (a credibility signal, "3 people confirmed"). Anyone may confirm;
+    idempotent per member."""
+    async with hub.lock:
+        entry = hub.confirm_warning(warning_id, user["id"])
+        if entry is None:
+            raise HTTPException(status_code=404, detail="That warning is gone.")
+        pub = hub._public_warning(entry)
+    await hub.broadcast_warnings()
+    return pub
+
+
+@app.delete("/api/warnings/{warning_id}")
+async def delete_warning(warning_id: int, user: dict = Depends(require_session)):
+    """Clear a danger warning ("all clear") — poster or admin only (#24)."""
+    async with hub.lock:
+        ok = hub.close_warning(warning_id, user["id"], bool(user.get("is_admin")))
+    if not ok:
+        raise HTTPException(status_code=404, detail="No such warning (or not yours).")
+    await hub.broadcast_warnings()
+    return {"ok": True}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     # Browsers only; require a logged-in org member (session loaded from cookie).
@@ -5314,9 +5689,11 @@ async def websocket_endpoint(ws: WebSocket):
             roster = hub.roster()
             online = hub.online_roster()
             board = hub.lfg_board()
+            warnings = hub.warnings_board()
         await ws.send_text(json.dumps({"type": "roster", "users": roster}))
         await ws.send_text(json.dumps({"type": "online_roster", "users": online}))
         await ws.send_text(json.dumps({"type": "lfg", "entries": board}))
+        await ws.send_text(json.dumps({"type": "warnings", "entries": warnings}))
         # Tell the new tab the current count immediately; tell everyone else only
         # when this member actually came online (a 2nd/3rd tab doesn't change it,
         # but their arrival does add them to everyone's online roster).

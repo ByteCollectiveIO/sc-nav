@@ -37,13 +37,14 @@ banner — don't scroll.
 Body views (each a `#…-view` container, hash-routed):
 launcher, main (navigator), settings, setup, intel, leaderboard, stats,
 cargo-leaderboard, cargo-stats, route (cargo planner), events, goals, inventory,
-market, online (who's online, #19), lfg (group finder / LFG board, #19), terms, privacy.
+market, online (who's online, #19), lfg (group finder / LFG board, #19),
+pirates (danger board / pirate warnings, #24), terms, privacy.
 
 JS modules (by `// ----` banner): formatting · resource forecast · state ·
 freshness · shard · nearby · captures · destination · path/map · search ·
 element finder · teammate presence · websocket · auth gate · cargo planner +
 run mode · event planner · resource manager (catalog picker / goals / inventory)
-· marketplace · view router · leaderboard · statistics · Org Intel · org settings
+· marketplace · pirate danger board (#24) · view router · leaderboard · statistics · Org Intel · org settings
 · org logo · admins · watcher tokens · setup guide · init.
 
 ## app.py endpoint groups (grep the route to get the exact line)
@@ -53,6 +54,7 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 - Cargo planner: `/api/route/plan|run|history|session/reset`
 - Cargo analytics: `/api/cargo/leaderboard`, `/api/cargo/stats`
 - Trade Route Planner (#21): `/api/trade/terminals|prices|trades`, `/api/trade/plan` (auto/filtered/manual); **run mode (step 5)** `/api/trade/run` (POST start / GET resume / PATCH `action` buy|sell|advance / DELETE abandon) + `/api/trade/run/replan` (re-solve from live position, sunk-cargo-aware). Legs not stops: per-leg buy→sell phase; solver in `nav_core.plan_trade_route`/`cost_trade_legs`/`replan_trade_route`; session helpers `_point_at_active_trade_leg`/`_advance_trade_run`/`Session.trade_run_view`. **History + stats (step 6):** `/api/trade/history` (personal runs + realized-profit stats + quick-picks), `/api/trade/session/reset`, `/api/trade/stats` (guild Trading section `#/intel/trading`, `#/trade-stats` aliased) + admin `/api/admin/stats/trade/clear`; realized profit `nav_core.trade_leg_realized`→`trade_run_realized`; derivations `derive_trade_run_stats`/`derive_trade_quick_picks`/`derive_guild_trade_stats`/`derive_trade_leaderboard`; frontend `renderTradeHistory` (#/trade RECENT TRADES) + `renderTradeStats`. **Favorites:** `GET/POST /api/trade/favorites` + `DELETE /api/trade/favorites/{id}` (`TradeFavoriteIn`; save plan *config* not resolved legs → re-solve on load; `trade_favorites` table; `db.list/save/delete_trade_favorite`); frontend SAVED ROUTES panel `renderTradeFavorites`/`saveTradeFavorite`/`applyTradeConfig`, shared `buildTradePlanBody` + new generic `promptDialog`
+- Pirate danger warnings (#24): `/api/warnings` (board snapshot + `announce_available`), `POST /api/warnings` (post point|lane, pvp|pve, severity, anchor POI id(s) + free-text location; opt-in `announce`), `POST /api/warnings/{id}/confirm` (community "still active" refresh), `DELETE /api/warnings/{id}` (poster/admin). In-memory `Hub.warnings` board persisted to `pirate_warnings`, time-based age-off (`warning_ageoff_min`/`warning_stale_min`, default 60/40) pruned in the presence broadcaster, WS `warnings` frame; `notify` category `pirates`. Frontend = its own **Danger Board** app (`#/pirates`): composer + board + launcher card + `☠️ N` badge; admin lifecycle knobs `warning_ageoff_min`/`warning_stale_min` in ORG SETTINGS. **Trade-planner integration:** `avoid_mode` (ignore|warn|avoid) on `TradePlanIn`/`TradeReplanIn`; `hub.active_trade_warnings()` → `_solve_trade_plan`/replan build avoid sets (nav_core `trade_avoid_sets`) for the `_trade_candidates` `avoid_poi_ids`/`avoid_pairs` filter, and `_annotate_trade_legs` (nav_core `trade_leg_warnings`) tags touched legs; frontend `setTradeAvoid` seg + per-leg ⚠ badge + route-level callout in `renderTradePlan`. **Board→events:** each card's "⚔ Organize hunt" (`promoteWarningToEvent`) prefills CREATE EVENT via the shared `eventSeed` (was `lfgEventSeed`) + `#/events/new` + `POST /api/events`
 - Events: `/api/events*`, `/api/events/{id}/signup`; **fleet roster (#20)** `/api/events/{id}/groups[/{gid}]` (board + group CRUD), `/api/events/{id}/assignments` (PUT assign/move/unassign, group_id null = unassign), `/api/events/{id}/manifest` (+ `/post` → Discord). Plan is organizer/admin-owned; nav-side logic `nav_core.derive_roster_board`/`build_event_manifest`
 - Resource manager: `/api/catalog`, `/api/inventory*`, `/api/goals*`
 - Marketplace: `/api/market*` (offers, confirm)
@@ -63,9 +65,9 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 
 ## db.py tables
 meta · custom_pois · observations · handles · members · watcher_tokens ·
-user_ships · runs · trade_runs · trade_favorites · events · event_signups · event_groups ·
-event_assignments · catalog_items · inventory · goals · inventory_allocations ·
-listings · listing_offers.
+user_ships · runs · trade_runs · trade_favorites · pirate_warnings · events ·
+event_signups · event_groups · event_assignments · catalog_items · inventory ·
+goals · inventory_allocations · listings · listing_offers.
 
 ## Guardrails (don't regress these)
 - **Security**: CSP/nonce + defense-in-depth headers (app.py `_csp`, http middleware);

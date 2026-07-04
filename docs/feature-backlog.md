@@ -1290,7 +1290,7 @@ handle, 3) marketplace `seller_handle`, 4) directory + opt-out.
 ## Engagement & org-ops batch (2026-06-30) — priority order
 
 User brainstorm 2026-06-30; ranked by user interest. #18–20 scoped (own docs);
-#21 un-parked + **SHIPPED thru v0.31.0** (all 6 steps, see below); #22–23 still parked
+#21 un-parked + **SHIPPED thru v0.33.0** (all 6 steps, see below); #22–23 still parked
 (interesting but lower priority / not org-specific).
 
 ## 18. Discord notifications (push integration)
@@ -1366,7 +1366,7 @@ unassigned-pool → group-cards board on the event detail. Manifest export → D
 ### 21. Trade-route finder (buy-low/sell-high on live terminal prices)
 Pure commodity trading using the UEX feed (complements the *contract*-based cargo
 planner): "given my ship SCU + location, top profit-per-SCU routes now."
-**SHIPPED + DEPLOYED thru v0.31.0 (all 6 build steps done, 2026-07-04).** Full spec +
+**SHIPPED + DEPLOYED thru v0.33.0 (all 6 build steps done, 2026-07-04).** Full spec +
 build-status table in [`docs/trade-route-planner.md`](trade-route-planner.md). Live at
 `#/trade`: feeds + terminal→POI crosswalk, single-trade ranking, multi-leg
 auto/filtered/manual solver (v0.28.x), budget/deadhead/staleness enhancement pass
@@ -1379,8 +1379,11 @@ profit. The org-differentiation gap (below) is answered by the live-position re-
 generic external site can't seed from where you actually are) and by capturing real
 per-member earnings. **Favorite routes** (save a plan config → re-solve against live
 prices on load, `trade_favorites` + `/api/trade/favorites` + a SAVED ROUTES panel) are
-now built too, so the whole v1 scope is complete; only teammate-lane-awareness (and
-hazard markers) remain parked v2+ fast-follows.
+now built too, so the whole v1 scope is complete. A v0.33.0 follow-up polished price
+freshness: the "only prices newer than" filter now defaults **on** at 2 days (was
+opt-in at 7), and the best-trades board shows each row's scrape age plus a staleness
+banner when the filter is off. Only teammate-lane-awareness (and hazard markers)
+remain parked v2+ fast-follows.
 
 <details>
 <summary>Original parking note (2026-06-19)</summary>
@@ -1399,3 +1402,37 @@ later.
 ### 23. Recognition badges
 Milestone badges (aUEC hauled, events led) on the member directory. **Parked —
 liked but can get tacky fast**; revisit with restraint (few, earned, tasteful).
+
+## 24. Pirate danger warnings & snare-aware routing
+
+**Status:** **v1 FEATURE-COMPLETE 2026-07-04 (build-order steps 1–7; only /deploy
+left).** Full spec: [`docs/pirate-warnings.md`](pirate-warnings.md). Grew out of the
+#21 trade-planner "hazard markers" v2 fast-follow; supersedes that parking note.
+Backend danger board + `#/pirates` app (impeccable-polished 32→~36/40) + the
+trade-planner `ignore/warn/avoid` integration all built; 349-test suite green. Only
+the v2 snare-detour one-hop reroute stays parked.
+
+Community warning layer for trade routes. Traders get ambushed two ways — quantum
+snares along popular buy→sell lanes, and campers parked at popular destinations —
+and both are predictable, so a shared, time-bound warning board defends traders
+**and** doubles as a pirate-finder for the members who like to go hunt the campers.
+
+**v1 scope (locked):** a new `pirate_warnings` table + Hub board cloned end-to-end
+from the `lfg` stack (time-bound, community-refreshable via a "still active"
+confirm, self-ageing off `created`, admin `warning_ageoff_min`/`stale_min`
+defaulting to 60/40). A standalone `#/pirates` app (mirrors Group Finder) is the
+hunter surface; a compact widget lives in `#/trade`. Warnings are `point` (around a
+POI) or `lane` (between two anchor POIs), tagged PVP/PVE + severity, with
+free-text-tolerant POI autocomplete so a survivor can post "Between Baijini and
+Orison" mid-escape. Planner gets an `ignore/warn/avoid` toggle: **avoid** drops the
+POI from `_trade_candidates` (a POI is never chosen as a buy/sell stop); **warn**
+badges endangered legs (reuse the `--warn` idiom). Opt-in Discord announce via a new
+`notify` `"pirates"` category.
+
+**v2 (parked):** true snare-detour routing — model a lane warning as a capsule
+(segment + severity-scaled radius), test each leg for conflict, and insert a
+min-cost one-hop QT-marker detour to change the approach vector. This is genuinely
+new pathfinding (the travel model is straight-line `dist3` with **no POI graph** —
+only `travel_cost`'s two consumers `_cost_route`/`_greedy_route` and a 3-node
+system gate BFS). Live-run version reuses the `/api/trade/run/replan` pattern.
+Waits until the board has real data.
