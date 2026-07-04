@@ -1,8 +1,36 @@
 # Trade Route Planner — design
 
-**Status:** designing (2026-07-03). Backlog #21, previously parked; revisited
-with a concrete answer to the parking reason (see *Why revisit now* below).
-Nothing built yet — this doc is the decision record we build from.
+**Status:** SHIPPED through **v0.30.0** (2026-07-03, deployed). Backlog #21,
+previously parked; revisited with a concrete answer to the parking reason (see
+*Why revisit now* below). This doc began as the decision record; the build-status
+box below tracks what's actually landed. **What's live:** the full v1 scope —
+feeds/crosswalk, single-trade ranking, multi-leg auto/filtered/manual solver, the
+`#/trade` app, and **run/execute mode with re-plan-from-live-position** — plus a
+post-plan enhancement pass (budget cap / minimize-deadhead / price-staleness) and
+**actual buy/sell figure capture** at execution. Deferred: History + `#/trade-stats`
+(step 6) and favorite routes.
+
+## Build status (what's landed)
+
+| Step | What | Status |
+|---|---|---|
+| 1 | Terminal + price feeds + terminal→POI crosswalk | ✅ v0.28.0 |
+| 2 | Best-single-trade ranking (`rank_trades`) | ✅ v0.28.0 |
+| 3 | Multi-leg solver (`plan_trade_route` / `cost_trade_legs`, auto/filtered/manual) | ✅ v0.28.0 |
+| 4 | `#/trade` entry → plan UI (pickers, mode toggle, plan render, best-trades board) | ✅ v0.28.0 (renamed + logo + review fixes v0.28.1) |
+| — | Enhancement pass: budget cap, minimize-deadhead, price-staleness filter/badges | ✅ v0.29.0 |
+| 5 | **Execute + re-plan** (`trade_runs` table, run/confirm/advance, sunk-cargo replan) | ✅ **v0.30.0** |
+| — | **Actual buy/sell figure capture** at execution (honest earnings vs UEX scrape) | ✅ **v0.30.0** |
+| 6 | History + trade stats (RECENT TRADES panel + Org Intel **Trading** section) | ✅ **next release** |
+| — | Favorite routes (save config, re-plan on load) | ⬜ deferred |
+
+Key code (grep the banners per root `CLAUDE.md`): solver in `nav_core`
+(`plan_trade_route` / `cost_trade_legs` / `replan_trade_route` / `_solve_route` /
+`_cost_route` / `_held_sell_leg` / `trade_leg_realized`); run-mode session +
+endpoints in `app.py` (`Session.trade_run` / `trade_run_view` /
+`_point_at_active_trade_leg` / `_advance_trade_run`; `/api/trade/run` +
+`/api/trade/run/replan`); `trade_runs` table in `db.py`; `#/trade` view + run panel
+in `static/index.html` (`renderTradeRun` / `renderTradeRunLeg` / `submitTradeLeg`).
 
 ---
 
@@ -226,6 +254,28 @@ than inventing a new one.
 
 ## Execute layer — reusing the guidance loop, with re-plan from live position
 
+> **AS BUILT (v0.30.0):** implemented as designed below, with one shape
+> difference and one addition worth recording:
+> - **Legs, not stops, run in a buy→sell *phase*.** A trade leg is buy@A→sell@B,
+>   so the run cursor tracks a per-leg phase (`pending`→`bought`→`sold`) and
+>   guidance alternates: `destination_id` = the active leg's *buy* POI while
+>   `pending`, its *sell* POI once `bought`, then advance. Helpers
+>   `_point_at_active_trade_leg` / `_advance_trade_run`; PATCH `/api/trade/run`
+>   takes `action` ∈ buy|sell|advance with an optional `leg` stale-guard.
+> - **Sunk-cargo re-plan** = `nav_core.replan_trade_route(..., held=...)`. If the
+>   active leg is mid-trade (bought, not sold), its cargo becomes a `held:True`
+>   sell-only first leg (best reachable buyer; zero forward capital; no empty
+>   approach), then fresh trades chain onto the freed hold. Legs already sold stay
+>   as history. Tested (`TradeReplanTests`).
+> - **NEW — actual buy/sell capture (not in the original design).** Confirming a
+>   leg captures the real aUEC/SCU price + SCU moved on each side (pre-filled from
+>   the plan, editable), stored as `actual_buy_price`/`actual_buy_scu`/
+>   `actual_sell_price`/`actual_sell_scu` on the leg. `nav_core.trade_leg_realized`
+>   computes realized profit from actuals (per-side fallback to plan). Rationale:
+>   honest per-member earnings stats instead of trusting UEX's scrape cadence — and
+>   it's UEX-contribution-shaped (aUEC/unit), a future path to feed data back to UEX.
+>   This is what step 6's analytics should aggregate.
+
 Reuses the cargo planner's Execute pattern almost exactly: the active
 stop's POI becomes the session's `destination_id`, so distance/bearing/ETA/
 QT-marker guidance is free via the existing `compute_state` / `/ws` loop.
@@ -313,26 +363,50 @@ architecture from the cargo planner already generalizes to "N apps."
 
 ## Build order (bottom-up, mirrors how the cargo planner was staged)
 
-1. **Terminal + price feeds** — `GET /api/trade/terminals` (+ the
+> Status per step is in the **Build status** table at the top. Steps 1–5 + the
+> enhancement pass + actual-figure capture are **shipped (thru v0.30.0)**; step 6
+> is the next pick-up. Crosswalk match rate resolved at ~85% of live commodity
+> terminals **when starmap POIs are admin-enabled** (only ~28 synth
+> station-containers otherwise) — the one real dependency to remember.
+
+1. ✅ **Terminal + price feeds** — `GET /api/trade/terminals` (+ the
    name-match crosswalk against `nav.containers`/`nav.pois`, logging
    unmatched terminals) and `GET /api/trade/prices`, cached like
    `commodities.json`. Verify match rate against a real feed pull before
    going further — this is the one piece with no existing precedent to lean
    on completely.
-2. **Best-single-trade ranking** — profit-per-SCU / profit-per-hour ranking
+2. ✅ **Best-single-trade ranking** — profit-per-SCU / profit-per-hour ranking
    over resolved terminals, standalone and testable before any multi-leg
    chaining exists. Also the first payoff for **manual mode**.
-3. **Multi-leg solver** — greedy chain + local search over the ranked pairs,
+3. ✅ **Multi-leg solver** — greedy chain + local search over the ranked pairs,
    reusing `travel_cost`; `POST /api/trade/plan` for auto + filtered modes.
-4. **`#/trade` entry → plan UI** — pickers, mode toggle, plan rendering.
-5. **Execute + re-plan** — `trade_runs` table, run/confirm/advance, and the
-   sunk-cargo-aware re-plan endpoint.
-6. **History + `#/trade-stats`** — quick-picks + aUEC/hr analytics, same
-   shape as the cargo planner's Learn layer.
+4. ✅ **`#/trade` entry → plan UI** — pickers, mode toggle, plan rendering.
+5. ✅ **Execute + re-plan** — `trade_runs` table, run/confirm/advance, and the
+   sunk-cargo-aware re-plan endpoint. **Plus** actual buy/sell figure capture
+   per leg (see the Execute-layer AS BUILT note).
+6. ✅ **History + trade stats** — the cargo planner's Learn layer, over
+   `trade_runs`. Personal side: `GET /api/trade/history` (completed runs +
+   realized-profit stats in session/recent scopes + `POST /api/trade/session/reset`
+   + frequency quick-picks) feeds a **RECENT TRADES** panel in `#/trade` — lanes
+   reload as manual legs, a whole run "runs again". Guild side: `GET /api/trade/stats`
+   feeds an Org Intel **Trading** section (`#/intel/trading`, legacy `#/trade-stats`
+   aliased) mirroring **Hauling** — realized-profit totals, weekly sparkline, top
+   commodities/lanes/ships, and an inline **top-traders** board
+   (`derive_trade_leaderboard`). Admin `POST /api/admin/stats/trade/clear`. The
+   headline aUEC everywhere is *realized* profit (`trade_leg_realized` →
+   `trade_run_realized`), not the UEX-scraped plan estimate. nav_core derivations:
+   `derive_trade_run_stats` / `derive_trade_quick_picks` / `derive_guild_trade_stats`
+   / `derive_trade_leaderboard`. Suites 216 nav_core / 85 app green.
 
 ---
 
 ## Open questions for build time
+
+> **Resolved as built:** (1) stop-budget defaults to **6** (`max_stops`, UI default).
+> (2) system-lock defaults **on** — the UI seeds the picker to the busiest system,
+> "Any system" one click away. (4) **manual plans CAN be run** — the "Start this run"
+> button appears on any feasible plan regardless of mode; it's the same leg list, one
+> code path. Still open: (3) teammate-lane-awareness (deferred fast-follow, unbuilt).
 
 1. **Stop-budget default** — the cargo planner's B&B cap is ~12 stops
    because the set is fixed; trading's orienteering shape is more expensive

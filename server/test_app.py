@@ -1133,5 +1133,44 @@ class TradeRunStateTests(unittest.TestCase):
         self.assertEqual(s.trade_run_view()["realized_profit"], 8000)   # planned profit
 
 
+class TradeRunSummaryTests(unittest.TestCase):
+    """app._trade_run_summary — the compact completed-run record the history list
+    and 'run again' shortcut consume (#21 step 6)."""
+
+    def _run(self):
+        legs = [
+            {"commodity": "Gold", "buy_terminal_id": 1, "buy_terminal": "A",
+             "buy_poi_id": 11, "buy_system": "Stanton",
+             "sell_terminal_id": 2, "sell_terminal": "B", "sell_poi_id": 12,
+             "sell_system": "Stanton", "buy_price": 100, "sell_price": 300,
+             "scu": 40, "profit": 8000},
+            {"commodity": "Iron", "buy_terminal_id": 2, "buy_terminal": "B",
+             "buy_poi_id": 12, "sell_terminal_id": 3, "sell_terminal": "C",
+             "sell_poi_id": 13, "buy_price": 50, "sell_price": 200,
+             "scu": 40, "profit": 6000},
+        ]
+        return {"id": 7, "ship": "C2", "usable_scu": 64, "legs": legs,
+                "leg_states": ["sold", "sold"], "completed_at": "2026-07-04T00:00:00+00:00",
+                "summary": {"total_distance_m": 5000.0, "total_time_s": 3600.0}}
+
+    def test_summary_headline_and_legs(self):
+        s = app._trade_run_summary(self._run())
+        self.assertEqual(s["id"], 7)
+        self.assertEqual(s["ship"], "C2")
+        self.assertEqual(s["num_legs"], 2)
+        self.assertEqual(s["total_scu"], 80.0)
+        self.assertEqual(s["profit"], 14000)               # 8000 + 6000
+        self.assertEqual(s["auec_per_hour"], 14000.0)      # over 1h
+        self.assertEqual([l["commodity"] for l in s["legs"]], ["Gold", "Iron"])
+        self.assertEqual(s["legs"][0]["realized"], 8000)
+
+    def test_summary_only_lists_sold_legs(self):
+        run = self._run()
+        run["leg_states"] = ["sold", "pending"]
+        s = app._trade_run_summary(run)
+        self.assertEqual(s["num_legs"], 1)
+        self.assertEqual(s["profit"], 8000)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

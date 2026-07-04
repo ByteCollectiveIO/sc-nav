@@ -2743,6 +2743,201 @@ def trade_leg_realized(leg: dict) -> int | None:
                      - (buy_price or 0) * (buy_scu or 0)))
 
 
+# ---------------------------------------------------------------------------
+# Trade-route planner (#21): history + statistics (step 6).
+#
+# Same Learn-layer shape as the cargo planner (derive_run_stats / quick_picks /
+# guild_cargo_stats), over the trade_runs blobs instead. The headline aUEC number
+# is *realized* profit — the actual buy/sell figures a player entered at each
+# terminal (trade_leg_realized), not UEX's scraped estimate — so a trader's stats
+# reflect what they actually earned. Distance/time ride from the frozen plan
+# summary (updated on every re-plan). Pure derivations over the stored blobs.
+# ---------------------------------------------------------------------------
+
+
+def _trade_sold_legs(run: dict) -> list[dict]:
+    """A run's transacted legs. Prefers the parallel `leg_states` (a completed run
+    is all 'sold'; a mid-run blob mixes states) and returns only the sold ones;
+    falls back to every leg when states are missing or mis-sized (older blobs)."""
+    legs = run.get("legs") or []
+    states = run.get("leg_states")
+    if not states or len(states) != len(legs):
+        return legs
+    return [l for l, st in zip(legs, states) if st == "sold"]
+
+
+def trade_run_realized(run: dict) -> int:
+    """A trade run's realized aUEC profit: the sum of each sold leg's realized
+    profit (entered actuals, else the plan — see `trade_leg_realized`). Mirrors the
+    live tally `Session.trade_run_view` shows in run mode so history agrees."""
+    return int(sum(trade_leg_realized(l) or 0 for l in _trade_sold_legs(run)))
+
+
+def trade_run_scu(run: dict) -> float:
+    """Total SCU actually moved across a run's sold legs — the entered sell SCU
+    when the player recorded it, else the planned load."""
+    total = 0.0
+    for l in _trade_sold_legs(run):
+        total += float(l.get("actual_sell_scu") or l.get("scu") or 0)
+    return total
+
+
+def _trade_run_summary_num(run: dict, key: str) -> float:
+    """A numeric field off a run's frozen plan `summary` (distance/time totals),
+    0 when absent."""
+    return float((run.get("summary") or {}).get(key) or 0)
+
+
+def derive_trade_run_stats(runs) -> dict:
+    """Headline trading analytics over a set of completed trade runs: realized
+    profit, SCU moved, distance/time, and the overall aUEC/hour (realized profit ÷
+    run time). Runs predating a metric contribute 0 and are simply diluted, same as
+    the cargo planner's `derive_run_stats`."""
+    total_profit = total_scu = total_dist = total_time = 0.0
+    for run in runs:
+        total_profit += trade_run_realized(run)
+        total_scu += trade_run_scu(run)
+        total_dist += _trade_run_summary_num(run, "total_distance_m")
+        total_time += _trade_run_summary_num(run, "total_time_s")
+    per_hr = (total_profit / (total_time / 3600.0)) if total_time > 0 else None
+    return {
+        "num_runs": len(runs),
+        "total_profit": int(round(total_profit)),
+        "total_scu": round(total_scu, 2),
+        "total_distance_m": round(total_dist, 2),
+        "total_time_s": round(total_time, 2),
+        "auec_per_hour": round(per_hr, 2) if per_hr is not None else None,
+    }
+
+
+def _trade_lane_pick(leg: dict, count: int) -> dict:
+    """A quick-pick / top-lane row from a sample leg: the commodity plus both
+    terminals (id + name + system + resolved POI id), so the UI can re-enter the
+    whole buy→sell leg in manual mode with one click."""
+    return {
+        "commodity": leg.get("commodity"),
+        "buy_terminal_id": leg.get("buy_terminal_id"), "buy_terminal": leg.get("buy_terminal"),
+        "buy_poi_id": leg.get("buy_poi_id"), "buy_system": leg.get("buy_system"),
+        "sell_terminal_id": leg.get("sell_terminal_id"), "sell_terminal": leg.get("sell_terminal"),
+        "sell_poi_id": leg.get("sell_poi_id"), "sell_system": leg.get("sell_system"),
+        "count": count,
+    }
+
+
+def _tally_trade_legs(runs):
+    """Shared fold over a run set's sold legs for the quick-picks / stats builders.
+    Returns per-commodity SCU + count, per-lane count + a sample leg, and per-ship
+    count. A `held` leg (carried cargo from a re-plan) has no real buy terminal, so
+    it counts toward its commodity but never toward a lane."""
+    lane_ct, lane_meta = {}, {}
+    commodity_ct, commodity_scu = {}, {}
+    ship_ct = {}
+    for run in runs:
+        ship = (run.get("ship") or "").strip()
+        if ship:
+            ship_ct[ship] = ship_ct.get(ship, 0) + 1
+        for l in _trade_sold_legs(run):
+            name = (l.get("commodity") or "").strip()
+            if not name:
+                continue
+            commodity_ct[name] = commodity_ct.get(name, 0) + 1
+            commodity_scu[name] = commodity_scu.get(name, 0.0) + \
+                float(l.get("actual_sell_scu") or l.get("scu") or 0)
+            if l.get("held"):
+                continue
+            btid, stid = l.get("buy_terminal_id"), l.get("sell_terminal_id")
+            if btid is not None and stid is not None:
+                k = (name, btid, stid)
+                lane_ct[k] = lane_ct.get(k, 0) + 1
+                lane_meta[k] = l
+    return lane_ct, lane_meta, commodity_ct, commodity_scu, ship_ct
+
+
+def _trade_top_lanes(nav: NavData, lane_ct, lane_meta, limit) -> list[dict]:
+    """Lanes ranked by frequency, dropping any whose terminals no longer resolve on
+    the live map (so a stale lane never re-enters an unroutable leg)."""
+    out = []
+    for k, ct in sorted(lane_ct.items(), key=lambda kv: (-kv[1], str(kv[0]))):
+        l = lane_meta[k]
+        if nav.pois.get(l.get("buy_poi_id")) is None or nav.pois.get(l.get("sell_poi_id")) is None:
+            continue
+        out.append(_trade_lane_pick(l, ct))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def derive_trade_quick_picks(nav: NavData, runs, limit: int = 12) -> dict:
+    """Frequency-ranked data-entry priors from a member's completed trade runs: the
+    buy→sell lanes they run most (for one-click manual re-entry), the commodities
+    they trade (with the SCU amount they most often move — a filter prior), and the
+    ships they fly. Feeds `#/trade`'s quick-picks; pure derivation over the blobs."""
+    lane_ct, lane_meta, commodity_ct, commodity_scu, ship_ct = _tally_trade_legs(runs)
+    # commodity_scu here is a total; quick-picks want the *most-often-moved* amount,
+    # so re-fold sold legs into a per-commodity SCU histogram.
+    scu_hist: dict = {}
+    for run in runs:
+        for l in _trade_sold_legs(run):
+            name = (l.get("commodity") or "").strip()
+            scu = l.get("actual_sell_scu") or l.get("scu")
+            if name and scu:
+                by = scu_hist.setdefault(name, {})
+                by[float(scu)] = by.get(float(scu), 0) + 1
+
+    lanes = _trade_top_lanes(nav, lane_ct, lane_meta, limit)
+    commodities = []
+    for name, ct in sorted(commodity_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]:
+        scu = None
+        by = scu_hist.get(name)
+        if by:                             # the SCU amount most often moved for it
+            scu = max(by.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        commodities.append({"commodity": name, "count": ct, "scu": scu})
+    ships = [{"ship": s, "count": c}
+             for s, c in sorted(ship_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+    return {"lanes": lanes, "commodities": commodities, "ships": ships}
+
+
+def derive_guild_trade_stats(nav: NavData, runs, limit: int = 15) -> dict:
+    """Guild-wide trading aggregates for the `#/trade-stats` page: the headline
+    totals (realized profit / SCU / distance / time + aUEC/hour, via
+    `derive_trade_run_stats`), a count of distinct traders, and the top commodities
+    (by total SCU moved), busiest lanes, and most-flown ships across every member's
+    completed trade runs. The top-traders board + weekly series are added by the
+    endpoint (it owns name resolution + the iso-week helper)."""
+    base = derive_trade_run_stats(runs)
+    traders = {str(r.get("discord_id")) for r in runs if r.get("discord_id")}
+    lane_ct, lane_meta, commodity_ct, commodity_scu, ship_ct = _tally_trade_legs(runs)
+    commodities = [
+        {"commodity": n, "scu": round(commodity_scu[n], 2), "count": commodity_ct[n]}
+        for n in sorted(commodity_scu, key=lambda k: (-commodity_scu[k], k))[:limit]
+    ]
+    lanes = _trade_top_lanes(nav, lane_ct, lane_meta, limit)
+    ships = [{"ship": s, "count": c}
+             for s, c in sorted(ship_ct.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+    return {**base, "num_traders": len(traders), "top_commodities": commodities,
+            "top_lanes": lanes, "top_ships": ships}
+
+
+def derive_trade_leaderboard(runs) -> list[dict]:
+    """Per-member trading tallies for the top-traders board. Groups completed trade
+    runs by owning `discord_id` and runs `derive_trade_run_stats` over each group,
+    so a member's whole trading record collapses to one row (the stat block plus a
+    `display_name` lifted from their most recent run that carried one). The endpoint
+    resolves missing names and ranks. Runs lacking a discord_id are skipped."""
+    by_member: dict[str, list] = {}
+    for run in runs:
+        did = str(run.get("discord_id") or "")
+        if not did:
+            continue
+        by_member.setdefault(did, []).append(run)
+    rows = []
+    for did, member_runs in by_member.items():
+        name = next((r.get("display_name") for r in member_runs if r.get("display_name")), None)
+        rows.append({"discord_id": did, "display_name": name,
+                     **derive_trade_run_stats(member_runs)})
+    return rows
+
+
 def derive_guild_leaderboard(runs) -> list[dict]:
     """Per-member hauling tallies for the guild leaderboard. Groups completed
     runs by their owning `discord_id` and runs `derive_run_stats` over each
