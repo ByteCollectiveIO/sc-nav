@@ -2287,5 +2287,123 @@ class TradeLegRealizedTests(unittest.TestCase):
         self.assertEqual(nav_core.trade_leg_realized(leg), 280 * 40 - 100 * 40)
 
 
+class TradeHistoryStatsTests(unittest.TestCase):
+    """nav_core trade history/statistics derivations (#21 step 6): realized totals,
+    quick-picks, guild aggregates, and the top-traders board over trade_runs
+    blobs. POIs 0..3 resolve; 999 never does (drops stale lanes)."""
+
+    def setUp(self):
+        self.nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)])
+
+    def _leg(self, commodity, b_poi, s_poi, scu, buy, sell, **over):
+        """A sold-leg record shaped like _cost_route emits (terminal id == poi id
+        here for simplicity)."""
+        leg = {
+            "commodity": commodity,
+            "buy_terminal_id": b_poi, "buy_terminal": f"T{b_poi}",
+            "buy_poi_id": b_poi, "buy_system": "Test",
+            "sell_terminal_id": s_poi, "sell_terminal": f"T{s_poi}",
+            "sell_poi_id": s_poi, "sell_system": "Test",
+            "buy_price": buy, "sell_price": sell, "scu": scu,
+            "profit": (sell - buy) * scu,
+        }
+        leg.update(over)
+        return leg
+
+    def _run(self, did, ship, legs, dist=100.0, time_s=3600.0, **extra):
+        return {"discord_id": did, "ship": ship, "legs": legs,
+                "leg_states": ["sold"] * len(legs),
+                "summary": {"total_distance_m": dist, "total_time_s": time_s}, **extra}
+
+    def test_realized_prefers_actuals(self):
+        # planned 8000, but actual sell price 320 on 40 SCU bought @110 -> 8400.
+        leg = self._leg("Gold", 0, 1, 40, 100, 300,
+                        actual_buy_price=110, actual_sell_price=320)
+        run = self._run("a", "Caterpillar", [leg])
+        self.assertEqual(nav_core.trade_run_realized(run), (320 - 110) * 40)
+        self.assertEqual(nav_core.trade_run_scu(run), 40.0)
+
+    def test_only_sold_legs_count(self):
+        legs = [self._leg("Gold", 0, 1, 40, 100, 300),
+                self._leg("Iron", 1, 2, 20, 50, 90)]
+        run = self._run("a", "Cat", legs)
+        run["leg_states"] = ["sold", "pending"]     # 2nd not transacted yet
+        self.assertEqual(nav_core.trade_run_realized(run), (300 - 100) * 40)
+        self.assertEqual(nav_core.trade_run_scu(run), 40.0)
+
+    def test_run_stats_headline_and_per_hour(self):
+        runs = [
+            self._run("a", "Cat", [self._leg("Gold", 0, 1, 40, 100, 300)],
+                      dist=1000, time_s=3600),                      # profit 8000, 1h
+            self._run("a", "Cat", [self._leg("Iron", 1, 2, 10, 50, 150)],
+                      dist=500, time_s=3600),                       # profit 1000, 1h
+        ]
+        s = nav_core.derive_trade_run_stats(runs)
+        self.assertEqual(s["num_runs"], 2)
+        self.assertEqual(s["total_profit"], 9000)
+        self.assertEqual(s["total_scu"], 50.0)
+        self.assertEqual(s["total_distance_m"], 1500.0)
+        self.assertEqual(s["auec_per_hour"], 4500.0)               # 9000 / 2h
+
+    def test_run_stats_empty(self):
+        s = nav_core.derive_trade_run_stats([])
+        self.assertEqual(s["num_runs"], 0)
+        self.assertEqual(s["total_profit"], 0)
+        self.assertIsNone(s["auec_per_hour"])
+
+    def test_quick_picks_lanes_commodities_ships(self):
+        runs = [
+            self._run("a", "Caterpillar", [self._leg("Gold", 0, 1, 40, 100, 300)]),
+            self._run("a", "Caterpillar", [self._leg("Gold", 0, 1, 40, 100, 300)]),
+            self._run("a", "Freelancer", [self._leg("Iron", 1, 2, 20, 50, 90)]),
+        ]
+        picks = nav_core.derive_trade_quick_picks(self.nav, runs)
+        # Gold@0->1 run twice, so it leads; carries terminals for one-click re-entry.
+        self.assertEqual(picks["lanes"][0]["commodity"], "Gold")
+        self.assertEqual((picks["lanes"][0]["buy_terminal_id"],
+                          picks["lanes"][0]["sell_terminal_id"]), (0, 1))
+        self.assertEqual(picks["lanes"][0]["count"], 2)
+        self.assertEqual([c["commodity"] for c in picks["commodities"]], ["Gold", "Iron"])
+        self.assertEqual(picks["commodities"][0]["scu"], 40.0)     # most-moved amount
+        self.assertEqual(picks["ships"][0]["ship"], "Caterpillar")
+
+    def test_quick_picks_drop_unresolvable_lane(self):
+        runs = [self._run("a", "Cat", [self._leg("x", 0, 999, 10, 10, 20)])]
+        self.assertEqual(nav_core.derive_trade_quick_picks(self.nav, runs)["lanes"], [])
+
+    def test_held_leg_counts_commodity_not_lane(self):
+        # A carried-cargo leg (re-plan) has no real buy terminal.
+        leg = self._leg("Gold", None, 1, 40, 100, 300, held=True,
+                        buy_terminal_id=None, buy_terminal="carried cargo")
+        picks = nav_core.derive_trade_quick_picks(self.nav, [self._run("a", "Cat", [leg])])
+        self.assertEqual(picks["lanes"], [])
+        self.assertEqual(picks["commodities"][0]["commodity"], "Gold")
+
+    def test_guild_stats_totals_and_boards(self):
+        runs = [
+            self._run("a", "Cat", [self._leg("Gold", 0, 1, 30, 100, 300)]),
+            self._run("b", "Freelancer", [self._leg("Iron", 1, 2, 80, 50, 90)]),
+        ]
+        s = nav_core.derive_guild_trade_stats(self.nav, runs)
+        self.assertEqual(s["num_runs"], 2)
+        self.assertEqual(s["num_traders"], 2)
+        # Iron moved 80 SCU > Gold 30, so Iron leads the commodity board.
+        self.assertEqual([c["commodity"] for c in s["top_commodities"]], ["Iron", "Gold"])
+        self.assertEqual({l["commodity"] for l in s["top_lanes"]}, {"Gold", "Iron"})
+
+    def test_leaderboard_one_row_per_member(self):
+        runs = [
+            self._run("a", "Cat", [self._leg("Gold", 0, 1, 40, 100, 300)],
+                      display_name="Ana"),
+            self._run("a", "Cat", [self._leg("Gold", 0, 1, 40, 100, 300)]),
+            self._run("b", "Cat", [self._leg("Iron", 1, 2, 10, 50, 150)]),
+        ]
+        rows = {r["discord_id"]: r for r in nav_core.derive_trade_leaderboard(runs)}
+        self.assertEqual(set(rows), {"a", "b"})
+        self.assertEqual(rows["a"]["num_runs"], 2)
+        self.assertEqual(rows["a"]["total_profit"], 16000)
+        self.assertEqual(rows["a"]["display_name"], "Ana")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

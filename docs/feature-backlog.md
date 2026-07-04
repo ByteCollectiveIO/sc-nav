@@ -1290,7 +1290,8 @@ handle, 3) marketplace `seller_handle`, 4) directory + opt-out.
 ## Engagement & org-ops batch (2026-06-30) — priority order
 
 User brainstorm 2026-06-30; ranked by user interest. #18–20 scoped (own docs);
-#21–23 parked (interesting but lower priority / not org-specific).
+#21 un-parked + **SHIPPED thru v0.30.0** (see below); #22–23 still parked
+(interesting but lower priority / not org-specific).
 
 ## 18. Discord notifications (push integration)
 
@@ -1365,10 +1366,16 @@ unassigned-pool → group-cards board on the event detail. Manifest export → D
 ### 21. Trade-route finder (buy-low/sell-high on live terminal prices)
 Pure commodity trading using the UEX feed (complements the *contract*-based cargo
 planner): "given my ship SCU + location, top profit-per-SCU routes now."
-**Un-parked 2026-07-03 — designing.** Full spec in
-[`docs/trade-route-planner.md`](trade-route-planner.md). The org-differentiation
-gap (below) is answered by live-position re-plan + teammate-lane-awareness, both
-things a generic external site can't do; nothing built yet.
+**SHIPPED + DEPLOYED thru v0.30.0 (2026-07-03).** Full spec + build-status table in
+[`docs/trade-route-planner.md`](trade-route-planner.md). Live at `#/trade`: feeds +
+terminal→POI crosswalk, single-trade ranking, multi-leg auto/filtered/manual solver
+(v0.28.x), budget/deadhead/staleness enhancement pass (v0.29.0), and **run/execute
+mode with re-plan-from-live-position + actual buy/sell figure capture** (v0.30.0).
+The org-differentiation gap (below) is answered by the live-position re-plan (a
+generic external site can't seed from where you actually are) and by capturing real
+per-member earnings. Step 6 (**History + trade stats** — RECENT TRADES panel + Org
+Intel Trading section over realized profit) shipped too. **Only deferred:** favorite
+routes; teammate-lane-awareness remains a parked fast-follow.
 
 <details>
 <summary>Original parking note (2026-06-19)</summary>

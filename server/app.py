@@ -2707,6 +2707,105 @@ async def cargo_stats(range: str = "all", user: dict = Depends(require_session))
     return {"range": range, **stats, "activity": activity}
 
 
+# --- trade-route history + statistics (#21 step 6) -------------------------
+
+
+def _trade_run_summary(run: dict) -> dict:
+    """Compact completed trade-run record for the history list + the 'run again'
+    shortcut: headline realized totals plus the leg list (terminals + realized
+    profit per leg) so the UI can render it and re-enter the lanes in manual mode
+    without another round-trip."""
+    legs = []
+    for l in nav_core._trade_sold_legs(run):
+        legs.append({
+            "commodity": l.get("commodity"), "scu": l.get("scu"), "held": bool(l.get("held")),
+            "buy_terminal_id": l.get("buy_terminal_id"), "buy_terminal": l.get("buy_terminal"),
+            "buy_poi_id": l.get("buy_poi_id"), "buy_system": l.get("buy_system"),
+            "sell_terminal_id": l.get("sell_terminal_id"), "sell_terminal": l.get("sell_terminal"),
+            "sell_poi_id": l.get("sell_poi_id"), "sell_system": l.get("sell_system"),
+            "realized": nav_core.trade_leg_realized(l),
+        })
+    profit = nav_core.trade_run_realized(run)
+    sm = run.get("summary") or {}
+    t = sm.get("total_time_s")
+    return {
+        "id": run.get("id"), "ship": run.get("ship"),
+        "started_at": run.get("started_at"), "completed_at": run.get("completed_at"),
+        "usable_scu": run.get("usable_scu"), "num_legs": len(legs),
+        "total_scu": round(nav_core.trade_run_scu(run), 2),
+        "total_distance_m": sm.get("total_distance_m"),
+        "profit": profit, "legs": legs,
+        "auec_per_hour": round(profit / (t / 3600.0), 2) if (profit and t) else None,
+    }
+
+
+@app.get("/api/trade/history")
+async def get_trade_history(user: dict = Depends(require_session)):
+    """The caller's completed trade runs (freshest first, for the recent-runs list
+    + re-run), headline trading stats (realized profit, SCU, aUEC/hour) in two
+    scopes — all-time and since the player's session marker — and frequency-ranked
+    quick-picks (lanes / commodities / ships) that float repeat trades to the top of
+    the pickers."""
+    runs = db.list_trade_run_history(user["id"])
+    session_start = db.get_trade_session_start(user["id"])
+    session_runs = ([r for r in runs if (r.get("completed_at") or "") >= session_start]
+                    if session_start else runs)
+    return {"runs": [_trade_run_summary(r) for r in runs],
+            "stats": nav_core.derive_trade_run_stats(runs),
+            "session_stats": nav_core.derive_trade_run_stats(session_runs),
+            "session_start": session_start,
+            "picks": nav_core.derive_trade_quick_picks(nav, runs)}
+
+
+@app.post("/api/trade/session/reset")
+async def reset_trade_session(user: dict = Depends(require_session)):
+    """Start a fresh trading session: stamp 'now' as the session marker so the
+    session-scoped stats reset to zero and count only runs completed from here on.
+    Non-destructive — trade history and quick-picks are untouched."""
+    ts = datetime.now(timezone.utc).isoformat()
+    db.set_trade_session_start(user["id"], ts)
+    return {"ok": True, "session_start": ts}
+
+
+@app.get("/api/trade/stats")
+async def trade_stats(range: str = "all", user: dict = Depends(require_session)):
+    """Guild-wide trading statistics for the #/trade-stats page: realized-profit
+    headline totals, top commodities / lanes / ships, a top-traders board, and a
+    weekly aUEC sparkline. `range=week` scopes totals/breakdowns/board to the
+    trailing 7 days; the sparkline always spans the trailing weeks."""
+    runs = db.list_all_completed_trade_runs(_cargo_window_start(range))
+    stats = nav_core.derive_guild_trade_stats(nav, runs)
+    traders = nav_core.derive_trade_leaderboard(runs)
+    for r in traders:
+        r["display_name"] = _resolve_member_name(r["discord_id"], r.get("display_name"))
+        r["mine"] = r["discord_id"] == user["id"]
+    traders.sort(key=lambda r: (-r["total_profit"], r["display_name"].lower()))
+    # Weekly realized aUEC (mirrors /api/cargo/stats' series). Always all-time so the
+    # trend doesn't collapse to a single bar under the 'week' range.
+    spark_runs = runs if range != "week" else db.list_all_completed_trade_runs(None)
+    weeks: Counter = Counter()
+    for run in spark_runs:
+        ts = run.get("completed_at")
+        profit = nav_core.trade_run_realized(run)
+        if not ts or not profit:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        weeks[_iso_week_start(dt)] += profit
+    activity = []
+    if weeks:
+        end = _iso_week_start(datetime.now(timezone.utc))
+        start = end - timedelta(weeks=_STATS_WEEKS - 1)
+        wk = start
+        while wk <= end:
+            activity.append({"label": wk.strftime("%b %d"),
+                             "count": round(weeks.get(wk, 0), 2)})
+            wk += timedelta(weeks=1)
+    return {"range": range, **stats, "traders": traders, "activity": activity}
+
+
 # --- event planner (guild events) ------------------------------------------
 
 
@@ -4781,6 +4880,14 @@ async def clear_cargo_stats(admin: dict = Depends(require_admin)):
     leaderboard, hauling stats, and every member's run history. In-progress
     (active) runs are left running."""
     deleted = await asyncio.to_thread(db.clear_run_history)
+    return {"ok": True, "deleted": deleted}
+
+
+@app.post("/api/admin/stats/trade/clear")
+async def clear_trade_stats(admin: dict = Depends(require_admin)):
+    """Wipe finished trade runs org-wide (admin only): zeroes the guild trade stats
+    board and every member's trade history. In-progress (active) runs keep going."""
+    deleted = await asyncio.to_thread(db.clear_trade_run_history)
     return {"ok": True, "deleted": deleted}
 
 

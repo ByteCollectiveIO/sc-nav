@@ -2172,6 +2172,7 @@
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       <button id="clear-resource-stats" class="danger-btn">Clear resource statistics</button>
       <button id="clear-cargo-stats" class="danger-btn">Clear cargo statistics</button>
+      <button id="clear-trade-stats" class="danger-btn">Clear trade statistics</button>
       <span class="muted" id="clear-stats-status" role="status" aria-live="polite"></span>
     </div>
     <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -2268,6 +2269,7 @@
       <a href="#/intel" data-sec="overview">Overview</a>
       <a href="#/intel/mapping" data-sec="mapping">Mapping</a>
       <a href="#/intel/hauling" data-sec="hauling">Hauling</a>
+      <a href="#/intel/trading" data-sec="trading">Trading</a>
       <a href="#/intel/market" data-sec="market">Market</a>
       <a href="#/intel/boards" data-sec="boards">Leaderboards</a>
       <a href="#/intel/directory" data-sec="directory" id="intel-nav-directory" hidden>Directory</a>
@@ -2465,6 +2467,49 @@
   </div><!-- /cargo-stats-body -->
   </div><!-- /cargo-stats-view -->
 
+  <div id="trade-stats-view" hidden>
+  <div id="trade-stats-status" class="stats-status" hidden></div>
+  <div id="trade-stats-body">
+  <div class="panel">
+    <div class="lb-head-row">
+      <h2 style="margin:0;">GUILD TRADING OVERVIEW <span class="muted" id="trade-stat-sub"></span></h2>
+      <div class="range-toggle" id="trade-stat-range">
+        <button data-range="all" class="active">All-time</button>
+        <button data-range="week">This week</button>
+      </div>
+    </div>
+    <div class="stat-cards" id="trade-stat-cards" style="margin-top:12px;"></div>
+    <p class="muted" style="font-size:12px; margin:10px 0 0;">Profit is <b>realized</b> —
+      the actual buy/sell figures traders enter at each terminal, not UEX's scrape.</p>
+  </div>
+  <div class="panel">
+    <h2>aUEC PROFIT OVER TIME <span class="muted">(per week · last 16 weeks)</span></h2>
+    <div class="colchart" id="trade-stat-activity"></div>
+    <div class="colchart-x" id="trade-stat-activity-x"></div>
+    <div class="stat-empty" id="trade-stat-activity-empty" hidden>No completed trade runs yet.</div>
+  </div>
+  <div class="panel">
+    <h2>TOP TRADERS <span class="muted">(realized aUEC profit)</span></h2>
+    <div class="lb-chart" id="trade-stat-traders"></div>
+    <div class="muted" id="trade-stat-traders-empty" hidden style="padding:8px 0;">No completed trade runs yet.</div>
+  </div>
+  <div class="stat-grid">
+    <div class="panel">
+      <h2>TOP COMMODITIES <span class="muted">(by SCU moved)</span></h2>
+      <div class="hbars" id="trade-stat-commodities"></div>
+    </div>
+    <div class="panel">
+      <h2>BUSIEST LANES <span class="muted">(trades)</span></h2>
+      <div class="hbars" id="trade-stat-lanes"></div>
+    </div>
+    <div class="panel">
+      <h2>MOST-FLOWN SHIPS</h2>
+      <div class="hbars" id="trade-stat-ships"></div>
+    </div>
+  </div>
+  </div><!-- /trade-stats-body -->
+  </div><!-- /trade-stats-view -->
+
   <div id="route-view" hidden>
     <div id="route-run" hidden></div>
     <div id="route-intro" class="panel route-intro" hidden>
@@ -2649,6 +2694,7 @@
 
     <div id="trade-result" hidden></div>
     <div id="trade-suggest" class="panel" hidden></div>
+    <div id="trade-history" class="panel" hidden></div>
 
     <p class="fansite-disclaimer">Terminal &amp; commodity prices
       <a href="https://uexcorp.space" target="_blank" rel="noopener">Powered by UEX</a>, at UEX's own
@@ -5944,6 +5990,8 @@ const tradePriceCache = {};              // commodity -> {tid: {buy, sell}} for 
 let tradeCurrentRun = null;              // active run blob the panel last rendered
 let tradeLastRunSig = null;              // de-dupe WS re-renders
 let tradeRunComplete = false;            // keep the completion card up until cleared
+let tradeHistory = null;                 // {runs, picks, stats, session_stats} for RECENT TRADES
+let tradeStatsScope = "session";         // session | recent — which totals the panel shows
 
 async function loadTradePlanner() {
   if (!tradeShips) {
@@ -5961,6 +6009,7 @@ async function loadTradePlanner() {
   if (tradeMode === "manual" && !$("trade-legs").children.length) addTradeLegRow();
   renderTradeIntro();
   renderTradeSuggest();
+  loadTradeHistory();
   // Resume an in-progress run (survives reload / navigating away and back). The
   // live WS frame keeps it fresh after this initial paint.
   if (!tradeCurrentRun && !tradeRunComplete)
@@ -5983,7 +6032,156 @@ function populateTradeSystems() {
 
 function renderTradeIntro() {
   const el = $("trade-intro"); if (!el) return;
-  el.hidden = !!localStorage.getItem("trade_intro_dismissed");
+  el.hidden = !!localStorage.getItem("trade_intro_dismissed") || tradeHasHistory();
+}
+// A returning trader (has completed runs or frequent lanes) doesn't need the intro
+// — the RECENT TRADES panel is the faster entry point.
+function tradeHasHistory() {
+  return !!(tradeHistory && ((tradeHistory.runs && tradeHistory.runs.length)
+    || (tradeHistory.picks && tradeHistory.picks.lanes && tradeHistory.picks.lanes.length)));
+}
+
+// RECENT TRADES: the trader's completed runs, personal realized-profit stats
+// (session vs recent), and frequency quick-picks — mirrors the cargo planner's
+// RECENT HAULS panel. Lanes reload as manual legs; a whole run re-runs by hand.
+async function loadTradeHistory() {
+  try {
+    tradeHistory = await fetch("/api/trade/history").then(r => r.json());
+  } catch {
+    const el = $("trade-history");
+    el.innerHTML = `<p class="muted" style="font-size:12px; margin:0;">Couldn't load your `
+      + `recent trades. <button class="route-chip" id="trade-hist-retry">Retry</button></p>`;
+    el.hidden = false;
+    $("trade-hist-retry").onclick = loadTradeHistory;
+    return;
+  }
+  renderTradeHistory();
+  renderTradeIntro();          // a returning trader (has history) skips the intro
+  rebuildTradeCommodityList(); // float the trader's most-traded commodities to the top
+}
+
+// Rebuild the manual-leg commodity datalist: the trader's most-traded commodities
+// first, then the rest of the catalog, deduped case-insensitively.
+function rebuildTradeCommodityList() {
+  const cd = $("trade-commodities");
+  if (!cd || !tradeHistory) return;
+  const priors = ((tradeHistory.picks && tradeHistory.picks.commodities) || []).map(c => c.commodity);
+  if (!priors.length) return;
+  const existing = [...cd.options].map(o => o.value);
+  const seen = new Set(), ordered = [];
+  for (const n of [...priors, ...existing]) {
+    const k = (n || "").toLowerCase();
+    if (!n || seen.has(k)) continue;
+    seen.add(k); ordered.push(n);
+  }
+  cd.innerHTML = ordered.map(n => `<option value="${esc(n)}"></option>`).join("");
+}
+
+function renderTradeHistory() {
+  const el = $("trade-history");
+  if (!tradeHistory) { el.hidden = true; return; }
+  const { runs, picks, stats, session_stats } = tradeHistory;
+  if (!runs.length && !picks.lanes.length) { el.hidden = true; return; }
+  const scope = tradeStatsScope;
+  let h = `<div class="route-hist-head"><h2>RECENT TRADES</h2>`
+    + `<span class="seg" id="trade-scope-seg">`
+    + `<button data-scope="session" class="${scope === "session" ? "on" : ""}">Session</button>`
+    + `<button data-scope="recent" class="${scope === "recent" ? "on" : ""}">Recent</button>`
+    + `</span></div>`;
+  if (runs.length) {
+    // Boxed stat cards, matching the Statistics page; scope = session | recent.
+    const s = (scope === "session" ? session_stats : stats) || stats;
+    const cards = [[s.num_runs, "RUNS"]];
+    if (s.total_profit) cards.push([fmtAuec(s.total_profit), "aUEC PROFIT"]);
+    if (s.auec_per_hour) cards.push([fmtAuec(s.auec_per_hour), "aUEC / HR"]);
+    cards.push([fmtAuec(s.total_scu), "SCU MOVED"],
+               [fmtGm(s.total_distance_m), "QT DISTANCE"],
+               [fmtDur(s.total_time_s), "TIME"]);
+    h += `<div class="stat-cards">` + cards.map(([n, k]) =>
+      `<div class="stat-card"><div class="n route-warn">${n}</div><div class="k">${k}</div></div>`).join("")
+      + `</div>`;
+    h += `<div class="route-scope-note">`;
+    if (scope === "session") {
+      h += tradeHistory.session_start
+        ? `<span class="muted">Session since ${esc(new Date(tradeHistory.session_start).toLocaleString())}.</span>`
+        : `<span class="muted">No session started — these count all recent runs.</span>`;
+      h += ` <button id="trade-session-reset">↻ start new session</button>`;
+    } else {
+      h += `<span class="muted">Across your last ${stats.num_runs} run${stats.num_runs === 1 ? "" : "s"}.</span>`;
+    }
+    h += `</div>`;
+  }
+  if (picks.lanes.length) {
+    h += `<p class="route-picks-h">FREQUENT LANES — click to load as a manual leg</p>`
+      + `<div class="route-picks">` + picks.lanes.map((l, i) =>
+        `<button class="route-chip" data-lane="${i}">${esc(l.commodity)}: ${esc(l.buy_terminal)} → ${esc(l.sell_terminal)}`
+        + `<span class="ct">×${l.count}</span></button>`).join("") + `</div>`;
+  }
+  if (runs.length) {
+    h += `<p class="route-picks-h">LAST RUNS — run again to rebuild the legs</p>`
+      + runs.slice(0, 6).map((r, i) => {
+        const when = r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "";
+        const pay = r.profit
+          ? `<span class="rr-pay">💰 ${fmtAuec(r.profit)} aUEC`
+            + (r.auec_per_hour ? ` <span class="hr">· ${fmtAuec(r.auec_per_hour)}/hr</span>` : "")
+            + `</span>`
+          : "";
+        const meta = [`<b>${r.num_legs}</b> leg${r.num_legs === 1 ? "" : "s"}`,
+                      `<b>${r.total_scu}</b> SCU`];
+        if (when) meta.push(esc(when));
+        return `<div class="route-recent"><div class="rr-main">`
+          + `<div class="rr-title"><span class="rr-ship">${esc(r.ship || "Unknown ship")}</span>${pay}</div>`
+          + `<div class="rr-sub">${meta.join(" · ")}</div>`
+          + `</div><button class="route-chip" data-again="${i}">run again</button></div>`;
+      }).join("");
+  }
+  el.innerHTML = h;
+  el.hidden = false;
+  // Scope toggle re-renders from the already-loaded payload (no refetch).
+  el.querySelectorAll("#trade-scope-seg [data-scope]").forEach(b =>
+    b.onclick = () => { tradeStatsScope = b.dataset.scope; renderTradeHistory(); });
+  const reset = $("trade-session-reset");
+  if (reset) reset.onclick = startNewTradeSession;
+  el.querySelectorAll("[data-lane]").forEach(b =>
+    b.onclick = () => loadTradeLane(picks.lanes[+b.dataset.lane]));
+  el.querySelectorAll("[data-again]").forEach(b =>
+    b.onclick = () => runTradeAgain(runs[+b.dataset.again]));
+}
+
+// A quick-pick lane → a fresh manual leg (switch to Manual, prefill commodity +
+// both terminals). The player sets SCU and plans.
+function loadTradeLane(l) {
+  setTradeMode("manual");
+  addTradeLegRow({ commodity: l.commodity,
+    buy_terminal_id: l.buy_terminal_id, buy_terminal: l.buy_terminal,
+    sell_terminal_id: l.sell_terminal_id, sell_terminal: l.sell_terminal });
+  $("trade-manual").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Re-run a whole past run by hand: rebuild its legs in Manual mode (skipping any
+// carried-cargo re-plan leg, which has no real buy terminal) and restore the ship.
+function runTradeAgain(run) {
+  setTradeMode("manual");
+  $("trade-legs").innerHTML = "";
+  for (const l of (run.legs || [])) {
+    if (l.held || l.buy_terminal_id == null || l.sell_terminal_id == null) continue;
+    addTradeLegRow({ commodity: l.commodity,
+      buy_terminal_id: l.buy_terminal_id, buy_terminal: l.buy_terminal,
+      sell_terminal_id: l.sell_terminal_id, sell_terminal: l.sell_terminal, scu: l.scu });
+  }
+  if (!$("trade-legs").children.length) addTradeLegRow();
+  if (run.ship) { $("trade-ship").value = run.ship; prefillTradeScu(); }
+  $("trade-manual").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Stamp a fresh trading session, then reload so the session stats zero out.
+async function startNewTradeSession() {
+  if (!(await confirmDialog(
+      "Your session stats reset to zero. Trade history is kept.",
+      { title: "Start a new session?", confirmLabel: "Start new session", danger: true }))) return;
+  try { await fetch("/api/trade/session/reset", { method: "POST" }); } catch { return; }
+  tradeStatsScope = "session";
+  loadTradeHistory();
 }
 
 function wireTradePlanner() {
@@ -6128,6 +6326,7 @@ function addTradeLegRow(pre) {
   if (pre.commodity) commodity.value = pre.commodity;
   if (pre.buy_terminal_id) { buy.value = pre.buy_terminal; buy.dataset.tid = pre.buy_terminal_id; buy.parentElement.classList.add("picked"); }
   if (pre.sell_terminal_id) { sell.value = pre.sell_terminal; sell.dataset.tid = pre.sell_terminal_id; sell.parentElement.classList.add("picked"); }
+  if (pre.scu) wrap.querySelector(".tl-scu").value = pre.scu;
   renumberLegs();
   if (pre.commodity) updateLegLive(wrap);
   return wrap;
@@ -6443,6 +6642,7 @@ async function abandonTradeRun() {
 
 function showTradeRunComplete() {
   tradeRunComplete = true; tradeLastRunSig = "complete";
+  loadTradeHistory();          // the finished run now shows in RECENT TRADES + stats
   const box = $("trade-run");
   box.hidden = false;
   box.innerHTML = `<div class="panel route-run-panel"><div class="run-head"><h2>TRADE RUN COMPLETE</h2></div>`
@@ -8885,6 +9085,7 @@ let lastApp = (() => { try { return sessionStorage.getItem("scLastApp"); } catch
 // bookmarks → [destination section, board to pre-select (boards section only)].
 const INTEL_ALIAS = {
   "#/stats": ["#/intel/mapping", null], "#/cargo-stats": ["#/intel/hauling", null],
+  "#/trade-stats": ["#/intel/trading", null],
   "#/leaderboard": ["#/intel/boards", "mapping"], "#/cargo-leaderboard": ["#/intel/boards", "hauling"],
 };
 let intelBoard = "mapping";   // which leaderboard the Boards section shows
@@ -8915,7 +9116,8 @@ function applyView() {
   const setup = h === "#/setup" && authed;
   // Org Intel: one analytics app whose section is selected by the sub-route.
   const intelSec = h === "#/intel" ? "overview" : h === "#/intel/mapping" ? "mapping"
-    : h === "#/intel/hauling" ? "hauling" : h === "#/intel/market" ? "market"
+    : h === "#/intel/hauling" ? "hauling" : h === "#/intel/trading" ? "trading"
+    : h === "#/intel/market" ? "market"
     : h === "#/intel/boards" ? "boards" : h === "#/intel/directory" ? "directory" : null;
   const intel = !!intelSec && authed;
   // Legal pages are public — readable before sign-in (linked from the login
@@ -8960,6 +9162,7 @@ function applyView() {
   $("stats-view").hidden = true;
   $("cargo-leaderboard-view").hidden = true;
   $("cargo-stats-view").hidden = true;
+  $("trade-stats-view").hidden = true;
   if (intel) renderIntel(intelSec);
 
   // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
@@ -9360,6 +9563,54 @@ function renderCargoStats(d) {
     { items: (d.top_ships || []).map(s => ({ name: s.ship, count: s.count })) });
 }
 
+// ---------- guild trading stats (#/intel/trading) ----------
+// Mirrors the Hauling stats section, over trade_runs. The headline aUEC number is
+// *realized* profit (entered actuals). Adds a top-traders board inline (trading has
+// no separate Leaderboards toggle entry).
+let tradeStatRange = "all";
+function loadTradeStats() {
+  return loadSection("trade-stats-status", "trade-stats-body", {
+    url: `/api/trade/stats?range=${tradeStatRange}`, label: "Trading", render: renderTradeStats });
+}
+function renderTradeStats(d) {
+  $("trade-stat-sub").textContent = tradeStatRange === "week" ? "(this week)" : "(all-time)";
+  wireRangeToggle("trade-stat-range", tradeStatRange, r => { tradeStatRange = r; loadTradeStats(); });
+  $("trade-stat-cards").innerHTML = [
+    [d.num_traders || 0, "TRADERS"], [d.num_runs || 0, "RUNS"],
+    [fmtAuec(d.total_profit || 0), "aUEC PROFIT"], [fmtAuec(d.total_scu || 0), "SCU MOVED"],
+    [d.auec_per_hour ? fmtAuec(d.auec_per_hour) : "—", "aUEC / HR"],
+  ].map(([n, k]) =>
+    `<div class="stat-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
+
+  // Weekly realized-profit columns (always trailing 16 weeks, regardless of range).
+  const act = d.activity || [];
+  $("trade-stat-activity-empty").hidden = act.length > 0;
+  const aMax = act.reduce((m, w) => Math.max(m, w.count), 0) || 1;
+  const actEl = $("trade-stat-activity");
+  actEl.setAttribute("role", "img");
+  actEl.setAttribute("aria-label", act.length
+    ? "Weekly aUEC profit — " + act.map(w => `${w.label}: ${fmtAuec(w.count)}`).join("; ")
+    : "No weekly trading activity yet");
+  actEl.innerHTML = act.map(w => {
+    const ht = (w.count / aMax) * 100;
+    return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)} aUEC">
+        <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
+        <span class="bar" style="height:${ht}%"></span>
+      </div>`;
+  }).join("");
+  $("trade-stat-activity-x").innerHTML = act.map((w, i) =>
+    `<span>${i % 2 === 0 ? esc(w.label) : ""}</span>`).join("");
+
+  cargoBoard("trade-stat-traders", "trade-stat-traders-empty", d.traders || [],
+    r => r.total_profit, v => fmtAuec(v) + " aUEC", "auec");
+  statBars("trade-stat-commodities",
+    { items: (d.top_commodities || []).map(c => ({ name: c.commodity, count: c.scu })) }, "auec");
+  statBars("trade-stat-lanes",
+    { items: (d.top_lanes || []).map(l => ({ name: `${l.commodity}: ${l.buy_terminal} → ${l.sell_terminal}`, count: l.count })) });
+  statBars("trade-stat-ships",
+    { items: (d.top_ships || []).map(s => ({ name: s.ship, count: s.count })) });
+}
+
 // ---------- Org Intel (analytics app shell) ----------
 // Drives the section nav active state, shows the active section's view (Overview
 // + Market live inside #intel-view; Mapping / Hauling / Leaderboards reuse the
@@ -9375,6 +9626,7 @@ function renderIntel(section) {
   $("intel-market").hidden = section !== "market";
   $("stats-view").hidden = section !== "mapping";
   $("cargo-stats-view").hidden = section !== "hauling";
+  $("trade-stats-view").hidden = section !== "trading";
   const boards = section === "boards";
   $("intel-boards-bar").hidden = !boards;
   $("leaderboard-view").hidden = !(boards && intelBoard === "mapping");
@@ -9383,6 +9635,7 @@ function renderIntel(section) {
   else if (section === "directory") loadDirectory();
   else if (section === "mapping") loadStats();
   else if (section === "hauling") loadCargoStats();
+  else if (section === "trading") loadTradeStats();
   else if (section === "market") loadMarketStats();
   else if (boards) {
     document.querySelectorAll("#intel-board-toggle button").forEach(b => {
@@ -9947,6 +10200,24 @@ $("clear-cargo-stats").onclick = async () => {
   st.textContent = "clearing cargo statistics…";
   try {
     const r = await fetch("/api/admin/stats/cargo/clear", { method: "POST" });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `cleared ${d.deleted} run${d.deleted === 1 ? "" : "s"}`;
+  } catch {
+    st.textContent = "failed — try again";
+  }
+};
+
+$("clear-trade-stats").onclick = async () => {
+  if (!(await confirmDialog(
+      "Every member's completed trade run for the whole org will be deleted. " +
+      "The guild trade stats and every member's trade history reset to zero. " +
+      "In-progress trade runs keep going. This can't be undone.",
+      { title: "Clear all trade runs?", confirmLabel: "Delete runs", danger: true }))) return;
+  const st = $("clear-stats-status");
+  st.textContent = "clearing trade statistics…";
+  try {
+    const r = await fetch("/api/admin/stats/trade/clear", { method: "POST" });
     if (!r.ok) throw new Error();
     const d = await r.json();
     st.textContent = `cleared ${d.deleted} run${d.deleted === 1 ? "" : "s"}`;

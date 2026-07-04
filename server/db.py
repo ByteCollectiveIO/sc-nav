@@ -848,6 +848,58 @@ def abandon_trade_run(discord_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def list_trade_run_history(discord_id: str, limit: int = 50) -> list[dict]:
+    """A member's completed trade runs, freshest first (feeds #/trade history +
+    quick-picks). Each parsed blob carries its row id + completed_at."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, ship, started_at, completed_at, data FROM trade_runs "
+            "WHERE discord_id=? AND status='completed' ORDER BY completed_at DESC LIMIT ?",
+            (str(discord_id), limit),
+        ).fetchall()
+    out = []
+    for r in rows:
+        run = _u(r["data"]) or {}
+        run["id"] = r["id"]
+        run["completed_at"] = r["completed_at"]
+        out.append(run)
+    return out
+
+
+def list_all_completed_trade_runs(since: str | None = None) -> list[dict]:
+    """Every member's completed trade runs (for the guild trade stats board),
+    freshest first. Each parsed blob carries its row id, owning `discord_id`, and
+    `completed_at`. `since` (ISO ts) limits to the trailing-window; None is
+    all-time."""
+    q = ("SELECT id, discord_id, completed_at, data FROM trade_runs "
+         "WHERE status='completed'")
+    params: list = []
+    if since:
+        q += " AND completed_at >= ?"
+        params.append(since)
+    q += " ORDER BY completed_at DESC"
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        run = _u(r["data"]) or {}
+        run["id"] = r["id"]
+        run["discord_id"] = r["discord_id"]
+        run["completed_at"] = r["completed_at"]
+        out.append(run)
+    return out
+
+
+def clear_trade_run_history() -> int:
+    """Wipe finished trade runs (completed + abandoned) across all members for the
+    admin 'clear trade statistics' action — zeroes the trade stats board and every
+    member's trade history. Active runs are left alone. Returns rows removed."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM trade_runs WHERE status IN ('completed','abandoned')")
+    return cur.rowcount
+
+
 def get_cargo_session_start(discord_id: str) -> str | None:
     """The member's hauling-session marker (ISO ts): stats since this point are
     'this session'. None until they first start a session."""
@@ -857,6 +909,17 @@ def get_cargo_session_start(discord_id: str) -> str | None:
 def set_cargo_session_start(discord_id: str, ts: str) -> None:
     """Stamp the start of a fresh hauling session (the 'reset' action)."""
     _meta_set(f"cargo_session_start:{discord_id}", ts)
+
+
+def get_trade_session_start(discord_id: str) -> str | None:
+    """The member's trading-session marker (ISO ts): trade stats since this point
+    are 'this session'. None until they first start a session."""
+    return _meta_get(f"trade_session_start:{discord_id}")
+
+
+def set_trade_session_start(discord_id: str, ts: str) -> None:
+    """Stamp the start of a fresh trading session (the 'reset' action)."""
+    _meta_set(f"trade_session_start:{discord_id}", ts)
 
 
 # --- event planner (events + signups) --------------------------------------
