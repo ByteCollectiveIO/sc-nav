@@ -358,6 +358,20 @@ CREATE TABLE IF NOT EXISTS group_templates (
     created_by TEXT,                    -- discord_id of the author
     created_at TEXT
 );
+
+-- Trade planner favorites (#21): a member's saved trade-route configurations.
+-- `data` is a JSON blob of the *plan config* (ship, usable SCU, start, mode,
+-- filters, budget, manual legs) — NOT the resolved legs/prices. Prices move, so a
+-- favorite re-plans against live UEX data every time it's loaded; only the setup is
+-- persisted. `name` is the member's own label for the route.
+CREATE TABLE IF NOT EXISTS trade_favorites (
+    id INTEGER PRIMARY KEY,
+    discord_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT,
+    data TEXT
+);
+CREATE INDEX IF NOT EXISTS trade_favorites_owner ON trade_favorites(discord_id);
 """
 
 
@@ -920,6 +934,63 @@ def get_trade_session_start(discord_id: str) -> str | None:
 def set_trade_session_start(discord_id: str, ts: str) -> None:
     """Stamp the start of a fresh trading session (the 'reset' action)."""
     _meta_set(f"trade_session_start:{discord_id}", ts)
+
+
+# --- trade favorites (#21: saved trade-route configs) ----------------------
+
+TRADE_FAVORITES_MAX = 40   # per-member cap, oldest culled on overflow
+
+
+def list_trade_favorites(discord_id: str) -> list[dict]:
+    """A member's saved trade-route favorites, freshest first. Each row is
+    {id, name, created_at, config} where `config` is the parsed plan blob."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, name, created_at, data FROM trade_favorites "
+            "WHERE discord_id=? ORDER BY created_at DESC, id DESC",
+            (str(discord_id),),
+        ).fetchall()
+    return [{"id": r["id"], "name": r["name"], "created_at": r["created_at"],
+             "config": _u(r["data"]) or {}} for r in rows]
+
+
+def save_trade_favorite(discord_id: str, name: str, config: dict, created_at: str) -> int:
+    """Save (or replace-by-name) a trade-route favorite for a member. Saving under
+    an existing name overwrites that favorite in place rather than duplicating it;
+    the per-member cap culls the oldest on overflow. Returns the row id."""
+    with _lock, _conn:
+        existing = _conn.execute(
+            "SELECT id FROM trade_favorites WHERE discord_id=? AND name=?",
+            (str(discord_id), name),
+        ).fetchone()
+        if existing:
+            _conn.execute(
+                "UPDATE trade_favorites SET data=?, created_at=? WHERE id=?",
+                (_j(config), created_at, existing["id"]),
+            )
+            return existing["id"]
+        cur = _conn.execute(
+            "INSERT INTO trade_favorites (discord_id, name, created_at, data) "
+            "VALUES (?, ?, ?, ?)",
+            (str(discord_id), name, created_at, _j(config)),
+        )
+        _conn.execute(
+            "DELETE FROM trade_favorites WHERE discord_id=? AND id NOT IN ("
+            "  SELECT id FROM trade_favorites WHERE discord_id=? "
+            "  ORDER BY created_at DESC, id DESC LIMIT ?)",
+            (str(discord_id), str(discord_id), TRADE_FAVORITES_MAX),
+        )
+    return cur.lastrowid
+
+
+def delete_trade_favorite(discord_id: str, fav_id: int) -> bool:
+    """Remove one of the member's saved favorites. Returns whether it existed."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM trade_favorites WHERE id=? AND discord_id=?",
+            (fav_id, str(discord_id)),
+        )
+    return cur.rowcount > 0
 
 
 # --- event planner (events + signups) --------------------------------------

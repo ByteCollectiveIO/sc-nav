@@ -1053,6 +1053,22 @@
     color: var(--accent); background: var(--accent-wash); }
   .trade-chip button { border: none; background: none; color: inherit; cursor: pointer;
     font-size: 14px; line-height: 1; padding: 0; }
+  /* Saved routes (#21 favorites): a load button + a small delete, side by side. */
+  .trade-favs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .trade-fav { display: inline-flex; align-items: stretch; border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; }
+  .trade-fav:hover { border-color: var(--accent); }
+  .trade-fav-load { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    border: none; background: none; cursor: pointer; padding: 6px 10px; text-align: left;
+    color: var(--text); }
+  .trade-fav-load:hover { color: var(--accent); }
+  .trade-fav-load .tf-name { font-size: 13px; font-weight: 600; }
+  .trade-fav-load .tf-sub { font-size: 11px; }
+  .trade-fav-del { border: none; border-left: 1px solid var(--border); background: none;
+    color: var(--dim); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 9px; }
+  .trade-fav-del:hover { color: var(--bad); background: var(--accent-wash); }
+  /* Prompt dialog: text input inside the shared confirm-dialog shell. */
+  .prompt-input { width: 100%; margin-top: 12px; }
   /* Manual leg builder rows. */
   .trade-leg-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
     padding: 8px 0; border-top: 1px solid var(--border-soft); }
@@ -2603,6 +2619,8 @@
 
     <div id="trade-run" hidden></div>
 
+    <div id="trade-favorites" class="panel" hidden></div>
+
     <div class="panel">
       <h2>SHIP</h2>
       <div class="route-row">
@@ -2687,6 +2705,7 @@
       <datalist id="trade-commodities"></datalist>
       <div class="route-actions">
         <button id="trade-plan" class="active">Plan trade run</button>
+        <button id="trade-save" title="save this setup as a favorite to reload later">★ Save route</button>
         <button id="trade-clear" title="reset the planner">Clear</button>
         <span id="trade-plan-msg" class="muted" style="font-size:12px;"></span>
       </div>
@@ -3170,6 +3189,49 @@ function confirmDialog(message, opts = {}) {
     dlg.showModal();
     // Default focus to the safe choice for destructive actions, else the action.
     (danger ? cancelBtn : okBtn).focus();
+  });
+}
+
+// A single-line text prompt built on the same modal shell as confirmDialog.
+// Resolves to the entered string on OK / Enter, or null on Cancel / Esc / backdrop.
+let _promptDialogEl = null;
+function promptDialog(message, opts = {}) {
+  const { title = "Enter a value", confirmLabel = "OK", cancelLabel = "Cancel",
+          placeholder = "", value = "" } = opts;
+  let dlg = _promptDialogEl;
+  if (!dlg) {
+    dlg = _promptDialogEl = document.createElement("dialog");
+    dlg.className = "confirm";
+    dlg.innerHTML =
+      '<form method="dialog" class="confirm-form">' +
+        '<div class="confirm-body">' +
+          '<h2 class="confirm-title"></h2>' +
+          '<p class="confirm-msg"></p>' +
+          '<input class="ti prompt-input" type="text" autocomplete="off">' +
+        '</div>' +
+        '<menu class="confirm-actions">' +
+          '<button type="button" class="confirm-cancel"></button>' +
+          '<button value="ok" class="confirm-ok"></button>' +
+        '</menu>' +
+      '</form>';
+    document.body.appendChild(dlg);
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close("cancel"); });
+    dlg.querySelector(".confirm-cancel").addEventListener("click", () => dlg.close("cancel"));
+  }
+  const input = dlg.querySelector(".prompt-input");
+  dlg.querySelector(".confirm-title").textContent = title;
+  dlg.querySelector(".confirm-msg").textContent = message;
+  dlg.querySelector(".confirm-ok").textContent = confirmLabel;
+  dlg.querySelector(".confirm-cancel").textContent = cancelLabel;
+  input.placeholder = placeholder; input.value = value;
+  dlg.setAttribute("aria-label", title);
+  return new Promise((resolve) => {
+    const onClose = () => { dlg.removeEventListener("close", onClose);
+      resolve(dlg.returnValue === "ok" ? input.value : null); };
+    dlg.addEventListener("close", onClose);
+    dlg.returnValue = "";           // clear a prior result so Esc/backdrop reads as cancel
+    dlg.showModal();
+    input.focus(); input.select();
   });
 }
 
@@ -5992,6 +6054,7 @@ let tradeLastRunSig = null;              // de-dupe WS re-renders
 let tradeRunComplete = false;            // keep the completion card up until cleared
 let tradeHistory = null;                 // {runs, picks, stats, session_stats} for RECENT TRADES
 let tradeStatsScope = "session";         // session | recent — which totals the panel shows
+let tradeFavorites = [];                 // saved trade-route configs (#21 favorites)
 
 async function loadTradePlanner() {
   if (!tradeShips) {
@@ -6010,6 +6073,7 @@ async function loadTradePlanner() {
   renderTradeIntro();
   renderTradeSuggest();
   loadTradeHistory();
+  loadTradeFavorites();
   // Resume an in-progress run (survives reload / navigating away and back). The
   // live WS frame keeps it fresh after this initial paint.
   if (!tradeCurrentRun && !tradeRunComplete)
@@ -6184,6 +6248,159 @@ async function startNewTradeSession() {
   loadTradeHistory();
 }
 
+// --- saved routes (#21 favorites) -------------------------------------------
+// A favorite stores the plan *config* (not resolved legs/prices) so loading one
+// re-solves against live UEX prices. See buildTradePlanBody for the shared shape.
+
+async function loadTradeFavorites() {
+  try {
+    const d = await fetch("/api/trade/favorites").then(r => r.json());
+    tradeFavorites = (d && d.favorites) || [];
+  } catch { tradeFavorites = []; }
+  renderTradeFavorites();
+}
+
+// One-line summary of a saved config for the chip subtitle.
+function tradeFavoriteSummary(cfg) {
+  const bits = [cfg.mode === "manual" ? "Manual legs"
+    : cfg.mode === "filtered" ? "Filtered" : "Auto"];
+  if (cfg.mode === "filtered" && cfg.commodities && cfg.commodities.length)
+    bits.push(cfg.commodities.join(", "));
+  if (cfg.mode === "manual" && cfg.legs)
+    bits.push(cfg.legs.length + " leg" + (cfg.legs.length === 1 ? "" : "s"));
+  if (cfg.ship) bits.push(cfg.ship);
+  if (cfg.mode !== "manual" && cfg.system) bits.push(cfg.system);
+  if (cfg.start_label) bits.push("from " + cfg.start_label);
+  else if (cfg.start_here) bits.push("from live position");
+  return bits.join(" · ");
+}
+
+// A default name suggestion from the config (the player can edit it).
+function tradeFavoriteDefaultName(cfg) {
+  const parts = [];
+  if (cfg.ship) parts.push(cfg.ship);
+  if (cfg.mode === "filtered" && cfg.commodities && cfg.commodities.length)
+    parts.push(cfg.commodities.slice(0, 2).join(" / "));
+  else parts.push(cfg.mode === "manual" ? "manual" : "auto");
+  if (cfg.mode !== "manual" && cfg.system) parts.push(cfg.system);
+  return parts.join(" · ");
+}
+
+function renderTradeFavorites() {
+  const el = $("trade-favorites");
+  if (!el) return;
+  if (!tradeFavorites.length) { el.hidden = true; el.innerHTML = ""; return; }
+  let h = `<div class="route-hist-head"><h2>SAVED ROUTES</h2></div>`
+    + `<p class="route-picks-h">Tap to load the setup and re-plan against live prices</p>`
+    + `<div class="trade-favs">`
+    + tradeFavorites.map((f, i) => {
+        const sub = tradeFavoriteSummary(f.config || {});
+        return `<div class="trade-fav">`
+          + `<button class="trade-fav-load" data-fav="${i}">`
+          + `<span class="tf-name">★ ${esc(f.name)}</span>`
+          + (sub ? `<span class="tf-sub muted">${esc(sub)}</span>` : "")
+          + `</button>`
+          + `<button class="trade-fav-del" data-del="${i}" title="remove this saved route">✕</button>`
+          + `</div>`;
+      }).join("")
+    + `</div>`;
+  el.innerHTML = h; el.hidden = false;
+  el.querySelectorAll("[data-fav]").forEach(b =>
+    b.onclick = () => loadTradeFavorite(tradeFavorites[+b.dataset.fav]));
+  el.querySelectorAll("[data-del]").forEach(b =>
+    b.onclick = () => deleteTradeFavorite(tradeFavorites[+b.dataset.del]));
+}
+
+// Save the current planner setup as a named favorite. Only the config is stored,
+// so it re-plans against live prices when loaded. Re-saving a name overwrites it.
+async function saveTradeFavorite() {
+  const msg = $("trade-plan-msg");
+  const config = buildTradePlanBody(msg);
+  if (!config) return;
+  // start_label: the POI name can't be resolved from an id client-side, so keep it
+  // for repainting the picker on load.
+  if (config.start_id) config.start_label = $("trade-start-poi").value.trim() || null;
+  const name = await promptDialog("Give this route a name so you can reload it later.",
+    { title: "Save trade route", placeholder: "e.g. Gold loop — Stanton",
+      value: tradeFavoriteDefaultName(config), confirmLabel: "Save route" });
+  if (name == null) return;
+  const trimmed = name.trim();
+  if (!trimmed) { msg.textContent = "give the route a name to save it"; return; }
+  const start_label = config.start_label || null;
+  delete config.start_label;                 // travels as its own field, not in config
+  msg.textContent = "saving…";
+  try {
+    const r = await fetch("/api/trade/favorites", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: trimmed, config, start_label }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({}));
+      msg.textContent = "⚠ " + (d.detail || "couldn't save route"); return; }
+  } catch { msg.textContent = "⚠ network error"; return; }
+  msg.textContent = "★ route saved";
+  loadTradeFavorites();
+}
+
+async function deleteTradeFavorite(fav) {
+  if (!fav) return;
+  if (!(await confirmDialog(`Remove “${fav.name}” from your saved routes?`,
+      { title: "Remove saved route", confirmLabel: "Remove", danger: true }))) return;
+  try { await fetch(`/api/trade/favorites/${fav.id}`, { method: "DELETE" }); } catch { return; }
+  loadTradeFavorites();
+}
+
+// Restore the planner form from a saved config, then re-plan against live prices.
+function loadTradeFavorite(fav) {
+  if (!fav) return;
+  applyTradeConfig(fav.config || {});
+  planTrade();
+}
+
+// Repaint every planner control from a stored config blob. Terminal/commodity
+// names for manual legs are resolved from the loaded terminal catalog; the start
+// POI uses the stored label (ids alone don't carry a display name).
+function applyTradeConfig(cfg) {
+  $("trade-ship").value = cfg.ship || "";
+  if (cfg.ship) prefillTradeScu();
+  if (cfg.usable_scu) $("trade-scu").value = cfg.usable_scu;   // explicit hold wins over stated
+  $("trade-budget").value = cfg.budget || "";
+  // start-from: live position vs a picked POI vs neither.
+  cancelTradeHere();
+  const sp = $("trade-start-poi");
+  sp.value = ""; sp.dataset.poiId = ""; sp.parentElement.classList.remove("picked");
+  $("trade-start-msg").textContent = "";
+  if (cfg.start_here) { tradeStartHere = false; toggleTradeHere(); }
+  else if (cfg.start_id) {
+    sp.value = cfg.start_label || ("POI #" + cfg.start_id);
+    sp.dataset.poiId = cfg.start_id;
+    sp.parentElement.classList.add("picked");
+  }
+  setTradeMode(cfg.mode || "auto");
+  if (cfg.mode !== "manual") {
+    $("trade-stops").value = cfg.max_stops || 6;
+    if ($("trade-system")) $("trade-system").value = cfg.system || "";
+    tradeSort = cfg.sort || "per_hour";
+    for (const x of $("trade-sort").children) x.classList.toggle("active", x.dataset.sort === tradeSort);
+    $("trade-deadhead").checked = !!cfg.minimize_deadhead;
+    const freshOn = cfg.max_price_age_days != null;
+    $("trade-fresh-on").checked = freshOn;
+    $("trade-fresh-days").disabled = !freshOn;
+    if (freshOn) $("trade-fresh-days").value = cfg.max_price_age_days;
+    tradeFilter = (cfg.mode === "filtered" && Array.isArray(cfg.commodities)) ? cfg.commodities.slice() : [];
+    renderTradeChips();
+  }
+  if (cfg.mode === "manual") {
+    $("trade-legs").innerHTML = "";
+    for (const l of (cfg.legs || [])) {
+      const bt = tradeTermById[l.buy_terminal_id], st = tradeTermById[l.sell_terminal_id];
+      addTradeLegRow({ commodity: l.commodity,
+        buy_terminal_id: l.buy_terminal_id, buy_terminal: bt ? bt.name : "",
+        sell_terminal_id: l.sell_terminal_id, sell_terminal: st ? st.name : "",
+        scu: l.scu });
+    }
+    if (!$("trade-legs").children.length) addTradeLegRow();
+  }
+}
+
 function wireTradePlanner() {
   tradeWired = true;
   for (const b of $("trade-mode-tabs").querySelectorAll(".trade-tab"))
@@ -6210,6 +6427,7 @@ function wireTradePlanner() {
     if (e.key === "Enter") { e.preventDefault(); addTradeCommodity(); } });
   $("trade-add-leg").onclick = () => addTradeLegRow();
   $("trade-plan").onclick = planTrade;
+  $("trade-save").onclick = saveTradeFavorite;
   $("trade-clear").onclick = clearTrade;
   $("trade-intro-dismiss").onclick = () => {
     try { localStorage.setItem("trade_intro_dismissed", "1"); } catch {} renderTradeIntro(); };
@@ -6384,11 +6602,16 @@ async function updateLegLive(wrap) {
   live.innerHTML = m > 0 ? `<b>+${fmtAuec(m)}</b>/SCU` : `<span class="route-warn">${fmtAuec(m)}/SCU</span>`;
 }
 
-async function planTrade() {
+// Read the planner form into a /api/trade/plan body, validating as it goes: sets
+// `msg` and returns null on the first problem. Shared by Plan and Save-favorite so
+// a saved config is exactly what would be planned. `ship` rides along (harmless to
+// /plan) so a loaded favorite can restore the ship name too.
+function buildTradePlanBody(msg) {
   const usable = Number($("trade-scu").value);
-  const msg = $("trade-plan-msg");
-  if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return; }
+  if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return null; }
   const body = { mode: tradeMode, usable_scu: usable, ...tradeStartPayload() };
+  const ship = $("trade-ship").value.trim();
+  if (ship) body.ship = ship;
   const budget = Number($("trade-budget").value);
   if (budget > 0) body.budget = Math.round(budget);
   if (tradeMode === "manual") {
@@ -6401,7 +6624,7 @@ async function planTrade() {
       if (!commodity || !buyTid || !sellTid) continue;
       legs.push({ commodity, buy_terminal_id: buyTid, sell_terminal_id: sellTid, scu });
     }
-    if (!legs.length) { msg.textContent = "add a leg: commodity + a buy terminal + a sell terminal"; return; }
+    if (!legs.length) { msg.textContent = "add a leg: commodity + a buy terminal + a sell terminal"; return null; }
     body.legs = legs;
   } else {
     body.max_stops = Number($("trade-stops").value) || 6;
@@ -6411,10 +6634,17 @@ async function planTrade() {
     if ($("trade-fresh-on").checked)
       body.max_price_age_days = Math.max(1, Number($("trade-fresh-days").value) || 7);
     if (tradeMode === "filtered") {
-      if (!tradeFilter.length) { msg.textContent = "add at least one commodity, or switch to Auto"; return; }
+      if (!tradeFilter.length) { msg.textContent = "add at least one commodity, or switch to Auto"; return null; }
       body.commodities = tradeFilter;
     }
   }
+  return body;
+}
+
+async function planTrade() {
+  const msg = $("trade-plan-msg");
+  const body = buildTradePlanBody(msg);
+  if (!body) return;
   tradeLastInput = body;
   msg.textContent = "planning…";
   let res;
