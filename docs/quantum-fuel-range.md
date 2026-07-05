@@ -1,8 +1,33 @@
 # Quantum fuel & jump-range in the route planners — design
 
-Status: **DESIGN ONLY — not built. UNBLOCKED 2026-07-04.** Adds real
-quantum-drive fuel-usage and max-jump-range to both the **Cargo Hauling
-Planner** (`#/route`) and the **Trade Route Planner** (`#/trade`).
+Status: **BUILT 2026-07-04 (not yet released).** Adds real quantum-drive
+fuel-usage and max-jump-range to both the **Cargo Hauling Planner** (`#/route`)
+and the **Trade Route Planner** (`#/trade`). Data layer is #26
+(`tools/sync_quantum.py` → committed `poi/quantum_*.json`). What shipped, vs. the
+design below:
+- **nav_core:** `leg_fuel_scu` helper; per-leg `fuel_scu`/`over_range` annotation
+  on cargo stops + trade `to_buy`/`haul` sub-legs; summary `total_fuel_scu`/
+  `over_range_count`/`worst_leg_m`; `in_range_only` as a hard per-leg cap
+  (`max_leg_m`) in `_bnb_order`/`_greedy_order` (cargo → `range_infeasible` flag)
+  and `_greedy_route` (trade → over-range trades dropped). Manual trade legs are
+  annotated, never dropped. 8 tests in `test_nav_core.py`.
+- **app.py:** `load_quantum()` + `enrich_ships_quantum()` attach a `quantum`
+  sub-object to matched `/api/ships` rows; `_resolve_drive(ship, qd)` →
+  `(fuel_req, max_range_m, qd)`; `ship`/`qd`/`in_range_only` added to `RoutePlanIn`
+  + `TradePlanIn` + `TradeReplanIn` and threaded into every solver call (plan, run,
+  replan). Drive persisted in the trade run's params. 3 tests in `test_app.py`.
+- **Frontend:** a SHIP-panel drive `<select>` + "in-range only" checkbox
+  (populated from `ship.quantum.drives`, default-first, hidden for unmatched
+  ships); chosen drive remembered per ship in `localStorage` (**no DB migration** —
+  the `user_ships.qd` column below was not needed); `fmtScu` formatter; per-leg
+  fuel + `⚠ over range` badge; `QT FUEL` summary metric; route-level `.route-range`
+  callout (advisory) and range-infeasible message (hard). Both planners.
+- **Verification:** full suites green (nav_core + app); a full-stack TestClient
+  plan confirmed fuel figures + `range_infeasible` end-to-end; `node --check` on
+  the SPA script. A live browser drive was not possible (no local browser; the SPA
+  is behind Discord OAuth).
+
+The design prose below is retained as the reference for intent.
 
 > **Data-source update (2026-07-04):** the primary source is now the **SC Wiki
 > API** (backlog #26): `GET /api/vehicles` carries a precomputed per-ship

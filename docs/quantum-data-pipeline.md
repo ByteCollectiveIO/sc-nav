@@ -4,6 +4,31 @@ Companion to [`quantum-fuel-range.md`](quantum-fuel-range.md). Describes how the
 **SC Wiki API** (backlog #26) becomes the two small files the server loads, so a
 per-patch refresh is reproducible.
 
+> **Status (2026-07-04): BUILT — `tools/sync_quantum.py`.** The distill script
+> is committed and the artifacts are generated + committed. What actually shipped
+> vs. the plan below:
+> - **Outputs are keyed by wiki `slug`** (e.g. `aegs-avenger-stalker`), not an
+>   internal id, and each file wraps its payload: `quantum_drives.json` =
+>   `{_meta, drives}`, `quantum_profiles.json` = `{_meta, profiles, uexcorp}`.
+>   `_meta` carries `game_version` + CC BY-SA attribution.
+> - **The uexcorp match is baked into the output** (`profiles.uexcorp`: a resolved
+>   `name_full → slug` map), so runtime is a pure dict lookup — no name index to
+>   rebuild in `app.py`.
+> - **Default drive + QD size come from the ship's `hardpoint_quantum_drive`
+>   port** (`class_name` + `sizes.max`), not fuel_req back-matching.
+> - **Gate is the ship's `quantum` block, not the port.** Hulls with a range but
+>   no equippable port (Hull C, capital ships with TEMP drives) still get a stock
+>   profile: a **synthesized default drive** (`fuel_req = fuel_scu/wiki_range`,
+>   `synthetic: true`) whose range equals the wiki's own `quantum_range`. Those
+>   ships list only the stock drive (no picker), never a fabricated one.
+> - **Coverage: 230 profiles, 57 drives, 0 identity mismatches, 81% of uexcorp
+>   cargo haulers matched** (103/126) — up from the mine's 49%. The ~23 unmatched
+>   are concept ships the wiki has no quantum data for (Kraken, Galaxy,
+>   Merchantman, Hull D/E, Orion…); they degrade gracefully.
+> - Refresh = `python3 tools/sync_quantum.py` (offline, manual, per patch).
+> - **Not yet built:** the consuming feature (#27 — planner fuel/range UI +
+>   nav_core wiring). This slice is the data layer only.
+
 > **History (2026-07-04):** this pipeline was originally scoped against a
 > datamined `data.p4k` extract (~49% ship coverage). That raw mine has since been
 > **removed from the repo**; the SC Wiki API replaced it as the source (same

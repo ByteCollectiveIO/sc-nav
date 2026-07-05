@@ -370,6 +370,64 @@ def load_ships() -> list[dict]:
     return ships
 
 
+def load_quantum() -> tuple[dict, dict, dict]:
+    """Load the committed quantum artifacts distilled from the SC Wiki API by
+    tools/sync_quantum.py (#26/#27). Returns (drives, profiles, uex_index):
+    drives = {qd_class_name: {...}}; profiles = {slug: {fuel_scu, drives, ...}};
+    uex_index = {uexcorp name_full: slug}. All empty (feature simply off) if the
+    files are absent — the planners degrade to no fuel/range UI."""
+    def _read(name):
+        try:
+            return json.loads((DATA_DIR / name).read_text())
+        except (OSError, json.JSONDecodeError):
+            return {}
+    prof_doc = _read("quantum_profiles.json")
+    drives = _read("quantum_drives.json").get("drives", {})
+    return drives, prof_doc.get("profiles", {}), prof_doc.get("uexcorp", {})
+
+
+def _ship_quantum_obj(profile: dict) -> dict:
+    """The `quantum` sub-object attached to a /api/ships row: enough for the
+    frontend drive picker + range readout, without leaking distill internals."""
+    default = next((d for d in profile["drives"] if d["is_default"]),
+                   profile["drives"][0] if profile["drives"] else None)
+    return {
+        "fuel_scu": profile["fuel_scu"],
+        "qd_size": profile.get("qd_size"),
+        "default_qd": profile.get("default_qd"),
+        "default_range_m": default["range_m"] if default else None,
+        "max_range_m": profile.get("max_range_m"),
+        "default_from_synth": profile.get("default_from_synth", False),
+        "drives": [{"qd": d["qd"], "name": d["name"], "fuel_req": d["fuel_req"],
+                    "range_m": d["range_m"], "is_default": d["is_default"]}
+                   for d in profile["drives"]],
+    }
+
+
+def enrich_ships_quantum(ship_rows: list[dict]) -> None:
+    """Attach a `quantum` sub-object to each planner ship that matched a wiki
+    profile (mutates in place). Unmatched ships get no `quantum` key — the UI hides
+    the drive picker and range readout for them (no fabricated numbers, #27)."""
+    for s in ship_rows:
+        slug = QUANTUM_UEX.get(s["name"])
+        prof = QUANTUM_PROFILES.get(slug) if slug else None
+        if prof and prof.get("drives"):
+            s["quantum"] = _ship_quantum_obj(prof)
+
+
+def _resolve_drive(ship_name: str | None, qd_key: str | None):
+    """(fuel_req, max_range_m, resolved_qd) for a ship + optional drive override.
+    Falls back to the ship's stock drive when qd_key is unknown/None; returns
+    (None, None, None) for an unmatched ship so the solvers skip fuel/range."""
+    slug = QUANTUM_UEX.get(ship_name or "")
+    prof = QUANTUM_PROFILES.get(slug) if slug else None
+    if not prof or not prof.get("drives"):
+        return (None, None, None)
+    by_key = {d["qd"]: d for d in prof["drives"]}
+    d = by_key.get(qd_key) or by_key.get(prof.get("default_qd")) or prof["drives"][0]
+    return (d["fuel_req"], d["range_m"], d["qd"])
+
+
 def load_fleet_ships() -> list[dict]:
     """All spaceships (name + crew size + a default seat template) for the fleet
     organizer's ship picker — a superset of the cargo `ships` list (combat
@@ -812,6 +870,8 @@ raw_commodity_names = load_raw_commodity_names()
 commodity_names = load_commodity_names()
 harvestable_names = load_harvestable_names()
 ships = load_ships()
+QUANTUM_DRIVES, QUANTUM_PROFILES, QUANTUM_UEX = load_quantum()
+enrich_ships_quantum(ships)     # attach per-ship quantum fuel/range (#27), when matched
 fleet_ships = load_fleet_ships()
 item_names = load_item_names()
 item_prices = build_item_prices()
@@ -1087,6 +1147,13 @@ class RoutePlanIn(BaseModel):
     # silently skipped (POIs can be refreshed away).
     avoid_mode: str = "avoid"
     avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
+    # Quantum fuel & range (#27). `ship` (uexcorp name_full) + optional `qd` (drive
+    # class_name override) resolve the drive; `in_range_only` turns the advisory
+    # over-range warning into a hard solver constraint. All optional — an unmatched
+    # ship or absent `ship` simply yields no fuel/range figures.
+    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    qd: str | None = Field(default=None, max_length=_NAME_MAX)
+    in_range_only: bool = False
 
 
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
@@ -2223,6 +2290,9 @@ class TradePlanIn(BaseModel):
     max_price_age_days: int | None = Field(default=None, ge=1, le=365)   # drop stale prices
     legs: list[TradeLegIn] = Field(default_factory=list, max_length=24)  # manual mode
     ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    # Quantum fuel & range (#27): optional drive override + hard in-range constraint.
+    qd: str | None = Field(default=None, max_length=_NAME_MAX)
+    in_range_only: bool = False
     # Pirate danger board (#24): ignore = plan as-is; warn = plan normally but flag
     # legs that touch (or fly past) an active warning; avoid = route around dangers —
     # snared lanes are detoured, camped terminals dropped (auto/filtered only; manual
@@ -2257,6 +2327,9 @@ class TradeReplanIn(BaseModel):
     minimize_deadhead: bool | None = None
     max_price_age_days: int | None = Field(default=None, ge=1, le=365)
     avoid_mode: str | None = None                       # ignore | warn | avoid (#24)
+    # Quantum (#27): override the run's stored drive / in-range constraint on re-plan.
+    qd: str | None = Field(default=None, max_length=_NAME_MAX)
+    in_range_only: bool | None = None
 
 
 class TradeFavoriteIn(BaseModel):
@@ -2420,14 +2493,17 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
         # not just as a fly-past volume (decision 4).
         avoid_poi_ids = frozenset(avoid_poi_ids or ()) | set(blacklist)
     solver_volumes = volumes if mode == "avoid" else None
+    fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
     try:
         if body.mode == "manual":
             # Manual legs are the player's explicit choice — never silently dropped;
             # they still get warn/avoid badges + costed detours so a snared pick is flagged.
+            # (in_range_only only ever annotates manual legs, never drops them.)
             plan = nav_core.cost_trade_legs(
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
-                budget=body.budget, t_ref=t_ref, avoid_volumes=solver_volumes)
+                budget=body.budget, t_ref=t_ref, avoid_volumes=solver_volumes,
+                fuel_req=fuel_req, max_range_m=max_range_m)
         else:
             plan = nav_core.plan_trade_route(
                 nav, trade_price_points, body.usable_scu,
@@ -2436,7 +2512,8 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
-                avoid_volumes=solver_volumes)
+                avoid_volumes=solver_volumes,
+                fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=body.in_range_only)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
@@ -2490,6 +2567,7 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "max_price_age_days": body.max_price_age_days,
             "avoid_mode": _norm_avoid_mode(body.avoid_mode, default="avoid"),   # #24
             "avoid_poi_ids": list(body.avoid_poi_ids or ()),                    # #24 v2 blacklist
+            "qd": body.qd, "in_range_only": body.in_range_only,                 # #27
         },
     }
 
@@ -2616,6 +2694,13 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
                                       if mode == "avoid" else (None, None))
         if mode == "avoid" and blacklist:
             avoid_poi_ids = frozenset(avoid_poi_ids or ()) | set(blacklist)
+        # #27: re-resolve the drive from the run's ship (body may override qd /
+        # in-range). A mid-run re-plan is exactly when a tight tank matters.
+        qd = body.qd if body.qd is not None else p.get("qd")
+        in_range = (body.in_range_only if body.in_range_only is not None
+                    else bool(p.get("in_range_only")))
+        fuel_req, max_range_m, _qd = _resolve_drive(run.get("ship"), qd)
+        p["qd"], p["in_range_only"] = qd, in_range   # persist the params used
         new_plan = nav_core.replan_trade_route(
             nav, trade_price_points, run["usable_scu"], start_pos=sess.pos, held=held,
             max_stops=(body.max_stops or p.get("max_stops") or 6),
@@ -2626,7 +2711,8 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
             deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
             max_age_s=max_age_s, t_ref=sess.t,
             avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
-            avoid_volumes=(volumes if mode == "avoid" else None))
+            avoid_volumes=(volumes if mode == "avoid" else None),
+            fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
         _annotate_trade_legs(new_plan, warnings, mode, volumes, sess.t)
         p["avoid_mode"] = mode                       # persist the mode used
         new_legs = new_plan.get("legs") or []
@@ -2764,11 +2850,13 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
             warnings = hub.active_trade_warnings()
     volumes = (_build_hazard_volumes(warnings, list(body.avoid_poi_ids or ()),
                                      sess.t if sess else None) if mode == "avoid" else None)
+    fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
     try:
         plan = nav_core.plan_route(
             nav, [p.model_dump() for p in body.packages],
             usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
             t_ref=sess.t if sess else None, avoid_volumes=volumes,
+            fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=body.in_range_only,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2780,7 +2868,8 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
 
 
 class RunStartIn(RoutePlanIn):
-    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    # ship/qd/in_range_only inherited from RoutePlanIn (#27).
+    pass
 
 
 class RunPatchIn(BaseModel):
@@ -2841,11 +2930,13 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
         warnings = hub.active_trade_warnings() if mode != "ignore" else []
         volumes = (_build_hazard_volumes(warnings, list(body.avoid_poi_ids or ()), sess.t)
                    if mode == "avoid" else None)
+        fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
         try:
             plan = nav_core.plan_route(
                 nav, [p.model_dump() for p in body.packages],
                 usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
                 t_ref=sess.t, avoid_volumes=volumes,
+                fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=body.in_range_only,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

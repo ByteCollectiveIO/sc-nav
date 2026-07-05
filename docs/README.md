@@ -24,8 +24,8 @@ drift — trust grep and CI, not the citation.
 | Doc | Status | Notes |
 |---|---|---|
 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | 📐 designed 2026-07-04 | Backlog #25; wiki `/api/blueprints` is the locked data source |
-| [quantum-fuel-range.md](quantum-fuel-range.md) | 📐 designed, **unblocked** | Backlog #27; data source now the SC Wiki API (95% coverage), decisions unchanged |
-| [quantum-data-pipeline.md](quantum-data-pipeline.md) | 📐 companion to the above | Fetch → distill → committed-JSON convention; source is the SC Wiki API (#26) |
+| [quantum-fuel-range.md](quantum-fuel-range.md) | ✅ BUILT 2026-07-04 | Backlog #27; fuel burn + max-range in both planners (drive picker + in-range + per-leg fuel). Not yet released |
+| [quantum-data-pipeline.md](quantum-data-pipeline.md) | ✅ script BUILT 2026-07-04 | `tools/sync_quantum.py` → committed `poi/quantum_{drives,profiles}.json`; 230 profiles / 81% uexcorp coverage. Consuming feature #27 still pending |
 
 ## Shipped feature specs (reference for what's live)
 

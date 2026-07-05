@@ -18,7 +18,16 @@ historical design prose that used to live here is preserved verbatim in
 
 ### 26. SC Wiki API reference-data layer 🆕 (foundation — do first)
 
-**Status:** researched + probed live 2026-07-04, not built.
+**Status:** researched + probed live 2026-07-04. **Vehicles/quantum slice BUILT
+2026-07-04** — `tools/sync_quantum.py` fetches `/api/vehicles` +
+`/api/vehicle-items?filter[type]=QuantumDrive`, distills committed
+`poi/quantum_drives.json` + `poi/quantum_profiles.json` (+ `quantum_match_report.txt`
+build artifact), version-stamped, no runtime calls. 230 ship profiles / 57 drives
+/ 0 identity mismatches / 81% uexcorp-hauler coverage. Footer carries the CC BY-SA
+4.0 attribution. Smoke test in `test_nav_core.py`. **Remaining slices** (share the
+same fetch→distill convention, still to do): `/api/blueprints` (feeds #25) and
+`/api/locations/positions` (feeds #28). Consuming the quantum data in the planners
+is #27.
 
 `https://api.star-citizen.wiki` (OpenAPI at `/api/openapi`) is a public,
 game-version-scoped JSON API — no auth for game data, pagination
@@ -45,9 +54,12 @@ Stanton entities), `/api/locations/{id}` (per-POI `quantum_travel` radii +
 
 ### 27. Quantum fuel & max jump-range (cargo + trade planners)
 
-**Status:** designed (docs complete), **UNBLOCKED 2026-07-04** by #26.
-Spec: [`quantum-fuel-range.md`](quantum-fuel-range.md) +
-[`quantum-data-pipeline.md`](quantum-data-pipeline.md).
+**Status:** **BUILT 2026-07-04 (not yet released).** Fuel burn + max-range are
+live in both planners: nav_core annotation/summary/`in_range_only`, app.py
+`/api/ships` `quantum` enrichment + `_resolve_drive` + solver wiring, and a SHIP-
+panel drive picker + in-range checkbox + per-leg fuel + range callout (drive
+remembered in localStorage, no DB migration). Unmatched ships degrade gracefully.
+Spec + build notes: [`quantum-fuel-range.md`](quantum-fuel-range.md).
 
 Decisions locked: default drive + override picker; max-range as **advisory
 warning** with an opt-in "only in-range routes" hard constraint; unmatched ships
