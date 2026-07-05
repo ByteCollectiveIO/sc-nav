@@ -89,6 +89,37 @@ shapes from the design carry over unchanged; only the source is the wiki API.
   counts them); spec builder needs a pick-one-of-N control only if CIG uses
   them on craftable recipes players care about.
 
+### 14.2 Personal goals + blueprint-seeded craft goals (Resource Manager × blueprints)
+
+**Status:** **BUILT** (this pass) — pending release. Ties the Resource Manager's
+goals/inventory to the blueprint feed and lands the #25.1 member blueprint
+library at the same time (the two share one table).
+
+- **Personal vs org goals** — `goals.visibility` (`org` default | `personal`);
+  personal goals are visible/contributable only to their creator (`list_goals`
+  viewer filter, `_can_view_goal` guard, personal goal-met suppresses the
+  org-wide Discord ping, account-deletion hard-deletes personal goals).
+- **Craft goals** — `POST /api/goals` accepts `blueprint_key` (+ `blueprint_qty`)
+  and seeds line items from the recipe's materials manifest
+  (`nav_core.blueprint_goal_lines`; 36/37 inputs name-map cleanly to `commodity:`
+  catalog items — only "Yormandi Eye" is unmapped, surfaced as `seed_unmapped`).
+  `goals.blueprint_key` drives the detail craft header (name, craft time, per-line
+  `≥Qn` min-quality badges — advisory) + a "where my materials are" location
+  grouping (`my_locations`).
+- **Member blueprint library (#25.1 §10)** — `member_blueprints` table +
+  `GET/POST/DELETE /api/me/blueprints`; a "My Blueprints" settings panel; each row
+  deep-links "🎯 Gather" → a pre-seeded personal craft goal.
+- **Commission crafter-matching (#25.1 §10)** — commission cards carry
+  `can_craft_count` ("🛠 N can craft") + `i_can_craft` ("✨ You can craft"), and a
+  client-side "✨ Requests I can craft" filter (`db.blueprint_crafter_counts`,
+  one grouped query — LFG suggested-match pattern).
+- **Frontend** — goal form visibility segment + blueprint-seed picker w/ live
+  materials preview; board All/Mine/🛠 Craft filter + 🔒/🛠 chips.
+
+Still open under #25.1: §11 sell-side ripples (stat-name autocomplete,
+`blueprint:` identity for sale listings), §12 estimated material cost, the
+choice-group picker, and the announce name-check.
+
 ### 28. Starmap & POI enrichment from the wiki API 🆕 (needs scoping)
 
 **Status:** opportunity identified 2026-07-04; three independent slices, each

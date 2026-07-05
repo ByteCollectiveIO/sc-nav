@@ -3255,6 +3255,44 @@ class BlueprintCommissionTests(unittest.TestCase):
         self.assertIsNone(st["best_quote"])
         self.assertIsNone(st["budget"])
 
+    # -- goal seeding (Resource Manager craft goals) --
+
+    @staticmethod
+    def _resolver(known):
+        """A stand-in catalog resolver: known names → a commodity item, else None."""
+        def resolve(name):
+            if name in known:
+                return {"item_id": f"commodity:{name.lower()}", "name": name}
+            return None
+        return resolve
+
+    def test_goal_lines_maps_both_kinds_and_scales_qty(self):
+        resolve = self._resolver({"Agricium", "Hadanite", "Dolivine"})
+        out = nav_core.blueprint_goal_lines(self.WEAPON, 2, resolve)
+        self.assertEqual(out["unmapped"], [])
+        by_id = {l["item_id"]: l for l in out["lines"]}
+        agri = by_id["commodity:agricium"]
+        self.assertEqual(agri["unit"], "SCU")
+        self.assertAlmostEqual(agri["qty_needed"], 0.72)     # 0.36 SCU × 2
+        hada = by_id["commodity:hadanite"]
+        self.assertEqual(hada["unit"], "each")               # gem count, not SCU
+        self.assertEqual(hada["qty_needed"], 14)             # 7 × 2
+        self.assertEqual(agri["item_name"], "Agricium")
+
+    def test_goal_lines_surfaces_min_quality_and_dedups_resource(self):
+        resolve = self._resolver({"Borase"})
+        out = nav_core.blueprint_goal_lines(self.PLANT, 1, resolve)
+        self.assertEqual(len(out["lines"]), 1)               # Borase summed across slots
+        line = out["lines"][0]
+        self.assertAlmostEqual(line["qty_needed"], 2.0)      # 1.5 + 0.5 SCU
+        self.assertEqual(line["min_q"], 500)                 # strictest slot wins
+
+    def test_goal_lines_reports_unmapped_inputs(self):
+        resolve = self._resolver({"Agricium"})               # gems unresolved
+        out = nav_core.blueprint_goal_lines(self.WEAPON, 1, resolve)
+        self.assertEqual([l["item_id"] for l in out["lines"]], ["commodity:agricium"])
+        self.assertEqual(sorted(out["unmapped"]), ["Dolivine", "Hadanite"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

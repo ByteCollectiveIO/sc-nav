@@ -418,6 +418,21 @@ CREATE TABLE IF NOT EXISTS pirate_warnings (
     confirmations TEXT,               -- json list of member ids who re-verified
     created       REAL NOT NULL       -- epoch seconds; a confirm/refresh bumps this
 );
+
+-- Member blueprint library (#25.1): which crafting recipes a member owns / can
+-- make. Powers both the commission board's "N members can craft this" + "requests
+-- I can craft" filter AND the Resource Manager's "seed a craft goal from one of my
+-- blueprints" quick-pick. `blueprint_key` is the feed's BP_CRAFT_… id (denormalized
+-- name would drift on a re-sync, so only the key is stored). One row per pair.
+CREATE TABLE IF NOT EXISTS member_blueprints (
+    id          INTEGER PRIMARY KEY,
+    member_id   TEXT NOT NULL,         -- Discord member id
+    blueprint_key TEXT NOT NULL,
+    added_at    TEXT,
+    UNIQUE (member_id, blueprint_key)
+);
+CREATE INDEX IF NOT EXISTS member_bp_member ON member_blueprints(member_id);
+CREATE INDEX IF NOT EXISTS member_bp_key ON member_blueprints(blueprint_key);
 """
 
 
@@ -445,6 +460,12 @@ def init(db_path) -> None:
         # Scheduled Discord reminders: stamped when the T-minus ping fires so a
         # restart or a slow tick can never double-ping (see events_due_for_reminder).
         _ensure_column("events", "reminded_at", "TEXT")
+        # Personal vs org goals + blueprint-seeded craft goals (#14.2). A goal is
+        # `org` (shared board, anyone contributes) or `personal` (only its creator
+        # sees/fills it); `blueprint_key` tags a goal whose line items were seeded
+        # from a crafting recipe's materials manifest.
+        _ensure_column("goals", "visibility", "TEXT NOT NULL DEFAULT 'org'")
+        _ensure_column("goals", "blueprint_key", "TEXT")
         # Demand-side stock reports: v0.38.0 created the table without `side`.
         _ensure_column("stock_reports", "side", "TEXT NOT NULL DEFAULT 'supply'")
         denorm_added = _ensure_column("listings", "sort_price", "REAL")
@@ -1624,10 +1645,12 @@ def create_goal(d: dict) -> int:
     with _lock, _conn:
         cur = _conn.execute(
             "INSERT INTO goals (creator_id, title, description, priority, deadline, "
-            "status, line_items, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            "status, line_items, visibility, blueprint_key, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["creator_id"]), d.get("title"), d.get("description"),
              d.get("priority", 5), d.get("deadline"), d.get("status", "active"),
-             _j(d.get("line_items") or []), d.get("created_at"), d.get("updated_at")),
+             _j(d.get("line_items") or []), d.get("visibility") or "org",
+             d.get("blueprint_key"), d.get("created_at"), d.get("updated_at")),
         )
     return cur.lastrowid
 
@@ -1638,14 +1661,21 @@ def get_goal(goal_id: int) -> dict | None:
     return _goal_row_to_dict(row) if row else None
 
 
-def list_goals(status: str | None = None) -> list[dict]:
+def list_goals(status: str | None = None, viewer_id: str | None = None) -> list[dict]:
     """Goals sorted priority ascending (1 = highest) then soonest deadline, open-
-    ended (NULL deadline) last. `status` filters when given."""
+    ended (NULL deadline) last. `status` filters when given. `viewer_id` scopes
+    visibility: org goals are shown to everyone, personal goals only to their
+    creator — so someone else's private craft goals never surface on the board."""
     q = "SELECT * FROM goals"
-    params: list = []
+    where, params = [], []
     if status:
-        q += " WHERE status=?"
+        where.append("status=?")
         params.append(status)
+    if viewer_id is not None:
+        where.append("(visibility='org' OR creator_id=?)")
+        params.append(str(viewer_id))
+    if where:
+        q += " WHERE " + " AND ".join(where)
     # NULL deadlines sort last within a priority; SQLite orders NULL first, so key
     # on (deadline IS NULL) before deadline.
     q += " ORDER BY priority ASC, deadline IS NULL, deadline ASC, id DESC"
@@ -1654,7 +1684,8 @@ def list_goals(status: str | None = None) -> list[dict]:
     return [_goal_row_to_dict(r) for r in rows]
 
 
-_GOAL_EDITABLE = ("title", "description", "priority", "deadline", "status", "line_items")
+_GOAL_EDITABLE = ("title", "description", "priority", "deadline", "status",
+                  "line_items", "visibility")
 _GOAL_JSON = ("line_items",)
 
 
@@ -1691,6 +1722,64 @@ def delete_goal(goal_id: int) -> bool:
         _conn.execute("DELETE FROM inventory_allocations WHERE goal_id=?", (goal_id,))
         cur = _conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
     return cur.rowcount > 0
+
+
+# --- member blueprint library (#25.1) --------------------------------------
+
+
+def list_member_blueprints(member_id: str) -> list[dict]:
+    """A member's saved crafting recipes, most-recently-added first."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT blueprint_key, added_at FROM member_blueprints "
+            "WHERE member_id=? ORDER BY added_at DESC, id DESC", (str(member_id),)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_member_blueprint(member_id: str, blueprint_key: str, added_at: str) -> bool:
+    """Record that a member owns a blueprint. Idempotent (UNIQUE pair) — a repeat
+    add is a no-op that still reports success."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT OR IGNORE INTO member_blueprints (member_id, blueprint_key, added_at) "
+            "VALUES (?,?,?)", (str(member_id), blueprint_key, added_at))
+    return True
+
+
+def delete_member_blueprint(member_id: str, blueprint_key: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM member_blueprints WHERE member_id=? AND blueprint_key=?",
+            (str(member_id), blueprint_key))
+    return cur.rowcount > 0
+
+
+def member_has_blueprint(member_id: str, blueprint_key: str) -> bool:
+    with _lock:
+        row = _conn.execute(
+            "SELECT 1 FROM member_blueprints WHERE member_id=? AND blueprint_key=? LIMIT 1",
+            (str(member_id), blueprint_key)).fetchone()
+    return row is not None
+
+
+def blueprint_crafter_counts(keys=None) -> dict[str, int]:
+    """How many members can craft each blueprint, as {blueprint_key: count} — one
+    grouped query for the commission board's "N members can craft this" chip (no
+    N+1). `keys` narrows to the board's visible recipes; None counts all."""
+    q = ("SELECT blueprint_key, COUNT(DISTINCT member_id) AS n "
+         "FROM member_blueprints")
+    params: list = []
+    keys = list(keys) if keys is not None else None
+    if keys is not None:
+        if not keys:
+            return {}
+        q += " WHERE blueprint_key IN (%s)" % ",".join("?" * len(keys))
+        params = keys
+    q += " GROUP BY blueprint_key"
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    return {r["blueprint_key"]: r["n"] for r in rows}
 
 
 # --- marketplace listings + offers -----------------------------------------
@@ -2113,7 +2202,17 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
             "(SELECT id FROM inventory WHERE owner_id=?)", (did,))
         counts["inventory"] = _conn.execute(
             "DELETE FROM inventory WHERE owner_id=?", (did,)).rowcount
-        # Goals and custom catalog items are org reference data — keep them but
+        # The member's blueprint library is personal — drop it.
+        counts["blueprints"] = _conn.execute(
+            "DELETE FROM member_blueprints WHERE member_id=?", (did,)).rowcount
+        # Personal goals were never shared — hard-delete them (and their
+        # allocations) rather than leave de-identified orphans nobody can see.
+        _conn.execute(
+            "DELETE FROM inventory_allocations WHERE goal_id IN "
+            "(SELECT id FROM goals WHERE creator_id=? AND visibility='personal')", (did,))
+        counts["goals_deleted"] = _conn.execute(
+            "DELETE FROM goals WHERE creator_id=? AND visibility='personal'", (did,)).rowcount
+        # Org goals + custom catalog items are shared reference data — keep them but
         # de-identify the creator (mirrors how shared POIs are anonymized).
         counts["goals_anonymized"] = _conn.execute(
             "UPDATE goals SET creator_id='' WHERE creator_id=?", (did,)).rowcount

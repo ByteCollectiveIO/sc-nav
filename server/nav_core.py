@@ -4168,6 +4168,39 @@ def blueprint_manifest(bp: dict, qty: float = 1) -> dict:
     }
 
 
+def blueprint_goal_lines(bp: dict, qty: float, resolve) -> dict:
+    """Turn a blueprint's materials manifest into procurement-goal line items —
+    the bridge that lets a member seed a "collect everything to craft X" goal
+    straight from a recipe (Resource Manager × the blueprint feed). `resolve`
+    is a callback mapping a material name to a catalog item ({item_id, name} or
+    None); the app passes commodity-slug resolution. Resource inputs become SCU
+    line items, gem/item inputs become "each" counts (the manifest quantity is a
+    count, so the unit is fixed by kind, not inherited from the catalog), and
+    each line carries the strictest min-quality the recipe demands — advisory,
+    since inventory doesn't track quality. Inputs that don't resolve to a catalog
+    item are returned in `unmapped` so the caller can warn instead of silently
+    dropping them."""
+    man = blueprint_manifest(bp, qty)
+    lines, unmapped = [], []
+    for rows, qkey, unit in ((man["resources"], "scu", "SCU"),
+                             (man["items"], "qty", "each")):
+        for r in rows:
+            name = r.get("input")
+            item = resolve(name) if name else None
+            if not item:
+                if name:
+                    unmapped.append(name)
+                continue
+            lines.append({
+                "item_id": item["item_id"],
+                "item_name": item.get("name") or name,
+                "unit": unit,
+                "qty_needed": round(float(r.get(qkey) or 0), 6),
+                "min_q": int(r.get("min_q") or 0),
+            })
+    return {"lines": lines, "unmapped": unmapped}
+
+
 def _mod_extremes(mod: dict) -> tuple[float, float]:
     """The lowest/highest value a modifier can reach across its full quality
     span (piecewise segments included — endpoints are the extremes of a linear
