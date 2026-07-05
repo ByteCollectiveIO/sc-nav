@@ -9235,7 +9235,7 @@ function goalCraftChip(g) {
   const c = g.craft;
   if (!c) return "";
   const name = c.available ? (c.name || "recipe") : "recipe (unavailable)";
-  return `<span class="rm-craft-chip">🛠 ${esc(name)}</span>`;
+  return `<span class="rm-craft-chip">⚒ ${esc(name)}</span>`;
 }
 
 function goalCard(g) {
@@ -9263,7 +9263,7 @@ async function renderGoalBoard() {
     `members log contributions; <b>personal</b> goals stay private (seed one from a blueprint to gather ` +
     `everything a craft needs). Every item links into the <a href="#/nav">resource finder</a>.</p>` +
     `<div class="rm-scope-seg" id="goals-scope" style="margin-top:4px">` +
-      seg("all", "All") + seg("mine", "Mine") + seg("craft", "🛠 Craft") + `</div></div>` +
+      seg("all", "All") + seg("mine", "Mine") + seg("craft", "⚒ Craft") + `</div></div>` +
     `<div id="goals-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   document.querySelectorAll("#goals-scope button").forEach(b => {
     b.onclick = () => { goalScopeFilter = b.dataset.scope; renderGoalBoard(); };
@@ -9340,12 +9340,12 @@ function goalCraftHead(g) {
   const c = g.craft;
   if (!c) return "";
   if (!c.available) {
-    return `<div class="rm-craft-head"><span class="rm-craft-t">🛠 Craft goal</span>` +
+    return `<div class="rm-craft-head"><span class="rm-craft-t">⚒ Craft goal</span>` +
       `<span class="muted">recipe data unavailable — this goal still tracks its saved materials.</span></div>`;
   }
   const unlocks = (c.unlocks && c.unlocks.length)
     ? ` · unlock: ${esc(c.unlocks.slice(0, 2).join(", "))}` : (c.default ? " · unlocked by default" : "");
-  return `<div class="rm-craft-head"><span class="rm-craft-t">🛠 Craft: ${esc(c.name)}</span>` +
+  return `<div class="rm-craft-head"><span class="rm-craft-t">⚒ Craft: ${esc(c.name)}</span>` +
     `<span class="muted">${esc(c.cat || "")} · ${fmtDur(c.time_s || 0)} craft${unlocks}</span>` +
     `<a class="mk-inline-link" href="#" id="goal-craft-lib" title="add this recipe to your blueprint library">＋ my blueprints</a></div>`;
 }
@@ -10060,7 +10060,7 @@ function mkCraftMatch(l) {
   if (l.mode !== "commission") return "";
   const c = l.commission || {};
   if (c.i_can_craft) return `<span class="rm-craft-chip">✨ You can craft</span>`;
-  if (c.can_craft_count) return `<span class="rm-personal-chip">🛠 ${c.can_craft_count} can craft</span>`;
+  if (c.can_craft_count) return `<span class="rm-personal-chip">⚒ ${c.can_craft_count} can craft</span>`;
   return "";
 }
 
