@@ -375,15 +375,27 @@ def load_quantum() -> tuple[dict, dict, dict]:
     tools/sync_quantum.py (#26/#27). Returns (drives, profiles, uex_index):
     drives = {qd_class_name: {...}}; profiles = {slug: {fuel_scu, drives, ...}};
     uex_index = {uexcorp name_full: slug}. All empty (feature simply off) if the
-    files are absent — the planners degrade to no fuel/range UI."""
-    def _read(name):
+    files are absent — the planners degrade to no fuel/range UI.
+
+    These are **static, code-versioned reference data**, not a runtime cache, so
+    the image-bundled copy next to the server code is authoritative and is tried
+    FIRST. `DATA_DIR` is a fallback (that's where dev/CI and the sync script keep
+    them). In production `DATA_DIR` is a named volume that shadows the image's
+    baked `/data`, and Docker only seeds a volume on first creation — so a file
+    added in a later release would never reach an existing volume. Loading from
+    the code dir sidesteps that entirely and guarantees the data matches the
+    deployed version. See the Dockerfile `COPY poi/quantum_*.json`."""
+    def _read(base: Path, name: str) -> dict:
         try:
-            return json.loads((DATA_DIR / name).read_text())
+            return json.loads((base / name).read_text())
         except (OSError, json.JSONDecodeError):
             return {}
-    prof_doc = _read("quantum_profiles.json")
-    drives = _read("quantum_drives.json").get("drives", {})
-    return drives, prof_doc.get("profiles", {}), prof_doc.get("uexcorp", {})
+    for base in (Path(__file__).parent, DATA_DIR):     # code-bundled wins over the volume
+        prof_doc = _read(base, "quantum_profiles.json")
+        if prof_doc.get("profiles"):
+            drives = _read(base, "quantum_drives.json").get("drives", {})
+            return drives, prof_doc["profiles"], prof_doc.get("uexcorp", {})
+    return {}, {}, {}
 
 
 def _ship_quantum_obj(profile: dict) -> dict:

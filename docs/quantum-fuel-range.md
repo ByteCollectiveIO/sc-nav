@@ -26,6 +26,15 @@ design below:
   plan confirmed fuel figures + `range_infeasible` end-to-end; `node --check` on
   the SPA script. A live browser drive was not possible (no local browser; the SPA
   is behind Discord OAuth).
+- **Deploy gotcha (fixed v0.37.1):** `poi/` is a named Docker volume that shadows
+  the image's baked `/data`, and Docker only seeds a volume on first creation — so
+  the new `quantum_*.json`, added after the volume already existed, never reached
+  the running server (every ship showed no `quantum`). Fix: `load_quantum()` reads
+  the **code-dir** copy first (image-bundled via `COPY poi/quantum_*.json ./`,
+  versioned with the code), `DATA_DIR` only as a dev/CI fallback. Any future
+  committed reference file must be bundled the same way, not left to the volume.
+  Also v0.37.1: `.route-row { display:flex }` outranked the UA `[hidden]` rule so
+  the drive row showed even when empty — fixed with `.route-row[hidden]{display:none}`.
 
 The design prose below is retained as the reference for intent.
 

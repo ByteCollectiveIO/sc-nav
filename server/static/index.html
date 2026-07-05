@@ -1186,6 +1186,9 @@
   /* Quantum fuel & range (#27): the SHIP-panel drive row, the range readout
      beside it, the per-leg over-range flag (reuses the danger accent), and the
      route-level range callout (advisory = accent, hard-infeasible = alarm). */
+  /* `.route-row { display:flex }` outranks the UA [hidden] rule, so a hidden
+     drive-row would still show; restore hiding at higher specificity (#27). */
+  .route-row[hidden] { display: none; }
   .drive-row { align-items: center; gap: 12px; flex-wrap: wrap; }
   .drive-row .range-only { display: inline-flex; align-items: center; gap: 5px; }
   .drive-row .range-readout { font-size: 12px; color: var(--dim); }
