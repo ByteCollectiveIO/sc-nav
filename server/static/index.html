@@ -2365,8 +2365,9 @@
       distances a generous berth costs almost nothing. Scales with severity automatically.
     </div>
     <div class="muted" id="hazard-radius-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-      Stock &amp; demand reports age off after
+    <h2>TRADE STOCK &amp; DEMAND REPORTS</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Reports age off after
       <input id="stock-ageoff" type="number" min="1" max="10080" step="5" style="width:80px;"> min
       <button id="stock-ageoff-save">Save</button>
     </div>
@@ -2374,7 +2375,9 @@
       A trader who finds a terminal's shelf empty — or a terminal that won't <b>buy</b> their
       cargo — reports it from trade run mode; while the report is fresh the trade planner
       won't route anyone through that side of the trade there (the other side is
-      unaffected). Markets move on their own, so keep this in the hours range.
+      unaffected). Markets restock and reset on their own, so keep this in the hours range;
+      raise it if members keep re-hitting dead terminals, lower it if reports outlive the
+      real shortage.
     </div>
     <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
