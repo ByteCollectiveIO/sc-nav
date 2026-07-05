@@ -2273,6 +2273,23 @@ class CommissionNotifyTests(unittest.TestCase):
         self.assertFalse(app._commission_announce_ok("111"))   # inside the cooldown
         self.assertTrue(app._commission_announce_ok("999"))    # other members unaffected
 
+    def test_wanted_announce_mentions_capable_crafters(self):
+        now = "2026-07-05T00:00:00+00:00"
+        db.add_member_blueprint("222", "TEST_BP", now)
+        db.add_member_blueprint("333", "TEST_BP", now)
+        db.add_member_blueprint("111", "TEST_BP", now)   # the poster — never self-pinged
+        asyncio.run(app._notify_commission_posted(
+            {**self._LISTING, "blueprint_key": "TEST_BP"}))
+        msg = self.sent[0]
+        self.assertEqual(msg["mentions"], ["222", "333"])
+        self.assertIn("Can craft: <@222> <@333>", msg["text"])
+        self.assertNotIn("<@111>", msg["text"])
+
+    def test_wanted_announce_without_recipe_pings_nobody(self):
+        asyncio.run(app._notify_commission_posted(self._LISTING))
+        self.assertEqual(self.sent[0]["mentions"], [])
+        self.assertNotIn("Can craft", self.sent[0]["text"])
+
     def test_quote_and_accept_read_commission_flavored(self):
         asyncio.run(app._notify_market_offer(self._LISTING, self._OFFER, deal=False))
         self.assertIn("New quote", self.sent[0]["text"])
@@ -2293,7 +2310,9 @@ class CraftGoalTests(unittest.TestCase):
         "name": "Test Cannon", "cat": "Weapon Gun", "time_s": 300, "default": False,
         "unlocks": [], "aspects": [
             {"slot": "Frame", "kind": "resource", "input": "Agricium",
-             "scu": 0.5, "min_q": 1, "mods": []},
+             "scu": 0.5, "min_q": 1,
+             "mods": [{"prop": "Integrity", "dir": "higher", "mode": "multiplier",
+                       "ranges": [{"q0": 0, "q1": 1000, "v0": 0.9, "v1": 1.1}]}]},
             {"slot": "Emitter", "kind": "item", "input": "Hadanite",
              "qty": 4, "min_q": 500, "mods": []},
             {"slot": "Weird", "kind": "resource", "input": "Nonexistanium",
@@ -2314,6 +2333,10 @@ class CraftGoalTests(unittest.TestCase):
         app.token_user = lambda request: cls._a
         cls._orig_feed = app.blueprints_feed
         app.blueprints_feed = cls._FEED
+        # A controlled price map so the materials-cost estimate is deterministic
+        # (Agricium priced, everything else unpriced).
+        cls._orig_prices = app.item_prices
+        app.item_prices = {"commodity:agricium": {"buy": 100, "sell": 120}}
         cls._orig_send = notify.send
         cls.client = TestClient(app.app)
 
@@ -2322,6 +2345,7 @@ class CraftGoalTests(unittest.TestCase):
         app.app.dependency_overrides.clear()
         app.token_user = cls._orig_token_user
         app.blueprints_feed = cls._orig_feed
+        app.item_prices = cls._orig_prices
         notify.send = cls._orig_send
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -2357,6 +2381,88 @@ class CraftGoalTests(unittest.TestCase):
     def test_unknown_blueprint_seed_is_404(self):
         r = self.client.post("/api/goals", json={"title": "x", "blueprint_key": "NOPE"})
         self.assertEqual(r.status_code, 404)
+
+    # -- estimated material cost + stat vocabulary (#25.1 §12 / §11.2) --
+
+    def test_blueprint_detail_carries_est_cost(self):
+        d = self.client.get("/api/blueprints/TEST_BP").json()
+        self.assertEqual(d["est_cost"]["total"], 50)         # 0.5 SCU × 100 buy
+        # Unknown resource + the gem count both degrade to unpriced.
+        self.assertEqual(sorted(d["est_cost"]["unpriced"]),
+                         ["Hadanite", "Nonexistanium"])
+
+    def test_stat_names_endpoint_lists_canonical_vocabulary(self):
+        r = self.client.get("/api/blueprints/stat-names")
+        self.assertEqual(r.status_code, 200)                 # not eaten by /{bp_key}
+        self.assertEqual(r.json()["stats"], ["Integrity"])
+
+    def test_goal_detail_carries_est_cost(self):
+        gid = self.client.post("/api/goals", json={
+            "title": "cannon", "blueprint_key": "TEST_BP",
+            "blueprint_qty": 2}).json()["id"]
+        g = self.client.get(f"/api/goals/{gid}").json()
+        # Per single craft — the UI scales by the goal's craft count.
+        self.assertEqual(g["craft"]["est_cost"]["total"], 50)
+
+    # -- spec-builder quality asks (#14.2 follow-up) --
+
+    def test_seed_with_inputs_raises_line_target_quality(self):
+        r = self.client.post("/api/goals", json={
+            "title": "high-spec cannon", "blueprint_key": "TEST_BP",
+            "blueprint_qty": 2,
+            "blueprint_inputs": [
+                {"slot": "Frame", "input": "Agricium", "min_q": 800},
+                {"slot": "Bogus", "input": "Agricium", "min_q": 999}]})  # unknown slot dropped
+        self.assertEqual(r.status_code, 200, r.text)
+        g = r.json()
+        lines = {l["item_id"]: l for l in g["line_items"]}
+        self.assertEqual(lines["commodity:agricium"]["min_q"], 800)     # ask > recipe's 1
+        self.assertEqual(lines["commodity:hadanite"]["min_q"], 500)     # recipe minimum kept
+        # The saved spec rides on the craft block (edit restore + detail display).
+        self.assertEqual(g["craft"]["qty"], 2)
+        self.assertEqual(g["craft"]["inputs"],
+                         [{"slot": "Frame", "input": "Agricium", "min_q": 800}])
+        # min_q map + progress lines both badge the stored targets.
+        self.assertEqual(g["craft"]["min_q"]["commodity:agricium"], 800)
+        pline = next(l for l in g["progress"]["lines"]
+                     if l["item_id"] == "commodity:agricium")
+        self.assertEqual(pline["min_q"], 800)
+        # Expected stats at the asked qualities: Frame Q800 → 0.9 + 0.2×0.8.
+        prev = {s["prop"]: s["value"] for s in g["craft"]["stat_preview"]}
+        self.assertAlmostEqual(prev["Integrity"], 1.06)
+
+    def test_edit_reseed_rescales_lines_and_keeps_spec(self):
+        gid = self.client.post("/api/goals", json={
+            "title": "cannon", "blueprint_key": "TEST_BP",
+            "blueprint_inputs": [
+                {"slot": "Frame", "input": "Agricium", "min_q": 600}]}).json()["id"]
+        # Re-seed on edit: new craft count + qualities, no line items → the recipe
+        # re-expands server-side.
+        r = self.client.patch(f"/api/goals/{gid}", json={
+            "title": "cannon", "blueprint_key": "TEST_BP", "blueprint_qty": 3,
+            "blueprint_inputs": [
+                {"slot": "Frame", "input": "Agricium", "min_q": 900}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        g = r.json()
+        lines = {l["item_id"]: l for l in g["line_items"]}
+        self.assertAlmostEqual(lines["commodity:agricium"]["qty_needed"], 1.5)  # 0.5×3
+        self.assertEqual(lines["commodity:agricium"]["min_q"], 900)
+        self.assertEqual(g["craft"]["qty"], 3)
+
+    def test_manual_line_edit_preserves_the_craft_spec(self):
+        gid = self.client.post("/api/goals", json={
+            "title": "cannon", "blueprint_key": "TEST_BP",
+            "blueprint_inputs": [
+                {"slot": "Frame", "input": "Agricium", "min_q": 700}]}).json()["id"]
+        # A hand edit of the rows (no blueprint fields sent) must not drop the
+        # goal's craft tag or its saved spec.
+        r = self.client.patch(f"/api/goals/{gid}", json={
+            "title": "cannon", "line_items": [
+                {"item_id": "commodity:agricium", "qty_needed": 9}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        g = r.json()
+        self.assertEqual(g["blueprint_key"], "TEST_BP")
+        self.assertEqual(g["craft"]["inputs"][0]["min_q"], 700)
 
     # -- personal visibility --
 

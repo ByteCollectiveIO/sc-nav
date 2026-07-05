@@ -2301,6 +2301,33 @@ async def list_fleet_ships():
 _BLUEPRINT_INDEX_CAP = 50
 
 
+def _blueprint_price_of(name: str) -> float | None:
+    """aUEC-per-SCU reference for a blueprint input material, from the same
+    merged price map the marketplace's 'market value' hint uses (buy side first —
+    the estimate answers "what would acquiring the mats cost")."""
+    p = item_prices.get(f"commodity:{catalog.slug(name or '')}") or {}
+    return p.get("buy") or p.get("sell")
+
+
+def _blueprint_est_cost(bp: dict) -> dict:
+    """Per-craft materials-cost estimate for a recipe (#25.1 §12)."""
+    return nav_core.blueprint_material_cost(bp, _blueprint_price_of)
+
+
+@app.get("/api/blueprints/stat-names")
+async def list_blueprint_stat_names():
+    """The canonical finished-stat vocabulary across the whole blueprint feed
+    (~22 names like "Damage Mitigation") — autocomplete for the crafted-stats
+    form so free-typed names stop fragmenting the `?stat=` market filter
+    (#25.1 §11.2). Registered before the /{bp_key} route so the literal path
+    wins. Derived per call (the feed is in-memory; trivial)."""
+    names = {m.get("prop")
+             for bp in blueprints_feed.values()
+             for a in bp.get("aspects") or []
+             for m in a.get("mods") or [] if m.get("prop")}
+    return {"stats": sorted(names)}
+
+
 @app.get("/api/blueprints")
 async def list_blueprints(q: str | None = None, category: str | None = None):
     """Crafting-blueprint search index for the commission picker (#25): key,
@@ -2333,7 +2360,8 @@ async def get_blueprint(bp_key: str):
         raise HTTPException(status_code=404, detail="unknown blueprint")
     return {"key": bp_key, **bp,
             "manifest": nav_core.blueprint_manifest(bp, 1),
-            "stat_drivers": nav_core.blueprint_stat_drivers(bp)}
+            "stat_drivers": nav_core.blueprint_stat_drivers(bp),
+            "est_cost": _blueprint_est_cost(bp)}
 
 
 @app.get("/api/harvestables")
@@ -3873,10 +3901,16 @@ def _commission_announce_ok(poster_id: str) -> bool:
     return True
 
 
+_ANNOUNCE_MENTION_CAP = 15   # sanity cap on capable-crafter pings per announce
+
+
 async def _notify_commission_posted(listing: dict) -> None:
     """Opt-in shout for a new craft request (#25) — the requester asked for
     reach, so it broadcasts to the marketplace channel with the job's headline
-    terms (spec quality, budget, materials sourcing, needed-by)."""
+    terms (spec quality, budget, materials sourcing, needed-by). Members whose
+    blueprint library holds the recipe get an @-mention (#25.1) so the request
+    reaches the people who can actually take it; everyone else just sees the
+    channel post."""
     if not notify.is_configured("marketplace"):
         return
     bits = []
@@ -3896,11 +3930,17 @@ async def _notify_commission_posted(listing: dict) -> None:
         bits.append(f"needed by {str(listing['ends_at'])[:10]}")
     who = _resolve_member_name(listing["seller_id"], None)
     detail = (" — " + ", ".join(bits)) if bits else ""
+    # Ping the members who can craft this (library match), minus the requester.
+    key = listing.get("blueprint_key")
+    crafters = [m for m in (db.blueprint_crafters(key) if key else [])
+                if str(m) != str(listing["seller_id"])][:_ANNOUNCE_MENTION_CAP]
+    craft_line = ("\nCan craft: " + " ".join(f"<@{m}>" for m in crafters)) if crafters else ""
     await notify.send(
         "marketplace",
         f"🛠️ **WANTED: {listing.get('item_name')}**{detail}\n"
-        f"Posted by {who}. Quote the job on the board.{_deep_link('#/market')}",
-        dedup_key=f"commission-posted:{listing['id']}")
+        f"Posted by {who}. Quote the job on the board.{craft_line}{_deep_link('#/market')}",
+        dedup_key=f"commission-posted:{listing['id']}",
+        mentions=crafters)
 
 
 async def _notify_market_offer(listing: dict, offer: dict, *, deal: bool) -> None:
@@ -4426,6 +4466,16 @@ class GoalLineIn(BaseModel):
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
 
 
+class SpecInputIn(BaseModel):
+    """One per-slot material-quality minimum: the spec-builder slider position for
+    that crafting slot, e.g. Emitter (Hadanite) ≥ Q800. Shared by craft requests
+    (#25, under attributes.spec.inputs) and blueprint-seeded craft goals (#14.2,
+    where it raises the seeded line items' target quality)."""
+    slot: str = Field(min_length=1, max_length=40)              # e.g. "Emitter"
+    input: str = Field(min_length=1, max_length=40)             # e.g. "Hadanite"
+    min_q: int = Field(ge=1, le=1000)
+
+
 class GoalIn(BaseModel):
     title: str = Field(min_length=1, max_length=_NAME_MAX)
     description: str = Field(default="", max_length=_DESC_MAX)
@@ -4436,20 +4486,25 @@ class GoalIn(BaseModel):
     # Personal vs org scope (#14.2) + optional blueprint seed: when `blueprint_key`
     # is given without explicit line_items, the materials manifest for
     # `blueprint_qty` crafts is expanded into the goal's line items server-side.
+    # `blueprint_inputs` carries the spec-builder sliders' per-slot quality asks —
+    # each seeded line's target quality is the recipe minimum max'd with these.
     visibility: str | None = Field(default=None, max_length=16)
     blueprint_key: str | None = Field(default=None, max_length=_META_MAX)
     blueprint_qty: float = Field(default=1, ge=1, le=_MAX_QTY)
+    blueprint_inputs: list[SpecInputIn] = Field(default_factory=list, max_length=12)
 
 
 _GOAL_VISIBILITY = ("org", "personal")
 
 
-def _seed_goal_lines(blueprint_key: str, qty: float) -> tuple[list[dict], list[str]]:
+def _seed_goal_lines(blueprint_key: str, qty: float,
+                     input_qs: dict | None = None) -> tuple[list[dict], list[str]]:
     """Expand a blueprint's materials manifest into goal line items, mapping each
-    input material to its commodity catalog item. Returns (lines, unmapped) —
-    unmapped names (e.g. a material not yet in the commodity feed) are surfaced as
-    a non-fatal warning rather than silently dropped. 404 if the recipe is
-    unknown."""
+    input material to its commodity catalog item. `input_qs` ({slot: q}, from the
+    spec-builder sliders) raises each line's target quality above the recipe's own
+    minimum. Returns (lines, unmapped) — unmapped names (e.g. a material not yet
+    in the commodity feed) are surfaced as a non-fatal warning rather than
+    silently dropped. 404 if the recipe is unknown."""
     bp = blueprints_feed.get(blueprint_key)
     if bp is None:
         raise HTTPException(status_code=404, detail="unknown blueprint")
@@ -4457,9 +4512,10 @@ def _seed_goal_lines(blueprint_key: str, qty: float) -> tuple[list[dict], list[s
     def resolve(name: str):
         return resolve_catalog_item(f"commodity:{catalog.slug(name)}")
 
-    seeded = nav_core.blueprint_goal_lines(bp, qty, resolve)
+    seeded = nav_core.blueprint_goal_lines(bp, qty, resolve, input_qs)
     lines = [{"item_id": l["item_id"], "item_name": l["item_name"],
-              "unit": l["unit"], "qty_needed": l["qty_needed"]}
+              "unit": l["unit"], "qty_needed": l["qty_needed"],
+              **({"min_q": l["min_q"]} if l.get("min_q") else {})}
              for l in seeded["lines"][:_MAX_LINE_ITEMS]]
     return lines, seeded["unmapped"]
 
@@ -4612,9 +4668,26 @@ def _validate_goal(body: GoalIn) -> dict:
     # None = "unspecified" → create defaults to org; edit preserves the current value.
     visibility = body.visibility if body.visibility in _GOAL_VISIBILITY else None
     unmapped: list[str] = []
+    fields: dict = {}
     if body.blueprint_key and not body.line_items:
-        lines, unmapped = _seed_goal_lines(body.blueprint_key, body.blueprint_qty)
+        # A craft goal: the recipe (at the requested qualities) IS the line items.
+        # The spec rides along so edits can restore the sliders; slots the recipe
+        # doesn't have are dropped rather than trusted from the client.
+        bp = blueprints_feed.get(body.blueprint_key) or {}
+        slot_input = {a.get("slot"): a.get("input")
+                      for a in bp.get("aspects") or [] if a.get("input")}
+        inputs = [{"slot": i.slot.strip(), "input": slot_input[i.slot.strip()],
+                   "min_q": int(i.min_q)}
+                  for i in body.blueprint_inputs if i.slot.strip() in slot_input]
+        input_qs = {i["slot"]: i["min_q"] for i in inputs}
+        lines, unmapped = _seed_goal_lines(body.blueprint_key, body.blueprint_qty,
+                                           input_qs)
+        fields = {"blueprint_key": body.blueprint_key,
+                  "blueprint_qty": float(body.blueprint_qty),
+                  "blueprint_inputs": inputs}
     else:
+        # Hand-entered lines: any blueprint fields on the body are ignored and the
+        # stored ones left untouched (an existing craft goal keeps its tag).
         lines, seen = [], set()
         for li in body.line_items:
             item = _resolve_or_400(li.item_id)
@@ -4629,10 +4702,9 @@ def _validate_goal(body: GoalIn) -> dict:
     deadline = None
     if body.deadline:
         deadline = _normalize_event_start(body.deadline)   # reuse UTC canonicalizer
-    return {"title": title, "description": (body.description or "").strip(),
+    return {**fields, "title": title, "description": (body.description or "").strip(),
             "priority": body.priority, "deadline": deadline, "line_items": lines,
-            "visibility": visibility, "blueprint_key": body.blueprint_key or None,
-            "seed_unmapped": unmapped}
+            "visibility": visibility, "seed_unmapped": unmapped}
 
 
 def _require_goal_owner(goal: dict, user: dict) -> None:
@@ -4652,24 +4724,40 @@ def _can_view_goal(goal: dict, user: dict) -> bool:
 def _goal_craft_block(goal: dict, detail: bool = False) -> dict | None:
     """The craft-goal header for a blueprint-seeded goal: recipe name + craft time
     for the card, plus (in detail) each line's demanded min-quality so the UI can
-    badge it. Degrades to `available: False` if the recipe left the feed on a
-    game-patch re-sync (the goal keeps working on its denormalized line items)."""
+    badge it, the saved spec (craft count + per-slot quality asks, restoring the
+    edit form's sliders) and the expected finished stats at those qualities.
+    Degrades to `available: False` if the recipe left the feed on a game-patch
+    re-sync (the goal keeps working on its denormalized line items)."""
     key = goal.get("blueprint_key")
     if not key:
         return None
+    inputs = goal.get("blueprint_inputs") or []
     bp = blueprints_feed.get(key)
     if bp is None:
-        return {"blueprint_key": key, "available": False}
+        return {"blueprint_key": key, "available": False,
+                "qty": goal.get("blueprint_qty") or 1, "inputs": inputs}
     block = {"blueprint_key": key, "available": True, "name": bp.get("name"),
              "cat": bp.get("cat"), "time_s": bp.get("time_s"),
-             "default": bp.get("default")}
+             "default": bp.get("default"),
+             "qty": goal.get("blueprint_qty") or 1, "inputs": inputs}
     if detail:
-        def resolve(name):
-            return resolve_catalog_item(f"commodity:{catalog.slug(name)}")
-        seeded = nav_core.blueprint_goal_lines(bp, 1, resolve)
-        block["min_q"] = {l["item_id"]: l["min_q"]
-                          for l in seeded["lines"] if l.get("min_q")}
+        # Per-line target quality: stored on the seeded lines (recipe minimum
+        # max'd with the member's asks); re-derived from the recipe for goals
+        # saved before min_q was denormalized.
+        minq = {l["item_id"]: l["min_q"]
+                for l in (goal.get("line_items") or []) if l.get("min_q")}
+        if not minq:
+            def resolve(name):
+                return resolve_catalog_item(f"commodity:{catalog.slug(name)}")
+            seeded = nav_core.blueprint_goal_lines(bp, 1, resolve)
+            minq = {l["item_id"]: l["min_q"]
+                    for l in seeded["lines"] if l.get("min_q")}
+        block["min_q"] = minq
         block["unlocks"] = bp.get("unlocks") or []
+        block["est_cost"] = _blueprint_est_cost(bp)   # per craft; UI scales by qty
+        if inputs:
+            block["stat_preview"] = nav_core.blueprint_stat_preview(
+                bp, {i["slot"]: i["min_q"] for i in inputs})
     return block
 
 
@@ -4847,15 +4935,6 @@ _COMMISSION_MATERIALS = ("requester", "crafter", "split")
 class CraftStatIn(BaseModel):
     name: str = Field(min_length=1, max_length=40)              # e.g. "Power output"
     value: str = Field(min_length=1, max_length=40)            # free-form, e.g. "12.5 MW"
-
-
-class SpecInputIn(BaseModel):
-    """One per-slot material-quality minimum on a craft request (#25): the
-    requester's slider position for that crafting slot, e.g. Emitter (Hadanite)
-    ≥ Q800. What tells the crafter which material qualities to source."""
-    slot: str = Field(min_length=1, max_length=40)              # e.g. "Emitter"
-    input: str = Field(min_length=1, max_length=40)             # e.g. "Hadanite"
-    min_q: int = Field(ge=1, le=1000)
 
 
 class CraftedIn(BaseModel):
@@ -5048,6 +5127,22 @@ def _resolve_listing_expiry(listing: dict, offers, now: datetime) -> dict:
     return db.get_listing(listing["id"])
 
 
+def _commission_mats_est(listing: dict) -> float | None:
+    """A craft request's estimated total materials cost (#25.1 §12): the recipe's
+    per-craft estimate × the requested quantity. None when the recipe left the
+    feed or no input has a price reference — the UI simply omits the hint.
+    Pure in-memory math (feed + price map), so cards can carry it without a
+    query."""
+    key = listing.get("blueprint_key")
+    bp = blueprints_feed.get(key) if key else None
+    if bp is None:
+        return None
+    cost = _blueprint_est_cost(bp)
+    if cost["total"] is None:
+        return None
+    return round(cost["total"] * max(float(listing.get("qty") or 1), 1))
+
+
 def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
     """Serialize a listing: its fields, the seller's name + completed-deals count,
     the derived auction state (auctions), the caller's own standing offer, and the
@@ -5072,6 +5167,7 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
         key = listing.get("blueprint_key")
         comm["can_craft_count"] = db.blueprint_crafter_counts([key]).get(key, 0) if key else 0
         comm["i_can_craft"] = bool(key and db.member_has_blueprint(user["id"], key))
+        comm["mats_est"] = _commission_mats_est(listing)
         view["commission"] = comm
     else:
         view["commission"] = None
@@ -5146,7 +5242,8 @@ def _listing_card(listing: dict, user: dict, deals: dict,
             "best_quote": listing.get("sort_price") if cnt else None,
             "quote_count": cnt, "budget": listing.get("price_auec"),
             "can_craft_count": (craft_counts or {}).get(key, 0),
-            "i_can_craft": bool(key and my_bps and key in my_bps)}
+            "i_can_craft": bool(key and my_bps and key in my_bps),
+            "mats_est": _commission_mats_est(listing)}
     else:
         card["commission"] = None
     return card

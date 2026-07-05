@@ -466,6 +466,12 @@ def init(db_path) -> None:
         # from a crafting recipe's materials manifest.
         _ensure_column("goals", "visibility", "TEXT NOT NULL DEFAULT 'org'")
         _ensure_column("goals", "blueprint_key", "TEXT")
+        # Craft-goal spec (#14.2 follow-up): how many crafts the goal covers plus
+        # the per-slot material-quality asks ([{slot, input, min_q}] JSON — same
+        # shape as a commission's attributes.spec.inputs) so the edit form can
+        # restore the spec-builder sliders and the detail page can show targets.
+        _ensure_column("goals", "blueprint_qty", "REAL")
+        _ensure_column("goals", "blueprint_inputs", "TEXT")
         # Demand-side stock reports: v0.38.0 created the table without `side`.
         _ensure_column("stock_reports", "side", "TEXT NOT NULL DEFAULT 'supply'")
         denorm_added = _ensure_column("listings", "sort_price", "REAL")
@@ -1637,6 +1643,7 @@ def allocations_for_owner(owner_id: str) -> list[dict]:
 def _goal_row_to_dict(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["line_items"] = _u(d.get("line_items")) or []
+    d["blueprint_inputs"] = _u(d.get("blueprint_inputs")) or []
     return d
 
 
@@ -1645,12 +1652,15 @@ def create_goal(d: dict) -> int:
     with _lock, _conn:
         cur = _conn.execute(
             "INSERT INTO goals (creator_id, title, description, priority, deadline, "
-            "status, line_items, visibility, blueprint_key, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "status, line_items, visibility, blueprint_key, blueprint_qty, "
+            "blueprint_inputs, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["creator_id"]), d.get("title"), d.get("description"),
              d.get("priority", 5), d.get("deadline"), d.get("status", "active"),
              _j(d.get("line_items") or []), d.get("visibility") or "org",
-             d.get("blueprint_key"), d.get("created_at"), d.get("updated_at")),
+             d.get("blueprint_key"), d.get("blueprint_qty"),
+             _j(d.get("blueprint_inputs") or []),
+             d.get("created_at"), d.get("updated_at")),
         )
     return cur.lastrowid
 
@@ -1685,8 +1695,9 @@ def list_goals(status: str | None = None, viewer_id: str | None = None) -> list[
 
 
 _GOAL_EDITABLE = ("title", "description", "priority", "deadline", "status",
-                  "line_items", "visibility")
-_GOAL_JSON = ("line_items",)
+                  "line_items", "visibility", "blueprint_key", "blueprint_qty",
+                  "blueprint_inputs")
+_GOAL_JSON = ("line_items", "blueprint_inputs")
 
 
 def update_goal(goal_id: int, fields: dict, updated_at: str) -> bool:
@@ -1761,6 +1772,17 @@ def member_has_blueprint(member_id: str, blueprint_key: str) -> bool:
             "SELECT 1 FROM member_blueprints WHERE member_id=? AND blueprint_key=? LIMIT 1",
             (str(member_id), blueprint_key)).fetchone()
     return row is not None
+
+
+def blueprint_crafters(blueprint_key: str) -> list[str]:
+    """Members whose library contains this recipe — the WANTED announce
+    @-mentions them so a craft request reaches the people who can take it."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT DISTINCT member_id FROM member_blueprints "
+            "WHERE blueprint_key=? ORDER BY member_id",
+            (blueprint_key,)).fetchall()
+    return [r["member_id"] for r in rows]
 
 
 def blueprint_crafter_counts(keys=None) -> dict[str, int]:

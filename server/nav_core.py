@@ -4017,7 +4017,7 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
         pct = 100.0 if needed <= 0 else min(100.0, have / needed * 100.0)
         if needed > 0 and have < needed:
             all_met = False
-        lines.append({
+        line = {
             "item_id": iid,
             "name": li.get("item_name") or iid,
             "unit": li.get("unit"),
@@ -4025,7 +4025,12 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
             "have": have,
             "pct": round(pct, 1),
             "short": max(0.0, needed - have),
-        })
+        }
+        # Craft goals stamp a target quality per material (recipe minimum max'd
+        # with the member's slider asks) — advisory, rides through to the UI badge.
+        if li.get("min_q"):
+            line["min_q"] = int(li["min_q"])
+        lines.append(line)
 
     overall = 100.0 if total_need <= 0 else min(100.0, total_have / total_need * 100.0)
     per_contributor = sorted(
@@ -4168,7 +4173,7 @@ def blueprint_manifest(bp: dict, qty: float = 1) -> dict:
     }
 
 
-def blueprint_goal_lines(bp: dict, qty: float, resolve) -> dict:
+def blueprint_goal_lines(bp: dict, qty: float, resolve, input_qs: dict | None = None) -> dict:
     """Turn a blueprint's materials manifest into procurement-goal line items —
     the bridge that lets a member seed a "collect everything to craft X" goal
     straight from a recipe (Resource Manager × the blueprint feed). `resolve`
@@ -4176,11 +4181,19 @@ def blueprint_goal_lines(bp: dict, qty: float, resolve) -> dict:
     None); the app passes commodity-slug resolution. Resource inputs become SCU
     line items, gem/item inputs become "each" counts (the manifest quantity is a
     count, so the unit is fixed by kind, not inherited from the catalog), and
-    each line carries the strictest min-quality the recipe demands — advisory,
-    since inventory doesn't track quality. Inputs that don't resolve to a catalog
-    item are returned in `unmapped` so the caller can warn instead of silently
-    dropping them."""
+    each line carries the strictest min-quality demanded — the recipe's own
+    minimum max'd with the member's per-slot quality asks (`input_qs`, {slot: q}
+    from the spec-builder sliders) across every slot consuming that input.
+    Advisory, since inventory doesn't track quality. Inputs that don't resolve
+    to a catalog item are returned in `unmapped` so the caller can warn instead
+    of silently dropping them."""
     man = blueprint_manifest(bp, qty)
+    req_by_input: dict[str, int] = {}
+    for a in bp.get("aspects") or []:
+        q = (input_qs or {}).get(a.get("slot"))
+        if a.get("input") and q:
+            name = a["input"]
+            req_by_input[name] = max(req_by_input.get(name, 0), int(q))
     lines, unmapped = [], []
     for rows, qkey, unit in ((man["resources"], "scu", "SCU"),
                              (man["items"], "qty", "each")):
@@ -4196,9 +4209,29 @@ def blueprint_goal_lines(bp: dict, qty: float, resolve) -> dict:
                 "item_name": item.get("name") or name,
                 "unit": unit,
                 "qty_needed": round(float(r.get(qkey) or 0), 6),
-                "min_q": int(r.get("min_q") or 0),
+                "min_q": max(int(r.get("min_q") or 0), req_by_input.get(name, 0)),
             })
     return {"lines": lines, "unmapped": unmapped}
+
+
+def blueprint_material_cost(bp: dict, price_of) -> dict:
+    """Estimated aUEC cost of ONE craft's materials (#25.1 §12). `price_of` maps
+    an input material name to an aUEC-per-SCU reference (or None). Only resource
+    (SCU) inputs are priced — gem/item ingredients are counts with no per-unit
+    price source yet, so they degrade into `unpriced` alongside resources the
+    price feed doesn't know. `total` is None when nothing priced at all. Scales
+    linearly with craft count, so callers multiply client-side."""
+    man = blueprint_manifest(bp, 1)
+    total, priced_any, unpriced = 0.0, False, []
+    for r in man["resources"]:
+        p = price_of(r.get("input"))
+        if p:
+            total += float(p) * float(r.get("scu") or 0)
+            priced_any = True
+        else:
+            unpriced.append(r["input"])
+    unpriced += [r["input"] for r in man["items"]]
+    return {"total": round(total) if priced_any else None, "unpriced": unpriced}
 
 
 def _mod_extremes(mod: dict) -> tuple[float, float]:
