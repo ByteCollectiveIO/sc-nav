@@ -30,6 +30,16 @@ during scoping has since been removed from the repo.
   active quote else budget (auction mirrors with highest).
 - The announce flag rides `ListingIn.announce` (create-only, marketplace
   webhook, 600 s per-member cooldown like LFG/pirates).
+- **Follow-up (2026-07-05, user feedback):** the spec builder's sliders now
+  *drive* the Quality/Band fields instead of sitting beside them — Quality
+  auto-tracks the **lowest** slider (the weakest input bounds the build), Band
+  derives as ⌈quality ÷ 125⌉ (labeled ≈ everywhere; in-game mapping still
+  unverified, §12), and typing a value detaches the link. Slider positions
+  persist as **`spec.inputs`** (`CraftedIn.inputs` → `[{slot, input, min_q}]`),
+  so the crafter sees a "Materials quality needed" table (≥ Qn + ≈band) in the
+  spec box and "wants ≥Qn" badges on the manifest panel; edits re-seed the
+  sliders from the saved spec. A shared "ⓘ What do Quality and Band mean?"
+  explainer sits in the form (all modes) + a footnote on the detail spec box.
 
 A member posts a **craft request**: "build me this item, to this quality spec,
 for this price" — and an org crafter takes the job. It is the marketplace's
