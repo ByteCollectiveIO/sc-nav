@@ -1,8 +1,13 @@
 # Multi-user / org migration plan
 
-How to evolve SC Nav from a single-user LAN tool into an org-scoped service on a
-public IP (AWS EC2 + elastic IP), gated to one Discord guild, with live teammate
-visibility on the map. This is a **design/plan only** — nothing here is built yet.
+How to evolve SC Nav from a single-user LAN tool into an org-scoped service,
+gated to one Discord guild, with live teammate visibility on the map.
+**Status: ALL PHASES COMPLETE (2026-06-18)** — deployed on a home server behind
+a Cloudflare Tunnel (the original EC2/elastic-IP and Caddy framing was dropped
+during the build). Kept as the reference for the auth/session/identity
+architecture; the "current single-user architecture" section near the end is
+the *pre-migration baseline*, not the present. One deferred tail (capture-side
+Discord-id attribution) is tracked in the backlog's Platform fast-follows.
 
 Guiding constraint: **`nav_core` never changes.** It operates on an in-memory
 `NavData`, so every phase only touches `app.py`'s state/auth layer plus the

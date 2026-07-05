@@ -5,16 +5,20 @@ whole files**. Grep the banner conventions below; jump with `Read(offset/limit)`
 Keep this map current when you add a view, endpoint, or table.
 
 ## What this is
-Star Citizen org tool: live navigator + cargo-hauling planner + event planner +
-resource manager + aUEC marketplace. FastAPI backend, **single-file** SPA, plus a
-Windows watcher (Python script) that reports the player's in-game position.
+Star Citizen org tool — nine apps in one SPA: navigator, cargo + trade route
+planners, event planner (+ fleet rosters), group finder, danger board, resource
+manager, aUEC marketplace, org intel. FastAPI backend, **single-file** SPA, plus
+a Windows watcher (Python script) that reports the player's in-game position.
 
 - Backend: `server/app.py` (HTTP/WS + routes), `server/nav_core.py` (pure nav/route
   logic, fully unit-tested), `server/db.py` (SQLite schema + queries).
 - Frontend: `server/static/index.html` — ONE file: `<style>` + body + `<script>`.
 - Watcher: `watcher/` (runs on the player's Windows box; reads Game.log).
 - Version: `server/version.py` (SemVer; surfaced at `/api/health` + footer).
-- Tests: `server/test_nav_core.py`. Deploy = push to `origin/main` (see `/deploy`).
+- Tests: `server/test_nav_core.py` + `server/test_app.py`. Deploy = push to
+  `origin/main` (see `/deploy`).
+- Docs: `docs/README.md` = index w/ per-doc status · `docs/product-overview.md`
+  = consolidated app/service/data map · `docs/feature-backlog.md` = active work.
 
 ## DO NOT READ (token sinks / generated / binary)
 - `server/.venv/**` — dependencies. Never read; never grep here.

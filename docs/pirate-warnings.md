@@ -1,11 +1,12 @@
 # Pirate danger warnings & snare-aware routing (backlog #24)
 
-**Status:** v1 FEATURE-COMPLETE 2026-07-04 (build-order steps 1–7 done; only
-`/deploy` remains). Backend board + `#/pirates` frontend + impeccable polish
-(32→~36/40) + the trade-planner `ignore/warn/avoid` integration are all built and
-tested (**349-test suite green**). Grew out of the #21 trade-planner "hazard
-markers" v2 fast-follow; supersedes that parking note. v2 (the snare-detour
-one-hop reroute) stays parked below.
+**Status:** **v1 SHIPPED v0.34.0 · v2 snare-detour SHIPPED v0.35.0** (both
+deployed 2026-07-04). Backend board + `#/pirates` frontend + the trade-planner
+`ignore/warn/avoid` integration (v1), then full hazard-volume detour routing
+(v2, spec [`snare-detour-routing.md`](snare-detour-routing.md), which supersedes
+the v2 sketch kept for history below). Grew out of the #21 trade-planner
+"hazard markers" v2 fast-follow. Remaining ideas (two-waypoint detours,
+severity tuning with real board data) live in the backlog's #24 fast-follows.
 
 Star Citizen traders get ambushed two ways: (a) pirates set **quantum snares**
 along popular buy→sell lanes to yank anyone flying the direct line out of QT, and

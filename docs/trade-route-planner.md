@@ -12,8 +12,11 @@ minimize-deadhead / price-staleness), **actual buy/sell figure capture** at exec
 realized profit), **saved routes / favorites** (name a plan config, reload it to
 re-solve against live prices), and a **freshness-UX polish** (price-age filter on by
 default at 2 days, down from opt-in at 7; per-row scrape age + staleness banner on the
-best-trades board). Nothing from the v1 scope remains deferred; only the v2+ ideas
-(teammate-lane awareness, hazard markers) are still parked.
+best-trades board). Nothing from the v1 scope remains deferred; only teammate-lane awareness is
+still parked — hazard markers shipped separately as backlog #24
+([pirate-warnings.md](pirate-warnings.md) v0.34.0 +
+[snare-detour-routing.md](snare-detour-routing.md) v0.35.0), which also gave
+this planner `avoid_mode` snare-detour routing.
 
 ## Build status (what's landed)
 

@@ -1,6 +1,7 @@
 # Discord notifications (push integration)
 
-**Status:** scoped, not built (2026-06-30). Backlog #18.
+**Status:** **FEATURE-COMPLETE + DEPLOYED** (v0.14.0–v0.17.0, 2026-06-30) — all
+six build-order steps below are ✅. Backlog #18 (closed).
 **Priority:** #1 — highest engagement-per-effort. Everything shipped so far is
 pull-only; this makes the app *reach out* and pull members back in-game.
 

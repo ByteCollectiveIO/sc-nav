@@ -26,9 +26,12 @@ SC Nav is a self-hosted org companion app for Star Citizen. A watcher on the
 gaming PC forwards coordinates to a small LAN/Docker server that computes
 container, lat/lon, altitude, and bearing/distance/ETA to any POI or recorded
 resource node, then pushes it live (WebSocket) to a browser on a second device.
-It has grown into a multi-app suite under one hash-routed SPA: navigator, cargo
-route planner, event planner, statistics, resource manager (inventory/goals),
-and an aUEC marketplace, with Discord-OAuth multi-user/org support.
+It has grown into a nine-app suite under one hash-routed SPA, grouped in the
+launcher as **Out in the 'Verse** (resource navigator, cargo planner, trade
+route planner), **Rally the Org** (event planner with fleet rosters, group
+finder/LFG, pirate danger board), and **Run the Org** (resource manager
+inventory/goals, aUEC marketplace, org intel/analytics) — with Discord-OAuth
+multi-user/org support, live presence, and Discord webhook notifications.
 
 Success is the tool disappearing into play: a member gets an accurate reading or
 a usable plan in one glance and returns to the game. It is an unofficial fan
