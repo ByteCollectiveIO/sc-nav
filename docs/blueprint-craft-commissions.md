@@ -1,8 +1,9 @@
 # Blueprint craft commissions — design (backlog #25)
 
-**Status:** **v1 BUILT 2026-07-05** — build-order steps 0–4 all landed in one
-pass (sync + feed, nav_core helpers, commission mode end-to-end, spec builder,
-Discord). v1.1 (member blueprint library, §10) remains open. Data source is the
+**Status:** **v1 SHIPPED — v0.40.0 (2026-07-05, PR #21: steps 0–4) +
+v0.41.0 (PR #22: slider-driven quality minimums + `spec.inputs` +
+Quality/Band explainer), both confirmed live.** v1.1 (member blueprint
+library, §10) remains open — tracked as backlog #25.1. Data source is the
 SC Wiki API `/api/blueprints` (backlog #26); an early datamined extract used
 during scoping has since been removed from the repo.
 

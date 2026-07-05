@@ -10813,7 +10813,7 @@ function renderBpSpecBuilder() {
       aspects.map(a => {
         const seed = mkBpInitQ && mkBpInitQ[a.slot] != null ? mkBpInitQ[a.slot] : 500;
         return `<div class="mk-asp-row"><span>${esc(a.slot)} <span class="muted">(${esc(a.input)})</span></span>` +
-          `<input type="range" min="1" max="1000" value="${seed}" data-slot="${esc(a.slot)}" ` +
+          `<input type="range" min="0" max="1000" step="25" value="${seed}" data-slot="${esc(a.slot)}" ` +
             `aria-label="${esc(a.slot)} input quality">` +
           `<span class="mk-asp-q"></span></div>`;
       }).join("");
