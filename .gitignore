@@ -45,3 +45,15 @@ docs/loadout.json
 
 # Ignore the impeccable stuff.
 server/static/.impeccable/
+
+# Local tooling + generated data — NOT app code, kept out of the repo:
+# vendored Claude skills, impeccable design-review config/caches/critique
+# snapshots, and the uexcorp scrape output dir. (The hand-written `deploy` skill
+# and the CI workflows stay tracked — these ignore only the vendored/generated
+# siblings.)
+.claude/skills/impeccable/
+.github/skills/
+.github/hooks/
+.impeccable/
+output/
+images/trade_route_planner.png

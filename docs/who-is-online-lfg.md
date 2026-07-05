@@ -1,6 +1,10 @@
 # Who's online + group finder (LFG / "rally now")
 
-**Status:** scoped, not built (2026-06-30). Backlog #19.
+**Status:** **FEATURE-COMPLETE + DEPLOYED** (v0.18.0–v0.22.0; LFG SQLite
+persistence v0.21.0) — all five build-order steps below are BUILT. Note the
+step-4 amendment: Group Finder was promoted out of `#/online` into its own
+`#/lfg` app, superseding earlier "tab beside the roster" language. Backlog #19
+(closed).
 **Priority:** #2 — the social glue for *spontaneous* play. Turns "I wonder if
 anyone's on" into "3 people are on, let's group up."
 

@@ -273,6 +273,14 @@ naturally alongside (1)–(3) since they share the `db.list_listings` query path
 
 ## Deferred (cheap paths noted)
 
+> **Graduation note (2026-07-04):** four items originally listed here shipped
+> 2026-06-26 (suggested market-value price, crafted-quality annotation,
+> search/filter/sort, board scalability — each marked BUILT inline below).
+> Discord announce shipped via #18. The WTB idea is being realized as backlog
+> #25 (blueprint craft commissions). Still genuinely deferred: inventory
+> bridge, price history, richer reputation — tracked in the backlog's
+> Marketplace fast-follows.
+
 - **Inventory bridge** — list from / decrement `inventory` rows; surplus from `met`
   goals → one-click listing. Both apps already share the tables.
 - **Discord announce** — post new/ending listings to a channel (same deferred hook
