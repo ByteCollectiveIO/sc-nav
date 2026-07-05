@@ -24,9 +24,10 @@ distills committed `poi/quantum_drives.json` + `poi/quantum_profiles.json`
 (+ `quantum_match_report.txt` build artifact), version-stamped, no runtime
 calls. 230 ship profiles / 57 drives / 0 identity mismatches / 81%
 uexcorp-hauler coverage. Footer carries the CC BY-SA 4.0 attribution. Smoke test
-in `test_nav_core.py`. **Remaining slices** (share the same fetch→distill
-convention): `/api/blueprints` (feeds #25, in progress with it) and
-`/api/locations/positions` (feeds #28).
+in `test_nav_core.py`. **Blueprints slice SHIPPED v0.40.0**
+(`tools/sync_blueprints.py` → committed `poi/blueprints.json`, 1,559 recipes —
+see #25 in the Shipped log). **Remaining slice** (same fetch→distill
+convention): `/api/locations/positions` (feeds #28).
 
 `https://api.star-citizen.wiki` (OpenAPI at `/api/openapi`) is a public,
 game-version-scoped JSON API — no auth for game data, pagination
@@ -70,19 +71,23 @@ correctly absent) and the drive catalog from
 `/api/vehicle-items?filter[type]=QuantumDrive`. The SCU/Gm fuel math and JSON
 shapes from the design carry over unchanged; only the source is the wiki API.
 
-### 25. Blueprint craft commissions (marketplace mode #4)
+### 25.1 Craft commissions v1.1 (follow-on to the shipped #25)
 
-**Status:** **v1 BUILT 2026-07-05 (pending release)** — all of steps 0–4:
-`tools/sync_blueprints.py` → committed `poi/blueprints.json` (1,559 recipes),
-`/api/blueprints` index+detail, nav_core manifest/stat-driver/interpolation
-helpers, `commission` listing mode end-to-end (quotes, accept,
-withdraw-after-accept reopens, dual-confirm, lazy needed-by expiry), spec
-builder (manifest + per-aspect sliders + live stat estimates), WANTED Discord
-announce + mode-aware market copy. Build notes in the spec:
-[`blueprint-craft-commissions.md`](blueprint-craft-commissions.md).
-**Remaining: v1.1** — member blueprint library ("requests I can craft", spec
-§10) + the §11 sell-side ripples (stat-name autocomplete, `blueprint:` identity
-for sales) + estimated material cost (§12).
+**Status:** open; v1 **SHIPPED v0.40.0–v0.41.0** (see the Shipped log). Spec:
+[`blueprint-craft-commissions.md`](blueprint-craft-commissions.md) §10–§12.
+
+- **Member blueprint library** ("requests I can craft", §10) —
+  `member_blueprints` table + "My blueprints" picker; board shows "N members
+  can craft this" + a ✨ requests-I-can-craft filter (LFG match pattern).
+- **§11 sell-side ripples** — canonical stat-name autocomplete on the crafted
+  form (fixes the fragmenting `?stat=` filter), `blueprint:` identity for
+  sale/auction listings (crafted goods become comparable), auto-estimated stat
+  panel from quality interpolation.
+- **Estimated material cost** (§12) — `blueprint_manifest` × raw-commodity
+  prices → "mats ≈ 12,400 aUEC" hint; gem prices need a source.
+- **Choice-group picker** — 9 live `sel` aspects in the feed (sync report
+  counts them); spec builder needs a pick-one-of-N control only if CIG uses
+  them on craftable recipes players care about.
 
 ### 28. Starmap & POI enrichment from the wiki API 🆕 (needs scoping)
 
@@ -195,3 +200,4 @@ rebuild). Full design/build notes: the spec doc where listed, else the
 | — | Launcher reorganization (3 themed groups) | v0.36.0 | PR #13 |
 | 26/27 | Quantum data slice (wiki API) + fuel/range in both planners | v0.37.0 | [quantum-fuel-range.md](quantum-fuel-range.md), [quantum-data-pipeline.md](quantum-data-pipeline.md) |
 | 21 | Trade planner stock + demand-side reports (STOCK WATCH) | v0.38.0 · v0.39.0 | [trade-route-planner.md](trade-route-planner.md) |
+| 25 | Blueprint craft commissions v1 (+ blueprint feed, spec builder, slider-driven quality minimums) | v0.40.0 · v0.41.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) |

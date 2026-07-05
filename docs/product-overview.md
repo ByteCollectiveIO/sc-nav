@@ -45,7 +45,7 @@ Nine apps in three themed launcher groups, plus account/admin surfaces.
 | App | Route | What it does | Spec |
 |---|---|---|---|
 | Resource Manager | `#/goals` + `#/inventory` | Shared item catalog; per-member holdings ledger; procurement goals with allocations drawn from holdings; deep-links into the navigator's finder | [org-inventory-goals.md](org-inventory-goals.md) |
-| Org Marketplace | `#/market` | aUEC-only sale/auction/barter board with dual-confirm handshake, search/filter/sort, crafted-quality annotations, market-value hints; commission mode planned (#25) | [marketplace.md](marketplace.md) |
+| Org Marketplace | `#/market` | aUEC-only sale/auction/barter/**commission** board with dual-confirm handshake, search/filter/sort, crafted-quality annotations, market-value hints; craft requests carry a blueprint spec builder w/ per-material quality minimums (#25, v0.40.0–v0.41.0) | [marketplace.md](marketplace.md) |
 | Org Intel | `#/intel` | Guild analytics: leaderboards, capture/hauling/trading stats, member directory (admin) | in-code; backlog #17 for identity |
 
 Also: Who's Online roster (`#/online`, reached via the 🟢 badge), Settings
@@ -66,8 +66,8 @@ guide (`#/setup`), legal (`#/terms`, `#/privacy`).
   webhooks (events, marketplace, goals, records, lfg, pirates), threaded,
   rate-limited, never raises. No bot, by decision.
 - **Shared item catalog** — commodities + ships + equipment feeds + custom
-  items (`catalog.py`), consumed by Resource Manager, Marketplace, and (soon)
-  blueprint commissions.
+  items (`catalog.py`), consumed by Resource Manager and Marketplace; the
+  `blueprint:` namespace resolves against the committed blueprint feed (#25).
 - **Travel model** — `nav_core.travel_cost`: straight-line QT legs over a
   complete graph of QT markers, 3-system gate chain (Stanton—Pyro—Nyx), hazard
   volumes (sphere/capsule) with detour-waypoint insertion; shared by both
@@ -85,7 +85,7 @@ guide (`#/setup`), legal (`#/terms`, `#/privacy`).
 |---|---|---|---|
 | starmap.space | POI/container catalog | fetched at startup, cached in `poi/` (committed seed for offline) | community dataset |
 | uexcorp API | commodities, terminal prices, vehicles, equipment | fetch + cache, `/api/refresh` | permitted w/ attribution |
-| **SC Wiki API** (`api.star-citizen.wiki`) 🆕 | per-ship quantum fuel/range (95% coverage), quantum-drive catalog, blueprints (1,559), starmap x/y/z + QT radii + amenities, commodity metadata | **planned** (#26): sync script → committed `poi/*.json`, game-version-stamped; no live calls | **CC BY-SA 4.0, attribution required; English fields only** |
+| **SC Wiki API** (`api.star-citizen.wiki`) 🆕 | per-ship quantum fuel/range (95% coverage), quantum-drive catalog, blueprints (1,559), starmap x/y/z + QT radii + amenities, commodity metadata | **live** (#26): quantum (v0.37.0) + blueprints (v0.40.0) slices synced → committed `poi/*.json`, game-version-stamped; no live calls; locations slice still planned | **CC BY-SA 4.0, attribution required; English fields only** |
 | Game.log (via watcher) | position, shard id | `/api/position` | player's own client |
 | erkul.games | — (rejected) | — | CC BY-NC-**ND** — no derivatives, unusable |
 

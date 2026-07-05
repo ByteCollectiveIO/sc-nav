@@ -23,7 +23,7 @@ drift — trust grep and CI, not the citation.
 
 | Doc | Status | Notes |
 |---|---|---|
-| [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | ✅ v1 BUILT 2026-07-05, pending release | Backlog #25; commission mode + blueprint feed + spec builder; v1.1 (member blueprint library) open |
+| *(none — #25 shipped; next up is #25.1 / #28, see the backlog)* | | |
 
 ## Shipped feature specs (reference for what's live)
 
@@ -44,6 +44,7 @@ drift — trust grep and CI, not the citation.
 | [snare-detour-routing.md](snare-detour-routing.md) | v0.35.0 | Hazard-volume detour routing (#24 v2) |
 | [quantum-data-pipeline.md](quantum-data-pipeline.md) | v0.37.0 | `tools/sync_quantum.py` → committed `poi/quantum_{drives,profiles}.json` (#26 slice) |
 | [quantum-fuel-range.md](quantum-fuel-range.md) | v0.37.0 | Fuel burn + max-range in both planners (#27) |
+| [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | v0.40.0–v0.41.0 | Commission mode + blueprint feed + spec builder w/ slider-driven quality minimums (#25); v1.1 open in the backlog |
 
 ## Strategy / records
 
