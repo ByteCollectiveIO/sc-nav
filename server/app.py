@@ -4520,12 +4520,31 @@ def _seed_goal_lines(blueprint_key: str, qty: float,
     return lines, seeded["unmapped"]
 
 
+_CATALOG_BP_CAP = 10
+
+
 @app.get("/api/catalog")
-async def get_catalog(q: str = "", user: dict = Depends(require_session)):
+async def get_catalog(q: str = "", bp: int = 0, user: dict = Depends(require_session)):
     """Item search over the merged catalog (commodity + ship feeds + custom rows),
     debounced from the picker. Empty `q` returns the head of the list. Shared by
-    the inventory/goals forms and the marketplace listing form."""
-    return {"items": catalog.search(item_catalog, q, limit=50)}
+    the inventory/goals forms and the marketplace listing form. `bp=1` appends
+    matching craftable recipes as `blueprint:` items (#25.1 §11.3) — only the
+    marketplace picker asks for them, so crafted goods get shared identity on
+    sale/auction listings while staying out of the inventory/goals pickers."""
+    items = catalog.search(item_catalog, q, limit=50)
+    if bp:
+        needle = q.strip().lower()
+        hits = []
+        for key, rec in blueprints_feed.items():
+            name = rec.get("name") or key
+            if needle and needle not in f"{name} {key}".lower():
+                continue
+            hits.append({"item_id": f"blueprint:{key}", "name": name,
+                         "kind": "blueprint", "unit": "each",
+                         "cat": rec.get("cat")})
+        hits.sort(key=lambda r: (r["name"].lower(), r["item_id"]))
+        items = items + hits[:_CATALOG_BP_CAP]
+    return {"items": items}
 
 
 @app.post("/api/catalog")
@@ -5044,6 +5063,12 @@ def _validate_listing(body: ListingIn) -> dict:
               "attributes": _clean_crafted(body.crafted),
               "price_auec": None, "start_price": None, "buyout_auec": None,
               "ends_at": None, "want": None, "blueprint_key": None, "materials": None}
+    # Any listing whose item is a craftable recipe carries its blueprint_key
+    # (#25.1 §11.3) — on sale/auction it gives the crafted good shared identity
+    # (exact-item search, kind=blueprint filter, expected-stats panel), not just
+    # on commissions.
+    if item["item_id"].startswith("blueprint:"):
+        fields["blueprint_key"] = item["item_id"][len("blueprint:"):]
     if body.mode == "sale":
         if body.price_auec is None:
             raise HTTPException(status_code=400, detail="a sale listing needs a price")
@@ -5056,7 +5081,6 @@ def _validate_listing(body: ListingIn) -> dict:
         if not item["item_id"].startswith("blueprint:"):
             raise HTTPException(status_code=400,
                                 detail="a craft request needs a blueprint item")
-        fields["blueprint_key"] = item["item_id"][len("blueprint:"):]
         materials = (body.materials or "crafter").strip().lower()
         if materials not in _COMMISSION_MATERIALS:
             raise HTTPException(status_code=400,
@@ -5197,7 +5221,40 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
              "status": o["status"], "created_at": o["created_at"],
              "is_mine": o["bidder_id"] == user["id"]}
             for o in offers]
+        view["expected_stats"] = _listing_expected_stats(listing)
+        if listing["mode"] != "commission" and listing.get("blueprint_key"):
+            # Fair-price anchor for buyers of a crafted good (commissions carry
+            # theirs under the commission block).
+            view["mats_est"] = _commission_mats_est(listing)
     return view
+
+
+def _listing_expected_stats(listing: dict) -> dict | None:
+    """The expected finished stats of a blueprint-linked listing (#25.1 §11.4).
+    A commission with per-slot quality asks previews at exactly those (`basis:
+    "inputs"`); otherwise an advertised overall quality previews every slot at
+    that number (`basis: "uniform"` — a stated assumption, since the game derives
+    stats per input slot). None when there's no recipe, no quality signal, or the
+    recipe left the feed."""
+    key = listing.get("blueprint_key")
+    bp = blueprints_feed.get(key) if key else None
+    if bp is None:
+        return None
+    attrs = listing.get("attributes") or {}
+    spec = attrs.get("spec") or {}
+    inputs = spec.get("inputs") or []
+    if inputs:
+        stats = nav_core.blueprint_stat_preview(
+            bp, {i["slot"]: i["min_q"] for i in inputs})
+        return {"basis": "inputs", "stats": stats} if stats else None
+    quality = spec.get("quality") if listing.get("mode") == "commission" \
+        else attrs.get("quality")
+    if quality is None:
+        return None
+    q = float(quality)
+    stats = nav_core.blueprint_stat_preview(
+        bp, {a.get("slot"): q for a in bp.get("aspects") or []})
+    return {"basis": "uniform", "quality": quality, "stats": stats} if stats else None
 
 
 def _auction_time_up(listing: dict, now: datetime) -> bool:
