@@ -462,6 +462,38 @@ def _resolve_drive(ship_name: str | None, qd_key: str | None):
     return (d["fuel_req"], d["range_m"], d["qd"])
 
 
+def load_blueprints() -> dict:
+    """Load the committed crafting-blueprint feed distilled from the SC Wiki API
+    by tools/sync_blueprints.py (#26, feeds the marketplace craft-commission
+    mode #25). Returns {bp_key: record}; empty (commissions still post, no
+    manifest/spec help) if the file is absent. Same code-bundled-first loading
+    rationale as load_quantum — see that docstring + the Dockerfile COPY."""
+    for base in (Path(__file__).parent, DATA_DIR):     # code-bundled wins over the volume
+        try:
+            doc = json.loads((base / "blueprints.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if doc.get("blueprints"):
+            return doc["blueprints"]
+    return {}
+
+
+def _blueprint_index_row(key: str, bp: dict) -> dict:
+    """One search-index row for GET /api/blueprints — enough for the picker
+    (name + disambiguating category + a materials summary), never the full
+    modifier payload (that's the detail endpoint's job)."""
+    ins = bp.get("aspects") or []
+    return {
+        "key": key,
+        "name": bp.get("name"),
+        "cat": bp.get("cat"),
+        "time_s": bp.get("time_s"),
+        "default": bp.get("default", False),
+        "inputs": ", ".join(dict.fromkeys(a["input"] for a in ins if a.get("input"))),
+        "has_mods": any(a.get("mods") for a in ins),
+    }
+
+
 def load_fleet_ships() -> list[dict]:
     """All spaceships (name + crew size + a default seat template) for the fleet
     organizer's ship picker — a superset of the cargo `ships` list (combat
@@ -907,6 +939,7 @@ ships = load_ships()
 QUANTUM_DRIVES, QUANTUM_PROFILES, QUANTUM_UEX = load_quantum()
 enrich_ships_quantum(ships)     # attach per-ship quantum fuel/range (#27), when matched
 fleet_ships = load_fleet_ships()
+blueprints_feed = load_blueprints()     # crafting recipes for commissions (#25)
 item_names = load_item_names()
 item_prices = build_item_prices()
 fauna_names = load_fauna_names()
@@ -930,7 +963,17 @@ item_catalog_by_id = {it["item_id"]: it for it in item_catalog}
 def resolve_catalog_item(item_id: str) -> dict | None:
     """A catalog id → its canonical item ({item_id, name, kind, unit}), or None.
     Endpoints resolve the client's chosen id here to stamp the authoritative
-    name/unit onto a stored row, rather than trusting a client-sent name."""
+    name/unit onto a stored row, rather than trusting a client-sent name.
+
+    `blueprint:<bp_key>` ids resolve against the blueprint feed instead of the
+    merged catalog — craftable items stay out of the inventory/goals pickers
+    (#25) but gain first-class identity on marketplace listings."""
+    if item_id.startswith("blueprint:"):
+        bp = blueprints_feed.get(item_id[len("blueprint:"):])
+        if bp is None:
+            return None
+        return {"item_id": item_id, "name": bp.get("name"),
+                "kind": "blueprint", "unit": "each"}
     return item_catalog_by_id.get(item_id)
 
 
@@ -1256,6 +1299,10 @@ _WARNING_NOTE_MAX = 280
 _WARNING_LOCATION_MAX = 120
 WARNING_ANNOUNCE_COOLDOWN_S = 600.0
 _warning_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
+
+# Craft-request announce shouts (#25) share the same per-member cooldown shape.
+COMMISSION_ANNOUNCE_COOLDOWN_S = 600.0
+_commission_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
 # How often the scheduled event-reminder loop scans for due events.
 REMINDER_TICK_S = 60.0
@@ -2249,6 +2296,44 @@ async def list_fleet_ships():
     """All spaceships with crew size + a default seat template, for the fleet
     organizer's ship picker (#20 v1.1). Superset of /api/ships."""
     return fleet_ships
+
+
+_BLUEPRINT_INDEX_CAP = 50
+
+
+@app.get("/api/blueprints")
+async def list_blueprints(q: str | None = None, category: str | None = None):
+    """Crafting-blueprint search index for the commission picker (#25): key,
+    item name, category, craft time, input summary. Filter with `?q=` (substring
+    over name/inputs/key) and/or `?category=`; capped — the client autocompletes,
+    it never pages the whole feed. Categories ride along for the filter UI."""
+    needle = (q or "").strip().lower()
+    rows = []
+    for key, bp in blueprints_feed.items():
+        row = _blueprint_index_row(key, bp)
+        if category and row["cat"] != category:
+            continue
+        if needle and needle not in (
+                f"{row['name']} {row['inputs']} {key}".lower()):
+            continue
+        rows.append(row)
+    rows.sort(key=lambda r: ((r["name"] or "").lower(), r["key"]))
+    cats = sorted({bp.get("cat") or "Misc" for bp in blueprints_feed.values()})
+    return {"blueprints": rows[:_BLUEPRINT_INDEX_CAP], "total": len(rows),
+            "categories": cats}
+
+
+@app.get("/api/blueprints/{bp_key}")
+async def get_blueprint(bp_key: str):
+    """One blueprint's full record — aspects/inputs with min qualities and stat
+    modifiers — plus the derived views the spec builder renders: the materials
+    manifest (qty 1; the client scales) and the stat→driver inversion."""
+    bp = blueprints_feed.get(bp_key)
+    if bp is None:
+        raise HTTPException(status_code=404, detail="unknown blueprint")
+    return {"key": bp_key, **bp,
+            "manifest": nav_core.blueprint_manifest(bp, 1),
+            "stat_drivers": nav_core.blueprint_stat_drivers(bp)}
 
 
 @app.get("/api/harvestables")
@@ -3777,15 +3862,60 @@ def _offer_amount_text(offer: dict) -> str:
     return "offered " + (" — ".join(parts) if parts else "a trade")
 
 
+def _commission_announce_ok(poster_id: str) -> bool:
+    """Anti-spam gate for announcing a craft request: one shout per member per
+    cooldown. Returns True (and arms the cooldown) only when allowed."""
+    now = time.monotonic()
+    last = _commission_announce_at.get(poster_id)
+    if last is not None and now - last < COMMISSION_ANNOUNCE_COOLDOWN_S:
+        return False
+    _commission_announce_at[poster_id] = now
+    return True
+
+
+async def _notify_commission_posted(listing: dict) -> None:
+    """Opt-in shout for a new craft request (#25) — the requester asked for
+    reach, so it broadcasts to the marketplace channel with the job's headline
+    terms (spec quality, budget, materials sourcing, needed-by)."""
+    if not notify.is_configured("marketplace"):
+        return
+    bits = []
+    spec = (listing.get("attributes") or {}).get("spec") or {}
+    if spec.get("quality"):
+        bits.append(f"Q{spec['quality']}+")
+    qty = listing.get("qty") or 1
+    if qty and float(qty) > 1:
+        bits.append(f"×{qty:g}")
+    if listing.get("price_auec"):
+        bits.append(f"budget {_auec(listing['price_auec'])}")
+    mats = {"requester": "materials supplied", "crafter": "crafter sources mats",
+            "split": "materials split"}.get(listing.get("materials") or "")
+    if mats:
+        bits.append(mats)
+    if listing.get("ends_at"):
+        bits.append(f"needed by {str(listing['ends_at'])[:10]}")
+    who = _resolve_member_name(listing["seller_id"], None)
+    detail = (" — " + ", ".join(bits)) if bits else ""
+    await notify.send(
+        "marketplace",
+        f"🛠️ **WANTED: {listing.get('item_name')}**{detail}\n"
+        f"Posted by {who}. Quote the job on the board.{_deep_link('#/market')}",
+        dedup_key=f"commission-posted:{listing['id']}")
+
+
 async def _notify_market_offer(listing: dict, offer: dict, *, deal: bool) -> None:
     """Tell the seller activity landed on their listing — a standing offer/bid, or
-    an instant buy/buyout that already struck the deal (`deal=True`)."""
+    an instant buy/buyout that already struck the deal (`deal=True`). Commission
+    copy reads crafter-side: a quote on the job, never a purchase."""
     if not notify.is_configured("marketplace"):
         return
     mentions, ping = _mentions(listing["seller_id"])
     who = _resolve_member_name(offer["bidder_id"], None)
     item = listing.get("item_name") or "your listing"
-    if deal:
+    if listing.get("mode") == "commission":
+        body = (f"🛠️ **New quote on {item}**\n{who} quoted "
+                f"{_auec(offer['amount_auec'])}.")
+    elif deal:
         body = (f"🎉 **{item} sold!**\n"
                 f"{who} bought it for {_auec(offer['amount_auec'])} — confirm the "
                 f"handoff once you meet up in-game.")
@@ -3803,10 +3933,14 @@ async def _notify_market_accepted(listing: dict, offer: dict) -> None:
     seller = _resolve_member_name(listing["seller_id"], None)
     item = listing.get("item_name") or "a listing"
     amount = f" — {_auec(offer['amount_auec'])}" if offer.get("amount_auec") is not None else ""
+    if listing.get("mode") == "commission":
+        body = (f"🛠️ **You got the job**\n{seller} accepted your quote on {item}"
+                f"{amount}. Get crafting.")
+    else:
+        body = (f"🤝 **Your offer was accepted**\n{seller} accepted your offer on "
+                f"{item}{amount}. Coordinate the handoff.")
     await notify.send(
-        "marketplace",
-        f"🤝 **Your offer was accepted**\n{seller} accepted your offer on {item}"
-        f"{amount}. Coordinate the handoff.{_deep_link('#/market')}{ping}",
+        "marketplace", f"{body}{_deep_link('#/market')}{ping}",
         mentions=mentions, dedup_key=f"market-accept:{offer['id']}")
 
 
@@ -3836,9 +3970,10 @@ async def _notify_market_completed(listing: dict) -> None:
     buyer = _resolve_member_name(listing["buyer_id"], None)
     item = listing.get("item_name") or "a listing"
     amount = f", {_auec(listing['final_auec'])}" if listing.get("final_auec") is not None else ""
+    label = "Commission complete" if listing.get("mode") == "commission" else "Deal complete"
     await notify.send(
         "marketplace",
-        f"✅ **Deal complete: {item}**\n{seller} ↔ {buyer}{amount}. Nice doing "
+        f"✅ **{label}: {item}**\n{seller} ↔ {buyer}{amount}. Nice doing "
         f"business.{_deep_link('#/market')}{ping}",
         mentions=mentions, dedup_key=f"market-complete:{listing['id']}")
 
@@ -4606,7 +4741,11 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
 # in-game on trust. aUEC ONLY, never real money (fan project under CIG's IP).
 
 
-_LISTING_MODES = ("sale", "auction", "barter")
+_LISTING_MODES = ("sale", "auction", "barter", "commission")
+
+# Who sources a commission's input materials — changes the price of the job more
+# than anything else, so it's first-class (column + board chip), not note text.
+_COMMISSION_MATERIALS = ("requester", "crafter", "split")
 
 
 class CraftStatIn(BaseModel):
@@ -4638,6 +4777,8 @@ class ListingIn(BaseModel):
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
     crafted: CraftedIn | None = None                            # crafted-quality blob
     seller_handle: str | None = Field(default=None, max_length=_HANDLE_MAX)  # in-game meetup name
+    materials: str | None = Field(default=None, max_length=16)  # commission: requester|crafter|split
+    announce: bool = False                                      # commission: Discord shout
 
 
 class ListingPatchIn(BaseModel):
@@ -4649,6 +4790,7 @@ class ListingPatchIn(BaseModel):
     want: str | None = Field(default=None, max_length=_NOTE_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     crafted: CraftedIn | None = None       # present (even if empty) ⇒ replace/clear
+    materials: str | None = Field(default=None, max_length=16)  # commission only
 
 
 class OfferIn(BaseModel):
@@ -4664,15 +4806,16 @@ class OfferActionIn(BaseModel):
 _LISTING_PUBLIC = ("id", "seller_id", "seller_handle", "item_id", "item_name", "unit",
                    "qty", "mode", "price_auec", "start_price", "buyout_auec", "ends_at",
                    "want", "status", "note", "buyer_id", "seller_confirmed",
-                   "buyer_confirmed", "attributes", "created_at", "updated_at",
-                   "completed_at")
+                   "buyer_confirmed", "attributes", "blueprint_key", "materials",
+                   "created_at", "updated_at", "completed_at")
 
 # The columns a board card needs — a subset of _LISTING_PUBLIC, served without the
 # per-listing offer query (auction high-bid/count ride the denormalized columns).
 # `attributes` rides along so a card can show the "Crafted · Qn" badge.
 _LISTING_CARD = ("id", "seller_id", "seller_handle", "item_id", "item_name", "unit",
                  "qty", "mode", "price_auec", "start_price", "ends_at", "want",
-                 "status", "sort_price", "offer_count", "attributes", "created_at")
+                 "status", "sort_price", "offer_count", "attributes",
+                 "blueprint_key", "materials", "created_at")
 
 
 def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
@@ -4708,11 +4851,35 @@ def _validate_listing(body: ListingIn) -> dict:
               "note": (body.note or "").strip() or None,
               "attributes": _clean_crafted(body.crafted),
               "price_auec": None, "start_price": None, "buyout_auec": None,
-              "ends_at": None, "want": None}
+              "ends_at": None, "want": None, "blueprint_key": None, "materials": None}
     if body.mode == "sale":
         if body.price_auec is None:
             raise HTTPException(status_code=400, detail="a sale listing needs a price")
         fields["price_auec"] = float(body.price_auec)
+    elif body.mode == "commission":
+        # A craft request (#25): the item IS a blueprint; budget is optional
+        # ("open to quotes"); ends_at is an optional needed-by date; the quality
+        # spec rides under attributes.spec so a future as-delivered annotation
+        # can sit beside it.
+        if not item["item_id"].startswith("blueprint:"):
+            raise HTTPException(status_code=400,
+                                detail="a craft request needs a blueprint item")
+        fields["blueprint_key"] = item["item_id"][len("blueprint:"):]
+        materials = (body.materials or "crafter").strip().lower()
+        if materials not in _COMMISSION_MATERIALS:
+            raise HTTPException(status_code=400,
+                                detail="materials must be requester, crafter or split")
+        fields["materials"] = materials
+        if body.price_auec is not None:
+            fields["price_auec"] = float(body.price_auec)
+        if body.ends_at:
+            ends_at = _normalize_event_start(body.ends_at)
+            if datetime.fromisoformat(ends_at) <= datetime.now(timezone.utc):
+                raise HTTPException(status_code=400,
+                                    detail="the needed-by date must be in the future")
+            fields["ends_at"] = ends_at
+        spec = _clean_crafted(body.crafted)
+        fields["attributes"] = {"spec": spec} if spec else None
     elif body.mode == "auction":
         if body.start_price is None:
             raise HTTPException(status_code=400, detail="an auction needs a start price")
@@ -4740,8 +4907,17 @@ def _resolve_listing_expiry(listing: dict, offers, now: datetime) -> dict:
     """Lazily settle a closed auction on read — no background job. An open auction
     past its end (or one a buyout has cleared) becomes `pending` with the winning
     bidder (their bid accepted, the rest marked lost), or `expired` if nobody bid.
-    Other modes are returned unchanged. Returns the (reloaded) listing."""
-    if listing["mode"] != "auction" or listing["status"] != "open":
+    A commission past its needed-by date just goes `expired` — no winner
+    derivation, the requester picks quotes manually while it's open. Other modes
+    are returned unchanged. Returns the (reloaded) listing."""
+    if listing["status"] != "open":
+        return listing
+    if listing["mode"] == "commission":
+        if _auction_time_up(listing, now):
+            db.set_listing_status(listing["id"], "expired", now.isoformat())
+            return db.get_listing(listing["id"])
+        return listing
+    if listing["mode"] != "auction":
         return listing
     state = nav_core.derive_auction_state(listing, offers, now)
     if not state["is_closed"]:
@@ -4778,6 +4954,8 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
     view["is_seller"] = listing["seller_id"] == user["id"]
     view["can_edit"] = view["is_seller"] or bool(user.get("is_admin"))
     view["auction"] = state if listing["mode"] == "auction" else None
+    view["commission"] = (nav_core.commission_board_state(listing, offers)
+                          if listing["mode"] == "commission" else None)
     view["offer_count"] = state["bid_count"]
     mine = next((o for o in offers
                  if o["bidder_id"] == user["id"] and o["status"] == "active"), None)
@@ -4837,6 +5015,15 @@ def _listing_card(listing: dict, user: dict, deals: dict) -> dict:
                            "bid_count": cnt}
     else:
         card["auction"] = None
+    if listing["mode"] == "commission":
+        cnt = int(listing.get("offer_count") or 0)
+        # sort_price is the best (lowest) quote once anyone has quoted, else the
+        # requester's budget (may be NULL = open to quotes).
+        card["commission"] = {
+            "best_quote": listing.get("sort_price") if cnt else None,
+            "quote_count": cnt, "budget": listing.get("price_auec")}
+    else:
+        card["commission"] = None
     return card
 
 
@@ -4869,7 +5056,8 @@ async def list_market(mode: str | None = None, item: str | None = None,
     now = datetime.now(timezone.utc)
     cards = []
     for r in rows:
-        if r["mode"] == "auction" and r["status"] == "open" and _auction_time_up(r, now):
+        if (r["mode"] in ("auction", "commission") and r["status"] == "open"
+                and _auction_time_up(r, now)):
             r = _resolve_listing_expiry(r, db.list_offers(r["id"]), now)
             if not mine and r["status"] != "open":   # left the open board
                 total -= 1
@@ -4877,7 +5065,10 @@ async def list_market(mode: str | None = None, item: str | None = None,
         cards.append(r)
     deals = db.completed_deals_counts([r["seller_id"] for r in cards])
     return {"listings": [_listing_card(r, user, deals) for r in cards],
-            "total": total, "limit": limit, "offset": offset}
+            "total": total, "limit": limit, "offset": offset,
+            # Whether the commission form should offer the Discord announce
+            # checkbox (mirrors the LFG board's announce_available flag).
+            "announce_available": notify.is_configured("marketplace")}
 
 
 def _meetup_handle(discord_id: str) -> str | None:
@@ -4898,6 +5089,12 @@ async def create_listing(body: ListingIn, user: dict = Depends(require_session))
     now = datetime.now(timezone.utc).isoformat()
     lid = db.create_listing({**fields, "seller_id": user["id"], "seller_handle": handle,
                              "status": "open", "created_at": now, "updated_at": now})
+    # Opt-in Discord shout for craft requests (#25) — rate-limited per member so
+    # the channel never floods; silently skipped when webhooks aren't configured.
+    if (body.announce and fields["mode"] == "commission"
+            and notify.is_configured("marketplace")
+            and _commission_announce_ok(user["id"])):
+        _notify_bg(_notify_commission_posted(db.get_listing(lid)))
     return _listing_view(db.get_listing(lid), user, detail=True)
 
 
@@ -4979,9 +5176,30 @@ async def edit_listing(listing_id: int, body: ListingPatchIn,
     if body.note is not None:
         fields["note"] = body.note.strip() or None
     if body.crafted is not None:           # present (even if empty) ⇒ replace/clear
-        fields["attributes"] = _clean_crafted(body.crafted)
+        spec = _clean_crafted(body.crafted)
+        # Commission specs live under attributes.spec (a future as-delivered
+        # annotation sits beside it); other modes keep the flat crafted blob.
+        if listing["mode"] == "commission":
+            fields["attributes"] = {"spec": spec} if spec else None
+        else:
+            fields["attributes"] = spec
     if listing["mode"] == "sale" and body.price_auec is not None:
         fields["price_auec"] = float(body.price_auec)
+    if listing["mode"] == "commission":
+        if body.price_auec is not None:
+            fields["price_auec"] = float(body.price_auec)   # revised budget
+        if body.ends_at:
+            ends_at = _normalize_event_start(body.ends_at)
+            if datetime.fromisoformat(ends_at) <= datetime.now(timezone.utc):
+                raise HTTPException(status_code=400,
+                                    detail="the needed-by date must be in the future")
+            fields["ends_at"] = ends_at
+        if body.materials is not None:
+            materials = body.materials.strip().lower()
+            if materials not in _COMMISSION_MATERIALS:
+                raise HTTPException(status_code=400,
+                                    detail="materials must be requester, crafter or split")
+            fields["materials"] = materials
     if listing["mode"] == "barter" and body.want is not None:
         want = body.want.strip()
         if not want:
@@ -5034,6 +5252,14 @@ async def place_offer(listing_id: int, body: OfferIn,
             db.settle_listing(listing_id, user["id"], "pending", ts)
             db.set_offer_status(oid, "accepted")
             db.reject_other_offers(listing_id, oid)
+    elif mode == "commission":
+        # A crafter's quote: their price (may differ from the posted budget) +
+        # a note (ETA, proposed quality, material notes). Never an instant deal
+        # — the requester picks a quote manually.
+        if body.amount_auec is None:
+            raise HTTPException(status_code=400, detail="a quote needs an aUEC amount")
+        oid = db.add_offer(listing_id, user["id"], float(body.amount_auec), None, None,
+                           (body.offer_note or "").strip() or None, ts)
     elif mode == "sale":
         price = float(listing["price_auec"] or 0)
         amount = float(body.amount_auec) if body.amount_auec is not None else price
@@ -5074,9 +5300,17 @@ async def act_on_offer(listing_id: int, offer_id: int, body: OfferActionIn,
     if body.action == "withdraw":
         if offer["bidder_id"] != user["id"]:
             raise HTTPException(status_code=403, detail="you can only withdraw your own offer")
-        if offer["status"] != "active":
+        if (listing["mode"] == "commission" and offer["status"] == "accepted"
+                and listing["status"] == "pending"):
+            # The accepted crafter can bail on the job ("can't source the
+            # Riccite") — the request goes back to open for other quotes; offers
+            # that were already lost stay lost.
+            db.set_offer_status(offer_id, "withdrawn")
+            db.settle_listing(listing_id, None, "open", ts)
+        elif offer["status"] != "active":
             raise HTTPException(status_code=400, detail="that offer is no longer active")
-        db.set_offer_status(offer_id, "withdrawn")
+        else:
+            db.set_offer_status(offer_id, "withdrawn")
     elif body.action == "accept":
         if listing["seller_id"] != user["id"] and not user.get("is_admin"):
             raise HTTPException(status_code=403, detail="only the seller can accept an offer")

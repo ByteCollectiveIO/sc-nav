@@ -1,8 +1,35 @@
 # Blueprint craft commissions — design (backlog #25)
 
-**Status:** designed 2026-07-04; **not built.** Data source is the SC Wiki API
-`/api/blueprints` (backlog #26); an early datamined extract used during scoping
-has since been removed from the repo.
+**Status:** **v1 BUILT 2026-07-05** — build-order steps 0–4 all landed in one
+pass (sync + feed, nav_core helpers, commission mode end-to-end, spec builder,
+Discord). v1.1 (member blueprint library, §10) remains open. Data source is the
+SC Wiki API `/api/blueprints` (backlog #26); an early datamined extract used
+during scoping has since been removed from the repo.
+
+**Build notes (what shipped, deltas from the design):**
+- `tools/sync_blueprints.py` → committed `poi/blueprints.json` (**1,559
+  records**, game `4.8.2-LIVE.12030094`, ~2.7 MB) + gitignored
+  `poi/blueprint_sync_report.txt`. All 1,559 have usable aspects; 3,883
+  resource + 294 item (gem) inputs; **9 choice-group aspects** exist in live
+  data (`sel` field, no picker yet — the report counts them, per §12).
+- **Category** comes from the wiki's `output.type` label ("Weapon Gun",
+  "Helmet (Armor)", 20 values) — the mine's `VehicleWeaponsS1`-style vocabulary
+  isn't in the API; `cls` (output_class) rides along for disambiguation.
+- Piecewise modifiers arrive as `value_segments`
+  ({quality_min/max, modifier_at_start/end}); `linear_integer_additive` →
+  mode `additive` (Power Pips). Distilled to `{q0,q1,v0,v1}` ranges.
+- Endpoints: `GET /api/blueprints` (index, `?q` over name/inputs/key +
+  `?category`, cap 50) and `GET /api/blueprints/{key}` (full record **+
+  server-derived `manifest` and `stat_drivers`** so the client stays thin).
+- nav_core: `blueprint_manifest` / `blueprint_stat_drivers` /
+  `blueprint_quality_effect` / `blueprint_stat_preview` /
+  `commission_board_state` (11 tests); client keeps a JS twin (`bpEffectAt`)
+  for the live slider preview.
+- Withdraw-after-accept reopens via `settle_listing(id, None, "open", ts)` —
+  no new db helper needed. Board denorm: commission `sort_price` = **lowest**
+  active quote else budget (auction mirrors with highest).
+- The announce flag rides `ListingIn.announce` (create-only, marketplace
+  webhook, 600 s per-member cooldown like LFG/pirates).
 
 A member posts a **craft request**: "build me this item, to this quality spec,
 for this price" — and an org crafter takes the job. It is the marketplace's

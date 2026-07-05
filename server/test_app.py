@@ -1983,5 +1983,288 @@ class QuantumEnrichmentTests(unittest.TestCase):
         self.assertEqual(app._resolve_drive("Definitely Not A Ship", None), (None, None, None))
 
 
+class CommissionModeTests(unittest.TestCase):
+    """#25 — the blueprint feed endpoints + the commission listing mode:
+    create/validate, the quote flow (never an instant deal), accept →
+    withdraw-after-accept reopening the job, dual-confirm freezing the quote,
+    lazy needed-by expiry, and the WANTED announce copy."""
+
+    _BP = {
+        "uuid": "u-1", "name": "Omnisky III Cannon", "cat": "Weapon Gun",
+        "type": "WeaponGun", "cls": "amrs_lasercannon_s1", "time_s": 540,
+        "default": False,
+        "aspects": [
+            {"slot": "Frame", "kind": "resource", "input": "Agricium",
+             "scu": 0.36, "min_q": 1,
+             "mods": [{"prop": "Integrity", "dir": "higher", "mode": "multiplier",
+                       "ranges": [{"q0": 0, "q1": 1000, "v0": 0.9, "v1": 1.1}]}]},
+            {"slot": "Emitter", "kind": "item", "input": "Hadanite", "qty": 7,
+             "mods": [{"prop": "Impact Force", "dir": "higher", "mode": "multiplier",
+                       "ranges": [{"q0": 0, "q1": 1000, "v0": 0.95, "v1": 1.05}]}]},
+        ],
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._requester = {"id": "111", "username": "req", "is_admin": False}
+        cls._crafter = {"id": "222", "username": "crafty", "is_admin": False}
+        cls._other = {"id": "333", "username": "third", "is_admin": False}
+        cls._current = cls._requester
+        app.app.dependency_overrides[app.require_session] = lambda: cls._current
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._current
+        cls._orig_feed = app.blueprints_feed
+        app.blueprints_feed = {"BP_CRAFT_AMRS_LaserCannon_S1": cls._BP}
+        cls._orig_catalog_by_id = app.item_catalog_by_id
+        # A resolvable NON-blueprint item, to prove the mode check itself rejects it.
+        app.item_catalog_by_id = {**app.item_catalog_by_id, "commodity:TestOre": {
+            "item_id": "commodity:TestOre", "name": "Test Ore",
+            "kind": "commodity", "unit": "SCU"}}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.blueprints_feed = cls._orig_feed
+        app.item_catalog_by_id = cls._orig_catalog_by_id
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def _as(self, user):
+        type(self)._current = user
+
+    def setUp(self):
+        self._as(self._requester)
+
+    def _post_commission(self, **over):
+        body = {"item_id": "blueprint:BP_CRAFT_AMRS_LaserCannon_S1",
+                "mode": "commission", "qty": 1, "price_auec": 45000,
+                "materials": "crafter",
+                "crafted": {"quality": 700,
+                            "stats": [{"name": "Impact Force", "value": "≥ 1.05x"}]}}
+        body.update(over)
+        return self.client.post("/api/market", json=body)
+
+    # -- blueprint feed endpoints --
+
+    def test_blueprint_index_and_search(self):
+        r = self.client.get("/api/blueprints").json()
+        self.assertEqual(r["total"], 1)
+        row = r["blueprints"][0]
+        self.assertEqual(row["key"], "BP_CRAFT_AMRS_LaserCannon_S1")
+        self.assertIn("Agricium", row["inputs"])
+        self.assertIn("Weapon Gun", r["categories"])
+        # search matches name/input substrings; a miss returns nothing
+        self.assertEqual(self.client.get("/api/blueprints?q=omnisky").json()["total"], 1)
+        self.assertEqual(self.client.get("/api/blueprints?q=hadanite").json()["total"], 1)
+        self.assertEqual(self.client.get("/api/blueprints?q=nope").json()["total"], 0)
+        self.assertEqual(
+            self.client.get("/api/blueprints?category=Helmet%20(Armor)").json()["total"], 0)
+
+    def test_blueprint_detail_carries_derived_views(self):
+        r = self.client.get("/api/blueprints/BP_CRAFT_AMRS_LaserCannon_S1")
+        self.assertEqual(r.status_code, 200)
+        d = r.json()
+        self.assertEqual(d["manifest"]["items"][0]["input"], "Hadanite")
+        props = {s["prop"] for s in d["stat_drivers"]}
+        self.assertEqual(props, {"Integrity", "Impact Force"})
+        self.assertEqual(self.client.get("/api/blueprints/BP_NOPE").status_code, 404)
+
+    # -- create + validation --
+
+    def test_create_commission(self):
+        r = self._post_commission()
+        self.assertEqual(r.status_code, 200, r.text)
+        v = r.json()
+        self.assertEqual(v["mode"], "commission")
+        self.assertEqual(v["item_name"], "Omnisky III Cannon")   # stamped from the feed
+        self.assertEqual(v["blueprint_key"], "BP_CRAFT_AMRS_LaserCannon_S1")
+        self.assertEqual(v["materials"], "crafter")
+        self.assertEqual(v["attributes"]["spec"]["quality"], 700)
+        self.assertEqual(v["commission"]["budget"], 45000)
+        self.assertEqual(v["commission"]["quote_count"], 0)
+
+    def test_budget_is_optional(self):
+        r = self._post_commission(price_auec=None)
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(r.json()["commission"]["budget"])
+
+    def test_rejects_non_blueprint_item(self):
+        r = self._post_commission(item_id="commodity:TestOre")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("blueprint", r.json()["detail"])
+
+    def test_rejects_bad_materials_and_past_needed_by(self):
+        self.assertEqual(self._post_commission(materials="magic").status_code, 400)
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        self.assertEqual(self._post_commission(ends_at=past).status_code, 400)
+
+    # -- quote flow --
+
+    def test_quote_never_strikes_instantly_and_best_quote_derives(self):
+        lid = self._post_commission().json()["id"]
+        self._as(self._crafter)
+        r = self.client.post(f"/api/market/{lid}/offer",
+                             json={"amount_auec": 40000, "offer_note": "2 days"})
+        self.assertEqual(r.status_code, 200)
+        v = r.json()
+        # at/below budget still does NOT auto-strike — the requester picks
+        self.assertEqual(v["status"], "open")
+        self._as(self._other)
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 38000})
+        v = self.client.get(f"/api/market/{lid}").json()
+        self.assertEqual(v["commission"]["quote_count"], 2)
+        self.assertEqual(v["commission"]["best_quote"], 38000)
+        # a quote without an amount is rejected
+        self.assertEqual(
+            self.client.post(f"/api/market/{lid}/offer",
+                             json={"offer_note": "no price"}).status_code, 400)
+
+    def test_board_card_and_filters(self):
+        lid = self._post_commission().json()["id"]
+        board = self.client.get("/api/market?mode=commission").json()
+        card = next(c for c in board["listings"] if c["id"] == lid)
+        self.assertEqual(card["commission"]["budget"], 45000)
+        self.assertIsNone(card["commission"]["best_quote"])   # no quotes yet
+        self.assertIn("announce_available", board)
+        kinds = self.client.get("/api/market?kind=blueprint").json()
+        self.assertIn(lid, [c["id"] for c in kinds["listings"]])
+
+    # -- accept, withdraw-after-accept, dual-confirm --
+
+    def _accept_flow(self):
+        lid = self._post_commission().json()["id"]
+        self._as(self._crafter)
+        v = self.client.post(f"/api/market/{lid}/offer",
+                             json={"amount_auec": 40000}).json()
+        oid = v["my_offer"]["id"]
+        self._as(self._other)
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 50000})
+        self._as(self._requester)
+        v = self.client.patch(f"/api/market/{lid}/offer/{oid}",
+                              json={"action": "accept"}).json()
+        return lid, oid, v
+
+    def test_accept_goes_pending_with_the_crafter(self):
+        lid, oid, v = self._accept_flow()
+        self.assertEqual(v["status"], "pending")
+        self.assertEqual(v["buyer_id"], "222")               # crafter rides buyer_id
+        lost = [o for o in v["offers"] if o["status"] == "lost"]
+        self.assertEqual(len(lost), 1)
+
+    def test_accepted_crafter_can_withdraw_and_job_reopens(self):
+        lid, oid, _ = self._accept_flow()
+        self._as(self._crafter)
+        v = self.client.patch(f"/api/market/{lid}/offer/{oid}",
+                              json={"action": "withdraw"}).json()
+        self.assertEqual(v["status"], "open")                 # back on the board
+        self.assertIsNone(v["buyer_id"])
+        statuses = {o["id"]: o["status"] for o in v["offers"]}
+        self.assertEqual(statuses[oid], "withdrawn")
+        self.assertIn("lost", statuses.values())              # lost offers stay lost
+
+    def test_dual_confirm_freezes_the_quote(self):
+        lid, oid, _ = self._accept_flow()
+        self._as(self._requester)
+        self.client.post(f"/api/market/{lid}/confirm")
+        self._as(self._crafter)
+        v = self.client.post(f"/api/market/{lid}/confirm").json()
+        self.assertEqual(v["status"], "completed")
+        self.assertEqual(v["attributes"]["spec"]["quality"], 700)
+        listing = db.get_listing(lid)
+        self.assertEqual(listing["final_auec"], 40000)        # the accepted quote
+
+    # -- lazy needed-by expiry --
+
+    def test_lapsed_needed_by_expires_without_a_winner(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        lid = self._post_commission(ends_at=future).json()["id"]
+        self._as(self._crafter)
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 40000})
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        db.update_listing(lid, {"ends_at": past}, past)       # force the lapse
+        self._as(self._requester)
+        v = self.client.get(f"/api/market/{lid}").json()
+        self.assertEqual(v["status"], "expired")              # no auction-style winner
+        self.assertIsNone(v["buyer_id"])
+
+    # -- edit --
+
+    def test_edit_budget_materials_and_spec(self):
+        lid = self._post_commission().json()["id"]
+        r = self.client.patch(
+            f"/api/market/{lid}",
+            json={"price_auec": 60000, "materials": "split",
+                  "crafted": {"quality": 900}})
+        v = r.json()
+        self.assertEqual(v["price_auec"], 60000)
+        self.assertEqual(v["materials"], "split")
+        self.assertEqual(v["attributes"]["spec"]["quality"], 900)
+        self.assertEqual(
+            self.client.patch(f"/api/market/{lid}",
+                              json={"materials": "magic"}).status_code, 400)
+
+
+class CommissionNotifyTests(unittest.TestCase):
+    """#25 step 4 — the WANTED announce (terms in the headline, per-member
+    cooldown) and the commission-flavored quote/accept/complete copy."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("marketplace"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+        app._commission_announce_at.clear()
+
+    _LISTING = {"id": 7, "seller_id": "111", "buyer_id": "222",
+                "mode": "commission", "item_name": "Omnisky III Cannon",
+                "qty": 1, "price_auec": 45000, "materials": "crafter",
+                "ends_at": "2027-01-15T00:00:00+00:00", "final_auec": 40000,
+                "attributes": {"spec": {"quality": 700}}}
+    _OFFER = {"id": 4, "bidder_id": "222", "amount_auec": 40000}
+
+    def test_wanted_announce_carries_the_terms(self):
+        asyncio.run(app._notify_commission_posted(self._LISTING))
+        msg = self.sent[0]
+        self.assertIn("WANTED: Omnisky III Cannon", msg["text"])
+        self.assertIn("Q700+", msg["text"])
+        self.assertIn("45,000 aUEC", msg["text"])
+        self.assertIn("crafter sources mats", msg["text"])
+        self.assertIn("needed by 2027-01-15", msg["text"])
+        self.assertEqual(msg["dedup_key"], "commission-posted:7")
+
+    def test_announce_cooldown_gates_per_member(self):
+        self.assertTrue(app._commission_announce_ok("111"))
+        self.assertFalse(app._commission_announce_ok("111"))   # inside the cooldown
+        self.assertTrue(app._commission_announce_ok("999"))    # other members unaffected
+
+    def test_quote_and_accept_read_commission_flavored(self):
+        asyncio.run(app._notify_market_offer(self._LISTING, self._OFFER, deal=False))
+        self.assertIn("New quote", self.sent[0]["text"])
+        asyncio.run(app._notify_market_accepted(self._LISTING, self._OFFER))
+        self.assertIn("You got the job", self.sent[1]["text"])
+        asyncio.run(app._notify_market_completed(self._LISTING))
+        self.assertIn("Commission complete", self.sent[2]["text"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

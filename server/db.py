@@ -451,6 +451,10 @@ def init(db_path) -> None:
         denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("listings", "attributes", "TEXT")
         _ensure_column("listings", "final_auec", "REAL")
+        # Craft commissions (#25): the recipe id + who sources the materials
+        # (requester | crafter | split) — commission-mode listings only.
+        _ensure_column("listings", "blueprint_key", "TEXT")
+        _ensure_column("listings", "materials", "TEXT")
         # Marketplace meetup handle (display only; ownership stays on seller_id).
         _ensure_column("listings", "seller_handle", "TEXT")
         # Index the board's sort column now that it's guaranteed to exist (see the
@@ -1693,7 +1697,7 @@ def delete_goal(goal_id: int) -> bool:
 
 
 _LISTING_EDITABLE = ("qty", "price_auec", "start_price", "buyout_auec", "ends_at",
-                      "want", "note", "status", "attributes")
+                      "want", "note", "status", "attributes", "materials")
 _LISTING_JSON = ("attributes",)
 
 
@@ -1726,6 +1730,13 @@ def _recompute_denorm(listing_id: int) -> None:
             "SELECT MAX(amount_auec) AS m FROM listing_offers WHERE listing_id=? "
             "AND status IN ('active','accepted')", (listing_id,)).fetchone()["m"]
         sort_price = high if high is not None else row["start_price"]
+    elif row["mode"] == "commission":
+        # A craft request's board price is the best (lowest) standing quote,
+        # else the requester's budget (which may be NULL = open to quotes).
+        best = _conn.execute(
+            "SELECT MIN(amount_auec) AS m FROM listing_offers WHERE listing_id=? "
+            "AND status IN ('active','accepted')", (listing_id,)).fetchone()["m"]
+        sort_price = best if best is not None else row["price_auec"]
     else:                                       # barter — no aUEC price
         sort_price = None
     _conn.execute("UPDATE listings SET sort_price=?, offer_count=? WHERE id=?",
@@ -1758,13 +1769,14 @@ def create_listing(d: dict) -> int:
         cur = _conn.execute(
             "INSERT INTO listings (seller_id, seller_handle, item_id, item_name, unit, "
             "qty, mode, price_auec, start_price, buyout_auec, ends_at, want, status, "
-            "note, attributes, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "note, attributes, blueprint_key, materials, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["seller_id"]), d.get("seller_handle"), d["item_id"],
              d.get("item_name"), d.get("unit"), d.get("qty", 1), d.get("mode", "sale"),
              d.get("price_auec"), d.get("start_price"), d.get("buyout_auec"),
              d.get("ends_at"), d.get("want"), d.get("status", "open"), d.get("note"),
-             _j(d.get("attributes")), d.get("created_at"), d.get("updated_at")),
+             _j(d.get("attributes")), d.get("blueprint_key"), d.get("materials"),
+             d.get("created_at"), d.get("updated_at")),
         )
         _recompute_denorm(cur.lastrowid)        # seed the board columns
     return cur.lastrowid
@@ -1791,7 +1803,8 @@ _LISTING_SORTS = {
 # Item-kind filter values → the catalog id prefix they map to (the board filters by
 # the listing's `item_id` prefix — no catalog join needed, no schema change).
 _LISTING_KIND_PREFIX = {"commodity": "commodity:", "ship": "ship:",
-                        "item": "item:", "custom": "custom:"}
+                        "item": "item:", "custom": "custom:",
+                        "blueprint": "blueprint:"}
 
 
 def _like_needle(s: str) -> str:

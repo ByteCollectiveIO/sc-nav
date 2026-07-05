@@ -16,18 +16,17 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 26. SC Wiki API reference-data layer 🆕 (foundation — do first)
+### 26. SC Wiki API reference-data layer (foundation)
 
-**Status:** researched + probed live 2026-07-04. **Vehicles/quantum slice BUILT
-2026-07-04** — `tools/sync_quantum.py` fetches `/api/vehicles` +
-`/api/vehicle-items?filter[type]=QuantumDrive`, distills committed
-`poi/quantum_drives.json` + `poi/quantum_profiles.json` (+ `quantum_match_report.txt`
-build artifact), version-stamped, no runtime calls. 230 ship profiles / 57 drives
-/ 0 identity mismatches / 81% uexcorp-hauler coverage. Footer carries the CC BY-SA
-4.0 attribution. Smoke test in `test_nav_core.py`. **Remaining slices** (share the
-same fetch→distill convention, still to do): `/api/blueprints` (feeds #25) and
-`/api/locations/positions` (feeds #28). Consuming the quantum data in the planners
-is #27.
+**Status:** vehicles/quantum slice **SHIPPED v0.37.0** — `tools/sync_quantum.py`
+fetches `/api/vehicles` + `/api/vehicle-items?filter[type]=QuantumDrive`,
+distills committed `poi/quantum_drives.json` + `poi/quantum_profiles.json`
+(+ `quantum_match_report.txt` build artifact), version-stamped, no runtime
+calls. 230 ship profiles / 57 drives / 0 identity mismatches / 81%
+uexcorp-hauler coverage. Footer carries the CC BY-SA 4.0 attribution. Smoke test
+in `test_nav_core.py`. **Remaining slices** (share the same fetch→distill
+convention): `/api/blueprints` (feeds #25, in progress with it) and
+`/api/locations/positions` (feeds #28).
 
 `https://api.star-citizen.wiki` (OpenAPI at `/api/openapi`) is a public,
 game-version-scoped JSON API — no auth for game data, pagination
@@ -54,7 +53,7 @@ Stanton entities), `/api/locations/{id}` (per-POI `quantum_travel` radii +
 
 ### 27. Quantum fuel & max jump-range (cargo + trade planners)
 
-**Status:** **BUILT 2026-07-04 (not yet released).** Fuel burn + max-range are
+**Status:** **SHIPPED v0.37.0.** Fuel burn + max-range are
 live in both planners: nav_core annotation/summary/`in_range_only`, app.py
 `/api/ships` `quantum` enrichment + `_resolve_drive` + solver wiring, and a SHIP-
 panel drive picker + in-range checkbox + per-leg fuel + range callout (drive
@@ -73,14 +72,17 @@ shapes from the design carry over unchanged; only the source is the wiki API.
 
 ### 25. Blueprint craft commissions (marketplace mode #4)
 
-**Status:** designed 2026-07-04, not built.
-Spec: [`blueprint-craft-commissions.md`](blueprint-craft-commissions.md).
-
-"Build me this item, to this spec, for this price" as a fourth listing mode
-reusing the listings/offers/dual-confirm machinery wholesale. The blueprint
-reference feed comes from `/api/blueprints` via #26 (decision already locked in
-the spec; the local mine is the cross-check). v1 = mode + feed + spec-builder +
-Discord ping; v1.1 = member blueprint library ("requests I can craft").
+**Status:** **v1 BUILT 2026-07-05 (pending release)** — all of steps 0–4:
+`tools/sync_blueprints.py` → committed `poi/blueprints.json` (1,559 recipes),
+`/api/blueprints` index+detail, nav_core manifest/stat-driver/interpolation
+helpers, `commission` listing mode end-to-end (quotes, accept,
+withdraw-after-accept reopens, dual-confirm, lazy needed-by expiry), spec
+builder (manifest + per-aspect sliders + live stat estimates), WANTED Discord
+announce + mode-aware market copy. Build notes in the spec:
+[`blueprint-craft-commissions.md`](blueprint-craft-commissions.md).
+**Remaining: v1.1** — member blueprint library ("requests I can craft", spec
+§10) + the §11 sell-side ripples (stat-name autocomplete, `blueprint:` identity
+for sales) + estimated material cost (§12).
 
 ### 28. Starmap & POI enrichment from the wiki API 🆕 (needs scoping)
 
@@ -191,3 +193,5 @@ rebuild). Full design/build notes: the spec doc where listed, else the
 | 21 | Trade Route Planner (solver, run mode, history/stats, favorites, freshness UX) | v0.28.1–v0.33.0 | [trade-route-planner.md](trade-route-planner.md) |
 | 24 | Pirate danger warnings v1 + v2 snare-detour routing | v0.34.0 · v0.35.0 | [pirate-warnings.md](pirate-warnings.md), [snare-detour-routing.md](snare-detour-routing.md) |
 | — | Launcher reorganization (3 themed groups) | v0.36.0 | PR #13 |
+| 26/27 | Quantum data slice (wiki API) + fuel/range in both planners | v0.37.0 | [quantum-fuel-range.md](quantum-fuel-range.md), [quantum-data-pipeline.md](quantum-data-pipeline.md) |
+| 21 | Trade planner stock + demand-side reports (STOCK WATCH) | v0.38.0 · v0.39.0 | [trade-route-planner.md](trade-route-planner.md) |

@@ -3101,5 +3101,160 @@ class QuantumDataArtifactTest(unittest.TestCase):
             self.assertIn(slug, slugs, name_full)
 
 
+class BlueprintCommissionTests(unittest.TestCase):
+    """Pure blueprint helpers for craft commissions (#25) — manifest math,
+    stat-driver inversion, quality interpolation, and the board quote state.
+    Fixtures mirror real feed records (Omnisky III / LumaCore shapes)."""
+
+    # An Omnisky-shaped weapon: one resource aspect + two gem aspects, the two
+    # gems both driving the same stat (cross-aspect stacking).
+    WEAPON = {
+        "name": "Omnisky III Cannon", "cat": "Weapon Gun", "time_s": 540,
+        "default": False,
+        "aspects": [
+            {"slot": "Frame", "kind": "resource", "input": "Agricium",
+             "scu": 0.36, "min_q": 1,
+             "mods": [{"prop": "Integrity", "dir": "higher", "mode": "multiplier",
+                       "ranges": [{"q0": 0, "q1": 1000, "v0": 0.9, "v1": 1.1}]}]},
+            {"slot": "Emitter", "kind": "item", "input": "Hadanite", "qty": 7,
+             "mods": [{"prop": "Impact Force", "dir": "higher", "mode": "multiplier",
+                       "ranges": [{"q0": 0, "q1": 1000, "v0": 0.95, "v1": 1.05}]}]},
+            {"slot": "Aperture Iris", "kind": "item", "input": "Dolivine", "qty": 7,
+             "mods": [{"prop": "Impact Force", "dir": "higher", "mode": "multiplier",
+                       "ranges": [{"q0": 0, "q1": 1000, "v0": 0.95, "v1": 1.05}]}]},
+        ],
+    }
+
+    # A LumaCore-shaped power plant: piecewise segmented multiplier + an
+    # additive (Power Pips) modifier, plus a duplicated resource across slots
+    # with different min qualities.
+    PLANT = {
+        "name": "LumaCore", "cat": "Power Plant", "time_s": 1200, "default": True,
+        "aspects": [
+            {"slot": "Shell", "kind": "resource", "input": "Borase", "scu": 1.5,
+             "min_q": 500,
+             "mods": [{"prop": "Integrity", "dir": "higher", "mode": "multiplier",
+                       "ranges": [{"q0": 0, "q1": 500, "v0": 0.8, "v1": 1.0},
+                                  {"q0": 501, "q1": 1000, "v0": 1.0, "v1": 1.2}]}]},
+            {"slot": "Stator Cores", "kind": "resource", "input": "Borase",
+             "scu": 0.5,
+             "mods": [{"prop": "Power Pips", "dir": "higher", "mode": "additive",
+                       "ranges": [{"q0": 0, "q1": 399, "v0": 1, "v1": 1},
+                                  {"q0": 400, "q1": 899, "v0": 2, "v1": 2},
+                                  {"q0": 900, "q1": 1000, "v0": 3, "v1": 3}]}]},
+        ],
+    }
+
+    # -- manifest --
+
+    def test_manifest_aggregates_both_kinds(self):
+        m = nav_core.blueprint_manifest(self.WEAPON, qty=1)
+        self.assertEqual([r["input"] for r in m["resources"]], ["Agricium"])
+        self.assertAlmostEqual(m["resources"][0]["scu"], 0.36)
+        gems = {r["input"]: r["qty"] for r in m["items"]}
+        self.assertEqual(gems, {"Hadanite": 7, "Dolivine": 7})
+        self.assertEqual(m["time_s"], 540)
+        self.assertEqual(m["total_time_s"], 540)
+
+    def test_manifest_multiplies_by_qty(self):
+        m = nav_core.blueprint_manifest(self.WEAPON, qty=4)
+        self.assertAlmostEqual(m["resources"][0]["scu"], 1.44)
+        self.assertEqual(m["items"][0]["qty"], 28)
+        self.assertEqual(m["total_time_s"], 2160)
+
+    def test_manifest_sums_duplicate_resource_and_max_wins_min_quality(self):
+        m = nav_core.blueprint_manifest(self.PLANT, qty=1)
+        self.assertEqual(len(m["resources"]), 1)
+        row = m["resources"][0]
+        self.assertAlmostEqual(row["scu"], 2.0)
+        self.assertEqual(sorted(row["slots"]), ["Shell", "Stator Cores"])
+        self.assertEqual(row["min_q"], 500)     # strictest slot wins
+        self.assertEqual(m["max_min_q"], 500)
+
+    # -- stat drivers --
+
+    def test_stat_drivers_invert_and_stack_across_aspects(self):
+        drivers = {d["prop"]: d for d in nav_core.blueprint_stat_drivers(self.WEAPON)}
+        self.assertEqual(set(drivers), {"Integrity", "Impact Force"})
+        imp = drivers["Impact Force"]
+        self.assertEqual(len(imp["drivers"]), 2)
+        # two independent ×0.95–×1.05 sliders compose multiplicatively
+        self.assertAlmostEqual(imp["combined_min"], 0.9025)
+        self.assertAlmostEqual(imp["combined_max"], 1.1025)
+        integ = drivers["Integrity"]
+        self.assertEqual(integ["drivers"][0]["slot"], "Frame")
+        self.assertAlmostEqual(integ["combined_min"], 0.9)
+        self.assertAlmostEqual(integ["combined_max"], 1.1)
+
+    def test_stat_drivers_multi_range_extremes(self):
+        drivers = {d["prop"]: d for d in nav_core.blueprint_stat_drivers(self.PLANT)}
+        integ = drivers["Integrity"]
+        self.assertAlmostEqual(integ["combined_min"], 0.8)
+        self.assertAlmostEqual(integ["combined_max"], 1.2)
+        pips = drivers["Power Pips"]
+        self.assertEqual(pips["mode"], "additive")
+        self.assertEqual(pips["combined_min"], 1)
+        self.assertEqual(pips["combined_max"], 3)
+
+    # -- quality interpolation --
+
+    def test_quality_effect_linear_midpoint_and_bounds(self):
+        mod = self.WEAPON["aspects"][0]["mods"][0]
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, 500), 1.0)
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, 0), 0.9)
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, 1000), 1.1)
+        # out-of-span clamps
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, -50), 0.9)
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, 2000), 1.1)
+
+    def test_quality_effect_piecewise_segments(self):
+        mod = self.PLANT["aspects"][0]["mods"][0]
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, 250), 0.9)
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, 500), 1.0)
+        # second segment interpolates 1.0→1.2 over 501→1000
+        v = nav_core.blueprint_quality_effect(mod, 750)
+        self.assertAlmostEqual(v, 1.0 + 0.2 * (750 - 501) / (1000 - 501), places=6)
+        self.assertAlmostEqual(nav_core.blueprint_quality_effect(mod, 1000), 1.2)
+
+    def test_quality_effect_additive_steps(self):
+        mod = self.PLANT["aspects"][1]["mods"][0]
+        self.assertEqual(nav_core.blueprint_quality_effect(mod, 0), 1)
+        self.assertEqual(nav_core.blueprint_quality_effect(mod, 399), 1)
+        self.assertEqual(nav_core.blueprint_quality_effect(mod, 400), 2)
+        self.assertEqual(nav_core.blueprint_quality_effect(mod, 950), 3)
+
+    def test_stat_preview_defaults_to_base_and_combines(self):
+        base = {s["prop"]: s["value"] for s in nav_core.blueprint_stat_preview(self.WEAPON)}
+        self.assertAlmostEqual(base["Integrity"], 1.0)
+        self.assertAlmostEqual(base["Impact Force"], 1.0)   # 1.0 × 1.0
+        boosted = {s["prop"]: s["value"] for s in nav_core.blueprint_stat_preview(
+            self.WEAPON, {"Emitter": 1000, "Aperture Iris": 1000})}
+        self.assertAlmostEqual(boosted["Impact Force"], 1.1025)
+        self.assertAlmostEqual(boosted["Integrity"], 1.0)   # Frame untouched
+
+    # -- board quote state --
+
+    def test_commission_board_state_best_quote(self):
+        listing = {"mode": "commission", "status": "open", "price_auec": 45000,
+                   "ends_at": None}
+        offers = [
+            {"amount_auec": 50000, "status": "active"},
+            {"amount_auec": 42000, "status": "active"},
+            {"amount_auec": 30000, "status": "withdrawn"},   # gone — not a quote
+            {"amount_auec": None, "status": "active"},        # note-only, no amount
+        ]
+        st = nav_core.commission_board_state(listing, offers)
+        self.assertEqual(st["quote_count"], 2)
+        self.assertEqual(st["best_quote"], 42000)
+        self.assertEqual(st["budget"], 45000)
+
+    def test_commission_board_state_empty(self):
+        st = nav_core.commission_board_state(
+            {"mode": "commission", "status": "open", "price_auec": None}, [])
+        self.assertEqual(st["quote_count"], 0)
+        self.assertIsNone(st["best_quote"])
+        self.assertIsNone(st["budget"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

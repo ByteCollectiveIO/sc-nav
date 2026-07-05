@@ -23,9 +23,7 @@ drift — trust grep and CI, not the citation.
 
 | Doc | Status | Notes |
 |---|---|---|
-| [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | 📐 designed 2026-07-04 | Backlog #25; wiki `/api/blueprints` is the locked data source |
-| [quantum-fuel-range.md](quantum-fuel-range.md) | ✅ BUILT 2026-07-04 | Backlog #27; fuel burn + max-range in both planners (drive picker + in-range + per-leg fuel). Not yet released |
-| [quantum-data-pipeline.md](quantum-data-pipeline.md) | ✅ script BUILT 2026-07-04 | `tools/sync_quantum.py` → committed `poi/quantum_{drives,profiles}.json`; 230 profiles / 81% uexcorp coverage. Consuming feature #27 still pending |
+| [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | ✅ v1 BUILT 2026-07-05, pending release | Backlog #25; commission mode + blueprint feed + spec builder; v1.1 (member blueprint library) open |
 
 ## Shipped feature specs (reference for what's live)
 
@@ -44,6 +42,8 @@ drift — trust grep and CI, not the citation.
 | [trade-route-planner.md](trade-route-planner.md) | v0.28.1–v0.33.0 | Trade Route Planner, all 6 steps (#21) |
 | [pirate-warnings.md](pirate-warnings.md) | v0.34.0 | Danger Board + planner avoid/warn (#24 v1) |
 | [snare-detour-routing.md](snare-detour-routing.md) | v0.35.0 | Hazard-volume detour routing (#24 v2) |
+| [quantum-data-pipeline.md](quantum-data-pipeline.md) | v0.37.0 | `tools/sync_quantum.py` → committed `poi/quantum_{drives,profiles}.json` (#26 slice) |
+| [quantum-fuel-range.md](quantum-fuel-range.md) | v0.37.0 | Fuel burn + max-range in both planners (#27) |
 
 ## Strategy / records
 
