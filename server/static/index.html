@@ -1296,6 +1296,18 @@
   .trade-actual .ta-x { color: var(--dim); }
   .tl-actual-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--accent); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
+  .tl-stock { font-size: 12px; color: var(--warn); margin: 4px 0; }
+  .tl-stock.out { font-weight: 600; }
+  .run-nostock { color: var(--warn); border-color: var(--warn); }
+  .stock-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    padding: 4px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .stock-row:last-of-type { border-bottom: none; }
+  .stock-kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--warn); white-space: nowrap; }
+  .stock-kind.out { color: var(--bad); font-weight: 600; }
+  .stock-what { flex: 1; min-width: 180px; }
+  .stock-meta { font-size: 12px; white-space: nowrap; }
 
   /* ---- event planner (#/events) ---- */
   #events-view, #events-root { display: contents; }
@@ -2353,6 +2365,18 @@
       distances a generous berth costs almost nothing. Scales with severity automatically.
     </div>
     <div class="muted" id="hazard-radius-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+      Out-of-stock / low-stock reports age off after
+      <input id="stock-ageoff" type="number" min="1" max="10080" step="5" style="width:80px;"> min
+      <button id="stock-ageoff-save">Save</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      A trader who finds a terminal's shelf empty reports it from trade run mode; while the
+      report is fresh the trade planner won't route anyone back there to <b>buy</b> that
+      commodity (selling is unaffected). Terminals restock on their own, so keep this in
+      the hours range.
+    </div>
+    <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
     <h2>DISCORD NOTIFICATIONS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -2846,6 +2870,8 @@
     </div>
 
     <div id="trade-run" hidden></div>
+
+    <div id="trade-stock" class="panel" hidden></div>
 
     <div id="trade-favorites" class="panel" hidden></div>
 
@@ -6905,6 +6931,7 @@ async function loadTradePlanner() {
   renderTradeSuggest();
   loadTradeHistory();
   loadTradeFavorites();
+  loadTradeStock();
   // Resume an in-progress run (survives reload / navigating away and back). The
   // live WS frame keeps it fresh after this initial paint.
   if (!tradeCurrentRun && !tradeRunComplete)
@@ -6928,6 +6955,32 @@ function populateTradeSystems() {
 function renderTradeIntro() {
   const el = $("trade-intro"); if (!el) return;
   el.hidden = !!localStorage.getItem("trade_intro_dismissed") || tradeHasHistory();
+}
+
+// STOCK WATCH (#21): the org's fresh out-of-stock / low-stock reports, filed from
+// trade run mode. While a report is fresh the solver already avoids that buy —
+// this strip is the human-readable why ("who saw what, where, when").
+async function loadTradeStock() {
+  const el = $("trade-stock"); if (!el) return;
+  try {
+    const d = await fetch("/api/trade/stock").then(r => r.json());
+    const reports = d.reports || [];
+    if (!reports.length) { el.hidden = true; el.innerHTML = ""; return; }
+    let h = `<h2>STOCK WATCH <span class="muted" style="font-weight:400; font-size:12px;">`
+      + `member-reported, clears after ${d.ageoff_min} min</span></h2>`;
+    for (const r of reports) {
+      const out = r.kind === "out";
+      h += `<div class="stock-row">`
+        + `<span class="stock-kind${out ? " out" : ""}">${out ? "⛔ out" : "📉 low"}</span>`
+        + `<span class="stock-what"><b>${esc(r.commodity)}</b> at <b>${esc(r.terminal || "unknown terminal")}</b>`
+        + (!out && r.scu != null ? ` <span class="muted">(~${r.scu} SCU seen)</span>` : "") + `</span>`
+        + `<span class="stock-meta muted">${fmtAge(r.age_s || 0)}${r.poster_name ? " · " + esc(r.poster_name) : ""}</span>`
+        + `</div>`;
+    }
+    h += `<p class="muted" style="font-size:12px; margin:6px 0 0;">The planner won't route a buy `
+      + `through a ⛔ terminal while its report is fresh. Report from run mode: "no stock — skip".</p>`;
+    el.innerHTML = h; el.hidden = false;
+  } catch { el.hidden = true; }
 }
 // A returning trader (has completed runs or frequent lanes) doesn't need the intro
 // — the RECENT TRADES panel is the faster entry point.
@@ -7664,6 +7717,16 @@ function renderTradeLeg(lg, i) {
       + `☠ destination camped — no reroute exists `
       + `<span class="muted">(${esc(b0.severity)} · ${threatLabel(b0)} at ${esc(b0.where)})</span></div>`;
   }
+  // Stock reports (#21): a member recently found this buy short (or, on a manual
+  // pick, empty — auto/filtered plans never route through a fresh ⛔ buy).
+  const stk = (lg.stock || [])[0];
+  if (stk) {
+    dngr += stk.kind === "out"
+      ? `<div class="tl-stock out">⛔ reported <b>out of stock</b> ${fmtAge(stk.age_s || 0)}`
+        + `${stk.by ? ` <span class="muted">by ${esc(stk.by)}</span>` : ""} — confirm before flying</div>`
+      : `<div class="tl-stock">📉 low stock ${fmtAge(stk.age_s || 0)}`
+        + `${stk.scu != null ? ` <span class="muted">(~${stk.scu} SCU seen${stk.by ? " by " + esc(stk.by) : ""})</span>` : ""}</div>`;
+  }
   return `<div class="trade-leg-card${(warns.length || blk.length) ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
     + `<span class="tl-scu">${lg.scu} SCU</span>${fresh}</div>`
@@ -7929,6 +7992,20 @@ function renderTradeRun(run) {
   box.querySelectorAll("[data-buy]").forEach(b => b.onclick = () => submitTradeLeg("buy", +b.dataset.buy, b));
   box.querySelectorAll("[data-sell]").forEach(b => b.onclick = () => submitTradeLeg("sell", +b.dataset.sell, b));
   box.querySelectorAll("[data-skip]").forEach(b => b.onclick = () => patchTradeRun({ action: "advance", leg: +b.dataset.skip }));
+  box.querySelectorAll("[data-nostock]").forEach(b => b.onclick = () => reportNoStock(+b.dataset.nostock));
+}
+
+// The no-stock skip is org-visible (it steers everyone's routing for a while),
+// so confirm before filing — a mis-tap shouldn't blacklist a healthy terminal.
+async function reportNoStock(leg) {
+  const run = tradeCurrentRun, lg = run && (run.legs || [])[leg];
+  if (!lg) return;
+  if (!(await confirmDialog(
+      `Skips this buy and tells the org ${lg.buy_terminal} is out of ${lg.commodity} — `
+      + `the trade planner will route buys around it until the report ages off.`,
+      { title: "Report no stock?", confirmLabel: "Report & skip" }))) return;
+  await patchTradeRun({ action: "stockout", leg });
+  loadTradeStock();          // the new report shows in STOCK WATCH right away
 }
 
 // One leg in the run checklist: a buy step then a sell step. State drives which is
@@ -7936,10 +8013,18 @@ function renderTradeRun(run) {
 function renderTradeRunLeg(lg, i, run) {
   const active = i === run.active;
   const past = lg.state === "sold";
-  const seq = past ? "✓" : i + 1;
+  const seq = past ? (lg.skipped ? "✗" : "✓") : i + 1;
   let h = `<div class="run-stop${active ? " active" : ""}${past ? " past" : ""}">`
     + `<div class="run-stop-head"><span class="seq">${seq}</span>`
     + `<span class="stop-name">${esc(lg.commodity)} <span class="stop-sys">${lg.scu} SCU</span></span></div>`;
+  // A skipped leg was never transacted: one line says why, no phantom profit.
+  if (lg.skipped) {
+    h += lg.stockout
+      ? `<div class="trade-run-step done">⛔ no ${esc(lg.commodity)} in stock at `
+        + `<b>${esc(lg.buy_terminal)}</b> — reported to the org</div></div>`
+      : `<div class="trade-run-step done">✗ leg skipped — nothing bought or sold</div></div>`;
+    return h;
+  }
   // Buy side (skipped for held cargo already aboard).
   if (lg.held) {
     h += `<div class="trade-run-step done">▲ carried aboard from re-plan</div>`;
@@ -7987,6 +8072,10 @@ function renderTradeRunLeg(lg, i, run) {
     else
       h += `<button class="trade-run-do" data-sell="${i}">✓ Sold — next leg ▸</button>`;
     h += `<button class="run-skip" data-skip="${i}">skip this leg ▸</button>`;
+    // Distinct from a plain skip: the terminal had *nothing to buy*. Files a
+    // shared stock report so the solver stops routing the org here for a while.
+    if (isBuy)
+      h += `<button class="run-skip run-nostock" data-nostock="${i}">⛔ no stock to buy — skip &amp; report ▸</button>`;
   }
   h += `</div>`;
   return h;
@@ -11089,6 +11178,8 @@ async function loadSettings() {
       $("warn-stale").value = s.warning_stale_min;
     if (s.hazard_radius_km && document.activeElement !== $("hazard-radius"))
       $("hazard-radius").value = s.hazard_radius_km;
+    if (s.stock_ageoff_min && document.activeElement !== $("stock-ageoff"))
+      $("stock-ageoff").value = s.stock_ageoff_min;
     rootAdmins = s.root_admin_ids || [];
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
@@ -11405,6 +11496,25 @@ $("hazard-radius-save").onclick = async () => {
   }
 };
 $("hazard-radius").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("hazard-radius-save").click(); } });
+
+$("stock-ageoff-save").onclick = async () => {
+  const st = $("stock-ageoff-status");
+  const min = parseInt($("stock-ageoff").value, 10);
+  if (!(min >= 1 && min <= 10080)) { st.textContent = "enter 1 – 10,080 minutes"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stock_ageoff_min: min }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `saved — stock reports steer routing for ${d.stock_ageoff_min} min`;
+  } catch {
+    st.textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+$("stock-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("stock-ageoff-save").click(); } });
 
 $("member-role-save").onclick = async () => {
   const id = $("member-role").value.trim();

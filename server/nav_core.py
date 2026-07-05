@@ -2705,7 +2705,8 @@ def _price_fresh(p, max_age_s, now) -> bool:
 
 def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       budget=None, max_age_s=None, now_ts=None,
-                      avoid_poi_ids=frozenset(), avoid_pairs=frozenset()) -> list[dict]:
+                      avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
+                      avoid_buys=frozenset()) -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
     name set) restricts to filtered mode; `system` keeps both ends in-system.
@@ -2713,7 +2714,9 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     points older than that (stale-data opt-out). `avoid_poi_ids` drops any trade
     that buys or sells at a warned POI (a camped station); `avoid_pairs` (a set of
     frozenset({buy_poi, sell_poi})) drops the exact snared lane — both from the
-    pirate danger board (#24)."""
+    pirate danger board (#24). `avoid_buys` (a set of (poi_id, commodity_lower))
+    drops only the *buy* side — a terminal a member just found out of stock —
+    while still allowing sells there (empty shelves buy fine)."""
     now = now_ts if now_ts is not None else time.time()
     cset = {c.strip().lower() for c in commodities} if commodities else None
     buyers: dict[str, list] = {}
@@ -2732,6 +2735,7 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
             sellers.setdefault(name, []).append(p)
     rows = []
     for name, srcs in buyers.items():
+        key = name.strip().lower()
         for dst in sellers.get(name, ()):
             for src in srcs:
                 sid, did = src.get("poi_id"), dst.get("poi_id")
@@ -2739,6 +2743,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                     continue
                 if sid in avoid_poi_ids or did in avoid_poi_ids:
                     continue            # a camped buy/sell POI (avoid mode, #24)
+                if avoid_buys and (sid, key) in avoid_buys:
+                    continue            # reported out of stock — buy side only
                 if avoid_pairs and frozenset((sid, did)) in avoid_pairs:
                     continue            # a snared buy->sell lane (avoid mode, #24)
                 margin = int(dst["sell"]) - int(src["buy"])
@@ -2789,6 +2795,40 @@ def trade_leg_warnings(leg: dict, warnings) -> list[dict]:
             hits.append(w)
     rank = {"deadly": 0, "active": 1, "sighted": 2}
     hits.sort(key=lambda w: rank.get(w.get("severity"), 9))
+    return hits
+
+
+def stock_avoid_buys(reports) -> frozenset:
+    """Turn active stock reports into the solver's buy-side exclusion set: the
+    (poi_id, commodity_lower) pairs members recently found *out* of stock. Only
+    `kind == 'out'` excludes — a 'low' report is a badge, not a routing veto (a
+    short shelf can still be worth the stop). Safe on an empty/None list; reports
+    missing a POI anchor or commodity contribute nothing."""
+    pairs = set()
+    for r in reports or ():
+        if r.get("kind") != "out":
+            continue
+        pid, name = r.get("poi_id"), r.get("commodity")
+        if pid is not None and name:
+            pairs.add((pid, name.strip().lower()))
+    return frozenset(pairs)
+
+
+def trade_leg_stock(leg: dict, reports) -> list[dict]:
+    """The active stock reports that touch one costed trade leg's *buy* end —
+    same commodity, same POI — for per-leg badges ("reported out of stock 45m
+    ago", "only 40 SCU left"). Out-of-stock first, then low, freshest first
+    within a kind. Sells are unaffected: a stock report says nothing about a
+    terminal's demand."""
+    pid = leg.get("buy_poi_id")
+    name = (leg.get("commodity") or "").strip().lower()
+    if pid is None or not name:
+        return []
+    hits = [r for r in reports or ()
+            if r.get("poi_id") == pid
+            and (r.get("commodity") or "").strip().lower() == name]
+    rank = {"out": 0, "low": 1}
+    hits.sort(key=lambda r: (rank.get(r.get("kind"), 9), -(r.get("created") or 0)))
     return hits
 
 
@@ -2993,6 +3033,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
+                     avoid_buys=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Auto / filtered trade-route solver: pick and order the buy->sell trades that
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
@@ -3020,7 +3061,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     cand_pairs = frozenset() if avoid_volumes else avoid_pairs
     cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
                               budget=budget, max_age_s=max_age_s, now_ts=now_ts,
-                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs)
+                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
+                              avoid_buys=frozenset(avoid_buys or ()))
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -3146,7 +3188,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, avoid_poi_ids=None, avoid_pairs=None,
-                       avoid_volumes=None,
+                       avoid_volumes=None, avoid_buys=None,
                        fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Re-solve a trade route from the player's *current* position mid-run,
     carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
@@ -3172,6 +3214,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
             now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
+            avoid_buys=avoid_buys,
             fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range_only)
 
     start = None
@@ -3201,7 +3244,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     cands = _trade_candidates(prices, usable_scu, system=system,
                               commodities=commodities, budget=budget,
                               max_age_s=max_age_s, now_ts=now,
-                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs)
+                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
+                              avoid_buys=frozenset(avoid_buys or ()))
     cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,
@@ -3250,12 +3294,15 @@ def trade_leg_realized(leg: dict) -> int | None:
 def _trade_sold_legs(run: dict) -> list[dict]:
     """A run's transacted legs. Prefers the parallel `leg_states` (a completed run
     is all 'sold'; a mid-run blob mixes states) and returns only the sold ones;
-    falls back to every leg when states are missing or mis-sized (older blobs)."""
+    falls back to every leg when states are missing or mis-sized (older blobs).
+    A `skipped` leg (bailed / stock-out) is never transacted — it parks in the
+    'sold' state to move the cursor, but counting its *planned* profit as realized
+    would inflate every stat, so it's dropped here."""
     legs = run.get("legs") or []
     states = run.get("leg_states")
     if not states or len(states) != len(legs):
-        return legs
-    return [l for l, st in zip(legs, states) if st == "sold"]
+        return [l for l in legs if not l.get("skipped")]
+    return [l for l, st in zip(legs, states) if st == "sold" and not l.get("skipped")]
 
 
 def trade_run_realized(run: dict) -> int:

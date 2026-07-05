@@ -204,6 +204,28 @@ def hazard_radius_km() -> int:
         return 5000
 
 
+def stock_ageoff_min() -> int:
+    """Minutes a trade stock report (out-of-stock / low-stock, #21) lives before
+    it ages off — and stops steering the trade solver away from that buy. Terminal
+    inventory in-game restocks on the order of an hour or two, so the default is
+    180; admins tune it like the LFG/warning windows. Applies live (computed from
+    `created`, not frozen at post time)."""
+    try:
+        return max(1, int(db.get_setting("stock_ageoff_min", "180")))
+    except (TypeError, ValueError):
+        return 180
+
+
+def active_stock_reports() -> list[dict]:
+    """The live stock board: fresh reports only (side effect: expired rows are
+    pruned). Each row gains `age_s` for the client's badges."""
+    now = time.time()
+    reports = db.stock_reports_since(now - stock_ageoff_min() * 60)
+    for r in reports:
+        r["age_s"] = max(0, int(now - (r.get("created") or now)))
+    return reports
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
@@ -1364,8 +1386,11 @@ class Session:
         if not done and states[active] == "bought":
             a = legs[active]
             onboard = float(a.get("actual_buy_scu") or a.get("scu") or 0)
+        # A skipped leg (bailed / stock-out) parks in 'sold' to move the cursor
+        # but was never transacted — it contributes nothing realized.
         realized = sum(nav_core.trade_leg_realized(l) or 0
-                       for l, st in zip(legs, states) if st == "sold")
+                       for l, st in zip(legs, states)
+                       if st == "sold" and not l.get("skipped"))
         return {
             "id": run["id"], "ship": run.get("ship"), "usable_scu": run.get("usable_scu"),
             "active": active, "phase": phase, "done": done,
@@ -1373,7 +1398,8 @@ class Session:
             "onboard_scu": round(onboard, 2),
             "realized_profit": realized,
             "legs": [{**l, "state": st,
-                      "realized": nav_core.trade_leg_realized(l) if st == "sold" else None}
+                      "realized": (nav_core.trade_leg_realized(l)
+                                   if st == "sold" and not l.get("skipped") else None)}
                      for l, st in zip(legs, states)],
             "summary": run.get("summary"),
         }
@@ -2317,7 +2343,7 @@ class TradePlanIn(BaseModel):
 
 
 class TradeRunPatchIn(BaseModel):
-    action: str                                         # buy | sell | advance
+    action: str                                         # buy | sell | advance | stockout
     # target leg (defaults to the active one); guards against a stale click
     # confirming the wrong leg after the cursor moved.
     leg: int | None = Field(default=None, ge=0, le=100)
@@ -2386,6 +2412,26 @@ def _leg_warning_view(w: dict) -> dict:
         where = a or (w.get("location") or "a location")
     return {"id": w.get("id"), "kind": w.get("kind"), "threat": w.get("threat"),
             "severity": w.get("severity"), "where": where}
+
+
+def _leg_stock_view(r: dict) -> dict:
+    """Compact wire form of one stock report as it attaches to a trade leg's buy
+    side: kind + the observed SCU (low reports) + freshness + who saw it."""
+    return {"kind": r.get("kind"), "scu": r.get("scu"),
+            "age_s": r.get("age_s"), "by": r.get("poster_name") or ""}
+
+
+def _annotate_leg_stock(plan: dict, reports: list[dict]) -> dict:
+    """Tag each costed trade leg whose *buy* end has a fresh stock report (#21) so
+    the client can badge it — 'reported out of stock 45m ago' on a manual pick,
+    'only 40 SCU seen' on a short shelf. No-op with no reports. Mutates + returns
+    the plan."""
+    if reports:
+        for lg in plan.get("legs") or ():
+            hits = nav_core.trade_leg_stock(lg, reports)
+            if hits:
+                lg["stock"] = [_leg_stock_view(r) for r in hits]
+    return plan
 
 
 _SEVERITY_RANK = {"deadly": 0, "active": 1, "sighted": 2}
@@ -2479,7 +2525,10 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     requested mode. Shared by /api/trade/plan (stateless) and /api/trade/run
     (persisted). `warnings` (active danger board records, #24) drive avoid_mode:
     'avoid' drops warned POIs/snared lanes from the solver; 'warn' plans normally and
-    flags touched legs. Raises HTTPException on bad input / missing live position."""
+    flags touched legs. Fresh stock reports (#21) always steer: 'out' buys are
+    dropped from the solver pool (any avoid_mode — an empty shelf isn't a danger
+    preference), and touched legs get `stock` badges. Raises HTTPException on bad
+    input / missing live position."""
     if body.start_id is not None and body.start_id not in nav.pois:
         raise HTTPException(status_code=404, detail="unknown start_id")
     start_pos = None
@@ -2505,6 +2554,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
         # not just as a fly-past volume (decision 4).
         avoid_poi_ids = frozenset(avoid_poi_ids or ()) | set(blacklist)
     solver_volumes = volumes if mode == "avoid" else None
+    stock_reports = active_stock_reports()
     fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
     try:
         if body.mode == "manual":
@@ -2525,10 +2575,30 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
                 avoid_volumes=solver_volumes,
+                avoid_buys=nav_core.stock_avoid_buys(stock_reports),
                 fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=body.in_range_only)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    _annotate_leg_stock(plan, stock_reports)
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
+
+
+_LOW_STOCK_FRACTION = 0.5   # bought under half the planned load → auto 'low' report
+
+
+def _file_stock_report(user: dict, leg: dict, kind: str, scu=None) -> None:
+    """File a stock report (#21) off a run leg's buy terminal: `out` from the
+    no-stock skip, `low` from a well-short buy. Silently a no-op when the leg has
+    no buy POI to anchor to (a held leg) — an unanchored report can't steer the
+    solver or badge anything."""
+    if leg.get("buy_poi_id") is None or not leg.get("commodity"):
+        return
+    db.stock_report_save({
+        "poi_id": leg["buy_poi_id"], "terminal": leg.get("buy_terminal") or "",
+        "commodity": leg["commodity"], "kind": kind, "scu": scu,
+        "poster": user["id"], "poster_name": user.get("display_name") or "",
+        "created": time.time(),
+    })
 
 
 def _initial_trade_states(legs: list[dict]) -> list[str]:
@@ -2615,9 +2685,13 @@ async def get_trade_run(user: dict = Depends(require_session)):
 async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_session)):
     """Advance the active trade run. `action`:
       buy      — confirm the buy at the active leg (pending → bought; guidance
-                 flips to its sell terminal),
+                 flips to its sell terminal). Entering an SCU well under plan
+                 auto-files a shared 'low' stock report for the terminal,
       sell     — confirm the sell (bought → sold; cursor advances to the next leg),
-      advance  — skip the active leg (bailed on it).
+      advance  — skip the active leg (bailed on it; excluded from realized stats),
+      stockout — skip the active buy because the terminal had *nothing to buy*:
+                 same cursor motion as advance, plus a shared 'out' stock report
+                 that steers everyone's solver away while it's fresh (#21).
     `leg` optionally pins the target index to guard a stale click. Completing the
     last leg finishes the run."""
     async with hub.lock:
@@ -2639,6 +2713,9 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                 leg["actual_buy_price"] = body.price
             if body.scu is not None:
                 leg["actual_buy_scu"] = body.scu
+                planned = float(leg.get("scu") or 0)
+                if planned and body.scu < planned * _LOW_STOCK_FRACTION:
+                    _file_stock_report(user, leg, "low", scu=body.scu)
             run["leg_states"][active] = "bought"
         elif body.action == "sell":
             if st != "bought":
@@ -2649,7 +2726,16 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                 leg["actual_sell_scu"] = body.scu
             run["leg_states"][active] = "sold"
         elif body.action == "advance":
-            run["leg_states"][active] = "sold"     # abandon the leg, move on
+            leg["skipped"] = True                  # abandon the leg, move on —
+            run["leg_states"][active] = "sold"     # never counted as realized
+        elif body.action == "stockout":
+            if st != "pending":
+                raise HTTPException(status_code=409,
+                                    detail="stock-out only applies before the buy")
+            leg["skipped"] = True
+            leg["stockout"] = True
+            run["leg_states"][active] = "sold"
+            _file_stock_report(user, leg, "out")   # steer the org away while fresh
         else:
             raise HTTPException(status_code=400, detail="bad action")
         _point_at_active_trade_leg(sess)
@@ -2713,6 +2799,9 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
                     else bool(p.get("in_range_only")))
         fuel_req, max_range_m, _qd = _resolve_drive(run.get("ship"), qd)
         p["qd"], p["in_range_only"] = qd, in_range   # persist the params used
+        # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
+        # skip followed by "re-plan from here" must not route back to the empty shelf.
+        stock_reports = active_stock_reports()
         new_plan = nav_core.replan_trade_route(
             nav, trade_price_points, run["usable_scu"], start_pos=sess.pos, held=held,
             max_stops=(body.max_stops or p.get("max_stops") or 6),
@@ -2724,7 +2813,9 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
             max_age_s=max_age_s, t_ref=sess.t,
             avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
             avoid_volumes=(volumes if mode == "avoid" else None),
+            avoid_buys=nav_core.stock_avoid_buys(stock_reports),
             fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
+        _annotate_leg_stock(new_plan, stock_reports)
         _annotate_trade_legs(new_plan, warnings, mode, volumes, sess.t)
         p["avoid_mode"] = mode                       # persist the mode used
         new_legs = new_plan.get("legs") or []
@@ -2740,6 +2831,14 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         sess.recompute()
         await sess.broadcast()
         return {"ok": True, "trade_run": sess.trade_run_view()}
+
+
+@app.get("/api/trade/stock")
+async def get_trade_stock(user: dict = Depends(require_session)):
+    """The live stock board (#21): org members' fresh out-of-stock / low-stock
+    reports, freshest first, for the planner's STOCK WATCH strip. `ageoff_min`
+    rides along so the client can phrase the window."""
+    return {"reports": active_stock_reports(), "ageoff_min": stock_ageoff_min()}
 
 
 @app.delete("/api/trade/run")
@@ -5455,6 +5554,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "warning_ageoff_min": warning_ageoff_min(),
         "warning_stale_min": warning_stale_min(),
         "hazard_radius_km": hazard_radius_km(),      # snare-detour base radius (#24 v2)
+        "stock_ageoff_min": stock_ageoff_min(),      # stock-report lifetime (#21)
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
@@ -5481,6 +5581,9 @@ class SettingsIn(BaseModel):
     # Base hazard radius (km) a warning projects for snare-detour routing (#24 v2);
     # severity scales it in code. 100 km .. 200,000 km.
     hazard_radius_km: int | None = Field(default=None, ge=100, le=200_000)
+    # Stock-report lifetime (minutes, #21): how long an out-of-stock report keeps
+    # steering the trade solver away from that buy. Capped at a week.
+    stock_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
     # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
     # be used to stuff the meta table. Each id is validated (isdigit) below.
     extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
@@ -5539,6 +5642,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting("warning_stale_min", str(stale))
     if body.hazard_radius_km is not None:
         db.set_setting("hazard_radius_km", str(body.hazard_radius_km))
+    if body.stock_ageoff_min is not None:
+        db.set_setting("stock_ageoff_min", str(body.stock_ageoff_min))
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
@@ -5560,6 +5665,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "lfg_ageoff_min": lfg_ageoff_min(), "lfg_stale_min": lfg_stale_min(),
             "warning_ageoff_min": warning_ageoff_min(), "warning_stale_min": warning_stale_min(),
             "hazard_radius_km": hazard_radius_km(),
+            "stock_ageoff_min": stock_ageoff_min(),
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),

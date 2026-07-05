@@ -2274,6 +2274,96 @@ class TradeDangerAvoidTests(unittest.TestCase):
         self.assertEqual(nav_core.trade_leg_warnings(leg, [w]), [])
 
 
+class TradeStockTests(unittest.TestCase):
+    """Stock reports (#21): the buy-side avoid_buys solver filter and the
+    stock_avoid_buys / trade_leg_stock pure helpers. Reuses the Gold A->B,
+    Iron B->C fixture from the danger-avoid tests."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": None}
+
+    def _prices(self):
+        return [self._pt("Gold", 1, self.A, buy=100, scu_buy=500),
+                self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500),
+                self._pt("Iron", 3, self.B, buy=50, scu_buy=500),
+                self._pt("Iron", 4, self.C, sell=200, scu_sell_stock=500)]
+
+    # --- stock_avoid_buys ---------------------------------------------------
+    def test_avoid_buys_from_out_reports_only(self):
+        reports = [{"poi_id": self.A, "commodity": "GOLD", "kind": "out"},
+                   {"poi_id": self.B, "commodity": "Iron", "kind": "low", "scu": 10},
+                   {"poi_id": None, "commodity": "Gold", "kind": "out"},
+                   {"poi_id": self.C, "commodity": "", "kind": "out"}]
+        self.assertEqual(nav_core.stock_avoid_buys(reports),
+                         frozenset({(self.A, "gold")}))
+
+    def test_avoid_buys_empty_input(self):
+        self.assertEqual(nav_core.stock_avoid_buys(None), frozenset())
+        self.assertEqual(nav_core.stock_avoid_buys([]), frozenset())
+
+    # --- avoid_buys in the solver -------------------------------------------
+    def test_out_report_drops_only_that_buy(self):
+        # Gold's buy at A reported out -> Gold gone; Iron (buys at B) survives.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_buys={(self.A, "gold")})
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Iron"})
+
+    def test_out_report_does_not_block_selling_there(self):
+        # A Gold report anchored at B touches only Gold's *sell* end — nothing
+        # buys Gold at B, so both trades survive untouched.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_buys={(self.B, "gold")})
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Gold", "Iron"})
+
+    def test_replan_threads_avoid_buys(self):
+        # No held cargo -> replan degrades to plan; the filter must still apply.
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_buys={(self.A, "gold")})
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Iron"})
+
+    def test_no_avoid_buys_matches_baseline(self):
+        base = nav_core.plan_trade_route(NAV, self._prices(), 100,
+                                         start_id=self.A, sort="profit")
+        same = nav_core.plan_trade_route(NAV, self._prices(), 100, start_id=self.A,
+                                         sort="profit", avoid_buys=None)
+        self.assertEqual(same["summary"]["total_profit"], base["summary"]["total_profit"])
+        self.assertEqual(len(same["legs"]), len(base["legs"]))
+
+    # --- trade_leg_stock ----------------------------------------------------
+    def test_leg_stock_matches_buy_end_and_commodity_only(self):
+        leg = {"buy_poi_id": self.A, "sell_poi_id": self.B, "commodity": "Gold"}
+        rs = [{"poi_id": self.A, "commodity": "gold", "kind": "low", "created": 1},
+              {"poi_id": self.B, "commodity": "Gold", "kind": "out", "created": 2},
+              {"poi_id": self.A, "commodity": "Iron", "kind": "out", "created": 3}]
+        hits = nav_core.trade_leg_stock(leg, rs)
+        self.assertEqual([h["kind"] for h in hits], ["low"])
+
+    def test_leg_stock_out_ranks_before_low(self):
+        leg = {"buy_poi_id": self.A, "sell_poi_id": self.B, "commodity": "Gold"}
+        rs = [{"poi_id": self.A, "commodity": "Gold", "kind": "low", "created": 5},
+              {"poi_id": self.A, "commodity": "Gold", "kind": "out", "created": 1}]
+        self.assertEqual([h["kind"] for h in nav_core.trade_leg_stock(leg, rs)],
+                         ["out", "low"])
+
+    def test_leg_stock_safe_on_missing_anchor(self):
+        self.assertEqual(nav_core.trade_leg_stock({"commodity": "Gold"}, [
+            {"poi_id": self.A, "commodity": "Gold", "kind": "out"}]), [])
+        self.assertEqual(nav_core.trade_leg_stock(
+            {"buy_poi_id": self.A, "commodity": "Gold"}, None), [])
+
+
 class TradeReplanTests(unittest.TestCase):
     """nav_core.replan_trade_route — mid-run re-solve from the live position,
     carrying forward sunk (bought-not-sold) cargo (#21 step 5). Uses real Stanton
@@ -2427,6 +2517,22 @@ class TradeHistoryStatsTests(unittest.TestCase):
         run["leg_states"] = ["sold", "pending"]     # 2nd not transacted yet
         self.assertEqual(nav_core.trade_run_realized(run), (300 - 100) * 40)
         self.assertEqual(nav_core.trade_run_scu(run), 40.0)
+
+    def test_skipped_legs_never_count_as_realized(self):
+        # A bailed / stock-out leg parks in 'sold' to move the cursor but was
+        # never transacted — planned profit and SCU must not leak into stats.
+        legs = [self._leg("Gold", 0, 1, 40, 100, 300),
+                self._leg("Iron", 1, 2, 20, 50, 90, skipped=True, stockout=True)]
+        run = self._run("a", "Cat", legs)          # states: all 'sold'
+        self.assertEqual(nav_core.trade_run_realized(run), (300 - 100) * 40)
+        self.assertEqual(nav_core.trade_run_scu(run), 40.0)
+
+    def test_skipped_legs_dropped_on_the_stateless_fallback_too(self):
+        legs = [self._leg("Gold", 0, 1, 40, 100, 300),
+                self._leg("Iron", 1, 2, 20, 50, 90, skipped=True)]
+        run = self._run("a", "Cat", legs)
+        run["leg_states"] = ["sold"]               # mis-sized -> fallback path
+        self.assertEqual(nav_core.trade_run_realized(run), (300 - 100) * 40)
 
     def test_run_stats_headline_and_per_hour(self):
         runs = [
