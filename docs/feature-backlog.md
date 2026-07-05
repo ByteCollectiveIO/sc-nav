@@ -73,24 +73,35 @@ shapes from the design carry over unchanged; only the source is the wiki API.
 
 ### 25.1 Craft commissions v1.1 (follow-on to the shipped #25)
 
-**Status:** partially shipped; v1 **SHIPPED v0.40.0–v0.41.0** and the **member
-blueprint library (§10) SHIPPED v0.42.0** (with #14.2 — see the Shipped log).
-Spec: [`blueprint-craft-commissions.md`](blueprint-craft-commissions.md) §10–§12.
+**Status: CLOSED — everything build-worthy shipped v0.40.0–v0.44.0** (see the
+Shipped log). Spec: [`blueprint-craft-commissions.md`](blueprint-craft-commissions.md)
+§10–§12.
 
 - ~~**Member blueprint library** (§10)~~ — **SHIPPED v0.42.0**:
   `member_blueprints` table + "My Blueprints" settings picker; commission board
   shows "⚒ N can craft" + a "✨ Requests I can craft" filter (LFG match pattern).
-- **§11 sell-side ripples** — canonical stat-name autocomplete on the crafted
-  form (fixes the fragmenting `?stat=` filter), `blueprint:` identity for
-  sale/auction listings (crafted goods become comparable), auto-estimated stat
-  panel from quality interpolation.
-- **Estimated material cost** (§12) — `blueprint_manifest` × raw-commodity
-  prices → "mats ≈ 12,400 aUEC" hint; gem prices need a source.
-- **Choice-group picker** — 9 live `sel` aspects in the feed (sync report
-  counts them); spec builder needs a pick-one-of-N control only if CIG uses
-  them on craftable recipes players care about.
-- **Announce name-check** — the WANTED announce could @-mention capable
-  crafters (from the library) instead of an org-wide ping.
+- ~~**§11 sell-side ripples**~~ — **SHIPPED v0.43.0 + v0.44.0**: canonical
+  stat-name autocomplete (§11.2, `/api/blueprints/stat-names` + datalist,
+  v0.43.0); `blueprint:` identity for sale/auction listings (§11.3 — market
+  picker offers ⚒ recipes, `blueprint_key` stamped on any mode, `kind=blueprint`
+  filter finds crafted goods, v0.44.0); auto-estimated stat panel (§11.4 —
+  per-slot asks for commissions, uniform-at-Qn for an advertised overall
+  quality, assumption stated in-UI, v0.44.0). Still open from §11: plausibility
+  nudges (§11.5), price↔quality intelligence (§11.6), numeric stat values
+  (§11.7) — post-bedding-in ideas, grab opportunistically.
+- ~~**Estimated material cost** (§12)~~ — **SHIPPED v0.43.0**:
+  `nav_core.blueprint_material_cost` × market reference prices → "mats ≈" on
+  both spec-builder forms, commission cards/detail, crafted-sale detail, and
+  the craft-goal header; gem/item inputs degrade to a named *unpriced* list
+  (still no per-gem price source). All 1,559 feed recipes price out.
+- ~~**Choice-group picker**~~ — **DECIDED SKIP 2026-07-05** (per this item's
+  own conditional): the feed's 9 `sel` aspects sit on exactly 3 fringe recipes
+  (the Aztalan Legs armor variants, each "pick 2 of 3" over the same slots).
+  The manifest lists all 3 options — a slight over-count on those 3 recipes
+  only. Revisit if a game patch puts choice groups on recipes players care
+  about.
+- ~~**Announce name-check**~~ — **SHIPPED v0.43.0**: the WANTED announce
+  @-mentions library-matched crafters (poster excluded, capped at 15).
 
 ### 28. Starmap & POI enrichment from the wiki API 🆕 (needs scoping)
 
@@ -206,3 +217,5 @@ listed, else the [archived backlog](archive/feature-backlog-full-2026-07-04.md).
 | 21 | Trade planner stock + demand-side reports (STOCK WATCH) | v0.38.0 · v0.39.0 | [trade-route-planner.md](trade-route-planner.md) |
 | 25 | Blueprint craft commissions v1 (+ blueprint feed, spec builder, slider-driven quality minimums) | v0.40.0 · v0.41.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) |
 | 14.2 / 25.1 | Personal + blueprint-seeded craft goals · member blueprint library · commission crafter-matching (§10) | v0.42.0 (⚒ glyph fix v0.42.1) | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §10 |
+| 25.1 | Craft-goal spec builder (per-slot quality targets) · estimated materials cost (§12) · stat-name autocomplete (§11.2) · WANTED announce pings capable crafters | v0.43.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §11–§12 |
+| 25.1 | `blueprint:` identity for sale/auction listings (§11.3) · expected-stats panel on blueprint-linked listings (§11.4) — closes #25.1 | v0.44.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §11 |

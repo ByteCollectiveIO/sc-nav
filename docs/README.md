@@ -44,7 +44,7 @@ drift — trust grep and CI, not the citation.
 | [snare-detour-routing.md](snare-detour-routing.md) | v0.35.0 | Hazard-volume detour routing (#24 v2) |
 | [quantum-data-pipeline.md](quantum-data-pipeline.md) | v0.37.0 | `tools/sync_quantum.py` → committed `poi/quantum_{drives,profiles}.json` (#26 slice) |
 | [quantum-fuel-range.md](quantum-fuel-range.md) | v0.37.0 | Fuel burn + max-range in both planners (#27) |
-| [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | v0.40.0–v0.41.0 | Commission mode + blueprint feed + spec builder w/ slider-driven quality minimums (#25); v1.1 open in the backlog |
+| [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | v0.40.0–v0.44.0 | Commission mode + blueprint feed + spec builder (#25); library, craft-goal spec, mats cost, stat autocomplete, sale identity + expected stats (#25.1 — closed; leftovers are backlog fast-follows) |
 
 ## Strategy / records
 

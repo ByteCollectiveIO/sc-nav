@@ -9169,27 +9169,32 @@ function rmDue(iso) {
 // --- shared catalog picker (debounced server search, resolves an item_id) ---
 // Attaches to a .poi-pick wrapper; a pick stashes item_id/unit on the input's
 // dataset. Mirrors attachShipPicker, but fetches /api/catalog per keystroke.
-function attachCatalogPicker(wrap, onPick) {
+function attachCatalogPicker(wrap, onPick, opts) {
   const input = wrap.querySelector("input");
   const drop = document.createElement("div");
   drop.className = "poi-drop"; drop.hidden = true;
   wrap.appendChild(drop);
   let timer = null, seq = 0;
+  // opts.blueprints: also suggest craftable recipes as `blueprint:` items —
+  // marketplace-only (#25.1 §11.3), so crafted goods share identity across
+  // listings while staying out of the inventory/goals pickers.
+  const bpArg = opts && opts.blueprints ? "&bp=1" : "";
   const clearPick = () => { delete input.dataset.itemId; delete input.dataset.unit; wrap.classList.remove("picked"); };
   async function refresh() {
     const q = input.value.trim();
     const mine = ++seq;
     let items = [];
-    try { items = ((await fetch(`/api/catalog?q=${encodeURIComponent(q)}`).then(r => r.json())) || {}).items || []; }
+    try { items = ((await fetch(`/api/catalog?q=${encodeURIComponent(q)}${bpArg}`).then(r => r.json())) || {}).items || []; }
     catch { items = []; }
     if (mine !== seq) return;   // a newer keystroke already superseded this fetch
     drop.innerHTML = "";
-    for (const it of items.slice(0, 12)) {
+    for (const it of items.slice(0, bpArg ? 18 : 12)) {
       const opt = document.createElement("div");
       opt.className = "poi-opt";
       // Tag the kind for ships/equipment (so a commodity and a same-named item are
       // distinguishable in the picker); otherwise show the counting unit.
-      const tag = it.kind === "ship" ? "ship" : it.kind === "item" ? "equipment" : (it.unit || "");
+      const tag = it.kind === "ship" ? "ship" : it.kind === "item" ? "equipment"
+        : it.kind === "blueprint" ? `⚒ crafted · ${it.cat || "recipe"}` : (it.unit || "");
       opt.setAttribute("role", "option");
       opt.innerHTML = `${esc(it.name)} <span class="muted">${esc(tag)}</span>`;
       opt._pick = () => {
@@ -10075,7 +10080,7 @@ async function loadCommissionManifest(l) {
     if (!r.ok) throw 0;
     bp = await r.json();
   } catch {
-    el.innerHTML = `<div class="mk-bpbox"><div class="mk-bp-meta">Recipe data unavailable for this blueprint (removed in a game patch?). The request still stands as written.</div></div>`;
+    el.innerHTML = `<div class="mk-bpbox"><div class="mk-bp-meta">Recipe data unavailable for this blueprint (removed in a game patch?). The listing still stands as written.</div></div>`;
     return;
   }
   // Badge the requester's per-material asks (max across slots sharing an input).
@@ -10618,12 +10623,34 @@ function renderMarketDetailBody(l) {
   else if (l.status === "pending") html += mkPendingBlock(l);
   else html += mkClosedBlock(l);
   html += mkCraftBlock(l);
-  if (isJob) html += `<div id="mk-bp-detail"></div>`;
+  html += mkExpectedStats(l);
+  // Any blueprint-linked listing gets the recipe manifest panel — a crafted
+  // sale/auction shows what went into the item, not just commissions.
+  if (l.blueprint_key) html += `<div id="mk-bp-detail"></div>`;
   html += mkOffersBlock(l);
   if (l.can_edit) html += mkSellerControls(l);
   $("market-detail-body").innerHTML = html;
   wireMarketDetail(l);
-  if (isJob) loadCommissionManifest(l);
+  if (l.blueprint_key) loadCommissionManifest(l);
+}
+
+// Expected finished stats of a blueprint-linked listing (#25.1 §11.4), from the
+// server's interpolation of the recipe's modifiers. Two bases: a commission's
+// per-slot quality asks, or an advertised overall quality applied uniformly —
+// the uniform assumption is stated, since the game derives stats per input slot.
+function mkExpectedStats(l) {
+  const ex = l.expected_stats;
+  if (!ex || !(ex.stats || []).length) return "";
+  const rows = ex.stats.map(s =>
+    `<tr><td>${esc(s.prop)}</td><td>${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td></tr>`).join("");
+  const mats = l.mode !== "commission" && l.mats_est != null
+    ? `<div class="mk-bp-meta" style="margin-top:6px">Materials to craft one ≈ ${fmtAuec(l.mats_est)}</div>` : "";
+  const basis = ex.basis === "inputs"
+    ? "At the requested per-slot input qualities."
+    : `Assumes every input at Q${esc(String(ex.quality))} — actual stats depend on each slot's material quality.`;
+  return `<div class="mk-craftbox"><div class="mk-craft-h">⚒ Expected stats — estimates, not guarantees</div>` +
+    `<table class="mk-craft-tbl">${rows}</table>${mats}` +
+    `<p class="mk-craft-foot">${basis} Interpolated from the recipe's modifier data; the app can't verify in-game stats.</p></div>`;
 }
 
 function wireMarketDetail(l) {
@@ -11203,10 +11230,12 @@ mkSpec.onSlide = function bpAutoFillSpec() {
 
 function bindMarketForm(editId, onCancel) {
   const itemEl = $("mk-f-item");
+  // The market picker also offers craftable recipes (⚒) — picking one gives the
+  // sale/auction listing shared `blueprint:` identity (#25.1 §11.3).
   attachCatalogPicker(itemEl.parentElement, it => {
     itemEl.dataset.unit = it.unit || "";
     mkShowMarketValue(it);              // surface the feed's reference price
-  });
+  }, { blueprints: true });
   // Retyping a new search (without re-picking) drops the stale value hint.
   itemEl.addEventListener("input", () => { if (!itemEl.dataset.itemId) mkShowMarketValue(null); });
   mkFillStatNames();   // global stat vocabulary; a blueprint pick narrows it

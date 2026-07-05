@@ -2382,6 +2382,53 @@ class CraftGoalTests(unittest.TestCase):
         r = self.client.post("/api/goals", json={"title": "x", "blueprint_key": "NOPE"})
         self.assertEqual(r.status_code, 404)
 
+    # -- crafted-sale identity + expected stats (#25.1 §11.3 / §11.4) --
+
+    def test_sale_of_blueprint_item_carries_recipe_identity(self):
+        r = self.client.post("/api/market", json={
+            "item_id": "blueprint:TEST_BP", "qty": 1, "mode": "sale",
+            "price_auec": 50000, "crafted": {"quality": 800}})
+        self.assertEqual(r.status_code, 200, r.text)
+        v = r.json()
+        self.assertEqual(v["blueprint_key"], "TEST_BP")   # identity, not commission-only
+        self.assertEqual(v["item_name"], "Test Cannon")
+        # kind filter = catalog-id prefix, so kind=blueprint finds crafted goods.
+        cards = self.client.get("/api/market?kind=blueprint").json()["listings"]
+        self.assertIn(v["id"], [c["id"] for c in cards])
+        # Detail: uniform expected stats at the advertised Q800 + the mats anchor.
+        d = self.client.get(f"/api/market/{v['id']}").json()
+        ex = d["expected_stats"]
+        self.assertEqual(ex["basis"], "uniform")
+        self.assertEqual(ex["quality"], 800)
+        stats = {s["prop"]: s["value"] for s in ex["stats"]}
+        self.assertAlmostEqual(stats["Integrity"], 1.06)   # 0.9 + 0.2×0.8
+        self.assertEqual(d["mats_est"], 50)                # 0.5 SCU × 100 buy
+
+    def test_sale_without_quality_has_no_stat_preview(self):
+        lid = self.client.post("/api/market", json={
+            "item_id": "blueprint:TEST_BP", "mode": "sale",
+            "price_auec": 1000}).json()["id"]
+        self.assertIsNone(self.client.get(f"/api/market/{lid}").json()["expected_stats"])
+
+    def test_commission_expected_stats_use_slot_asks(self):
+        r = self.client.post("/api/market", json={
+            "item_id": "blueprint:TEST_BP", "mode": "commission",
+            "crafted": {"inputs": [
+                {"slot": "Frame", "input": "Agricium", "min_q": 750}]}})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = self.client.get(f"/api/market/{r.json()['id']}").json()
+        ex = d["expected_stats"]
+        self.assertEqual(ex["basis"], "inputs")
+        stats = {s["prop"]: s["value"] for s in ex["stats"]}
+        self.assertAlmostEqual(stats["Integrity"], 1.05)   # Frame at Q750
+
+    def test_catalog_bp_flag_offers_blueprints(self):
+        items = self.client.get("/api/catalog?q=test cannon&bp=1").json()["items"]
+        self.assertIn("blueprint:TEST_BP", [i["item_id"] for i in items])
+        # Without the flag (inventory/goals pickers) recipes stay out.
+        items = self.client.get("/api/catalog?q=test cannon").json()["items"]
+        self.assertNotIn("blueprint:TEST_BP", [i["item_id"] for i in items])
+
     # -- estimated material cost + stat vocabulary (#25.1 §12 / §11.2) --
 
     def test_blueprint_detail_carries_est_cost(self):
