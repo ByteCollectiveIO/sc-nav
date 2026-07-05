@@ -4433,6 +4433,35 @@ class GoalIn(BaseModel):
     deadline: str | None = Field(default=None, max_length=_META_MAX)
     status: str | None = Field(default=None, max_length=16)
     line_items: list[GoalLineIn] = Field(default_factory=list, max_length=_MAX_LINE_ITEMS)
+    # Personal vs org scope (#14.2) + optional blueprint seed: when `blueprint_key`
+    # is given without explicit line_items, the materials manifest for
+    # `blueprint_qty` crafts is expanded into the goal's line items server-side.
+    visibility: str | None = Field(default=None, max_length=16)
+    blueprint_key: str | None = Field(default=None, max_length=_META_MAX)
+    blueprint_qty: float = Field(default=1, ge=1, le=_MAX_QTY)
+
+
+_GOAL_VISIBILITY = ("org", "personal")
+
+
+def _seed_goal_lines(blueprint_key: str, qty: float) -> tuple[list[dict], list[str]]:
+    """Expand a blueprint's materials manifest into goal line items, mapping each
+    input material to its commodity catalog item. Returns (lines, unmapped) —
+    unmapped names (e.g. a material not yet in the commodity feed) are surfaced as
+    a non-fatal warning rather than silently dropped. 404 if the recipe is
+    unknown."""
+    bp = blueprints_feed.get(blueprint_key)
+    if bp is None:
+        raise HTTPException(status_code=404, detail="unknown blueprint")
+
+    def resolve(name: str):
+        return resolve_catalog_item(f"commodity:{catalog.slug(name)}")
+
+    seeded = nav_core.blueprint_goal_lines(bp, qty, resolve)
+    lines = [{"item_id": l["item_id"], "item_name": l["item_name"],
+              "unit": l["unit"], "qty_needed": l["qty_needed"]}
+             for l in seeded["lines"][:_MAX_LINE_ITEMS]]
+    return lines, seeded["unmapped"]
 
 
 @app.get("/api/catalog")
@@ -4575,30 +4604,73 @@ async def delete_inventory(inv_id: int, user: dict = Depends(require_session)):
 def _validate_goal(body: GoalIn) -> dict:
     """Validate a goal against the catalog and normalize into db column fields.
     Each line item's id must resolve; its name/unit are stamped from the catalog
-    (not trusted from the client) and duplicate items are rejected."""
+    (not trusted from the client) and duplicate items are rejected. When a
+    `blueprint_key` is supplied without explicit line items, the recipe's
+    materials manifest is expanded into the line items server-side (a "craft
+    goal")."""
     title = body.title.strip()
-    lines, seen = [], set()
-    for li in body.line_items:
-        item = _resolve_or_400(li.item_id)
-        if item["item_id"] in seen:
-            raise HTTPException(status_code=400, detail=f"duplicate line item: {item['name']}")
-        seen.add(item["item_id"])
-        unit = catalog.valid_unit(li.unit) or item["unit"]
-        lines.append({"item_id": item["item_id"], "item_name": item["name"],
-                      "unit": unit, "qty_needed": li.qty_needed})
+    # None = "unspecified" → create defaults to org; edit preserves the current value.
+    visibility = body.visibility if body.visibility in _GOAL_VISIBILITY else None
+    unmapped: list[str] = []
+    if body.blueprint_key and not body.line_items:
+        lines, unmapped = _seed_goal_lines(body.blueprint_key, body.blueprint_qty)
+    else:
+        lines, seen = [], set()
+        for li in body.line_items:
+            item = _resolve_or_400(li.item_id)
+            if item["item_id"] in seen:
+                raise HTTPException(status_code=400, detail=f"duplicate line item: {item['name']}")
+            seen.add(item["item_id"])
+            unit = catalog.valid_unit(li.unit) or item["unit"]
+            lines.append({"item_id": item["item_id"], "item_name": item["name"],
+                          "unit": unit, "qty_needed": li.qty_needed})
     if not lines:
         raise HTTPException(status_code=400, detail="add at least one line item")
     deadline = None
     if body.deadline:
         deadline = _normalize_event_start(body.deadline)   # reuse UTC canonicalizer
     return {"title": title, "description": (body.description or "").strip(),
-            "priority": body.priority, "deadline": deadline, "line_items": lines}
+            "priority": body.priority, "deadline": deadline, "line_items": lines,
+            "visibility": visibility, "blueprint_key": body.blueprint_key or None,
+            "seed_unmapped": unmapped}
 
 
 def _require_goal_owner(goal: dict, user: dict) -> None:
     if goal["creator_id"] != user["id"] and not user.get("is_admin"):
         raise HTTPException(status_code=403,
                             detail="only the creator or an admin can change this goal")
+
+
+def _can_view_goal(goal: dict, user: dict) -> bool:
+    """Org goals are public; a personal goal is visible only to its creator (or an
+    admin)."""
+    if goal.get("visibility") != "personal":
+        return True
+    return goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
+
+
+def _goal_craft_block(goal: dict, detail: bool = False) -> dict | None:
+    """The craft-goal header for a blueprint-seeded goal: recipe name + craft time
+    for the card, plus (in detail) each line's demanded min-quality so the UI can
+    badge it. Degrades to `available: False` if the recipe left the feed on a
+    game-patch re-sync (the goal keeps working on its denormalized line items)."""
+    key = goal.get("blueprint_key")
+    if not key:
+        return None
+    bp = blueprints_feed.get(key)
+    if bp is None:
+        return {"blueprint_key": key, "available": False}
+    block = {"blueprint_key": key, "available": True, "name": bp.get("name"),
+             "cat": bp.get("cat"), "time_s": bp.get("time_s"),
+             "default": bp.get("default")}
+    if detail:
+        def resolve(name):
+            return resolve_catalog_item(f"commodity:{catalog.slug(name)}")
+        seeded = nav_core.blueprint_goal_lines(bp, 1, resolve)
+        block["min_q"] = {l["item_id"]: l["min_q"]
+                          for l in seeded["lines"] if l.get("min_q")}
+        block["unlocks"] = bp.get("unlocks") or []
+    return block
 
 
 def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> dict:
@@ -4617,12 +4689,27 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
             ("id", "creator_id", "title", "description", "priority", "deadline",
              "line_items", "created_at", "updated_at")}
     view["status"] = status
+    view["visibility"] = goal.get("visibility") or "org"
+    view["blueprint_key"] = goal.get("blueprint_key")
     view["creator_name"] = _resolve_member_name(goal["creator_id"], None)
+    view["is_mine"] = goal["creator_id"] == user["id"]
     view["can_edit"] = goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
     view["progress"] = progress
+    craft = _goal_craft_block(goal, detail=detail)
+    if craft:
+        view["craft"] = craft
     if detail:
         view["progress"]["per_contributor"] = _enrich_owner_names(
             progress["per_contributor"])
+        # "Where my materials are": the caller's own committed holdings grouped by
+        # location, so a craft-goal shows what's staged where.
+        locs: dict[str, list] = {}
+        for c in contributions:
+            if c.get("owner_id") != user["id"]:
+                continue
+            locs.setdefault(c.get("location") or "Unspecified", []).append(
+                {"name": c.get("item_name"), "qty": c.get("qty"), "unit": c.get("unit")})
+        view["my_locations"] = [{"location": k, "items": v} for k, v in locs.items()]
     return view
 
 
@@ -4631,7 +4718,7 @@ async def list_goals(status: str | None = None, user: dict = Depends(require_ses
     """The goals board, sorted priority↑ then deadline↑. Each carries its derived
     overall fill so cards render without an N+1 (contributions are fetched once
     and grouped by goal)."""
-    goals = db.list_goals(status)
+    goals = db.list_goals(status, viewer_id=user["id"])
     contributions: dict[int, list] = {}
     for row in db.list_goal_contributions():
         contributions.setdefault(row["goal_id"], []).append(row)
@@ -4640,20 +4727,25 @@ async def list_goals(status: str | None = None, user: dict = Depends(require_ses
 
 @app.post("/api/goals")
 async def create_goal(body: GoalIn, user: dict = Depends(require_session)):
-    """Create a procurement goal (any org member)."""
+    """Create a procurement goal (any org member). Seed a "craft goal" by passing
+    `blueprint_key` (+ optional `blueprint_qty`) with no line items: the recipe's
+    materials manifest becomes the line items. `visibility` scopes it org|personal."""
     fields = _validate_goal(body)
     now = datetime.now(timezone.utc).isoformat()
     gid = db.create_goal({**fields, "creator_id": user["id"], "status": "active",
                           "created_at": now, "updated_at": now})
     goal = db.get_goal(gid)
-    return _goal_view(goal, db.list_goal_contributions(goal_id=gid), user, detail=True)
+    view = _goal_view(goal, db.list_goal_contributions(goal_id=gid), user, detail=True)
+    if fields.get("seed_unmapped"):
+        view["seed_unmapped"] = fields["seed_unmapped"]   # materials with no catalog match
+    return view
 
 
 @app.get("/api/goals/{goal_id}")
 async def get_goal(goal_id: int, user: dict = Depends(require_session)):
     """One goal with per-line fill + the per-contributor breakdown."""
     goal = db.get_goal(goal_id)
-    if goal is None:
+    if goal is None or not _can_view_goal(goal, user):
         raise HTTPException(status_code=404, detail="unknown goal")
     return _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user, detail=True)
 
@@ -4668,6 +4760,8 @@ async def edit_goal(goal_id: int, body: GoalIn, user: dict = Depends(require_ses
         raise HTTPException(status_code=404, detail="unknown goal")
     _require_goal_owner(goal, user)
     fields = _validate_goal(body)
+    if fields.get("visibility") is None:
+        fields.pop("visibility", None)     # unspecified → keep the goal's current scope
     if body.status in ("active", "met", "archived"):
         fields["status"] = body.status
     db.update_goal(goal_id, fields, datetime.now(timezone.utc).isoformat())
@@ -4702,7 +4796,7 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
     doesn't hold enough free quantity, it's topped up to cover the commitment (the
     member is declaring they have at least that much on hand)."""
     goal = db.get_goal(goal_id)
-    if goal is None:
+    if goal is None or not _can_view_goal(goal, user):
         raise HTTPException(status_code=404, detail="unknown goal")
     item = _resolve_or_400(body.item_id)
     loc = body.location.strip() or None
@@ -4728,8 +4822,10 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
         db.add_allocation(holding["id"], goal_id, body.qty, now)
     contributions = db.list_goal_contributions(goal_id=goal_id)
     # Ping when this contribution is the one that tips the goal to 100% (and it
-    # wasn't already met, and it's not an archived/parked goal).
+    # wasn't already met, and it's not an archived/parked goal). Personal goals
+    # stay private — no org-wide broadcast.
     if (not was_met and goal.get("status") != "archived"
+            and goal.get("visibility") != "personal"
             and nav_core.derive_goal_progress(goal, contributions)["is_met"]):
         _notify_bg(_notify_goal_met(goal, contributions))
     return _goal_view(db.get_goal(goal_id), contributions, user, detail=True)
@@ -4971,8 +5067,14 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
     view["is_seller"] = listing["seller_id"] == user["id"]
     view["can_edit"] = view["is_seller"] or bool(user.get("is_admin"))
     view["auction"] = state if listing["mode"] == "auction" else None
-    view["commission"] = (nav_core.commission_board_state(listing, offers)
-                          if listing["mode"] == "commission" else None)
+    if listing["mode"] == "commission":
+        comm = nav_core.commission_board_state(listing, offers)
+        key = listing.get("blueprint_key")
+        comm["can_craft_count"] = db.blueprint_crafter_counts([key]).get(key, 0) if key else 0
+        comm["i_can_craft"] = bool(key and db.member_has_blueprint(user["id"], key))
+        view["commission"] = comm
+    else:
+        view["commission"] = None
     view["offer_count"] = state["bid_count"]
     mine = next((o for o in offers
                  if o["bidder_id"] == user["id"] and o["status"] == "active"), None)
@@ -5014,11 +5116,14 @@ def _auction_time_up(listing: dict, now: datetime) -> bool:
         return False
 
 
-def _listing_card(listing: dict, user: dict, deals: dict) -> dict:
+def _listing_card(listing: dict, user: dict, deals: dict,
+                  craft_counts: dict | None = None, my_bps: set | None = None) -> dict:
     """Lightweight board serializer: only the columns a card draws, with no
     per-listing offer query. An auction's high bid / bid count come from the
     denormalized `sort_price` / `offer_count` (kept current by
-    db.refresh_listing_denorm), so the board read is pure SQL."""
+    db.refresh_listing_denorm), so the board read is pure SQL. Commission cards
+    also carry crafter matching (#25.1): how many members can craft the recipe and
+    whether the caller can — from the member blueprint library."""
     card = {k: listing.get(k) for k in _LISTING_CARD}
     card["seller_name"] = _resolve_member_name(listing["seller_id"], None)
     card["handle_verified"] = handles.owns_handle(
@@ -5034,11 +5139,14 @@ def _listing_card(listing: dict, user: dict, deals: dict) -> dict:
         card["auction"] = None
     if listing["mode"] == "commission":
         cnt = int(listing.get("offer_count") or 0)
+        key = listing.get("blueprint_key")
         # sort_price is the best (lowest) quote once anyone has quoted, else the
         # requester's budget (may be NULL = open to quotes).
         card["commission"] = {
             "best_quote": listing.get("sort_price") if cnt else None,
-            "quote_count": cnt, "budget": listing.get("price_auec")}
+            "quote_count": cnt, "budget": listing.get("price_auec"),
+            "can_craft_count": (craft_counts or {}).get(key, 0),
+            "i_can_craft": bool(key and my_bps and key in my_bps)}
     else:
         card["commission"] = None
     return card
@@ -5081,7 +5189,15 @@ async def list_market(mode: str | None = None, item: str | None = None,
                 continue
         cards.append(r)
     deals = db.completed_deals_counts([r["seller_id"] for r in cards])
-    return {"listings": [_listing_card(r, user, deals) for r in cards],
+    # Crafter matching for commission cards (#25.1): count members who can craft
+    # each visible recipe (one grouped query) + the caller's own library.
+    bp_keys = [r["blueprint_key"] for r in cards
+               if r["mode"] == "commission" and r.get("blueprint_key")]
+    craft_counts = db.blueprint_crafter_counts(bp_keys) if bp_keys else {}
+    my_bps = ({b["blueprint_key"] for b in db.list_member_blueprints(user["id"])}
+              if bp_keys else set())
+    return {"listings": [_listing_card(r, user, deals, craft_counts, my_bps)
+                         for r in cards],
             "total": total, "limit": limit, "offset": offset,
             # Whether the commission form should offer the Discord announce
             # checkbox (mirrors the LFG board's announce_available flag).
@@ -6599,6 +6715,50 @@ async def forget_ship(name: str, user: dict = Depends(require_session)):
     if not db.delete_user_ship(user["id"], name.strip()):
         raise HTTPException(status_code=404, detail="no such saved ship")
     return {"ok": True, "ships": db.list_user_ships(user["id"])}
+
+
+class MemberBlueprintIn(BaseModel):
+    blueprint_key: str = Field(min_length=1, max_length=_META_MAX)
+
+
+def _member_blueprint_view(rows) -> list[dict]:
+    """Enrich saved blueprint keys with feed name/category for display. A key whose
+    recipe left the feed on a re-sync still lists (name falls back to the key)."""
+    out = []
+    for r in rows:
+        key = r["blueprint_key"]
+        bp = blueprints_feed.get(key)
+        out.append({"blueprint_key": key, "added_at": r.get("added_at"),
+                    "name": (bp or {}).get("name") or key,
+                    "cat": (bp or {}).get("cat"), "available": bp is not None})
+    return out
+
+
+@app.get("/api/me/blueprints")
+async def my_blueprints(user: dict = Depends(require_session)):
+    """The caller's blueprint library — recipes they own / can craft (#25.1). Powers
+    the 'requests I can craft' board filter and the 'seed a craft goal' quick-pick."""
+    return {"blueprints": _member_blueprint_view(db.list_member_blueprints(user["id"]))}
+
+
+@app.post("/api/me/blueprints")
+async def add_my_blueprint(body: MemberBlueprintIn, user: dict = Depends(require_session)):
+    """Add a recipe to the caller's library (must resolve in the blueprint feed)."""
+    key = body.blueprint_key.strip()
+    if key not in blueprints_feed:
+        raise HTTPException(status_code=404, detail="unknown blueprint")
+    db.add_member_blueprint(user["id"], key, datetime.now(timezone.utc).isoformat())
+    return {"ok": True,
+            "blueprints": _member_blueprint_view(db.list_member_blueprints(user["id"]))}
+
+
+@app.delete("/api/me/blueprints")
+async def remove_my_blueprint(key: str, user: dict = Depends(require_session)):
+    """Remove a recipe from the caller's library."""
+    if not db.delete_member_blueprint(user["id"], key.strip()):
+        raise HTTPException(status_code=404, detail="not in your library")
+    return {"ok": True,
+            "blueprints": _member_blueprint_view(db.list_member_blueprints(user["id"]))}
 
 
 class TokenCreateIn(BaseModel):

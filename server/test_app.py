@@ -2282,5 +2282,174 @@ class CommissionNotifyTests(unittest.TestCase):
         self.assertIn("Commission complete", self.sent[2]["text"])
 
 
+class CraftGoalTests(unittest.TestCase):
+    """Personal vs org goals + blueprint-seeded craft goals (#14.2) and the member
+    blueprint library / commission crafter-matching (#25.1). Drives the real
+    endpoints over a TestClient with a controlled blueprint feed."""
+
+    # A controlled feed: real commodity names so the seed maps to catalog items,
+    # plus one bogus input to exercise the unmapped path.
+    _FEED = {"TEST_BP": {
+        "name": "Test Cannon", "cat": "Weapon Gun", "time_s": 300, "default": False,
+        "unlocks": [], "aspects": [
+            {"slot": "Frame", "kind": "resource", "input": "Agricium",
+             "scu": 0.5, "min_q": 1, "mods": []},
+            {"slot": "Emitter", "kind": "item", "input": "Hadanite",
+             "qty": 4, "min_q": 500, "mods": []},
+            {"slot": "Weird", "kind": "resource", "input": "Nonexistanium",
+             "scu": 1.0, "min_q": 0, "mods": []}]}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("goals"), _GOOD_WEBHOOK)
+        cls._a = {"id": "111", "username": "ana", "is_admin": False}
+        cls._b = {"id": "222", "username": "bo", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._a
+        # The auth-gate middleware runs before the route dependency, so token_user
+        # must also resolve to *some* member for the request to reach the route.
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._a
+        cls._orig_feed = app.blueprints_feed
+        app.blueprints_feed = cls._FEED
+        cls._orig_send = notify.send
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.blueprints_feed = cls._orig_feed
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as(self._a)
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text})
+            return True
+        notify.send = _capture
+
+    def _as(self, u):
+        app.app.dependency_overrides[app.require_session] = lambda: u
+
+    # -- blueprint seeding --
+
+    def test_seed_expands_manifest_into_line_items(self):
+        r = self.client.post("/api/goals", json={
+            "title": "Craft a cannon", "blueprint_key": "TEST_BP", "blueprint_qty": 2})
+        self.assertEqual(r.status_code, 200, r.text)
+        g = r.json()
+        lines = {l["item_id"]: l for l in g["line_items"]}
+        self.assertAlmostEqual(lines["commodity:agricium"]["qty_needed"], 1.0)  # 0.5×2
+        self.assertEqual(lines["commodity:agricium"]["unit"], "SCU")
+        self.assertAlmostEqual(lines["commodity:hadanite"]["qty_needed"], 8)    # 4×2
+        self.assertEqual(lines["commodity:hadanite"]["unit"], "each")
+        self.assertEqual(g["blueprint_key"], "TEST_BP")
+        self.assertEqual(g["craft"]["name"], "Test Cannon")
+        self.assertEqual(g["craft"]["min_q"]["commodity:hadanite"], 500)
+        self.assertIn("Nonexistanium", g.get("seed_unmapped", []))
+
+    def test_unknown_blueprint_seed_is_404(self):
+        r = self.client.post("/api/goals", json={"title": "x", "blueprint_key": "NOPE"})
+        self.assertEqual(r.status_code, 404)
+
+    # -- personal visibility --
+
+    def test_personal_goal_hidden_from_others(self):
+        gid = self.client.post("/api/goals", json={
+            "title": "my private stash", "visibility": "personal",
+            "blueprint_key": "TEST_BP"}).json()["id"]
+        # creator sees it on the board + can open it
+        board = self.client.get("/api/goals").json()["goals"]
+        self.assertIn(gid, [g["id"] for g in board])
+        self.assertEqual(self.client.get(f"/api/goals/{gid}").status_code, 200)
+        # another member does not
+        self._as(self._b)
+        board_b = self.client.get("/api/goals").json()["goals"]
+        self.assertNotIn(gid, [g["id"] for g in board_b])
+        self.assertEqual(self.client.get(f"/api/goals/{gid}").status_code, 404)
+
+    def test_edit_without_visibility_preserves_personal_scope(self):
+        gid = self.client.post("/api/goals", json={
+            "title": "keep me private", "visibility": "personal",
+            "blueprint_key": "TEST_BP"}).json()["id"]
+        # a PATCH that omits visibility must not silently flip it back to org
+        r = self.client.patch(f"/api/goals/{gid}", json={
+            "title": "renamed", "line_items": [
+                {"item_id": "commodity:agricium", "qty_needed": 3}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["visibility"], "personal")
+
+    def test_personal_goal_met_does_not_broadcast(self):
+        # a one-line personal goal, filled to 100% — the org-wide ping must stay silent
+        gid = self.client.post("/api/goals", json={
+            "title": "solo", "visibility": "personal",
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 5}]}).json()["id"]
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 5, "location": "Area18"})
+        self.assertEqual(self.sent, [])   # no goals-category broadcast
+
+    def test_detail_groups_my_materials_by_location(self):
+        gid = self.client.post("/api/goals", json={
+            "title": "stage it", "visibility": "personal",
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 20}]}).json()["id"]
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 8, "location": "Area18"})
+        g = self.client.get(f"/api/goals/{gid}").json()
+        locs = {grp["location"]: grp for grp in g["my_locations"]}
+        self.assertIn("Area18", locs)
+        self.assertAlmostEqual(locs["Area18"]["items"][0]["qty"], 8)
+
+    def test_org_goal_met_still_broadcasts(self):
+        gid = self.client.post("/api/goals", json={
+            "title": "shared", "visibility": "org",
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 5}]}).json()["id"]
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 5, "location": "Area18"})
+        self.assertTrue(any(m["category"] == "goals" for m in self.sent))
+
+    # -- member blueprint library --
+
+    def test_blueprint_library_crud(self):
+        self.assertEqual(self.client.get("/api/me/blueprints").json()["blueprints"], [])
+        r = self.client.post("/api/me/blueprints", json={"blueprint_key": "TEST_BP"})
+        self.assertEqual(r.status_code, 200, r.text)
+        lib = r.json()["blueprints"]
+        self.assertEqual(lib[0]["blueprint_key"], "TEST_BP")
+        self.assertEqual(lib[0]["name"], "Test Cannon")
+        # idempotent add, unknown-key reject, then delete
+        self.client.post("/api/me/blueprints", json={"blueprint_key": "TEST_BP"})
+        self.assertEqual(len(self.client.get("/api/me/blueprints").json()["blueprints"]), 1)
+        self.assertEqual(self.client.post(
+            "/api/me/blueprints", json={"blueprint_key": "NOPE"}).status_code, 404)
+        d = self.client.request("DELETE", "/api/me/blueprints", params={"key": "TEST_BP"})
+        self.assertEqual(d.status_code, 200)
+        self.assertEqual(self.client.get("/api/me/blueprints").json()["blueprints"], [])
+
+    def test_commission_card_reports_crafter_matching(self):
+        now = datetime.now(timezone.utc).isoformat()
+        db.create_listing({"seller_id": "999", "item_id": "blueprint:TEST_BP",
+                           "item_name": "Test Cannon", "unit": "each", "qty": 1,
+                           "mode": "commission", "price_auec": 40000,
+                           "blueprint_key": "TEST_BP", "status": "open",
+                           "created_at": now, "updated_at": now})
+        # ana can't craft it yet
+        cards = self.client.get("/api/market", params={"mode": "commission"}).json()["listings"]
+        card = next(c for c in cards if c.get("blueprint_key") == "TEST_BP")
+        self.assertEqual(card["commission"]["can_craft_count"], 0)
+        self.assertFalse(card["commission"]["i_can_craft"])
+        # after adding it to her library, the card matches
+        self.client.post("/api/me/blueprints", json={"blueprint_key": "TEST_BP"})
+        cards = self.client.get("/api/market", params={"mode": "commission"}).json()["listings"]
+        card = next(c for c in cards if c.get("blueprint_key") == "TEST_BP")
+        self.assertEqual(card["commission"]["can_craft_count"], 1)
+        self.assertTrue(card["commission"]["i_can_craft"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
