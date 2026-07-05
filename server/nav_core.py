@@ -2024,7 +2024,17 @@ def _pkg_view(p):
             "group": p.get("group"), "group_scu": p.get("group_scu")}
 
 
-def _leg_view(leg):
+def leg_fuel_scu(distance_m, fuel_req):
+    """Quantum fuel (SCU) burned flying `distance_m` on a drive whose `fuel_req`
+    is SCU per gigameter (1 Gm = 1e9 m). `None` fuel_req (unknown ship) or `None`
+    distance (unroutable leg) -> `None`; the planner then shows no fuel figure
+    rather than a fabricated one (#27)."""
+    if fuel_req is None or distance_m is None:
+        return None
+    return distance_m / 1e9 * fuel_req
+
+
+def _leg_view(leg, fuel_req=None, max_range_m=None):
     if leg is None:
         return None
     v = {"distance_m": leg["distance_m"], "eta_s": _leg_time_s(leg["distance_m"]),
@@ -2036,7 +2046,29 @@ def _leg_view(leg):
     for k in ("waypoints", "detour_m", "dodged", "blocked"):
         if leg.get(k):
             v[k] = leg[k]
+    # Quantum fuel/range annotation (#27) — only when a drive is known. Distance
+    # here is already post-detour, so fuel over a re-routed path is automatic.
+    if fuel_req is not None:
+        d = leg["distance_m"]
+        v["fuel_scu"] = leg_fuel_scu(d, fuel_req)
+        v["over_range"] = bool(max_range_m is not None and d is not None and d > max_range_m)
     return v
+
+
+def _fuel_summary(leg_views):
+    """Aggregate the per-leg fuel/range annotations of a route's leg views into
+    (total_fuel_scu, over_range_count, worst_leg_m). Legs without a `fuel_scu`
+    (unknown ship / unroutable) are ignored. Returns all-None when no leg carried
+    a drive annotation."""
+    fuels = [lv["fuel_scu"] for lv in leg_views
+             if lv and lv.get("fuel_scu") is not None]
+    over = sum(1 for lv in leg_views if lv and lv.get("over_range"))
+    dists = [lv["distance_m"] for lv in leg_views
+             if lv and lv.get("distance_m") is not None]
+    if not fuels and not any("fuel_scu" in lv for lv in leg_views if lv):
+        return None, None, None
+    return (round(sum(fuels), 3) if fuels else 0.0,
+            over, max(dists) if dists else None)
 
 
 def _stop_delta(stops, gpick, gdrop, gtot, j, seen):
@@ -2057,7 +2089,8 @@ def _stop_delta(stops, gpick, gdrop, gtot, j, seen):
 
 
 def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None,
-               t_ref=None, *, avoid_volumes=None) -> dict:
+               t_ref=None, *, avoid_volumes=None,
+               fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Order accepted cargo packages into an efficient run.
 
     Returns {summary, stops}. `summary` carries feasibility (peak load vs.
@@ -2174,17 +2207,36 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     # --- minimum capacity the bundle requires (precedence only, min peak) ---
     min_cap = _min_capacity(stops, preds, n, gctx)
 
+    # A per-leg range cap forbids any hop the ship can't cover on a full tank —
+    # active only when the player opts into "in-range only" and a drive is known
+    # (#27). All stops must be visited, so an over-range hop makes an ordering
+    # infeasible (unlike the selective trade solver, which just drops the trade).
+    max_leg_m = max_range_m if (in_range_only and max_range_m) else None
+
     # --- order the stops (minimize distance under precedence + capacity) ---
     if n <= _BNB_MAX_STOPS:
-        order, peak = _bnb_order(stops, preds, dmat, start_d, usable_scu, n, gctx)
+        order, peak = _bnb_order(stops, preds, dmat, start_d, usable_scu, n, gctx,
+                                 max_leg_m=max_leg_m)
     else:
-        order, peak = _greedy_order(stops, preds, step_cost, usable_scu, n, gctx)
+        order, peak = _greedy_order(stops, preds, step_cost, usable_scu, n, gctx,
+                                    max_leg_m=max_leg_m)
 
     if order is None:
+        # Distinguish a range failure from a capacity/connectivity one so the UI
+        # can tell the player to uncheck "in-range only" or switch drives: re-solve
+        # without the cap; if that succeeds, range was the blocker.
+        range_infeasible = False
+        if max_leg_m is not None:
+            if n <= _BNB_MAX_STOPS:
+                alt, _ = _bnb_order(stops, preds, dmat, start_d, usable_scu, n, gctx)
+            else:
+                alt, _ = _greedy_order(stops, preds, step_cost, usable_scu, n, gctx)
+            range_infeasible = alt is not None
         return {"summary": {"feasible": False, "num_stops": n,
                             "num_packages": len(pkgs), "usable_scu": usable_scu,
                             "peak_load_scu": None, "min_capacity_scu": round(min_cap, 2),
                             "total_distance_m": None, "total_time_s": None,
+                            "range_infeasible": range_infeasible,
                             "start_id": start_poi.id if (start_poi and start_poi.id >= 0) else None,
                             "start": start_poi.name if start_poi else None}, "stops": []}
 
@@ -2205,24 +2257,31 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
             "type": poi.type,
             "pickups": [_pkg_view(pkgs[pi]) for pi in s["loads"]],
             "dropoffs": [_pkg_view(pkgs[pi]) for pi in s["drops"]],
-            "leg": _leg_view(leg),
+            "leg": _leg_view(leg, fuel_req=fuel_req, max_range_m=max_range_m),
             "onboard_scu": round(onboard, 2),
         })
     total_time = sum((_leg_time_s(s["leg"]["distance_m"]) or 0.0)
                      for s in out_stops if s["leg"]) + STOP_DWELL_S * n
 
-    return {"summary": {"feasible": True, "num_stops": n, "num_packages": len(pkgs),
-                        "usable_scu": usable_scu, "peak_load_scu": round(peak, 2),
-                        "min_capacity_scu": round(min_cap, 2),
-                        "total_distance_m": total_dist, "total_time_s": total_time,
-                        "start_id": start_poi.id if (start_poi and start_poi.id >= 0) else None,
-                        "start": start_poi.name if start_poi else None},
-            "stops": out_stops}
+    summary = {"feasible": True, "num_stops": n, "num_packages": len(pkgs),
+               "usable_scu": usable_scu, "peak_load_scu": round(peak, 2),
+               "min_capacity_scu": round(min_cap, 2),
+               "total_distance_m": total_dist, "total_time_s": total_time,
+               "start_id": start_poi.id if (start_poi and start_poi.id >= 0) else None,
+               "start": start_poi.name if start_poi else None}
+    if fuel_req is not None:
+        tf, oc, wl = _fuel_summary([s["leg"] for s in out_stops])
+        summary["total_fuel_scu"] = tf
+        summary["over_range_count"] = oc
+        summary["worst_leg_m"] = wl
+    return {"summary": summary, "stops": out_stops}
 
 
-def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx):
+def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx, *, max_leg_m=None):
     """Branch-and-bound: least-distance precedence+capacity-feasible order.
-    Returns (order, peak_load) or (None, None) if no feasible order exists."""
+    `max_leg_m` (when set) forbids any single hop longer than the ship's tank —
+    the "in-range only" constraint. Returns (order, peak_load) or (None, None)
+    if no feasible order exists."""
     gpick, gdrop, gtot = gctx
     best = {"cost": math.inf, "order": None, "peak": None}
 
@@ -2243,6 +2302,8 @@ def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx):
             step = start_d[j] if prev is None else dmat[prev][j]
             if step == math.inf:
                 continue
+            if max_leg_m is not None and step > max_leg_m:
+                continue
             dfs(order + [j], visited | {j}, no, cost + step, max(peak, no),
                 seen | set(newly))
 
@@ -2250,9 +2311,10 @@ def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx):
     return (best["order"], best["peak"]) if best["order"] is not None else (None, None)
 
 
-def _greedy_order(stops, preds, step_cost, cap, n, gctx):
+def _greedy_order(stops, preds, step_cost, cap, n, gctx, *, max_leg_m=None):
     """Nearest-neighbor fallback for large stop sets: at each step take the
-    nearest precedence- and capacity-feasible stop."""
+    nearest precedence- and capacity-feasible stop. `max_leg_m` (when set) rejects
+    any hop longer than the ship's tank (the "in-range only" constraint)."""
     gpick, gdrop, gtot = gctx
     order, visited = [], set()
     onboard = peak = 0.0
@@ -2264,6 +2326,7 @@ def _greedy_order(stops, preds, step_cost, cap, n, gctx):
             if j not in visited and preds[j].issubset(visited)
             and onboard + _stop_delta(stops, gpick, gdrop, gtot, j, seen)[0] <= cap + 1e-9
             and step_cost(prev, j) != math.inf
+            and (max_leg_m is None or step_cost(prev, j) <= max_leg_m)
         ]
         if not cands:
             return None, None
@@ -2746,11 +2809,13 @@ def leg_hazards(nav: NavData, src, dst, volumes, t_ref) -> list:
 
 
 def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
-                *, avoid=None, memo=None) -> dict:
+                *, avoid=None, memo=None, fuel_req=None, max_range_m=None) -> dict:
     """Walk an ordered list of trade rows from `start`, costing the QT legs
     (reposition to each buy terminal, then the loaded haul to its sell terminal)
     and accumulating profit/time/distance. Returns {summary, legs}. `avoid`
-    (hazard volumes) + `memo` thread snare-detour costing into every leg."""
+    (hazard volumes) + `memo` thread snare-detour costing into every leg;
+    `fuel_req`/`max_range_m` (when a drive is known, #27) annotate each leg with
+    fuel_scu/over_range and add fuel totals to the summary."""
     legs, pos, prev_sell = [], start, None
     total_profit = total_dist = total_time = 0.0
     deadhead_time = loaded_time = 0.0
@@ -2794,8 +2859,8 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
         } | {
             "scu": row["max_scu"], "profit": row["trade_profit"], "buy_cost": row["buy_cost"],
             "held": held,
-            "to_buy": None if held else (_leg_view(approach) if approach else None),
-            "haul": _leg_view(haul) if haul else None,
+            "to_buy": None if held else (_leg_view(approach, fuel_req, max_range_m) if approach else None),
+            "haul": _leg_view(haul, fuel_req, max_range_m) if haul else None,
         })
         pos = sp if sp is not None else pos
         prev_sell = row["sell_poi_id"]
@@ -2814,11 +2879,17 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
         "oldest_updated_at": oldest_ts,
         "profit_per_hour": int(round(total_profit / hours)) if hours > 0 else None,
     }
+    if fuel_req is not None:
+        views = [lv for leg in legs for lv in (leg.get("to_buy"), leg.get("haul"))]
+        tf, oc, wl = _fuel_summary(views)
+        summary["total_fuel_scu"] = tf
+        summary["over_range_count"] = oc
+        summary["worst_leg_m"] = wl
     return {"summary": summary, "legs": legs}
 
 
 def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
-                  deadhead_weight=1.0, *, avoid=None, memo=None) -> list[dict]:
+                  deadhead_weight=1.0, *, avoid=None, memo=None, max_leg_m=None) -> list[dict]:
     """Build a trade chain by repeatedly taking the best-scoring reachable trade
     from the current position. `optimize` = 'profit' (raw) or 'per_hour'
     (throughput). `deadhead_weight` > 1 penalizes empty-hold repositioning: it
@@ -2826,7 +2897,9 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
     mode shrinks a trade's score by its approach time — so a fuller-hold chain wins
     even at some profit cost. `first` forces the opening leg (multi-start seed).
     With `avoid` (hazard volumes) a candidate whose haul can't be routed around a
-    danger (`blocked`) is skipped — the snare-aware analog of avoid mode."""
+    danger (`blocked`) is skipped — the snare-aware analog of avoid mode.
+    `max_leg_m` (in-range only, #27) drops a candidate whose haul OR approach hop
+    exceeds the ship's tank — an over-range trade is simply unusable from here."""
     chosen, pos, used = [], start, set()
     key = lambda r: (r["commodity"], r["buy_poi_id"], r["sell_poi_id"])
     while len(chosen) < max_legs:
@@ -2844,10 +2917,19 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                 continue
             if avoid and haul.get("blocked"):
                 continue                      # camped haul with no reroute — skip
+            if max_leg_m is not None and haul["distance_m"] > max_leg_m:
+                continue                      # loaded haul out of range — skip
             profit = r["trade_profit"] or 0
+            # With a range cap the approach must be measured even in profit mode,
+            # so an out-of-range reposition drops the candidate.
             approach = (travel_cost(nav, pos, bp, t_ref, avoid=avoid, memo=memo)
-                        if (pos is not None and (optimize != "profit" or deadhead_weight > 1.0))
+                        if (pos is not None and (optimize != "profit" or deadhead_weight > 1.0
+                                                 or max_leg_m is not None))
                         else None)
+            if (max_leg_m is not None and approach is not None
+                    and approach["distance_m"] is not None
+                    and approach["distance_m"] > max_leg_m):
+                continue                      # empty reposition out of range — skip
             approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
             if optimize == "profit":
                 # empty-hold hours shrink the score; weight 1.0 => raw profit.
@@ -2879,19 +2961,21 @@ def _route_score(summary, optimize, deadhead_weight) -> float:
 
 
 def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
-                 *, avoid=None, memo=None) -> list[dict]:
+                 *, avoid=None, memo=None, max_leg_m=None) -> list[dict]:
     """Multi-start greedy over the candidate pool: an unforced chain plus one
     forced from each of the top seeds, keeping the best-scoring complete route.
     Returns the chosen trade rows (empty if nothing chains). `avoid`/`memo`
-    thread snare-detour costing into every leg cost."""
+    thread snare-detour costing into every leg cost; `max_leg_m` enforces the
+    in-range-only cap (#27)."""
     if not cands or max_legs < 1:
         return []
     routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
-                            deadhead_weight=deadhead_weight, avoid=avoid, memo=memo)]
+                            deadhead_weight=deadhead_weight, avoid=avoid, memo=memo,
+                            max_leg_m=max_leg_m)]
     for seed in cands[:_TRADE_RESTARTS]:
         routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
                                     first=seed, deadhead_weight=deadhead_weight,
-                                    avoid=avoid, memo=memo))
+                                    avoid=avoid, memo=memo, max_leg_m=max_leg_m))
     best, best_score = [], -1.0
     for chosen in routes:
         if not chosen:
@@ -2908,7 +2992,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      start_pos=None, max_stops=6, commodities=None, system=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
-                     avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None) -> dict:
+                     avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
+                     fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Auto / filtered trade-route solver: pick and order the buy->sell trades that
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
     `usable_scu` hold, starting from a POI (`start_id`) or live position
@@ -2944,16 +3029,19 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
         empty["start"] = _start_ref(start)
         return empty
 
+    max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     chosen = _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
-                          avoid=avoid_volumes, memo=memo)
-    best = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo=memo)
+                          avoid=avoid_volumes, memo=memo, max_leg_m=max_leg_m)
+    best = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo=memo,
+                       fuel_req=fuel_req, max_range_m=max_range_m)
     best["summary"]["usable_scu"] = float(usable_scu)
     best["start"] = _start_ref(start)
     return best
 
 
 def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
-                    start_pos=None, budget=None, t_ref=None, avoid_volumes=None) -> dict:
+                    start_pos=None, budget=None, t_ref=None, avoid_volumes=None,
+                    fuel_req=None, max_range_m=None) -> dict:
     """Manual mode: cost a player-chosen ordered list of legs (each
     {commodity, buy_terminal_id, sell_terminal_id, scu?}) into the same
     {summary, legs, start} shape the solver returns — no route selection, just live
@@ -2984,7 +3072,8 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
         start = nav.pois.get(start_id)
     elif start_pos is not None:
         start = position_start(nav, start_pos)
-    costed = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo={})
+    costed = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo={},
+                         fuel_req=fuel_req, max_range_m=max_range_m)
     costed["summary"]["usable_scu"] = float(usable_scu)
     costed["start"] = _start_ref(start)
     return costed
@@ -3057,7 +3146,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, avoid_poi_ids=None, avoid_pairs=None,
-                       avoid_volumes=None) -> dict:
+                       avoid_volumes=None,
+                       fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Re-solve a trade route from the player's *current* position mid-run,
     carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
     already loaded with cargo that's been paid for but not yet sold. The new plan
@@ -3081,7 +3171,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             max_stops=max_stops, commodities=commodities, system=system, sort=sort,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
             now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids,
-            avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes)
+            avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
+            fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range_only)
 
     start = None
     if start_id is not None:
@@ -3112,9 +3203,12 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               max_age_s=max_age_s, now_ts=now,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs)
     cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
+    max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,
-                        deadhead_weight, avoid=avoid_volumes, memo=memo) if cont_legs else []
-    best = _cost_route(nav, [held_row] + cont, start, t_ref, avoid=avoid_volumes, memo=memo)
+                        deadhead_weight, avoid=avoid_volumes, memo=memo,
+                        max_leg_m=max_leg_m) if cont_legs else []
+    best = _cost_route(nav, [held_row] + cont, start, t_ref, avoid=avoid_volumes, memo=memo,
+                       fuel_req=fuel_req, max_range_m=max_range_m)
     best["summary"]["usable_scu"] = float(usable_scu)
     best["summary"]["carried_commodity"] = held.get("commodity")
     best["summary"]["carried_scu"] = held_scu

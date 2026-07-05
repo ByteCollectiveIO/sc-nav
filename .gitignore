@@ -28,6 +28,9 @@ poi/sc_nav.db
 poi/sc_nav.db-wal
 poi/sc_nav.db-shm
 poi/branding/
+# quantum_drives.json + quantum_profiles.json ARE committed (offline seed, like
+# poi.json); the match report is a build artifact for eyeballing coverage only.
+poi/quantum_match_report.txt
 
 # Third-party reference data kept locally for development only — NOT committed.
 # erkul.games content is CC BY-NC-ND 4.0; redistributing their compiled feed /

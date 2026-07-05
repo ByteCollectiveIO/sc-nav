@@ -2770,5 +2770,170 @@ class SnareDetourSolverTests(unittest.TestCase):
         self.assertEqual(same, base)
 
 
+class QuantumFuelRangeTests(unittest.TestCase):
+    """#27 — quantum fuel burn + max-range annotation/constraint in both planners.
+    Distances use a toy line system (1 Gm = 1e9 m) so fuel math is exact."""
+
+    def _nav3(self):
+        return _line_nav([(0, 0, 0), (1e9, 0, 0), (2e9, 0, 0)])
+
+    # --- helper ---
+    def test_leg_fuel_scu_unit_conversion(self):
+        # fuel_req is SCU/Gm; 1 Gm at 0.5 -> 0.5 SCU
+        self.assertAlmostEqual(nav_core.leg_fuel_scu(1e9, 0.5), 0.5)
+        self.assertAlmostEqual(nav_core.leg_fuel_scu(2e9, 0.0098), 0.0196)
+        self.assertIsNone(nav_core.leg_fuel_scu(1e9, None))   # unknown ship
+        self.assertIsNone(nav_core.leg_fuel_scu(None, 0.5))   # unroutable leg
+
+    # --- cargo ---
+    def test_cargo_leg_annotation_and_over_range_boundary(self):
+        nav = _line_nav([(0, 0, 0), (1e9, 0, 0)])
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 1}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0,
+                                  fuel_req=0.5, max_range_m=2e9)
+        leg = next(s["leg"] for s in res["stops"] if s["stop_id"] == 1)
+        self.assertAlmostEqual(leg["fuel_scu"], 0.5)          # 1 Gm @ 0.5
+        self.assertFalse(leg["over_range"])                   # 1 Gm < 2 Gm tank
+        tight = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0,
+                                    fuel_req=0.5, max_range_m=0.5e9)
+        leg = next(s["leg"] for s in tight["stops"] if s["stop_id"] == 1)
+        self.assertTrue(leg["over_range"])                    # 1 Gm > 0.5 Gm tank
+
+    def test_cargo_summary_fuel_totals(self):
+        nav = self._nav3()
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 1},
+                {"id": "B", "commodity": "y", "scu": 10, "from_id": 0, "to_id": 2}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0,
+                                  fuel_req=0.5, max_range_m=2e9)
+        s = res["summary"]
+        self.assertAlmostEqual(s["total_fuel_scu"], 1.0)      # two 1-Gm legs @ 0.5
+        self.assertEqual(s["over_range_count"], 0)
+        self.assertAlmostEqual(s["worst_leg_m"], 1e9)
+
+    def test_cargo_in_range_only_infeasible_flags_range(self):
+        nav = self._nav3()
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 2}]
+        blocked = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0,
+                                      fuel_req=0.5, max_range_m=1e9, in_range_only=True)
+        self.assertFalse(blocked["summary"]["feasible"])      # only hop is 2 Gm
+        self.assertTrue(blocked["summary"]["range_infeasible"])
+        ok = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0,
+                                 fuel_req=0.5, max_range_m=3e9, in_range_only=True)
+        self.assertTrue(ok["summary"]["feasible"])
+
+    def test_cargo_unknown_ship_adds_no_fuel_fields(self):
+        nav = self._nav3()
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 1}]
+        base = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        withq = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertEqual(base, withq)
+        self.assertNotIn("total_fuel_scu", base["summary"])
+        for st in base["stops"]:
+            if st["leg"]:
+                self.assertNotIn("fuel_scu", st["leg"])
+
+    # --- trade ---
+    def _trade_setup(self):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        A, B, C = (p.id for p in spc)
+
+        def pt(commodity, tid, poi, buy=None, sell=None, scu_buy=0, scu_sell_stock=0):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": scu_buy, "scu_sell_stock": scu_sell_stock, "updated_at": None}
+        prices = [pt("Gold", 1, A, buy=100, scu_buy=500),
+                  pt("Gold", 2, B, sell=300, scu_sell_stock=500)]
+        return A, B, C, prices
+
+    def test_trade_leg_gets_fuel_annotation(self):
+        A, B, C, prices = self._trade_setup()
+        plan = nav_core.plan_trade_route(NAV, prices, 100, start_id=A, sort="profit",
+                                         fuel_req=0.01)
+        self.assertTrue(plan["summary"]["feasible"])
+        haul = plan["legs"][0]["haul"]
+        self.assertIsNotNone(haul["fuel_scu"])
+        self.assertAlmostEqual(haul["fuel_scu"],
+                               nav_core.leg_fuel_scu(haul["distance_m"], 0.01))
+        self.assertIn("total_fuel_scu", plan["summary"])
+
+    def test_trade_in_range_only_drops_over_range_trade(self):
+        A, B, C, prices = self._trade_setup()
+        # measure the real haul distance with no drive, then squeeze the tank under it
+        base = nav_core.plan_trade_route(NAV, prices, 100, start_id=A, sort="profit")
+        haul_m = base["legs"][0]["haul"]["distance_m"]
+        dropped = nav_core.plan_trade_route(NAV, prices, 100, start_id=A, sort="profit",
+                                            fuel_req=0.01, max_range_m=haul_m / 2,
+                                            in_range_only=True)
+        self.assertEqual(dropped["legs"], [])                 # over-range trade unusable
+        kept = nav_core.plan_trade_route(NAV, prices, 100, start_id=A, sort="profit",
+                                         fuel_req=0.01, max_range_m=haul_m / 2)
+        self.assertEqual(len(kept["legs"]), 1)                # off: kept but flagged
+        self.assertTrue(kept["legs"][0]["haul"]["over_range"])
+
+    def test_trade_manual_annotates_but_never_drops(self):
+        A, B, C, prices = self._trade_setup()
+        legs = [{"commodity": "Gold", "buy_terminal_id": 1, "sell_terminal_id": 2}]
+        base = nav_core.cost_trade_legs(NAV, prices, legs, 100, start_id=A)
+        haul_m = base["legs"][0]["haul"]["distance_m"]
+        plan = nav_core.cost_trade_legs(NAV, prices, legs, 100, start_id=A,
+                                        fuel_req=0.01, max_range_m=haul_m / 2)
+        self.assertEqual(len(plan["legs"]), 1)                # manual legs never dropped
+        self.assertTrue(plan["legs"][0]["haul"]["over_range"])
+
+
+class QuantumDataArtifactTest(unittest.TestCase):
+    """Backlog #26 — keep the committed poi/quantum_*.json artifacts honest.
+
+    These files are distilled offline by tools/sync_quantum.py from the SC Wiki
+    API and committed; this guards them against silent corruption on refresh.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        cls.drives = json.loads((DATA_DIR / "quantum_drives.json").read_text())
+        cls.profiles = json.loads((DATA_DIR / "quantum_profiles.json").read_text())
+
+    def test_meta_stamped_with_game_version(self):
+        for doc in (self.drives, self.profiles):
+            self.assertIn("game_version", doc["_meta"])
+            self.assertEqual(doc["_meta"]["license"], "CC BY-SA 4.0")
+
+    def test_drive_catalog_wellformed(self):
+        cat = self.drives["drives"]
+        self.assertGreater(len(cat), 40)
+        for cn, d in cat.items():
+            self.assertGreater(d["fuel_req"], 0, cn)      # SCU/Gm, must be positive
+            self.assertIn(d["size"], (1, 2, 3, 4), cn)
+
+    def test_every_profile_has_exactly_one_default_drive(self):
+        for slug, p in self.profiles["profiles"].items():
+            self.assertTrue(p["drives"], f"{slug} has no drives")
+            defaults = [d for d in p["drives"] if d["is_default"]]
+            self.assertEqual(len(defaults), 1, f"{slug} default count {len(defaults)}")
+
+    def test_default_drive_range_matches_wiki_range(self):
+        # the identity fuel_capacity / fuel_req == max_range_Gm, within rounding
+        for slug, p in self.profiles["profiles"].items():
+            dfl = next(d for d in p["drives"] if d["is_default"])
+            self.assertAlmostEqual(dfl["range_m"], p["wiki_range_m"],
+                                   delta=p["wiki_range_m"] * 0.01, msg=slug)
+
+    def test_per_drive_range_identity(self):
+        for slug, p in self.profiles["profiles"].items():
+            cap = p["fuel_scu"]
+            for d in p["drives"]:
+                expect = round(cap / d["fuel_req"] * 1e9)
+                # synthetic stock drives carry the wiki range verbatim; both agree to rounding
+                self.assertAlmostEqual(d["range_m"], expect, delta=max(expect * 1e-6, 2),
+                                       msg=f"{slug}/{d['name']}")
+
+    def test_uexcorp_map_points_at_real_profiles(self):
+        slugs = set(self.profiles["profiles"])
+        self.assertGreater(len(self.profiles["uexcorp"]), 80)
+        for name_full, slug in self.profiles["uexcorp"].items():
+            self.assertIn(slug, slugs, name_full)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

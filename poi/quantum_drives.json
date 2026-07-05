@@ -1,0 +1,582 @@
+{
+ "_meta": {
+  "source": "SC Wiki API (api.star-citizen.wiki)",
+  "license": "CC BY-SA 4.0",
+  "attribution": "Game data: Star Citizen Wiki (api.star-citizen.wiki), CC BY-SA 4.0",
+  "game_version": "4.8.2-LIVE.12030094",
+  "generated_by": "tools/sync_quantum.py",
+  "drive_count": 57
+ },
+ "drives": {
+  "QDRV_JUST_S03_Agni_SCItem": {
+   "name": "Agni",
+   "size": 3,
+   "grade": "B",
+   "class": "Industrial",
+   "fuel_req": 0.036064,
+   "drive_speed": 383000000,
+   "cooldown_s": 21,
+   "spool_s": 7
+  },
+  "QDRV_RSI_S02_Aither_SCItem": {
+   "name": "Aither",
+   "size": 2,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.009156,
+   "drive_speed": 242000000,
+   "cooldown_s": 16.38,
+   "spool_s": 6
+  },
+  "QDRV_ORIG_S04_890J_SCItem": {
+   "name": "Allegro",
+   "size": 4,
+   "grade": "A",
+   "class": "Civilian",
+   "fuel_req": 0.0613,
+   "drive_speed": 512000000,
+   "cooldown_s": 32,
+   "spool_s": 9
+  },
+  "QDRV_RSI_S01_Atlas_SCItem": {
+   "name": "Atlas",
+   "size": 1,
+   "grade": "A",
+   "class": "Civilian",
+   "fuel_req": 0.007546,
+   "drive_speed": 231000000,
+   "cooldown_s": 8.7,
+   "spool_s": 4
+  },
+  "QDRV_WETK_S03_Balandin_SCItem": {
+   "name": "Balandin",
+   "size": 3,
+   "grade": "B",
+   "class": "Military",
+   "fuel_req": 0.13524,
+   "drive_speed": 339000000,
+   "cooldown_s": 12.3,
+   "spool_s": 7
+  },
+  "QDRV_WETK_S01_Beacon_SCItem": {
+   "name": "Beacon",
+   "size": 1,
+   "grade": "C",
+   "class": "Military",
+   "fuel_req": 0.01862,
+   "drive_speed": 190000000,
+   "cooldown_s": 12,
+   "spool_s": 4
+  },
+  "QDRV_JUST_S02_Bolon_SCItem": {
+   "name": "Bolon",
+   "size": 2,
+   "grade": "C",
+   "class": "Industrial",
+   "fuel_req": 0.00654,
+   "drive_speed": 262000000,
+   "cooldown_s": 39.6,
+   "spool_s": 6
+  },
+  "QDRV_RACO_S02_Bolt_SCItem": {
+   "name": "Bolt",
+   "size": 2,
+   "grade": "B",
+   "class": "Stealth",
+   "fuel_req": 0.01962,
+   "drive_speed": 205000000,
+   "cooldown_s": 19.8,
+   "spool_s": 6
+  },
+  "QDRV_ARCC_S01_Burst_SCItem": {
+   "name": "Burst",
+   "size": 1,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.011368,
+   "drive_speed": 198000000,
+   "cooldown_s": 12.3,
+   "spool_s": 4
+  },
+  "QDRV_ARCC_S02_Cascade_SCItem": {
+   "name": "Cascade",
+   "size": 2,
+   "grade": "D",
+   "class": "Civilian",
+   "fuel_req": 0.011227,
+   "drive_speed": 168000000,
+   "cooldown_s": 21.24,
+   "spool_s": 6
+  },
+  "QDRV_JUST_S01_Colossus_SCItem": {
+   "name": "Colossus",
+   "size": 1,
+   "grade": "B",
+   "class": "Industrial",
+   "fuel_req": 0.005488,
+   "drive_speed": 257000000,
+   "cooldown_s": 21,
+   "spool_s": 4
+  },
+  "QDRV_WETK_S02_Crossfield_SCItem": {
+   "name": "Crossfield",
+   "size": 2,
+   "grade": "C",
+   "class": "Military",
+   "fuel_req": 0.02071,
+   "drive_speed": 231000000,
+   "cooldown_s": 21.6,
+   "spool_s": 6
+  },
+  "QDRV_RACO_S01_Drift_SCItem": {
+   "name": "Drift",
+   "size": 1,
+   "grade": "C",
+   "class": "Stealth",
+   "fuel_req": 0.01666,
+   "drive_speed": 140000000,
+   "cooldown_s": 12,
+   "spool_s": 4
+  },
+  "QDRV_TARS_S03_Drifter_SCItem": {
+   "name": "Drifter",
+   "size": 3,
+   "grade": "D",
+   "class": "Civilian",
+   "fuel_req": 0.066332,
+   "drive_speed": 205000000,
+   "cooldown_s": 10,
+   "spool_s": 7
+  },
+  "QDRV_ARCC_S03_Echo_SCItem": {
+   "name": "Echo",
+   "size": 3,
+   "grade": "D",
+   "class": "Civilian",
+   "fuel_req": 0.049588,
+   "drive_speed": 205000000,
+   "cooldown_s": 11.8,
+   "spool_s": 7
+  },
+  "QDRV_RSI_S01_Eos_SCItem": {
+   "name": "Eos",
+   "size": 1,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.009114,
+   "drive_speed": 165000000,
+   "cooldown_s": 9.4,
+   "spool_s": 4
+  },
+  "QDRV_RSI_S03_Erebos_SCItem": {
+   "name": "Erebos",
+   "size": 3,
+   "grade": "A",
+   "class": "Civilian",
+   "fuel_req": 0.049588,
+   "drive_speed": 344000000,
+   "cooldown_s": 8.7,
+   "spool_s": 7
+  },
+  "QDRV_TARS_S01_Expedition_SCItem": {
+   "name": "Expedition",
+   "size": 1,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.0098,
+   "drive_speed": 165000000,
+   "cooldown_s": 10,
+   "spool_s": 4
+  },
+  "QDRV_ARCC_S03_Fissure_SCItem": {
+   "name": "Fissure",
+   "size": 3,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.070196,
+   "drive_speed": 246000000,
+   "cooldown_s": 12,
+   "spool_s": 7
+  },
+  "QDRV_ARCC_S02_Flash_SCItem": {
+   "name": "Flash",
+   "size": 2,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.012644,
+   "drive_speed": 242000000,
+   "cooldown_s": 22.14,
+   "spool_s": 6
+  },
+  "QDRV_ARCC_S01_Flood_SCItem": {
+   "name": "Flood",
+   "size": 1,
+   "grade": "D",
+   "class": "Civilian",
+   "fuel_req": 0.010094,
+   "drive_speed": 138000000,
+   "cooldown_s": 11.8,
+   "spool_s": 4
+  },
+  "QDRV_ACAS_S01_FoxFire_SCItem": {
+   "name": "FoxFire",
+   "size": 1,
+   "grade": "B",
+   "class": "Competition",
+   "fuel_req": 0.00588,
+   "drive_speed": 168000000,
+   "cooldown_s": 5.5,
+   "spool_s": 4
+  },
+  "QDRV_JUST_S01_Goliath_SCItem": {
+   "name": "Goliath",
+   "size": 1,
+   "grade": "C",
+   "class": "Industrial",
+   "fuel_req": 0.0058,
+   "drive_speed": 215000000,
+   "cooldown_s": 22,
+   "spool_s": 4
+  },
+  "QDRV_RSI_S02_Hemera_SCItem": {
+   "name": "Hemera",
+   "size": 2,
+   "grade": "A",
+   "class": "Civilian",
+   "fuel_req": 0.008393,
+   "drive_speed": 282000000,
+   "cooldown_s": 15.66,
+   "spool_s": 6
+  },
+  "QDRV_JUST_S02_Huracan_SCItem": {
+   "name": "Huracan",
+   "size": 2,
+   "grade": "B",
+   "class": "Industrial",
+   "fuel_req": 0.006104,
+   "drive_speed": 314000000,
+   "cooldown_s": 37.8,
+   "spool_s": 6
+  },
+  "QDRV_RSI_S01_Hyperion_SCItem": {
+   "name": "Hyperion",
+   "size": 1,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.008232,
+   "drive_speed": 198000000,
+   "cooldown_s": 9.1,
+   "spool_s": 4
+  },
+  "QDRV_ARCC_S03_Impulse_SCItem": {
+   "name": "Impulse",
+   "size": 3,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.074704,
+   "drive_speed": 295000000,
+   "cooldown_s": 12.3,
+   "spool_s": 7
+  },
+  "QDRV_JUST_S03_Kama_SCItem": {
+   "name": "Kama",
+   "size": 3,
+   "grade": "C",
+   "class": "Industrial",
+   "fuel_req": 0.03864,
+   "drive_speed": 319000000,
+   "cooldown_s": 22,
+   "spool_s": 7
+  },
+  "QDRV_RSI_S02_Khaos_SCItem": {
+   "name": "Khaos",
+   "size": 2,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.010137,
+   "drive_speed": 201000000,
+   "cooldown_s": 16.92,
+   "spool_s": 6
+  },
+  "QDRV_ACAS_S01_LightFire_SCItem": {
+   "name": "LightFire",
+   "size": 1,
+   "grade": "C",
+   "class": "Competition",
+   "fuel_req": 0.0049,
+   "drive_speed": 140000000,
+   "cooldown_s": 5.7,
+   "spool_s": 4
+  },
+  "QDRV_S04_VNCL_Mauler": {
+   "name": "Mauler Quantum Drive",
+   "size": 4,
+   "grade": "A",
+   "class": null,
+   "fuel_req": 0.0613,
+   "drive_speed": 500000000,
+   "cooldown_s": 32,
+   "spool_s": 9
+  },
+  "QDRV_RSI_S03_Metis_SCItem": {
+   "name": "Metis",
+   "size": 3,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.059892,
+   "drive_speed": 246000000,
+   "cooldown_s": 9.4,
+   "spool_s": 7
+  },
+  "QDRV_RACO_S02_Nova_SCItem": {
+   "name": "Nova",
+   "size": 2,
+   "grade": "C",
+   "class": "Stealth",
+   "fuel_req": 0.01853,
+   "drive_speed": 171000000,
+   "cooldown_s": 21.6,
+   "spool_s": 6
+  },
+  "QDRV_TARS_S02_Odyssey_SCItem": {
+   "name": "Odyssey",
+   "size": 2,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.0109,
+   "drive_speed": 201000000,
+   "cooldown_s": 18,
+   "spool_s": 6
+  },
+  "QDRV_WETK_S03_Pontes_SCItem": {
+   "name": "Pontes",
+   "size": 3,
+   "grade": "C",
+   "class": "Military",
+   "fuel_req": 0.12236,
+   "drive_speed": 282000000,
+   "cooldown_s": 12,
+   "spool_s": 7
+  },
+  "QDRV_TARS_S02_Quest_SCItem": {
+   "name": "Quest",
+   "size": 2,
+   "grade": "D",
+   "class": "Civilian",
+   "fuel_req": 0.011227,
+   "drive_speed": 168000000,
+   "cooldown_s": 18,
+   "spool_s": 6
+  },
+  "QDRV_TARS_S03_Ranger_SCItem": {
+   "name": "Ranger",
+   "size": 3,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.06118,
+   "drive_speed": 295000000,
+   "cooldown_s": 10,
+   "spool_s": 7
+  },
+  "QDRV_ARCC_S01_Rush_SCItem": {
+   "name": "Rush",
+   "size": 1,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.010682,
+   "drive_speed": 165000000,
+   "cooldown_s": 12,
+   "spool_s": 4
+  },
+  "QDRV_WETK_S01_Siren_SCItem": {
+   "name": "Siren",
+   "size": 1,
+   "grade": "B",
+   "class": "Military",
+   "fuel_req": 0.02058,
+   "drive_speed": 228000000,
+   "cooldown_s": 12.3,
+   "spool_s": 4
+  },
+  "QDRV_TARS_S02_Sojourn_SCItem": {
+   "name": "Sojourn",
+   "size": 2,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.010355,
+   "drive_speed": 242000000,
+   "cooldown_s": 18,
+   "spool_s": 6
+  },
+  "QDRV_ACAS_S02_SparkFire_SCItem": {
+   "name": "SparkFire",
+   "size": 2,
+   "grade": "C",
+   "class": "Competition",
+   "fuel_req": 0.00545,
+   "drive_speed": 171000000,
+   "cooldown_s": 10.26,
+   "spool_s": 6
+  },
+  "QDRV_RACO_S01_Spectre_SCItem": {
+   "name": "Spectre",
+   "size": 1,
+   "grade": "A",
+   "class": "Stealth",
+   "fuel_req": 0.01862,
+   "drive_speed": 196000000,
+   "cooldown_s": 10.5,
+   "spool_s": 4
+  },
+  "QDRV_RACO_S02_Spicule_SCItem": {
+   "name": "Spicule",
+   "size": 2,
+   "grade": "A",
+   "class": "Stealth",
+   "fuel_req": 0.02071,
+   "drive_speed": 240000000,
+   "cooldown_s": 18.9,
+   "spool_s": 6
+  },
+  "QDRV_ACAS_S02_SunFire_SCItem": {
+   "name": "SunFire",
+   "size": 2,
+   "grade": "B",
+   "class": "Competition",
+   "fuel_req": 0.00654,
+   "drive_speed": 205000000,
+   "cooldown_s": 9.9,
+   "spool_s": 6
+  },
+  "QDRV_ARCC_S02_Torrent_SCItem": {
+   "name": "Torrent",
+   "size": 2,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.011881,
+   "drive_speed": 201000000,
+   "cooldown_s": 21.6,
+   "spool_s": 6
+  },
+  "QDRV_WETK_S03_TS2_SCItem": {
+   "name": "TS-2",
+   "size": 3,
+   "grade": "A",
+   "class": "Military",
+   "fuel_req": 0.14168,
+   "drive_speed": 395000000,
+   "cooldown_s": 12.7,
+   "spool_s": 7
+  },
+  "QDRV_RSI_S03_Tyche_SCItem": {
+   "name": "Tyche",
+   "size": 3,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.054096,
+   "drive_speed": 295000000,
+   "cooldown_s": 9.1,
+   "spool_s": 7
+  },
+  "QDRV_JUST_S03_Vesta_SCItem": {
+   "name": "Vesta",
+   "size": 3,
+   "grade": "D",
+   "class": "Industrial",
+   "fuel_req": 0.039928,
+   "drive_speed": 266000000,
+   "cooldown_s": 23,
+   "spool_s": 7
+  },
+  "QDRV_WETK_S01_VK00_SCItem": {
+   "name": "VK-00",
+   "size": 1,
+   "grade": "A",
+   "class": "Military",
+   "fuel_req": 0.02156,
+   "drive_speed": 266000000,
+   "cooldown_s": 12.7,
+   "spool_s": 4
+  },
+  "QDRV_TARS_S01_Voyage_SCItem": {
+   "name": "Voyage",
+   "size": 1,
+   "grade": "B",
+   "class": "Civilian",
+   "fuel_req": 0.009114,
+   "drive_speed": 198000000,
+   "cooldown_s": 10,
+   "spool_s": 4
+  },
+  "QDRV_JUST_S01_Vulcan_SCItem": {
+   "name": "Vulcan",
+   "size": 1,
+   "grade": "D",
+   "class": "Industrial",
+   "fuel_req": 0.006076,
+   "drive_speed": 179000000,
+   "cooldown_s": 23,
+   "spool_s": 4
+  },
+  "QDRV_TARS_S03_Wanderer_SCItem": {
+   "name": "Wanderer",
+   "size": 3,
+   "grade": "C",
+   "class": "Civilian",
+   "fuel_req": 0.0644,
+   "drive_speed": 246000000,
+   "cooldown_s": 10,
+   "spool_s": 7
+  },
+  "QDRV_TARS_S01_Wayfare_SCItem": {
+   "name": "Wayfare",
+   "size": 1,
+   "grade": "D",
+   "class": "Civilian",
+   "fuel_req": 0.010094,
+   "drive_speed": 138000000,
+   "cooldown_s": 10,
+   "spool_s": 4
+  },
+  "QDRV_WETK_S02_XL1_SCItem": {
+   "name": "XL-1",
+   "size": 2,
+   "grade": "A",
+   "class": "Military",
+   "fuel_req": 0.02398,
+   "drive_speed": 324000000,
+   "cooldown_s": 22.86,
+   "spool_s": 6
+  },
+  "QDRV_JUST_S02_Yaluk_SCItem": {
+   "name": "Yaluk",
+   "size": 2,
+   "grade": "D",
+   "class": "Industrial",
+   "fuel_req": 0.006758,
+   "drive_speed": 218000000,
+   "cooldown_s": 41.4,
+   "spool_s": 6
+  },
+  "QDRV_WETK_S02_Yeager_SCItem": {
+   "name": "Yeager",
+   "size": 2,
+   "grade": "B",
+   "class": "Military",
+   "fuel_req": 0.02289,
+   "drive_speed": 278000000,
+   "cooldown_s": 22.14,
+   "spool_s": 6
+  },
+  "QDRV_RACO_S01_Zephyr_SCItem": {
+   "name": "Zephyr",
+   "size": 1,
+   "grade": "B",
+   "class": "Stealth",
+   "fuel_req": 0.01764,
+   "drive_speed": 168000000,
+   "cooldown_s": 11,
+   "spool_s": 4
+  }
+ }
+}

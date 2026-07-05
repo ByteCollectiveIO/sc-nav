@@ -141,6 +141,7 @@
   .site-footer .foot-links { margin-bottom: 6px; }
   .site-footer .foot-links a { margin: 0 8px; }
   .site-footer .foot-copy b { color: var(--text); font-weight: 600; }
+  .site-footer .foot-data { margin-top: 6px; color: var(--dim); font-size: 11px; }
   .site-footer .foot-version { margin-top: 6px; color: var(--dim); font-size: 11px; }
 
   /* destructive action button (e.g. delete account) */
@@ -1182,6 +1183,17 @@
   .route-reroute { color: var(--accent); font-size: 13px; margin: 8px 0 0;
     border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
   .route-reroute .muted { color: var(--dim); }
+  /* Quantum fuel & range (#27): the SHIP-panel drive row, the range readout
+     beside it, the per-leg over-range flag (reuses the danger accent), and the
+     route-level range callout (advisory = accent, hard-infeasible = alarm). */
+  .drive-row { align-items: center; gap: 12px; flex-wrap: wrap; }
+  .drive-row .range-only { display: inline-flex; align-items: center; gap: 5px; }
+  .drive-row .range-readout { font-size: 12px; color: var(--dim); }
+  .leg-fuel { color: var(--dim); }
+  .over-range { color: var(--bad); font-weight: 600; }
+  .route-range { color: var(--accent); font-size: 13px; margin: 8px 0 0;
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+  .route-range.hard { color: var(--bad); border-color: var(--bad); background: var(--bad-wash); }
   .avoid-blk { margin-top: 10px; }
   .avoid-blk-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .avoid-blk-add .fld-label { font-size: 11px; letter-spacing: .04em; color: var(--dim); }
@@ -2710,6 +2722,16 @@
         <button id="route-ship-save" title="remember this usable SCU for the ship">remember</button>
         <span id="route-ship-msg" class="muted" style="font-size:12px;"></span>
       </div>
+      <div class="route-row drive-row" id="route-drive-wrap" hidden>
+        <label class="muted" style="font-size:12px;">quantum drive
+          <select id="route-qd" class="ti" style="width:auto; min-width:150px;"></select>
+        </label>
+        <label class="muted range-only" style="font-size:12px;"
+               title="Only plan routes where every jump fits on one tank of quantum fuel">
+          <input type="checkbox" id="route-inrange"> in-range only
+        </label>
+        <span id="route-range" class="range-readout"></span>
+      </div>
       <p class="muted route-hint">Override the prefilled SCU with what actually fits — remembered per ship.</p>
     </div>
 
@@ -2803,7 +2825,17 @@
         </label>
         <span id="trade-ship-msg" class="muted" style="font-size:12px;"></span>
       </div>
-      <p class="muted route-hint">Bigger holds move more per leg. Set what actually fits —
+      <div class="route-row drive-row" id="trade-drive-wrap" hidden>
+        <label class="muted" style="font-size:12px;">quantum drive
+          <select id="trade-qd" class="ti" style="width:auto; min-width:150px;"></select>
+        </label>
+        <label class="muted range-only" style="font-size:12px;"
+               title="Only plan trades where every jump fits on one tank of quantum fuel">
+          <input type="checkbox" id="trade-inrange"> in-range only
+        </label>
+        <span id="trade-range" class="range-readout"></span>
+      </div>
+      <p class="muted route-hint">Bigger holds move more per leg. Set what actually fits,
         and cap <b>max spend</b> to the aUEC you have to trade with.</p>
     </div>
 
@@ -3284,6 +3316,10 @@
     all rights reserved. An unofficial Star Citizen fansite, not affiliated with the Cloud
     Imperium group of companies. Star Citizen®, Roberts Space Industries®, and Cloud Imperium®
     are registered trademarks of Cloud Imperium Rights LLC.</div>
+  <div class="foot-data">Game data: <a href="https://api.star-citizen.wiki" target="_blank"
+      rel="noopener">Star Citizen Wiki</a>, <a href="https://creativecommons.org/licenses/by-sa/4.0/"
+      target="_blank" rel="noopener">CC BY-SA 4.0</a>. Ship &amp; market data:
+    <a href="https://uexcorp.space" target="_blank" rel="noopener">UEX Corp</a>.</div>
   <div class="foot-version">v{{APP_VERSION}}</div>
 </footer>
 
@@ -5951,6 +5987,10 @@ function attachShipPicker() {
   input.addEventListener("focus", () => { if (input.value.trim()) refresh(); });
   input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
   attachPickerKeys(input, drop);
+  $("route-qd").addEventListener("change", () => {   // #27: remember drive + refresh range
+    saveDrivePref($("route-ship").value.trim(), $("route-qd").value);
+    updateDriveRange(routeQuantum(), "route-qd", "route-range");
+  });
 }
 
 function savedScuFor(name) {
@@ -5961,10 +6001,15 @@ function savedScuFor(name) {
 function prefillScu() {
   const name = $("route-ship").value.trim();
   const cat = routeCatalogByName && routeCatalogByName[name.toLowerCase()];
-  if (!cat) { $("route-ship-msg").textContent = ""; return; }
+  if (!cat) {
+    $("route-ship-msg").textContent = "";
+    syncDrivePicker(null, name, "route-qd", "route-drive-wrap", "route-range");
+    return;
+  }
   const saved = savedScuFor(name);
   $("route-scu").value = saved != null ? saved : cat.scu;
   $("route-ship-msg").textContent = saved != null ? "your saved override" : `stated ${cat.scu} SCU`;
+  syncDrivePicker(cat.quantum, name, "route-qd", "route-drive-wrap", "route-range");   // #27
 }
 async function rememberShip() {
   const name = $("route-ship").value.trim();
@@ -6232,8 +6277,12 @@ async function planRoute() {
     packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
+  const hasDrive = !$("route-drive-wrap").hidden;   // #27: only when the ship matched a profile
   lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(),
                     avoid_mode: routeAvoid, ...(avoidPoiIds().length ? { avoid_poi_ids: avoidPoiIds() } : {}),
+                    ship: $("route-ship").value.trim() || null,
+                    ...(hasDrive && $("route-qd").value ? { qd: $("route-qd").value } : {}),
+                    ...(hasDrive && $("route-inrange").checked ? { in_range_only: true } : {}),
                     ...routeStartPayload() };
   msg.textContent = "planning…";
   let res;
@@ -6259,6 +6308,52 @@ function fmtDur(s) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 function metric(v, l) { return `<div class="metric"><span class="v">${v}</span><span class="l">${l}</span></div>`; }
+function fmtScu(x) {
+  if (x == null) return "—";
+  return (x >= 100 ? Math.round(x) : x >= 10 ? x.toFixed(1) : x.toFixed(2)) + " SCU";
+}
+
+// ---- quantum drive picker (#27) ----
+// Chosen drive is remembered per ship in localStorage (no server migration; the
+// stock drive is the default). Shared by both planners; each passes its own
+// element ids + the ship's `quantum` sub-object from /api/ships.
+const DRIVE_PREF_KEY = "qdByShip";
+let drivePrefs = (() => { try { return JSON.parse(localStorage.getItem(DRIVE_PREF_KEY)) || {}; } catch { return {}; } })();
+function saveDrivePref(ship, qd) {
+  try { drivePrefs[(ship || "").toLowerCase()] = qd; localStorage.setItem(DRIVE_PREF_KEY, JSON.stringify(drivePrefs)); } catch {}
+}
+function driveLabel(d) { return `${d.name} · ${fmtGm(d.range_m)}`; }
+function updateDriveRange(quantum, selectId, rangeId) {
+  const rng = $(rangeId); if (!rng) return;
+  const d = (quantum && quantum.drives || []).find(x => x.qd === $(selectId).value);
+  rng.textContent = d ? `${fmtGm(d.range_m)} range · ${fmtScu(quantum.fuel_scu)} tank` : "";
+}
+// Fill a drive <select> + range readout from a ship's quantum profile; hide the
+// whole row (graceful degrade) when the ship has no matched data.
+function syncDrivePicker(quantum, shipName, selectId, wrapId, rangeId) {
+  const wrap = $(wrapId), sel = $(selectId);
+  if (!quantum || !(quantum.drives || []).length) {
+    if (wrap) wrap.hidden = true;
+    if (sel) sel.innerHTML = "";
+    if ($(rangeId)) $(rangeId).textContent = "";
+    return;
+  }
+  const saved = drivePrefs[(shipName || "").toLowerCase()];
+  const useSaved = quantum.drives.some(d => d.qd === saved);
+  sel.innerHTML = quantum.drives.map(d =>
+    `<option value="${esc(d.qd)}"${(useSaved ? d.qd === saved : d.is_default) ? " selected" : ""}>`
+    + `${esc(driveLabel(d))}</option>`).join("");
+  wrap.hidden = false;
+  updateDriveRange(quantum, selectId, rangeId);
+}
+function routeQuantum() {
+  const cat = routeCatalogByName && routeCatalogByName[$("route-ship").value.trim().toLowerCase()];
+  return cat && cat.quantum || null;
+}
+function tradeQuantum() {
+  const cat = tradeShipsByName && tradeShipsByName[$("trade-ship").value.trim().toLowerCase()];
+  return cat && cat.quantum || null;
+}
 // aUEC with thousands separators; compact (k/M) for big headline numbers.
 function fmtAuec(n) {
   if (n == null) return "—";
@@ -6331,9 +6426,13 @@ function renderPlan(res) {
   const sm = res.summary;
   let h = `<div class="panel"><h2>PLAN</h2>`;
   if (!sm.feasible) {
-    h += `<p class="route-infeasible">⚠ This won't fit your ship. It needs at least
-      <b>${sm.min_capacity_scu} SCU</b> of usable capacity (you have ${sm.usable_scu}).
-      Drop a contract or split it into two trips.</p></div>`;
+    if (sm.range_infeasible)   // #27: a jump exceeds the drive, not a capacity problem
+      h += `<p class="route-infeasible">⚠ No route where every jump fits this drive's range.
+        Uncheck <b>in-range only</b> to allow mid-route refueling, or pick a longer-range drive.</p></div>`;
+    else
+      h += `<p class="route-infeasible">⚠ This won't fit your ship. It needs at least
+        <b>${sm.min_capacity_scu} SCU</b> of usable capacity (you have ${sm.usable_scu}).
+        Drop a contract or split it into two trips.</p></div>`;
     out.innerHTML = h; out.hidden = false; return;
   }
   const peakClass = sm.peak_load_scu > sm.usable_scu ? "route-warn" : "route-feasible";
@@ -6352,7 +6451,11 @@ function renderPlan(res) {
   const sub = [metric(sm.num_stops, "STOPS"), metric(sm.num_packages, "PACKAGES"),
                metric(fmtGm(sm.total_distance_m), "QT DISTANCE")];
   if (sm.total_reward) sub.push(metric(fmtDur(sm.total_time_s), "EST. TIME"));
+  if (sm.total_fuel_scu != null) sub.push(metric(fmtScu(sm.total_fuel_scu), "QT FUEL"));   // #27
   h += `<div class="route-substats">` + sub.join("") + `</div>`;
+  if (sm.over_range_count)   // #27: advisory — legs longer than one tank
+    h += `<p class="route-range">⚠ ${sm.over_range_count} leg${sm.over_range_count > 1 ? "s" : ""} `
+      + `exceed this drive's range. Refuel mid-route, or pick a longer-range drive.</p>`;
   // Peak load reads as the capacity constraint it is — a gauge, not a headline.
   const capPct = sm.usable_scu ? Math.min(100, Math.round(sm.peak_load_scu / sm.usable_scu * 100)) : 0;
   h += `<div class="route-cap${overCap ? " over" : ""}">`
@@ -6656,6 +6759,9 @@ function renderStop(s, i, completes) {
       extra += ` <span class="gate">⇆ ${esc(s.leg.via_gate.join(" → "))}${s.leg.partial ? " (approx)" : ""}</span>`;
     if (s.leg.via) extra += ` <span class="via">via ${esc(s.leg.via)}</span>`;
     const dv = detourVia(s.leg); if (dv) extra += ` · ${dv}`;   // snare-detour (#24 v2)
+    if (s.leg.fuel_scu != null)   // #27: quantum fuel + over-range flag
+      extra += ` · <span class="leg-fuel">${fmtScu(s.leg.fuel_scu)} fuel</span>`
+        + (s.leg.over_range ? ` <span class="over-range">⚠ over range</span>` : "");
     legHtml = `<div class="route-leg">${bits.join(" · ")}${extra}</div>`;
   } else if (i === 0) {
     legHtml = `<div class="route-leg">start here</div>`;
@@ -7021,6 +7127,12 @@ function loadTradeFavorite(fav) {
 function applyTradeConfig(cfg) {
   $("trade-ship").value = cfg.ship || "";
   if (cfg.ship) prefillTradeScu();
+  // #27: restore a saved drive + in-range choice (picker was populated by prefill).
+  if (!$("trade-drive-wrap").hidden) {
+    if (cfg.qd && [...$("trade-qd").options].some(o => o.value === cfg.qd)) $("trade-qd").value = cfg.qd;
+    $("trade-inrange").checked = !!cfg.in_range_only;
+    updateDriveRange(tradeQuantum(), "trade-qd", "trade-range");
+  }
   if (cfg.usable_scu) $("trade-scu").value = cfg.usable_scu;   // explicit hold wins over stated
   $("trade-budget").value = cfg.budget || "";
   // start-from: live position vs a picked POI vs neither.
@@ -7129,14 +7241,23 @@ function attachTradeShipPicker() {
   input.addEventListener("focus", () => { if (input.value.trim()) refresh(); });
   input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
   attachPickerKeys(input, drop);
+  $("trade-qd").addEventListener("change", () => {   // #27: remember drive + refresh range
+    saveDrivePref($("trade-ship").value.trim(), $("trade-qd").value);
+    updateDriveRange(tradeQuantum(), "trade-qd", "trade-range");
+  });
 }
 function prefillTradeScu() {
   const name = $("trade-ship").value.trim();
   const cat = tradeShipsByName[name.toLowerCase()];
-  if (!cat) { $("trade-ship-msg").textContent = ""; return; }
+  if (!cat) {
+    $("trade-ship-msg").textContent = "";
+    syncDrivePicker(null, name, "trade-qd", "trade-drive-wrap", "trade-range");
+    return;
+  }
   const saved = savedScuFor(name);
   $("trade-scu").value = saved != null ? saved : cat.scu;
   $("trade-ship-msg").textContent = saved != null ? "your saved override" : `stated ${cat.scu} SCU`;
+  syncDrivePicker(cat.quantum, name, "trade-qd", "trade-drive-wrap", "trade-range");   // #27
   renderTradeSuggest();   // re-rank the board for the new hold size
 }
 
@@ -7279,6 +7400,10 @@ function buildTradePlanBody(msg) {
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
   const ship = $("trade-ship").value.trim();
   if (ship) body.ship = ship;
+  if (!$("trade-drive-wrap").hidden) {   // #27: drive override + in-range constraint
+    if ($("trade-qd").value) body.qd = $("trade-qd").value;
+    if ($("trade-inrange").checked) body.in_range_only = true;
+  }
   const budget = Number($("trade-budget").value);
   if (budget > 0) body.budget = Math.round(budget);
   if (tradeMode === "manual") {
@@ -7367,7 +7492,11 @@ function renderTradePlan(res) {
                metric(fmtDur(sm.total_time_s), "EST. TIME"),
                metric(fmtAuec(sm.peak_capital), "CAPITAL NEEDED")];
   if (sm.loaded_pct != null) sub.push(metric(sm.loaded_pct + "%", "HOLD LOADED"));
+  if (sm.total_fuel_scu != null) sub.push(metric(fmtScu(sm.total_fuel_scu), "QT FUEL"));   // #27
   h += `<div class="route-substats">` + sub.join("") + `</div>`;
+  if (sm.over_range_count)   // #27: advisory over-range callout
+    h += `<p class="route-range">⚠ ${sm.over_range_count} leg${sm.over_range_count > 1 ? "s" : ""} `
+      + `exceed this drive's range. Refuel between legs, or pick a longer-range drive.</p>`;
   if (res.start) h += `<p class="route-hint muted">Starting from <b>${esc(res.start.name)}</b>.</p>`;
   if (sm.oldest_updated_at != null) {
     const a = tradeAgeInfo(sm.oldest_updated_at);
@@ -7413,6 +7542,13 @@ function renderTradeLeg(lg, i) {
   }
   // Snare-detour (#24 v2): a "dodge via …" span on whichever sub-leg was rerouted.
   for (const seg of [lg.to_buy, lg.haul]) { const d = detourVia(seg); if (d) move.push(d); }
+  // #27: quantum fuel across the leg's sub-hops, with an over-range flag.
+  let legFuel = 0, hasFuel = false, overRange = false;
+  for (const seg of [lg.to_buy, lg.haul])
+    if (seg && seg.fuel_scu != null) { legFuel += seg.fuel_scu; hasFuel = true; if (seg.over_range) overRange = true; }
+  if (hasFuel)
+    move.push(`<span class="leg-fuel">${fmtScu(legFuel)} fuel</span>`
+      + (overRange ? ` <span class="over-range">⚠ over range</span>` : ""));
   // Age of the older of the two price sides drives the leg's freshness badge.
   const ts = [lg.buy_updated_at, lg.sell_updated_at].filter(v => v != null);
   const age = tradeAgeInfo(ts.length ? Math.min(...ts) : null);

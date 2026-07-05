@@ -1694,5 +1694,52 @@ class TradeFavoritesTests(unittest.TestCase):
         self.assertEqual(r.status_code, 422)
 
 
+class QuantumEnrichmentTests(unittest.TestCase):
+    """#27 — /api/ships quantum enrichment + drive resolution wiring."""
+
+    @classmethod
+    def setUpClass(cls):
+        # auth_gate is middleware (runs before DI): satisfy it with a stub token user.
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.token_user = cls._orig_token_user
+
+    def test_ships_endpoint_carries_quantum_for_matched(self):
+        rows = self.client.get("/api/ships").json()
+        matched = [s for s in rows if "quantum" in s]
+        self.assertTrue(matched, "expected some ships enriched with quantum data")
+        q = matched[0]["quantum"]
+        for k in ("fuel_scu", "default_range_m", "max_range_m", "drives"):
+            self.assertIn(k, q)
+        self.assertTrue(q["drives"])
+        self.assertTrue(any(d["is_default"] for d in q["drives"]))
+
+    def test_unmatched_ships_have_no_quantum_key(self):
+        # Never fabricate: an unmatched ship simply omits the key.
+        rows = self.client.get("/api/ships").json()
+        self.assertTrue(any("quantum" not in s for s in rows))
+
+    def test_resolve_drive_default_and_override(self):
+        row = next((s for s in self.client.get("/api/ships").json() if "quantum" in s), None)
+        self.assertIsNotNone(row)
+        name = row["name"]
+        fuel_req, max_range_m, qd = app._resolve_drive(name, None)
+        self.assertIsNotNone(fuel_req)
+        self.assertEqual(qd, row["quantum"]["default_qd"])
+        # an override selects that specific drive
+        alt = next((d for d in row["quantum"]["drives"] if not d["is_default"]), None)
+        if alt:
+            fr2, mr2, qd2 = app._resolve_drive(name, alt["qd"])
+            self.assertEqual(qd2, alt["qd"])
+            self.assertEqual(fr2, alt["fuel_req"])
+        # unmatched ship -> all None (no fabricated numbers)
+        self.assertEqual(app._resolve_drive("Definitely Not A Ship", None), (None, None, None))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
