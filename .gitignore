@@ -31,6 +31,8 @@ poi/branding/
 # quantum_drives.json + quantum_profiles.json ARE committed (offline seed, like
 # poi.json); the match report is a build artifact for eyeballing coverage only.
 poi/quantum_match_report.txt
+# blueprints.json IS committed (#25 feed); its sync report is a build artifact.
+poi/blueprint_sync_report.txt
 
 # Third-party reference data kept locally for development only — NOT committed.
 # erkul.games content is CC BY-NC-ND 4.0; redistributing their compiled feed /

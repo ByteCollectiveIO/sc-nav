@@ -18,12 +18,12 @@ COPY watcher/ ./watcher_src/
 COPY poi/ /data/
 ENV SC_NAV_DATA=/data
 
-# Static, code-versioned quantum reference data (#27). Also bundled INTO the code
-# dir (/app) — not just /data — because /data is a named volume that shadows the
-# image's seed and is only populated on the volume's first creation, so files
-# added in a later release never reach an existing volume. app.load_quantum()
-# reads the code-dir copy first. Keep in sync with poi/quantum_*.json.
-COPY poi/quantum_drives.json poi/quantum_profiles.json ./
+# Static, code-versioned reference data (#27 quantum, #25 blueprints). Also
+# bundled INTO the code dir (/app) — not just /data — because /data is a named
+# volume that shadows the image's seed and is only populated on the volume's
+# first creation, so files added in a later release never reach an existing
+# volume. app.load_quantum()/load_blueprints() read the code-dir copy first.
+COPY poi/quantum_drives.json poi/quantum_profiles.json poi/blueprints.json ./
 
 RUN useradd --system --home /app scnav && chown -R scnav:scnav /data
 USER scnav

@@ -4119,3 +4119,171 @@ def derive_auction_state(listing: dict, offers, now: datetime) -> dict:
         "next_min_bid": next_min_bid,
         "ends_at": listing.get("ends_at"),
     }
+
+
+# ---------------------------------------------------------------------------
+#
+#   BLUEPRINT CRAFT COMMISSIONS (#25)
+#
+#   Pure helpers over the committed blueprint feed (poi/blueprints.json,
+#   distilled by tools/sync_blueprints.py from the SC Wiki API — design:
+#   docs/blueprint-craft-commissions.md). A blueprint record:
+#     {name, cat, time_s, default, aspects: [
+#        {slot, kind: 'resource'|'item', input, scu|qty, min_q?, sel?,
+#         mods: [{prop, dir, mode: 'multiplier'|'additive',
+#                 ranges: [{q0, q1, v0, v1}]}]}]}
+#
+# ---------------------------------------------------------------------------
+
+
+def blueprint_manifest(bp: dict, qty: float = 1) -> dict:
+    """The materials bill for crafting `qty` of a blueprint, aggregated across
+    both ingredient kinds: resources (ore/refined, SCU) and items (countable
+    gems, units). Duplicate inputs across slots sum; a demanded min quality
+    max-wins (the crafter has to satisfy the strictest slot). Powers the
+    commission manifest panel and the Discord post."""
+    qty = max(float(qty or 1), 1.0)
+    res: dict[str, dict] = {}
+    items: dict[str, dict] = {}
+    for a in bp.get("aspects") or []:
+        name = a.get("input")
+        if not name:
+            continue
+        min_q = int(a.get("min_q") or 0)
+        if a.get("kind") == "item":
+            row = items.setdefault(name, {"input": name, "qty": 0, "slots": [], "min_q": 0})
+            row["qty"] += (a.get("qty") or 0) * qty
+        else:
+            row = res.setdefault(name, {"input": name, "scu": 0.0, "slots": [], "min_q": 0})
+            row["scu"] = round(row["scu"] + (a.get("scu") or 0.0) * qty, 6)
+        row["slots"].append(a.get("slot"))
+        row["min_q"] = max(row["min_q"], min_q)
+    time_s = bp.get("time_s") or 0
+    return {
+        "resources": sorted(res.values(), key=lambda r: -r["scu"]),
+        "items": sorted(items.values(), key=lambda r: -r["qty"]),
+        "time_s": time_s,
+        "total_time_s": round(time_s * qty),
+        "max_min_q": max([r["min_q"] for r in (*res.values(), *items.values())] or [0]),
+    }
+
+
+def _mod_extremes(mod: dict) -> tuple[float, float]:
+    """The lowest/highest value a modifier can reach across its full quality
+    span (piecewise segments included — endpoints are the extremes of a linear
+    segment, so scanning endpoints is exact)."""
+    vals = [v for r in mod.get("ranges") or [] for v in (r.get("v0"), r.get("v1"))
+            if v is not None]
+    if not vals:
+        return (1.0, 1.0)
+    return (min(vals), max(vals))
+
+
+def blueprint_stat_drivers(bp: dict) -> list[dict]:
+    """Invert a blueprint's aspects→modifiers into the spec-builder vocabulary:
+    per finished stat, which slot/input drives it and over what effect range
+    ("Damage Mitigation ← Shell (Stileron): ×0.85–×1.15"). Where several aspects
+    drive one stat, the combined range composes across them — multiplicatively
+    for multiplier mods, additively for additive ones (independent sliders)."""
+    stats: dict[str, dict] = {}
+    for a in bp.get("aspects") or []:
+        for m in a.get("mods") or []:
+            prop = m.get("prop")
+            if not prop:
+                continue
+            lo, hi = _mod_extremes(m)
+            entry = stats.setdefault(prop, {
+                "prop": prop, "dir": m.get("dir") or "higher",
+                "mode": m.get("mode") or "multiplier", "drivers": []})
+            entry["drivers"].append({
+                "slot": a.get("slot"), "input": a.get("input"), "kind": a.get("kind"),
+                "v_min": lo, "v_max": hi, "mode": m.get("mode") or "multiplier",
+                "ranges": m.get("ranges") or []})
+    out = []
+    for entry in stats.values():
+        c_lo, c_hi = None, None
+        for d in entry["drivers"]:
+            if c_lo is None:
+                c_lo, c_hi = d["v_min"], d["v_max"]
+            elif d["mode"] == "additive":
+                c_lo, c_hi = c_lo + d["v_min"], c_hi + d["v_max"]
+            else:
+                c_lo, c_hi = c_lo * d["v_min"], c_hi * d["v_max"]
+        entry["combined_min"] = round(c_lo, 6)
+        entry["combined_max"] = round(c_hi, 6)
+        out.append(entry)
+    return sorted(out, key=lambda e: e["prop"])
+
+
+def blueprint_quality_effect(mod: dict, q: float) -> float:
+    """A modifier's value at input quality `q` (0–1000): piecewise-linear
+    interpolation over its ranges. `q` clamps to the covered span; a gap
+    between segments (e.g. 0–500 / 501–1000) resolves to the nearer edge.
+    Additive-mode values are integer steps in the data, so they round."""
+    ranges = sorted(mod.get("ranges") or [], key=lambda r: (r.get("q0") or 0))
+    if not ranges:
+        return 1.0
+    q = max(min(float(q), ranges[-1].get("q1") or 1000), ranges[0].get("q0") or 0)
+    seg = ranges[0]
+    for r in ranges:
+        q0 = r.get("q0") or 0
+        if q0 <= q:
+            seg = r
+        if q0 <= q <= (r.get("q1") if r.get("q1") is not None else 1000):
+            seg = r
+            break
+    q0, q1 = seg.get("q0") or 0, seg.get("q1") if seg.get("q1") is not None else 1000
+    v0, v1 = seg.get("v0"), seg.get("v1")
+    if v0 is None or v1 is None:
+        return 1.0
+    if q1 <= q0:
+        val = v1
+    else:
+        t = (max(min(q, q1), q0) - q0) / (q1 - q0)
+        val = v0 + (v1 - v0) * t
+    if (mod.get("mode") or "multiplier") == "additive":
+        return float(round(val))
+    return round(val, 6)
+
+
+def blueprint_stat_preview(bp: dict, qualities: dict | None = None) -> list[dict]:
+    """The expected finished stats at given per-aspect input qualities
+    (`{slot: q}`, default 500 = base). Same-stat modifiers across aspects
+    compose multiplicatively (multiplier mode) / additively (additive mode) —
+    an *estimate*, clearly labeled so in the UI; the app never pretends it can
+    verify in-game stats."""
+    qualities = qualities or {}
+    out = []
+    for entry in blueprint_stat_drivers(bp):
+        val = None
+        for d in entry["drivers"]:
+            q = qualities.get(d["slot"], 500)
+            eff = blueprint_quality_effect({"mode": d["mode"], "ranges": d["ranges"]}, q)
+            if val is None:
+                val = eff
+            elif d["mode"] == "additive":
+                val += eff
+            else:
+                val *= eff
+        out.append({"prop": entry["prop"], "dir": entry["dir"], "mode": entry["mode"],
+                    "value": round(val, 6) if val is not None else None})
+    return out
+
+
+def commission_board_state(listing: dict, offers) -> dict:
+    """Live quote state of a craft-request listing for its board card / detail
+    view (mirrors derive_auction_state's role, much simpler: no tie-breaks or
+    winner derivation — the requester picks a quote manually). Best quote =
+    the lowest active aUEC amount; a lapsed needed-by date just expires the
+    request (no winner), which the endpoint settles lazily on read."""
+    quotes = [o for o in (offers or [])
+              if o.get("amount_auec") is not None
+              and (o.get("status") or "active") in ("active", "accepted")]
+    amounts = [_qty(o.get("amount_auec")) for o in quotes]
+    budget = listing.get("price_auec")
+    return {
+        "quote_count": len(quotes),
+        "best_quote": min(amounts) if amounts else None,
+        "budget": _qty(budget) if budget is not None else None,
+        "ends_at": listing.get("ends_at"),
+    }
