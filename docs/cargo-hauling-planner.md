@@ -243,9 +243,9 @@ the linear-in-distance model holds at Gm scale.
 > liability; their `server.erkul.games/*` endpoints are also an undocumented private
 > API (ToS/load risk). The *underlying numbers* (drive speed, fuel-per-distance, hull
 > fuel tank) are **CIG game facts, not erkul's to license**, so we source those facts
-> from a reuse-permitted dataset and do the math in-house. Local reference copies of
-> the erkul responses are git-ignored (`docs/qdrives.json`, `docs/loadout.json`) —
-> kept for development reference, never committed or served. This supersedes any
+> from a reuse-permitted dataset (now the SC Wiki API, backlog #26) and do the math
+> in-house. The early local reference copies of the erkul responses
+> (`docs/qdrives.json`, `docs/loadout.json`) have been removed. This supersedes any
 > earlier "paste your erkul link" idea.
 
 - **Cumulative QT distance — always shown (free).** The cost matrix already
