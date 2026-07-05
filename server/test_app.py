@@ -1620,6 +1620,168 @@ class TradeRunSummaryTests(unittest.TestCase):
         self.assertEqual(s["profit"], 8000)
 
 
+class TradeStockReportTests(unittest.TestCase):
+    """Stock reports (#21): the run-mode no-stock skip files a shared 'out'
+    report, a well-short buy files a 'low' one, the board endpoint serves fresh
+    reports with age-off pruning, and skipped legs stay out of realized stats."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "9", "display_name": "Trader", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.hub.sessions.pop("9", None)
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        db.stock_reports_clear()
+        legs = [
+            {"commodity": "Gold", "buy_poi_id": 11, "sell_poi_id": 12,
+             "buy_terminal": "A", "sell_terminal": "B", "buy_price": 100,
+             "sell_price": 300, "scu": 40, "profit": 8000, "held": False},
+            {"commodity": "Iron", "buy_poi_id": 12, "sell_poi_id": 13,
+             "buy_terminal": "B", "sell_terminal": "C", "buy_price": 50,
+             "sell_price": 200, "scu": 40, "profit": 6000, "held": False},
+        ]
+        sess = app.hub.get(self._member)
+        sess.trade_run = {"id": 1, "ship": "C2", "usable_scu": 64, "legs": legs,
+                          "leg_states": app._initial_trade_states(legs), "active": 0,
+                          "summary": {"total_profit": 14000}}
+
+    # --- the stockout action ------------------------------------------------
+    def test_stockout_skips_leg_and_files_out_report(self):
+        r = self.client.patch("/api/trade/run", json={"action": "stockout", "leg": 0})
+        self.assertEqual(r.status_code, 200)
+        v = r.json()["trade_run"]
+        self.assertEqual(v["active"], 1)                    # cursor moved on
+        self.assertTrue(v["legs"][0]["skipped"])
+        self.assertTrue(v["legs"][0]["stockout"])
+        self.assertEqual(v["realized_profit"], 0)           # no phantom 8000
+        self.assertIsNone(v["legs"][0]["realized"])
+        board = self.client.get("/api/trade/stock").json()
+        self.assertEqual(len(board["reports"]), 1)
+        rep = board["reports"][0]
+        self.assertEqual((rep["kind"], rep["poi_id"], rep["commodity"]),
+                         ("out", 11, "Gold"))
+        self.assertEqual(rep["poster_name"], "Trader")
+        self.assertIn("age_s", rep)
+
+    def test_stockout_only_valid_before_the_buy(self):
+        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0})
+        r = self.client.patch("/api/trade/run", json={"action": "stockout", "leg": 0})
+        self.assertEqual(r.status_code, 409)
+
+    def test_plain_skip_files_nothing_but_stays_unrealized(self):
+        r = self.client.patch("/api/trade/run", json={"action": "advance", "leg": 0})
+        v = r.json()["trade_run"]
+        self.assertTrue(v["legs"][0]["skipped"])
+        self.assertNotIn("stockout", v["legs"][0])
+        self.assertEqual(v["realized_profit"], 0)           # the regression fix
+        self.assertEqual(self.client.get("/api/trade/stock").json()["reports"], [])
+
+    # --- the low-stock auto-report ------------------------------------------
+    def test_short_buy_files_low_report(self):
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "buy", "leg": 0, "scu": 10})
+        self.assertEqual(r.status_code, 200)                # 10 < 40 * 0.5
+        rep = self.client.get("/api/trade/stock").json()["reports"][0]
+        self.assertEqual((rep["kind"], rep["scu"]), ("low", 10))
+
+    def test_modest_short_buy_files_nothing(self):
+        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0, "scu": 30})
+        self.assertEqual(self.client.get("/api/trade/stock").json()["reports"], [])
+
+    # --- board lifecycle ----------------------------------------------------
+    def test_new_report_replaces_same_terminal_and_commodity(self):
+        now = time.time()
+        db.stock_report_save({"poi_id": 11, "terminal": "A", "commodity": "Gold",
+                              "kind": "low", "scu": 5, "poster": "9",
+                              "poster_name": "Trader", "created": now - 60})
+        db.stock_report_save({"poi_id": 11, "terminal": "A", "commodity": "gold",
+                              "kind": "out", "scu": None, "poster": "8",
+                              "poster_name": "Other", "created": now})
+        reports = app.active_stock_reports()
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0]["kind"], "out")         # newest observation wins
+
+    def test_ageoff_prunes_expired_reports(self):
+        now = time.time()
+        db.stock_report_save({"poi_id": 11, "terminal": "A", "commodity": "Gold",
+                              "kind": "out", "scu": None, "poster": "9",
+                              "poster_name": "T", "created": now})
+        db.stock_report_save({"poi_id": 12, "terminal": "B", "commodity": "Iron",
+                              "kind": "out", "scu": None, "poster": "9",
+                              "poster_name": "T",
+                              "created": now - (app.stock_ageoff_min() * 60 + 5)})
+        reports = app.active_stock_reports()
+        self.assertEqual([r["commodity"] for r in reports], ["Gold"])
+        # the expired row was pruned, not just filtered
+        self.assertEqual(len(db.stock_reports_since(0)), 1)
+
+    def test_ageoff_window_is_the_org_setting(self):
+        db.set_setting("stock_ageoff_min", "1")
+        try:
+            self.assertEqual(app.stock_ageoff_min(), 1)
+            now = time.time()
+            db.stock_report_save({"poi_id": 11, "terminal": "A", "commodity": "Gold",
+                                  "kind": "out", "scu": None, "poster": "9",
+                                  "poster_name": "T", "created": now - 90})
+            self.assertEqual(app.active_stock_reports(), [])   # 90s > 1min window
+        finally:
+            db.set_setting("stock_ageoff_min", "")
+        self.assertEqual(app.stock_ageoff_min(), 180)          # default restored
+
+    def test_settings_surface_carries_the_knob(self):
+        s = self.client.get("/api/settings").json()
+        self.assertEqual(s["stock_ageoff_min"], app.stock_ageoff_min())
+
+    # --- end-to-end: the plan endpoint honors + badges reports ---------------
+    def test_plan_respects_out_reports_and_badges_low(self):
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        A, B, C = (p.id for p in pois)
+
+        def pt(commodity, tid, poi, buy=None, sell=None):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 500 if buy else 0,
+                    "scu_sell_stock": 500 if sell else 0, "updated_at": None}
+
+        orig = app.trade_price_points
+        app.trade_price_points = [pt("Gold", 1, A, buy=100), pt("Gold", 2, B, sell=300),
+                                  pt("Iron", 3, B, buy=50), pt("Iron", 4, C, sell=200)]
+        try:
+            now = time.time()
+            db.stock_report_save({"poi_id": A, "terminal": "T1", "commodity": "Gold",
+                                  "kind": "out", "scu": None, "poster": "9",
+                                  "poster_name": "T", "created": now})
+            db.stock_report_save({"poi_id": B, "terminal": "T3", "commodity": "Iron",
+                                  "kind": "low", "scu": 12, "poster": "9",
+                                  "poster_name": "T", "created": now})
+            r = self.client.post("/api/trade/plan", json={
+                "usable_scu": 100, "start_id": A, "sort": "profit",
+                "system": "Stanton"})
+            self.assertEqual(r.status_code, 200)
+            legs = r.json()["legs"]
+            # Gold's buy is reported out -> excluded; Iron survives with its
+            # low-stock badge attached to the buy side.
+            self.assertEqual({l["commodity"] for l in legs}, {"Iron"})
+            self.assertEqual(legs[0]["stock"][0]["kind"], "low")
+            self.assertEqual(legs[0]["stock"][0]["scu"], 12)
+        finally:
+            app.trade_price_points = orig
+
+
 class TradeFavoritesTests(unittest.TestCase):
     """Saved trade-route favorites (#21): persist a plan *config* (not resolved
     legs), list freshest-first, overwrite by name, and delete — scoped per member."""

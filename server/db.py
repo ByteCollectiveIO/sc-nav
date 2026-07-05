@@ -380,6 +380,26 @@ CREATE INDEX IF NOT EXISTS trade_favorites_owner ON trade_favorites(discord_id);
 -- `location` is always-kept free text so a survivor can post "Between Baijini and
 -- Orison" mid-escape without picking exact POIs. Only anchored warnings can steer
 -- the trade planner; unanchored ones are board-only intel.
+-- Trade stock reports (#21): short-lived, org-shared "this terminal was out of
+-- (or low on) this commodity" observations, filed from trade run mode — the
+-- no-stock skip files an `out`, a well-short buy files a `low`. `created` drives
+-- a pure time age-off (org setting stock_ageoff_min; not stored here). One live
+-- row per (poi_id, commodity): a newer report replaces the old. While fresh,
+-- `out` rows are dropped from the trade solver's buy-side candidates; `low` rows
+-- only badge.
+CREATE TABLE IF NOT EXISTS stock_reports (
+    id          INTEGER PRIMARY KEY,
+    poi_id      INTEGER NOT NULL,     -- the buy terminal (nav_core Poi.id)
+    terminal    TEXT,                 -- display name, denormed for the board
+    commodity   TEXT NOT NULL,
+    kind        TEXT NOT NULL,        -- out (nothing to buy) | low (short shelf)
+    scu         REAL,                 -- observed available SCU (low reports)
+    poster      TEXT NOT NULL,        -- Discord member id of the reporter
+    poster_name TEXT,                 -- display name at post time
+    created     REAL NOT NULL         -- epoch seconds; drives age-off
+);
+CREATE INDEX IF NOT EXISTS stock_reports_pair ON stock_reports(poi_id, commodity);
+
 CREATE TABLE IF NOT EXISTS pirate_warnings (
     id            INTEGER PRIMARY KEY,
     poster        TEXT NOT NULL,      -- Discord member id of the reporter
@@ -2199,6 +2219,50 @@ def warning_delete_for(poster: str) -> None:
     """Remove every warning a member posted (e.g. an admin purging a member)."""
     with _lock, _conn:
         _conn.execute("DELETE FROM pirate_warnings WHERE poster=?", (poster,))
+
+
+def _stock_row_to_dict(r) -> dict:
+    return {
+        "id": r["id"], "poi_id": r["poi_id"], "terminal": r["terminal"] or "",
+        "commodity": r["commodity"], "kind": r["kind"], "scu": r["scu"],
+        "poster": r["poster"], "poster_name": r["poster_name"] or "",
+        "created": r["created"],
+    }
+
+
+def stock_report_save(e: dict) -> int:
+    """File one stock report, replacing any live report for the same
+    (poi_id, commodity) — the newest observation is the only one that matters.
+    Returns the new row id."""
+    with _lock, _conn:
+        _conn.execute(
+            "DELETE FROM stock_reports WHERE poi_id=? AND lower(commodity)=lower(?)",
+            (e["poi_id"], e["commodity"]))
+        cur = _conn.execute(
+            "INSERT INTO stock_reports "
+            "(poi_id,terminal,commodity,kind,scu,poster,poster_name,created) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (e["poi_id"], e.get("terminal") or "", e["commodity"], e["kind"],
+             e.get("scu"), e["poster"], e.get("poster_name") or "", e["created"]))
+        return cur.lastrowid
+
+
+def stock_reports_since(cutoff: float) -> list[dict]:
+    """The live stock board: every report filed after `cutoff` (epoch seconds),
+    freshest first. Expired rows are pruned in the same pass so the table never
+    accumulates."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM stock_reports WHERE created < ?", (cutoff,))
+        rows = _conn.execute(
+            "SELECT * FROM stock_reports ORDER BY created DESC").fetchall()
+    return [_stock_row_to_dict(r) for r in rows]
+
+
+def stock_reports_clear() -> int:
+    """Admin wipe of the stock board. Returns rows removed."""
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM stock_reports")
+        return cur.rowcount
 
 
 def _meta_get(key: str):
