@@ -2092,6 +2092,22 @@ class CommissionModeTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIsNone(r.json()["commission"]["budget"])
 
+    def test_spec_inputs_persist_per_slot_material_minimums(self):
+        r = self._post_commission(crafted={
+            "quality": 800,
+            "inputs": [{"slot": "Emitter", "input": "Hadanite", "min_q": 800},
+                       {"slot": "Frame", "input": "Agricium", "min_q": 500},
+                       {"slot": " ", "input": "Blank", "min_q": 5}]})   # blank slot dropped
+        self.assertEqual(r.status_code, 200, r.text)
+        spec = r.json()["attributes"]["spec"]
+        self.assertEqual(spec["inputs"], [
+            {"slot": "Emitter", "input": "Hadanite", "min_q": 800},
+            {"slot": "Frame", "input": "Agricium", "min_q": 500}])
+        # out-of-range min_q is rejected at the model layer
+        bad = self._post_commission(crafted={
+            "inputs": [{"slot": "Emitter", "input": "Hadanite", "min_q": 2000}]})
+        self.assertEqual(bad.status_code, 422)
+
     def test_rejects_non_blueprint_item(self):
         r = self._post_commission(item_id="commodity:TestOre")
         self.assertEqual(r.status_code, 400)

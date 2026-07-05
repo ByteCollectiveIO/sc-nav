@@ -4753,15 +4753,26 @@ class CraftStatIn(BaseModel):
     value: str = Field(min_length=1, max_length=40)            # free-form, e.g. "12.5 MW"
 
 
+class SpecInputIn(BaseModel):
+    """One per-slot material-quality minimum on a craft request (#25): the
+    requester's slider position for that crafting slot, e.g. Emitter (Hadanite)
+    ≥ Q800. What tells the crafter which material qualities to source."""
+    slot: str = Field(min_length=1, max_length=40)              # e.g. "Emitter"
+    input: str = Field(min_length=1, max_length=40)             # e.g. "Hadanite"
+    min_q: int = Field(ge=1, le=1000)
+
+
 class CraftedIn(BaseModel):
     """Optional crafted-item quality annotation (SC 4.8 crafting). A crafted
     component's quality rides from its materials (1–1000, in 8 bands) into its
     per-stat values, so a seller can advertise an overall quality and/or band plus
     a few finished-stat rows. Stored as a free-form JSON blob — no fixed schema, so
-    it survives whatever the in-game model turns out to expose."""
+    it survives whatever the in-game model turns out to expose. `inputs` carries a
+    craft request's per-slot material minimums (commission spec builder)."""
     quality: int | None = Field(default=None, ge=1, le=1000)
     band: int | None = Field(default=None, ge=1, le=8)
     stats: list[CraftStatIn] = Field(default_factory=list, max_length=12)
+    inputs: list[SpecInputIn] = Field(default_factory=list, max_length=12)
 
 
 class ListingIn(BaseModel):
@@ -4820,7 +4831,9 @@ _LISTING_CARD = ("id", "seller_id", "seller_handle", "item_id", "item_name", "un
 
 def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
     """Normalize a crafted-quality annotation into the stored JSON blob, or None if
-    it carries nothing. Drops blank stat rows; keeps quality/band only when set."""
+    it carries nothing. Drops blank stat rows; keeps quality/band only when set.
+    `inputs` (per-slot material minimums from the commission spec builder) ride
+    along so the crafter can see which material qualities to source."""
     if crafted is None:
         return None
     out: dict = {}
@@ -4832,6 +4845,10 @@ def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
              for s in (crafted.stats or []) if s.name.strip() and s.value.strip()]
     if stats:
         out["stats"] = stats
+    inputs = [{"slot": i.slot.strip(), "input": i.input.strip(), "min_q": int(i.min_q)}
+              for i in (crafted.inputs or []) if i.slot.strip() and i.input.strip()]
+    if inputs:
+        out["inputs"] = inputs
     return out or None
 
 _MARKET_PAGE = 25          # default board page size
