@@ -3293,6 +3293,40 @@ class BlueprintCommissionTests(unittest.TestCase):
         self.assertEqual([l["item_id"] for l in out["lines"]], ["commodity:agricium"])
         self.assertEqual(sorted(out["unmapped"]), ["Dolivine", "Hadanite"])
 
+    def test_goal_lines_input_qs_raise_target_quality(self):
+        # Spec-builder sliders ({slot: q}) lift each line above the recipe minimum.
+        resolve = self._resolver({"Agricium", "Hadanite", "Dolivine"})
+        out = nav_core.blueprint_goal_lines(
+            self.WEAPON, 1, resolve, {"Frame": 800, "Emitter": 650})
+        by_id = {l["item_id"]: l for l in out["lines"]}
+        self.assertEqual(by_id["commodity:agricium"]["min_q"], 800)   # ask > recipe's 1
+        self.assertEqual(by_id["commodity:hadanite"]["min_q"], 650)
+        self.assertEqual(by_id["commodity:dolivine"]["min_q"], 0)     # slot not asked
+
+    # -- estimated material cost (#25.1 §12) --
+
+    def test_material_cost_prices_resources_only(self):
+        # Resource (SCU) inputs price out; gem/item counts have no per-unit price
+        # source and land in unpriced alongside unknown resources.
+        prices = {"Agricium": 2000}
+        cost = nav_core.blueprint_material_cost(self.WEAPON, lambda n: prices.get(n))
+        self.assertEqual(cost["total"], 720)                 # 0.36 SCU × 2,000
+        self.assertEqual(sorted(cost["unpriced"]), ["Dolivine", "Hadanite"])
+
+    def test_material_cost_none_when_nothing_priced(self):
+        cost = nav_core.blueprint_material_cost(self.WEAPON, lambda n: None)
+        self.assertIsNone(cost["total"])
+        self.assertEqual(sorted(cost["unpriced"]),
+                         ["Agricium", "Dolivine", "Hadanite"])
+
+    def test_goal_lines_recipe_minimum_wins_over_lower_ask(self):
+        # A slider below the recipe's own demand never lowers the target; a shared
+        # input takes the strictest ask across its slots.
+        resolve = self._resolver({"Borase"})
+        out = nav_core.blueprint_goal_lines(
+            self.PLANT, 1, resolve, {"Shell": 200, "Stator Cores": 700})
+        self.assertEqual(out["lines"][0]["min_q"], 700)   # max(recipe 500, asks 200/700)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -1625,14 +1625,12 @@
     padding: 2px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim);
     border: 1px solid var(--border); }
   .rm-minq { font-size: 10px; color: var(--craft); margin-left: 6px; white-space: nowrap; }
-  .rm-scope-seg { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  /* align-self: a flex-column parent (.ev-field) would otherwise stretch the seg full-width */
+  .rm-scope-seg { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden; align-self: flex-start; }
   .rm-scope-seg button { background: var(--panel); color: var(--dim); border: 0; padding: 7px 14px;
     font: inherit; font-size: 13px; cursor: pointer; }
   .rm-scope-seg button.on { background: var(--accent); color: var(--ink-on-accent); font-weight: 600; }
-  .rm-bp-preview { margin-top: 8px; padding: 10px 12px; background: var(--panel2);
-    border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
-  .rm-bp-preview .rm-bp-mats { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 6px; }
-  .rm-bp-mat { font-variant-numeric: tabular-nums; }
   .rm-craft-head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
     padding: 9px 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--craft) 8%, var(--panel2));
     border: 1px solid color-mix(in srgb, var(--craft) 30%, var(--border)); border-radius: 8px; font-size: 12px; }
@@ -9308,11 +9306,13 @@ async function consumeFinderPrefill() {
 function goalLineRow(l, minqMap) {
   const pct = l.needed ? Math.min(100, Math.round(100 * l.have / l.needed)) : 100;
   const done = l.needed && l.have >= l.needed;
-  const minq = minqMap && minqMap[l.item_id];
+  // Target quality: stored per line (recipe minimum max'd with the goal's spec
+  // sliders); goals saved before that denormalization fall back to the recipe map.
+  const minq = l.min_q || (minqMap && minqMap[l.item_id]);
   return `<div class="rm-line ${done ? "done" : ""}">` +
     `<span class="rm-line-n"><a class="rm-finder-link" href="#/nav" data-finder="${esc(l.name)}" ` +
     `title="find ${esc(l.name)} in the navigator">${esc(l.name)}</a>` +
-    `${minq ? `<span class="rm-minq" title="recipe wants at least quality ${minq}">≥Q${minq}</span>` : ""}</span>` +
+    `${minq ? `<span class="rm-minq" title="gather at least quality ${minq} (${bandTag(minq)})">≥Q${minq}</span>` : ""}</span>` +
     `<span class="rm-line-bar"><span style="width:${pct}%"></span></span>` +
     `<span class="rm-line-ct">${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")}${done ? " ✓" : ""}</span></div>`;
 }
@@ -9345,9 +9345,30 @@ function goalCraftHead(g) {
   }
   const unlocks = (c.unlocks && c.unlocks.length)
     ? ` · unlock: ${esc(c.unlocks.slice(0, 2).join(", "))}` : (c.default ? " · unlocked by default" : "");
-  return `<div class="rm-craft-head"><span class="rm-craft-t">⚒ Craft: ${esc(c.name)}</span>` +
-    `<span class="muted">${esc(c.cat || "")} · ${fmtDur(c.time_s || 0)} craft${unlocks}</span>` +
+  const n = Number(c.qty) || 1;
+  const mats = bpMatsCost(c, n);   // server sends est_cost per craft; scale by count
+  return `<div class="rm-craft-head"><span class="rm-craft-t">⚒ Craft: ${n > 1 ? `${fmtQty(n)}× ` : ""}${esc(c.name)}</span>` +
+    `<span class="muted">${esc(c.cat || "")} · ${fmtDur((c.time_s || 0) * n)} craft${mats}${unlocks}</span>` +
     `<a class="mk-inline-link" href="#" id="goal-craft-lib" title="add this recipe to your blueprint library">＋ my blueprints</a></div>`;
+}
+
+// A craft goal's saved spec: the per-slot material-quality targets the sliders
+// set, plus the expected finished stats at those qualities — same craftbox
+// styling as a commission's requested spec.
+function goalSpecBox(g) {
+  const c = g.craft;
+  if (!c || !(c.inputs || []).length) return "";
+  const rows = c.inputs.map(i =>
+    `<tr><td>${esc(i.slot)} <span class="muted">(${esc(i.input)})</span></td>` +
+    `<td>≥ Q${esc(String(i.min_q))} <span class="muted">${bandTag(i.min_q)}</span></td></tr>`).join("");
+  const stats = (c.stat_preview || []).map(s =>
+    `<tr><td>${esc(s.prop)}</td><td>${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td></tr>`).join("");
+  return `<div class="mk-craftbox"><div class="mk-craft-h">⚒ Target material quality</div>` +
+    `<table class="mk-craft-tbl">${rows}</table>` +
+    (stats ? `<div class="mk-craft-h" style="margin-top:10px">Expected stats at these qualities — estimates</div>` +
+      `<table class="mk-craft-tbl">${stats}</table>` : "") +
+    `<p class="mk-craft-foot">Quality is the game's 1–1000 material scale (Q500 ≈ base); ` +
+    `Band ≈ quality ÷ 125 (B8 top). Gather targets, not hard requirements.</p></div>`;
 }
 
 function goalLocations(g) {
@@ -9381,6 +9402,7 @@ function renderGoalDetailBody(g) {
     `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b></div>` +
     goalCraftHead(g) + seedWarn +
     (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
+    goalSpecBox(g) +
     `<div class="rm-headline"><span class="rm-headline-v ${met ? "met" : ""}">${Math.round(pr.overall_pct)}%</span>` +
     `<span class="rm-headline-l">filled${met ? " · met ✓" : ""}</span></div>` +
     `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
@@ -9468,15 +9490,25 @@ function goalFormHtml(g) {
         `<button type="button" data-vis="org" class="${vis === "org" ? "on" : ""}">Org — shared</button>` +
         `<button type="button" data-vis="personal" class="${vis === "personal" ? "on" : ""}">Personal — only me</button>` +
       `</div><span class="ev-hint">Personal goals stay private to you (e.g. gathering to craft something).</span></div>`;
+  // Editing a craft goal restores its recipe + craft count so the spec-builder
+  // sliders come back at the saved per-slot qualities (mirrors the commission
+  // edit form). An unavailable recipe (left the feed) stays blank — the goal
+  // still works on its saved line items.
+  const craft = g && g.craft && g.craft.available ? g.craft : null;
   const seedBlock =
     `<div class="ev-field"><label>Seed from a blueprint <span class="muted">(optional)</span></label>` +
       `<div class="rm-row">` +
-        `<span class="poi-pick" style="flex:1;min-width:220px"><input id="goal-f-bp" class="ti" ` +
-          `placeholder="search a craftable recipe…" autocomplete="off"></span>` +
-        `<input id="goal-f-bp-qty" class="ti rm-qty" type="number" min="1" step="1" value="1" title="how many to craft">` +
+        `<span class="poi-pick${craft ? " picked" : ""}" style="flex:1;min-width:220px"><input id="goal-f-bp" class="ti" ` +
+          `placeholder="search a craftable recipe…" autocomplete="off"` +
+          `${craft ? ` value="${esc(craft.name)}" data-bp-key="${esc(craft.blueprint_key)}"` : ""}></span>` +
+        `<input id="goal-f-bp-qty" class="ti rm-qty" type="number" min="1" step="1" ` +
+          `value="${craft ? fmtQty(craft.qty || 1) : 1}" title="how many to craft">` +
         `<button class="ev-btn" id="goal-f-bp-clear" type="button">clear</button>` +
-      `</div><span class="ev-hint">Pick a recipe to auto-fill its materials as line items. Leave blank to add items by hand.</span>` +
-      `<div id="goal-f-bp-preview" class="rm-bp-preview" hidden></div></div>`;
+      `</div><span class="ev-hint">Pick a recipe to auto-fill its materials as line items — the quality sliders ` +
+        `below raise each material's gather target. Leave blank to add items by hand.</span>` +
+      `<span class="ev-hint" id="goal-f-reseed-hint" hidden style="color:var(--craft)">Recipe settings changed — ` +
+        `saving re-derives the line items from the recipe at these qualities (replacing the rows below).</span>` +
+      `<div id="goal-f-bp-spec"></div></div>`;
   return `<div class="ev-form">` +
     `<div class="ev-field"><label>Title</label><input id="goal-f-title" class="ti" maxlength="120" ` +
       `value="${g ? esc(g.title) : ""}" placeholder="e.g. Fund the org Hull-C"></div>` +
@@ -9507,11 +9539,26 @@ function goalScopeValue() {
   return on ? on.dataset.vis : "org";
 }
 
+// The goal form's spec-builder instance — the same component as the marketplace
+// craft-request form (bpSpecCtl, defined with the market code), minus its
+// "+ spec" stat rows. Slider positions become the seeded line items' per-material
+// gather-quality targets.
+const goalSpec = bpSpecCtl({
+  host: () => $("goal-f-bp-spec"),
+  qty: () => Math.max(1, parseInt(($("goal-f-bp-qty") || {}).value, 10) || 1),
+});
+
 function collectGoalForm() {
   const title = $("goal-f-title").value.trim();
   if (!title) return { error: "Give the goal a title." };
+  const bpEl = $("goal-f-bp");
+  const bpKey = bpEl ? bpEl.dataset.bpKey : "";
+  // Editing a craft goal with changed recipe settings (quality sliders / craft
+  // count) re-derives the line items server-side — the manual rows are replaced,
+  // so they're not collected or validated.
+  const reseed = !!bpKey && bpEl.dataset.reseed === "1";
   const line_items = [];
-  for (const row of document.querySelectorAll("#goal-f-lines .rm-row")) {
+  if (!reseed) for (const row of document.querySelectorAll("#goal-f-lines .rm-row")) {
     const input = row.querySelector(".rm-li-item");
     const id = input.dataset.itemId;
     const qty = Number(row.querySelector(".rm-li-qty").value);
@@ -9521,7 +9568,6 @@ function collectGoalForm() {
     const unitEl = row.querySelector(".rm-li-unit");
     line_items.push({ item_id: id, qty_needed: qty, unit: unitEl ? unitEl.value : undefined });
   }
-  const bpKey = $("goal-f-bp") ? $("goal-f-bp").dataset.bpKey : "";
   // A blueprint seed (with no hand-entered items) expands into line items server-
   // side; otherwise at least one manual line is required.
   if (!line_items.length && !bpKey) return { error: "Add a line item, or seed from a blueprint." };
@@ -9536,6 +9582,8 @@ function collectGoalForm() {
   if (bpKey && !line_items.length) {
     payload.blueprint_key = bpKey;
     payload.blueprint_qty = Math.max(1, parseInt($("goal-f-bp-qty").value, 10) || 1);
+    const inputs = goalSpec.collectInputs();   // per-slot quality asks (if engaged)
+    if (inputs.length) payload.blueprint_inputs = inputs;
   }
   const statusEl = $("goal-f-status");
   if (statusEl) payload.status = statusEl.value;
@@ -9567,34 +9615,30 @@ function bindGoalForm(editId, onCancel) {
       b.classList.add("on");
     };
   });
-  // Blueprint seed: picking a recipe shows its materials preview; the manual line
-  // editor stays available but is optional once a recipe is chosen.
-  const bpWrap = $("goal-f-bp") && $("goal-f-bp").parentElement;
-  const bpPrev = $("goal-f-bp-preview");
-  const renderBpPreview = async () => {
-    const key = $("goal-f-bp").dataset.bpKey;
-    if (!key) { bpPrev.hidden = true; bpPrev.innerHTML = ""; return; }
-    const qty = Math.max(1, parseInt($("goal-f-bp-qty").value, 10) || 1);
-    let d;
-    try { d = await fetch(`/api/blueprints/${encodeURIComponent(key)}`).then(r => r.json()); }
-    catch { bpPrev.hidden = true; return; }
-    const m = d.manifest || {};
-    const mats = [...(m.resources || []).map(r =>
-        `<span class="rm-bp-mat">${esc(r.input)} ${fmtQty((r.scu || 0) * qty)} SCU${r.min_q ? `<span class="rm-minq">≥Q${r.min_q}</span>` : ""}</span>`),
-      ...(m.items || []).map(r =>
-        `<span class="rm-bp-mat">${esc(r.input)} ×${fmtQty((r.qty || 0) * qty)}${r.min_q ? `<span class="rm-minq">≥Q${r.min_q}</span>` : ""}</span>`)];
-    bpPrev.hidden = false;
-    bpPrev.innerHTML = `<b>${esc(d.name || key)}</b> — materials for ${qty}× ` +
-      `<span class="muted">(${fmtDur(m.total_time_s || 0)} craft)</span>` +
-      `<div class="rm-bp-mats">${mats.join("") || `<span class="muted">no materials listed</span>`}</div>`;
-  };
-  if (bpWrap) {
-    attachBlueprintPicker(bpWrap, () => renderBpPreview());
-    $("goal-f-bp")._renderPreview = renderBpPreview;   // let a deep-link seed re-run it
-    $("goal-f-bp-qty").addEventListener("input", renderBpPreview);
+  // Blueprint seed: picking a recipe mounts the full spec builder (materials
+  // bill, per-slot quality sliders, stat estimates — same component as the
+  // marketplace craft-request form); the manual line editor stays available but
+  // is optional once a recipe is chosen. On edit, changing the recipe, a slider,
+  // or the craft count arms a "re-derive line items on save".
+  const bpEl = $("goal-f-bp");
+  if (bpEl) {
+    const hint = $("goal-f-reseed-hint");
+    const armReseed = editId ? () => { bpEl.dataset.reseed = "1"; if (hint) hint.hidden = false; } : null;
+    goalSpec.onSlide = armReseed;
+    attachBlueprintPicker(bpEl.parentElement, bp => {
+      goalSpec.initQ = null;             // a fresh recipe starts at base sliders
+      if (armReseed) armReseed();
+      goalSpec.load(bp.key);
+    });
+    if (bpEl.dataset.bpKey) goalSpec.load(bpEl.dataset.bpKey);   // edit: restore the saved spec
+    $("goal-f-bp-qty").addEventListener("input", () => {
+      if (goalSpec.bp) { if (armReseed) armReseed(); goalSpec.render(); }
+    });
     $("goal-f-bp-clear").onclick = () => {
-      const i = $("goal-f-bp"); i.value = ""; delete i.dataset.bpKey;
-      i.parentElement.classList.remove("picked"); bpPrev.hidden = true; bpPrev.innerHTML = "";
+      bpEl.value = ""; delete bpEl.dataset.bpKey; delete bpEl.dataset.reseed;
+      bpEl.parentElement.classList.remove("picked");
+      goalSpec.initQ = null; goalSpec.load("");
+      if (hint) hint.hidden = true;
     };
   }
   $("goal-f-cancel").onclick = onCancel;
@@ -9620,6 +9664,7 @@ function bindGoalForm(editId, onCancel) {
 }
 
 async function renderGoalForm() {
+  goalSpec.initQ = null;
   $("goals-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/goals">← All goals</a>` +
     `<h2 class="ev-screen-h">NEW GOAL</h2>${goalFormHtml(null)}</div>`;
   bindGoalForm(null, () => { location.hash = "#/goals"; });
@@ -9635,12 +9680,20 @@ async function renderGoalForm() {
       const perElBtn = document.querySelector('#goal-f-scope button[data-vis="personal"]');
       if (perElBtn) { document.querySelectorAll("#goal-f-scope button").forEach(x => x.classList.remove("on")); perElBtn.classList.add("on"); }
       if (!$("goal-f-title").value) $("goal-f-title").value = `Craft: ${d.name || key}`;
-      if (input._renderPreview) input._renderPreview();   // show the materials preview
+      goalSpec.bp = d; goalSpec.touched = false; goalSpec.render();   // mount the spec builder
     } catch {}
   }
 }
 
 function renderGoalEditForm(g) {
+  // A craft goal's saved per-slot quality asks seed the sliders (so a save
+  // round-trips them instead of resetting to base) — mirrors the market edit form.
+  goalSpec.initQ = null;
+  const inputs = (g.craft && g.craft.inputs) || [];
+  if (inputs.length) {
+    goalSpec.initQ = {};
+    inputs.forEach(i => { goalSpec.initQ[i.slot] = i.min_q; });
+  }
   $("goal-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT GOAL</h2>${goalFormHtml(g)}`;
   bindGoalForm(g.id, () => renderGoalDetail(g.id));
 }
@@ -9997,7 +10050,18 @@ function bpManifestHtml(bp, qty, reqByInput) {
         ? " via: " + bp.unlocks.map(esc).join(" · ") : ""}.</div>`;
   return `<div class="mk-bp-sect">Materials bill${n > 1 ? ` · ×${fmtQty(n)}` : ""}</div>` +
     `<table class="mk-bp-tbl">${rows}</table>` +
-    `<div class="mk-bp-meta" style="margin-top:6px">Craft time: ${time}</div>` + unlock;
+    `<div class="mk-bp-meta" style="margin-top:6px">Craft time: ${time}${bpMatsCost(bp, n)}</div>` + unlock;
+}
+
+// "· mats ≈ 12,400 aUEC" — the server's per-craft materials-cost estimate
+// (est_cost) scaled to the craft count. Inputs with no price reference are
+// named so the ≈ reads as a floor, not a promise; no estimate → no line.
+function bpMatsCost(bp, n) {
+  const c = bp.est_cost;
+  if (!c || c.total == null) return "";
+  const gaps = (c.unpriced || []).length
+    ? ` <span class="muted">(+ unpriced: ${esc(c.unpriced.join(", "))})</span>` : "";
+  return ` · mats ≈ ${fmtAuec(Math.round(c.total * n))}${gaps}`;
 }
 
 // Lazy manifest panel on a commission's detail page — fetched per-view so the
@@ -10049,7 +10113,10 @@ function mkPriceLine(l) {
         ? `<b class="mk-price">${fmtAuec(c.budget)}</b> <span class="muted">budget</span>`
         : `<span class="muted">open to quotes</span>`;
     const ends = l.ends_at ? ` · ${mkCountdown(l.ends_at)}` : "";
-    return `${cur} · ${c.quote_count || 0} quote${c.quote_count === 1 ? "" : "s"}${ends}`;
+    // Quoting anchor for crafters: what the job's materials roughly cost to buy.
+    const mats = c.mats_est != null
+      ? ` · <span class="muted" title="estimated materials cost (priced inputs only)">mats ≈ ${fmtAuec(c.mats_est)}</span>` : "";
+    return `${cur} · ${c.quote_count || 0} quote${c.quote_count === 1 ? "" : "s"}${mats}${ends}`;
   }
   return `<span class="muted">wants:</span> ${esc(l.want || "")}`;
 }
@@ -10703,7 +10770,7 @@ function marketFormHtml(l) {
         `<div class="ev-field"><label>Needed by (time)</label><input id="mk-f-need-time" class="ti" type="time" ` +
           `value="${l && l.mode === "commission" && l.ends_at ? toLocalTime(l.ends_at) : ""}"><span class="ev-hint">Blank ⇒ end of day.</span></div>` +
       `</div>` +
-      (l ? "" : `<label class="on-invis" style="margin:4px 0 8px"><input type="checkbox" id="mk-f-announce"> 📣 Announce the request to the org's Discord</label>`) +
+      (l ? "" : `<label class="on-invis" style="margin:4px 0 8px"><input type="checkbox" id="mk-f-announce"> 📣 Announce the request to the org's Discord <span class="muted">(pings members who can craft it)</span></label>`) +
     `</div>` +
     `<div class="mk-mode-fields" data-mode="sale">` +
       `<div class="ev-field"><label>Price (aUEC)</label><input id="mk-f-price" class="ti" type="number" min="0" step="any" ` +
@@ -10774,7 +10841,7 @@ function mkSyncModeFields() {
 // stat rows. Collapsed unless the listing already carries an annotation.
 function mkStatRow(name, value) {
   return `<div class="mk-statrow">` +
-    `<input class="ti mk-stat-name" placeholder="stat (e.g. Power output)" maxlength="40" value="${name ? esc(name) : ""}">` +
+    `<input class="ti mk-stat-name" list="mk-stat-names" placeholder="stat (e.g. Power output)" maxlength="40" value="${name ? esc(name) : ""}">` +
     `<input class="ti mk-stat-val" placeholder="value (e.g. 12.5 MW)" maxlength="40" value="${value ? esc(value) : ""}">` +
     `<button type="button" class="ev-btn sm mk-stat-rm" title="Remove">✕</button></div>`;
 }
@@ -10800,7 +10867,8 @@ function mkCraftedFields(l) {
     `</div>` +
     mkQualityHelp() +
     `<label class="mk-stat-lbl">Stats</label><div id="mk-f-stats">${rows}</div>` +
-    `<button type="button" class="ev-btn sm" id="mk-f-addstat">+ Add stat</button></details>`;
+    `<button type="button" class="ev-btn sm" id="mk-f-addstat">+ Add stat</button>` +
+    `<datalist id="mk-stat-names"></datalist></details>`;
 }
 
 // What Quality and Band actually mean — one shared explainer for every listing
@@ -10874,7 +10942,7 @@ function collectMarketForm() {
     }
     const ann = $("mk-f-announce");
     if (ann && ann.checked) payload.announce = true;
-    const specInputs = bpCollectInputs();
+    const specInputs = mkSpec.collectInputs();
     if (specInputs.length) payload.crafted.inputs = specInputs;
     return { payload };
   }
@@ -10969,38 +11037,6 @@ function attachBlueprintPicker(wrap, onPick) {
   attachPickerKeys(input, drop);
 }
 
-let mkBpCur = null;      // the fetched blueprint powering the form's spec builder
-let mkBpTouched = false; // user engaged the sliders (or an edit seeded them)
-let mkBpInitQ = null;    // edit form: saved spec.inputs → { slot: q } slider seeds
-
-// Per-aspect quality sliders → { slot: q } (missing slot ⇒ base 500).
-function bpSliderQs() {
-  const qs = {};
-  document.querySelectorAll("#mk-bp-spec .mk-asp-row input[type=range]").forEach(r => {
-    qs[r.dataset.slot] = Number(r.value);
-  });
-  return qs;
-}
-
-// Sliders → the Quality/Band fields: the request's overall minimum is bounded by
-// the weakest input, so Quality auto-tracks the LOWEST slider (and Band derives
-// from it). Hand-editing either field detaches the link (dataset.auto cleared by
-// the input listener in bindMarketForm) so a typed value is never clobbered.
-function bpAutoFillSpec() {
-  if (!mkBpTouched) return;
-  const qEl = $("mk-f-q"), bandEl = $("mk-f-band");
-  if (!qEl || qEl.dataset.auto !== "1") return;
-  const vals = Object.values(bpSliderQs());
-  if (!vals.length) return;
-  const minQ = Math.min(...vals);
-  qEl.value = minQ;
-  if (bandEl && bandEl.dataset.auto === "1") bandEl.value = qualityBand(minQ);
-  const note = $("mk-f-q-auto");
-  if (note) note.textContent = `auto: weakest input slider (${bandTag(minQ)}) — type to override`;
-  const form = document.querySelector(".mk-craft-form");
-  if (form) form.open = true;
-}
-
 // Combined effect of one stat's drivers at the current slider qualities —
 // multiplicative across multiplier mods, additive across additive ones
 // (independent sliders; an estimate, mirrored server-side in nav_core).
@@ -11014,93 +11050,156 @@ function bpEstFor(entry, qs) {
   return val;
 }
 
-function bpUpdateEsts() {
-  if (!mkBpCur) return;
-  const qs = bpSliderQs();
-  document.querySelectorAll("#mk-bp-spec .mk-asp-row").forEach(row => {
-    const r = row.querySelector("input[type=range]");
-    const lbl = row.querySelector(".mk-asp-q");
-    if (r && lbl) lbl.textContent = `Q${r.value} · ${bandTag(r.value)}`;
-  });
-  (mkBpCur.stat_drivers || []).forEach(entry => {
-    const el = document.querySelector(`#mk-bp-spec .mk-est[data-prop="${CSS.escape(entry.prop)}"]`);
-    if (el) el.textContent = `≈ ${bpFmtEffect(entry.mode, bpEstFor(entry, qs))}`;
-  });
+// One spec-builder controller per hosting form (marketplace craft requests +
+// craft goals): materials bill scaled by the craft count, per-slot input-quality
+// sliders, and the blueprint's tunable stats with a live combined estimate.
+// `opts.host()` → the container element, `opts.qty()` → the craft count,
+// `opts.statBtn` → optional per-stat action ({label, onClick(entry)}). Instance
+// state: .bp (fetched blueprint), .touched (sliders engaged — an untouched
+// builder means "no per-material asks"), .initQ (edit seeds, {slot: q}),
+// .onSlide (per-form hook run on every slider input).
+function bpSpecCtl(opts) {
+  const c = { bp: null, touched: false, initQ: null, onSlide: null };
+  // Per-aspect quality sliders → { slot: q } (missing slot ⇒ base 500).
+  c.sliderQs = () => {
+    const qs = {}, h = opts.host();
+    if (h) h.querySelectorAll(".mk-asp-row input[type=range]").forEach(r => {
+      qs[r.dataset.slot] = Number(r.value);
+    });
+    return qs;
+  };
+  c.updateEsts = () => {
+    const h = opts.host();
+    if (!c.bp || !h) return;
+    const qs = c.sliderQs();
+    h.querySelectorAll(".mk-asp-row").forEach(row => {
+      const r = row.querySelector("input[type=range]");
+      const lbl = row.querySelector(".mk-asp-q");
+      if (r && lbl) lbl.textContent = `Q${r.value} · ${bandTag(r.value)}`;
+    });
+    (c.bp.stat_drivers || []).forEach(entry => {
+      const el = h.querySelector(`.mk-est[data-prop="${CSS.escape(entry.prop)}"]`);
+      if (el) el.textContent = `≈ ${bpFmtEffect(entry.mode, bpEstFor(entry, qs))}`;
+    });
+  };
+  c.render = () => {
+    const host = opts.host();
+    if (!host) return;
+    if (!c.bp) { host.innerHTML = ""; return; }
+    const bp = c.bp;
+    const qty = opts.qty();
+    const aspects = (bp.aspects || []).filter(a => (a.mods || []).length);
+    let h = `<div class="mk-bpbox"><div class="mk-bp-h">📐 ${esc(bp.name)} <span class="muted">· ${esc(bp.cat || "")}</span></div>` +
+      bpManifestHtml(bp, qty);
+    if (aspects.length) {
+      h += `<div class="mk-bp-sect">Input quality — one slider per crafting slot (500 = base)</div>` +
+        aspects.map(a => {
+          const seed = c.initQ && c.initQ[a.slot] != null ? c.initQ[a.slot] : 500;
+          return `<div class="mk-asp-row"><span>${esc(a.slot)} <span class="muted">(${esc(a.input)})</span></span>` +
+            `<input type="range" min="0" max="1000" step="25" value="${seed}" data-slot="${esc(a.slot)}" ` +
+              `aria-label="${esc(a.slot)} input quality">` +
+            `<span class="mk-asp-q"></span></div>`;
+        }).join("");
+      h += `<div class="mk-bp-sect">What the quality drives — estimates, not guarantees</div>` +
+        (bp.stat_drivers || []).map(entry => {
+          const who = entry.drivers.map(d => `${esc(d.slot)} (${esc(d.input)})`).join(" + ");
+          const range = `${bpFmtEffect(entry.mode, entry.combined_min)}–${bpFmtEffect(entry.mode, entry.combined_max)}`;
+          return `<div class="mk-statdrv"><span>${esc(entry.prop)} <span class="muted">← ${who}</span></span>` +
+            `<span class="mk-range">${range}</span>` +
+            `<span class="mk-est" data-prop="${esc(entry.prop)}"></span>` +
+            (opts.statBtn ? `<button type="button" class="ev-btn sm mk-addspec" data-prop="${esc(entry.prop)}">${opts.statBtn.label}</button>` : "") +
+            `</div>`;
+        }).join("");
+    }
+    h += `</div>`;
+    host.innerHTML = h;
+    host.querySelectorAll("input[type=range]").forEach(r => {
+      r.oninput = () => { c.touched = true; c.updateEsts(); if (c.onSlide) c.onSlide(); };
+    });
+    if (opts.statBtn) host.querySelectorAll(".mk-addspec").forEach(b => b.onclick = () => {
+      const entry = (c.bp.stat_drivers || []).find(e => e.prop === b.dataset.prop);
+      if (entry) opts.statBtn.onClick(entry);
+    });
+    c.updateEsts();
+  };
+  c.load = async (key) => {
+    c.bp = null;
+    // Seeded sliders (an edit restoring saved inputs) count as engaged so a
+    // save keeps them; a fresh pick starts untouched.
+    c.touched = !!(c.initQ && Object.keys(c.initQ).length);
+    c.render();
+    if (!key) return;
+    try {
+      const r = await fetch(`/api/blueprints/${encodeURIComponent(key)}`);
+      if (!r.ok) throw 0;
+      c.bp = await r.json();
+    } catch { c.bp = null; }
+    c.render();
+  };
+  // The sliders' current positions as spec-input rows [{slot, input, min_q}] —
+  // only once the user has engaged them.
+  c.collectInputs = () => {
+    if (!c.bp || !c.touched) return [];
+    const bySlot = {};
+    (c.bp.aspects || []).forEach(a => { bySlot[a.slot] = a.input; });
+    const qs = c.sliderQs();
+    return Object.keys(qs)
+      .filter(slot => bySlot[slot])
+      .map(slot => ({ slot, input: bySlot[slot], min_q: qs[slot] }));
+  };
+  return c;
 }
 
-// The spec builder: materials manifest (scaled by qty), per-aspect quality
-// sliders, and the blueprint's tunable stats with a live combined estimate.
-function renderBpSpecBuilder() {
-  const host = $("mk-bp-spec");
-  if (!host) return;
-  if (!mkBpCur) { host.innerHTML = ""; return; }
-  const bp = mkBpCur;
-  const qty = Number($("mk-f-qty") && $("mk-f-qty").value) || 1;
-  const aspects = (bp.aspects || []).filter(a => (a.mods || []).length);
-  let h = `<div class="mk-bpbox"><div class="mk-bp-h">📐 ${esc(bp.name)} <span class="muted">· ${esc(bp.cat || "")}</span></div>` +
-    bpManifestHtml(bp, qty);
-  if (aspects.length) {
-    h += `<div class="mk-bp-sect">Input quality — one slider per crafting slot (500 = base)</div>` +
-      aspects.map(a => {
-        const seed = mkBpInitQ && mkBpInitQ[a.slot] != null ? mkBpInitQ[a.slot] : 500;
-        return `<div class="mk-asp-row"><span>${esc(a.slot)} <span class="muted">(${esc(a.input)})</span></span>` +
-          `<input type="range" min="0" max="1000" step="25" value="${seed}" data-slot="${esc(a.slot)}" ` +
-            `aria-label="${esc(a.slot)} input quality">` +
-          `<span class="mk-asp-q"></span></div>`;
-      }).join("");
-    h += `<div class="mk-bp-sect">What the quality drives — estimates, not guarantees</div>` +
-      (bp.stat_drivers || []).map(entry => {
-        const who = entry.drivers.map(d => `${esc(d.slot)} (${esc(d.input)})`).join(" + ");
-        const range = `${bpFmtEffect(entry.mode, entry.combined_min)}–${bpFmtEffect(entry.mode, entry.combined_max)}`;
-        return `<div class="mk-statdrv"><span>${esc(entry.prop)} <span class="muted">← ${who}</span></span>` +
-          `<span class="mk-range">${range}</span>` +
-          `<span class="mk-est" data-prop="${esc(entry.prop)}"></span>` +
-          `<button type="button" class="ev-btn sm mk-addspec" data-prop="${esc(entry.prop)}">+ spec</button></div>`;
-      }).join("");
-  }
-  h += `</div>`;
-  host.innerHTML = h;
-  host.querySelectorAll("input[type=range]").forEach(r => {
-    r.oninput = () => { mkBpTouched = true; bpUpdateEsts(); bpAutoFillSpec(); };
-  });
-  // "+ spec" copies a stat (at its current estimate) into the requested-spec rows.
-  host.querySelectorAll(".mk-addspec").forEach(b => b.onclick = () => {
-    const entry = (mkBpCur.stat_drivers || []).find(e => e.prop === b.dataset.prop);
-    if (!entry) return;
-    const val = `≥ ${bpFmtEffect(entry.mode, bpEstFor(entry, bpSliderQs()))} (est.)`;
+// The marketplace instance: "+ spec" copies a stat (at its current estimate)
+// into the requested-spec rows.
+const mkSpec = bpSpecCtl({
+  host: () => $("mk-bp-spec"),
+  qty: () => Number($("mk-f-qty") && $("mk-f-qty").value) || 1,
+  statBtn: { label: "+ spec", onClick: (entry) => {
+    const val = `≥ ${bpFmtEffect(entry.mode, bpEstFor(entry, mkSpec.sliderQs()))} (est.)`;
     $("mk-f-stats").insertAdjacentHTML("beforeend", mkStatRow(entry.prop, val));
     const form = document.querySelector(".mk-craft-form");
     if (form) form.open = true;
-  });
-  bpUpdateEsts();
+  } },
+});
+
+// Canonical finished-stat names for the crafted-stats autocomplete (#25.1
+// §11.2): the linked recipe's own stats once a blueprint is picked, else the
+// global vocabulary across the feed (fetched once, cached) — so free-typed
+// names stop fragmenting the board's stat filter.
+let mkStatNamesAll = null;
+async function mkFillStatNames() {
+  if (!$("mk-stat-names")) return;
+  let names = (mkSpec.bp && (mkSpec.bp.stat_drivers || []).map(e => e.prop)) || [];
+  if (!names.length) {
+    if (mkStatNamesAll === null) {
+      try { mkStatNamesAll = ((await fetch("/api/blueprints/stat-names").then(r => r.json())) || {}).stats || []; }
+      catch { mkStatNamesAll = []; }
+    }
+    names = mkStatNamesAll;
+  }
+  const dl = $("mk-stat-names");   // re-grab — the form may have re-rendered during the await
+  if (dl) dl.innerHTML = names.map(n => `<option value="${esc(n)}">`).join("");
 }
 
-async function mkLoadBlueprint(key) {
-  mkBpCur = null;
-  // Seeded sliders (an edit restoring saved spec.inputs) count as engaged so a
-  // save keeps them; a fresh pick starts untouched.
-  mkBpTouched = !!(mkBpInitQ && Object.keys(mkBpInitQ).length);
-  renderBpSpecBuilder();
-  if (!key) return;
-  try {
-    const r = await fetch(`/api/blueprints/${encodeURIComponent(key)}`);
-    if (!r.ok) throw 0;
-    mkBpCur = await r.json();
-  } catch { mkBpCur = null; }
-  renderBpSpecBuilder();
-}
-
-// The sliders' current positions as spec.inputs rows — only once the user has
-// engaged them (an untouched builder means "no per-material asks").
-function bpCollectInputs() {
-  if (!mkBpCur || !mkBpTouched) return [];
-  const bySlot = {};
-  (mkBpCur.aspects || []).forEach(a => { bySlot[a.slot] = a.input; });
-  const qs = bpSliderQs();
-  return Object.keys(qs)
-    .filter(slot => bySlot[slot])
-    .map(slot => ({ slot, input: bySlot[slot], min_q: qs[slot] }));
-}
+// Sliders → the Quality/Band fields: the request's overall minimum is bounded by
+// the weakest input, so Quality auto-tracks the LOWEST slider (and Band derives
+// from it). Hand-editing either field detaches the link (dataset.auto cleared by
+// the input listener in bindMarketForm) so a typed value is never clobbered.
+mkSpec.onSlide = function bpAutoFillSpec() {
+  if (!mkSpec.touched) return;
+  const qEl = $("mk-f-q"), bandEl = $("mk-f-band");
+  if (!qEl || qEl.dataset.auto !== "1") return;
+  const vals = Object.values(mkSpec.sliderQs());
+  if (!vals.length) return;
+  const minQ = Math.min(...vals);
+  qEl.value = minQ;
+  if (bandEl && bandEl.dataset.auto === "1") bandEl.value = qualityBand(minQ);
+  const note = $("mk-f-q-auto");
+  if (note) note.textContent = `auto: weakest input slider (${bandTag(minQ)}) — type to override`;
+  const form = document.querySelector(".mk-craft-form");
+  if (form) form.open = true;
+};
 
 function bindMarketForm(editId, onCancel) {
   const itemEl = $("mk-f-item");
@@ -11110,12 +11209,13 @@ function bindMarketForm(editId, onCancel) {
   });
   // Retyping a new search (without re-picking) drops the stale value hint.
   itemEl.addEventListener("input", () => { if (!itemEl.dataset.itemId) mkShowMarketValue(null); });
+  mkFillStatNames();   // global stat vocabulary; a blueprint pick narrows it
   const bpEl = $("mk-f-bp");
   if (bpEl) {
-    if (!bpEl.disabled) attachBlueprintPicker(bpEl.parentElement, bp => mkLoadBlueprint(bp.key));
-    if (bpEl.dataset.bpKey) mkLoadBlueprint(bpEl.dataset.bpKey);   // edit: recipe is fixed
+    if (!bpEl.disabled) attachBlueprintPicker(bpEl.parentElement, bp => mkSpec.load(bp.key).then(mkFillStatNames));
+    if (bpEl.dataset.bpKey) mkSpec.load(bpEl.dataset.bpKey).then(mkFillStatNames);   // edit: recipe is fixed
     const qtyEl = $("mk-f-qty");
-    if (qtyEl) qtyEl.addEventListener("input", () => { if (mkBpCur) renderBpSpecBuilder(); });
+    if (qtyEl) qtyEl.addEventListener("input", () => { if (mkSpec.bp) mkSpec.render(); });
     // Typing your own Quality/Band detaches it from the sliders for good.
     [["mk-f-q", "mk-f-q-auto"], ["mk-f-band", null]].forEach(([fid, noteId]) => {
       const f = $(fid);
@@ -11154,7 +11254,7 @@ function bindMarketForm(editId, onCancel) {
 }
 
 function renderMarketForm() {
-  mkBpInitQ = null;
+  mkSpec.initQ = null;
   $("market-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/market">← All listings</a>` +
     `<h2 class="ev-screen-h">NEW LISTING</h2>${marketFormHtml(null)}</div>`;
   bindMarketForm(null, () => { location.hash = "#/market"; });
@@ -11163,11 +11263,11 @@ function renderMarketForm() {
 function renderMarketEditForm(l) {
   // Editing a commission restores its saved per-slot slider positions so a
   // save round-trips the material minimums instead of resetting them to base.
-  mkBpInitQ = null;
+  mkSpec.initQ = null;
   const specIn = ((l.attributes || {}).spec || {}).inputs;
   if (l.mode === "commission" && (specIn || []).length) {
-    mkBpInitQ = {};
-    specIn.forEach(i => { mkBpInitQ[i.slot] = i.min_q; });
+    mkSpec.initQ = {};
+    specIn.forEach(i => { mkSpec.initQ[i.slot] = i.min_q; });
   }
   $("market-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT LISTING</h2>${marketFormHtml(l)}`;
   bindMarketForm(l.id, () => renderMarketDetail(l.id));
