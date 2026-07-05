@@ -2706,7 +2706,7 @@ def _price_fresh(p, max_age_s, now) -> bool:
 def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       budget=None, max_age_s=None, now_ts=None,
                       avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
-                      avoid_buys=frozenset()) -> list[dict]:
+                      avoid_buys=frozenset(), avoid_sells=frozenset()) -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
     name set) restricts to filtered mode; `system` keeps both ends in-system.
@@ -2714,9 +2714,10 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     points older than that (stale-data opt-out). `avoid_poi_ids` drops any trade
     that buys or sells at a warned POI (a camped station); `avoid_pairs` (a set of
     frozenset({buy_poi, sell_poi})) drops the exact snared lane — both from the
-    pirate danger board (#24). `avoid_buys` (a set of (poi_id, commodity_lower))
-    drops only the *buy* side — a terminal a member just found out of stock —
-    while still allowing sells there (empty shelves buy fine)."""
+    pirate danger board (#24). `avoid_buys` / `avoid_sells` (sets of
+    (poi_id, commodity_lower), from stock reports) each drop only their own side:
+    a terminal a member found out of stock still *sells* fine, and one that
+    stopped buying (no demand) still *buys* fine."""
     now = now_ts if now_ts is not None else time.time()
     cset = {c.strip().lower() for c in commodities} if commodities else None
     buyers: dict[str, list] = {}
@@ -2745,6 +2746,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                     continue            # a camped buy/sell POI (avoid mode, #24)
                 if avoid_buys and (sid, key) in avoid_buys:
                     continue            # reported out of stock — buy side only
+                if avoid_sells and (did, key) in avoid_sells:
+                    continue            # reported no demand — sell side only
                 if avoid_pairs and frozenset((sid, did)) in avoid_pairs:
                     continue            # a snared buy->sell lane (avoid mode, #24)
                 margin = int(dst["sell"]) - int(src["buy"])
@@ -2798,15 +2801,21 @@ def trade_leg_warnings(leg: dict, warnings) -> list[dict]:
     return hits
 
 
-def stock_avoid_buys(reports) -> frozenset:
-    """Turn active stock reports into the solver's buy-side exclusion set: the
-    (poi_id, commodity_lower) pairs members recently found *out* of stock. Only
-    `kind == 'out'` excludes — a 'low' report is a badge, not a routing veto (a
-    short shelf can still be worth the stop). Safe on an empty/None list; reports
-    missing a POI anchor or commodity contribute nothing."""
+def _report_side(r: dict) -> str:
+    """A report's trade side; rows written before the demand feature (no `side`)
+    are supply-side by construction."""
+    return r.get("side") or "supply"
+
+
+def _stock_avoid_pairs(reports, side) -> frozenset:
+    """The (poi_id, commodity_lower) pairs with a fresh `out` report on `side`.
+    Only `kind == 'out'` excludes — a 'low' report is a badge, not a routing veto
+    (a short shelf / soft market can still be worth the stop). Safe on an
+    empty/None list; reports missing a POI anchor or commodity contribute
+    nothing."""
     pairs = set()
     for r in reports or ():
-        if r.get("kind") != "out":
+        if r.get("kind") != "out" or _report_side(r) != side:
             continue
         pid, name = r.get("poi_id"), r.get("commodity")
         if pid is not None and name:
@@ -2814,18 +2823,31 @@ def stock_avoid_buys(reports) -> frozenset:
     return frozenset(pairs)
 
 
+def stock_avoid_buys(reports) -> frozenset:
+    """Buy-side exclusion set: terminals members recently found *out of stock*
+    (supply-side `out` reports)."""
+    return _stock_avoid_pairs(reports, "supply")
+
+
+def stock_avoid_sells(reports) -> frozenset:
+    """Sell-side exclusion set: terminals members recently found *not buying*
+    the commodity (demand-side `out` reports)."""
+    return _stock_avoid_pairs(reports, "demand")
+
+
 def trade_leg_stock(leg: dict, reports) -> list[dict]:
-    """The active stock reports that touch one costed trade leg's *buy* end —
-    same commodity, same POI — for per-leg badges ("reported out of stock 45m
-    ago", "only 40 SCU left"). Out-of-stock first, then low, freshest first
-    within a kind. Sells are unaffected: a stock report says nothing about a
-    terminal's demand."""
-    pid = leg.get("buy_poi_id")
+    """The active stock reports that touch one costed trade leg — a supply-side
+    report matches the leg's *buy* end, a demand-side report its *sell* end,
+    always on the leg's own commodity — for per-leg badges ("reported out of
+    stock 45m ago", "won't buy here"). Out-of-stock first, then low, freshest
+    first within a kind."""
     name = (leg.get("commodity") or "").strip().lower()
-    if pid is None or not name:
+    if not name:
         return []
+    end = {"supply": leg.get("buy_poi_id"), "demand": leg.get("sell_poi_id")}
     hits = [r for r in reports or ()
-            if r.get("poi_id") == pid
+            if r.get("poi_id") is not None
+            and r.get("poi_id") == end.get(_report_side(r))
             and (r.get("commodity") or "").strip().lower() == name]
     rank = {"out": 0, "low": 1}
     hits.sort(key=lambda r: (rank.get(r.get("kind"), 9), -(r.get("created") or 0)))
@@ -3033,7 +3055,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
-                     avoid_buys=None,
+                     avoid_buys=None, avoid_sells=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Auto / filtered trade-route solver: pick and order the buy->sell trades that
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
@@ -3062,7 +3084,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
                               budget=budget, max_age_s=max_age_s, now_ts=now_ts,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
-                              avoid_buys=frozenset(avoid_buys or ()))
+                              avoid_buys=frozenset(avoid_buys or ()),
+                              avoid_sells=frozenset(avoid_sells or ()))
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -3122,12 +3145,15 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
 
 
 def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
-                   optimize, avoid=None, memo=None) -> tuple[dict | None, "Poi | None"]:
+                   optimize, avoid=None, memo=None,
+                   avoid_sells=frozenset()) -> tuple[dict | None, "Poi | None"]:
     """The best buyer for cargo the player is already carrying (sunk cost), as a
     sell-only leg. The buy is already paid for, so buy_cost going forward is 0 and
     profit is the realized spread over the recorded buy price. Prefers a buyer in
     the locked `system`, but a held load must be offloadable somewhere — falls back
-    to any system if the lock strands it. Returns (leg_row, sell_poi) or
+    to any system if the lock strands it. `avoid_sells` drops buyers with a fresh
+    no-demand report — unlike danger volumes (which only make a buyer costlier), a
+    terminal that won't take the cargo is a hard no. Returns (leg_row, sell_poi) or
     (None, None) when nothing buys the commodity."""
     name = held.get("commodity")
     scu = int(round(float(held.get("scu") or 0)))
@@ -3142,6 +3168,8 @@ def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
             if locked and system and p.get("system") != system:
                 continue
             if not p.get("sell") or not _price_fresh(p, max_age_s, now):
+                continue
+            if avoid_sells and (p.get("poi_id"), cnorm) in avoid_sells:
                 continue
             if nav.pois.get(p.get("poi_id")) is None:
                 continue
@@ -3188,7 +3216,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, avoid_poi_ids=None, avoid_pairs=None,
-                       avoid_volumes=None, avoid_buys=None,
+                       avoid_volumes=None, avoid_buys=None, avoid_sells=None,
                        fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Re-solve a trade route from the player's *current* position mid-run,
     carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
@@ -3214,7 +3242,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
             now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
-            avoid_buys=avoid_buys,
+            avoid_buys=avoid_buys, avoid_sells=avoid_sells,
             fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range_only)
 
     start = None
@@ -3225,9 +3253,13 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
 
     # The held-cargo sell leg is costed with volumes too — you're already loaded,
     # so a detour on the sell approach is exactly what a mid-run reroute is for.
+    # It also honors demand-side stock reports (`avoid_sells`): "this terminal
+    # won't buy my cargo → re-plan" is exactly the moment a fresh no-demand
+    # report must steer the replacement buyer.
     held_row, sell_poi = _held_sell_leg(
         nav, prices, held, start, system=system, max_age_s=max_age_s, now=now,
-        t_ref=t_ref, optimize=optimize, avoid=avoid_volumes, memo=memo)
+        t_ref=t_ref, optimize=optimize, avoid=avoid_volumes, memo=memo,
+        avoid_sells=frozenset(avoid_sells or ()))
     if held_row is None:
         empty = _cost_route(nav, [], start, t_ref)
         empty["summary"]["reason"] = f"no known buyer for held {held.get('commodity')}"
@@ -3245,7 +3277,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               commodities=commodities, budget=budget,
                               max_age_s=max_age_s, now_ts=now,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
-                              avoid_buys=frozenset(avoid_buys or ()))
+                              avoid_buys=frozenset(avoid_buys or ()),
+                              avoid_sells=frozenset(avoid_sells or ()))
     cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,

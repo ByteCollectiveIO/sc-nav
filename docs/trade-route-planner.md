@@ -32,38 +32,57 @@ this planner `avoid_mode` snare-detour routing.
 | 6 | History + trade stats (RECENT TRADES panel + Org Intel **Trading** section) | ✅ **v0.31.0** |
 | — | **Favorite routes** (save config, re-plan on load) | ✅ **v0.32.0** |
 | — | **Freshness-UX polish** (age filter on by default @ 2d, per-row age + staleness banner) | ✅ **v0.33.0** |
-| — | **Stock reports** (run-mode "no stock — skip & report", auto low-stock capture, shared STOCK WATCH board, buy-side solver avoidance) | ✅ built 2026-07-05 |
+| — | **Stock reports** (run-mode "no stock — skip & report", auto low-stock capture, shared STOCK WATCH board, buy-side solver avoidance) | ✅ **v0.38.0** |
+| — | **Demand reports** (sell-side twin: "won't buy here — report & re-plan", auto low-demand capture, sell-side solver avoidance incl. held-cargo re-plan) | ✅ built 2026-07-05 |
 
-### Stock reports (out-of-stock / low-stock) — AS BUILT
+### Stock & demand reports — AS BUILT
 
-The UEX scrape says a terminal *should* have supply; the player at the kiosk
-knows whether it actually does. Run mode captures that ground truth and shares
-it org-wide for a configurable window:
+The UEX scrape says a terminal *should* have supply and demand; the player at
+the kiosk knows whether it actually does. Run mode captures that ground truth
+on **both sides of a trade** and shares it org-wide for a configurable window.
+Every report carries a `side`: **`supply`** (the buy end — nothing/little to
+buy) or **`demand`** (the sell end — the terminal won't/barely will take the
+cargo), plus a `kind` (`out` | `low`).
 
-- **Run mode, buy phase** now has three outcomes: `✓ Bought` (with the usual
+- **Run mode, buy phase** has three outcomes: `✓ Bought` (with the usual
   paid/SCU actuals), `skip this leg` (bailed for any reason), and
   `⛔ no stock to buy — skip & report` (PATCH `action=stockout`, buy phase
   only, confirm-gated since it's org-visible). The stockout skips the leg
-  *and* files a shared **`out`** report anchored to the buy POI + commodity.
-- **Auto low-stock capture:** confirming a buy with an entered SCU under
-  **50%** of the planned load files a **`low`** report with the observed SCU
-  (`_LOW_STOCK_FRACTION` in app.py) — zero extra clicks.
+  *and* files a shared supply-**`out`** report anchored to the buy POI +
+  commodity.
+- **Run mode, sell phase** mirrors it with `⛔ won't buy here — report &
+  re-plan` (PATCH `action=demandout`, sell phase only, confirm-gated). The
+  crucial difference: it does **not** advance the cursor — the cargo is still
+  aboard — it files a demand-`out` report, flags the leg
+  (`demand_reported`), and the client immediately triggers
+  **re-plan-from-here**, whose held-cargo buyer selection now excludes the
+  reported terminal (`_held_sell_leg avoid_sells` — a hard drop, unlike
+  danger volumes which only make a buyer costlier). If every known buyer is
+  reported out, the re-plan honestly says "no known buyer".
+- **Auto low capture, both sides:** confirming a buy OR sell with an entered
+  SCU under **50%** of the planned load files a `low` report with the
+  observed SCU (`_LOW_STOCK_FRACTION` in app.py) — zero extra clicks.
 - **Storage/lifecycle:** `stock_reports` table (one live row per
-  poi+commodity, newest replaces), pure time age-off via org setting
-  **`stock_ageoff_min`** (default 180, ORG SETTINGS → Danger Board block),
-  pruned on read (`active_stock_reports`). `GET /api/trade/stock` serves the
-  board; the `#/trade` **STOCK WATCH** panel renders it.
-- **Routing influence:** fresh `out` reports become the solver's buy-side
-  exclusion set (`nav_core.stock_avoid_buys` → `_trade_candidates
-  avoid_buys`) in `/api/trade/plan`, run start, **and** `/api/trade/run/replan`
-  — so "no stock → re-plan from here" never routes back to the empty shelf.
-  Selling at a reported terminal stays allowed; `low` reports only badge
-  (`trade_leg_stock` → per-leg `stock` views; manual legs are badged, never
-  dropped, matching the #24 convention).
-- **Stats fix (regression):** skipped legs (plain skip *or* stockout) now
-  carry `skipped: true` and are excluded from realized profit/SCU everywhere
-  (`_trade_sold_legs`, `trade_run_view`) — previously a skipped leg's
-  *planned* profit leaked into realized stats.
+  poi+commodity+**side**, newest replaces; `side` column added by
+  `_ensure_column` migration for v0.38.0 DBs), pure time age-off via org
+  setting **`stock_ageoff_min`** (default 180, ORG SETTINGS → Danger Board
+  block), pruned on read (`active_stock_reports`). `GET /api/trade/stock`
+  serves the board; the `#/trade` **STOCK WATCH** panel renders it with
+  side-aware labels (⛔ out of stock / ⛔ no demand / 📉 low stock / 📉 low
+  demand).
+- **Routing influence:** fresh `out` reports become per-side solver exclusion
+  sets (`nav_core.stock_avoid_buys` / `stock_avoid_sells` →
+  `_trade_candidates avoid_buys`/`avoid_sells`) in `/api/trade/plan`, run
+  start, **and** `/api/trade/run/replan`. Each side only vetoes itself: an
+  out-of-stock terminal still takes sells, a no-demand terminal still sells
+  you cargo. `low` reports only badge (`trade_leg_stock` matches supply
+  reports to a leg's buy end and demand reports to its sell end → per-leg
+  `stock` views carrying `side`; manual legs are badged, never dropped,
+  matching the #24 convention).
+- **Stats fix (regression, v0.38.0):** skipped legs (plain skip *or*
+  stockout) carry `skipped: true` and are excluded from realized profit/SCU
+  everywhere (`_trade_sold_legs`, `trade_run_view`) — previously a skipped
+  leg's *planned* profit leaked into realized stats.
 
 Key code (grep the banners per root `CLAUDE.md`): solver in `nav_core`
 (`plan_trade_route` / `cost_trade_legs` / `replan_trade_route` / `_solve_route` /
