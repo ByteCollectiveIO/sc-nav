@@ -2343,7 +2343,7 @@ class TradePlanIn(BaseModel):
 
 
 class TradeRunPatchIn(BaseModel):
-    action: str                                         # buy | sell | advance | stockout
+    action: str                                # buy | sell | advance | stockout | demandout
     # target leg (defaults to the active one); guards against a stale click
     # confirming the wrong leg after the cursor moved.
     leg: int | None = Field(default=None, ge=0, le=100)
@@ -2415,17 +2415,19 @@ def _leg_warning_view(w: dict) -> dict:
 
 
 def _leg_stock_view(r: dict) -> dict:
-    """Compact wire form of one stock report as it attaches to a trade leg's buy
-    side: kind + the observed SCU (low reports) + freshness + who saw it."""
-    return {"kind": r.get("kind"), "scu": r.get("scu"),
-            "age_s": r.get("age_s"), "by": r.get("poster_name") or ""}
+    """Compact wire form of one stock report as it attaches to a trade leg:
+    side (supply = buy end, demand = sell end) + kind + the observed SCU (low
+    reports) + freshness + who saw it."""
+    return {"side": r.get("side") or "supply", "kind": r.get("kind"),
+            "scu": r.get("scu"), "age_s": r.get("age_s"),
+            "by": r.get("poster_name") or ""}
 
 
 def _annotate_leg_stock(plan: dict, reports: list[dict]) -> dict:
-    """Tag each costed trade leg whose *buy* end has a fresh stock report (#21) so
-    the client can badge it — 'reported out of stock 45m ago' on a manual pick,
-    'only 40 SCU seen' on a short shelf. No-op with no reports. Mutates + returns
-    the plan."""
+    """Tag each costed trade leg touched by a fresh stock report (#21) — supply
+    reports on its buy end, demand reports on its sell end — so the client can
+    badge it ('reported out of stock 45m ago', 'won't buy here'). No-op with no
+    reports. Mutates + returns the plan."""
     if reports:
         for lg in plan.get("legs") or ():
             hits = nav_core.trade_leg_stock(lg, reports)
@@ -2576,6 +2578,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
                 avoid_volumes=solver_volumes,
                 avoid_buys=nav_core.stock_avoid_buys(stock_reports),
+                avoid_sells=nav_core.stock_avoid_sells(stock_reports),
                 fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=body.in_range_only)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2583,19 +2586,25 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
 
 
-_LOW_STOCK_FRACTION = 0.5   # bought under half the planned load → auto 'low' report
+_LOW_STOCK_FRACTION = 0.5   # transacted under half the planned load → auto 'low' report
 
 
-def _file_stock_report(user: dict, leg: dict, kind: str, scu=None) -> None:
-    """File a stock report (#21) off a run leg's buy terminal: `out` from the
-    no-stock skip, `low` from a well-short buy. Silently a no-op when the leg has
-    no buy POI to anchor to (a held leg) — an unanchored report can't steer the
-    solver or badge anything."""
-    if leg.get("buy_poi_id") is None or not leg.get("commodity"):
+def _file_stock_report(user: dict, leg: dict, kind: str, scu=None,
+                       side: str = "supply") -> None:
+    """File a stock report (#21) off a run leg: `side` picks the anchor — the
+    leg's buy terminal for supply reports (no-stock skip / short buy) or its sell
+    terminal for demand reports (won't-buy / short sell). Silently a no-op when
+    the leg has no POI on that side to anchor to (e.g. a held leg's buy) — an
+    unanchored report can't steer the solver or badge anything."""
+    if side == "demand":
+        poi_id, terminal = leg.get("sell_poi_id"), leg.get("sell_terminal")
+    else:
+        poi_id, terminal = leg.get("buy_poi_id"), leg.get("buy_terminal")
+    if poi_id is None or not leg.get("commodity"):
         return
     db.stock_report_save({
-        "poi_id": leg["buy_poi_id"], "terminal": leg.get("buy_terminal") or "",
-        "commodity": leg["commodity"], "kind": kind, "scu": scu,
+        "poi_id": poi_id, "terminal": terminal or "",
+        "commodity": leg["commodity"], "side": side, "kind": kind, "scu": scu,
         "poster": user["id"], "poster_name": user.get("display_name") or "",
         "created": time.time(),
     })
@@ -2684,14 +2693,20 @@ async def get_trade_run(user: dict = Depends(require_session)):
 @app.patch("/api/trade/run")
 async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_session)):
     """Advance the active trade run. `action`:
-      buy      — confirm the buy at the active leg (pending → bought; guidance
-                 flips to its sell terminal). Entering an SCU well under plan
-                 auto-files a shared 'low' stock report for the terminal,
-      sell     — confirm the sell (bought → sold; cursor advances to the next leg),
-      advance  — skip the active leg (bailed on it; excluded from realized stats),
-      stockout — skip the active buy because the terminal had *nothing to buy*:
-                 same cursor motion as advance, plus a shared 'out' stock report
-                 that steers everyone's solver away while it's fresh (#21).
+      buy       — confirm the buy at the active leg (pending → bought; guidance
+                  flips to its sell terminal). Entering an SCU well under plan
+                  auto-files a shared supply-'low' stock report for the terminal,
+      sell      — confirm the sell (bought → sold; cursor advances to the next
+                  leg). Entering an SCU well under plan auto-files a shared
+                  demand-'low' report (the terminal barely bought),
+      advance   — skip the active leg (bailed on it; excluded from realized stats),
+      stockout  — skip the active buy because the terminal had *nothing to buy*:
+                  same cursor motion as advance, plus a shared supply-'out' report
+                  that steers everyone's solver away while it's fresh (#21),
+      demandout — the sell terminal *won't buy* the held cargo: files a shared
+                  demand-'out' report but does NOT move the cursor — the player
+                  still holds the load; the natural next step is re-plan-from-here,
+                  which now avoids that buyer (held-cargo sell included).
     `leg` optionally pins the target index to guard a stale click. Completing the
     last leg finishes the run."""
     async with hub.lock:
@@ -2724,6 +2739,9 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                 leg["actual_sell_price"] = body.price
             if body.scu is not None:
                 leg["actual_sell_scu"] = body.scu
+                planned = float(leg.get("scu") or 0)
+                if planned and body.scu < planned * _LOW_STOCK_FRACTION:
+                    _file_stock_report(user, leg, "low", scu=body.scu, side="demand")
             run["leg_states"][active] = "sold"
         elif body.action == "advance":
             leg["skipped"] = True                  # abandon the leg, move on —
@@ -2736,6 +2754,14 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             leg["stockout"] = True
             run["leg_states"][active] = "sold"
             _file_stock_report(user, leg, "out")   # steer the org away while fresh
+        elif body.action == "demandout":
+            if st != "bought":
+                raise HTTPException(status_code=409,
+                                    detail="no-demand only applies at the sell")
+            # No cursor motion: the cargo is still aboard. The report immediately
+            # steers this player's own re-plan (and everyone else's solver).
+            leg["demand_reported"] = True
+            _file_stock_report(user, leg, "out", side="demand")
         else:
             raise HTTPException(status_code=400, detail="bad action")
         _point_at_active_trade_leg(sess)
@@ -2814,6 +2840,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
             avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
             avoid_volumes=(volumes if mode == "avoid" else None),
             avoid_buys=nav_core.stock_avoid_buys(stock_reports),
+            avoid_sells=nav_core.stock_avoid_sells(stock_reports),
             fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
         _annotate_leg_stock(new_plan, stock_reports)
         _annotate_trade_legs(new_plan, warnings, mode, volumes, sess.t)

@@ -2363,6 +2363,66 @@ class TradeStockTests(unittest.TestCase):
         self.assertEqual(nav_core.trade_leg_stock(
             {"buy_poi_id": self.A, "commodity": "Gold"}, None), [])
 
+    # --- demand side (sell end) ----------------------------------------------
+    def test_avoid_sets_split_by_side(self):
+        reports = [{"poi_id": self.A, "commodity": "Gold", "kind": "out"},  # legacy: supply
+                   {"poi_id": self.B, "commodity": "Gold", "kind": "out", "side": "demand"},
+                   {"poi_id": self.C, "commodity": "Iron", "kind": "low", "side": "demand"}]
+        self.assertEqual(nav_core.stock_avoid_buys(reports),
+                         frozenset({(self.A, "gold")}))
+        self.assertEqual(nav_core.stock_avoid_sells(reports),
+                         frozenset({(self.B, "gold")}))
+
+    def test_no_demand_drops_only_that_sell(self):
+        # Gold's sell at B reported not buying -> Gold gone; Iron (which BUYS at
+        # B and sells at C) survives untouched.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_sells={(self.B, "gold")})
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Iron"})
+
+    def test_no_demand_does_not_block_buying_there(self):
+        # An Iron demand report at B touches only a *sell* that doesn't exist
+        # there (Iron sells at C) — both trades survive.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            avoid_sells={(self.B, "iron")})
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Gold", "Iron"})
+
+    def test_replan_held_cargo_avoids_no_demand_buyer(self):
+        # Held Gold aboard; B pays best but was just reported not buying —
+        # the held-cargo sell leg must route to the lesser buyer C instead.
+        prices = self._prices() + [self._pt("Gold", 5, self.C, sell=250,
+                                            scu_sell_stock=500)]
+        held = {"commodity": "Gold", "scu": 50, "buy_price": 100}
+        free = nav_core.replan_trade_route(
+            NAV, prices, 100, start_id=self.A, sort="profit", held=held)
+        self.assertEqual(free["legs"][0]["sell_poi_id"], self.B)   # baseline: best price
+        steered = nav_core.replan_trade_route(
+            NAV, prices, 100, start_id=self.A, sort="profit", held=held,
+            avoid_sells={(self.B, "gold")})
+        self.assertEqual(steered["legs"][0]["sell_poi_id"], self.C)
+
+    def test_replan_held_cargo_unsellable_when_all_buyers_reported(self):
+        held = {"commodity": "Gold", "scu": 50, "buy_price": 100}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit", held=held,
+            avoid_sells={(self.B, "gold")})       # B is Gold's only buyer
+        self.assertEqual(plan["legs"], [])
+        self.assertIn("no known buyer", plan["summary"]["reason"])
+
+    def test_leg_stock_demand_matches_sell_end_only(self):
+        leg = {"buy_poi_id": self.A, "sell_poi_id": self.B, "commodity": "Gold"}
+        rs = [{"poi_id": self.B, "commodity": "Gold", "kind": "out",
+               "side": "demand", "created": 1},
+              {"poi_id": self.A, "commodity": "Gold", "kind": "out",
+               "side": "demand", "created": 2},   # demand report at the BUY end: inert
+              {"poi_id": self.B, "commodity": "Gold", "kind": "low",
+               "created": 3}]                     # supply report at the SELL end: inert
+        hits = nav_core.trade_leg_stock(leg, rs)
+        self.assertEqual([(h["side"], h["poi_id"]) for h in hits],
+                         [("demand", self.B)])
+
 
 class TradeReplanTests(unittest.TestCase):
     """nav_core.replan_trade_route — mid-run re-solve from the live position,

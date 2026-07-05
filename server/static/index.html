@@ -2366,15 +2366,15 @@
     </div>
     <div class="muted" id="hazard-radius-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-      Out-of-stock / low-stock reports age off after
+      Stock &amp; demand reports age off after
       <input id="stock-ageoff" type="number" min="1" max="10080" step="5" style="width:80px;"> min
       <button id="stock-ageoff-save">Save</button>
     </div>
     <div class="muted" style="font-size:12px; margin-top:4px;">
-      A trader who finds a terminal's shelf empty reports it from trade run mode; while the
-      report is fresh the trade planner won't route anyone back there to <b>buy</b> that
-      commodity (selling is unaffected). Terminals restock on their own, so keep this in
-      the hours range.
+      A trader who finds a terminal's shelf empty — or a terminal that won't <b>buy</b> their
+      cargo — reports it from trade run mode; while the report is fresh the trade planner
+      won't route anyone through that side of the trade there (the other side is
+      unaffected). Markets move on their own, so keep this in the hours range.
     </div>
     <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
@@ -6957,9 +6957,11 @@ function renderTradeIntro() {
   el.hidden = !!localStorage.getItem("trade_intro_dismissed") || tradeHasHistory();
 }
 
-// STOCK WATCH (#21): the org's fresh out-of-stock / low-stock reports, filed from
-// trade run mode. While a report is fresh the solver already avoids that buy —
-// this strip is the human-readable why ("who saw what, where, when").
+// STOCK WATCH (#21): the org's fresh market-condition reports, filed from trade
+// run mode — supply side (out of / low on stock at the buy) and demand side
+// (won't buy / barely bought at the sell). While a report is fresh the solver
+// already avoids that side of the trade — this strip is the human-readable why
+// ("who saw what, where, when").
 async function loadTradeStock() {
   const el = $("trade-stock"); if (!el) return;
   try {
@@ -6970,15 +6972,19 @@ async function loadTradeStock() {
       + `member-reported, clears after ${d.ageoff_min} min</span></h2>`;
     for (const r of reports) {
       const out = r.kind === "out";
+      const demand = r.side === "demand";
+      const tag = out ? (demand ? "⛔ no demand" : "⛔ out of stock")
+                      : (demand ? "📉 low demand" : "📉 low stock");
       h += `<div class="stock-row">`
-        + `<span class="stock-kind${out ? " out" : ""}">${out ? "⛔ out" : "📉 low"}</span>`
+        + `<span class="stock-kind${out ? " out" : ""}">${tag}</span>`
         + `<span class="stock-what"><b>${esc(r.commodity)}</b> at <b>${esc(r.terminal || "unknown terminal")}</b>`
-        + (!out && r.scu != null ? ` <span class="muted">(~${r.scu} SCU seen)</span>` : "") + `</span>`
+        + (!out && r.scu != null ? ` <span class="muted">(~${r.scu} SCU ${demand ? "taken" : "seen"})</span>` : "") + `</span>`
         + `<span class="stock-meta muted">${fmtAge(r.age_s || 0)}${r.poster_name ? " · " + esc(r.poster_name) : ""}</span>`
         + `</div>`;
     }
-    h += `<p class="muted" style="font-size:12px; margin:6px 0 0;">The planner won't route a buy `
-      + `through a ⛔ terminal while its report is fresh. Report from run mode: "no stock — skip".</p>`;
+    h += `<p class="muted" style="font-size:12px; margin:6px 0 0;">The planner won't route that side of `
+      + `a trade through a ⛔ terminal while its report is fresh. Report from run mode: `
+      + `"no stock — skip" at a buy, "won't buy here" at a sell.</p>`;
     el.innerHTML = h; el.hidden = false;
   } catch { el.hidden = true; }
 }
@@ -7717,15 +7723,17 @@ function renderTradeLeg(lg, i) {
       + `☠ destination camped — no reroute exists `
       + `<span class="muted">(${esc(b0.severity)} · ${threatLabel(b0)} at ${esc(b0.where)})</span></div>`;
   }
-  // Stock reports (#21): a member recently found this buy short (or, on a manual
-  // pick, empty — auto/filtered plans never route through a fresh ⛔ buy).
-  const stk = (lg.stock || [])[0];
-  if (stk) {
+  // Stock reports (#21): a member recently found this leg's buy short/empty or
+  // its sell end not buying (auto/filtered plans never route through a fresh ⛔
+  // on either side; manual picks are badged, not dropped). One line per side.
+  for (const stk of (lg.stock || [])) {
+    const demand = stk.side === "demand";
     dngr += stk.kind === "out"
-      ? `<div class="tl-stock out">⛔ reported <b>out of stock</b> ${fmtAge(stk.age_s || 0)}`
-        + `${stk.by ? ` <span class="muted">by ${esc(stk.by)}</span>` : ""} — confirm before flying</div>`
-      : `<div class="tl-stock">📉 low stock ${fmtAge(stk.age_s || 0)}`
-        + `${stk.scu != null ? ` <span class="muted">(~${stk.scu} SCU seen${stk.by ? " by " + esc(stk.by) : ""})</span>` : ""}</div>`;
+      ? `<div class="tl-stock out">⛔ reported <b>${demand ? "not buying (no demand)" : "out of stock"}</b> `
+        + `${fmtAge(stk.age_s || 0)}${stk.by ? ` <span class="muted">by ${esc(stk.by)}</span>` : ""}`
+        + ` — confirm before flying</div>`
+      : `<div class="tl-stock">📉 ${demand ? "low demand" : "low stock"} ${fmtAge(stk.age_s || 0)}`
+        + `${stk.scu != null ? ` <span class="muted">(~${stk.scu} SCU ${demand ? "taken" : "seen"}${stk.by ? " by " + esc(stk.by) : ""})</span>` : ""}</div>`;
   }
   return `<div class="trade-leg-card${(warns.length || blk.length) ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
@@ -7993,6 +8001,7 @@ function renderTradeRun(run) {
   box.querySelectorAll("[data-sell]").forEach(b => b.onclick = () => submitTradeLeg("sell", +b.dataset.sell, b));
   box.querySelectorAll("[data-skip]").forEach(b => b.onclick = () => patchTradeRun({ action: "advance", leg: +b.dataset.skip }));
   box.querySelectorAll("[data-nostock]").forEach(b => b.onclick = () => reportNoStock(+b.dataset.nostock));
+  box.querySelectorAll("[data-nodemand]").forEach(b => b.onclick = () => reportNoDemand(+b.dataset.nodemand));
 }
 
 // The no-stock skip is org-visible (it steers everyone's routing for a while),
@@ -8006,6 +8015,23 @@ async function reportNoStock(leg) {
       { title: "Report no stock?", confirmLabel: "Report & skip" }))) return;
   await patchTradeRun({ action: "stockout", leg });
   loadTradeStock();          // the new report shows in STOCK WATCH right away
+}
+
+// Sell-side twin: the terminal won't buy the held cargo. Files a demand report
+// (org-visible, same confirm bar) then immediately re-plans from here — the
+// cargo stays aboard, and the re-solve routes it to a different buyer now that
+// the report excludes this one.
+async function reportNoDemand(leg) {
+  const run = tradeCurrentRun, lg = run && (run.legs || [])[leg];
+  if (!lg) return;
+  if (!(await confirmDialog(
+      `Tells the org ${lg.sell_terminal} isn't buying ${lg.commodity} — the trade `
+      + `planner will route sells around it until the report ages off. Your cargo `
+      + `stays aboard; we'll re-plan from here to find a new buyer.`,
+      { title: "Report no demand?", confirmLabel: "Report & re-plan" }))) return;
+  await patchTradeRun({ action: "demandout", leg });
+  loadTradeStock();          // the new report shows in STOCK WATCH right away
+  replanTradeRun();          // live position → new buyer for the held load
 }
 
 // One leg in the run checklist: a buy step then a sell step. State drives which is
@@ -8072,10 +8098,17 @@ function renderTradeRunLeg(lg, i, run) {
     else
       h += `<button class="trade-run-do" data-sell="${i}">✓ Sold — next leg ▸</button>`;
     h += `<button class="run-skip" data-skip="${i}">skip this leg ▸</button>`;
-    // Distinct from a plain skip: the terminal had *nothing to buy*. Files a
-    // shared stock report so the solver stops routing the org here for a while.
+    // Distinct from a plain skip: the terminal's market failed on this side.
+    // Buy phase = nothing to buy (skips + reports); sell phase = terminal won't
+    // take the cargo (reports + re-plans — you still hold the load, so the run
+    // doesn't advance; the re-plan finds a different buyer).
     if (isBuy)
       h += `<button class="run-skip run-nostock" data-nostock="${i}">⛔ no stock to buy — skip &amp; report ▸</button>`;
+    else if (lg.demand_reported)
+      h += `<div class="tl-stock out">⛔ reported not buying — `
+        + `<b>↻ re-plan from here</b> to route to a new buyer, or sell what you can.</div>`;
+    else
+      h += `<button class="run-skip run-nostock" data-nodemand="${i}">⛔ won't buy here — report &amp; re-plan ▸</button>`;
   }
   h += `</div>`;
   return h;

@@ -1781,6 +1781,86 @@ class TradeStockReportTests(unittest.TestCase):
         finally:
             app.trade_price_points = orig
 
+    # --- the demand side (sell end) -------------------------------------------
+    def test_demandout_reports_without_moving_the_cursor(self):
+        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0})
+        r = self.client.patch("/api/trade/run", json={"action": "demandout", "leg": 0})
+        self.assertEqual(r.status_code, 200)
+        v = r.json()["trade_run"]
+        self.assertEqual(v["active"], 0)                    # cargo still aboard —
+        self.assertEqual(v["legs"][0]["state"], "bought")   # nothing advanced
+        self.assertTrue(v["legs"][0]["demand_reported"])
+        rep = self.client.get("/api/trade/stock").json()["reports"][0]
+        self.assertEqual((rep["side"], rep["kind"], rep["poi_id"], rep["commodity"]),
+                         ("demand", "out", 12, "Gold"))     # anchored to the SELL end
+        self.assertEqual(rep["terminal"], "B")
+
+    def test_demandout_only_valid_at_the_sell(self):
+        r = self.client.patch("/api/trade/run", json={"action": "demandout", "leg": 0})
+        self.assertEqual(r.status_code, 409)                # still awaiting the buy
+
+    def test_short_sell_files_demand_low(self):
+        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0})
+        self.client.patch("/api/trade/run", json={"action": "sell", "leg": 0, "scu": 10})
+        rep = self.client.get("/api/trade/stock").json()["reports"][0]
+        self.assertEqual((rep["side"], rep["kind"], rep["scu"], rep["poi_id"]),
+                         ("demand", "low", 10, 12))
+
+    def test_modest_short_sell_files_nothing(self):
+        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0})
+        self.client.patch("/api/trade/run", json={"action": "sell", "leg": 0, "scu": 30})
+        self.assertEqual(self.client.get("/api/trade/stock").json()["reports"], [])
+
+    def test_supply_and_demand_reports_coexist_per_terminal(self):
+        now = time.time()
+        base = {"poi_id": 11, "terminal": "A", "commodity": "Gold", "kind": "out",
+                "scu": None, "poster": "9", "poster_name": "T", "created": now}
+        db.stock_report_save(base)
+        db.stock_report_save({**base, "side": "demand"})
+        reports = app.active_stock_reports()
+        self.assertEqual({r["side"] for r in reports}, {"supply", "demand"})
+        # ...but a newer report on the SAME side still replaces its predecessor.
+        db.stock_report_save({**base, "side": "demand", "kind": "low", "scu": 5})
+        reports = app.active_stock_reports()
+        self.assertEqual(len(reports), 2)
+        demand = next(r for r in reports if r["side"] == "demand")
+        self.assertEqual(demand["kind"], "low")
+
+    def test_plan_respects_demand_out_and_badges_low_demand(self):
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        A, B, C = (p.id for p in pois)
+
+        def pt(commodity, tid, poi, buy=None, sell=None):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 500 if buy else 0,
+                    "scu_sell_stock": 500 if sell else 0, "updated_at": None}
+
+        orig = app.trade_price_points
+        app.trade_price_points = [pt("Gold", 1, A, buy=100), pt("Gold", 2, B, sell=300),
+                                  pt("Iron", 3, B, buy=50), pt("Iron", 4, C, sell=200)]
+        try:
+            now = time.time()
+            db.stock_report_save({"poi_id": B, "terminal": "T2", "commodity": "Gold",
+                                  "side": "demand", "kind": "out", "scu": None,
+                                  "poster": "9", "poster_name": "T", "created": now})
+            db.stock_report_save({"poi_id": C, "terminal": "T4", "commodity": "Iron",
+                                  "side": "demand", "kind": "low", "scu": 20,
+                                  "poster": "9", "poster_name": "T", "created": now})
+            r = self.client.post("/api/trade/plan", json={
+                "usable_scu": 100, "start_id": A, "sort": "profit",
+                "system": "Stanton"})
+            self.assertEqual(r.status_code, 200)
+            legs = r.json()["legs"]
+            # Gold's sell is reported not buying -> excluded; Iron survives with
+            # its low-demand badge attached to the sell side.
+            self.assertEqual({l["commodity"] for l in legs}, {"Iron"})
+            self.assertEqual((legs[0]["stock"][0]["side"], legs[0]["stock"][0]["kind"]),
+                             ("demand", "low"))
+        finally:
+            app.trade_price_points = orig
+
 
 class TradeFavoritesTests(unittest.TestCase):
     """Saved trade-route favorites (#21): persist a plan *config* (not resolved

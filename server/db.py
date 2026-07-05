@@ -380,20 +380,24 @@ CREATE INDEX IF NOT EXISTS trade_favorites_owner ON trade_favorites(discord_id);
 -- `location` is always-kept free text so a survivor can post "Between Baijini and
 -- Orison" mid-escape without picking exact POIs. Only anchored warnings can steer
 -- the trade planner; unanchored ones are board-only intel.
--- Trade stock reports (#21): short-lived, org-shared "this terminal was out of
--- (or low on) this commodity" observations, filed from trade run mode — the
--- no-stock skip files an `out`, a well-short buy files a `low`. `created` drives
--- a pure time age-off (org setting stock_ageoff_min; not stored here). One live
--- row per (poi_id, commodity): a newer report replaces the old. While fresh,
--- `out` rows are dropped from the trade solver's buy-side candidates; `low` rows
--- only badge.
+-- Trade stock reports (#21): short-lived, org-shared market-condition
+-- observations filed from trade run mode. `side` picks the half of the trade:
+-- `supply` = the terminal had nothing/little to BUY (no-stock skip → `out`, a
+-- well-short buy → `low`); `demand` = the terminal wouldn't/barely would take
+-- the cargo at the SELL end (won't-buy report → `out`, a well-short sell →
+-- `low`). `created` drives a pure time age-off (org setting stock_ageoff_min;
+-- not stored here). One live row per (poi_id, commodity, side): a newer report
+-- replaces the old. While fresh, `out` rows are dropped from the trade solver's
+-- candidates on their side (supply → don't buy there, demand → don't sell
+-- there); `low` rows only badge.
 CREATE TABLE IF NOT EXISTS stock_reports (
     id          INTEGER PRIMARY KEY,
-    poi_id      INTEGER NOT NULL,     -- the buy terminal (nav_core Poi.id)
+    poi_id      INTEGER NOT NULL,     -- the reported terminal (nav_core Poi.id)
     terminal    TEXT,                 -- display name, denormed for the board
     commodity   TEXT NOT NULL,
-    kind        TEXT NOT NULL,        -- out (nothing to buy) | low (short shelf)
-    scu         REAL,                 -- observed available SCU (low reports)
+    side        TEXT NOT NULL DEFAULT 'supply',   -- supply (buy end) | demand (sell end)
+    kind        TEXT NOT NULL,        -- out (none at all) | low (short)
+    scu         REAL,                 -- observed SCU (low reports)
     poster      TEXT NOT NULL,        -- Discord member id of the reporter
     poster_name TEXT,                 -- display name at post time
     created     REAL NOT NULL         -- epoch seconds; drives age-off
@@ -441,6 +445,8 @@ def init(db_path) -> None:
         # Scheduled Discord reminders: stamped when the T-minus ping fires so a
         # restart or a slow tick can never double-ping (see events_due_for_reminder).
         _ensure_column("events", "reminded_at", "TEXT")
+        # Demand-side stock reports: v0.38.0 created the table without `side`.
+        _ensure_column("stock_reports", "side", "TEXT NOT NULL DEFAULT 'supply'")
         denorm_added = _ensure_column("listings", "sort_price", "REAL")
         denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("listings", "attributes", "TEXT")
@@ -2224,7 +2230,8 @@ def warning_delete_for(poster: str) -> None:
 def _stock_row_to_dict(r) -> dict:
     return {
         "id": r["id"], "poi_id": r["poi_id"], "terminal": r["terminal"] or "",
-        "commodity": r["commodity"], "kind": r["kind"], "scu": r["scu"],
+        "commodity": r["commodity"], "side": r["side"] or "supply",
+        "kind": r["kind"], "scu": r["scu"],
         "poster": r["poster"], "poster_name": r["poster_name"] or "",
         "created": r["created"],
     }
@@ -2232,18 +2239,22 @@ def _stock_row_to_dict(r) -> dict:
 
 def stock_report_save(e: dict) -> int:
     """File one stock report, replacing any live report for the same
-    (poi_id, commodity) — the newest observation is the only one that matters.
-    Returns the new row id."""
+    (poi_id, commodity, side) — the newest observation on that side is the only
+    one that matters; a supply and a demand report on the same terminal +
+    commodity coexist. Returns the new row id."""
+    side = e.get("side") or "supply"
     with _lock, _conn:
         _conn.execute(
-            "DELETE FROM stock_reports WHERE poi_id=? AND lower(commodity)=lower(?)",
-            (e["poi_id"], e["commodity"]))
+            "DELETE FROM stock_reports "
+            "WHERE poi_id=? AND lower(commodity)=lower(?) AND side=?",
+            (e["poi_id"], e["commodity"], side))
         cur = _conn.execute(
             "INSERT INTO stock_reports "
-            "(poi_id,terminal,commodity,kind,scu,poster,poster_name,created) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (e["poi_id"], e.get("terminal") or "", e["commodity"], e["kind"],
-             e.get("scu"), e["poster"], e.get("poster_name") or "", e["created"]))
+            "(poi_id,terminal,commodity,side,kind,scu,poster,poster_name,created) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (e["poi_id"], e.get("terminal") or "", e["commodity"], side,
+             e["kind"], e.get("scu"), e["poster"], e.get("poster_name") or "",
+             e["created"]))
         return cur.lastrowid
 
 
