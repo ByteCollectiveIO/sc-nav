@@ -78,11 +78,14 @@ never merges the PR and never touches the server; both stay manual.
    - On merge, the `tag-release` workflow auto-creates and pushes `v<X.Y.Z>` once
      `tests` passes on `main` — no further `/deploy` run needed. Confirm via
      `git fetch --tags` or the Actions tab.
-   - Then rebuild the server (their manual step):
-     ```
-     cd <repo> && git pull --ff-only origin main && docker compose up -d --build sc-nav
-     ```
-     and that `/api/health` + the footer should then read the new version.
+   - Redeploy is **automatic** — no manual step. Prod runs as a **git-based
+     Portainer stack** on the Proxmox/Ubuntu VM with **5-minute polling** enabled:
+     Portainer re-pulls `main` and redeploys (it owns the checkout and the
+     `build: .`) within ~5 min of the merge. The old `git pull && docker compose
+     up --build` SSH flow is gone. Tell the user to just wait a poll cycle, then
+     confirm `/api/health` + the footer read the new version. (If they ever want
+     it instant, they can hit **Pull and redeploy** on the `sc-nav` stack in the
+     Portainer UI.)
 
 10. **Update memory.** Update the `release-versioning` memory's latest-version note
     to the version just shipped.
@@ -96,4 +99,17 @@ never merges the PR and never touches the server; both stay manual.
   version, or a dirty tree the user hasn't accounted for.
 - Stage explicit paths only; commit an explicit path list — never `git add -A` and
   never a bare `git commit -m` that could include unrelated staged changes.
-- Do not touch the server, SSH, or docker — that's the user's manual step.
+- Do not touch the server, SSH, docker, or Portainer. Redeploy is fully automatic
+  via Portainer's 5-minute git-stack polling — there is no manual redeploy step to
+  perform or to instruct the user to perform (beyond merging the PR).
+
+## How the deployed app updates (Portainer git-stack polling)
+Prod is a git-based Portainer stack polling `main` every **5 minutes**. When a
+release PR merges, the sequence is fully hands-off after the merge:
+merge → `tests` passes on `main` → `tag-release` pushes `vX.Y.Z` → within ~5 min
+Portainer re-pulls the new SHA and rebuilds/redeploys the `sc-nav` stack. So the
+whole `/deploy` job ends at "PR is merged"; the running app catches up on its own.
+For an instant redeploy the user can click **Pull and redeploy** in Portainer, but
+that's optional. (Alternatives not in use: a redeploy webhook chained off CI would
+be instant but needs a Cloudflare tunnel route + Access token to reach Portainer —
+more setup than the polling is worth.)
