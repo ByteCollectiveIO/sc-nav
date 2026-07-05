@@ -73,12 +73,13 @@ shapes from the design carry over unchanged; only the source is the wiki API.
 
 ### 25.1 Craft commissions v1.1 (follow-on to the shipped #25)
 
-**Status:** open; v1 **SHIPPED v0.40.0–v0.41.0** (see the Shipped log). Spec:
-[`blueprint-craft-commissions.md`](blueprint-craft-commissions.md) §10–§12.
+**Status:** partially shipped; v1 **SHIPPED v0.40.0–v0.41.0** and the **member
+blueprint library (§10) SHIPPED v0.42.0** (with #14.2 — see the Shipped log).
+Spec: [`blueprint-craft-commissions.md`](blueprint-craft-commissions.md) §10–§12.
 
-- **Member blueprint library** ("requests I can craft", §10) —
-  `member_blueprints` table + "My blueprints" picker; board shows "N members
-  can craft this" + a ✨ requests-I-can-craft filter (LFG match pattern).
+- ~~**Member blueprint library** (§10)~~ — **SHIPPED v0.42.0**:
+  `member_blueprints` table + "My Blueprints" settings picker; commission board
+  shows "⚒ N can craft" + a "✨ Requests I can craft" filter (LFG match pattern).
 - **§11 sell-side ripples** — canonical stat-name autocomplete on the crafted
   form (fixes the fragmenting `?stat=` filter), `blueprint:` identity for
   sale/auction listings (crafted goods become comparable), auto-estimated stat
@@ -88,37 +89,8 @@ shapes from the design carry over unchanged; only the source is the wiki API.
 - **Choice-group picker** — 9 live `sel` aspects in the feed (sync report
   counts them); spec builder needs a pick-one-of-N control only if CIG uses
   them on craftable recipes players care about.
-
-### 14.2 Personal goals + blueprint-seeded craft goals (Resource Manager × blueprints)
-
-**Status:** **BUILT** (this pass) — pending release. Ties the Resource Manager's
-goals/inventory to the blueprint feed and lands the #25.1 member blueprint
-library at the same time (the two share one table).
-
-- **Personal vs org goals** — `goals.visibility` (`org` default | `personal`);
-  personal goals are visible/contributable only to their creator (`list_goals`
-  viewer filter, `_can_view_goal` guard, personal goal-met suppresses the
-  org-wide Discord ping, account-deletion hard-deletes personal goals).
-- **Craft goals** — `POST /api/goals` accepts `blueprint_key` (+ `blueprint_qty`)
-  and seeds line items from the recipe's materials manifest
-  (`nav_core.blueprint_goal_lines`; 36/37 inputs name-map cleanly to `commodity:`
-  catalog items — only "Yormandi Eye" is unmapped, surfaced as `seed_unmapped`).
-  `goals.blueprint_key` drives the detail craft header (name, craft time, per-line
-  `≥Qn` min-quality badges — advisory) + a "where my materials are" location
-  grouping (`my_locations`).
-- **Member blueprint library (#25.1 §10)** — `member_blueprints` table +
-  `GET/POST/DELETE /api/me/blueprints`; a "My Blueprints" settings panel; each row
-  deep-links "🎯 Gather" → a pre-seeded personal craft goal.
-- **Commission crafter-matching (#25.1 §10)** — commission cards carry
-  `can_craft_count` ("🛠 N can craft") + `i_can_craft` ("✨ You can craft"), and a
-  client-side "✨ Requests I can craft" filter (`db.blueprint_crafter_counts`,
-  one grouped query — LFG suggested-match pattern).
-- **Frontend** — goal form visibility segment + blueprint-seed picker w/ live
-  materials preview; board All/Mine/🛠 Craft filter + 🔒/🛠 chips.
-
-Still open under #25.1: §11 sell-side ripples (stat-name autocomplete,
-`blueprint:` identity for sale listings), §12 estimated material cost, the
-choice-group picker, and the announce name-check.
+- **Announce name-check** — the WANTED announce could @-mention capable
+  crafters (from the library) instead of an org-wide ping.
 
 ### 28. Starmap & POI enrichment from the wiki API 🆕 (needs scoping)
 
@@ -155,8 +127,9 @@ opportunistically; none is urgent.
   deals · WTB saved searches (largely realized by #25) · richer reputation
   (only if abuse appears).
 - **Resource Manager (#14):** map→goal badging ("needed for N goals" in the
-  finder) · contribution history/leaderboard · goal templates (ship BOMs) ·
-  goal-met → marketplace bridge.
+  finder) · contribution history/leaderboard · goal-met → marketplace bridge.
+  (Recipe-BOM goal seeding + personal goals shipped v0.42.0, #14.2; ship-BOM
+  templates still open.)
 - **Events (#13/#20):** POI-linked event location (autocomplete exists; still
   stores freeform text) · recurring events via a "clone event" shortcut ·
   attendance / organizer leaderboard · per-user timezone setting ·
@@ -197,9 +170,9 @@ opportunistically; none is urgent.
 
 ## Shipped log
 
-Everything below is live (deploy = push to `origin/main` + manual server
-rebuild). Full design/build notes: the spec doc where listed, else the
-[archived backlog](archive/feature-backlog-full-2026-07-04.md).
+Everything below is live (deploy = merge to `origin/main`; a git-based Portainer
+stack auto-redeploys within ~5 min). Full design/build notes: the spec doc where
+listed, else the [archived backlog](archive/feature-backlog-full-2026-07-04.md).
 
 | # | Feature | Shipped | Reference |
 |---|---------|---------|-----------|
@@ -232,3 +205,4 @@ rebuild). Full design/build notes: the spec doc where listed, else the
 | 26/27 | Quantum data slice (wiki API) + fuel/range in both planners | v0.37.0 | [quantum-fuel-range.md](quantum-fuel-range.md), [quantum-data-pipeline.md](quantum-data-pipeline.md) |
 | 21 | Trade planner stock + demand-side reports (STOCK WATCH) | v0.38.0 · v0.39.0 | [trade-route-planner.md](trade-route-planner.md) |
 | 25 | Blueprint craft commissions v1 (+ blueprint feed, spec builder, slider-driven quality minimums) | v0.40.0 · v0.41.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) |
+| 14.2 / 25.1 | Personal + blueprint-seeded craft goals · member blueprint library · commission crafter-matching (§10) | v0.42.0 (⚒ glyph fix v0.42.1) | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §10 |
