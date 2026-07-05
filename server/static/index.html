@@ -1057,8 +1057,13 @@
   .run-bar { flex: 1; height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden;
     border: 1px solid var(--border); }
   .run-bar-fill { height: 100%; background: var(--accent); transition: width .25s; }
-  .run-stop { padding: 10px 0; border-top: 1px solid var(--border); opacity: .6; }
-  .run-stop.active { opacity: 1; }
+  /* Active stop marker: opacity alone is too subtle to catch "which leg am I on?"
+     from a second screen, so the live stop also gets an accent-wash fill (full-bleed
+     via negative margin; equal padding on all rows = no shift when a stop advances).
+     Paired with the cyan seq circle below — a background tint + leading icon, not a
+     banned side-stripe border. */
+  .run-stop { padding: 10px 12px; margin: 0 -12px; border-top: 1px solid var(--border); opacity: .6; }
+  .run-stop.active { opacity: 1; background: var(--accent-wash); border-radius: 6px; }
   .run-stop.past { opacity: .45; }
   .run-stop-head { display: flex; align-items: center; gap: 10px; }
   .run-stop .seq { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--panel2);
@@ -1107,15 +1112,30 @@
   .trade-tab { border: 1px solid transparent; background: none; color: var(--dim);
     font-size: 13px; padding: 6px 14px; border-radius: 6px; cursor: pointer; }
   .trade-tab:hover { color: var(--text); }
-  .trade-tab.active { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); }
-  /* Segmented optimizer choice (aUEC/hr vs total profit). */
-  .trade-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .trade-seg button { border: none; background: none; color: var(--dim); font-size: 12px;
-    padding: 6px 12px; cursor: pointer; }
-  .trade-seg button + button { border-left: 1px solid var(--border); }
-  .trade-seg button.active { background: var(--accent-wash); color: var(--accent); }
+  /* Active segment fills cyan (DESIGN §5 button-active), matching .seg / .range-toggle
+     so every segmented control across the suite reads the same and the engaged
+     state survives a peripheral glance from a second screen. */
+  .trade-tab.active { background: var(--accent); border-color: var(--accent); color: var(--ink-on-accent); }
+  .trade-tab:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); z-index: 1; }
+  /* NOTE: the optimize-for + pirate-avoid segments reuse the house `.seg` component
+     (see its rule near the top) rather than a bespoke chassis, so every flat-divider
+     segmented control in the suite shares one radius, one `.on` active class, and one
+     focus ring. Only `.trade-tabs` stays distinct — it's the higher-tier mode tablist. */
   .trade-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); cursor: pointer; }
   .trade-check input { accent-color: var(--accent); }
+  /* Advanced-options disclosure: keeps the resting HOW-TO-PLAN decision at
+     mode + optimize-for + Plan (≤4 choices) with sensible defaults tucked away.
+     Native <details> = keyboard/SR-operable for free; caret mirrors .rm-caret. */
+  .trade-tuning { margin-top: 12px; }
+  .trade-tuning > summary { display: inline-flex; align-items: center; gap: 7px; width: fit-content;
+    list-style: none; cursor: pointer; font-size: 12px; letter-spacing: .04em; color: var(--dim); padding: 3px 0; }
+  .trade-tuning > summary::-webkit-details-marker { display: none; }
+  .trade-tuning > summary::before { content: "▸"; font-size: 10px; color: var(--dim);
+    transition: transform .12s ease-out; }
+  .trade-tuning[open] > summary::before { transform: rotate(90deg); color: var(--accent); }
+  .trade-tuning > summary:hover { color: var(--text); }
+  .trade-tuning > summary:focus-visible { outline: none; color: var(--accent); box-shadow: none; }
+  @media (prefers-reduced-motion: reduce) { .trade-tuning > summary::before { transition: none; } }
   /* Commodity filter chips. */
   .trade-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .trade-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
@@ -1197,6 +1217,23 @@
   .route-range { color: var(--accent); font-size: 13px; margin: 8px 0 0;
     border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
   .route-range.hard { color: var(--bad); border-color: var(--bad); background: var(--bad-wash); }
+  /* Consolidated advisory strip: the non-urgent plan notes (over-range, price age,
+     UEX scrape caveat) fold behind one summary so they don't wall off the
+     profit → legs read. Urgent danger/reroute callouts stay inline above it. A
+     warn tint on the summary keeps a stale-price note eye-catching while collapsed. */
+  .route-advisories { margin: 10px 0 0; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+  .route-advisories > summary { display: inline-flex; align-items: center; gap: 7px; width: fit-content;
+    list-style: none; cursor: pointer; font-size: 12px; color: var(--dim); }
+  .route-advisories > summary::-webkit-details-marker { display: none; }
+  .route-advisories > summary::before { content: "▸"; font-size: 10px; transition: transform .12s ease-out; }
+  .route-advisories[open] > summary::before { transform: rotate(90deg); color: var(--accent); }
+  .route-advisories > summary:hover { color: var(--text); }
+  .route-advisories > summary:focus-visible { outline: none; color: var(--accent); }
+  .route-advisories.warn { border-color: var(--warn); }
+  .route-advisories.warn > summary { color: var(--warn); }
+  .route-advisories p { font-size: 12px; color: var(--dim); margin: 8px 0 0; line-height: 1.5; }
+  .route-advisories p b { color: var(--text); }
+  @media (prefers-reduced-motion: reduce) { .route-advisories > summary::before { transition: none; } }
   .avoid-blk { margin-top: 10px; }
   .avoid-blk-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .avoid-blk-add .fld-label { font-size: 11px; letter-spacing: .04em; color: var(--dim); }
@@ -2768,10 +2805,10 @@
       <div class="route-row trade-danger-row" style="margin-top:12px;">
         <span class="muted" style="font-size:12px;">Pirate danger
           <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
-        <span class="trade-seg" id="route-avoid" role="group" aria-label="Pirate danger handling">
-          <button data-avoid="ignore" type="button">Ignore</button>
-          <button data-avoid="warn" type="button">Warn</button>
-          <button class="active" data-avoid="avoid" type="button">Avoid</button>
+        <span class="seg" id="route-avoid" role="group" aria-label="Pirate danger handling">
+          <button data-avoid="ignore" type="button" aria-pressed="false">Ignore</button>
+          <button data-avoid="warn" type="button" aria-pressed="false">Warn</button>
+          <button class="on" data-avoid="avoid" type="button" aria-pressed="true">Avoid</button>
         </span>
         <span class="muted trade-danger-hint" id="route-avoid-hint" style="font-size:11px;"></span>
       </div>
@@ -2858,34 +2895,43 @@
 
     <div class="panel">
       <h2>HOW TO PLAN</h2>
-      <div class="trade-tabs" id="trade-mode-tabs" role="tablist">
-        <button class="trade-tab active" data-mode="auto" role="tab">Auto</button>
-        <button class="trade-tab" data-mode="filtered" role="tab">Pick commodities</button>
-        <button class="trade-tab" data-mode="manual" role="tab">Manual legs</button>
+      <div class="trade-tabs" id="trade-mode-tabs" role="tablist" aria-label="How to plan the run">
+        <button class="trade-tab active" id="trade-tab-auto" data-mode="auto" role="tab" type="button" aria-selected="true" aria-controls="trade-mode-panel">Auto</button>
+        <button class="trade-tab" id="trade-tab-filtered" data-mode="filtered" role="tab" type="button" aria-selected="false" tabindex="-1" aria-controls="trade-mode-panel">Pick commodities</button>
+        <button class="trade-tab" id="trade-tab-manual" data-mode="manual" role="tab" type="button" aria-selected="false" tabindex="-1" aria-controls="trade-mode-panel">Manual legs</button>
       </div>
 
+      <!-- One reused tabpanel for all three modes; setTradeMode relabels it (aria-labelledby)
+           to the active tab, the correct pattern when tabs reconfigure a shared region. -->
+      <div id="trade-mode-panel" role="tabpanel" aria-labelledby="trade-tab-auto">
       <div id="trade-solver-opts">
-        <div class="route-row" style="margin-top:12px;">
-          <label class="muted" style="font-size:12px;">max stops
-            <input id="trade-stops" class="ti" type="number" min="2" max="12" step="1" value="6"
-                   style="width:70px;">
-          </label>
-          <label class="muted" style="font-size:12px;">system
-            <select id="trade-system" class="sel"></select>
-          </label>
-          <span class="trade-seg" id="trade-sort">
-            <button class="active" data-sort="per_hour" type="button">Best aUEC/hr</button>
-            <button data-sort="profit" type="button">Most profit</button>
+        <div class="route-row" style="margin-top:12px; align-items:center;">
+          <span class="muted" style="font-size:12px;">optimize for</span>
+          <span class="seg" id="trade-sort" role="group" aria-label="Optimize for">
+            <button class="on" data-sort="per_hour" type="button" aria-pressed="true">Best aUEC/hr</button>
+            <button data-sort="profit" type="button" aria-pressed="false">Most profit</button>
           </span>
         </div>
-        <div class="route-row trade-pref-row" style="margin-top:10px;">
-          <label class="trade-pref" title="Weigh empty-hold repositioning more heavily so the plan keeps you loaded, even if it gives up some profit.">
-            <input id="trade-deadhead" type="checkbox"> minimize empty-hold flight</label>
-          <label class="trade-pref" title="UEX prices are community-scraped and can lag. Skip any terminal whose price hasn't been updated within this many days. On by default at 2 days so stale terminals stay out of the plan and the best-trades board.">
-            <input id="trade-fresh-on" type="checkbox" checked> only prices newer than
-            <input id="trade-fresh-days" class="ti" type="number" min="1" max="365" step="1"
-                   value="2" style="width:56px;"> days</label>
-        </div>
+        <details class="trade-tuning">
+          <summary>Tuning — stops, system, price freshness</summary>
+          <div class="route-row" style="margin-top:12px;">
+            <label class="muted" style="font-size:12px;">max stops
+              <input id="trade-stops" class="ti" type="number" min="2" max="12" step="1" value="6"
+                     style="width:70px;">
+            </label>
+            <label class="muted" style="font-size:12px;">system
+              <select id="trade-system" class="sel"></select>
+            </label>
+          </div>
+          <div class="route-row trade-pref-row" style="margin-top:10px;">
+            <label class="trade-pref" title="Weigh empty-hold repositioning more heavily so the plan keeps you loaded, even if it gives up some profit.">
+              <input id="trade-deadhead" type="checkbox"> minimize empty-hold flight</label>
+            <label class="trade-pref" title="UEX prices are community-scraped and can lag. Skip any terminal whose price hasn't been updated within this many days. On by default at 2 days so stale terminals stay out of the plan and the best-trades board.">
+              <input id="trade-fresh-on" type="checkbox" checked> only prices newer than
+              <input id="trade-fresh-days" class="ti" type="number" min="1" max="365" step="1"
+                     value="2" style="width:56px;"> days</label>
+          </div>
+        </details>
         <div id="trade-filter-row" class="route-row" hidden style="margin-top:10px;">
           <span class="poi-pick" style="flex:1; min-width:180px;">
             <input id="trade-commodity-add" class="ti" list="trade-commodities"
@@ -2902,14 +2948,15 @@
         <p class="muted route-hint">Pick a commodity, then a terminal to buy at and one to sell at.
           Live prices and profit fill in as you go.</p>
       </div>
+      </div><!-- /trade-mode-panel -->
 
       <div class="route-row trade-danger-row" style="margin-top:12px;">
         <span class="muted" style="font-size:12px;">Pirate danger
           <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
-        <span class="trade-seg" id="trade-avoid" role="group" aria-label="Pirate danger handling">
-          <button data-avoid="ignore" type="button">Ignore</button>
-          <button data-avoid="warn" type="button">Warn</button>
-          <button class="active" data-avoid="avoid" type="button">Avoid</button>
+        <span class="seg" id="trade-avoid" role="group" aria-label="Pirate danger handling">
+          <button data-avoid="ignore" type="button" aria-pressed="false">Ignore</button>
+          <button data-avoid="warn" type="button" aria-pressed="false">Warn</button>
+          <button class="on" data-avoid="avoid" type="button" aria-pressed="true">Avoid</button>
         </span>
         <span class="muted trade-danger-hint" id="trade-avoid-hint" style="font-size:11px;"></span>
       </div>
@@ -6646,7 +6693,10 @@ const ROUTE_AVOID_HINT = {
 function setRouteAvoid(mode) {
   routeAvoid = ["warn", "avoid"].includes(mode) ? mode : "ignore";
   const seg = $("route-avoid");
-  if (seg) for (const x of seg.children) x.classList.toggle("active", x.dataset.avoid === routeAvoid);
+  if (seg) for (const x of seg.children) {
+    const on = x.dataset.avoid === routeAvoid;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
   const hint = $("route-avoid-hint"); if (hint) hint.textContent = ROUTE_AVOID_HINT[routeAvoid];
 }
 
@@ -6810,8 +6860,20 @@ const TRADE_AVOID_HINT = {
 };
 function setTradeAvoid(mode) {
   tradeAvoid = ["warn", "avoid"].includes(mode) ? mode : "ignore";
-  for (const x of $("trade-avoid").children) x.classList.toggle("active", x.dataset.avoid === tradeAvoid);
+  for (const x of $("trade-avoid").children) {
+    const on = x.dataset.avoid === tradeAvoid;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
   const hint = $("trade-avoid-hint"); if (hint) hint.textContent = TRADE_AVOID_HINT[tradeAvoid];
+}
+// Single source of truth for the optimize-for seg (used by the click wiring and by
+// applyTradeConfig) so the visual, the state, and aria-pressed never drift apart.
+function setTradeSort(sort) {
+  tradeSort = sort === "profit" ? "profit" : "per_hour";
+  for (const x of $("trade-sort").children) {
+    const on = x.dataset.sort === tradeSort;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
 }
 let tradeFilter = [];                    // commodity names (filtered mode)
 let tradeStartHere = false;              // start from the caller's live position
@@ -7154,8 +7216,7 @@ function applyTradeConfig(cfg) {
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
     if ($("trade-system")) $("trade-system").value = cfg.system || "";
-    tradeSort = cfg.sort || "per_hour";
-    for (const x of $("trade-sort").children) x.classList.toggle("active", x.dataset.sort === tradeSort);
+    setTradeSort(cfg.sort || "per_hour");
     $("trade-deadhead").checked = !!cfg.minimize_deadhead;
     const freshOn = cfg.max_price_age_days != null;
     $("trade-fresh-on").checked = freshOn;
@@ -7163,6 +7224,11 @@ function applyTradeConfig(cfg) {
     if (freshOn) $("trade-fresh-days").value = cfg.max_price_age_days;
     tradeFilter = (cfg.mode === "filtered" && Array.isArray(cfg.commodities)) ? cfg.commodities.slice() : [];
     renderTradeChips();
+    // Surface loaded tuning if it departs from defaults (stops 6 / no system lock /
+    // no deadhead / fresh-at-2d) so a favorite's custom settings aren't hidden.
+    const tuning = document.querySelector(".trade-tuning");
+    if (tuning) tuning.open = (cfg.max_stops && cfg.max_stops !== 6) || !!cfg.system
+      || !!cfg.minimize_deadhead || !freshOn || (freshOn && cfg.max_price_age_days !== 2);
   }
   if (cfg.mode === "manual") {
     $("trade-legs").innerHTML = "";
@@ -7181,9 +7247,16 @@ function wireTradePlanner() {
   tradeWired = true;
   for (const b of $("trade-mode-tabs").querySelectorAll(".trade-tab"))
     b.onclick = () => setTradeMode(b.dataset.mode);
+  // Roving-tabindex arrow-key nav across the mode tablist (keyboard + SR support).
+  $("trade-mode-tabs").onkeydown = (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const tabs = [...$("trade-mode-tabs").querySelectorAll(".trade-tab")];
+    const i = tabs.findIndex(t => t.dataset.mode === tradeMode);
+    const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+    setTradeMode(next.dataset.mode); next.focus(); e.preventDefault();
+  };
   for (const b of $("trade-sort").querySelectorAll("button"))
-    b.onclick = () => { tradeSort = b.dataset.sort;
-      for (const x of $("trade-sort").children) x.classList.toggle("active", x === b); };
+    b.onclick = () => setTradeSort(b.dataset.sort);
   for (const b of $("trade-avoid").querySelectorAll("button"))
     b.onclick = () => setTradeAvoid(b.dataset.avoid);
   setTradeAvoid(tradeAvoid);
@@ -7266,8 +7339,14 @@ function prefillTradeScu() {
 
 function setTradeMode(mode) {
   tradeMode = mode;
-  for (const b of $("trade-mode-tabs").querySelectorAll(".trade-tab"))
-    b.classList.toggle("active", b.dataset.mode === mode);
+  for (const b of $("trade-mode-tabs").querySelectorAll(".trade-tab")) {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on);
+    b.tabIndex = on ? 0 : -1;   // roving tabindex: only the selected tab is in tab order
+  }
+  const panel = $("trade-mode-panel");   // one reused tabpanel — relabel it to the live tab
+  if (panel) panel.setAttribute("aria-labelledby", "trade-tab-" + mode);
   $("trade-solver-opts").hidden = mode === "manual";
   $("trade-filter-row").hidden = mode !== "filtered";
   $("trade-manual").hidden = mode !== "manual";
@@ -7497,18 +7576,10 @@ function renderTradePlan(res) {
   if (sm.loaded_pct != null) sub.push(metric(sm.loaded_pct + "%", "HOLD LOADED"));
   if (sm.total_fuel_scu != null) sub.push(metric(fmtScu(sm.total_fuel_scu), "QT FUEL"));   // #27
   h += `<div class="route-substats">` + sub.join("") + `</div>`;
-  if (sm.over_range_count)   // #27: advisory over-range callout
-    h += `<p class="route-range">⚠ ${sm.over_range_count} leg${sm.over_range_count > 1 ? "s" : ""} `
-      + `exceed this drive's range. Refuel between legs, or pick a longer-range drive.</p>`;
   if (res.start) h += `<p class="route-hint muted">Starting from <b>${esc(res.start.name)}</b>.</p>`;
-  if (sm.oldest_updated_at != null) {
-    const a = tradeAgeInfo(sm.oldest_updated_at);
-    h += `<p class="trade-fresh-line${a.stale ? " warn" : ""}">`
-      + `${a.stale ? "⚠ " : ""}Prices as old as <b>${a.txt}</b> feed this plan`
-      + `${a.stale ? " — some terminals may have moved. Enable the freshness filter to exclude them." : "."}</p>`;
-  }
-  // Route-level danger callout (#24 v2): rerouted-around (informational) split from
-  // touches-danger-can't-reroute (a warning that links the flagged legs below).
+  // Urgent, route-safety callouts stay inline right under the headline (#24 v2):
+  // rerouted-around (informational, a good outcome) split from touches-danger-
+  // can't-reroute (a warning that links the flagged legs below).
   let reroutedN = 0, detourTotal = 0;
   (res.legs || []).forEach(lg => {
     let has = false;
@@ -7523,7 +7594,25 @@ function renderTradePlan(res) {
     h += `<p class="route-danger">⚠ ${flagged.length} leg${flagged.length > 1 ? "s" : ""} touch danger `
       + `that can't be routed around. Check the flagged legs below`
       + `${tradeAvoid === "avoid" ? "." : ", or switch danger to <b>Avoid</b> to route around it."}</p>`;
-  h += `<p class="trade-price-note">Prices are UEX's latest scrape, not live in-game — confirm at the terminal.</p>`;
+  // Non-urgent notes (over-range, price age, the standing UEX caveat) fold into one
+  // collapsible strip so they don't wall off the profit → legs read (P3). A stale-
+  // price note tints the summary so it still catches the eye while collapsed.
+  const adv = []; let advWarn = false;
+  if (sm.over_range_count) {   // #27: advisory over-range callout
+    adv.push(`⚠ ${sm.over_range_count} leg${sm.over_range_count > 1 ? "s" : ""} exceed this drive's range. `
+      + `Refuel between legs, or pick a longer-range drive.`);
+    advWarn = true;
+  }
+  if (sm.oldest_updated_at != null) {
+    const a = tradeAgeInfo(sm.oldest_updated_at);
+    if (a.stale) advWarn = true;
+    adv.push(`${a.stale ? "⚠ " : ""}Prices as old as <b>${a.txt}</b> feed this plan`
+      + `${a.stale ? " — some terminals may have moved. Enable the freshness filter to exclude them." : "."}`);
+  }
+  adv.push(`Prices are UEX's latest scrape, not live in-game — confirm at the terminal.`);
+  h += `<details class="route-advisories${advWarn ? " warn" : ""}">`
+    + `<summary>${advWarn ? "⚠ " : ""}Advisories (${adv.length})</summary>`
+    + adv.map(p => `<p>${p}</p>`).join("") + `</details>`;
   h += `</div><div class="panel"><h2>LEGS</h2>`;
   (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
   h += `<div class="route-actions"><button id="trade-start" class="active">Start this run ▸</button>`
