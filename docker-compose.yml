@@ -2,7 +2,18 @@ services:
   sc-nav:
     build: .
     container_name: sc-nav
-    env_file: .env          # Discord OAuth + session config (and the tunnel token)
+    # Explicit ${VAR} refs (not env_file) so Portainer stack env vars get
+    # substituted in; env_file only loads literal file contents, no interpolation.
+    environment:
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
+      - OAUTH_REDIRECT_URI=${OAUTH_REDIRECT_URI}
+      - ORG_GUILD_ID=${ORG_GUILD_ID}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - COOKIE_SECURE=${COOKIE_SECURE}
+      - ORG_MEMBER_ROLE_ID=${ORG_MEMBER_ROLE_ID}
+      - SC_NAV_PUBLIC_URL=${SC_NAV_PUBLIC_URL}
     # Bound to localhost only: the cloudflared sidecar reaches the app over the
     # internal Docker network (http://sc-nav:8765), so there's no need to expose
     # it on the LAN — doing so would bypass the Cloudflare Access/WAF layer.

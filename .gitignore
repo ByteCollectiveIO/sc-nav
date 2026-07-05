@@ -43,7 +43,7 @@ docs/loadout.json
 
 # Secrets / local env — list the FILE here, never the secret itself.
 # The Cloudflare tunnel token goes inside .env (CLOUDFLARE_TUNNEL_TOKEN=...).
-.env
+#.env
 
 # Ignore the impeccable stuff.
 server/static/.impeccable/
