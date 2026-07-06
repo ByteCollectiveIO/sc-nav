@@ -9,7 +9,7 @@
    * STYLE MAP — grep `/* ----` to jump (ranges drift; grep wins).
    *   :root tokens · base/layout · legal pages · site footer · settings layout ·
    *   small-screen (phone) overrides · cargo planner (#/route) ·
-   *   event planner (#/events) · resource manager (#/goals + #/inventory) ·
+   *   event planner (#/events) · resource manager (#/goals + #/inventory + #/blueprints) ·
    *   org marketplace (#/market).
    * Design tokens & component rules are documented in /DESIGN.md.
    * ======================================================================== */
@@ -523,6 +523,10 @@
   .on-tag:hover { border-color: var(--accent); color: var(--accent); }
   .on-tag:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
   .on-tag.active { border-color: var(--accent); color: var(--ink-on-accent); background: var(--accent); }
+  /* read-only profile-tag chips (#30) — quieter than the interactive .on-tag */
+  .on-ptags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .on-ptag { font-size: 11px; padding: 1px 7px; border-radius: 14px; white-space: nowrap;
+    border: 1px solid var(--border); color: var(--dim); }
   /* looking-for-group board (#19 step 3) */
   .lfg-blurb { margin: 0 0 12px; font-size: 12px; }
   .lfg-compose { display: flex; flex-direction: column; gap: 10px; }
@@ -1538,10 +1542,16 @@
     color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
     resize: vertical; }
 
-  /* ---- resource manager (#/goals + #/inventory) ---- */
-  #goals-view, #goals-root, #inventory-view, #inventory-root { display: contents; }
-  #goals-view[hidden], #inventory-view[hidden] { display: none; }
-  /* sub-nav tabs shared by the Goals + Inventory screens */
+  /* ---- resource manager (#/goals + #/inventory + #/blueprints) ---- */
+  #goals-view, #goals-root, #inventory-view, #inventory-root,
+  #blueprints-view, #blueprints-root { display: contents; }
+  #goals-view[hidden], #inventory-view[hidden], #blueprints-view[hidden] { display: none; }
+  /* app masthead (#29): app name + the three section tabs as peers */
+  .rm-mast { display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px; }
+  .rm-mast-name { font-size: 11px; font-weight: 700; letter-spacing: .12em;
+    color: var(--dim); }
+  /* sub-nav tabs shared by the Goals / Inventory / Blueprints screens */
   .rm-tabs { display: flex; gap: 8px; }
   .rm-tab { font-size: 13px; padding: 6px 14px; border-radius: 6px; text-decoration: none;
     border: 1px solid var(--border); color: var(--dim); }
@@ -2009,8 +2019,8 @@
         <a class="app-card" href="#/goals">
           <img class="app-logo" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Resource Manager</div>
-          <div class="app-desc">Set org procurement goals with deadlines &amp; priorities, log what
-            members are holding, and watch contributions fill each target.</div>
+          <div class="app-desc">Set procurement goals, track your holdings and where they're
+            stashed, and keep your craftable-blueprint library.</div>
         </a>
         <a class="app-card" href="#/market">
           <img class="app-logo" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
@@ -2292,21 +2302,15 @@
     <span class="muted" id="identity-status" role="status" aria-live="polite"
           style="font-size:12px; display:block; margin-top:6px;"></span>
   </div>
-  <div class="panel" id="blueprints-panel">
-    <h2>MY BLUEPRINTS <span class="muted">(recipes you own / can craft)</span></h2>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      Save the crafting recipes you can make. Commission requests show
-      <b>“N can craft”</b> and you can filter the board to
-      <b>requests you can craft</b>; you can also seed a personal goal to gather a
-      recipe's materials.
+  <div class="panel" id="profile-panel">
+    <h2>PROFILE <span class="muted">(preferred playstyles)</span></h2>
+    <div class="muted" style="font-size:12px;">
+      Pick up to 6 playstyles you enjoy. They're shown next to your name in the
+      member directory and on the Who's Online roster, so org-mates can find you.
     </div>
-    <div class="rm-row" style="max-width:520px;">
-      <span class="poi-pick" style="flex:1;min-width:220px;"><input id="mybp-add" class="ti"
-        placeholder="search a craftable recipe…" autocomplete="off"></span>
-      <button class="ev-btn" id="mybp-add-btn" type="button">Add</button>
-    </div>
-    <span class="muted" id="mybp-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    <div id="mybp-list" style="margin-top:10px;"></div>
+    <div class="on-tags" id="profile-tags"></div>
+    <span class="muted" id="profile-status" role="status" aria-live="polite"
+          style="font-size:12px; display:block; margin-top:6px;"></span>
   </div>
   <div class="panel" id="token-panel" hidden>
     <h2>WATCHER TOKEN <span class="muted">(authenticates the desktop watcher)</span></h2>
@@ -3113,6 +3117,13 @@
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div><!-- /inventory-view -->
 
+  <div id="blueprints-view" hidden>
+    <div id="blueprints-root"></div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /blueprints-view -->
+
   <div id="market-view" hidden>
     <div id="market-root"></div>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
@@ -3532,8 +3543,8 @@ function applyTheme(pref) {
  *   freshness · shard · nearby · captures · destination · path controls · map ·
  *   search · element finder · teammate presence · online count · websocket ·
  *   constrained <select> · auth gate · cargo planner (#/route) + run mode ·
- *   event planner (#/events) · resource manager (#/goals + #/inventory:
- *     catalog picker / goal form / inventory) · marketplace (#/market) ·
+ *   event planner (#/events) · resource manager (#/goals + #/inventory + #/blueprints:
+ *     catalog picker / goal form / inventory / blueprint library) · marketplace (#/market) ·
  *   view router · leaderboard · statistics · analytics-section status ·
  *   guild hauling · Org Intel · org settings · org logo · admins ·
  *   clear statistics · delete account · watcher tokens · setup guide · init.
@@ -4785,6 +4796,7 @@ const MATE_STALE_S = 90;
 // chosen primary handle, and the directory opt-out. Drives the marketplace handle
 // picker and the settings identity panel.
 let myIdentity = { handles: [], primary_handle: null, directory_opt_out: false };
+let myProfileTags = [];   // declared playstyle tags (#30), cached from /api/me
 
 function rememberMate(u) {
   if (u.discord_id === myId) return;   // don't list/draw myself as a teammate
@@ -4900,12 +4912,16 @@ function renderOnlineView() {
     const where = u.location
       ? `<span class="on-where">${esc(u.location.body)} · ${esc(u.location.system)}</span>` : "";
     const act = u.activity ? `<span class="on-activity">${esc(u.activity)}</span>` : "";
+    // Declared profile tags (#30) — the persistent "what I like to play", shown
+    // even when the member hasn't set a transient activity.
+    const tags = (u.tags || []).length
+      ? `<span class="on-ptags">${u.tags.map(t => `<span class="on-ptag">${esc(t)}</span>`).join("")}</span>` : "";
     const me = u.discord_id === myId ? ` <span class="on-where">(you)</span>` : "";
     return `<div class="on-row">` +
       `<span class="on-dot ${st}" title="${esc(stLabel)}"></span>` +
       `<span class="on-name">${esc(u.name)}</span>${me}` +
       `<span class="on-status ${st}">${esc(stLabel)}</span>` +
-      act + where +
+      act + tags + where +
       `<span class="on-age">online ${fmtSince(u.since_s)}</span></div>`;
   }).join("");
 }
@@ -5794,6 +5810,7 @@ function renderAccount(me) {
   // here (renderAccount is the single place that receives the full me object).
   myIdentity = { handles: me.handles || [], primary_handle: me.primary_handle || null,
                  directory_opt_out: !!me.directory_opt_out };
+  myProfileTags = me.playstyle_tags || [];
   // The watcher-token panel is for any member; the org-administration panels are
   // admin-only. Both groups live inside #settings-view, shown by the hash router
   // (applyView); #admin-section wraps the admin-only group as one visibility unit.
@@ -5848,6 +5865,39 @@ async function saveIdentity(url, body, apply) {
   } catch (err) {
     s.textContent = (err && err.detail) || "Couldn't save — try again.";
   }
+}
+
+// The PROFILE panel in Settings (#30): the shared playstyle vocabulary as toggle
+// chips. A toggle saves immediately via PUT /api/me; the 6-tag cap is enforced
+// here for feedback and again server-side.
+const PROFILE_MAX_TAGS = 6;
+async function renderProfilePanel() {
+  const el = $("profile-tags");
+  if (!el) return;
+  await ensurePlaystyleTags();
+  el.innerHTML = playstyleTags.map(t =>
+    `<button type="button" class="on-tag${myProfileTags.includes(t) ? " active" : ""}" ` +
+    `aria-pressed="${myProfileTags.includes(t)}" data-tag="${esc(t)}">${esc(t)}</button>`).join("");
+  el.querySelectorAll(".on-tag").forEach(b => b.onclick = () => toggleProfileTag(b.dataset.tag));
+}
+async function toggleProfileTag(tag) {
+  const st = $("profile-status");
+  const next = myProfileTags.includes(tag)
+    ? myProfileTags.filter(t => t !== tag) : [...myProfileTags, tag];
+  if (next.length > PROFILE_MAX_TAGS) {
+    st.textContent = `Up to ${PROFILE_MAX_TAGS} tags — drop one to add another.`;
+    return;
+  }
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/me", { method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playstyle_tags: next }) });
+    if (!r.ok) throw 0;
+    myProfileTags = (await r.json()).playstyle_tags || [];
+    st.textContent = "Saved.";
+  } catch { st.textContent = "Couldn't save — try again."; }
+  renderProfilePanel();
 }
 
 // ---------- cargo planner (#/route) ----------
@@ -9104,9 +9154,10 @@ async function renderEditForm(e) {
   bindEventForm(tax, e.id, () => renderDetailBody(e));
 }
 
-// ---------- resource manager (#/goals + #/inventory) ----------
-// Two screens of one app over a shared item catalog: Goals (procurement targets
-// + derived fill) and Inventory (the org rollup of members' attributed holdings).
+// ---------- resource manager (#/goals + #/inventory + #/blueprints) ----------
+// Three screens of one app over a shared item catalog: Goals (procurement targets
+// + derived fill), Inventory (members' attributed holdings + the org rollup) and
+// Blueprints (the personal craftable-recipe library, #29).
 
 function fmtQty(n) {
   n = Number(n) || 0;
@@ -9126,11 +9177,20 @@ function unitSelect(cls, selected) {
   return `<select class="sel rm-unit ${cls}" title="unit">${head}${opts}</select>`;
 }
 
-// Sub-nav tabs shared by both screens.
+// Sub-nav tabs shared by the app's three peer screens (#29).
 function rmTabs(active) {
   return `<div class="rm-tabs">` +
     `<a class="rm-tab ${active === "goals" ? "on" : ""}" href="#/goals">Goals</a>` +
-    `<a class="rm-tab ${active === "inventory" ? "on" : ""}" href="#/inventory">Inventory</a></div>`;
+    `<a class="rm-tab ${active === "inventory" ? "on" : ""}" href="#/inventory">Inventory</a>` +
+    `<a class="rm-tab ${active === "blueprints" ? "on" : ""}" href="#/blueprints">Blueprints</a></div>`;
+}
+
+// App masthead (#29): one compact header panel shared by all RM screens — the
+// app name + the section tabs as peers — so each screen below states its own
+// job instead of the tabs living inside the Goals panel.
+function rmMast(active) {
+  return `<div class="panel rm-mast"><span class="rm-mast-name">RESOURCE MANAGER</span>` +
+    rmTabs(active) + `</div>`;
 }
 
 // Priority reads as three tiers, not a 10-hue rainbow (which collided with the
@@ -9258,10 +9318,9 @@ async function renderGoalBoard() {
   const root = $("goals-root");
   const seg = (v, lbl) =>
     `<button type="button" data-scope="${v}" class="${goalScopeFilter === v ? "on" : ""}">${lbl}</button>`;
-  root.innerHTML =
-    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">RESOURCE GOALS</h2>` +
+  root.innerHTML = rmMast("goals") +
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">GOALS</h2>` +
     `<a class="ev-btn primary" href="#/goals/new">+ New goal</a></div>` +
-    `<div style="margin:12px 0 6px">${rmTabs("goals")}</div>` +
     `<p class="rm-intro">Procurement targets — what to gather, how much, by when. Org goals fill as ` +
     `members log contributions; <b>personal</b> goals stay private (seed one from a blueprint to gather ` +
     `everything a craft needs). Every item links into the <a href="#/nav">resource finder</a>.</p>` +
@@ -9704,7 +9763,9 @@ function renderGoalEditForm(g) {
 }
 
 // --- inventory screen (#/inventory) ---
-let rmInvScope = "org";   // "org" rollup | "mine"
+// Defaults to "My holdings" (#29) — the management use case the section exists
+// for; the org rollup is one click away. Last scope sticks like other RM prefs.
+let rmInvScope = (() => { try { return localStorage.getItem("rmInvScope"); } catch { return null; } })() || "mine";
 
 function loadInventory() {
   renderInventory();
@@ -9712,12 +9773,11 @@ function loadInventory() {
 
 async function renderInventory() {
   const root = $("inventory-root");
-  root.innerHTML =
-    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG INVENTORY</h2></div>` +
-    `<div style="margin:12px 0 6px">${rmTabs("inventory")}</div>` +
-    `<p class="rm-intro">A ledger of what members are <em>holding for the org</em> — attributed ` +
-    `pledges, not a vault (SC has no shared storage). Log yours below; the org view rolls them ` +
-    `up per item.</p>` +
+  root.innerHTML = rmMast("inventory") +
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">INVENTORY</h2></div>` +
+    `<p class="rm-intro">What you're holding and where it's stashed — attributed ` +
+    `pledges, not a vault (SC has no shared storage). Log holdings against catalog items and ` +
+    `locations; the org rollup sums everyone's attributed stock.</p>` +
     `<div class="rm-row" style="margin-top:10px">` +
       `<span class="poi-pick"><input id="inv-item" class="ti" placeholder="item" autocomplete="off"></span>` +
       `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
@@ -9726,16 +9786,17 @@ async function renderInventory() {
       `<button class="ev-btn primary" id="inv-save">Log holding</button>` +
     `</div><span id="inv-msg" class="muted"></span></div>` +
     `<div class="panel"><div class="ev-head"><div class="rm-tabs">` +
-      `<button class="rm-tab ${rmInvScope === "org" ? "on" : ""}" id="inv-scope-org">Org rollup</button>` +
       `<button class="rm-tab ${rmInvScope === "mine" ? "on" : ""}" id="inv-scope-mine">My holdings</button>` +
+      `<button class="rm-tab ${rmInvScope === "org" ? "on" : ""}" id="inv-scope-org">Org rollup</button>` +
     `</div></div><div id="inv-body"><p class="stat-empty">Loading…</p></div></div>`;
 
   // Picking an item prefills the unit from the catalog (overridable).
   attachCatalogPicker($("inv-item").parentElement, it => { if (it && it.unit) document.querySelector(".inv-unit").value = it.unit; });
   attachPoiPicker($("inv-loc").parentElement);   // location autocompletes from POIs (free text ok)
   $("inv-save").onclick = logHolding;
-  $("inv-scope-org").onclick = () => { rmInvScope = "org"; renderInventory(); };
-  $("inv-scope-mine").onclick = () => { rmInvScope = "mine"; renderInventory(); };
+  const setScope = (s) => { rmInvScope = s; try { localStorage.setItem("rmInvScope", s); } catch {} renderInventory(); };
+  $("inv-scope-org").onclick = () => setScope("org");
+  $("inv-scope-mine").onclick = () => setScope("mine");
   rmInvScope === "mine" ? renderInvMine() : renderInvOrg();
 }
 
@@ -10252,7 +10313,7 @@ function mktUnfiltered() {
 function mktEmptyMsg() {
   if (mktFilter.canCraft && mktFilter.mode === "commission")
     return "No open requests match recipes in your library. Add recipes in " +
-      "<a href=\"#/settings\">Settings › My Blueprints</a>.";
+      "<a href=\"#/blueprints\">Resource Manager › Blueprints</a>.";
   if (mktFilter.mine) return "You haven't posted any listings yet.";
   if (mktFilter.seller) return "Nothing on the board from this seller right now.";
   if (!mktUnfiltered()) return "No listings match those filters. Try widening them.";
@@ -11316,7 +11377,8 @@ const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
   "#/trade": "Trade Route Planner", "#/events": "Event Planner", "#/goals": "Resource Manager",
-  "#/inventory": "Resource Manager", "#/market": "Org Marketplace",
+  "#/inventory": "Resource Manager", "#/blueprints": "Resource Manager",
+  "#/market": "Org Marketplace",
   "#/online": "Who's Online", "#/lfg": "Group Finder", "#/pirates": "Danger Board",
   "#/intel": "Org Intel" };
 // Returning-user accelerator: if you've opened an app before, the launcher offers a
@@ -11358,10 +11420,11 @@ function applyView() {
   // any hash under #/events counts as being in the app.
   const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
   // Resource Manager: the Goals screen owns a sub-route family (board/new/detail);
-  // Inventory is a peer screen. Both are the one "Resource Manager" app.
+  // Inventory + Blueprints are peer screens. All three are the one "Resource Manager" app.
   const goals = (h === "#/goals" || h.startsWith("#/goals/")) && authed;
   const inventory = h === "#/inventory" && authed;
-  const resourceMgr = goals || inventory;
+  const blueprints = h === "#/blueprints" && authed;   // personal blueprint library (#29)
+  const resourceMgr = goals || inventory || blueprints;
   // Marketplace owns a sub-route family (board / new / detail), like the events app.
   const market = (h === "#/market" || h.startsWith("#/market/")) && authed;
   const online = h === "#/online" && authed;
@@ -11402,6 +11465,7 @@ function applyView() {
   $("events-view").hidden = !events;
   $("goals-view").hidden = !goals;
   $("inventory-view").hidden = !inventory;
+  $("blueprints-view").hidden = !blueprints;
   $("market-view").hidden = !market;
   $("online-view").hidden = !online;
   if (online) loadOnline();   // seed initial paint; WS keeps it live thereafter
@@ -11449,7 +11513,7 @@ function applyView() {
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
     loadTokens();
-    loadMyBlueprints();
+    renderProfilePanel();
     if (currentMe.is_admin) loadSettings();
   } else if (route) {
     loadRoutePlanner();
@@ -11461,6 +11525,8 @@ function applyView() {
     loadGoals();
   } else if (inventory) {
     loadInventory();
+  } else if (blueprints) {
+    loadBlueprintsScreen();
   } else if (market) {
     loadMarket();
   } else if (nav) {
@@ -11941,14 +12007,17 @@ async function loadDirectory() {
     if (m.opt_out) t += `<span class="dir-tag optout" title="Opted out of member-facing directory views. Admins still see them.">hidden</span>`;
     return t;
   };
+  const tagsCell = (m) => (m.playstyle_tags || []).length
+    ? `<span class="on-ptags">${m.playstyle_tags.map(t => `<span class="on-ptag">${esc(t)}</span>`).join("")}</span>`
+    : `<span class="muted">—</span>`;
   const body = rows.map(m =>
-    `<tr><td>${memberCell(m)}</td><td>${handleCell(m)}</td><td>${statusCell(m)}</td></tr>`).join("");
+    `<tr><td>${memberCell(m)}</td><td>${handleCell(m)}</td><td>${tagsCell(m)}</td><td>${statusCell(m)}</td></tr>`).join("");
   root.innerHTML = `<div class="panel"><div class="lb-head-row">` +
     `<h2 style="margin:0;">MEMBER DIRECTORY <span class="muted">(${rows.length} member${rows.length === 1 ? "" : "s"})</span></h2></div>` +
     `<p class="ev-hint">Discord identity to in-game handle, for finding org-mates. ` +
     `Members can hide themselves from member-facing views in Settings; admins always see everyone, so opted-out rows show a <b>hidden</b> flag here.</p>` +
     (rows.length
-      ? `<div class="table-x"><table class="dir-table"><thead><tr><th>MEMBER</th><th>IN-GAME HANDLE(S)</th><th>STATUS</th></tr></thead><tbody>${body}</tbody></table></div>`
+      ? `<div class="table-x"><table class="dir-table"><thead><tr><th>MEMBER</th><th>IN-GAME HANDLE(S)</th><th>PLAYSTYLES</th><th>STATUS</th></tr></thead><tbody>${body}</tbody></table></div>`
       : `<div class="stat-empty">No members have signed in yet.</div>`) +
     `</div>`;
 }
@@ -12573,14 +12642,33 @@ $("delete-account").onclick = async () => {
   }
 };
 
-// ---------- my blueprint library (#25.1) ----------
-let mybpWired = false;
+// ---------- my blueprint library (#25.1; its own RM screen since #29) ----------
+// Third Resource Manager tab (#/blueprints): the personal library of craftable
+// recipes. Powers the commission board's "N can craft" (server-side) + the
+// "requests I can craft" filter, and seeds gather-goals via 🎯.
+function loadBlueprintsScreen() {
+  const root = $("blueprints-root");
+  root.innerHTML = rmMast("blueprints") +
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">MY BLUEPRINTS</h2></div>` +
+    `<p class="rm-intro">Crafting recipes you own. Commission requests on the marketplace show ` +
+    `<b>“N can craft”</b> to requesters, you can filter that board to requests you can craft, ` +
+    `and 🎯 seeds a personal goal to gather a recipe's materials.</p>` +
+    `<div class="rm-row" style="max-width:520px;">` +
+      `<span class="poi-pick" style="flex:1;min-width:220px;"><input id="mybp-add" class="ti" ` +
+        `placeholder="search a craftable recipe…" autocomplete="off"></span>` +
+      `<button class="ev-btn" id="mybp-add-btn" type="button">Add</button></div>` +
+    `<span class="muted" id="mybp-status" role="status" aria-live="polite" style="font-size:12px;"></span>` +
+    `<div id="mybp-list" style="margin-top:10px;"></div>` +
+    `<div class="muted" style="font-size:12px; margin-top:12px;">` +
+      `<a href="#/market" id="mybp-commissions">See open commissions you can craft →</a></div></div>`;
+  attachBlueprintPicker($("mybp-add").parentElement);
+  $("mybp-add-btn").onclick = addMyBlueprint;
+  // Land on the commission board pre-narrowed to craftable requests.
+  $("mybp-commissions").onclick = () => { mktFilter.mode = "commission"; mktFilter.canCraft = true; };
+  loadMyBlueprints();
+}
+
 async function loadMyBlueprints() {
-  if (!mybpWired) {   // wire the add control once (the panel is static in the DOM)
-    mybpWired = true;
-    attachBlueprintPicker($("mybp-add").parentElement);
-    $("mybp-add-btn").onclick = addMyBlueprint;
-  }
   let list = null;
   try { const r = await fetch("/api/me/blueprints"); if (r.ok) list = (await r.json()).blueprints; } catch {}
   renderMyBlueprints(list);

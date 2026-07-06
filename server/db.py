@@ -452,6 +452,7 @@ def init(db_path) -> None:
         _ensure_column("members", "online_status", "TEXT")
         _ensure_column("members", "online_activity", "TEXT")
         _ensure_column("members", "appear_offline", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column("members", "playstyle_tags", "TEXT")   # JSON list, member profile (#30)
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
         _ensure_column("observations", "shard_id", "TEXT")
@@ -752,6 +753,18 @@ def set_online_prefs(discord_id: str, status: str, activity: str | None,
             "  online_activity=excluded.online_activity, "
             "  appear_offline=excluded.appear_offline",
             (did, status, activity, 1 if appear_offline else 0))
+
+
+def set_member_playstyles(discord_id: str, tags: list[str]) -> None:
+    """Persist a member's declared playstyle tags (#30) as a JSON list; an empty
+    list clears back to NULL. Creates a stub member row if none exists yet
+    (deletion-then-reuse edge), mirroring the other member-pref setters."""
+    did = str(discord_id)
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, playstyle_tags) VALUES (?,?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET playstyle_tags=excluded.playstyle_tags",
+            (did, json.dumps(tags) if tags else None))
 
 
 # --- watcher tokens --------------------------------------------------------

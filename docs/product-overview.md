@@ -44,13 +44,14 @@ Nine apps in three themed launcher groups, plus account/admin surfaces.
 **Run the Org** — logistics & management:
 | App | Route | What it does | Spec |
 |---|---|---|---|
-| Resource Manager | `#/goals` + `#/inventory` | Shared item catalog; per-member holdings ledger; procurement goals with allocations drawn from holdings; deep-links into the navigator's finder | [org-inventory-goals.md](org-inventory-goals.md) |
+| Resource Manager | `#/goals` + `#/inventory` + `#/blueprints` | Shared item catalog; three peer sections under one masthead (#29): procurement goals with allocations drawn from holdings, per-member holdings ledger (defaults to "My holdings"), personal craftable-blueprint library; deep-links into the navigator's finder | [org-inventory-goals.md](org-inventory-goals.md), [rm-restructure-and-profile.md](rm-restructure-and-profile.md) |
 | Org Marketplace | `#/market` | aUEC-only sale/auction/barter/**commission** board with dual-confirm handshake, search/filter/sort, crafted-quality annotations, market-value hints; craft requests carry a blueprint spec builder w/ per-material quality minimums (#25, v0.40.0–v0.41.0) | [marketplace.md](marketplace.md) |
 | Org Intel | `#/intel` | Guild analytics: leaderboards, capture/hauling/trading stats, member directory (admin) | in-code; backlog #17 for identity |
 
-Also: Who's Online roster (`#/online`, reached via the 🟢 badge), Settings
-(`#/settings`: watcher tokens, org settings, branding, notifications), Setup
-guide (`#/setup`), legal (`#/terms`, `#/privacy`).
+Also: Who's Online roster (`#/online`, reached via the 🟢 badge; shows each
+member's declared playstyle tags, #30), Settings (`#/settings`: identity,
+playstyle-profile chips, watcher tokens, org settings, branding,
+notifications), Setup guide (`#/setup`), legal (`#/terms`, `#/privacy`).
 
 ## Platform services (cross-cutting, reused by every app)
 

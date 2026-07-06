@@ -654,6 +654,89 @@ class OnlineRosterTests(unittest.TestCase):
         return self.client.get("/api/online").json()["me"]
 
 
+class ProfileTagsTests(unittest.TestCase):
+    """Backlog #30 — persistent member playstyle tags: PUT /api/me normalization
+    (allowlist, dedup, cap, clear-to-empty), persistence through the member
+    directory cache, and the two surfaces that carry them (the admin directory
+    rows and the who's-online roster, live-updated on save)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._member
+        cls._orig_token_user = app.token_user   # the auth middleware's bearer path
+        app.token_user = lambda request: cls._member
+        # The module-global directory cache was loaded from the real DB at import;
+        # park it and run against the temp DB only, restoring on teardown.
+        cls._orig_members = app.members_dir.by_id
+        app.members_dir.by_id = {}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.members_dir.by_id = cls._orig_members
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.online.clear()
+        app.members_dir.by_id.clear()
+        db.set_member_playstyles("1", [])
+
+    def test_put_normalizes_allowlist_dedup(self):
+        r = self.client.put("/api/me", json={
+            "playstyle_tags": ["PvP", "PvP", "not-a-real-tag", "FPS", "mining"]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["playstyle_tags"], ["PvP", "FPS", "mining"])
+        # Persisted through the directory cache — the same read /api/me serves.
+        self.assertEqual(app.member_playstyles(app.members_dir.get("1")),
+                         ["PvP", "FPS", "mining"])
+
+    def test_put_rejects_oversized_list(self):
+        seven = ["hauling", "mining", "salvage", "trading", "bunkers", "bounty", "PvE"]
+        self.assertEqual(
+            self.client.put("/api/me", json={"playstyle_tags": seven}).status_code, 422)
+
+    def test_put_clears_to_empty_and_absent_leaves_untouched(self):
+        self.client.put("/api/me", json={"playstyle_tags": ["bounty"]})
+        # Absent field = untouched (the presence-toggle-only call must not wipe tags).
+        self.client.put("/api/me", json={"share_presence": True})
+        self.assertEqual(app.member_playstyles(app.members_dir.get("1")), ["bounty"])
+        r = self.client.put("/api/me", json={"playstyle_tags": []})
+        self.assertEqual(r.json()["playstyle_tags"], [])
+        self.assertEqual(app.member_playstyles(app.members_dir.get("1")), [])
+        self.assertIsNone((db.get_member("1") or {}).get("playstyle_tags"))
+
+    def test_directory_rows_carry_tags(self):
+        app.members_dir.upsert({"id": "1", "username": "tester",
+                                "display_name": "Tester", "guild_nick": None})
+        self.client.put("/api/me", json={"playstyle_tags": ["PvE", "casual"]})
+        rows = self.client.get("/api/intel/directory").json()["members"]
+        self.assertEqual(rows[0]["playstyle_tags"], ["PvE", "casual"])
+
+    def test_online_roster_seeds_and_live_updates_tags(self):
+        db.set_member_playstyles("1", ["FPS", "bounty"])
+        app.hub.mark_online(app.Session({"id": "1", "display_name": "Me", "is_admin": False}))
+        rec = next(r for r in app.hub.online_roster() if r["discord_id"] == "1")
+        self.assertEqual(rec["tags"], ["FPS", "bounty"])   # seeded from prefs on arrival
+        # Saving new tags while online mirrors onto the live record — no reconnect.
+        self.client.put("/api/me", json={"playstyle_tags": ["mining"]})
+        rec = next(r for r in app.hub.online_roster() if r["discord_id"] == "1")
+        self.assertEqual(rec["tags"], ["mining"])
+
+    def test_stored_tags_refiltered_against_live_vocabulary(self):
+        # A tag retired from PLAYSTYLE_TAGS must not resurface from an old row.
+        db.set_member_playstyles("1", ["FPS"])
+        row = db.get_member("1")
+        row["playstyle_tags"] = '["FPS", "retired-tag"]'
+        self.assertEqual(app.member_playstyles(row), ["FPS"])
+
+
 class PresenceTrailTests(unittest.TestCase):
     """Teammate presence now carries the member's current-body breadcrumb trail so
     everyone can see where the org has already scouted (avoids duplicate mapping)."""
