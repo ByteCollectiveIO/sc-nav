@@ -81,6 +81,8 @@ class Poi:
     note: str | None = None          # free-text context; upstream POIs map from Comment
     nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
     nearest_qt_dist_m: float | None = None  # distance to that marker, meters
+    source: str = "starmap"          # catalog origin: "starmap" | "wiki" (#28)
+    arrival_radius_m: float | None = None   # per-POI QT arrival radius (#28b)
 
 
 @dataclass
@@ -246,6 +248,140 @@ def synth_container_pois(nav: NavData) -> None:
             type=cont.type, local_km=None, global_m=cont.pos,
             latitude=None, longitude=None, height_m=None, qt_marker=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# Wiki locations catalog (#28): poi/locations.json, distilled from the SC Wiki
+# API by tools/sync_locations.py. Two consumers: add_wiki_pois imports the
+# records as routable POIs (org-toggled, like the starmap catalog), and
+# annotate_arrival_radii attaches per-POI QT arrival radii to *whatever* POIs
+# are loaded (always on — physics metadata, not content).
+# ---------------------------------------------------------------------------
+
+# Reserved id range for wiki-catalog POIs, derived from the record uuid so ids
+# are stable across syncs and restarts. Clear of starmap (<50k), custom (1M+),
+# observations (2M+) and synthesized container-stations (3M+).
+WIKI_POI_START = 4_000_000
+
+# Wiki entity types -> the display vocabulary the POI catalog already uses.
+_WIKI_TYPE_LABELS = {
+    "Manmade": "Station",
+    "Manmade_VisibleOnInteraction": "Station",
+    "LandingZone": "Landing Zone",
+    "Asteroid_ValidQT": "Asteroid Cluster",
+    "Asteroid": "Asteroid Cluster",
+    "NavPoint": "Nav Point",
+    "JumpPoint": "Jump Point",
+    "PointOfInterest": "Point of Interest",
+}
+
+
+def wiki_name_key(name: str) -> tuple[str, ...]:
+    """Order-insensitive token key for matching one place name across catalogs.
+    Handles the naming drift between the sources: 'ARC-L1 Wide Forest Station'
+    (wiki) vs 'Wide Forest Station (ARC-L1)' (synth_container_pois' fold) vs
+    'ARC L1' vs 'ARC-L1' — lowercase, strip quotes/parens, fold hyphens to
+    spaces, compare as a sorted token set."""
+    cleaned = re.sub(r"[()\"'’]", " ", (name or "").lower()).replace("-", " ")
+    return tuple(sorted(cleaned.split()))
+
+
+def add_wiki_pois(nav: NavData, locations: list[dict]) -> int:
+    """Import wiki-catalog locations into nav.pois as routable POIs (#28a).
+
+    Dedup is by (system, token-set name) against everything already loaded —
+    starmap POIs, containers, synthesized stations — with the incumbent
+    winning, so enabling both catalogs never doubles a place. Never matches on
+    position: a POI CIG moved between patches would otherwise double up.
+    Call after parse_data/synth_container_pois and before merge_custom_pois
+    (custom POIs are user content and may legitimately shadow names).
+    Returns the number of POIs added."""
+    existing: set[tuple[str, tuple[str, ...]]] = set()
+    for p in nav.pois.values():
+        existing.add((p.system.lower(), wiki_name_key(p.name)))
+    for (system, cname) in nav.containers:
+        existing.add((system.lower(), wiki_name_key(cname)))
+
+    added = 0
+    for rec in locations:
+        key = (rec["system"].lower(), wiki_name_key(rec["name"]))
+        if key in existing:
+            continue
+        existing.add(key)
+        pid = WIKI_POI_START + (zlib.crc32(rec["uuid"].encode()) % 900_000)
+        while pid in nav.pois:          # crc collisions are vanishingly rare; probe anyway
+            pid += 1
+        local = rec.get("local_km")
+        glob = rec.get("global_m")
+        nav.pois[pid] = Poi(
+            id=pid,
+            name=rec["name"],
+            system=rec["system"],
+            container_name=rec.get("container") if local else None,
+            type=_WIKI_TYPE_LABELS.get(rec.get("type") or "", rec.get("type") or "Unknown"),
+            local_km=tuple(local) if local else None,
+            global_m=tuple(glob) if glob else None,
+            latitude=None, longitude=None, height_m=None,
+            qt_marker=bool(rec.get("qt_valid")),
+            source="wiki",
+            arrival_radius_m=rec.get("arrival_m"),
+        )
+        added += 1
+    return added
+
+
+def upgrade_qt_markers(nav: NavData, locations: list[dict]) -> int:
+    """Promote loaded POIs the wiki catalog knows to be QT destinations (#28a).
+
+    The starmap feed's QTMarker coverage trails the game (150 markers in
+    Stanton vs ~550 qt_valid in 4.8 game data — CIG made most outposts QT-able
+    in recent patches), so places both catalogs know would stay unroutable
+    after dedup. Same derive-don't-edit precedent as parse_data's Landing Zone
+    rule. Conservative on purpose: only when the record's name maps to exactly
+    ONE loaded POI in that system AND the container agrees (generic repeated
+    names like 'Derelict Outpost' never mass-upgrade). Runs under the same org
+    toggle as add_wiki_pois. Returns the number of POIs promoted."""
+    by_key: dict[tuple[str, tuple[str, ...]], list[Poi]] = {}
+    for p in nav.pois.values():
+        by_key.setdefault((p.system.lower(), wiki_name_key(p.name)), []).append(p)
+    n = 0
+    for rec in locations:
+        if not rec.get("qt_valid"):
+            continue
+        cands = by_key.get((rec["system"].lower(), wiki_name_key(rec["name"]))) or []
+        if len(cands) != 1:
+            continue
+        p = cands[0]
+        if p.qt_marker or p.custom or p.source == "wiki":
+            continue
+        rec_container = rec.get("container") if rec.get("local_km") else None
+        if (p.container_name or None) != rec_container:
+            continue
+        p.qt_marker = True
+        n += 1
+    return n
+
+
+def annotate_arrival_radii(nav: NavData, locations: list[dict]) -> int:
+    """Attach wiki per-POI QT arrival radii to loaded POIs by name (#28b).
+
+    Enrichment, not content: runs regardless of the wiki-POI org toggle, and
+    touches starmap/synthesized POIs the wiki also knows (custom POIs won't
+    name-match, by design). Radii sharpen run-mode arrival detection; a POI
+    with no match keeps None and the caller's flat threshold applies.
+    Returns the number of POIs annotated."""
+    radii: dict[tuple[str, tuple[str, ...]], float] = {}
+    for rec in locations:
+        if rec.get("arrival_m"):
+            radii[(rec["system"].lower(), wiki_name_key(rec["name"]))] = float(rec["arrival_m"])
+    hit = 0
+    for p in nav.pois.values():
+        if p.arrival_radius_m is None:
+            r = radii.get((p.system.lower(), wiki_name_key(p.name)))
+            if r:
+                p.arrival_radius_m = r
+                hit += 1
+    return hit
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +646,8 @@ def _poi_base(poi) -> dict:
         "note": poi.note,
         "nearest_qt": poi.nearest_qt,
         "nearest_qt_dist_m": poi.nearest_qt_dist_m,
+        "source": getattr(poi, "source", "starmap"),
+        "arrival_radius_m": getattr(poi, "arrival_radius_m", None),
     }
 
 

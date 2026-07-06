@@ -23,7 +23,7 @@ drift — trust grep and CI, not the citation.
 
 | Doc | Status | Notes |
 |---|---|---|
-| — | | nothing in flight; next scoping = backlog #28 POI enrichment |
+| [wiki-poi-enrichment.md](wiki-poi-enrichment.md) | ✅ built 2026-07-05, pending release | Backlog #28: wiki locations import (`wiki_pois_enabled` toggle, 241 POIs + 206 QT promotions), per-POI arrival radii, trade-stop amenity chips; closes #26's last slice |
 
 ## Shipped feature specs (reference for what's live)
 

@@ -2687,5 +2687,97 @@ class CraftGoalTests(unittest.TestCase):
         self.assertTrue(card["commission"]["i_can_craft"])
 
 
+class WikiCatalogTests(unittest.TestCase):
+    """Backlog #28 — the wiki locations catalog end to end: the org toggle
+    imports/drops wiki POIs through /api/settings (+ QT promotion of matched
+    starmap POIs), arrival radii tailor run-mode arrival detection, and the
+    amenity distiller feeds trade-stop chips."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "9", "username": "boss", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._admin
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._admin
+        # _rebuild_nav re-runs load_nav_data; force the offline/cache path so a
+        # toggle test never fetches starmap.space.
+        cls._orig_offline = app.OFFLINE
+        app.OFFLINE = True
+        cls._orig_nav = app.nav
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.OFFLINE = cls._orig_offline
+        app.nav = cls._orig_nav
+        app.rebuild_trade_terminals()
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def test_toggle_imports_and_drops_wiki_pois(self):
+        r = self.client.get("/api/settings")
+        self.assertFalse(r.json()["wiki_pois_enabled"])
+        self.assertFalse(any(p.source == "wiki" for p in app.nav.pois.values()))
+
+        r = self.client.post("/api/settings", json={"wiki_pois_enabled": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["wiki_pois_enabled"])
+        wiki = [p for p in app.nav.pois.values() if p.source == "wiki"]
+        self.assertGreater(len(wiki), 200)
+        # ...searchable like any imported POI (a known wiki-only Pyro cluster),
+        hits = self.client.get("/api/pois", params={"q": "Cluster BGR"}).json()
+        self.assertTrue(any(h["source"] == "wiki" for h in hits))
+        # ...and a matched starmap POI got the game's QT flag (promotion).
+        ghost = next(p for p in app.nav.pois.values() if p.name == "Ghost Hollow")
+        self.assertTrue(ghost.qt_marker)
+
+        r = self.client.post("/api/settings", json={"wiki_pois_enabled": False})
+        self.assertFalse(r.json()["wiki_pois_enabled"])
+        self.assertFalse(any(p.source == "wiki" for p in app.nav.pois.values()))
+
+    def test_arrival_radii_enrich_without_toggle(self):
+        # Radii are physics metadata: attached even with both catalogs off, via
+        # the token-name match — the synthesized Lagrange stations ('Lively
+        # Pathway Station (ARC-L2)' vs the wiki's 'ARC-L2 Lively Pathway
+        # Station') prove the fold works.
+        hit = [p for p in app.nav.pois.values() if p.arrival_radius_m]
+        self.assertGreater(len(hit), 10)
+        arc = next(p for p in hit if "(ARC-L2)" in p.name)
+        self.assertEqual(arc.arrival_radius_m, 24000)
+
+    def test_arrival_threshold_prefers_destination_radius(self):
+        import types
+        arrived = app.Session._arrived_at_active
+        mk = lambda dest: types.SimpleNamespace(nav_state={"destination": dest})
+        # 30 km out: arrived by the flat constant, NOT by Everus' 24 km × 1.5.
+        self.assertTrue(arrived(mk({"distance_m": 30_000, "surface_distance_m": None,
+                                    "arrival_radius_m": None})))
+        self.assertFalse(arrived(mk({"distance_m": 40_000, "surface_distance_m": None,
+                                     "arrival_radius_m": 24_000})))
+        self.assertTrue(arrived(mk({"distance_m": 30_000, "surface_distance_m": None,
+                                    "arrival_radius_m": 24_000})))
+        # Tiny radii (asteroid clusters, 100 m) are floored, not taken literally.
+        self.assertTrue(arrived(mk({"distance_m": 8_000, "surface_distance_m": None,
+                                    "arrival_radius_m": 100})))
+
+    def test_amenity_view_distills_operational_facts(self):
+        v = app._amenity_view([
+            "Commodity Trading - Freight Elevator", "Commodity Trading - Loading Dock",
+            "Clinic", "Hangar L", "Hangar M", "Landing Pad XL", "Docking"])
+        self.assertEqual(v["cargo"], ["elevator", "dock"])
+        self.assertEqual(v["hangar"], "L")       # largest wins
+        self.assertEqual(v["pad"], "XL")
+        self.assertTrue(v["clinic"])
+        self.assertIsNone(app._amenity_view(["Food Court"]))
+        # The module lookup resolved real stops (built from the committed feed).
+        self.assertIn(("stanton", app.nav_core.wiki_name_key("Everus Harbor")),
+                      app.WIKI_AMENITIES)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

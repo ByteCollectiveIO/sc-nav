@@ -26,8 +26,8 @@ calls. 230 ship profiles / 57 drives / 0 identity mismatches / 81%
 uexcorp-hauler coverage. Footer carries the CC BY-SA 4.0 attribution. Smoke test
 in `test_nav_core.py`. **Blueprints slice SHIPPED v0.40.0**
 (`tools/sync_blueprints.py` → committed `poi/blueprints.json`, 1,559 recipes —
-see #25 in the Shipped log). **Remaining slice** (same fetch→distill
-convention): `/api/locations/positions` (feeds #28).
+see #25 in the Shipped log). **Locations slice built 2026-07-05 with #28**
+(`tools/sync_locations.py` → committed `poi/locations.json`) — **#26 complete**.
 
 `https://api.star-citizen.wiki` (OpenAPI at `/api/openapi`) is a public,
 game-version-scoped JSON API — no auth for game data, pagination
@@ -103,21 +103,29 @@ Shipped log). Spec: [`blueprint-craft-commissions.md`](blueprint-craft-commissio
 - ~~**Announce name-check**~~ — **SHIPPED v0.43.0**: the WANTED announce
   @-mentions library-matched crafters (poster excluded, capped at 15).
 
-### 28. Starmap & POI enrichment from the wiki API 🆕 (needs scoping)
+### 28. Starmap & POI enrichment from the wiki API ✅ (built 2026-07-05)
 
-**Status:** opportunity identified 2026-07-04; three independent slices, each
-cheap once #26 exists. Scope before building.
+**Status:** ✅ built 2026-07-05 (scoped the same day), pending release — spec +
+as-built notes in [`wiki-poi-enrichment.md`](wiki-poi-enrichment.md). Closes
+#26's last slice. What shipped:
 
-- **a) POI validation/expansion** — `/api/locations/positions` gives real x/y/z
-  + `qt_valid` + parent hierarchy per system (stanton/pyro/nyx). Cross-check our
-  starmap.space-derived POI set; backfill missing QT destinations.
-- **b) Arrival & detour radii** — per-POI `quantum_travel`
-  (`arrival_radius`/`obstruction_radius`, e.g. Everus Harbor 24 km/8 km) can
-  sharpen run-mode arrival detection and replace the flat org-wide
-  `hazard_radius_km` detour margin with per-destination values.
-- **c) Terminal amenities** — `amenities` (Commodity Trading via freight
-  elevator vs. loading dock, hangar/pad sizes, clinics) → trade-planner stop
-  annotations and pad-size-vs-ship warnings.
+- **Data layer**: `tools/sync_locations.py` → committed `poi/locations.json`
+  (634 records, stamped 4.8.2; report artifact gitignored). Wiki data
+  **complements** starmap (community caves/wrecks + rotation-param containers
+  stay starmap-owned), never supersedes.
+- **Slice a**: org toggle `wiki_pois_enabled` (default OFF, beside the starmap
+  one) → `nav_core.add_wiki_pois` (241 wiki-only POIs: Pyro asteroid clusters,
+  Nyx stations, comm arrays; ids 4M+, `source="wiki"`; token-name dedup,
+  starmap wins) + `nav_core.upgrade_qt_markers` (206 matched starmap POIs the
+  game now allows jumping to → **508 QT markers with everything on**, vs ~150
+  Stanton before).
+- **Slice b**: `nav_core.annotate_arrival_radii` (always-on, 392 POIs) —
+  run-mode `_arrived_at_active` prefers the destination's QT arrival radius
+  (×1.5, 10 km floor) over the flat `ARRIVAL_SPACE_M`.
+- **Slice c**: `_annotate_leg_amenities` + `amenChips` — freight-elevator /
+  loading-dock / hangar-pad-size / clinic chips on trade plan + run legs.
+  Pad-size-vs-ship warning deferred (uexcorp feed has no ship size class) —
+  now a Trade planner fast-follow.
 
 ### 29. Resource Manager restructure ✅ (built 2026-07-05)
 
@@ -150,7 +158,9 @@ opportunistically; none is urgent.
 
 - **Trade planner (#21):** teammate-lane-awareness ("someone's already running
   this lane" — needs a presence-side design pass first) · exact B&B "thorough"
-  solver option under a ≤4-stop cap.
+  solver option under a ≤4-stop cap · pad-size-vs-ship warning on stops (#28c
+  chips already show the stop's max hangar/pad; needs ship size class plumbed
+  through `sync_quantum.py` — the uexcorp feed has none).
 - **Danger board / routing (#24):** two-waypoint detour fallback (v2.1 — a
   `# v2.1` marker sits at the spot in `nav_core`) · severity-scale + radius
   tuning once the board has real data (partly superseded by #28b).

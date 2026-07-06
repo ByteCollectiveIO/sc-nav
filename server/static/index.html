@@ -1300,6 +1300,8 @@
   .trade-actual .ta-x { color: var(--dim); }
   .tl-actual-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--accent); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  /* Stop amenities (#28c): station facility chips on a leg's buy/sell lines. */
+  .tl-amen { font-size: 11px; color: var(--dim); white-space: nowrap; }
   /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
   .tl-stock { font-size: 12px; color: var(--warn); margin: 4px 0; }
   .tl-stock.out { font-weight: 600; }
@@ -2394,6 +2396,15 @@
       celestial bodies always load). Check to import the full starmap.space catalog
       now — no restart needed, and it refreshes on each restart. Uncheck to drop it
       and return to a clean database; your custom POIs stay.
+    </div>
+    <label style="display:flex; gap:8px; align-items:center; font-size:13px; margin-top:12px;">
+      <input type="checkbox" id="wiki-toggle"> Import the Star Citizen Wiki locations catalog
+    </label>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Also off by default, and independent of the starmap catalog. Adds datamined
+      outposts, stations and asteroid clusters the starmap feed lacks (game data:
+      Star Citizen Wiki, CC BY-SA 4.0). Places both catalogs know are never
+      doubled up. Updated with each app release rather than on restart.
     </div>
 
     <h2>OBSERVATION FRESHNESS</h2>
@@ -7816,6 +7827,21 @@ function renderTradePlan(res) {
   window.scrollTo({ top: out.offsetTop - 20, behavior: "smooth" });
 }
 
+// Stop amenity chips (#28c): the wiki catalog's operational facts about a trade
+// stop — how cargo transfers (freight elevator vs loading dock), the largest
+// hangar/pad, clinic. Rendered only when the catalog knows the stop.
+function amenChips(a) {
+  if (!a) return "";
+  const bits = [];
+  for (const c of (a.cargo || [])) bits.push(c === "dock" ? "🚚 loading dock" : "⬆ freight elevator");
+  if (a.hangar) bits.push(`hangar ${a.hangar}`);
+  else if (a.pad) bits.push(`pad ${a.pad}`);
+  if (a.clinic) bits.push("⚕ clinic");
+  return bits.length
+    ? ` <span class="tl-amen" title="Facilities — game data: Star Citizen Wiki">${bits.join(" · ")}</span>`
+    : "";
+}
+
 function renderTradeLeg(lg, i) {
   const move = [];
   if (lg.to_buy && lg.to_buy.distance_m != null && i > 0)
@@ -7874,9 +7900,9 @@ function renderTradeLeg(lg, i) {
     + `<span class="tl-scu">${lg.scu} SCU</span>${fresh}</div>`
     + dngr
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
-    + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span></div>`
+    + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span>${amenChips(lg.buy_amen)}</div>`
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
-    + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span></div>`
+    + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span>${amenChips(lg.sell_amen)}</div>`
     + `<div class="tl-econ">+${fmtAuec(lg.profit_per_scu)}/SCU · profit <b>${fmtAuec(lg.profit)}</b>`
     + ` · ${fmtAuec(lg.buy_cost)} capital</div>`
     + (move.length ? `<div class="tl-move">${move.join(" · ")}</div>` : "")
@@ -8192,7 +8218,8 @@ function renderTradeRunLeg(lg, i, run) {
     const bought = lg.state === "bought" || lg.state === "sold";
     h += `<div class="trade-run-step${bought ? " done" : (active ? " now" : "")}">`
       + `▲ Buy <b>${esc(lg.commodity)}</b> at <b>${esc(lg.buy_terminal)}</b> `
-      + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span></div>`;
+      + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span>`
+      + `${active && !bought ? amenChips(lg.buy_amen) : ""}</div>`;
   }
   // Sell side. A sold leg shows its realized profit (from actuals when entered).
   const sold = lg.state === "sold";
@@ -8202,7 +8229,8 @@ function renderTradeRunLeg(lg, i, run) {
     ? ` <span class="tl-actual-tag">actual</span>` : "";
   h += `<div class="trade-run-step${sold ? " done" : (active && selling ? " now" : "")}">`
     + `▼ Sell at <b>${esc(lg.sell_terminal)}</b> <span class="muted">@ ${fmtAuec(lg.sell_price)}</span>`
-    + ` · profit <b>${fmtAuec(profitShown)}</b>${actualTag}</div>`;
+    + ` · profit <b>${fmtAuec(profitShown)}</b>${actualTag}`
+    + `${active && selling ? amenChips(lg.sell_amen) : ""}</div>`;
   if (active) {
     const phase = run.phase;   // "buy" | "sell"
     const seg = phase === "sell" ? lg.haul : lg.to_buy;
@@ -12164,6 +12192,7 @@ async function loadSettings() {
   try {
     const s = await fetch("/api/settings").then(r => r.json());
     $("starmap-toggle").checked = !!s.starmap_pois_enabled;
+    $("wiki-toggle").checked = !!s.wiki_pois_enabled;
     if (document.activeElement !== $("member-role"))
       $("member-role").value = s.member_role_id || "";
     if (s.obs_fresh_window_h) {
@@ -12554,6 +12583,30 @@ $("starmap-toggle").onchange = async (e) => {
     const r = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ starmap_pois_enabled: enabled }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    $("admin-status").textContent = `done — ${d.pois} POIs in the dataset`;
+    loadAll();                       // refresh the browse view against the new dataset
+    if (finderOre) runFinder();
+  } catch {
+    $("admin-status").textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+$("wiki-toggle").onchange = async (e) => {
+  const enabled = e.target.checked;
+  if (!enabled && !(await confirmDialog(
+      "The Star Citizen Wiki locations will be removed from the dataset (your " +
+      "custom POIs are kept). You can re-enable this later.",
+      { title: "Drop the wiki locations catalog?", confirmLabel: "Drop wiki locations", danger: true }))) {
+    e.target.checked = true;
+    return;
+  }
+  $("admin-status").textContent = "rebuilding dataset…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wiki_pois_enabled: enabled }) });
     if (!r.ok) throw new Error();
     const d = await r.json();
     $("admin-status").textContent = `done — ${d.pois} POIs in the dataset`;

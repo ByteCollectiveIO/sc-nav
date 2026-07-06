@@ -23,7 +23,9 @@ a Windows watcher (Python script) that reports the player's in-game position.
 ## DO NOT READ (token sinks / generated / binary)
 - `server/.venv/**` — dependencies. Never read; never grep here.
 - `poi/*.db`, `poi/*.db-wal/-shm` — SQLite binaries. Use `db.py` for schema.
-- `poi/*.json` runtime caches (gitignored). The schema is in code, not here.
+- `poi/*.json` runtime caches (gitignored) AND the committed feeds
+  (`poi.json`/`containers.json`/`quantum_*`/`blueprints.json`/`locations.json`)
+  — all token sinks. The schema is in code, not here.
 - `.impeccable/`, `.github/skills/`, `.claude/skills/` — tooling, not app code.
 
 ## Navigation conventions (how to find things fast)
@@ -67,7 +69,20 @@ library at `#/blueprints`, #29)
 - Marketplace: `/api/market*` (offers, confirm). **Modes: sale | auction | barter | commission (#25 craft requests)** — commission = "build me this, to this spec, for this price": poster stays `seller_id` ("Requester"), accepted crafter = `buyer_id`; quote = offer w/ required amount, never instant-deal; accepted crafter withdraw → listing back to `open`; lazy needed-by expiry (no winner); `listings.blueprint_key` + `listings.materials` (requester|crafter|split) via `_ensure_column`; spec under `attributes.spec` (CraftedIn shape); denorm `sort_price` = lowest quote else budget; `nav_core.commission_board_state`; opt-in `announce` → "🛠️ WANTED" ping (`_notify_commission_posted`, 600s cooldown) + @-mentions library-matched crafters (`db.blueprint_crafters`, cap 15, poster excluded); commission views carry `mats_est` (`_commission_mats_est`, board card + detail price line). **Crafted-sale identity (#25.1 §11.3/§11.4):** ANY listing whose item is `blueprint:<key>` stamps `blueprint_key` (sale/auction too) → `kind=blueprint` board filter finds crafted goods; detail view carries `expected_stats` (`_listing_expected_stats`: commission spec.inputs → basis `inputs`, else advertised overall quality → basis `uniform`) + `mats_est`; frontend `mkExpectedStats` panel + manifest panel on any blueprint-linked listing + ⚒ crafted rows in the item picker (`attachCatalogPicker` opts.blueprints) + mode-aware copy in the 4 `_notify_market_*` helpers
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`
-- Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`
+- Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. POI-catalog
+  toggles in `/api/settings`: `starmap_pois_enabled` + `wiki_pois_enabled` (#28,
+  both default OFF, flip → `_rebuild_nav`). **Wiki locations catalog (#28,
+  docs/wiki-poi-enrichment.md):** committed `poi/locations.json` from
+  `tools/sync_locations.py` (SC Wiki API, re-run per game patch, CC BY-SA 4.0);
+  `app._apply_wiki_catalog` in `load_nav_data` → nav_core `add_wiki_pois` (ids
+  4M+, `Poi.source="wiki"`, token-name dedup via `wiki_name_key`, starmap wins)
+  + `upgrade_qt_markers` (promotes matched starmap POIs the game marks
+  `qt_valid`) under the toggle, `annotate_arrival_radii` always (→
+  `Poi.arrival_radius_m`, used by `_arrived_at_active` ×1.5 w/ 10 km floor
+  instead of flat `ARRIVAL_SPACE_M`); trade-stop amenity chips
+  `_amenity_view`/`WIKI_AMENITIES`/`_annotate_leg_amenities` → leg
+  `buy_amen`/`sell_amen` → frontend `amenChips` (plan + run views), ORG
+  SETTINGS `wiki-toggle`
 - Auth/account: `/auth/login|callback|logout`, `/api/me*`, `/api/tokens`. **Member profile (#30):** `members.playstyle_tags` (JSON via `_ensure_column`, `db.set_member_playstyles`); `PUT /api/me` `playstyle_tags` (allowlist `PLAYSTYLE_TAGS`, dedup, cap `_PROFILE_MAX_TAGS`=6, parses via `member_playstyles`, mirrors onto the live online record + roster rebroadcast); carried on `GET /api/me`, `/api/intel/directory` rows, and online-roster records (`tags`); UI = Settings PROFILE chips + roster/directory `.on-ptag` chips
 - Misc: `/api/health`, `/download/watcher`, `/` + `/index.html`
 

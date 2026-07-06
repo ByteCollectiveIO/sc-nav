@@ -3328,5 +3328,130 @@ class BlueprintCommissionTests(unittest.TestCase):
         self.assertEqual(out["lines"][0]["min_q"], 700)   # max(recipe 500, asks 200/700)
 
 
+class WikiCatalogArtifactTests(unittest.TestCase):
+    """Backlog #28 — keep the committed poi/locations.json artifact honest.
+
+    Distilled offline by tools/sync_locations.py from the SC Wiki API; this
+    guards it against silent corruption on a per-patch re-run.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        cls.doc = json.loads((DATA_DIR / "locations.json").read_text())
+        cls.records = cls.doc["locations"]
+
+    def test_meta_stamped_with_game_version(self):
+        self.assertIn("game_version", self.doc["_meta"])
+        self.assertEqual(self.doc["_meta"]["license"], "CC BY-SA 4.0")
+
+    def test_records_wellformed(self):
+        self.assertGreater(len(self.records), 500)
+        self.assertGreater(sum(1 for r in self.records if r["qt_valid"]), 400)
+        for r in self.records:
+            # exactly one frame: body-local (with a resolvable container) or
+            # static system-global — never both, never neither.
+            self.assertNotEqual(r["local_km"] is None, r["global_m"] is None, r["name"])
+            if r["local_km"] is not None:
+                self.assertIn((r["system"], r["container"]), NAV.containers, r["name"])
+            self.assertIn(r["system"], ("Stanton", "Pyro", "Nyx"), r["name"])
+
+    def test_names_unique_within_system(self):
+        keys = [(r["system"], nav_core.wiki_name_key(r["name"])) for r in self.records]
+        self.assertEqual(len(keys), len(set(keys)))
+
+
+class WikiPoiImportTests(unittest.TestCase):
+    """Backlog #28a/b — wiki-catalog POI import (dedup, id namespace, frames)
+    and the always-on arrival-radius enrichment, against the real artifacts."""
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        cls.locations = json.loads((DATA_DIR / "locations.json").read_text())["locations"]
+
+    def setUp(self):
+        # A fresh NavData per test: add_wiki_pois mutates, and NAV is shared.
+        self.nav = load_data(DATA_DIR)
+
+    def test_import_adds_wiki_only_pois_in_reserved_id_range(self):
+        added = nav_core.add_wiki_pois(self.nav, self.locations)
+        self.assertGreater(added, 200)      # ~241 wiki-only places as of 4.8.2
+        wiki = [p for p in self.nav.pois.values() if p.source == "wiki"]
+        self.assertEqual(len(wiki), added)
+        self.assertTrue(all(p.id >= nav_core.WIKI_POI_START for p in wiki))
+        # A known wiki-only Pyro asteroid cluster landed as a routable space POI.
+        cluster = next(p for p in wiki if p.name == "Cluster BGR-560")
+        self.assertTrue(cluster.qt_marker)
+        self.assertIsNotNone(cluster.global_m)
+        # A known wiki-only Stanton surface entity landed on its body.
+        comm = next(p for p in wiki if p.local_km is not None and p.system == "Stanton")
+        self.assertIn((comm.system, comm.container_name), self.nav.containers)
+
+    def test_dedup_never_doubles_a_known_place(self):
+        # The starmap catalog already repeats generic names (numbered caves,
+        # 'Derelict Outpost') — the invariant is that the wiki import never
+        # ADDS to an existing name: every name it had before keeps its exact
+        # count, and every new name appears exactly once.
+        from collections import Counter
+        key = lambda p: (p.system.lower(), nav_core.wiki_name_key(p.name))
+        before = Counter(key(p) for p in self.nav.pois.values())
+        nav_core.add_wiki_pois(self.nav, self.locations)
+        after = Counter(key(p) for p in self.nav.pois.values())
+        for k, n in after.items():
+            self.assertEqual(n, before.get(k, 0) or 1, k)
+        # e.g. Everus Harbor (a synthesized container-station) stayed single.
+        ek = ("stanton", nav_core.wiki_name_key("Everus Harbor"))
+        self.assertEqual(before[ek], 1)
+        self.assertEqual(after[ek], 1)
+
+    def test_import_is_idempotent(self):
+        nav_core.add_wiki_pois(self.nav, self.locations)
+        self.assertEqual(nav_core.add_wiki_pois(self.nav, self.locations), 0)
+
+    def test_surface_frame_is_body_local(self):
+        # An imported surface outpost sits at ~body radius in the rotating
+        # frame — the same convention every starmap surface POI uses. (Comm
+        # arrays are deliberately high above their body, so outposts only.)
+        nav_core.add_wiki_pois(self.nav, self.locations)
+        checked = 0
+        for p in self.nav.pois.values():
+            if p.source != "wiki" or p.local_km is None or p.type != "Outpost":
+                continue
+            c = self.nav.containers[(p.system, p.container_name)]
+            if not c.is_body:
+                continue
+            r_km = math.dist((0, 0, 0), p.local_km)
+            self.assertLess(abs(r_km - c.body_radius / 1000), c.body_radius / 1000 * 0.2,
+                            p.name)
+            checked += 1
+        self.assertGreater(checked, 5)
+
+    def test_qt_upgrade_promotes_matched_starmap_pois(self):
+        # Places both catalogs know (deduped away as POIs) still gain the
+        # game's QT flag — e.g. Ghost Hollow, a starmap derelict outpost that
+        # 4.8 made a QT destination. Generic repeated names never upgrade.
+        ghost = next(p for p in self.nav.pois.values()
+                     if p.name == "Ghost Hollow" and p.system == "Stanton")
+        self.assertFalse(ghost.qt_marker)
+        nav_core.add_wiki_pois(self.nav, self.locations)
+        promoted = nav_core.upgrade_qt_markers(self.nav, self.locations)
+        self.assertGreater(promoted, 50)
+        self.assertTrue(ghost.qt_marker)
+        derelicts = [p for p in self.nav.pois.values()
+                     if nav_core.wiki_name_key(p.name) == ("derelict", "outpost")]
+        self.assertTrue(all(not p.qt_marker for p in derelicts))
+
+    def test_arrival_radii_annotate_without_import(self):
+        # Enrichment is independent of the POI toggle: the synthesized Everus
+        # Harbor station gets its wiki QT arrival radius by name.
+        hit = nav_core.annotate_arrival_radii(self.nav, self.locations)
+        self.assertGreater(hit, 0)
+        everus = next(p for p in self.nav.pois.values() if p.name == "Everus Harbor")
+        self.assertEqual(everus.arrival_radius_m, 24000)
+        # POIs the wiki doesn't know keep None and the flat threshold applies.
+        self.assertTrue(any(p.arrival_radius_m is None for p in self.nav.pois.values()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
