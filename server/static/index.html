@@ -2406,6 +2406,8 @@
       Star Citizen Wiki, CC BY-SA 4.0). Places both catalogs know are never
       doubled up. Updated with each app release rather than on restart.
     </div>
+    <div class="muted" id="dataset-status" role="status" aria-live="polite"
+         style="font-size:12px; margin-top:8px;"></div>
 
     <h2>OBSERVATION FRESHNESS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
@@ -12578,18 +12580,18 @@ $("starmap-toggle").onchange = async (e) => {
     e.target.checked = true;
     return;
   }
-  $("admin-status").textContent = "rebuilding dataset…";
+  $("dataset-status").textContent = "rebuilding dataset…";
   try {
     const r = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ starmap_pois_enabled: enabled }) });
     if (!r.ok) throw new Error();
     const d = await r.json();
-    $("admin-status").textContent = `done — ${d.pois} POIs in the dataset`;
+    $("dataset-status").textContent = `done — ${d.pois} POIs in the dataset`;
     loadAll();                       // refresh the browse view against the new dataset
     if (finderOre) runFinder();
   } catch {
-    $("admin-status").textContent = "failed to update — try again";
+    $("dataset-status").textContent = "failed to update — try again";
     loadSettings();
   }
 };
@@ -12602,18 +12604,18 @@ $("wiki-toggle").onchange = async (e) => {
     e.target.checked = true;
     return;
   }
-  $("admin-status").textContent = "rebuilding dataset…";
+  $("dataset-status").textContent = "rebuilding dataset…";
   try {
     const r = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ wiki_pois_enabled: enabled }) });
     if (!r.ok) throw new Error();
     const d = await r.json();
-    $("admin-status").textContent = `done — ${d.pois} POIs in the dataset`;
+    $("dataset-status").textContent = `done — ${d.pois} POIs in the dataset`;
     loadAll();                       // refresh the browse view against the new dataset
     if (finderOre) runFinder();
   } catch {
-    $("admin-status").textContent = "failed to update — try again";
+    $("dataset-status").textContent = "failed to update — try again";
     loadSettings();
   }
 };

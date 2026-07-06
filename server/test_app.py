@@ -2687,6 +2687,41 @@ class CraftGoalTests(unittest.TestCase):
         self.assertTrue(card["commission"]["i_can_craft"])
 
 
+class ReferenceDataBundlingTests(unittest.TestCase):
+    """The v0.37.1 lesson, pinned: every committed reference file the server
+    loads code-dir-first must also be COPY'd into /app in the Dockerfile.
+    /data is a named volume Docker seeds only on the volume's FIRST creation,
+    so a file added in a later release never reaches an existing deployment
+    through /data — it must ride the image next to the code. v0.46.0 shipped
+    poi/locations.json without this and the wiki catalog was empty in prod."""
+
+    def test_dockerfile_bundles_every_code_dir_reference_file(self):
+        docker = (Path(app.__file__).resolve().parent.parent / "Dockerfile").read_text()
+        copy_lines = [l for l in docker.splitlines()
+                      if l.startswith("COPY poi/") and l.rstrip().endswith("./")]
+        self.assertTrue(copy_lines, "Dockerfile lost the code-dir reference-data COPY")
+        bundled = " ".join(copy_lines)
+        for name in ("quantum_drives.json", "quantum_profiles.json",
+                     "blueprints.json", "locations.json"):
+            self.assertIn(f"poi/{name}", bundled, name)
+
+    def test_wiki_locations_load_from_a_code_dir_copy(self):
+        # Simulate the prod layout: the file sits next to app.py, NOT in
+        # DATA_DIR. The loader must find the code-dir copy first.
+        import shutil
+        code_copy = Path(app.__file__).resolve().parent / "locations.json"
+        self.assertFalse(code_copy.exists(),
+                         "dev tree should not have a code-dir copy; test would be moot")
+        shutil.copy(app.DATA_DIR / "locations.json", code_copy)
+        orig_data_dir = app.DATA_DIR
+        try:
+            app.DATA_DIR = Path("/nonexistent-data-dir")
+            self.assertGreater(len(app.load_wiki_locations()), 500)
+        finally:
+            app.DATA_DIR = orig_data_dir
+            code_copy.unlink(missing_ok=True)
+
+
 class WikiCatalogTests(unittest.TestCase):
     """Backlog #28 — the wiki locations catalog end to end: the org toggle
     imports/drops wiki POIs through /api/settings (+ QT promotion of matched
