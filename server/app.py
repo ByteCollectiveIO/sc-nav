@@ -111,6 +111,16 @@ def starmap_pois_enabled() -> bool:
     return db.get_setting("starmap_pois_enabled", "0") == "1"
 
 
+def wiki_pois_enabled() -> bool:
+    """Whether to import the SC Wiki locations catalog (#28a) as routable POIs
+    — datamined outposts, stations and asteroid clusters the starmap feed
+    lacks. Same blank-slate opt-in as starmap_pois_enabled, toggled
+    independently; the source is the committed poi/locations.json snapshot
+    (tools/sync_locations.py), not a runtime fetch. Its QT arrival radii are
+    enrichment and load regardless of this flag."""
+    return db.get_setting("wiki_pois_enabled", "0") == "1"
+
+
 def member_role_id() -> str:
     """Discord role a user must hold (besides guild membership) to sign in.
     Empty = any guild member is allowed. DB-backed + admin-editable, seeded by
@@ -226,12 +236,40 @@ def active_stock_reports() -> list[dict]:
     return reports
 
 
+def load_wiki_locations() -> list[dict]:
+    """The committed SC Wiki locations snapshot (poi/locations.json, #28) —
+    regenerated per game patch by tools/sync_locations.py, never fetched at
+    runtime. Empty list when absent (tests, stripped deployments)."""
+    try:
+        return json.loads((DATA_DIR / "locations.json").read_text()).get("locations") or []
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[sc-nav] wiki locations catalog not loaded: {exc}")
+        return []
+
+
+wiki_locations = load_wiki_locations()
+
+
+def _apply_wiki_catalog(fresh: nav_core.NavData) -> nav_core.NavData:
+    """Fold the wiki locations catalog into a freshly parsed NavData: new POIs
+    + QT-marker promotion of starmap POIs the game now allows jumping to, when
+    the org opted in (#28a); per-POI QT arrival radii always (#28b — physics
+    metadata, enriches the starmap/synth POIs regardless of the toggle)."""
+    if wiki_pois_enabled():
+        nav_core.add_wiki_pois(fresh, wiki_locations)
+        nav_core.upgrade_qt_markers(fresh, wiki_locations)
+    nav_core.annotate_arrival_radii(fresh, wiki_locations)
+    return fresh
+
+
 def load_nav_data() -> nav_core.NavData:
     """Fetch live data from starmap.space; fall back to the on-disk cache.
 
     A successful fetch refreshes the cache files, so the newest good dataset
     survives restarts and network outages. The POI catalog is skipped when the
-    org has opted out (containers are always loaded).
+    org has opted out (containers are always loaded). The wiki locations
+    catalog (committed snapshot) is folded in last, so its dedup sees the
+    complete starmap set.
     """
     want_pois = starmap_pois_enabled()
     if not OFFLINE:
@@ -255,14 +293,14 @@ def load_nav_data() -> nav_core.NavData:
                 fetched_at=datetime.now(timezone.utc).isoformat(),
                 error=None,
             )
-            return fresh
+            return _apply_wiki_catalog(fresh)
         except Exception as exc:
             data_info["error"] = str(exc)
             print(f"[sc-nav] live fetch failed, using cached data: {exc}")
     data_info["source"] = "offline" if OFFLINE else "cache"
     oc_raw = json.loads((DATA_DIR / "containers.json").read_text())
     poi_raw = json.loads((DATA_DIR / "poi.json").read_text()) if want_pois else []
-    return nav_core.parse_data(oc_raw, poi_raw)
+    return _apply_wiki_catalog(nav_core.parse_data(oc_raw, poi_raw))
 
 
 COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
@@ -1251,6 +1289,12 @@ SHARED_PATH_MAX = 500     # crumbs shared with teammates per presence upsert (pa
 # so erring toward "you're here" is safe and helpful.
 ARRIVAL_SURFACE_M = 5_000.0    # on the destination's own body (surface guidance)
 ARRIVAL_SPACE_M = 50_000.0     # everything else (station / space approach)
+# When the destination carries a wiki QT arrival radius (#28b), the space
+# threshold becomes that radius ×1.5 — QT drops the ship *at* the radius, so
+# the margin keeps drop-out counting as arrived — floored so the tiny radii in
+# the catalog (asteroid clusters: 100 m) stay forgiving.
+ARRIVAL_RADIUS_FACTOR = 1.5
+ARRIVAL_RADIUS_FLOOR_M = 10_000.0
 
 # Live presence tuning.
 PRESENCE_TICK_S = 1.0     # broadcaster cadence (coalesced upserts, ~1 Hz)
@@ -1389,7 +1433,9 @@ class Session:
 
     def _arrived_at_active(self) -> bool:
         """Whether the guidance distance to the active stop is within the
-        arrival threshold (surface vs. space picked from the live readout)."""
+        arrival threshold (surface vs. space picked from the live readout).
+        A destination with a wiki QT arrival radius (#28b) gets a threshold
+        tailored to it instead of the flat space constant."""
         dest = self.nav_state.get("destination") if self.nav_state else None
         if not dest:
             return False
@@ -1397,7 +1443,11 @@ class Session:
         if surf is not None:
             return surf < ARRIVAL_SURFACE_M
         d = dest.get("distance_m")
-        return d is not None and d < ARRIVAL_SPACE_M
+        thr = ARRIVAL_SPACE_M
+        if dest.get("arrival_radius_m"):
+            thr = max(dest["arrival_radius_m"] * ARRIVAL_RADIUS_FACTOR,
+                      ARRIVAL_RADIUS_FLOOR_M)
+        return d is not None and d < thr
 
     def onboard_scu(self) -> float:
         """Live cargo aboard = sum of SCU for packages currently 'onboard'. A
@@ -2565,6 +2615,62 @@ def _leg_stock_view(r: dict) -> dict:
             "by": r.get("poster_name") or ""}
 
 
+_PAD_SIZE_ORDER = {"XS": 0, "S": 1, "M": 2, "L": 3, "XL": 4}
+
+
+def _amenity_view(amens: list[str]) -> dict | None:
+    """Distill a wiki amenity list to the operational facts a trade stop view
+    renders (#28c): how cargo moves (freight elevator vs loading dock), the
+    largest hangar/pad, and clinic presence. None when nothing relevant."""
+    v: dict = {}
+    cargo = []
+    for a in amens:
+        if a == "Commodity Trading - Freight Elevator":
+            cargo.append("elevator")
+        elif a == "Commodity Trading - Loading Dock":
+            cargo.append("dock")
+        elif a == "Clinic":
+            v["clinic"] = True
+        else:
+            m = re.match(r"(Hangar|Landing Pad) (XS|S|M|L|XL)$", a)
+            if m:
+                key = "hangar" if m.group(1) == "Hangar" else "pad"
+                if _PAD_SIZE_ORDER[m.group(2)] > _PAD_SIZE_ORDER.get(v.get(key), -1):
+                    v[key] = m.group(2)
+    if cargo:
+        v["cargo"] = cargo
+    return v or None
+
+
+# (system, token-name) -> distilled amenity view, for every wiki location that
+# has relevant amenities. Static per deploy (the catalog is a committed
+# snapshot), so built once; keyed like the POI dedup so any loaded POI —
+# starmap, synthesized station or wiki — resolves regardless of the org toggle.
+WIKI_AMENITIES = {
+    (rec["system"].lower(), nav_core.wiki_name_key(rec["name"])): view
+    for rec in wiki_locations
+    if (view := _amenity_view(rec.get("amenities") or []))
+}
+
+
+def _poi_amenity_view(poi_id) -> dict | None:
+    p = nav.pois.get(poi_id)
+    if p is None:
+        return None
+    return WIKI_AMENITIES.get((p.system.lower(), nav_core.wiki_name_key(p.name)))
+
+
+def _annotate_leg_amenities(plan: dict) -> dict:
+    """Tag each costed trade leg's endpoints with the stop's amenity facts
+    (#28c) so the client can chip them. Mutates + returns the plan."""
+    for lg in plan.get("legs") or ():
+        for id_key, out_key in (("buy_poi_id", "buy_amen"), ("sell_poi_id", "sell_amen")):
+            v = _poi_amenity_view(lg.get(id_key))
+            if v:
+                lg[out_key] = v
+    return plan
+
+
 def _annotate_leg_stock(plan: dict, reports: list[dict]) -> dict:
     """Tag each costed trade leg touched by a fresh stock report (#21) — supply
     reports on its buy end, demand reports on its sell end — so the client can
@@ -2725,6 +2831,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     _annotate_leg_stock(plan, stock_reports)
+    _annotate_leg_amenities(plan)
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
 
 
@@ -2985,6 +3092,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
             avoid_sells=nav_core.stock_avoid_sells(stock_reports),
             fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
         _annotate_leg_stock(new_plan, stock_reports)
+        _annotate_leg_amenities(new_plan)
         _annotate_trade_legs(new_plan, warnings, mode, volumes, sess.t)
         p["avoid_mode"] = mode                       # persist the mode used
         new_legs = new_plan.get("legs") or []
@@ -6007,9 +6115,9 @@ async def stats(user: dict = Depends(require_session)):
             "bodies": len(bodies),
             "shards": len(shards),
         },
-        # Whether the imported starmap POI catalog is loaded, so the UI knows to
-        # show the imported annotations even when the count happens to be 0.
-        "catalog_enabled": starmap_pois_enabled(),
+        # Whether an imported POI catalog (starmap and/or wiki) is loaded, so the
+        # UI knows to show the imported annotations even when the count is 0.
+        "catalog_enabled": starmap_pois_enabled() or wiki_pois_enabled(),
         "top_bodies": top_bodies,
         "systems": _top_counter(by_system),
         "ores": _top_counter(ores),
@@ -6124,6 +6232,7 @@ async def get_settings(user: dict = Depends(require_session)):
     """Org-wide settings (any member can read; admins change them)."""
     return {
         "starmap_pois_enabled": starmap_pois_enabled(),
+        "wiki_pois_enabled": wiki_pois_enabled(),
         "member_role_id": member_role_id(),
         "obs_fresh_window_h": obs_fresh_window_h(),
         "lfg_ageoff_min": lfg_ageoff_min(),
@@ -6144,6 +6253,7 @@ async def get_settings(user: dict = Depends(require_session)):
 
 class SettingsIn(BaseModel):
     starmap_pois_enabled: bool | None = None
+    wiki_pois_enabled: bool | None = None    # SC Wiki locations catalog (#28a)
     member_role_id: str | None = Field(default=None, max_length=_META_MAX)
     obs_fresh_window_h: int | None = Field(default=None, ge=1, le=8760)  # 1h .. 1yr
     # Group Finder lifecycle (minutes): posts turn stale (yellow) at lfg_stale_min
@@ -6224,6 +6334,9 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
+    if body.wiki_pois_enabled is not None:
+        db.set_setting("wiki_pois_enabled", "1" if body.wiki_pois_enabled else "0")
+        await _rebuild_nav()
     if body.discord_webhooks is not None:
         for cat, url in body.discord_webhooks.items():
             if cat not in notify.CATEGORIES:
@@ -6237,6 +6350,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     if body.discord_reminder_lead_min is not None:
         db.set_setting(notify.REMINDER_LEAD_KEY, str(body.discord_reminder_lead_min))
     return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
+            "wiki_pois_enabled": wiki_pois_enabled(),
             "member_role_id": member_role_id(),
             "obs_fresh_window_h": obs_fresh_window_h(),
             "lfg_ageoff_min": lfg_ageoff_min(), "lfg_stale_min": lfg_stale_min(),
