@@ -239,12 +239,21 @@ def active_stock_reports() -> list[dict]:
 def load_wiki_locations() -> list[dict]:
     """The committed SC Wiki locations snapshot (poi/locations.json, #28) —
     regenerated per game patch by tools/sync_locations.py, never fetched at
-    runtime. Empty list when absent (tests, stripped deployments)."""
-    try:
-        return json.loads((DATA_DIR / "locations.json").read_text()).get("locations") or []
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"[sc-nav] wiki locations catalog not loaded: {exc}")
-        return []
+    runtime. Static, code-versioned reference data like the quantum/blueprint
+    feeds, so the image-bundled copy next to the server code is authoritative
+    and tried FIRST; `DATA_DIR` is the dev/CI fallback. In production DATA_DIR
+    is a named volume seeded only on first creation, so a file added in a later
+    release never reaches an existing volume (the v0.37.1 lesson — see
+    load_quantum + the Dockerfile COPY). Empty list when absent everywhere."""
+    for base in (Path(__file__).parent, DATA_DIR):     # code-bundled wins over the volume
+        try:
+            locs = json.loads((base / "locations.json").read_text()).get("locations")
+            if locs:
+                return locs
+        except (OSError, json.JSONDecodeError):
+            continue
+    print("[sc-nav] wiki locations catalog not found — #28 features degrade to off")
+    return []
 
 
 wiki_locations = load_wiki_locations()
