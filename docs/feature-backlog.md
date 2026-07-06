@@ -119,6 +119,27 @@ cheap once #26 exists. Scope before building.
   elevator vs. loading dock, hangar/pad sizes, clinics) → trade-planner stop
   annotations and pad-size-vs-ship warnings.
 
+### 29. Resource Manager restructure ✅ (built 2026-07-05)
+
+**Status:** ✅ built 2026-07-05 (with #30, one release) — spec
+[`rm-restructure-and-profile.md`](rm-restructure-and-profile.md) Part A.
+Frontend-only. "Resource Goals" → **Goals**; shared RM masthead panel with
+**Goals · Inventory · Blueprints** peer tabs + per-screen headers/intros;
+Inventory defaults to "My holdings" (scope persisted in `localStorage`); the
+personal blueprint library moved out of Settings into the new **`#/blueprints`**
+tab (Settings panel removed; marketplace empty-state link retargeted).
+
+### 30. Member profile: preferred playstyles ✅ (built 2026-07-05)
+
+**Status:** ✅ built 2026-07-05 (with #29, one release) — spec
+[`rm-restructure-and-profile.md`](rm-restructure-and-profile.md) Part B.
+Persistent per-member playstyle tags (reuse `PLAYSTYLE_TAGS`, cap 6):
+`members.playstyle_tags` via `_ensure_column`, `PUT /api/me` field
+(allowlist/dedup/cap, mirrored onto the live online record + rebroadcast),
+Settings PROFILE chip panel; surfaced in the admin directory (PLAYSTYLES
+column) + Who's Online roster chips. Fast-follows still open: LFG ✨-match
+weighting, member-facing directory.
+
 ---
 
 ## Fast-follows by app

@@ -23,7 +23,7 @@ drift — trust grep and CI, not the citation.
 
 | Doc | Status | Notes |
 |---|---|---|
-| *(none — #25 shipped; next up is #25.1 / #28, see the backlog)* | | |
+| — | | nothing in flight; next scoping = backlog #28 POI enrichment |
 
 ## Shipped feature specs (reference for what's live)
 
@@ -45,6 +45,7 @@ drift — trust grep and CI, not the citation.
 | [quantum-data-pipeline.md](quantum-data-pipeline.md) | v0.37.0 | `tools/sync_quantum.py` → committed `poi/quantum_{drives,profiles}.json` (#26 slice) |
 | [quantum-fuel-range.md](quantum-fuel-range.md) | v0.37.0 | Fuel burn + max-range in both planners (#27) |
 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | v0.40.0–v0.44.0 | Commission mode + blueprint feed + spec builder (#25); library, craft-goal spec, mats cost, stat autocomplete, sale identity + expected stats (#25.1 — closed; leftovers are backlog fast-follows) |
+| [rm-restructure-and-profile.md](rm-restructure-and-profile.md) | 2026-07-05 (built, unreleased) | RM Goals · Inventory · Blueprints restructure (#29) + member playstyle profile tags (#30) |
 
 ## Strategy / records
 

@@ -779,6 +779,14 @@ class MemberDirectory:
         db.set_directory_opt_out(did, opt_out)
         self.by_id.setdefault(did, {"discord_id": did})["directory_opt_out"] = 1 if opt_out else 0
 
+    def set_playstyles(self, discord_id: str, tags: list[str]) -> None:
+        # Cache the raw column value (JSON or None) so reads parse uniformly
+        # whether the row came from the DB load or this setter.
+        did = str(discord_id)
+        db.set_member_playstyles(did, tags)
+        self.by_id.setdefault(did, {"discord_id": did})["playstyle_tags"] = \
+            json.dumps(tags) if tags else None
+
     def forget(self, discord_id: str) -> None:
         self.by_id.pop(str(discord_id), None)
 
@@ -1271,6 +1279,23 @@ PLAYSTYLE_TAGS = [
     "PvE", "PvP", "FPS", "flight", "exploration", "medical/rescue",
     "RP", "casual", "serious", "new-player-friendly",
 ]
+# Member profile (#30): persistent declared playstyles, capped — a profile is a
+# signature, not a checklist (LFG posts cap similarly).
+_PROFILE_MAX_TAGS = 6
+
+
+def member_playstyles(member: dict | None) -> list[str]:
+    """A member's declared profile tags (#30), parsed from the stored JSON and
+    re-filtered against the live vocabulary so trimming PLAYSTYLE_TAGS can never
+    resurface a retired tag."""
+    raw = (member or {}).get("playstyle_tags")
+    if not raw:
+        return []
+    try:
+        vals = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [t for t in vals if isinstance(t, str) and t in PLAYSTYLE_TAGS][:_PROFILE_MAX_TAGS]
 
 # Looking-for-group entries (#19 step 3): transient, in-memory, matching-oriented
 # — NOT the scheduled `events` table. Two directions: "lfm" (I'm hosting / starting
@@ -1629,6 +1654,9 @@ class SessionHub:
             self.online[uid] = {
                 "status": status if status in ONLINE_STATUSES else "available",
                 "activity": prefs.get("online_activity"),
+                # Profile tags ride the roster record (loaded once per arrival,
+                # like status/activity) so the broadcast path stays DB-free.
+                "tags": member_playstyles(prefs),
                 "visible": not prefs.get("appear_offline"),
                 "since": now,
                 "last_seen": now,
@@ -1651,6 +1679,7 @@ class SessionHub:
             "name": _resolve_member_name(uid, None),
             "status": rec["status"],
             "activity": rec["activity"],
+            "tags": rec.get("tags") or [],
             "since_s": max(0.0, time.time() - rec["since"]),
         }
         pres = self.presence.get(uid)
@@ -6729,11 +6758,15 @@ async def api_me(request: Request):
     return {**user, "share_presence": hub.get(user).share_presence,
             "org_logo": bool(db.get_setting("org_logo_ext")),
             "ships": db.list_user_ships(user["id"]),
+            "playstyle_tags": member_playstyles(members_dir.get(user["id"])),
             **_member_identity(user["id"])}
 
 
 class ProfileIn(BaseModel):
     share_presence: bool | None = None
+    # Declared playstyle tags (#30). None = untouched; [] = clear. Oversized
+    # payloads are rejected outright (mirrors LFGPostIn.tags).
+    playstyle_tags: list[str] | None = Field(default=None, max_length=_PROFILE_MAX_TAGS)
 
 
 class ShipPrefIn(BaseModel):
@@ -6744,15 +6777,33 @@ class ShipPrefIn(BaseModel):
 
 @app.put("/api/me")
 async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
-    """Update the caller's profile. For now just the presence-share toggle:
-    turning it off emits a `remove` and stops broadcasting the member (one-way —
-    they keep receiving teammates); turning it on re-publishes their last fix."""
+    """Update the caller's profile: the presence-share toggle (turning it off
+    emits a `remove` and stops broadcasting the member — one-way, they keep
+    receiving teammates; turning it on re-publishes their last fix) and the
+    declared playstyle tags (#30), normalized like LFG tags — dedup, allowlist,
+    cap — then mirrored onto their live online-roster record so org-mates see
+    the change without waiting for a reconnect."""
+    uid = user["id"]
+    tags = None
+    if body.playstyle_tags is not None:
+        tags = [t for t in dict.fromkeys(body.playstyle_tags)
+                if t in PLAYSTYLE_TAGS][:_PROFILE_MAX_TAGS]
+        members_dir.set_playstyles(uid, tags)
     async with hub.lock:
         sess = hub.get(user)
         if body.share_presence is not None:
             sess.share_presence = body.share_presence
             hub.touch_presence(sess)   # re-publish, or drop if now off / not on a body
-        return {"ok": True, "share_presence": sess.share_presence}
+        if tags is not None:
+            rec = hub.online.get(uid)
+            if rec is not None:
+                rec["tags"] = tags
+    if tags is not None:
+        await hub.broadcast_online_roster()
+    out = {"ok": True, "share_presence": sess.share_presence}
+    if tags is not None:
+        out["playstyle_tags"] = tags
+    return out
 
 
 class PrimaryHandleIn(BaseModel):
@@ -6806,6 +6857,7 @@ async def member_directory(admin: dict = Depends(require_admin)):
             "username": m.get("username"),
             "handles": owned,
             "primary_handle": primary,
+            "playstyle_tags": member_playstyles(m),
             "opt_out": bool(m.get("directory_opt_out")),
             "last_login": m.get("last_login"),
             "is_admin": did in admin_ids(),

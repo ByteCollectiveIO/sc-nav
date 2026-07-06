@@ -41,13 +41,16 @@ banner — don't scroll.
 Body views (each a `#…-view` container, hash-routed):
 launcher, main (navigator), settings, setup, intel, leaderboard, stats,
 cargo-leaderboard, cargo-stats, route (cargo planner), events, goals, inventory,
-market, online (who's online, #19), lfg (group finder / LFG board, #19),
-pirates (danger board / pirate warnings, #24), terms, privacy.
+blueprints (RM's third tab, #29), market, online (who's online, #19),
+lfg (group finder / LFG board, #19), pirates (danger board / pirate warnings, #24),
+terms, privacy.
 
 JS modules (by `// ----` banner): formatting · resource forecast · state ·
 freshness · shard · nearby · captures · destination · path/map · search ·
-element finder · teammate presence · websocket · auth gate · cargo planner +
-run mode · event planner · resource manager (catalog picker / goals / inventory)
+element finder · teammate presence · websocket · auth gate (+ PROFILE playstyle
+chips, #30) · cargo planner + run mode · event planner · resource manager
+(shared masthead `rmMast`; catalog picker / goals / inventory / my blueprint
+library at `#/blueprints`, #29)
 · marketplace · pirate danger board (#24) · view router · leaderboard · statistics · Org Intel · org settings
 · org logo · admins · watcher tokens · setup guide · init.
 
@@ -65,7 +68,7 @@ run mode · event planner · resource manager (catalog picker / goals / inventor
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`
 - Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`
-- Auth/account: `/auth/login|callback|logout`, `/api/me*`, `/api/tokens`
+- Auth/account: `/auth/login|callback|logout`, `/api/me*`, `/api/tokens`. **Member profile (#30):** `members.playstyle_tags` (JSON via `_ensure_column`, `db.set_member_playstyles`); `PUT /api/me` `playstyle_tags` (allowlist `PLAYSTYLE_TAGS`, dedup, cap `_PROFILE_MAX_TAGS`=6, parses via `member_playstyles`, mirrors onto the live online record + roster rebroadcast); carried on `GET /api/me`, `/api/intel/directory` rows, and online-roster records (`tags`); UI = Settings PROFILE chips + roster/directory `.on-ptag` chips
 - Misc: `/api/health`, `/download/watcher`, `/` + `/index.html`
 
 ## db.py tables
