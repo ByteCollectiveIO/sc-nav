@@ -16,18 +16,16 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 26. SC Wiki API reference-data layer (foundation)
+### 26. SC Wiki API reference-data layer (foundation) ✅ COMPLETE
 
-**Status:** vehicles/quantum slice **SHIPPED v0.37.0** — `tools/sync_quantum.py`
-fetches `/api/vehicles` + `/api/vehicle-items?filter[type]=QuantumDrive`,
-distills committed `poi/quantum_drives.json` + `poi/quantum_profiles.json`
-(+ `quantum_match_report.txt` build artifact), version-stamped, no runtime
-calls. 230 ship profiles / 57 drives / 0 identity mismatches / 81%
-uexcorp-hauler coverage. Footer carries the CC BY-SA 4.0 attribution. Smoke test
-in `test_nav_core.py`. **Blueprints slice SHIPPED v0.40.0**
-(`tools/sync_blueprints.py` → committed `poi/blueprints.json`, 1,559 recipes —
-see #25 in the Shipped log). **Locations slice built 2026-07-05 with #28**
-(`tools/sync_locations.py` → committed `poi/locations.json`) — **#26 complete**.
+**Status:** all three slices shipped — vehicles/quantum **v0.37.0**
+(`tools/sync_quantum.py` → `poi/quantum_{drives,profiles}.json`, 230 profiles /
+57 drives / 81% hauler coverage), blueprints **v0.40.0**
+(`tools/sync_blueprints.py` → `poi/blueprints.json`, 1,559 recipes), locations
+**v0.46.0 with #28** (`tools/sync_locations.py` → `poi/locations.json`, 634
+records). Footer carries the CC BY-SA 4.0 attribution; every artifact is
+version-stamped, no runtime API calls, manual per-patch re-run. Kept below as
+the wiki-API reference:
 
 `https://api.star-citizen.wiki` (OpenAPI at `/api/openapi`) is a public,
 game-version-scoped JSON API — no auth for game data, pagination
@@ -102,30 +100,6 @@ Shipped log). Spec: [`blueprint-craft-commissions.md`](blueprint-craft-commissio
   about.
 - ~~**Announce name-check**~~ — **SHIPPED v0.43.0**: the WANTED announce
   @-mentions library-matched crafters (poster excluded, capped at 15).
-
-### 28. Starmap & POI enrichment from the wiki API ✅ (built 2026-07-05)
-
-**Status:** ✅ built 2026-07-05 (scoped the same day), pending release — spec +
-as-built notes in [`wiki-poi-enrichment.md`](wiki-poi-enrichment.md). Closes
-#26's last slice. What shipped:
-
-- **Data layer**: `tools/sync_locations.py` → committed `poi/locations.json`
-  (634 records, stamped 4.8.2; report artifact gitignored). Wiki data
-  **complements** starmap (community caves/wrecks + rotation-param containers
-  stay starmap-owned), never supersedes.
-- **Slice a**: org toggle `wiki_pois_enabled` (default OFF, beside the starmap
-  one) → `nav_core.add_wiki_pois` (241 wiki-only POIs: Pyro asteroid clusters,
-  Nyx stations, comm arrays; ids 4M+, `source="wiki"`; token-name dedup,
-  starmap wins) + `nav_core.upgrade_qt_markers` (206 matched starmap POIs the
-  game now allows jumping to → **508 QT markers with everything on**, vs ~150
-  Stanton before).
-- **Slice b**: `nav_core.annotate_arrival_radii` (always-on, 392 POIs) —
-  run-mode `_arrived_at_active` prefers the destination's QT arrival radius
-  (×1.5, 10 km floor) over the flat `ARRIVAL_SPACE_M`.
-- **Slice c**: `_annotate_leg_amenities` + `amenChips` — freight-elevator /
-  loading-dock / hangar-pad-size / clinic chips on trade plan + run legs.
-  Pad-size-vs-ship warning deferred (uexcorp feed has no ship size class) —
-  now a Trade planner fast-follow.
 
 ---
 
@@ -234,3 +208,4 @@ listed, else the [archived backlog](archive/feature-backlog-full-2026-07-04.md).
 | 25.1 | Craft-goal spec builder (per-slot quality targets) · estimated materials cost (§12) · stat-name autocomplete (§11.2) · WANTED announce pings capable crafters | v0.43.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §11–§12 |
 | 25.1 | `blueprint:` identity for sale/auction listings (§11.3) · expected-stats panel on blueprint-linked listings (§11.4) — closes #25.1 | v0.44.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §11 |
 | 29/30 | Resource Manager restructure (Goals · Inventory · Blueprints peer tabs, library out of Settings, My-holdings default) · member playstyle profile (Settings PROFILE chips → Who's Online + directory) | v0.45.0 | [rm-restructure-and-profile.md](rm-restructure-and-profile.md) |
+| 26/28 | Wiki locations catalog: `wiki_pois_enabled` import (241 wiki-only POIs + 206 QT-marker promotions → 508 QT destinations) · per-POI QT arrival radii in run-mode arrival · trade-stop amenity chips (freight elevator / loading dock / hangar-pad / clinic) | v0.46.0 | [wiki-poi-enrichment.md](wiki-poi-enrichment.md) |

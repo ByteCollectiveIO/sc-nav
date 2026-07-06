@@ -1,10 +1,12 @@
 # Starmap & POI enrichment from the SC Wiki API (backlog #28)
 
-**Status: ✅ built 2026-07-05 (scoped same day), pending release.** All three
-slices + the data layer landed in one pass; suites 312 nav_core / 202 app
-green. License: **CC BY-SA 4.0 with attribution** — the footer attribution
-line shipped with #26 already covers it. §9 lists where the build deviated
-from this spec (all deviations are strict improvements found in the data).
+**Status: ✅ SHIPPED v0.46.0 (PR #33), confirmed live 2026-07-05** — scoped,
+built and released the same day. All three slices + the data layer landed in
+one pass; suites 312 nav_core / 202 app green. License: **CC BY-SA 4.0 with
+attribution** — the footer attribution line shipped with #26 already covers
+it. §9 lists where the build deviated from this spec (all deviations are
+strict improvements found in the data). Not yet verified in-browser: the ORG
+SETTINGS wiki toggle and the trade-leg amenity chips deserve an eyeball.
 
 **As built:** `tools/sync_locations.py` → committed `poi/locations.json`
 (634 records, 4.8.2) · nav_core `add_wiki_pois` (241 wiki-only POIs, ids 4M+,
