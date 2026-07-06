@@ -119,27 +119,6 @@ cheap once #26 exists. Scope before building.
   elevator vs. loading dock, hangar/pad sizes, clinics) → trade-planner stop
   annotations and pad-size-vs-ship warnings.
 
-### 29. Resource Manager restructure ✅ (built 2026-07-05)
-
-**Status:** ✅ built 2026-07-05 (with #30, one release) — spec
-[`rm-restructure-and-profile.md`](rm-restructure-and-profile.md) Part A.
-Frontend-only. "Resource Goals" → **Goals**; shared RM masthead panel with
-**Goals · Inventory · Blueprints** peer tabs + per-screen headers/intros;
-Inventory defaults to "My holdings" (scope persisted in `localStorage`); the
-personal blueprint library moved out of Settings into the new **`#/blueprints`**
-tab (Settings panel removed; marketplace empty-state link retargeted).
-
-### 30. Member profile: preferred playstyles ✅ (built 2026-07-05)
-
-**Status:** ✅ built 2026-07-05 (with #29, one release) — spec
-[`rm-restructure-and-profile.md`](rm-restructure-and-profile.md) Part B.
-Persistent per-member playstyle tags (reuse `PLAYSTYLE_TAGS`, cap 6):
-`members.playstyle_tags` via `_ensure_column`, `PUT /api/me` field
-(allowlist/dedup/cap, mirrored onto the live online record + rebroadcast),
-Settings PROFILE chip panel; surfaced in the admin directory (PLAYSTYLES
-column) + Who's Online roster chips. Fast-follows still open: LFG ✨-match
-weighting, member-facing directory.
-
 ---
 
 ## Fast-follows by app
@@ -169,8 +148,12 @@ opportunistically; none is urgent.
 - **Cargo planner (#12):** start-from-chosen-POI (`start_id`) + free start ·
   contract-selection advisor (reward-per-hour is already captured) · per-leg
   drive-accurate ETA (lands with #27).
-- **Identity (#17):** member-facing directory surface (opt-out already honored)
-  · directory avatars (hash captured; rendering is one CDN call).
+- **Identity / profiles (#17/#30):** member-facing directory surface (opt-out
+  already honored; #30's playstyle tags now make it genuinely useful) ·
+  directory avatars (hash captured; rendering is one CDN call) · LFG
+  ✨-suggested-matches weighting persistent profile tags, so matching works even
+  when a member hasn't set a transient activity · `PLAYSTYLE_TAGS` vocabulary
+  governance (custom org tags as a setting) if orgs ask.
 - **Notifications (#18):** auction "ending soon" ping (needs a scheduled loop) ·
   goal milestone pings at 50/75% (off by default).
 - **Platform:** capture-side Discord-id attribution (`owner_id` still =
@@ -240,3 +223,4 @@ listed, else the [archived backlog](archive/feature-backlog-full-2026-07-04.md).
 | 14.2 / 25.1 | Personal + blueprint-seeded craft goals · member blueprint library · commission crafter-matching (§10) | v0.42.0 (⚒ glyph fix v0.42.1) | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §10 |
 | 25.1 | Craft-goal spec builder (per-slot quality targets) · estimated materials cost (§12) · stat-name autocomplete (§11.2) · WANTED announce pings capable crafters | v0.43.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §11–§12 |
 | 25.1 | `blueprint:` identity for sale/auction listings (§11.3) · expected-stats panel on blueprint-linked listings (§11.4) — closes #25.1 | v0.44.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §11 |
+| 29/30 | Resource Manager restructure (Goals · Inventory · Blueprints peer tabs, library out of Settings, My-holdings default) · member playstyle profile (Settings PROFILE chips → Who's Online + directory) | v0.45.0 | [rm-restructure-and-profile.md](rm-restructure-and-profile.md) |

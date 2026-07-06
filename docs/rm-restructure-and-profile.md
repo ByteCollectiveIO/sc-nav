@@ -1,9 +1,11 @@
 # Resource Manager restructure & member profile (backlog #29 + #30)
 
-**Status:** ✅ built 2026-07-05 (A + B together, one release; designed same day).
-Both parts landed as specced; the only drift: the Inventory scope preference
-persists as `localStorage.rmInvScope`, and the marketplace craftable-filter
-empty-state now deep-links `#/blueprints`. Two related workstreams:
+**Status:** ✅ shipped **v0.45.0** (PR #31, live 2026-07-05; designed + built
+same day, A + B in one release). Both parts landed as specced; the only drift:
+the Inventory scope preference persists as `localStorage.rmInvScope`, and the
+marketplace craftable-filter empty-state now deep-links `#/blueprints`. The
+open questions below moved to the backlog's fast-follows (Identity / profiles).
+Two related workstreams:
 **A** — split the Resource Manager's blended UI into distinct **Goals**,
 **Inventory**, and **Blueprints** sections (and pull the personal blueprint
 library out of Settings, where it never belonged); **B** — a lightweight
