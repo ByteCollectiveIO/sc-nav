@@ -1,6 +1,7 @@
 @echo off
-rem SC Nav Watcher launcher — set your Linux nav server address here:
-set SERVER=http://192.168.1.68:8765
+rem SC Nav Watcher launcher — set your nav server address here (the bundle
+rem downloaded from the web UI's Setup page arrives with this pre-filled):
+set SERVER=http://YOUR-SERVER:8765
 rem Your in-game handle (for attributing captured POIs/nodes). Once set, it is
 rem remembered in watcher_config.json, so you can blank this out afterward.
 set HANDLE=

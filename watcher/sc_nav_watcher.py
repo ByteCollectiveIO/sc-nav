@@ -502,7 +502,7 @@ def main():
     )
     parser.add_argument(
         "--server",
-        help="Nav server base URL, e.g. http://192.168.1.68:8765",
+        help="Nav server base URL, e.g. http://192.168.1.50:8765",
     )
     parser.add_argument(
         "--interval", type=float, default=0.25, help="Poll interval seconds (default 0.25)"

@@ -6,6 +6,7 @@ __pycache__/
 # Local tooling / OS
 .claude/settings.local.json
 .DS_Store
+.pytest_cache/
 
 # Build artifacts
 *.zip
@@ -44,8 +45,8 @@ docs/qdrives.json
 docs/loadout.json
 
 # Secrets / local env — list the FILE here, never the secret itself.
-# The Cloudflare tunnel token goes inside .env (CLOUDFLARE_TUNNEL_TOKEN=...).
-#.env
+# Copy .env.example (tracked) to .env and fill in; .env never gets committed.
+.env
 
 # Ignore the impeccable stuff.
 server/static/.impeccable/

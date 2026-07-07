@@ -3,3 +3,5 @@ server/.venv
 watcher/watcher_config.json
 Dockerfile
 docker-compose.yml
+.env
+.env.example
