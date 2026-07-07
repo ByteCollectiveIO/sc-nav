@@ -1,4 +1,4 @@
-# SC Nav Server (Ubuntu 26.04)
+# SC Nav Server
 
 Receives positions from the Windows clipboard watcher, computes navigation
 state (container, lat/lon, bearing, distance, ETA) against the
@@ -20,7 +20,7 @@ server/
   static/index.html  browser UI
   test_nav_core.py   tests — run with: python3 test_nav_core.py
   requirements.txt
-  deploy/sc-nav.service
+  deploy/backup_db.sh  online SQLite backup (usage in the script's comments)
 ```
 
 ## Dataset
@@ -35,7 +35,7 @@ A successful fetch is written to the cache folder (`../poi` by default); if
 starmap.space is unreachable, the server starts from that cache instead.
 `GET /api/health` reports which one you're running on (`"source": "live"` or
 `"cache"`). After a game patch moves things, `curl -X POST
-http://192.168.1.68:8765/api/refresh` picks up the new data — no restart.
+http://<server>:8765/api/refresh` picks up the new data — no restart.
 
 Env overrides: `SC_NAV_DATA` (cache dir), `SC_NAV_OC_URL`, `SC_NAV_POI_URL`,
 `SC_NAV_OFFLINE=1` (skip fetching entirely).
@@ -57,32 +57,32 @@ rotating frame (same storage convention as upstream POIs) and saves it.
 Custom POIs are marked with ★ in lists and can be deleted via the ✕ in
 search results. See also **Resource nodes** and **Contributor handles** below.
 
-## Deploy option A: Docker (recommended — fits alongside existing containers)
+## Deploy: Docker
 
 The project root has a `Dockerfile` and `docker-compose.yml`. The image bakes
 the repo's poi snapshot into a named volume as seed data, fetches live data
-on boot, and runs as a non-root user. Nothing touches other containers; the
-only shared resource is host port 8765 (remap the left side of `ports:` in
-the compose file if it's taken).
+on boot, and runs as a non-root user. Configuration comes from environment
+variables — copy `.env.example` to `.env` and fill it in (or set the same
+variables in your orchestrator's UI; see the comments in `docker-compose.yml`).
 
-From your Mac:
-
-```bash
-rsync -av --exclude server/.venv --exclude __pycache__ \
-    ~/Documents/dev/star_citizen/nav_project/ <user>@192.168.1.68:~/sc-nav/
-```
-
-On the server (any account in the `docker` group):
+On any Docker host:
 
 ```bash
-cd ~/sc-nav
+git clone https://github.com/ByteCollectiveIO/sc-nav.git && cd sc-nav
+cp .env.example .env   # fill in Discord OAuth + secrets
 docker compose up -d --build
 curl http://localhost:8765/api/health   # expect "source": "live"
 ```
 
 `restart: unless-stopped` keeps it running across reboots. Update after a
 code change with `docker compose up -d --build`; update the dataset without
-a restart via `curl -X POST http://192.168.1.68:8765/api/refresh`.
+a restart via `curl -X POST http://<server>:8765/api/refresh`.
+
+The reference deployment runs this compose file as a Portainer git stack
+(env vars set in the stack UI, redeploy = pull from `main`) with the bundled
+`cloudflared` sidecar exposing it over a Cloudflare Tunnel — no inbound ports.
+Both are optional; plain `docker compose up` plus your own reverse proxy works
+the same.
 
 ### Data persistence & backups
 
@@ -116,64 +116,27 @@ docker run --rm -v sc-nav-data:/data -v "$PWD":/backup alpine \
 docker compose up -d
 ```
 
-## Deploy option B: bare systemd service
-
-From your Mac, copy the project over (the `.venv` here is local — exclude it):
+## Local dev (no Docker)
 
 ```bash
-rsync -av --exclude .venv --exclude __pycache__ \
-    ~/Documents/dev/star_citizen/nav_project/ jeremiah@192.168.1.68:/tmp/sc-nav/
+cd server
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python test_nav_core.py && .venv/bin/python test_app.py
+.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8765
 ```
 
-On the server:
-
-```bash
-sudo apt update && sudo apt install -y python3-venv
-sudo mkdir -p /opt/sc-nav && sudo cp -r /tmp/sc-nav/{server,poi} /opt/sc-nav/
-sudo useradd --system --home /opt/sc-nav --shell /usr/sbin/nologin scnav || true
-
-cd /opt/sc-nav/server
-sudo python3 -m venv .venv
-sudo .venv/bin/pip install -r requirements.txt
-sudo chown -R scnav:scnav /opt/sc-nav
-
-# verify before installing the service
-sudo -u scnav .venv/bin/python test_nav_core.py
-sudo -u scnav .venv/bin/uvicorn app:app --host 0.0.0.0 --port 8765   # Ctrl-C after checking
-```
-
-Sanity check from another machine: `curl http://192.168.1.68:8765/api/health`
-should return `{"ok":true,"containers":496,"pois":1885,...}`.
-
-Install as a service:
-
-```bash
-sudo cp deploy/sc-nav.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now sc-nav
-systemctl status sc-nav
-```
-
-If ufw is active, allow LAN access only:
-
-```bash
-sudo ufw allow from 192.168.1.0/24 to any port 8765 proto tcp
-```
-
-(Only needed for option B — Docker-published ports bypass ufw via its own
-iptables rules, so option A is reachable on the LAN without a ufw rule. To
-restrict the Docker port to one interface/IP instead, bind it explicitly in
-the compose file, e.g. `"192.168.1.68:8765:8765"`.)
-
-NTP matters: planet rotation is computed from wall-clock time, so keep
-`timedatectl` showing "System clock synchronized: yes" (default on Ubuntu).
+NTP matters: planet rotation is computed from wall-clock time, so keep the
+host clock synchronized (`timedatectl` should show "System clock
+synchronized: yes" — the default on Ubuntu).
 
 ## Connect the pieces
 
-- **Gaming PC**: in `watcher/run_watcher.bat`, set `SERVER=http://192.168.1.68:8765`
-  and (optionally) `HANDLE=YourInGameName` so your captures are attributed.
-- **Laptop**: open `http://192.168.1.68:8765` — live readouts appear after the
-  first in-game `/showlocation`.
+- **Gaming PC**: download the pre-configured watcher bundle from the web UI's
+  Setup page (it arrives with the server address and your access token filled
+  in), or set `SERVER=` in `watcher/run_watcher.bat` by hand — see
+  `watcher/README.md`.
+- **Any browser**: open the app's URL — live readouts appear after the first
+  in-game `/showlocation`.
 
 ## Contributor handles & attribution
 

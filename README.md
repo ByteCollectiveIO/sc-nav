@@ -117,11 +117,12 @@ appear on your laptop.
 
 ## Configuration
 
-The server is configured entirely through environment variables. In Docker they
-come from your orchestrator's env store — the committed root `.env` is an
-**empty placeholder** whose only job is to let `docker compose`'s `${VAR}`
-interpolation resolve without erroring; put real values in Portainer stack
-env vars, a Compose `.env` you keep out of git, or your host's secret store.
+The server is configured entirely through environment variables. For a local
+`docker compose` run, copy the committed [`.env.example`](.env.example) to
+`.env` (gitignored) and fill it in — Compose picks it up for `${VAR}`
+interpolation automatically. In a managed deployment, set the same variables
+in your orchestrator's env store instead (e.g. Portainer stack env vars or
+your host's secret store).
 
 | Variable | Required | What it is |
 |---|---|---|

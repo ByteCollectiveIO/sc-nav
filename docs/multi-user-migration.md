@@ -310,4 +310,4 @@ courses + captures)~~ ✅ -> ~~3 (teammate map)~~ ✅ -> ~~4 (admin/backups)~~ �
 - Data in a Docker named volume: upstream cache (`poi.json`/`containers.json`),
   `custom_pois.json`, `resource_nodes.json`, `wildlife.json`, `handles.json`,
   `commodities.json`. IDs via in-memory `max()+1` / monotonic counters.
-- Deployed today at 192.168.1.68:8765 (LAN), systemd/Docker.
+- Deployed today on a LAN home server at port 8765, systemd/Docker.
