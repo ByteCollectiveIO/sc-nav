@@ -11,7 +11,7 @@ watcher (Windows PC) ──POST /api/position──▶ this server ──WS─�
 
 ## Layout
 
-![SC Nav Server](sc-navigator-routes.png)
+![SC Nav Server](../images/readme_images/sc-navigator-routes.png)
 
 ```
 server/
