@@ -140,6 +140,8 @@
   .site-footer a:hover { color: var(--accent); }
   .site-footer .foot-links { margin-bottom: 6px; }
   .site-footer .foot-links a { margin: 0 8px; }
+  .site-footer .foot-links a.foot-sponsor { color: var(--accent); font-weight: 600; }
+  .site-footer .foot-links a.foot-sponsor:hover { text-decoration: underline; }
   .site-footer .foot-copy b { color: var(--text); font-weight: 600; }
   .site-footer .foot-data { margin-top: 6px; color: var(--dim); font-size: 11px; }
   .site-footer .foot-version { margin-top: 6px; color: var(--dim); font-size: 11px; }
@@ -147,6 +149,10 @@
   /* destructive action button (e.g. delete account) */
   .danger-btn { border-color: var(--bad); color: var(--bad); }
   .danger-btn:hover { background: var(--bad); color: var(--ink-on-accent); border-color: var(--bad); }
+  /* sponsor / support call-to-action */
+  .support-btn { display: inline-block; padding: 8px 16px; border: 1px solid var(--accent);
+    border-radius: 8px; color: var(--accent); text-decoration: none; font-size: 13px; }
+  .support-btn:hover { background: var(--accent); color: var(--ink-on-accent); }
 
   /* small Terms/Privacy links under the login splash disclaimer */
   .login-card .legal-links { margin-top: 12px; font-size: 12px; }
@@ -707,6 +713,7 @@
   .lfg-badge { border-color: var(--warn); color: var(--warn); margin-top: -4px; }
   .warn-badge { border-color: var(--bad); color: var(--bad); }
   .warn-badge:hover { background: var(--bad-wash); }
+  .support-badge { border-color: var(--accent); color: var(--accent); }
   /* the two live badges share one centred row instead of stacking as loose pills */
   .launcher-badges { display: flex; justify-content: center; align-items: center;
     gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
@@ -1985,6 +1992,8 @@
       <a id="online-badge" class="online-badge" href="#/online" hidden></a>
       <a id="lfg-badge" class="online-badge lfg-badge" href="#/lfg" hidden></a>
       <a id="warn-badge" class="online-badge warn-badge" href="#/pirates" hidden></a>
+      <a class="online-badge support-badge" href="https://github.com/sponsors/ByteCollectiveIO"
+        target="_blank" rel="noopener">♥ Support this project</a>
     </div>
     <a id="launcher-resume" class="launcher-resume" hidden></a>
 
@@ -2338,6 +2347,17 @@
     <div class="on-tags" id="profile-tags"></div>
     <span class="muted" id="profile-status" role="status" aria-live="polite"
           style="font-size:12px; display:block; margin-top:6px;"></span>
+  </div>
+  <div class="settings-grp-h">Support the project</div>
+  <div class="panel" id="support-panel">
+    <h2>SUPPORT <span class="muted">(help keep the lights on)</span></h2>
+    <div class="muted" style="font-size:12px; margin-bottom:10px;">
+      Org Navigator is a free, unofficial fan project. If it's useful to your crew and
+      you'd like to chip in toward hosting and development, you can sponsor it on GitHub.
+      Entirely optional; every tool stays free.
+    </div>
+    <a class="support-btn" href="https://github.com/sponsors/ByteCollectiveIO"
+       target="_blank" rel="noopener">♥ Sponsor on GitHub</a>
   </div>
   <div class="panel" id="token-panel" hidden>
     <h2>WATCHER TOKEN <span class="muted">(authenticates the desktop watcher)</span></h2>
@@ -3519,7 +3539,9 @@
 
 <footer class="site-footer">
   <div class="foot-links">
-    <a href="#/terms">Terms of Service</a>·<a href="#/privacy">Privacy Policy</a>
+    <a href="#/terms">Terms of Service</a>·<a href="#/privacy">Privacy Policy</a>·<a
+      class="foot-sponsor" href="https://github.com/sponsors/ByteCollectiveIO" target="_blank"
+      rel="noopener">♥ Sponsor</a>
   </div>
   <div class="foot-copy">© 2026 <b>ByteCollective LLC</b>. Site design and original content,
     all rights reserved. An unofficial Star Citizen fansite, not affiliated with the Cloud
