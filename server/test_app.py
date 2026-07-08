@@ -2814,5 +2814,39 @@ class WikiCatalogTests(unittest.TestCase):
                       app.WIKI_AMENITIES)
 
 
+class HandleOwnershipTests(unittest.TestCase):
+    """A handle is client-supplied free text on /api/position; ownership binding
+    must be trust-on-first-use and NON-transferable, or any member could steal a
+    victim's contributions + verified marketplace identity by reporting their
+    handle (security regression guard)."""
+
+    def _registry(self):
+        reg = app.HandleRegistry.__new__(app.HandleRegistry)
+        reg.by_handle = {}
+        return reg
+
+    def test_first_poster_binds_but_second_cannot_steal(self):
+        reg = self._registry()
+        # Victim's watcher reports first -> handle bound to the victim (TOFU).
+        e1 = reg.register("VictimHandle", "victim-discord")
+        self.assertEqual(e1["discord_id"], "victim-discord")
+        # Attacker POSTs a position claiming the same handle -> binding unchanged.
+        e2 = reg.register("VictimHandle", "attacker-discord")
+        self.assertEqual(e2["discord_id"], "victim-discord")
+        # Ownership queries still point only at the victim.
+        self.assertEqual(reg.player_ids_for("attacker-discord"), set())
+        self.assertFalse(reg.owns_handle("attacker-discord", "VictimHandle"))
+        self.assertTrue(reg.owns_handle("victim-discord", "VictimHandle"))
+
+    def test_unbound_handle_is_claimable_once(self):
+        reg = self._registry()
+        # Legacy/unbound entry (e.g. seeded before ownership binding existed).
+        reg.by_handle["Wanderer"] = {"player_id": 7, "handle": "Wanderer",
+                                     "first_seen": "t", "last_seen": "t",
+                                     "discord_id": None}
+        e = reg.register("Wanderer", "finder-discord")
+        self.assertEqual(e["discord_id"], "finder-discord")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

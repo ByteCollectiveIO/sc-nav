@@ -1814,13 +1814,20 @@ def travel_cost(nav: NavData, src, dst, t_ref: float | None = None, *,
     includes the added detour distance. `memo` (an optional per-solve dict keyed
     by (src, dst)) caches results so the greedy inner loop re-costs each POI pair
     at most once."""
-    if not avoid:
-        return _base_travel_cost(nav, src, dst, t_ref)
-    key = (getattr(src, "id", id(src)), getattr(dst, "id", id(dst))) if memo is not None else None
-    if memo is not None and key in memo:
-        return memo[key]
+    # Consult the memo before any costing — the no-hazard path (avoid=None, the
+    # common case) also benefits: the greedy solver re-costs the same POI pairs
+    # across restarts/legs, so without this every pair was recomputed from
+    # scratch (~50x redundancy at production POI scale). t_ref is in the key so a
+    # per-solve memo (constant t_ref) stays correct; hazard volumes are constant
+    # per memo, so keying on (src, dst, t_ref) is sufficient.
+    key = None
+    if memo is not None:
+        key = (getattr(src, "id", id(src)), getattr(dst, "id", id(dst)), t_ref)
+        if key in memo:
+            return memo[key]
     result = _base_travel_cost(nav, src, dst, t_ref)
-    _apply_detours(nav, src, dst, t_ref, avoid, result)
+    if avoid:
+        _apply_detours(nav, src, dst, t_ref, avoid, result)
     if memo is not None:
         memo[key] = result
     return result
