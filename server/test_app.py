@@ -2908,5 +2908,91 @@ class HandleOwnershipTests(unittest.TestCase):
         self.assertEqual(e["discord_id"], "finder-discord")
 
 
+class BrandingAndMotdTests(unittest.TestCase):
+    """Custom guild branding: the admin-set org name (shown pre-auth on the login
+    splash + app chooser) and the message-of-the-day broadcast banner."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "1", "username": "tester", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._member["is_admin"] = True
+        db.set_setting("org_name", "")
+        db.set_setting("motd", "")
+        db.set_setting("motd_updated", "0")
+
+    # --- org name -----------------------------------------------------------
+    def test_org_name_saves_and_surfaces_everywhere(self):
+        r = self.client.post("/api/settings", json={"org_name": "  Aurora Trading Co.  "})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["org_name"], "Aurora Trading Co.")   # trimmed
+        self.assertEqual(app.org_name(), "Aurora Trading Co.")
+        self.assertEqual(self.client.get("/api/settings").json()["org_name"], "Aurora Trading Co.")
+        self.assertEqual(self.client.get("/api/me").json()["org_name"], "Aurora Trading Co.")
+
+    def test_branding_endpoint_is_public_and_minimal(self):
+        db.set_setting("org_name", "Aurora Trading Co.")
+        # Drop all auth: no session cookie, token_user returns nobody. A gated
+        # route would 401 here; /api/branding is exempt so the login splash can
+        # read the name pre-auth.
+        app.app.dependency_overrides.pop(app.require_session, None)
+        app.token_user = lambda request: None
+        try:
+            self.assertEqual(self.client.get("/api/me").status_code, 401)   # gate is live
+            r = self.client.get("/api/branding")
+        finally:
+            app.app.dependency_overrides[app.require_session] = lambda: self._member
+            app.token_user = lambda request: self._member
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["org_name"], "Aurora Trading Co.")
+        self.assertIn("org_logo", body)
+        self.assertNotIn("motd", body)   # member-only, never pre-auth
+
+    def test_org_name_admin_only(self):
+        self._member["is_admin"] = False
+        r = self.client.post("/api/settings", json={"org_name": "Nope"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(app.org_name(), "")
+
+    # --- MOTD ---------------------------------------------------------------
+    def test_motd_save_stamps_update_time(self):
+        r = self.client.post("/api/settings", json={"motd": "  Op tonight 20:00  "})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["motd"], "Op tonight 20:00")
+        me = self.client.get("/api/me").json()
+        self.assertEqual(me["motd"], "Op tonight 20:00")
+        self.assertGreater(me["motd_updated"], 0)
+
+    def test_resaving_same_text_keeps_update_time(self):
+        self.client.post("/api/settings", json={"motd": "Steady message"})
+        first = self.client.get("/api/me").json()["motd_updated"]
+        self.client.post("/api/settings", json={"motd": "Steady message"})   # no-op
+        again = self.client.get("/api/me").json()["motd_updated"]
+        self.assertEqual(first, again)   # dismissals must not resurface
+
+    def test_clearing_motd_zeroes_update_time(self):
+        self.client.post("/api/settings", json={"motd": "temporary"})
+        self.assertGreater(self.client.get("/api/me").json()["motd_updated"], 0)
+        self.client.post("/api/settings", json={"motd": ""})
+        me = self.client.get("/api/me").json()
+        self.assertEqual(me["motd"], "")
+        self.assertEqual(me["motd_updated"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

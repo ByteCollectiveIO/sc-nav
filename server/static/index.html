@@ -718,6 +718,25 @@
   .launcher-badges { display: flex; justify-content: center; align-items: center;
     gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
   .launcher-badges .online-badge { margin: 0; }
+  /* the guild's own name, an eyebrow above "Your org toolkit" on the app chooser */
+  .launcher-org-name { text-align: center; color: var(--text); font-size: 22px;
+    font-weight: 700; letter-spacing: 1px; margin: 4px 0 0; }
+  .launcher-org-name[hidden] { display: none; }
+  /* admin message-of-the-day: a dismissible banner at the top of the app chooser */
+  .motd-banner { display: flex; align-items: flex-start; gap: 12px;
+    max-width: 760px; margin: 0 auto 18px; padding: 12px 14px;
+    background: var(--accent-wash); border: 1px solid var(--accent);
+    border-radius: 10px; }
+  .motd-banner[hidden] { display: none; }
+  .motd-icon { font-size: 18px; line-height: 1.4; flex: none; }
+  .motd-body { flex: 1; min-width: 0; }
+  .motd-label { color: var(--accent); font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; margin-bottom: 2px; }
+  .motd-text { color: var(--text); font-size: 14px; line-height: 1.5;
+    white-space: pre-wrap; overflow-wrap: anywhere; }
+  .motd-dismiss { flex: none; background: none; border: none; color: var(--dim);
+    font-size: 15px; cursor: pointer; padding: 0 2px; line-height: 1.2; }
+  .motd-dismiss:hover { color: var(--text); }
   /* each themed group is its own labeled section + 3-across grid */
   .app-group { margin-top: 26px; }
   .app-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px;
@@ -786,6 +805,10 @@
   #login-org-logo { max-height: 110px; max-width: 120px; width: auto; height: auto; display: block; }
   #login-org-logo[hidden] { display: none; }
   .login-card h1 { color: var(--accent); letter-spacing: 3px; margin: 0 0 10px; }
+  /* the guild's own name, above the product wordmark on the login splash */
+  .login-org-name { color: var(--text); font-size: 20px; font-weight: 700;
+    letter-spacing: 1px; margin: 0 0 2px; }
+  .login-org-name[hidden] { display: none; }
   /* LLC + Star Citizen community attribution badges, under the login card */
   .login-attribution { display: flex; align-items: center; justify-content: center;
     gap: 20px; opacity: .9; }
@@ -1713,7 +1736,12 @@
   .mk-craft-foot { font-size: 11px; line-height: 1.5; color: var(--dim); margin: 8px 0 0; max-width: 68ch; }
   .mk-bp-sect { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim);
     margin: 10px 0 4px; }
-  .mk-asp-row { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr minmax(130px, auto); gap: 10px;
+  /* The quality readout column is a FIXED width, not content-sized: its text
+     changes length as the slider crosses a band boundary (e.g. "Good / High" →
+     "Very High" at Q750→775), and an `auto`/content-sized column would reflow
+     the slider track mid-drag — shifting the thumb under the cursor into a
+     jitter/blink feedback loop. A fixed width keeps the track rock-steady. */
+  .mk-asp-row { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr 160px; gap: 10px;
     align-items: center; font-size: 13px; margin: 4px 0; }
   .mk-asp-row input[type=range] { width: 100%; accent-color: var(--craft); }
   .mk-asp-q { font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
@@ -1920,6 +1948,7 @@
       <span id="login-org-sep" class="login-logo-sep" hidden></span>
       <img id="login-org-logo" alt="org logo" hidden>
     </div>
+    <div id="login-org-name" class="login-org-name" hidden></div>
     <h1>Org Navigator</h1>
     <p class="muted">Your org's command deck — nine tools covering live navigation, cargo
       hauling, trade routes, org events, group finding, pirate warnings, shared resources,
@@ -1983,6 +2012,15 @@
 
 <main>
   <div id="launcher-view" class="launcher" hidden>
+    <div id="motd-banner" class="motd-banner" hidden role="status">
+      <span class="motd-icon" aria-hidden="true">📢</span>
+      <div class="motd-body">
+        <div class="motd-label">Message of the day</div>
+        <div id="motd-text" class="motd-text"></div>
+      </div>
+      <button id="motd-dismiss" type="button" class="motd-dismiss" aria-label="Dismiss message">✕</button>
+    </div>
+    <div id="launcher-org-name" class="launcher-org-name" hidden></div>
     <h2 class="launcher-head">Your org toolkit</h2>
     <p class="launcher-sub">Nine tools, one org — grouped by what you're up to. New here? Start
       with the Resource Navigator; the rest build on it.</p>
@@ -2540,6 +2578,16 @@
 
     <h2>BRANDING</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      Your guild's name shows on the login screen and the app chooser, next to the
+      built-in Org Navigator branding. Leave it blank to show the generic copy.
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
+      <input id="org-name-input" type="text" maxlength="80" placeholder="e.g. Aurora Trading Co."
+             style="min-width:220px; flex:1;">
+      <button id="org-name-save">Save name</button>
+      <span class="muted" id="org-name-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    </div>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
       the header — it's added alongside, never replacing it. PNG, JPG, or WebP, up
       to 2&nbsp;MB.
@@ -2551,6 +2599,23 @@
       <button id="org-logo-upload">Upload</button>
       <button id="org-logo-remove" hidden>Remove logo</button>
       <span class="muted" id="org-logo-status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <div class="panel admin-grp" id="motd-panel">
+    <h2>MESSAGE OF THE DAY</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      Broadcast a short notice to every member. It shows as a banner at the top of
+      the app chooser until they dismiss it. Editing the text re-shows it to
+      everyone. Clear the box and save to take it down. Plain text only.
+    </div>
+    <textarea id="motd-input" maxlength="2000" rows="3"
+              placeholder="e.g. Org op tonight at 20:00 UTC. Muster at Everus Harbor."
+              style="width:100%; resize:vertical;"></textarea>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+      <button id="motd-save">Save message</button>
+      <button id="motd-clear" class="danger-btn">Clear</button>
+      <span class="muted" id="motd-status" role="status" aria-live="polite" style="font-size:12px;"></span>
     </div>
   </div>
 
@@ -5882,6 +5947,7 @@ function renderAccount(me) {
   const el = $("account");
   if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; applyOrgLogo(false); applyView(); return; }
   applyOrgLogo(!!me.org_logo);
+  applyBranding(me);
   const admin = me.is_admin ? ` <span class="muted">(admin)</span>` : "";
   el.innerHTML = `<span class="muted">signed in as</span> <b>${esc(me.display_name || me.username || "member")}</b>${admin} · <a id="logout">log out</a>`;
   $("logout").onclick = async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); };
@@ -12313,6 +12379,10 @@ async function loadSettings() {
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
     applyOrgLogoAdmin(!!s.org_logo);
+    if (document.activeElement !== $("org-name-input"))
+      $("org-name-input").value = s.org_name || "";
+    if (document.activeElement !== $("motd-input"))
+      $("motd-input").value = s.motd || "";
     applyDiscordSettings(s);
     const st = $("admin-status");
     if (st.dataset.loadFailed) { st.dataset.loadFailed = ""; st.textContent = ""; }
@@ -12427,6 +12497,45 @@ $("discord-lead-save").onclick = async () => {
   } catch { st.textContent = "failed to save — try again"; }
 };
 
+// ---------- org name + message of the day (custom guild branding) ----------
+// The guild's display name shows on the app chooser (and the login splash, still
+// visible under the gate); the MOTD is a dismissible banner atop the app chooser.
+// Both ride the /api/me payload, so this runs once per session from renderAccount.
+function applyBranding(me) {
+  setLoginOrgName(me && me.org_name);
+  const ln = $("launcher-org-name");
+  if (ln) {
+    if (me && me.org_name) { ln.textContent = me.org_name; ln.hidden = false; }
+    else { ln.textContent = ""; ln.hidden = true; }
+  }
+  renderMotd(me);
+}
+
+// A member's dismissal is remembered per MOTD version (its `updated` epoch), so a
+// fresh or edited message resurfaces for everyone while a re-save of the same
+// text does not. Stored client-side only — dismissal is a personal preference.
+const MOTD_DISMISSED_KEY = "motdDismissed";   // stores the last-dismissed `updated` epoch
+function renderMotd(me) {
+  const box = $("motd-banner"), txt = $("motd-text");
+  if (!box || !txt) return;
+  const text = (me && me.motd) || "";
+  const updated = (me && me.motd_updated) || 0;
+  let dismissed = 0;
+  try { dismissed = Number(localStorage.getItem(MOTD_DISMISSED_KEY)) || 0; } catch {}
+  if (text && updated > dismissed) {
+    txt.textContent = text;
+    box.hidden = false;
+    box.dataset.updated = String(updated);
+  } else {
+    box.hidden = true;
+  }
+}
+$("motd-dismiss").onclick = () => {
+  const box = $("motd-banner");
+  try { localStorage.setItem(MOTD_DISMISSED_KEY, box.dataset.updated || "0"); } catch {}
+  box.hidden = true;
+};
+
 // ---------- org logo (custom guild branding) ----------
 // The header image (every signed-in member) and the admin panel's preview share
 // the one /api/org-logo route; bust the cache on change so a fresh upload shows.
@@ -12469,6 +12578,48 @@ $("org-logo-remove").onclick = async () => {
     applyOrgLogoAdmin(false);
     applyOrgLogo(false);
   } catch { st.textContent = "failed — try again"; }
+};
+
+// ---------- org name + MOTD (admin) ----------
+$("org-name-save").onclick = async () => {
+  const st = $("org-name-status");
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ org_name: $("org-name-input").value }) });
+    if (!r.ok) throw new Error();
+    const s = await r.json();
+    $("org-name-input").value = s.org_name || "";
+    st.textContent = "saved";
+    // Reflect the change on the live app chooser + splash without a reload.
+    if (currentMe) { currentMe.org_name = s.org_name || ""; applyBranding(currentMe); }
+  } catch { st.textContent = "failed to save — try again"; }
+};
+
+async function saveMotd(text) {
+  const st = $("motd-status");
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motd: text }) });
+    if (!r.ok) throw new Error();
+    const s = await r.json();
+    $("motd-input").value = s.motd || "";
+    st.textContent = "saved";
+    // The admin's own view: reload /api/me so the banner reflects the new text +
+    // update time (a new version re-shows even if they'd dismissed the old one).
+    try { const m = await fetch("/api/me"); if (m.ok) { currentMe = await m.json(); renderMotd(currentMe); } } catch {}
+  } catch { st.textContent = "failed to save — try again"; }
+}
+$("motd-save").onclick = () => saveMotd($("motd-input").value);
+$("motd-clear").onclick = async () => {
+  if (!(await confirmDialog(
+      "Members will no longer see the message.",
+      { title: "Clear the message of the day?", confirmLabel: "Clear", danger: true }))) return;
+  $("motd-input").value = "";
+  saveMotd("");
 };
 
 // ---------- admins (admin) ----------
@@ -13042,14 +13193,25 @@ async function boot() {
   } else { loadLoginOrgLogo(); }   // anonymous: applyView() (via renderAccount) owns the sign-in gate
 }
 
-// The login splash shows the org logo (if any) beside the built-in one. This is
-// pre-auth — settings/me are 401 here — so we can't read the org_logo flag; just
-// try the public image and reveal it on load, hide (and 404) silently otherwise.
+// The login splash shows the org logo + name (if any) beside the built-in ones.
+// This is pre-auth — /api/me is 401 here — so read them from the public
+// /api/branding endpoint (name) and the public image route (logo), revealing
+// each only when present and staying silent otherwise.
 function loadLoginOrgLogo() {
   const img = $("login-org-logo"), sep = $("login-org-sep"), row = img.parentElement;
   img.onload = () => { img.hidden = false; sep.hidden = false; row.classList.add("has-org"); };
   img.onerror = () => { img.hidden = true; sep.hidden = true; row.classList.remove("has-org"); };
   img.src = "/api/org-logo?t=" + Date.now();
+  fetch("/api/branding")
+    .then(r => r.ok ? r.json() : null)
+    .then(b => setLoginOrgName(b && b.org_name))
+    .catch(() => {});
+}
+function setLoginOrgName(name) {
+  const el = $("login-org-name");
+  if (!el) return;
+  if (name) { el.textContent = name; el.hidden = false; }
+  else { el.textContent = ""; el.hidden = true; }
 }
 boot();
 </script>

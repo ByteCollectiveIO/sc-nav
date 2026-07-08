@@ -69,7 +69,17 @@ library at `#/blueprints`, #29)
 - Marketplace: `/api/market*` (offers, confirm). **Modes: sale | auction | barter | commission (#25 craft requests)** — commission = "build me this, to this spec, for this price": poster stays `seller_id` ("Requester"), accepted crafter = `buyer_id`; quote = offer w/ required amount, never instant-deal; accepted crafter withdraw → listing back to `open`; lazy needed-by expiry (no winner); `listings.blueprint_key` + `listings.materials` (requester|crafter|split) via `_ensure_column`; spec under `attributes.spec` (CraftedIn shape); denorm `sort_price` = lowest quote else budget; `nav_core.commission_board_state`; opt-in `announce` → "🛠️ WANTED" ping (`_notify_commission_posted`, 600s cooldown) + @-mentions library-matched crafters (`db.blueprint_crafters`, cap 15, poster excluded); commission views carry `mats_est` (`_commission_mats_est`, board card + detail price line). **Crafted-sale identity (#25.1 §11.3/§11.4):** ANY listing whose item is `blueprint:<key>` stamps `blueprint_key` (sale/auction too) → `kind=blueprint` board filter finds crafted goods; detail view carries `expected_stats` (`_listing_expected_stats`: commission spec.inputs → basis `inputs`, else advertised overall quality → basis `uniform`) + `mats_est`; frontend `mkExpectedStats` panel + manifest panel on any blueprint-linked listing + ⚒ crafted rows in the item picker (`attachCatalogPicker` opts.blueprints) + mode-aware copy in the 4 `_notify_market_*` helpers
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`
-- Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. POI-catalog
+- Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. **Guild
+  branding (org name + MOTD):** `/api/settings` carries `org_name` (helper
+  `org_name()`) + `motd` (helper `motd_state()` → `{text, updated}`); saving new
+  MOTD text stamps `motd_updated` epoch (no-op re-save keeps it so dismissals
+  don't resurface). Public **`GET /api/branding`** (`{org_name, org_logo}`,
+  auth-gate-exempt) feeds the pre-auth login splash; `GET /api/me` carries
+  `org_name`/`motd`/`motd_updated`. Frontend: login-splash + launcher
+  `login-org-name`/`launcher-org-name`, dismissible `#motd-banner` on the
+  launcher (per-member dismissal keyed to `motd_updated` in localStorage
+  `motdDismissed`), `applyBranding`/`renderMotd`/`setLoginOrgName`, ORG SETTINGS
+  BRANDING name input + MESSAGE OF THE DAY panel. POI-catalog
   toggles in `/api/settings`: `starmap_pois_enabled` + `wiki_pois_enabled` (#28,
   both default OFF, flip → `_rebuild_nav`). **Wiki locations catalog (#28,
   docs/wiki-poi-enrichment.md):** committed `poi/locations.json` from
@@ -84,7 +94,7 @@ library at `#/blueprints`, #29)
   `buy_amen`/`sell_amen` → frontend `amenChips` (plan + run views), ORG
   SETTINGS `wiki-toggle`
 - Auth/account: `/auth/login|callback|logout`, `/api/me*`, `/api/tokens`. **Member profile (#30):** `members.playstyle_tags` (JSON via `_ensure_column`, `db.set_member_playstyles`); `PUT /api/me` `playstyle_tags` (allowlist `PLAYSTYLE_TAGS`, dedup, cap `_PROFILE_MAX_TAGS`=6, parses via `member_playstyles`, mirrors onto the live online record + roster rebroadcast); carried on `GET /api/me`, `/api/intel/directory` rows, and online-roster records (`tags`); UI = Settings PROFILE chips + roster/directory `.on-ptag` chips
-- Misc: `/api/health`, `/download/watcher`, `/` + `/index.html`
+- Misc: `/api/health`, `/api/branding` (public org name + logo flag), `/download/watcher`, `/` + `/index.html`
 
 ## db.py tables
 meta · custom_pois · observations · handles · members · watcher_tokens ·

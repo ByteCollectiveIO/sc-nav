@@ -157,6 +157,25 @@ def obs_fresh_window_h() -> int:
         return 48
 
 
+def org_name() -> str:
+    """The guild's display name, shown beside the built-in branding on the login
+    splash and the app chooser. DB-backed + admin-editable; empty = show the
+    generic product copy only."""
+    return (db.get_setting("org_name", "") or "").strip()
+
+
+def motd_state() -> dict:
+    """The message-of-the-day an admin can broadcast to members: the text plus the
+    epoch it was last set. `updated` gives the client a stable key to remember a
+    per-member dismissal and to re-show the banner whenever the text changes."""
+    text = (db.get_setting("motd", "") or "").strip()
+    try:
+        updated = int(db.get_setting("motd_updated", "0") or "0")
+    except (TypeError, ValueError):
+        updated = 0
+    return {"text": text, "updated": updated if text else 0}
+
+
 def lfg_ageoff_min() -> int:
     """Minutes a Group Finder post lives before it ages off the board (removed).
     DB-backed + admin-editable so an org can tune how "right now" the board feels
@@ -926,9 +945,12 @@ app = FastAPI(title="SC Nav")
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     path = request.url.path
-    # The org logo is shown on the pre-auth login splash, so reading it is public
-    # (GET only — POST/DELETE still fall through to the admin-gated route).
+    # The org logo + name are shown on the pre-auth login splash, so reading them
+    # is public (GET only — POST/DELETE still fall through to the admin-gated
+    # route). /api/branding carries the public name; the logo is its own image
+    # route.
     if (not path.startswith("/api/") or path == "/api/health"
+            or (path == "/api/branding" and request.method == "GET")
             or (path == "/api/org-logo" and request.method == "GET")):
         return await call_next(request)
     if request.session.get("user") or token_user(request):
@@ -6375,6 +6397,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
+        "org_name": org_name(),
+        "motd": motd_state()["text"],
         # Per-category Discord webhooks: never echo a URL (it's a credential) —
         # surface only whether each category has one set + a masked tail.
         "discord_webhooks": notify.webhook_status(),
@@ -6410,6 +6434,11 @@ class SettingsIn(BaseModel):
     # (anti-SSRF). A category is "on" iff it has a valid webhook.
     discord_webhooks: dict[str, str] | None = None
     discord_reminder_lead_min: int | None = Field(default=None, ge=1, le=1440)
+    # Custom guild branding: the org's display name (shown on the login splash +
+    # app chooser) and a broadcast message-of-the-day. Both "" clears. Plain text
+    # only — rendered via textContent on the client, never as HTML.
+    org_name: str | None = Field(default=None, max_length=80)
+    motd: str | None = Field(default=None, max_length=2000)
 
 
 @app.post("/api/settings")
@@ -6480,6 +6509,15 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             notify.set_webhook(cat, url)   # "" clears it
     if body.discord_reminder_lead_min is not None:
         db.set_setting(notify.REMINDER_LEAD_KEY, str(body.discord_reminder_lead_min))
+    if body.org_name is not None:
+        db.set_setting("org_name", body.org_name.strip())
+    if body.motd is not None:
+        new_motd = body.motd.strip()
+        # Only stamp a fresh update time when the text actually changes, so a
+        # no-op save doesn't resurface a banner every member already dismissed.
+        if new_motd != motd_state()["text"]:
+            db.set_setting("motd", new_motd)
+            db.set_setting("motd_updated", str(int(time.time())) if new_motd else "0")
     return {"ok": True, "starmap_pois_enabled": starmap_pois_enabled(),
             "wiki_pois_enabled": wiki_pois_enabled(),
             "member_role_id": member_role_id(),
@@ -6491,7 +6529,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),
-            "discord_reminder_lead_min": notify.reminder_lead_min()}
+            "discord_reminder_lead_min": notify.reminder_lead_min(),
+            "org_name": org_name(), "motd": motd_state()["text"]}
 
 
 _test_send_at = 0.0   # last admin test-send, for a light cooldown
@@ -6525,6 +6564,14 @@ async def test_discord_webhook(body: DiscordTestIn, admin: dict = Depends(requir
         raise HTTPException(status_code=502,
                             detail="Discord rejected the message — check the webhook URL")
     return {"ok": True}
+
+
+@app.get("/api/branding")
+async def get_branding():
+    """Public org branding for the pre-auth login splash: the guild name and
+    whether a custom logo exists. Deliberately minimal — no member data — since
+    this is reachable without a session (see the auth_gate exemption)."""
+    return {"org_name": org_name(), "org_logo": bool(db.get_setting("org_logo_ext"))}
 
 
 @app.get("/api/org-logo")
@@ -7003,13 +7050,15 @@ def _member_identity(discord_id: str) -> dict:
 
 
 @app.get("/api/me")
-async def api_me(request: Request):
+async def api_me(user: dict = Depends(require_session)):
     """The signed-in org member (or 401). Drives the UI's account state. Carries
     the live presence-share flag so the UI's toggle reflects the current state,
     plus the member's handles + primary-handle + directory preference."""
-    user = require_session(request)
+    motd = motd_state()
     return {**user, "share_presence": hub.get(user).share_presence,
             "org_logo": bool(db.get_setting("org_logo_ext")),
+            "org_name": org_name(),
+            "motd": motd["text"], "motd_updated": motd["updated"],
             "ships": db.list_user_ships(user["id"]),
             "playstyle_tags": member_playstyles(members_dir.get(user["id"])),
             **_member_identity(user["id"])}
