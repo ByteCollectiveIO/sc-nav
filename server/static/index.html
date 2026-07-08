@@ -5553,13 +5553,19 @@ async function postWarning() {
     const r = await fetch("/api/warnings", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
-    if (!r.ok) throw new Error(r.status);
+    if (!r.ok) {
+      // Surface the server's reason (e.g. the per-member flood cap 429) rather
+      // than a generic retry — it's actionable ("clear one before posting").
+      const d = await r.json().catch(() => ({}));
+      flash(d.detail || "Couldn't post — try again.", "bad");
+      return;
+    }
     aInput.value = ""; bInput.value = ""; aInput.dataset.poiId = ""; bInput.dataset.poiId = "";
     aInput.parentElement.classList.remove("picked"); bInput.parentElement.classList.remove("picked");
     $("warn-note").value = ""; updateWarnNoteCount();
     if (announceEl) announceEl.checked = false;
     flash(announced ? "✓ Posted & announced" : "✓ Posted", "ok");
-  } catch { flash("Couldn't post — try again.", "bad"); }
+  } catch { flash("Couldn't post — network error.", "bad"); }
 }
 // Give a tapped action an immediate busy state; the WS `warnings` frame rebuilds the
 // card on success, so on failure we restore the button and show the reason on the card.

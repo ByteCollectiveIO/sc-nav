@@ -27,7 +27,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -1291,7 +1291,16 @@ class RoutePlanIn(BaseModel):
     # Per-contract payout keyed by the package `contract` label ("" = the
     # ungrouped bucket). Display-only/advisory — never affects routing; the run's
     # total payout is the sum, the denominator for aUEC/hour.
-    rewards: dict[str, float] = Field(default_factory=dict)
+    rewards: dict[str, float] = Field(default_factory=dict, max_length=_MAX_PACKAGES)
+
+    @field_validator("rewards")
+    @classmethod
+    def _cap_reward_keys(cls, v: dict) -> dict:
+        # Keys are contract labels; without a length cap a client could ship a few
+        # multi-MB key strings and balloon memory before the count check runs.
+        if any(len(k) > _CONTRACT_MAX for k in v):
+            raise ValueError(f"reward label too long (max {_CONTRACT_MAX} chars)")
+        return v
     # Pirate danger board (#24 v2): snare-detour routing. `avoid` (the default) —
     # route around dangers, stops never change; `warn` — flag legs that touch a
     # danger; `ignore` — plan as-is. `avoid_poi_ids` is the caller's personal
@@ -1326,6 +1335,26 @@ ARRIVAL_RADIUS_FACTOR = 1.5
 ARRIVAL_RADIUS_FLOOR_M = 10_000.0
 
 # Live presence tuning.
+# A single stuck/backpressured WS client would otherwise block a serial broadcast
+# indefinitely — and since some broadcasts run under hub.lock, that would freeze
+# every lock-taking endpoint (a single-client global stall). Bound every send.
+WS_SEND_TIMEOUT_S = 5.0
+
+# Cap tabs per member so a reconnect storm can't grow ws_clients (and the O(tabs)
+# broadcast fan-out) without bound.
+WS_MAX_CLIENTS_PER_MEMBER = 8
+
+
+async def _ws_send(ws, text: str) -> bool:
+    """Send `text` on `ws` with a hard timeout. Returns False if the socket errored
+    or timed out (a slow reader hitting TCP backpressure) and should be dropped."""
+    try:
+        await asyncio.wait_for(ws.send_text(text), timeout=WS_SEND_TIMEOUT_S)
+        return True
+    except Exception:
+        return False
+
+
 PRESENCE_TICK_S = 1.0     # broadcaster cadence (coalesced upserts, ~1 Hz)
 # Positions arrive only when a player manually runs /showlocation (the watcher has
 # no position heartbeat), so a fix can be many minutes old yet still the best known
@@ -1396,6 +1425,7 @@ WARNING_SEVERITIES = ("sighted", "active", "deadly")
 _WARNING_NOTE_MAX = 280
 _WARNING_LOCATION_MAX = 120
 WARNING_ANNOUNCE_COOLDOWN_S = 600.0
+WARNINGS_MAX_PER_MEMBER = 12   # flood guard: distinct active dangers one member may hold
 _warning_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
 # Craft-request announce shouts (#25) share the same per-member cooldown shape.
@@ -1590,10 +1620,12 @@ class Session:
         message = json.dumps(
             {"type": "state", "data": self.nav_state, "capture": self.capture_status()}
         )
-        for ws in list(self.ws_clients):   # copy: a tab may connect/drop mid-send
-            try:
-                await ws.send_text(message)
-            except Exception:
+        targets = list(self.ws_clients)   # copy: a tab may connect/drop mid-send
+        if not targets:
+            return
+        oks = await asyncio.gather(*(_ws_send(ws, message) for ws in targets))
+        for ws, ok in zip(targets, oks):
+            if not ok:
                 self.ws_clients.discard(ws)
 
 
@@ -1786,12 +1818,17 @@ class SessionHub:
 
     async def send_to_all_clients(self, message: dict) -> None:
         text = json.dumps(message)
-        for s in list(self.sessions.values()):   # copy: get() may add a session mid-send
-            for ws in list(s.ws_clients):   # copy: a tab may drop mid-send
-                try:
-                    await ws.send_text(text)
-                except Exception:
-                    s.ws_clients.discard(ws)
+        # Snapshot (session, ws) pairs, then fan out concurrently with a per-send
+        # timeout: the whole broadcast is bounded by WS_SEND_TIMEOUT_S wall-clock
+        # instead of the sum over clients, and a stuck client can't stall it.
+        targets = [(s, ws) for s in list(self.sessions.values())
+                   for ws in list(s.ws_clients)]
+        if not targets:
+            return
+        oks = await asyncio.gather(*(_ws_send(ws, text) for _, ws in targets))
+        for (s, ws), ok in zip(targets, oks):
+            if not ok:
+                s.ws_clients.discard(ws)
 
     def online_count(self) -> int:
         """Members shown as online right now — the size of the *visible* online
@@ -1928,6 +1965,15 @@ class SessionHub:
                       if w["poster"] == poster and (
                           w["kind"], w["anchor_a_poi"], w["anchor_b_poi"],
                           (w["location"] or "").strip().lower()) == key]
+        # Flood guard: one member can only hold so many *distinct* active dangers.
+        # Supersede (re-post of an identical danger) is exempt — it's net-zero. This
+        # bounds the board, the DB, and the hazard-volume set the solvers process.
+        if not superseded:
+            mine = sum(1 for w in self.warnings.values() if w["poster"] == poster)
+            if mine >= WARNINGS_MAX_PER_MEMBER:
+                raise ValueError(
+                    f"You already have {WARNINGS_MAX_PER_MEMBER} active warnings — "
+                    "clear one before posting another.")
         for wid in superseded:
             del self.warnings[wid]
         db.warning_delete(superseded)
@@ -2076,6 +2122,12 @@ async def presence_broadcaster():
     while True:
         await asyncio.sleep(PRESENCE_TICK_S)
         try:
+            # Compute every frame under the lock (snapshots of hub state), but do the
+            # actual WS fan-out AFTER releasing it — a slow client must never stall
+            # the ~1 Hz loop while holding hub.lock (that would freeze every
+            # lock-taking endpoint). The frames are point-in-time; sending them a
+            # moment later is fine (all board frames are full-state and idempotent).
+            frames = []
             async with hub.lock:
                 now = time.time()
                 for uid, rec in list(hub.presence.items()):
@@ -2099,19 +2151,18 @@ async def presence_broadcaster():
                 lfg_changed = hub.prune_lfg(now)
                 warnings_changed = hub.prune_warnings(now)
                 if upserts:
-                    await hub.send_to_all_clients(
-                        {"type": "presence", "op": "upsert", "users": upserts})
+                    frames.append({"type": "presence", "op": "upsert", "users": upserts})
                 for uid in removes:
-                    await hub.send_to_all_clients(
-                        {"type": "presence", "op": "remove", "discord_id": uid})
+                    frames.append({"type": "presence", "op": "remove", "discord_id": uid})
                 if online_dropped:
-                    await hub.send_to_all_clients(
-                        {"type": "online", "count": hub.online_count()})
-                    await hub.broadcast_online_roster()
+                    frames.append({"type": "online", "count": hub.online_count()})
+                    frames.append({"type": "online_roster", "users": hub.online_roster()})
                 if lfg_changed:
-                    await hub.broadcast_lfg()
+                    frames.append({"type": "lfg", "entries": hub.lfg_board()})
                 if warnings_changed:
-                    await hub.broadcast_warnings()
+                    frames.append({"type": "warnings", "entries": hub.warnings_board()})
+            for frame in frames:
+                await hub.send_to_all_clients(frame)
         except Exception as exc:   # never let the loop die on a transient error
             print(f"[sc-nav] presence broadcaster error: {exc}")
 
@@ -3085,6 +3136,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         run_id = run["id"]
         active = run["active"]
         legs, states = run["legs"], run["leg_states"]
+        leg_states_snap = list(states)             # detect an active-leg change mid-solve
         done_legs = legs[:active]                  # everything before the cursor is sold
         held = None
         if active < len(legs) and states[active] == "bought":
@@ -3147,11 +3199,17 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         raise HTTPException(status_code=409, detail=f"re-plan infeasible: {reason}")
 
     # Phase 3 — re-acquire the lock and commit, but only if the run hasn't moved
-    # on underneath us (another tab advanced/abandoned it while we solved).
+    # on underneath us (another tab advanced/abandoned/bought on the active leg
+    # while we solved off-lock). We also compare leg_states, not just active: a
+    # concurrent `buy` sets leg_states[active]="bought" WITHOUT moving the cursor,
+    # and committing over it would discard that purchase + leave its cargo (which
+    # our snapshot solved as held=None) untracked. Reject → the client re-plans
+    # from the now-correct state.
     async with hub.lock:
         sess = hub.get(user)
         run = sess.trade_run
-        if not run or run["id"] != run_id or run["active"] != active:
+        if (not run or run["id"] != run_id or run["active"] != active
+                or run["leg_states"] != leg_states_snap):
             raise HTTPException(status_code=409,
                                 detail="the run moved on while re-planning — try again")
         p = run.get("params") or {}
@@ -5828,8 +5886,9 @@ async def confirm_handoff(listing_id: int, user: dict = Depends(require_session)
         raise HTTPException(status_code=403, detail="only the buyer or seller can confirm this deal")
     ts = datetime.now(timezone.utc).isoformat()
     side = "seller" if is_seller else "buyer"
-    other_confirmed = listing["buyer_confirmed"] if is_seller else listing["seller_confirmed"]
-    db.confirm_listing(listing_id, side, ts, completed_at=ts if other_confirmed else None)
+    # Completion is decided atomically inside db.confirm_listing (keyed off the
+    # other side's live flag), not from the read above — see its docstring.
+    db.confirm_listing(listing_id, side, ts, completed_at=ts)
     final = db.get_listing(listing_id)
     if final["status"] == "completed":
         _notify_bg(_notify_market_completed(final))
@@ -6716,8 +6775,11 @@ async def create_warning(body: WarningIn, user: dict = Depends(require_session))
             status_code=400,
             detail="A warning needs a location — pick a POI or describe where.")
     async with hub.lock:
-        entry = hub.post_warning(user["id"], kind, threat, severity,
-                                 anchor_a, anchor_b, location, note)
+        try:
+            entry = hub.post_warning(user["id"], kind, threat, severity,
+                                     anchor_a, anchor_b, location, note)
+        except ValueError as exc:
+            raise HTTPException(status_code=429, detail=str(exc))
         pub = hub._public_warning(entry)
     await hub.broadcast_warnings()
     # Opt-in Discord shout (rate-limited per member so nobody can blast the channel).
@@ -6763,6 +6825,11 @@ async def websocket_endpoint(ws: WebSocket):
         return
     await ws.accept()
     sess = hub.get(user)
+    # Cap tabs per member: a reconnect storm would otherwise grow ws_clients (and
+    # the O(tabs) broadcast fan-out) without bound. Real usage is a handful of tabs.
+    if len(sess.ws_clients) >= WS_MAX_CLIENTS_PER_MEMBER:
+        await ws.close(code=1013)   # try again later
+        return
     was_offline = not sess.ws_clients   # first tab for this member?
     sess.ws_clients.add(ws)
     async with hub.lock:

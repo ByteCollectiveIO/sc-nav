@@ -2054,26 +2054,37 @@ def settle_listing(listing_id: int, buyer_id: str | None, status: str,
 
 
 def confirm_listing(listing_id: int, side: str, updated_at: str,
-                    completed_at: str | None = None) -> bool:
-    """Record one side's handoff confirmation (`side` is 'seller' or 'buyer'); when
-    `completed_at` is given the listing is also flipped to completed (the caller
-    decides that once both flags are set)."""
+                    completed_at: str | None = None) -> tuple[bool, bool]:
+    """Record one side's handoff confirmation (`side` is 'seller' or 'buyer'). The
+    deal is flipped to completed **atomically here** — inside this transaction,
+    keyed off the OTHER side's current flag — rather than the caller deciding from
+    an earlier read. That closes a race where buyer and seller confirming at once
+    (or a double-submit) both saw the other flag still 0 and left the deal stuck
+    `pending` with both flags set. `completed_at` is the timestamp to stamp if this
+    confirm completes it (falls back to `updated_at`). Returns (updated, completed)."""
     col = "seller_confirmed" if side == "seller" else "buyer_confirmed"
-    sets = f"{col}=1, updated_at=?"
-    params: list = [updated_at]
+    other_col = "buyer_confirmed" if side == "seller" else "seller_confirmed"
     with _lock, _conn:
-        if completed_at is not None:
+        cur_row = _conn.execute(
+            f"SELECT {other_col} AS other_flag, status FROM listings WHERE id=?",
+            (listing_id,)).fetchone()
+        if cur_row is None:
+            return (False, False)
+        completed = bool(cur_row["other_flag"]) and cur_row["status"] == "pending"
+        sets = f"{col}=1, updated_at=?"
+        params: list = [updated_at]
+        if completed:
             # Freeze the agreed aUEC: every struck sale/auction leaves one accepted
             # offer holding the price; barter's accepted offer carries no amount.
             row = _conn.execute(
                 "SELECT amount_auec FROM listing_offers WHERE listing_id=? "
                 "AND status='accepted' ORDER BY id DESC LIMIT 1", (listing_id,)).fetchone()
             sets += ", status='completed', completed_at=?, final_auec=?"
-            params += [completed_at, row["amount_auec"] if row else None]
+            params += [completed_at or updated_at, row["amount_auec"] if row else None]
         params.append(listing_id)
         cur = _conn.execute(f"UPDATE listings SET {sets} WHERE id=?", params)
         _recompute_denorm(listing_id)
-    return cur.rowcount > 0
+    return (cur.rowcount > 0, completed)
 
 
 def set_listing_status(listing_id: int, status: str, updated_at: str) -> bool:
