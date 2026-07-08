@@ -1339,6 +1339,7 @@ ARRIVAL_RADIUS_FLOOR_M = 10_000.0
 # indefinitely — and since some broadcasts run under hub.lock, that would freeze
 # every lock-taking endpoint (a single-client global stall). Bound every send.
 WS_SEND_TIMEOUT_S = 5.0
+WS_CLOSE_TIMEOUT_S = 2.0
 
 # Cap tabs per member so a reconnect storm can't grow ws_clients (and the O(tabs)
 # broadcast fan-out) without bound.
@@ -1347,11 +1348,21 @@ WS_MAX_CLIENTS_PER_MEMBER = 8
 
 async def _ws_send(ws, text: str) -> bool:
     """Send `text` on `ws` with a hard timeout. Returns False if the socket errored
-    or timed out (a slow reader hitting TCP backpressure) and should be dropped."""
+    or timed out (a slow reader hitting TCP backpressure) and should be dropped.
+
+    On failure we also close the socket (best-effort, bounded) so the client's
+    onclose fires and it reconnects — which re-registers it in ws_clients. Without
+    the close, a slow-but-alive client that recovers after one timed-out send would
+    be silently dropped from broadcasts and go deaf until a manual reload (its ~20s
+    ping keeps the socket open but never re-adds it here)."""
     try:
         await asyncio.wait_for(ws.send_text(text), timeout=WS_SEND_TIMEOUT_S)
         return True
     except Exception:
+        try:
+            await asyncio.wait_for(ws.close(), timeout=WS_CLOSE_TIMEOUT_S)
+        except Exception:
+            pass
         return False
 
 
