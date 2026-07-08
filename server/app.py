@@ -28,6 +28,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, 
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
@@ -746,9 +747,13 @@ class HandleRegistry:
                 print(f"[sc-nav] handle registry save failed: {exc}")
         else:
             entry["last_seen"] = now  # in-memory only; not worth a write per position
-            # Bind ownership the first time we learn who is posting this handle
-            # (the watcher's token resolves to a Discord id). Persist that once.
-            if discord_id and entry.get("discord_id") != discord_id:
+            # Trust-on-first-use ownership: bind the handle the first time we learn
+            # who is posting it (the watcher's token resolves to a Discord id), but
+            # NEVER transfer a handle already bound to a *different* member. Without
+            # this guard any authenticated caller could POST /api/position with
+            # someone else's handle and steal ownership of their contributions and
+            # verified marketplace identity (a handle is client-supplied free text).
+            if discord_id and entry.get("discord_id") is None:
                 entry["discord_id"] = discord_id
                 try:
                     db.upsert_handle(entry)
@@ -934,13 +939,28 @@ async def auth_gate(request: Request, call_next):
 # Signed session cookie (Discord login state). The secret must be stable across
 # restarts so sessions survive a redeploy; a random fallback keeps dev working.
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
+_SESSION_SECRET = os.environ.get("SESSION_SECRET")
+if not _SESSION_SECRET:
+    # A per-process random key invalidates every session on each restart and
+    # can't verify cookies signed by a sibling worker — a misconfiguration, not
+    # a safe default. Warn loudly (prod runs with COOKIE_SECURE) so it's caught.
+    _SESSION_SECRET = secrets.token_hex(32)
+    print("[sc-nav] WARNING: SESSION_SECRET unset — using a per-process random "
+          "key; sessions will not survive a restart or span multiple workers. "
+          "Set SESSION_SECRET in the deployment environment.")
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("SESSION_SECRET") or secrets.token_hex(32),
+    secret_key=_SESSION_SECRET,
     https_only=COOKIE_SECURE,
     same_site="lax",
     max_age=8 * 3600,
 )
+
+# Compress text responses (the ~700 KB SPA shell, POI catalog, boards). The shell
+# is served no-store for the CSP nonce, so gzip is the only transfer-size lever;
+# behind the Cloudflare tunnel this also shrinks origin→edge traffic. Only bodies
+# ≥1 KB are touched, so tiny JSON/error responses are left alone.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Defense-in-depth response headers on every response (static + API). The SPA
 # ships one inline <script>, authorized by a per-request nonce so script-src can
@@ -2151,7 +2171,11 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
 
         if body.handle:
             entry = handles.register(body.handle, sess.user["id"])
-            sess.owner = {"player_id": entry["player_id"], "handle": entry["handle"]}
+            # Only claim the handle as this session's owner when it is actually
+            # bound to this member — otherwise a caller reporting someone else's
+            # handle would get their captures attributed to the victim's PlayerID.
+            if entry.get("discord_id") == sess.user["id"]:
+                sess.owner = {"player_id": entry["player_id"], "handle": entry["handle"]}
 
         captured = False
         if sess.capture_pending is not None:
@@ -2775,7 +2799,11 @@ async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_sessio
     async with hub.lock:
         sess = hub.sessions.get(user["id"])
         warnings = hub.active_trade_warnings()
-    return _solve_trade_plan(body, sess, warnings)
+    # The solver is pure Python and can run 100s of ms at production POI scale;
+    # off-load it so a plan request never freezes the event loop (WS pushes, the
+    # presence broadcaster, watcher /api/position). It reads a snapshot of stable
+    # globals + a couple of session attributes — no lock needed.
+    return await asyncio.to_thread(_solve_trade_plan, body, sess, warnings)
 
 
 def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
@@ -3043,6 +3071,9 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
     cargo — if it's been bought but not yet sold — is carried forward and offloaded
     first, then fresh trades chain onto the freed hold. Optional knobs override the
     run's stored plan params."""
+    # Phase 1 — snapshot everything the solver needs under the lock, then release
+    # it so the pure-Python solve (100s of ms at production scale) doesn't freeze
+    # the event loop OR serialize every other request behind hub.lock.
     async with hub.lock:
         sess = hub.get(user)
         run = sess.trade_run
@@ -3051,6 +3082,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         if sess.pos is None:
             raise HTTPException(status_code=400,
                                 detail="no live position yet — run /showlocation")
+        run_id = run["id"]
         active = run["active"]
         legs, states = run["legs"], run["leg_states"]
         done_legs = legs[:active]                  # everything before the cursor is sold
@@ -3071,7 +3103,8 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
                                 else p.get("avoid_mode"), default="avoid")
         warnings = hub.active_trade_warnings()
         blacklist = list(p.get("avoid_poi_ids") or ())
-        volumes = _build_hazard_volumes(warnings, blacklist, sess.t) if mode != "ignore" else None
+        start_pos, t_ref, ship = sess.pos, sess.t, run.get("ship")
+        volumes = _build_hazard_volumes(warnings, blacklist, t_ref) if mode != "ignore" else None
         avoid_poi_ids, avoid_pairs = (nav_core.trade_avoid_sets(warnings)
                                       if mode == "avoid" else (None, None))
         if mode == "avoid" and blacklist:
@@ -3081,33 +3114,50 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         qd = body.qd if body.qd is not None else p.get("qd")
         in_range = (body.in_range_only if body.in_range_only is not None
                     else bool(p.get("in_range_only")))
-        fuel_req, max_range_m, _qd = _resolve_drive(run.get("ship"), qd)
-        p["qd"], p["in_range_only"] = qd, in_range   # persist the params used
+        fuel_req, max_range_m, _qd = _resolve_drive(ship, qd)
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
-        new_plan = nav_core.replan_trade_route(
-            nav, trade_price_points, run["usable_scu"], start_pos=sess.pos, held=held,
-            max_stops=(body.max_stops or p.get("max_stops") or 6),
-            commodities=(p.get("commodities") or None),
-            system=(body.system if body.system is not None else p.get("system")),
-            sort=(body.sort or p.get("sort") or "per_hour"),
-            budget=p.get("budget"),
-            deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
-            max_age_s=max_age_s, t_ref=sess.t,
-            avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
-            avoid_volumes=(volumes if mode == "avoid" else None),
-            avoid_buys=nav_core.stock_avoid_buys(stock_reports),
-            avoid_sells=nav_core.stock_avoid_sells(stock_reports),
-            fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
-        _annotate_leg_stock(new_plan, stock_reports)
-        _annotate_leg_amenities(new_plan)
-        _annotate_trade_legs(new_plan, warnings, mode, volumes, sess.t)
+        usable_scu = run["usable_scu"]
+        max_stops = body.max_stops or p.get("max_stops") or 6
+        commodities = p.get("commodities") or None
+        system = body.system if body.system is not None else p.get("system")
+        sort = body.sort or p.get("sort") or "per_hour"
+        budget = p.get("budget")
+
+    # Phase 2 — solve off the loop and lock.
+    new_plan = await asyncio.to_thread(
+        nav_core.replan_trade_route,
+        nav, trade_price_points, usable_scu, start_pos=start_pos, held=held,
+        max_stops=max_stops, commodities=commodities, system=system, sort=sort,
+        budget=budget,
+        deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
+        max_age_s=max_age_s, t_ref=t_ref,
+        avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
+        avoid_volumes=(volumes if mode == "avoid" else None),
+        avoid_buys=nav_core.stock_avoid_buys(stock_reports),
+        avoid_sells=nav_core.stock_avoid_sells(stock_reports),
+        fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
+    _annotate_leg_stock(new_plan, stock_reports)
+    _annotate_leg_amenities(new_plan)
+    _annotate_trade_legs(new_plan, warnings, mode, volumes, t_ref)
+    new_legs = new_plan.get("legs") or []
+    if not new_legs:
+        reason = new_plan["summary"].get("reason") or "no profitable continuation from here"
+        raise HTTPException(status_code=409, detail=f"re-plan infeasible: {reason}")
+
+    # Phase 3 — re-acquire the lock and commit, but only if the run hasn't moved
+    # on underneath us (another tab advanced/abandoned it while we solved).
+    async with hub.lock:
+        sess = hub.get(user)
+        run = sess.trade_run
+        if not run or run["id"] != run_id or run["active"] != active:
+            raise HTTPException(status_code=409,
+                                detail="the run moved on while re-planning — try again")
+        p = run.get("params") or {}
+        p["qd"], p["in_range_only"] = qd, in_range   # persist the params used
         p["avoid_mode"] = mode                       # persist the mode used
-        new_legs = new_plan.get("legs") or []
-        if not new_legs:
-            reason = new_plan["summary"].get("reason") or "no profitable continuation from here"
-            raise HTTPException(status_code=409, detail=f"re-plan infeasible: {reason}")
+        run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)
         run["active"] = len(done_legs)
@@ -3249,7 +3299,9 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
                                      sess.t if sess else None) if mode == "avoid" else None)
     fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
     try:
-        plan = nav_core.plan_route(
+        # Off-load the pure-Python solve so it never freezes the event loop.
+        plan = await asyncio.to_thread(
+            nav_core.plan_route,
             nav, [p.model_dump() for p in body.packages],
             usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
             t_ref=sess.t if sess else None, avoid_volumes=volumes,
@@ -3662,7 +3714,7 @@ async def save_trade_favorite(body: TradeFavoriteIn, user: dict = Depends(requir
 async def delete_trade_favorite(fav_id: int, user: dict = Depends(require_session)):
     """Remove one of the caller's saved favorites."""
     if not db.delete_trade_favorite(user["id"], fav_id):
-        raise HTTPException(status_code=404, detail="favorite not found")
+        raise HTTPException(status_code=404, detail="unknown favorite")
     return {"ok": True}
 
 

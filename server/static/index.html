@@ -1147,8 +1147,6 @@
      (see its rule near the top) rather than a bespoke chassis, so every flat-divider
      segmented control in the suite shares one radius, one `.on` active class, and one
      focus ring. Only `.trade-tabs` stays distinct — it's the higher-tier mode tablist. */
-  .trade-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); cursor: pointer; }
-  .trade-check input { accent-color: var(--accent); }
   /* Advanced-options disclosure: keeps the resting HOW-TO-PLAN decision at
      mode + optimize-for + Plan (≤4 choices) with sensible defaults tucked away.
      Native <details> = keyboard/SR-operable for free; caret mirrors .rm-caret. */
@@ -1182,7 +1180,7 @@
   .trade-fav-load .tf-sub { font-size: 11px; }
   .trade-fav-del { border: none; border-left: 1px solid var(--border); background: none;
     color: var(--dim); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 9px; }
-  .trade-fav-del:hover { color: var(--bad); background: var(--accent-wash); }
+  .trade-fav-del:hover { color: var(--bad); }
   /* Prompt dialog: text input inside the shared confirm-dialog shell. */
   .prompt-input { width: 100%; margin-top: 12px; }
   /* Manual leg builder rows. */
@@ -3564,8 +3562,13 @@ const $ = (id) => document.getElementById(id);
 // (prefers-color-scheme) so an OS-default load has no first-paint flash. JS
 // only pins an EXPLICIT user choice onto <html data-theme>, persisted in
 // localStorage; clearing the choice falls back to the OS default.
+// Storage access throws in some contexts (Chrome "block all cookies", embedded
+// webviews). A BARE localStorage call at top level would then abort the whole
+// script block — every app dies, not just the feature. Always go through these.
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 const THEME_KEY = "scTheme";
-const getThemePref = () => { try { return localStorage.getItem(THEME_KEY); } catch { return null; } };
+const getThemePref = () => lsGet(THEME_KEY);
 const osTheme = () => matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 const resolvedTheme = () => { const p = getThemePref(); return (p === "light" || p === "dark") ? p : osTheme(); };
 function applyTheme(pref) {
@@ -5176,8 +5179,19 @@ async function postLfg() {
       hint.textContent = announced ? "✓ Posted & announced" : "✓ Posted";
       clearTimeout(postLfg._t);
       postLfg._t = setTimeout(() => { hint.textContent = ""; }, 2500);
-    } else { hint.textContent = "Couldn't post — try again."; }
-  } catch { hint.textContent = "Couldn't post — try again."; }
+    } else {
+      const d = await r.json().catch(() => ({}));
+      lfgHintFail(hint, d.detail || "Couldn't post — try again.");
+    }
+  } catch { lfgHintFail(hint, "Couldn't post — network error."); }
+}
+// A failed post must read as an error (the plain hint colour is dim grey, easily
+// missed) and clear itself, matching the compose-guard branch above.
+function lfgHintFail(hint, msg) {
+  hint.textContent = msg;
+  hint.classList.add("bad");
+  clearTimeout(postLfg._t);
+  postLfg._t = setTimeout(() => { hint.textContent = ""; hint.classList.remove("bad"); }, 3600);
 }
 // These actions repaint from the WS `lfg` frame, so on success the board just
 // updates. On failure there's no frame — surface the notice *on the tapped card*
@@ -6028,7 +6042,7 @@ async function loadRouteHistory() {
 function renderRouteIntro() {
   const el = $("route-intro");
   if (!el) return;
-  const dismissed = localStorage.getItem("route_intro_dismissed");
+  const dismissed = lsGet("route_intro_dismissed");
   const hasHistory = routeHistory && ((routeHistory.runs && routeHistory.runs.length)
     || (routeHistory.picks && routeHistory.picks.lanes && routeHistory.picks.lanes.length));
   el.hidden = !!dismissed || !!hasHistory;
@@ -6174,7 +6188,7 @@ function wireRoutePlanner() {
   setRouteAvoid(routeAvoid);
   mountAvoidBlacklist($("route-avoid-blk"), () => { if (lastPlanInput) planRoute(); });
   $("route-intro-dismiss").onclick = () => {
-    localStorage.setItem("route_intro_dismissed", "1");
+    lsSet("route_intro_dismissed", "1");
     $("route-intro").hidden = true;
   };
   // Start-from controls: a POI picker and a "use my live position" toggle (the
@@ -6764,15 +6778,36 @@ async function startRun() {
   } catch { msg.textContent = "⚠ network error"; }
 }
 
+// Surface a run-mode PATCH failure into the run panel instead of leaving the
+// tapped control looking dead. The server returns meaningful 409s for exactly
+// these calls ("stale leg — the run has moved on", "active leg is not awaiting a
+// buy", …) — those detail strings are user-readable. Clears on the next success.
+function runPatchMsg(box, text) {
+  if (!box) return;
+  let el = box.querySelector(".run-patch-err");
+  if (!el) {
+    const head = box.querySelector(".run-head");
+    if (!head) return;
+    el = document.createElement("div");
+    el.className = "run-patch-err";
+    el.setAttribute("role", "status");
+    head.insertAdjacentElement("afterend", el);
+  }
+  el.textContent = text ? "⚠ " + text : "";
+  el.hidden = !text;
+}
+
 async function patchRun(body) {
+  const box = $("route-run");
   try {
     const r = await fetch("/api/route/run", { method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
-    if (!r.ok) return;
+    if (!r.ok) { const d = await r.json().catch(() => ({})); runPatchMsg(box, d.detail || "couldn't update the run"); return; }
     const d = await r.json();
+    runPatchMsg(box, "");
     if (d.completed) { showRunComplete(); return; }
     renderRun(d.run);
-  } catch {}
+  } catch { runPatchMsg(box, "network error — try again"); }
 }
 
 // Terminal state after the last drop — the run is gone server-side, so show a
@@ -7148,7 +7183,7 @@ function populateTradeSystems() {
 
 function renderTradeIntro() {
   const el = $("trade-intro"); if (!el) return;
-  el.hidden = !!localStorage.getItem("trade_intro_dismissed") || tradeHasHistory();
+  el.hidden = !!lsGet("trade_intro_dismissed") || tradeHasHistory();
 }
 
 // STOCK WATCH (#21): the org's fresh market-condition reports, filed from trade
@@ -7384,7 +7419,7 @@ function renderTradeFavorites() {
           + `<span class="tf-name">★ ${esc(f.name)}</span>`
           + (sub ? `<span class="tf-sub muted">${esc(sub)}</span>` : "")
           + `</button>`
-          + `<button class="trade-fav-del" data-del="${i}" title="remove this saved route">✕</button>`
+          + `<button class="trade-fav-del" data-del="${i}" aria-label="Remove saved route ${esc(f.name)}" title="remove this saved route">✕</button>`
           + `</div>`;
       }).join("")
     + `</div>`;
@@ -7428,7 +7463,12 @@ async function deleteTradeFavorite(fav) {
   if (!fav) return;
   if (!(await confirmDialog(`Remove “${fav.name}” from your saved routes?`,
       { title: "Remove saved route", confirmLabel: "Remove", danger: true }))) return;
-  try { await fetch(`/api/trade/favorites/${fav.id}`, { method: "DELETE" }); } catch { return; }
+  const msg = $("trade-plan-msg");
+  try {
+    const r = await fetch(`/api/trade/favorites/${fav.id}`, { method: "DELETE" });
+    if (!r.ok) { const d = await r.json().catch(() => ({}));
+      if (msg) msg.textContent = "⚠ " + (d.detail || "couldn't remove route"); return; }
+  } catch { if (msg) msg.textContent = "⚠ network error"; return; }
   loadTradeFavorites();
 }
 
@@ -8046,14 +8086,16 @@ async function startTradeRun() {
 }
 
 async function patchTradeRun(body) {
+  const box = $("trade-run");
   try {
     const r = await fetch("/api/trade/run", { method: "PATCH",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) return;
+    if (!r.ok) { const d = await r.json().catch(() => ({})); runPatchMsg(box, d.detail || "couldn't update the run"); return; }
     const d = await r.json();
+    runPatchMsg(box, "");
     if (d.completed) { showTradeRunComplete(); return; }
     renderTradeRun(d.trade_run);
-  } catch {}
+  } catch { runPatchMsg(box, "network error — try again"); }
 }
 
 // Confirm a buy/sell, folding in the actual aUEC/SCU price + SCU the player
@@ -10356,7 +10398,7 @@ let mktFilter = { mode: "", mine: false, q: "", sort: "recent", kind: "",
                   min: "", max: "", seller: "", sellerName: "",
                   qmin: "", qmax: "", band: "", stat: "", canCraft: false };
 let mktOffset = 0, mktSearchTimer = null;
-let mktView = localStorage.getItem("mktView") || "card";   // card grid | compact rows
+let mktView = lsGet("mktView") || "card";   // card grid | compact rows
 const MKT_PAGE = 25;
 
 function mktQuery() {
@@ -10516,7 +10558,7 @@ async function renderMarketBoard() {
   syncViewBtn();
   viewBtn.onclick = () => {
     mktView = mktView === "compact" ? "card" : "compact";
-    localStorage.setItem("mktView", mktView);
+    lsSet("mktView", mktView);
     syncViewBtn(); loadMarketPage(true);
   };
   syncMktControls(root);
