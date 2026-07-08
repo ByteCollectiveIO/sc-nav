@@ -1102,6 +1102,22 @@ class WarningBoardTests(unittest.TestCase):
         app.hub.post_warning("7", "lane", "pve", "active", None, None, "Between X and Y", "")
         self.assertEqual(len(app.hub.warnings), 2)
 
+    def test_per_member_flood_cap(self):
+        # A member can hold up to WARNINGS_MAX_PER_MEMBER distinct active dangers;
+        # the next DISTINCT one is refused (flood guard), but a supersede is exempt.
+        cap = app.WARNINGS_MAX_PER_MEMBER
+        for i in range(cap):
+            app.hub.post_warning("7", "point", "pvp", "active", None, None, f"spot {i}", "")
+        self.assertEqual(len(app.hub.warnings), cap)
+        with self.assertRaises(ValueError):
+            app.hub.post_warning("7", "point", "pvp", "active", None, None, "one too many", "")
+        # Re-posting an identical danger (same key) still works — it's net-zero.
+        app.hub.post_warning("7", "point", "pvp", "deadly", None, None, "spot 0", "refresh")
+        self.assertEqual(len(app.hub.warnings), cap)
+        # A different member has their own budget.
+        app.hub.post_warning("8", "point", "pvp", "active", None, None, "their spot", "")
+        self.assertEqual(len(app.hub.warnings), cap + 1)
+
     def test_confirm_records_confirmer_and_refreshes(self):
         w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
         w["created"] = time.time() - 100
@@ -2812,6 +2828,50 @@ class WikiCatalogTests(unittest.TestCase):
         # The module lookup resolved real stops (built from the committed feed).
         self.assertIn(("stanton", app.nav_core.wiki_name_key("Everus Harbor")),
                       app.WIKI_AMENITIES)
+
+
+class MarketConfirmTests(unittest.TestCase):
+    """The dual-confirm handshake completes ATOMICALLY: db.confirm_listing decides
+    completion from the other side's live flag inside its own transaction, so two
+    near-simultaneous confirms can't both see the other flag still 0 and leave the
+    deal stuck 'pending' with both flags set (regression guard)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def _pending_listing(self):
+        lid = db.create_listing({"seller_id": "111", "item_id": "commodity:gold",
+                                 "item_name": "Gold", "mode": "sale",
+                                 "price_auec": 1000, "status": "open",
+                                 "created_at": "t0", "updated_at": "t0"})
+        db.settle_listing(lid, "222", "pending", "t1")   # accept: buyer bound, pending
+        return lid
+
+    def test_second_confirm_completes(self):
+        lid = self._pending_listing()
+        updated, completed = db.confirm_listing(lid, "seller", "t2", completed_at="t2")
+        self.assertTrue(updated)
+        self.assertFalse(completed)
+        self.assertEqual(db.get_listing(lid)["status"], "pending")
+        _, completed2 = db.confirm_listing(lid, "buyer", "t3", completed_at="t3")
+        self.assertTrue(completed2)
+        self.assertEqual(db.get_listing(lid)["status"], "completed")
+
+    def test_first_confirm_never_completes_despite_caller_hint(self):
+        # The caller always passes a completed_at timestamp, but the deal must NOT
+        # flip to completed until the OTHER side's flag is set — this is exactly the
+        # decision that used to be caller-computed (and raced). DB-derived now.
+        lid = self._pending_listing()
+        _, completed = db.confirm_listing(lid, "seller", "t2", completed_at="t2")
+        self.assertFalse(completed)
+        self.assertEqual(db.get_listing(lid)["status"], "pending")
 
 
 class HandleOwnershipTests(unittest.TestCase):

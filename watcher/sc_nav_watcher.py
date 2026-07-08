@@ -362,6 +362,12 @@ def _save_config(config):
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
             json.dump(config, fh)
+        # The config holds the bearer token — keep it owner-only where the OS
+        # honors it (POSIX; a no-op on Windows, the watcher's usual home).
+        try:
+            os.chmod(CONFIG_PATH, 0o600)
+        except OSError:
+            pass
     except OSError as exc:
         log(f"could not save watcher config: {exc}")
 
