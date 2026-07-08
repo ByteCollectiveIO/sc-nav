@@ -37,8 +37,8 @@ banner — don't scroll.
 - **app.py routes**:  `grep -nE "^@app\.(get|post|put|patch|delete)" server/app.py`
 - **db tables**:      `grep -n "CREATE TABLE" server/db.py`
 
-## index.html section index (~13046 lines; ranges drift — confirm by grep)
-`<style>` lines 7–1913 · body 1915–3554 · `<script>` 3555–13044.
+## index.html section index (~13219 lines; ranges drift — confirm by grep)
+`<style>` lines 7–1941 · body 1943–3619 · `<script>` 3620–13217.
 
 Body views (each a `#…-view` container, hash-routed):
 launcher, main (navigator), settings, setup, intel, leaderboard, stats,
@@ -54,7 +54,7 @@ chips, #30) · cargo planner + run mode · event planner · resource manager
 (shared masthead `rmMast`; catalog picker / goals / inventory / my blueprint
 library at `#/blueprints`, #29)
 · marketplace · pirate danger board (#24) · view router · leaderboard · statistics · Org Intel · org settings
-· org logo · admins · watcher tokens · setup guide · init.
+· org name + MOTD (`applyBranding`/`renderMotd`/`setLoginOrgName`, v0.50.0) · org logo · admins · watcher tokens · setup guide · init.
 
 ## app.py endpoint groups (grep the route to get the exact line)
 - Nav/live: `/api/position`, `/api/state`, `/api/pois`, `/api/destination`, `/api/capture/*`, `/api/path/{action}`, `/api/refresh`
