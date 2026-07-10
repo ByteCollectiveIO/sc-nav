@@ -3098,26 +3098,61 @@ class HaloFinderApiTests(unittest.TestCase):
         self.assertEqual(doc["band"], 5)
         self.assertIsNotNone(doc["fix_age_s"])
 
-    def test_sticky_system_disambiguates_deep_space(self):
+    def test_in_belt_fix_resolves_stanton_over_stale_sticky(self):
         # (14, -14.8) Gm is real Stanton belt space that sits nearer a Pyro
-        # container than any Stanton one. With the session's last confirmed
-        # system, locate must classify it (not "other_system"), a live-start
-        # plan must work, and the state view must carry the backfilled system.
+        # container than any Stanton one. An in-belt fix is an unambiguous
+        # Stanton landmark, so locate classifies it and a live-start plan works
+        # even when the session's sticky system is a STALE value carried over
+        # from a previously-visited system — the reported "travel to Stanton
+        # first" bug for a fix taken inside the belt (v0.52.2).
         ambiguous = (14_000_000e3, -14_800_000e3, 900e3)
         s = self._live_at(ambiguous)
         s.system = "Stanton"
         s.recompute()
         self.assertIsNone(s.nav_state["container"])
         self.assertEqual(s.nav_state["system"], "Stanton")
-        loc = self.client.get("/api/halo/locate").json()
-        self.assertNotEqual(loc["status"], "other_system")
-        r = self.client.post("/api/halo/plan", json={"band": 5})
-        self.assertEqual(r.status_code, 200)
-        # sticky system says Pyro -> friendly rejection, not a wrong plan
+        self.assertNotEqual(self.client.get("/api/halo/locate").json()["status"],
+                            "other_system")
+        self.assertEqual(self.client.post("/api/halo/plan", json={"band": 5}).status_code, 200)
+        # stale sticky "Pyro" must NOT block or mislabel an in-belt fix
         s.system = "Pyro"
+        self.assertNotEqual(self.client.get("/api/halo/locate").json()["status"],
+                            "other_system")
+        self.assertEqual(self.client.post("/api/halo/plan", json={"band": 5}).status_code, 200)
+
+    def test_plan_allows_ambiguous_deep_space_fix(self):
+        # A container-less deep-space live fix is system-ambiguous; the Halo is
+        # Stanton-only, so the plan assumes Stanton rather than false-rejecting
+        # the core feature — even when the raw heuristic/sticky would say Pyro.
+        s = self._live_at((6_000_000e3, 0.0, 0.0))   # deep space, not in a band
+        self.assertIsNone(app.nav_core.detect_container(app.nav, s.pos))
+        s.system = "Pyro"                             # stale/foreign sticky
+        r = self.client.post("/api/halo/plan", json={"band": 5})
+        self.assertEqual(r.status_code, 200)          # not "travel there first"
+        self.assertEqual(r.json()["start"]["name"], "your location")
+
+    def test_plan_blocks_live_fix_at_foreign_container(self):
+        # A live fix sitting AT a detected container in another system is a
+        # CONFIDENT foreign start — that still gets the friendly rejection.
+        pyroc = next((c for c in app.nav.containers.values()
+                      if c.system == "Pyro" and c.detection_radius() > 0), None)
+        if pyroc is None:
+            self.skipTest("no Pyro container in dataset")
+        self._live_at(tuple(pyroc.pos))
         r = self.client.post("/api/halo/plan", json={"band": 5})
         self.assertEqual(r.status_code, 400)
         self.assertIn("travel there first", r.json()["detail"])
+
+    def test_locate_uses_sticky_for_out_of_belt(self):
+        # Out-of-belt deep space is genuinely ambiguous (no landmark); the
+        # sticky container-confirmed system decides how locate labels it.
+        s = self._live_at((6_000_000e3, 0.0, 0.0))   # inward of band 1
+        s.system = "Pyro"
+        self.assertEqual(self.client.get("/api/halo/locate").json()["status"],
+                         "other_system")
+        s.system = "Stanton"
+        self.assertNotEqual(self.client.get("/api/halo/locate").json()["status"],
+                            "other_system")
 
     def test_capture_note_annotates_band(self):
         def poi_at(global_m, container=None, system="Stanton"):

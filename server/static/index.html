@@ -4188,6 +4188,7 @@ function render(state) {
   lastState = state;
   // A live fix arriving resolves an armed "my current location" start.
   if (routeStartArmed && state.position) resolveStartArm();
+  if (haloStartArmed && state.position) resolveHaloStartArm();
   // Live run updates (arrival flag, onboard SCU) ride on the nav state. Only
   // re-render when something actually changed, so the checklist doesn't thrash.
   if ("run" in state) maybeRenderRun(state.run);
@@ -11734,6 +11735,53 @@ function renderMarketEditForm(l) {
 let haloBandsDoc = null, haloShips = null, haloShipsByName = {};
 let haloWired = false, haloGoal = "band", haloBandSel = 5, haloAim = "band";
 let haloLastPlan = null;
+// "my current location" start: mirror the navigator/cargo arm flow — arm on
+// click, then take the NEXT /showlocation fix as the start (gold "ARMED").
+let haloStartArmed = false, haloStartHere = false;
+
+function haloLocLabel() {
+  if (!lastState) return "your location";
+  const c = lastState.container;
+  return (c ? c.name : "deep space") + (lastState.system ? " · " + lastState.system : "");
+}
+function updateHaloStartUI() {
+  const btn = $("halo-here"), msg = $("halo-start-msg");
+  if (!btn || !msg) return;
+  btn.classList.toggle("active", haloStartHere || haloStartArmed);
+  btn.setAttribute("aria-pressed", String(haloStartHere || haloStartArmed));
+  if (haloStartArmed) {
+    msg.className = "armed"; msg.innerHTML = "ARMED — run <b>/showlocation</b> to set your start";
+  } else if (haloStartHere) {
+    msg.className = "muted"; msg.textContent = "start: " + haloLocLabel() + " ✓";
+  } else {
+    msg.className = "muted"; msg.textContent = "";
+  }
+}
+// First click arms and waits for the next fix; a second click cancels. Choosing
+// a start POI supersedes it (cancelHaloStartHere).
+function toggleHaloStartHere() {
+  if (haloStartHere || haloStartArmed) {
+    haloStartHere = false; haloStartArmed = false; updateHaloStartUI(); return;
+  }
+  haloStartArmed = true;
+  const inp = $("halo-start-poi");
+  inp.value = ""; inp.dataset.poiId = ""; inp.parentElement.classList.remove("picked");
+  updateHaloStartUI();
+}
+function resolveHaloStartArm() {     // a live fix arrived → arm becomes active
+  if (!haloStartArmed) return;
+  haloStartArmed = false; haloStartHere = true; updateHaloStartUI();
+}
+function cancelHaloStartHere() {     // picking/typing a start POI wins
+  $("halo-start-msg").textContent = "";
+  if (!haloStartHere && !haloStartArmed) return;
+  haloStartHere = false; haloStartArmed = false; updateHaloStartUI();
+}
+function haloUseLiveStart() {        // Refine: a fix already exists → active now
+  const inp = $("halo-start-poi");
+  inp.value = ""; inp.dataset.poiId = ""; inp.parentElement.classList.remove("picked");
+  haloStartArmed = false; haloStartHere = true; updateHaloStartUI();
+}
 
 // The in-game HUD readout is integer km with thousands separators; mirror it.
 const fmtKmNum = (m) => Math.round(m / 1000).toLocaleString("en-US");
@@ -11874,12 +11922,9 @@ function wireHaloFinder() {
   for (const x of $("halo-aim").querySelectorAll("button"))
     x.onclick = () => setHaloAim(x.dataset.aim);
   attachPoiPicker($("halo-target-poi").parentElement, () => refreshHaloAfter());
-  attachPoiPicker($("halo-start-poi").parentElement, () => { $("halo-start-msg").textContent = ""; });
-  $("halo-here").onclick = () => {
-    const inp = $("halo-start-poi");
-    inp.value = ""; inp.dataset.poiId = ""; inp.parentElement.classList.remove("picked");
-    $("halo-start-msg").textContent = "using your live fix";
-  };
+  attachPoiPicker($("halo-start-poi").parentElement, cancelHaloStartHere);
+  $("halo-here").onclick = toggleHaloStartHere;
+  updateHaloStartUI();
   attachHaloShipPicker();
   mountAvoidBlacklist($("halo-avoid-blk"), () => { if (haloLastPlan) planHalo(); });
   $("halo-plan").onclick = planHalo;
@@ -11895,6 +11940,10 @@ function wireHaloFinder() {
 
 async function planHalo() {
   const msg = $("halo-plan-msg");
+  if (haloStartArmed) {   // armed but no fix yet — wait for /showlocation
+    msg.className = "muted"; msg.textContent = "run /showlocation to set your start first";
+    return;
+  }
   const body = { allow_staging: $("halo-staging").checked };
   if (haloGoal === "band") { body.band = haloBandSel; body.aim = haloAim; }
   else {
@@ -12251,7 +12300,7 @@ async function refreshHaloAfter() {
     + (d.target ? ` <div style="margin-top:8px;"><button class="route-chip" id="halo-refine" type="button" `
       + `title="re-plan the fly-by from this fix">🎯 Refine from here</button></div>` : "");
   const rb = $("halo-refine");
-  if (rb) rb.onclick = () => { $("halo-here").click(); planHalo(); };
+  if (rb) rb.onclick = () => { haloUseLiveStart(); planHalo(); };
 }
 
 function haloVerdictHtml(d) {

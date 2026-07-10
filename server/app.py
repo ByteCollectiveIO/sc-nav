@@ -3918,6 +3918,28 @@ def get_halo_bands(user: dict = Depends(require_session)):
             "attribution": nav_core.HALO_ATTRIBUTION}
 
 
+def _halo_fix_system(pos, sess: "Session | None") -> str:
+    """Best-effort star system for a live Halo position fix, most-confident
+    signal first. Deep space is system-ambiguous — every system's data centers
+    on its own (0,0,0), so the raw nearest-container guess mixes frames and can
+    name the wrong system 20 Gm out. Order:
+      1. a container actually detected at the fix — ground truth;
+      2. inside the Aaron Halo ring (`halo_contains`) — an unambiguous Stanton
+         landmark that must OUTRANK a stale sticky value carried over from an
+         earlier system (the in-belt fix, v0.52.2);
+      3. the session's sticky, container-confirmed system;
+      4. the nearest-container heuristic — last resort.
+    """
+    c = nav_core.detect_container(nav, pos)
+    if c is not None:
+        return c.system
+    if nav_core.halo_contains(pos):
+        return nav_core.HALO_SYSTEM
+    if sess is not None and sess.system:
+        return sess.system
+    return nav_core.system_at(nav, pos)
+
+
 def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> dict:
     """Resolve start/target and run the halo drop planner. Runs off the event
     loop (pure geometry over ~200 markers; the staged POI pair scan is the
@@ -3935,13 +3957,18 @@ def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> di
                             detail="no live position yet — run /showlocation, or pick a start POI")
     else:
         start = nav_core.position_start(nav, sess.pos)
-        if sess.system:               # deep-space fixes are system-ambiguous
-            start.system = sess.system
+        start.system = _halo_fix_system(sess.pos, sess)
     if start.system != nav_core.HALO_SYSTEM:
-        # Stanton-only v1 (design decision): no auto gate legs for a case
-        # nobody starts from.
-        raise HTTPException(status_code=400,
-                            detail=f"the Aaron Halo is in {nav_core.HALO_SYSTEM} — travel there first")
+        # Stanton-only v1. Only a CONFIDENT foreign start is rejected: a start
+        # POI, or a live fix sitting at a container detected in another system.
+        # A container-less deep-space live fix is system-ambiguous (per-system
+        # frames overlap near the origin) and the Halo is Stanton-only, so
+        # assume Stanton rather than false-reject — this was the "travel to
+        # Stanton first" bug for in-belt / deep-space fixes.
+        if body.start_poi_id is not None or nav_core.detect_container(nav, sess.pos) is not None:
+            raise HTTPException(status_code=400,
+                                detail=f"the Aaron Halo is in {nav_core.HALO_SYSTEM} — travel there first")
+        start.system = nav_core.HALO_SYSTEM
     target = None
     if body.target_poi_id is not None:
         target = nav.pois.get(body.target_poi_id)
@@ -3996,10 +4023,9 @@ async def get_halo_locate(target_poi_id: int | None = None,
     if pos is None:
         raise HTTPException(status_code=400,
                             detail="no live position yet — run /showlocation")
-    # Deep-space coordinates are system-ambiguous; the session's sticky
-    # (container-confirmed) system outranks the nearest-container heuristic.
-    fix_system = (sess.system if sess and sess.system
-                  else nav_core.system_at(nav, pos))
+    # Deep-space coordinates are system-ambiguous; resolve most-confident
+    # signal first (detected container → in-belt geometry → sticky → guess).
+    fix_system = _halo_fix_system(pos, sess)
     if fix_system != nav_core.HALO_SYSTEM:
         view = {"status": "other_system", "system": fix_system}
     else:
