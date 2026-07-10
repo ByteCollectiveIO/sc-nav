@@ -16,6 +16,21 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 31. Halo Finder — Aaron Halo drop planner (tenth app) ✅ SHIPPED
+
+**Status: built 2026-07-10 (same day as the design).** Full spec + build notes:
+[`halo-finder.md`](halo-finder.md). The tenth app (`#/halo`): pick a density
+band (band 5 = the ~3×-dense jackpot) or a deep-space custom POI, get "set
+destination X, exit QT at D km" with an enter/peak/exit drop *window*
+(+ seconds at your drive's speed), a staging hop when the sun/geometry blocks
+every direct chord, the patch-proof star-marker fallback number, and post-drop
+`/showlocation` verdicts ("you're in band 5, 12,400 km past the inner edge")
+with a Refine loop for POI targeting. Passive extras: the navigator's
+"☄ Halo band N" deep-space chip and automatic band annotation on deep-space
+captures. Geometry golden-tested against Cornerstone's published chart numbers
+(4 fixtures, all ≤5,000 km off); the prereq `_frame_at` Unknown-system fix
+(deep-space captures were unroutable) shipped with it.
+
 ### 26. SC Wiki API reference-data layer (foundation) ✅ COMPLETE
 
 **Status:** all three slices shipped — vehicles/quantum **v0.37.0**
@@ -209,3 +224,4 @@ listed, else the [archived backlog](archive/feature-backlog-full-2026-07-04.md).
 | 25.1 | `blueprint:` identity for sale/auction listings (§11.3) · expected-stats panel on blueprint-linked listings (§11.4) — closes #25.1 | v0.44.0 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) §11 |
 | 29/30 | Resource Manager restructure (Goals · Inventory · Blueprints peer tabs, library out of Settings, My-holdings default) · member playstyle profile (Settings PROFILE chips → Who's Online + directory) | v0.45.0 | [rm-restructure-and-profile.md](rm-restructure-and-profile.md) |
 | 26/28 | Wiki locations catalog: `wiki_pois_enabled` import (241 wiki-only POIs + 206 QT-marker promotions → 508 QT destinations) · per-POI QT arrival radii in run-mode arrival · trade-stop amenity chips (freight elevator / loading dock / hangar-pad / clinic) | v0.46.0 | [wiki-poi-enrichment.md](wiki-poi-enrichment.md) |
+| 31 | Halo Finder (tenth app): Aaron Halo band/POI drop planner, staging hops, star-marker fallback, post-drop verify + Refine, navigator belt chip, capture band annotation (+ `_frame_at` deep-space fix) | 2026-07-10 | [halo-finder.md](halo-finder.md) |

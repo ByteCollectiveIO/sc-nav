@@ -2994,5 +2994,128 @@ class BrandingAndMotdTests(unittest.TestCase):
         self.assertEqual(me["motd_updated"], 0)
 
 
+
+
+class HaloFinderApiTests(unittest.TestCase):
+    """Halo Finder endpoints (#31): band feed, drop planner, post-drop locate."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Pilot", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        cls.arc = next(p for p in app.nav.pois.values()
+                       if "(ARC-L1)" in p.name and p.qt_marker)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+
+    def _live_at(self, pos):
+        s = app.Session(self._user)
+        s.pos = pos
+        s.t = time.time()
+        app.hub.sessions["1"] = s
+        return s
+
+    def test_bands_feed(self):
+        r = self.client.get("/api/halo/bands")
+        self.assertEqual(r.status_code, 200)
+        doc = r.json()
+        self.assertEqual(len(doc["bands"]), 10)
+        self.assertEqual(doc["system"], "Stanton")
+        self.assertIn("Cornerstone", doc["attribution"])
+        b5 = doc["bands"][4]
+        self.assertEqual(b5["band"], 5)
+        self.assertEqual(b5["width_m"], b5["outer_m"] - b5["inner_m"])
+
+    def test_plan_validates_goal_choice(self):
+        for bad in ({}, {"band": 5, "target_poi_id": 1}):
+            r = self.client.post("/api/halo/plan", json=bad)
+            self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/halo/plan",
+                             json={"band": 5, "start_poi_id": 999999999})
+        self.assertEqual(r.status_code, 404)
+        # no live fix and no start POI -> friendly 400
+        r = self.client.post("/api/halo/plan", json={"band": 5})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("showlocation", r.json()["detail"])
+
+    def test_plan_band_from_station(self):
+        r = self.client.post("/api/halo/plan",
+                             json={"band": 5, "start_poi_id": self.arc.id,
+                                   "aim": "peak"})
+        self.assertEqual(r.status_code, 200)
+        plan = r.json()
+        drop = plan["drop"]
+        self.assertEqual(plan["legs"][-1]["kind"], "drop")
+        self.assertGreater(drop["enter_m"], drop["peak_m"])
+        self.assertGreater(drop["peak_m"], drop["exit_m"])
+        self.assertEqual(plan["band"]["band"], 5)
+        self.assertIn("Cornerstone", plan["attribution"])
+        # densest-point aim: the fallback star-marker readout is the band peak
+        self.assertAlmostEqual(drop["star_dist_peak_m"],
+                               plan["band"]["peak_m"], delta=5_000e3)
+
+    def test_plan_from_live_position(self):
+        self._live_at((23_000_000e3, 0.0, 0.0))
+        r = self.client.post("/api/halo/plan", json={"band": 5})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["start"]["name"], "your location")
+
+    def test_plan_rejects_other_system_start(self):
+        pyro = next((p for p in app.nav.pois.values()
+                     if p.system == "Pyro" and p.qt_marker), None)
+        if pyro is None:
+            self.skipTest("no Pyro markers in dataset")
+        r = self.client.post("/api/halo/plan",
+                             json={"band": 5, "start_poi_id": pyro.id})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("travel there first", r.json()["detail"])
+
+    def test_locate_classifies_fix(self):
+        r = self.client.get("/api/halo/locate")
+        self.assertEqual(r.status_code, 400)          # no fix yet
+        self._live_at((20_320_000e3, 0.0, 800e3))     # band-5 densest radius
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual(doc["status"], "band")
+        self.assertEqual(doc["band"], 5)
+        self.assertIsNotNone(doc["fix_age_s"])
+
+    def test_capture_note_annotates_band(self):
+        def poi_at(global_m, container=None, system="Stanton"):
+            return app.nav_core.Poi(
+                id=1, name="x", system=system, container_name=container,
+                type="", local_km=None, global_m=global_m, latitude=None,
+                longitude=None, height_m=None, qt_marker=False, custom=True)
+        self.assertEqual(app._halo_capture_note(poi_at((20_320_000e3, 0, 0))),
+                         "Aaron Halo band 5")
+        self.assertIn("void", app._halo_capture_note(poi_at((19_750_000e3, 0, 0))))
+        # not in the belt / not deep space / not Stanton -> no annotation
+        self.assertIsNone(app._halo_capture_note(poi_at((1_000_000e3, 0, 0))))
+        self.assertIsNone(app._halo_capture_note(
+            poi_at((20_320_000e3, 0, 0), container="Daymar")))
+        self.assertIsNone(app._halo_capture_note(
+            poi_at((20_320_000e3, 0, 0), system="Pyro")))
+
+    def test_locate_reports_target_miss(self):
+        self._live_at((20_320_000e3, 0.0, 0.0))
+        r = self.client.get("/api/halo/locate",
+                            params={"target_poi_id": self.arc.id})
+        doc = r.json()
+        self.assertEqual(doc["target"]["id"], self.arc.id)
+        self.assertGreater(doc["target"]["miss_m"], 1e9)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -21,9 +21,7 @@ drift — trust grep and CI, not the citation.
 
 ## Active designs (not built)
 
-| Doc | Status | Notes |
-|---|---|---|
-| — | | nothing in flight |
+None right now — pick the next item from [feature-backlog.md](feature-backlog.md).
 
 ## Shipped feature specs (reference for what's live)
 
@@ -47,6 +45,7 @@ drift — trust grep and CI, not the citation.
 | [blueprint-craft-commissions.md](blueprint-craft-commissions.md) | v0.40.0–v0.44.0 | Commission mode + blueprint feed + spec builder (#25); library, craft-goal spec, mats cost, stat autocomplete, sale identity + expected stats (#25.1 — closed; leftovers are backlog fast-follows) |
 | [rm-restructure-and-profile.md](rm-restructure-and-profile.md) | v0.45.0 | RM Goals · Inventory · Blueprints restructure (#29) + member playstyle profile tags (#30) |
 | [wiki-poi-enrichment.md](wiki-poi-enrichment.md) | v0.46.0 | Wiki locations catalog: `wiki_pois_enabled` import (241 POIs + 206 QT promotions), per-POI arrival radii, trade-stop amenity chips (#28; closes #26) |
+| [halo-finder.md](halo-finder.md) | 2026-07-10 | Halo Finder, the tenth app (`#/halo`, #31): Aaron Halo band/POI drop planner, staging hops, verify-and-refine, navigator belt chip |
 
 ## Strategy / records
 

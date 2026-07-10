@@ -1917,6 +1917,62 @@
     .mk-skel-bar { animation: none; background: var(--border); }
     #market-list.mk-busy { transition: none; }
   }
+  /* ---- halo finder (#/halo, #31) ---- */
+  /* Band picker: 10 bars, width ∝ surveyed band width, height/tint ∝ relative
+     peak density (band 5 visibly dominant). Bars sit on a shared baseline. */
+  .halo-strip { display: flex; align-items: flex-end; gap: 3px; margin: 14px 2px 6px;
+    height: 96px; }
+  .halo-cell { flex-grow: var(--w, 1); flex-basis: 0; min-width: 30px; display: flex;
+    flex-direction: column; justify-content: flex-end; gap: 4px;
+    background: none; border: none; padding: 0; cursor: pointer; }
+  .halo-cell .halo-bar { height: var(--h, 20%);
+    background: rgba(79, 195, 247, var(--a, .3));
+    border: 1px solid var(--border); border-bottom: 2px solid var(--border);
+    border-radius: 4px 4px 0 0; transition: background .15s, border-color .15s; }
+  .halo-cell:hover .halo-bar { border-color: var(--accent); }
+  .halo-cell .halo-num { font-size: 11px; color: var(--dim);
+    font-variant-numeric: tabular-nums; text-align: center; }
+  .halo-cell.sel .halo-bar { border-color: var(--sel); border-bottom-color: var(--sel);
+    box-shadow: 0 0 8px var(--sel-wash); }
+  .halo-cell.sel .halo-num { color: var(--sel); font-weight: 700; }
+  .halo-cell:focus-visible { outline: none; }
+  .halo-cell:focus-visible .halo-bar { border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring); }
+  .halo-band-info { font-size: 12px; margin: 4px 2px 0; min-height: 1.2em; }
+  /* Plan card: the DROP readout is the product — big, monospace, copyable. */
+  .halo-leg { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+    padding: 8px 0; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+  .halo-leg .ln { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .halo-drop-block { margin-top: 12px; padding: 14px; background: var(--track);
+    border: 1px solid var(--border); border-radius: 8px; }
+  .halo-drop-step { font-size: 13px; margin-bottom: 8px; }
+  .halo-drop-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 22px; font-weight: 700; color: var(--accent);
+    font-variant-numeric: tabular-nums; display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap; }
+  .halo-drop-code small { font-size: 13px; font-weight: 400; color: var(--dim); }
+  .halo-window { font-size: 12px; color: var(--dim); margin-top: 6px;
+    font-variant-numeric: tabular-nums; }
+  .halo-window b { color: var(--text); }
+  .halo-fallback { font-size: 12px; color: var(--dim); margin-top: 8px;
+    padding-top: 8px; border-top: 1px dashed var(--border); }
+  .halo-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .halo-chip { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);
+    border-radius: 999px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .halo-chip.warn { color: var(--warn); border-color: var(--warn); }
+  .halo-alt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 6px 0; border-bottom: 1px solid var(--border-soft); font-size: 12px;
+    color: var(--dim); font-variant-numeric: tabular-nums; }
+  .halo-alt:last-child { border-bottom: none; }
+  /* After-the-drop verdict */
+  .halo-verdict { font-size: 14px; }
+  .halo-verdict .in-band { color: var(--good); font-weight: 700; }
+  .halo-verdict .off-band { color: var(--warn); font-weight: 700; }
+  .halo-verdict-meta { font-size: 12px; color: var(--dim); margin-top: 4px;
+    font-variant-numeric: tabular-nums; }
+  .halo-credit { font-size: 11px; text-align: center; margin: 18px 0 4px; }
+  .halo-credit a { color: var(--dim); }
+
   /* Coarse-pointer (touch) devices: lift small controls to a ~44px tap target
      without disturbing the compact desktop instrument density (WCAG 2.5.5). The
      dense table rows already clear the 24px AA floor, so they're left alone. */
@@ -1950,9 +2006,9 @@
     </div>
     <div id="login-org-name" class="login-org-name" hidden></div>
     <h1>Org Navigator</h1>
-    <p class="muted">Your org's command deck — nine tools covering live navigation, cargo
-      hauling, trade routes, org events, group finding, pirate warnings, shared resources,
-      aUEC trading, and org intel.</p>
+    <p class="muted">Your org's command deck — ten tools covering live navigation, cargo
+      hauling, trade routes, asteroid-belt drops, org events, group finding, pirate warnings,
+      shared resources, aUEC trading, and org intel.</p>
     <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. All content not authored by its host or
@@ -2022,7 +2078,7 @@
     </div>
     <div id="launcher-org-name" class="launcher-org-name" hidden></div>
     <h2 class="launcher-head">Your org toolkit</h2>
-    <p class="launcher-sub">Nine tools, one org — grouped by what you're up to. New here? Start
+    <p class="launcher-sub">Ten tools, one org — grouped by what you're up to. New here? Start
       with the Resource Navigator; the rest build on it.</p>
     <div class="launcher-badges">
       <a id="online-badge" class="online-badge" href="#/online" hidden></a>
@@ -2055,6 +2111,12 @@
           <div class="app-name">Trade Route Planner</div>
           <div class="app-desc">Buy low, sell high on live UEX prices — the most profitable buy→sell
             loop your ship can carry, planned and run leg-by-leg.</div>
+        </a>
+        <a class="app-card" href="#/halo">
+          <img class="app-logo" src="/images/halo_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Halo Finder</div>
+          <div class="app-desc">Drop out of quantum inside the Aaron Halo — pick a density band,
+            get the exact exit-here number for your route, and verify where you landed.</div>
         </a>
       </div>
     </section>
@@ -3413,6 +3475,108 @@
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div><!-- /pirates-view -->
 
+  <div id="halo-view" hidden>
+    <div id="halo-intro" class="panel route-intro" hidden>
+      <div class="ri-head"><h2>DROP INTO THE AARON HALO</h2>
+        <button id="halo-intro-dismiss" class="ri-dismiss" title="hide this">Got it ✕</button></div>
+      <p class="ri-lead">Stanton's ring asteroid belt has no quantum markers — you jump
+        <i>through</i> it and exit early. Pick a density band; we pick the best marker to
+        target and the exact readout number to exit at.</p>
+      <ol class="ri-steps">
+        <li><b>Pick a band</b> — or one of your own deep-space POIs inside the belt.</li>
+        <li><b>Jump &amp; watch the HUD</b> — set the destination we name and exit quantum
+          (hold B) when “distance to destination” hits the drop number.</li>
+        <li><b>Verify</b> — run <b>/showlocation</b> after the drop and we'll tell you
+          exactly which band you landed in.</li>
+      </ol>
+    </div>
+
+    <div class="panel">
+      <h2>TARGET</h2>
+      <div class="route-row" style="align-items:center; gap:16px;">
+        <span class="seg" id="halo-goal" role="group" aria-label="Target type">
+          <button class="on" data-goal="band" type="button" aria-pressed="true">☄ Density band</button>
+          <button data-goal="poi" type="button" aria-pressed="false">📍 My POI</button>
+        </span>
+        <span class="seg" id="halo-aim" role="group" aria-label="Where in the band">
+          <button class="on" data-aim="band" type="button" aria-pressed="true">Anywhere in band</button>
+          <button data-aim="peak" type="button" aria-pressed="false">Densest point</button>
+        </span>
+      </div>
+      <div id="halo-band-wrap">
+        <div class="halo-strip" id="halo-strip" role="group" aria-label="Aaron Halo density bands"></div>
+        <p class="muted halo-band-info" id="halo-band-info" role="status" aria-live="polite"></p>
+      </div>
+      <div id="halo-poi-wrap" hidden>
+        <div class="route-row">
+          <span class="poi-pick" style="flex:2; min-width:200px;">
+            <input id="halo-target-poi" class="ti" autocomplete="off"
+                   placeholder="a deep-space POI you tagged in the belt (e.g. a rock cluster)">
+          </span>
+        </div>
+        <p class="muted route-hint">We plan the closest possible fly-by (no chord hits a point
+          exactly). Drop, run <b>/showlocation</b>, then <b>Refine</b> below to close the distance.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>START FROM</h2>
+      <div class="route-row">
+        <span class="poi-pick" style="flex:2; min-width:160px;">
+          <input id="halo-start-poi" class="ti" autocomplete="off"
+                 placeholder="a station / POI you'll jump from (optional)">
+        </span>
+        <span class="muted" style="font-size:12px;">or</span>
+        <button id="halo-here" type="button">📍 my current location</button>
+        <span id="halo-start-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <p class="muted route-hint">Blank plans from your live position; parked in space works
+        (run <b>/showlocation</b> so we have a fix).</p>
+    </div>
+
+    <div class="panel">
+      <h2>SHIP <span class="muted" style="font-weight:400; font-size:12px;">optional: turns the
+        drop window into seconds &amp; adds fuel figures</span></h2>
+      <div class="route-row">
+        <span class="poi-pick" style="flex:2; min-width:160px;">
+          <input id="halo-ship" class="ti" autocomplete="off"
+                 placeholder="ship — type a name (e.g. Prospector)">
+        </span>
+        <span id="halo-ship-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+      <div class="route-row drive-row" id="halo-drive-wrap" hidden>
+        <label class="muted" style="font-size:12px;">quantum drive
+          <select id="halo-qd" class="ti" style="width:auto; min-width:150px;"></select>
+        </label>
+        <span id="halo-range" class="range-readout"></span>
+      </div>
+      <div class="route-row" style="margin-top:10px;">
+        <label class="trade-pref" title="When no clean direct jump crosses the target (blocked by the sun, or you're off-plane), hop to another marker first and drop from there.">
+          <input id="halo-staging" type="checkbox" checked> allow a staging hop</label>
+      </div>
+      <div class="avoid-blk" id="halo-avoid-blk"></div>
+      <div class="route-actions">
+        <button id="halo-plan" class="active">Plan my drop</button>
+        <span id="halo-plan-msg" class="muted" style="font-size:12px;"></span>
+      </div>
+    </div>
+
+    <div id="halo-result" hidden></div>
+
+    <div class="panel">
+      <h2>AFTER THE DROP <span class="muted" style="font-weight:400; font-size:12px;">run
+        /showlocation in game — this panel reads your fix live</span></h2>
+      <div id="halo-after-body"><p class="muted" style="font-size:12px; margin:0;">No live fix
+        yet. Drop out of quantum, then run <b>/showlocation</b> in the in-game chat.</p></div>
+    </div>
+
+    <p class="muted halo-credit">Band survey:
+      <a href="https://cstone.space" target="_blank" rel="noopener">CaptSheppard / Cornerstone — cstone.space</a></p>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /halo-view -->
+
   <!-- ============================================================
        Legal pages. STARTER TEXT drafted to fit this app — have a
        lawyer review before relying on it. Fill the bracketed
@@ -4034,8 +4198,9 @@ function render(state) {
   $("map-panel").hidden = false;
 
   const c = state.container;
-  $("where").innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}` : `deep space`;
-  $("r-cont").innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>` : `deep space`;
+  const haloChip = haloWhereChip(state);   // "☄ Halo band N" when the fix is in the belt (#31)
+  $("where").innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}` : `deep space${haloChip}`;
+  $("r-cont").innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>` : `deep space${haloChip}`;
   updateBiomes(state.system, c && c.name);
 
   const d = state.destination;
@@ -5839,7 +6004,8 @@ function connect() {
     $("online").classList.remove("off"); renderSetupConn(); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); renderSetupConn(); }
+    if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); renderSetupConn();
+      if (!$("halo-view").hidden) refreshHaloAfter(); }   // live post-drop verdict (#31)
     else if (msg.type === "roster") {
       presence.clear();
       for (const u of msg.users) rememberMate(u);
@@ -11554,6 +11720,338 @@ function renderMarketEditForm(l) {
   bindMarketForm(l.id, () => renderMarketDetail(l.id));
 }
 
+// ---------- halo finder (#31) ----------
+// Aaron Halo QT-drop planner: pick a density band (or a tagged deep-space POI),
+// get "set destination X, exit QT at D km" guidance computed from real marker
+// geometry, then verify the landing from the next /showlocation fix. The band
+// model is survey data (CaptSheppard / Cornerstone, cstone.space) served by
+// /api/halo/bands; all planning happens server-side in nav_core.plan_halo_drop.
+let haloBandsDoc = null, haloShips = null, haloShipsByName = {};
+let haloWired = false, haloGoal = "band", haloBandSel = 5, haloAim = "band";
+let haloLastPlan = null;
+
+// The in-game HUD readout is integer km with thousands separators; mirror it.
+const fmtKmNum = (m) => Math.round(m / 1000).toLocaleString("en-US");
+const fmtWinS = (s) => s == null ? null : (s >= 10 ? String(Math.round(s)) : s.toFixed(1));
+
+// Passive navigator chip: a deep-space Stanton fix inside the belt annulus gets
+// a "☄ Halo band N" tag on the location readout. Pure client-side lookup against
+// the (tiny, static) band table; fetched lazily the first time it's needed.
+function haloWhereChip(state) {
+  if (state.container || state.system !== "Stanton" || !state.position) return "";
+  if (!haloBandsDoc) {
+    fetch("/api/halo/bands").then(r => r.json())
+      .then(d => { haloBandsDoc = d; }).catch(() => {});
+    return "";      // classified on the next fix, once the table is here
+  }
+  const p = state.position;
+  const r = Math.hypot(p.x, p.y);
+  for (const b of haloBandsDoc.bands)
+    if (r >= b.inner_m && r <= b.outer_m && Math.abs(p.z) <= b.half_height_m)
+      return ` · <a href="#/halo" title="Aaron Halo, band ${b.band}: open Halo Finder">☄ Halo band ${b.band}</a>`;
+  return "";
+}
+
+async function loadHaloFinder() {
+  if (!haloBandsDoc) {
+    haloBandsDoc = await fetch("/api/halo/bands").then(r => r.json()).catch(() => null);
+    renderHaloStrip();
+  }
+  if (!haloShips) {
+    haloShips = await fetch("/api/ships").then(r => r.json()).catch(() => []);
+    for (const s of haloShips) haloShipsByName[s.name.toLowerCase()] = s;
+  }
+  if (!haloWired) wireHaloFinder();
+  renderHaloIntro();
+  refreshHaloAfter();
+}
+
+function renderHaloIntro() {
+  const el = $("halo-intro"); if (el) el.hidden = !!lsGet("halo_intro_dismissed");
+}
+
+function renderHaloStrip() {
+  const strip = $("halo-strip");
+  if (!strip || !haloBandsDoc) return;
+  strip.innerHTML = "";
+  for (const b of haloBandsDoc.bands) {
+    const c = document.createElement("button");
+    c.type = "button";
+    c.className = "halo-cell" + (b.band === haloBandSel ? " sel" : "");
+    c.style.setProperty("--w", String(Math.round(b.width_m / 1e6)));
+    c.title = `Band ${b.band}: ${(b.inner_m / 1e9).toFixed(3)} to ${(b.outer_m / 1e9).toFixed(3)} Gm`;
+    c.setAttribute("aria-pressed", String(b.band === haloBandSel));
+    c.setAttribute("aria-label", `band ${b.band}`);
+    c.innerHTML = `<span class="halo-bar" style="height:${Math.round(12 + 88 * b.density)}%;`
+      + `--a:${(0.18 + 0.55 * b.density).toFixed(2)};"></span>`
+      + `<span class="halo-num">${b.band}</span>`;
+    c.onclick = () => { haloBandSel = b.band; renderHaloStrip(); };
+    strip.appendChild(c);
+  }
+  renderHaloBandInfo();
+}
+
+function renderHaloBandInfo() {
+  const el = $("halo-band-info"); if (!el || !haloBandsDoc) return;
+  const b = haloBandsDoc.bands.find(x => x.band === haloBandSel);
+  if (!b) { el.textContent = ""; return; }
+  el.innerHTML = `<b>BAND ${b.band}</b> · ${fmtGm(b.inner_m)} to ${fmtGm(b.outer_m)} from the `
+    + `Stanton marker · densest at ${fmtGm(b.peak_m)} · ±${fmtKmNum(b.half_height_m)} km tall`
+    + (b.band === 5 ? ` · <b>★ ~3× the density of any other band, larger rocks</b>` : "");
+}
+
+function setHaloGoal(goal) {
+  haloGoal = goal === "poi" ? "poi" : "band";
+  for (const x of $("halo-goal").querySelectorAll("button")) {
+    const on = x.dataset.goal === haloGoal;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
+  }
+  $("halo-band-wrap").hidden = haloGoal !== "band";
+  $("halo-aim").hidden = haloGoal !== "band";
+  $("halo-poi-wrap").hidden = haloGoal !== "poi";
+}
+
+function setHaloAim(aim) {
+  haloAim = aim === "peak" ? "peak" : "band";
+  for (const x of $("halo-aim").querySelectorAll("button")) {
+    const on = x.dataset.aim === haloAim;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
+  }
+}
+
+// Ship typeahead: same combobox as the cargo/trade planners, minus the SCU
+// prefill (nothing to haul here); the ship only feeds drive speed, fuel, range.
+function attachHaloShipPicker() {
+  const input = $("halo-ship");
+  const wrap = input.parentElement;
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true;
+  wrap.appendChild(drop);
+  const quantum = () => {
+    const cat = haloShipsByName[input.value.trim().toLowerCase()];
+    return cat && cat.quantum || null;
+  };
+  const sync = () => {
+    const name = input.value.trim();
+    const cat = haloShipsByName[name.toLowerCase()];
+    $("halo-ship-msg").textContent = cat && !cat.quantum ? "no drive data for this ship" : "";
+    syncDrivePicker(cat && cat.quantum, name, "halo-qd", "halo-drive-wrap", "halo-range");
+  };
+  const refresh = () => {
+    const q = input.value.trim().toLowerCase();
+    drop.innerHTML = "";
+    const hits = q ? (haloShips || []).filter(s => s.name.toLowerCase().includes(q)).slice(0, 12) : [];
+    for (const s of hits) {
+      const it = document.createElement("div");
+      it.className = "poi-opt"; it.setAttribute("role", "option");
+      it.innerHTML = `${esc(s.name)}${s.company ? ` <span class="muted">${esc(s.company)}</span>` : ""}`;
+      it._pick = () => { input.value = s.name; drop.hidden = true; sync(); input.focus(); };
+      it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
+      drop.appendChild(it);
+    }
+    drop.hidden = hits.length === 0;
+    sync();
+  };
+  input.addEventListener("input", refresh);
+  input.addEventListener("focus", () => { if (input.value.trim()) refresh(); });
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+  attachPickerKeys(input, drop);
+  $("halo-qd").addEventListener("change", () => {   // #27: remember drive + refresh range
+    saveDrivePref(input.value.trim(), $("halo-qd").value);
+    updateDriveRange(quantum(), "halo-qd", "halo-range");
+  });
+}
+
+function wireHaloFinder() {
+  haloWired = true;
+  for (const x of $("halo-goal").querySelectorAll("button"))
+    x.onclick = () => setHaloGoal(x.dataset.goal);
+  for (const x of $("halo-aim").querySelectorAll("button"))
+    x.onclick = () => setHaloAim(x.dataset.aim);
+  attachPoiPicker($("halo-target-poi").parentElement, () => refreshHaloAfter());
+  attachPoiPicker($("halo-start-poi").parentElement, () => { $("halo-start-msg").textContent = ""; });
+  $("halo-here").onclick = () => {
+    const inp = $("halo-start-poi");
+    inp.value = ""; inp.dataset.poiId = ""; inp.parentElement.classList.remove("picked");
+    $("halo-start-msg").textContent = "using your live fix";
+  };
+  attachHaloShipPicker();
+  mountAvoidBlacklist($("halo-avoid-blk"), () => { if (haloLastPlan) planHalo(); });
+  $("halo-plan").onclick = planHalo;
+  $("halo-intro-dismiss").onclick = () => {
+    try { localStorage.setItem("halo_intro_dismissed", "1"); } catch {} renderHaloIntro(); };
+}
+
+async function planHalo() {
+  const msg = $("halo-plan-msg");
+  const body = { allow_staging: $("halo-staging").checked };
+  if (haloGoal === "band") { body.band = haloBandSel; body.aim = haloAim; }
+  else {
+    const id = $("halo-target-poi").dataset.poiId;
+    if (!id) { msg.textContent = "pick one of your POIs first"; return; }
+    body.target_poi_id = Number(id);
+  }
+  const sid = $("halo-start-poi").dataset.poiId;
+  if (sid) body.start_poi_id = Number(sid);
+  const ship = $("halo-ship").value.trim();
+  if (ship) {
+    body.ship = ship;
+    if (!$("halo-drive-wrap").hidden && $("halo-qd").value) body.qd = $("halo-qd").value;
+  }
+  if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
+  msg.textContent = "planning…";
+  let plan;
+  try {
+    const r = await fetch("/api/halo/plan", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
+    plan = await r.json();
+  } catch { msg.textContent = "⚠ network error"; return; }
+  msg.textContent = "";
+  haloLastPlan = plan;
+  renderHaloPlan(plan);
+}
+
+// A staging leg row (only ever precedes the drop leg).
+function haloLegRow(leg, i) {
+  return `<div class="halo-leg"><span class="ln">${i + 1}.</span>`
+    + ` <span>${waypointSteps(leg)}QT to <b>${esc(leg.to)}</b></span>`
+    + ` <span class="muted">${fmtGm(leg.distance_m)} · ${fmtDur(leg.eta_s)}`
+    + (leg.fuel_scu != null ? ` · ${fmtScu(leg.fuel_scu)} qt fuel` : "") + `</span>`
+    + detourVia(leg)
+    + (leg.over_range ? ` <span class="halo-chip warn">⚠ over drive range</span>` : "")
+    + `</div>`;
+}
+
+function haloDropHtml(plan) {
+  const d = plan.drop;
+  const leg = plan.legs[plan.legs.length - 1];
+  const secs = fmtWinS(d.window_s);
+  let h = `<div class="halo-drop-block">`
+    + `<div class="halo-drop-step"><span class="ln">${plan.legs.length}.</span> Set destination `
+    + `<b>${esc(d.marker_name)}</b>, jump, and watch “distance to destination”:</div>`
+    + `<div class="halo-drop-code">EXIT AT ${fmtKmNum(d.peak_m)}<small>km</small>`
+    + `<button class="route-chip" id="halo-copy" type="button" title="copy the drop number">⧉ copy</button></div>`;
+  if (plan.band) {
+    h += `<div class="halo-window">window <b>${fmtKmNum(d.enter_m)}</b> (enter band) → `
+      + `<b>${fmtKmNum(d.exit_m)}</b> km (exit): drop anywhere inside and you're in the rocks`
+      + (secs != null ? ` · ≈<b>${secs}s</b> wide at cruise` : "") + `</div>`;
+  } else if (plan.target) {
+    h += `<div class="halo-window">closest approach to <b>${esc(plan.target.name)}</b>, expected miss `
+      + `≈<b>${fmtDist(d.expected_miss_m)}</b> · watch-window ${fmtKmNum(d.enter_m)} → ${fmtKmNum(d.exit_m)} km</div>`;
+  }
+  h += `<div class="halo-chiprow">`
+    + `<span class="halo-chip">${fmtGm(leg.distance_m)} flown</span>`
+    + `<span class="halo-chip">${fmtGm(leg.plotted_m)} plotted</span>`
+    + (d.steep_deg != null ? `<span class="halo-chip" title="90° = radial (precise radius, short window); 0° = grazing (long window)">${Math.round(d.steep_deg)}° crossing</span>` : "")
+    + (leg.fuel_scu != null ? `<span class="halo-chip">${fmtScu(leg.fuel_scu)} qt fuel to the drop</span>` : "")
+    + (leg.over_range ? `<span class="halo-chip warn">⚠ plotted jump exceeds drive range</span>` : "")
+    + `</div>`;
+  if (d.second_crossing)
+    h += `<div class="halo-window">this route crosses the band again on the far side: `
+      + `${fmtKmNum(d.second_crossing.enter_m)} → ${fmtKmNum(d.second_crossing.exit_m)} km</div>`;
+  h += `<div class="halo-fallback">Patch-proof fallback: watch your <b>starmap distance to the `
+    + `Stanton marker</b> instead and exit at <b>${fmtKmNum(d.star_dist_peak_m)} km</b>. `
+    + `That number works on any route that crosses this ${plan.band ? "band" : "point"}.</div>`
+    + `</div>`;
+  return h;
+}
+
+function renderHaloPlan(plan) {
+  const el = $("halo-result");
+  const head = plan.band
+    ? `BAND ${plan.band.band} DROP` + (plan.aim === "peak" ? " · DENSEST POINT" : "")
+    : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
+  let h = `<div class="panel"><h2>${head} <span class="muted" style="font-weight:400; font-size:12px;">`
+    + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
+  for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
+  h += haloDropHtml(plan);
+  if (plan.alternates && plan.alternates.length) {
+    h += `<div style="margin-top:12px;"><span class="fld-label">ALTERNATES</span></div>`;
+    plan.alternates.forEach((a, i) => {
+      h += `<div class="halo-alt">via <b>${esc(a.drop.marker_name)}</b> · exit at ${fmtKmNum(a.drop.peak_m)} km`
+        + (a.drop.window_s != null ? ` · window ≈${fmtWinS(a.drop.window_s)}s` : "")
+        + (a.drop.steep_deg != null ? ` · ${Math.round(a.drop.steep_deg)}°` : "")
+        + (a.drop.expected_miss_m != null ? ` · miss ≈${fmtDist(a.drop.expected_miss_m)}` : "")
+        + ` <button class="route-chip halo-promote" type="button" data-i="${i}">use this</button></div>`;
+    });
+  }
+  h += `<p class="muted" style="font-size:11px; margin:10px 0 0;">${esc(plan.attribution)}</p></div>`;
+  el.innerHTML = h; el.hidden = false;
+  const cp = $("halo-copy");
+  if (cp && navigator.clipboard) cp.onclick = () => {
+    navigator.clipboard.writeText(fmtKmNum(plan.drop.peak_m) + " km").then(() => {
+      cp.textContent = "✓ copied"; setTimeout(() => { cp.textContent = "⧉ copy"; }, 1200);
+    }, () => {});
+  };
+  // Promote an alternate to the main card (full drop+leg views came with the
+  // plan, so no re-plan round trip); the old best swaps into its slot.
+  el.querySelectorAll(".halo-promote").forEach(b => b.onclick = () => {
+    const i = Number(b.dataset.i);
+    const alt = plan.alternates[i];
+    const next = { ...plan, drop: alt.drop,
+      legs: [...plan.legs.slice(0, -1), alt.leg],
+      alternates: plan.alternates.map((x, j) => j === i
+        ? { drop: plan.drop, leg: plan.legs[plan.legs.length - 1] } : x) };
+    haloLastPlan = next;
+    renderHaloPlan(next);
+  });
+}
+
+// AFTER THE DROP: classify the latest fix (band / void / off-plane / outside),
+// live off every position frame while the view is open. In POI mode it also
+// reports the actual miss and offers the Refine loop (re-plan from the fix).
+async function refreshHaloAfter() {
+  const el = $("halo-after-body");
+  if (!el || $("halo-view").hidden) return;
+  let q = "";
+  if (haloGoal === "poi" && $("halo-target-poi").dataset.poiId)
+    q = "?target_poi_id=" + encodeURIComponent($("halo-target-poi").dataset.poiId);
+  let d;
+  try {
+    const r = await fetch("/api/halo/locate" + q);
+    if (!r.ok) {
+      el.innerHTML = `<p class="muted" style="font-size:12px; margin:0;">No live fix yet. `
+        + `Drop out of quantum, then run <b>/showlocation</b> in the in-game chat.</p>`;
+      return;
+    }
+    d = await r.json();
+  } catch { return; }
+  el.innerHTML = haloVerdictHtml(d)
+    + (d.target ? ` <div style="margin-top:8px;"><button class="route-chip" id="halo-refine" type="button" `
+      + `title="re-plan the fly-by from this fix">🎯 Refine from here</button></div>` : "");
+  const rb = $("halo-refine");
+  if (rb) rb.onclick = () => { $("halo-here").click(); planHalo(); };
+}
+
+function haloVerdictHtml(d) {
+  const zoff = (z) => `${fmtDist(Math.abs(z))} ${z >= 0 ? "above" : "below"} plane`;
+  let main = "", meta = [];
+  if (d.status === "band") {
+    main = `☄ You're <span class="in-band">in band ${d.band}</span>`;
+    meta.push(`${fmtDist(d.inside_m)} past the inner edge`,
+      `${fmtDist(Math.abs(d.off_peak_m))} ${d.off_peak_m >= 0 ? "outside" : "inside"} the densest radius`,
+      zoff(d.z_m));
+  } else if (d.status === "band_offplane") {
+    main = `You're at <span class="off-band">band-${d.band} radius but off-plane</span>: `
+      + `${zoff(d.z_m)}; the rocks sit within ±${fmtKmNum(d.half_height_m)} km of the ecliptic`;
+  } else if (d.status === "void") {
+    main = `You're in the <span class="off-band">void between bands ${d.between[0]} and ${d.between[1]}</span>`;
+    meta.push(`${fmtDist(d.to_inner_band_m)} back to band ${d.between[0]}`,
+      `${fmtDist(d.to_outer_band_m)} on to band ${d.between[1]}`);
+  } else if (d.status === "outside") {
+    main = d.side === "inward"
+      ? `You're <span class="off-band">inside the belt's inner edge</span>: ${fmtDist(d.to_belt_m)} out to band 1`
+      : `You're <span class="off-band">beyond the belt's outer edge</span>: ${fmtDist(d.to_belt_m)} back in to band ${d.near_band}`;
+  } else if (d.status === "other_system") {
+    main = `You're in ${esc(d.system || "another system")}; the Aaron Halo is in Stanton.`;
+  }
+  if (d.target) meta.push(`📍 ${esc(d.target.name)}: <b>${fmtDist(d.target.miss_m)}</b> away`);
+  if (d.fix_age_s != null) meta.push(`fix ${fmtAge(d.fix_age_s)}`);
+  return `<div class="halo-verdict">${main}</div>`
+    + (meta.length ? `<div class="halo-verdict-meta">${meta.join(" · ")}</div>` : "");
+}
+
 // ---------- view router (app launcher + apps + dedicated sub-pages) ----------
 // One SPA; the URL hash picks the view (fragment never hits the server, so
 // StaticFiles still serves the single index.html). The launcher (#/) is home and
@@ -11561,13 +12059,15 @@ function renderMarketEditForm(l) {
 // are account sub-pages; all analytics live under the Org Intel app (#/intel/*).
 // Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
-  "#/trade": "Trade Route Planner", "#/events": "Events", "#/goals": "Resource Manager",
+  "#/trade": "Trade Route Planner", "#/halo": "Halo Finder", "#/events": "Events",
+  "#/goals": "Resource Manager",
   "#/market": "Marketplace", "#/online": "Who's Online", "#/lfg": "Group Finder",
   "#/pirates": "Danger Board", "#/intel": "Org Intel", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
-  "#/trade": "Trade Route Planner", "#/events": "Event Planner", "#/goals": "Resource Manager",
+  "#/trade": "Trade Route Planner", "#/halo": "Halo Finder",
+  "#/events": "Event Planner", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/blueprints": "Resource Manager",
   "#/market": "Org Marketplace",
   "#/online": "Who's Online", "#/lfg": "Group Finder", "#/pirates": "Danger Board",
@@ -11607,6 +12107,7 @@ function applyView() {
   const nav = h === "#/nav" && authed;
   const route = h === "#/route" && authed;
   const trade = h === "#/trade" && authed;   // Trade Route Planner (commodity arbitrage)
+  const halo = h === "#/halo" && authed;     // Halo Finder — Aaron Halo drop planner (#31)
   // The event planner owns a small sub-route family (board / new / detail), so
   // any hash under #/events counts as being in the app.
   const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
@@ -11636,7 +12137,7 @@ function applyView() {
   const privacy = h === "#/privacy";
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !route && !trade && !events && !resourceMgr && !market && !online
+  const launcher = authed && !nav && !route && !trade && !halo && !events && !resourceMgr && !market && !online
     && !lfg && !pirates && !settings && !setup && !intel && !legal;
   // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/intel/market) to
   // their app root for the header indicator and the "remember last app" jump.
@@ -11653,6 +12154,8 @@ function applyView() {
   $("main-view").hidden = !nav;
   $("route-view").hidden = !route;
   $("trade-view").hidden = !trade;
+  $("halo-view").hidden = !halo;
+  if (halo) loadHaloFinder();   // seed bands/ships + the after-drop panel; WS keeps it live
   $("events-view").hidden = !events;
   $("goals-view").hidden = !goals;
   $("inventory-view").hidden = !inventory;
@@ -11679,7 +12182,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
   // "← back to that app" link.
-  if (nav || route || trade || events || resourceMgr || market || intel || lfg || pirates) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
+  if (nav || route || trade || halo || events || resourceMgr || market || intel || lfg || pirates) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
 
   // Header chrome. The logo/title (a.home-link) is the universal Home; the back
   // link returns to the app you came from. ⚙ Settings + 📖 Setup are global. Org
@@ -11689,8 +12192,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || trade || events || resourceMgr || market || online || lfg || pirates || intel || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || trade || events || resourceMgr || market || lfg || pirates || intel || legal;
+  $("where").hidden = launcher || route || trade || halo || events || resourceMgr || market || online || lfg || pirates || intel || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || trade || halo || events || resourceMgr || market || lfg || pirates || intel || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   // Settings + Setup are global utilities — available whenever signed in, including
