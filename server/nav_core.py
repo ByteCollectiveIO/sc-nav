@@ -4560,13 +4560,39 @@ HALO_POI_MISS_GOOD_M = 20_000e3
 def body_volumes(nav: NavData, system: str, margin: float = HALO_BODY_MARGIN) -> list[dict]:
     """Obstruction volumes for every celestial body in `system` (star, planets,
     moons), shaped like hazard_volumes entries so segment_hits works unchanged.
+    `body_r` keeps the unmargined radius for chord_obstructed's endpoint rule.
     Body positions are static in SC, so callers may build these once. Note the
     Stanton star is NOT at the origin — its container position is used."""
     return [{"kind": "sphere", "a": c.pos, "b": None,
-             "r": c.body_radius * margin, "warning_id": None,
-             "system": c.system, "body": c.name}
+             "r": c.body_radius * margin, "body_r": c.body_radius,
+             "warning_id": None, "system": c.system, "body": c.name}
             for c in nav.containers.values()
             if c.system == system and c.is_body]
+
+
+def chord_obstructed(p0, p1, volumes) -> bool:
+    """Body-obstruction test for a candidate QT chord (halo planner).
+
+    Unlike a raw segment_hits pass, a margined volume that CONTAINS a chord
+    endpoint must not veto the chord outright: a station in low orbit (e.g.
+    Baijini Point, 910 km from ArcCorp's center vs a 960 km margin sphere) sits
+    inside its planet's margin bubble, and the game happily lets you QT out of
+    orbit. For endpoint-containing volumes the chord is blocked only if it dips
+    DEEPER toward the body than the endpoint already sits (floored at the hard
+    body radius — surface outposts sit at/under the dataset's body sphere, and
+    the real move is "lift off, jump to something overhead"). The safety margin
+    applies unchanged to every body the chord merely flies past."""
+    for v in volumes or ():
+        d = _seg_point_dist(p0, p1, v["a"])
+        if d >= v["r"]:
+            continue                       # clears the margin sphere entirely
+        contained = [x for x in (dist3(p0, v["a"]), dist3(p1, v["a"])) if x < v["r"]]
+        if contained and v.get("body_r") is not None:
+            floor = min([v["body_r"]] + contained)
+            if d >= floor * 0.999:         # tolerance: the endpoint itself is
+                continue                   # often the segment's closest point
+        return True
+    return False
 
 
 def halo_band(n: int) -> dict:
@@ -4731,7 +4757,7 @@ def _halo_band_candidate(s_pos, marker, m_pos, band: dict, volumes) -> dict | No
     cross = crossings[0]                  # first along the travel direction
     if cross["exit_m"] < HALO_DROP_MIN_M:
         return None
-    if volumes and segment_hits(s_pos, m_pos, volumes):
+    if volumes and chord_obstructed(s_pos, m_pos, volumes):
         return None
     plotted_m = dist3(s_pos, m_pos)
     return {
@@ -4760,7 +4786,7 @@ def _halo_poi_candidate(s_pos, marker, m_pos, p_star, volumes) -> dict | None:
     drop_m = dist3(pc, m_pos)
     if drop_m < HALO_DROP_MIN_M:
         return None
-    if volumes and segment_hits(s_pos, m_pos, volumes):
+    if volumes and chord_obstructed(s_pos, m_pos, volumes):
         return None
     miss_m = dist3(pc, p_star)
     # Reaction window: the stretch of the chord within (miss + slack) of the
@@ -4927,7 +4953,7 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
         stages = [m for m in markers
                   if usable(m) and marker_pos(m) is not None
                   and dist3(s_pos, marker_pos(m)) > 1.0
-                  and not (volumes and segment_hits(s_pos, marker_pos(m), volumes))]
+                  and not (volumes and chord_obstructed(s_pos, marker_pos(m), volumes))]
         if band_row is not None:
             # Band mode: nearest-first — the first T whose onward chords cross
             # the band is (near-)cheapest, and band quality barely depends on T.
@@ -4958,7 +4984,7 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
             for c, T in pairs:
                 if stage_poi is not None and T.id != stage_poi.id:
                     continue                 # alternates share the staging hop
-                if volumes and segment_hits(marker_pos(T), c["m_pos"], volumes):
+                if volumes and chord_obstructed(marker_pos(T), c["m_pos"], volumes):
                     continue
                 stage_poi = T
                 staged.append(c)

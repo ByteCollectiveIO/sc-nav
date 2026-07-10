@@ -3689,6 +3689,49 @@ class HaloFinderTests(unittest.TestCase):
         second = plan["drop"]["second_crossing"]
         self.assertLess(second["peak_m"], plan["drop"]["peak_m"])
 
+    # --- obstruction: endpoint-in-volume rule (v0.51.1 regression) -----------
+
+    def test_chord_obstructed_endpoint_in_margin(self):
+        vols = [{"kind": "sphere", "a": (0, 0, 0), "b": None, "r": 960e3,
+                 "body_r": 800e3, "warning_id": None, "system": "Stanton",
+                 "body": "X"}]
+        orbit = (910e3, 0, 0)          # inside the margin, outside the body
+        self.assertFalse(nav_core.chord_obstructed(orbit, (5e9, 0, 0), vols))
+        self.assertTrue(nav_core.chord_obstructed(orbit, (-5e9, 0, 0), vols))
+        surface = (795e3, 0, 0)        # terrain sits under the body sphere
+        self.assertFalse(nav_core.chord_obstructed(surface, (5e9, 0, 0), vols))
+        self.assertTrue(nav_core.chord_obstructed(surface, (-5e9, 0, 0), vols))
+        # the margin still applies unchanged to fly-past chords
+        self.assertTrue(nav_core.chord_obstructed(
+            (5e9, 900e3, 0), (-5e9, 900e3, 0), vols))
+        self.assertFalse(nav_core.chord_obstructed(
+            (5e9, 1_000e3, 0), (-5e9, 1_000e3, 0), vols))
+
+    def test_plan_from_low_orbit_station(self):
+        # Baijini Point orbits 910 km from ArcCorp's center — inside the 960 km
+        # margin sphere. v0.51.0 rejected every chord from it ("no viable drop
+        # route from here"); the endpoint rule must let departures through.
+        vols = nav_core.body_volumes(self.nav, "Stanton")
+        baijini = next(p for p in self.nav.pois.values()
+                       if "Baijini" in p.name and p.system == "Stanton")
+        plan = nav_core.plan_halo_drop(self.nav, start=baijini, band=5,
+                                       volumes=vols)
+        self.assertEqual(plan["legs"][-1]["kind"], "drop")
+
+    def test_plan_from_every_stanton_marker(self):
+        # The invariant the app promises: a band drop is plannable from any
+        # marker in the system (orbital stations, surface outposts, all of it).
+        vols = nav_core.body_volumes(self.nav, "Stanton")
+        fails = []
+        for p in self.nav.qt_markers:
+            if p.system != "Stanton":
+                continue
+            try:
+                nav_core.plan_halo_drop(self.nav, start=p, band=5, volumes=vols)
+            except ValueError:
+                fails.append(p.name)
+        self.assertEqual(fails, [])
+
     # --- deep-space capture regression (#31 prerequisite) ---------------------
 
     def test_frame_at_deep_space_resolves_system(self):
