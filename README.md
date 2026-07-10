@@ -11,10 +11,10 @@ which turns it into precise, glanceable navigation and logistics — bearing,
 distance, ETA, route plans, and shared org data — pushed live over WebSocket to
 a browser on a second device (a laptop or phone beside the game).
 
-Around that navigator core has grown a **nine-app suite** in a single-file SPA,
-behind Discord-OAuth org gating: cargo and trade route planners, an event
-planner with fleet rosters, a group finder, a pirate danger board, org
-inventory/goals, an aUEC marketplace, and guild analytics.
+Around that navigator core has grown a **ten-app suite** in a single-file SPA,
+behind Discord-OAuth org gating: cargo and trade route planners, an Aaron Halo
+drop planner, an event planner with fleet rosters, a group finder, a pirate
+danger board, org inventory/goals, an aUEC marketplace, and guild analytics.
 
 > Unofficial fan project. Not affiliated with Cloud Imperium Games. Strictly
 > non-commercial under CIG's fan-content rules. Star Citizen®, Roberts Space
@@ -44,7 +44,7 @@ and version together.
 
 ## The apps
 
-Nine apps in three themed launcher groups, plus account and admin surfaces. All
+Ten apps in three themed launcher groups, plus account and admin surfaces. All
 share one component language, one auth gate, and one live WebSocket.
 
 > 📸 **Each app name below links to a full-size screenshot.**
@@ -56,6 +56,7 @@ share one component language, one auth gate, and one live WebSocket.
 | [**Resource Navigator**](images/readme_images/sc-navigator-routes.png) | `#/nav` | Live position → bearing/distance/ETA to POIs; capture resource/fauna/harvestable observations; forecast, element finder, heatmaps; shard-aware, fresh-only markers; live teammate presence on the map |
 | [**Cargo Planner**](images/readme_images/cargo_planner_screenshot.png) | `#/route` | Pickup-and-delivery route solver for hauling contracts; run mode with arrival detection; rewards, history, quick-picks, guild hauling leaderboards |
 | [**Trade Route Planner**](images/readme_images/trade_route_planner.png) | `#/trade` | Buy-low/sell-high multi-leg planner on live commodity prices; run mode with live-position replan; realized-profit history/stats; saved routes; hazard-aware routing (ignore/warn/avoid + snare detours) |
+| [**Halo Finder**](images/readme_images/halo_navigator_screenshot.png) | `#/halo` | Aaron Halo QT-drop planner: pick a density band (or a deep-space POI) and get the exact quantum-travel distance to drop into it; true-scale system map, drop-zone inset, alternates, and a live post-drop refine loop |
 
 **Rally the Org** — coordination:
 
@@ -212,6 +213,7 @@ third parties on the request path.
 | [starmap.space](https://starmap.space) | POI / container catalog | Community dataset |
 | [UEXcorp](https://uexcorp.space) | Commodity & terminal prices, vehicles, equipment | Used with attribution |
 | [Star Citizen Wiki API](https://api.star-citizen.wiki) | Quantum fuel/range, blueprints, starmap positions, amenities | CC BY-SA 4.0 — attribution required |
+| [Cornerstone](https://cstone.space) (CaptSheppard) | Aaron Halo density-band survey powering the Halo Finder | Community dataset — credited in-app |
 | Your own `Game.log` (via the watcher) | Position, shard id | Your own game client |
 
 ## Development
