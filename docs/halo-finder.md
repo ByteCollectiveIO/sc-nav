@@ -28,6 +28,20 @@ position to Stanton directly — the ring sits ~20 Gm out where no Pyro/Nyx body
 lives, so it's an unambiguous landmark. Fixes the plan, locate, and (hint-less)
 capture paths; the session hint still takes precedence, the envelope is the
 smarter geometric fallback. +2 regression tests.
+**v0.52.2:** finishes the live-fix story (user-verified in-game). The plan and
+locate endpoints still leaned on the session's sticky system, which only updates
+near a container — so in deep space it stays STALE (a value carried from a
+previously-visited system) and clobbered the correct answer, and the plan
+hard-rejected any non-Stanton result → "travel to Stanton first" even for a fix
+that routed fine elsewhere. `app._halo_fix_system` now resolves confidence-first
+— **detected container > in-belt geometry (`halo_contains`) > sticky > nearest-
+container guess** — so an in-belt fix outranks a stale sticky, and the plan only
+blocks a CONFIDENT foreign start (a start POI, or a live fix at a detected
+foreign container); a container-less deep-space fix defaults to Stanton rather
+than false-rejecting the core feature. Also: the "my current location" start
+button now **arms and awaits the next `/showlocation`** (gold ARMED → "start: …
+✓"), mirroring the navigator/cargo planner pattern, instead of silently using
+the last fix.
 A tenth app:
 plot quantum-travel drops into the **Aaron Halo**, Stanton's ring asteroid belt.
 The player picks a density band (or one of their own custom POIs inside the
@@ -251,10 +265,13 @@ The Aaron Halo is a Stanton feature. If the caller's start resolves to
 Pyro/Nyx, return a friendly "travel to Stanton first" error rather than
 auto-planning gate legs — cross-system staging triples the solver surface for
 a case nobody starts from. The existing gate chain makes it a natural v2 if
-asked for. **Note (v0.52.1):** this guard is only meant to catch a *genuine*
-cross-system start. A live fix taken inside the belt must resolve to Stanton,
-not trip this error — see the `halo_contains` note at the top; the guard now
-only fires for real Pyro/Nyx starts.
+asked for. **Note (v0.52.1–v0.52.2):** this guard is only meant to catch a
+*genuine* cross-system start, which is why it now fires only for a **confident**
+foreign start — a start POI, or a live fix at a *detected container* in another
+system. A live deep-space fix is system-ambiguous (frames overlap near the
+origin) and the belt is Stanton-only, so a container-less fix defaults to
+Stanton rather than tripping this error (see `app._halo_fix_system` + the
+`halo_contains` note at the top).
 
 ### 3.10 Attribution: credit Cornerstone visibly
 
