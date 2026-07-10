@@ -2282,6 +2282,23 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
     return {"ok": True}
 
 
+def _halo_capture_note(poi) -> str | None:
+    """Band annotation for a deep-space capture inside the Aaron Halo (#31):
+    tagging a rock immediately records which band it's in, so it's findable
+    (and plannable-to) later without re-deriving anything."""
+    if (poi.container_name is not None or poi.system != nav_core.HALO_SYSTEM
+            or poi.global_m is None):
+        return None
+    loc = nav_core.halo_locate(poi.global_m)
+    if loc["status"] == "band":
+        return f"Aaron Halo band {loc['band']}"
+    if loc["status"] == "band_offplane":
+        return f"Aaron Halo band {loc['band']} radius, off-plane"
+    if loc["status"] == "void":
+        return f"Aaron Halo void (bands {loc['between'][0]}–{loc['between'][1]})"
+    return None
+
+
 def _capture_poi(sess, pos_m, now, pending, owner):
     next_id = db.next_custom_poi_id()
     poi = nav_core.custom_poi_from_position(
@@ -2290,6 +2307,9 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         qt_marker=pending.get("qt_marker", False),
         private=pending.get("private", False), note=pending.get("note"),
     )
+    halo_tag = _halo_capture_note(poi)
+    if halo_tag and halo_tag not in (poi.note or ""):
+        poi.note = f"{poi.note} · {halo_tag}" if poi.note else halo_tag
     try:
         db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
     except Exception as exc:
@@ -3846,6 +3866,124 @@ async def trade_stats(range: str = "all", user: dict = Depends(require_session))
                              "count": round(weeks.get(wk, 0), 2)})
             wk += timedelta(weeks=1)
     return {"range": range, **stats, "traders": traders, "activity": activity}
+
+
+# --- halo finder (#31): Aaron Halo QT-drop planner --------------------------
+
+
+class HaloPlanIn(BaseModel):
+    """Plan a QT drop into the Aaron Halo. Exactly one of `band` (1-10) /
+    `target_poi_id` (a POI inside the belt) selects the goal; start is
+    `start_poi_id` or, by default, the caller's live position."""
+    band: int | None = Field(default=None, ge=1, le=10)
+    target_poi_id: int | None = None
+    start_poi_id: int | None = None
+    aim: str = "band"                                   # band | peak
+    allow_staging: bool = True
+    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    qd: str | None = Field(default=None, max_length=_NAME_MAX)
+    avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
+
+
+@app.get("/api/halo/bands")
+def get_halo_bands(user: dict = Depends(require_session)):
+    """The Aaron Halo band model for the picker strip. Static survey constants
+    (nav_core.HALO_BANDS) — cacheable, identical for every caller."""
+    return {"system": nav_core.HALO_SYSTEM,
+            "bands": [{**b, "width_m": b["outer_m"] - b["inner_m"]}
+                      for b in nav_core.HALO_BANDS],
+            "attribution": nav_core.HALO_ATTRIBUTION}
+
+
+def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> dict:
+    """Resolve start/target and run the halo drop planner. Runs off the event
+    loop (pure geometry over ~200 markers; the staged POI pair scan is the
+    worst case). Raises HTTPException on bad input / missing live position."""
+    if (body.band is None) == (body.target_poi_id is None):
+        raise HTTPException(status_code=400,
+                            detail="pick exactly one of band / target_poi_id")
+    viewer = viewer_owner_ids(user)
+    if body.start_poi_id is not None:
+        start = nav.pois.get(body.start_poi_id)
+        if start is None or not nav_core.poi_visible_to(start, viewer):
+            raise HTTPException(status_code=404, detail="unknown start_poi_id")
+    elif sess is None or sess.pos is None:
+        raise HTTPException(status_code=400,
+                            detail="no live position yet — run /showlocation, or pick a start POI")
+    else:
+        start = nav_core.position_start(nav, sess.pos)
+    if start.system != nav_core.HALO_SYSTEM:
+        # Stanton-only v1 (design decision): no auto gate legs for a case
+        # nobody starts from.
+        raise HTTPException(status_code=400,
+                            detail=f"the Aaron Halo is in {nav_core.HALO_SYSTEM} — travel there first")
+    target = None
+    if body.target_poi_id is not None:
+        target = nav.pois.get(body.target_poi_id)
+        if target is None or not nav_core.poi_visible_to(target, viewer):
+            raise HTTPException(status_code=404, detail="unknown target_poi_id")
+        if target.system != nav_core.HALO_SYSTEM:
+            raise HTTPException(status_code=400,
+                                detail=f"target is outside {nav_core.HALO_SYSTEM}")
+    # Never suggest (or stage through) a marker the caller can't see.
+    markers = [p for p in nav.qt_markers
+               if p.system == nav_core.HALO_SYSTEM
+               and nav_core.poi_visible_to(p, viewer)]
+    fuel_req, max_range_m, qd = _resolve_drive(body.ship, body.qd)   # #27
+    speed = (QUANTUM_DRIVES.get(qd) or {}).get("drive_speed") if qd else None
+    try:
+        return nav_core.plan_halo_drop(
+            nav, start=start, band=body.band, target=target,
+            aim=(body.aim if body.aim in ("band", "peak") else "band"),
+            markers=markers,
+            volumes=nav_core.body_volumes(nav, nav_core.HALO_SYSTEM),
+            avoid_poi_ids=body.avoid_poi_ids, allow_staging=body.allow_staging,
+            t_ref=sess.t if sess else None, drive_speed_ms=speed,
+            fuel_req=fuel_req, max_range_m=max_range_m)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/halo/plan")
+async def post_halo_plan(body: HaloPlanIn, user: dict = Depends(require_session)):
+    """Aaron Halo drop planner (#31): "set destination X, jump, exit QT when
+    the HUD readout hits D" — into a chosen density band or at one of the
+    caller's deep-space POIs, with a staging leg when no clean direct chord
+    exists. Geometry is time-invariant, so a plan can be computed now and
+    flown later. Returns {start, band|target, legs, drop, alternates,
+    attribution}."""
+    async with hub.lock:
+        sess = hub.sessions.get(user["id"])
+    return await asyncio.to_thread(_solve_halo_plan, body, sess, user)
+
+
+@app.get("/api/halo/locate")
+async def get_halo_locate(target_poi_id: int | None = None,
+                          user: dict = Depends(require_session)):
+    """Classify the caller's latest position fix against the band model — the
+    post-drop verify step ("you're in band 5, 12,400 km past the inner edge")
+    and the navigator's in-belt chip. `target_poi_id` additionally reports the
+    actual miss distance to that POI (POI-mode Refine loop)."""
+    async with hub.lock:
+        sess = hub.sessions.get(user["id"])
+        pos = sess.pos if sess else None
+        t = sess.t if sess else None
+    if pos is None:
+        raise HTTPException(status_code=400,
+                            detail="no live position yet — run /showlocation")
+    if nav_core.system_at(nav, pos) != nav_core.HALO_SYSTEM:
+        view = {"status": "other_system", "system": nav_core.system_at(nav, pos)}
+    else:
+        view = nav_core.halo_locate(pos)
+    view["fix_age_s"] = max(0.0, time.time() - t) if t else None
+    if target_poi_id is not None:
+        tp = nav.pois.get(target_poi_id)
+        if tp is not None and nav_core.poi_visible_to(tp, viewer_owner_ids(user)):
+            g = nav_core.poi_global_m(nav, tp, t or time.time())
+            if g is not None:
+                view["target"] = {"id": tp.id, "name": tp.name,
+                                  "miss_m": nav_core.dist3(pos, g)}
+    return view
 
 
 # --- event planner (guild events) ------------------------------------------

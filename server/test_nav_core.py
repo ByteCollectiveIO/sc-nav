@@ -3453,5 +3453,256 @@ class WikiPoiImportTests(unittest.TestCase):
         self.assertTrue(any(p.arrival_radius_m is None for p in self.nav.pois.values()))
 
 
+
+
+# ---------------------------------------------------------------------------
+# Halo Finder (#31) — Aaron Halo band geometry, classifier, drop planner.
+# ---------------------------------------------------------------------------
+
+def _halo_marker(nav, code):
+    return next(p for p in nav.pois.values()
+                if code in p.name and p.qt_marker and p.system == "Stanton")
+
+
+class HaloFinderTests(unittest.TestCase):
+    """Band model + chord geometry golden-tested against CaptSheppard /
+    Cornerstone's published ARC-L1<->CRU-L4 route-chart values (cstone.space,
+    3.16.1 survey, unchanged through 4.x). Published numbers are photo-survey
+    measurements against the live game; ours are exact marker geometry — they
+    agree within ~0.013%% of the route, so tolerance is 5,000 km."""
+
+    GOLDEN_TOL_M = 5_000e3
+    # Published chart values (km -> m): drops to the destination, both
+    # directions, band 5 (densest) and band 1; the two directions of the same
+    # crossing sum to the published route length.
+    ROUTE_M = 24_001_764e3
+    B5_FWD_M = 14_292_609e3      # ARC-L1 -> CRU-L4, band-5 densest point
+    B5_REV_M = 9_709_155e3       # CRU-L4 -> ARC-L1, same point
+    B1_FWD_M = 12_744_803e3
+    B1_REV_M = 11_256_961e3
+
+    @classmethod
+    def setUpClass(cls):
+        cls.nav = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(cls.nav)
+        cls.t = nav_core.ROTATION_EPOCH
+        cls.arc = _halo_marker(cls.nav, "(ARC-L1)")
+        cls.cru = _halo_marker(cls.nav, "(CRU-L4)")
+        cls.p_arc = poi_global_m(cls.nav, cls.arc, cls.t)
+        cls.p_cru = poi_global_m(cls.nav, cls.cru, cls.t)
+
+    # --- band table + primitives -------------------------------------------
+
+    def test_band_table_shape(self):
+        self.assertEqual([b["band"] for b in nav_core.HALO_BANDS], list(range(1, 11)))
+        for b in nav_core.HALO_BANDS:
+            self.assertLess(b["inner_m"], b["peak_m"])
+            self.assertLess(b["peak_m"], b["outer_m"])
+            self.assertLessEqual(b["half_height_m"], 5_000e3)
+        radii = [x for b in nav_core.HALO_BANDS for x in (b["inner_m"], b["outer_m"])]
+        self.assertEqual(radii, sorted(radii))     # bands ordered, never overlap
+
+    def test_ring_crossings_known_answer(self):
+        # Straight radial chord through the origin: crosses r=5 at t=0.25/0.75.
+        ts = nav_core._ring_crossings((-10, 0, 0), (10, 0, 0), 5.0)
+        self.assertEqual(len(ts), 2)
+        self.assertAlmostEqual(ts[0], 0.25)
+        self.assertAlmostEqual(ts[1], 0.75)
+        # A chord entirely outside the radius misses.
+        self.assertEqual(nav_core._ring_crossings((10, 10, 0), (10, -10, 0), 5.0), [])
+
+    def test_body_volumes_star_not_at_origin(self):
+        vols = nav_core.body_volumes(self.nav, "Stanton")
+        star = next(v for v in vols if v["body"] == "Stanton Star")
+        self.assertGreater(nav_core.dist3(star["a"], (0, 0, 0)), 1e9)
+        self.assertAlmostEqual(star["r"], 696_000e3 * nav_core.HALO_BODY_MARGIN)
+
+    # --- golden chart values ------------------------------------------------
+
+    def test_golden_route_length(self):
+        self.assertAlmostEqual(nav_core.dist3(self.p_arc, self.p_cru),
+                               self.ROUTE_M, delta=self.GOLDEN_TOL_M)
+
+    def _peak_drop(self, p0, p1, band_n):
+        crossings = nav_core.halo_band_crossings(p0, p1, nav_core.halo_band(band_n))
+        self.assertEqual(len(crossings), 1)     # endpoint inside the belt: one pass
+        return crossings[0]
+
+    def test_golden_band5_both_directions(self):
+        fwd = self._peak_drop(self.p_arc, self.p_cru, 5)
+        rev = self._peak_drop(self.p_cru, self.p_arc, 5)
+        self.assertAlmostEqual(fwd["peak_m"], self.B5_FWD_M, delta=self.GOLDEN_TOL_M)
+        self.assertAlmostEqual(rev["peak_m"], self.B5_REV_M, delta=self.GOLDEN_TOL_M)
+        # window brackets the peak, in travel order
+        self.assertGreater(fwd["enter_m"], fwd["peak_m"])
+        self.assertGreater(fwd["peak_m"], fwd["exit_m"])
+
+    def test_golden_band1_both_directions(self):
+        fwd = self._peak_drop(self.p_arc, self.p_cru, 1)
+        rev = self._peak_drop(self.p_cru, self.p_arc, 1)
+        self.assertAlmostEqual(fwd["peak_m"], self.B1_FWD_M, delta=self.GOLDEN_TOL_M)
+        self.assertAlmostEqual(rev["peak_m"], self.B1_REV_M, delta=self.GOLDEN_TOL_M)
+
+    def test_sum_identity(self):
+        # The two directions reference the same crossing point, so their drop
+        # distances sum to the route length exactly (Cornerstone's own
+        # validation identity for the published charts).
+        route = nav_core.dist3(self.p_arc, self.p_cru)
+        fwd = self._peak_drop(self.p_arc, self.p_cru, 5)
+        rev = self._peak_drop(self.p_cru, self.p_arc, 5)
+        self.assertAlmostEqual(fwd["peak_m"] + rev["peak_m"], route, delta=1e3)
+
+    def test_star_fallback_reads_peak_radius(self):
+        # At <= 5,000 km of z over ~20 Gm of radius, the 3D distance to the
+        # origin marker and the cylindrical peak radius agree within meters.
+        fwd = self._peak_drop(self.p_arc, self.p_cru, 5)
+        self.assertAlmostEqual(fwd["star_dist_peak_m"],
+                               nav_core.halo_band(5)["peak_m"], delta=1e3)
+
+    def test_gateway_chords_never_touch_the_belt(self):
+        # Jump-point stations sit Gm off-plane; their chords cross the band
+        # radii far above the rocks — the z gate must reject every band.
+        gate = _halo_marker(self.nav, "Jumppoint Pyro")
+        p_gate = poi_global_m(self.nav, gate, self.t)
+        for band in nav_core.HALO_BANDS:
+            self.assertEqual(
+                nav_core.halo_band_crossings(p_gate, self.p_cru, band), [],
+                f"band {band['band']} should be crossed off-plane only")
+
+    def test_z_gate_synthetic(self):
+        band5 = nav_core.halo_band(5)
+        flat = nav_core.halo_band_crossings(
+            (-25e9, 0, 0), (25e9, 0, 0), band5)
+        high = nav_core.halo_band_crossings(
+            (-25e9, 0, 8_000e3), (25e9, 0, 8_000e3), band5)
+        self.assertEqual(len(flat), 2)          # through the interior: two passes
+        self.assertEqual(high, [])              # same chord 8,000 km up: none
+
+    # --- halo_locate ----------------------------------------------------------
+
+    def test_locate_band_and_offplane(self):
+        peak = nav_core.halo_band(5)["peak_m"]
+        hit = nav_core.halo_locate((peak, 0, 800e3))
+        self.assertEqual((hit["status"], hit["band"]), ("band", 5))
+        self.assertAlmostEqual(hit["off_peak_m"], 0.0, delta=1.0)
+        lofted = nav_core.halo_locate((peak, 0, 8_000e3))
+        self.assertEqual((lofted["status"], lofted["band"]), ("band_offplane", 5))
+
+    def test_locate_void_and_outside(self):
+        void = nav_core.halo_locate((0, 19_750_000e3, 0))
+        self.assertEqual(void["status"], "void")
+        self.assertEqual(void["between"], [1, 2])
+        inside = nav_core.halo_locate((19_000_000e3, 0, 0))
+        self.assertEqual((inside["status"], inside["side"]), ("outside", "inward"))
+        beyond = nav_core.halo_locate((0, 22_000_000e3, 0))
+        self.assertEqual((beyond["status"], beyond["side"]), ("outside", "outward"))
+
+    # --- plan_halo_drop -------------------------------------------------------
+
+    def test_plan_validates_inputs(self):
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(self.nav, start=self.arc)          # neither
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(self.nav, start=self.arc, band=5,
+                                    target=self.cru)                   # both
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(self.nav, start=self.arc, band=11)
+
+    def test_plan_band_peak_aim(self):
+        vols = nav_core.body_volumes(self.nav, "Stanton")
+        plan = nav_core.plan_halo_drop(self.nav, start=self.arc, band=5,
+                                       aim="peak", volumes=vols)
+        drop = plan["drop"]
+        # peak aim lands the drop point on the surveyed densest radius
+        r = math.hypot(drop["crossing_xyz"][0], drop["crossing_xyz"][1])
+        self.assertAlmostEqual(r, nav_core.halo_band(5)["peak_m"], delta=1_000e3)
+        self.assertGreater(drop["steep_deg"], 45)
+        self.assertGreater(drop["enter_m"], drop["peak_m"])
+        self.assertGreater(drop["peak_m"], drop["exit_m"])
+        self.assertGreaterEqual(drop["exit_m"], nav_core.HALO_DROP_MIN_M)
+        self.assertEqual(plan["legs"][-1]["kind"], "drop")
+        self.assertFalse(plan["staged"])
+        self.assertNotIn(drop["marker_id"], nav_core.HALO_PLACEHOLDER_POI_IDS)
+        # alternates are distinct markers, each a full drop+leg pair the
+        # client can promote without a re-plan round trip
+        ids = [drop["marker_id"]] + [a["drop"]["marker_id"] for a in plan["alternates"]]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(all(a["leg"]["kind"] == "drop" for a in plan["alternates"]))
+
+    def test_plan_band_aim_stretches_window(self):
+        vols = nav_core.body_volumes(self.nav, "Stanton")
+        peak = nav_core.plan_halo_drop(self.nav, start=self.arc, band=5,
+                                       aim="peak", volumes=vols)
+        band = nav_core.plan_halo_drop(self.nav, start=self.arc, band=5,
+                                       aim="band", volumes=vols)
+        self.assertGreater(band["drop"]["window_s"], peak["drop"]["window_s"])
+
+    def test_plan_poi_mode(self):
+        rock = nav_core.Poi(
+            id=1000001, name="Big Q Rock", system="Stanton", container_name=None,
+            type="asteroid", local_km=None,
+            global_m=(14_000_000e3, -14_800_000e3, 900e3),
+            latitude=None, longitude=None, height_m=None, qt_marker=False,
+            custom=True)
+        vols = nav_core.body_volumes(self.nav, "Stanton")
+        direct = nav_core.plan_halo_drop(self.nav, start=self.arc, target=rock,
+                                         volumes=vols, allow_staging=False)
+        best = nav_core.plan_halo_drop(self.nav, start=self.arc, target=rock,
+                                       volumes=vols)
+        self.assertIn("expected_miss_m", direct["drop"])
+        # the staged (T, M) pair scan must materially beat the direct chord
+        self.assertTrue(best["staged"])
+        self.assertLess(best["drop"]["expected_miss_m"],
+                        0.6 * direct["drop"]["expected_miss_m"])
+        self.assertEqual(best["legs"][0]["kind"], "travel")
+        self.assertEqual(best["legs"][1]["kind"], "drop")
+        self.assertEqual(best["target"]["name"], "Big Q Rock")
+
+    def test_plan_staging_synthetic(self):
+        # Start lofted 50,000 km above the belt: every band radius is crossed
+        # far off-plane, so no direct chord exists; the planner must stage
+        # through the inner marker and drop on the way back out.
+        m_in = _space_poi(11, "Inner", (19_000_000e3, 0, 0), system="Stanton")
+        m_out = _space_poi(12, "Outer", (23_000_000e3, 0, 0), system="Stanton")
+        nav2 = _synthetic_nav([m_in, m_out], system="Stanton")
+        start = nav_core.Poi(
+            id=-1, name="your location", system="Stanton", container_name=None,
+            type="", local_km=None, global_m=(20_320_000e3, 0, 50_000e3),
+            latitude=None, longitude=None, height_m=None, qt_marker=False)
+        plan = nav_core.plan_halo_drop(nav2, start=start, band=5,
+                                       markers=[m_in, m_out])
+        self.assertTrue(plan["staged"])
+        self.assertEqual(plan["legs"][0]["to"], "Inner")
+        self.assertEqual(plan["drop"]["marker_name"], "Outer")
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(nav2, start=start, band=5,
+                                    markers=[m_in, m_out], allow_staging=False)
+
+    def test_second_crossing_reported(self):
+        # A chord through the belt interior crosses the band twice; the far
+        # pass is surfaced as the alternate window.
+        a = _space_poi(21, "A", (23_000_000e3, 0, 0), system="Stanton")
+        b = _space_poi(22, "B", (-23_000_000e3, 1_000_000e3, 0), system="Stanton")
+        nav2 = _synthetic_nav([a, b], system="Stanton")
+        plan = nav_core.plan_halo_drop(nav2, start=a, band=5, markers=[b])
+        self.assertIn("second_crossing", plan["drop"])
+        second = plan["drop"]["second_crossing"]
+        self.assertLess(second["peak_m"], plan["drop"]["peak_m"])
+
+    # --- deep-space capture regression (#31 prerequisite) ---------------------
+
+    def test_frame_at_deep_space_resolves_system(self):
+        # A capture 20 Gm out detects no container; it must still stamp the
+        # nearest-container system (not "Unknown", which made travel_cost
+        # treat the POI as cross-system and unroutable).
+        pos = (20_320_000e3, 0.0, 0.0)
+        poi = nav_core.custom_poi_from_position(
+            self.nav, pos, self.t, "Halo Rock", "asteroid", 1000009)
+        self.assertEqual(poi.system, "Stanton")
+        self.assertIsNone(poi.container_name)
+        self.assertEqual(poi.global_m, pos)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

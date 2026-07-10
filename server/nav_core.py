@@ -849,7 +849,11 @@ def _frame_at(nav: NavData, pos_m, t_unix: float):
     (system, container_name, local_km, global_m, lat, lon, height_m)."""
     container = detect_container(nav, pos_m)
     if container is None:
-        return "Unknown", None, None, tuple(pos_m), None, None, None
+        # Deep space: no container detects this far out, but the position is
+        # still *in* a system (nearest-container heuristic) — stamping
+        # "Unknown" would make travel_cost treat the POI as cross-system and
+        # unroutable (breaks deep-space captures, e.g. Aaron Halo rocks).
+        return system_at(nav, pos_m) or "Unknown", None, None, tuple(pos_m), None, None, None
     local = global_to_local_km(container, pos_m, t_unix)
     lat = lon = height = None
     if container.body_radius > 0:
@@ -4498,3 +4502,503 @@ def commission_board_state(listing: dict, offers) -> dict:
         "budget": _qty(budget) if budget is not None else None,
         "ends_at": listing.get("ends_at"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Halo Finder (#31) — Aaron Halo QT-drop geometry + planner.
+#
+# The Aaron Halo is Stanton's ring asteroid belt (between Crusader's and
+# ArcCorp's orbits). It has no quantum markers: you QT *through* it between two
+# ordinary markers and manually exit partway. This module answers "set
+# destination X, jump, exit when the HUD distance-to-destination readout hits
+# D" for a chosen density band or a custom POI inside the belt — plus a staging
+# leg when no clean direct chord exists, and post-drop classification of the
+# next /showlocation fix. Full design: docs/halo-finder.md.
+# ---------------------------------------------------------------------------
+
+HALO_SYSTEM = "Stanton"
+HALO_ATTRIBUTION = "Band survey: CaptSheppard / Cornerstone — cstone.space"
+
+# Band model from "Aaron Halo — Detailed Shape and Density Survey",
+# CaptSheppard / Cornerstone (cstone.space; surveyed 3.16.1, unchanged through
+# 4.x). Datum: the Stanton starmap marker == our system origin (0,0,0) — NOT
+# the star container, which sits offset ~(0.136, 1.294, 2.923) Gm. Bands are
+# origin-centered cylindrical annuli about the z=0 plane. All values meters.
+# `peak_m` is the surveyed densest radius; `density` is the relative peak
+# density (band 5 ≈ 3× any other) for the picker strip — geometry only, spawn
+# data is server-side.
+HALO_BANDS = [
+    {"band": 1,  "inner_m": 19_673_000e3, "outer_m": 19_715_000e3, "peak_m": 19_702_000e3, "half_height_m": 625e3,   "density": 0.30},
+    {"band": 2,  "inner_m": 19_815_000e3, "outer_m": 19_914_000e3, "peak_m": 19_857_000e3, "half_height_m": 2_070e3, "density": 0.30},
+    {"band": 3,  "inner_m": 19_914_000e3, "outer_m": 20_071_000e3, "peak_m": 19_995_000e3, "half_height_m": 4_046e3, "density": 0.25},
+    {"band": 4,  "inner_m": 20_129_000e3, "outer_m": 20_230_000e3, "peak_m": 20_168_000e3, "half_height_m": 2_912e3, "density": 0.30},
+    {"band": 5,  "inner_m": 20_230_000e3, "outer_m": 20_407_000e3, "peak_m": 20_320_000e3, "half_height_m": 4_998e3, "density": 1.00},
+    {"band": 6,  "inner_m": 20_407_000e3, "outer_m": 20_540_000e3, "peak_m": 20_471_000e3, "half_height_m": 5_000e3, "density": 0.35},
+    {"band": 7,  "inner_m": 20_540_000e3, "outer_m": 20_750_000e3, "peak_m": 20_662_000e3, "half_height_m": 4_998e3, "density": 0.30},
+    {"band": 8,  "inner_m": 20_793_000e3, "outer_m": 20_968_000e3, "peak_m": 20_881_000e3, "half_height_m": 3_487e3, "density": 0.25},
+    {"band": 9,  "inner_m": 21_046_000e3, "outer_m": 21_132_000e3, "peak_m": 21_082_000e3, "half_height_m": 2_400e3, "density": 0.20},
+    {"band": 10, "inner_m": 21_159_000e3, "outer_m": 21_299_000e3, "peak_m": 21_207_000e3, "half_height_m": 2_008e3, "density": 0.25},
+]
+
+# The starmap dataset ships a placeholder POI "Aaron Halo - Band" (id 8000)
+# sitting at (0,0,0) — never geometry, never a candidate.
+HALO_PLACEHOLDER_POI_IDS = frozenset({8000})
+
+# The drop point must sit well before the destination marker's auto-arrival
+# deceleration; closer than this and the ship starts braking inside the window.
+HALO_DROP_MIN_M = 200_000e3
+
+# Celestial-body obstruction margin: the game refuses QT routes that graze a
+# body, so candidate chords are tested against body_radius × this factor.
+HALO_BODY_MARGIN = 1.2
+
+# POI mode: a direct chord that already passes within this of the target is
+# "good enough" — don't bother scanning staged (T, M) pairs.
+HALO_POI_MISS_GOOD_M = 20_000e3
+
+
+def body_volumes(nav: NavData, system: str, margin: float = HALO_BODY_MARGIN) -> list[dict]:
+    """Obstruction volumes for every celestial body in `system` (star, planets,
+    moons), shaped like hazard_volumes entries so segment_hits works unchanged.
+    Body positions are static in SC, so callers may build these once. Note the
+    Stanton star is NOT at the origin — its container position is used."""
+    return [{"kind": "sphere", "a": c.pos, "b": None,
+             "r": c.body_radius * margin, "warning_id": None,
+             "system": c.system, "body": c.name}
+            for c in nav.containers.values()
+            if c.system == system and c.is_body]
+
+
+def halo_band(n: int) -> dict:
+    """Band row by 1-based band number; ValueError outside 1–10."""
+    if not isinstance(n, int) or not 1 <= n <= len(HALO_BANDS):
+        raise ValueError(f"unknown halo band {n!r}")
+    return HALO_BANDS[n - 1]
+
+
+def _ring_crossings(p0, p1, r_m: float) -> list[float]:
+    """The t values in (0,1) where segment p0->p1 crosses cylindrical radius
+    r_m about the origin — a quadratic in the xy components only (the belt is
+    an annulus about the z=0 plane; at ≤5,000 km of z over ~20 Gm of radius the
+    3D and cylindrical radii agree within ~1 km). Sorted ascending; tangent
+    grazes (double roots) return nothing."""
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    a = dx * dx + dy * dy
+    if a == 0.0:
+        return []
+    b = 2.0 * (p0[0] * dx + p0[1] * dy)
+    c = p0[0] * p0[0] + p0[1] * p0[1] - r_m * r_m
+    disc = b * b - 4.0 * a * c
+    if disc <= 0.0:
+        return []
+    s = math.sqrt(disc)
+    return sorted(t for t in ((-b - s) / (2.0 * a), (-b + s) / (2.0 * a))
+                  if 0.0 < t < 1.0)
+
+
+def _crossing_steepness_deg(p0, p1, pc) -> float:
+    """How radially the chord p0->p1 crosses the ring at point pc: 90° = dead
+    radial (short window, precise radius control), 0° = tangential graze
+    (stretched window, sloppy radius)."""
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    chord = math.hypot(dx, dy)
+    radial = math.hypot(pc[0], pc[1])
+    if chord == 0.0 or radial == 0.0:
+        return 90.0
+    cos_r = abs((dx * pc[0] + dy * pc[1]) / (chord * radial))
+    return math.degrees(math.asin(min(1.0, cos_r)))
+
+
+def halo_band_crossings(p0, p1, band: dict) -> list[dict]:
+    """Crossing intervals of `band` along the chord p0->p1, in travel order.
+
+    Roots of the inner/outer radii partition the segment; each sub-interval
+    whose midpoint radius lies inside the annulus AND whose ends are within the
+    band's half-height is a crossing. Distances are 3D (what the in-game HUD
+    distance-to-destination readout shows). Each interval:
+      {t_enter, t_peak, t_exit, enter_m, peak_m, exit_m, crossing_xyz,
+       star_dist_peak_m, steep_deg}
+    where *_m = distance from that point to the destination p1, t_peak is the
+    densest-radius crossing (or the radial extremum clipped to the interval
+    when the chord never reaches the peak radius), and star_dist_peak_m is the
+    drop point's distance to the Stanton origin marker (the patch-proof
+    fallback readout)."""
+    h = band["half_height_m"]
+    d = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+
+    def P(t):
+        return (p0[0] + t * d[0], p0[1] + t * d[1], p0[2] + t * d[2])
+
+    events = [0.0] + sorted(set(_ring_crossings(p0, p1, band["inner_m"])
+                                + _ring_crossings(p0, p1, band["outer_m"]))) + [1.0]
+    out = []
+    for t0, t1 in zip(events, events[1:]):
+        pm = P((t0 + t1) / 2.0)
+        if not band["inner_m"] <= math.hypot(pm[0], pm[1]) <= band["outer_m"]:
+            continue
+        pe, px = P(t0), P(t1)
+        if abs(pe[2]) > h or abs(px[2]) > h:
+            continue                     # crosses the radius but over/under the rocks
+        peak_ts = [t for t in _ring_crossings(p0, p1, band["peak_m"]) if t0 <= t <= t1]
+        if peak_ts:
+            tp = peak_ts[0]
+        else:
+            # Chord stays on one side of the densest radius: aim for the radial
+            # extremum (xy perigee/apogee), clipped into the interval.
+            a2 = d[0] * d[0] + d[1] * d[1]
+            t_star = -(p0[0] * d[0] + p0[1] * d[1]) / a2 if a2 else (t0 + t1) / 2.0
+            tp = min(max(t_star, t0), t1)
+        pp = P(tp)
+        out.append({
+            "t_enter": t0, "t_peak": tp, "t_exit": t1,
+            "enter_m": dist3(pe, p1), "peak_m": dist3(pp, p1), "exit_m": dist3(px, p1),
+            "crossing_xyz": pp,
+            "star_dist_peak_m": math.dist(pp, (0.0, 0.0, 0.0)),
+            "steep_deg": _crossing_steepness_deg(p0, p1, pp),
+        })
+    return out
+
+
+def halo_locate(pos) -> dict:
+    """Classify a position fix against the band model: inside a band (or at a
+    band radius but off-plane), in a void between bands, or outside the belt
+    entirely. Pure cylindrical-radius + z lookup — the post-drop verdict and
+    the navigator's in-belt chip."""
+    r, z = math.hypot(pos[0], pos[1]), pos[2]
+    view = {"r_m": r, "z_m": z}
+    for b in HALO_BANDS:
+        if b["inner_m"] <= r <= b["outer_m"]:
+            view.update({
+                "status": "band" if abs(z) <= b["half_height_m"] else "band_offplane",
+                "band": b["band"],
+                "inside_m": r - b["inner_m"],       # radial depth past the inner edge
+                "to_outer_m": b["outer_m"] - r,
+                "off_peak_m": r - b["peak_m"],      # signed: + = outside the densest radius
+                "half_height_m": b["half_height_m"],
+            })
+            return view
+    if r < HALO_BANDS[0]["inner_m"]:
+        view.update({"status": "outside", "side": "inward",
+                     "near_band": 1, "to_belt_m": HALO_BANDS[0]["inner_m"] - r})
+        return view
+    if r > HALO_BANDS[-1]["outer_m"]:
+        view.update({"status": "outside", "side": "outward",
+                     "near_band": HALO_BANDS[-1]["band"],
+                     "to_belt_m": r - HALO_BANDS[-1]["outer_m"]})
+        return view
+    for a, b in zip(HALO_BANDS, HALO_BANDS[1:]):
+        if a["outer_m"] < r < b["inner_m"]:
+            view.update({"status": "void",
+                         "between": [a["band"], b["band"]],
+                         "to_inner_band_m": r - a["outer_m"],
+                         "to_outer_band_m": b["inner_m"] - r})
+            return view
+    return view      # unreachable with a well-formed band table
+
+
+def _seg_sphere_ts(p0, p1, c, r_m: float) -> list[float]:
+    """The t values in [0,1] where segment p0->p1 crosses the sphere |P-c|=r_m
+    (full 3D — used for the POI-mode drop window). Clipped to the segment."""
+    d = (p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
+    f = (p0[0] - c[0], p0[1] - c[1], p0[2] - c[2])
+    a = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+    if a == 0.0:
+        return []
+    b = 2.0 * (f[0] * d[0] + f[1] * d[1] + f[2] * d[2])
+    k = f[0] * f[0] + f[1] * f[1] + f[2] * f[2] - r_m * r_m
+    disc = b * b - 4.0 * a * k
+    if disc <= 0.0:
+        return []
+    s = math.sqrt(disc)
+    return sorted(min(1.0, max(0.0, t))
+                  for t in ((-b - s) / (2.0 * a), (-b + s) / (2.0 * a)))
+
+
+def _minmax_norm(vals: list[float]) -> list[float]:
+    lo, hi = min(vals), max(vals)
+    span = hi - lo
+    return [(v - lo) / span if span else 0.5 for v in vals]
+
+
+def _halo_band_candidate(s_pos, marker, m_pos, band: dict, volumes) -> dict | None:
+    """One scored-scan candidate: the chord s_pos->marker crossed against a
+    band. None when the chord misses the band (radius or z-height), the drop
+    would land inside the marker's auto-arrival approach, or a celestial body
+    obstructs the plotted route (the game refuses to plot those)."""
+    crossings = halo_band_crossings(s_pos, m_pos, band)
+    if not crossings:
+        return None
+    cross = crossings[0]                  # first along the travel direction
+    if cross["exit_m"] < HALO_DROP_MIN_M:
+        return None
+    if volumes and segment_hits(s_pos, m_pos, volumes):
+        return None
+    plotted_m = dist3(s_pos, m_pos)
+    return {
+        "marker": marker, "m_pos": m_pos, "cross": cross,
+        "second": crossings[1] if len(crossings) > 1 else None,
+        "window_m": cross["enter_m"] - cross["exit_m"],
+        "flown_m": plotted_m - cross["peak_m"],
+        "plotted_m": plotted_m,
+    }
+
+
+def _halo_poi_candidate(s_pos, marker, m_pos, p_star, volumes) -> dict | None:
+    """POI-mode candidate: closest approach of the chord s_pos->marker to the
+    target point. None when the approach clamps to an endpoint (the chord
+    doesn't actually pass the target), the drop point sits too close to the
+    marker, or the chord is obstructed."""
+    d = (m_pos[0] - s_pos[0], m_pos[1] - s_pos[1], m_pos[2] - s_pos[2])
+    L2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+    if L2 == 0.0:
+        return None
+    t = ((p_star[0] - s_pos[0]) * d[0] + (p_star[1] - s_pos[1]) * d[1]
+         + (p_star[2] - s_pos[2]) * d[2]) / L2
+    if not 0.0 < t < 1.0:
+        return None
+    pc = (s_pos[0] + t * d[0], s_pos[1] + t * d[1], s_pos[2] + t * d[2])
+    drop_m = dist3(pc, m_pos)
+    if drop_m < HALO_DROP_MIN_M:
+        return None
+    if volumes and segment_hits(s_pos, m_pos, volumes):
+        return None
+    miss_m = dist3(pc, p_star)
+    # Reaction window: the stretch of the chord within (miss + slack) of the
+    # target — exit anywhere inside it and you're never much worse than the
+    # best-case miss.
+    slack = max(miss_m, 25_000e3)
+    ts = _seg_sphere_ts(s_pos, m_pos, p_star, miss_m + slack)
+    t0, t1 = (ts[0], ts[-1]) if len(ts) >= 2 else (t, t)
+    p_in = (s_pos[0] + t0 * d[0], s_pos[1] + t0 * d[1], s_pos[2] + t0 * d[2])
+    p_out = (s_pos[0] + t1 * d[0], s_pos[1] + t1 * d[1], s_pos[2] + t1 * d[2])
+    return {
+        "marker": marker, "m_pos": m_pos, "miss_m": miss_m,
+        "cross": {
+            "t_enter": t0, "t_peak": t, "t_exit": t1,
+            "enter_m": dist3(p_in, m_pos), "peak_m": drop_m,
+            "exit_m": dist3(p_out, m_pos), "crossing_xyz": pc,
+            "star_dist_peak_m": math.dist(pc, (0.0, 0.0, 0.0)),
+            "steep_deg": None,
+        },
+        "second": None,
+        "window_m": dist3(p_in, m_pos) - dist3(p_out, m_pos),
+        "flown_m": dist3(s_pos, pc),
+        "plotted_m": dist3(s_pos, m_pos),
+    }
+
+
+def _score_halo_band_cands(cands: list[dict], aim: str) -> None:
+    """Attach a comparable `score` to each band-mode candidate (min-max
+    normalized within this scan). `aim` flips the steepness weight: "peak"
+    wants a radial crossing (precise radius control at the densest point),
+    "band" wants a long forgiving window."""
+    wins = _minmax_norm([c["window_m"] for c in cands])
+    flown = _minmax_norm([c["flown_m"] for c in cands])
+    steep = _minmax_norm([c["cross"]["steep_deg"] for c in cands])
+    for c, w, f, s in zip(cands, wins, flown, steep):
+        if aim == "peak":
+            c["score"] = 0.5 * s + 0.3 * w + 0.2 * (1.0 - f)
+        else:
+            c["score"] = 0.6 * w + 0.25 * (1.0 - f) + 0.15 * (1.0 - s)
+
+
+def _score_halo_poi_cands(cands: list[dict]) -> None:
+    """POI-mode score: miss distance dominates (getting within visual/radar
+    range IS the product), flown distance breaks ties."""
+    miss = _minmax_norm([c["miss_m"] for c in cands])
+    flown = _minmax_norm([c["flown_m"] for c in cands])
+    for c, m, f in zip(cands, miss, flown):
+        c["score"] = 0.8 * (1.0 - m) + 0.2 * (1.0 - f)
+
+
+def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
+    """The wire `drop` block: everything the pilot needs on one card."""
+    speed = drive_speed_ms or QT_CRUISE_SPEED_MS
+    cross = cand["cross"]
+    view = {
+        "marker_id": cand["marker"].id, "marker_name": cand["marker"].name,
+        "enter_m": cross["enter_m"], "peak_m": cross["peak_m"],
+        "exit_m": cross["exit_m"], "window_m": cand["window_m"],
+        "window_s": cand["window_m"] / speed if speed else None,
+        "star_dist_peak_m": cross["star_dist_peak_m"],
+        "crossing_xyz": list(cross["crossing_xyz"]),
+        "steep_deg": cross["steep_deg"],
+        "plotted_m": cand["plotted_m"], "flown_m": cand["flown_m"],
+    }
+    if cand.get("miss_m") is not None:
+        view["expected_miss_m"] = cand["miss_m"]
+    if cand.get("second"):
+        s = cand["second"]
+        view["second_crossing"] = {"enter_m": s["enter_m"], "peak_m": s["peak_m"],
+                                   "exit_m": s["exit_m"]}
+    return view
+
+
+def _halo_drop_leg(from_name: str, cand: dict, fuel_req=None, max_range_m=None) -> dict:
+    """The final leg view: jump toward the marker, exit early at the drop
+    point. `distance_m` is the distance actually flown (start -> drop);
+    `plotted_m` is the full plotted route the drive must accept."""
+    leg = {"kind": "drop", "from": from_name, "to": cand["marker"].name,
+           "distance_m": cand["flown_m"], "eta_s": _leg_time_s(cand["flown_m"]),
+           "plotted_m": cand["plotted_m"]}
+    if fuel_req is not None:
+        leg["fuel_scu"] = leg_fuel_scu(cand["flown_m"], fuel_req)
+        leg["over_range"] = bool(max_range_m is not None
+                                 and cand["plotted_m"] > max_range_m)
+    return leg
+
+
+def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
+                   target=None, aim: str = "band", markers=None, volumes=None,
+                   avoid_poi_ids=None, allow_staging: bool = True,
+                   t_ref: float | None = None, drive_speed_ms: float | None = None,
+                   fuel_req=None, max_range_m=None, alternates: int = 3) -> dict:
+    """Plan a QT drop into the Aaron Halo (#31).
+
+    `start` is any positioned Poi (position_start for a live fix); exactly one
+    of `band` (1-10) / `target` (a Poi inside or near the belt) selects the
+    goal. Scans candidate destination markers (`markers`, default: the
+    system's QT markers), rejecting obstructed chords (`volumes`, see
+    body_volumes) and drops inside the auto-arrival approach, then scores by
+    drop-window length / flown distance / crossing steepness (`aim` flips the
+    steepness preference; POI mode scores by miss distance instead). When no
+    direct chord works (`allow_staging`), a staging hop through the cheapest
+    viable marker T is planned via the existing travel_cost machinery.
+
+    Returns {start, band|target, aim, legs, drop, alternates, attribution};
+    raises ValueError when no viable plan exists or inputs are inconsistent.
+    All geometry is time-invariant (nothing in Stanton moves), so plans can be
+    computed now and flown later."""
+    if (band is None) == (target is None):
+        raise ValueError("pick exactly one of band / target")
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    s_pos = entity_global_m(nav, start, t_ref)
+    if s_pos is None:
+        raise ValueError("start position unresolvable")
+    band_row = halo_band(band) if band is not None else None
+    p_star = None
+    if target is not None:
+        p_star = entity_global_m(nav, target, t_ref)
+        if p_star is None:
+            raise ValueError("target position unresolvable")
+
+    avoid = set(avoid_poi_ids or ()) | set(HALO_PLACEHOLDER_POI_IDS)
+    if markers is None:
+        markers = [p for p in nav.qt_markers if p.system == HALO_SYSTEM]
+    cands_from = {}          # marker id -> global pos, resolved once
+
+    def usable(m) -> bool:
+        return (m.id not in avoid and m.id != getattr(start, "id", None)
+                and (target is None or m.id != target.id))
+
+    def marker_pos(m):
+        if m.id not in cands_from:
+            cands_from[m.id] = entity_global_m(nav, m, t_ref)
+        return cands_from[m.id]
+
+    def scan(from_pos):
+        out = []
+        for m in markers:
+            if not usable(m):
+                continue
+            m_pos = marker_pos(m)
+            if m_pos is None or dist3(from_pos, m_pos) < HALO_DROP_MIN_M:
+                continue
+            if band_row is not None:
+                c = _halo_band_candidate(from_pos, m, m_pos, band_row, volumes)
+            else:
+                c = _halo_poi_candidate(from_pos, m, m_pos, p_star, volumes)
+            if c is not None:
+                out.append(c)
+        if out:
+            if band_row is not None:
+                _score_halo_band_cands(out, aim)
+            else:
+                _score_halo_poi_cands(out)
+            out.sort(key=lambda c: -c["score"])
+        return out
+
+    direct = scan(s_pos)
+    staged, stage_poi, stage_leg = [], None, None
+    need_staged = (not direct if band_row is not None else
+                   (not direct or direct[0]["miss_m"] > HALO_POI_MISS_GOOD_M))
+    if allow_staging and need_staged:
+        # Staging markers we can cleanly reach from the start.
+        stages = [m for m in markers
+                  if usable(m) and marker_pos(m) is not None
+                  and dist3(s_pos, marker_pos(m)) > 1.0
+                  and not (volumes and segment_hits(s_pos, marker_pos(m), volumes))]
+        if band_row is not None:
+            # Band mode: nearest-first — the first T whose onward chords cross
+            # the band is (near-)cheapest, and band quality barely depends on T.
+            for T in sorted(stages, key=lambda m: dist3(s_pos, marker_pos(m))):
+                found = [c for c in scan(marker_pos(T)) if c["marker"].id != T.id]
+                if found:
+                    staged, stage_poi = found, T
+                    break
+        else:
+            # POI mode: the whole point of staging is lining a chord up with
+            # the target, so optimize miss over all (T, M) pairs. The pair scan
+            # is cheap projections; the (pricier) obstruction test is deferred
+            # to the miss-sorted walk below and stops once the best clean T has
+            # its alternates.
+            pairs = []
+            for T in stages:
+                t_pos = marker_pos(T)
+                for m in markers:
+                    if not usable(m) or m.id == T.id:
+                        continue
+                    m_pos = marker_pos(m)
+                    if m_pos is None or dist3(t_pos, m_pos) < HALO_DROP_MIN_M:
+                        continue
+                    c = _halo_poi_candidate(t_pos, m, m_pos, p_star, None)
+                    if c is not None:
+                        pairs.append((c, T))
+            pairs.sort(key=lambda ct: (ct[0]["miss_m"], ct[0]["flown_m"]))
+            for c, T in pairs:
+                if stage_poi is not None and T.id != stage_poi.id:
+                    continue                 # alternates share the staging hop
+                if volumes and segment_hits(marker_pos(T), c["m_pos"], volumes):
+                    continue
+                stage_poi = T
+                staged.append(c)
+                if len(staged) > alternates:
+                    break
+        if staged and stage_poi is not None:
+            leg = travel_cost(nav, start, stage_poi, t_ref, avoid=volumes)
+            stage_leg = _leg_view(leg, fuel_req, max_range_m)
+            stage_leg.update({"kind": "travel", "from": start.name,
+                              "to": stage_poi.name})
+
+    # POI mode with both options on the table: staging must *materially* beat
+    # the direct miss to justify the extra jump.
+    use_staged = bool(staged) and (
+        not direct or (band_row is None
+                       and staged[0]["miss_m"] < 0.6 * direct[0]["miss_m"]))
+    pool = staged if use_staged else direct
+    if not pool:
+        raise ValueError("no viable drop route from here"
+                         + ("" if allow_staging else " (staging disabled)"))
+
+    best, alts = pool[0], pool[1:1 + max(0, alternates)]
+    from_name = stage_poi.name if use_staged else start.name
+    legs = ([stage_leg] if use_staged else []) + \
+        [_halo_drop_leg(from_name, best, fuel_req, max_range_m)]
+    plan = {
+        "start": {"id": getattr(start, "id", None), "name": start.name},
+        "aim": aim if band_row is not None else None,
+        "staged": use_staged,
+        "legs": legs,
+        "drop": _halo_drop_view(best, drive_speed_ms),
+        # Full drop + leg views per alternate, so the client can promote one
+        # to the main card without a re-plan round trip.
+        "alternates": [{"drop": _halo_drop_view(c, drive_speed_ms),
+                        "leg": _halo_drop_leg(from_name, c, fuel_req, max_range_m)}
+                       for c in alts],
+        "attribution": HALO_ATTRIBUTION,
+    }
+    if band_row is not None:
+        plan["band"] = dict(band_row, width_m=band_row["outer_m"] - band_row["inner_m"])
+    if target is not None:
+        plan["target"] = {"id": target.id, "name": target.name}
+    return plan
