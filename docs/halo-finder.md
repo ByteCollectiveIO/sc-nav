@@ -16,6 +16,18 @@ headless-Chrome preview harness) + the sticky-session-system fix for
 deep-space coordinate ambiguity (raw positions can't name their system —
 every system centers on its own origin; the session's last container-confirmed
 system now disambiguates captures, halo locate, and live-start plans).
+**v0.52.1:** completes the deep-space-system fix for the belt itself. v0.52.0's
+session-hint only helped when the client had a recent container-confirmed
+system; a live fix taken *inside* the belt (jump in, `/showlocation`) had no
+such context, so `system_at`'s raw nearest-container fallback still mixed the
+per-system frames and named **Pyro/Nyx** — the plan then rejected it with
+"travel to Stanton first," and locate reported the wrong system. New
+`nav_core.halo_contains(pos)` (cylindrical radius within the band table + near
+the ecliptic, `HALO_PLANE_TOLERANCE_M`) makes `system_at` resolve any in-belt
+position to Stanton directly — the ring sits ~20 Gm out where no Pyro/Nyx body
+lives, so it's an unambiguous landmark. Fixes the plan, locate, and (hint-less)
+capture paths; the session hint still takes precedence, the envelope is the
+smarter geometric fallback. +2 regression tests.
 A tenth app:
 plot quantum-travel drops into the **Aaron Halo**, Stanton's ring asteroid belt.
 The player picks a density band (or one of their own custom POIs inside the
@@ -239,7 +251,10 @@ The Aaron Halo is a Stanton feature. If the caller's start resolves to
 Pyro/Nyx, return a friendly "travel to Stanton first" error rather than
 auto-planning gate legs — cross-system staging triples the solver surface for
 a case nobody starts from. The existing gate chain makes it a natural v2 if
-asked for.
+asked for. **Note (v0.52.1):** this guard is only meant to catch a *genuine*
+cross-system start. A live fix taken inside the belt must resolve to Stanton,
+not trip this error — see the `halo_contains` note at the top; the guard now
+only fires for real Pyro/Nyx starts.
 
 ### 3.10 Attribution: credit Cornerstone visibly
 
