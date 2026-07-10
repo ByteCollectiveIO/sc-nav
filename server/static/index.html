@@ -11783,9 +11783,23 @@ function haloUseLiveStart() {        // Refine: a fix already exists → active 
   haloStartArmed = false; haloStartHere = true; updateHaloStartUI();
 }
 
-// The in-game HUD readout is integer km with thousands separators; mirror it.
+// Integer km with thousands separators.
 const fmtKmNum = (m) => Math.round(m / 1000).toLocaleString("en-US");
 const fmtWinS = (s) => s == null ? null : (s >= 10 ? String(Math.round(s)) : s.toFixed(1));
+
+// Mirror the in-game quantum HUD's "distance to destination" readout: it shows
+// gigameters at range (e.g. 33.9 Gm) and only flips to km once you're within a
+// few hundred thousand km of the marker — so the drop numbers read the same way
+// the pilot sees them counting down. Returns [number, unit] so callers can style
+// the unit; fmtHud() joins them for inline text.
+const HUD_KM_CUTOFF_M = 5e8; // 500,000 km — below this the HUD reads km
+function fmtHudParts(m) {
+  if (m == null) return ["—", ""];
+  if (m < HUD_KM_CUTOFF_M) return [fmtKmNum(m), "km"];
+  const g = m / 1e9;
+  return [g >= 10 ? g.toFixed(1) : g.toFixed(2), "Gm"];
+}
+const fmtHud = (m) => { const [n, u] = fmtHudParts(m); return u ? `${n} ${u}` : n; };
 
 // Passive navigator chip: a deep-space Stanton fix inside the belt annulus gets
 // a "☄ Halo band N" tag on the location readout. Pure client-side lookup against
@@ -11987,18 +12001,19 @@ function haloDropHtml(plan) {
   const d = plan.drop;
   const leg = plan.legs[plan.legs.length - 1];
   const secs = fmtWinS(d.window_s);
+  const peak = fmtHudParts(d.peak_m);
   let h = `<div class="halo-drop-block">`
     + `<div class="halo-drop-step"><span class="ln">${plan.legs.length}.</span> Set destination `
     + `<b>${esc(d.marker_name)}</b>, jump, and watch “distance to destination”:</div>`
-    + `<div class="halo-drop-code">EXIT AT ${fmtKmNum(d.peak_m)}<small>km</small>`
+    + `<div class="halo-drop-code">EXIT AT ${peak[0]}<small>${peak[1]}</small>`
     + `<button class="route-chip" id="halo-copy" type="button" title="copy the drop number">⧉ copy</button></div>`;
   if (plan.band) {
-    h += `<div class="halo-window">window <b>${fmtKmNum(d.enter_m)}</b> (enter band) → `
-      + `<b>${fmtKmNum(d.exit_m)}</b> km (exit): drop anywhere inside and you're in the rocks`
+    h += `<div class="halo-window">window <b>${fmtHud(d.enter_m)}</b> (enter band) → `
+      + `<b>${fmtHud(d.exit_m)}</b> (exit): drop anywhere inside and you're in the rocks`
       + (secs != null ? ` · ≈<b>${secs}s</b> wide at cruise` : "") + `</div>`;
   } else if (plan.target) {
     h += `<div class="halo-window">closest approach to <b>${esc(plan.target.name)}</b>, expected miss `
-      + `≈<b>${fmtDist(d.expected_miss_m)}</b> · watch-window ${fmtKmNum(d.enter_m)} → ${fmtKmNum(d.exit_m)} km</div>`;
+      + `≈<b>${fmtDist(d.expected_miss_m)}</b> · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
   }
   h += `<div class="halo-chiprow">`
     + `<span class="halo-chip">${fmtGm(leg.distance_m)} flown</span>`
@@ -12009,9 +12024,9 @@ function haloDropHtml(plan) {
     + `</div>`;
   if (d.second_crossing)
     h += `<div class="halo-window">this route crosses the band again on the far side: `
-      + `${fmtKmNum(d.second_crossing.enter_m)} → ${fmtKmNum(d.second_crossing.exit_m)} km</div>`;
+      + `${fmtHud(d.second_crossing.enter_m)} → ${fmtHud(d.second_crossing.exit_m)}</div>`;
   h += `<div class="halo-fallback">Patch-proof fallback: watch your <b>starmap distance to the `
-    + `Stanton marker</b> instead and exit at <b>${fmtKmNum(d.star_dist_peak_m)} km</b>. `
+    + `Stanton marker</b> instead and exit at <b>${fmtHud(d.star_dist_peak_m)}</b>. `
     + `That number works on any route that crosses this ${plan.band ? "band" : "point"}.</div>`
     + `</div>`;
   return h;
@@ -12031,7 +12046,7 @@ function renderHaloPlan(plan) {
   if (plan.alternates && plan.alternates.length) {
     h += `<div style="margin-top:12px;"><span class="fld-label">ALTERNATES</span></div>`;
     plan.alternates.forEach((a, i) => {
-      h += `<div class="halo-alt">via <b>${esc(a.drop.marker_name)}</b> · exit at ${fmtKmNum(a.drop.peak_m)} km`
+      h += `<div class="halo-alt">via <b>${esc(a.drop.marker_name)}</b> · exit at ${fmtHud(a.drop.peak_m)}`
         + (a.drop.window_s != null ? ` · window ≈${fmtWinS(a.drop.window_s)}s` : "")
         + (a.drop.steep_deg != null ? ` · ${Math.round(a.drop.steep_deg)}°` : "")
         + (a.drop.expected_miss_m != null ? ` · miss ≈${fmtDist(a.drop.expected_miss_m)}` : "")
@@ -12042,7 +12057,7 @@ function renderHaloPlan(plan) {
   el.innerHTML = h; el.hidden = false;
   const cp = $("halo-copy");
   if (cp && navigator.clipboard) cp.onclick = () => {
-    navigator.clipboard.writeText(fmtKmNum(plan.drop.peak_m) + " km").then(() => {
+    navigator.clipboard.writeText(fmtHud(plan.drop.peak_m)).then(() => {
       cp.textContent = "✓ copied"; setTimeout(() => { cp.textContent = "⧉ copy"; }, 1200);
     }, () => {});
   };
