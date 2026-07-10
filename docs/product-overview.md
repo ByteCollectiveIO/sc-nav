@@ -23,9 +23,9 @@ Members sign in with Discord OAuth (gated to one guild); the server pushes live
 state over WebSocket to a browser on a second device. Unofficial fan project,
 strictly non-commercial under CIG's fan-content rules.
 
-## The apps (launcher map, as of v0.36.0)
+## The apps (launcher map, as of v0.52.1)
 
-Nine apps in three themed launcher groups, plus account/admin surfaces.
+Ten apps in three themed launcher groups, plus account/admin surfaces.
 
 **Out in the 'Verse** — solo tools for a live session:
 | App | Route | What it does | Spec |
@@ -33,6 +33,7 @@ Nine apps in three themed launcher groups, plus account/admin surfaces.
 | Resource Navigator | `#/nav` | Live position → bearing/distance to POIs; observation capture (resources/fauna/harvestables); forecast, element finder, heatmaps; shard-aware, fresh-only markers; teammate map presence | archived backlog #1–11 |
 | Cargo Planner | `#/route` | Pickup-and-delivery route solver for hauling contracts; run mode with arrival detection; rewards, history, quick-picks, guild hauling boards | [cargo-hauling-planner.md](cargo-hauling-planner.md) |
 | Trade Route Planner | `#/trade` | Buy-low/sell-high multi-leg planner on live UEX terminal prices; run mode with live-position replan; realized-profit history/stats; saved routes; hazard-aware (ignore/warn/avoid + snare detours) | [trade-route-planner.md](trade-route-planner.md) |
+| Halo Finder | `#/halo` | Aaron Halo drop planner: "set destination X, jump, exit QT at distance D" into a chosen density band or a deep-space POI; staging hops, HALO MAP canvas, verify-and-refine loop against live fixes; navigator belt chip | [halo-finder.md](halo-finder.md) |
 
 **Rally the Org** — coordination:
 | App | Route | What it does | Spec |
