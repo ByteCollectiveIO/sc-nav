@@ -7,7 +7,16 @@ module + launcher card · 19 nav_core tests (4 Cornerstone golden fixtures, all
 within tolerance) + 8 app tests. Alternates ship as full drop+leg pairs so the
 client promotes one without a re-plan. The §3.8 extras landed too: navigator
 "☄ Halo band N" chip (client-side against the band feed) and automatic band
-annotation on deep-space POI captures (`_halo_capture_note`). A tenth app:
+annotation on deep-space POI captures (`_halo_capture_note`).
+**v0.51.1:** `chord_obstructed` endpoint rule — low-orbit stations (Baijini
+Point) and surface outposts no longer veto every chord; drops plan from all
+177 Stanton markers. **v0.52.0:** HALO MAP canvas in the plan card (true-scale
+top-down system view + magnified drop-zone inset; browser-verified via the
+headless-Chrome preview harness) + the sticky-session-system fix for
+deep-space coordinate ambiguity (raw positions can't name their system —
+every system centers on its own origin; the session's last container-confirmed
+system now disambiguates captures, halo locate, and live-start plans).
+A tenth app:
 plot quantum-travel drops into the **Aaron Halo**, Stanton's ring asteroid belt.
 The player picks a density band (or one of their own custom POIs inside the
 belt), and the app answers: *set destination X, jump, exit QT when the

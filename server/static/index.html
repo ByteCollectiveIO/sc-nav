@@ -1925,7 +1925,7 @@
   .halo-cell { flex-grow: var(--w, 1); flex-basis: 0; min-width: 30px; display: flex;
     flex-direction: column; justify-content: flex-end; gap: 4px;
     background: none; border: none; padding: 0; cursor: pointer; }
-  .halo-cell .halo-bar { height: var(--h, 20%);
+  .halo-cell .halo-bar { display: block;
     background: rgba(79, 195, 247, var(--a, .3));
     border: 1px solid var(--border); border-bottom: 2px solid var(--border);
     border-radius: 4px 4px 0 0; transition: background .15s, border-color .15s; }
@@ -1964,6 +1964,11 @@
     padding: 6px 0; border-bottom: 1px solid var(--border-soft); font-size: 12px;
     color: var(--dim); font-variant-numeric: tabular-nums; }
   .halo-alt:last-child { border-bottom: none; }
+  /* Route map: top-down system view + drop-zone inset. Like the navigator
+     map, the canvas keeps dark scope colors in BOTH themes (--map-bg). */
+  .halo-map-wrap { margin-top: 12px; border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; background: var(--map-bg); }
+  .halo-map-wrap canvas { display: block; width: 100%; }
   /* After-the-drop verdict */
   .halo-verdict { font-size: 14px; }
   .halo-verdict .in-band { color: var(--good); font-weight: 700; }
@@ -11782,7 +11787,7 @@ function renderHaloStrip() {
     c.title = `Band ${b.band}: ${(b.inner_m / 1e9).toFixed(3)} to ${(b.outer_m / 1e9).toFixed(3)} Gm`;
     c.setAttribute("aria-pressed", String(b.band === haloBandSel));
     c.setAttribute("aria-label", `band ${b.band}`);
-    c.innerHTML = `<span class="halo-bar" style="height:${Math.round(12 + 88 * b.density)}%;`
+    c.innerHTML = `<span class="halo-bar" style="height:${Math.round(14 + 60 * b.density)}px;`
       + `--a:${(0.18 + 0.55 * b.density).toFixed(2)};"></span>`
       + `<span class="halo-num">${b.band}</span>`;
     c.onclick = () => { haloBandSel = b.band; renderHaloStrip(); };
@@ -11880,6 +11885,12 @@ function wireHaloFinder() {
   $("halo-plan").onclick = planHalo;
   $("halo-intro-dismiss").onclick = () => {
     try { localStorage.setItem("halo_intro_dismissed", "1"); } catch {} renderHaloIntro(); };
+  let rsz = null;   // keep the map crisp across window resizes
+  window.addEventListener("resize", () => {
+    if (!haloLastPlan || $("halo-view").hidden) return;
+    clearTimeout(rsz);
+    rsz = setTimeout(() => drawHaloMap(haloLastPlan), 150);
+  });
 }
 
 async function planHalo() {
@@ -11966,6 +11977,8 @@ function renderHaloPlan(plan) {
     + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
   for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
   h += haloDropHtml(plan);
+  h += `<div class="halo-map-wrap"><canvas id="halo-map"
+    aria-label="top-down system map: the belt, your route, and the drop point"></canvas></div>`;
   if (plan.alternates && plan.alternates.length) {
     h += `<div style="margin-top:12px;"><span class="fld-label">ALTERNATES</span></div>`;
     plan.alternates.forEach((a, i) => {
@@ -11996,6 +12009,223 @@ function renderHaloPlan(plan) {
     haloLastPlan = next;
     renderHaloPlan(next);
   });
+  // canvas needs layout before clientWidth is real
+  requestAnimationFrame(() => drawHaloMap(plan));
+}
+
+// ---- HALO MAP: top-down system view + drop-zone inset ----
+// Everything is true scale: the belt is honestly a thin ring at system scale,
+// so a magnified inset around the drop point shows the individual bands. Like
+// the navigator map, the canvas keeps fixed dark scope colors in both themes.
+const HALO_MAP_C = { bg: "#080b10", inset: "#0c1119", orbit: "#182236",
+  belt: "rgba(79,195,247,.10)", beltEdge: "rgba(79,195,247,.28)",
+  band: "rgba(79,195,247,.45)", bandFill: "rgba(79,195,247,.16)",
+  body: "#8693a6", star: "#ffb74d", label: "#8693a6", text: "#d8e1ee",
+  chord: "#4fc3f7", window: "#66bb6a", drop: "#ffd54f", frame: "#243044" };
+
+function haloMapPoints(plan) {
+  const start = plan.start.xyz;
+  const stage = plan.staged ? plan.legs[0].to_xyz : null;
+  const from = stage || start;
+  const marker = plan.drop.marker_xyz, cross = plan.drop.crossing_xyz;
+  // window endpoints: known distances-to-marker along the chord
+  const L = Math.hypot(marker[0] - from[0], marker[1] - from[1], marker[2] - from[2]);
+  const along = (d) => [marker[0] + (from[0] - marker[0]) * d / L,
+                        marker[1] + (from[1] - marker[1]) * d / L,
+                        marker[2] + (from[2] - marker[2]) * d / L];
+  return { start, stage, from, marker, cross,
+           wEnter: along(plan.drop.enter_m), wExit: along(plan.drop.exit_m) };
+}
+
+function haloNiceScale(maxM) {   // largest 1/2/5·10^n at most maxM
+  const exp = Math.pow(10, Math.floor(Math.log10(maxM)));
+  for (const m of [5, 2, 1]) if (m * exp <= maxM) return m * exp;
+  return exp / 2;
+}
+
+function haloRRect(ctx, x, y, w, h, r) {   // roundRect w/ pre-2022 fallback
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
+function drawHaloMap(plan) {
+  const cv = $("halo-map");
+  if (!cv || !haloBandsDoc || !plan) return;
+  const cssW = cv.parentElement.clientWidth;
+  if (!(cssW > 0)) return;                       // hidden / mid-layout: skip
+  const cssH = Math.round(Math.min(430, Math.max(280, cssW * 0.58)));
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + "px";
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const C = HALO_MAP_C, bands = haloBandsDoc.bands;
+  const beltIn = bands[0].inner_m, beltOut = bands[bands.length - 1].outer_m;
+  const P = haloMapPoints(plan);
+  const pts = [P.start, P.marker, P.cross].concat(P.stage ? [P.stage] : []);
+  const rFit = Math.max(beltOut, ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
+  const cx = cssW / 2, cy = cssH / 2;
+  const s = (Math.min(cssW, cssH) / 2 - 12) / rFit;
+  const X = (p) => cx + p[0] * s, Y = (p) => cy - p[1] * s;
+
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, cssH);
+  ctx.font = "10px monospace";
+
+  // planet orbits (true planets; moons are sub-pixel at this scale)
+  ctx.lineWidth = 1; ctx.strokeStyle = C.orbit;
+  for (const b of haloBandsDoc.bodies || []) {
+    if (b.type === "Star") continue;
+    ctx.beginPath(); ctx.arc(cx, cy, Math.hypot(b.x, b.y) * s, 0, 2 * Math.PI); ctx.stroke();
+  }
+  // the belt — a true-scale thin ring; the chosen band brightened
+  ctx.beginPath();
+  ctx.arc(cx, cy, beltOut * s, 0, 2 * Math.PI);
+  ctx.arc(cx, cy, beltIn * s, 0, 2 * Math.PI, true);
+  ctx.fillStyle = C.belt; ctx.fill("evenodd");
+  ctx.strokeStyle = C.beltEdge;
+  for (const r of [beltIn, beltOut]) {
+    ctx.beginPath(); ctx.arc(cx, cy, r * s, 0, 2 * Math.PI); ctx.stroke();
+  }
+  if (plan.band) {
+    const b = bands[plan.band.band - 1];
+    ctx.strokeStyle = C.band;
+    ctx.lineWidth = Math.max(1.5, (b.outer_m - b.inner_m) * s);
+    ctx.beginPath();
+    ctx.arc(cx, cy, (b.inner_m + b.outer_m) / 2 * s, 0, 2 * Math.PI); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+  // bodies: star at its real offset, planets as dots + labels
+  ctx.textAlign = "left";
+  for (const b of haloBandsDoc.bodies || []) {
+    const bx = cx + b.x * s, by = cy - b.y * s;
+    const isStar = b.type === "Star";
+    ctx.fillStyle = isStar ? C.star : C.body;
+    ctx.beginPath();
+    ctx.arc(bx, by, Math.max(isStar ? 4 : 2.2, b.r * s), 0, 2 * Math.PI); ctx.fill();
+    if (!isStar) { ctx.fillStyle = C.label; ctx.fillText(b.name, bx + 5, by + 3); }
+  }
+  // origin tick: the Stanton starmap marker, the band datum
+  ctx.strokeStyle = C.label;
+  ctx.beginPath(); ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy);
+  ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3); ctx.stroke();
+
+  // route: staging hop (dashed) then the drop chord
+  ctx.strokeStyle = C.chord; ctx.lineWidth = 1.4;
+  if (P.stage) {
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(X(P.start), Y(P.start)); ctx.lineTo(X(P.stage), Y(P.stage)); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.beginPath(); ctx.moveTo(X(P.from), Y(P.from)); ctx.lineTo(X(P.marker), Y(P.marker)); ctx.stroke();
+  // drop window: exit anywhere on the green stretch
+  ctx.strokeStyle = C.window; ctx.lineWidth = 3.5;
+  ctx.beginPath(); ctx.moveTo(X(P.wEnter), Y(P.wEnter)); ctx.lineTo(X(P.wExit), Y(P.wExit)); ctx.stroke();
+  ctx.lineWidth = 1;
+  // endpoints + drop ✕
+  const dot = (p, fill, label, dy) => {
+    ctx.fillStyle = fill;
+    ctx.beginPath(); ctx.arc(X(p), Y(p), 3, 0, 2 * Math.PI); ctx.fill();
+    if (label) { ctx.fillStyle = C.text; ctx.fillText(label, X(p) + 6, Y(p) + (dy || -5)); }
+  };
+  dot(P.start, C.chord, plan.start.name);
+  if (P.stage) dot(P.stage, C.chord, plan.legs[0].to, 10);
+  dot(P.marker, C.body, plan.drop.marker_name, 10);
+  ctx.strokeStyle = C.drop; ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(X(P.cross) - 5, Y(P.cross) - 5); ctx.lineTo(X(P.cross) + 5, Y(P.cross) + 5);
+  ctx.moveTo(X(P.cross) - 5, Y(P.cross) + 5); ctx.lineTo(X(P.cross) + 5, Y(P.cross) - 5);
+  ctx.stroke(); ctx.lineWidth = 1;
+  // scale bar
+  const bar = haloNiceScale(rFit * 0.5);
+  ctx.strokeStyle = C.label; ctx.fillStyle = C.label;
+  ctx.beginPath(); ctx.moveTo(12, cssH - 12); ctx.lineTo(12 + bar * s, cssH - 12); ctx.stroke();
+  ctx.fillText((bar / 1e9) + " Gm", 12, cssH - 18);
+
+  drawHaloInset(ctx, plan, P, cssW, cssH);
+}
+
+// Magnified drop zone: individual band edges are visible here (they're
+// sub-pixel on the system view), plus the chord, window ticks, and the ✕.
+function drawHaloInset(ctx, plan, P, cssW, cssH) {
+  const C = HALO_MAP_C, bands = haloBandsDoc.bands;
+  const size = Math.round(Math.min(cssW * 0.34, cssH * 0.66));
+  if (size < 90) return;                         // too small to be useful
+  const x0 = cssW - size - 10, y0 = 10;
+  let half;                                       // world half-extent of the box
+  if (plan.band) {
+    const b = bands[plan.band.band - 1];
+    half = Math.max(2.2 * (b.outer_m - b.inner_m),
+                    0.55 * (plan.drop.enter_m - plan.drop.exit_m), 0.25e9);
+  } else {
+    half = Math.max(3 * (plan.drop.expected_miss_m || 0), 0.15e9);
+  }
+  const si = (size / 2 - 8) / half;
+  const icx = x0 + size / 2, icy = y0 + size / 2;
+  const IX = (p) => icx + (p[0] - P.cross[0]) * si;
+  const IY = (p) => icy - (p[1] - P.cross[1]) * si;
+
+  ctx.save();
+  haloRRect(ctx, x0, y0, size, size, 6); ctx.clip();
+  ctx.fillStyle = C.inset; ctx.fillRect(x0, y0, size, size);
+  // band edges: arcs of the origin-centered rings passing through the box
+  const originX = icx - P.cross[0] * si, originY = icy + P.cross[1] * si;
+  const crossR = Math.hypot(P.cross[0], P.cross[1]);
+  const ring = (r, stroke, width) => {
+    if (Math.abs(r - crossR) > half * 2.2) return;
+    ctx.strokeStyle = stroke; ctx.lineWidth = width || 1;
+    ctx.beginPath(); ctx.arc(originX, originY, r * si, 0, 2 * Math.PI); ctx.stroke();
+  };
+  for (const b of bands) {
+    const sel = plan.band && b.band === plan.band.band;
+    if (sel) {                                   // fill the chosen band's annulus
+      ctx.beginPath();
+      ctx.arc(originX, originY, b.outer_m * si, 0, 2 * Math.PI);
+      ctx.arc(originX, originY, b.inner_m * si, 0, 2 * Math.PI, true);
+      ctx.fillStyle = C.bandFill; ctx.fill("evenodd");
+    }
+    ring(b.inner_m, sel ? C.band : C.beltEdge);
+    ring(b.outer_m, sel ? C.band : C.beltEdge);
+    // number the bands along the sightline from the origin through the drop
+    if (Math.abs((b.inner_m + b.outer_m) / 2 - crossR) < half * 1.6) {
+      const u = [P.cross[0] / crossR, P.cross[1] / crossR];
+      const mid = [(u[0] * (b.inner_m + b.outer_m)) / 2, (u[1] * (b.inner_m + b.outer_m)) / 2];
+      ctx.fillStyle = C.label; ctx.font = "9px monospace";
+      ctx.fillText(String(b.band), IX(mid) + 3, IY(mid) - 3);
+    }
+  }
+  // chord through the box + window ticks + the ✕
+  ctx.strokeStyle = C.chord; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(IX(P.from), IY(P.from)); ctx.lineTo(IX(P.marker), IY(P.marker)); ctx.stroke();
+  ctx.strokeStyle = C.window; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(IX(P.wEnter), IY(P.wEnter)); ctx.lineTo(IX(P.wExit), IY(P.wExit)); ctx.stroke();
+  ctx.lineWidth = 1;
+  if (plan.target && plan.target.xyz) {          // POI mode: the rock itself
+    const t = plan.target.xyz;
+    ctx.fillStyle = C.drop;
+    ctx.beginPath(); ctx.arc(IX(t), IY(t), 3, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = C.label; ctx.font = "9px monospace";
+    ctx.fillText(plan.target.name, IX(t) + 5, IY(t) + 3);
+  }
+  ctx.strokeStyle = C.drop; ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(icx - 4, icy - 4); ctx.lineTo(icx + 4, icy + 4);
+  ctx.moveTo(icx - 4, icy + 4); ctx.lineTo(icx + 4, icy - 4);
+  ctx.stroke();
+  ctx.restore();
+  // frame + labels
+  ctx.strokeStyle = C.frame; ctx.lineWidth = 1;
+  haloRRect(ctx, x0, y0, size, size, 6); ctx.stroke();
+  ctx.fillStyle = C.inset;                        // keep the label legible
+  ctx.fillRect(x0 + 2, y0 + 2, 66, 13);           // when the chord runs under it
+  ctx.fillStyle = C.label; ctx.font = "9px monospace";
+  ctx.fillText("DROP ZONE", x0 + 6, y0 + 12);
+  const bar = haloNiceScale(half * 0.9);
+  ctx.strokeStyle = C.label;
+  ctx.beginPath();
+  ctx.moveTo(x0 + 6, y0 + size - 8); ctx.lineTo(x0 + 6 + bar * si, y0 + size - 8); ctx.stroke();
+  ctx.fillText(bar >= 1e9 ? (bar / 1e9) + " Gm" : fmtKmNum(bar) + " km",
+               x0 + 6, y0 + size - 13);
 }
 
 // AFTER THE DROP: classify the latest fix (band / void / off-plane / outside),

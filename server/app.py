@@ -1478,6 +1478,11 @@ class Session:
         self.user = user           # {"id","display_name","is_admin"}
         self.pos = None
         self.t = None
+        # Last container-confirmed system. Deep space is ambiguous from raw
+        # coordinates (every system centers on its own (0,0,0) in one shared
+        # numeric space), but you can't change systems without transiting a
+        # jump gate — always near detectable containers — so this sticks.
+        self.system = None
         self.prev_pos = None
         self.prev_t = None
         self.destination_id = None
@@ -1510,6 +1515,16 @@ class Session:
         if self.pos is None:
             self.nav_state = None
             return
+        self._recompute_state()
+        # Sticky system: learn it when a container confirms it; backfill the
+        # deep-space view (compute_state reports None there) so clients — the
+        # navigator's halo chip, the halo locate loop — know where we are.
+        if self.nav_state.get("system"):
+            self.system = self.nav_state["system"]
+        elif self.system:
+            self.nav_state["system"] = self.system
+
+    def _recompute_state(self):
         self.nav_state = nav_core.compute_state(
             nav, self.pos, self.t,
             destination_id=self.destination_id,
@@ -2306,6 +2321,7 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
         qt_marker=pending.get("qt_marker", False),
         private=pending.get("private", False), note=pending.get("note"),
+        system_hint=sess.system,
     )
     halo_tag = _halo_capture_note(poi)
     if halo_tag and halo_tag not in (poi.note or ""):
@@ -2338,7 +2354,7 @@ def _capture_observation(sess, pos_m, now, pending, owner):
         nav, pos_m, now, category, pending["data"], next_id,
         biome=pending.get("biome"), note=pending.get("note"),
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
-        shard_id=sess.shard,
+        shard_id=sess.shard, system_hint=sess.system,
     )
     try:
         db.add_observation(nav_core.observation_to_dict(obs))
@@ -3887,11 +3903,18 @@ class HaloPlanIn(BaseModel):
 
 @app.get("/api/halo/bands")
 def get_halo_bands(user: dict = Depends(require_session)):
-    """The Aaron Halo band model for the picker strip. Static survey constants
-    (nav_core.HALO_BANDS) — cacheable, identical for every caller."""
+    """The Aaron Halo band model for the picker strip + the system-map bodies
+    (star + true planets; moons are sub-pixel at map scale). Static — bodies
+    don't move in SC — and identical for every caller."""
+    star = [c for c in nav.containers.values()
+            if c.system == nav_core.HALO_SYSTEM and c.type == "Star"]
+    planets = nav_core._planets_in_system(nav, nav_core.HALO_SYSTEM)
     return {"system": nav_core.HALO_SYSTEM,
             "bands": [{**b, "width_m": b["outer_m"] - b["inner_m"]}
                       for b in nav_core.HALO_BANDS],
+            "bodies": [{"name": c.name, "type": c.type,
+                        "x": c.pos[0], "y": c.pos[1], "r": c.body_radius}
+                       for c in star + planets],
             "attribution": nav_core.HALO_ATTRIBUTION}
 
 
@@ -3912,6 +3935,8 @@ def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> di
                             detail="no live position yet — run /showlocation, or pick a start POI")
     else:
         start = nav_core.position_start(nav, sess.pos)
+        if sess.system:               # deep-space fixes are system-ambiguous
+            start.system = sess.system
     if start.system != nav_core.HALO_SYSTEM:
         # Stanton-only v1 (design decision): no auto gate legs for a case
         # nobody starts from.
@@ -3971,8 +3996,12 @@ async def get_halo_locate(target_poi_id: int | None = None,
     if pos is None:
         raise HTTPException(status_code=400,
                             detail="no live position yet — run /showlocation")
-    if nav_core.system_at(nav, pos) != nav_core.HALO_SYSTEM:
-        view = {"status": "other_system", "system": nav_core.system_at(nav, pos)}
+    # Deep-space coordinates are system-ambiguous; the session's sticky
+    # (container-confirmed) system outranks the nearest-container heuristic.
+    fix_system = (sess.system if sess and sess.system
+                  else nav_core.system_at(nav, pos))
+    if fix_system != nav_core.HALO_SYSTEM:
+        view = {"status": "other_system", "system": fix_system}
     else:
         view = nav_core.halo_locate(pos)
     view["fix_age_s"] = max(0.0, time.time() - t) if t else None

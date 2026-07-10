@@ -3689,6 +3689,28 @@ class HaloFinderTests(unittest.TestCase):
         second = plan["drop"]["second_crossing"]
         self.assertLess(second["peak_m"], plan["drop"]["peak_m"])
 
+    def test_plan_carries_map_coordinates(self):
+        # The HALO MAP needs real positions: plan start, staging hop, and each
+        # drop's marker. crossing_xyz was already there.
+        vols = nav_core.body_volumes(self.nav, "Stanton")
+        plan = nav_core.plan_halo_drop(self.nav, start=self.arc, band=5,
+                                       volumes=vols)
+        self.assertEqual(tuple(plan["start"]["xyz"]), tuple(self.p_arc))
+        r = math.hypot(plan["drop"]["marker_xyz"][0], plan["drop"]["marker_xyz"][1])
+        self.assertGreater(r, 1e9)          # a real system position, not a stub
+        self.assertTrue(all("marker_xyz" in a["drop"] for a in plan["alternates"]))
+        # staged plans position the hop too (synthetic staging fixture)
+        m_in = _space_poi(11, "Inner", (19_000_000e3, 0, 0), system="Stanton")
+        m_out = _space_poi(12, "Outer", (23_000_000e3, 0, 0), system="Stanton")
+        nav2 = _synthetic_nav([m_in, m_out], system="Stanton")
+        lofted = nav_core.Poi(
+            id=-1, name="your location", system="Stanton", container_name=None,
+            type="", local_km=None, global_m=(20_320_000e3, 0, 50_000e3),
+            latitude=None, longitude=None, height_m=None, qt_marker=False)
+        staged = nav_core.plan_halo_drop(nav2, start=lofted, band=5,
+                                         markers=[m_in, m_out])
+        self.assertEqual(tuple(staged["legs"][0]["to_xyz"]), (19_000_000e3, 0, 0))
+
     # --- obstruction: endpoint-in-volume rule (v0.51.1 regression) -----------
 
     def test_chord_obstructed_endpoint_in_margin(self):
@@ -3731,6 +3753,26 @@ class HaloFinderTests(unittest.TestCase):
             except ValueError:
                 fails.append(p.name)
         self.assertEqual(fails, [])
+
+    def test_frame_at_system_hint_disambiguates_deep_space(self):
+        # Every system's data centers on its own (0,0,0) in one numeric space,
+        # so this genuine Stanton belt position sits NEARER a Pyro container
+        # than any Stanton one — the raw heuristic names the wrong system.
+        ambiguous = (14_000_000e3, -14_800_000e3, 900e3)
+        self.assertNotEqual(nav_core.system_at(self.nav, ambiguous), "Stanton")
+        poi = nav_core.custom_poi_from_position(
+            self.nav, ambiguous, self.t, "Halo Rock", "asteroid", 1000010,
+            system_hint="Stanton")
+        self.assertEqual(poi.system, "Stanton")
+        # near a container the detection wins — a hint can't mis-stamp it
+        daymar = next(c for c in self.nav.containers.values()
+                      if c.system == "Stanton" and c.name == "Daymar")
+        surface = (daymar.pos[0] + daymar.body_radius + 1_000,
+                   daymar.pos[1], daymar.pos[2])
+        near = nav_core.custom_poi_from_position(
+            self.nav, surface, self.t, "Camp", "outpost", 1000011,
+            system_hint="Pyro")
+        self.assertEqual(near.system, "Stanton")
 
     # --- deep-space capture regression (#31 prerequisite) ---------------------
 

@@ -844,16 +844,22 @@ def compute_state(
 CUSTOM_ID_START = 1_000_000
 
 
-def _frame_at(nav: NavData, pos_m, t_unix: float):
+def _frame_at(nav: NavData, pos_m, t_unix: float, system_hint: str | None = None):
     """Resolve a global position into storage form: returns
-    (system, container_name, local_km, global_m, lat, lon, height_m)."""
+    (system, container_name, local_km, global_m, lat, lon, height_m).
+
+    Deep space is ambiguous from coordinates alone: every system's data is
+    centered on its own (0,0,0) in one shared numeric space, so the raw
+    nearest-container heuristic can name the wrong system 20 Gm out (an Aaron
+    Halo position can sit nearer a Pyro container than any Stanton one).
+    `system_hint` — the caller's context (the session's last container-
+    confirmed system) — wins when detection fails; the heuristic is the
+    fallback of last resort. Stamping "Unknown" would make travel_cost treat
+    the POI as cross-system and unroutable."""
     container = detect_container(nav, pos_m)
     if container is None:
-        # Deep space: no container detects this far out, but the position is
-        # still *in* a system (nearest-container heuristic) — stamping
-        # "Unknown" would make travel_cost treat the POI as cross-system and
-        # unroutable (breaks deep-space captures, e.g. Aaron Halo rocks).
-        return system_at(nav, pos_m) or "Unknown", None, None, tuple(pos_m), None, None, None
+        system = system_hint or system_at(nav, pos_m) or "Unknown"
+        return system, None, None, tuple(pos_m), None, None, None
     local = global_to_local_km(container, pos_m, t_unix)
     lat = lon = height = None
     if container.body_radius > 0:
@@ -874,6 +880,7 @@ def custom_poi_from_position(
     qt_marker: bool = False,
     private: bool = False,
     note: str | None = None,
+    system_hint: str | None = None,
 ) -> Poi:
     """Create a POI at a global position, stored the same way the upstream
     dataset stores it: body-local rotating-frame km when at a container,
@@ -881,8 +888,9 @@ def custom_poi_from_position(
 
     Set qt_marker=True to record the POI as a jumpable quantum-travel marker
     (e.g. an Orbital Marker the user is mapping) so it becomes a candidate
-    nearest-jump target for every other entity."""
-    system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix)
+    nearest-jump target for every other entity. `system_hint` disambiguates a
+    deep-space capture (see _frame_at)."""
+    system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix, system_hint)
     poi = Poi(
         id=poi_id,
         name=name,
@@ -1048,11 +1056,12 @@ def observation_from_position(
     owner_handle: str | None = None,
     observed_at: str | None = None,
     shard_id: str | None = None,
+    system_hint: str | None = None,
 ) -> Observation:
     if category not in OBSERVATION_CATEGORIES:
         raise ValueError(f"unknown observation category: {category}")
     data = OBSERVATION_CATEGORIES[category]["normalize"](data)
-    system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix)
+    system, cname, local, gm, lat, lon, height = _frame_at(nav, pos_m, t_unix, system_hint)
     obs = Observation(
         id=obs_id,
         category=category,
@@ -4843,6 +4852,7 @@ def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
     cross = cand["cross"]
     view = {
         "marker_id": cand["marker"].id, "marker_name": cand["marker"].name,
+        "marker_xyz": list(cand["m_pos"]),
         "enter_m": cross["enter_m"], "peak_m": cross["peak_m"],
         "exit_m": cross["exit_m"], "window_m": cand["window_m"],
         "window_s": cand["window_m"] / speed if speed else None,
@@ -4994,7 +5004,8 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
             leg = travel_cost(nav, start, stage_poi, t_ref, avoid=volumes)
             stage_leg = _leg_view(leg, fuel_req, max_range_m)
             stage_leg.update({"kind": "travel", "from": start.name,
-                              "to": stage_poi.name})
+                              "to": stage_poi.name,
+                              "to_xyz": list(marker_pos(stage_poi))})
 
     # POI mode with both options on the table: staging must *materially* beat
     # the direct miss to justify the extra jump.
@@ -5011,7 +5022,8 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
     legs = ([stage_leg] if use_staged else []) + \
         [_halo_drop_leg(from_name, best, fuel_req, max_range_m)]
     plan = {
-        "start": {"id": getattr(start, "id", None), "name": start.name},
+        "start": {"id": getattr(start, "id", None), "name": start.name,
+                  "xyz": list(s_pos)},
         "aim": aim if band_row is not None else None,
         "staged": use_staged,
         "legs": legs,
@@ -5026,5 +5038,6 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
     if band_row is not None:
         plan["band"] = dict(band_row, width_m=band_row["outer_m"] - band_row["inner_m"])
     if target is not None:
-        plan["target"] = {"id": target.id, "name": target.name}
+        plan["target"] = {"id": target.id, "name": target.name,
+                          "xyz": list(p_star)}
     return plan
