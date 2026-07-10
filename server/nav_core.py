@@ -1533,6 +1533,13 @@ def system_at(nav: NavData, pos) -> str | None:
     c = detect_container(nav, pos)
     if c is not None:
         return c.system
+    # Deep space: the nearest-container guess is unreliable near the origin
+    # because per-system frames overlap there (Pyro/Nyx bodies sit at their
+    # own (0,0,0)). The Aaron Halo is a known Stanton landmark ~20 Gm out, so
+    # a fix inside its ring is unambiguously Stanton — resolve it directly
+    # rather than letting a coincidentally-close Pyro/Nyx body win (#31).
+    if halo_contains(pos):
+        return HALO_SYSTEM
     best, best_d = None, math.inf
     for cont in nav.containers.values():
         d = dist3(pos, cont.pos)
@@ -4609,6 +4616,27 @@ def halo_band(n: int) -> dict:
     if not isinstance(n, int) or not 1 <= n <= len(HALO_BANDS):
         raise ValueError(f"unknown halo band {n!r}")
     return HALO_BANDS[n - 1]
+
+
+# Off-plane slack for the *system* discriminator (halo_contains). The belt disk
+# itself is thin (band half-heights ≤ 5000 km), but a drop can exit QT well off
+# the plane; 1 Gm is generous for any realistic fix yet still a razor-thin torus
+# (2 Gm tall, ~1.6 Gm wide, at ~20 Gm radius) — far too specific for a genuine
+# Pyro/Nyx deep-space fix to land in by coincidence.
+HALO_PLANE_TOLERANCE_M = 1.0e9
+
+
+def halo_contains(pos) -> bool:
+    """True when `pos` lies inside the Aaron Halo ring envelope: cylindrical
+    radius within the band table AND near the ecliptic. The halo is centered on
+    the Stanton system origin at ~20 Gm radius, a region no Pyro/Nyx body
+    occupies — so this is a reliable landmark for disambiguating a deep-space
+    fix's system (see system_at). Broader than halo_locate's per-band lookup:
+    void gaps and off-plane fixes at halo radius still count as "in the halo"
+    for system purposes."""
+    r = math.hypot(pos[0], pos[1])
+    return (HALO_BANDS[0]["inner_m"] <= r <= HALO_BANDS[-1]["outer_m"]
+            and abs(pos[2]) <= HALO_PLANE_TOLERANCE_M)
 
 
 def _ring_crossings(p0, p1, r_m: float) -> list[float]:

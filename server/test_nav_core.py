@@ -3597,6 +3597,32 @@ class HaloFinderTests(unittest.TestCase):
         beyond = nav_core.halo_locate((0, 22_000_000e3, 0))
         self.assertEqual((beyond["status"], beyond["side"]), ("outside", "outward"))
 
+    # --- system disambiguation (#31 in-halo bug) ------------------------------
+
+    def test_in_halo_resolves_to_stanton_every_angle(self):
+        # Regression: a deep-space fix inside the belt used to resolve to
+        # Pyro/Nyx at some bearings, because the nearest-container fallback
+        # mixes per-system frames (Pyro/Nyx bodies sit at their own origin,
+        # ~20 Gm from the Stanton-frame halo ring). It must be Stanton from
+        # every angle around the ring — the halo is a Stanton landmark.
+        peak = nav_core.halo_band(5)["peak_m"]
+        for deg in range(0, 360, 15):
+            a = math.radians(deg)
+            pos = (peak * math.cos(a), peak * math.sin(a), 0.0)
+            self.assertTrue(nav_core.halo_contains(pos))
+            self.assertEqual(nav_core.system_at(self.nav, pos),
+                             nav_core.HALO_SYSTEM, msg=f"bearing {deg}")
+
+    def test_halo_contains_bounds(self):
+        peak = nav_core.halo_band(5)["peak_m"]
+        # off-plane but within tolerance -> still in the halo
+        self.assertTrue(nav_core.halo_contains((peak, 0, 5e8)))
+        # far off-plane -> not the halo (radius-only match is not enough)
+        self.assertFalse(nav_core.halo_contains((peak, 0, 2e9)))
+        # inside the inner edge / beyond the outer edge -> not the halo
+        self.assertFalse(nav_core.halo_contains((10_000_000e3, 0, 0)))
+        self.assertFalse(nav_core.halo_contains((30_000_000e3, 0, 0)))
+
     # --- plan_halo_drop -------------------------------------------------------
 
     def test_plan_validates_inputs(self):
@@ -3756,9 +3782,13 @@ class HaloFinderTests(unittest.TestCase):
 
     def test_frame_at_system_hint_disambiguates_deep_space(self):
         # Every system's data centers on its own (0,0,0) in one numeric space,
-        # so this genuine Stanton belt position sits NEARER a Pyro container
-        # than any Stanton one — the raw heuristic names the wrong system.
-        ambiguous = (14_000_000e3, -14_800_000e3, 900e3)
+        # so this genuine Stanton position sits NEARER a Pyro container than any
+        # Stanton one — the raw heuristic names the wrong system. Lofted 3 Gm
+        # off-plane so it's outside the Aaron Halo envelope (see
+        # test_in_halo_resolves_to_stanton_every_angle) — this isolates the
+        # system_hint mechanism, not the halo_contains geometric shortcut.
+        ambiguous = (14_000_000e3, -14_800_000e3, 3_000_000e3)
+        self.assertFalse(nav_core.halo_contains(ambiguous))
         self.assertNotEqual(nav_core.system_at(self.nav, ambiguous), "Stanton")
         poi = nav_core.custom_poi_from_position(
             self.nav, ambiguous, self.t, "Halo Rock", "asteroid", 1000010,
