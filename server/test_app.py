@@ -3038,6 +3038,12 @@ class HaloFinderApiTests(unittest.TestCase):
         b5 = doc["bands"][4]
         self.assertEqual(b5["band"], 5)
         self.assertEqual(b5["width_m"], b5["outer_m"] - b5["inner_m"])
+        # system-map bodies: the star (at its real offset, not origin) + planets
+        bodies = {b["name"]: b for b in doc["bodies"]}
+        self.assertIn("Stanton Star", bodies)
+        self.assertGreater(abs(bodies["Stanton Star"]["y"]), 1e9)
+        self.assertIn("ArcCorp", bodies)
+        self.assertNotIn("Daymar", bodies)      # moons stay off the map
 
     def test_plan_validates_goal_choice(self):
         for bad in ({}, {"band": 5, "target_poi_id": 1}):
@@ -3091,6 +3097,27 @@ class HaloFinderApiTests(unittest.TestCase):
         self.assertEqual(doc["status"], "band")
         self.assertEqual(doc["band"], 5)
         self.assertIsNotNone(doc["fix_age_s"])
+
+    def test_sticky_system_disambiguates_deep_space(self):
+        # (14, -14.8) Gm is real Stanton belt space that sits nearer a Pyro
+        # container than any Stanton one. With the session's last confirmed
+        # system, locate must classify it (not "other_system"), a live-start
+        # plan must work, and the state view must carry the backfilled system.
+        ambiguous = (14_000_000e3, -14_800_000e3, 900e3)
+        s = self._live_at(ambiguous)
+        s.system = "Stanton"
+        s.recompute()
+        self.assertIsNone(s.nav_state["container"])
+        self.assertEqual(s.nav_state["system"], "Stanton")
+        loc = self.client.get("/api/halo/locate").json()
+        self.assertNotEqual(loc["status"], "other_system")
+        r = self.client.post("/api/halo/plan", json={"band": 5})
+        self.assertEqual(r.status_code, 200)
+        # sticky system says Pyro -> friendly rejection, not a wrong plan
+        s.system = "Pyro"
+        r = self.client.post("/api/halo/plan", json={"band": 5})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("travel there first", r.json()["detail"])
 
     def test_capture_note_annotates_band(self):
         def poi_at(global_m, container=None, system="Stanton"):
