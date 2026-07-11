@@ -3221,9 +3221,12 @@ class ResourceValueTests(unittest.TestCase):
         doc = self.client.get("/api/resource_values").json()
         ores = doc["resource"]
         self.assertEqual(ores["Hadanite"]["tier"], "high")
+        self.assertNotIn("refined", ores["Hadanite"])         # priced raw: no asterisk
+        # Refined fallback carries the basis flag so the UI can asterisk it.
         self.assertEqual(ores["Bexalite (Raw)"],
-                         {"sell": 28907, "tier": "medium"})   # refined fallback
+                         {"sell": 28907, "tier": "medium", "refined": True})
         self.assertEqual(ores["Copper (Ore)"]["tier"], "low")
+        self.assertTrue(ores["Copper (Ore)"].get("refined"))
         self.assertNotIn("Ice (Raw)", ores)                   # unpriced -> no badge
         # Harvestables tier against each other, not against ore prices: 80k aUEC
         # would be mid-tier among ores but is the top of its own category.

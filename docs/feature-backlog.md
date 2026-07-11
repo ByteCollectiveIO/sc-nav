@@ -42,7 +42,9 @@ carries a relative-value badge (`$$$`/`$$`/`$`, tooltip = ≈aUEC/SCU sell ref)
 so the player knows instantly whether a scanned node is worth stopping for.
 Data: the already-cached uexcorp commodities feed — raw ores without their own
 sell price fall back to their refined commodity ("Quantainium (Raw)" →
-"Quantainium"), genuinely unpriced names (Ice, rubble) get **no** badge rather
+"Quantainium"); those badges carry a trailing **asterisk** (`$$$*`, tooltip
+states the refined basis) so raw-vs-refined pricing is never conflated
+silently. Genuinely unpriced names (Ice, rubble) get **no** badge rather
 than a misleading "low". Tiers are rank terciles *within* each category
 (ores vs ores, harvestables vs harvestables; `nav_core.resource_value_tiers`),
 so buckets survive patch-day price rebalances and the 23M-aUEC Jaclium outlier
