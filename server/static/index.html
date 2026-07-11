@@ -4127,15 +4127,20 @@ async function loadOreValues() {
 const VALUE_TIERS = { high: ["val-high", "$$$", "high value"],
                       medium: ["val-med", "$$", "medium value"],
                       low: ["val-low", "$", "low value"] };
+// A trailing * marks a refined-value basis: the raw ore has no market row, so
+// the badge reflects its refined commodity's price (fair relative signal, but
+// you'd refine before selling).
 function oreValueChip(name, category = "resource") {
   const v = (oreValues[category] || {})[name], t = v && VALUE_TIERS[v.tier];
   if (!t) return "";
-  return ` <span class="val-chip ${t[0]}" title="${t[2]} — sells ≈${v.sell.toLocaleString()} aUEC/SCU">${t[1]}</span>`;
+  const star = v.refined ? "*" : "";
+  const basis = v.refined ? ` (refined value — raw ${esc(name)} isn't sold directly)` : "";
+  return ` <span class="val-chip ${t[0]}" title="${t[2]} — sells ≈${v.sell.toLocaleString()} aUEC/SCU${basis}">${t[1]}${star}</span>`;
 }
 // Plain-text twin for <option> labels (no HTML allowed inside a <select>).
 function oreValueText(name, category = "resource") {
   const v = (oreValues[category] || {})[name];
-  return v && VALUE_TIERS[v.tier] ? `  ${VALUE_TIERS[v.tier][1]}` : "";
+  return v && VALUE_TIERS[v.tier] ? `  ${VALUE_TIERS[v.tier][1]}${v.refined ? "*" : ""}` : "";
 }
 
 // ---------- resource forecast (what's around me) ----------

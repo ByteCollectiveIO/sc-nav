@@ -732,14 +732,21 @@ def build_resource_values() -> dict:
     prices = load_commodity_prices()
 
     def sell_of(name: str):
+        """(sell, via_refined): the price and whether it came from the refined
+        commodity rather than the raw ore's own market row."""
         p = prices.get(name) or {}
         if p.get("sell"):
-            return p["sell"]
+            return p["sell"], False
         refined = prices.get(_RAW_ORE_SUFFIX.sub("", name)) or {}
-        return refined.get("sell")
+        return refined.get("sell"), True
 
     def tiered(names: list[str]) -> dict:
-        return nav_core.resource_value_tiers({n: sell_of(n) for n in names})
+        resolved = {n: sell_of(n) for n in names}
+        out = nav_core.resource_value_tiers({n: s for n, (s, _) in resolved.items()})
+        for n, v in out.items():
+            if resolved[n][1]:
+                v["refined"] = True   # badge shows an asterisk: refined value, not raw
+        return out
 
     return {"resource": tiered(raw_commodity_names),
             "harvestable": tiered(harvestable_names)}
