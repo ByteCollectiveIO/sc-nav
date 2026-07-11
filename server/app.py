@@ -246,6 +246,23 @@ def stock_ageoff_min() -> int:
         return 180
 
 
+_FEED_REFRESH_FLOOR_H = 2    # hard floor — be kind to the community-run uexcorp API
+_FEED_REFRESH_MAX_H = 720    # a month; sanity cap on the meta value, not a policy
+
+
+def feed_refresh_h() -> int:
+    """Hours between automatic uexcorp feed refreshes (#33). 0 = off (manual
+    /api/refresh only). Any enabled value clamps UP to the 2h floor — an admin
+    may refresh less often than the default 6h, never more often."""
+    try:
+        h = int(db.get_setting("feed_refresh_h", "6"))
+    except (TypeError, ValueError):
+        return 6
+    if h <= 0:
+        return 0
+    return min(max(h, _FEED_REFRESH_FLOOR_H), _FEED_REFRESH_MAX_H)
+
+
 def active_stock_reports() -> list[dict]:
     """The live stock board: fresh reports only (side effect: expired rows are
     pruned). Each row gains `age_s` for the client's badges."""
@@ -699,6 +716,35 @@ def load_harvestable_names() -> list[str]:
     return sorted(names)
 
 
+# Most raw ores are unsellable as-is — you refine first, so their value signal
+# lives on the refined commodity ("Quantainium (Raw)" -> "Quantainium"). Gems
+# and FPS minables (Hadanite, Janalite, ...) sell raw and price directly.
+_RAW_ORE_SUFFIX = re.compile(r"\s*\((?:Raw|Ore)\)$")
+
+
+def build_resource_values() -> dict:
+    """Relative mining-value tiers for the navigator's "worth pausing the
+    survey for?" badges: per mappable category, each ore/harvestable name's
+    aUEC/SCU sell reference bucketed high/medium/low (nav_core tierer). Raw
+    ores without their own sell price fall back to their refined commodity's
+    price — a fair *relative* proxy (refining preserves the value ordering).
+    Genuinely unpriced names (Ice, rubble) are simply absent: no badge."""
+    prices = load_commodity_prices()
+
+    def sell_of(name: str):
+        p = prices.get(name) or {}
+        if p.get("sell"):
+            return p["sell"]
+        refined = prices.get(_RAW_ORE_SUFFIX.sub("", name)) or {}
+        return refined.get("sell")
+
+    def tiered(names: list[str]) -> dict:
+        return nav_core.resource_value_tiers({n: sell_of(n) for n in names})
+
+    return {"resource": tiered(raw_commodity_names),
+            "harvestable": tiered(harvestable_names)}
+
+
 def load_trade_terminals() -> list[dict]:
     """UEX commodity terminals (one row per terminal), for the trade-route planner
     (#21). Filtered to live, commodity-type terminals — the only ones that buy/sell
@@ -1039,6 +1085,7 @@ fleet_ships = load_fleet_ships()
 blueprints_feed = load_blueprints()     # crafting recipes for commissions (#25)
 item_names = load_item_names()
 item_prices = build_item_prices()
+resource_values = build_resource_values()   # mining-value badges (needs the name lists above)
 fauna_names = load_fauna_names()
 biomes = load_biomes()
 
@@ -2236,6 +2283,31 @@ async def event_reminder_loop():
             print(f"[sc-nav] event reminder loop error: {exc}")
 
 
+_FEED_REFRESH_TICK_S = 300   # how often the loop re-checks the elapsed time / setting
+
+
+async def feed_refresh_loop():
+    """Scheduled uexcorp feed refresh (#33): keeps trade prices, market-value
+    hints, and ore value badges current between deploys. Re-reads the interval
+    every tick, so an admin change — including 0 = off — applies without a
+    restart. A failed pass backs off a full interval (the loaders already fell
+    back to cache) instead of retrying every tick."""
+    global feeds_refreshed_at
+    if OFFLINE:
+        return   # nothing to fetch; the disk cache is all there is
+    while True:
+        await asyncio.sleep(_FEED_REFRESH_TICK_S)
+        try:
+            h = feed_refresh_h()
+            if not h or time.time() - feeds_refreshed_at < h * 3600:
+                continue
+            await _refresh_feeds()
+            print("[sc-nav] scheduled uexcorp feed refresh done")
+        except Exception as exc:   # never let the loop die
+            feeds_refreshed_at = time.time()
+            print(f"[sc-nav] scheduled feed refresh failed: {exc}")
+
+
 @app.on_event("startup")
 async def _start_presence_broadcaster():
     # Re-hydrate the Group Finder board so a redeploy/restart no longer wipes it.
@@ -2250,6 +2322,7 @@ async def _start_presence_broadcaster():
     hub._warning_seq = max([0, *hub.warnings])
     asyncio.create_task(presence_broadcaster())
     asyncio.create_task(event_reminder_loop())
+    asyncio.create_task(feed_refresh_loop())
     # v0.13.0 stored one shared Discord webhook; move it to the new per-category
     # settings so notifications keep flowing after this upgrade (one-time, no-op
     # thereafter).
@@ -2508,6 +2581,14 @@ async def list_handles():
 async def list_raw_commodities():
     """Raw-ore names (uexcorp is_raw==1) for the ore datalist."""
     return raw_commodity_names
+
+
+@app.get("/api/resource_values")
+async def get_resource_values():
+    """Relative mining-value tier (high/medium/low + aUEC/SCU sell reference)
+    per ore / harvestable name — the navigator's value badges. Absent name =
+    unpriced, and the client shows no badge rather than implying worthless."""
+    return resource_values
 
 
 @app.get("/api/commodities")
@@ -6513,22 +6594,45 @@ async def _rebuild_nav() -> None:
     rebuild_trade_terminals()   # re-resolve the crosswalk against the new POI set
 
 
-@app.post("/api/refresh")
-async def refresh_data(admin: dict = Depends(require_admin)):
-    """Re-fetch the dataset (starmap) and the commodities list (uexcorp)
-    without restarting. Admin only."""
-    global raw_commodity_names, commodity_names, ships, fleet_ships, item_names, item_prices
-    global trade_terminals_raw, trade_prices
+# Epoch of the last successful uexcorp feed load (the import-time loaders count
+# as the first one). Drives the scheduled loop's elapsed check and the ORG
+# SETTINGS "prices as of" readout.
+feeds_refreshed_at = time.time()
+
+
+async def _refresh_feeds() -> None:
+    """Re-fetch every uexcorp feed and rebuild all state derived from them
+    (price refs, value badges, item catalog, trade-terminal crosswalk). Shared
+    by the manual /api/refresh and the scheduled feed_refresh_loop (#33). The
+    loaders fall back to the disk cache on a failed fetch, so a UEX outage
+    degrades to stale-but-served rather than raising."""
+    global raw_commodity_names, commodity_names, ships, fleet_ships
+    global item_names, item_prices, resource_values
+    global trade_terminals_raw, trade_prices, feeds_refreshed_at
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
+    # Startup enriches ships with quantum fuel/range (#27); a refresh must too,
+    # or the drive picker's ranges vanish until the next restart.
+    enrich_ships_quantum(ships)
     fleet_ships = await asyncio.to_thread(load_fleet_ships)
     item_names = await asyncio.to_thread(load_item_names)
     item_prices = await asyncio.to_thread(build_item_prices)   # fresh price refs
+    resource_values = await asyncio.to_thread(build_resource_values)  # fresh value badges
     trade_terminals_raw = await asyncio.to_thread(load_trade_terminals)
     trade_prices = await asyncio.to_thread(load_trade_prices)
-    refresh_catalog()   # feeds changed → rebuild the shared item catalog
-    await _rebuild_nav()   # also re-runs the trade-terminal crosswalk
+    refresh_catalog()             # feeds changed → rebuild the shared item catalog
+    rebuild_trade_terminals()     # re-resolve the crosswalk with the new terminal set
+    feeds_refreshed_at = time.time()
+
+
+@app.post("/api/refresh")
+async def refresh_data(admin: dict = Depends(require_admin)):
+    """Re-fetch the starmap dataset AND every uexcorp feed without restarting.
+    Admin only. (The scheduled loop refreshes the feeds alone; the starmap only
+    changes with game patches, so it stays manual.)"""
+    await _refresh_feeds()
+    await _rebuild_nav()   # starmap + wiki catalog; re-runs the crosswalk too
     return {
         "ok": True,
         "data": data_info,
@@ -6587,6 +6691,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "warning_stale_min": warning_stale_min(),
         "hazard_radius_km": hazard_radius_km(),      # snare-detour base radius (#24 v2)
         "stock_ageoff_min": stock_ageoff_min(),      # stock-report lifetime (#21)
+        "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
+        "feeds_refreshed_at": int(feeds_refreshed_at),  # epoch of the last uexcorp pull
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
@@ -6619,6 +6725,10 @@ class SettingsIn(BaseModel):
     # Stock-report lifetime (minutes, #21): how long an out-of-stock report keeps
     # steering the trade solver away from that buy. Capped at a week.
     stock_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
+    # Automatic uexcorp feed-refresh interval (hours, #33). 0 = off; enabled
+    # values must respect the 2h floor (enforced in the handler — "0 or >=2"
+    # isn't expressible as a Field bound) so orgs can't hammer the community API.
+    feed_refresh_h: int | None = Field(default=None, ge=0, le=720)
     # Discord snowflakes are ~17-20 digits; cap the list so the admin form can't
     # be used to stuff the meta table. Each id is validated (isdigit) below.
     extra_admin_ids: list[str] | None = Field(default=None, max_length=200)
@@ -6684,6 +6794,13 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting("hazard_radius_km", str(body.hazard_radius_km))
     if body.stock_ageoff_min is not None:
         db.set_setting("stock_ageoff_min", str(body.stock_ageoff_min))
+    if body.feed_refresh_h is not None:
+        if 0 < body.feed_refresh_h < _FEED_REFRESH_FLOOR_H:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Automatic refresh can't run more often than every "
+                       f"{_FEED_REFRESH_FLOOR_H} hours (0 turns it off).")
+        db.set_setting("feed_refresh_h", str(body.feed_refresh_h))
     if body.starmap_pois_enabled is not None:
         db.set_setting("starmap_pois_enabled", "1" if body.starmap_pois_enabled else "0")
         await _rebuild_nav()
@@ -6719,6 +6836,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "warning_ageoff_min": warning_ageoff_min(), "warning_stale_min": warning_stale_min(),
             "hazard_radius_km": hazard_radius_km(),
             "stock_ageoff_min": stock_ageoff_min(),
+            "feed_refresh_h": feed_refresh_h(),
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),

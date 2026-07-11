@@ -16,6 +16,41 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 33. Scheduled UEX feed refresh (admin-configurable) ✅ BUILT
+
+**Status: built 2026-07-11 with #32, browser-verified.** Before this, uexcorp
+feeds (commodities/items/terminals/prices) loaded **once at process startup**;
+the only later refresh was the curl-only admin `POST /api/refresh` — prices
+were as old as the last deploy. Now `feed_refresh_loop()` (started alongside
+the presence broadcaster) re-pulls the feeds on a schedule: org setting
+`feed_refresh_h`, **default 6h, hard 2h floor** (be kind to the community-run
+UEX API — admins can go longer, never shorter; API rejects <2 with 400, the
+reader clamps hand-edited meta rows up), `0` = off, cap 720h. Setting changes
+apply without restart (re-read every 5-min tick). Shared `_refresh_feeds()`
+body now also backs the manual endpoint — which finally has UI: ORG SETTINGS
+"UEX PRICE DATA" panel with interval input, "prices as of" readout
+(`feeds_refreshed_at`), and a **Refresh now** button. The scheduled pass
+refreshes feeds only (starmap stays manual — it only changes with game
+patches). Bonus fix: `/api/refresh` previously dropped per-ship quantum
+enrichment (#27) until restart; `_refresh_feeds` re-applies it.
+
+### 32. Ore value badges — "pause and mine, or keep surveying?" ✅ BUILT
+
+**Status: built 2026-07-11, browser-verified via the preview harness.** While
+surveying, every place an ore/harvestable name appears in the navigator now
+carries a relative-value badge (`$$$`/`$$`/`$`, tooltip = ≈aUEC/SCU sell ref)
+so the player knows instantly whether a scanned node is worth stopping for.
+Data: the already-cached uexcorp commodities feed — raw ores without their own
+sell price fall back to their refined commodity ("Quantainium (Raw)" →
+"Quantainium"), genuinely unpriced names (Ice, rubble) get **no** badge rather
+than a misleading "low". Tiers are rank terciles *within* each category
+(ores vs ores, harvestables vs harvestables; `nav_core.resource_value_tiers`),
+so buckets survive patch-day price rebalances and the 23M-aUEC Jaclium outlier
+can't squash the scale. New `GET /api/resource_values` (rebuilt on
+`/api/refresh`); badges on: resource forecast, NEARBY detail, element-finder
+picker options + status line, destination panel, ADD RESOURCE NODE live hint +
+capture confirmations. 37/44 ores + 7/10 harvestables badged with today's cache.
+
 ### 31. Halo Finder — Aaron Halo drop planner (tenth app) ✅ SHIPPED
 
 **Status: built 2026-07-10 (same day as the design).** Full spec + build notes:

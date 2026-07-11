@@ -1491,6 +1491,32 @@ def resource_ore_names(nav: NavData, category: str = "resource") -> list[str]:
                    if o.category == category})
 
 
+def resource_value_tiers(sell_prices: dict) -> dict:
+    """Relative-value tier per material name from its aUEC/SCU sell reference:
+    {name: {"sell", "tier" high|medium|low}}. Tiers are terciles of the *rank*
+    within the given population (tier ores against ores, harvestables against
+    harvestables — different price regimes), so buckets self-adjust when a
+    patch rebalances the economy and price outliers can't squash the scale.
+    Names without a positive numeric price are omitted — no signal, no badge
+    (an absent chip must mean "unpriced", never "worthless")."""
+    priced = {n: float(p) for n, p in sell_prices.items()
+              if isinstance(p, (int, float)) and p > 0}
+    if not priced:
+        return {}
+    ranked = sorted(priced.values())
+    n = len(ranked)
+    lo_cut = ranked[(n + 2) // 3 - 1]      # top of the bottom third
+    hi_cut = ranked[n - (n + 2) // 3]      # bottom of the top third
+    return {
+        name: {"sell": round(sell),
+               "tier": ("medium" if lo_cut == hi_cut   # flat spread — no contrast
+                        else "high" if sell >= hi_cut
+                        else "low" if sell <= lo_cut
+                        else "medium")}
+        for name, sell in priced.items()
+    }
+
+
 # Body hierarchy is encoded in InternalName, not Type (the dataset types moons
 # as "Planet"): a planet is "<System><number>" (e.g. Stanton2 = Crusader) and a
 # moon appends a letter ("Stanton2b" = Daymar, moon of Crusader).
