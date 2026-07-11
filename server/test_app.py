@@ -3179,5 +3179,120 @@ class HaloFinderApiTests(unittest.TestCase):
         self.assertGreater(doc["target"]["miss_m"], 1e9)
 
 
+class ResourceValueTests(unittest.TestCase):
+    """/api/resource_values — the mining-value badge feed (#32): raw ores fall
+    back to their refined commodity's sell price, unpriced names are absent,
+    and ores/harvestables tier within their own category."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._user = {"id": "7", "username": "miner", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        # Controlled feeds: build against known names/prices, not the live cache.
+        cls._orig = (app.raw_commodity_names, app.harvestable_names,
+                     app.load_commodity_prices, app.resource_values)
+        app.raw_commodity_names = [
+            "Bexalite (Raw)",     # priced via refined "Bexalite"
+            "Hadanite",           # gems price directly, raw
+            "Copper (Ore)",       # refined fallback, cheap
+            "Ice (Raw)",          # genuinely unpriced -> absent
+        ]
+        app.harvestable_names = ["Sunset Berries", "Ranta Dung"]
+        app.load_commodity_prices = lambda: {
+            "Bexalite": {"buy": None, "sell": 28907},
+            "Hadanite": {"buy": None, "sell": 546593},
+            "Copper": {"buy": None, "sell": 1200},
+            "Sunset Berries": {"buy": None, "sell": 80808},
+            "Ranta Dung": {"buy": None, "sell": 200},
+        }
+        app.resource_values = app.build_resource_values()
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        (app.raw_commodity_names, app.harvestable_names,
+         app.load_commodity_prices, app.resource_values) = cls._orig
+
+    def test_tiers_fallback_and_omission(self):
+        doc = self.client.get("/api/resource_values").json()
+        ores = doc["resource"]
+        self.assertEqual(ores["Hadanite"]["tier"], "high")
+        self.assertEqual(ores["Bexalite (Raw)"],
+                         {"sell": 28907, "tier": "medium"})   # refined fallback
+        self.assertEqual(ores["Copper (Ore)"]["tier"], "low")
+        self.assertNotIn("Ice (Raw)", ores)                   # unpriced -> no badge
+        # Harvestables tier against each other, not against ore prices: 80k aUEC
+        # would be mid-tier among ores but is the top of its own category.
+        self.assertEqual(doc["harvestable"]["Sunset Berries"]["tier"], "high")
+        self.assertEqual(doc["harvestable"]["Ranta Dung"]["tier"], "low")
+
+
+class FeedRefreshSettingTests(unittest.TestCase):
+    """feed_refresh_h (#33): default 6h, 0 = off, and a hard 2h floor on
+    enabled values — the community-run uexcorp API must not be hammerable
+    from the admin form, the API, or a hand-edited meta row."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._admin
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        db.set_setting("feed_refresh_h", "")   # back to the built-in default
+
+    def test_default_is_six_hours_and_roundtrips(self):
+        s = self.client.get("/api/settings").json()
+        self.assertEqual(s["feed_refresh_h"], 6)
+        self.assertIn("feeds_refreshed_at", s)   # "prices as of" readout
+        ok = self.client.post("/api/settings", json={"feed_refresh_h": 12})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["feed_refresh_h"], 12)   # POST echo (UI reads it)
+        self.assertEqual(self.client.get("/api/settings").json()["feed_refresh_h"], 12)
+
+    def test_zero_turns_auto_refresh_off(self):
+        ok = self.client.post("/api/settings", json={"feed_refresh_h": 0})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(self.client.get("/api/settings").json()["feed_refresh_h"], 0)
+
+    def test_below_floor_is_rejected_not_clamped(self):
+        r = self.client.post("/api/settings", json={"feed_refresh_h": 1})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("2 hours", r.json()["detail"])
+        # The floor itself is fine; longer is fine.
+        self.assertEqual(self.client.post(
+            "/api/settings", json={"feed_refresh_h": 2}).status_code, 200)
+        # Absurd values die at the model bound.
+        self.assertEqual(self.client.post(
+            "/api/settings", json={"feed_refresh_h": 100000}).status_code, 422)
+
+    def test_reader_clamps_hand_edited_meta_rows(self):
+        # The API rejects <2, but an old DB / manual edit could still hold one:
+        # the reader clamps up so the loop can never run hotter than the floor.
+        db.set_setting("feed_refresh_h", "1")
+        self.assertEqual(app.feed_refresh_h(), 2)
+        db.set_setting("feed_refresh_h", "9999")
+        self.assertEqual(app.feed_refresh_h(), 720)
+        db.set_setting("feed_refresh_h", "junk")
+        self.assertEqual(app.feed_refresh_h(), 6)
+        db.set_setting("feed_refresh_h", "-5")
+        self.assertEqual(app.feed_refresh_h(), 0)   # negatives read as "off"
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

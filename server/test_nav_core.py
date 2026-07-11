@@ -3818,6 +3818,48 @@ class HaloFinderTests(unittest.TestCase):
         self.assertEqual(poi.global_m, pos)
 
 
+class ResourceValueTierTests(unittest.TestCase):
+    """resource_value_tiers: the mining-value badge buckets (#32)."""
+
+    def test_terciles_split_a_nine_price_spread(self):
+        prices = {f"ore{i}": float(i) for i in range(1, 10)}  # 1..9
+        tiers = nav_core.resource_value_tiers(prices)
+        self.assertEqual({n for n, v in tiers.items() if v["tier"] == "low"},
+                         {"ore1", "ore2", "ore3"})
+        self.assertEqual({n for n, v in tiers.items() if v["tier"] == "medium"},
+                         {"ore4", "ore5", "ore6"})
+        self.assertEqual({n for n, v in tiers.items() if v["tier"] == "high"},
+                         {"ore7", "ore8", "ore9"})
+
+    def test_rank_based_so_outliers_cannot_squash_the_scale(self):
+        # A 23M outlier (Jaclium) must not push everything else into "low".
+        prices = {"Jaclium": 23_000_000, "A": 30_000, "B": 20_000,
+                  "C": 10_000, "D": 5_000, "E": 1_200}
+        tiers = nav_core.resource_value_tiers(prices)
+        self.assertEqual(tiers["Jaclium"]["tier"], "high")
+        self.assertEqual(tiers["A"]["tier"], "high")
+        self.assertEqual(tiers["E"]["tier"], "low")
+
+    def test_unpriced_and_nonpositive_names_are_omitted(self):
+        tiers = nav_core.resource_value_tiers(
+            {"priced": 100.0, "zero": 0, "none": None, "bogus": "n/a"})
+        self.assertEqual(set(tiers), {"priced"})
+
+    def test_flat_or_single_price_is_medium_not_high(self):
+        # No contrast -> no verdict; everything reads "medium".
+        self.assertEqual(
+            nav_core.resource_value_tiers({"a": 5.0, "b": 5.0, "c": 5.0}),
+            {"a": {"sell": 5, "tier": "medium"}, "b": {"sell": 5, "tier": "medium"},
+             "c": {"sell": 5, "tier": "medium"}})
+        self.assertEqual(nav_core.resource_value_tiers({"only": 9.0}),
+                         {"only": {"sell": 9, "tier": "medium"}})
+
+    def test_empty_input(self):
+        self.assertEqual(nav_core.resource_value_tiers({}), {})
+
+    def test_sell_reference_is_rounded_to_whole_auec(self):
+        self.assertEqual(nav_core.resource_value_tiers({"a": 10.6})["a"]["sell"], 11)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

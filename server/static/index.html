@@ -648,13 +648,22 @@
   /* resource forecast */
   .fc-row { display: grid; grid-template-columns: 130px 1fr 46px 56px;
     gap: 10px; align-items: center; padding: 3px 0; font-size: 13px; }
-  .fc-ore { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* name truncates; the value badge never does (it's the actionable part) */
+  .fc-ore { display: flex; align-items: baseline; gap: 5px; }
+  .fc-ore-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fc-ore .val-chip { flex-shrink: 0; }
   .fc-bar-outer { background: var(--panel2); border-radius: 4px; height: 11px; overflow: hidden; }
   .fc-bar-inner { height: 100%; border-radius: 4px; }
   .fc-pct { text-align: right; font-variant-numeric: tabular-nums; }
   .fc-n { color: var(--dim); font-size: 11px; text-align: right; }
   .fc-low { color: var(--warn); }
   .fc-section + .fc-section { margin-top: 12px; }
+  /* mining-value badge ($$$ / $$ / $): worth pausing the survey for? */
+  .val-chip { font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    white-space: nowrap; cursor: default; }
+  .val-high { color: var(--good); }
+  .val-med { color: var(--warn); }
+  .val-low { color: var(--dim); }
   .fc-sec-head { font-size: 11px; color: var(--dim); letter-spacing: 1px;
     text-transform: uppercase; margin-bottom: 4px; }
   .fc-sec-head .muted { text-transform: none; letter-spacing: 0; }
@@ -2334,6 +2343,7 @@
       <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <select id="node-ore" class="sel" style="flex:1; min-width:130px;"></select>
         <input id="node-ore-other" class="ti" placeholder="other ore" hidden style="flex:1; min-width:110px;">
+        <span id="node-ore-value" hidden></span>
         <label class="muted" style="font-size:12px;"
                title="Scan quality band 1–8 (higher = richer deposit); Unk if you didn't read it off the scanner.">band
           <select id="node-band" class="sel">
@@ -2626,6 +2636,20 @@
       real shortage.
     </div>
     <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>UEX PRICE DATA</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Auto-refresh prices every
+      <input id="feed-refresh" type="number" min="0" max="720" step="1" style="width:70px;"> hours
+      <button id="feed-refresh-save">Save</button>
+      <button id="feed-refresh-now">Refresh now</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Commodity, item, terminal and price feeds re-pull from UEX Corp on this schedule —
+      they drive trade-planner margins, marketplace market values and ore value badges.
+      Minimum every <b>2 hours</b> (UEX is community-run — don't tax it); longer is fine;
+      <b>0</b> turns auto-refresh off. <b>Refresh now</b> also re-pulls the starmap dataset.
+    </div>
+    <div class="muted" id="feed-refresh-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
 
     <h2>DISCORD NOTIFICATIONS</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -4055,10 +4079,12 @@ function kindBadge(e) {
 function entDetail(e) {
   if (e.kind === "resource") {
     const band = e.band == null ? "?" : Number(e.band);
-    return `B${band} · ${esc(e.quality)}` + (e.biome ? ` · ${esc(e.biome)}` : "");
+    return `B${band} · ${esc(e.quality)}${oreValueChip(e.ore)}` + (e.biome ? ` · ${esc(e.biome)}` : "");
   }
-  if (e.kind === "wildlife" || e.kind === "harvestable")
-    return e.biome ? esc(e.biome) : (e.note ? esc(e.note) : "—");
+  if (e.kind === "wildlife" || e.kind === "harvestable") {
+    const val = e.kind === "harvestable" ? oreValueChip(e.name, "harvestable") : "";
+    return (e.biome ? esc(e.biome) : (e.note ? esc(e.note) : "—")) + val;
+  }
   // POIs: type, then any note (custom notes are editable; upstream Comments are not).
   let detail = esc(e.type) + (e.note ? ` · ${esc(e.note)}` : "");
   if (e.private)
@@ -4090,10 +4116,32 @@ function oreHue(name) {
 function oreColor(name, a = 1) { return `hsla(${oreHue(name)}, 65%, 55%, ${a})`; }
 const confOf = (n) => n / (n + 4);   // 0..1 confidence from sample count
 
+// ---------- ore value badges (pause and mine, or keep surveying?) ----------
+// Server-tiered relative value per ore/harvestable name (/api/resource_values,
+// uexcorp sell refs, terciles within each category). A missing name means
+// "unpriced", so no badge — never imply an unknown ore is worthless.
+let oreValues = { resource: {}, harvestable: {} };
+async function loadOreValues() {
+  try { oreValues = await fetch("/api/resource_values").then(r => r.json()); } catch {}
+}
+const VALUE_TIERS = { high: ["val-high", "$$$", "high value"],
+                      medium: ["val-med", "$$", "medium value"],
+                      low: ["val-low", "$", "low value"] };
+function oreValueChip(name, category = "resource") {
+  const v = (oreValues[category] || {})[name], t = v && VALUE_TIERS[v.tier];
+  if (!t) return "";
+  return ` <span class="val-chip ${t[0]}" title="${t[2]} — sells ≈${v.sell.toLocaleString()} aUEC/SCU">${t[1]}</span>`;
+}
+// Plain-text twin for <option> labels (no HTML allowed inside a <select>).
+function oreValueText(name, category = "resource") {
+  const v = (oreValues[category] || {})[name];
+  return v && VALUE_TIERS[v.tier] ? `  ${VALUE_TIERS[v.tier][1]}` : "";
+}
+
 // ---------- resource forecast (what's around me) ----------
 // Ores and harvestables are forecast separately (server keeps their stats
 // unpooled), so each gets its own labeled section in the one panel.
-function forecastSection(rf, label, unit) {
+function forecastSection(rf, label, unit, category) {
   const rows = rf && rf.ranked ? rf.ranked.filter(r => r.p >= 0.02).slice(0, 6) : [];
   if (!rows.length) return "";
   const hint = rf.n_local
@@ -4103,7 +4151,7 @@ function forecastSection(rf, label, unit) {
     const pct = Math.round(r.p * 100);
     const low = r.n < 4 ? ` <span class="fc-low">·</span>` : "";
     return `<div class="fc-row">` +
-      `<span class="fc-ore" title="${esc(r.ore)}">${esc(r.ore)}</span>` +
+      `<span class="fc-ore" title="${esc(r.ore)}"><span class="fc-ore-name">${esc(r.ore)}</span>${oreValueChip(r.ore, category)}</span>` +
       `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${pct}%;background:${oreColor(r.ore)}"></span></span>` +
       `<span class="fc-pct">${pct}%</span>` +
       `<span class="fc-n">n=${r.n}${low}</span></div>`;
@@ -4114,8 +4162,8 @@ function forecastSection(rf, label, unit) {
 function renderForecast(state) {
   const panel = $("forecast-panel");
   const blocks = [
-    forecastSection(state && state.resource_forecast, "Ores", "node"),
-    forecastSection(state && state.harvestable_forecast, "Harvestables", "site"),
+    forecastSection(state && state.resource_forecast, "Ores", "node", "resource"),
+    forecastSection(state && state.harvestable_forecast, "Harvestables", "site", "harvestable"),
   ].filter(Boolean);
   if (!blocks.length) { panel.hidden = true; return; }
   panel.hidden = false;
@@ -4213,8 +4261,9 @@ function render(state) {
   $("dest-panel").hidden = !d;
   if (d) {
     $("dest-name").innerHTML = entLabel(d);
-    const extra = d.kind === "resource" ? `${esc(d.ore)} · B${d.band == null ? "?" : Number(d.band)} · ${esc(d.quality)}`
-      : (d.kind === "wildlife" || d.kind === "harvestable") ? esc(d.name) : esc(d.type);
+    const extra = d.kind === "resource" ? `${esc(d.ore)}${oreValueChip(d.ore)} · B${d.band == null ? "?" : Number(d.band)} · ${esc(d.quality)}`
+      : d.kind === "harvestable" ? esc(d.name) + oreValueChip(d.name, "harvestable")
+      : d.kind === "wildlife" ? esc(d.name) : esc(d.type);
     $("dest-meta").innerHTML = `${esc(d.container)} · ${extra}` +
       (d.nearest_qt ? ` · jump to ${qtLabel(d)}` : "") +
       (d.same_container ? "" : " · different container — use quantum travel");
@@ -4488,11 +4537,11 @@ function renderCapture(cap) {
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
     const ll = L.latitude == null ? "" : ` @ ${L.latitude.toFixed(3)}°, ${L.longitude.toFixed(3)}°`;
     if (L.kind === "resource") show("node-result",
-      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b> B${L.band == null ? "?" : Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`);
+      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b>${oreValueChip(L.ore)} B${L.band == null ? "?" : Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`);
     else if (L.kind === "wildlife") show("wild-result",
       `added <span class="fauna-dot">❀</span> <b>${esc(L.species)}</b> on ${esc(L.container)}${ll}${by}`);
     else if (L.kind === "harvestable") show("wild-result",
-      `added <span class="harvest-dot">■</span> <b>${esc(L.name)}</b> on ${esc(L.container)}${ll}${by}`);
+      `added <span class="harvest-dot">■</span> <b>${esc(L.name)}</b>${oreValueChip(L.name, "harvestable")} on ${esc(L.container)}${ll}${by}`);
     else show("poi-result",
       `added <span class="custom-star">★</span> <b>${esc(L.name)}</b> (${esc(L.type)})` +
       (L.qt_marker ? ` <span class="qt-self">⚡ QT marker</span>` : "") +
@@ -4538,7 +4587,7 @@ $("node-arm").onclick = async () => {
   const r = await postJson("/api/capture/node", {
     ore, band: $("node-band").value,   // "Unk" or "1".."8"; server normalizes
     biome: selectValue("node-biome"), note: $("node-note").value.trim() });
-  if (r.ok) { resetSelect("node-ore"); resetSelect("node-biome"); $("node-note").value = ""; } else armFailed("node-result", r);
+  if (r.ok) { resetSelect("node-ore"); updateNodeOreValue(); resetSelect("node-biome"); $("node-note").value = ""; } else armFailed("node-result", r);
 };
 $("node-cancel").onclick = () => postJson("/api/capture/cancel", {});
 
@@ -5007,7 +5056,11 @@ async function loadFinderOres() {
     const addGroup = (label, names, category) => {
       if (!names.length) return;
       const g = document.createElement("optgroup"); g.label = label;
-      for (const n of names) { const o = new Option(n, n); o.dataset.category = category; g.appendChild(o); }
+      for (const n of names) {
+        // Value suffix ("Bexalite  $$$") so worth is visible while choosing.
+        const o = new Option(n + oreValueText(n, category), n);
+        o.dataset.category = category; g.appendChild(o);
+      }
       sel.appendChild(g);
     };
     addGroup("Ores", ores, "resource");
@@ -5051,10 +5104,11 @@ async function runFinder() {
   }
   // The distance-aware orders need a live position to measure travel from.
   const needsPos = sort !== "likely";
-  status.textContent = needsPos && !data.has_position
+  status.innerHTML = (needsPos && !data.has_position
     ? `sorted by likelihood — run /showlocation to order by travel`
     : `${hs.length} known area${hs.length === 1 ? "" : "s"}` +
-      (sort === "near" ? ", closest first" : sort === "value" ? ", best value first" : ", most likely first");
+      (sort === "near" ? ", closest first" : sort === "value" ? ", best value first" : ", most likely first"))
+    + oreValueChip(finderOre, finderCategory);
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
   for (const h of hs) {
@@ -6092,8 +6146,15 @@ function fillSelectWithOther(selId, names, placeholder) {
   toggleOther(selId);
 }
 
-// Ore datalist toggle (the list itself is fetched in init()).
-$("node-ore").onchange = () => toggleOther("node-ore");
+// Ore datalist toggle (the list itself is fetched in init()) + live value hint
+// beside the picker — the "is this node worth mining?" answer at capture time.
+function updateNodeOreValue() {
+  const el = $("node-ore-value"), html = oreValueChip(selectValue("node-ore"));
+  el.innerHTML = html;
+  el.hidden = !html;
+}
+$("node-ore").onchange = () => { toggleOther("node-ore"); updateNodeOreValue(); };
+$("node-ore-other").addEventListener("input", updateNodeOreValue);
 
 // Biome dropdowns (node + fauna): options narrow to the player's current body,
 // falling back to system then all.
@@ -13172,6 +13233,11 @@ async function loadSettings() {
       $("hazard-radius").value = s.hazard_radius_km;
     if (s.stock_ageoff_min && document.activeElement !== $("stock-ageoff"))
       $("stock-ageoff").value = s.stock_ageoff_min;
+    if (s.feed_refresh_h != null && document.activeElement !== $("feed-refresh"))
+      $("feed-refresh").value = s.feed_refresh_h;
+    if (s.feeds_refreshed_at)
+      $("feed-refresh-status").textContent =
+        `prices as of ${new Date(s.feeds_refreshed_at * 1000).toLocaleString()}`;
     rootAdmins = s.root_admin_ids || [];
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
@@ -13593,6 +13659,42 @@ $("stock-ageoff-save").onclick = async () => {
 };
 $("stock-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("stock-ageoff-save").click(); } });
 
+// UEX price data (#33): auto-refresh interval (0 = off, else 2h floor) + manual pull.
+$("feed-refresh-save").onclick = async () => {
+  const st = $("feed-refresh-status");
+  const h = parseInt($("feed-refresh").value, 10);
+  if (!(h === 0 || (h >= 2 && h <= 720))) { st.textContent = "enter 0 (off) or 2 – 720 hours"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feed_refresh_h: h }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = d.feed_refresh_h
+      ? `saved — prices auto-refresh every ${d.feed_refresh_h} h`
+      : "saved — auto-refresh off (manual only)";
+  } catch {
+    st.textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+$("feed-refresh").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("feed-refresh-save").click(); } });
+$("feed-refresh-now").onclick = async () => {
+  const st = $("feed-refresh-status"), b = $("feed-refresh-now");
+  b.disabled = true; st.textContent = "refreshing from UEX (can take ~30 s)…";
+  try {
+    const r = await fetch("/api/refresh", { method: "POST" });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `refreshed — ${d.trade_prices} price rows, ${d.items} items, ${d.ships} ships`;
+    loadOreValues();   // value badges may have re-tiered
+  } catch {
+    st.textContent = "refresh failed — UEX may be down; serving the previous data";
+  }
+  b.disabled = false;
+};
+
 $("member-role-save").onclick = async () => {
   const id = $("member-role").value.trim();
   if (id && !/^\d+$/.test(id)) {
@@ -13951,7 +14053,13 @@ $("setup-download").onclick = async () => {
 // ---------- init (only after we confirm the user is signed in) ----------
 function init() {
   connect();
-  loadFinderOres();
+  // Value badges load first so the finder's option labels can carry them
+  // (loadOreValues never rejects; on failure everything renders chip-less).
+  // Then repaint the surfaces that may have rendered before the badges landed.
+  loadOreValues().then(() => {
+    loadFinderOres();
+    if (lastState) { renderForecast(lastState); renderNearby(); }
+  });
   // Show the map from the start so the feature is discoverable; drawMap paints
   // an "awaiting location" notice on the blank canvas until the first
   // /showlocation arrives (render() repopulates it once a fix lands).
