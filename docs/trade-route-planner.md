@@ -34,6 +34,80 @@ this planner `avoid_mode` snare-detour routing.
 | — | **Freshness-UX polish** (age filter on by default @ 2d, per-row age + staleness banner) | ✅ **v0.33.0** |
 | — | **Stock reports** (run-mode "no stock — skip & report", auto low-stock capture, shared STOCK WATCH board, buy-side solver avoidance) | ✅ **v0.38.0** |
 | — | **Demand reports** (sell-side twin: "won't buy here — report & re-plan", auto low-demand capture, sell-side solver avoidance incl. held-cargo re-plan) | ✅ built 2026-07-05 |
+| — | **Stop kinds** (#34: stations-only / cargo-dock filter for big haulers; ship-aware default) | ✅ built 2026-07-12 |
+
+### Stop kinds — the big-hauler filter (#34) — AS BUILT
+
+Not every ship can trade everywhere. A **Hull-C has no landing gear at all** —
+it can only ever moor at a station cargo dock — and even ships that *can* set
+down planetside find surface outposts a chore in a big hull. So the planner
+takes a `stops` mode:
+
+| mode | means |
+|---|---|
+| `any` | no restriction (default) |
+| `stations` | orbital stations only — no planet/moon surface landings |
+| `dock` | only stations with a **cargo dock**: the hard constraint for a Hull C/D/E or Kraken |
+
+**The two are independent axes, not nested.** Levski is a *planetary* landing
+zone that nonetheless has a Hull-C cargo dock, so `stations` drops it while
+`dock` keeps it. That's correct: they answer different questions ("I hate
+surface landings" vs "my ship physically cannot land").
+
+**Where the data comes from — and the trap.** The uexcorp feed already encodes
+both facts, on both sides of the pairing:
+
+- **Ships** carry `is_loading_dock`, set for exactly five: Hull C, Hull D,
+  Hull E, Kraken, Kraken Privateer. Surfaced on `/api/ships` as `dock`.
+- **Terminals** carry `has_loading_dock` — but **per terminal, not per
+  station**, and a station has many desks (admin, shops, cargo services). Only
+  whichever desk UEX happened to record it on carries the flag: **Levski
+  declares its dock on "Cargo Services" and never on its commodity desk.** So
+  the flag must be **OR-ed across every terminal at the POI**, which is why
+  `load_trade_terminals()` returns `(commodity, all_live)` and
+  `nav_core.terminal_stop_kinds` classifies over the *unfiltered* feed. Filter
+  to commodity rows first and you wrongly conclude Levski is undockable.
+- **Place** (station / city / outpost) comes from UEX's own unambiguous
+  location ids (`id_space_station` / `id_city` / `id_outpost`).
+
+Two known feed gaps, handled explicitly:
+
+- **Jump gateways.** UEX omits `has_loading_dock` on the Nyx-side gateways
+  (Nyx is newly added and its rows are thin). Every gateway is one station
+  template with a cargo deck, so `_GATEWAY_RE` asserts the capability from the
+  architecture rather than trusting a demonstrably incomplete feed.
+- **Magnus Gateway** is absent from the terminal feed entirely (no terminals of
+  any type), so it can't appear as a stop at all. Nothing to do until UEX has it.
+
+Result with the POI catalogs on: 133/133 terminals resolve, 128 stops
+classified, **14 cargo-dock** — exactly the in-game Hull-C set (Everus Harbor,
+Baijini Point, Seraphim, Port Tressler, the four Stanton gateways, the six Pyro
+stations, Levski).
+
+**Solver contract — why this is not just another `avoid_poi_ids`.** The stop
+filter becomes `exclude_poi_ids`, a set kept deliberately *separate* from the
+danger sets, because they have opposite override semantics:
+
+> `_held_sell_leg` (the held-cargo re-plan) **ignores** `avoid_poi_ids` on
+> purpose — a sunk load must be offloadable even if its only buyer sits in a
+> camped zone, since you can always run a blockade. It **cannot** ignore
+> `exclude_poi_ids`: no amount of daring lands a Hull-C on a moon.
+
+Threaded through `_trade_candidates` → `plan_trade_route` /
+`replan_trade_route`, and persisted in the run's `params.stops` so a mid-run
+re-plan still honors the hull. Manual legs follow the same rule as
+`in_range_only` and `avoid_mode`: **badged, never dropped** (`no_stop` on the
+leg → a ⛔ line in the card), because a hand-picked leg is the player's explicit
+choice and gets told, not overruled.
+
+**UI.** A three-way `Stops` seg beside `Pirate danger`. Picking a ship whose
+`/api/ships` row has `dock: true` auto-flips it to Cargo dock with an
+explanatory hint ("MISC Hull C can't land planetside…") — a nudge, not a lock;
+the player can move it back. A favorite saved before this existed has no
+`stops`, so it falls back to *whatever the ship demands* rather than to `any`,
+so a legacy Hull-C favorite can't silently start routing through outposts.
+Separately, the wiki catalog's `Docking` amenity (38 locations) was being
+dropped by `_amenity_view` and is now kept, rendering an `⚓ docking` stop chip.
 
 ### Stock & demand reports — AS BUILT
 

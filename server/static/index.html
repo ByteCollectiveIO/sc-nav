@@ -3277,6 +3277,16 @@
       </div><!-- /trade-mode-panel -->
 
       <div class="route-row trade-danger-row" style="margin-top:12px;">
+        <span class="muted" style="font-size:12px;">Stops</span>
+        <span class="seg" id="trade-stopkind" role="group" aria-label="Which stops the ship can use">
+          <button class="on" data-stops="any" type="button" aria-pressed="true">Any</button>
+          <button data-stops="stations" type="button" aria-pressed="false">Stations only</button>
+          <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
+        </span>
+        <span class="muted trade-danger-hint" id="trade-stopkind-hint" style="font-size:11px;"></span>
+      </div>
+
+      <div class="route-row trade-danger-row" style="margin-top:12px;">
         <span class="muted" style="font-size:12px;">Pirate danger
           <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
         <span class="seg" id="trade-avoid" role="group" aria-label="Pirate danger handling">
@@ -7431,6 +7441,35 @@ function setTradeAvoid(mode) {
   }
   const hint = $("trade-avoid-hint"); if (hint) hint.textContent = TRADE_AVOID_HINT[tradeAvoid];
 }
+// Stop kinds (#34): which places the ship can actually trade at. "stations" skips
+// planet/moon surface landings (a chore in a big hauler); "dock" keeps only stations
+// with a cargo dock — the hard limit for a Hull-C/D/E or Kraken, which have no landing
+// gear at all. Not nested: Levski is a planetary landing zone WITH a cargo dock, so
+// "stations only" drops it while "cargo dock" keeps it.
+let tradeStops = "any";                  // any | stations | dock
+const TRADE_STOPS_HINT = {
+  any: "Buy and sell anywhere, including surface outposts.",
+  stations: "Orbital stations only — no planet or moon landings.",
+  dock: "Only stations with a cargo dock (Hull C/D/E, Kraken).",
+};
+function setTradeStops(mode, why) {
+  tradeStops = ["stations", "dock"].includes(mode) ? mode : "any";
+  for (const x of $("trade-stopkind").children) {
+    const on = x.dataset.stops === tradeStops;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
+  const hint = $("trade-stopkind-hint");
+  if (hint) hint.textContent = why || TRADE_STOPS_HINT[tradeStops];
+}
+// A ship that loads only through a station cargo dock (server sets `dock` on the
+// /api/ships row) can't use a planetary stop at all, so pick the honest default the
+// moment the ship is known. Left overridable: it's a nudge, not a lock.
+function tradeStopsForShip() {
+  const cat = tradeShipsByName[$("trade-ship").value.trim().toLowerCase()];
+  if (cat && cat.dock && tradeStops !== "dock") {
+    setTradeStops("dock", `${cat.name} can't land planetside — cargo-dock stations only.`);
+  }
+}
 // Single source of truth for the optimize-for seg (used by the click wiring and by
 // applyTradeConfig) so the visual, the state, and aria-pressed never drift apart.
 function setTradeSort(sort) {
@@ -7816,6 +7855,11 @@ function applyTradeConfig(cfg) {
   }
   setTradeMode(cfg.mode || "auto");
   setTradeAvoid(cfg.avoid_mode || "avoid");   // danger handling applies in every mode (#24)
+  // Stops (#34) apply in every mode too. A favorite saved before this existed has no
+  // `stops`, so fall back to whatever the ship demands rather than to "any" — a legacy
+  // Hull-C favorite must not silently start routing through outposts it can't land on.
+  setTradeStops(cfg.stops || "any");
+  if (!cfg.stops) tradeStopsForShip();
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
     if ($("trade-system")) $("trade-system").value = cfg.system || "";
@@ -7863,6 +7907,9 @@ function wireTradePlanner() {
   for (const b of $("trade-avoid").querySelectorAll("button"))
     b.onclick = () => setTradeAvoid(b.dataset.avoid);
   setTradeAvoid(tradeAvoid);
+  for (const b of $("trade-stopkind").querySelectorAll("button"))
+    b.onclick = () => setTradeStops(b.dataset.stops);   // an explicit pick clears the ship hint
+  setTradeStops(tradeStops);
   // Shared avoided-locations blacklist (#24 v2): re-plan on edit if a plan is showing.
   mountAvoidBlacklist($("trade-avoid-blk"), () => { if (tradeLastInput) planTrade(); });
   attachTradeShipPicker();
@@ -7937,6 +7984,7 @@ function prefillTradeScu() {
   $("trade-scu").value = saved != null ? saved : cat.scu;
   $("trade-ship-msg").textContent = saved != null ? "your saved override" : `stated ${cat.scu} SCU`;
   syncDrivePicker(cat.quantum, name, "trade-qd", "trade-drive-wrap", "trade-range");   // #27
+  tradeStopsForShip();    // #34: a dock-only hull can't use planetary stops — default it
   renderTradeSuggest();   // re-rank the board for the new hold size
 }
 
@@ -8081,7 +8129,10 @@ async function updateLegLive(wrap) {
 function buildTradePlanBody(msg) {
   const usable = Number($("trade-scu").value);
   if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return null; }
-  const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid, ...tradeStartPayload() };
+  // `stops` (#34) rides on every mode: the solver drops unusable stops, manual legs
+  // just get badged. Like avoid_mode, it's a property of the ship, not of the mode.
+  const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid,
+                 stops: tradeStops, ...tradeStartPayload() };
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
   const ship = $("trade-ship").value.trim();
   if (ship) body.ship = ship;
@@ -8233,6 +8284,7 @@ function amenChips(a) {
   if (!a) return "";
   const bits = [];
   for (const c of (a.cargo || [])) bits.push(c === "dock" ? "🚚 loading dock" : "⬆ freight elevator");
+  if (a.docking) bits.push("⚓ docking");   // docking collar — what a Hull-C moors to (#34)
   if (a.hangar) bits.push(`hangar ${a.hangar}`);
   else if (a.pad) bits.push(`pad ${a.pad}`);
   if (a.clinic) bits.push("⚕ clinic");
@@ -8281,6 +8333,15 @@ function renderTradeLeg(lg, i) {
     dngr += `<div class="tl-danger sev-${esc(b0.severity)}" title="${esc(blk.map(w => w.where).join(" · "))}">`
       + `☠ destination camped — no reroute exists `
       + `<span class="muted">(${esc(b0.severity)} · ${threatLabel(b0)} at ${esc(b0.where)})</span></div>`;
+  }
+  // Stops (#34): a leg touching a place this ship can't use. The solver drops those,
+  // so this only ever fires on a manual leg — the player picked it, so say so rather
+  // than rewriting their route.
+  const noStop = lg.no_stop || [];
+  if (noStop.length) {
+    const where = noStop.map(s => s === "buy" ? "buy" : "sell").join(" and ");
+    dngr += `<div class="tl-stock out">⛔ your ship can't use this leg's <b>${esc(where)}</b> stop `
+      + `<span class="muted">(${tradeStops === "dock" ? "no cargo dock" : "planetary landing"})</span></div>`;
   }
   // Stock reports (#21): a member recently found this leg's buy short/empty or
   // its sell end not buying (auto/filtered plans never route through a fresh ⛔

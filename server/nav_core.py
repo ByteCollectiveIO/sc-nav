@@ -416,13 +416,13 @@ def _terminal_place_candidates(row: dict) -> list[str]:
     return out
 
 
-def match_terminals(nav: NavData, rows: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Resolve UEX terminal rows to routable nav POIs by name.
-
-    Returns ``(resolved, unmatched)`` where each resolved entry is
-    ``{id, name, system, poi_id, poi_name}`` (``id`` = UEX terminal id) and each
-    unmatched entry is the original row (for logging / coverage stats). Matching
-    tries, per place-name candidate:
+def _terminal_poi_resolver(nav: NavData):
+    """Build the name-matcher that places a UEX terminal row on a routable POI.
+    Factored out of match_terminals so terminal_stop_kinds can run the *same*
+    placement over the unfiltered feed (every terminal type, not just commodity
+    desks) — a station's cargo capability is often only stated on a non-commodity
+    row (Levski flags its loading dock on 'Cargo Services', not on its commodity
+    desk). Matching tries, per place-name candidate:
       1. exact normalized name (station/outpost/city as-is),
       2. Lagrange word-order flip — 'CRU-L4 Shallow Fields Station' (UEX) vs
          'Shallow Fields Station (CRU-L4)' (synth_container_pois' fold),
@@ -460,6 +460,16 @@ def match_terminals(nav: NavData, rows: list[dict]) -> tuple[list[dict], list[di
                     return hit
         return None
 
+    return resolve
+
+
+def match_terminals(nav: NavData, rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Resolve UEX terminal rows to routable nav POIs by name.
+
+    Returns ``(resolved, unmatched)`` where each resolved entry is
+    ``{id, name, system, poi_id, poi_name}`` (``id`` = UEX terminal id) and each
+    unmatched entry is the original row (for logging / coverage stats)."""
+    resolve = _terminal_poi_resolver(nav)
     resolved: list[dict] = []
     unmatched: list[dict] = []
     for row in rows:
@@ -475,6 +485,90 @@ def match_terminals(nav: NavData, rows: list[dict]) -> tuple[list[dict], list[di
             "poi_name": poi.name,
         })
     return resolved, unmatched
+
+
+# ---------------------------------------------------------------------------
+# Stop kinds: can this ship physically trade here? (#34)
+#
+# Big freighters can't use every terminal. A Hull-C has no landing gear at all —
+# it can only ever moor at a station cargo dock — and even ships that *can* land
+# planetside find it a chore. So a trade stop has two facts worth knowing:
+#
+#   place — "station" (orbital), "city" (planetary landing zone) or "outpost"
+#           (surface). From UEX's own location ids, which are unambiguous.
+#   dock  — the station has a cargo dock (docking collar + loading dock), the
+#           thing a Hull-C/D/E or Kraken moors to. UEX states this per *terminal*
+#           (`has_loading_dock`), but a station has many terminal desks and only
+#           some carry the flag — Levski declares its dock on 'Cargo Services',
+#           never on its commodity desk. So the flag is OR-ed across every
+#           terminal at the POI, which is why this runs over the unfiltered feed.
+#
+# The two are independent axes, not nested: Levski is a *planetary* landing zone
+# that nonetheless has a Hull-C cargo dock, so "stations only" excludes it while
+# "cargo dock" keeps it. That's correct — they answer different questions ("I
+# hate surface landings" vs "my ship physically cannot land").
+# ---------------------------------------------------------------------------
+
+STOP_MODES = ("any", "stations", "dock")
+
+# Jump gateways are one station template, stamped out once per jump point, and
+# every one of them has a cargo deck. UEX only flags `has_loading_dock` on some
+# of them (the Nyx-side gateways are missing it — the system is newly added and
+# its rows are thin), so we assert the capability from the architecture instead
+# of trusting a feed that is demonstrably incomplete here.
+_GATEWAY_RE = re.compile(r"\bgateway\b", re.I)
+
+
+def terminal_stop_kinds(nav: NavData, rows: list[dict]) -> dict[int, dict]:
+    """Classify every POI that has a UEX terminal on it: {poi_id: {place, dock}}.
+
+    `rows` must be the *unfiltered* live terminal feed (all types) — see the
+    module note above on why a commodity-only view under-reports cargo docks.
+    A POI with no terminal row simply isn't in the map (it can't be a trade
+    endpoint anyway; every price point resolves through this same crosswalk)."""
+    resolve = _terminal_poi_resolver(nav)
+    out: dict[int, dict] = {}
+    for row in rows:
+        poi = resolve(row)
+        if poi is None:
+            continue
+        rec = out.setdefault(poi.id, {"place": None, "dock": False})
+        # A place is a station if ANY of its rows say so; outpost/city rows on the
+        # same POI are then just desks inside it. Station wins, city beats outpost.
+        if row.get("id_space_station"):
+            rec["place"] = "station"
+        elif row.get("id_city") and rec["place"] != "station":
+            rec["place"] = "city"
+        elif row.get("id_outpost") and rec["place"] is None:
+            rec["place"] = "outpost"
+        if row.get("has_loading_dock"):
+            rec["dock"] = True
+    for poi_id, rec in out.items():
+        if rec["place"] is None:
+            rec["place"] = "outpost"        # unclassifiable: assume the strict case
+        poi = nav.pois.get(poi_id)
+        if poi is not None and _GATEWAY_RE.search(poi.name or ""):
+            rec["dock"] = True              # see _GATEWAY_RE
+    return out
+
+
+def stop_exclusions(stop_kinds: dict[int, dict], mode: str) -> frozenset[int]:
+    """The POIs a `mode` ('stations' | 'dock') forbids as a buy or sell stop —
+    ready to hand the solver as `exclude_poi_ids`. Empty for 'any' (and for any
+    unrecognized mode: an unknown restriction must never silently drop stops).
+
+    Exclusion is positive-knowledge-only in one direction and strict in the
+    other: a POI we have no classification for is left OUT of the returned set
+    (it has no terminal, so it can never be a trade endpoint), but a POI we *do*
+    know and that fails the test is always excluded. A Hull-C is never routed to
+    a stop we merely failed to classify, because such stops don't exist in the
+    price feed."""
+    if mode == "stations":
+        return frozenset(pid for pid, rec in stop_kinds.items()
+                         if rec["place"] != "station")
+    if mode == "dock":
+        return frozenset(pid for pid, rec in stop_kinds.items() if not rec["dock"])
+    return frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -2897,7 +2991,8 @@ def _price_fresh(p, max_age_s, now) -> bool:
 def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       budget=None, max_age_s=None, now_ts=None,
                       avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
-                      avoid_buys=frozenset(), avoid_sells=frozenset()) -> list[dict]:
+                      avoid_buys=frozenset(), avoid_sells=frozenset(),
+                      exclude_poi_ids=frozenset()) -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
     name set) restricts to filtered mode; `system` keeps both ends in-system.
@@ -2908,7 +3003,13 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     pirate danger board (#24). `avoid_buys` / `avoid_sells` (sets of
     (poi_id, commodity_lower), from stock reports) each drop only their own side:
     a terminal a member found out of stock still *sells* fine, and one that
-    stopped buying (no demand) still *buys* fine."""
+    stopped buying (no demand) still *buys* fine.
+
+    `exclude_poi_ids` (#34) is the *physical* exclusion — stops this ship can't
+    use at all (a Hull-C at a surface outpost it cannot land on). It reads like
+    `avoid_poi_ids` here but the two are not interchangeable: danger avoidance is
+    a preference the solver may override to offload sunk cargo, while an
+    unusable stop is never an option. See replan_trade_route."""
     now = now_ts if now_ts is not None else time.time()
     cset = {c.strip().lower() for c in commodities} if commodities else None
     buyers: dict[str, list] = {}
@@ -2935,6 +3036,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                     continue
                 if sid in avoid_poi_ids or did in avoid_poi_ids:
                     continue            # a camped buy/sell POI (avoid mode, #24)
+                if sid in exclude_poi_ids or did in exclude_poi_ids:
+                    continue            # a stop this ship can't use (#34)
                 if avoid_buys and (sid, key) in avoid_buys:
                     continue            # reported out of stock — buy side only
                 if avoid_sells and (did, key) in avoid_sells:
@@ -3246,7 +3349,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
-                     avoid_buys=None, avoid_sells=None,
+                     avoid_buys=None, avoid_sells=None, exclude_poi_ids=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Auto / filtered trade-route solver: pick and order the buy->sell trades that
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
@@ -3254,12 +3357,14 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     (`start_pos`), within a `max_stops` budget. `commodities` (name list) restricts
     to filtered mode; `system` locks to intra-system trades. `budget` caps each
     hold-fill to affordable aUEC; `deadhead_weight` > 1 trades profit for less
-    empty-hold flight; `max_age_s` drops stale price points. Returns
-    {summary, legs, start} — the same shape cost_trade_legs produces for manual mode."""
+    empty-hold flight; `max_age_s` drops stale price points; `exclude_poi_ids`
+    (#34) drops stops the ship can't physically use. Returns {summary, legs, start}
+    — the same shape cost_trade_legs produces for manual mode."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     optimize = "profit" if sort == "profit" else "per_hour"
     avoid_poi_ids = frozenset(avoid_poi_ids or ())
     avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))
+    exclude_poi_ids = frozenset(exclude_poi_ids or ())
     memo = {}
     start = None
     if start_id is not None:
@@ -3276,7 +3381,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               budget=budget, max_age_s=max_age_s, now_ts=now_ts,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
-                              avoid_sells=frozenset(avoid_sells or ()))
+                              avoid_sells=frozenset(avoid_sells or ()),
+                              exclude_poi_ids=exclude_poi_ids)
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -3337,15 +3443,20 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
 
 def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
                    optimize, avoid=None, memo=None,
-                   avoid_sells=frozenset()) -> tuple[dict | None, "Poi | None"]:
+                   avoid_sells=frozenset(),
+                   exclude_poi_ids=frozenset()) -> tuple[dict | None, "Poi | None"]:
     """The best buyer for cargo the player is already carrying (sunk cost), as a
     sell-only leg. The buy is already paid for, so buy_cost going forward is 0 and
     profit is the realized spread over the recorded buy price. Prefers a buyer in
     the locked `system`, but a held load must be offloadable somewhere — falls back
     to any system if the lock strands it. `avoid_sells` drops buyers with a fresh
     no-demand report — unlike danger volumes (which only make a buyer costlier), a
-    terminal that won't take the cargo is a hard no. Returns (leg_row, sell_poi) or
-    (None, None) when nothing buys the commodity."""
+    terminal that won't take the cargo is a hard no. `exclude_poi_ids` (#34) is the
+    same kind of hard no for the opposite reason: the ship cannot dock there. Note
+    this leg ignores `avoid_poi_ids` (a sunk load must be offloadable even if its
+    only buyer is camped — you can run a blockade) but it can NOT ignore this one:
+    no amount of daring lands a Hull-C on a moon. Returns (leg_row, sell_poi) or
+    (None, None) when nothing usable buys the commodity."""
     name = held.get("commodity")
     scu = int(round(float(held.get("scu") or 0)))
     buy_price = int(held.get("buy_price") or 0)
@@ -3361,6 +3472,8 @@ def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
             if not p.get("sell") or not _price_fresh(p, max_age_s, now):
                 continue
             if avoid_sells and (p.get("poi_id"), cnorm) in avoid_sells:
+                continue
+            if p.get("poi_id") in exclude_poi_ids:
                 continue
             if nav.pois.get(p.get("poi_id")) is None:
                 continue
@@ -3408,6 +3521,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, avoid_poi_ids=None, avoid_pairs=None,
                        avoid_volumes=None, avoid_buys=None, avoid_sells=None,
+                       exclude_poi_ids=None,
                        fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Re-solve a trade route from the player's *current* position mid-run,
     carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
@@ -3423,6 +3537,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     now = now_ts if now_ts is not None else time.time()
     avoid_poi_ids = frozenset(avoid_poi_ids or ())
     avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))
+    exclude_poi_ids = frozenset(exclude_poi_ids or ())
     memo = {}
 
     held_scu = float(held.get("scu")) if (held and held.get("scu")) else 0.0
@@ -3434,6 +3549,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
             avoid_buys=avoid_buys, avoid_sells=avoid_sells,
+            exclude_poi_ids=exclude_poi_ids,
             fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range_only)
 
     start = None
@@ -3450,10 +3566,16 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     held_row, sell_poi = _held_sell_leg(
         nav, prices, held, start, system=system, max_age_s=max_age_s, now=now,
         t_ref=t_ref, optimize=optimize, avoid=avoid_volumes, memo=memo,
-        avoid_sells=frozenset(avoid_sells or ()))
+        avoid_sells=frozenset(avoid_sells or ()),
+        exclude_poi_ids=exclude_poi_ids)
     if held_row is None:
         empty = _cost_route(nav, [], start, t_ref)
-        empty["summary"]["reason"] = f"no known buyer for held {held.get('commodity')}"
+        # Name the constraint that stranded the cargo: "nobody buys Titanium" and
+        # "nobody your ship can dock at buys Titanium" want very different fixes.
+        empty["summary"]["reason"] = (
+            f"no reachable buyer for held {held.get('commodity')} — try widening STOPS"
+            if exclude_poi_ids
+            else f"no known buyer for held {held.get('commodity')}")
         empty["summary"]["usable_scu"] = float(usable_scu)
         empty["summary"]["carried_commodity"] = held.get("commodity")
         empty["summary"]["carried_scu"] = held_scu
@@ -3469,7 +3591,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               max_age_s=max_age_s, now_ts=now,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
-                              avoid_sells=frozenset(avoid_sells or ()))
+                              avoid_sells=frozenset(avoid_sells or ()),
+                              exclude_poi_ids=exclude_poi_ids)
     cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,

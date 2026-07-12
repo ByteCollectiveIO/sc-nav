@@ -3234,6 +3234,95 @@ class ResourceValueTests(unittest.TestCase):
         self.assertEqual(doc["harvestable"]["Ranta Dung"]["tier"], "low")
 
 
+class TradeStopFilterApiTests(unittest.TestCase):
+    """Stop-kind filter (#34): keep a big hauler out of places it can't use. The
+    solver drops unusable stops; manual legs (the player's explicit pick) are
+    badged instead; the choice survives onto the run so a re-plan honors it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Hauler", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+
+        def pt(commodity, tid, poi, buy=None, sell=None):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 500 if buy else 0,
+                    "scu_sell_stock": 500 if sell else 0, "updated_at": None}
+
+        # Gold: A -> B.  Iron: B -> C.  C is the only stop our "ship" can't use.
+        self._orig_pts, self._orig_kinds = app.trade_price_points, app.trade_stop_kinds
+        app.trade_price_points = [pt("Gold", 1, self.A, buy=100), pt("Gold", 2, self.B, sell=300),
+                                  pt("Iron", 3, self.B, buy=50), pt("Iron", 4, self.C, sell=200)]
+        app.trade_stop_kinds = {
+            self.A: {"place": "station", "dock": True},
+            self.B: {"place": "station", "dock": True},
+            self.C: {"place": "outpost", "dock": False},
+        }
+
+    def tearDown(self):
+        app.trade_price_points, app.trade_stop_kinds = self._orig_pts, self._orig_kinds
+
+    def _plan(self, **kw):
+        body = {"usable_scu": 100, "start_id": self.A, "sort": "profit",
+                "system": "Stanton"}
+        body.update(kw)
+        return self.client.post("/api/trade/plan", json=body)
+
+    def test_default_any_uses_every_stop(self):
+        legs = self._plan().json()["legs"]
+        self.assertEqual({l["commodity"] for l in legs}, {"Gold", "Iron"})
+
+    def test_stations_only_drops_the_surface_outpost(self):
+        legs = self._plan(stops="stations").json()["legs"]
+        self.assertEqual({l["commodity"] for l in legs}, {"Gold"})   # Iron sold at C
+
+    def test_cargo_dock_drops_the_undockable_stop(self):
+        legs = self._plan(stops="dock").json()["legs"]
+        self.assertEqual({l["commodity"] for l in legs}, {"Gold"})
+        for lg in legs:
+            self.assertNotIn(self.C, (lg["buy_poi_id"], lg["sell_poi_id"]))
+
+    def test_unknown_stops_value_never_silently_drops_stops(self):
+        legs = self._plan(stops="bogus").json()["legs"]
+        self.assertEqual({l["commodity"] for l in legs}, {"Gold", "Iron"})
+
+    def test_manual_leg_at_an_unusable_stop_is_badged_not_dropped(self):
+        # The player explicitly chose this leg. Tell them; don't rewrite it.
+        r = self._plan(mode="manual", stops="dock",
+                       legs=[{"commodity": "Iron", "buy_terminal_id": 3,
+                              "sell_terminal_id": 4}])
+        legs = r.json()["legs"]
+        self.assertEqual(len(legs), 1)                 # kept
+        self.assertEqual(legs[0]["no_stop"], ["sell"])  # and flagged on the C end
+
+    def test_stops_persists_onto_the_run_for_replan(self):
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 100, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "stops": "dock"})
+        self.assertEqual(r.status_code, 200)
+        run = db.get_active_trade_run("1")
+        self.assertEqual(run["params"]["stops"], "dock")
+
+
 class FeedRefreshSettingTests(unittest.TestCase):
     """feed_refresh_h (#33): default 6h, 0 = off, and a hard 2h floor on
     enabled values — the community-run uexcorp API must not be hammerable

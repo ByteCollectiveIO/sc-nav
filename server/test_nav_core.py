@@ -1941,6 +1941,90 @@ class TradeTerminalCrosswalkTests(unittest.TestCase):
         self.assertEqual(resolved[0]["poi_name"], "Everus Harbor")
 
 
+class TradeStopKindTests(unittest.TestCase):
+    """nav_core.terminal_stop_kinds / stop_exclusions — which stops a ship can
+    physically use (#34). A Hull-C has no landing gear: it can only moor at a
+    station cargo dock."""
+
+    def _nav(self):
+        nav = nav_core.NavData()
+
+        def poi(pid, name, system="Stanton"):
+            nav.pois[pid] = nav_core.Poi(
+                id=pid, name=name, system=system, container_name=None, type="Station",
+                local_km=None, global_m=(float(pid), 0.0, 0.0), latitude=None,
+                longitude=None, height_m=None, qt_marker=True)
+
+        poi(1, "Everus Harbor")          # station with a cargo dock
+        poi(2, "HDMS-Bezdek")            # surface outpost
+        poi(3, "Gateway Station Pyro")   # gateway: dock asserted from architecture
+        poi(4, "Levski")                 # planetary city that HAS a cargo dock
+        poi(5, "ARC-L1 Station")         # station, no cargo dock
+        return nav
+
+    def _term(self, poi_name, *, ttype="commodity", station=0, city=0, outpost=0,
+              loading_dock=0, tid=1):
+        return {"id": tid, "type": ttype, "star_system_name": "Stanton",
+                "displayname": poi_name, "space_station_name": poi_name if station else None,
+                "city_name": poi_name if city else None,
+                "outpost_name": poi_name if outpost else None,
+                "id_space_station": station, "id_city": city, "id_outpost": outpost,
+                "has_loading_dock": loading_dock, "nickname": None, "name": poi_name}
+
+    def _kinds(self):
+        rows = [
+            self._term("Everus Harbor", station=1, loading_dock=1, tid=1),
+            self._term("HDMS-Bezdek", outpost=1, tid=2),
+            self._term("Gateway Station Pyro", station=1, tid=3),        # feed omits the dock
+            # Levski states its dock on a NON-commodity desk only — the whole reason
+            # the classifier runs over the unfiltered feed.
+            self._term("Levski", city=1, tid=4),
+            self._term("Levski", city=1, loading_dock=1, ttype="item", tid=5),
+            self._term("ARC-L1 Station", station=1, tid=6),
+        ]
+        return nav_core.terminal_stop_kinds(self._nav(), rows)
+
+    def test_places_classified_from_uex_location_ids(self):
+        k = self._kinds()
+        self.assertEqual(k[1]["place"], "station")
+        self.assertEqual(k[2]["place"], "outpost")
+        self.assertEqual(k[4]["place"], "city")
+
+    def test_dock_flag_is_ored_across_all_terminals_at_the_stop(self):
+        # Levski's commodity desk has no dock flag; its item desk does. A
+        # commodity-only view would wrongly call Levski undockable.
+        self.assertTrue(self._kinds()[4]["dock"])
+
+    def test_gateway_dock_asserted_despite_missing_feed_flag(self):
+        # UEX omits has_loading_dock on several gateways; every gateway has a cargo
+        # deck, so architecture wins over an incomplete feed.
+        self.assertTrue(self._kinds()[3]["dock"])
+
+    def test_station_without_a_dock_is_not_dockable(self):
+        k = self._kinds()
+        self.assertEqual(k[5]["place"], "station")
+        self.assertFalse(k[5]["dock"])
+
+    def test_stations_mode_excludes_surface_and_city_stops(self):
+        ex = nav_core.stop_exclusions(self._kinds(), "stations")
+        self.assertIn(2, ex)            # outpost
+        self.assertIn(4, ex)            # Levski is a planetary city...
+        self.assertNotIn(1, ex)
+
+    def test_dock_mode_keeps_a_planetary_stop_that_has_a_dock(self):
+        # The two modes are independent axes, not nested: Levski is planetary but
+        # dockable, so "cargo dock" keeps the stop "stations only" drops.
+        ex = nav_core.stop_exclusions(self._kinds(), "dock")
+        self.assertNotIn(4, ex)         # ...yet a Hull-C can dock there
+        self.assertIn(2, ex)            # outpost: no dock
+        self.assertIn(5, ex)            # station, but no dock
+
+    def test_any_and_unknown_modes_exclude_nothing(self):
+        # An unrecognized restriction must never silently drop stops.
+        self.assertEqual(nav_core.stop_exclusions(self._kinds(), "any"), frozenset())
+        self.assertEqual(nav_core.stop_exclusions(self._kinds(), "bogus"), frozenset())
+
+
 class TradeRankingTests(unittest.TestCase):
     """nav_core.rank_trades — best buy->sell trades over the live price feed (#21
     step 2). Price points use the shape /api/trade/prices emits."""
@@ -2088,6 +2172,45 @@ class TradeSolverTests(unittest.TestCase):
         plan = nav_core.plan_trade_route(
             NAV, self._prices(), 100, start_id=self.A, max_stops=2, sort="profit")
         self.assertEqual(plan["summary"]["legs"], 1)    # max_stops//2
+
+    def test_excluded_stop_is_dropped_from_both_ends(self):
+        # C is unusable (say: a surface outpost, and we're flying a Hull-C). The Iron
+        # leg sells at C, so it must vanish — leaving only the Gold leg.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="profit",
+            exclude_poi_ids=frozenset({self.C}))
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Gold"})
+        for lg in plan["legs"]:
+            self.assertNotIn(self.C, (lg["buy_poi_id"], lg["sell_poi_id"]))
+
+    def test_excluding_every_stop_is_infeasible_not_a_bad_route(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="profit",
+            exclude_poi_ids=frozenset({self.A, self.B, self.C}))
+        self.assertFalse(plan["summary"]["feasible"])
+        self.assertEqual(plan["legs"], [])
+
+    def test_held_cargo_is_never_sold_at_an_unusable_stop(self):
+        # The regression that matters: a re-plan must not route a Hull-C to a stop it
+        # can't dock at just because that's where the buyer is. B is the only Gold
+        # buyer; excluding it must strand the cargo loudly, not sell it there anyway.
+        # (Contrast avoid_poi_ids, which the held-sell leg deliberately ignores — you
+        # can run a pirate blockade, but you cannot land a Hull-C on a moon.)
+        held = {"commodity": "Gold", "scu": 100, "buy_price": 100}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, held=held, max_stops=6,
+            exclude_poi_ids=frozenset({self.B}))
+        self.assertEqual(plan["legs"], [])
+        self.assertIn("STOPS", plan["summary"]["reason"])
+
+    def test_held_cargo_still_sells_at_a_usable_stop(self):
+        held = {"commodity": "Gold", "scu": 100, "buy_price": 100}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, held=held, max_stops=6,
+            exclude_poi_ids=frozenset({self.C}))
+        self.assertTrue(plan["legs"])
+        self.assertEqual(plan["legs"][0]["sell_poi_id"], self.B)
+        self.assertTrue(plan["legs"][0]["held"])
 
     def test_no_trades_is_infeasible(self):
         losing = [self._pt("Gold", 1, self.A, buy=300, scu_buy=500),
