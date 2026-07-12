@@ -466,8 +466,13 @@ def load_ships() -> list[dict]:
     ships = [
         # name_full includes the manufacturer ("Argo MOLE"), which is how players
         # search; fall back to the bare model name.
+        # `dock` (#34): the ship loads only through a station cargo dock — it has no
+        # landing gear for a planetary pad. UEX flags exactly five (Hull C/D/E,
+        # Kraken, Kraken Privateer), which is the real in-game constraint. The trade
+        # planner reads it to default the STOPS filter to cargo-dock stations.
         {"name": r.get("name_full") or r["name"], "company": r.get("company_name"),
-         "scu": to_scu(r.get("scu"))}
+         "scu": to_scu(r.get("scu")),
+         "dock": bool(r.get("is_loading_dock"))}
         for r in rows
         if (r.get("name_full") or r.get("name")) and r.get("is_spaceship") in (1, "1", True)
         and to_scu(r.get("scu")) > 0
@@ -752,11 +757,18 @@ def build_resource_values() -> dict:
             "harvestable": tiered(harvestable_names)}
 
 
-def load_trade_terminals() -> list[dict]:
-    """UEX commodity terminals (one row per terminal), for the trade-route planner
-    (#21). Filtered to live, commodity-type terminals — the only ones that buy/sell
-    bulk cargo. Fetched live with an on-disk cache fallback, same as the other feeds.
-    Placement onto the map happens later, in nav_core.match_terminals."""
+def load_trade_terminals() -> tuple[list[dict], list[dict]]:
+    """UEX terminals (one row per terminal) for the trade-route planner (#21),
+    as ``(commodity, all_live)``.
+
+    `commodity` — live commodity-type terminals, the only ones that buy/sell bulk
+    cargo; this is the routing/pricing set. `all_live` — every live terminal at
+    those same places (shops, cargo services, refineries…), which the trade-stop
+    classifier needs: a station states its cargo-dock capability on whichever desk
+    UEX happened to record it on, so filtering to commodity rows first loses it
+    (see nav_core.terminal_stop_kinds). Fetched live with an on-disk cache
+    fallback, same as the other feeds. Placement onto the map happens later, in
+    nav_core.match_terminals."""
     rows = None
     if not OFFLINE:
         try:
@@ -768,8 +780,8 @@ def load_trade_terminals() -> list[dict]:
             print(f"[sc-nav] terminals fetch failed, using cache: {exc}")
     if not rows:
         rows = _load_json_list(TERMINALS_FILE)
-    return [r for r in rows
-            if r.get("type") == "commodity" and r.get("is_available_live")]
+    live = [r for r in rows if r.get("is_available_live")]
+    return [r for r in live if r.get("type") == "commodity"], live
 
 
 def load_trade_prices() -> list[dict]:
@@ -1141,11 +1153,12 @@ nav_core.assign_qt_markers(nav)
 
 
 # --- trade-route planner feeds (#21) ---------------------------------------
-trade_terminals_raw = load_trade_terminals()   # cached UEX commodity terminals
+trade_terminals_raw, trade_terminal_rows = load_trade_terminals()  # commodity, all-live
 trade_prices = load_trade_prices()             # cached per-terminal buy/sell rows
 trade_terminals: list[dict] = []               # resolved onto routable POIs
 trade_terminals_by_id: dict[int, dict] = {}
 trade_price_points: list[dict] = []            # live prices joined to resolved terminals
+trade_stop_kinds: dict[int, dict] = {}         # poi_id -> {place, dock} (#34)
 
 
 def _serialize_trade_price(row: dict, term: dict) -> dict:
@@ -1176,7 +1189,7 @@ def rebuild_trade_terminals() -> None:
     startup and after /api/refresh — the match depends on the live nav POI catalog.
     Terminals that don't resolve are dropped from routing (never mis-placed) and
     their count logged; price rows at an unresolved terminal are likewise dropped."""
-    global trade_terminals, trade_terminals_by_id, trade_price_points
+    global trade_terminals, trade_terminals_by_id, trade_price_points, trade_stop_kinds
     resolved, unmatched = nav_core.match_terminals(nav, trade_terminals_raw)
     trade_terminals = resolved
     trade_terminals_by_id = {t["id"]: t for t in resolved}
@@ -1185,10 +1198,14 @@ def rebuild_trade_terminals() -> None:
         for row in trade_prices
         if (tid := row.get("id_terminal")) in trade_terminals_by_id
     ]
+    # Stop kinds (#34) classify over the *unfiltered* feed — see load_trade_terminals.
+    trade_stop_kinds = nav_core.terminal_stop_kinds(nav, trade_terminal_rows)
     if trade_terminals_raw:
+        docks = sum(1 for r in trade_stop_kinds.values() if r["dock"])
         print(f"[sc-nav] trade terminals resolved {len(resolved)}/"
               f"{len(trade_terminals_raw)} ({len(unmatched)} unplaced); "
-              f"{len(trade_price_points)} routable price rows")
+              f"{len(trade_price_points)} routable price rows; "
+              f"{len(trade_stop_kinds)} stops classified ({docks} cargo-dock)")
 
 
 rebuild_trade_terminals()
@@ -2773,6 +2790,13 @@ class TradePlanIn(BaseModel):
     # Personal blacklist (localStorage): POI ids to always route around, layered on
     # top of the board as extra hazard volumes. Unknown ids silently skipped.
     avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
+    # Stop kind (#34): which places this ship may buy/sell at. `any` = no limit;
+    # `stations` = orbital stations only (no planet/moon surface landings — a chore
+    # in a big hauler); `dock` = only stations with a cargo dock, the hard physical
+    # constraint for a Hull-C/D/E or Kraken, which cannot land planetside at all.
+    # Auto/filtered modes drop excluded stops; manual legs are the player's explicit
+    # choice and are only ever badged (same contract as in_range_only / avoid_mode).
+    stops: str = "any"                                  # any | stations | dock
 
 
 class TradeRunPatchIn(BaseModel):
@@ -2801,6 +2825,7 @@ class TradeReplanIn(BaseModel):
     # Quantum (#27): override the run's stored drive / in-range constraint on re-plan.
     qd: str | None = Field(default=None, max_length=_NAME_MAX)
     in_range_only: bool | None = None
+    stops: str | None = None                            # any | stations | dock (#34)
 
 
 class TradeFavoriteIn(BaseModel):
@@ -2818,6 +2843,12 @@ _DEADHEAD_WEIGHT = 3.0   # empty-hold time multiplier when minimize_deadhead is 
 
 def _norm_avoid_mode(mode, default="ignore") -> str:
     return mode if mode in ("ignore", "warn", "avoid") else default
+
+
+def _norm_stops(mode) -> str:
+    """The stop-kind filter (#34), defaulting an unknown value to 'any'. An
+    unrecognized restriction must never silently drop stops."""
+    return mode if mode in nav_core.STOP_MODES else "any"
 
 
 def _build_hazard_volumes(warnings, blacklist, t_ref):
@@ -2861,8 +2892,9 @@ _PAD_SIZE_ORDER = {"XS": 0, "S": 1, "M": 2, "L": 3, "XL": 4}
 
 def _amenity_view(amens: list[str]) -> dict | None:
     """Distill a wiki amenity list to the operational facts a trade stop view
-    renders (#28c): how cargo moves (freight elevator vs loading dock), the
-    largest hangar/pad, and clinic presence. None when nothing relevant."""
+    renders (#28c): how cargo moves (freight elevator vs loading dock), whether
+    ships can moor at a docking collar (#34), the largest hangar/pad, and clinic
+    presence. None when nothing relevant."""
     v: dict = {}
     cargo = []
     for a in amens:
@@ -2870,6 +2902,8 @@ def _amenity_view(amens: list[str]) -> dict | None:
             cargo.append("elevator")
         elif a == "Commodity Trading - Loading Dock":
             cargo.append("dock")
+        elif a == "Docking":
+            v["docking"] = True     # docking collar — what a Hull-C moors to (#34)
         elif a == "Clinic":
             v["clinic"] = True
         else:
@@ -2909,6 +2943,22 @@ def _annotate_leg_amenities(plan: dict) -> dict:
             v = _poi_amenity_view(lg.get(id_key))
             if v:
                 lg[out_key] = v
+    return plan
+
+
+def _annotate_leg_stops(plan: dict, exclude: frozenset) -> dict:
+    """Badge any leg that touches a stop the ship can't use (#34). The solver never
+    produces one — it drops them — so this only ever fires on *manual* legs, which
+    are the player's explicit choice and are never silently rewritten. That's the
+    point: a Hull-C owner hand-picking an outpost gets told, not overruled. Mutates
+    + returns the plan."""
+    if not exclude:
+        return plan
+    for lg in plan.get("legs") or ():
+        bad = [k for k, id_key in (("buy", "buy_poi_id"), ("sell", "sell_poi_id"))
+               if lg.get(id_key) in exclude]
+        if bad:
+            lg["no_stop"] = bad          # ["buy"], ["sell"] or both
     return plan
 
 
@@ -3051,11 +3101,14 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     solver_volumes = volumes if mode == "avoid" else None
     stock_reports = active_stock_reports()
     fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
+    # Stops this ship can't use (#34). Unlike the danger sets this is physical, so
+    # it holds in every mode — including a held-cargo re-plan.
+    exclude = nav_core.stop_exclusions(trade_stop_kinds, _norm_stops(body.stops))
     try:
         if body.mode == "manual":
             # Manual legs are the player's explicit choice — never silently dropped;
             # they still get warn/avoid badges + costed detours so a snared pick is flagged.
-            # (in_range_only only ever annotates manual legs, never drops them.)
+            # (in_range_only and `stops` only ever annotate manual legs, never drop them.)
             plan = nav_core.cost_trade_legs(
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
@@ -3072,11 +3125,13 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 avoid_volumes=solver_volumes,
                 avoid_buys=nav_core.stock_avoid_buys(stock_reports),
                 avoid_sells=nav_core.stock_avoid_sells(stock_reports),
+                exclude_poi_ids=exclude,
                 fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=body.in_range_only)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     _annotate_leg_stock(plan, stock_reports)
     _annotate_leg_amenities(plan)
+    _annotate_leg_stops(plan, exclude)
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
 
 
@@ -3153,6 +3208,7 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "avoid_mode": _norm_avoid_mode(body.avoid_mode, default="avoid"),   # #24
             "avoid_poi_ids": list(body.avoid_poi_ids or ()),                    # #24 v2 blacklist
             "qd": body.qd, "in_range_only": body.in_range_only,                 # #27
+            "stops": _norm_stops(body.stops),                                   # #34
         },
     }
 
@@ -3324,6 +3380,11 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         in_range = (body.in_range_only if body.in_range_only is not None
                     else bool(p.get("in_range_only")))
         fuel_req, max_range_m, _qd = _resolve_drive(ship, qd)
+        # #34: the stop filter survives a re-plan. It's a property of the hull, not
+        # of the route — a Hull-C that couldn't land planetside when the run started
+        # still can't, and this is the path that re-homes sunk cargo.
+        stops = _norm_stops(body.stops if body.stops is not None else p.get("stops"))
+        exclude = nav_core.stop_exclusions(trade_stop_kinds, stops)
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
@@ -3346,6 +3407,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         avoid_volumes=(volumes if mode == "avoid" else None),
         avoid_buys=nav_core.stock_avoid_buys(stock_reports),
         avoid_sells=nav_core.stock_avoid_sells(stock_reports),
+        exclude_poi_ids=exclude,
         fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
     _annotate_leg_stock(new_plan, stock_reports)
     _annotate_leg_amenities(new_plan)
@@ -3372,6 +3434,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         p = run.get("params") or {}
         p["qd"], p["in_range_only"] = qd, in_range   # persist the params used
         p["avoid_mode"] = mode                       # persist the mode used
+        p["stops"] = stops                           # #34
         run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)
@@ -6615,7 +6678,7 @@ async def _refresh_feeds() -> None:
     degrades to stale-but-served rather than raising."""
     global raw_commodity_names, commodity_names, ships, fleet_ships
     global item_names, item_prices, resource_values
-    global trade_terminals_raw, trade_prices, feeds_refreshed_at
+    global trade_terminals_raw, trade_terminal_rows, trade_prices, feeds_refreshed_at
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
     ships = await asyncio.to_thread(load_ships)
@@ -6626,7 +6689,7 @@ async def _refresh_feeds() -> None:
     item_names = await asyncio.to_thread(load_item_names)
     item_prices = await asyncio.to_thread(build_item_prices)   # fresh price refs
     resource_values = await asyncio.to_thread(build_resource_values)  # fresh value badges
-    trade_terminals_raw = await asyncio.to_thread(load_trade_terminals)
+    trade_terminals_raw, trade_terminal_rows = await asyncio.to_thread(load_trade_terminals)
     trade_prices = await asyncio.to_thread(load_trade_prices)
     refresh_catalog()             # feeds changed → rebuild the shared item catalog
     rebuild_trade_terminals()     # re-resolve the crosswalk with the new terminal set

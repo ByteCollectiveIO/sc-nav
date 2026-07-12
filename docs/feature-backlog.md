@@ -16,6 +16,35 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 34. Trade planner: stop kinds for big haulers ✅ BUILT
+
+**Status: built 2026-07-12, browser-verified (headless harness, real Hull-C
+plan).** A Hull-C has no landing gear — it can *only* moor at a station cargo
+dock — and even ships that can land planetside find surface outposts a chore in
+a big hull. The planner now takes `stops` = `any | stations | dock`:
+`stations` drops planet/moon surface stops, `dock` keeps only stations with a
+cargo dock.
+
+The win was that **the data already knew**: uexcorp flags `is_loading_dock` on
+exactly five ships (Hull C/D/E, Kraken ×2) and `has_loading_dock` on terminals —
+so we didn't need a hand-curated station list. The catch is that the terminal
+flag is per *desk*, not per station (Levski declares its dock on "Cargo
+Services", never on its commodity desk), so it has to be OR-ed across the
+unfiltered feed. Plus a gateway rule (UEX omits the flag on the Nyx-side
+gateways; every gateway has a cargo deck). Yields exactly the in-game Hull-C
+set of 14 stops. Magnus Gateway is absent from the feed entirely — nothing to
+do until UEX carries it.
+
+Design detail worth remembering: `exclude_poi_ids` is a **separate** solver set
+from `avoid_poi_ids`, because the held-cargo re-plan deliberately *ignores*
+danger (you can run a blockade to offload sunk cargo) but must never ignore
+physics (no daring lands a Hull-C on a moon). Full write-up in
+[`trade-route-planner.md`](trade-route-planner.md#stop-kinds--the-big-hauler-filter-34--as-built).
+
+**Possible follow-on:** the cargo-hauling planner (#12) has the same problem —
+its contract stops are player-entered, so it can't *drop* them, but it could
+badge a stop the chosen ship can't use. Not built.
+
 ### 33. Scheduled UEX feed refresh (admin-configurable) ✅ BUILT
 
 **Status: built 2026-07-11 with #32, browser-verified.** Before this, uexcorp
