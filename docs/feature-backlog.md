@@ -16,6 +16,29 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 35. Halo Finder multi-system expansion — Glaciem Ring + Pyro fields ✅ BUILT
+
+**Status: built 2026-07-15 (same day as the design), browser-verified via the
+preview harness (Nyx pocket hit 1,463 km staged from Levski; Akiro fly-by
+6,258 km via RAB-JAK; Stanton band flow regression-clean). NOT in-game
+verified — the design doc's §7 unknowns (do Wtn pockets spawn rocks
+contract-free, ring QT obstruction, RMB rock density) still need a flight.**
+Suites 367/244 green. Full design + build notes:
+[`halo-finder-expansion.md`](halo-finder-expansion.md). Extends #31 to the
+**Nyx Glaciem Ring** (circumstellar ring at 15.000 Gm — but only ~4% of the
+circumference holds rocks, in 381 datamined pocket containers we already ship
+in `containers.json`, so the planner aims chords at **pocket centers**, not a
+radius crossing) and **Pyro's 102 unmarked resource fields** (PYR L-points +
+RMB sites, coords already in `locations.json`; Akiro Cluster = the PYR1-L3
+field). Key decisions: per-system belt registry on `NavData` (`bands` /
+`ring+pockets` / `fields`), new pocket mode = POI closest-approach over a
+target *set*, `glaciem_contains` joins the system-disambiguation ladder with a
+fresh-sticky-beats-geometry rule (Stanton traffic crosses 15 Gm constantly —
+regression case pinned in the doc), band mode deliberately NOT offered for
+Nyx. **Pyro VI / Pyro V planetary rings don't exist** (researched — lore only)
+and the Keeger Belt isn't physicalized yet; both explicitly out of scope. No
+new tables/deps/sync tools. In-game unknowns to verify listed in the doc §7.
+
 ### 34. Trade planner: stop kinds for big haulers ✅ BUILT
 
 **Status: built 2026-07-12, browser-verified (headless harness, real Hull-C

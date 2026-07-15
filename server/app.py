@@ -300,11 +300,15 @@ def _apply_wiki_catalog(fresh: nav_core.NavData) -> nav_core.NavData:
     """Fold the wiki locations catalog into a freshly parsed NavData: new POIs
     + QT-marker promotion of starmap POIs the game now allows jumping to, when
     the org opted in (#28a); per-POI QT arrival radii always (#28b — physics
-    metadata, enriches the starmap/synth POIs regardless of the toggle)."""
+    metadata, enriches the starmap/synth POIs regardless of the toggle).
+    The belt registry (#35) is also built here — always: its rows are planner
+    targets keyed off the containers + this feed, not catalog POIs, so the
+    wiki_pois_enabled toggle doesn't gate them."""
     if wiki_pois_enabled():
         nav_core.add_wiki_pois(fresh, wiki_locations)
         nav_core.upgrade_qt_markers(fresh, wiki_locations)
     nav_core.annotate_arrival_radii(fresh, wiki_locations)
+    fresh.belts = nav_core.build_belt_registry(fresh, wiki_locations)
     return fresh
 
 
@@ -1540,6 +1544,10 @@ _commission_announce_at: dict[str, float] = {}   # poster id -> last announce (m
 REMINDER_TICK_S = 60.0
 
 
+SYSTEM_STICKY_FRESH_S = 1800    # container confirmation younger than this is
+                                # physically binding for deep-space fixes (#35)
+
+
 class Session:
     """One org member's live state: position cursor, destination, capture
     arming, breadcrumb trail, and their open browser tabs. Keyed by Discord id
@@ -1553,7 +1561,11 @@ class Session:
         # coordinates (every system centers on its own (0,0,0) in one shared
         # numeric space), but you can't change systems without transiting a
         # jump gate — always near detectable containers — so this sticks.
+        # system_t stamps WHEN a container last confirmed it: a fresh
+        # confirmation outranks belt-envelope geometry in _halo_fix_system
+        # (#35), a stale one doesn't.
         self.system = None
+        self.system_t = None
         self.prev_pos = None
         self.prev_t = None
         self.destination_id = None
@@ -1592,8 +1604,18 @@ class Session:
         # navigator's halo chip, the halo locate loop — know where we are.
         if self.nav_state.get("system"):
             self.system = self.nav_state["system"]
+            self.system_t = self.t or time.time()
         elif self.system:
             self.nav_state["system"] = self.system
+
+    def system_fresh(self) -> bool:
+        """True while the sticky system's container confirmation is recent
+        enough to be physically binding for a deep-space fix (#35): you can't
+        have been at a known pad minutes ago and be in another system's belt
+        now without transiting a jump gate — itself a detectable container
+        that would have re-stamped this."""
+        return bool(self.system and self.system_t
+                    and time.time() - self.system_t <= SYSTEM_STICKY_FRESH_S)
 
     def _recompute_state(self):
         self.nav_state = nav_core.compute_state(
@@ -2395,19 +2417,42 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
 
 
 def _halo_capture_note(poi) -> str | None:
-    """Band annotation for a deep-space capture inside the Aaron Halo (#31):
-    tagging a rock immediately records which band it's in, so it's findable
-    (and plannable-to) later without re-deriving anything."""
-    if (poi.container_name is not None or poi.system != nav_core.HALO_SYSTEM
-            or poi.global_m is None):
+    """Belt annotation for a capture (#31, #35): tagging a rock immediately
+    records which Aaron Halo band / Glaciem pocket / Pyro field it's in, so
+    it's findable (and plannable-to) later without re-deriving anything."""
+    if poi.container_name is not None:
+        # A capture INSIDE a Glaciem pocket detects the ring segment itself
+        # (each is a ~5,200 km container) — the pocket key IS the annotation.
+        cont = nav.containers.get((poi.system, poi.container_name))
+        if cont is not None and cont.type == "AsteroidBelt":
+            return ("Glaciem Ring pocket "
+                    f"{nav_core.glaciem_pocket_key(cont.internal_name or cont.name)}")
         return None
-    loc = nav_core.halo_locate(poi.global_m)
-    if loc["status"] == "band":
-        return f"Aaron Halo band {loc['band']}"
-    if loc["status"] == "band_offplane":
-        return f"Aaron Halo band {loc['band']} radius, off-plane"
-    if loc["status"] == "void":
-        return f"Aaron Halo void (bands {loc['between'][0]}–{loc['between'][1]})"
+    if poi.global_m is None:
+        return None
+    belt = nav.belts.get(poi.system)
+    kind = belt.get("kind") if belt else None
+    if kind == "bands":
+        loc = nav_core.halo_locate(poi.global_m)
+        if loc["status"] == "band":
+            return f"Aaron Halo band {loc['band']}"
+        if loc["status"] == "band_offplane":
+            return f"Aaron Halo band {loc['band']} radius, off-plane"
+        if loc["status"] == "void":
+            return f"Aaron Halo void (bands {loc['between'][0]}–{loc['between'][1]})"
+        return None
+    if kind == "ring":
+        loc = nav_core.glaciem_locate(poi.global_m, belt["pockets"])
+        if loc["status"] == "pocket":
+            return f"Glaciem Ring pocket {loc['pocket']['key']}"
+        if loc["status"] == "ring_void":
+            return f"Glaciem Ring (between pockets, {loc['pocket']['key']} nearest)"
+        return None
+    if kind == "fields":
+        loc = nav_core.field_locate(poi.global_m, belt["fields"])
+        if loc["status"] == "field":
+            return f"near the {loc['field']['name']} asteroid field"
+        return None
     return None
 
 
@@ -4035,15 +4080,23 @@ async def trade_stats(range: str = "all", user: dict = Depends(require_session))
     return {"range": range, **stats, "traders": traders, "activity": activity}
 
 
-# --- halo finder (#31): Aaron Halo QT-drop planner --------------------------
+# --- halo finder (#31, multi-system #35): asteroid QT-drop planner ----------
 
 
 class HaloPlanIn(BaseModel):
-    """Plan a QT drop into the Aaron Halo. Exactly one of `band` (1-10) /
-    `target_poi_id` (a POI inside the belt) selects the goal; start is
-    `start_poi_id` or, by default, the caller's live position."""
+    """Plan a QT drop into an asteroid belt/field. The goal picks the system:
+    `band` (1-10, Aaron Halo / Stanton), `field_uuid` (a Pyro field from the
+    registry), `pocket_key` or a bare system="Nyx" (Glaciem Ring — the solver
+    auto-picks the pocket unless one is pinned), or `target_poi_id` (any
+    system — a tagged POI near a belt). Start is `start_poi_id` or, by
+    default, the caller's live position."""
+    system: str | None = Field(default=None, max_length=24)
     band: int | None = Field(default=None, ge=1, le=10)
     target_poi_id: int | None = None
+    pocket_key: str | None = Field(default=None, max_length=64)   # Nyx pin
+    field_uuid: str | None = Field(default=None, max_length=64)   # Pyro field
+    # Nyx: also target QV-Breaker mission pockets (believed contract-gated)
+    include_mission: bool = False
     start_poi_id: int | None = None
     aim: str = "band"                                   # band | peak
     allow_staging: bool = True
@@ -4052,21 +4105,57 @@ class HaloPlanIn(BaseModel):
     avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
 
 
+def _halo_bodies(system: str) -> list[dict]:
+    """System-map bodies for the halo canvas: the star (at its real offset,
+    not origin) + true planets; moons are sub-pixel at map scale."""
+    star = [c for c in nav.containers.values()
+            if c.system == system and c.type == "Star"]
+    planets = nav_core._planets_in_system(nav, system)
+    return [{"name": c.name, "type": c.type,
+             "x": c.pos[0], "y": c.pos[1], "r": c.body_radius}
+            for c in star + planets]
+
+
 @app.get("/api/halo/bands")
 def get_halo_bands(user: dict = Depends(require_session)):
-    """The Aaron Halo band model for the picker strip + the system-map bodies
-    (star + true planets; moons are sub-pixel at map scale). Static — bodies
-    don't move in SC — and identical for every caller."""
-    star = [c for c in nav.containers.values()
-            if c.system == nav_core.HALO_SYSTEM and c.type == "Star"]
-    planets = nav_core._planets_in_system(nav, nav_core.HALO_SYSTEM)
+    """The Aaron Halo band model for the picker strip + map bodies. Static —
+    bodies don't move in SC — and identical for every caller. Kept as the
+    Stanton-shaped alias of /api/halo/targets (pre-#35 clients)."""
     return {"system": nav_core.HALO_SYSTEM,
             "bands": [{**b, "width_m": b["outer_m"] - b["inner_m"]}
                       for b in nav_core.HALO_BANDS],
-            "bodies": [{"name": c.name, "type": c.type,
-                        "x": c.pos[0], "y": c.pos[1], "r": c.body_radius}
-                       for c in star + planets],
+            "bodies": _halo_bodies(nav_core.HALO_SYSTEM),
             "attribution": nav_core.HALO_ATTRIBUTION}
+
+
+@app.get("/api/halo/targets")
+def get_halo_targets(system: str = "Stanton",
+                     user: dict = Depends(require_session)):
+    """The per-system drop-target catalog (#35): Stanton's surveyed bands,
+    the Glaciem Ring + its 381 datamined pockets, or Pyro's unmarked resource
+    fields — plus the map bodies and the data attribution. Static per
+    dataset."""
+    belt = nav.belts.get(system)
+    if belt is None:
+        raise HTTPException(status_code=404, detail="unknown system")
+    doc = {"system": system, "kind": belt["kind"],
+           "bodies": _halo_bodies(system), "attribution": belt["attribution"]}
+    if belt["kind"] == "bands":
+        doc["bands"] = [{**b, "width_m": b["outer_m"] - b["inner_m"]}
+                        for b in belt["bands"]]
+    elif belt["kind"] == "ring":
+        doc["ring"] = {"r_m": belt["r_m"],
+                       "pocket_radius_m": belt["pocket_radius_m"]}
+        doc["pockets"] = [{"key": p["key"], "kind": p["kind"],
+                           "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
+                           "grid_radius_m": p["grid_radius_m"]}
+                          for p in belt["pockets"]]
+    else:
+        doc["fields"] = [{"uuid": f["uuid"], "name": f["name"],
+                          "shell": f["shell"],
+                          "x": f["xyz"][0], "y": f["xyz"][1], "z": f["xyz"][2]}
+                         for f in belt["fields"]]
+    return doc
 
 
 def _halo_fix_system(pos, sess: "Session | None") -> str:
@@ -4075,30 +4164,131 @@ def _halo_fix_system(pos, sess: "Session | None") -> str:
     on its own (0,0,0), so the raw nearest-container guess mixes frames and can
     name the wrong system 20 Gm out. Order:
       1. a container actually detected at the fix — ground truth;
-      2. inside the Aaron Halo ring (`halo_contains`) — an unambiguous Stanton
-         landmark that must OUTRANK a stale sticky value carried over from an
-         earlier system (the in-belt fix, v0.52.2);
-      3. the session's sticky, container-confirmed system;
+      2. belt-envelope geometry (Aaron Halo -> Stanton, Glaciem Ring -> Nyx),
+         UNLESS a FRESH sticky system contradicts it (#35). With two belts the
+         envelopes are no longer unambiguous landmarks: ordinary Stanton and
+         Pyro traffic crosses the 15 Gm Glaciem radius, and Pyro traffic
+         crosses the ~20 Gm Aaron radii too. A container confirmation minutes
+         old is physically binding (you can't switch systems without transiting
+         a jump gate, itself a container) — but a STALE sticky still loses to
+         geometry, which is the v0.52.2 in-belt fix (that bug's sticky was a
+         value carried from a previously-visited system, ages old);
+      3. the sticky, container-confirmed system, fresh or not;
       4. the nearest-container heuristic — last resort.
     """
     c = nav_core.detect_container(nav, pos)
     if c is not None:
         return c.system
-    if nav_core.halo_contains(pos):
-        return nav_core.HALO_SYSTEM
+    belt = (nav_core.HALO_SYSTEM if nav_core.halo_contains(pos)
+            else nav_core.GLACIEM_SYSTEM if nav_core.glaciem_contains(pos)
+            else None)
+    fresh = sess.system if (sess is not None and sess.system_fresh()) else None
+    if belt is not None and (fresh is None or fresh == belt):
+        return belt
+    if fresh is not None:
+        return fresh
     if sess is not None and sess.system:
         return sess.system
     return nav_core.system_at(nav, pos)
 
 
-def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> dict:
-    """Resolve start/target and run the halo drop planner. Runs off the event
-    loop (pure geometry over ~200 markers; the staged POI pair scan is the
-    worst case). Raises HTTPException on bad input / missing live position."""
-    if (body.band is None) == (body.target_poi_id is None):
+def _halo_goal_system(body: HaloPlanIn) -> str | None:
+    """The belt system a plan request is about. Explicit `system` wins;
+    otherwise the goal's shape names it (band -> Stanton, field -> Pyro,
+    pocket pin -> Nyx, a target POI -> that POI's system)."""
+    if body.system:
+        return body.system
+    if body.band is not None:
+        return nav_core.HALO_SYSTEM
+    if body.field_uuid is not None:
+        return nav_core.PYRO_SYSTEM
+    if body.pocket_key is not None:
+        return nav_core.GLACIEM_SYSTEM
+    if body.target_poi_id is not None:
+        tp = nav.pois.get(body.target_poi_id)
+        if tp is None:
+            raise HTTPException(status_code=404, detail="unknown target_poi_id")
+        return tp.system
+    return None
+
+
+def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
+    """Validate the goal against the system's belt kind and resolve it into
+    plan_halo_drop kwargs: {band=} / {target=} / {pockets=}. Shape errors
+    (cross-system or over-specified goals) are checked BEFORE any id resolves,
+    so they're always a 400 — never a 404 on an incidental bad id."""
+    belt = nav.belts.get(system) or {}
+    kind = belt.get("kind")
+    if body.band is not None and kind != "bands":
+        raise HTTPException(status_code=400,
+                            detail=f"bands are an Aaron Halo ({nav_core.HALO_SYSTEM}) goal")
+    if body.field_uuid is not None and kind != "fields":
+        raise HTTPException(status_code=400,
+                            detail=f"fields are a {nav_core.PYRO_SYSTEM} goal")
+    if body.pocket_key is not None and kind != "ring":
+        raise HTTPException(status_code=400,
+                            detail=f"ring pockets are a {nav_core.GLACIEM_SYSTEM} goal")
+    has_target = body.target_poi_id is not None
+    if kind == "bands" and (body.band is None) == (not has_target):
         raise HTTPException(status_code=400,
                             detail="pick exactly one of band / target_poi_id")
+    if kind == "fields" and (body.field_uuid is None) == (not has_target):
+        raise HTTPException(status_code=400,
+                            detail="pick exactly one of field_uuid / target_poi_id")
+    if kind == "ring" and body.pocket_key is not None and has_target:
+        raise HTTPException(status_code=400,
+                            detail="pick one of pocket_key / target_poi_id")
+    if has_target:
+        target = nav.pois.get(body.target_poi_id)
+        if target is None or not nav_core.poi_visible_to(target, viewer):
+            raise HTTPException(status_code=404, detail="unknown target_poi_id")
+        if target.system != system:
+            raise HTTPException(status_code=400,
+                                detail=f"target is outside {system}")
+        return {"target": target}
+    if kind == "bands":
+        return {"band": body.band}
+    if kind == "fields":
+        rec = next((f for f in belt["fields"] if f["uuid"] == body.field_uuid),
+                   None)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="unknown field_uuid")
+        return {"target": nav_core.Poi(
+            id=-2, name=rec["name"], system=system, container_name=None,
+            type="Asteroid Field", local_km=None, global_m=rec["xyz"],
+            latitude=None, longitude=None, height_m=None, qt_marker=False)}
+    if kind == "ring":
+        pockets = belt["pockets"]
+        if body.pocket_key is not None:
+            pin = next((p for p in pockets
+                        if p["key"].lower() == body.pocket_key.lower()), None)
+            if pin is None:
+                raise HTTPException(status_code=404, detail="unknown pocket_key")
+            return {"pockets": [pin]}
+        # AUTO: free-roam pockets only. Mission arcs are believed
+        # contract-gated (opt-in), and the Levski pocket is Delamar — you'd
+        # just fly from Levski.
+        auto = [p for p in pockets
+                if p["kind"] == "general"
+                or (body.include_mission and p["kind"] == "mission")]
+        if not auto:
+            raise HTTPException(status_code=400,
+                                detail="no ring pockets in the dataset — refresh the starmap data")
+        return {"pockets": auto}
+    raise HTTPException(status_code=400,
+                        detail="pick a goal: a band, a Nyx ring pocket, a Pyro field, or one of your POIs")
+
+
+def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> dict:
+    """Resolve system/start/goal and run the drop planner. Runs off the event
+    loop (pure geometry; the pocket scan and staged pair scans are the worst
+    cases). Raises HTTPException on bad input / missing live position."""
     viewer = viewer_owner_ids(user)
+    system = _halo_goal_system(body)
+    if system not in nav.belts:
+        raise HTTPException(status_code=400,
+                            detail="pick a goal: a band, a Nyx ring pocket, a Pyro field, or one of your POIs")
+    goal = _halo_goal(body, system, viewer)
     if body.start_poi_id is not None:
         start = nav.pois.get(body.start_poi_id)
         if start is None or not nav_core.poi_visible_to(start, viewer):
@@ -4109,37 +4299,28 @@ def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> di
     else:
         start = nav_core.position_start(nav, sess.pos)
         start.system = _halo_fix_system(sess.pos, sess)
-    if start.system != nav_core.HALO_SYSTEM:
-        # Stanton-only v1. Only a CONFIDENT foreign start is rejected: a start
-        # POI, or a live fix sitting at a container detected in another system.
-        # A container-less deep-space live fix is system-ambiguous (per-system
-        # frames overlap near the origin) and the Halo is Stanton-only, so
-        # assume Stanton rather than false-reject — this was the "travel to
-        # Stanton first" bug for in-belt / deep-space fixes.
+    if start.system != system:
+        # Same-system starts only (cross-system gate chains stay deferred).
+        # Only a CONFIDENT foreign start is rejected: a start POI, or a live
+        # fix sitting at a container detected in another system. A
+        # container-less deep-space live fix is system-ambiguous (per-system
+        # frames overlap near the origin), so assume the belt's system rather
+        # than false-reject — the v0.52.2 "travel to Stanton first" lesson.
         if body.start_poi_id is not None or nav_core.detect_container(nav, sess.pos) is not None:
             raise HTTPException(status_code=400,
-                                detail=f"the Aaron Halo is in {nav_core.HALO_SYSTEM} — travel there first")
-        start.system = nav_core.HALO_SYSTEM
-    target = None
-    if body.target_poi_id is not None:
-        target = nav.pois.get(body.target_poi_id)
-        if target is None or not nav_core.poi_visible_to(target, viewer):
-            raise HTTPException(status_code=404, detail="unknown target_poi_id")
-        if target.system != nav_core.HALO_SYSTEM:
-            raise HTTPException(status_code=400,
-                                detail=f"target is outside {nav_core.HALO_SYSTEM}")
+                                detail=f"this belt is in {system} — travel there first")
+        start.system = system
     # Never suggest (or stage through) a marker the caller can't see.
     markers = [p for p in nav.qt_markers
-               if p.system == nav_core.HALO_SYSTEM
-               and nav_core.poi_visible_to(p, viewer)]
+               if p.system == system and nav_core.poi_visible_to(p, viewer)]
     fuel_req, max_range_m, qd = _resolve_drive(body.ship, body.qd)   # #27
     speed = (QUANTUM_DRIVES.get(qd) or {}).get("drive_speed") if qd else None
     try:
         return nav_core.plan_halo_drop(
-            nav, start=start, band=body.band, target=target,
+            nav, start=start, system=system, **goal,
             aim=(body.aim if body.aim in ("band", "peak") else "band"),
             markers=markers,
-            volumes=nav_core.body_volumes(nav, nav_core.HALO_SYSTEM),
+            volumes=nav_core.body_volumes(nav, system),
             avoid_poi_ids=body.avoid_poi_ids, allow_staging=body.allow_staging,
             t_ref=sess.t if sess else None, drive_speed_ms=speed,
             fuel_req=fuel_req, max_range_m=max_range_m)
@@ -4149,12 +4330,13 @@ def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> di
 
 @app.post("/api/halo/plan")
 async def post_halo_plan(body: HaloPlanIn, user: dict = Depends(require_session)):
-    """Aaron Halo drop planner (#31): "set destination X, jump, exit QT when
-    the HUD readout hits D" — into a chosen density band or at one of the
-    caller's deep-space POIs, with a staging leg when no clean direct chord
-    exists. Geometry is time-invariant, so a plan can be computed now and
-    flown later. Returns {start, band|target, legs, drop, alternates,
-    attribution}."""
+    """Asteroid drop planner (#31, multi-system #35): "set destination X,
+    jump, exit QT when the HUD readout hits D" — into an Aaron Halo density
+    band, a Glaciem Ring pocket (auto-picked or pinned), a Pyro field, or at
+    one of the caller's deep-space POIs, with a staging leg when no clean
+    direct chord exists. Geometry is time-invariant, so a plan can be
+    computed now and flown later. Returns {system, mode, start, band|target,
+    legs, drop, alternates, attribution}."""
     async with hub.lock:
         sess = hub.sessions.get(user["id"])
     return await asyncio.to_thread(_solve_halo_plan, body, sess, user)
@@ -4175,12 +4357,19 @@ async def get_halo_locate(target_poi_id: int | None = None,
         raise HTTPException(status_code=400,
                             detail="no live position yet — run /showlocation")
     # Deep-space coordinates are system-ambiguous; resolve most-confident
-    # signal first (detected container → in-belt geometry → sticky → guess).
+    # signal first (detected container → fresh sticky vs belt geometry →
+    # sticky → guess), then classify against that system's belt model (#35).
     fix_system = _halo_fix_system(pos, sess)
-    if fix_system != nav_core.HALO_SYSTEM:
-        view = {"status": "other_system", "system": fix_system}
+    belt = nav.belts.get(fix_system)
+    if belt is None:
+        view = {"status": "other_system"}
+    elif belt["kind"] == "ring":
+        view = nav_core.glaciem_locate(pos, belt["pockets"])
+    elif belt["kind"] == "fields":
+        view = nav_core.field_locate(pos, belt["fields"])
     else:
         view = nav_core.halo_locate(pos)
+    view["system"] = fix_system
     view["fix_age_s"] = max(0.0, time.time() - t) if t else None
     if target_poi_id is not None:
         tp = nav.pois.get(target_poi_id)

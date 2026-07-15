@@ -132,6 +132,8 @@ class NavData:
     # QT-marker indexes (filled by assign_qt_markers)
     qt_markers: list = field(default_factory=list)               # all qt_marker POIs
     qt_by_container: dict = field(default_factory=dict)           # (system,container) -> [Poi]
+    # Per-system asteroid drop-target registry (#35, filled by build_belt_registry)
+    belts: dict = field(default_factory=dict)                     # system -> registry row
 
     def container_of(self, entity) -> Container | None:
         """Parent container of any positioned entity (Poi or Observation —
@@ -1658,8 +1660,14 @@ def system_at(nav: NavData, pos) -> str | None:
     # own (0,0,0)). The Aaron Halo is a known Stanton landmark ~20 Gm out, so
     # a fix inside its ring is unambiguously Stanton — resolve it directly
     # rather than letting a coincidentally-close Pyro/Nyx body win (#31).
+    # The Glaciem Ring is the same landmark for Nyx at 15 Gm (#35); its
+    # envelope is kept razor-thin because — unlike 20 Gm — ordinary Stanton
+    # and Pyro traffic does cross 15 Gm (callers with a fresh sticky system
+    # resolve that collision; see app._halo_fix_system).
     if halo_contains(pos):
         return HALO_SYSTEM
+    if glaciem_contains(pos):
+        return GLACIEM_SYSTEM
     best, best_d = None, math.inf
     for cont in nav.containers.values():
         d = dist3(pos, cont.pos)
@@ -5040,6 +5048,13 @@ def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
     }
     if cand.get("miss_m") is not None:
         view["expected_miss_m"] = cand["miss_m"]
+    if cand.get("pocket") is not None:                       # pocket mode (#35)
+        pk = cand["pocket"]
+        view["pocket"] = {"key": pk["key"], "kind": pk["kind"],
+                          "xyz": list(pk["xyz"]),
+                          "grid_radius_m": (pk.get("grid_radius_m")
+                                            or GLACIEM_POCKET_RADIUS_M),
+                          "hit": bool(cand.get("hit"))}
     if cand.get("second"):
         s = cand["second"]
         view["second_crossing"] = {"enter_m": s["enter_m"], "peak_m": s["peak_m"],
@@ -5062,28 +5077,34 @@ def _halo_drop_leg(from_name: str, cand: dict, fuel_req=None, max_range_m=None) 
 
 
 def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
-                   target=None, aim: str = "band", markers=None, volumes=None,
+                   target=None, pockets=None, system: str = HALO_SYSTEM,
+                   aim: str = "band", markers=None, volumes=None,
                    avoid_poi_ids=None, allow_staging: bool = True,
                    t_ref: float | None = None, drive_speed_ms: float | None = None,
                    fuel_req=None, max_range_m=None, alternates: int = 3) -> dict:
-    """Plan a QT drop into the Aaron Halo (#31).
+    """Plan a QT drop into an asteroid belt/field (#31, multi-system #35).
 
     `start` is any positioned Poi (position_start for a live fix); exactly one
-    of `band` (1-10) / `target` (a Poi inside or near the belt) selects the
-    goal. Scans candidate destination markers (`markers`, default: the
-    system's QT markers), rejecting obstructed chords (`volumes`, see
+    of `band` (1-10, Aaron Halo) / `target` (a Poi near the belt, or a
+    synthetic Poi at a Pyro field anchor) / `pockets` (Glaciem Ring pocket
+    dicts — the solver picks the pocket the geometry makes cheapest) selects
+    the goal. Scans candidate destination markers (`markers`, default:
+    `system`'s QT markers), rejecting obstructed chords (`volumes`, see
     body_volumes) and drops inside the auto-arrival approach, then scores by
     drop-window length / flown distance / crossing steepness (`aim` flips the
-    steepness preference; POI mode scores by miss distance instead). When no
-    direct chord works (`allow_staging`), a staging hop through the cheapest
-    viable marker T is planned via the existing travel_cost machinery.
+    steepness preference; POI mode scores by miss distance, pocket mode by
+    in-pocket hit then flown distance). When no direct chord works
+    (`allow_staging`), a staging hop through the cheapest viable marker T is
+    planned via the existing travel_cost machinery.
 
-    Returns {start, band|target, aim, legs, drop, alternates, attribution};
-    raises ValueError when no viable plan exists or inputs are inconsistent.
-    All geometry is time-invariant (nothing in Stanton moves), so plans can be
-    computed now and flown later."""
-    if (band is None) == (target is None):
-        raise ValueError("pick exactly one of band / target")
+    Returns {system, mode, start, band|target, aim, legs, drop, alternates,
+    attribution}; raises ValueError when no viable plan exists or inputs are
+    inconsistent. All geometry is time-invariant (nothing moves in SC), so
+    plans can be computed now and flown later."""
+    if (band is not None) + (target is not None) + (pockets is not None) != 1:
+        raise ValueError("pick exactly one of band / target / pockets")
+    if pockets is not None and not pockets:
+        raise ValueError("no pockets to target (dataset missing the ring?)")
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     s_pos = entity_global_m(nav, start, t_ref)
     if s_pos is None:
@@ -5097,7 +5118,7 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
 
     avoid = set(avoid_poi_ids or ()) | set(HALO_PLACEHOLDER_POI_IDS)
     if markers is None:
-        markers = [p for p in nav.qt_markers if p.system == HALO_SYSTEM]
+        markers = [p for p in nav.qt_markers if p.system == system]
     cands_from = {}          # marker id -> global pos, resolved once
 
     def usable(m) -> bool:
@@ -5119,13 +5140,30 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
                 continue
             if band_row is not None:
                 c = _halo_band_candidate(from_pos, m, m_pos, band_row, volumes)
+                if c is not None:
+                    out.append(c)
+            elif pockets is not None:
+                # Pocket mode (#35): every pocket is a candidate target on
+                # this chord. Obstruction depends only on the chord, so test
+                # it once per marker, not per pocket.
+                if volumes and chord_obstructed(from_pos, m_pos, volumes):
+                    continue
+                for pk in pockets:
+                    c = _halo_poi_candidate(from_pos, m, m_pos, pk["xyz"], None)
+                    if c is not None:
+                        c["pocket"] = pk
+                        c["hit"] = c["miss_m"] <= (pk.get("grid_radius_m")
+                                                   or GLACIEM_POCKET_RADIUS_M)
+                        out.append(c)
             else:
                 c = _halo_poi_candidate(from_pos, m, m_pos, p_star, volumes)
-            if c is not None:
-                out.append(c)
+                if c is not None:
+                    out.append(c)
         if out:
             if band_row is not None:
                 _score_halo_band_cands(out, aim)
+            elif pockets is not None:
+                _score_halo_pocket_cands(out)
             else:
                 _score_halo_poi_cands(out)
             out.sort(key=lambda c: -c["score"])
@@ -5133,22 +5171,39 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
 
     direct = scan(s_pos)
     staged, stage_poi, stage_leg = [], None, None
-    need_staged = (not direct if band_row is not None else
-                   (not direct or direct[0]["miss_m"] > HALO_POI_MISS_GOOD_M))
+    if band_row is not None:
+        need_staged = not direct
+    elif pockets is not None:
+        need_staged = not any(c["hit"] for c in direct)
+    else:
+        need_staged = not direct or direct[0]["miss_m"] > HALO_POI_MISS_GOOD_M
     if allow_staging and need_staged:
         # Staging markers we can cleanly reach from the start.
         stages = [m for m in markers
                   if usable(m) and marker_pos(m) is not None
                   and dist3(s_pos, marker_pos(m)) > 1.0
                   and not (volumes and chord_obstructed(s_pos, marker_pos(m), volumes))]
-        if band_row is not None:
-            # Band mode: nearest-first — the first T whose onward chords cross
-            # the band is (near-)cheapest, and band quality barely depends on T.
+        if band_row is not None or pockets is not None:
+            # Band/pocket mode: nearest-first — the first T whose onward
+            # chords cross the band (or hit a pocket) is (near-)cheapest, and
+            # goal quality barely depends on T. Pocket mode holds out for a
+            # true in-pocket hit; when NO stage hits (sparse-marker systems),
+            # it keeps the stage with the smallest near-miss — a staged
+            # near-miss can still beat the direct chord by orders of magnitude.
+            near_miss = None
             for T in sorted(stages, key=lambda m: dist3(s_pos, marker_pos(m))):
                 found = [c for c in scan(marker_pos(T)) if c["marker"].id != T.id]
-                if found:
-                    staged, stage_poi = found, T
-                    break
+                if not found:
+                    continue
+                if pockets is not None and not any(c["hit"] for c in found):
+                    if (near_miss is None
+                            or found[0]["miss_m"] < near_miss[0][0]["miss_m"]):
+                        near_miss = (found, T)
+                    continue
+                staged, stage_poi = found, T
+                break
+            if not staged and near_miss is not None:
+                staged, stage_poi = near_miss
         else:
             # POI mode: the whole point of staging is lining a chord up with
             # the target, so optimize miss over all (T, M) pairs. The pair scan
@@ -5184,21 +5239,47 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
                               "to": stage_poi.name,
                               "to_xyz": list(marker_pos(stage_poi))})
 
-    # POI mode with both options on the table: staging must *materially* beat
-    # the direct miss to justify the extra jump.
-    use_staged = bool(staged) and (
-        not direct or (band_row is None
-                       and staged[0]["miss_m"] < 0.6 * direct[0]["miss_m"]))
+    # Staging must earn the extra jump: POI mode when it *materially* beats
+    # the direct miss; pocket mode when it turns a direct near-miss into a
+    # true in-pocket hit — or, when nothing hits anywhere, when it materially
+    # beats the direct miss (the POI rule again).
+    if pockets is not None:
+        direct_hit = any(c["hit"] for c in direct)
+        staged_hit = any(c["hit"] for c in staged)
+        use_staged = bool(staged) and (
+            not direct
+            or (staged_hit and not direct_hit)
+            or (not staged_hit and not direct_hit
+                and staged[0]["miss_m"] < 0.6 * direct[0]["miss_m"]))
+    else:
+        use_staged = bool(staged) and (
+            not direct or (band_row is None
+                           and staged[0]["miss_m"] < 0.6 * direct[0]["miss_m"]))
     pool = staged if use_staged else direct
     if not pool:
         raise ValueError("no viable drop route from here"
                          + ("" if allow_staging else " (staging disabled)"))
 
-    best, alts = pool[0], pool[1:1 + max(0, alternates)]
+    # Alternates offer different jump targets, not rescored twins: one
+    # candidate per marker. Band/POI scans already have that shape (one
+    # candidate per marker); pocket mode generates one per (marker, pocket)
+    # pair, so without this the list would be the best pocket four times over.
+    best = pool[0]
+    alts, seen = [], {best["marker"].id}
+    for c in pool[1:]:
+        if c["marker"].id in seen:
+            continue
+        seen.add(c["marker"].id)
+        alts.append(c)
+        if len(alts) >= max(0, alternates):
+            break
     from_name = stage_poi.name if use_staged else start.name
     legs = ([stage_leg] if use_staged else []) + \
         [_halo_drop_leg(from_name, best, fuel_req, max_range_m)]
     plan = {
+        "system": system,
+        "mode": ("band" if band_row is not None
+                 else "pocket" if pockets is not None else "poi"),
         "start": {"id": getattr(start, "id", None), "name": start.name,
                   "xyz": list(s_pos)},
         "aim": aim if band_row is not None else None,
@@ -5210,7 +5291,7 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
         "alternates": [{"drop": _halo_drop_view(c, drive_speed_ms),
                         "leg": _halo_drop_leg(from_name, c, fuel_req, max_range_m)}
                        for c in alts],
-        "attribution": HALO_ATTRIBUTION,
+        "attribution": BELT_ATTRIBUTIONS.get(system, HALO_ATTRIBUTION),
     }
     if band_row is not None:
         plan["band"] = dict(band_row, width_m=band_row["outer_m"] - band_row["inner_m"])
@@ -5218,3 +5299,227 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
         plan["target"] = {"id": target.id, "name": target.name,
                           "xyz": list(p_star)}
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Halo Finder multi-system expansion (#35): the Nyx Glaciem Ring + Pyro's
+# deep-space asteroid fields. Full design: docs/halo-finder-expansion.md.
+#
+# The Glaciem Ring is a circumstellar ring at 15.000 Gm from the Nyx origin —
+# but its minable content covers only ~4% of the circumference, in 381
+# discrete pocket containers (datamined; already in containers.json as
+# Type=="AsteroidBelt"). An Aaron-style "exit at radius R" drop lands in empty
+# ring ~96% of the time, so the planner aims chords at POCKET CENTERS instead
+# (pocket mode below — POI closest-approach over the whole target set).
+#
+# Pyro has no belt at all: its asteroid content is ~150 discrete sites. The 47
+# with quantum markers need no planner; the 102 unmarked resource fields (PYR
+# L-point fields + RMB derelict mining sites, from the wiki locations feed)
+# are single-point drop targets — the existing POI mode with a registry
+# target. Pyro VI/V planetary rings were researched and DO NOT exist in-game.
+# ---------------------------------------------------------------------------
+
+GLACIEM_SYSTEM = "Nyx"
+PYRO_SYSTEM = "Pyro"
+
+# Ring geometry from the datamined segment containers (build 10679008,
+# 2025-11-12): 381 centers at cylindrical r = 14.9968–15.0025 Gm, z = 0 (max
+# |z| 114 km, the Levski segment), each a ~6,000 km cube grid (GRIDRadius
+# 5,196 km = sqrt(3) x 3,000 km). Some rows carry GRIDRadius 0 upstream — the
+# pocket constant is the fallback.
+GLACIEM_R_M = 15.0e9
+GLACIEM_POCKET_RADIUS_M = 5_196_152.5
+
+# Envelope for the *system* discriminator (glaciem_contains). Deliberately far
+# tighter than HALO_PLANE_TOLERANCE_M: the Aaron annulus at ~20 Gm is a region
+# no Stanton body neighbors, but ordinary Stanton traffic (Hurston 12.85 Gm <->
+# Crusader 19.1 Gm) and Pyro traffic (Monox 10.6 <-> Bloom 17.8 Gm) cross
+# 15 Gm constantly — a loose envelope would misname routine deep-space fixes.
+# ±75,000 km radially and off-plane still comfortably wraps the physical ring
+# (centers ±2.5 Mm, pockets ±5.2 Mm) plus a sloppy manual drop. A FRESH
+# container-confirmed sticky system outranks this envelope entirely (see
+# app._halo_fix_system).
+GLACIEM_ENVELOPE_M = 75e6
+
+GLACIEM_ATTRIBUTION = ("Ring geometry: Star Citizen game data "
+                       "via the starmap.space dataset")
+PYRO_FIELDS_ATTRIBUTION = ("Field catalog: Star Citizen Wiki API "
+                           "(CC BY-SA 4.0) — api.star-citizen.wiki")
+BELT_ATTRIBUTIONS = {HALO_SYSTEM: HALO_ATTRIBUTION,
+                     GLACIEM_SYSTEM: GLACIEM_ATTRIBUTION,
+                     PYRO_SYSTEM: PYRO_FIELDS_ATTRIBUTION}
+
+
+def glaciem_contains(pos) -> bool:
+    """True when `pos` lies inside the Glaciem Ring envelope: cylindrical
+    radius within GLACIEM_ENVELOPE_M of the 15 Gm ring AND near the z=0 plane.
+    The Nyx sibling of halo_contains — a deep-space landmark for system
+    disambiguation, kept razor-thin because 15 Gm IS crossed by ordinary
+    Stanton/Pyro traffic (see the constant's comment)."""
+    r = math.hypot(pos[0], pos[1])
+    return (abs(r - GLACIEM_R_M) <= GLACIEM_ENVELOPE_M
+            and abs(pos[2]) <= GLACIEM_ENVELOPE_M)
+
+
+def glaciem_pocket_key(container_name: str) -> str:
+    """Player-facing pocket key from a ring segment container name:
+    'Glaciemring_Segment_Wtn-022' -> 'Wtn-022' (engine suffixes stripped)."""
+    key = container_name.strip()
+    key = key.split("_", 1)[1] if "_" in key else key    # drop "Glaciemring_"
+    key = key[len("Segment_"):] if key.startswith("Segment_") else key
+    return re.sub(r"_?Fstreamable$", "", key, flags=re.IGNORECASE)
+
+
+def glaciem_pockets(nav: NavData) -> list[dict]:
+    """The Glaciem Ring's minable pocket containers, derived from
+    nav.containers at registry-build time (never duplicated as data — a
+    starmap refresh that moves the ring moves the planner automatically).
+    Kinds: "general" (Wtn free-roam segments), "mission" (QV Breaker
+    mining-rights arcs, believed contract-gated), "levski" (the Delamar
+    segment — you'd just fly from Levski). Sorted by ring angle for a stable
+    order and the arc map."""
+    out = []
+    for c in nav.containers.values():
+        if c.system != GLACIEM_SYSTEM or c.type != "AsteroidBelt":
+            continue
+        key = glaciem_pocket_key(c.internal_name or c.name)
+        low = key.lower()
+        kind = ("mission" if low.startswith("mission")
+                else "levski" if low.startswith("levski") else "general")
+        out.append({"key": key, "kind": kind, "xyz": c.pos,
+                    "grid_radius_m": c.grid_radius or GLACIEM_POCKET_RADIUS_M})
+    out.sort(key=lambda p: math.atan2(p["xyz"][1], p["xyz"][0]))
+    return out
+
+
+def glaciem_locate(pos, pockets: list[dict]) -> dict:
+    """Classify a fix against the Glaciem Ring: inside a pocket (rocks), in
+    the ring but between pockets (pretty, empty), or off the ring — with the
+    nearest pocket and how far along the ring it sits, so a near-miss drop can
+    creep over sublight or re-plan. The Nyx counterpart of halo_locate."""
+    r, z = math.hypot(pos[0], pos[1]), pos[2]
+    view = {"r_m": r, "z_m": z, "ring_r_m": GLACIEM_R_M}
+    nearest, d = None, math.inf
+    for pk in pockets or ():
+        dd = dist3(pos, pk["xyz"])
+        if dd < d:
+            nearest, d = pk, dd
+    if nearest is not None:
+        # Arc distance along the ring to the pocket (the useful "how far off
+        # was my drop" number — radial/z misses are small by construction).
+        da = abs(math.atan2(pos[1], pos[0])
+                 - math.atan2(nearest["xyz"][1], nearest["xyz"][0]))
+        if da > math.pi:
+            da = 2 * math.pi - da
+        view["pocket"] = {"key": nearest["key"], "kind": nearest["kind"],
+                          "center_off_m": d, "arc_m": da * GLACIEM_R_M}
+    if nearest is not None and d <= (nearest.get("grid_radius_m")
+                                     or GLACIEM_POCKET_RADIUS_M):
+        view["status"] = "pocket"
+    elif glaciem_contains(pos):
+        view["status"] = "ring_void"
+    else:
+        view.update({"status": "off_ring", "to_ring_m": abs(r - GLACIEM_R_M)})
+    return view
+
+
+# Shell labels for the field picker, keyed by planet container internal name.
+_PYRO_SHELL_LABELS = {
+    "pyro1": "Pyro I", "pyro2": "Pyro II (Monox)", "pyro3": "Pyro III (Bloom)",
+    "pyro4": "Pyro IV", "pyro5": "Pyro V", "pyro6": "Terminus (Pyro VI)",
+}
+# The Akiro Cluster ("Pyro Cluster Alpha") has no live marker or position row
+# in 4.x game data; the community anchors it to Pyro I's L3 point — so that
+# field wears the name players actually search for.
+_AKIRO_FIELD_NAME = "PYR1 L3"
+
+
+def pyro_fields(nav: NavData, locations: list[dict]) -> list[dict]:
+    """Pyro's unmarked deep-space asteroid resource fields from the wiki
+    locations feed: type Asteroid*, has_resources, and NO quantum marker (the
+    qt_valid sites are ordinary jump targets — no drop planning needed).
+    Grouped for the picker by orbital shell (nearest planet by cylindrical
+    radius); sorted inside-out. Built at registry time, independent of the
+    wiki_pois_enabled org toggle — these are planner targets, not catalog
+    POIs."""
+    shells = [(c, math.hypot(c.pos[0], c.pos[1]))
+              for c in _planets_in_system(nav, PYRO_SYSTEM)]
+
+    def shell_of(g):
+        if not shells:
+            return None
+        r = math.hypot(g[0], g[1])
+        c, _ = min(shells, key=lambda t: abs(t[1] - r))
+        return _PYRO_SHELL_LABELS.get((c.internal_name or c.name).lower(),
+                                      c.name)
+
+    out = []
+    for rec in locations or ():
+        if rec.get("system") != PYRO_SYSTEM:
+            continue
+        if not str(rec.get("type") or "").startswith("Asteroid"):
+            continue
+        if rec.get("qt_valid") or not rec.get("has_resources"):
+            continue
+        g = rec.get("global_m")
+        if not g:
+            continue
+        name = str(rec.get("name") or "").strip()
+        if name == _AKIRO_FIELD_NAME:
+            name = f"Akiro Cluster ({name})"
+        out.append({"uuid": rec.get("uuid"), "name": name,
+                    "xyz": (float(g[0]), float(g[1]), float(g[2])),
+                    "shell": shell_of(g)})
+    out.sort(key=lambda f: (math.hypot(f["xyz"][0], f["xyz"][1]), f["name"]))
+    return out
+
+
+def field_locate(pos, fields: list[dict]) -> dict:
+    """Classify a Pyro fix against the field catalog: at the nearest field
+    (within visual/radar range of its anchor) or in open space, with the miss
+    distance either way. The Pyro counterpart of halo_locate."""
+    view = {"r_m": math.hypot(pos[0], pos[1]), "z_m": pos[2]}
+    nearest, d = None, math.inf
+    for f in fields or ():
+        dd = dist3(pos, f["xyz"])
+        if dd < d:
+            nearest, d = f, dd
+    if nearest is None:
+        view["status"] = "space"
+        return view
+    view["field"] = {"uuid": nearest["uuid"], "name": nearest["name"],
+                     "shell": nearest["shell"], "miss_m": d}
+    view["status"] = "field" if d <= HALO_POI_MISS_GOOD_M else "space"
+    return view
+
+
+def build_belt_registry(nav: NavData, locations: list[dict]) -> dict:
+    """The per-system drop-target registry (nav.belts): Stanton keeps the
+    surveyed band model, Nyx derives ring + pockets from the containers,
+    Pyro derives point fields from the wiki locations feed. Rebuilt with the
+    nav dataset; rows degrade to empty target lists when a system's source
+    data is missing (old cached datasets)."""
+    return {
+        HALO_SYSTEM: {"kind": "bands", "bands": HALO_BANDS,
+                      "attribution": HALO_ATTRIBUTION},
+        GLACIEM_SYSTEM: {"kind": "ring", "r_m": GLACIEM_R_M,
+                         "pocket_radius_m": GLACIEM_POCKET_RADIUS_M,
+                         "pockets": glaciem_pockets(nav),
+                         "attribution": GLACIEM_ATTRIBUTION},
+        PYRO_SYSTEM: {"kind": "fields", "fields": pyro_fields(nav, locations),
+                      "attribution": PYRO_FIELDS_ATTRIBUTION},
+    }
+
+
+def _score_halo_pocket_cands(cands: list[dict]) -> None:
+    """Pocket-mode score: an in-pocket hit beats any near-miss outright, and
+    among hits the shorter flight wins (anywhere inside a pocket is rocks —
+    precision beyond the hit threshold buys nothing). Among misses the scan is
+    effectively POI mode: miss distance dominates, flown breaks ties."""
+    miss = _minmax_norm([c["miss_m"] for c in cands])
+    flown = _minmax_norm([c["flown_m"] for c in cands])
+    for c, m, f in zip(cands, miss, flown):
+        if c["hit"]:
+            c["score"] = 1.0 + 0.25 * (1.0 - f) + 0.1 * (1.0 - m)
+        else:
+            c["score"] = 0.8 * (1.0 - m) + 0.2 * (1.0 - f)

@@ -16,7 +16,7 @@ drift — trust grep and CI, not the citation.
 | Doc | What it is |
 |---|---|
 | [product-overview.md](product-overview.md) | **The consolidated map**: apps, platform services, data sources, conventions |
-| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#26–#28 shipped; next big item needs picking) |
+| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#35 Halo Finder expansion built 2026-07-15, pending release) |
 | [../PRODUCT.md](../PRODUCT.md) · [../DESIGN.md](../DESIGN.md) | Product scope/brand · visual design system |
 
 ## Active designs (not built)
@@ -46,6 +46,7 @@ None right now — pick the next item from [feature-backlog.md](feature-backlog.
 | [rm-restructure-and-profile.md](rm-restructure-and-profile.md) | v0.45.0 | RM Goals · Inventory · Blueprints restructure (#29) + member playstyle profile tags (#30) |
 | [wiki-poi-enrichment.md](wiki-poi-enrichment.md) | v0.46.0 | Wiki locations catalog: `wiki_pois_enabled` import (241 POIs + 206 QT promotions), per-POI arrival radii, trade-stop amenity chips (#28; closes #26) |
 | [halo-finder.md](halo-finder.md) | 2026-07-10 | Halo Finder, the tenth app (`#/halo`, #31): Aaron Halo band/POI drop planner, staging hops, verify-and-refine, navigator belt chip |
+| [halo-finder-expansion.md](halo-finder-expansion.md) | built 2026-07-15, pending release | Halo Finder → Nyx Glaciem Ring pocket mode (381 datamined segments, ~4% coverage insight) + Pyro unmarked-field fly-bys (#35); Pyro VI/V rings researched-and-rejected (don't exist); browser-verified, in-game pass pending |
 
 ## Strategy / records
 
