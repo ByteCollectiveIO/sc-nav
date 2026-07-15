@@ -13,7 +13,8 @@ only — no pip installs.
 ## Setup on the gaming PC
 
 1. Install Python 3.10+ from https://www.python.org/downloads/windows/
-   (check **"Add python.exe to PATH"** in the installer).
+   (checking **"Add python.exe to PATH"** is nice but not required —
+   `run_watcher.bat` finds Python via the `py` launcher either way).
 2. Copy this `watcher/` folder to the PC.
 3. Edit `run_watcher.bat` and set your Linux server's address.
 4. Double-click `run_watcher.bat` (or run from a terminal):
