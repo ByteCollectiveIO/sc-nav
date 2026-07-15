@@ -3145,14 +3145,18 @@ class HaloFinderApiTests(unittest.TestCase):
 
     def test_locate_uses_sticky_for_out_of_belt(self):
         # Out-of-belt deep space is genuinely ambiguous (no landmark); the
-        # sticky container-confirmed system decides how locate labels it.
+        # sticky container-confirmed system decides WHICH belt model locate
+        # classifies against. Since #35 every live system has one: a Pyro
+        # sticky yields a Pyro field verdict (not "other_system", the pre-#35
+        # label for anything non-Stanton).
         s = self._live_at((6_000_000e3, 0.0, 0.0))   # inward of band 1
         s.system = "Pyro"
-        self.assertEqual(self.client.get("/api/halo/locate").json()["status"],
-                         "other_system")
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual(doc["system"], "Pyro")
+        self.assertIn(doc["status"], ("space", "field"))
         s.system = "Stanton"
-        self.assertNotEqual(self.client.get("/api/halo/locate").json()["status"],
-                            "other_system")
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual((doc["system"], doc["status"]), ("Stanton", "outside"))
 
     def test_capture_note_annotates_band(self):
         def poi_at(global_m, container=None, system="Stanton"):
@@ -3177,6 +3181,145 @@ class HaloFinderApiTests(unittest.TestCase):
         doc = r.json()
         self.assertEqual(doc["target"]["id"], self.arc.id)
         self.assertGreater(doc["target"]["miss_m"], 1e9)
+
+    # --- multi-system expansion (#35) ----------------------------------------
+
+    def test_targets_feed_per_system(self):
+        st = self.client.get("/api/halo/targets").json()
+        self.assertEqual((st["system"], st["kind"]), ("Stanton", "bands"))
+        self.assertEqual(len(st["bands"]), 10)
+        nyx = self.client.get("/api/halo/targets", params={"system": "Nyx"}).json()
+        self.assertEqual(nyx["kind"], "ring")
+        self.assertEqual(len(nyx["pockets"]), 381)
+        self.assertAlmostEqual(nyx["ring"]["r_m"], 15.0e9)
+        self.assertIn("starmap.space", nyx["attribution"])
+        pyro = self.client.get("/api/halo/targets", params={"system": "Pyro"}).json()
+        self.assertEqual(pyro["kind"], "fields")
+        self.assertEqual(len(pyro["fields"]), 102)
+        self.assertTrue(any("Akiro" in f["name"] for f in pyro["fields"]))
+        self.assertIn("CC BY-SA", pyro["attribution"])
+        r = self.client.get("/api/halo/targets", params={"system": "Castra"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_nyx_pocket_plan_and_pin(self):
+        # The bare test dataset (starmap/wiki POI toggles off) leaves Nyx just
+        # its two gateway markers — the plan must still exist; a true
+        # in-pocket hit needs the richer production marker set.
+        gate = next(p for p in app.nav.qt_markers
+                    if p.system == "Nyx" and "Pyro" in p.name)
+        r = self.client.post("/api/halo/plan",
+                             json={"system": "Nyx", "start_poi_id": gate.id})
+        self.assertEqual(r.status_code, 200)
+        plan = r.json()
+        self.assertEqual((plan["system"], plan["mode"]), ("Nyx", "pocket"))
+        pk = plan["drop"]["pocket"]
+        self.assertEqual(pk["kind"], "general")     # AUTO pool is free-roam only
+        self.assertIn("expected_miss_m", plan["drop"])
+        self.assertIn("starmap.space", plan["attribution"])
+        # pin that pocket explicitly -> the plan targets exactly it
+        r2 = self.client.post("/api/halo/plan",
+                              json={"pocket_key": pk["key"],
+                                    "start_poi_id": gate.id})
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.json()["drop"]["pocket"]["key"], pk["key"])
+        # cross-system goal params are shape errors
+        r3 = self.client.post("/api/halo/plan",
+                              json={"system": "Nyx", "band": 5,
+                                    "start_poi_id": gate.id})
+        self.assertEqual(r3.status_code, 400)
+        r4 = self.client.post("/api/halo/plan",
+                              json={"pocket_key": "no-such-pocket",
+                                    "start_poi_id": gate.id})
+        self.assertEqual(r4.status_code, 404)
+
+    def test_pyro_field_plan(self):
+        # The bare dataset's two Pyro stations have no chord passing PYR1-L3,
+        # so lend the system one marker beyond the field (production runs with
+        # the starmap+wiki POI catalogs on and ~120 Pyro markers).
+        fields = self.client.get("/api/halo/targets",
+                                 params={"system": "Pyro"}).json()["fields"]
+        akiro = next(f for f in fields if "Akiro" in f["name"])
+        ruin = next(p for p in app.nav.qt_markers
+                    if p.system == "Pyro" and "Ruin" in p.name)
+        r_pos = app.nav_core.poi_global_m(app.nav, ruin, time.time())
+        beyond = tuple(akiro[k] + 0.4 * (akiro[k] - r_pos[i])
+                       for i, k in enumerate("xyz"))
+        marker = app.nav_core.Poi(
+            id=3_999_999, name="Test Beacon", system="Pyro",
+            container_name=None, type="Station", local_km=None,
+            global_m=beyond, latitude=None, longitude=None, height_m=None,
+            qt_marker=True)
+        app.nav.pois[marker.id] = marker
+        app.nav_core.index_qt_markers(app.nav)
+        def _restore():
+            app.nav.pois.pop(marker.id, None)
+            app.nav_core.index_qt_markers(app.nav)
+        self.addCleanup(_restore)
+        r = self.client.post("/api/halo/plan",
+                             json={"field_uuid": akiro["uuid"],
+                                   "start_poi_id": ruin.id})
+        self.assertEqual(r.status_code, 200)
+        plan = r.json()
+        self.assertEqual((plan["system"], plan["mode"]), ("Pyro", "poi"))
+        self.assertEqual(plan["target"]["name"], akiro["name"])
+        self.assertIn("CC BY-SA", plan["attribution"])
+        r2 = self.client.post("/api/halo/plan",
+                              json={"field_uuid": "no-such-field",
+                                    "start_poi_id": ruin.id})
+        self.assertEqual(r2.status_code, 404)
+
+    def test_fresh_sticky_outranks_glaciem_geometry(self):
+        # The #35 collision case: ordinary Stanton traffic crosses the 15 Gm
+        # Glaciem radius. A hauler interdicted there with a FRESH
+        # container-confirmed Stanton sticky must stay Stanton; once the
+        # sticky is stale, the ring envelope wins (the v0.52.2 in-belt rule).
+        on_ring = (app.nav_core.GLACIEM_R_M, 0.0, 50e6)   # in envelope, no container
+        self.assertIsNone(app.nav_core.detect_container(app.nav, on_ring))
+        s = self._live_at(on_ring)
+        s.system, s.system_t = "Stanton", time.time()     # fresh confirmation
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual(doc["system"], "Stanton")
+        s.system_t = time.time() - 2 * app.SYSTEM_STICKY_FRESH_S   # gone stale
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual(doc["system"], "Nyx")
+        self.assertIn(doc["status"], ("ring_void", "pocket"))
+
+    def test_locate_inside_a_pocket(self):
+        pocket = app.nav.belts["Nyx"]["pockets"][0]
+        s = self._live_at(tuple(pocket["xyz"]))
+        # ground truth: the ring segment container itself detects the fix
+        c = app.nav_core.detect_container(app.nav, s.pos)
+        self.assertIsNotNone(c)
+        self.assertEqual(c.type, "AsteroidBelt")
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual((doc["system"], doc["status"]), ("Nyx", "pocket"))
+        self.assertEqual(doc["pocket"]["key"], pocket["key"])
+
+    def test_capture_note_multi_system(self):
+        def poi_at(global_m, container=None, system="Stanton"):
+            return app.nav_core.Poi(
+                id=1, name="x", system=system, container_name=container,
+                type="", local_km=None, global_m=global_m, latitude=None,
+                longitude=None, height_m=None, qt_marker=False, custom=True)
+        # a capture inside a pocket carries the ring segment container
+        cont = next(c for c in app.nav.containers.values()
+                    if c.system == "Nyx" and c.type == "AsteroidBelt")
+        key = app.nav_core.glaciem_pocket_key(cont.internal_name or cont.name)
+        note = app._halo_capture_note(poi_at(None, container=cont.name,
+                                             system="Nyx"))
+        self.assertEqual(note, f"Glaciem Ring pocket {key}")
+        # a deep-space Nyx capture in the ring void names the nearest pocket
+        void = app._halo_capture_note(
+            poi_at((0.0, -app.nav_core.GLACIEM_R_M, 0.0), system="Nyx"))
+        self.assertIn("Glaciem Ring", void)
+        # a Pyro capture near a field is annotated with the field's name
+        akiro = next(f for f in app.nav.belts["Pyro"]["fields"]
+                     if "Akiro" in f["name"])
+        near = app._halo_capture_note(poi_at(akiro["xyz"], system="Pyro"))
+        self.assertIn("Akiro", near)
+        # far from any field -> no annotation
+        self.assertIsNone(app._halo_capture_note(
+            poi_at((0.0, 0.0, 5.0e9), system="Pyro")))
 
 
 class ResourceValueTests(unittest.TestCase):

@@ -3,6 +3,7 @@
 Run: python3 test_nav_core.py
 """
 
+import json
 import math
 import time
 import unittest
@@ -3939,6 +3940,208 @@ class HaloFinderTests(unittest.TestCase):
         self.assertEqual(poi.system, "Stanton")
         self.assertIsNone(poi.container_name)
         self.assertEqual(poi.global_m, pos)
+
+
+class BeltRegistryTests(unittest.TestCase):
+    """Multi-system expansion (#35): the per-system belt registry (Glaciem
+    Ring pockets from the datamined containers, Pyro fields from the wiki
+    locations feed), the Nyx/Pyro locate classifiers, system disambiguation,
+    and pocket-mode drop planning. Registry counts/geometry are pinned against
+    the committed feeds; solver fixtures are SELF-DERIVED from datamined
+    coordinates (no community survey exists for these systems — the in-game
+    verification pass is the external oracle, docs/halo-finder-expansion.md §7)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.nav = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(cls.nav)
+        locs = json.loads((DATA_DIR / "locations.json").read_text())["locations"]
+        cls.belts = nav_core.build_belt_registry(cls.nav, locs)
+
+    # --- registry shape (pinned against the committed feeds) -----------------
+
+    def test_glaciem_pocket_registry(self):
+        nyx = self.belts["Nyx"]
+        self.assertEqual(nyx["kind"], "ring")
+        pockets = nyx["pockets"]
+        kinds = {k: sum(1 for p in pockets if p["kind"] == k)
+                 for k in ("general", "mission", "levski")}
+        self.assertEqual(len(pockets), 381)
+        self.assertEqual(kinds, {"general": 300, "mission": 80, "levski": 1})
+        for p in pockets:
+            r = math.hypot(p["xyz"][0], p["xyz"][1])
+            self.assertAlmostEqual(r, nav_core.GLACIEM_R_M, delta=5e6)
+            self.assertLessEqual(abs(p["xyz"][2]), 1e6)     # razor-thin plane
+            self.assertGreater(p["grid_radius_m"], 0)
+            self.assertNotIn("Fstreamable", p["key"])
+        # sorted by ring angle (stable order for the UI's arc rendering)
+        angles = [math.atan2(p["xyz"][1], p["xyz"][0]) for p in pockets]
+        self.assertEqual(angles, sorted(angles))
+
+    def test_pyro_field_registry(self):
+        fields = self.belts["Pyro"]["fields"]
+        self.assertEqual(len(fields), 102)                  # 16 L-points + 86 RMBs
+        akiro = [f for f in fields if "Akiro" in f["name"]]
+        self.assertEqual(len(akiro), 1)
+        self.assertEqual(akiro[0]["shell"], "Pyro I")
+        # a Terminus-shell field groups under the player-facing planet name
+        pyr6 = next(f for f in fields if f["name"].startswith("PYR6"))
+        self.assertEqual(pyr6["shell"], "Terminus (Pyro VI)")
+        # only unmarked resource fields: every entry has coords + uuid
+        for f in fields:
+            self.assertTrue(f["uuid"])
+            self.assertEqual(len(f["xyz"]), 3)
+
+    def test_stanton_row_unchanged(self):
+        st = self.belts["Stanton"]
+        self.assertEqual(st["kind"], "bands")
+        self.assertIs(st["bands"], nav_core.HALO_BANDS)
+        self.assertIn("Cornerstone", st["attribution"])
+
+    # --- system disambiguation ------------------------------------------------
+
+    def test_glaciem_contains_bounds(self):
+        r = nav_core.GLACIEM_R_M
+        self.assertTrue(nav_core.glaciem_contains((r, 0, 0)))
+        self.assertTrue(nav_core.glaciem_contains((0, -r, 50e6)))
+        # outside the deliberately razor-thin envelope
+        self.assertFalse(nav_core.glaciem_contains((r + 200e6, 0, 0)))
+        self.assertFalse(nav_core.glaciem_contains((r, 0, 200e6)))
+        # the Aaron Halo is NOT the Glaciem Ring (non-overlapping radii)
+        self.assertFalse(nav_core.glaciem_contains((20_320_000e3, 0, 0)))
+        self.assertFalse(nav_core.halo_contains((r, 0, 0)))
+
+    def test_system_at_resolves_both_belts(self):
+        self.assertEqual(nav_core.system_at(self.nav, (20_320_000e3, 0, 0)),
+                         "Stanton")
+        self.assertEqual(
+            nav_core.system_at(self.nav, (nav_core.GLACIEM_R_M, 0, 0)), "Nyx")
+
+    # --- locate classifiers ---------------------------------------------------
+
+    def test_glaciem_locate_verdicts(self):
+        pockets = self.belts["Nyx"]["pockets"]
+        pk = next(p for p in pockets if p["kind"] == "general")
+        at = nav_core.glaciem_locate(pk["xyz"], pockets)
+        self.assertEqual(at["status"], "pocket")
+        self.assertEqual(at["pocket"]["key"], pk["key"])
+        self.assertLess(at["pocket"]["center_off_m"], 1.0)
+        # a ring point rotated half the typical gap sits in the void, with the
+        # arc distance back to the nearest pocket reported
+        a = math.atan2(pk["xyz"][1], pk["xyz"][0]) + math.radians(0.4)
+        mid = (nav_core.GLACIEM_R_M * math.cos(a),
+               nav_core.GLACIEM_R_M * math.sin(a), 0.0)
+        void = nav_core.glaciem_locate(mid, pockets)
+        self.assertEqual(void["status"], "ring_void")
+        self.assertGreater(void["pocket"]["arc_m"], 10_000e3)
+        off = nav_core.glaciem_locate((10.0e9, 0, 0), pockets)
+        self.assertEqual(off["status"], "off_ring")
+        self.assertAlmostEqual(off["to_ring_m"], 5.0e9, delta=1e7)
+
+    def test_field_locate_verdicts(self):
+        fields = self.belts["Pyro"]["fields"]
+        akiro = next(f for f in fields if "Akiro" in f["name"])
+        at = nav_core.field_locate(akiro["xyz"], fields)
+        self.assertEqual(at["status"], "field")
+        self.assertEqual(at["field"]["name"], akiro["name"])
+        far = nav_core.field_locate((0.0, 0.0, 5.0e9), fields)
+        self.assertEqual(far["status"], "space")
+        self.assertIn("field", far)                     # nearest still reported
+
+    # --- pocket-mode planning (synthetic: exact known-answer geometry) --------
+
+    def _ring_fixture(self):
+        # Radial chord Inner(13 Gm) -> Outer(17 Gm) passes dead through a
+        # pocket on the ring; a second pocket a quarter-turn away is off-chord.
+        inner = _space_poi(11, "Inner", (13.0e9, 0, 0), system="Nyx")
+        outer = _space_poi(12, "Outer", (17.0e9, 0, 0), system="Nyx")
+        on = {"key": "Wtn-001", "kind": "general",
+              "xyz": (nav_core.GLACIEM_R_M, 0.0, 0.0),
+              "grid_radius_m": nav_core.GLACIEM_POCKET_RADIUS_M}
+        off = {"key": "Wtn-090", "kind": "general",
+               "xyz": (0.0, nav_core.GLACIEM_R_M, 0.0),
+               "grid_radius_m": nav_core.GLACIEM_POCKET_RADIUS_M}
+        return _synthetic_nav([inner, outer], system="Nyx"), inner, outer, [on, off]
+
+    def test_pocket_plan_hits_on_chord_pocket(self):
+        nav2, inner, outer, pockets = self._ring_fixture()
+        plan = nav_core.plan_halo_drop(nav2, start=inner, pockets=pockets,
+                                       system="Nyx", markers=[outer])
+        self.assertEqual((plan["system"], plan["mode"]), ("Nyx", "pocket"))
+        d = plan["drop"]
+        self.assertEqual(d["pocket"]["key"], "Wtn-001")
+        self.assertTrue(d["pocket"]["hit"])
+        self.assertLess(d["expected_miss_m"], 1.0)      # dead-on radial chord
+        # drop number = distance from the ring crossing to Outer = 2 Gm
+        self.assertAlmostEqual(d["peak_m"], 2.0e9, delta=1e6)
+        self.assertIn("Star Citizen game data", plan["attribution"])
+
+    def test_pocket_plan_stages_when_direct_chords_miss(self):
+        # Lofted 1 Gm above the ring: the direct chord to Outer passes far
+        # over every pocket, so the planner must stage through Inner and hit
+        # the pocket on the flat Inner -> Outer chord.
+        nav2, inner, outer, pockets = self._ring_fixture()
+        start = nav_core.Poi(
+            id=-1, name="your location", system="Nyx", container_name=None,
+            type="", local_km=None, global_m=(nav_core.GLACIEM_R_M, 0, 1.0e9),
+            latitude=None, longitude=None, height_m=None, qt_marker=False)
+        plan = nav_core.plan_halo_drop(nav2, start=start, pockets=pockets,
+                                       system="Nyx", markers=[inner, outer])
+        self.assertTrue(plan["staged"])
+        self.assertTrue(plan["drop"]["pocket"]["hit"])
+        self.assertEqual(plan["legs"][0]["kind"], "travel")
+        self.assertEqual(plan["legs"][1]["kind"], "drop")
+
+    def test_pocket_plan_validates_inputs(self):
+        nav2, inner, outer, pockets = self._ring_fixture()
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(nav2, start=inner, pockets=pockets, band=5,
+                                    system="Nyx", markers=[outer])   # two goals
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(nav2, start=inner, pockets=[],
+                                    system="Nyx", markers=[outer])   # no ring data
+
+    # --- pocket-mode planning (real dataset, self-derived fixture) -----------
+
+    def test_pocket_plan_from_gateway_real_data(self):
+        # Raw dataset (wiki catalog off) has only ~5 Nyx markers, so a true
+        # in-pocket hit isn't guaranteed — but the plan must exist, target a
+        # real pocket near the ring radius, and miss by no more than a couple
+        # of grid radii. (With the wiki markers folded in, the same start
+        # yields sub-2,000 km in-pocket hits — exercised in test_app.)
+        gate = next(p for p in self.nav.qt_markers
+                    if p.system == "Nyx" and "Pyro" in p.name)
+        gen = [p for p in self.belts["Nyx"]["pockets"] if p["kind"] == "general"]
+        plan = nav_core.plan_halo_drop(
+            self.nav, start=gate, pockets=gen, system="Nyx",
+            volumes=nav_core.body_volumes(self.nav, "Nyx"))
+        d = plan["drop"]
+        r = math.hypot(d["crossing_xyz"][0], d["crossing_xyz"][1])
+        self.assertAlmostEqual(r, nav_core.GLACIEM_R_M, delta=50e6)
+        self.assertLess(d["expected_miss_m"], 3 * nav_core.GLACIEM_POCKET_RADIUS_M)
+        # alternates offer distinct markers (pocket mode generates one
+        # candidate per (marker, pocket) pair — no rescored twins)
+        ids = [d["marker_id"]] + [a["drop"]["marker_id"] for a in plan["alternates"]]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_pyro_field_plan_real_data(self):
+        # Single-point POI mode with a registry target: plannable from a real
+        # Pyro station against the raw dataset's markers.
+        fields = self.belts["Pyro"]["fields"]
+        akiro = next(f for f in fields if "Akiro" in f["name"])
+        target = nav_core.Poi(
+            id=-2, name=akiro["name"], system="Pyro", container_name=None,
+            type="Asteroid Field", local_km=None, global_m=akiro["xyz"],
+            latitude=None, longitude=None, height_m=None, qt_marker=False)
+        start = next(p for p in self.nav.qt_markers
+                     if p.system == "Pyro" and "Ruin" in p.name)
+        plan = nav_core.plan_halo_drop(
+            self.nav, start=start, target=target, system="Pyro",
+            volumes=nav_core.body_volumes(self.nav, "Pyro"))
+        self.assertEqual((plan["system"], plan["mode"]), ("Pyro", "poi"))
+        self.assertEqual(plan["target"]["name"], akiro["name"])
+        self.assertIn("expected_miss_m", plan["drop"])
+        self.assertIn("CC BY-SA", plan["attribution"])
 
 
 class ResourceValueTierTests(unittest.TestCase):

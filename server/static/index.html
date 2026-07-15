@@ -225,6 +225,7 @@
   .kind-harvest { color: var(--harvest); }
   .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg[hidden] { display: none; }   /* author display beats the UA [hidden] rule */
   .seg button { border: none; border-radius: 0; border-right: 1px solid var(--border); }
   .seg button:last-child { border-right: none; }
   .seg button.on { background: var(--accent); color: var(--ink-on-accent); }
@@ -3516,23 +3517,29 @@
 
   <div id="halo-view" hidden>
     <div id="halo-intro" class="panel route-intro" hidden>
-      <div class="ri-head"><h2>DROP INTO THE AARON HALO</h2>
+      <div class="ri-head"><h2>DROP INTO THE ROCKS</h2>
         <button id="halo-intro-dismiss" class="ri-dismiss" title="hide this">Got it ✕</button></div>
-      <p class="ri-lead">Stanton's ring asteroid belt has no quantum markers — you jump
-        <i>through</i> it and exit early. Pick a density band; we pick the best marker to
-        target and the exact readout number to exit at.</p>
+      <p class="ri-lead">The best mining space has no quantum markers — you jump
+        <i>through</i> or <i>past</i> it and exit early. Pick a target (an Aaron Halo band, a
+        Glaciem Ring pocket, a Pyro field); we pick the best marker to aim at and the exact
+        readout number to exit at.</p>
       <ol class="ri-steps">
-        <li><b>Pick a band</b> — or one of your own deep-space POIs inside the belt.</li>
+        <li><b>Pick a target</b> — or one of your own deep-space POIs near the rocks.</li>
         <li><b>Jump &amp; watch the HUD</b> — set the destination we name and exit quantum
           (hold B) when “distance to destination” hits the drop number.</li>
         <li><b>Verify</b> — run <b>/showlocation</b> after the drop and we'll tell you
-          exactly which band you landed in.</li>
+          exactly where you landed.</li>
       </ol>
     </div>
 
     <div class="panel">
       <h2>TARGET</h2>
       <div class="route-row" style="align-items:center; gap:16px;">
+        <span class="seg" id="halo-system" role="group" aria-label="Star system">
+          <button class="on" data-sys="Stanton" type="button" aria-pressed="true">STANTON</button>
+          <button data-sys="Nyx" type="button" aria-pressed="false">NYX</button>
+          <button data-sys="Pyro" type="button" aria-pressed="false">PYRO</button>
+        </span>
         <span class="seg" id="halo-goal" role="group" aria-label="Target type">
           <button class="on" data-goal="band" type="button" aria-pressed="true">☄ Density band</button>
           <button data-goal="poi" type="button" aria-pressed="false">📍 My POI</button>
@@ -3546,11 +3553,37 @@
         <div class="halo-strip" id="halo-strip" role="group" aria-label="Aaron Halo density bands"></div>
         <p class="muted halo-band-info" id="halo-band-info" role="status" aria-live="polite"></p>
       </div>
+      <div id="halo-nyx-wrap" hidden>
+        <p class="muted route-hint" style="margin-top:10px;">The <b>Glaciem Ring</b> circles the
+          Nyx star at 15.00 Gm — but only ~4% of it holds rocks, in <span id="halo-pocket-count">381</span>
+          mapped pockets. We aim your drop at the pocket your route makes cheapest.</p>
+        <div class="route-row" style="align-items:center;">
+          <label class="muted" style="font-size:12px;">pocket
+            <input id="halo-pocket" class="ti" list="halo-pocket-keys" autocomplete="off"
+                   placeholder="AUTO — best pocket" style="width:190px;">
+          </label>
+          <datalist id="halo-pocket-keys"></datalist>
+          <label class="trade-pref" title="QV Breaker mining-rights arcs — believed to need an accepted contract to spawn rocks.">
+            <input id="halo-mission" type="checkbox"> include mission pockets</label>
+        </div>
+      </div>
+      <div id="halo-pyro-wrap" hidden>
+        <p class="muted route-hint" style="margin-top:10px;">Pyro has no belt — its rocks sit in
+          scattered fields with no quantum markers (the Akiro Cluster, Lagrange fields, derelict
+          mining sites). Pick one; we plan the closest fly-by.</p>
+        <div class="route-row">
+          <span class="poi-pick" style="flex:2; min-width:200px;">
+            <input id="halo-field" class="ti" autocomplete="off"
+                   placeholder="field — type to search (e.g. Akiro, PYR6 L1, RMB)">
+          </span>
+          <span id="halo-field-msg" class="muted" style="font-size:12px;"></span>
+        </div>
+      </div>
       <div id="halo-poi-wrap" hidden>
         <div class="route-row">
           <span class="poi-pick" style="flex:2; min-width:200px;">
             <input id="halo-target-poi" class="ti" autocomplete="off"
-                   placeholder="a deep-space POI you tagged in the belt (e.g. a rock cluster)">
+                   placeholder="a deep-space POI you tagged near the rocks (e.g. a rock cluster)">
           </span>
         </div>
         <p class="muted route-hint">We plan the closest possible fly-by (no chord hits a point
@@ -3609,7 +3642,7 @@
         yet. Drop out of quantum, then run <b>/showlocation</b> in the in-game chat.</p></div>
     </div>
 
-    <p class="muted halo-credit">Band survey:
+    <p class="muted halo-credit" id="halo-credit-line">Band survey:
       <a href="https://cstone.space" target="_blank" rel="noopener">CaptSheppard / Cornerstone — cstone.space</a></p>
     <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
@@ -11853,15 +11886,30 @@ function renderMarketEditForm(l) {
   bindMarketForm(l.id, () => renderMarketDetail(l.id));
 }
 
-// ---------- halo finder (#31) ----------
-// Aaron Halo QT-drop planner: pick a density band (or a tagged deep-space POI),
-// get "set destination X, exit QT at D km" guidance computed from real marker
-// geometry, then verify the landing from the next /showlocation fix. The band
-// model is survey data (CaptSheppard / Cornerstone, cstone.space) served by
-// /api/halo/bands; all planning happens server-side in nav_core.plan_halo_drop.
-let haloBandsDoc = null, haloShips = null, haloShipsByName = {};
-let haloWired = false, haloGoal = "band", haloBandSel = 5, haloAim = "band";
+// ---------- halo finder (#31, multi-system #35) ----------
+// Asteroid QT-drop planner: pick a target (an Aaron Halo density band, a
+// Glaciem Ring pocket, a Pyro field, or a tagged deep-space POI), get "set
+// destination X, exit QT at D km" guidance computed from real marker
+// geometry, then verify the landing from the next /showlocation fix. Targets
+// come from /api/halo/targets per system (Stanton bands = Cornerstone survey
+// data; Nyx pockets + Pyro fields = datamined game data); all planning
+// happens server-side in nav_core.plan_halo_drop.
+let haloTargets = {};                 // system -> targets doc (lazy)
+let haloShips = null, haloShipsByName = {};
+let haloWired = false, haloSystem = "Stanton", haloSysAuto = true;
+let haloGoal = "band", haloBandSel = 5, haloAim = "band";
 let haloLastPlan = null;
+const HALO_SYSTEMS = ["Stanton", "Nyx", "Pyro"];
+const haloDoc = (sys) => haloTargets[sys || haloSystem] || null;
+async function loadHaloTargets(sys) {
+  if (haloTargets[sys]) return haloTargets[sys];
+  try {
+    const d = await fetch("/api/halo/targets?system=" + encodeURIComponent(sys))
+      .then(r => r.ok ? r.json() : null);
+    if (d) haloTargets[sys] = d;
+    return d;
+  } catch { return null; }
+}
 // "my current location" start: mirror the navigator/cargo arm flow — arm on
 // click, then take the NEXT /showlocation fix as the start (gold "ARMED").
 let haloStartArmed = false, haloStartHere = false;
@@ -11928,28 +11976,47 @@ function fmtHudParts(m) {
 }
 const fmtHud = (m) => { const [n, u] = fmtHudParts(m); return u ? `${n} ${u}` : n; };
 
-// Passive navigator chip: a deep-space Stanton fix inside the belt annulus gets
-// a "☄ Halo band N" tag on the location readout. Pure client-side lookup against
-// the (tiny, static) band table; fetched lazily the first time it's needed.
+// Passive navigator chip: a deep-space fix inside a belt gets a "☄ …" tag on
+// the location readout — Aaron Halo band N in Stanton, Glaciem Ring pocket in
+// Nyx. Pure client-side lookup against the (tiny, static) target tables;
+// fetched lazily the first time each system needs one.
 function haloWhereChip(state) {
-  if (state.container || state.system !== "Stanton" || !state.position) return "";
-  if (!haloBandsDoc) {
-    fetch("/api/halo/bands").then(r => r.json())
-      .then(d => { haloBandsDoc = d; }).catch(() => {});
+  if (state.container || !state.position) return "";
+  const sys = state.system;
+  if (sys !== "Stanton" && sys !== "Nyx") return "";
+  const doc = haloTargets[sys];
+  if (!doc) {
+    loadHaloTargets(sys);
     return "";      // classified on the next fix, once the table is here
   }
   const p = state.position;
   const r = Math.hypot(p.x, p.y);
-  for (const b of haloBandsDoc.bands)
-    if (r >= b.inner_m && r <= b.outer_m && Math.abs(p.z) <= b.half_height_m)
-      return ` · <a href="#/halo" title="Aaron Halo, band ${b.band}: open Halo Finder">☄ Halo band ${b.band}</a>`;
+  if (sys === "Stanton") {
+    for (const b of doc.bands)
+      if (r >= b.inner_m && r <= b.outer_m && Math.abs(p.z) <= b.half_height_m)
+        return ` · <a href="#/halo" title="Aaron Halo, band ${b.band}: open Halo Finder">☄ Halo band ${b.band}</a>`;
+    return "";
+  }
+  // Nyx: inside a pocket beats "somewhere on the ring"
+  for (const pk of doc.pockets || []) {
+    const d = Math.hypot(p.x - pk.x, p.y - pk.y, p.z - pk.z);
+    if (d <= pk.grid_radius_m)
+      return ` · <a href="#/halo" title="Glaciem Ring pocket ${esc(pk.key)}: open Halo Finder">☄ Glaciem pocket ${esc(pk.key)}</a>`;
+  }
+  if (Math.abs(r - doc.ring.r_m) <= 75e6 && Math.abs(p.z) <= 75e6)
+    return ` · <a href="#/halo" title="Glaciem Ring (between pockets): open Halo Finder">☄ Glaciem Ring</a>`;
   return "";
 }
 
 async function loadHaloFinder() {
-  if (!haloBandsDoc) {
-    haloBandsDoc = await fetch("/api/halo/bands").then(r => r.json()).catch(() => null);
-    renderHaloStrip();
+  // Default the system seg to wherever the player actually is, until they
+  // pick one themselves.
+  if (haloSysAuto && lastState && HALO_SYSTEMS.includes(lastState.system)
+      && lastState.system !== haloSystem)
+    setHaloSystem(lastState.system, true);
+  if (!haloDoc(haloSystem)) {
+    await loadHaloTargets(haloSystem);
+    renderHaloSystemPanel();
   }
   if (!haloShips) {
     haloShips = await fetch("/api/ships").then(r => r.json()).catch(() => []);
@@ -11964,8 +12031,61 @@ function renderHaloIntro() {
   const el = $("halo-intro"); if (el) el.hidden = !!lsGet("halo_intro_dismissed");
 }
 
+// The system seg decides which target panel shows and what the primary goal
+// button means: Stanton = the band strip, Nyx = the pocket controls, Pyro =
+// the field picker. "auto" flags a default from the live fix (doesn't claim
+// the seg for the user).
+const HALO_GOAL_LABELS = { Stanton: "☄ Density band", Nyx: "☄ Ring pocket",
+                           Pyro: "☄ Asteroid field" };
+function setHaloSystem(sys, auto) {
+  if (!HALO_SYSTEMS.includes(sys)) return;
+  if (!auto) haloSysAuto = false;
+  haloSystem = sys;
+  for (const x of $("halo-system").querySelectorAll("button")) {
+    const on = x.dataset.sys === sys;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
+  }
+  const main = $("halo-goal").querySelector('[data-goal="band"]');
+  if (main) main.textContent = HALO_GOAL_LABELS[sys];
+  setHaloGoal(haloGoal);                 // re-apply per-system wrap visibility
+  renderHaloCredit();
+  if (!haloDoc(sys)) loadHaloTargets(sys).then(renderHaloSystemPanel);
+  else renderHaloSystemPanel();
+}
+
+function renderHaloSystemPanel() {
+  const doc = haloDoc(haloSystem);
+  if (!doc) return;
+  if (doc.kind === "bands") renderHaloStrip();
+  if (doc.kind === "ring") {
+    const n = (doc.pockets || []).filter(p => p.kind === "general").length;
+    const cnt = $("halo-pocket-count");
+    if (cnt) cnt.textContent = String(n);
+    const dl = $("halo-pocket-keys");
+    if (dl && !dl.children.length) {
+      for (const p of doc.pockets || []) {
+        const o = document.createElement("option");
+        o.value = p.key;
+        dl.appendChild(o);
+      }
+    }
+  }
+}
+
+function renderHaloCredit() {
+  const el = $("halo-credit-line");
+  const doc = haloDoc(haloSystem);
+  if (!el) return;
+  if (haloSystem === "Stanton")
+    el.innerHTML = `Band survey: <a href="https://cstone.space" target="_blank"
+      rel="noopener">CaptSheppard / Cornerstone — cstone.space</a>`;
+  else
+    el.textContent = doc ? doc.attribution : "";
+}
+
 function renderHaloStrip() {
   const strip = $("halo-strip");
+  const haloBandsDoc = haloDoc("Stanton");
   if (!strip || !haloBandsDoc) return;
   strip.innerHTML = "";
   for (const b of haloBandsDoc.bands) {
@@ -11986,7 +12106,8 @@ function renderHaloStrip() {
 }
 
 function renderHaloBandInfo() {
-  const el = $("halo-band-info"); if (!el || !haloBandsDoc) return;
+  const el = $("halo-band-info"), haloBandsDoc = haloDoc("Stanton");
+  if (!el || !haloBandsDoc) return;
   const b = haloBandsDoc.bands.find(x => x.band === haloBandSel);
   if (!b) { el.textContent = ""; return; }
   el.innerHTML = `<b>BAND ${b.band}</b> · ${fmtGm(b.inner_m)} to ${fmtGm(b.outer_m)} from the `
@@ -11995,14 +12116,17 @@ function renderHaloBandInfo() {
 }
 
 function setHaloGoal(goal) {
-  haloGoal = goal === "poi" ? "poi" : "band";
+  haloGoal = goal === "poi" ? "poi" : "band";      // "band" = system's primary
   for (const x of $("halo-goal").querySelectorAll("button")) {
     const on = x.dataset.goal === haloGoal;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
   }
-  $("halo-band-wrap").hidden = haloGoal !== "band";
-  $("halo-aim").hidden = haloGoal !== "band";
-  $("halo-poi-wrap").hidden = haloGoal !== "poi";
+  const primary = haloGoal === "band";
+  $("halo-band-wrap").hidden = !(primary && haloSystem === "Stanton");
+  $("halo-aim").hidden = !(primary && haloSystem === "Stanton");
+  $("halo-nyx-wrap").hidden = !(primary && haloSystem === "Nyx");
+  $("halo-pyro-wrap").hidden = !(primary && haloSystem === "Pyro");
+  $("halo-poi-wrap").hidden = primary;
 }
 
 function setHaloAim(aim) {
@@ -12056,12 +12180,54 @@ function attachHaloShipPicker() {
   });
 }
 
+// Pyro field typeahead over the (static, ~102-row) registry: same dropdown
+// pattern as the POI pickers, rows labeled "name — shell" so the Terminus
+// fields group visibly. Stores the registry uuid on the input.
+function attachHaloFieldPicker() {
+  const input = $("halo-field");
+  const wrap = input.parentElement;
+  const drop = document.createElement("div");
+  drop.className = "poi-drop"; drop.hidden = true;
+  wrap.appendChild(drop);
+  const refresh = () => {
+    const doc = haloDoc("Pyro");
+    const q = input.value.trim().toLowerCase();
+    drop.innerHTML = "";
+    input.dataset.uuid = "";
+    wrap.classList.remove("picked");
+    const rows = doc ? doc.fields : [];
+    const hits = q ? rows.filter(f =>
+      f.name.toLowerCase().includes(q)
+      || (f.shell || "").toLowerCase().includes(q)).slice(0, 12) : [];
+    for (const f of hits) {
+      const it = document.createElement("div");
+      it.className = "poi-opt"; it.setAttribute("role", "option");
+      it.innerHTML = `${esc(f.name)}${f.shell ? ` <span class="muted">${esc(f.shell)}</span>` : ""}`;
+      it._pick = () => {
+        input.value = f.name; input.dataset.uuid = f.uuid;
+        wrap.classList.add("picked"); drop.hidden = true; input.focus();
+      };
+      it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
+      drop.appendChild(it);
+    }
+    drop.hidden = hits.length === 0;
+  };
+  input.addEventListener("input", refresh);
+  input.addEventListener("focus", () => { if (input.value.trim()) refresh(); });
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+  attachPickerKeys(input, drop);
+}
+
 function wireHaloFinder() {
   haloWired = true;
+  for (const x of $("halo-system").querySelectorAll("button"))
+    x.onclick = () => setHaloSystem(x.dataset.sys);
   for (const x of $("halo-goal").querySelectorAll("button"))
     x.onclick = () => setHaloGoal(x.dataset.goal);
   for (const x of $("halo-aim").querySelectorAll("button"))
     x.onclick = () => setHaloAim(x.dataset.aim);
+  attachHaloFieldPicker();
+  renderHaloCredit();
   attachPoiPicker($("halo-target-poi").parentElement, () => refreshHaloAfter());
   attachPoiPicker($("halo-start-poi").parentElement, cancelHaloStartHere);
   $("halo-here").onclick = toggleHaloStartHere;
@@ -12085,12 +12251,21 @@ async function planHalo() {
     msg.className = "muted"; msg.textContent = "run /showlocation to set your start first";
     return;
   }
-  const body = { allow_staging: $("halo-staging").checked };
-  if (haloGoal === "band") { body.band = haloBandSel; body.aim = haloAim; }
-  else {
+  const body = { allow_staging: $("halo-staging").checked, system: haloSystem };
+  if (haloGoal !== "band") {                       // "📍 My POI", any system
     const id = $("halo-target-poi").dataset.poiId;
     if (!id) { msg.textContent = "pick one of your POIs first"; return; }
     body.target_poi_id = Number(id);
+  } else if (haloSystem === "Stanton") {
+    body.band = haloBandSel; body.aim = haloAim;
+  } else if (haloSystem === "Nyx") {
+    const pin = $("halo-pocket").value.trim();
+    if (pin) body.pocket_key = pin;
+    if ($("halo-mission").checked) body.include_mission = true;
+  } else {                                         // Pyro: a field is required
+    const uuid = $("halo-field").dataset.uuid;
+    if (!uuid) { msg.textContent = "pick a field first"; return; }
+    body.field_uuid = uuid;
   }
   const sid = $("halo-start-poi").dataset.poiId;
   if (sid) body.start_poi_id = Number(sid);
@@ -12138,6 +12313,13 @@ function haloDropHtml(plan) {
     h += `<div class="halo-window">window <b>${fmtHud(d.enter_m)}</b> (enter band) → `
       + `<b>${fmtHud(d.exit_m)}</b> (exit): drop anywhere inside and you're in the rocks`
       + (secs != null ? ` · ≈<b>${secs}s</b> wide at cruise` : "") + `</div>`;
+  } else if (d.pocket) {
+    h += `<div class="halo-window">closest approach to pocket <b>${esc(d.pocket.key)}</b>, `
+      + (d.pocket.hit
+         ? `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> — inside the rocks`
+         : `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> `
+           + `<span class="halo-chip warn">⚠ ~${fmtDist(Math.max(0, d.expected_miss_m - d.pocket.grid_radius_m))} outside the pocket — drop, /showlocation, re-plan</span>`)
+      + ` · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
   } else if (plan.target) {
     h += `<div class="halo-window">closest approach to <b>${esc(plan.target.name)}</b>, expected miss `
       + `≈<b>${fmtDist(d.expected_miss_m)}</b> · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
@@ -12153,7 +12335,7 @@ function haloDropHtml(plan) {
     h += `<div class="halo-window">this route crosses the band again on the far side: `
       + `${fmtHud(d.second_crossing.enter_m)} → ${fmtHud(d.second_crossing.exit_m)}</div>`;
   h += `<div class="halo-fallback">Patch-proof fallback: watch your <b>starmap distance to the `
-    + `Stanton marker</b> instead and exit at <b>${fmtHud(d.star_dist_peak_m)}</b>. `
+    + `${esc(plan.system || "Stanton")} marker</b> instead and exit at <b>${fmtHud(d.star_dist_peak_m)}</b>. `
     + `That number works on any route that crosses this ${plan.band ? "band" : "point"}.</div>`
     + `</div>`;
   return h;
@@ -12163,7 +12345,10 @@ function renderHaloPlan(plan) {
   const el = $("halo-result");
   const head = plan.band
     ? `BAND ${plan.band.band} DROP` + (plan.aim === "peak" ? " · DENSEST POINT" : "")
-    : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
+    : plan.mode === "pocket"
+      ? `POCKET DROP: ${esc(plan.drop.pocket.key).toUpperCase()}`
+        + (plan.drop.pocket.kind === "mission" ? " · MISSION ARC" : "")
+      : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
   let h = `<div class="panel"><h2>${head} <span class="muted" style="font-weight:400; font-size:12px;">`
     + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
   for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
@@ -12174,6 +12359,7 @@ function renderHaloPlan(plan) {
     h += `<div style="margin-top:12px;"><span class="fld-label">ALTERNATES</span></div>`;
     plan.alternates.forEach((a, i) => {
       h += `<div class="halo-alt">via <b>${esc(a.drop.marker_name)}</b> · exit at ${fmtHud(a.drop.peak_m)}`
+        + (a.drop.pocket ? ` · pocket ${esc(a.drop.pocket.key)}${a.drop.pocket.hit ? "" : " ⚠ near-miss"}` : "")
         + (a.drop.window_s != null ? ` · window ≈${fmtWinS(a.drop.window_s)}s` : "")
         + (a.drop.steep_deg != null ? ` · ${Math.round(a.drop.steep_deg)}°` : "")
         + (a.drop.expected_miss_m != null ? ` · miss ≈${fmtDist(a.drop.expected_miss_m)}` : "")
@@ -12242,7 +12428,8 @@ function haloRRect(ctx, x, y, w, h, r) {   // roundRect w/ pre-2022 fallback
 
 function drawHaloMap(plan) {
   const cv = $("halo-map");
-  if (!cv || !haloBandsDoc || !plan) return;
+  const doc = haloDoc(plan && plan.system || "Stanton");
+  if (!cv || !doc || !plan) return;
   const cssW = cv.parentElement.clientWidth;
   if (!(cssW > 0)) return;                       // hidden / mid-layout: skip
   const cssH = Math.round(Math.min(430, Math.max(280, cssW * 0.58)));
@@ -12251,11 +12438,15 @@ function drawHaloMap(plan) {
   cv.style.height = cssH + "px";
   const ctx = cv.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const C = HALO_MAP_C, bands = haloBandsDoc.bands;
-  const beltIn = bands[0].inner_m, beltOut = bands[bands.length - 1].outer_m;
+  const C = HALO_MAP_C, bands = doc.bands || null, ring = doc.ring || null;
+  const beltIn = bands ? bands[0].inner_m
+    : ring ? ring.r_m - ring.pocket_radius_m : null;
+  const beltOut = bands ? bands[bands.length - 1].outer_m
+    : ring ? ring.r_m + ring.pocket_radius_m : null;
   const P = haloMapPoints(plan);
   const pts = [P.start, P.marker, P.cross].concat(P.stage ? [P.stage] : []);
-  const rFit = Math.max(beltOut, ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
+  const rFit = Math.max(beltOut || 0,
+                        ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
   const cx = cssW / 2, cy = cssH / 2;
   const s = (Math.min(cssW, cssH) / 2 - 12) / rFit;
   const X = (p) => cx + p[0] * s, Y = (p) => cy - p[1] * s;
@@ -12265,30 +12456,49 @@ function drawHaloMap(plan) {
 
   // planet orbits (true planets; moons are sub-pixel at this scale)
   ctx.lineWidth = 1; ctx.strokeStyle = C.orbit;
-  for (const b of haloBandsDoc.bodies || []) {
+  for (const b of doc.bodies || []) {
     if (b.type === "Star") continue;
     ctx.beginPath(); ctx.arc(cx, cy, Math.hypot(b.x, b.y) * s, 0, 2 * Math.PI); ctx.stroke();
   }
-  // the belt — a true-scale thin ring; the chosen band brightened
-  ctx.beginPath();
-  ctx.arc(cx, cy, beltOut * s, 0, 2 * Math.PI);
-  ctx.arc(cx, cy, beltIn * s, 0, 2 * Math.PI, true);
-  ctx.fillStyle = C.belt; ctx.fill("evenodd");
-  ctx.strokeStyle = C.beltEdge;
-  for (const r of [beltIn, beltOut]) {
-    ctx.beginPath(); ctx.arc(cx, cy, r * s, 0, 2 * Math.PI); ctx.stroke();
-  }
-  if (plan.band) {
-    const b = bands[plan.band.band - 1];
-    ctx.strokeStyle = C.band;
-    ctx.lineWidth = Math.max(1.5, (b.outer_m - b.inner_m) * s);
+  if (bands) {
+    // the belt — a true-scale thin ring; the chosen band brightened
     ctx.beginPath();
-    ctx.arc(cx, cy, (b.inner_m + b.outer_m) / 2 * s, 0, 2 * Math.PI); ctx.stroke();
-    ctx.lineWidth = 1;
+    ctx.arc(cx, cy, beltOut * s, 0, 2 * Math.PI);
+    ctx.arc(cx, cy, beltIn * s, 0, 2 * Math.PI, true);
+    ctx.fillStyle = C.belt; ctx.fill("evenodd");
+    ctx.strokeStyle = C.beltEdge;
+    for (const r of [beltIn, beltOut]) {
+      ctx.beginPath(); ctx.arc(cx, cy, r * s, 0, 2 * Math.PI); ctx.stroke();
+    }
+    if (plan.band) {
+      const b = bands[plan.band.band - 1];
+      ctx.strokeStyle = C.band;
+      ctx.lineWidth = Math.max(1.5, (b.outer_m - b.inner_m) * s);
+      ctx.beginPath();
+      ctx.arc(cx, cy, (b.inner_m + b.outer_m) / 2 * s, 0, 2 * Math.PI); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  } else if (ring) {
+    // the Glaciem Ring — one circle; the ~4%-coverage story IS the pocket
+    // dots (the chosen pocket brightened)
+    ctx.strokeStyle = C.beltEdge;
+    ctx.beginPath(); ctx.arc(cx, cy, ring.r_m * s, 0, 2 * Math.PI); ctx.stroke();
+    const sel = plan.drop && plan.drop.pocket;
+    ctx.fillStyle = C.band;
+    for (const pk of doc.pockets || []) {
+      const px = cx + pk.x * s, py = cy - pk.y * s;
+      ctx.fillRect(px - 0.75, py - 0.75, 1.5, 1.5);
+    }
+    if (sel) {
+      ctx.fillStyle = C.drop;
+      ctx.beginPath();
+      ctx.arc(cx + sel.xyz[0] * s, cy - sel.xyz[1] * s, 2.6, 0, 2 * Math.PI);
+      ctx.fill();
+    }
   }
   // bodies: star at its real offset, planets as dots + labels
   ctx.textAlign = "left";
-  for (const b of haloBandsDoc.bodies || []) {
+  for (const b of doc.bodies || []) {
     const bx = cx + b.x * s, by = cy - b.y * s;
     const isStar = b.type === "Star";
     ctx.fillStyle = isStar ? C.star : C.body;
@@ -12333,21 +12543,26 @@ function drawHaloMap(plan) {
   ctx.beginPath(); ctx.moveTo(12, cssH - 12); ctx.lineTo(12 + bar * s, cssH - 12); ctx.stroke();
   ctx.fillText((bar / 1e9) + " Gm", 12, cssH - 18);
 
-  drawHaloInset(ctx, plan, P, cssW, cssH);
+  drawHaloInset(ctx, plan, P, cssW, cssH, doc);
 }
 
-// Magnified drop zone: individual band edges are visible here (they're
-// sub-pixel on the system view), plus the chord, window ticks, and the ✕.
-function drawHaloInset(ctx, plan, P, cssW, cssH) {
-  const C = HALO_MAP_C, bands = haloBandsDoc.bands;
+// Magnified drop zone: individual band edges / pocket circles are visible
+// here (they're sub-pixel on the system view), plus the chord, window ticks,
+// and the ✕.
+function drawHaloInset(ctx, plan, P, cssW, cssH, doc) {
+  const C = HALO_MAP_C, bands = doc.bands || null;
+  const pocket = plan.drop && plan.drop.pocket;
   const size = Math.round(Math.min(cssW * 0.34, cssH * 0.66));
   if (size < 90) return;                         // too small to be useful
   const x0 = cssW - size - 10, y0 = 10;
   let half;                                       // world half-extent of the box
-  if (plan.band) {
+  if (plan.band && bands) {
     const b = bands[plan.band.band - 1];
     half = Math.max(2.2 * (b.outer_m - b.inner_m),
                     0.55 * (plan.drop.enter_m - plan.drop.exit_m), 0.25e9);
+  } else if (pocket) {
+    half = Math.max(3.5 * pocket.grid_radius_m,
+                    2.5 * (plan.drop.expected_miss_m || 0), 0.02e9);
   } else {
     half = Math.max(3 * (plan.drop.expected_miss_m || 0), 0.15e9);
   }
@@ -12367,7 +12582,7 @@ function drawHaloInset(ctx, plan, P, cssW, cssH) {
     ctx.strokeStyle = stroke; ctx.lineWidth = width || 1;
     ctx.beginPath(); ctx.arc(originX, originY, r * si, 0, 2 * Math.PI); ctx.stroke();
   };
-  for (const b of bands) {
+  for (const b of bands || []) {
     const sel = plan.band && b.band === plan.band.band;
     if (sel) {                                   // fill the chosen band's annulus
       ctx.beginPath();
@@ -12384,6 +12599,25 @@ function drawHaloInset(ctx, plan, P, cssW, cssH) {
       ctx.fillStyle = C.label; ctx.font = "9px monospace";
       ctx.fillText(String(b.band), IX(mid) + 3, IY(mid) - 3);
     }
+  }
+  if (pocket) {
+    // pocket-mode: the target pocket's grid sphere + any neighbors in view
+    ctx.strokeStyle = C.beltEdge;
+    for (const pk of (doc.pockets || [])) {
+      const d = Math.hypot(pk.x - P.cross[0], pk.y - P.cross[1]);
+      if (d > half * 2.2) continue;
+      ctx.beginPath();
+      ctx.arc(IX([pk.x, pk.y]), IY([pk.x, pk.y]),
+              Math.max(1.5, pk.grid_radius_m * si), 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(IX(pocket.xyz), IY(pocket.xyz),
+            Math.max(2, pocket.grid_radius_m * si), 0, 2 * Math.PI);
+    ctx.fillStyle = C.bandFill; ctx.fill();
+    ctx.strokeStyle = C.band; ctx.stroke();
+    ctx.fillStyle = C.label; ctx.font = "9px monospace";
+    ctx.fillText(pocket.key, IX(pocket.xyz) + 5, IY(pocket.xyz) - 5);
   }
   // chord through the box + window ticks + the ✕
   ctx.strokeStyle = C.chord; ctx.lineWidth = 1.2;
@@ -12464,8 +12698,25 @@ function haloVerdictHtml(d) {
     main = d.side === "inward"
       ? `You're <span class="off-band">inside the belt's inner edge</span>: ${fmtDist(d.to_belt_m)} out to band 1`
       : `You're <span class="off-band">beyond the belt's outer edge</span>: ${fmtDist(d.to_belt_m)} back in to band ${d.near_band}`;
+  } else if (d.status === "pocket") {
+    main = `☄ You're <span class="in-band">in Glaciem pocket ${esc(d.pocket.key)}</span>`;
+    meta.push(`${fmtDist(d.pocket.center_off_m)} from its center`, zoff(d.z_m));
+  } else if (d.status === "ring_void") {
+    main = `You're <span class="off-band">on the Glaciem Ring between pockets</span>`;
+    if (d.pocket) meta.push(`nearest rocks: pocket ${esc(d.pocket.key)}, `
+      + `≈${fmtDist(d.pocket.arc_m)} along the ring`);
+  } else if (d.status === "off_ring") {
+    main = `You're <span class="off-band">off the Glaciem Ring</span>: ${fmtDist(d.to_ring_m)} radially`;
+    meta.push(zoff(d.z_m));
+    if (d.pocket) meta.push(`nearest pocket ${esc(d.pocket.key)}: ${fmtDist(d.pocket.center_off_m)}`);
+  } else if (d.status === "field") {
+    main = `☄ You're <span class="in-band">at the ${esc(d.field.name)} field</span>`;
+    meta.push(`${fmtDist(d.field.miss_m)} from its anchor`);
+  } else if (d.status === "space") {
+    main = `You're in open ${esc(d.system || "Pyro")} space`;
+    if (d.field) meta.push(`nearest field: ${esc(d.field.name)}, ${fmtDist(d.field.miss_m)}`);
   } else if (d.status === "other_system") {
-    main = `You're in ${esc(d.system || "another system")}; the Aaron Halo is in Stanton.`;
+    main = `You're in ${esc(d.system || "another system")} — no mapped belt there yet.`;
   }
   if (d.target) meta.push(`📍 ${esc(d.target.name)}: <b>${fmtDist(d.target.miss_m)}</b> away`);
   if (d.fix_age_s != null) meta.push(`fix ${fmtAge(d.fix_age_s)}`);
