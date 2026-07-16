@@ -455,6 +455,9 @@ def init(db_path) -> None:
         _ensure_column("members", "playstyle_tags", "TEXT")   # JSON list, member profile (#30)
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
+        # Belt-survey payload (#36): JSON {rocks, ores, salvage, source} on
+        # type=="survey" marks; NULL for every other POI.
+        _ensure_column("custom_pois", "survey", "TEXT")
         _ensure_column("observations", "shard_id", "TEXT")
         _ensure_column("events", "event_location", "TEXT")
         _ensure_column("events", "signup_deadline", "TEXT")
@@ -547,6 +550,7 @@ def _custom_row_to_dict(r: sqlite3.Row) -> dict:
         "height_m": r["height_m"], "qt_marker": bool(r["qt_marker"]),
         "owner_id": r["owner_id"], "owner_handle": r["owner_handle"],
         "note": r["note"], "private": bool(r["private"]),
+        "survey": _u(r["survey"]),
     }
 
 
@@ -555,14 +559,30 @@ def add_custom_poi(d: dict) -> None:
         _conn.execute(
             "INSERT OR REPLACE INTO custom_pois "
             "(id,name,system,container,type,local_km,global_m,latitude,longitude,"
-            "height_m,qt_marker,owner_id,owner_handle,note,private) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "height_m,qt_marker,owner_id,owner_handle,note,private,survey) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (d["id"], d.get("name"), d.get("system"), d.get("container"),
              d.get("type"), _j(d.get("local_km")), _j(d.get("global_m")),
              d.get("latitude"), d.get("longitude"), d.get("height_m"),
              1 if d.get("qt_marker") else 0, d.get("owner_id"), d.get("owner_handle"),
-             d.get("note"), 1 if d.get("private") else 0),
+             d.get("note"), 1 if d.get("private") else 0,
+             _j(d.get("survey"))),
         )
+
+
+def clear_survey_pois(system: str) -> list[int]:
+    """Delete every survey mark in `system` (admin patch-reset, #36). Returns
+    the deleted ids so the caller can evict them from the live nav."""
+    with _lock, _conn:
+        rows = _conn.execute(
+            "SELECT id FROM custom_pois WHERE type='survey' AND system=?",
+            (system,)).fetchall()
+        ids = [r["id"] for r in rows]
+        if ids:
+            _conn.execute(
+                "DELETE FROM custom_pois WHERE type='survey' AND system=?",
+                (system,))
+    return ids
 
 
 def list_custom_pois() -> list[dict]:

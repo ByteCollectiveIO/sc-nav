@@ -1328,12 +1328,22 @@ class DestinationIn(BaseModel):
     poi_id: int
 
 
+class SurveyPayloadIn(BaseModel):
+    """Belt-survey mark payload (#36): what's around this fix. `rocks:"none"`
+    is a first-class negative — it teaches the fit where a field ends."""
+    rocks: str = Field(default="medium", max_length=12)
+    ores: list[str] = Field(default_factory=list, max_length=10)
+    salvage: bool = False
+    source: str | None = Field(default=None, max_length=16)  # contract | freeroam
+
+
 class CaptureIn(BaseModel):
     name: str = Field(max_length=_NAME_MAX)
     type: str = Field(default="Custom", max_length=_TYPE_MAX)
     qt_marker: bool = False   # record as a jumpable QT marker (e.g. an OM)
     private: bool = False     # owner-only POI; hidden from the rest of the org
     note: str = Field(default="", max_length=_NOTE_MAX)   # optional free-text context
+    survey: SurveyPayloadIn | None = None   # only honored when type=="survey"
 
 
 class NodeCaptureIn(BaseModel):
@@ -2447,6 +2457,14 @@ def _halo_capture_note(poi) -> str | None:
             return f"Glaciem Ring pocket {loc['pocket']['key']}"
         if loc["status"] == "ring_void":
             return f"Glaciem Ring (between pockets, {loc['pocket']['key']} nearest)"
+        # Not Glaciem space — the Keeger region (#36); surveyed pockets get
+        # their key into the note so marks self-organize.
+        kg = nav_core.keeger_locate(poi.global_m,
+                                    nav_core.survey_pockets(nav, poi.system))
+        if kg is not None and kg["status"] == "keeger_pocket":
+            return f"Keeger Belt — survey pocket {kg['pocket']['key']}"
+        if kg is not None:
+            return "Keeger Belt region"
         return None
     if kind == "fields":
         loc = nav_core.field_locate(poi.global_m, belt["fields"])
@@ -2463,7 +2481,7 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
         qt_marker=pending.get("qt_marker", False),
         private=pending.get("private", False), note=pending.get("note"),
-        system_hint=sess.system,
+        system_hint=sess.system, survey=pending.get("survey"),
     )
     halo_tag = _halo_capture_note(poi)
     if halo_tag and halo_tag not in (poi.note or ""):
@@ -2575,13 +2593,27 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
         sess = hub.get(user)
         if sess.capture_pending is not None:
             raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
+        poi_type = body.type.strip() or "Custom"
+        survey = None
+        if poi_type.lower() == nav_core.SURVEY_POI_TYPE:
+            # Survey marks (#36): normalize the payload; a bare "survey"
+            # capture (navigator form, no chips) defaults to a positive
+            # medium-density mark.
+            s = body.survey or SurveyPayloadIn()
+            rocks = s.rocks if s.rocks in nav_core.SURVEY_ROCKS else "medium"
+            survey = {"rocks": rocks,
+                      "ores": [o.strip()[:_NAME_MAX] for o in s.ores if o.strip()],
+                      "salvage": bool(s.salvage)}
+            if s.source in ("contract", "freeroam"):
+                survey["source"] = s.source
         sess.capture_pending = {
-            "kind": "poi", "name": name, "type": body.type.strip() or "Custom",
+            "kind": "poi", "name": name, "type": poi_type,
             # A QT marker is shared navigation infrastructure, so private wins:
             # a private POI is never also a QT marker.
             "qt_marker": body.qt_marker and not body.private,
             "private": body.private,
             "note": body.note.strip() or None,
+            "survey": survey,
         }
         await sess.broadcast()
         return {"ok": True, "capture": sess.capture_status()}
@@ -4095,6 +4127,9 @@ class HaloPlanIn(BaseModel):
     target_poi_id: int | None = None
     pocket_key: str | None = Field(default=None, max_length=64)   # Nyx pin
     field_uuid: str | None = Field(default=None, max_length=64)   # Pyro field
+    # Nyx belt selector (#36): "glaciem" (datamined pockets, default) or
+    # "keeger" (the org's surveyed pockets — live from the first mark).
+    belt: str | None = Field(default=None, max_length=16)
     # Nyx: also target QV-Breaker mission pockets (believed contract-gated)
     include_mission: bool = False
     start_poi_id: int | None = None
@@ -4150,6 +4185,27 @@ def get_halo_targets(system: str = "Stanton",
                            "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
                            "grid_radius_m": p["grid_radius_m"]}
                           for p in belt["pockets"]]
+        # Belt survey (#36): the Keeger region + the org's surveyed pockets,
+        # computed live from the marks (never cached — deleting a mark heals
+        # the map on the next read).
+        doc["keeger"] = {"r_m": nav_core.KEEGER_R_M,
+                         "radial_tol_m": nav_core.KEEGER_RADIAL_TOL_M,
+                         "z_tol_m": nav_core.KEEGER_Z_TOL_M}
+        marks = nav_core.survey_marks(nav, system)
+        surveyed = nav_core.survey_pockets(nav, system)
+        doc["surveyed"] = [{"key": p["key"], "kind": p["kind"],
+                            "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
+                            "grid_radius_m": p["grid_radius_m"],
+                            "marks": p["marks"], "density": p["density"],
+                            "ores": p["ores"], "salvage": p["salvage"]}
+                           for p in surveyed]
+        doc["survey"] = {
+            "total": len(marks),
+            "positive": sum(1 for m in marks if m["positive"]),
+            "model": nav_core.survey_field_model(
+                [m for m in marks if not nav_core.glaciem_contains(m["xyz"])]),
+            "model_min": nav_core.SURVEY_MODEL_MIN_MARKS,
+        }
     else:
         doc["fields"] = [{"uuid": f["uuid"], "name": f["name"],
                           "shell": f["shell"],
@@ -4181,6 +4237,7 @@ def _halo_fix_system(pos, sess: "Session | None") -> str:
         return c.system
     belt = (nav_core.HALO_SYSTEM if nav_core.halo_contains(pos)
             else nav_core.GLACIEM_SYSTEM if nav_core.glaciem_contains(pos)
+            else nav_core.GLACIEM_SYSTEM if nav_core.keeger_contains(pos)   # #36
             else None)
     fresh = sess.system if (sess is not None and sess.system_fresh()) else None
     if belt is not None and (fresh is None or fresh == belt):
@@ -4202,7 +4259,7 @@ def _halo_goal_system(body: HaloPlanIn) -> str | None:
         return nav_core.HALO_SYSTEM
     if body.field_uuid is not None:
         return nav_core.PYRO_SYSTEM
-    if body.pocket_key is not None:
+    if body.pocket_key is not None or body.belt is not None:
         return nav_core.GLACIEM_SYSTEM
     if body.target_poi_id is not None:
         tp = nav.pois.get(body.target_poi_id)
@@ -4228,6 +4285,11 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
     if body.pocket_key is not None and kind != "ring":
         raise HTTPException(status_code=400,
                             detail=f"ring pockets are a {nav_core.GLACIEM_SYSTEM} goal")
+    if body.belt is not None and kind != "ring":
+        raise HTTPException(status_code=400,
+                            detail=f"belt selection is a {nav_core.GLACIEM_SYSTEM} goal")
+    if body.belt is not None and (body.belt or "").lower() not in ("glaciem", "keeger"):
+        raise HTTPException(status_code=400, detail="belt must be glaciem or keeger")
     has_target = body.target_poi_id is not None
     if kind == "bands" and (body.band is None) == (not has_target):
         raise HTTPException(status_code=400,
@@ -4258,17 +4320,26 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
             type="Asteroid Field", local_km=None, global_m=rec["xyz"],
             latitude=None, longitude=None, height_m=None, qt_marker=False)}
     if kind == "ring":
-        pockets = belt["pockets"]
+        surveyed = nav_core.survey_pockets(nav, system)
         if body.pocket_key is not None:
-            pin = next((p for p in pockets
+            # A pin names one pocket outright; both pools are searchable
+            # (datamined Glaciem keys + org SVY-* keys), so a pinned survey
+            # pocket needs no belt selector.
+            pin = next((p for p in list(belt["pockets"]) + surveyed
                         if p["key"].lower() == body.pocket_key.lower()), None)
             if pin is None:
                 raise HTTPException(status_code=404, detail="unknown pocket_key")
             return {"pockets": [pin]}
-        # AUTO: free-roam pockets only. Mission arcs are believed
+        if (body.belt or "glaciem").lower() == "keeger":
+            # Surveyed pockets (#36): live from the org's first rock mark.
+            if not surveyed:
+                raise HTTPException(status_code=400,
+                                    detail="no Keeger survey marks yet — drop one with ⛏ Mark survey point")
+            return {"pockets": surveyed}
+        # AUTO (Glaciem): free-roam pockets only. Mission arcs are believed
         # contract-gated (opt-in), and the Levski pocket is Delamar — you'd
         # just fly from Levski.
-        auto = [p for p in pockets
+        auto = [p for p in belt["pockets"]
                 if p["kind"] == "general"
                 or (body.include_mission and p["kind"] == "mission")]
         if not auto:
@@ -4328,6 +4399,64 @@ def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> di
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.get("/api/halo/survey")
+def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
+    """The org's belt-survey state (#36): every visible mark, the tier-1
+    surveyed pockets, and the tier-2 field model (or progress toward it).
+    Computed live from the marks — never cached."""
+    if system not in nav.belts:
+        raise HTTPException(status_code=404, detail="unknown system")
+    marks = nav_core.survey_marks(nav, system)
+    return {
+        "system": system,
+        "marks": [{"id": m["id"], "name": m["name"],
+                   "x": m["xyz"][0], "y": m["xyz"][1], "z": m["xyz"][2],
+                   "rocks": m["rocks"], "ores": m["ores"],
+                   "salvage": m["salvage"], "owner_handle": m["owner_handle"]}
+                  for m in marks],
+        "pockets": nav_core.survey_pockets(nav, system),
+        "model": nav_core.survey_field_model(
+            [m for m in marks if not nav_core.glaciem_contains(m["xyz"])]),
+        "model_min": nav_core.SURVEY_MODEL_MIN_MARKS,
+        "attribution": nav_core.SURVEY_ATTRIBUTION,
+    }
+
+
+@app.get("/api/halo/survey/export")
+def get_halo_survey_export(system: str = "Nyx",
+                           user: dict = Depends(require_session)):
+    """Versioned survey export (#36 §3.6): the marks + fitted model as a
+    self-describing document, for sharing with the project (committed-
+    constants promotion once a field's model is stable) or the community."""
+    doc = get_halo_survey(system, user)
+    doc["_meta"] = {
+        "document": "sc-nav belt survey export",
+        "app_version": APP_VERSION,
+        "generated": datetime.now(timezone.utc).isoformat(),
+        "org": org_name(),
+        "license_note": ("Positions are player-taken in-game measurements; "
+                         "share at your org's discretion."),
+    }
+    return doc
+
+
+class SurveyClearIn(BaseModel):
+    system: str = Field(default="Nyx", max_length=24)
+
+
+@app.post("/api/admin/survey/clear")
+async def clear_survey_marks(body: SurveyClearIn,
+                             admin: dict = Depends(require_admin)):
+    """Wipe every survey mark in a system (admin only) — the patch-reset for
+    a field CIG visibly moved. Fits are derived, so the map heals instantly."""
+    if body.system not in nav.belts:
+        raise HTTPException(status_code=404, detail="unknown system")
+    ids = await asyncio.to_thread(db.clear_survey_pois, body.system)
+    for pid in ids:
+        nav.pois.pop(pid, None)
+    return {"ok": True, "deleted": len(ids)}
+
+
 @app.post("/api/halo/plan")
 async def post_halo_plan(body: HaloPlanIn, user: dict = Depends(require_session)):
     """Asteroid drop planner (#31, multi-system #35): "set destination X,
@@ -4365,6 +4494,13 @@ async def get_halo_locate(target_poi_id: int | None = None,
         view = {"status": "other_system"}
     elif belt["kind"] == "ring":
         view = nav_core.glaciem_locate(pos, belt["pockets"])
+        if view["status"] == "off_ring":
+            # Not Glaciem space — maybe Keeger (#36): the region envelope or
+            # one of the org's surveyed pockets.
+            kg = nav_core.keeger_locate(
+                pos, nav_core.survey_pockets(nav, fix_system))
+            if kg is not None:
+                view = kg
     elif belt["kind"] == "fields":
         view = nav_core.field_locate(pos, belt["fields"])
     else:

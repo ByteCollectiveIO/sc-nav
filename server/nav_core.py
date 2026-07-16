@@ -83,6 +83,9 @@ class Poi:
     nearest_qt_dist_m: float | None = None  # distance to that marker, meters
     source: str = "starmap"          # catalog origin: "starmap" | "wiki" (#28)
     arrival_radius_m: float | None = None   # per-POI QT arrival radius (#28b)
+    # Belt-survey payload (#36, type=="survey" customs only):
+    # {rocks: none|sparse|medium|dense, ores: [...], salvage: bool, source: ...}
+    survey: dict | None = None
 
 
 @dataclass
@@ -977,6 +980,7 @@ def custom_poi_from_position(
     private: bool = False,
     note: str | None = None,
     system_hint: str | None = None,
+    survey: dict | None = None,
 ) -> Poi:
     """Create a POI at a global position, stored the same way the upstream
     dataset stores it: body-local rotating-frame km when at a container,
@@ -1004,6 +1008,7 @@ def custom_poi_from_position(
         owner_handle=owner_handle,
         private=bool(private),
         note=note,
+        survey=survey,
     )
     poi.nearest_qt, poi.nearest_qt_dist_m = nearest_qt_marker(nav, poi, t_unix)
     return poi
@@ -1026,6 +1031,7 @@ def custom_poi_to_dict(poi: Poi) -> dict:
         "owner_handle": poi.owner_handle,
         "private": poi.private,
         "note": poi.note,
+        "survey": poi.survey,
     }
 
 
@@ -1047,6 +1053,7 @@ def poi_from_custom_dict(d: dict) -> Poi:
         owner_handle=d.get("owner_handle"),
         private=bool(d.get("private")),
         note=d.get("note"),
+        survey=d.get("survey") or None,
     )
 
 
@@ -1667,6 +1674,14 @@ def system_at(nav: NavData, pos) -> str | None:
     if halo_contains(pos):
         return HALO_SYSTEM
     if glaciem_contains(pos):
+        return GLACIEM_SYSTEM
+    # The Keeger Belt (#36) at 48 Gm: only Pyro's outer traffic plausibly
+    # crosses it (Stanton's outermost body orbits 28.9 Gm — a nearest-container
+    # guess naming Stanton out here is physically absurd, and that's exactly
+    # what it does). Fresh-sticky callers still override (see
+    # app._halo_fix_system); this rung fixes the hint-less case — e.g. a
+    # watcher booted while already parked at the rocks.
+    if keeger_contains(pos):
         return GLACIEM_SYSTEM
     best, best_d = None, math.inf
     for cont in nav.containers.values():
@@ -5055,6 +5070,10 @@ def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
                           "grid_radius_m": (pk.get("grid_radius_m")
                                             or GLACIEM_POCKET_RADIUS_M),
                           "hit": bool(cand.get("hit"))}
+        if pk.get("marks"):                    # surveyed pockets (#36) carry
+            view["pocket"]["marks"] = pk["marks"]     # their confidence badge
+            view["pocket"]["density"] = pk.get("density")
+            view["pocket"]["ores"] = pk.get("ores") or []
     if cand.get("second"):
         s = cand["second"]
         view["second_crossing"] = {"enter_m": s["enter_m"], "peak_m": s["peak_m"],
@@ -5150,7 +5169,7 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
                     continue
                 for pk in pockets:
                     c = _halo_poi_candidate(from_pos, m, m_pos, pk["xyz"], None)
-                    if c is not None:
+                    if c is not None and c["miss_m"] <= POCKET_MISS_CEILING_M:
                         c["pocket"] = pk
                         c["hit"] = c["miss_m"] <= (pk.get("grid_radius_m")
                                                    or GLACIEM_POCKET_RADIUS_M)
@@ -5257,6 +5276,11 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
                            and staged[0]["miss_m"] < 0.6 * direct[0]["miss_m"]))
     pool = staged if use_staged else direct
     if not pool:
+        if pockets is not None and pockets[0].get("kind") == "surveyed":
+            raise ValueError(
+                "no jump route passes near this pocket — surveyed rocks are "
+                "only drop-reachable when a marker chord crosses them; "
+                "revisit via a contract marker (the mark stays on the org's map)")
         raise ValueError("no viable drop route from here"
                          + ("" if allow_staging else " (staging disabled)"))
 
@@ -5291,7 +5315,12 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
         "alternates": [{"drop": _halo_drop_view(c, drive_speed_ms),
                         "leg": _halo_drop_leg(from_name, c, fuel_req, max_range_m)}
                        for c in alts],
-        "attribution": BELT_ATTRIBUTIONS.get(system, HALO_ATTRIBUTION),
+        # Surveyed pockets are the org's own measurements, not game data —
+        # credit accordingly (#36).
+        "attribution": (SURVEY_ATTRIBUTION
+                        if pockets is not None and pockets
+                        and pockets[0].get("kind") == "surveyed"
+                        else BELT_ATTRIBUTIONS.get(system, HALO_ATTRIBUTION)),
     }
     if band_row is not None:
         plan["band"] = dict(band_row, width_m=band_row["outer_m"] - band_row["inner_m"])
@@ -5523,3 +5552,207 @@ def _score_halo_pocket_cands(cands: list[dict]) -> None:
             c["score"] = 1.0 + 0.25 * (1.0 - f) + 0.1 * (1.0 - m)
         else:
             c["score"] = 0.8 * (1.0 - m) + 0.2 * (1.0 - f)
+
+
+# ---------------------------------------------------------------------------
+# Belt survey (#36): crowd-sourced field mapping. Full design:
+# docs/belt-survey.md.
+#
+# The Keeger Belt is implemented and lootable (HPP_Nyx_KeegerBelt mining +
+# salvage; the People's Service Stations ring it at exactly 48.000 Gm) but has
+# ZERO container geometry in the starmap dump — nothing to aim drops at. So
+# players map it themselves: one-tap survey marks (custom POIs, type
+# "survey") record rock density / ores / salvage at exact fixes. A
+# rock-positive mark is GROUND TRUTH, not an estimate — so tier-1 surveyed
+# pockets are plannable org-wide from the very first mark, refining as nearby
+# marks merge; only the tier-2 field model (ring width/height stats — the
+# exportable artifact) waits for a sample size.
+# ---------------------------------------------------------------------------
+
+SURVEY_POI_TYPE = "survey"
+SURVEY_ROCKS = ("none", "sparse", "medium", "dense")
+
+# Keeger region envelope: centerline from the station ring (exactly 48.000 Gm,
+# z=0); width/thickness are generous starting constants, superseded by the
+# fitted field model once one exists. A GUARDED system-disambiguation rung
+# like the other belts (fresh sticky always overrides): Pyro's V<->VI traffic
+# does cross 48 Gm, but the alternative — the raw nearest-container guess —
+# names STANTON out here, whose outermost body orbits 28.9 Gm. Caught live in
+# the preview harness: a hint-less session's first-ever fix at the rocks
+# stamped its survey mark "Stanton" and the mark vanished from the Nyx map.
+KEEGER_R_M = 48.0e9
+KEEGER_RADIAL_TOL_M = 2.5e9
+KEEGER_Z_TOL_M = 1.0e9
+
+# Tier-1 clustering: marks within this of a cluster centroid merge into it
+# (~2 pocket widths — rocks that close are one field for planning purposes).
+SURVEY_MERGE_M = 2.0 * GLACIEM_POCKET_RADIUS_M
+# Pocket-mode sanity ceiling: a candidate whose closest approach misses the
+# pocket by more than this is not a way to reach rocks (100,000 km is hours
+# of sublight) — presenting it as a drop plan would be garbage dressed as
+# guidance. Chord coverage of the 48 Gm Keeger annulus is sparse with ~9 Nyx
+# markers, so far-flung marks legitimately have NO plan; the mark still lives
+# on the org's map and the 400 explains it (see plan_halo_drop).
+POCKET_MISS_CEILING_M = 100_000e3
+# Tier-2 gate: below this many rock-positive marks, ring statistics would be
+# noise dressed as knowledge. Tier-1 targeting never waits for this.
+SURVEY_MODEL_MIN_MARKS = 25
+
+SURVEY_ATTRIBUTION = "Field map: this org's own survey marks (in-game fixes)"
+
+
+def keeger_contains(pos) -> bool:
+    """True when `pos` lies inside the Keeger Belt region envelope. Region
+    classification only (locate/chip/capture notes) — never a system
+    discriminator (see the constants' comment)."""
+    r = math.hypot(pos[0], pos[1])
+    return (abs(r - KEEGER_R_M) <= KEEGER_RADIAL_TOL_M
+            and abs(pos[2]) <= KEEGER_Z_TOL_M)
+
+
+def survey_marks(nav: NavData, system: str,
+                 t_ref: float | None = None) -> list[dict]:
+    """All org-visible survey marks in `system`, positions resolved to global
+    meters. Private marks stay out — the survey is a team artifact, and a
+    hidden mark must not leak through the org's pocket list. Sorted by id
+    (capture order) so clustering is deterministic."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    out = []
+    for p in nav.pois.values():
+        if not p.custom or p.private:
+            continue
+        if (p.type or "").strip().lower() != SURVEY_POI_TYPE:
+            continue
+        if p.system != system:
+            continue
+        g = poi_global_m(nav, p, t_ref)
+        if g is None:
+            continue
+        s = getattr(p, "survey", None) or {}
+        rocks = s.get("rocks") if s.get("rocks") in SURVEY_ROCKS else "medium"
+        out.append({"id": p.id, "name": p.name, "xyz": tuple(g),
+                    "rocks": rocks, "positive": rocks != "none",
+                    "ores": list(s.get("ores") or []),
+                    "salvage": bool(s.get("salvage")),
+                    "owner_handle": p.owner_handle})
+    out.sort(key=lambda m: m["id"])
+    return out
+
+
+def survey_pockets(nav: NavData, system: str,
+                   t_ref: float | None = None) -> list[dict]:
+    """Tier-1 fit: rock-positive survey marks clustered into plannable
+    pockets, live from the FIRST mark. Marks inside the (datamined) Glaciem
+    envelope are excluded — those rocks are already mapped; this pool is the
+    unmapped space, which for Nyx today means the Keeger Belt.
+
+    Greedy centroid clustering (mark counts are small): a mark joins the
+    nearest cluster within SURVEY_MERGE_M of its centroid, else starts one.
+    Pocket envelope = the default pocket radius or the cluster's spread,
+    whichever is larger — capped by the nearest "nothing here" mark, which is
+    how negatives bound a field's edge. Keys are stable while their anchor
+    mark (the cluster's lowest id) survives. Output shape = #35 pocket dicts,
+    so plan_halo_drop consumes them untouched."""
+    marks = survey_marks(nav, system, t_ref)
+    positives = [m for m in marks
+                 if m["positive"] and not glaciem_contains(m["xyz"])]
+    negatives = [m for m in marks
+                 if not m["positive"] and not glaciem_contains(m["xyz"])]
+    clusters: list[dict] = []
+    for m in positives:
+        best, best_d = None, SURVEY_MERGE_M
+        for c in clusters:
+            d = dist3(m["xyz"], c["centroid"])
+            if d <= best_d:
+                best, best_d = c, d
+        if best is None:
+            clusters.append({"members": [m], "centroid": m["xyz"]})
+        else:
+            best["members"].append(m)
+            n = len(best["members"])
+            best["centroid"] = tuple(
+                sum(mm["xyz"][i] for mm in best["members"]) / n
+                for i in range(3))
+    out = []
+    for c in clusters:
+        members = c["members"]
+        centroid = c["centroid"]
+        spread = max((dist3(m["xyz"], centroid) for m in members), default=0.0)
+        radius = max(GLACIEM_POCKET_RADIUS_M, 1.2 * spread)
+        near_neg = min((dist3(n["xyz"], centroid) for n in negatives),
+                       default=math.inf)
+        if near_neg < 2.0 * radius:
+            radius = max(500e3, min(radius, 0.8 * near_neg))
+        density = max((m["rocks"] for m in members),
+                      key=lambda r: SURVEY_ROCKS.index(r))
+        ores = sorted({o for m in members for o in m["ores"]})
+        out.append({
+            "key": f"SVY-{min(m['id'] for m in members) % 1_000_000}",
+            "kind": "surveyed",
+            "xyz": centroid,
+            "grid_radius_m": radius,
+            "marks": len(members),
+            "density": density,
+            "ores": ores,
+            "salvage": any(m["salvage"] for m in members),
+        })
+    out.sort(key=lambda p: math.atan2(p["xyz"][1], p["xyz"][0]))
+    return out
+
+
+def _pct(sorted_vals: list[float], p: float) -> float:
+    """Percentile by linear interpolation over a pre-sorted list."""
+    if not sorted_vals:
+        return 0.0
+    k = (len(sorted_vals) - 1) * p
+    lo, hi = int(math.floor(k)), int(math.ceil(k))
+    if lo == hi:
+        return sorted_vals[lo]
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (k - lo)
+
+
+def survey_field_model(marks: list[dict]) -> dict | None:
+    """Tier-2 fit: ring-level statistics over rock-positive marks — the
+    exportable field model. None below SURVEY_MODEL_MIN_MARKS: percentile
+    claims from a handful of points would be noise dressed as knowledge
+    (tier-1 targeting keeps working regardless). Coverage = fraction of
+    1-degree ring bins holding at least one positive mark."""
+    pos = [m for m in marks if m["positive"]]
+    if len(pos) < SURVEY_MODEL_MIN_MARKS:
+        return None
+    rs = sorted(math.hypot(m["xyz"][0], m["xyz"][1]) for m in pos)
+    zs = sorted(abs(m["xyz"][2]) for m in pos)
+    bins = {int(math.degrees(math.atan2(m["xyz"][1], m["xyz"][0])) % 360)
+            for m in pos}
+    return {
+        "samples": len(pos),
+        "r_med_m": _pct(rs, 0.5),
+        "r_inner_m": _pct(rs, 0.05),
+        "r_outer_m": _pct(rs, 0.95),
+        "half_height_m": _pct(zs, 0.95),
+        "coverage": len(bins) / 360.0,
+    }
+
+
+def keeger_locate(pos, pockets: list[dict]) -> dict | None:
+    """Classify a fix against the Keeger region + the org's surveyed pockets:
+    inside a surveyed pocket, in the region between them, or None (not Keeger
+    space — the caller falls back to its other verdicts)."""
+    r, z = math.hypot(pos[0], pos[1]), pos[2]
+    nearest, d = None, math.inf
+    for pk in pockets or ():
+        dd = dist3(pos, pk["xyz"])
+        if dd < d:
+            nearest, d = pk, dd
+    if nearest is not None and d <= nearest["grid_radius_m"]:
+        return {"status": "keeger_pocket", "r_m": r, "z_m": z,
+                "pocket": {"key": nearest["key"], "marks": nearest["marks"],
+                           "center_off_m": d}}
+    if not keeger_contains(pos):
+        return None
+    view = {"status": "keeger", "r_m": r, "z_m": z,
+            "to_ring_m": abs(r - KEEGER_R_M)}
+    if nearest is not None:
+        view["pocket"] = {"key": nearest["key"], "marks": nearest["marks"],
+                          "center_off_m": d}
+    return view

@@ -16,6 +16,34 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 36. Belt survey — crowd-sourced field mapping (Keeger first) ✅ BUILT
+
+**Status: built 2026-07-16 (same day as the design), browser-verified
+end-to-end (mark → live pocket → plan at 635 m miss → in-pocket verdict);
+NOT in-game verified. Suites 376/252 green.** Two build discoveries worth
+knowing: Keeger had to join the guarded system-disambiguation ladder (a
+hint-less watcher fix at 48 Gm was getting stamped "Stanton" and losing the
+mark), and a pocket-miss ceiling (100,000 km) now rejects un-plannable
+deep-belt marks with a contract-marker explanation instead of emitting
+multi-Gm "drop" cards — with sparse Nyx markers, the drop-plannable sweet
+spot is rocks on station approach chords. Full design + build notes:
+[`belt-survey.md`](belt-survey.md). The user's idea: players drop one-tap
+**survey marks** (custom POIs, `type="survey"` + one JSON payload column —
+density incl. first-class "nothing here" negatives, ores, salvage) while
+flying unmapped belts; **surveyed pockets go live org-wide from the FIRST
+rock mark** (a mark is ground truth — centroid target w/ mark-count
+confidence badge; nearby marks merge and refine), feeding the #35
+pocket-mode planner as `surveyed` pockets; the statistical field model
+(ring width/height/coverage) gates at ~25 marks and is the exportable
+artifact — export → review → committed constants for every deployment
+(Cornerstone precedent, industrialized).
+Bootstrap: Keeger contracts spawn QT markers deep in-belt — any fix taken
+there is a measurement. **Prerequisite slice ships alone: Keeger becomes a
+named region** (stations ring the belt at exactly 48.000 Gm; wiki live data
+confirms `HPP_Nyx_KeegerBelt` mining ~10% + salvage — the #35 doc's "not
+physicalized" call was wrong, corrected in its §4). Fits are derived at
+nav-rebuild, never stored; no new tables; solver untouched.
+
 ### 35. Halo Finder multi-system expansion — Glaciem Ring + Pyro fields ✅ BUILT
 
 **Status: built 2026-07-15 (same day as the design), browser-verified via the

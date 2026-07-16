@@ -3554,17 +3554,32 @@
         <p class="muted halo-band-info" id="halo-band-info" role="status" aria-live="polite"></p>
       </div>
       <div id="halo-nyx-wrap" hidden>
-        <p class="muted route-hint" style="margin-top:10px;">The <b>Glaciem Ring</b> circles the
-          Nyx star at 15.00 Gm — but only ~4% of it holds rocks, in <span id="halo-pocket-count">381</span>
-          mapped pockets. We aim your drop at the pocket your route makes cheapest.</p>
-        <div class="route-row" style="align-items:center;">
-          <label class="muted" style="font-size:12px;">pocket
-            <input id="halo-pocket" class="ti" list="halo-pocket-keys" autocomplete="off"
-                   placeholder="AUTO — best pocket" style="width:190px;">
-          </label>
-          <datalist id="halo-pocket-keys"></datalist>
-          <label class="trade-pref" title="QV Breaker mining-rights arcs — believed to need an accepted contract to spawn rocks.">
-            <input id="halo-mission" type="checkbox"> include mission pockets</label>
+        <div class="route-row" style="align-items:center; margin-top:10px;">
+          <span class="seg" id="halo-nyx-belt" role="group" aria-label="Nyx belt">
+            <button class="on" data-belt="glaciem" type="button" aria-pressed="true">GLACIEM RING</button>
+            <button data-belt="keeger" type="button" aria-pressed="false">KEEGER BELT</button>
+          </span>
+        </div>
+        <div id="halo-glaciem-wrap">
+          <p class="muted route-hint" style="margin-top:10px;">The <b>Glaciem Ring</b> circles the
+            Nyx star at 15.00 Gm — but only ~4% of it holds rocks, in <span id="halo-pocket-count">381</span>
+            mapped pockets. We aim your drop at the pocket your route makes cheapest.</p>
+          <div class="route-row" style="align-items:center;">
+            <label class="muted" style="font-size:12px;">pocket
+              <input id="halo-pocket" class="ti" list="halo-pocket-keys" autocomplete="off"
+                     placeholder="AUTO — best pocket" style="width:190px;">
+            </label>
+            <datalist id="halo-pocket-keys"></datalist>
+            <label class="trade-pref" title="QV Breaker mining-rights arcs — believed to need an accepted contract to spawn rocks.">
+              <input id="halo-mission" type="checkbox"> include mission pockets</label>
+          </div>
+        </div>
+        <div id="halo-keeger-wrap" hidden>
+          <p class="muted route-hint" style="margin-top:10px;">The <b>Keeger Belt</b> rings the
+            outer system at 48.00 Gm (the People's Service Stations sit inside it) — but the game
+            data has no rock map, so <b>your org builds one</b>: drop ⛏ survey marks below and
+            every rock mark becomes a jumpable pocket here, instantly.</p>
+          <p class="muted route-hint" id="halo-keeger-progress" role="status" aria-live="polite"></p>
         </div>
       </div>
       <div id="halo-pyro-wrap" hidden>
@@ -3640,6 +3655,23 @@
         /showlocation in game — this panel reads your fix live</span></h2>
       <div id="halo-after-body"><p class="muted" style="font-size:12px; margin:0;">No live fix
         yet. Drop out of quantum, then run <b>/showlocation</b> in the in-game chat.</p></div>
+      <div id="halo-survey-blk" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);">
+        <span class="fld-label">⛏ SURVEY <span class="muted" style="font-weight:400; text-transform:none;">— mark
+          this spot for the org's belt map (“nothing here” counts too: it maps a field's edge)</span></span>
+        <div class="route-row" style="align-items:center; margin-top:8px;">
+          <span class="seg" id="halo-survey-rocks" role="group" aria-label="Rock density here">
+            <button data-rocks="none" type="button" aria-pressed="false">⛔ none</button>
+            <button data-rocks="sparse" type="button" aria-pressed="false">sparse</button>
+            <button class="on" data-rocks="medium" type="button" aria-pressed="true">medium</button>
+            <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
+          </span>
+          <input id="halo-survey-ores" class="ti" autocomplete="off"
+                 placeholder="ores seen, comma-separated (optional)" style="width:230px;">
+          <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
+          <button id="halo-survey-mark" type="button">⛏ Mark survey point</button>
+          <span id="halo-survey-msg" class="muted" style="font-size:12px;"></span>
+        </div>
+      </div>
     </div>
 
     <p class="muted halo-credit" id="halo-credit-line">Band survey:
@@ -6112,7 +6144,7 @@ function connect() {
     $("online").classList.remove("off"); renderSetupConn(); };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); renderSetupConn();
+    if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); resolveHaloSurveyArm(msg.capture); renderSetupConn();
       if (!$("halo-view").hidden) refreshHaloAfter(); }   // live post-drop verdict (#31)
     else if (msg.type === "roster") {
       presence.clear();
@@ -11898,6 +11930,7 @@ let haloTargets = {};                 // system -> targets doc (lazy)
 let haloShips = null, haloShipsByName = {};
 let haloWired = false, haloSystem = "Stanton", haloSysAuto = true;
 let haloGoal = "band", haloBandSel = 5, haloAim = "band";
+let haloBelt = "glaciem", haloSurveyRocks = "medium";   // #36
 let haloLastPlan = null;
 const HALO_SYSTEMS = ["Stanton", "Nyx", "Pyro"];
 const haloDoc = (sys) => haloTargets[sys || haloSystem] || null;
@@ -12005,6 +12038,15 @@ function haloWhereChip(state) {
   }
   if (Math.abs(r - doc.ring.r_m) <= 75e6 && Math.abs(p.z) <= 75e6)
     return ` · <a href="#/halo" title="Glaciem Ring (between pockets): open Halo Finder">☄ Glaciem Ring</a>`;
+  // Keeger (#36): the org's surveyed pockets, then the region envelope
+  for (const pk of doc.surveyed || []) {
+    const d = Math.hypot(p.x - pk.x, p.y - pk.y, p.z - pk.z);
+    if (d <= pk.grid_radius_m)
+      return ` · <a href="#/halo" title="Surveyed Keeger pocket ${esc(pk.key)}: open Halo Finder">☄ Keeger pocket ${esc(pk.key)}</a>`;
+  }
+  if (doc.keeger && Math.abs(r - doc.keeger.r_m) <= doc.keeger.radial_tol_m
+      && Math.abs(p.z) <= doc.keeger.z_tol_m)
+    return ` · <a href="#/halo" title="Keeger Belt region: open Halo Finder and drop a survey mark">☄ Keeger Belt</a>`;
   return "";
 }
 
@@ -12053,6 +12095,37 @@ function setHaloSystem(sys, auto) {
   else renderHaloSystemPanel();
 }
 
+// The Nyx panel serves two belts (#36): Glaciem (datamined pockets) and
+// Keeger (the org's own survey — live from the first rock mark).
+function setHaloBelt(b) {
+  haloBelt = b === "keeger" ? "keeger" : "glaciem";
+  for (const x of $("halo-nyx-belt").querySelectorAll("button")) {
+    const on = x.dataset.belt === haloBelt;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
+  }
+  $("halo-glaciem-wrap").hidden = haloBelt !== "glaciem";
+  $("halo-keeger-wrap").hidden = haloBelt !== "keeger";
+  renderHaloSystemPanel();
+}
+
+function renderHaloKeegerProgress() {
+  const el = $("halo-keeger-progress");
+  const doc = haloDoc("Nyx");
+  if (!el || !doc || !doc.survey) return;
+  const s = doc.survey, pockets = (doc.surveyed || []).length;
+  let h = pockets
+    ? `<b>${pockets}</b> surveyed pocket${pockets === 1 ? "" : "s"} live · `
+      + `<b>${s.positive}</b> rock mark${s.positive === 1 ? "" : "s"} (${s.total} total)`
+    : `No marks yet — the first rock mark creates the first jumpable pocket.`;
+  h += s.model
+    ? ` · field model fitted (${s.model.samples} samples, `
+      + `ring ${fmtGm(s.model.r_inner_m)}–${fmtGm(s.model.r_outer_m)})`
+    : ` · ${s.positive}/${s.model_min} toward the field model`;
+  if (s.total)
+    h += ` · <a href="/api/halo/survey/export?system=Nyx" target="_blank" rel="noopener">⇩ export survey</a>`;
+  el.innerHTML = h;
+}
+
 function renderHaloSystemPanel() {
   const doc = haloDoc(haloSystem);
   if (!doc) return;
@@ -12069,7 +12142,65 @@ function renderHaloSystemPanel() {
         dl.appendChild(o);
       }
     }
+    renderHaloKeegerProgress();
   }
+}
+
+// ⛏ survey mark (#36): arm a pre-typed survey capture; the next
+// /showlocation fix becomes the mark. Density chips make "nothing here" one
+// tap — negatives map a field's edge.
+function setHaloSurveyRocks(r) {
+  haloSurveyRocks = r;
+  for (const x of $("halo-survey-rocks").querySelectorAll("button")) {
+    const on = x.dataset.rocks === r;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
+  }
+}
+
+let haloSurveyArmed = false;
+// Called on every ws state frame: an armed survey mark resolving (capture no
+// longer pending, a fresh `last`) refreshes the Keeger pockets + progress —
+// the new mark may already BE a jumpable pocket.
+function resolveHaloSurveyArm(capture) {
+  if (!haloSurveyArmed || !capture || capture.armed) return;
+  haloSurveyArmed = false;
+  const msg = $("halo-survey-msg");
+  const landed = capture.last && /^Survey /.test(capture.last.name || "");
+  if (msg) {
+    msg.className = "muted";
+    msg.textContent = landed ? "✓ mark dropped — the org's map just got better" : "";
+  }
+  if (landed) {
+    delete haloTargets.Nyx;
+    if (!$("halo-view").hidden && haloSystem === "Nyx")
+      loadHaloTargets("Nyx").then(renderHaloSystemPanel);
+  }
+}
+
+async function haloMarkSurvey() {
+  const msg = $("halo-survey-msg");
+  const now = new Date();
+  const body = {
+    name: `Survey ${now.toISOString().slice(5, 10)} ${now.toTimeString().slice(0, 5)}`,
+    type: "survey",
+    survey: {
+      rocks: haloSurveyRocks,
+      ores: $("halo-survey-ores").value.split(",").map(s => s.trim()).filter(Boolean),
+      salvage: $("halo-survey-salvage").checked,
+    },
+  };
+  try {
+    const r = await fetch("/api/capture/start", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      msg.className = "muted"; msg.textContent = "⚠ " + (d.detail || "couldn't arm the mark");
+      return;
+    }
+    haloSurveyArmed = true;
+    msg.className = "armed";
+    msg.innerHTML = "ARMED — run <b>/showlocation</b> at the spot to drop the mark";
+  } catch { msg.className = "muted"; msg.textContent = "⚠ network error"; }
 }
 
 function renderHaloCredit() {
@@ -12226,6 +12357,11 @@ function wireHaloFinder() {
     x.onclick = () => setHaloGoal(x.dataset.goal);
   for (const x of $("halo-aim").querySelectorAll("button"))
     x.onclick = () => setHaloAim(x.dataset.aim);
+  for (const x of $("halo-nyx-belt").querySelectorAll("button"))
+    x.onclick = () => setHaloBelt(x.dataset.belt);
+  for (const x of $("halo-survey-rocks").querySelectorAll("button"))
+    x.onclick = () => setHaloSurveyRocks(x.dataset.rocks);
+  $("halo-survey-mark").onclick = haloMarkSurvey;
   attachHaloFieldPicker();
   renderHaloCredit();
   attachPoiPicker($("halo-target-poi").parentElement, () => refreshHaloAfter());
@@ -12259,9 +12395,13 @@ async function planHalo() {
   } else if (haloSystem === "Stanton") {
     body.band = haloBandSel; body.aim = haloAim;
   } else if (haloSystem === "Nyx") {
-    const pin = $("halo-pocket").value.trim();
-    if (pin) body.pocket_key = pin;
-    if ($("halo-mission").checked) body.include_mission = true;
+    if (haloBelt === "keeger") {
+      body.belt = "keeger";                        // org-surveyed pockets (#36)
+    } else {
+      const pin = $("halo-pocket").value.trim();
+      if (pin) body.pocket_key = pin;
+      if ($("halo-mission").checked) body.include_mission = true;
+    }
   } else {                                         // Pyro: a field is required
     const uuid = $("halo-field").dataset.uuid;
     if (!uuid) { msg.textContent = "pick a field first"; return; }
@@ -12320,6 +12460,11 @@ function haloDropHtml(plan) {
          : `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> `
            + `<span class="halo-chip warn">⚠ ~${fmtDist(Math.max(0, d.expected_miss_m - d.pocket.grid_radius_m))} outside the pocket — drop, /showlocation, re-plan</span>`)
       + ` · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
+    if (d.pocket.kind === "surveyed")
+      h += `<div class="halo-window">⛏ <b>org survey · ${d.pocket.marks} mark${d.pocket.marks === 1 ? "" : "s"}</b>`
+        + (d.pocket.density ? ` · ${esc(d.pocket.density)} rocks reported` : "")
+        + ((d.pocket.ores || []).length ? ` · ${d.pocket.ores.map(esc).join(", ")}` : "")
+        + ` — player-measured, not game data</div>`;
   } else if (plan.target) {
     h += `<div class="halo-window">closest approach to <b>${esc(plan.target.name)}</b>, expected miss `
       + `≈<b>${fmtDist(d.expected_miss_m)}</b> · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
@@ -12347,7 +12492,8 @@ function renderHaloPlan(plan) {
     ? `BAND ${plan.band.band} DROP` + (plan.aim === "peak" ? " · DENSEST POINT" : "")
     : plan.mode === "pocket"
       ? `POCKET DROP: ${esc(plan.drop.pocket.key).toUpperCase()}`
-        + (plan.drop.pocket.kind === "mission" ? " · MISSION ARC" : "")
+        + (plan.drop.pocket.kind === "mission" ? " · MISSION ARC"
+           : plan.drop.pocket.kind === "surveyed" ? " · ORG SURVEY" : "")
       : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
   let h = `<div class="panel"><h2>${head} <span class="muted" style="font-weight:400; font-size:12px;">`
     + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
@@ -12489,6 +12635,19 @@ function drawHaloMap(plan) {
       const px = cx + pk.x * s, py = cy - pk.y * s;
       ctx.fillRect(px - 0.75, py - 0.75, 1.5, 1.5);
     }
+    // the Keeger Belt (#36): outer ring + the org's surveyed pockets (drawn
+    // even when off-canvas for a Glaciem-scale fit — arcs clip harmlessly)
+    if (doc.keeger) {
+      ctx.strokeStyle = C.orbit;
+      ctx.setLineDash([3, 5]);
+      ctx.beginPath(); ctx.arc(cx, cy, doc.keeger.r_m * s, 0, 2 * Math.PI); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = C.window;
+      for (const pk of doc.surveyed || []) {
+        ctx.beginPath();
+        ctx.arc(cx + pk.x * s, cy - pk.y * s, 2, 0, 2 * Math.PI); ctx.fill();
+      }
+    }
     if (sel) {
       ctx.fillStyle = C.drop;
       ctx.beginPath();
@@ -12602,8 +12761,10 @@ function drawHaloInset(ctx, plan, P, cssW, cssH, doc) {
   }
   if (pocket) {
     // pocket-mode: the target pocket's grid sphere + any neighbors in view
+    // (neighbors come from whichever belt the target belongs to)
     ctx.strokeStyle = C.beltEdge;
-    for (const pk of (doc.pockets || [])) {
+    const neighbors = pocket.kind === "surveyed" ? doc.surveyed : doc.pockets;
+    for (const pk of (neighbors || [])) {
       const d = Math.hypot(pk.x - P.cross[0], pk.y - P.cross[1]);
       if (d > half * 2.2) continue;
       ctx.beginPath();
@@ -12709,6 +12870,15 @@ function haloVerdictHtml(d) {
     main = `You're <span class="off-band">off the Glaciem Ring</span>: ${fmtDist(d.to_ring_m)} radially`;
     meta.push(zoff(d.z_m));
     if (d.pocket) meta.push(`nearest pocket ${esc(d.pocket.key)}: ${fmtDist(d.pocket.center_off_m)}`);
+  } else if (d.status === "keeger_pocket") {
+    main = `☄ You're <span class="in-band">in surveyed pocket ${esc(d.pocket.key)}</span> (Keeger Belt)`;
+    meta.push(`${fmtDist(d.pocket.center_off_m)} from its center`,
+      `${d.pocket.marks} mark${d.pocket.marks === 1 ? "" : "s"}`);
+  } else if (d.status === "keeger") {
+    main = `You're in the <span class="off-band">Keeger Belt region</span>`;
+    meta.push(`${fmtDist(d.to_ring_m)} off the 48 Gm centerline`, zoff(d.z_m));
+    if (d.pocket) meta.push(`nearest surveyed pocket ${esc(d.pocket.key)}: ${fmtDist(d.pocket.center_off_m)}`);
+    meta.push(`⛏ see rocks? drop a survey mark below`);
   } else if (d.status === "field") {
     main = `☄ You're <span class="in-band">at the ${esc(d.field.name)} field</span>`;
     meta.push(`${fmtDist(d.field.miss_m)} from its anchor`);

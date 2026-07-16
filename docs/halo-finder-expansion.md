@@ -258,8 +258,15 @@ Attribution line becomes per-system (§3.8).
 ## 4. What we deliberately do NOT build
 
 - **Pyro VI / Pyro V ring planners** — the rings don't exist in-game.
-- **Keeger Belt** — not physicalized; re-check `containers.json` per patch
-  (a one-line registry addition when it lands).
+- **Keeger Belt** — ~~not physicalized~~ **CORRECTION 2026-07-16: it IS
+  implemented and lootable** (wiki live data: `HPP_Nyx_KeegerBelt` provider,
+  ship mining ~10% incl. Aluminum, salvage 0.03–4%; the People's Service
+  Stations ring the belt at exactly 48.000 Gm z=0, user-confirmed in-game;
+  Keeger contracts spawn in-belt QT markers). What it lacks is **container
+  geometry** — zero Keeger containers even in the current build's starmap
+  feed (re-verified live), so there are no pocket centers to aim drops at.
+  Successor plan: crowd-sourced survey marks + fitted clusters feed the
+  pocket planner — backlog #36, [`belt-survey.md`](belt-survey.md).
 - **Nyx band mode / density model** — one ring, no bands, no survey to encode.
 - **Per-pocket/per-field ore intel** — no public data; deferred to a future
   enrichment (Regolith integration or our own org-sourced capture stats).
