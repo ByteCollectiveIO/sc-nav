@@ -4011,11 +4011,18 @@ class BeltRegistryTests(unittest.TestCase):
         self.assertFalse(nav_core.glaciem_contains((20_320_000e3, 0, 0)))
         self.assertFalse(nav_core.halo_contains((r, 0, 0)))
 
-    def test_system_at_resolves_both_belts(self):
+    def test_system_at_resolves_all_belts(self):
         self.assertEqual(nav_core.system_at(self.nav, (20_320_000e3, 0, 0)),
                          "Stanton")
         self.assertEqual(
             nav_core.system_at(self.nav, (nav_core.GLACIEM_R_M, 0, 0)), "Nyx")
+        # Keeger (#36): a hint-less fix at the 48 Gm ring must resolve Nyx —
+        # the nearest-container guess names Stanton out here (whose outermost
+        # body orbits 28.9 Gm), which stamped survey marks into the wrong
+        # system and dropped them from the org's Nyx map.
+        self.assertEqual(
+            nav_core.system_at(self.nav, (nav_core.KEEGER_R_M, 1.0e9, 0)),
+            "Nyx")
 
     # --- locate classifiers ---------------------------------------------------
 
@@ -4142,6 +4149,141 @@ class BeltRegistryTests(unittest.TestCase):
         self.assertEqual(plan["target"]["name"], akiro["name"])
         self.assertIn("expected_miss_m", plan["drop"])
         self.assertIn("CC BY-SA", plan["attribution"])
+
+
+def _survey_mark(pid, xyz, rocks="dense", ores=(), private=False,
+                 system="Nyx", payload=True):
+    return nav_core.Poi(
+        id=pid, name=f"mark {pid}", system=system, container_name=None,
+        type="survey", local_km=None,
+        global_m=(float(xyz[0]), float(xyz[1]), float(xyz[2])),
+        latitude=None, longitude=None, height_m=None, qt_marker=False,
+        custom=True, private=private,
+        survey=({"rocks": rocks, "ores": list(ores)} if payload else None))
+
+
+class BeltSurveyTests(unittest.TestCase):
+    """Belt survey (#36): the Keeger region, tier-1 surveyed pockets (live
+    from the FIRST rock mark — a mark is ground truth), the tier-2 field
+    model's sample gate, the keeger locate verdicts, and planning into a
+    surveyed pocket. All synthetic fixtures — the survey exists precisely
+    because no game data does."""
+
+    KR = nav_core.KEEGER_R_M
+
+    def _nav_with(self, marks, extra_pois=()):
+        nav = _synthetic_nav(list(extra_pois), system="Nyx")
+        for m in marks:
+            nav.pois[m.id] = m
+        return nav
+
+    def test_keeger_contains_bounds(self):
+        self.assertTrue(nav_core.keeger_contains((self.KR, 0, 0)))
+        self.assertTrue(nav_core.keeger_contains((0, -self.KR - 2.0e9, 0.5e9)))
+        self.assertFalse(nav_core.keeger_contains((self.KR + 3.0e9, 0, 0)))
+        self.assertFalse(nav_core.keeger_contains((self.KR, 0, 1.5e9)))
+        # the Glaciem Ring is not the Keeger Belt (and vice versa)
+        self.assertFalse(nav_core.keeger_contains((nav_core.GLACIEM_R_M, 0, 0)))
+        self.assertFalse(nav_core.glaciem_contains((self.KR, 0, 0)))
+
+    def test_first_mark_is_a_live_pocket(self):
+        nav = self._nav_with([_survey_mark(1_000_001, (self.KR, 0, 0))])
+        pockets = nav_core.survey_pockets(nav, "Nyx")
+        self.assertEqual(len(pockets), 1)
+        pk = pockets[0]
+        self.assertEqual(pk["key"], "SVY-1")
+        self.assertEqual((pk["kind"], pk["marks"]), ("surveyed", 1))
+        self.assertEqual(pk["xyz"], (self.KR, 0.0, 0.0))
+        self.assertEqual(pk["grid_radius_m"], nav_core.GLACIEM_POCKET_RADIUS_M)
+
+    def test_nearby_marks_merge_and_refine(self):
+        off = nav_core.SURVEY_MERGE_M * 0.5
+        nav = self._nav_with([
+            _survey_mark(1_000_001, (self.KR, 0, 0), ores=("Aluminum",)),
+            _survey_mark(1_000_002, (self.KR + off, 0, 0), rocks="sparse",
+                         ores=("Gold",)),
+            _survey_mark(1_000_003, (0, self.KR, 0)),        # far: own pocket
+        ])
+        pockets = nav_core.survey_pockets(nav, "Nyx")
+        self.assertEqual(len(pockets), 2)
+        merged = next(p for p in pockets if p["marks"] == 2)
+        self.assertEqual(merged["key"], "SVY-1")             # anchor = lowest id
+        self.assertAlmostEqual(merged["xyz"][0], self.KR + off / 2, delta=1.0)
+        self.assertEqual(merged["density"], "dense")          # densest member
+        self.assertEqual(merged["ores"], ["Aluminum", "Gold"])
+
+    def test_negative_marks_bound_but_never_target(self):
+        nav = self._nav_with([_survey_mark(1_000_001, (self.KR, 0, 0),
+                                           rocks="none")])
+        self.assertEqual(nav_core.survey_pockets(nav, "Nyx"), [])
+        # a negative near a positive caps the pocket's envelope
+        near = nav_core.GLACIEM_POCKET_RADIUS_M            # negative one pocket-radius out
+        nav2 = self._nav_with([
+            _survey_mark(1_000_001, (self.KR, 0, 0)),
+            _survey_mark(1_000_002, (self.KR + near, 0, 0), rocks="none"),
+        ])
+        pk = nav_core.survey_pockets(nav2, "Nyx")[0]
+        self.assertLess(pk["grid_radius_m"], nav_core.GLACIEM_POCKET_RADIUS_M)
+
+    def test_private_glaciem_and_payloadless_marks(self):
+        nav = self._nav_with([
+            _survey_mark(1_000_001, (self.KR, 0, 0), private=True),   # excluded
+            _survey_mark(1_000_002, (nav_core.GLACIEM_R_M, 0, 0)),    # glaciem: excluded
+            _survey_mark(1_000_003, (0, self.KR, 0), payload=False),  # defaults +medium
+        ])
+        pockets = nav_core.survey_pockets(nav, "Nyx")
+        self.assertEqual(len(pockets), 1)
+        self.assertEqual((pockets[0]["key"], pockets[0]["density"]),
+                         ("SVY-3", "medium"))
+
+    def test_field_model_gate_and_stats(self):
+        few = [_survey_mark(1_000_000 + i,
+                            (self.KR * math.cos(i * 0.2),
+                             self.KR * math.sin(i * 0.2), 0))
+               for i in range(10)]
+        nav = self._nav_with(few)
+        self.assertIsNone(nav_core.survey_field_model(
+            nav_core.survey_marks(nav, "Nyx")))
+        many = [_survey_mark(
+                    1_000_000 + i,
+                    ((self.KR + (i % 5 - 2) * 1e8) * math.cos(i * 0.21),
+                     (self.KR + (i % 5 - 2) * 1e8) * math.sin(i * 0.21),
+                     (i % 3 - 1) * 2e8))
+                for i in range(30)]
+        nav2 = self._nav_with(many)
+        model = nav_core.survey_field_model(nav_core.survey_marks(nav2, "Nyx"))
+        self.assertEqual(model["samples"], 30)
+        self.assertAlmostEqual(model["r_med_m"], self.KR, delta=3e8)
+        self.assertLessEqual(model["half_height_m"], 2.1e8)
+        self.assertGreater(model["coverage"], 0.05)
+
+    def test_keeger_locate_verdicts(self):
+        nav = self._nav_with([_survey_mark(1_000_001, (self.KR, 0, 0))])
+        pockets = nav_core.survey_pockets(nav, "Nyx")
+        at = nav_core.keeger_locate((self.KR, 0, 100e3), pockets)
+        self.assertEqual(at["status"], "keeger_pocket")
+        self.assertEqual(at["pocket"]["key"], "SVY-1")
+        region = nav_core.keeger_locate((0, self.KR + 1.0e9, 0), pockets)
+        self.assertEqual(region["status"], "keeger")
+        self.assertAlmostEqual(region["to_ring_m"], 1.0e9, delta=1e6)
+        self.assertIsNone(nav_core.keeger_locate((20e9, 0, 0), pockets))
+
+    def test_plan_into_surveyed_pocket(self):
+        # Radial chord Inner(44 Gm) -> Outer(52 Gm) passes dead through the
+        # org's first surveyed pocket at 48 Gm: plannable from mark #1.
+        inner = _space_poi(11, "Inner", (44.0e9, 0, 0), system="Nyx")
+        outer = _space_poi(12, "Outer", (52.0e9, 0, 0), system="Nyx")
+        mark = _survey_mark(1_000_001, (self.KR, 0, 0), ores=("Aluminum",))
+        nav = self._nav_with([mark], extra_pois=[inner, outer])
+        plan = nav_core.plan_halo_drop(
+            nav, start=inner, pockets=nav_core.survey_pockets(nav, "Nyx"),
+            system="Nyx", markers=[outer])
+        d = plan["drop"]
+        self.assertTrue(d["pocket"]["hit"])
+        self.assertEqual(d["pocket"]["kind"], "surveyed")
+        self.assertEqual(d["pocket"]["marks"], 1)          # confidence badge
+        self.assertEqual(d["pocket"]["ores"], ["Aluminum"])
+        self.assertAlmostEqual(d["peak_m"], 4.0e9, delta=1e6)
 
 
 class ResourceValueTierTests(unittest.TestCase):

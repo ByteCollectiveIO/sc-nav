@@ -3322,6 +3322,203 @@ class HaloFinderApiTests(unittest.TestCase):
             poi_at((0.0, 0.0, 5.0e9), system="Pyro")))
 
 
+class BeltSurveyApiTests(unittest.TestCase):
+    """Belt survey (#36): survey-mark capture payload, the Nyx targets feed's
+    keeger/surveyed/survey blocks, planning into surveyed pockets (live from
+    the first mark), keeger locate verdicts, export, and the admin clear."""
+
+    KR = None   # set in setUpClass
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Surveyor", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        cls.KR = app.nav_core.KEEGER_R_M
+        cls.gate = next(p for p in app.nav.qt_markers
+                        if p.system == "Nyx" and "Pyro" in p.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+
+    def tearDown(self):
+        for pid in [p.id for p in app.nav.pois.values()
+                    if getattr(p, "custom", False)
+                    and (p.type or "").lower() == "survey"]:
+            app.nav.pois.pop(pid, None)
+        db.clear_survey_pois("Nyx")
+
+    def _mark_at(self, xyz, rocks="dense", **kw):
+        pid = db.next_custom_poi_id()
+        poi = app.nav_core.Poi(
+            id=pid, name=f"mark {pid}", system="Nyx", container_name=None,
+            type="survey", local_km=None, global_m=xyz, latitude=None,
+            longitude=None, height_m=None, qt_marker=False, custom=True,
+            survey={"rocks": rocks, **kw})
+        db.add_custom_poi(app.nav_core.custom_poi_to_dict(poi))
+        app.nav.pois[poi.id] = poi
+        return poi
+
+    def test_capture_arms_normalized_survey_payload(self):
+        s = app.Session(self._user)
+        app.hub.sessions["1"] = s
+        r = self.client.post("/api/capture/start", json={
+            "name": "Keeger survey", "type": "survey",
+            "survey": {"rocks": "bogus-value", "ores": [" Aluminum ", ""],
+                       "salvage": True, "source": "contract"}})
+        self.assertEqual(r.status_code, 200)
+        pending = r.json()["capture"]["pending"]
+        self.assertEqual(pending["survey"],
+                         {"rocks": "medium", "ores": ["Aluminum"],
+                          "salvage": True, "source": "contract"})
+        # a non-survey capture never carries a payload, even if one is sent
+        s.capture_pending = None
+        r2 = self.client.post("/api/capture/start", json={
+            "name": "Just a rock", "type": "Custom",
+            "survey": {"rocks": "dense"}})
+        self.assertIsNone(r2.json()["capture"]["pending"]["survey"])
+        s.capture_pending = None
+
+    def test_capture_completion_persists_and_annotates(self):
+        s = app.Session(self._user)
+        s.pos, s.t = (self.KR, 0.0, 0.0), time.time()
+        s.system = "Nyx"
+        app.hub.sessions["1"] = s
+        pending = {"kind": "poi", "name": "Keeger survey", "type": "survey",
+                   "qt_marker": False, "private": False, "note": None,
+                   "survey": {"rocks": "dense", "ores": ["Aluminum"],
+                              "salvage": False}}
+        app._capture_poi(s, s.pos, s.t, pending,
+                         {"player_id": None, "handle": None})
+        marks = app.nav_core.survey_marks(app.nav, "Nyx")
+        self.assertEqual(len(marks), 1)
+        self.assertEqual(marks[0]["rocks"], "dense")
+        stored = next(d for d in db.list_custom_pois()
+                      if d["id"] == marks[0]["id"])
+        self.assertEqual(stored["survey"]["ores"], ["Aluminum"])
+        self.assertEqual(stored["type"], "survey")
+        # the capture note self-classified it into the Keeger region
+        poi = app.nav.pois[marks[0]["id"]]
+        self.assertIn("Keeger Belt", poi.note or "")
+        # a HINT-LESS session (watcher booted while parked at the rocks) must
+        # still stamp Nyx — the keeger_contains system_at rung; without it the
+        # nearest-container guess said "Stanton" and the mark vanished from
+        # the org's Nyx map (caught live in the preview harness)
+        s.system = None
+        pending2 = dict(pending, name="Keeger survey 2")
+        app._capture_poi(s, (self.KR, 1.0e9, 0.0), time.time(), pending2,
+                         {"player_id": None, "handle": None})
+        self.assertEqual(len(app.nav_core.survey_marks(app.nav, "Nyx")), 2)
+
+    def test_targets_feed_carries_survey_state(self):
+        doc = self.client.get("/api/halo/targets",
+                              params={"system": "Nyx"}).json()
+        self.assertIn("keeger", doc)
+        self.assertAlmostEqual(doc["keeger"]["r_m"], self.KR)
+        self.assertEqual(doc["surveyed"], [])
+        self.assertEqual(doc["survey"]["positive"], 0)
+        self.assertIsNone(doc["survey"]["model"])
+        self._mark_at((self.KR, 0.0, 0.0))
+        doc = self.client.get("/api/halo/targets",
+                              params={"system": "Nyx"}).json()
+        self.assertEqual(len(doc["surveyed"]), 1)
+        self.assertEqual(doc["surveyed"][0]["marks"], 1)
+        self.assertEqual(doc["survey"]["positive"], 1)
+
+    def test_plan_keeger_belt_live_from_first_mark(self):
+        r = self.client.post("/api/halo/plan",
+                             json={"belt": "keeger",
+                                   "start_poi_id": self.gate.id})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("survey", r.json()["detail"])
+        # a mark ON the gateway<->gateway chord: a drop chord exists even in
+        # the bare test dataset (whose only Nyx markers are the two gateways)
+        other = next(p for p in app.nav.qt_markers
+                     if p.system == "Nyx" and p.id != self.gate.id)
+        now = time.time()
+        g1 = app.nav_core.poi_global_m(app.nav, self.gate, now)
+        g2 = app.nav_core.poi_global_m(app.nav, other, now)
+        mid = tuple((a + b) / 2 for a, b in zip(g1, g2))
+        mark = self._mark_at(mid, ores=["Aluminum"])
+        r = self.client.post("/api/halo/plan",
+                             json={"belt": "keeger",
+                                   "start_poi_id": self.gate.id})
+        self.assertEqual(r.status_code, 200)
+        plan = r.json()
+        self.assertEqual(plan["mode"], "pocket")
+        pk = plan["drop"]["pocket"]
+        self.assertEqual(pk["kind"], "surveyed")
+        self.assertEqual((pk["marks"], pk["hit"]), (1, True))
+        self.assertEqual(pk["key"], f"SVY-{mark.id % 1_000_000}")
+        self.assertIn("org's own survey marks", plan["attribution"])
+        # the SVY key also pins directly, no belt selector needed
+        r2 = self.client.post("/api/halo/plan",
+                              json={"pocket_key": pk["key"],
+                                    "start_poi_id": self.gate.id})
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.json()["drop"]["pocket"]["key"], pk["key"])
+        # belt param is a Nyx-shaped goal
+        r3 = self.client.post("/api/halo/plan",
+                              json={"belt": "keeger", "system": "Pyro",
+                                    "start_poi_id": self.gate.id})
+        self.assertEqual(r3.status_code, 400)
+
+    def test_plan_unreachable_pocket_explains_instead_of_garbage(self):
+        # A mark far from every marker chord (deep Keeger, bare dataset) has
+        # NO honest drop plan — the miss ceiling must reject it with the
+        # contract-marker explanation, never emit a multi-Gm "drop" card.
+        self._mark_at((self.KR, 0.0, 0.0))
+        r = self.client.post("/api/halo/plan",
+                             json={"belt": "keeger",
+                                   "start_poi_id": self.gate.id})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("contract marker", r.json()["detail"])
+
+    def test_locate_keeger_verdicts(self):
+        s = app.Session(self._user)
+        s.pos, s.t = (0.0, self.KR + 1.0e9, 0.0), time.time()
+        s.system = "Nyx"
+        app.hub.sessions["1"] = s
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual((doc["system"], doc["status"]), ("Nyx", "keeger"))
+        self._mark_at((0.0, self.KR + 1.0e9, 0.0))
+        doc = self.client.get("/api/halo/locate").json()
+        self.assertEqual(doc["status"], "keeger_pocket")
+
+    def test_survey_feed_and_export(self):
+        self._mark_at((self.KR, 0.0, 0.0), ores=["Aluminum"])
+        doc = self.client.get("/api/halo/survey").json()
+        self.assertEqual(len(doc["marks"]), 1)
+        self.assertEqual(len(doc["pockets"]), 1)
+        self.assertEqual(doc["model_min"], app.nav_core.SURVEY_MODEL_MIN_MARKS)
+        exp = self.client.get("/api/halo/survey/export").json()
+        self.assertEqual(exp["_meta"]["document"], "sc-nav belt survey export")
+        self.assertEqual(exp["_meta"]["app_version"], app.APP_VERSION)
+        r = self.client.get("/api/halo/survey", params={"system": "Castra"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_admin_clear_wipes_marks(self):
+        self._mark_at((self.KR, 0.0, 0.0))
+        self._mark_at((0.0, self.KR, 0.0))
+        r = self.client.post("/api/admin/survey/clear", json={"system": "Nyx"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["deleted"], 2)
+        self.assertEqual(app.nav_core.survey_marks(app.nav, "Nyx"), [])
+        self.assertEqual(db.clear_survey_pois("Nyx"), [])
+
+
 class ResourceValueTests(unittest.TestCase):
     """/api/resource_values — the mining-value badge feed (#32): raw ores fall
     back to their refined commodity's sell price, unpriced names are absent,
