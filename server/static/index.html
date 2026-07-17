@@ -3665,8 +3665,9 @@
             <button class="on" data-rocks="medium" type="button" aria-pressed="true">medium</button>
             <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
           </span>
-          <input id="halo-survey-ores" class="ti" autocomplete="off"
-                 placeholder="ores seen, comma-separated (optional)" style="width:230px;">
+          <input id="halo-survey-ores" class="ti" autocomplete="off" list="halo-survey-ore-list"
+                 placeholder="ore seen (type or pick; comma-separate if several)" style="width:230px;">
+          <datalist id="halo-survey-ore-list"></datalist>
           <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
           <button id="halo-survey-mark" type="button">⛏ Mark survey point</button>
           <span id="halo-survey-msg" class="muted" style="font-size:12px;"></span>
@@ -14562,7 +14563,11 @@ function init() {
   }).catch(() => {});
   loadFaunaHarvestables();
   fetch("/api/raw_commodities").then(r => r.json())
-    .then(n => fillSelectWithOther("node-ore", n, "— ore")).catch(() => {});
+    .then(n => {
+      fillSelectWithOther("node-ore", n, "— ore");
+      const dl = $("halo-survey-ore-list");   // survey box autocompletes the same ore vocab
+      if (dl) dl.innerHTML = (n || []).map(o => `<option value="${esc(o)}">`).join("");
+    }).catch(() => {});
   fetch("/api/biomes").then(r => r.json()).then(d => {
     biomeData = d;
     lastBiomeKey = null;
