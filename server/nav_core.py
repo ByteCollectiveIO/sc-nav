@@ -890,6 +890,24 @@ def scope_index(nav: "NavData"):
     return cache[1], cache[2]
 
 
+def obs_by_category(nav: "NavData") -> dict:
+    """Cached {category: [Observation]} over the whole dataset — the candidate
+    pool for deep-space fixes (no container to scope on) and the element
+    finder. Derived from scope_index's buckets so it shares the same
+    invalidation; consumers must treat it as read-only."""
+    key = (getattr(nav, "version", 0), len(nav.pois), len(nav.observations))
+    cache = getattr(nav, "_obs_cat_cache", None)
+    if cache is None or cache[0] != key:
+        _, obs_idx = scope_index(nav)
+        by_cat: dict = {}
+        for scoped in obs_idx.values():
+            for cat, lst in scoped.items():
+                by_cat.setdefault(cat, []).extend(lst)
+        cache = (key, by_cat)
+        nav._obs_cat_cache = cache
+    return cache[1]
+
+
 def compute_state(
     nav: NavData,
     pos_m,
@@ -947,9 +965,10 @@ def compute_state(
                       for cat in OBSERVATION_CATEGORIES}
     else:
         cand_pois = list(nav.pois.values())
-        obs_by_cat = {}
-        for o in list(nav.observations.values()):
-            obs_by_cat.setdefault(o.category, []).append(o)
+        # Whole-dataset pool, but from the version-keyed cache — a deep-space
+        # fix (haulers in QT, halo miners) must not re-bucket every
+        # observation per position sample.
+        obs_by_cat = obs_by_category(nav)
 
     visible_pois = [p for p in cand_pois if poi_visible_to(p, viewer_owner_ids)]
     # Survey marks (#36) are a specialized mapping artifact — a single pocket can
@@ -1576,11 +1595,14 @@ def _category_field(category: str) -> str:
 
 def _obs_on_body(nav: NavData, system: str, body: str,
                  category: str = "resource") -> list[Observation]:
+    # The scope index already buckets by (system, container) + category, so a
+    # body's sightings are an O(1) lookup — this used to scan every
+    # observation the org ever recorded, ×4 per on-body position sample
+    # (resource_forecast twice, each hitting this + body_base_rate).
+    _, obs_idx = scope_index(nav)
     return [
-        o for o in list(nav.observations.values())
-        if o.category == category and o.system == system
-        and o.container_name == body
-        and o.latitude is not None and o.longitude is not None
+        o for o in obs_idx.get((system, body), {}).get(category, [])
+        if o.latitude is not None and o.longitude is not None
     ]
 
 
@@ -2319,8 +2341,8 @@ def resource_hotspots(
         return []
     field = _category_field(category)
     groups: dict[tuple[str, str], list[Observation]] = {}
-    for o in nav.observations.values():
-        if o.category != category or o.latitude is None or o.longitude is None:
+    for o in obs_by_category(nav).get(category, []):
+        if o.latitude is None or o.longitude is None:
             continue
         if (system and o.system != system) or (body and o.container_name != body):
             continue

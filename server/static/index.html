@@ -5321,6 +5321,14 @@ let myProfileTags = [];   // declared playstyle tags (#30), cached from /api/me
 
 function rememberMate(u) {
   if (u.discord_id === myId) return;   // don't list/draw myself as a teammate
+  if (u.path === undefined) {
+    // Position-only upsert (trail resyncs are server-throttled): keep the
+    // trail we already have while they're on the same body, else drop it —
+    // a stale trail must never draw onto a different body's map.
+    const prev = presence.get(u.discord_id);
+    u.path = (prev && prev.body === u.body && prev.system === u.system)
+      ? prev.path : [];
+  }
   u._recv = Date.now();
   presence.set(u.discord_id, u);
 }

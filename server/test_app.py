@@ -854,6 +854,38 @@ class PresenceTrailTests(unittest.TestCase):
         self.assertEqual(len(rec["path"]), app.SHARED_PATH_MAX)
         self.assertEqual(rec["path"][-1], {"lat": n - 1, "lon": n - 1})  # keeps the tail
 
+    def test_trail_resync_throttled_between_full_sends(self):
+        # Payload scaling: the ~1 Hz upserts carry the full trail only on the
+        # member's first send, then at most every PRESENCE_PATH_RESYNC_S and
+        # only when it changed — position-only (`path` key OMITTED) between.
+        s = self._sess("9")
+        s.path = [{"lat": 1.0, "lon": 2.0, "container": "Daymar"}]
+        now = time.time()
+        app.hub.touch_presence(s)
+        first = app.hub.take_presence_upserts(now)
+        self.assertEqual(len(first[0]["path"]), 1)          # first send: full trail
+        s.path.append({"lat": 1.1, "lon": 2.1, "container": "Daymar"})
+        app.hub.touch_presence(s)
+        second = app.hub.take_presence_upserts(now + 1.0)
+        self.assertNotIn("path", second[0])                 # grew, but inside the window
+        app.hub.touch_presence(s)
+        third = app.hub.take_presence_upserts(now + app.PRESENCE_PATH_RESYNC_S + 1.0)
+        self.assertEqual(len(third[0]["path"]), 2)          # window elapsed: resync
+        app.hub.touch_presence(s)
+        fourth = app.hub.take_presence_upserts(
+            now + 2 * app.PRESENCE_PATH_RESYNC_S + 2.0)
+        self.assertNotIn("path", fourth[0])                 # unchanged: never resent
+        self.assertEqual(app.hub._dirty, set())             # take clears the queue
+
+    def test_roster_seed_always_carries_full_trail(self):
+        # A new tab's connect-time roster snapshot must never be trail-less,
+        # whatever the resync stamps say.
+        s = self._sess("9")
+        s.path = [{"lat": 1.0, "lon": 2.0, "container": "Daymar"}]
+        app.hub.touch_presence(s)
+        app.hub.take_presence_upserts(time.time())          # stamps set
+        self.assertEqual(len(app.hub.roster()[0]["path"]), 1)
+
 
 class LFGBoardTests(unittest.TestCase):
     """Backlog #19 step 3 — the looking-for-group board: the two directions
