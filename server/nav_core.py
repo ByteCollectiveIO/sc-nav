@@ -86,6 +86,13 @@ class Poi:
     # Belt-survey payload (#36, type=="survey" customs only):
     # {rocks: none|sparse|medium|dense, ores: [...], salvage: bool, source: ...}
     survey: dict | None = None
+    # Admin quality control (poi_overrides table). `disabled` = flagged bad →
+    # excluded from routing + search + destination. `qt_marker_base` = the imported
+    # qt_marker value captured on first override-apply, so clearing a QT override
+    # restores the real value with no reload (stored per-object, not on NavData, to
+    # survive out-of-band nav.pois mutation like _capture_poi / account deletion).
+    disabled: bool = False
+    qt_marker_base: bool | None = None
 
 
 @dataclass
@@ -289,6 +296,49 @@ def wiki_name_key(name: str) -> tuple[str, ...]:
     spaces, compare as a sorted token set."""
     cleaned = re.sub(r"[()\"'’]", " ", (name or "").lower()).replace("-", " ")
     return tuple(sorted(cleaned.split()))
+
+
+def poi_override_key(poi: "Poi") -> str:
+    """Stable natural key for an admin quality-control override: system + the
+    order-insensitive name tokens. Deliberately NOT the numeric id — starmap
+    item_ids shift per game patch and wiki dedup keeps the incumbent id, so ids
+    don't survive a re-import but this key does. Two POIs sharing this key (the
+    same collisions wiki dedup already handles) intentionally share one override."""
+    return f"{poi.system.lower()}::" + "|".join(wiki_name_key(poi.name))
+
+
+def poi_active(poi: "Poi") -> bool:
+    """False when an admin has flagged this POI 'bad' (poi_overrides). Disabled
+    POIs are excluded from routing (QT markers, destination) and search but stay
+    in nav.pois so an admin can un-flag them."""
+    return not getattr(poi, "disabled", False)
+
+
+def apply_poi_overrides(nav: NavData, overrides: list[dict]) -> None:
+    """Apply admin quality-control overrides to the live POI set, in place.
+
+    Called on every rebuild AFTER merge_custom_pois/merge_all_observations and
+    BEFORE assign_qt_markers, so a forced QT flip propagates into the marker index
+    and a flagged POI drops out of routing. Each override is keyed by
+    poi_override_key and applies to every POI matching that key.
+
+    `qt_marker` is reversible: the imported value is captured once per Poi in
+    `qt_marker_base` (fresh Poi objects each import re-capture it), so clearing an
+    override restores the real value without a feed reload."""
+    ovmap: dict[str, dict] = {o["key"]: o for o in overrides}
+    for p in nav.pois.values():
+        if p.qt_marker_base is None:
+            p.qt_marker_base = p.qt_marker
+        # Reset to imported state first, so a removed override reverts cleanly.
+        p.disabled = False
+        p.qt_marker = p.qt_marker_base
+        ov = ovmap.get(poi_override_key(p))
+        if not ov:
+            continue
+        p.disabled = bool(ov.get("bad"))
+        qt = ov.get("qt_override")
+        if qt is not None:
+            p.qt_marker = bool(qt)
 
 
 def add_wiki_pois(nav: NavData, locations: list[dict]) -> int:
@@ -916,6 +966,10 @@ def compute_state(
     # Never route to another member's private POI, even if its id is known.
     if dest_entity is not None and not poi_visible_to(dest_entity, viewer_owner_ids):
         dest_entity = None
+    # Drop a session that's still holding a destination an admin has since flagged
+    # bad — otherwise it would keep routing to a POI hidden from everyone else.
+    if dest_entity is not None and not poi_active(dest_entity):
+        dest_entity = None
     if dest_entity is None:
         dest_entity = nav.observations.get(destination_id)
     if dest_entity is not None:
@@ -1310,7 +1364,8 @@ def index_qt_markers(nav: NavData) -> None:
     are excluded: a QT marker is shared navigation infrastructure, and a private
     one would otherwise leak its name/location via every entity's nearest_qt."""
     nav.qt_markers = [p for p in nav.pois.values()
-                      if p.qt_marker and not getattr(p, "private", False)]
+                      if p.qt_marker and not getattr(p, "private", False)
+                      and poi_active(p)]
     nav.qt_by_container = {}
     for p in nav.qt_markers:
         nav.qt_by_container.setdefault((p.system, p.container_name), []).append(p)
@@ -1378,6 +1433,8 @@ def search_pois(
     q = query.strip().lower()
     results = []
     for p in nav.pois.values():
+        if not poi_active(p):           # admin-flagged bad → hidden from search
+            continue
         if not poi_visible_to(p, viewer_owner_ids):
             continue
         if system and p.system != system:

@@ -734,6 +734,90 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(all(r["container"] == "Daymar" for r in results))
 
 
+class PoiOverrideTests(unittest.TestCase):
+    """Admin quality-control overrides: flag bad + force QT, keyed by name-key
+    so they survive re-imports (nav_core.apply_poi_overrides)."""
+
+    def _space(self, pid, name, qt, gx):
+        return nav_core.Poi(
+            id=pid, name=name, system="Stanton", container_name=None,
+            type="Station", local_km=None, global_m=(gx, 0.0, 0.0),
+            latitude=None, longitude=None, height_m=None, qt_marker=qt)
+
+    def _nav(self):
+        nav = nav_core.NavData()
+        nav.pois[10] = self._space(10, "Port Olisar", True, 1e6)
+        nav.pois[11] = self._space(11, "Grim HEX", False, 2e6)
+        # sibling of #10 with the same order-insensitive name-key (collision case)
+        nav.pois[12] = self._space(12, "Olisar Port", True, 3e6)
+        return nav
+
+    def _ov(self, poi, bad=False, qt=None):
+        return {"key": nav_core.poi_override_key(poi), "bad": bad, "qt_override": qt}
+
+    def test_key_is_order_insensitive(self):
+        nav = self._nav()
+        self.assertEqual(nav_core.poi_override_key(nav.pois[10]),
+                         nav_core.poi_override_key(nav.pois[12]))
+
+    def test_bad_excludes_from_routing_and_search(self):
+        nav = self._nav()
+        nav_core.apply_poi_overrides(nav, [self._ov(nav.pois[10], bad=True)])
+        nav_core.assign_qt_markers(nav)
+        # Both siblings sharing the key are disabled (collision applies to all).
+        self.assertFalse(nav_core.poi_active(nav.pois[10]))
+        self.assertFalse(nav_core.poi_active(nav.pois[12]))
+        self.assertNotIn(nav.pois[10], nav.qt_markers)
+        self.assertNotIn(nav.pois[12], nav.qt_markers)
+        names = [r["name"] for r in search_pois(nav, query="olisar")]
+        self.assertEqual(names, [])
+
+    def test_qt_force_on_and_off(self):
+        nav = self._nav()
+        # Force the non-marker on, force a marker off.
+        nav_core.apply_poi_overrides(nav, [
+            self._ov(nav.pois[11], qt=1),
+            self._ov(nav.pois[10], qt=0),
+        ])
+        nav_core.assign_qt_markers(nav)
+        self.assertTrue(nav.pois[11].qt_marker)
+        self.assertIn(nav.pois[11], nav.qt_markers)
+        self.assertFalse(nav.pois[10].qt_marker)
+        self.assertNotIn(nav.pois[10], nav.qt_markers)
+
+    def test_clear_restores_imported_qt(self):
+        nav = self._nav()
+        nav_core.apply_poi_overrides(nav, [self._ov(nav.pois[10], qt=0)])
+        self.assertFalse(nav.pois[10].qt_marker)
+        # Removing the override reverts to the imported value with no reload.
+        nav_core.apply_poi_overrides(nav, [])
+        self.assertTrue(nav.pois[10].qt_marker)
+        self.assertTrue(nav_core.poi_active(nav.pois[10]))
+
+    def test_survives_reimport(self):
+        # A fresh import builds new Poi objects; overrides re-apply by key.
+        overrides = [self._ov(self._space(10, "Port Olisar", True, 1e6), bad=True)]
+        fresh = self._nav()
+        nav_core.apply_poi_overrides(fresh, overrides)
+        nav_core.assign_qt_markers(fresh)
+        self.assertFalse(nav_core.poi_active(fresh.pois[10]))
+
+    def test_compute_state_nulls_bad_destination(self):
+        t = time.time()
+        pois = surface_pois("Daymar")
+        here, dest = pois[0], pois[1]
+        pos = poi_global_m(NAV, here, t)
+        # Baseline: destination resolves normally.
+        base = compute_state(NAV, pos, t, destination_id=dest.id)
+        self.assertIsNotNone(base["destination"])
+        try:
+            dest.disabled = True
+            state = compute_state(NAV, pos, t, destination_id=dest.id)
+            self.assertIsNone(state["destination"])
+        finally:
+            dest.disabled = False
+
+
 class ResourceStatsTests(unittest.TestCase):
     R = 295_000.0
 

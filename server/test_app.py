@@ -204,6 +204,83 @@ class DiscordSettingsTests(unittest.TestCase):
         self.assertEqual(db.get_setting(notify._LEGACY_WEBHOOK_KEY), "")
 
 
+class PoiOverrideApiTests(unittest.TestCase):
+    """Admin POI quality-control endpoints: gate, flag-bad hides from search +
+    destination, QT override + clear, no-op clears the row (nav_core does the
+    routing-index work; this pins the HTTP contract + live re-apply)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "display_name": "Boss", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._admin
+        cls.client = TestClient(app.app)
+        cls.poi = next(p for p in app.nav.pois.values() if p.qt_marker and not p.private)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._reset()
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    @classmethod
+    def _reset(cls):
+        for o in db.list_poi_overrides():
+            db.delete_poi_override(o["id"])
+        app.nav_core.apply_poi_overrides(app.nav, [])
+        app.nav_core.assign_qt_markers(app.nav)
+
+    def setUp(self):
+        self._reset()
+        app.app.dependency_overrides[app.require_session] = lambda: self._admin
+
+    def test_requires_admin(self):
+        app.app.dependency_overrides[app.require_session] = lambda: {"id": "2", "is_admin": False}
+        self.assertEqual(self.client.get("/api/admin/poi-overrides").status_code, 403)
+        r = self.client.post("/api/admin/poi-overrides", json={"poi_id": self.poi.id, "bad": True})
+        self.assertEqual(r.status_code, 403)
+
+    def test_flag_bad_hides_from_search_and_destination(self):
+        pid = self.poi.id
+        r = self.client.post("/api/admin/poi-overrides", json={"poi_id": pid, "bad": True})
+        self.assertEqual(r.status_code, 200)
+        found = self.client.get("/api/pois", params={"q": self.poi.name}).json()
+        self.assertTrue(all(x["id"] != pid for x in found))
+        self.assertEqual(
+            self.client.post("/api/destination", json={"poi_id": pid}).status_code, 404)
+        rows = self.client.get("/api/admin/poi-overrides").json()["overrides"]
+        self.assertTrue(any(o["bad"] and pid in [m["id"] for m in o["matches"]] for o in rows))
+
+    def test_qt_override_off_then_clear_restores(self):
+        pid = self.poi.id
+        self.client.post("/api/admin/poi-overrides", json={"poi_id": pid, "qt_override": 0})
+        self.assertFalse(app.nav.pois[pid].qt_marker)
+        oid = self.client.get("/api/admin/poi-overrides").json()["overrides"][0]["id"]
+        self.assertEqual(self.client.delete(f"/api/admin/poi-overrides/{oid}").status_code, 200)
+        self.assertTrue(app.nav.pois[pid].qt_marker)
+
+    def test_noop_override_clears_row(self):
+        pid = self.poi.id
+        self.client.post("/api/admin/poi-overrides", json={"poi_id": pid, "bad": True})
+        self.client.post("/api/admin/poi-overrides",
+                         json={"poi_id": pid, "bad": False, "qt_override": None})
+        self.assertEqual(self.client.get("/api/admin/poi-overrides").json()["overrides"], [])
+
+    def test_invalid_qt_override_rejected(self):
+        r = self.client.post("/api/admin/poi-overrides",
+                             json={"poi_id": self.poi.id, "qt_override": 5})
+        self.assertEqual(r.status_code, 400)
+
+    def test_unknown_poi_id_404(self):
+        r = self.client.post("/api/admin/poi-overrides", json={"poi_id": 999999999, "bad": True})
+        self.assertEqual(r.status_code, 404)
+
+
 class EventNotifyTests(unittest.TestCase):
     """The inline event notifications: fire when the toggle is on, stay silent
     when off / no webhook, and format a member-friendly, timezone-aware message."""
