@@ -1623,15 +1623,22 @@ class Session:
         if self.pos is None:
             self.nav_state = None
             return
-        self._recompute_state()
+        self.adopt_state(self._build_state())
+
+    def adopt_state(self, ns: dict):
+        """Install a freshly built nav_state. Split from the build so the
+        dataset-refresh flush can run _build_state in a worker thread and
+        adopt the result here under the lock (snapshot → build → revalidate,
+        the trade-replan pattern)."""
         # Sticky system: learn it when a container confirms it; backfill the
         # deep-space view (compute_state reports None there) so clients — the
         # navigator's halo chip, the halo locate loop — know where we are.
-        if self.nav_state.get("system"):
-            self.system = self.nav_state["system"]
+        if ns.get("system"):
+            self.system = ns["system"]
             self.system_t = self.t or time.time()
         elif self.system:
-            self.nav_state["system"] = self.system
+            ns["system"] = self.system
+        self.nav_state = ns
 
     def system_fresh(self) -> bool:
         """True while the sticky system's container confirmation is recent
@@ -1642,8 +1649,13 @@ class Session:
         return bool(self.system and self.system_t
                     and time.time() - self.system_t <= SYSTEM_STICKY_FRESH_S)
 
-    def _recompute_state(self):
-        self.nav_state = nav_core.compute_state(
+    def _build_state(self) -> dict:
+        """Build this session's nav_state dict WITHOUT writing to the session,
+        so the dataset-refresh flush can run it off the event loop. Reads of
+        session fields are single-shot on immutable values (pos/t tuples), so
+        a concurrent position post can't tear the build — at worst the result
+        is stale, which adopt-time revalidation discards."""
+        ns = nav_core.compute_state(
             nav, self.pos, self.t,
             destination_id=self.destination_id,
             prev_pos=self.prev_pos, prev_t=self.prev_t,
@@ -1651,17 +1663,21 @@ class Session:
         )
         # The client's own shard rides on the state so it can flag which
         # observations / teammates share its server.
-        self.nav_state["shard"] = self.shard
-        self._attach_breadcrumbs()
-        self.nav_state["run"] = self.run_view()
-        self.nav_state["trade_run"] = self.trade_run_view()
+        ns["shard"] = self.shard
+        self._attach_breadcrumbs(ns)
+        ns["run"] = self.run_view(ns)
+        ns["trade_run"] = self.trade_run_view(ns)
+        return ns
 
-    def _arrived_at_active(self) -> bool:
+    def _arrived_at_active(self, ns: dict | None = None) -> bool:
         """Whether the guidance distance to the active stop is within the
         arrival threshold (surface vs. space picked from the live readout).
         A destination with a wiki QT arrival radius (#28b) gets a threshold
-        tailored to it instead of the flat space constant."""
-        dest = self.nav_state.get("destination") if self.nav_state else None
+        tailored to it instead of the flat space constant. `ns` overrides the
+        live nav_state on the off-loop build path (mid-build, self.nav_state
+        is still the previous frame)."""
+        ns = self.nav_state if ns is None else ns
+        dest = ns.get("destination") if ns else None
         if not dest:
             return False
         surf = dest.get("surface_distance_m")
@@ -1691,10 +1707,11 @@ class Session:
                 group_aboard[g] = float(p.get("group_scu") or 0)
         return total + sum(group_aboard.values())
 
-    def run_view(self) -> dict | None:
+    def run_view(self, ns: dict | None = None) -> dict | None:
         """The active run as the client renders it: ordered stops with per-package
         live state, the active-stop cursor, live onboard SCU, and the arrival
-        flag for the active stop."""
+        flag for the active stop. `ns` = the in-progress state on the off-loop
+        build path (arrival reads guidance distance from it)."""
         if not self.run:
             return None
         run, pkgs = self.run, self.run["packages"]
@@ -1709,16 +1726,17 @@ class Session:
         return {
             "id": run["id"], "ship": run.get("ship"), "usable_scu": run["usable_scu"],
             "active": active, "done": active >= len(run["stops"]),
-            "arrived": active < len(run["stops"]) and self._arrived_at_active(),
+            "arrived": active < len(run["stops"]) and self._arrived_at_active(ns),
             "onboard_scu": round(self.onboard_scu(), 2),
             "stops": stops,
         }
 
-    def trade_run_view(self) -> dict | None:
+    def trade_run_view(self, ns: dict | None = None) -> dict | None:
         """The active trade run as the client renders it: ordered legs with per-leg
         state (pending → bought → sold), the active-leg cursor, the current phase
         (buy vs sell — which POI guidance is pointing at), running realized profit,
-        the SCU currently aboard, and the arrival flag for the active waypoint."""
+        the SCU currently aboard, and the arrival flag for the active waypoint.
+        `ns` = the in-progress state on the off-loop build path."""
         run = self.trade_run
         if not run:
             return None
@@ -1741,7 +1759,7 @@ class Session:
         return {
             "id": run["id"], "ship": run.get("ship"), "usable_scu": run.get("usable_scu"),
             "active": active, "phase": phase, "done": done,
-            "arrived": (not done) and self._arrived_at_active(),
+            "arrived": (not done) and self._arrived_at_active(ns),
             "onboard_scu": round(onboard, 2),
             "realized_profit": realized,
             "legs": [{**l, "state": st,
@@ -1769,15 +1787,17 @@ class Session:
             del self.path[: len(self.path) - PATH_MAX]
         self._attach_breadcrumbs()
 
-    def _attach_breadcrumbs(self):
+    def _attach_breadcrumbs(self, ns: dict | None = None):
         """Expose the tracking flag + the trail for the *current* container
-        (crumbs on other bodies aren't drawable on the local map)."""
-        if self.nav_state is None:
+        (crumbs on other bodies aren't drawable on the local map). Operates on
+        `ns` when given (the off-loop build path) else the live nav_state."""
+        ns = self.nav_state if ns is None else ns
+        if ns is None:
             return
-        cont = self.nav_state.get("container")
+        cont = ns.get("container")
         cur = cont["name"] if cont else None
-        self.nav_state["tracking"] = self.tracking
-        self.nav_state["path"] = (
+        ns["tracking"] = self.tracking
+        ns["path"] = (
             [{"lat": c["lat"], "lon": c["lon"]} for c in self.path if c["container"] == cur]
             if cur else []
         )
@@ -2304,14 +2324,39 @@ class SessionHub:
         return [s for s in self.sessions.values() if s.ws_clients]
 
     async def flush_dataset_refresh(self, sessions: list["Session"]) -> None:
-        """Recompute each session and push its fresh state, then nudge every tab to
-        refetch the browse/filter dataset (a new POI/observation must show up in
-        the filtered lists, not just on the map). Call OFF the lock: recompute is
-        read-only on `nav` and recompute+serialize is atomic (no await between), so
-        a concurrent position post can't interleave a half-built frame."""
-        for s in sessions:
-            s.recompute()
-            await s.push_frame(s.state_frame())
+        """Recompute each open-tab session and push its fresh state, then nudge
+        every tab to refetch the browse/filter dataset (a new POI/observation
+        must show up in the filtered lists, not just on the map).
+
+        The per-session compute_state batch is the expensive part (a mapping
+        party keeps the dirty flag set every tick), so it runs in a worker
+        thread via the pure `_build_state` — snapshot inputs under the lock,
+        build off-loop, then adopt each result back under the lock ONLY if the
+        session hasn't recomputed with fresher inputs meanwhile (same
+        snapshot → solve → revalidate pattern as trade replan). Frames fan out
+        after the lock is released."""
+        async with self.lock:
+            snaps = [(s, s.pos, s.t) for s in sessions if s.pos is not None]
+
+        def _build_batch():
+            out = []
+            for s, pos, t in snaps:
+                try:
+                    out.append((s, pos, t, s._build_state()))
+                except Exception as exc:
+                    print(f"[sc-nav] dataset refresh recompute failed: {exc}")
+            return out
+
+        built = await asyncio.to_thread(_build_batch) if snaps else []
+        pushes = []
+        async with self.lock:
+            for s, pos, t, ns in built:
+                if s.pos is not pos or s.t != t:
+                    continue    # a position post beat us — theirs is fresher
+                s.adopt_state(ns)
+                pushes.append((s, s.state_frame()))
+        for s, frame in pushes:
+            await s.push_frame(frame)
         await self.send_to_all_clients({"type": "dataset"})
 
 

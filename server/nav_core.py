@@ -865,10 +865,12 @@ def build_scope_index(nav: "NavData"):
     a list of Poi; obs_by_scope[(system, container)] is {category: [Observation]}.
     """
     pois_by_scope: dict = {}
-    for p in nav.pois.values():
+    # list() snapshots: this can run from worker threads (dataset-refresh
+    # flush, solvers) while the event loop mutates the dicts under hub.lock.
+    for p in list(nav.pois.values()):
         pois_by_scope.setdefault((p.system, p.container_name), []).append(p)
     obs_by_scope: dict = {}
-    for o in nav.observations.values():
+    for o in list(nav.observations.values()):
         (obs_by_scope.setdefault((o.system, o.container_name), {})
                      .setdefault(o.category, []).append(o))
     return pois_by_scope, obs_by_scope
@@ -946,7 +948,7 @@ def compute_state(
     else:
         cand_pois = list(nav.pois.values())
         obs_by_cat = {}
-        for o in nav.observations.values():
+        for o in list(nav.observations.values()):
             obs_by_cat.setdefault(o.category, []).append(o)
 
     visible_pois = [p for p in cand_pois if poi_visible_to(p, viewer_owner_ids)]
@@ -1575,7 +1577,7 @@ def _category_field(category: str) -> str:
 def _obs_on_body(nav: NavData, system: str, body: str,
                  category: str = "resource") -> list[Observation]:
     return [
-        o for o in nav.observations.values()
+        o for o in list(nav.observations.values())
         if o.category == category and o.system == system
         and o.container_name == body
         and o.latitude is not None and o.longitude is not None
