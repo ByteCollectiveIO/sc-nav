@@ -43,6 +43,23 @@ CREATE TABLE IF NOT EXISTS custom_pois (
     private INTEGER DEFAULT 0     -- owner-only POI; hidden from the rest of the org
 );
 
+-- Admin quality-control overrides for imported (starmap/wiki) POIs. Keyed by the
+-- STABLE natural key (system + wiki_name_key tokens), NOT the numeric id: starmap
+-- item_ids shift per game patch and wiki dedup keeps the incumbent id, so ids don't
+-- survive a re-import but the name-key does. Re-applied on every _rebuild_nav so an
+-- admin's fix (flag a bogus POI bad, or force a QT-marker on/off) outlives imports.
+CREATE TABLE IF NOT EXISTS poi_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,     -- "<system_lower>::<tok>|<tok>|..." (nav_core.poi_override_key)
+    system TEXT, name TEXT,       -- last-seen values, advisory only (display/search)
+    name_key TEXT,               -- "|".join(wiki_name_key(name))
+    bad INTEGER NOT NULL DEFAULT 0,   -- 1 = excluded from routing + search + destination
+    qt_override INTEGER,         -- NULL = no override, 0 = force qt off, 1 = force qt on
+    admin_id INTEGER, admin_handle TEXT,
+    note TEXT,
+    updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS observations (
     id INTEGER PRIMARY KEY,
     category TEXT NOT NULL,
@@ -619,6 +636,58 @@ def update_custom_poi_private(poi_id: int, private: bool) -> bool:
             "UPDATE custom_pois SET private=? WHERE id=?",
             (1 if private else 0, poi_id),
         )
+    return cur.rowcount > 0
+
+
+# --- poi overrides (admin quality control) ---------------------------------
+
+
+def _override_row_to_dict(r: sqlite3.Row) -> dict:
+    return {
+        "id": r["id"], "key": r["key"], "system": r["system"],
+        "name": r["name"], "name_key": r["name_key"],
+        "bad": bool(r["bad"]),
+        "qt_override": None if r["qt_override"] is None else int(r["qt_override"]),
+        "admin_id": r["admin_id"], "admin_handle": r["admin_handle"],
+        "note": r["note"], "updated_at": r["updated_at"],
+    }
+
+
+def list_poi_overrides() -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM poi_overrides ORDER BY id").fetchall()
+    return [_override_row_to_dict(r) for r in rows]
+
+
+def set_poi_override(d: dict) -> None:
+    """Upsert one override by its stable `key`. `qt_override` is None|0|1."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO poi_overrides "
+            "(key,system,name,name_key,bad,qt_override,admin_id,admin_handle,note,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "system=excluded.system, name=excluded.name, name_key=excluded.name_key, "
+            "bad=excluded.bad, qt_override=excluded.qt_override, "
+            "admin_id=excluded.admin_id, admin_handle=excluded.admin_handle, "
+            "note=excluded.note, updated_at=excluded.updated_at",
+            (d["key"], d.get("system"), d.get("name"), d.get("name_key"),
+             1 if d.get("bad") else 0,
+             None if d.get("qt_override") is None else int(d["qt_override"]),
+             d.get("admin_id"), d.get("admin_handle"), d.get("note"),
+             d.get("updated_at")),
+        )
+
+
+def delete_poi_override(override_id: int) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM poi_overrides WHERE id=?", (override_id,))
+    return cur.rowcount > 0
+
+
+def delete_poi_override_by_key(key: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM poi_overrides WHERE key=?", (key,))
     return cur.rowcount > 0
 
 

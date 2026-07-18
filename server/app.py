@@ -1153,6 +1153,7 @@ def refresh_catalog() -> None:
     item_catalog_by_id = {it["item_id"]: it for it in item_catalog}
 nav_core.merge_custom_pois(nav, db.list_custom_pois())
 merge_all_observations(nav)
+nav_core.apply_poi_overrides(nav, db.list_poi_overrides())
 nav_core.assign_qt_markers(nav)
 
 
@@ -2620,6 +2621,9 @@ async def set_destination(body: DestinationIn, user: dict = Depends(require_sess
     if isinstance(target, nav_core.Poi) and not nav_core.poi_visible_to(
         target, viewer_owner_ids(user)
     ):
+        target = None
+    # An admin-flagged bad POI can't be a destination.
+    if isinstance(target, nav_core.Poi) and not nav_core.poi_active(target):
         target = None
     if target is None:
         raise HTTPException(status_code=404, detail="unknown poi_id")
@@ -4363,7 +4367,8 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
                             detail="pick one of pocket_key / target_poi_id")
     if has_target:
         target = nav.pois.get(body.target_poi_id)
-        if target is None or not nav_core.poi_visible_to(target, viewer):
+        if (target is None or not nav_core.poi_visible_to(target, viewer)
+                or not nav_core.poi_active(target)):
             raise HTTPException(status_code=404, detail="unknown target_poi_id")
         if target.system != system:
             raise HTTPException(status_code=400,
@@ -7038,6 +7043,7 @@ async def _rebuild_nav() -> None:
     fresh = await asyncio.to_thread(load_nav_data)
     nav_core.merge_custom_pois(fresh, db.list_custom_pois())
     merge_all_observations(fresh)
+    nav_core.apply_poi_overrides(fresh, db.list_poi_overrides())
     nav_core.assign_qt_markers(fresh)
     async with hub.lock:
         nav = fresh
@@ -7131,6 +7137,105 @@ async def clear_trade_stats(admin: dict = Depends(require_admin)):
     board and every member's trade history. In-progress (active) runs keep going."""
     deleted = await asyncio.to_thread(db.clear_trade_run_history)
     return {"ok": True, "deleted": deleted}
+
+
+# --- POI quality control (admin overrides) ---------------------------------
+# Imported POIs (starmap/wiki) are sometimes wrong: a place that doesn't exist,
+# or a mis-set QT-marker flag. These admin overrides flag a POI 'bad' (excluded
+# from routing + search + destination) or force its QT status, keyed by the
+# stable natural key so the fix survives every re-import (see nav_core.
+# apply_poi_overrides / poi_override_key).
+
+
+class PoiOverrideIn(BaseModel):
+    poi_id: int | None = None                 # resolve the stable key from a live POI
+    key: str | None = Field(default=None, max_length=300)  # or target the key directly
+    bad: bool = False
+    qt_override: int | None = None            # None = no QT override, 0 = force off, 1 = force on
+    note: str | None = Field(default=None, max_length=500)
+
+
+async def _apply_poi_overrides_live() -> None:
+    """Re-apply overrides to the live nav + rebuild the QT index, no feed reload
+    (per-object qt_marker_base makes QT reversible). Clears any session aimed at a
+    POI that just became bad and marks the dataset dirty so clients re-pull."""
+    overrides = await asyncio.to_thread(db.list_poi_overrides)
+    async with hub.lock:
+        nav_core.apply_poi_overrides(nav, overrides)
+        nav_core.assign_qt_markers(nav)
+        for s in hub.sessions.values():
+            if s.destination_id is not None:
+                p = nav.pois.get(s.destination_id)
+                if p is not None and not nav_core.poi_active(p):
+                    s.destination_id = None
+        hub.mark_dataset_dirty()
+
+
+@app.get("/api/admin/poi-overrides")
+async def list_poi_overrides_admin(admin: dict = Depends(require_admin)):
+    """Every active override + its live status: how many POIs currently match the
+    key (collision/orphan visibility) and their current disabled/qt state."""
+    overrides = await asyncio.to_thread(db.list_poi_overrides)
+    by_key: dict[str, list] = {}
+    for p in nav.pois.values():
+        by_key.setdefault(nav_core.poi_override_key(p), []).append(p)
+    rows = []
+    for o in overrides:
+        matches = by_key.get(o["key"], [])
+        rows.append({
+            **o,
+            "match_count": len(matches),
+            "matches": [
+                {"id": p.id, "name": p.name, "system": p.system, "type": p.type,
+                 "source": p.source, "disabled": p.disabled, "qt_marker": p.qt_marker}
+                for p in matches[:10]
+            ],
+        })
+    return {"overrides": rows}
+
+
+@app.post("/api/admin/poi-overrides")
+async def set_poi_override_admin(body: PoiOverrideIn, admin: dict = Depends(require_admin)):
+    """Flag a POI bad and/or force its QT status. Resolve the target by poi_id
+    (preferred — derives the stable key + display fields) or an explicit key. A
+    no-op override (not bad, no QT forcing) clears the row instead of storing it."""
+    if body.qt_override not in (None, 0, 1):
+        raise HTTPException(status_code=400, detail="qt_override must be null, 0, or 1")
+    key = body.key
+    system = name = name_key = None
+    if body.poi_id is not None:
+        poi = nav.pois.get(body.poi_id)
+        if poi is None:
+            raise HTTPException(status_code=404, detail="unknown poi_id")
+        key = nav_core.poi_override_key(poi)
+        system, name = poi.system, poi.name
+        name_key = "|".join(nav_core.wiki_name_key(poi.name))
+    if not key:
+        raise HTTPException(status_code=400, detail="poi_id or key required")
+    if not body.bad and body.qt_override is None:
+        await asyncio.to_thread(db.delete_poi_override_by_key, key)
+    else:
+        aid = admin.get("id")
+        await asyncio.to_thread(db.set_poi_override, {
+            "key": key, "system": system, "name": name, "name_key": name_key,
+            "bad": body.bad, "qt_override": body.qt_override,
+            "admin_id": int(aid) if aid and str(aid).isdigit() else None,
+            "admin_handle": admin.get("display_name"),
+            "note": body.note,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+    await _apply_poi_overrides_live()
+    return {"ok": True, "key": key}
+
+
+@app.delete("/api/admin/poi-overrides/{override_id}")
+async def delete_poi_override_admin(override_id: int, admin: dict = Depends(require_admin)):
+    """Clear one override by integer id (restores the POI's imported state)."""
+    removed = await asyncio.to_thread(db.delete_poi_override, override_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="unknown override id")
+    await _apply_poi_overrides_live()
+    return {"ok": True}
 
 
 @app.get("/api/settings")

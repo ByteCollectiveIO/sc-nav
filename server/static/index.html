@@ -2694,6 +2694,23 @@
     </div>
   </div>
 
+  <div class="panel admin-grp" id="poi-qc-panel">
+    <h2>POI QUALITY CONTROL</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      Imported POIs are sometimes wrong — a place that doesn't exist, or a mis-set
+      quantum-travel marker. <b>Flag a POI bad</b> to drop it from routing, search and
+      as a destination; <b>override its QT status</b> to force a jump marker on or off.
+      Fixes are keyed to the POI's name + system, so they <b>survive every data
+      re-import</b>. A name shared by more than one POI applies to all of them.
+    </div>
+    <input id="poi-qc-search" class="ti" placeholder="Search a POI by name…"
+           aria-label="Search POIs to flag or override" style="width:100%; max-width:360px;">
+    <div id="poi-qc-results" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+    <h3 style="margin-top:16px; margin-bottom:4px; font-size:13px; letter-spacing:.04em;">ACTIVE OVERRIDES</h3>
+    <div id="poi-qc-overrides" style="display:flex; flex-direction:column; gap:6px;"></div>
+    <div class="muted" id="poi-qc-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+  </div>
+
   <div class="panel admin-grp" id="motd-panel">
     <h2>MESSAGE OF THE DAY</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -13729,6 +13746,7 @@ async function loadSettings() {
     rootAdmins = s.root_admin_ids || [];
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
+    loadPoiOverrides();
     applyOrgLogoAdmin(!!s.org_logo);
     if (document.activeElement !== $("org-name-input"))
       $("org-name-input").value = s.org_name || "";
@@ -13746,6 +13764,141 @@ async function loadSettings() {
     if (b) b.onclick = loadSettings;
   }
 }
+
+// ---------- POI quality control (admin) ----------
+// Flag imported POIs bad (excluded from routing/search/destination) or force their
+// QT-marker status. Overrides are keyed server-side by name+system so they survive
+// re-imports; search here only surfaces good POIs (bad ones live in the list below).
+let poiQcByPoiId = {};       // poi_id -> its active override row (via matches[])
+let poiQcTimer = null;
+
+function poiQcCurrent(poiId) {
+  return poiQcByPoiId[poiId] || { bad: false, qt_override: null };
+}
+
+async function loadPoiOverrides() {
+  try {
+    const d = await fetch("/api/admin/poi-overrides").then(r => r.json());
+    const rows = d.overrides || [];
+    poiQcByPoiId = {};
+    for (const o of rows)
+      for (const m of (o.matches || [])) poiQcByPoiId[m.id] = o;
+    renderPoiOverrides(rows);
+  } catch {
+    $("poi-qc-overrides").innerHTML =
+      `<span class="muted" style="font-size:12px;">couldn't load overrides</span>`;
+  }
+}
+
+function poiQcTag(text, tone) {
+  const c = tone === "bad" ? "var(--bad)" : "var(--dim)";
+  return `<span style="font-size:11px; color:${c}; border:1px solid ${c};`
+       + ` border-radius:6px; padding:1px 5px; margin-left:4px;">${esc(text)}</span>`;
+}
+
+function renderPoiOverrides(rows) {
+  const box = $("poi-qc-overrides");
+  box.innerHTML = "";
+  if (!rows.length) {
+    box.innerHTML = `<span class="muted" style="font-size:12px;">No overrides yet.</span>`;
+    return;
+  }
+  for (const o of rows) {
+    const tags = [];
+    if (o.bad) tags.push(poiQcTag("bad", "bad"));
+    if (o.qt_override === 1) tags.push(poiQcTag("QT forced on"));
+    if (o.qt_override === 0) tags.push(poiQcTag("QT forced off"));
+    const miss = o.match_count === 0
+        ? ` ${poiQcTag("no live match")}`
+        : o.match_count > 1 ? ` <span class="muted">(${o.match_count} POIs)</span>` : "";
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; gap:8px; align-items:center; border:1px solid var(--border);"
+                      + " border-radius:6px; padding:6px 8px;";
+    row.innerHTML = `<div style="flex:1; min-width:0;">
+        <div style="font-weight:600;">${esc(o.name || o.key)}${miss}</div>
+        <div class="muted" style="font-size:12px;">${esc(o.system || "")} ${tags.join("")}</div>
+      </div>`;
+    const clr = document.createElement("button");
+    clr.textContent = "Clear";
+    clr.onclick = () => poiOverrideClear(o.id);
+    row.appendChild(clr);
+    box.appendChild(row);
+  }
+}
+
+function renderPoiQcResults(list) {
+  const box = $("poi-qc-results");
+  box.innerHTML = "";
+  for (const p of list) {
+    const cur = poiQcCurrent(p.id);
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; gap:8px; align-items:center; flex-wrap:wrap;"
+                      + " border:1px solid var(--border); border-radius:6px; padding:6px 8px;";
+    row.innerHTML = `<div style="flex:1; min-width:140px;">
+        <div style="font-weight:600;">${esc(p.name)}${p.qt_marker ? poiQcTag("QT") : ""}</div>
+        <div class="muted" style="font-size:12px;">${esc(p.container)} · ${esc(p.system)} · ${esc(p.source)}</div>
+      </div>`;
+    const ctl = document.createElement("div");
+    ctl.style.cssText = "display:flex; gap:6px; align-items:center; flex-wrap:wrap;";
+    const badBtn = document.createElement("button");
+    badBtn.textContent = cur.bad ? "Un-flag" : "Flag bad";
+    if (!cur.bad) badBtn.className = "danger-btn";
+    badBtn.onclick = () => poiOverrideSet(p.id, { bad: !cur.bad, qt_override: cur.qt_override });
+    // QT tri-state, reusing the house .seg component.
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    for (const [lbl, val] of [["QT on", 1], ["QT off", 0], ["Auto", null]]) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = lbl;
+      if (cur.qt_override === val) b.classList.add("on");
+      b.onclick = () => poiOverrideSet(p.id, { bad: cur.bad, qt_override: val });
+      seg.appendChild(b);
+    }
+    ctl.appendChild(badBtn);
+    ctl.appendChild(seg);
+    row.appendChild(ctl);
+    box.appendChild(row);
+  }
+}
+
+async function poiOverrideSet(poiId, { bad, qt_override }) {
+  $("poi-qc-status").textContent = "saving…";
+  try {
+    const r = await fetch("/api/admin/poi-overrides", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ poi_id: poiId, bad: !!bad, qt_override }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    $("poi-qc-status").textContent = "saved.";
+    await loadPoiOverrides();
+    await runPoiQcSearch();        // a newly-bad POI drops out of the results
+  } catch { $("poi-qc-status").textContent = "save failed — try again."; }
+}
+
+async function poiOverrideClear(id) {
+  $("poi-qc-status").textContent = "clearing…";
+  try {
+    const r = await fetch(`/api/admin/poi-overrides/${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.text());
+    $("poi-qc-status").textContent = "cleared.";
+    await loadPoiOverrides();
+    await runPoiQcSearch();
+  } catch { $("poi-qc-status").textContent = "clear failed — try again."; }
+}
+
+async function runPoiQcSearch() {
+  const q = $("poi-qc-search").value.trim();
+  if (q.length < 2) { $("poi-qc-results").innerHTML = ""; return; }
+  try {
+    const list = await fetch(`/api/pois?q=${encodeURIComponent(q)}&limit=20`).then(r => r.json());
+    renderPoiQcResults(list);
+  } catch { $("poi-qc-results").innerHTML =
+    `<span class="muted" style="font-size:12px;">search failed</span>`; }
+}
+
+$("poi-qc-search").addEventListener("input", () => {
+  clearTimeout(poiQcTimer); poiQcTimer = setTimeout(runPoiQcSearch, 180);
+});
 
 // ---------- Discord notifications (admin) ----------
 // Each category routes to its own channel via its own webhook. A URL is a secret:

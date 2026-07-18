@@ -102,12 +102,31 @@ library at `#/blueprints`, #29)
   instead of flat `ARRIVAL_SPACE_M`); trade-stop amenity chips
   `_amenity_view`/`WIKI_AMENITIES`/`_annotate_leg_amenities` → leg
   `buy_amen`/`sell_amen` → frontend `amenChips` (plan + run views), ORG
-  SETTINGS `wiki-toggle`
+  SETTINGS `wiki-toggle`. **POI quality control (admin overrides):** flag a bogus
+  imported POI **bad** (excluded from routing + search + destination + halo target)
+  or force its **QT-marker** on/off. `GET/POST /api/admin/poi-overrides` +
+  `DELETE /api/admin/poi-overrides/{id}` (`PoiOverrideIn`: `poi_id`→resolves the
+  stable key, `bad`, `qt_override` None|0|1; no-op clears the row). Keyed by the
+  STABLE natural key `nav_core.poi_override_key` (`<system_lower>::<wiki_name_key
+  tokens>`) NOT the numeric id — starmap item_ids shift per patch + wiki dedup keeps
+  the incumbent id, so ids don't survive a re-import but the name-key does. Applied
+  by `nav_core.apply_poi_overrides` in the merge pipeline **after**
+  merge_custom_pois/observations, **before** `assign_qt_markers` (both `_rebuild_nav`
+  AND startup), so a fix outlives every import. Two new `Poi` fields: `disabled`
+  (→ `nav_core.poi_active` guard in `index_qt_markers`/`search_pois`/`compute_state`
+  destination + `/api/destination`/halo target reject) and `qt_marker_base` (per-object
+  imported-QT snapshot → clearing a QT override reverts with no feed reload). Live
+  writes re-apply via `_apply_poi_overrides_live` (apply + `assign_qt_markers` under
+  `hub.lock`, clears any session aimed at a now-bad POI). Frontend = ORG SETTINGS
+  "POI QUALITY CONTROL" panel (`#poi-qc-panel`: `/api/pois?q=` search rows w/ flag-bad
+  + QT `.seg` tri-state, ACTIVE OVERRIDES list w/ live match-count + Clear;
+  `loadPoiOverrides`/`renderPoiQcResults`/`poiOverrideSet`). Name-key collisions
+  intentionally apply to all siblings. Trade-terminal feed + NEARBY list out of scope.
 - Auth/account: `/auth/login|callback|logout`, `/api/me*`, `/api/tokens`. **Member profile (#30):** `members.playstyle_tags` (JSON via `_ensure_column`, `db.set_member_playstyles`); `PUT /api/me` `playstyle_tags` (allowlist `PLAYSTYLE_TAGS`, dedup, cap `_PROFILE_MAX_TAGS`=6, parses via `member_playstyles`, mirrors onto the live online record + roster rebroadcast); carried on `GET /api/me`, `/api/intel/directory` rows, and online-roster records (`tags`); UI = Settings PROFILE chips + roster/directory `.on-ptag` chips
 - Misc: `/api/health`, `/api/branding` (public org name + logo flag), `/download/watcher`, `/` + `/index.html`
 
 ## db.py tables
-meta · custom_pois · observations · handles · members · watcher_tokens ·
+meta · custom_pois · poi_overrides · observations · handles · members · watcher_tokens ·
 user_ships · runs · trade_runs · trade_favorites · stock_reports ·
 pirate_warnings · events ·
 event_signups · event_groups · event_assignments · group_templates · lfg ·
