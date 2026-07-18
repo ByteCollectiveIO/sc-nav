@@ -2908,6 +2908,149 @@ class HandleOwnershipTests(unittest.TestCase):
         self.assertEqual(e["discord_id"], "finder-discord")
 
 
+class PositionBroadcastLockTests(unittest.TestCase):
+    """Regression: POST /api/position must NOT hold hub.lock while it fans the
+    state frame out over WebSocket. A slow/backpressured browser tab would
+    otherwise pin the single global lock for up to WS_SEND_TIMEOUT_S (5 s),
+    serializing every other member's position posts behind it — the delayed
+    /showlocation updates + upstream 502s seen once two watchers were live.
+    Mirrors the presence-broadcaster rule: compute under the lock, send after."""
+
+    def setUp(self):
+        self._saved = dict(app.hub.sessions)
+        app.hub.sessions.clear()
+
+    def tearDown(self):
+        app.hub.sessions.clear()
+        app.hub.sessions.update(self._saved)
+        for uid in ("member-a", "member-b"):
+            app.hub.presence.pop(uid, None)
+            app.hub._dirty.discard(uid)
+            app.hub._removed.discard(uid)
+
+    def test_slow_tab_does_not_block_other_members_post(self):
+        class _StalledWS:
+            """A tab stuck on send_text (TCP backpressure) until released."""
+
+            def __init__(self, gate):
+                self._gate = gate
+
+            async def send_text(self, _text):
+                await self._gate.wait()
+
+            async def close(self):
+                pass
+
+        async def _run():
+            gate = asyncio.Event()
+            # Member A: a live tab that stalls forever on send.
+            user_a = {"id": "member-a", "display_name": "A", "is_admin": False}
+            app.hub.get(user_a).ws_clients.add(_StalledWS(gate))
+            body_a = app.PositionIn(x=1.0, y=2.0, z=3.0)
+            # Member B: no tabs (its own fan-out is a no-op); we only care that
+            # its post can grab the lock while A is stuck sending.
+            user_b = {"id": "member-b", "display_name": "B", "is_admin": False}
+            body_b = app.PositionIn(x=4.0, y=5.0, z=6.0)
+
+            # A's post acquires the lock, mutates, RELEASES it, then blocks in the
+            # fan-out on the stalled tab. Give it a beat to reach that point.
+            task_a = asyncio.create_task(app.post_position(body_a, user=user_a))
+            await asyncio.sleep(0.05)
+            self.assertFalse(task_a.done(), "A should be parked in the WS fan-out")
+
+            # With the lock released, B's post completes promptly. Before the fix
+            # (fan-out under the lock) this blocks the full WS_SEND_TIMEOUT_S.
+            await asyncio.wait_for(app.post_position(body_b, user=user_b), timeout=1.0)
+
+            # Release A's stalled send; it too must finish cleanly.
+            gate.set()
+            await asyncio.wait_for(task_a, timeout=1.0)
+
+        asyncio.run(_run())
+
+
+class DatasetRefreshCoalesceTests(unittest.TestCase):
+    """The capture-path scaling fix: a shared-dataset change (capture/delete/feed
+    refresh) no longer recomputes EVERY session inline under the lock. It flags the
+    hub dirty; the presence broadcaster later recomputes only OPEN tabs, off-lock,
+    coalescing a burst of captures into one cross-session refresh."""
+
+    class _RecordingWS:
+        def __init__(self):
+            self.frames = []
+
+        async def send_text(self, text):
+            self.frames.append(text)
+
+        async def close(self):
+            pass
+
+    def setUp(self):
+        self._saved = dict(app.hub.sessions)
+        app.hub.sessions.clear()
+        app.hub._dataset_dirty = False
+
+    def tearDown(self):
+        app.hub.sessions.clear()
+        app.hub.sessions.update(self._saved)
+        app.hub._dataset_dirty = False
+        for uid in ("cap", "bystander", "tabless", "tabbed"):
+            app.hub.presence.pop(uid, None)
+            app.hub._dirty.discard(uid)
+            app.hub._removed.discard(uid)
+
+    def _sess(self, uid, tab=False):
+        s = app.hub.get({"id": uid, "display_name": uid, "is_admin": False})
+        if tab:
+            s._ws = self._RecordingWS()
+            s.ws_clients.add(s._ws)
+        return s
+
+    def test_take_dataset_refresh_skips_tabless_and_clears_flag(self):
+        self._sess("tabbed", tab=True)
+        self._sess("tabless")                                  # watcher, no tab open
+        self.assertIsNone(app.hub.take_dataset_refresh())      # nothing dirty
+        app.hub.mark_dataset_dirty()
+        refresh = app.hub.take_dataset_refresh()
+        self.assertEqual([s.user["id"] for s in refresh], ["tabbed"])   # tab-less skipped
+        self.assertIsNone(app.hub.take_dataset_refresh())      # flag cleared (coalesced)
+
+    def test_capture_flags_dirty_and_pushes_only_capturer(self):
+        async def _run():
+            cap = self._sess("cap", tab=True)
+            bystander = self._sess("bystander", tab=True)
+            # Arm a capture without touching the DB: stub the capture helper.
+            cap.capture_pending = {"kind": "observation"}
+            orig = app._capture_observation
+            app._capture_observation = (
+                lambda sess, *a, **k: setattr(sess, "last_capture", {"kind": "obs"}))
+            try:
+                await app.post_position(app.PositionIn(x=1.0, y=2.0, z=3.0), user=cap.user)
+            finally:
+                app._capture_observation = orig
+            # The capture flagged a coalesced refresh (not an inline all-sessions one)...
+            self.assertTrue(app.hub._dataset_dirty)
+            # ...the capturer got their own immediate frame...
+            self.assertEqual(len(cap._ws.frames), 1)
+            # ...but a bystander was NOT recomputed/pushed under the lock.
+            self.assertEqual(bystander._ws.frames, [])
+
+        asyncio.run(_run())
+
+    def test_flush_refreshes_open_tabs_and_nudges_browse(self):
+        async def _run():
+            s = self._sess("tabbed", tab=True)
+            s.pos, s.t = (1.0, 2.0, 3.0), time.time()   # a live fix so recompute has state
+            app.hub.mark_dataset_dirty()
+            await app.hub.flush_dataset_refresh(app.hub.take_dataset_refresh())
+            import json
+            types = [json.loads(f)["type"] for f in s._ws.frames]
+            self.assertIn("state", types)      # NEARBY recomputed + pushed to the tab
+            self.assertIn("dataset", types)    # browse/filter refetch nudge
+
+        asyncio.run(_run())
+
+
 class BrandingAndMotdTests(unittest.TestCase):
     """Custom guild branding: the admin-set org name (shown pre-auth on the login
     splash + app chooser) and the message-of-the-day broadcast banner."""

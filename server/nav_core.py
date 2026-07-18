@@ -798,6 +798,39 @@ def poi_visible_to(poi, viewer_owner_ids) -> bool:
     return poi.owner_id is not None and poi.owner_id in viewer_owner_ids
 
 
+def build_scope_index(nav: "NavData"):
+    """Bucket POIs/observations by (system, container_name) so `compute_state`
+    can pull just the entities in a viewer's current scope instead of scanning
+    the whole dataset on every call. container_name None = space entities.
+
+    Returns (pois_by_scope, obs_by_scope): pois_by_scope[(system, container)] is
+    a list of Poi; obs_by_scope[(system, container)] is {category: [Observation]}.
+    """
+    pois_by_scope: dict = {}
+    for p in nav.pois.values():
+        pois_by_scope.setdefault((p.system, p.container_name), []).append(p)
+    obs_by_scope: dict = {}
+    for o in nav.observations.values():
+        (obs_by_scope.setdefault((o.system, o.container_name), {})
+                     .setdefault(o.category, []).append(o))
+    return pois_by_scope, obs_by_scope
+
+
+def scope_index(nav: "NavData"):
+    """Cached (pois_by_scope, obs_by_scope) for `nav`, rebuilt lazily whenever the
+    POI or observation count changes. Every real mutation — a capture, a delete,
+    a feed refresh (which swaps in a fresh NavData) — changes one of those counts,
+    so the cache self-invalidates without threading a version bump through each
+    mutation site. (A same-count add+remove within a single uninterrupted call
+    never happens here; each such op is its own locked request.)"""
+    key = (len(nav.pois), len(nav.observations))
+    cache = getattr(nav, "_scope_cache", None)
+    if cache is None or cache[0] != key:
+        cache = (key, *build_scope_index(nav))
+        nav._scope_cache = cache
+    return cache[1], cache[2]
+
+
 def compute_state(
     nav: NavData,
     pos_m,
@@ -827,36 +860,43 @@ def compute_state(
         if dt <= 300:
             speed_ms = dist3(pos_m, prev_pos) / dt
 
-    def _in_scope(entity):
-        # When at a container, restrict to that container (+ space entities);
-        # otherwise consider everything.
-        if container is None:
-            return True
-        return entity.system == container.system and (
-            entity.container_name == container.name or entity.container_name is None
-        )
-
     def _nearest(entities, summarize):
         rows = [
             summarize(nav, e, t_unix, pos_m, lat, lon, surface_radius_m)
             for e in entities
-            if _in_scope(e)
         ]
         return sorted(
             (r for r in rows if r["distance_m"] is not None),
             key=lambda r: r["distance_m"],
         )[:nearest_count]
 
-    visible_pois = [p for p in nav.pois.values() if poi_visible_to(p, viewer_owner_ids)]
+    # Scope candidates up front instead of scanning the whole dataset: at a
+    # container, only that container's entities + the system's space entities are
+    # in range; in deep space everything is in scope (no container to narrow on).
+    # This is O(entities in scope), not O(dataset), which matters because a busy
+    # org accumulates thousands of observations and every position sample (and
+    # every coalesced dataset refresh) recomputes this.
+    pois_idx, obs_idx = scope_index(nav)
+    if container is not None:
+        skey = container.system
+        cand_pois = pois_idx.get((skey, container.name), []) + pois_idx.get((skey, None), [])
+        here = obs_idx.get((skey, container.name), {})
+        space = obs_idx.get((skey, None), {})
+        # Per-category so a dense category (e.g. resources) can't starve a sparse
+        # one (e.g. wildlife) out of the merged list.
+        obs_by_cat = {cat: here.get(cat, []) + space.get(cat, [])
+                      for cat in OBSERVATION_CATEGORIES}
+    else:
+        cand_pois = list(nav.pois.values())
+        obs_by_cat = {}
+        for o in nav.observations.values():
+            obs_by_cat.setdefault(o.category, []).append(o)
+
+    visible_pois = [p for p in cand_pois if poi_visible_to(p, viewer_owner_ids)]
     nearest_pois = _nearest(visible_pois, _poi_summary)
-    # Per-category so a dense category (e.g. resources) can't starve a sparse
-    # one (e.g. wildlife) out of the merged list.
-    by_cat = {}
-    for o in nav.observations.values():
-        by_cat.setdefault(o.category, []).append(o)
     nearest_observations = []
     for cat in OBSERVATION_CATEGORIES:
-        nearest_observations += _nearest(by_cat.get(cat, []), _observation_summary)
+        nearest_observations += _nearest(obs_by_cat.get(cat, []), _observation_summary)
 
     # "What's around me" forecast — only meaningful on a body surface. Ores and
     # harvestables are forecast separately (their compositions are never pooled).

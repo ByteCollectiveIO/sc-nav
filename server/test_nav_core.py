@@ -4329,5 +4329,79 @@ class ResourceValueTierTests(unittest.TestCase):
         self.assertEqual(nav_core.resource_value_tiers({"a": 10.6})["a"]["sell"], 11)
 
 
+class ScopeIndexTests(unittest.TestCase):
+    """compute_state pulls candidates from a cached per-container index instead of
+    scanning the whole dataset every call (the per-recompute cost that a 50-player
+    mapping party multiplies). The index must scope exactly like the old
+    _in_scope filter did AND self-invalidate when the dataset changes."""
+
+    R = 295_000.0
+
+    def _nav(self):
+        nav = nav_core.NavData()
+        # Two bodies, far apart so a fix at one isn't within the other's radius.
+        for name, pos in [("Yela", (0.0, 0.0, 0.0)), ("Daymar", (5e9, 0.0, 0.0))]:
+            nav.containers[("Stanton", name)] = nav_core.Container(
+                name=name, system="Stanton", type="Moon", internal_name="",
+                pos=pos, body_radius=self.R, om_radius=0, grid_radius=0,
+                rotation_speed=0, rotation_adjustment=0,
+            )
+        return nav
+
+    def _obs(self, nav, oid, body, gm):
+        # Explicit global_m so distance resolves; container_name drives scoping.
+        nav.observations[oid] = nav_core.Observation(
+            id=oid, category="resource", system="Stanton", container_name=body,
+            local_km=None, global_m=gm, latitude=None, longitude=None, height_m=0.0,
+            biome=None, note=None, owner_id=None, owner_handle=None,
+            observed_at="2026-01-01", data={"ore": "Quantanium"},
+        )
+
+    def test_build_scope_index_buckets_by_container(self):
+        nav = self._nav()
+        self._obs(nav, 1, "Yela", (0.0, 0.0, 0.0))
+        self._obs(nav, 2, "Yela", (0.0, 0.0, 0.0))
+        self._obs(nav, 3, "Daymar", (5e9, 0.0, 0.0))
+        _pois, obs = nav_core.build_scope_index(nav)
+        self.assertEqual({o.id for o in obs[("Stanton", "Yela")]["resource"]}, {1, 2})
+        self.assertEqual({o.id for o in obs[("Stanton", "Daymar")]["resource"]}, {3})
+
+    def test_scope_index_caches_and_rebuilds_on_count_change(self):
+        nav = self._nav()
+        self._obs(nav, 1, "Yela", (0.0, 0.0, 0.0))
+        _, obs_a = nav_core.scope_index(nav)
+        _, obs_a2 = nav_core.scope_index(nav)
+        self.assertIs(obs_a, obs_a2)                 # same count -> cached object
+        self._obs(nav, 2, "Yela", (0.0, 0.0, 0.0))   # count changed
+        _, obs_b = nav_core.scope_index(nav)
+        self.assertIsNot(obs_a, obs_b)               # rebuilt, not stale
+        self.assertEqual({o.id for o in obs_b[("Stanton", "Yela")]["resource"]}, {1, 2})
+
+    def test_compute_state_scopes_to_current_body(self):
+        nav = self._nav()
+        self._obs(nav, 1, "Yela", (100_000.0, 0.0, 0.0))
+        self._obs(nav, 2, "Daymar", (5e9, 0.0, 0.0))
+        at_yela = (100_000.0, 0.0, 0.0)   # inside Yela's detection radius
+        self.assertEqual(detect_container(nav, at_yela).name, "Yela")
+        ids = {o["id"] for o in compute_state(nav, at_yela, time.time())["nearest_observations"]}
+        self.assertIn(1, ids)          # this body's node surfaces
+        self.assertNotIn(2, ids)       # the other body's node is scoped out entirely
+        # Cache invalidation end-to-end: a freshly-added node on this body appears
+        # on the next recompute (no stale index).
+        self._obs(nav, 3, "Yela", (100_000.0, 0.0, 0.0))
+        ids2 = {o["id"] for o in compute_state(nav, at_yela, time.time())["nearest_observations"]}
+        self.assertIn(3, ids2)
+
+    def test_deep_space_considers_all_systems(self):
+        nav = self._nav()
+        self._obs(nav, 1, "Yela", (100_000.0, 0.0, 0.0))
+        self._obs(nav, 2, "Daymar", (5e9, 0.0, 0.0))
+        # No container in deep space -> everything is in scope (matches old behavior).
+        deep = (9e12, 9e12, 9e12)
+        self.assertIsNone(detect_container(nav, deep))
+        ids = {o["id"] for o in compute_state(nav, deep, time.time())["nearest_observations"]}
+        self.assertEqual(ids, {1, 2})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
