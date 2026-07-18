@@ -1449,13 +1449,85 @@ def nearest_qt_marker(nav: NavData, target, t_ref: float):
 
 def assign_qt_markers(nav: NavData, t_ref: float | None = None) -> None:
     """(Re)build the QT index and assign every POI/observation its nearest
-    QT-marker name + distance. Run after load and after a dataset refresh."""
+    QT-marker name + distance. Run after load and after a dataset refresh.
+    Scales with TOTAL entities (~33 ms at today's 2.1k POIs, ~280 ms with 10k
+    observations) and single-marker events run under hub.lock on the event
+    loop — those use qt_marker_added / qt_marker_removed instead; this full
+    rebuild stays for feed loads and admin override sweeps."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     index_qt_markers(nav)
     for p in nav.pois.values():
         p.nearest_qt, p.nearest_qt_dist_m = nearest_qt_marker(nav, p, t_ref)
     for o in nav.observations.values():
         o.nearest_qt, o.nearest_qt_dist_m = nearest_qt_marker(nav, o, t_ref)
+
+
+def _has_tier1_marker(nav: NavData, e, exclude=None) -> bool:
+    """Whether `e` has any same-body QT-marker candidate (excluding `exclude`)
+    — if one exists, e's assignment is (or will be) the same-body tier, which
+    beats ANY off-body marker regardless of distance (nearest_qt_marker's
+    preference order)."""
+    if e.container_name is None or e.local_km is None:
+        return False
+    for p in nav.qt_by_container.get((e.system, e.container_name), ()):
+        if p is e or p is exclude or p.local_km is None:
+            continue
+        return True
+    return False
+
+
+def qt_marker_added(nav: NavData, m, t_ref: float | None = None) -> None:
+    """Fold ONE newly-jumpable marker into the index + nearest assignments —
+    a new marker can only IMPROVE an assignment, so this is a single
+    compare-per-entity pass (~0.7 ms) instead of the full O(entities ×
+    markers) rebuild. Tier rule preserved: a same-body marker beats any
+    off-body one outright; distances compare only within a tier."""
+    if (not getattr(m, "qt_marker", False) or getattr(m, "private", False)
+            or not poi_active(m)):
+        return
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    if not any(p is m for p in nav.qt_markers):
+        nav.qt_markers.append(m)
+        nav.qt_by_container.setdefault((m.system, m.container_name), []).append(m)
+    m.nearest_qt, m.nearest_qt_dist_m = m.name, 0.0
+    mg = entity_global_m(nav, m, t_ref)
+    for bucket in (nav.pois.values(), nav.observations.values()):
+        for e in list(bucket):
+            if e is m or e.system != m.system or getattr(e, "qt_marker", False):
+                continue
+            tier1 = (m.container_name is not None
+                     and e.container_name == m.container_name
+                     and e.local_km is not None and m.local_km is not None)
+            if tier1:
+                d = dist3(e.local_km, m.local_km) * 1000.0
+                if (not _has_tier1_marker(nav, e, exclude=m)
+                        or e.nearest_qt_dist_m is None
+                        or d < e.nearest_qt_dist_m):
+                    e.nearest_qt, e.nearest_qt_dist_m = m.name, d
+            else:
+                # Fallback tier: can never beat a same-body assignment.
+                if _has_tier1_marker(nav, e, exclude=m) or mg is None:
+                    continue
+                eg = entity_global_m(nav, e, t_ref)
+                if eg is None:
+                    continue
+                d = dist3(eg, mg)
+                if e.nearest_qt_dist_m is None or d < e.nearest_qt_dist_m:
+                    e.nearest_qt, e.nearest_qt_dist_m = m.name, d
+
+
+def qt_marker_removed(nav: NavData, name: str,
+                      t_ref: float | None = None) -> None:
+    """A marker stopped being jumpable (deleted, went private, flagged bad):
+    rebuild the small index, then re-resolve ONLY the entities that pointed at
+    it (~1 ms for the worst real marker's 48 dependents). Call AFTER the
+    disqualifying mutation so index_qt_markers excludes it."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    index_qt_markers(nav)
+    for bucket in (nav.pois.values(), nav.observations.values()):
+        for e in list(bucket):
+            if e.nearest_qt == name:
+                e.nearest_qt, e.nearest_qt_dist_m = nearest_qt_marker(nav, e, t_ref)
 
 
 def search_pois(

@@ -2672,10 +2672,11 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         print(f"[sc-nav] custom poi save failed: {exc}")
     nav.pois[poi.id] = poi
     nav.touch()
-    # A new QT marker changes the nearest-jump answer for every other entity,
-    # so rebuild the index + reassign nearest_qt across the dataset.
+    # A new QT marker changes the nearest-jump answer for other entities; the
+    # single-marker improvement pass keeps this capture-path work off the
+    # full O(entities × markers) rebuild (this runs under hub.lock).
     if poi.qt_marker:
-        nav_core.assign_qt_markers(nav)
+        nav_core.qt_marker_added(nav, poi)
     sess.last_capture = {
         "kind": "poi", "id": poi.id, "name": poi.name, "type": poi.type,
         "container": poi.container_name or "Space", "system": poi.system,
@@ -7080,10 +7081,14 @@ async def update_custom_poi(poi_id: int, body: PoiEditIn, user: dict = Depends(r
             db.update_custom_poi_private(poi_id, body.private)
             poi.private = body.private
             nav.touch()
-            # A QT marker going private (or back) changes the shared jump index,
-            # so rebuild it + reassign nearest_qt across the dataset.
+            # A QT marker going private (or back) changes the shared jump
+            # index: private = it left (re-resolve its dependents only),
+            # public = it returned (single-marker improvement pass).
             if poi.qt_marker:
-                nav_core.assign_qt_markers(nav)
+                if poi.private:
+                    nav_core.qt_marker_removed(nav, poi.name)
+                else:
+                    nav_core.qt_marker_added(nav, poi)
         hub.mark_dataset_dirty()
     return {"ok": True, "note": poi.note, "private": poi.private}
 
@@ -7099,10 +7104,10 @@ async def delete_custom_poi(poi_id: int, user: dict = Depends(require_session)):
         db.delete_custom_poi(poi_id)
         nav.pois.pop(poi_id, None)
         nav.touch()
-        # Removing a QT marker leaves other entities pointing at a marker that's
-        # gone, so rebuild the index + reassign nearest_qt across the dataset.
+        # Removing a QT marker leaves other entities pointing at a marker
+        # that's gone — re-resolve just its dependents.
         if was_qt:
-            nav_core.assign_qt_markers(nav)
+            nav_core.qt_marker_removed(nav, removed.name)
         hub.forget_entity(poi_id)
         hub.mark_dataset_dirty()
     return {"ok": True}

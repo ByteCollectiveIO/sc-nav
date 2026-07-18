@@ -308,6 +308,102 @@ class CustomPoiTests(unittest.TestCase):
         self.assertEqual(nav2.pois[ref.id].nearest_qt, "Test OM")
 
 
+class QtIncrementalTests(unittest.TestCase):
+    """Single-marker QT index maintenance (scaling deferral #3): the full
+    assign_qt_markers rebuild scales with total entities and runs under
+    hub.lock, so the common events use incremental paths — qt_marker_added
+    (improvement pass) and qt_marker_removed (dependents-only re-resolve).
+    The gold standard for both is EXACT parity with the full rebuild,
+    including the same-body-beats-any-off-body tier preference."""
+
+    @staticmethod
+    def _snap(nav):
+        return {("p", p.id): (p.nearest_qt, p.nearest_qt_dist_m)
+                for p in nav.pois.values()} | \
+               {("o", o.id): (o.nearest_qt, o.nearest_qt_dist_m)
+                for o in nav.observations.values()}
+
+    def _assert_parity(self, nav):
+        got = self._snap(nav)
+        nav_core.assign_qt_markers(nav)
+        self.assertEqual(got, self._snap(nav))
+
+    def test_added_on_body_marker_matches_full_rebuild(self):
+        t = time.time()
+        nav = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav)
+        ref = [p for p in nav.pois.values()
+               if p.container_name == "Daymar" and not p.qt_marker and p.local_km][0]
+        pos = poi_global_m(nav, ref, t)
+        marker = nav_core.custom_poi_from_position(
+            nav, pos, t, "Inc OM", "Orbital Marker", 1000010, qt_marker=True)
+        nav.pois[marker.id] = marker
+        nav_core.qt_marker_added(nav, marker)
+        self.assertTrue(any(p is marker for p in nav.qt_markers))
+        self.assertEqual((marker.nearest_qt, marker.nearest_qt_dist_m),
+                         ("Inc OM", 0.0))                    # self-assignment
+        self.assertEqual(nav.pois[ref.id].nearest_qt, "Inc OM")
+        self._assert_parity(nav)
+
+    def test_added_deep_space_marker_matches_full_rebuild(self):
+        nav = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav)
+        marker = nav_core.custom_poi_from_position(
+            nav, (30_000_000e3, 1.0e9, 0.0), time.time(),
+            "Deep Beacon", "Custom", 1000011, qt_marker=True)
+        nav.pois[marker.id] = marker
+        nav_core.qt_marker_added(nav, marker)
+        self._assert_parity(nav)
+
+    def test_removed_marker_reassigns_only_dependents_to_parity(self):
+        nav = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav)
+        victim = max(nav.qt_markers, key=lambda m: sum(
+            1 for p in nav.pois.values() if p.nearest_qt == m.name))
+        self.assertTrue(any(p.nearest_qt == victim.name
+                            for p in nav.pois.values()))     # has dependents
+        victim.qt_marker = False
+        nav_core.qt_marker_removed(nav, victim.name)
+        self.assertFalse(any(p is victim for p in nav.qt_markers))
+        self.assertFalse(any(p.nearest_qt == victim.name
+                             for p in nav.pois.values()))   # nobody points at it
+        self._assert_parity(nav)
+
+    def test_private_flip_round_trip_matches_full_rebuild(self):
+        t = time.time()
+        nav = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav)
+        ref = [p for p in nav.pois.values()
+               if p.container_name == "Daymar" and not p.qt_marker and p.local_km][0]
+        marker = nav_core.custom_poi_from_position(
+            nav, poi_global_m(nav, ref, t), t, "Flip OM", "Orbital Marker",
+            1000012, qt_marker=True)
+        nav.pois[marker.id] = marker
+        nav_core.qt_marker_added(nav, marker)
+        # goes private: leaves the shared index, dependents re-resolve
+        marker.private = True
+        nav_core.qt_marker_removed(nav, marker.name)
+        self._assert_parity(nav)
+        # back to public: the improvement pass restores it
+        marker.private = False
+        nav_core.qt_marker_added(nav, marker)
+        self.assertEqual(nav.pois[ref.id].nearest_qt, "Flip OM")
+        self._assert_parity(nav)
+
+    def test_added_ignores_private_or_non_marker(self):
+        nav = load_data(DATA_DIR)
+        nav_core.assign_qt_markers(nav)
+        before = self._snap(nav)
+        plain = nav_core.custom_poi_from_position(
+            nav, (1.0e9, 1.0e9, 0.0), time.time(), "Not a marker", "Custom",
+            1000013, qt_marker=False)
+        nav.pois[plain.id] = plain
+        nav_core.qt_marker_added(nav, plain)          # must be a no-op
+        self.assertFalse(any(p is plain for p in nav.qt_markers))
+        after = {k: v for k, v in self._snap(nav).items() if k != ("p", plain.id)}
+        self.assertEqual(before, after)
+
+
 class PrivatePoiTests(unittest.TestCase):
     def _private_poi(self, nav, t, owner_id=7):
         ref = [p for p in nav.pois.values()
