@@ -479,6 +479,10 @@ def init(db_path) -> None:
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")
     _conn.execute("PRAGMA busy_timeout=5000")
+    # WAL-safe durability relaxation: fsync on checkpoint, not per commit. A
+    # power loss can drop the last few commits but can't corrupt the DB —
+    # the right trade for per-position/per-capture writes on the event loop.
+    _conn.execute("PRAGMA synchronous=NORMAL")
     with _lock, _conn:
         _conn.executescript(SCHEMA)
         # Migrate DBs created before a column existed (CREATE TABLE IF NOT EXISTS
