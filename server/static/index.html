@@ -6245,9 +6245,11 @@ function connect() {
     } else if (msg.type === "dataset") {
       // The shared POI/observation set changed (someone captured or deleted) —
       // refetch the whole-dataset rows so the filtered NEARBY view + contributor
-      // dropdown catch up, not just the live map. Debounced against bursts.
+      // dropdown catch up, not just the live map. Debounced against bursts, and
+      // jittered: every open tab gets this frame at once, so a fixed delay
+      // would stampede the single-worker origin with synchronized refetches.
       clearTimeout(datasetRefreshTimer);
-      datasetRefreshTimer = setTimeout(loadAll, 400);
+      datasetRefreshTimer = setTimeout(loadAll, 400 + Math.random() * 2600);
     } else if (msg.type === "online") {
       renderOnline(msg.count);
     } else if (msg.type === "online_roster") {

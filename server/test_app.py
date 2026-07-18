@@ -3127,6 +3127,47 @@ class DatasetRefreshCoalesceTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_build_state_is_pure(self):
+        # The off-loop flush relies on _build_state never writing the session:
+        # it must return a fresh dict and leave nav_state untouched.
+        s = self._sess("tabbed", tab=True)
+        s.pos, s.t = (1.0, 2.0, 3.0), time.time()
+        s.recompute()
+        before = s.nav_state
+        ns = s._build_state()
+        self.assertIs(s.nav_state, before)     # no session write
+        self.assertIsNot(ns, before)           # a genuinely fresh dict
+
+    def test_flush_discards_stale_build_when_position_moved(self):
+        # Snapshot → build → revalidate: if a position post lands while the
+        # worker thread is building, the session's own (fresher) recompute
+        # must win — the flush's stale build is discarded, not adopted.
+        async def _run():
+            s = self._sess("tabbed", tab=True)
+            s.pos, s.t = (1.0, 2.0, 3.0), time.time()
+            orig_build = app.Session._build_state
+            calls = {"n": 0}
+
+            def racing_build(self_s):
+                calls["n"] += 1
+                ns = orig_build(self_s)
+                if calls["n"] == 1:
+                    # simulate a position post landing mid-batch
+                    self_s.pos, self_s.t = (9.0, 9.0, 9.0), time.time()
+                    self_s.recompute()          # re-enters (guarded by calls)
+                    self_s.nav_state = dict(self_s.nav_state, sentinel="fresh")
+                return ns
+
+            app.Session._build_state = racing_build
+            try:
+                app.hub.mark_dataset_dirty()
+                await app.hub.flush_dataset_refresh(app.hub.take_dataset_refresh())
+            finally:
+                app.Session._build_state = orig_build
+            self.assertEqual((s.nav_state or {}).get("sentinel"), "fresh")
+
+        asyncio.run(_run())
+
 
 class BrandingAndMotdTests(unittest.TestCase):
     """Custom guild branding: the admin-set org name (shown pre-auth on the login
