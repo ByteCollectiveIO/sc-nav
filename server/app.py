@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import time
 import traceback
 import urllib.parse
@@ -927,6 +928,16 @@ class MemberDirectory:
         self.by_id.setdefault(did, {"discord_id": did})["playstyle_tags"] = \
             json.dumps(tags) if tags else None
 
+    def set_active_survey_zone(self, discord_id: str, zone_id: int | None) -> None:
+        did = str(discord_id)
+        db.set_member_active_survey_zone(did, zone_id)
+        self.by_id.setdefault(did, {"discord_id": did})["active_survey_zone"] = zone_id
+
+    def active_survey_zone(self, discord_id: str) -> int | None:
+        m = self.by_id.get(str(discord_id))
+        z = (m or {}).get("active_survey_zone")
+        return z if isinstance(z, int) else None
+
     def forget(self, discord_id: str) -> None:
         self.by_id.pop(str(discord_id), None)
 
@@ -1336,6 +1347,9 @@ class SurveyPayloadIn(BaseModel):
     ores: list[str] = Field(default_factory=list, max_length=10)
     salvage: bool = False
     source: str | None = Field(default=None, max_length=16)  # contract | freeroam
+    # Named survey zone (#36.1): explicit per-mark tag. None → the arming
+    # member's active zone is used (the common path).
+    zone_id: int | None = None
 
 
 class CaptureIn(BaseModel):
@@ -2671,6 +2685,13 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
                       "salvage": bool(s.salvage)}
             if s.source in ("contract", "freeroam"):
                 survey["source"] = s.source
+            # Tag the mark to a named zone (#36.1): an explicit zone_id wins,
+            # else the member's active zone. Only a zone that still exists is
+            # stamped (a deleted zone silently drops to an untagged mark).
+            zid = s.zone_id if s.zone_id is not None \
+                else members_dir.active_survey_zone(user["id"])
+            if zid is not None and db.get_survey_zone(zid) is not None:
+                survey["zone_id"] = zid
         sess.capture_pending = {
             "kind": "poi", "name": name, "type": poi_type,
             # A QT marker is shared navigation infrastructure, so private wins:
@@ -4246,17 +4267,22 @@ def get_halo_targets(system: str = "Stanton",
     elif belt["kind"] == "ring":
         doc["ring"] = {"r_m": belt["r_m"],
                        "pocket_radius_m": belt["pocket_radius_m"]}
-        doc["pockets"] = [{"key": p["key"], "kind": p["kind"],
-                           "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
-                           "grid_radius_m": p["grid_radius_m"]}
-                          for p in belt["pockets"]]
         # Belt survey (#36): the Keeger region + the org's surveyed pockets,
         # computed live from the marks (never cached — deleting a mark heals
         # the map on the next read).
+        marks = nav_core.survey_marks(nav, system)
+        # Overlay the org's in-pocket findings onto the datamined ring pockets
+        # (#36): a surveyed-barren pocket carries a `survey` block so the picker
+        # can badge it and the planner down-ranks it.
+        pockets = nav_core.annotate_glaciem_survey(belt["pockets"], marks)
+        doc["pockets"] = [{"key": p["key"], "kind": p["kind"],
+                           "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
+                           "grid_radius_m": p["grid_radius_m"],
+                           **({"survey": p["survey"]} if p.get("survey") else {})}
+                          for p in pockets]
         doc["keeger"] = {"r_m": nav_core.KEEGER_R_M,
                          "radial_tol_m": nav_core.KEEGER_RADIAL_TOL_M,
                          "z_tol_m": nav_core.KEEGER_Z_TOL_M}
-        marks = nav_core.survey_marks(nav, system)
         surveyed = nav_core.survey_pockets(nav, system)
         doc["surveyed"] = [{"key": p["key"], "kind": p["kind"],
                             "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
@@ -4324,7 +4350,14 @@ def _halo_goal_system(body: HaloPlanIn) -> str | None:
         return nav_core.HALO_SYSTEM
     if body.field_uuid is not None:
         return nav_core.PYRO_SYSTEM
-    if body.pocket_key is not None or body.belt is not None:
+    if body.pocket_key is not None:
+        # A zone pin (#36.1) can name any system; resolve it before defaulting
+        # to Nyx (datamined/SVY keys are always Nyx).
+        for z in db.list_survey_zones():
+            if z["slug"].lower() == body.pocket_key.lower():
+                return z["system"]
+        return nav_core.GLACIEM_SYSTEM
+    if body.belt is not None:
         return nav_core.GLACIEM_SYSTEM
     if body.target_poi_id is not None:
         tp = nav.pois.get(body.target_poi_id)
@@ -4341,6 +4374,16 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
     so they're always a 400 — never a 404 on an incidental bad id."""
     belt = nav.belts.get(system) or {}
     kind = belt.get("kind")
+    # Named zones (#36.1) are plannable in ANY system — resolve a zone pin here,
+    # before the ring-only pocket guard below.
+    if body.pocket_key is not None:
+        zone = next((z for z in _survey_zones_view(system)
+                     if z["key"].lower() == body.pocket_key.lower()), None)
+        if zone is not None:
+            if not zone.get("xyz"):
+                raise HTTPException(status_code=400,
+                                    detail="that zone has no survey marks yet — drop one with ⛏ first")
+            return {"pockets": [zone]}
     if body.band is not None and kind != "bands":
         raise HTTPException(status_code=400,
                             detail=f"bands are an Aaron Halo ({nav_core.HALO_SYSTEM}) goal")
@@ -4387,11 +4430,15 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
             latitude=None, longitude=None, height_m=None, qt_marker=False)}
     if kind == "ring":
         surveyed = nav_core.survey_pockets(nav, system)
+        # Datamined ring pockets carry the org's survey overlay so the solver
+        # sees a barren verdict and down-ranks it (#36).
+        glac = nav_core.annotate_glaciem_survey(
+            belt["pockets"], nav_core.survey_marks(nav, system))
         if body.pocket_key is not None:
             # A pin names one pocket outright; both pools are searchable
             # (datamined Glaciem keys + org SVY-* keys), so a pinned survey
             # pocket needs no belt selector.
-            pin = next((p for p in list(belt["pockets"]) + surveyed
+            pin = next((p for p in glac + surveyed
                         if p["key"].lower() == body.pocket_key.lower()), None)
             if pin is None:
                 raise HTTPException(status_code=404, detail="unknown pocket_key")
@@ -4405,7 +4452,7 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
         # AUTO (Glaciem): free-roam pockets only. Mission arcs are believed
         # contract-gated (opt-in), and the Levski pocket is Delamar — you'd
         # just fly from Levski.
-        auto = [p for p in belt["pockets"]
+        auto = [p for p in glac
                 if p["kind"] == "general"
                 or (body.include_mission and p["kind"] == "mission")]
         if not auto:
@@ -4473,6 +4520,15 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
     if system not in nav.belts:
         raise HTTPException(status_code=404, detail="unknown system")
     marks = nav_core.survey_marks(nav, system)
+    # Ring pockets the org has surveyed (barren or rich): ties the otherwise
+    # inert in-Glaciem marks back to their datamined pocket (#36).
+    belt = nav.belts.get(system) or {}
+    glaciem = ([{"key": p["key"], "kind": p["kind"],
+                 "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
+                 "grid_radius_m": p["grid_radius_m"], **p["survey"]}
+                for p in nav_core.annotate_glaciem_survey(
+                    belt.get("pockets", []), marks) if p.get("survey")]
+               if belt.get("kind") == "ring" else [])
     return {
         "system": system,
         "marks": [{"id": m["id"], "name": m["name"],
@@ -4481,6 +4537,8 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
                    "salvage": m["salvage"], "owner_handle": m["owner_handle"]}
                   for m in marks],
         "pockets": nav_core.survey_pockets(nav, system),
+        "glaciem": glaciem,
+        "zones": _survey_zones_view(system),
         "model": nav_core.survey_field_model(
             [m for m in marks if not nav_core.glaciem_contains(m["xyz"])]),
         "model_min": nav_core.SURVEY_MODEL_MIN_MARKS,
@@ -4520,7 +4578,131 @@ async def clear_survey_marks(body: SurveyClearIn,
     ids = await asyncio.to_thread(db.clear_survey_pois, body.system)
     for pid in ids:
         nav.pois.pop(pid, None)
-    return {"ok": True, "deleted": len(ids)}
+    # Zones are keyed to the marks; heal them together (#36.1).
+    zones = await asyncio.to_thread(db.clear_survey_zones, body.system)
+    return {"ok": True, "deleted": len(ids), "zones_cleared": len(zones)}
+
+
+# --- named survey zones (#36.1) --------------------------------------------
+
+
+def _zone_slug(name: str) -> str:
+    """A stable, pin-friendly key from a zone name: lowercased, non-alnum → '-'.
+    Falls back to 'zone' so an all-symbol name still yields a usable slug."""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug[:40] or "zone"
+
+
+def _survey_zones_view(system: str) -> list[dict]:
+    """Derived state for every zone in `system` (geometry recomputed live from
+    the marks tagged to it), newest-plannable order preserved by id."""
+    zones = db.list_survey_zones(system)
+    return nav_core.survey_zones_state(nav, system, zones)
+
+
+class ZoneIn(BaseModel):
+    name: str = Field(min_length=1, max_length=48)
+    system: str | None = Field(default=None, max_length=24)
+
+
+class ZonePatchIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=48)
+    closed: bool | None = None
+
+
+class ActiveZoneIn(BaseModel):
+    zone_id: int | None = None
+
+
+@app.get("/api/halo/survey/zones")
+def list_survey_zones(system: str = "Nyx", user: dict = Depends(require_session)):
+    """Every named survey zone in a system, with geometry derived live from its
+    marks (#36.1). Feeds the zone picker + the active-zone banner + the planner
+    pin list."""
+    return {"system": system, "zones": _survey_zones_view(system)}
+
+
+@app.post("/api/halo/survey/zones")
+async def create_survey_zone(body: ZoneIn, user: dict = Depends(require_session)):
+    """Create a named survey zone and make it the caller's active zone (every
+    ⛏ mark they drop now auto-tags to it). System defaults to the caller's
+    current fix system so 'new zone' is one tap where you're standing."""
+    system = body.system
+    if system is None:
+        async with hub.lock:
+            sess = hub.sessions.get(user["id"])
+            if sess and sess.pos is not None:
+                system = _halo_fix_system(sess.pos, sess)
+    system = system or "Nyx"
+    if system not in nav.belts:
+        raise HTTPException(status_code=400, detail="unknown system")
+    owner = (hub.get(user).owner or {}) if user else {}
+    try:
+        zid = await asyncio.to_thread(
+            db.create_survey_zone, _zone_slug(body.name), body.name.strip(),
+            system, user["id"], owner.get("handle"), time.time())
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409,
+                            detail="a zone with that name already exists in this system")
+    members_dir.set_active_survey_zone(user["id"], zid)
+    return {"ok": True, "zone": db.get_survey_zone(zid), "active_survey_zone": zid}
+
+
+@app.patch("/api/halo/survey/zones/{zone_id}")
+async def patch_survey_zone(zone_id: int, body: ZonePatchIn,
+                            user: dict = Depends(require_session)):
+    """Rename / close / reopen a zone. Owner or admin only (renaming re-slugs;
+    a slug collision 409s)."""
+    zone = db.get_survey_zone(zone_id)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="unknown zone")
+    _require_zone_owner(zone, user)
+    slug = _zone_slug(body.name) if body.name is not None else None
+    try:
+        await asyncio.to_thread(db.update_survey_zone, zone_id,
+                                body.name.strip() if body.name is not None else None,
+                                slug, body.closed)
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="that name collides with another zone")
+    return {"ok": True, "zone": db.get_survey_zone(zone_id)}
+
+
+@app.delete("/api/halo/survey/zones/{zone_id}")
+async def remove_survey_zone(zone_id: int, user: dict = Depends(require_session)):
+    """Delete a zone. Its marks are NOT destroyed — they're untagged (revert to
+    proximity clustering). Owner or admin only."""
+    zone = db.get_survey_zone(zone_id)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="unknown zone")
+    _require_zone_owner(zone, user)
+    # Untag the live marks (+ persist) so they fall back to proximity clustering.
+    for poi in nav.pois.values():
+        sv = getattr(poi, "survey", None)
+        if sv and sv.get("zone_id") == zone_id:
+            sv.pop("zone_id", None)
+            await asyncio.to_thread(db.add_custom_poi, nav_core.custom_poi_to_dict(poi))
+    await asyncio.to_thread(db.delete_survey_zone, zone_id)
+    return {"ok": True}
+
+
+@app.put("/api/halo/survey/zones/active")
+def set_active_survey_zone(body: ActiveZoneIn, user: dict = Depends(require_session)):
+    """Set (or clear, with null) the caller's active survey zone — the tag
+    stamped onto their next ⛏ marks. This is the 'start/stop surveying' control."""
+    if body.zone_id is not None and db.get_survey_zone(body.zone_id) is None:
+        raise HTTPException(status_code=404, detail="unknown zone")
+    members_dir.set_active_survey_zone(user["id"], body.zone_id)
+    return {"ok": True, "active_survey_zone": body.zone_id}
+
+
+def _require_zone_owner(zone: dict, user: dict) -> None:
+    """A zone is editable by its creator (by discord_id — always present, unlike
+    a handle-derived PlayerID) or an admin."""
+    if user.get("is_admin"):
+        return
+    if zone.get("created_by") == str(user["id"]):
+        return
+    raise HTTPException(status_code=403, detail="only the zone's creator or an admin can change it")
 
 
 @app.post("/api/halo/plan")
@@ -4559,7 +4741,11 @@ async def get_halo_locate(target_poi_id: int | None = None,
     if belt is None:
         view = {"status": "other_system"}
     elif belt["kind"] == "ring":
-        view = nav_core.glaciem_locate(pos, belt["pockets"])
+        # Annotate with the org survey overlay so re-entering a mapped-empty
+        # pocket reports 'surveyed barren' straight away (#36).
+        pockets = nav_core.annotate_glaciem_survey(
+            belt["pockets"], nav_core.survey_marks(nav, fix_system))
+        view = nav_core.glaciem_locate(pos, pockets)
         if view["status"] == "off_ring":
             # Not Glaciem space — maybe Keeger (#36): the region envelope or
             # one of the org's surveyed pockets.
@@ -7933,6 +8119,7 @@ async def api_me(user: dict = Depends(require_session)):
             "motd": motd["text"], "motd_updated": motd["updated"],
             "ships": db.list_user_ships(user["id"]),
             "playstyle_tags": member_playstyles(members_dir.get(user["id"])),
+            "active_survey_zone": members_dir.active_survey_zone(user["id"]),
             **_member_identity(user["id"])}
 
 

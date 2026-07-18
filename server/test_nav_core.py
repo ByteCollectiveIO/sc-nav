@@ -240,6 +240,30 @@ class CustomPoiTests(unittest.TestCase):
         state = compute_state(nav2, pos, t)
         self.assertIn(1000002, [n["id"] for n in state["nearest_pois"]])
 
+    def test_survey_marks_split_out_of_nearest_pois(self):
+        # Survey marks (#36) must not crowd the distance-capped NEARBY list:
+        # they land in `nearest_survey`, never `nearest_pois`, so real POIs
+        # (even a farther one) still surface.
+        t = time.time()
+        ref = surface_pois("Yela")[0]
+        pos = poi_global_m(NAV, ref, t)
+        nav2 = load_data(DATA_DIR)
+        normal = nav_core.custom_poi_from_position(
+            nav2, pos, t, "Cache Z", "Cave", 1000010)
+        nav2.pois[normal.id] = normal
+        for i in range(20):                        # a pocket's worth of marks
+            sp = nav_core.custom_poi_from_position(
+                nav2, pos, t, f"Survey {i}", "survey", 1000020 + i,
+                survey={"rocks": "none", "ores": [], "salvage": False})
+            nav2.pois[sp.id] = sp
+        state = compute_state(nav2, pos, t)
+        near_ids = [n["id"] for n in state["nearest_pois"]]
+        surv_ids = [n["id"] for n in state["nearest_survey"]]
+        self.assertIn(1000010, near_ids)                       # real POI survives
+        self.assertFalse(any(1000020 <= i < 1000040 for i in near_ids))
+        self.assertEqual(len(surv_ids), 10)                    # capped, own list
+        self.assertTrue(all(1000020 <= i < 1000040 for i in surv_ids))
+
     def test_owner_round_trips(self):
         t = time.time()
         pos = poi_global_m(NAV, surface_pois("Daymar")[0], t)
@@ -4128,6 +4152,95 @@ class BeltRegistryTests(unittest.TestCase):
         off = nav_core.glaciem_locate((10.0e9, 0, 0), pockets)
         self.assertEqual(off["status"], "off_ring")
         self.assertAlmostEqual(off["to_ring_m"], 5.0e9, delta=1e7)
+
+    def _survey_mark(self, xyz, rocks, ores=(), salvage=False, mid=1):
+        return {"id": 1_000_000 + mid, "name": f"Survey {mid}", "xyz": tuple(xyz),
+                "rocks": rocks, "positive": rocks != "none",
+                "ores": list(ores), "salvage": salvage, "owner_handle": None}
+
+    def test_annotate_glaciem_survey_barren_and_rich(self):
+        pockets = self.belts["Nyx"]["pockets"]
+        pk = next(p for p in pockets if p["kind"] == "general")
+        other = next(p for p in pockets
+                     if p["kind"] == "general" and p["key"] != pk["key"])
+        c = pk["xyz"]
+        # Three empty marks inside pk (nearest to center = 4 km); one dense
+        # Iron mark inside `other`; one far mark that belongs to NEITHER pocket.
+        marks = [
+            self._survey_mark((c[0] + 4_000, c[1], c[2]), "none", mid=1),
+            self._survey_mark((c[0], c[1] + 900_000, c[2]), "none", mid=2),
+            self._survey_mark((c[0] - 2_000_000, c[1], c[2]), "none", mid=3),
+            self._survey_mark((other["xyz"][0], other["xyz"][1] + 50_000,
+                               other["xyz"][2]), "dense", ores=["Iron (Ore)"], mid=4),
+            self._survey_mark((10.0e9, 0.0, 0.0), "dense", mid=5),  # off-ring
+        ]
+        ann = nav_core.annotate_glaciem_survey(pockets, marks)
+        by = {p["key"]: p for p in ann}
+        self.assertEqual(by[pk["key"]]["survey"]["status"], "barren")
+        self.assertEqual(by[pk["key"]]["survey"]["marks"], 3)
+        self.assertEqual(by[pk["key"]]["survey"]["positive"], 0)
+        self.assertAlmostEqual(by[pk["key"]]["survey"]["closest_center_m"],
+                               4_000, delta=1.0)
+        self.assertEqual(by[other["key"]]["survey"]["status"], "dense")
+        self.assertEqual(by[other["key"]]["survey"]["ores"], ["Iron (Ore)"])
+        # unsurveyed pockets carry no overlay; the off-ring mark is unassigned
+        self.assertEqual(sum(1 for p in ann if "survey" in p), 2)
+        # originals never mutated
+        self.assertNotIn("survey", pk)
+
+    def test_glaciem_pocket_survey_lookup(self):
+        pockets = self.belts["Nyx"]["pockets"]
+        pk = next(p for p in pockets if p["kind"] == "general")
+        marks = [self._survey_mark((pk["xyz"][0] + 3_000, pk["xyz"][1],
+                                    pk["xyz"][2]), "none", mid=1)]
+        ann = nav_core.annotate_glaciem_survey(pockets, marks)
+        inside = nav_core.glaciem_pocket_survey(
+            (pk["xyz"][0] + 1_000, pk["xyz"][1], pk["xyz"][2]), ann)
+        self.assertEqual(inside["status"], "barren")
+        # a ring-void point between pockets sees no verdict
+        a = math.atan2(pk["xyz"][1], pk["xyz"][0]) + math.radians(0.4)
+        mid = (nav_core.GLACIEM_R_M * math.cos(a),
+               nav_core.GLACIEM_R_M * math.sin(a), 0.0)
+        self.assertIsNone(nav_core.glaciem_pocket_survey(mid, ann))
+
+    def test_barren_pocket_downranked_not_dropped(self):
+        # Identical geometry, one pocket surveyed barren: the unsurveyed pocket
+        # wins, but the barren one keeps a positive score (still selectable).
+        barren = {"key": "Wtn-barren", "survey": {"status": "barren"}}
+        cands = [
+            {"hit": True, "miss_m": 1_000.0, "flown_m": 1e9, "pocket": barren},
+            {"hit": True, "miss_m": 1_000.0, "flown_m": 1e9,
+             "pocket": {"key": "Wtn-unknown"}},
+        ]
+        nav_core._score_halo_pocket_cands(cands)
+        self.assertLess(cands[0]["score"], cands[1]["score"])
+        self.assertGreater(cands[0]["score"], 0.0)
+        self.assertAlmostEqual(
+            cands[0]["score"], cands[1]["score"] * nav_core.GLACIEM_BARREN_PENALTY,
+            delta=1e-9)
+
+    def test_glaciem_locate_carries_radar_geometry(self):
+        # The live in-pocket radar (#36) needs center + envelope + signed offset.
+        pockets = self.belts["Nyx"]["pockets"]
+        pk = next(p for p in pockets if p["kind"] == "general")
+        c = pk["xyz"]
+        pos = (c[0] + 300_000, c[1] - 120_000, c[2] - 8_000)
+        v = nav_core.glaciem_locate(pos, pockets)
+        self.assertEqual(v["status"], "pocket")
+        rp = v["pocket"]
+        self.assertAlmostEqual(rp["dx"], 300_000, delta=1.0)
+        self.assertAlmostEqual(rp["dy"], -120_000, delta=1.0)
+        self.assertAlmostEqual(rp["dz"], -8_000, delta=1.0)
+        self.assertEqual([round(x) for x in rp["center_xyz"]],
+                         [round(x) for x in c])
+        self.assertGreater(rp["grid_radius_m"], 0)
+        # radar geometry rides along even in the ring-void (nearest pocket)
+        a = math.atan2(c[1], c[0]) + math.radians(0.4)
+        void = nav_core.glaciem_locate(
+            (nav_core.GLACIEM_R_M * math.cos(a),
+             nav_core.GLACIEM_R_M * math.sin(a), 0.0), pockets)
+        self.assertEqual(void["status"], "ring_void")
+        self.assertIn("center_xyz", void["pocket"])
 
     def test_field_locate_verdicts(self):
         fields = self.belts["Pyro"]["fields"]

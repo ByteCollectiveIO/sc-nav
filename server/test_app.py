@@ -3318,6 +3318,118 @@ class HaloFinderApiTests(unittest.TestCase):
         self.assertEqual(doc["band"], 5)
         self.assertIsNotNone(doc["fix_age_s"])
 
+    def _inject_survey(self, pos, rocks, ores=(), zone_id=None):
+        """Drop a survey mark at `pos` the way a resolved capture would, and
+        register cleanup so it can't leak into other tests."""
+        import nav_core
+        pid = 1_900_000 + len(app.nav.pois) % 1000
+        survey = {"rocks": rocks, "ores": list(ores), "salvage": False}
+        if zone_id is not None:
+            survey["zone_id"] = zone_id
+        poi = nav_core.custom_poi_from_position(
+            app.nav, pos, nav_core.ROTATION_EPOCH, f"Survey test {pid}", "survey",
+            pid, owner_id=1, owner_handle="Pilot", system_hint="Nyx",
+            survey=survey)
+        app.nav.pois[poi.id] = poi
+        self.addCleanup(lambda: app.nav.pois.pop(poi.id, None))
+        return poi
+
+    def test_survey_zone_full_flow(self):
+        # #36.1: create a named zone → it's active → armed marks auto-tag →
+        # geometry derives → planner pins it → rename/delete lifecycle. Works
+        # ANYWHERE, including inside the Glaciem envelope (dead-zone).
+        pk = next(p for p in app.nav.belts["Nyx"]["pockets"]
+                  if p["kind"] == "general")
+        c = pk["xyz"]
+        self._live_at((c[0] + 200_000, c[1], c[2]))
+        self.addCleanup(lambda: app.members_dir.set_active_survey_zone("1", None))
+
+        # create → becomes active
+        r = self.client.post("/api/halo/survey/zones", json={"name": "Iron Field A"})
+        self.assertEqual(r.status_code, 200)
+        zid, slug = r.json()["zone"]["id"], r.json()["zone"]["slug"]
+        self.addCleanup(lambda: app.db.delete_survey_zone(zid))
+        self.assertEqual(slug, "iron-field-a")
+        self.assertEqual(self.client.get("/api/me").json()["active_survey_zone"], zid)
+
+        # arming a survey capture stamps the active zone onto the pending mark
+        self.client.post("/api/capture/start", json={
+            "name": "Survey 1", "type": "survey",
+            "survey": {"rocks": "sparse", "ores": ["Iron (Ore)"]}})
+        self.assertEqual(app.hub.sessions["1"].capture_pending["survey"]["zone_id"], zid)
+
+        # two zone-tagged marks (inside the Glaciem envelope — the dead-zone)
+        self._inject_survey((c[0] + 3_000, c[1], c[2]), "sparse",
+                            ["Iron (Ore)"], zone_id=zid)
+        self._inject_survey((c[0], c[1] + 4_000, c[2]), "dense",
+                            ["Iron (Ore)"], zone_id=zid)
+
+        # geometry derives live; status = best density; not in proximity pockets
+        zones = self.client.get("/api/halo/survey/zones?system=Nyx").json()["zones"]
+        z = next(x for x in zones if x["zone_id"] == zid)
+        self.assertEqual(z["marks"], 2)
+        self.assertEqual(z["status"], "dense")
+        self.assertIsNotNone(z["xyz"])
+        surv = self.client.get("/api/halo/survey?system=Nyx").json()
+        self.assertFalse(any(p["key"] == slug for p in surv["pockets"]))  # not proximity
+        self.assertTrue(any(x["key"] == slug for x in surv["zones"]))
+
+        # the planner pins the zone by its slug — the pin RESOLVES (geometry
+        # viability is covered by the pocket-plan tests; the sparse test env
+        # with only gateway markers may legitimately have no chord → a 400, not
+        # the 404 an unresolved pin would give).
+        start = next(p for p in app.nav.qt_markers if p.system == "Nyx")
+        plan = self.client.post("/api/halo/plan",
+                                json={"pocket_key": slug, "start_poi_id": start.id})
+        self.assertNotEqual(plan.status_code, 404)
+        self.assertNotIn("unknown pocket", plan.text.lower())
+        if plan.status_code == 200:
+            self.assertEqual(plan.json()["drop"]["pocket"]["key"], slug)
+        # a bogus pin still 404s
+        self.assertEqual(self.client.post("/api/halo/plan",
+            json={"pocket_key": "no-such-zone", "start_poi_id": start.id}).status_code, 404)
+
+        # rename re-slugs; delete untags the marks (they survive, revert to proximity)
+        self.assertEqual(self.client.patch(f"/api/halo/survey/zones/{zid}",
+                         json={"name": "Iron Field B"}).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid}").status_code, 200)
+        marks = app.nav_core.survey_marks(app.nav, "Nyx")
+        tagged = [m for m in marks if m["zone_id"] == zid]
+        self.assertEqual(tagged, [])          # untagged, not deleted
+
+    def test_survey_zone_duplicate_name_conflicts(self):
+        self._live_at((0.0, 15.0e9, 0.0))
+        self.addCleanup(lambda: app.members_dir.set_active_survey_zone("1", None))
+        r1 = self.client.post("/api/halo/survey/zones",
+                              json={"name": "Dup Zone", "system": "Nyx"})
+        self.assertEqual(r1.status_code, 200)
+        self.addCleanup(lambda: app.db.delete_survey_zone(r1.json()["zone"]["id"]))
+        r2 = self.client.post("/api/halo/survey/zones",
+                              json={"name": "Dup Zone", "system": "Nyx"})
+        self.assertEqual(r2.status_code, 409)
+
+    def test_barren_survey_overlays_datamined_pocket(self):
+        # A barren survey inside a real ring pocket surfaces on the target
+        # catalog + the export + the live locate verdict, and down-ranks the
+        # pocket in the planner (#36 Glaciem overlay).
+        pk = next(p for p in app.nav.belts["Nyx"]["pockets"]
+                  if p["kind"] == "general")
+        self._inject_survey(pk["xyz"], "none")
+        # target catalog: the pocket now carries a barren survey block
+        doc = self.client.get("/api/halo/targets?system=Nyx").json()
+        hit = next(p for p in doc["pockets"] if p["key"] == pk["key"])
+        self.assertEqual(hit["survey"]["status"], "barren")
+        self.assertEqual(hit["survey"]["positive"], 0)
+        # export: grouped under a `glaciem` block, not just loose in `marks`
+        exp = self.client.get("/api/halo/survey/export?system=Nyx").json()
+        g = next(p for p in exp["glaciem"] if p["key"] == pk["key"])
+        self.assertEqual(g["status"], "barren")
+        # live locate inside the pocket reports the verdict
+        self._live_at(pk["xyz"])
+        loc = self.client.get("/api/halo/locate").json()
+        self.assertEqual(loc["status"], "pocket")
+        self.assertEqual(loc["pocket"]["survey"]["status"], "barren")
+
     def test_in_belt_fix_resolves_stanton_over_stale_sticky(self):
         # (14, -14.8) Gm is real Stanton belt space that sits nearer a Pyro
         # container than any Stanton one. An in-belt fix is an unambiguous

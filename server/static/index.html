@@ -1979,6 +1979,24 @@
   .halo-map-wrap { margin-top: 12px; border: 1px solid var(--border);
     border-radius: 8px; overflow: hidden; background: var(--map-bg); }
   .halo-map-wrap canvas { display: block; width: 100%; }
+  /* Live in-pocket radar (#36) */
+  #halo-radar-wrap { margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--border); }
+  .halo-radar-head { display: flex; align-items: baseline; gap: 8px; }
+  #halo-radar-sub { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .halo-radar-plot { margin-top: 8px; border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; background: var(--map-bg);
+    aspect-ratio: 1 / 0.72; }
+  .halo-radar-plot canvas { display: block; width: 100%; height: 100%; }
+  .halo-radar-tip { font-size: 11px; margin: 8px 0 0; }
+  .halo-radar-tip b { color: var(--text); }
+  /* Active survey zone banner (#36.1) */
+  #halo-zone-banner { margin-top: 8px; }
+  .halo-zone-active { display: flex; align-items: center; flex-wrap: wrap;
+    gap: 8px; font-size: 12.5px; color: var(--dim);
+    background: rgba(79, 195, 247, .07); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; }
+  .halo-zone-active b { color: var(--text); }
   /* After-the-drop verdict */
   .halo-verdict { font-size: 14px; }
   .halo-verdict .in-band { color: var(--good); font-weight: 700; }
@@ -2253,6 +2271,7 @@
           <label><input type="checkbox" class="layer" data-layer="teammates" checked> teammates</label>
           <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
           <label title="Ephemeral nodes only exist on the shard they were seen on. Checked hides nodes known to be on a different SC server than yours (needs the watcher's Game.log shard); uncheck to show every shard's nodes."><input type="checkbox" id="shard-toggle" checked> this shard</label>
+          <label title="Belt-survey marks (⛏) map an asteroid pocket and can number in the hundreds — hidden from NEARBY by default so they don't swamp real POIs. Check to show them here; they're always findable via search/filter."><input type="checkbox" id="survey-toggle"> survey marks</label>
           <label>heatmap
             <select id="heatmap-mode" class="sel">
               <option value="off">off</option>
@@ -3672,9 +3691,28 @@
         /showlocation in game — this panel reads your fix live</span></h2>
       <div id="halo-after-body"><p class="muted" style="font-size:12px; margin:0;">No live fix
         yet. Drop out of quantum, then run <b>/showlocation</b> in the in-game chat.</p></div>
+      <div id="halo-radar-wrap" hidden>
+        <div class="halo-radar-head"><span class="fld-label">⌖ POCKET RADAR</span>
+          <span id="halo-radar-sub" class="muted"></span></div>
+        <div class="halo-radar-plot"><canvas id="halo-radar"
+          aria-label="live top-down radar of your position inside the asteroid pocket"></canvas></div>
+        <p class="muted halo-radar-tip">Deep space has no compass — steer so the
+          <b>drift arrow</b> points at the <b>center dot</b>. Re-run
+          <b>/showlocation</b> as you move to update. Rings show scale.</p>
+      </div>
       <div id="halo-survey-blk" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);">
         <span class="fld-label">⛏ SURVEY <span class="muted" style="font-weight:400; text-transform:none;">— mark
           this spot for the org's belt map (“nothing here” counts too: it maps a field's edge)</span></span>
+        <div class="route-row" style="align-items:center; margin-top:8px;">
+          <label class="fld-label" for="halo-zone-select" style="margin:0;">ZONE</label>
+          <select id="halo-zone-select" class="sel" style="min-width:190px;"
+            title="Every ⛏ mark you drop is filed into the active zone. New zone starts a fresh named field wherever you are.">
+            <option value="">— none (auto-cluster) —</option>
+          </select>
+          <button id="halo-zone-new" type="button" class="route-chip">＋ New zone</button>
+          <span id="halo-zone-status" class="muted" style="font-size:12px;"></span>
+        </div>
+        <div id="halo-zone-banner" hidden></div>
         <div class="route-row" style="align-items:center; margin-top:8px;">
           <span class="seg" id="halo-survey-rocks" role="group" aria-label="Rock density here">
             <button data-rocks="none" type="button" aria-pressed="false">⛔ none</button>
@@ -4307,6 +4345,10 @@ let sessionStartMs = null;
 // the session-time heuristic above. Legacy/untagged nodes stay "unknown".
 let currentShard = null;            // this client's shard, from state.shard
 let shardOnly = true;               // map + NEARBY hide off-shard nodes by default
+// Belt-survey marks (#36) are hidden from NEARBY + map by default: one pocket
+// can hold hundreds. Off by default, persisted; search/filter always reveals.
+let showSurvey = localStorage.getItem("showSurvey") === "1";
+const isSurveyRow = r => (r.type || "").toLowerCase() === "survey";
 function obsShardState(o) {
   if (!OBS_KINDS.has(o.kind)) return "mine";          // POIs aren't shard-bound
   if (!o.shard_id || !currentShard) return "unknown"; // can't tell
@@ -4434,8 +4476,15 @@ function renderNearby() {
   // The container/contributor dropdowns list the WHOLE dataset (+ any live
   // entities), so you can pick a contributor or body even when nothing of
   // theirs is currently near you.
-  const liveRows = lastState ? (lastState.nearest_pois || []).concat(observations()) : [];
+  // Survey marks are searchable, so the live pool (dropdowns + distance-borrow)
+  // includes them; whether they DISPLAY is gated below by surveyVisible.
+  const liveRows = lastState
+    ? (lastState.nearest_pois || []).concat(lastState.nearest_survey || [], observations())
+    : [];
   const universe = (allRows || []).concat(liveRows);
+  // Hide survey marks unless the toggle is on or any filter is active (so you
+  // can always search/filter to them, per the toggle's promise).
+  const surveyVisible = showSurvey || filtering;
   syncSelect("f-container", [...new Set(universe.map(r => r.container))].sort(), "all containers");
   syncSelect("f-owner", [...new Set(universe.map(r => r.owner_handle).filter(Boolean))].sort(), "all contributors");
 
@@ -4446,7 +4495,8 @@ function renderNearby() {
   const nearMe = !!lastState && !filtering;
   let rows;
   if (nearMe) {
-    const pois = lastState.nearest_pois || [];
+    const pois = (lastState.nearest_pois || [])
+      .concat(showSurvey ? (lastState.nearest_survey || []) : []);
     rows = kindFilter === "poi" ? pois.slice()
       : kindFilter === "all" ? pois.concat(observations())
       : observations().filter(o => o.kind === kindFilter);
@@ -4478,6 +4528,7 @@ function renderNearby() {
 
   rows = rows.filter(r =>
     isFreshObs(r) && onShard(r) &&
+    (surveyVisible || !isSurveyRow(r)) &&
     (!fc || r.container === fc) &&
     (!fo || r.owner_handle === fo) &&
     (!ft || `${r.name} ${r.type || ""} ${r.ore || ""} ${r.species || ""} ${r.quality || ""}`.toLowerCase().includes(ft))
@@ -4728,6 +4779,16 @@ $("fresh-toggle").onchange = (e) => {
 $("shard-toggle").onchange = (e) => {
   shardOnly = e.target.checked; renderNearby(); drawMap(); updateMapMoreSummary();
 };
+(() => {
+  const t = $("survey-toggle");
+  if (!t) return;
+  t.checked = showSurvey;
+  t.onchange = (e) => {
+    showSurvey = e.target.checked;
+    localStorage.setItem("showSurvey", showSurvey ? "1" : "0");
+    renderNearby();
+  };
+})();
 
 // The map's secondary controls live behind a "Layers & settings" disclosure so the
 // bar stays glanceable. Persist its open state (a power user who wants the toggles
@@ -6288,6 +6349,7 @@ function renderAccount(me) {
   myIdentity = { handles: me.handles || [], primary_handle: me.primary_handle || null,
                  directory_opt_out: !!me.directory_opt_out };
   myProfileTags = me.playstyle_tags || [];
+  activeSurveyZone = (typeof me.active_survey_zone === "number") ? me.active_survey_zone : null;
   // The watcher-token panel is for any member; the org-administration panels are
   // admin-only. Both groups live inside #settings-view, shown by the hash router
   // (applyView); #admin-section wraps the admin-only group as one visibility unit.
@@ -12084,6 +12146,7 @@ async function loadHaloFinder() {
   }
   if (!haloWired) wireHaloFinder();
   renderHaloIntro();
+  loadHaloZones();
   refreshHaloAfter();
 }
 
@@ -12111,6 +12174,7 @@ function setHaloSystem(sys, auto) {
   renderHaloCredit();
   if (!haloDoc(sys)) loadHaloTargets(sys).then(renderHaloSystemPanel);
   else renderHaloSystemPanel();
+  if (haloWired) loadHaloZones(sys);     // zones are per-system
 }
 
 // The Nyx panel serves two belts (#36): Glaciem (datamined pockets) and
@@ -12192,6 +12256,7 @@ function resolveHaloSurveyArm(capture) {
     delete haloTargets.Nyx;
     if (!$("halo-view").hidden && haloSystem === "Nyx")
       loadHaloTargets("Nyx").then(renderHaloSystemPanel);
+    loadHaloZones();          // the mark may have grown/created the active zone
   }
 }
 
@@ -12217,8 +12282,127 @@ async function haloMarkSurvey() {
     }
     haloSurveyArmed = true;
     msg.className = "armed";
-    msg.innerHTML = "ARMED — run <b>/showlocation</b> at the spot to drop the mark";
+    const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
+    msg.innerHTML = "ARMED — run <b>/showlocation</b> at the spot to drop the mark"
+      + (z ? ` into <b>${esc(z.name)}</b>` : "");
   } catch { msg.className = "muted"; msg.textContent = "⚠ network error"; }
+}
+
+// Named survey zones (#36.1): the active zone every ⛏ mark files into. The
+// active zone lives on the member record (server-side) so it follows you across
+// devices; this UI just sets it and shows what you're feeding.
+let haloZones = [];
+let activeSurveyZone = null;      // zone_id | null
+
+async function loadHaloZones(sys) {
+  sys = sys || haloSystem || "Nyx";
+  try {
+    const r = await fetch("/api/halo/survey/zones?system=" + encodeURIComponent(sys));
+    if (!r.ok) return;
+    haloZones = (await r.json()).zones || [];
+  } catch { return; }
+  renderHaloZoneSelect();
+  renderHaloZoneBanner();
+}
+
+function renderHaloZoneSelect() {
+  const sel = $("halo-zone-select");
+  if (!sel) return;
+  const cur = activeSurveyZone;
+  sel.innerHTML = '<option value="">— none (auto-cluster) —</option>'
+    + haloZones.filter(z => !z.closed).map(z =>
+        `<option value="${z.zone_id}">${esc(z.name)}${z.marks ? ` · ${z.marks} mark${z.marks === 1 ? "" : "s"}` : ""}</option>`
+      ).join("");
+  if (cur != null && !haloZones.some(z => z.zone_id === cur && !z.closed)) {
+    const z = haloZones.find(x => x.zone_id === cur);   // keep a closed active zone visible
+    const o = document.createElement("option");
+    o.value = String(cur); o.textContent = (z ? esc(z.name) + " (closed)" : "active zone");
+    sel.appendChild(o);
+  }
+  sel.value = cur == null ? "" : String(cur);
+}
+
+function renderHaloZoneBanner() {
+  const el = $("halo-zone-banner");
+  if (!el) return;
+  const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
+  if (!z) { el.hidden = true; return; }
+  el.hidden = false;
+  const bits = [`<b>${z.marks || 0}</b> mark${z.marks === 1 ? "" : "s"}`];
+  if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
+  if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
+  else if (z.status && z.status !== "empty") bits.push(`<b>${esc(z.status)}</b> rocks`);
+  if ((z.ores || []).length) bits.push(z.ores.map(esc).join(", "));
+  el.innerHTML = `<div class="halo-zone-active">⛏ Surveying <b>${esc(z.name)}</b> — ${bits.join(" · ")}`
+    + ` <button type="button" class="route-chip" id="halo-zone-clear">Clear active</button>`
+    + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-plan">Plan a drop here</button>` : "")
+    + `</div>`;
+  $("halo-zone-clear").onclick = () => setActiveSurveyZone(null);
+  const pb = $("halo-zone-plan");
+  if (pb) pb.onclick = () => planHaloZone(z);
+}
+
+async function setActiveSurveyZone(zid) {
+  try {
+    const r = await fetch("/api/halo/survey/zones/active", { method: "PUT",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zone_id: zid }) });
+    if (!r.ok) return;
+    activeSurveyZone = zid;
+  } catch { return; }
+  renderHaloZoneSelect(); renderHaloZoneBanner();
+}
+
+async function newSurveyZone() {
+  const name = await promptDialog(
+    "Name this asteroid field. Every ⛏ mark you drop now files into it — no proximity guessing.",
+    { title: "New survey zone", confirmLabel: "Create", placeholder: "e.g. Nyx Iron Field A" });
+  if (!name || !name.trim()) return;
+  const st = $("halo-zone-status");
+  try {
+    const r = await fetch("/api/halo/survey/zones", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), system: haloSystem || "Nyx" }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || "couldn't create zone"); } return; }
+    activeSurveyZone = d.active_survey_zone;
+    await loadHaloZones();
+  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } }
+}
+
+// A synthetic pocket for the live radar when your active zone isn't a datamined
+// pocket (open space / the ring dead-zone): built from the zone centroid +
+// your live position, so progress-to-center works anywhere.
+function activeZonePocket() {
+  if (activeSurveyZone == null || !lastState || !lastState.position) return null;
+  const z = haloZones.find(x => x.zone_id === activeSurveyZone);
+  if (!z || !z.xyz) return null;
+  const p = lastState.position, c = z.xyz;
+  return { key: z.key, name: z.name, kind: "zone", center_xyz: c,
+    grid_radius_m: z.grid_radius_m,
+    dx: p.x - c[0], dy: p.y - c[1], dz: p.z - c[2],
+    center_off_m: Math.hypot(p.x - c[0], p.y - c[1], p.z - c[2]),
+    survey: z.survey };
+}
+
+async function planHaloZone(z) {
+  // Let the server resolve the zone's system from its slug (works in any
+  // system), so we only send the pin + shared start/ship/avoid inputs.
+  const body = { pocket_key: z.key, allow_staging: $("halo-staging").checked };
+  const sid = $("halo-start-poi").dataset.poiId;
+  if (sid) body.start_poi_id = Number(sid);
+  const ship = $("halo-ship").value.trim();
+  if (ship) { body.ship = ship; if (!$("halo-drive-wrap").hidden && $("halo-qd").value) body.qd = $("halo-qd").value; }
+  if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
+  const msg = $("halo-plan-msg");
+  msg.textContent = "planning…";
+  try {
+    const r = await fetch("/api/halo/plan", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
+    msg.textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    $("halo-result").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch { msg.textContent = "⚠ network error"; }
 }
 
 function renderHaloCredit() {
@@ -12380,6 +12564,9 @@ function wireHaloFinder() {
   for (const x of $("halo-survey-rocks").querySelectorAll("button"))
     x.onclick = () => setHaloSurveyRocks(x.dataset.rocks);
   $("halo-survey-mark").onclick = haloMarkSurvey;
+  $("halo-zone-new").onclick = newSurveyZone;
+  $("halo-zone-select").onchange = (e) =>
+    setActiveSurveyZone(e.target.value ? Number(e.target.value) : null);
   attachHaloFieldPicker();
   renderHaloCredit();
   attachPoiPicker($("halo-target-poi").parentElement, () => refreshHaloAfter());
@@ -12483,6 +12670,16 @@ function haloDropHtml(plan) {
         + (d.pocket.density ? ` · ${esc(d.pocket.density)} rocks reported` : "")
         + ((d.pocket.ores || []).length ? ` · ${d.pocket.ores.map(esc).join(", ")}` : "")
         + ` — player-measured, not game data</div>`;
+    if (d.pocket.survey) {          // org survey overlay on a datamined pocket
+      const s = d.pocket.survey;
+      h += `<div class="halo-window">⛏ <b>org survey · ${s.marks} mark${s.marks === 1 ? "" : "s"}</b> · `
+        + (s.status === "barren"
+           ? `<span class="halo-chip warn">surveyed BARREN — no rock to within ${fmtDist(s.closest_center_m)} of center; this target is down-ranked</span>`
+           : `<b>${esc(s.status)}</b> rocks found`
+             + ((s.ores || []).length ? ` · ${s.ores.map(esc).join(", ")}` : "")
+             + (s.salvage ? " · salvage" : ""))
+        + ` — player-measured</div>`;
+    }
   } else if (plan.target) {
     h += `<div class="halo-window">closest approach to <b>${esc(plan.target.name)}</b>, expected miss `
       + `≈<b>${fmtDist(d.expected_miss_m)}</b> · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
@@ -12509,9 +12706,12 @@ function renderHaloPlan(plan) {
   const head = plan.band
     ? `BAND ${plan.band.band} DROP` + (plan.aim === "peak" ? " · DENSEST POINT" : "")
     : plan.mode === "pocket"
-      ? `POCKET DROP: ${esc(plan.drop.pocket.key).toUpperCase()}`
+      ? (plan.drop.pocket.kind === "zone"
+           ? `SURVEY ZONE: ${esc(plan.drop.pocket.name || plan.drop.pocket.key).toUpperCase()}`
+           : `POCKET DROP: ${esc(plan.drop.pocket.key).toUpperCase()}`)
         + (plan.drop.pocket.kind === "mission" ? " · MISSION ARC"
            : plan.drop.pocket.kind === "surveyed" ? " · ORG SURVEY" : "")
+        + ((plan.drop.pocket.survey || {}).status === "barren" ? " · ⚠ SURVEYED BARREN" : "")
       : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
   let h = `<div class="panel"><h2>${head} <span class="muted" style="font-weight:400; font-size:12px;">`
     + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
@@ -12847,6 +13047,7 @@ async function refreshHaloAfter() {
     if (!r.ok) {
       el.innerHTML = `<p class="muted" style="font-size:12px; margin:0;">No live fix yet. `
         + `Drop out of quantum, then run <b>/showlocation</b> in the in-game chat.</p>`;
+      updatePocketRadar(null);
       return;
     }
     d = await r.json();
@@ -12856,7 +13057,156 @@ async function refreshHaloAfter() {
       + `title="re-plan the fly-by from this fix">🎯 Refine from here</button></div>` : "");
   const rb = $("halo-refine");
   if (rb) rb.onclick = () => { haloUseLiveStart(); planHalo(); };
+  updatePocketRadar(d);
 }
+
+// Live in-pocket radar (#36): a top-down, auto-zoomed view of where you are —
+// and your recent path — relative to the pocket center. Deep space gives you a
+// distance-to-center number but no compass, so navigating to the rocks is
+// blind trial-and-error; this is the missing instrument. Fed by
+// /api/halo/locate's radar geometry (dx/dy/dz from center + envelope radius).
+let haloRadar = { key: null, pts: [] };   // rolling path buffer: {dx,dy,dz}
+let haloRadarLast = null;                 // last pocket drawn (for resize)
+
+function updatePocketRadar(d) {
+  const wrap = $("halo-radar-wrap");
+  if (!wrap) return;
+  const dp = d && d.pocket;
+  const live = dp && dp.center_xyz &&
+    (d.status === "pocket" || d.status === "ring_void" || d.status === "keeger_pocket");
+  // A datamined/surveyed pocket at the fix wins; else fall back to the active
+  // survey zone (#36.1) so the radar works in open space / the ring dead-zone.
+  const p = live ? dp : activeZonePocket();
+  if (!p || !p.center_xyz) { wrap.hidden = true; haloRadarLast = null; haloRadar = { key: null, pts: [] }; return; }
+  if (haloRadar.key !== p.key) haloRadar = { key: p.key, pts: [] };
+  const last = haloRadar.pts[haloRadar.pts.length - 1];
+  if (!last || last.dx !== p.dx || last.dy !== p.dy || last.dz !== p.dz) {
+    haloRadar.pts.push({ dx: p.dx, dy: p.dy, dz: p.dz });
+    if (haloRadar.pts.length > 80) haloRadar.pts.shift();
+  }
+  const zTxt = Math.abs(p.dz) < 5000 ? "on plane"
+    : `${fmtDist(Math.abs(p.dz))} ${p.dz >= 0 ? "above" : "below"} plane`;
+  const label = p.kind === "zone" ? esc(p.name || p.key) : esc(p.key);
+  $("halo-radar-sub").innerHTML = `${label} · <b style="color:var(--text)">${fmtDist(p.center_off_m)}</b> to center · ${zTxt}`;
+  wrap.hidden = false;
+  haloRadarLast = p;
+  requestAnimationFrame(() => drawPocketRadar(p));
+}
+
+function radarDist(m) {   // plain-text for canvas (fmtDist returns HTML)
+  const a = Math.abs(m);
+  if (a < 1000) return Math.round(m) + " m";
+  if (a < 1e6) return +(m / 1000).toFixed(a < 1e5 ? 1 : 0) + " km";
+  if (a < 1e9) return +(m / 1e6).toFixed(1) + " Mm";
+  return +(m / 1e9).toFixed(2) + " Gm";
+}
+
+function drawPocketRadar(p) {
+  const host = document.querySelector("#halo-radar-wrap .halo-radar-plot");
+  const cv = $("halo-radar");
+  if (!host || !cv) return;
+  const rect = host.getBoundingClientRect();
+  if (!rect.width) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(rect.width * dpr); cv.height = Math.round(rect.height * dpr);
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = rect.width, h = rect.height;
+  const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const AC = cssv("--accent") || "#4fc3f7", GOLD = cssv("--sel") || "#ffd54f",
+        DIM = cssv("--dim") || "#8693a6", GOOD = cssv("--good") || "#66bb6a",
+        GRID = "rgba(79,195,247,.11)";
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = "10px ui-monospace, Menlo, monospace";
+
+  const gaugeW = 52;                                  // right strip: off-plane gauge
+  const mx = (w - gaugeW) / 2, my = h / 2;
+  const R = Math.min(w - gaugeW, h) / 2 - 16;
+  const pts = haloRadar.pts;
+  const reach = Math.max(Math.hypot(p.dx, p.dy),
+    ...pts.map(q => Math.hypot(q.dx, q.dy)), 2000);
+  const span = Math.min(reach * 1.3, p.grid_radius_m);   // never zoom past the edge
+  const sc = R / span;
+  const SX = dx => mx + dx * sc, SY = dy => my - dy * sc;   // north = +dy = up
+
+  // range rings + labels
+  ctx.textBaseline = "middle";
+  const step = haloNiceScale(span);
+  for (let rr = step; rr <= span * 1.02; rr += step) {
+    const rad = rr * sc; if (rad > R + 1) break;
+    ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(mx, my, rad, 0, 7); ctx.stroke();
+    ctx.fillStyle = DIM; ctx.textAlign = "left";
+    ctx.fillText(radarDist(rr), mx + 4, my - rad);
+  }
+  ctx.strokeStyle = "rgba(36,48,68,.9)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(mx - R, my); ctx.lineTo(mx + R, my);
+  ctx.moveTo(mx, my - R); ctx.lineTo(mx, my + R); ctx.stroke();
+
+  // pocket boundary (dashed) when it fits the zoom, else an edge cue
+  if (p.grid_radius_m * sc <= R + 1) {
+    ctx.strokeStyle = "rgba(79,195,247,.4)"; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.arc(mx, my, p.grid_radius_m * sc, 0, 7); ctx.stroke();
+    ctx.setLineDash([]);
+  } else {
+    ctx.fillStyle = DIM; ctx.textAlign = "right";
+    ctx.fillText("pocket radius " + radarDist(p.grid_radius_m), mx + R, my - R + 8);
+  }
+
+  // recent path
+  if (pts.length > 1) {
+    ctx.beginPath();
+    pts.forEach((q, i) => { const x = SX(q.dx), y = SY(q.dy); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.strokeStyle = "rgba(79,195,247,.45)"; ctx.lineWidth = 1.4; ctx.stroke();
+    pts.forEach(q => { ctx.beginPath(); ctx.arc(SX(q.dx), SY(q.dy), 1.5, 0, 7);
+      ctx.fillStyle = "rgba(79,195,247,.5)"; ctx.fill(); });
+  }
+
+  // center (the goal)
+  ctx.beginPath(); ctx.arc(mx, my, 3.5, 0, 7); ctx.fillStyle = GOLD; ctx.fill();
+  ctx.strokeStyle = "rgba(255,213,79,.4)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(mx, my, 7, 0, 7); ctx.stroke();
+  ctx.fillStyle = GOLD; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText("center", mx + 10, my);
+
+  // player + drift arrow (movement between the last two fixes)
+  const px = SX(p.dx), py = SY(p.dy);
+  if (pts.length >= 2) {
+    const a = pts[pts.length - 2], b = pts[pts.length - 1];
+    let vx = b.dx - a.dx, vy = b.dy - a.dy;
+    const vlen = Math.hypot(vx, vy);
+    if (vlen > 1) {
+      const L = 30; const ex = px + vx / vlen * L, ey = py - vy / vlen * L;
+      ctx.strokeStyle = AC; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(ex, ey); ctx.stroke();
+      const ang = Math.atan2(ey - py, ex - px);
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - 8 * Math.cos(ang - 0.4), ey - 8 * Math.sin(ang - 0.4));
+      ctx.lineTo(ex - 8 * Math.cos(ang + 0.4), ey - 8 * Math.sin(ang + 0.4));
+      ctx.closePath(); ctx.fillStyle = AC; ctx.fill();
+    }
+  }
+  ctx.beginPath(); ctx.arc(px, py, 4.5, 0, 7); ctx.fillStyle = AC; ctx.fill();
+  ctx.strokeStyle = "#07101a"; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // off-plane (z) gauge on the right strip
+  const gx = w - gaugeW / 2, gTop = 20, gBot = h - 16, gMid = (gTop + gBot) / 2;
+  const zmax = Math.max(50000, Math.abs(p.dz) * 1.25);
+  ctx.strokeStyle = "rgba(36,48,68,.9)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(gx, gTop); ctx.lineTo(gx, gBot); ctx.stroke();
+  ctx.strokeStyle = GRID; ctx.beginPath();
+  ctx.moveTo(gx - 7, gMid); ctx.lineTo(gx + 7, gMid); ctx.stroke();
+  ctx.fillStyle = DIM; ctx.font = "9px ui-monospace, Menlo, monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("OFF-PLANE", gx, gTop - 10);
+  ctx.fillText("0", gx + 15, gMid);
+  const zy = gMid - Math.max(-1, Math.min(1, p.dz / zmax)) * (gBot - gMid);
+  const onplane = Math.abs(p.dz) < 5000;
+  ctx.fillStyle = onplane ? GOOD : GOLD;
+  ctx.beginPath(); ctx.arc(gx, zy, 4, 0, 7); ctx.fill();
+  ctx.textBaseline = "middle"; ctx.fillText(radarDist(p.dz), gx, gBot + 8);
+}
+
+addEventListener("resize", () => { if (haloRadarLast && !$("halo-radar-wrap").hidden) drawPocketRadar(haloRadarLast); });
 
 function haloVerdictHtml(d) {
   const zoff = (z) => `${fmtDist(Math.abs(z))} ${z >= 0 ? "above" : "below"} plane`;
@@ -12878,8 +13228,14 @@ function haloVerdictHtml(d) {
       ? `You're <span class="off-band">inside the belt's inner edge</span>: ${fmtDist(d.to_belt_m)} out to band 1`
       : `You're <span class="off-band">beyond the belt's outer edge</span>: ${fmtDist(d.to_belt_m)} back in to band ${d.near_band}`;
   } else if (d.status === "pocket") {
-    main = `☄ You're <span class="in-band">in Glaciem pocket ${esc(d.pocket.key)}</span>`;
+    const sv = d.pocket.survey;
+    main = sv && sv.status === "barren"
+      ? `☄ You're in <span class="off-band">Glaciem pocket ${esc(d.pocket.key)} — surveyed BARREN</span>`
+      : `☄ You're <span class="in-band">in Glaciem pocket ${esc(d.pocket.key)}</span>`;
     meta.push(`${fmtDist(d.pocket.center_off_m)} from its center`, zoff(d.z_m));
+    if (sv) meta.push(sv.status === "barren"
+      ? `org survey: no rock in ${sv.marks} mark${sv.marks === 1 ? "" : "s"}`
+      : `org survey: ${esc(sv.status)} rocks${(sv.ores || []).length ? " · " + sv.ores.map(esc).join(", ") : ""}`);
   } else if (d.status === "ring_void") {
     main = `You're <span class="off-band">on the Glaciem Ring between pockets</span>`;
     if (d.pocket) meta.push(`nearest rocks: pocket ${esc(d.pocket.key)}, `
