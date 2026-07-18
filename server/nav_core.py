@@ -943,7 +943,16 @@ def compute_state(
             obs_by_cat.setdefault(o.category, []).append(o)
 
     visible_pois = [p for p in cand_pois if poi_visible_to(p, viewer_owner_ids)]
-    nearest_pois = _nearest(visible_pois, _poi_summary)
+    # Survey marks (#36) are a specialized mapping artifact — a single pocket can
+    # hold hundreds, which would swamp the distance-capped NEARBY list and starve
+    # out real POIs. Split them into their own list so the navigator can hide
+    # them by default (toggle) while keeping them searchable.
+    survey_pois = [p for p in visible_pois
+                   if (p.type or "").strip().lower() == SURVEY_POI_TYPE]
+    main_pois = [p for p in visible_pois
+                 if (p.type or "").strip().lower() != SURVEY_POI_TYPE]
+    nearest_pois = _nearest(main_pois, _poi_summary)
+    nearest_survey = _nearest(survey_pois, _poi_summary)
     nearest_observations = []
     for cat in OBSERVATION_CATEGORIES:
         nearest_observations += _nearest(obs_by_cat.get(cat, []), _observation_summary)
@@ -1023,6 +1032,7 @@ def compute_state(
         "speed_ms": speed_ms,
         "destination": destination,
         "nearest_pois": nearest_pois,
+        "nearest_survey": nearest_survey,
         "nearest_observations": nearest_observations,
         "resource_forecast": forecast,
         "harvestable_forecast": harvestable_forecast,
@@ -5167,10 +5177,14 @@ def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
                           "grid_radius_m": (pk.get("grid_radius_m")
                                             or GLACIEM_POCKET_RADIUS_M),
                           "hit": bool(cand.get("hit"))}
+        if pk.get("name"):                     # named zone (#36.1)
+            view["pocket"]["name"] = pk["name"]
         if pk.get("marks"):                    # surveyed pockets (#36) carry
             view["pocket"]["marks"] = pk["marks"]     # their confidence badge
             view["pocket"]["density"] = pk.get("density")
             view["pocket"]["ores"] = pk.get("ores") or []
+        if pk.get("survey"):     # datamined pocket with org survey overlay (#36)
+            view["pocket"]["survey"] = pk["survey"]
     if cand.get("second"):
         s = cand["second"]
         view["second_crossing"] = {"enter_m": s["enter_m"], "peak_m": s["peak_m"],
@@ -5456,6 +5470,14 @@ PYRO_SYSTEM = "Pyro"
 GLACIEM_R_M = 15.0e9
 GLACIEM_POCKET_RADIUS_M = 5_196_152.5
 
+# A datamined pocket the org has surveyed and found EMPTY (all in-pocket marks
+# rocks="none") is down-ranked, not dropped: rock spawns vary between instances
+# and a single survey — however thorough — is strong evidence, not proof. The
+# penalty multiplies the pocket-mode score so a known-barren pocket loses to any
+# UNSURVEYED one (unknown, maybe rocks) yet still beats a worse-geometry barren
+# neighbour, and stays selectable when every candidate is barren.
+GLACIEM_BARREN_PENALTY = 0.5
+
 # Envelope for the *system* discriminator (glaciem_contains). Deliberately far
 # tighter than HALO_PLANE_TOLERANCE_M: the Aaron annulus at ~20 Gm is a region
 # no Stanton body neighbors, but ordinary Stanton traffic (Hurston 12.85 Gm <->
@@ -5518,6 +5540,20 @@ def glaciem_pockets(nav: NavData) -> list[dict]:
     return out
 
 
+def _pocket_radar_fields(pos, pk) -> dict:
+    """Geometry the live in-pocket radar draws from (#36): the pocket center,
+    its envelope radius (datamined grid radius, or a survey pocket's fitted
+    extent), and the fix's in-plane offset from center (dx, dy) + off-plane dz.
+    Shared by the Glaciem + Keeger locate verdicts so the client draws both the
+    same way."""
+    c = pk["xyz"]
+    return {
+        "center_xyz": [c[0], c[1], c[2]],
+        "grid_radius_m": pk.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M,
+        "dx": pos[0] - c[0], "dy": pos[1] - c[1], "dz": pos[2] - c[2],
+    }
+
+
 def glaciem_locate(pos, pockets: list[dict]) -> dict:
     """Classify a fix against the Glaciem Ring: inside a pocket (rocks), in
     the ring but between pockets (pretty, empty), or off the ring — with the
@@ -5538,7 +5574,10 @@ def glaciem_locate(pos, pockets: list[dict]) -> dict:
         if da > math.pi:
             da = 2 * math.pi - da
         view["pocket"] = {"key": nearest["key"], "kind": nearest["kind"],
-                          "center_off_m": d, "arc_m": da * GLACIEM_R_M}
+                          "center_off_m": d, "arc_m": da * GLACIEM_R_M,
+                          **_pocket_radar_fields(pos, nearest)}
+        if nearest.get("survey"):     # org survey overlay (#36), when annotated
+            view["pocket"]["survey"] = nearest["survey"]
     if nearest is not None and d <= (nearest.get("grid_radius_m")
                                      or GLACIEM_POCKET_RADIUS_M):
         view["status"] = "pocket"
@@ -5547,6 +5586,78 @@ def glaciem_locate(pos, pockets: list[dict]) -> dict:
     else:
         view.update({"status": "off_ring", "to_ring_m": abs(r - GLACIEM_R_M)})
     return view
+
+
+def annotate_glaciem_survey(pockets: list[dict], marks: list[dict]) -> list[dict]:
+    """Overlay the datamined Glaciem pockets (#35) with the org's in-pocket
+    survey findings (#36): a Glaciem mark's rocks/ores are ground truth about
+    the exact pocket it sits in, but #36's `survey_pockets` deliberately skips
+    the ring (its pockets are already mapped), so those marks were inert. This
+    ties them back to their pocket.
+
+    Each mark belongs to its NEAREST pocket when within that pocket's grid
+    radius (pocket centers are ~247,000 km apart on the ring vs a ~5,196 km
+    radius, so assignment is unambiguous). Per pocket, `survey` carries:
+      status  barren  — has marks, every one rocks="none" (surveyed empty)
+              sparse|medium|dense — best positive density found
+              (absent)— unsurveyed
+      marks/positive counts, `closest_center_m` (how near center was checked —
+      the barren-confidence signal), union of `ores`, any `salvage`.
+
+    Marks tagged to a named zone (#36.1) are skipped — a deliberately-zoned
+    mark belongs to its zone, not the datamined overlay (no double-count).
+
+    Returns NEW pocket dicts; the registry list is never mutated."""
+    buckets: dict[int, list[tuple]] = {}
+    for m in marks:
+        if m.get("zone_id") is not None:
+            continue
+        best_i, best_d = None, math.inf
+        for i, pk in enumerate(pockets):
+            d = dist3(m["xyz"], pk["xyz"])
+            if d < best_d:
+                best_i, best_d = i, d
+        if best_i is None:
+            continue
+        pk = pockets[best_i]
+        if best_d <= (pk.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M):
+            buckets.setdefault(best_i, []).append((m, best_d))
+    out = []
+    for i, pk in enumerate(pockets):
+        pk2 = dict(pk)
+        mm = buckets.get(i)
+        if mm:
+            positives = [m for m, _ in mm if m["positive"]]
+            status = (max((m["rocks"] for m in positives),
+                          key=lambda r: SURVEY_ROCKS.index(r))
+                      if positives else "barren")
+            pk2["survey"] = {
+                "status": status,
+                "marks": len(mm),
+                "positive": len(positives),
+                "closest_center_m": min(d for _, d in mm),
+                "ores": sorted({o for m in positives for o in m["ores"]}),
+                "salvage": any(m["salvage"] for m, _ in mm),
+            }
+        out.append(pk2)
+    return out
+
+
+def glaciem_pocket_survey(pos, pockets: list[dict]):
+    """The survey verdict for the pocket a fix sits in, if any: the `survey`
+    block from the nearest annotated pocket when `pos` is inside it, else None.
+    Feeds glaciem_locate's in-pocket note so the navigator says 'surveyed
+    barren' the moment you re-enter a mapped-empty pocket."""
+    nearest, d = None, math.inf
+    for pk in pockets or ():
+        dd = dist3(pos, pk["xyz"])
+        if dd < d:
+            nearest, d = pk, dd
+    if nearest is None:
+        return None
+    if d <= (nearest.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M):
+        return nearest.get("survey")
+    return None
 
 
 # Shell labels for the field picker, keyed by planet container internal name.
@@ -5649,6 +5760,10 @@ def _score_halo_pocket_cands(cands: list[dict]) -> None:
             c["score"] = 1.0 + 0.25 * (1.0 - f) + 0.1 * (1.0 - m)
         else:
             c["score"] = 0.8 * (1.0 - m) + 0.2 * (1.0 - f)
+        # Down-rank a pocket the org surveyed empty (#36) — never eliminate it
+        # (spawns vary; keep it selectable if it's all that's left).
+        if (c.get("pocket") or {}).get("survey", {}).get("status") == "barren":
+            c["score"] *= GLACIEM_BARREN_PENALTY
 
 
 # ---------------------------------------------------------------------------
@@ -5727,13 +5842,53 @@ def survey_marks(nav: NavData, system: str,
             continue
         s = getattr(p, "survey", None) or {}
         rocks = s.get("rocks") if s.get("rocks") in SURVEY_ROCKS else "medium"
+        zid = s.get("zone_id")
         out.append({"id": p.id, "name": p.name, "xyz": tuple(g),
                     "rocks": rocks, "positive": rocks != "none",
                     "ores": list(s.get("ores") or []),
                     "salvage": bool(s.get("salvage")),
+                    "zone_id": zid if isinstance(zid, int) else None,
                     "owner_handle": p.owner_handle})
     out.sort(key=lambda m: m["id"])
     return out
+
+
+def survey_cluster_fit(members: list[dict], negatives: list[dict]) -> dict:
+    """Derive one pocket's geometry from its member marks + the negatives that
+    bound it — the shared reducer behind both proximity clusters (#36
+    survey_pockets) and named zones (#36.1 survey_zones_state).
+
+    Center = centroid of the POSITIVE marks (a rock is ground truth about where
+    the field is); a wholly-negative set ("we checked here, empty") falls back to
+    all members so a barren zone still has a location. Radius = the default
+    pocket radius or 1.2x the members' spread, whichever is larger, capped inward
+    to 0.8x the nearest "nothing here" mark (negatives bound the edge). Returns
+    center/radius/status/ores/salvage/closest + counts; keyless (the caller keys
+    it)."""
+    positives = [m for m in members if m["positive"]]
+    basis = positives or members
+    n = len(basis)
+    centroid = tuple(sum(m["xyz"][i] for m in basis) / n for i in range(3)) \
+        if n else (0.0, 0.0, 0.0)
+    spread = max((dist3(m["xyz"], centroid) for m in members), default=0.0)
+    radius = max(GLACIEM_POCKET_RADIUS_M, 1.2 * spread)
+    near_neg = min((dist3(ng["xyz"], centroid) for ng in negatives), default=math.inf)
+    if near_neg < 2.0 * radius:
+        radius = max(500e3, min(radius, 0.8 * near_neg))
+    status = (max((m["rocks"] for m in positives), key=lambda r: SURVEY_ROCKS.index(r))
+              if positives else "barren")
+    return {
+        "xyz": centroid,
+        "grid_radius_m": radius,
+        "marks": len(members),
+        "positive": len(positives),
+        "status": status,
+        "density": status if positives else None,
+        "ores": sorted({o for m in positives for o in m["ores"]}),
+        "salvage": any(m["salvage"] for m in members),
+        "closest_center_m": min((dist3(m["xyz"], centroid) for m in members),
+                                default=0.0),
+    }
 
 
 def survey_pockets(nav: NavData, system: str,
@@ -5749,8 +5904,11 @@ def survey_pockets(nav: NavData, system: str,
     whichever is larger — capped by the nearest "nothing here" mark, which is
     how negatives bound a field's edge. Keys are stable while their anchor
     mark (the cluster's lowest id) survives. Output shape = #35 pocket dicts,
-    so plan_halo_drop consumes them untouched."""
-    marks = survey_marks(nav, system, t_ref)
+    so plan_halo_drop consumes them untouched.
+
+    Marks tagged to a named zone (#36.1) are excluded — they belong to a
+    deliberate zone (survey_zones_state), never a proximity cluster."""
+    marks = [m for m in survey_marks(nav, system, t_ref) if m["zone_id"] is None]
     positives = [m for m in marks
                  if m["positive"] and not glaciem_contains(m["xyz"])]
     negatives = [m for m in marks
@@ -5772,28 +5930,52 @@ def survey_pockets(nav: NavData, system: str,
                 for i in range(3))
     out = []
     for c in clusters:
-        members = c["members"]
-        centroid = c["centroid"]
-        spread = max((dist3(m["xyz"], centroid) for m in members), default=0.0)
-        radius = max(GLACIEM_POCKET_RADIUS_M, 1.2 * spread)
-        near_neg = min((dist3(n["xyz"], centroid) for n in negatives),
-                       default=math.inf)
-        if near_neg < 2.0 * radius:
-            radius = max(500e3, min(radius, 0.8 * near_neg))
-        density = max((m["rocks"] for m in members),
-                      key=lambda r: SURVEY_ROCKS.index(r))
-        ores = sorted({o for m in members for o in m["ores"]})
+        fit = survey_cluster_fit(c["members"], negatives)
         out.append({
-            "key": f"SVY-{min(m['id'] for m in members) % 1_000_000}",
-            "kind": "surveyed",
-            "xyz": centroid,
-            "grid_radius_m": radius,
-            "marks": len(members),
-            "density": density,
-            "ores": ores,
-            "salvage": any(m["salvage"] for m in members),
+            "key": f"SVY-{min(m['id'] for m in c['members']) % 1_000_000}",
+            "kind": "surveyed", **fit,
         })
     out.sort(key=lambda p: math.atan2(p["xyz"][1], p["xyz"][0]))
+    return out
+
+
+def survey_zones_state(nav: NavData, system: str, zones: list[dict],
+                       t_ref: float | None = None) -> list[dict]:
+    """Named survey zones (#36.1) as plannable pockets: group the org's marks by
+    their `zone_id` tag (deliberate membership, NOT proximity) and fit each with
+    survey_cluster_fit. Unlike survey_pockets this does NOT exclude the Glaciem
+    envelope — a zone is allowed ANYWHERE (open space, the ring dead-zone between
+    datamined pockets, any system). Output shape = #35 pocket dicts (kind="zone",
+    key=slug) so plan_halo_drop + the radar consume them untouched. A zone with
+    no marks yet is emitted with `marks: 0` and no geometry so the UI can still
+    show it as active."""
+    marks = survey_marks(nav, system, t_ref)
+    by_zone: dict[int, list[dict]] = {}
+    for m in marks:
+        if m["zone_id"] is not None:
+            by_zone.setdefault(m["zone_id"], []).append(m)
+    # Negatives across the whole system bound a zone's edge just like a cluster's
+    # — a "nothing here" mark near a zone tightens it even if untagged.
+    negatives = [m for m in marks if not m["positive"]]
+    out = []
+    for z in zones:
+        members = by_zone.get(z["id"], [])
+        row = {"key": z["slug"], "kind": "zone", "zone_id": z["id"],
+               "name": z["name"], "closed": bool(z.get("closed")),
+               "owner_handle": z.get("owner_handle")}
+        if members:
+            fit = survey_cluster_fit(members, negatives)
+            row.update(fit)
+            # Mirror the datamined-overlay `survey` shape so the barren
+            # down-rank, drop-view badge, and frontend treat a zone uniformly.
+            row["survey"] = {k: fit[k] for k in
+                             ("status", "marks", "positive", "ores",
+                              "salvage", "closest_center_m")}
+        else:
+            row.update({"xyz": None, "grid_radius_m": None, "marks": 0,
+                        "positive": 0, "status": "empty", "ores": [],
+                        "salvage": False})
+        out.append(row)
     return out
 
 
@@ -5844,7 +6026,7 @@ def keeger_locate(pos, pockets: list[dict]) -> dict | None:
     if nearest is not None and d <= nearest["grid_radius_m"]:
         return {"status": "keeger_pocket", "r_m": r, "z_m": z,
                 "pocket": {"key": nearest["key"], "marks": nearest["marks"],
-                           "center_off_m": d}}
+                           "center_off_m": d, **_pocket_radar_fields(pos, nearest)}}
     if not keeger_contains(pos):
         return None
     view = {"status": "keeger", "r_m": r, "z_m": z,

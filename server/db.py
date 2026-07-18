@@ -450,6 +450,26 @@ CREATE TABLE IF NOT EXISTS member_blueprints (
 );
 CREATE INDEX IF NOT EXISTS member_bp_member ON member_blueprints(member_id);
 CREATE INDEX IF NOT EXISTS member_bp_key ON member_blueprints(blueprint_key);
+
+-- Named survey zones (#36.1): a deliberately-named asteroid field the org is
+-- surveying. A zone owns only its IDENTITY — its center/radius/density/ores are
+-- always re-derived live from the survey marks tagged to it (survey.zone_id in
+-- custom_pois), never stored, so a new mark refines it and a deleted mark heals
+-- it (the #36 "derive, never cache the fit" rule). Org-visible (two members can
+-- feed one zone); `slug` is the stable planner pin key, `closed` hides it from
+-- default targets without losing data.
+CREATE TABLE IF NOT EXISTS survey_zones (
+    id        INTEGER PRIMARY KEY,
+    slug      TEXT NOT NULL,             -- stable key from the name (pin target)
+    name      TEXT NOT NULL,             -- display name
+    system    TEXT NOT NULL,
+    created_by TEXT,                     -- creator discord_id (perm checks; always present)
+    owner_handle TEXT,                   -- creator's in-game handle, denormed for display
+    created   REAL,
+    closed    INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (system, slug)
+);
+CREATE INDEX IF NOT EXISTS survey_zones_system ON survey_zones(system);
 """
 
 
@@ -470,6 +490,7 @@ def init(db_path) -> None:
         _ensure_column("members", "online_activity", "TEXT")
         _ensure_column("members", "appear_offline", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("members", "playstyle_tags", "TEXT")   # JSON list, member profile (#30)
+        _ensure_column("members", "active_survey_zone", "INTEGER")   # #36.1 active zone id
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
         # Belt-survey payload (#36): JSON {rocks, ores, salvage, source} on
@@ -606,6 +627,78 @@ def list_custom_pois() -> list[dict]:
     with _lock:
         rows = _conn.execute("SELECT * FROM custom_pois").fetchall()
     return [_custom_row_to_dict(r) for r in rows]
+
+
+# --- named survey zones (#36.1) --------------------------------------------
+
+
+def list_survey_zones(system: str | None = None) -> list[dict]:
+    """Every survey zone (org-shared), optionally scoped to one system."""
+    with _lock:
+        if system is None:
+            rows = _conn.execute(
+                "SELECT * FROM survey_zones ORDER BY id").fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT * FROM survey_zones WHERE system=? ORDER BY id",
+                (system,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_survey_zone(zone_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM survey_zones WHERE id=?", (zone_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def create_survey_zone(slug: str, name: str, system: str, created_by, owner_handle,
+                       created: float) -> int:
+    """Create a zone; raises sqlite3.IntegrityError on a duplicate (system, slug)
+    so the caller can 409."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO survey_zones (slug, name, system, created_by, owner_handle, created) "
+            "VALUES (?,?,?,?,?,?)",
+            (slug, name, system, str(created_by) if created_by is not None else None,
+             owner_handle, created))
+    return cur.lastrowid
+
+
+def update_survey_zone(zone_id: int, name: str | None = None, slug: str | None = None,
+                       closed: bool | None = None) -> bool:
+    sets, args = [], []
+    if name is not None:
+        sets.append("name=?"); args.append(name)
+    if slug is not None:
+        sets.append("slug=?"); args.append(slug)
+    if closed is not None:
+        sets.append("closed=?"); args.append(1 if closed else 0)
+    if not sets:
+        return False
+    args.append(zone_id)
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE survey_zones SET {', '.join(sets)} WHERE id=?", args)
+    return cur.rowcount > 0
+
+
+def delete_survey_zone(zone_id: int) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM survey_zones WHERE id=?", (zone_id,))
+    return cur.rowcount > 0
+
+
+def clear_survey_zones(system: str) -> list[int]:
+    """Delete every zone in a system (admin patch-reset alongside the marks).
+    Returns the deleted ids so the caller can untag any live marks + prefs."""
+    with _lock, _conn:
+        rows = _conn.execute(
+            "SELECT id FROM survey_zones WHERE system=?", (system,)).fetchall()
+        ids = [r["id"] for r in rows]
+        if ids:
+            _conn.execute("DELETE FROM survey_zones WHERE system=?", (system,))
+    return ids
 
 
 def next_custom_poi_id() -> int:
@@ -854,6 +947,18 @@ def set_member_playstyles(discord_id: str, tags: list[str]) -> None:
             "INSERT INTO members (discord_id, playstyle_tags) VALUES (?,?) "
             "ON CONFLICT(discord_id) DO UPDATE SET playstyle_tags=excluded.playstyle_tags",
             (did, json.dumps(tags) if tags else None))
+
+
+def set_member_active_survey_zone(discord_id: str, zone_id: int | None) -> None:
+    """Persist which survey zone (#36.1) a member is actively feeding — the tag
+    stamped onto their next ⛏ marks. NULL clears it ("stop surveying"). Creates a
+    stub member row if none exists, like the other member-pref setters."""
+    did = str(discord_id)
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, active_survey_zone) VALUES (?,?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET active_survey_zone=excluded.active_survey_zone",
+            (did, zone_id))
 
 
 # --- watcher tokens --------------------------------------------------------

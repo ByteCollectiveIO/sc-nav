@@ -48,6 +48,7 @@ None right now — pick the next item from [feature-backlog.md](feature-backlog.
 | [halo-finder.md](halo-finder.md) | 2026-07-10 | Halo Finder, the tenth app (`#/halo`, #31): Aaron Halo band/POI drop planner, staging hops, verify-and-refine, navigator belt chip |
 | [halo-finder-expansion.md](halo-finder-expansion.md) | v0.55.0 | Halo Finder → Nyx Glaciem Ring pocket mode (381 datamined segments, ~4% coverage insight) + Pyro unmarked-field fly-bys (#35); Pyro VI/V rings researched-and-rejected (don't exist); in-game pass pending |
 | [belt-survey.md](belt-survey.md) | built 2026-07-16, pending release | Crowd-sourced belt mapping (#36): ⛏ survey marks → pockets live from mark #1 → Keeger drop plans + field-model export; Keeger region awareness + guarded system rung; miss-ceiling honesty guard; in-game pass pending |
+| [survey-zones.md](survey-zones.md) | built 2026-07-18, pending release | Named survey zones (#36.1): active-zone auto-tag so `⛏` marks localize into a deliberately-named, plannable field anywhere (incl. the Glaciem ring dead-zone); zone owns identity, geometry always derived; in-game pass pending |
 
 ## Strategy / records
 
