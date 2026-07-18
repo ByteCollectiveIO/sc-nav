@@ -4574,6 +4574,33 @@ class ScopeIndexTests(unittest.TestCase):
         self.assertIsNot(obs_a, obs_b)               # rebuilt, not stale
         self.assertEqual({o.id for o in obs_b[("Stanton", "Yela")]["resource"]}, {1, 2})
 
+    def test_obs_by_category_caches_and_invalidates_on_touch(self):
+        # The whole-dataset per-category pool (deep-space fixes + the element
+        # finder) shares scope_index's invalidation: same-version reads are
+        # the cached object; a touch()'d mutation rebuilds it.
+        nav = self._nav()
+        self._obs(nav, 1, "Yela", (0.0, 0.0, 0.0))
+        a = nav_core.obs_by_category(nav)
+        self.assertIs(a, nav_core.obs_by_category(nav))       # cached
+        self.assertEqual({o.id for o in a["resource"]}, {1})
+        self._obs(nav, 2, "Daymar", (5e9, 0.0, 0.0))
+        nav.touch()
+        b = nav_core.obs_by_category(nav)
+        self.assertEqual({o.id for o in b["resource"]}, {1, 2})
+
+    def test_obs_on_body_reads_scope_index(self):
+        # _obs_on_body used to scan every observation the org ever recorded
+        # (×4 per on-body fix via resource_forecast); it must now resolve from
+        # the scoped buckets — and still exclude lat/lon-less sightings.
+        nav = self._nav()
+        self._obs(nav, 1, "Yela", (0.0, 0.0, 0.0))
+        nav.observations[1].latitude, nav.observations[1].longitude = 1.0, 2.0
+        self._obs(nav, 2, "Yela", (0.0, 0.0, 0.0))            # no lat/lon
+        self._obs(nav, 3, "Daymar", (5e9, 0.0, 0.0))
+        nav.observations[3].latitude, nav.observations[3].longitude = 3.0, 4.0
+        got = nav_core._obs_on_body(nav, "Stanton", "Yela")
+        self.assertEqual({o.id for o in got}, {1})
+
     def test_compute_state_scopes_to_current_body(self):
         nav = self._nav()
         self._obs(nav, 1, "Yela", (100_000.0, 0.0, 0.0))

@@ -1443,6 +1443,10 @@ class RoutePlanIn(BaseModel):
 PATH_MIN_MOVE_M = 250.0   # don't record a crumb until you've moved this far
 PATH_MAX = 5000           # cap so a long session can't grow unbounded
 SHARED_PATH_MAX = 500     # crumbs shared with teammates per presence upsert (payload cap)
+PRESENCE_PATH_RESYNC_S = 10.0   # full-trail refresh cadence per sharer; between
+                                # resyncs the ~1 Hz upserts are position-only
+                                # (a moving sharer's trail was O(500 crumbs ×
+                                # tabs) EVERY tick — the dominant WS payload)
 
 # Cargo-run arrival thresholds. Generous on purpose: arrival only surfaces the
 # stop's package checklist for the player to confirm — it never auto-completes —
@@ -1917,16 +1921,20 @@ class SessionHub:
         }
 
     @staticmethod
-    def _public_presence(rec: dict) -> dict:
-        """Wire form: drop last_update, expose age_s at send time."""
-        return {
+    def _public_presence(rec: dict, include_path: bool = True) -> dict:
+        """Wire form: drop last_update, expose age_s at send time. Without
+        `include_path` the `path` key is OMITTED (not emptied) — the client
+        keeps its cached trail for a position-only upsert."""
+        out = {
             "discord_id": rec["discord_id"], "display_name": rec["display_name"],
             "handle": rec["handle"], "shard": rec["shard"],
             "system": rec["system"], "body": rec["body"],
             "lat": rec["lat"], "lon": rec["lon"], "heading": rec["heading"],
-            "path": rec.get("path", []),
             "age_s": max(0.0, time.time() - rec["last_update"]),
         }
+        if include_path:
+            out["path"] = rec.get("path", [])
+        return out
 
     def touch_presence(self, sess: "Session") -> None:
         """Recompute + queue this member's presence (or a remove if they left a
@@ -1936,9 +1944,37 @@ class SessionHub:
         if rec is None:
             self.drop_presence(uid)
             return
+        # Carry the trail-resync bookkeeping across the rebuild (the record is
+        # a fresh dict every touch; the wire stamps must survive it).
+        prev = self.presence.get(uid)
+        if prev is not None:
+            for k in ("path_wire_len", "path_wire_t"):
+                if k in prev:
+                    rec[k] = prev[k]
         self.presence[uid] = rec
         self._dirty.add(uid)
         self._removed.discard(uid)
+
+    def take_presence_upserts(self, now: float) -> list[dict]:
+        """Call under the lock: wire upserts for every dirty sharer, clearing
+        the dirty set. The full breadcrumb trail rides only on a member's
+        first upsert, then again at most every PRESENCE_PATH_RESYNC_S and only
+        when it actually changed — the ~1 Hz upserts in between are
+        position-only and the client keeps its cached trail."""
+        out = []
+        for uid in self._dirty:
+            rec = self.presence.get(uid)
+            if rec is None:
+                continue
+            path = rec.get("path") or []
+            due = ("path_wire_t" not in rec
+                   or (len(path) != rec.get("path_wire_len")
+                       and now - rec["path_wire_t"] >= PRESENCE_PATH_RESYNC_S))
+            out.append(self._public_presence(rec, include_path=due))
+            if due:
+                rec["path_wire_len"], rec["path_wire_t"] = len(path), now
+        self._dirty.clear()
+        return out
 
     def drop_presence(self, uid: str) -> None:
         if uid in self.presence:
@@ -2382,10 +2418,8 @@ async def presence_broadcaster():
                 for uid, rec in list(hub.presence.items()):
                     if now - rec["last_update"] > PRESENCE_STALE_S:
                         hub.drop_presence(uid)
-                upserts = [hub._public_presence(hub.presence[u])
-                           for u in hub._dirty if u in hub.presence]
+                upserts = hub.take_presence_upserts(now)
                 removes = list(hub._removed)
-                hub._dirty.clear()
                 hub._removed.clear()
                 # Backstop for the online roster: sweep members whose WS ping went
                 # quiet (a half-open socket that never fired a clean disconnect).
