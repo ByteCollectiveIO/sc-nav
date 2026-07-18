@@ -1767,10 +1767,19 @@ class Session:
             if cur else []
         )
 
-    async def broadcast(self):
-        message = json.dumps(
+    def state_frame(self) -> str:
+        """Serialize this session's live 'state' WS payload. Build it under the
+        hub lock, then hand it to `push_frame` to fan out AFTER the lock is
+        released — a slow/backpressured tab must never stall other members'
+        posts (the same discipline the presence broadcaster uses)."""
+        return json.dumps(
             {"type": "state", "data": self.nav_state, "capture": self.capture_status()}
         )
+
+    async def push_frame(self, message: str):
+        """Fan a pre-built frame out to this session's tabs. Safe to call WITHOUT
+        the hub lock: it snapshots its targets and each send is bounded by
+        WS_SEND_TIMEOUT_S, dropping (and closing) any socket that stalls."""
         targets = list(self.ws_clients)   # copy: a tab may connect/drop mid-send
         if not targets:
             return
@@ -1778,6 +1787,9 @@ class Session:
         for ws, ok in zip(targets, oks):
             if not ok:
                 self.ws_clients.discard(ws)
+
+    async def broadcast(self):
+        await self.push_frame(self.state_frame())
 
 
 class SessionHub:
@@ -1808,6 +1820,10 @@ class SessionHub:
         # and community-refreshable; ages off purely by the clock like `lfg`.
         self.warnings: dict[int, dict] = {}
         self._warning_seq = 0
+        # Set when a shared POI/observation changes; flushed off-lock ~1 Hz by the
+        # presence broadcaster (see mark_dataset_dirty). Coalesces a burst of
+        # captures into one cross-session refresh.
+        self._dataset_dirty = False
 
     def get(self, user: dict) -> Session:
         sess = self.sessions.get(user["id"])
@@ -2249,17 +2265,38 @@ class SessionHub:
             if s.last_capture and s.last_capture.get("id") == entity_id:
                 s.last_capture = None
 
-    async def broadcast_all(self) -> None:
-        """The shared dataset changed (capture/delete/refresh) — recompute and
-        push every session so all members' nearby/destination reflect it."""
-        for s in self.sessions.values():
+    def mark_dataset_dirty(self) -> None:
+        """A shared POI/observation changed (capture/delete/feed refresh). Flag a
+        coalesced cross-session refresh instead of recomputing every session inline
+        under the lock.
+
+        The old broadcast_all recomputed ALL sessions (O(sessions) CPU) and awaited
+        their WS sends while holding hub.lock — fine for a few players, but on the
+        hot capture path of a ~50-person mapping party it held the global lock for
+        hundreds of ms per capture and stalled every other member's position post.
+        The presence broadcaster now flushes this ~1 Hz, off-lock, for OPEN tabs
+        only. Safe to call under the lock (it just sets a flag)."""
+        self._dataset_dirty = True
+
+    def take_dataset_refresh(self) -> list["Session"] | None:
+        """Call under the lock: if the dataset changed since the last flush, clear
+        the flag and return the OPEN-tab sessions that need a recompute + push.
+        Tab-less watcher sessions are skipped — nobody's looking at their map, so
+        recomputing them was pure waste. None means nothing changed."""
+        if not self._dataset_dirty:
+            return None
+        self._dataset_dirty = False
+        return [s for s in self.sessions.values() if s.ws_clients]
+
+    async def flush_dataset_refresh(self, sessions: list["Session"]) -> None:
+        """Recompute each session and push its fresh state, then nudge every tab to
+        refetch the browse/filter dataset (a new POI/observation must show up in
+        the filtered lists, not just on the map). Call OFF the lock: recompute is
+        read-only on `nav` and recompute+serialize is atomic (no await between), so
+        a concurrent position post can't interleave a half-built frame."""
+        for s in sessions:
             s.recompute()
-            await s.broadcast()
-        # The per-session `state` push refreshes each viewer's live nearest lists,
-        # but the whole-dataset browse/filter view (and the contributor dropdown)
-        # is fed by a separate /api/pois + /api/observations fetch. Nudge every tab
-        # to refetch it so another member's new POI/observation shows up in the
-        # filtered NEARBY list, not just on the map.
+            await s.push_frame(s.state_frame())
         await self.send_to_all_clients({"type": "dataset"})
 
 
@@ -2279,6 +2316,7 @@ async def presence_broadcaster():
             # lock-taking endpoint). The frames are point-in-time; sending them a
             # moment later is fine (all board frames are full-state and idempotent).
             frames = []
+            refresh = None
             async with hub.lock:
                 now = time.time()
                 for uid, rec in list(hub.presence.items()):
@@ -2312,8 +2350,17 @@ async def presence_broadcaster():
                     frames.append({"type": "lfg", "entries": hub.lfg_board()})
                 if warnings_changed:
                     frames.append({"type": "warnings", "entries": hub.warnings_board()})
+                # Coalesced shared-dataset refresh (see mark_dataset_dirty): pick up
+                # the OPEN-tab sessions to recompute, but do the CPU + WS work below,
+                # off the lock.
+                refresh = hub.take_dataset_refresh()
             for frame in frames:
                 await hub.send_to_all_clients(frame)
+            if refresh is not None:
+                # A capture/delete/refresh happened: recompute each open tab so its
+                # NEARBY/destination reflect the change and nudge every tab to
+                # refetch the browse dataset — all off the lock.
+                await hub.flush_dataset_refresh(refresh)
         except Exception as exc:   # never let the loop die on a transient error
             print(f"[sc-nav] presence broadcaster error: {exc}")
 
@@ -2387,6 +2434,7 @@ async def _start_presence_broadcaster():
 
 @app.post("/api/position")
 async def post_position(body: PositionIn, user: dict = Depends(require_user)):
+    frame = None                        # set when the fan-out happens after the lock
     async with hub.lock:
         sess = hub.get(user)
         now = time.time()
@@ -2420,9 +2468,22 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         sess.record_crumb()
         hub.touch_presence(sess)        # queue a teammate-map upsert (or remove)
         if captured:
-            await hub.broadcast_all()   # a new POI is visible to everyone
-        else:
-            await sess.broadcast()
+            # A capture changes the shared dataset for everyone. Queue a coalesced
+            # cross-session refresh (recompute + push to open tabs), flushed
+            # off-lock by the presence broadcaster — NOT an inline O(sessions)
+            # recompute under the lock, which was the capture-path scaling cliff.
+            hub.mark_dataset_dirty()
+        # The common path is every /showlocation and every 60 s watcher heartbeat;
+        # the capturer also wants immediate feedback. Either way, snapshot this
+        # session's state frame here but fan it out to the poster's own tabs AFTER
+        # releasing the lock: a slow/backpressured browser tab would otherwise hold
+        # hub.lock across a 5 s WS timeout, serializing every other member's
+        # position posts behind it and leaving the single-worker origin
+        # unresponsive to the tunnel (the delayed updates + upstream 502s seen with
+        # two watchers live).
+        frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
     return {"ok": True}
 
 
@@ -6644,7 +6705,7 @@ async def update_custom_poi(poi_id: int, body: PoiEditIn, user: dict = Depends(r
             # so rebuild it + reassign nearest_qt across the dataset.
             if poi.qt_marker:
                 nav_core.assign_qt_markers(nav)
-        await hub.broadcast_all()
+        hub.mark_dataset_dirty()
     return {"ok": True, "note": poi.note, "private": poi.private}
 
 
@@ -6663,7 +6724,7 @@ async def delete_custom_poi(poi_id: int, user: dict = Depends(require_session)):
         if was_qt:
             nav_core.assign_qt_markers(nav)
         hub.forget_entity(poi_id)
-        await hub.broadcast_all()
+        hub.mark_dataset_dirty()
     return {"ok": True}
 
 
@@ -6689,7 +6750,7 @@ async def delete_observation(obs_id: int, user: dict = Depends(require_session))
         db.delete_observation(obs_id)
         nav.observations.pop(obs_id, None)
         hub.forget_entity(obs_id)
-        await hub.broadcast_all()
+        hub.mark_dataset_dirty()
         return {"ok": True}
 
 
@@ -6985,7 +7046,7 @@ async def _rebuild_nav() -> None:
                     and s.destination_id not in nav.pois
                     and s.destination_id not in nav.observations):
                 s.destination_id = None
-        await hub.broadcast_all()
+        hub.mark_dataset_dirty()
     rebuild_trade_terminals()   # re-resolve the crosswalk against the new POI set
 
 
@@ -7908,7 +7969,7 @@ async def delete_me(request: Request, user: dict = Depends(require_session)):
         # 3) Drop their live presence + session so teammates see them leave.
         hub.drop_presence(uid)
         hub.sessions.pop(uid, None)
-        await hub.broadcast_all()
+        hub.mark_dataset_dirty()
     await hub.broadcast_online()
     request.session.clear()
     return {"ok": True, "deleted": counts}
