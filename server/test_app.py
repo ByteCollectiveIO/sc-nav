@@ -3331,7 +3331,8 @@ class HaloFinderApiTests(unittest.TestCase):
             pid, owner_id=1, owner_handle="Pilot", system_hint="Nyx",
             survey=survey)
         app.nav.pois[poi.id] = poi
-        self.addCleanup(lambda: app.nav.pois.pop(poi.id, None))
+        app.nav.touch()     # the mutation contract: any nav.pois change bumps
+        self.addCleanup(lambda: (app.nav.pois.pop(poi.id, None), app.nav.touch()))
         return poi
 
     def test_survey_zone_full_flow(self):
@@ -3690,6 +3691,7 @@ class BeltSurveyApiTests(unittest.TestCase):
                     if getattr(p, "custom", False)
                     and (p.type or "").lower() == "survey"]:
             app.nav.pois.pop(pid, None)
+        app.nav.touch()
         db.clear_survey_pois("Nyx")
 
     def _mark_at(self, xyz, rocks="dense", **kw):
@@ -3701,6 +3703,7 @@ class BeltSurveyApiTests(unittest.TestCase):
             survey={"rocks": rocks, **kw})
         db.add_custom_poi(app.nav_core.custom_poi_to_dict(poi))
         app.nav.pois[poi.id] = poi
+        app.nav.touch()     # the mutation contract: any nav.pois change bumps
         return poi
 
     def test_capture_arms_normalized_survey_payload(self):
@@ -3849,6 +3852,89 @@ class BeltSurveyApiTests(unittest.TestCase):
         self.assertEqual(r.json()["deleted"], 2)
         self.assertEqual(app.nav_core.survey_marks(app.nav, "Nyx"), [])
         self.assertEqual(db.clear_survey_pois("Nyx"), [])
+
+    def test_admin_clear_forgets_destinations(self):
+        # A cleared mark must stop being anyone's destination (same plumbing
+        # as delete_custom_poi) — otherwise sessions navigate to a ghost.
+        m = self._mark_at((self.KR, 0.0, 0.0))
+        s = app.Session(self._user)
+        s.destination_id = m.id
+        app.hub.sessions["1"] = s
+        r = self.client.post("/api/admin/survey/clear", json={"system": "Nyx"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(s.destination_id)
+
+    def test_capture_note_survives_empty_pocket_list(self):
+        # A degraded deployment (belt containers missing from the feed) has an
+        # empty Glaciem pocket list; glaciem_locate then verdicts ring_void
+        # with NO `pocket` key. The capture note must degrade gracefully —
+        # not KeyError the whole position post.
+        poi = app.nav_core.Poi(
+            id=-99, name="ring rock", system="Nyx", container_name=None,
+            type="survey", local_km=None,
+            global_m=(app.nav_core.GLACIEM_R_M, 0.0, 0.0),
+            latitude=None, longitude=None, height_m=None, qt_marker=False)
+        real = app.nav.belts["Nyx"]["pockets"]
+        app.nav.belts["Nyx"]["pockets"] = []
+        try:
+            note = app._halo_capture_note(poi)
+        finally:
+            app.nav.belts["Nyx"]["pockets"] = real
+        self.assertEqual(note, "Glaciem Ring (between pockets)")
+
+    def test_capture_zone_system_mismatch_files_untagged(self):
+        # #36.1 §7: the active zone persists on the member record, so a mark
+        # can land in another system days later. The mark's own system wins:
+        # the tag is dropped (a cross-system tag would make the mark invisible
+        # on every survey surface) and the member is told via last_capture.
+        zid = db.create_survey_zone("far-zone", "Far Zone", "Nyx", "1",
+                                    "Surveyor", time.time())
+        self.addCleanup(lambda: db.delete_survey_zone(zid))
+        s = app.Session(self._user)
+        s.system = "Stanton"
+        app.hub.sessions["1"] = s
+        pending = {"kind": "poi", "name": "Survey mismatch", "type": "survey",
+                   "qt_marker": False, "private": False, "note": None,
+                   "survey": {"rocks": "dense", "ores": [], "salvage": False,
+                              "zone_id": zid}}
+        pos = (20_320_000e3, 0.0, 0.0)          # Aaron Halo band 5 — Stanton
+        app._capture_poi(s, pos, time.time(), pending,
+                         {"player_id": None, "handle": None})
+        self.addCleanup(lambda: db.delete_custom_poi(s.last_capture["id"]))
+        self.assertEqual(s.last_capture["system"], "Stanton")
+        self.assertEqual(s.last_capture["zone_mismatch"],
+                         {"name": "Far Zone", "system": "Nyx"})
+        mark = app.nav.pois[s.last_capture["id"]]
+        self.assertNotIn("zone_id", mark.survey)
+
+    def test_zone_pin_ambiguous_across_systems_needs_system(self):
+        # Slugs are only unique per system: a bare pin matching two systems
+        # must 400 rather than silently planning the lowest-id twin.
+        z1 = db.create_survey_zone("twin-field", "Twin Field", "Nyx", "1",
+                                   None, time.time())
+        z2 = db.create_survey_zone("twin-field", "Twin Field", "Pyro", "1",
+                                   None, time.time())
+        self.addCleanup(lambda: db.delete_survey_zone(z1))
+        self.addCleanup(lambda: db.delete_survey_zone(z2))
+        r = self.client.post("/api/halo/plan", json={"pocket_key": "twin-field"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("more than one system", r.json()["detail"])
+        # naming the system resolves the pin (the empty zone then 400s on
+        # "no survey marks yet" — resolution happened, ambiguity didn't)
+        r2 = self.client.post("/api/halo/plan",
+                              json={"pocket_key": "twin-field", "system": "Nyx"})
+        self.assertEqual(r2.status_code, 400)
+        self.assertIn("no survey marks yet", r2.json()["detail"])
+        # zone rows carry their system so the client can pin unambiguously
+        rows = self.client.get("/api/halo/survey/zones?system=Nyx").json()["zones"]
+        self.assertEqual(next(z["system"] for z in rows if z["zone_id"] == z1),
+                         "Nyx")
+
+    def test_plan_rejects_mixed_goals(self):
+        r = self.client.post("/api/halo/plan",
+                             json={"band": 5, "pocket_key": "wtn-227"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("exactly one goal", r.json()["detail"])
 
 
 class ResourceValueTests(unittest.TestCase):

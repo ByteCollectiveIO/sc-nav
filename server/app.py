@@ -2374,8 +2374,14 @@ async def presence_broadcaster():
             if refresh is not None:
                 # A capture/delete/refresh happened: recompute each open tab so its
                 # NEARBY/destination reflect the change and nudge every tab to
-                # refetch the browse dataset — all off the lock.
-                await hub.flush_dataset_refresh(refresh)
+                # refetch the browse dataset — all off the lock. The dirty flag was
+                # cleared when we took the batch, so a failure here would silently
+                # lose the refresh — re-flag and let the next tick retry.
+                try:
+                    await hub.flush_dataset_refresh(refresh)
+                except Exception:
+                    hub.mark_dataset_dirty()
+                    raise
         except Exception as exc:   # never let the loop die on a transient error
             print(f"[sc-nav] presence broadcaster error: {exc}")
 
@@ -2529,14 +2535,19 @@ def _halo_capture_note(poi) -> str | None:
         return None
     if kind == "ring":
         loc = nav_core.glaciem_locate(poi.global_m, belt["pockets"])
-        if loc["status"] == "pocket":
-            return f"Glaciem Ring pocket {loc['pocket']['key']}"
+        # A degraded deployment (belt containers missing from the feed) has an
+        # empty pocket list, so glaciem_locate may verdict "ring_void" with no
+        # nearest pocket — never let that KeyError a position post.
+        pocket = loc.get("pocket")
+        if loc["status"] == "pocket" and pocket:
+            return f"Glaciem Ring pocket {pocket['key']}"
         if loc["status"] == "ring_void":
-            return f"Glaciem Ring (between pockets, {loc['pocket']['key']} nearest)"
+            near = f", {pocket['key']} nearest" if pocket else ""
+            return f"Glaciem Ring (between pockets{near})"
         # Not Glaciem space — the Keeger region (#36); surveyed pockets get
         # their key into the note so marks self-organize.
-        kg = nav_core.keeger_locate(poi.global_m,
-                                    nav_core.survey_pockets(nav, poi.system))
+        kg = nav_core.keeger_locate(
+            poi.global_m, nav_core.survey_state(nav, poi.system)["pockets"])
         if kg is not None and kg["status"] == "keeger_pocket":
             return f"Keeger Belt — survey pocket {kg['pocket']['key']}"
         if kg is not None:
@@ -2559,6 +2570,20 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         private=pending.get("private", False), note=pending.get("note"),
         system_hint=sess.system, survey=pending.get("survey"),
     )
+    # Zone tag sanity at fix time (#36.1 §7): a zone is system-scoped, and the
+    # tag was stamped at ARM time — the mark may land in another system days
+    # later (the active zone persists on the member record). A cross-system
+    # (or since-deleted) zone tag would make the mark invisible everywhere:
+    # excluded from its own system's proximity clustering AND absent from the
+    # zone's system view. The mark's own system wins; file it untagged.
+    zone_mismatch = None
+    sv = poi.survey
+    if sv and sv.get("zone_id") is not None:
+        zone = db.get_survey_zone(sv["zone_id"])
+        if zone is None or zone["system"] != poi.system:
+            sv.pop("zone_id", None)
+            if zone is not None:
+                zone_mismatch = {"name": zone["name"], "system": zone["system"]}
     halo_tag = _halo_capture_note(poi)
     if halo_tag and halo_tag not in (poi.note or ""):
         poi.note = f"{poi.note} · {halo_tag}" if poi.note else halo_tag
@@ -2567,6 +2592,7 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     except Exception as exc:
         print(f"[sc-nav] custom poi save failed: {exc}")
     nav.pois[poi.id] = poi
+    nav.touch()
     # A new QT marker changes the nearest-jump answer for every other entity,
     # so rebuild the index + reassign nearest_qt across the dataset.
     if poi.qt_marker:
@@ -2579,6 +2605,8 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         "owner_handle": poi.owner_handle,
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
+    if zone_mismatch is not None:
+        sess.last_capture["zone_mismatch"] = zone_mismatch
 
 
 def _capture_observation(sess, pos_m, now, pending, owner):
@@ -2597,6 +2625,7 @@ def _capture_observation(sess, pos_m, now, pending, owner):
     except Exception as exc:
         print(f"[sc-nav] observation save failed: {exc}")
     nav.observations[obs.id] = obs
+    nav.touch()
     sess.last_capture = {
         **nav_core._observation_base(obs),
         "latitude": obs.latitude, "longitude": obs.longitude,
@@ -2645,7 +2674,11 @@ async def set_destination(body: DestinationIn, user: dict = Depends(require_sess
         sess = hub.get(user)
         sess.destination_id = body.poi_id
         sess.recompute()
-        await sess.broadcast()
+        # Frame under the lock, send after — never hold hub.lock across a WS
+        # send timeout (the post_position discipline).
+        frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
     if isinstance(target, nav_core.Observation):
         name = nav_core.OBSERVATION_CATEGORIES[target.category]["display_name"](target.data)
     else:
@@ -2659,7 +2692,9 @@ async def clear_destination(user: dict = Depends(require_session)):
         sess = hub.get(user)
         sess.destination_id = None
         sess.recompute()
-        await sess.broadcast()
+        frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
     return {"ok": True}
 
 
@@ -2668,30 +2703,33 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
+    # Build the pending payload (including its SQLite zone lookup) BEFORE
+    # taking hub.lock — nothing here needs the session.
+    poi_type = body.type.strip() or "Custom"
+    survey = None
+    if poi_type.lower() == nav_core.SURVEY_POI_TYPE:
+        # Survey marks (#36): normalize the payload; a bare "survey"
+        # capture (navigator form, no chips) defaults to a positive
+        # medium-density mark.
+        s = body.survey or SurveyPayloadIn()
+        rocks = s.rocks if s.rocks in nav_core.SURVEY_ROCKS else "medium"
+        survey = {"rocks": rocks,
+                  "ores": [o.strip()[:_NAME_MAX] for o in s.ores if o.strip()],
+                  "salvage": bool(s.salvage)}
+        if s.source in ("contract", "freeroam"):
+            survey["source"] = s.source
+        # Tag the mark to a named zone (#36.1): an explicit zone_id wins,
+        # else the member's active zone. Only a zone that still exists is
+        # stamped (a deleted zone silently drops to an untagged mark);
+        # _capture_poi re-checks system + existence at fix time.
+        zid = s.zone_id if s.zone_id is not None \
+            else members_dir.active_survey_zone(user["id"])
+        if zid is not None and await asyncio.to_thread(db.get_survey_zone, zid) is not None:
+            survey["zone_id"] = zid
     async with hub.lock:
         sess = hub.get(user)
         if sess.capture_pending is not None:
             raise HTTPException(status_code=409, detail="another capture is already armed; cancel it first")
-        poi_type = body.type.strip() or "Custom"
-        survey = None
-        if poi_type.lower() == nav_core.SURVEY_POI_TYPE:
-            # Survey marks (#36): normalize the payload; a bare "survey"
-            # capture (navigator form, no chips) defaults to a positive
-            # medium-density mark.
-            s = body.survey or SurveyPayloadIn()
-            rocks = s.rocks if s.rocks in nav_core.SURVEY_ROCKS else "medium"
-            survey = {"rocks": rocks,
-                      "ores": [o.strip()[:_NAME_MAX] for o in s.ores if o.strip()],
-                      "salvage": bool(s.salvage)}
-            if s.source in ("contract", "freeroam"):
-                survey["source"] = s.source
-            # Tag the mark to a named zone (#36.1): an explicit zone_id wins,
-            # else the member's active zone. Only a zone that still exists is
-            # stamped (a deleted zone silently drops to an untagged mark).
-            zid = s.zone_id if s.zone_id is not None \
-                else members_dir.active_survey_zone(user["id"])
-            if zid is not None and db.get_survey_zone(zid) is not None:
-                survey["zone_id"] = zid
         sess.capture_pending = {
             "kind": "poi", "name": name, "type": poi_type,
             # A QT marker is shared navigation infrastructure, so private wins:
@@ -2701,8 +2739,14 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
             "note": body.note.strip() or None,
             "survey": survey,
         }
-        await sess.broadcast()
-        return {"ok": True, "capture": sess.capture_status()}
+        # Snapshot the frame under the lock, push it after release — a slow
+        # tab must never hold hub.lock across a WS send timeout (the same
+        # discipline post_position uses).
+        frame = sess.state_frame()
+        result = {"ok": True, "capture": sess.capture_status()}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 async def _arm_observation(user, category, data, biome, note):
@@ -2717,8 +2761,11 @@ async def _arm_observation(user, category, data, biome, note):
             "biome": (biome or "").strip() or None,
             "note": (note or "").strip() or None,
         }
-        await sess.broadcast()
-        return {"ok": True, "capture": sess.capture_status()}
+        frame = sess.state_frame()
+        result = {"ok": True, "capture": sess.capture_status()}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 @app.post("/api/capture/node")
@@ -2755,7 +2802,9 @@ async def capture_cancel(user: dict = Depends(require_session)):
     async with hub.lock:
         sess = hub.get(user)
         sess.capture_pending = None
-        await sess.broadcast()
+        frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
     return {"ok": True}
 
 
@@ -3392,8 +3441,11 @@ async def start_trade_run(body: TradePlanIn, user: dict = Depends(require_sessio
         sess.trade_run = run
         _point_at_active_trade_leg(sess)
         sess.recompute()
-        await sess.broadcast()
-        return {"ok": True, "trade_run": sess.trade_run_view()}
+        frame = sess.state_frame()
+        result = {"ok": True, "trade_run": sess.trade_run_view()}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 @app.get("/api/trade/run")
@@ -3487,8 +3539,12 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
         else:
             db.update_trade_run(user["id"], run["id"], run)
         sess.recompute()
-        await sess.broadcast()
-        return {"ok": True, "completed": completed, "trade_run": sess.trade_run_view()}
+        frame = sess.state_frame()
+        result = {"ok": True, "completed": completed,
+                  "trade_run": sess.trade_run_view()}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 @app.post("/api/trade/run/replan")
@@ -3606,8 +3662,11 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         _point_at_active_trade_leg(sess)
         db.update_trade_run(user["id"], run["id"], run)
         sess.recompute()
-        await sess.broadcast()
-        return {"ok": True, "trade_run": sess.trade_run_view()}
+        frame = sess.state_frame()
+        result = {"ok": True, "trade_run": sess.trade_run_view()}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 @app.get("/api/trade/stock")
@@ -3627,8 +3686,10 @@ async def abandon_trade_run(user: dict = Depends(require_session)):
         sess.trade_run = None
         sess.destination_id = None
         sess.recompute()
-        await sess.broadcast()
-        return {"ok": True, "abandoned": had}
+        frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
+    return {"ok": True, "abandoned": had}
 
 
 # The forecast/finder/heatmap endpoints work for any mappable observation
@@ -3859,8 +3920,11 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
         sess.run = run
         _point_at_active_stop(sess)
         sess.recompute()
-        await sess.broadcast()
-        return {"ok": True, "run": sess.run_view()}
+        frame = sess.state_frame()
+        result = {"ok": True, "run": sess.run_view()}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 @app.get("/api/route/run")
@@ -3912,8 +3976,11 @@ async def patch_run(body: RunPatchIn, user: dict = Depends(require_session)):
         else:
             db.update_run(user["id"], run["id"], run)
         sess.recompute()
-        await sess.broadcast()
-        return {"ok": True, "completed": completed, "run": sess.run_view()}
+        frame = sess.state_frame()
+        result = {"ok": True, "completed": completed, "run": sess.run_view()}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 @app.delete("/api/route/run")
@@ -3925,8 +3992,10 @@ async def abandon_run(user: dict = Depends(require_session)):
         sess.run = None
         sess.destination_id = None
         sess.recompute()
-        await sess.broadcast()
-        return {"ok": True, "abandoned": had}
+        frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
+    return {"ok": True, "abandoned": had}
 
 
 def _run_summary(run: dict) -> dict:
@@ -4268,13 +4337,14 @@ def get_halo_targets(system: str = "Stanton",
         doc["ring"] = {"r_m": belt["r_m"],
                        "pocket_radius_m": belt["pocket_radius_m"]}
         # Belt survey (#36): the Keeger region + the org's surveyed pockets,
-        # computed live from the marks (never cached — deleting a mark heals
-        # the map on the next read).
-        marks = nav_core.survey_marks(nav, system)
+        # derived from the marks (version-keyed cache — deleting a mark still
+        # heals the map on the next read, via nav.touch()).
+        sstate = nav_core.survey_state(nav, system)
+        marks = sstate["marks"]
         # Overlay the org's in-pocket findings onto the datamined ring pockets
         # (#36): a surveyed-barren pocket carries a `survey` block so the picker
         # can badge it and the planner down-ranks it.
-        pockets = nav_core.annotate_glaciem_survey(belt["pockets"], marks)
+        pockets = sstate["glaciem"] or []
         doc["pockets"] = [{"key": p["key"], "kind": p["kind"],
                            "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
                            "grid_radius_m": p["grid_radius_m"],
@@ -4283,7 +4353,7 @@ def get_halo_targets(system: str = "Stanton",
         doc["keeger"] = {"r_m": nav_core.KEEGER_R_M,
                          "radial_tol_m": nav_core.KEEGER_RADIAL_TOL_M,
                          "z_tol_m": nav_core.KEEGER_Z_TOL_M}
-        surveyed = nav_core.survey_pockets(nav, system)
+        surveyed = sstate["pockets"]
         doc["surveyed"] = [{"key": p["key"], "kind": p["kind"],
                             "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
                             "grid_radius_m": p["grid_radius_m"],
@@ -4352,10 +4422,19 @@ def _halo_goal_system(body: HaloPlanIn) -> str | None:
         return nav_core.PYRO_SYSTEM
     if body.pocket_key is not None:
         # A zone pin (#36.1) can name any system; resolve it before defaulting
-        # to Nyx (datamined/SVY keys are always Nyx).
-        for z in db.list_survey_zones():
-            if z["slug"].lower() == body.pocket_key.lower():
-                return z["system"]
+        # to Nyx (datamined/SVY keys are always Nyx). Slugs are only unique
+        # PER system (UNIQUE(system, slug)), so a bare pin matching zones in
+        # two systems is ambiguous — 400 rather than silently planning the
+        # lowest-id twin.
+        matches = {z["system"] for z in db.list_survey_zones()
+                   if z["slug"].lower() == body.pocket_key.lower()}
+        if len(matches) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="that zone name exists in more than one system — "
+                       "send `system` with the pin")
+        if matches:
+            return matches.pop()
         return nav_core.GLACIEM_SYSTEM
     if body.belt is not None:
         return nav_core.GLACIEM_SYSTEM
@@ -4374,6 +4453,15 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
     so they're always a 400 — never a 404 on an incidental bad id."""
     belt = nav.belts.get(system) or {}
     kind = belt.get("kind")
+    # Over-specification is a shape error regardless of system: exactly one
+    # goal may be named. (Without this, a zone pin resolved below would
+    # silently win over an also-sent band/field/target.)
+    picked = sum(x is not None for x in (body.band, body.field_uuid,
+                                         body.pocket_key, body.target_poi_id))
+    if picked > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="pick exactly one goal: band / field_uuid / pocket_key / target_poi_id")
     # Named zones (#36.1) are plannable in ANY system — resolve a zone pin here,
     # before the ring-only pocket guard below.
     if body.pocket_key is not None:
@@ -4429,11 +4517,11 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
             type="Asteroid Field", local_km=None, global_m=rec["xyz"],
             latitude=None, longitude=None, height_m=None, qt_marker=False)}
     if kind == "ring":
-        surveyed = nav_core.survey_pockets(nav, system)
+        sstate = nav_core.survey_state(nav, system)
+        surveyed = sstate["pockets"]
         # Datamined ring pockets carry the org's survey overlay so the solver
         # sees a barren verdict and down-ranks it (#36).
-        glac = nav_core.annotate_glaciem_survey(
-            belt["pockets"], nav_core.survey_marks(nav, system))
+        glac = sstate["glaciem"] or []
         if body.pocket_key is not None:
             # A pin names one pocket outright; both pools are searchable
             # (datamined Glaciem keys + org SVY-* keys), so a pinned survey
@@ -4519,16 +4607,14 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
     Computed live from the marks — never cached."""
     if system not in nav.belts:
         raise HTTPException(status_code=404, detail="unknown system")
-    marks = nav_core.survey_marks(nav, system)
+    sstate = nav_core.survey_state(nav, system)
+    marks = sstate["marks"]
     # Ring pockets the org has surveyed (barren or rich): ties the otherwise
     # inert in-Glaciem marks back to their datamined pocket (#36).
-    belt = nav.belts.get(system) or {}
     glaciem = ([{"key": p["key"], "kind": p["kind"],
                  "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
                  "grid_radius_m": p["grid_radius_m"], **p["survey"]}
-                for p in nav_core.annotate_glaciem_survey(
-                    belt.get("pockets", []), marks) if p.get("survey")]
-               if belt.get("kind") == "ring" else [])
+                for p in (sstate["glaciem"] or []) if p.get("survey")])
     return {
         "system": system,
         "marks": [{"id": m["id"], "name": m["name"],
@@ -4536,7 +4622,7 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
                    "rocks": m["rocks"], "ores": m["ores"],
                    "salvage": m["salvage"], "owner_handle": m["owner_handle"]}
                   for m in marks],
-        "pockets": nav_core.survey_pockets(nav, system),
+        "pockets": sstate["pockets"],
         "glaciem": glaciem,
         "zones": _survey_zones_view(system),
         "model": nav_core.survey_field_model(
@@ -4576,8 +4662,16 @@ async def clear_survey_marks(body: SurveyClearIn,
     if body.system not in nav.belts:
         raise HTTPException(status_code=404, detail="unknown system")
     ids = await asyncio.to_thread(db.clear_survey_pois, body.system)
-    for pid in ids:
-        nav.pois.pop(pid, None)
+    async with hub.lock:
+        for pid in ids:
+            nav.pois.pop(pid, None)
+            # A cleared mark must stop being anyone's destination/last-capture,
+            # and every tab needs the coalesced dataset nudge — same plumbing
+            # as delete_custom_poi.
+            hub.forget_entity(pid)
+        if ids:
+            nav.touch()
+            hub.mark_dataset_dirty()
     # Zones are keyed to the marks; heal them together (#36.1).
     zones = await asyncio.to_thread(db.clear_survey_zones, body.system)
     return {"ok": True, "deleted": len(ids), "zones_cleared": len(zones)}
@@ -4675,13 +4769,25 @@ async def remove_survey_zone(zone_id: int, user: dict = Depends(require_session)
     if zone is None:
         raise HTTPException(status_code=404, detail="unknown zone")
     _require_zone_owner(zone, user)
-    # Untag the live marks (+ persist) so they fall back to proximity clustering.
-    for poi in nav.pois.values():
-        sv = getattr(poi, "survey", None)
-        if sv and sv.get("zone_id") == zone_id:
-            sv.pop("zone_id", None)
-            await asyncio.to_thread(db.add_custom_poi, nav_core.custom_poi_to_dict(poi))
-    await asyncio.to_thread(db.delete_survey_zone, zone_id)
+    # Untag the live marks so they fall back to proximity clustering. Mutate +
+    # snapshot under hub.lock (awaiting mid-iteration over the live dict races
+    # concurrent captures), then persist everything in one thread hop.
+    async with hub.lock:
+        touched = []
+        for poi in nav.pois.values():
+            sv = getattr(poi, "survey", None)
+            if sv and sv.get("zone_id") == zone_id:
+                sv.pop("zone_id", None)
+                touched.append(nav_core.custom_poi_to_dict(poi))
+        if touched:
+            nav.touch()
+            hub.mark_dataset_dirty()
+
+    def _persist():
+        for d in touched:
+            db.add_custom_poi(d)
+        db.delete_survey_zone(zone_id)
+    await asyncio.to_thread(_persist)
     return {"ok": True}
 
 
@@ -4742,15 +4848,16 @@ async def get_halo_locate(target_poi_id: int | None = None,
         view = {"status": "other_system"}
     elif belt["kind"] == "ring":
         # Annotate with the org survey overlay so re-entering a mapped-empty
-        # pocket reports 'surveyed barren' straight away (#36).
-        pockets = nav_core.annotate_glaciem_survey(
-            belt["pockets"], nav_core.survey_marks(nav, fix_system))
-        view = nav_core.glaciem_locate(pos, pockets)
+        # pocket reports 'surveyed barren' straight away (#36). The derived
+        # products are version-cached — this endpoint is polled by every open
+        # halo tab on every state frame, so it must never recompute the full
+        # survey overlay per call on the event loop.
+        sstate = nav_core.survey_state(nav, fix_system)
+        view = nav_core.glaciem_locate(pos, sstate["glaciem"] or [])
         if view["status"] == "off_ring":
             # Not Glaciem space — maybe Keeger (#36): the region envelope or
             # one of the org's surveyed pockets.
-            kg = nav_core.keeger_locate(
-                pos, nav_core.survey_pockets(nav, fix_system))
+            kg = nav_core.keeger_locate(pos, sstate["pockets"])
             if kg is not None:
                 view = kg
     elif belt["kind"] == "fields":
@@ -6889,9 +6996,11 @@ async def update_custom_poi(poi_id: int, body: PoiEditIn, user: dict = Depends(r
             note = body.note.strip() or None
             db.update_custom_poi_note(poi_id, note)
             poi.note = note
+            nav.touch()
         if body.private is not None and body.private != poi.private:
             db.update_custom_poi_private(poi_id, body.private)
             poi.private = body.private
+            nav.touch()
             # A QT marker going private (or back) changes the shared jump index,
             # so rebuild it + reassign nearest_qt across the dataset.
             if poi.qt_marker:
@@ -6910,6 +7019,7 @@ async def delete_custom_poi(poi_id: int, user: dict = Depends(require_session)):
         was_qt = removed.qt_marker
         db.delete_custom_poi(poi_id)
         nav.pois.pop(poi_id, None)
+        nav.touch()
         # Removing a QT marker leaves other entities pointing at a marker that's
         # gone, so rebuild the index + reassign nearest_qt across the dataset.
         if was_qt:
@@ -6940,6 +7050,7 @@ async def delete_observation(obs_id: int, user: dict = Depends(require_session))
         ensure_owns(user, obs.owner_id)
         db.delete_observation(obs_id)
         nav.observations.pop(obs_id, None)
+        nav.touch()
         hub.forget_entity(obs_id)
         hub.mark_dataset_dirty()
         return {"ok": True}
@@ -7218,8 +7329,11 @@ async def path_control(action: str, user: dict = Depends(require_session)):
             sess.path.clear()
         if sess.nav_state is not None:
             sess._attach_breadcrumbs()
-        await sess.broadcast()
-    return {"ok": True, "tracking": sess.tracking, "crumbs": len(sess.path)}
+        frame = sess.state_frame()
+        result = {"ok": True, "tracking": sess.tracking, "crumbs": len(sess.path)}
+    if frame is not None:
+        await sess.push_frame(frame)
+    return result
 
 
 async def _rebuild_nav() -> None:
@@ -7348,6 +7462,7 @@ async def _apply_poi_overrides_live() -> None:
     overrides = await asyncio.to_thread(db.list_poi_overrides)
     async with hub.lock:
         nav_core.apply_poi_overrides(nav, overrides)
+        nav.touch()
         nav_core.assign_qt_markers(nav)
         for s in hub.sessions.values():
             if s.destination_id is not None:
@@ -8247,6 +8362,7 @@ async def delete_me(request: Request, user: dict = Depends(require_session)):
                     if p.owner_id in player_ids and getattr(p, "private", False)]:
             nav.pois.pop(poi.id, None)
             hub.forget_entity(poi.id)
+        nav.touch()
         for poi in nav.pois.values():
             if poi.owner_id in player_ids:
                 poi.owner_id = poi.owner_handle = None

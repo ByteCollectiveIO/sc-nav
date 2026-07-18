@@ -1293,7 +1293,10 @@
   @media (prefers-reduced-motion: reduce) { .route-advisories > summary::before { transition: none; } }
   .avoid-blk { margin-top: 10px; }
   .avoid-blk-add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .avoid-blk-add .fld-label { font-size: 11px; letter-spacing: .04em; color: var(--dim); }
+  /* Small tracked section label — shared by the avoid block, the pocket
+     radar head, and the survey block (was scoped to .avoid-blk-add, leaving
+     the halo usages unstyled). */
+  .fld-label { font-size: 11px; letter-spacing: .04em; color: var(--dim); }
   .avoid-blk-add .poi-pick-wrap { position: relative; flex: 1; min-width: 200px; }
   .avoid-blk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .avoid-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
@@ -1994,7 +1997,7 @@
   #halo-zone-banner { margin-top: 8px; }
   .halo-zone-active { display: flex; align-items: center; flex-wrap: wrap;
     gap: 8px; font-size: 12.5px; color: var(--dim);
-    background: rgba(79, 195, 247, .07); border: 1px solid var(--border);
+    background: var(--accent-wash); border: 1px solid var(--border);
     border-radius: 8px; padding: 8px 10px; }
   .halo-zone-active b { color: var(--text); }
   /* After-the-drop verdict */
@@ -3627,7 +3630,7 @@
             <input id="halo-field" class="ti" autocomplete="off"
                    placeholder="field — type to search (e.g. Akiro, PYR6 L1, RMB)">
           </span>
-          <span id="halo-field-msg" class="muted" style="font-size:12px;"></span>
+          <span id="halo-field-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
       </div>
       <div id="halo-poi-wrap" hidden>
@@ -3651,7 +3654,7 @@
         </span>
         <span class="muted" style="font-size:12px;">or</span>
         <button id="halo-here" type="button">📍 my current location</button>
-        <span id="halo-start-msg" class="muted" style="font-size:12px;"></span>
+        <span id="halo-start-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
       </div>
       <p class="muted route-hint">Blank plans from your live position; parked in space works
         (run <b>/showlocation</b> so we have a fix).</p>
@@ -3665,7 +3668,7 @@
           <input id="halo-ship" class="ti" autocomplete="off"
                  placeholder="ship — type a name (e.g. Prospector)">
         </span>
-        <span id="halo-ship-msg" class="muted" style="font-size:12px;"></span>
+        <span id="halo-ship-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
       </div>
       <div class="route-row drive-row" id="halo-drive-wrap" hidden>
         <label class="muted" style="font-size:12px;">quantum drive
@@ -3680,7 +3683,7 @@
       <div class="avoid-blk" id="halo-avoid-blk"></div>
       <div class="route-actions">
         <button id="halo-plan" class="active">Plan my drop</button>
-        <span id="halo-plan-msg" class="muted" style="font-size:12px;"></span>
+        <span id="halo-plan-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
       </div>
     </div>
 
@@ -3710,7 +3713,7 @@
             <option value="">— none (auto-cluster) —</option>
           </select>
           <button id="halo-zone-new" type="button" class="route-chip">＋ New zone</button>
-          <span id="halo-zone-status" class="muted" style="font-size:12px;"></span>
+          <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
         <div id="halo-zone-banner" hidden></div>
         <div class="route-row" style="align-items:center; margin-top:8px;">
@@ -3725,7 +3728,7 @@
           <datalist id="halo-survey-ore-list"></datalist>
           <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
           <button id="halo-survey-mark" type="button">⛏ Mark survey point</button>
-          <span id="halo-survey-msg" class="muted" style="font-size:12px;"></span>
+          <span id="halo-survey-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
       </div>
     </div>
@@ -4177,6 +4180,12 @@ const BAND_QUALITY = (b) =>
 const DEG = Math.PI / 180;
 
 // ---------- formatting ----------
+// prefers-reduced-motion: the explicit {behavior:"smooth"} option overrides
+// the CSS-level reduction, so every smooth scroll asks here instead.
+function scrollBehavior() {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
 function fmtDist(m) {
   if (m == null) return "—";
   if (m < 1000) return `${m.toFixed(0)}<small> m</small>`;
@@ -6224,7 +6233,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); resolveHaloSurveyArm(msg.capture); renderSetupConn();
-      if (!$("halo-view").hidden) refreshHaloAfter(); }   // live post-drop verdict (#31)
+      if (!$("halo-view").hidden) refreshHaloAfterSoon(); }   // live post-drop verdict (#31, ≥2s coalesced)
     else if (msg.type === "roster") {
       presence.clear();
       for (const u of msg.users) rememberMate(u);
@@ -6636,7 +6645,7 @@ function cloneRun(run) {
   if (!$("route-pkgs").children.length) addPkgRow();
   if (run.ship) { $("route-ship").value = run.ship; prefillScu(); }
   refreshContractList();
-  $("route-pkgs").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("route-pkgs").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
 }
 
 function wireRoutePlanner() {
@@ -7832,7 +7841,7 @@ function loadTradeLane(l) {
   addTradeLegRow({ commodity: l.commodity,
     buy_terminal_id: l.buy_terminal_id, buy_terminal: l.buy_terminal,
     sell_terminal_id: l.sell_terminal_id, sell_terminal: l.sell_terminal });
-  $("trade-manual").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("trade-manual").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
 }
 
 // Re-run a whole past run by hand: rebuild its legs in Manual mode (skipping any
@@ -7848,7 +7857,7 @@ function runTradeAgain(run) {
   }
   if (!$("trade-legs").children.length) addTradeLegRow();
   if (run.ship) { $("trade-ship").value = run.ship; prefillTradeScu(); }
-  $("trade-manual").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("trade-manual").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
 }
 
 // Stamp a fresh trading session, then reload so the session stats zero out.
@@ -8419,7 +8428,7 @@ function renderTradePlan(res) {
   h += `</div>`;
   out.innerHTML = h; out.hidden = false;
   $("trade-start").onclick = startTradeRun;
-  window.scrollTo({ top: out.offsetTop - 20, behavior: "smooth" });
+  window.scrollTo({ top: out.offsetTop - 20, behavior: scrollBehavior() });
 }
 
 // Stop amenity chips (#28c): the wiki catalog's operational facts about a trade
@@ -8576,7 +8585,7 @@ async function renderTradeSuggest() {
     setTradeMode("manual");
     addTradeLegRow({ commodity: r.commodity, buy_terminal_id: r.buy_terminal_id,
       buy_terminal: r.buy_terminal, sell_terminal_id: r.sell_terminal_id, sell_terminal: r.sell_terminal });
-    window.scrollTo({ top: $("trade-manual").offsetTop - 40, behavior: "smooth" });
+    window.scrollTo({ top: $("trade-manual").offsetTop - 40, behavior: scrollBehavior() });
   });
 }
 
@@ -9998,7 +10007,7 @@ async function consumeFinderPrefill() {
   const opt = [...sel.options].find(o => o.value.toLowerCase() === name.toLowerCase());
   if (opt) {
     sel.value = opt.value; syncFinderSelection(); runFinder();
-    sel.scrollIntoView({ behavior: "smooth", block: "center" });
+    sel.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
   }
 }
 
@@ -12248,9 +12257,12 @@ function resolveHaloSurveyArm(capture) {
   haloSurveyArmed = false;
   const msg = $("halo-survey-msg");
   const landed = capture.last && /^Survey /.test(capture.last.name || "");
+  const zm = landed && capture.last.zone_mismatch;
   if (msg) {
-    msg.className = "muted";
-    msg.textContent = landed ? "✓ mark dropped — the org's map just got better" : "";
+    msg.className = zm ? "armed" : "muted";
+    msg.textContent = zm
+      ? `⚠ mark saved, but your active zone “${zm.name}” is in ${zm.system} — this mark is in ${capture.last.system}, so it was filed untagged`
+      : landed ? "✓ mark dropped — the org's map just got better" : "";
   }
   if (landed) {
     delete haloTargets.Nyx;
@@ -12316,7 +12328,7 @@ function renderHaloZoneSelect() {
   if (cur != null && !haloZones.some(z => z.zone_id === cur && !z.closed)) {
     const z = haloZones.find(x => x.zone_id === cur);   // keep a closed active zone visible
     const o = document.createElement("option");
-    o.value = String(cur); o.textContent = (z ? esc(z.name) + " (closed)" : "active zone");
+    o.value = String(cur); o.textContent = (z ? z.name + " (closed)" : "active zone");
     sel.appendChild(o);
   }
   sel.value = cur == null ? "" : String(cur);
@@ -12385,9 +12397,10 @@ function activeZonePocket() {
 }
 
 async function planHaloZone(z) {
-  // Let the server resolve the zone's system from its slug (works in any
-  // system), so we only send the pin + shared start/ship/avoid inputs.
+  // Pin by slug + the zone's own system (slugs are only unique per system,
+  // so a bare slug can be ambiguous across systems).
   const body = { pocket_key: z.key, allow_staging: $("halo-staging").checked };
+  if (z.system) body.system = z.system;
   const sid = $("halo-start-poi").dataset.poiId;
   if (sid) body.start_poi_id = Number(sid);
   const ship = $("halo-ship").value.trim();
@@ -12401,7 +12414,7 @@ async function planHaloZone(z) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
     msg.textContent = ""; haloLastPlan = d; renderHaloPlan(d);
-    $("halo-result").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
   } catch { msg.textContent = "⚠ network error"; }
 }
 
@@ -13035,9 +13048,21 @@ function drawHaloInset(ctx, plan, P, cssW, cssH, doc) {
 // AFTER THE DROP: classify the latest fix (band / void / off-plane / outside),
 // live off every position frame while the view is open. In POI mode it also
 // reports the actual miss and offers the Refine loop (re-plan from the fix).
+// WS-frame path: every state frame (own fixes, heartbeats, org-wide dataset
+// refreshes) lands here while the halo view is open — during a mapping party
+// that's a locate poll per capture per open tab. Coalesce to ≥2 s spacing with
+// a trailing timer so the newest state is always fetched eventually.
+let haloAfterLastFetch = 0, haloAfterTimer = null;
+function refreshHaloAfterSoon() {
+  if (haloAfterTimer) return;
+  const wait = Math.max(0, haloAfterLastFetch + 2000 - Date.now());
+  haloAfterTimer = setTimeout(() => { haloAfterTimer = null; refreshHaloAfter(); }, wait);
+}
+
 async function refreshHaloAfter() {
   const el = $("halo-after-body");
   if (!el || $("halo-view").hidden) return;
+  haloAfterLastFetch = Date.now();
   let q = "";
   if (haloGoal === "poi" && $("halo-target-poi").dataset.poiId)
     q = "?target_poi_id=" + encodeURIComponent($("halo-target-poi").dataset.poiId);
@@ -13101,6 +13126,12 @@ function radarDist(m) {   // plain-text for canvas (fmtDist returns HTML)
   return +(m / 1e9).toFixed(2) + " Gm";
 }
 
+// Fixed dark scope palette, like HALO_MAP_C: the radar canvas sits on the
+// always-dark --map-bg in BOTH themes, so it must never read live tokens —
+// the light theme's darker accent/dim/sel values are illegible on it.
+const HALO_RADAR_C = { accent: "#4fc3f7", gold: "#ffd54f", dim: "#8693a6",
+  good: "#66bb6a", grid: "rgba(79,195,247,.11)" };
+
 function drawPocketRadar(p) {
   const host = document.querySelector("#halo-radar-wrap .halo-radar-plot");
   const cv = $("halo-radar");
@@ -13111,10 +13142,9 @@ function drawPocketRadar(p) {
   cv.width = Math.round(rect.width * dpr); cv.height = Math.round(rect.height * dpr);
   const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const w = rect.width, h = rect.height;
-  const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const AC = cssv("--accent") || "#4fc3f7", GOLD = cssv("--sel") || "#ffd54f",
-        DIM = cssv("--dim") || "#8693a6", GOOD = cssv("--good") || "#66bb6a",
-        GRID = "rgba(79,195,247,.11)";
+  const AC = HALO_RADAR_C.accent, GOLD = HALO_RADAR_C.gold,
+        DIM = HALO_RADAR_C.dim, GOOD = HALO_RADAR_C.good,
+        GRID = HALO_RADAR_C.grid;
   ctx.clearRect(0, 0, w, h);
   ctx.font = "10px ui-monospace, Menlo, monospace";
 

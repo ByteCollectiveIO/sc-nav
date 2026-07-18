@@ -144,6 +144,14 @@ class NavData:
     qt_by_container: dict = field(default_factory=dict)           # (system,container) -> [Poi]
     # Per-system asteroid drop-target registry (#35, filled by build_belt_registry)
     belts: dict = field(default_factory=dict)                     # system -> registry row
+    # Monotonic mutation counter: bump (via touch()) after ANY in-place change
+    # to pois/observations — including field edits that don't change a count
+    # (note/private/survey edits, override flips). Derived-product caches key
+    # on it; count-based keys alias a delete followed by an add.
+    version: int = 0
+
+    def touch(self) -> None:
+        self.version += 1
 
     def container_of(self, entity) -> Container | None:
         """Parent container of any positioned entity (Poi or Observation —
@@ -867,13 +875,12 @@ def build_scope_index(nav: "NavData"):
 
 
 def scope_index(nav: "NavData"):
-    """Cached (pois_by_scope, obs_by_scope) for `nav`, rebuilt lazily whenever the
-    POI or observation count changes. Every real mutation — a capture, a delete,
-    a feed refresh (which swaps in a fresh NavData) — changes one of those counts,
-    so the cache self-invalidates without threading a version bump through each
-    mutation site. (A same-count add+remove within a single uninterrupted call
-    never happens here; each such op is its own locked request.)"""
-    key = (len(nav.pois), len(nav.observations))
+    """Cached (pois_by_scope, obs_by_scope) for `nav`, rebuilt lazily on any
+    mutation. Keyed on nav.version (bumped by every mutation site via touch())
+    — counts alone alias a delete followed by an add across separate requests,
+    leaving a stale index. Counts stay in the key as belt-and-suspenders for a
+    mutation site that forgets to touch()."""
+    key = (getattr(nav, "version", 0), len(nav.pois), len(nav.observations))
     cache = getattr(nav, "_scope_cache", None)
     if cache is None or cache[0] != key:
         cache = (key, *build_scope_index(nav))
@@ -5830,7 +5837,10 @@ def survey_marks(nav: NavData, system: str,
     (capture order) so clustering is deterministic."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     out = []
-    for p in nav.pois.values():
+    # Snapshot: this runs from solver threads while the event loop mutates
+    # nav.pois under hub.lock — iterating the live dict there raises
+    # RuntimeError. list() is atomic under the GIL.
+    for p in list(nav.pois.values()):
         if not p.custom or p.private:
             continue
         if (p.type or "").strip().lower() != SURVEY_POI_TYPE:
@@ -5939,6 +5949,36 @@ def survey_pockets(nav: NavData, system: str,
     return out
 
 
+def survey_state(nav: NavData, system: str) -> dict:
+    """Version-keyed cache of a system's survey derivations at the default
+    rotation reference: `marks` (all org-visible survey marks), `pockets`
+    (tier-1 proximity clusters), and — for a ring system — `glaciem` (the
+    datamined pockets with the org survey overlay). The products stay
+    derived-never-stored (#36); the cache only collapses the many reads
+    between mutations (every locate poll, targets fetch, plan, capture note)
+    into one compute per dataset change. Invalidated by nav.touch(); the POI
+    count rides along as belt-and-suspenders for a direct mutation that forgot
+    it (same discipline as scope_index)."""
+    ver = (getattr(nav, "version", 0), len(nav.pois))
+    cache = getattr(nav, "_survey_cache", None)
+    hit = cache.get(system) if cache is not None else None
+    if hit is not None and hit[0] == ver:
+        return hit[1]
+    belt = (nav.belts or {}).get(system) or {}
+    marks = survey_marks(nav, system)
+    state = {
+        "marks": marks,
+        "pockets": survey_pockets(nav, system),
+        "glaciem": (annotate_glaciem_survey(belt.get("pockets") or [], marks)
+                    if belt.get("kind") == "ring" else None),
+    }
+    if cache is None:
+        cache = {}
+        nav._survey_cache = cache
+    cache[system] = (ver, state)
+    return state
+
+
 def survey_zones_state(nav: NavData, system: str, zones: list[dict],
                        t_ref: float | None = None) -> list[dict]:
     """Named survey zones (#36.1) as plannable pockets: group the org's marks by
@@ -5949,7 +5989,8 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
     key=slug) so plan_halo_drop + the radar consume them untouched. A zone with
     no marks yet is emitted with `marks: 0` and no geometry so the UI can still
     show it as active."""
-    marks = survey_marks(nav, system, t_ref)
+    marks = (survey_state(nav, system)["marks"] if t_ref is None
+             else survey_marks(nav, system, t_ref))
     by_zone: dict[int, list[dict]] = {}
     for m in marks:
         if m["zone_id"] is not None:
@@ -5961,7 +6002,8 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
     for z in zones:
         members = by_zone.get(z["id"], [])
         row = {"key": z["slug"], "kind": "zone", "zone_id": z["id"],
-               "name": z["name"], "closed": bool(z.get("closed")),
+               "name": z["name"], "system": z.get("system") or system,
+               "closed": bool(z.get("closed")),
                "owner_handle": z.get("owner_handle")}
         if members:
             fit = survey_cluster_fit(members, negatives)
