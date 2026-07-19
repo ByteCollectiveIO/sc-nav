@@ -3884,6 +3884,27 @@ class BeltSurveyApiTests(unittest.TestCase):
                                     "start_poi_id": self.gate.id})
         self.assertEqual(r3.status_code, 400)
 
+    def test_plan_arrival_when_marker_inside_pocket(self):
+        # #37 routing fix: a mark cluster hugging a station (here: the Castra
+        # gateway) plans as "jump to the marker, complete the jump" — no
+        # early-exit number, no staging hop.
+        other = next(p for p in app.nav.qt_markers
+                     if p.system == "Nyx" and p.id != self.gate.id)
+        g = app.nav_core.poi_global_m(app.nav, other, time.time())
+        self._mark_at((g[0] + 3e6, g[1], g[2]), ores=["Aluminum"])
+        r = self.client.post("/api/halo/plan",
+                             json={"belt": "keeger",
+                                   "start_poi_id": self.gate.id})
+        self.assertEqual(r.status_code, 200)
+        plan = r.json()
+        self.assertFalse(plan["staged"])
+        d = plan["drop"]
+        self.assertTrue(d.get("arrival"))
+        self.assertEqual(d["marker_name"], other.name)
+        self.assertEqual(d["peak_m"], 0.0)
+        self.assertTrue(d["pocket"]["hit"])
+        self.assertEqual(len(plan["legs"]), 1)
+
     def test_plan_unreachable_pocket_explains_instead_of_garbage(self):
         # A mark far from every marker chord (deep Keeger, bare dataset) has
         # NO honest drop plan — the miss ceiling must reject it with the

@@ -4561,6 +4561,100 @@ class BeltSurveyTests(unittest.TestCase):
         self.assertAlmostEqual(region["to_ring_m"], 1.0e9, delta=1e6)
         self.assertIsNone(nav_core.keeger_locate((20e9, 0, 0), pockets))
 
+    # --- arrival candidates + staging cost sanity (#37 routing fix) ----------
+
+    def test_arrival_when_marker_sits_inside_pocket(self):
+        # The QV-Breaker shape: cluster centroid slightly BEYOND the station
+        # as seen from the start — the old early-exit-only solver t-clamped
+        # every direct chord and staged across the system (or 400'd).
+        start = _space_poi(11, "Levski-ish", (46.5e9, 0, 0), system="Nyx")
+        stn = _space_poi(12, "BRK-320", (48.0e9, 0, 0), system="Nyx")
+        far = _space_poi(13, "Far Stage", (48.0e9, 30.0e9, 0), system="Nyx")
+        mark = _survey_mark(1_000_001, (48.003e9, 0, 0))   # 3,000 km past stn
+        nav = self._nav_with([mark], extra_pois=[start, stn, far])
+        plan = nav_core.plan_halo_drop(
+            nav, start=start, pockets=nav_core.survey_pockets(nav, "Nyx"),
+            system="Nyx", markers=[stn, far])
+        self.assertFalse(plan["staged"])
+        d = plan["drop"]
+        self.assertTrue(d.get("arrival"))
+        self.assertEqual(d["marker_name"], "BRK-320")
+        self.assertEqual(d["peak_m"], 0.0)                 # complete the jump
+        self.assertTrue(d["pocket"]["hit"])
+        self.assertAlmostEqual(d["expected_miss_m"], 3.0e6, delta=1.0)
+        self.assertEqual(len(plan["legs"]), 1)
+
+    def test_arrival_bypasses_drop_floor_for_close_markers(self):
+        # Marker 45,000 km away (well under the 200,000 km early-exit
+        # run-up): arrival is still a plan — the old solver had nothing.
+        start = _space_poi(11, "Close Start", (self.KR - 45e6, 0, 0), system="Nyx")
+        stn = _space_poi(12, "Arc Station", (self.KR, 0, 0), system="Nyx")
+        mark = _survey_mark(1_000_001, (self.KR + 2e6, 0, 0))
+        nav = self._nav_with([mark], extra_pois=[start, stn])
+        plan = nav_core.plan_halo_drop(
+            nav, start=start, pockets=nav_core.survey_pockets(nav, "Nyx"),
+            system="Nyx", markers=[stn])
+        self.assertTrue(plan["drop"].get("arrival"))
+        self.assertFalse(plan["staged"])
+
+    def test_arrival_respects_obstruction(self):
+        # A body dead between start and the in-pocket marker: no arrival, no
+        # other chord → the honest 400 (the mark still lives on the map).
+        start = _space_poi(11, "Blocked Start", (44.0e9, 0, 0), system="Nyx")
+        stn = _space_poi(12, "Far Side Station", (48.0e9, 0, 0), system="Nyx")
+        mark = _survey_mark(1_000_001, (48.002e9, 0, 0))
+        nav = self._nav_with([mark], extra_pois=[start, stn])
+        vols = [{"a": (46.0e9, 0, 0), "r": 1.0e9, "body_r": 0.8e9}]
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(
+                nav, start=start, pockets=nav_core.survey_pockets(nav, "Nyx"),
+                system="Nyx", markers=[stn], volumes=vols,
+                allow_staging=False)
+
+    def test_poi_mode_arrival(self):
+        # POI mode: a marker within the good-miss threshold of the target is
+        # an arrival, beating any early-exit geometry.
+        start = _space_poi(11, "Start", (44.0e9, 0, 0), system="Nyx")
+        stn = _space_poi(12, "Near Station", (48.0e9, 0, 0), system="Nyx")
+        target = _space_poi(99, "Wreck", (48.0e9, 20e6, 0), system="Nyx",
+                            qt=False)
+        nav = self._nav_with([], extra_pois=[start, stn, target])
+        plan = nav_core.plan_halo_drop(
+            nav, start=start, target=target, system="Nyx", markers=[stn])
+        self.assertTrue(plan["drop"].get("arrival"))
+        self.assertAlmostEqual(plan["drop"]["expected_miss_m"], 20e6, delta=1.0)
+
+    def test_staging_cost_sanity_prefers_cheap_near_miss(self):
+        # Direct chord near-misses the pocket by ~2.3 radii on a 4 Gm flight;
+        # the only staged hit crosses ~60 Gm of system. The old rule took the
+        # staged hit unconditionally; the sanity rule says creep the last
+        # 12,000 km instead.
+        start = _space_poi(11, "S", (44.0e9, 0, 0), system="Nyx")
+        m1 = _space_poi(12, "Ahead", (52.0e9, 0, 0), system="Nyx")
+        stage = _space_poi(13, "Detour Stage", (44.0e9, 30.0e9, 0), system="Nyx")
+        # aim marker for the staged hit: the stage→m2 chord passes dead
+        # through the pocket center
+        m2 = _space_poi(14, "Across", (52.0e9, -30.0e9, 0), system="Nyx")
+        mark = _survey_mark(1_000_001, (48.0e9, 12e6, 0))   # 12,000 km off-chord
+        nav = self._nav_with([mark], extra_pois=[start, m1, stage, m2])
+        pockets = nav_core.survey_pockets(nav, "Nyx")
+        plan = nav_core.plan_halo_drop(
+            nav, start=start, pockets=pockets, system="Nyx",
+            markers=[m1, stage, m2])
+        self.assertFalse(plan["staged"])                    # sanity rule fired
+        d = plan["drop"]
+        self.assertFalse(d["pocket"]["hit"])                # honest near-miss
+        self.assertLessEqual(d["expected_miss_m"],
+                             3.0 * d["pocket"]["grid_radius_m"])
+        # ...but a WIDE direct miss (beyond 3× the envelope) still stages:
+        far_mark = _survey_mark(1_000_002, (48.0e9, 30e6, 0))  # ~5.8 radii off
+        nav2 = self._nav_with([far_mark], extra_pois=[start, m1, stage, m2])
+        plan2 = nav_core.plan_halo_drop(
+            nav2, start=start, pockets=nav_core.survey_pockets(nav2, "Nyx"),
+            system="Nyx", markers=[m1, stage, m2])
+        self.assertTrue(plan2["staged"])
+        self.assertTrue(plan2["drop"]["pocket"]["hit"])
+
     def test_plan_into_surveyed_pocket(self):
         # Radial chord Inner(44 Gm) -> Outer(52 Gm) passes dead through the
         # org's first surveyed pocket at 48 Gm: plannable from mark #1.
