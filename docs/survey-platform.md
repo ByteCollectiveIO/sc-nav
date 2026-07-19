@@ -224,6 +224,18 @@ proximity pockets, and datamined Glaciem pockets carrying a survey overlay:
   marker×pocket scan.
 - The element-finder picker now unions survey-mark ores into
   `/api/resource_ores`, so a belt-only ore is findable.
+- **Arrival plans + staging cost sanity (routing fix, found in-game
+  2026-07-18):** a live Levski→SVY-29 plan staged 70+ Gm through People's
+  Service Station Alpha to reach rocks hugging QV Breaker BRK-320, because
+  the solver's only maneuver was "early exit before the marker" — a marker
+  INSIDE the pocket can never satisfy the run-up floor or the
+  between-endpoints clamp. `_halo_arrival_candidate` adds the missing move:
+  "jump to the marker, let the jump complete, you arrive in the rocks"
+  (bypasses `HALO_DROP_MIN_M`; still obstruction-checked; drop card renders
+  **ARRIVE AT <marker>**). Plus `HALO_STAGE_COST_X`/`HALO_DIRECT_MISS_OK_X`:
+  a staged hit that flies >10× the direct chord no longer beats a direct
+  near-miss within 3 pocket radii — sublight closes that gap far faster
+  than crossing the system twice.
 
 ## 5. Phase 3 — direction ("where should I survey next?")
 

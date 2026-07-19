@@ -1020,6 +1020,8 @@
   .route-chip { font-size: 12px; padding: 4px 9px; border: 1px solid var(--border);
     border-radius: 14px; cursor: pointer; background: none; color: var(--text); }
   .route-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .route-chip.active { border-color: var(--accent); color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .route-chip .ct { color: var(--dim); margin-left: 4px; }
   .route-recent { display: flex; align-items: center; gap: 12px;
     padding: 10px 0; border-top: 1px solid var(--border); }
@@ -3631,6 +3633,7 @@
             <label class="trade-pref" title="QV Breaker mining-rights arcs — believed to need an accepted contract to spawn rocks.">
               <input id="halo-mission" type="checkbox"> include mission pockets</label>
           </div>
+          <div id="halo-glaciem-suggest" style="margin-top:6px;"></div>
         </div>
         <div id="halo-keeger-wrap" hidden>
           <p class="muted route-hint" style="margin-top:10px;">The <b>Keeger Belt</b> rings the
@@ -3638,6 +3641,14 @@
             data has no rock map, so <b>your org builds one</b>: drop ⛏ survey marks below and
             every rock mark becomes a jumpable pocket here, instantly.</p>
           <p class="muted route-hint" id="halo-keeger-progress" role="status" aria-live="polite"></p>
+          <div class="route-row" style="align-items:center;">
+            <label class="muted" style="font-size:12px;">pocket
+              <input id="halo-keeger-pocket" class="ti" list="halo-keeger-keys" autocomplete="off"
+                     placeholder="AUTO — best surveyed pocket" style="width:190px;">
+            </label>
+            <datalist id="halo-keeger-keys"></datalist>
+          </div>
+          <div id="halo-keeger-suggest" style="margin-top:6px;"></div>
         </div>
       </div>
       <div id="halo-pyro-wrap" hidden>
@@ -12386,17 +12397,49 @@ function renderHaloKeegerProgress() {
     : ` · ${s.positive}/${s.model_min} toward the field model`;
   if (s.total)
     h += ` · <a href="/api/halo/survey/export?system=Nyx" target="_blank" rel="noopener">⇩ export survey</a>`;
-  // Value-ranked pocket chips (#37 slice 1): the "where's it worth going"
-  // read at a glance — top pockets by org-survey value, best first.
-  const ranked = (doc.surveyed || []).slice()
+  el.innerHTML = h;
+  // Value-ranked pocket suggestions (#37): SELECTABLE — clicking pins that
+  // pocket as the plan destination (parity with the Glaciem panel's picker).
+  const rows = [
+    ...(doc.surveyed || []),
+    ...haloZones.filter(z => !z.closed && z.xyz)
+      .map(z => ({ key: z.key, marks: z.marks, ores: z.ores,
+                   value: z.value, name: z.name })),
+  ];
+  renderPocketSuggest("halo-keeger-suggest", rows, "halo-keeger-pocket");
+  const dl = $("halo-keeger-keys");
+  if (dl) dl.innerHTML = rows.map(pk => {
+    const vt = surveyValueText(pk.value);
+    return `<option value="${esc(pk.key)}"${vt ? ` label="${esc(pk.key)}${vt}"` : ""}>`;
+  }).join("");
+}
+
+// Shared value-ranked pocket suggestions (#37 picker parity): best first,
+// each chip a button that fills the panel's pocket pin. The pin input stays
+// the source of truth — Plan my drop reads it as before.
+function renderPocketSuggest(elId, rows, inputId) {
+  const el = $(elId);
+  if (!el) return;
+  const ranked = rows.filter(pk => pk.key)
     .sort((a, b) => ((b.value && b.value.score) || 0) - ((a.value && a.value.score) || 0))
     .slice(0, 6);
-  if (ranked.length)
-    h += `<div style="margin-top:6px;">` + ranked.map(pk =>
-      `<span class="halo-chip" title="${pk.marks} mark${pk.marks === 1 ? "" : "s"}`
-      + `${(pk.ores || []).length ? " · " + pk.ores.join(", ") : ""}">`
-      + `${esc(pk.key)}${surveyValueChip(pk.value)}</span>`).join(" ") + `</div>`;
-  el.innerHTML = h;
+  if (!ranked.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<span class="muted" style="font-size:11px;">best surveyed:</span> `
+    + ranked.map(pk =>
+      `<button type="button" class="route-chip" data-pinpocket="${esc(pk.key)}"`
+      + ` title="${pk.marks || 0} mark${pk.marks === 1 ? "" : "s"}`
+      + `${(pk.ores || []).length ? " · " + pk.ores.join(", ") : ""}`
+      + ` — click to set as the plan destination">`
+      + `${esc(pk.name || pk.key)}${surveyValueChip(pk.value)}</button>`).join(" ");
+  for (const b of el.querySelectorAll("[data-pinpocket]"))
+    b.onclick = () => {
+      const inp = $(inputId);
+      if (!inp) return;
+      inp.value = b.dataset.pinpocket;
+      inp.focus();
+      for (const x of el.querySelectorAll("[data-pinpocket]"))
+        x.classList.toggle("active", x === b);
+    };
 }
 
 function renderHaloSystemPanel() {
@@ -12418,6 +12461,12 @@ function renderHaloSystemPanel() {
         dl.appendChild(o);
       }
     }
+    // Picker parity (#37): the Glaciem panel gets the same selectable
+    // value-ranked suggestions the Keeger panel has — org-surveyed ring
+    // pockets, best first.
+    renderPocketSuggest("halo-glaciem-suggest",
+                        (doc.pockets || []).filter(p => p.value),
+                        "halo-pocket");
     renderHaloKeegerProgress();
   }
 }
@@ -12983,7 +13032,11 @@ async function planHalo() {
     body.band = haloBandSel; body.aim = haloAim;
   } else if (haloSystem === "Nyx") {
     if (haloBelt === "keeger") {
-      body.belt = "keeger";                        // org-surveyed pockets (#36)
+      // Picker parity (#37): a pinned surveyed pocket/zone wins; blank =
+      // AUTO over the whole survey (the old behavior).
+      const kpin = $("halo-keeger-pocket").value.trim();
+      if (kpin) body.pocket_key = kpin;
+      else body.belt = "keeger";                   // org-surveyed pockets (#36)
     } else {
       const pin = $("halo-pocket").value.trim();
       if (pin) body.pocket_key = pin;
@@ -13031,22 +13084,38 @@ function haloDropHtml(plan) {
   const leg = plan.legs[plan.legs.length - 1];
   const secs = fmtWinS(d.window_s);
   const peak = fmtHudParts(d.peak_m);
-  let h = `<div class="halo-drop-block">`
-    + `<div class="halo-drop-step"><span class="ln">${plan.legs.length}.</span> Set destination `
-    + `<b>${esc(d.marker_name)}</b>, jump, and watch “distance to destination”:</div>`
-    + `<div class="halo-drop-code">EXIT AT ${peak[0]}<small>${peak[1]}</small>`
-    + `<button class="route-chip" id="halo-copy" type="button" title="copy the drop number">⧉ copy</button></div>`;
+  let h = `<div class="halo-drop-block">`;
+  if (d.arrival) {
+    // Arrival plan (#37 routing fix): the marker sits in the rocks — just
+    // complete the jump. No exit number, no watch-window.
+    h += `<div class="halo-drop-step"><span class="ln">${plan.legs.length}.</span> Set destination `
+      + `<b>${esc(d.marker_name)}</b>, jump, and let the jump <b>complete</b>:</div>`
+      + `<div class="halo-drop-code">ARRIVE AT ${esc(d.marker_name).toUpperCase()}</div>`;
+  } else {
+    h += `<div class="halo-drop-step"><span class="ln">${plan.legs.length}.</span> Set destination `
+      + `<b>${esc(d.marker_name)}</b>, jump, and watch “distance to destination”:</div>`
+      + `<div class="halo-drop-code">EXIT AT ${peak[0]}<small>${peak[1]}</small>`
+      + `<button class="route-chip" id="halo-copy" type="button" title="copy the drop number">⧉ copy</button></div>`;
+  }
+  if (d.arrival && d.pocket) {
+    h += `<div class="halo-window">the station sits <b>inside</b> pocket <b>${esc(d.pocket.key)}</b> — `
+      + `arrival puts you ≈<b>${fmtDist(d.expected_miss_m)}</b> from its center, in the rocks</div>`;
+  } else if (d.arrival && plan.target) {
+    h += `<div class="halo-window">arrival at <b>${esc(d.marker_name)}</b> is `
+      + `≈<b>${fmtDist(d.expected_miss_m)}</b> from <b>${esc(plan.target.name)}</b></div>`;
+  }
   if (plan.band) {
     h += `<div class="halo-window">window <b>${fmtHud(d.enter_m)}</b> (enter band) → `
       + `<b>${fmtHud(d.exit_m)}</b> (exit): drop anywhere inside and you're in the rocks`
       + (secs != null ? ` · ≈<b>${secs}s</b> wide at cruise` : "") + `</div>`;
   } else if (d.pocket) {
-    h += `<div class="halo-window">closest approach to pocket <b>${esc(d.pocket.key)}</b>, `
-      + (d.pocket.hit
-         ? `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> — inside the rocks`
-         : `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> `
-           + `<span class="halo-chip warn">⚠ ~${fmtDist(Math.max(0, d.expected_miss_m - d.pocket.grid_radius_m))} outside the pocket — drop, /showlocation, re-plan</span>`)
-      + ` · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
+    if (!d.arrival)
+      h += `<div class="halo-window">closest approach to pocket <b>${esc(d.pocket.key)}</b>, `
+        + (d.pocket.hit
+           ? `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> — inside the rocks`
+           : `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> `
+             + `<span class="halo-chip warn">⚠ ~${fmtDist(Math.max(0, d.expected_miss_m - d.pocket.grid_radius_m))} outside the pocket — drop, /showlocation, re-plan</span>`)
+        + ` · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
     if (d.pocket.kind === "surveyed" || d.pocket.kind === "zone")
       h += `<div class="halo-window">⛏ <b>org survey · ${d.pocket.marks} mark${d.pocket.marks === 1 ? "" : "s"}</b>`
         + (d.pocket.value ? ` ${surveyValueChip(d.pocket.value)}` : "")
@@ -13064,7 +13133,7 @@ function haloDropHtml(plan) {
              + (s.salvage ? " · salvage" : ""))
         + ` — player-measured</div>`;
     }
-  } else if (plan.target) {
+  } else if (plan.target && !d.arrival) {
     h += `<div class="halo-window">closest approach to <b>${esc(plan.target.name)}</b>, expected miss `
       + `≈<b>${fmtDist(d.expected_miss_m)}</b> · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
   }
@@ -13078,10 +13147,11 @@ function haloDropHtml(plan) {
   if (d.second_crossing)
     h += `<div class="halo-window">this route crosses the band again on the far side: `
       + `${fmtHud(d.second_crossing.enter_m)} → ${fmtHud(d.second_crossing.exit_m)}</div>`;
-  h += `<div class="halo-fallback">Patch-proof fallback: watch your <b>starmap distance to the `
-    + `${esc(plan.system || "Stanton")} marker</b> instead and exit at <b>${fmtHud(d.star_dist_peak_m)}</b>. `
-    + `That number works on any route that crosses this ${plan.band ? "band" : "point"}.</div>`
-    + `</div>`;
+  if (!d.arrival)      // meaningless for an arrival — the jump just completes
+    h += `<div class="halo-fallback">Patch-proof fallback: watch your <b>starmap distance to the `
+      + `${esc(plan.system || "Stanton")} marker</b> instead and exit at <b>${fmtHud(d.star_dist_peak_m)}</b>. `
+      + `That number works on any route that crosses this ${plan.band ? "band" : "point"}.</div>`;
+  h += `</div>`;
   return h;
 }
 
@@ -13107,7 +13177,7 @@ function renderHaloPlan(plan) {
   if (plan.alternates && plan.alternates.length) {
     h += `<div style="margin-top:12px;"><span class="fld-label">ALTERNATES</span></div>`;
     plan.alternates.forEach((a, i) => {
-      h += `<div class="halo-alt">via <b>${esc(a.drop.marker_name)}</b> · exit at ${fmtHud(a.drop.peak_m)}`
+      h += `<div class="halo-alt">via <b>${esc(a.drop.marker_name)}</b> · ${a.drop.arrival ? "<b>arrive</b> (marker in the rocks)" : `exit at ${fmtHud(a.drop.peak_m)}`}`
         + (a.drop.pocket ? ` · pocket ${esc(a.drop.pocket.key)}${surveyValueChip(a.drop.pocket.value)}${a.drop.pocket.hit ? "" : " ⚠ near-miss"}` : "")
         + (a.drop.window_s != null ? ` · window ≈${fmtWinS(a.drop.window_s)}s` : "")
         + (a.drop.steep_deg != null ? ` · ${Math.round(a.drop.steep_deg)}°` : "")
@@ -13683,6 +13753,26 @@ function drawPocketRadar(p) {
   } else {
     ctx.fillStyle = DIM; ctx.textAlign = "right";
     ctx.fillText("pocket radius " + radarDist(p.grid_radius_m), mx + R, my - R + 8);
+  }
+
+  // Sun bearing (#37): deep space's one universal landmark — the star sits
+  // at the system origin, far off-scope but always visible from the cockpit.
+  // A compass arrow on the rim (the "north arrow") orients the whole map.
+  if (p.center_xyz && (p.center_xyz[0] || p.center_xyz[1])) {
+    const sunA = Math.atan2(-p.center_xyz[1], -p.center_xyz[0]);
+    const bx = mx + Math.cos(sunA) * (R - 10), by = my - Math.sin(sunA) * (R - 10);
+    const tx = mx + Math.cos(sunA) * (R + 2), ty = my - Math.sin(sunA) * (R + 2);
+    ctx.strokeStyle = GOLD; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(tx, ty); ctx.stroke();
+    const ang = Math.atan2(ty - by, tx - bx);
+    ctx.beginPath(); ctx.moveTo(tx, ty);
+    ctx.lineTo(tx - 6 * Math.cos(ang - 0.45), ty - 6 * Math.sin(ang - 0.45));
+    ctx.lineTo(tx - 6 * Math.cos(ang + 0.45), ty - 6 * Math.sin(ang + 0.45));
+    ctx.closePath(); ctx.fillStyle = GOLD; ctx.fill();
+    ctx.font = "10px ui-monospace, Menlo, monospace";
+    ctx.textAlign = Math.cos(sunA) >= 0 ? "right" : "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText("☀ sun", bx - Math.cos(sunA) * 8, by + Math.sin(sunA) * 8);
   }
 
   // reference POIs (#37): fixed landmarks near the pocket — the frame of

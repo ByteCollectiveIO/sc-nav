@@ -5194,6 +5194,42 @@ def _halo_band_candidate(s_pos, marker, m_pos, band: dict, volumes) -> dict | No
     }
 
 
+# Arrival plans (#37 routing fix): the shortest jump worth planning at all.
+# Below this you're effectively already there — sublight it.
+HALO_ARRIVAL_MIN_M = 1_000e3
+# Cost sanity for staging (#37 routing fix): a staged in-pocket hit must not
+# cost an order of magnitude more flying than a direct near-miss that a short
+# sublight creep would close. Ratios, tunable.
+HALO_STAGE_COST_X = 10.0          # staged total flown vs direct flown
+HALO_DIRECT_MISS_OK_X = 3.0       # direct miss acceptable within N × envelope
+
+
+def _halo_arrival_candidate(s_pos, marker, m_pos, p_star, volumes) -> dict | None:
+    """Arrival-mode candidate (#37 routing fix): the aim marker itself sits
+    inside/at the target, so the plan is simply "jump to the marker and let
+    the jump COMPLETE" — you arrive in the rocks. No early exit means no
+    reaction window, so neither the HALO_DROP_MIN_M run-up floor nor the
+    between-endpoints clamp applies (they exist for early-exit drops; this is
+    the QV-Breaker-station-inside-the-field case they were blind to). The
+    chord still has to be clear and long enough to quantum at all."""
+    plotted = dist3(s_pos, m_pos)
+    if plotted < HALO_ARRIVAL_MIN_M:
+        return None
+    if volumes and chord_obstructed(s_pos, m_pos, volumes):
+        return None
+    return {
+        "marker": marker, "m_pos": m_pos, "miss_m": dist3(m_pos, p_star),
+        "arrival": True,
+        "cross": {"t_enter": 1.0, "t_peak": 1.0, "t_exit": 1.0,
+                  "enter_m": 0.0, "peak_m": 0.0, "exit_m": 0.0,
+                  "crossing_xyz": m_pos,
+                  "star_dist_peak_m": math.dist(m_pos, (0.0, 0.0, 0.0)),
+                  "steep_deg": None},
+        "second": None, "window_m": 0.0,
+        "flown_m": plotted, "plotted_m": plotted,
+    }
+
+
 def _halo_poi_candidate(s_pos, marker, m_pos, p_star, volumes) -> dict | None:
     """POI-mode candidate: closest approach of the chord s_pos->marker to the
     target point. None when the approach clamps to an endpoint (the chord
@@ -5279,6 +5315,10 @@ def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
     }
     if cand.get("miss_m") is not None:
         view["expected_miss_m"] = cand["miss_m"]
+    if cand.get("arrival"):
+        # Arrival plan (#37 routing fix): complete the jump, no early exit —
+        # the client renders "ARRIVE AT <marker>" instead of an EXIT number.
+        view["arrival"] = True
     if cand.get("pocket") is not None:                       # pocket mode (#35)
         pk = cand["pocket"]
         view["pocket"] = {"key": pk["key"], "kind": pk["kind"],
@@ -5377,9 +5417,15 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
             if not usable(m):
                 continue
             m_pos = marker_pos(m)
-            if m_pos is None or dist3(from_pos, m_pos) < HALO_DROP_MIN_M:
+            if m_pos is None:
                 continue
+            # Early-exit drops need a HALO_DROP_MIN_M run-up; ARRIVAL plans
+            # (#37 routing fix) don't — a marker sitting in the rocks is a
+            # valid destination however close it is.
+            near = dist3(from_pos, m_pos) < HALO_DROP_MIN_M
             if band_row is not None:
+                if near:
+                    continue
                 c = _halo_band_candidate(from_pos, m, m_pos, band_row, volumes)
                 if c is not None:
                     out.append(c)
@@ -5390,13 +5436,32 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
                 if volumes and chord_obstructed(from_pos, m_pos, volumes):
                     continue
                 for pk in pockets:
+                    radius = pk.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M
+                    if dist3(m_pos, pk["xyz"]) <= radius:
+                        # The marker IS inside this pocket: jump and arrive.
+                        a = _halo_arrival_candidate(from_pos, m, m_pos,
+                                                    pk["xyz"], None)
+                        if a is not None:
+                            a["pocket"] = pk
+                            a["hit"] = True
+                            out.append(a)
+                    if near:
+                        continue
                     c = _halo_poi_candidate(from_pos, m, m_pos, pk["xyz"], None)
                     if c is not None and c["miss_m"] <= POCKET_MISS_CEILING_M:
                         c["pocket"] = pk
-                        c["hit"] = c["miss_m"] <= (pk.get("grid_radius_m")
-                                                   or GLACIEM_POCKET_RADIUS_M)
+                        c["hit"] = c["miss_m"] <= radius
                         out.append(c)
             else:
+                if dist3(m_pos, p_star) <= HALO_POI_MISS_GOOD_M:
+                    # The marker already sits within a good miss of the
+                    # target: arriving beats any early-exit geometry.
+                    a = _halo_arrival_candidate(from_pos, m, m_pos, p_star,
+                                                volumes)
+                    if a is not None:
+                        out.append(a)
+                if near:
+                    continue
                 c = _halo_poi_candidate(from_pos, m, m_pos, p_star, volumes)
                 if c is not None:
                     out.append(c)
@@ -5492,6 +5557,27 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
             or (staged_hit and not direct_hit)
             or (not staged_hit and not direct_hit
                 and staged[0]["miss_m"] < 0.6 * direct[0]["miss_m"]))
+        if (use_staged and staged_hit and not direct_hit and direct
+                and stage_leg is not None):
+            # Cost sanity (#37 routing fix): a staged hit must EARN its
+            # detour. When the direct chord already near-misses within a few
+            # pocket radii and the staged route flies an order of magnitude
+            # farther, the pilot closes the difference at sublight far faster
+            # than crossing the system twice — plan the direct near-miss.
+            best_d = min(direct, key=lambda c: c["miss_m"])
+            radius = ((best_d.get("pocket") or {}).get("grid_radius_m")
+                      or GLACIEM_POCKET_RADIUS_M)
+            staged_total = ((stage_leg.get("distance_m") or 0.0)
+                            + staged[0]["flown_m"])
+            if (best_d["miss_m"] <= HALO_DIRECT_MISS_OK_X * radius
+                    and staged_total > HALO_STAGE_COST_X
+                    * max(best_d["flown_m"], 1.0)):
+                use_staged = False
+                # The near-miss must front the pool — direct[0] is the best
+                # SCORE, which can be a farther-flying smaller miss; the
+                # sanity rule is about this specific candidate.
+                direct = ([best_d]
+                          + [c for c in direct if c is not best_d])
     else:
         use_staged = bool(staged) and (
             not direct or (band_row is None
