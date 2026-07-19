@@ -16,7 +16,30 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 37. Survey platform — value, direction, lifecycle, scope 🔨 SLICES 0–4 SHIPPED
+### 38. Survey app restructure — Halo Finder → Prospector ✅ BUILT
+
+**Status: BUILT 2026-07-19 (designed + built same day; all three slices
+R1–R3 in one pass), suites 736 green, browser-verified via the preview
+harness; PENDING RELEASE.** Build deviations (no last-tab memory; FIELD pin
+reuses the full drop block; `.halo-tab-dot[hidden]` CSS gotcha) recorded in
+the doc's status header. Full plan:
+[`survey-app-restructure.md`](survey-app-restructure.md). The `#/halo` app
+accreted #31→#35→#36→#37 into one ~230-line scroll that interleaves three
+jobs; the ⛏ survey block — now the app's most differentiated capability —
+reads as an addon buried under AFTER THE DROP. Decision: **separate the
+surfaces, not the app** (the field loop couples planning and surveying at the
+same live moment; survey outputs feed the planner). One app, RM-masthead
+tabs (#29 precedent): **DROP** (plan, `#/halo` default) · **FIELD** (armed
+plan + verdict + radar + one-tap ⛏ mark, `#/halo/field`) · **ATLAS** (zones,
+coverage/NEXT GAP, export — and the future #37 import home,
+`#/halo/atlas`); system seg promoted to the masthead; app renamed
+**Prospector** (DECIDED — user 2026-07-19: ~90% of what's mapped is ore
+nodes). Frontend-only, zero API changes; 3 slices R1–R3, each ships alone.
+All §9 pre-build questions DECIDED 2026-07-19 (ATLAS system-scoped; explicit
+→ FLY IT, no auto-switch) — **ready to build**; only §9.4 (DROP result-card
+trim) rides along in R1 review.
+
+### 37. Survey platform — value, direction, lifecycle, scope 🔨 SLICES 0–5 SHIPPED
 
 **Status: slice 0 (radar reference layers §5.4–5.5, v0.64.0 — Pocket Radar
 POI overlay + in-pocket survey heatmap w/ ALL/7D/24H age window), slice 1
@@ -28,10 +51,12 @@ age-off) slice 3 (scan detail + zone detail view §3.1/§3.4, v0.67.0 —
 after-the-drop scanner transcription via `PATCH .../survey`, the "scanned"
 value basis, pool-relative routing comp% term, zone ▸ details timeline),
 the v0.68.0 routing fix (arrival plans + staging cost sanity from a live
-in-game report, pocket picker parity, radar ☀ sun compass) and slice 4
+in-game report, pocket picker parity, radar ☀ sun compass), slice 4
 (coverage gaps §5.1 + the always-on 3-system overview map w/ click-to-pin
-+ NEXT GAP, v0.69.0) are SHIPPED. Remaining slices (stats, staleness,
-import, kinds) stay design.**
++ NEXT GAP, v0.69.0) and slice 5 (survey stats + Org Intel Surveying
+section §5.2 + Discord `survey` milestones + radar drift nudge §5.3,
+v0.72.0) are SHIPPED. Remaining slices (staleness, import, kinds) stay
+design.**
 Full plan:
 [`survey-platform.md`](survey-platform.md). Evolves the shipped #36/#36.1
 survey stack from a mapping tool into an org **prospecting** suite, in

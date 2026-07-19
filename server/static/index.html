@@ -1932,7 +1932,15 @@
     .mk-skel-bar { animation: none; background: var(--border); }
     #market-list.mk-busy { transition: none; }
   }
-  /* ---- halo finder (#/halo, #31) ---- */
+  /* ---- halo finder / Prospector (#/halo, #31; tabs #38) ---- */
+  /* Prospector masthead (#38): app name + shared system seg + the DROP /
+     FIELD / ATLAS tabs, reusing the RM masthead components (#29). */
+  .halo-mast { justify-content: flex-start; }
+  .halo-mast .rm-tabs { margin-left: auto; }
+  /* FIELD-tab nudge: a fresh live fix arrived while another tab was open. */
+  .halo-tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--sel); margin-left: 6px; vertical-align: 2px; }
+  .halo-tab-dot[hidden] { display: none; }   /* author display beats the UA [hidden] rule */
   /* Band picker: 10 bars, width ∝ surveyed band width, height/tint ∝ relative
      peak density (band 5 visibly dominant). Bars sit on a shared baseline. */
   .halo-strip { display: flex; align-items: flex-end; gap: 3px; margin: 14px 2px 6px;
@@ -2151,10 +2159,10 @@
             loop your ship can carry, planned and run leg-by-leg.</div>
         </a>
         <a class="app-card" href="#/halo">
-          <img class="app-logo" src="/images/halo_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
-          <div class="app-name">Halo Finder</div>
-          <div class="app-desc">Drop out of quantum inside the Aaron Halo — pick a density band,
-            get the exact exit-here number for your route, and verify where you landed.</div>
+          <img class="app-logo" src="/images/prospector_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Prospector</div>
+          <div class="app-desc">Drop into unmarked rock space (the Aaron Halo, Glaciem pockets,
+            Pyro fields), navigate and ⛏ survey it live, and build the org's belt atlas.</div>
         </a>
       </div>
     </section>
@@ -3605,6 +3613,25 @@
   </div><!-- /pirates-view -->
 
   <div id="halo-view" hidden>
+    <!-- Prospector masthead (#38): the app's three jobs as tabs — plan a drop
+         (DROP), work the rocks live (FIELD), browse the org's map (ATLAS).
+         The system seg lives here because every tab is system-scoped. -->
+    <div class="panel rm-mast halo-mast">
+      <span class="rm-mast-name">PROSPECTOR</span>
+      <span class="seg" id="halo-system" role="group" aria-label="Star system">
+        <button class="on" data-sys="Stanton" type="button" aria-pressed="true">STANTON</button>
+        <button data-sys="Nyx" type="button" aria-pressed="false">NYX</button>
+        <button data-sys="Pyro" type="button" aria-pressed="false">PYRO</button>
+      </span>
+      <nav class="rm-tabs" id="halo-tabs" aria-label="Prospector sections">
+        <a class="rm-tab on" href="#/halo" data-tab="drop">☄ DROP</a>
+        <a class="rm-tab" href="#/halo/field" data-tab="field">⛏ FIELD<span
+          class="halo-tab-dot" id="halo-field-dot" hidden title="a fresh live fix arrived"></span></a>
+        <a class="rm-tab" href="#/halo/atlas" data-tab="atlas">🗺 ATLAS</a>
+      </nav>
+    </div>
+
+    <div id="halo-tab-drop">
     <div id="halo-intro" class="panel route-intro" hidden>
       <div class="ri-head"><h2>DROP INTO THE ROCKS</h2>
         <button id="halo-intro-dismiss" class="ri-dismiss" title="hide this">Got it ✕</button></div>
@@ -3616,19 +3643,14 @@
         <li><b>Pick a target</b> — or one of your own deep-space POIs near the rocks.</li>
         <li><b>Jump &amp; watch the HUD</b> — set the destination we name and exit quantum
           (hold B) when “distance to destination” hits the drop number.</li>
-        <li><b>Verify</b> — run <b>/showlocation</b> after the drop and we'll tell you
-          exactly where you landed.</li>
+        <li><b>Verify</b> — run <b>/showlocation</b> after the drop and the <b>⛏ FIELD</b>
+          tab tells you exactly where you landed (radar + survey marking live there).</li>
       </ol>
     </div>
 
     <div class="panel">
       <h2>TARGET</h2>
       <div class="route-row" style="align-items:center; gap:16px;">
-        <span class="seg" id="halo-system" role="group" aria-label="Star system">
-          <button class="on" data-sys="Stanton" type="button" aria-pressed="true">STANTON</button>
-          <button data-sys="Nyx" type="button" aria-pressed="false">NYX</button>
-          <button data-sys="Pyro" type="button" aria-pressed="false">PYRO</button>
-        </span>
         <span class="seg" id="halo-goal" role="group" aria-label="Target type">
           <button class="on" data-goal="band" type="button" aria-pressed="true">☄ Density band</button>
           <button data-goal="poi" type="button" aria-pressed="false">📍 My POI</button>
@@ -3760,6 +3782,12 @@
     </div>
 
     <div id="halo-result" hidden></div>
+    </div><!-- /halo-tab-drop -->
+
+    <div id="halo-tab-field" hidden>
+    <!-- The pinned working copy of the armed plan (#38): the drop number the
+         pilot flies by, without leaving the live verdict + radar + ⛏ mark. -->
+    <div id="halo-fly" hidden></div>
 
     <div class="panel">
       <h2>AFTER THE DROP <span class="muted" style="font-weight:400; font-size:12px;">run
@@ -3794,18 +3822,15 @@
         <span class="fld-label">⛏ SURVEY <span class="muted" style="font-weight:400; text-transform:none;">— mark
           this spot for the org's belt map (“nothing here” counts too: it maps a field's edge)</span></span>
         <div class="route-row" style="align-items:center; margin-top:8px;">
-          <label class="fld-label" for="halo-zone-select" style="margin:0;">ZONE</label>
+          <label class="fld-label" for="halo-zone-select" style="margin:0;">FILING INTO</label>
           <select id="halo-zone-select" class="sel" style="min-width:190px;"
-            title="Every ⛏ mark you drop is filed into the active zone. New zone starts a fresh named field wherever you are.">
+            title="Every ⛏ mark you drop is filed into the active zone.">
             <option value="">— none (auto-cluster) —</option>
           </select>
-          <button id="halo-zone-new" type="button" class="route-chip">＋ New zone</button>
-          <a id="halo-export-link" class="muted" target="_blank" rel="noopener" style="font-size:12px;"
-             title="download the current system's survey (marks + fitted model) as JSON">⇩ export survey</a>
-          <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
+          <a class="muted" href="#/halo/atlas" style="font-size:12px;"
+             title="create zones, browse details and coverage, export — in ATLAS">manage zones →</a>
         </div>
         <div id="halo-zone-banner" hidden></div>
-        <div id="halo-zone-detail" hidden style="margin-top:8px;"></div>
         <div class="route-row" style="align-items:center; margin-top:8px;">
           <span class="seg" id="halo-survey-rocks" role="group" aria-label="Rock density here">
             <button data-rocks="none" type="button" aria-pressed="false">⛔ none</button>
@@ -3828,6 +3853,32 @@
         </div>
       </div>
     </div>
+    </div><!-- /halo-tab-field -->
+
+    <!-- ATLAS (#38): the org's belt atlas — zones, coverage, export. Data
+         administration lives here so FIELD stays a one-tap cockpit. -->
+    <div id="halo-tab-atlas" hidden>
+      <div class="panel">
+        <h2>SURVEY ZONES <span class="muted" style="font-weight:400; font-size:12px;">the org's
+          named fields in <span id="halo-atlas-sys">this system</span>, built from every ⛏ mark
+          dropped in FIELD</span></h2>
+        <div class="route-row" style="align-items:center;">
+          <button id="halo-zone-new" type="button" class="route-chip">＋ New zone</button>
+          <a id="halo-export-link" class="muted" target="_blank" rel="noopener" style="font-size:12px;"
+             title="download the current system's survey (marks + fitted model) as JSON">⇩ export survey</a>
+          <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
+        </div>
+        <div id="halo-atlas-zones" style="margin-top:8px;"></div>
+        <div id="halo-zone-detail" hidden style="margin-top:8px;"></div>
+      </div>
+      <div class="panel">
+        <h2>COVERAGE <span class="muted" style="font-weight:400; font-size:12px;">what the org
+          has mapped, and where to survey next</span></h2>
+        <div class="halo-map-wrap"><canvas id="halo-atlas-map"
+          aria-label="system overview: belts, surveyed pockets tinted by value, unmapped gap arcs, stations and gateways"></canvas></div>
+        <p class="muted route-hint" id="halo-atlas-cap" style="margin-top:4px;"></p>
+      </div>
+    </div><!-- /halo-tab-atlas -->
 
     <p class="muted halo-credit" id="halo-credit-line">Band survey:
       <a href="https://cstone.space" target="_blank" rel="noopener">CaptSheppard / Cornerstone — cstone.space</a></p>
@@ -4096,6 +4147,7 @@ function applyTheme(pref) {
  *   constrained <select> · auth gate · cargo planner (#/route) + run mode ·
  *   event planner (#/events) · resource manager (#/goals + #/inventory + #/blueprints:
  *     catalog picker / goal form / inventory / blueprint library) · marketplace (#/market) ·
+ *   halo finder = Prospector (#/halo tabs DROP·FIELD·ATLAS, #38) + scan detail + halo map + radar layers ·
  *   view router · leaderboard · statistics · analytics-section status ·
  *   guild hauling · Org Intel · org settings · org logo · admins ·
  *   clear statistics · delete account · watcher tokens · setup guide · init.
@@ -6448,7 +6500,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "state") { if (msg.data) render(msg.data); renderCapture(msg.capture); resolveHaloSurveyArm(msg.capture); renderSetupConn();
-      if (!$("halo-view").hidden) refreshHaloAfterSoon(); }   // live post-drop verdict (#31, ≥2s coalesced)
+      if (!$("halo-view").hidden) { refreshHaloAfterSoon(); haloFieldNudge(msg.data); } }   // live post-drop verdict (#31) + FIELD nudge dot (#38)
     else if (msg.type === "roster") {
       presence.clear();
       for (const u of msg.users) rememberMate(u);
@@ -12227,7 +12279,7 @@ function renderMarketEditForm(l) {
   bindMarketForm(l.id, () => renderMarketDetail(l.id));
 }
 
-// ---------- halo finder (#31, multi-system #35) ----------
+// ---------- halo finder / Prospector (#31, multi-system #35, tabs #38) ----------
 // Asteroid QT-drop planner: pick a target (an Aaron Halo density band, a
 // Glaciem Ring pocket, a Pyro field, or a tagged deep-space POI), get "set
 // destination X, exit QT at D km" guidance computed from real marker
@@ -12242,6 +12294,49 @@ let haloGoal = "band", haloBandSel = 5, haloAim = "band";
 let haloBelt = "glaciem", haloSurveyRocks = "medium";   // #36
 let haloLastPlan = null;
 const HALO_SYSTEMS = ["Stanton", "Nyx", "Pyro"];
+
+// Prospector tabs (#38): DROP (plan) · FIELD (live cockpit) · ATLAS (org data).
+// One view, three sub-hashes; the router calls applyHaloTab on every #/halo*.
+let haloTabCur = "drop";
+function applyHaloTab(h) {
+  const t = h === "#/halo/field" ? "field" : h === "#/halo/atlas" ? "atlas" : "drop";
+  haloTabCur = t;
+  $("halo-tab-drop").hidden = t !== "drop";
+  $("halo-tab-field").hidden = t !== "field";
+  $("halo-tab-atlas").hidden = t !== "atlas";
+  for (const a of $("halo-tabs").querySelectorAll(".rm-tab")) {
+    const on = a.dataset.tab === t;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
+  if (t === "field") {
+    const dot = $("halo-field-dot");
+    if (dot) dot.hidden = true;
+    refreshHaloAfter();          // redraw verdict + radar now the canvas has layout
+  }
+  if (t === "atlas") renderHaloAtlas();
+  if (t === "drop") requestAnimationFrame(() => {
+    renderHaloOverview();        // canvases were 0-size while the tab was hidden
+    if (haloLastPlan) drawHaloMap(haloLastPlan);
+  });
+}
+function haloGoTab(t) {          // programmatic jumps (FLY IT, plan-from-ATLAS…)
+  applyHaloTab(t === "field" ? "#/halo/field" : t === "atlas" ? "#/halo/atlas" : "#/halo");
+  const want = t === "drop" ? "#/halo" : "#/halo/" + t;
+  if (location.hash !== want) location.hash = want;   // router re-run is idempotent
+}
+// FIELD-tab nudge: a NEW fix (position changed) arrived while another tab was
+// open — light the dot instead of stealing focus. First frame only baselines.
+let haloNudgePos = null;
+function haloFieldNudge(state) {
+  const dot = $("halo-field-dot");
+  if (!dot || !state || !state.position) return;
+  const p = state.position;
+  const moved = haloNudgePos &&
+    (haloNudgePos.x !== p.x || haloNudgePos.y !== p.y || haloNudgePos.z !== p.z);
+  haloNudgePos = { x: p.x, y: p.y, z: p.z };
+  if (moved && $("halo-tab-field").hidden) dot.hidden = false;
+}
 const haloDoc = (sys) => haloTargets[sys || haloSystem] || null;
 async function loadHaloTargets(sys) {
   if (haloTargets[sys]) return haloTargets[sys];
@@ -12336,26 +12431,26 @@ function haloWhereChip(state) {
   if (sys === "Stanton") {
     for (const b of doc.bands)
       if (r >= b.inner_m && r <= b.outer_m && Math.abs(p.z) <= b.half_height_m)
-        return ` · <a href="#/halo" title="Aaron Halo, band ${b.band}: open Halo Finder">☄ Halo band ${b.band}</a>`;
+        return ` · <a href="#/halo/field" title="Aaron Halo, band ${b.band}: open Prospector FIELD">☄ Halo band ${b.band}</a>`;
     return "";
   }
   // Nyx: inside a pocket beats "somewhere on the ring"
   for (const pk of doc.pockets || []) {
     const d = Math.hypot(p.x - pk.x, p.y - pk.y, p.z - pk.z);
     if (d <= pk.grid_radius_m)
-      return ` · <a href="#/halo" title="Glaciem Ring pocket ${esc(pk.key)}: open Halo Finder">☄ Glaciem pocket ${esc(pk.key)}</a>`;
+      return ` · <a href="#/halo/field" title="Glaciem Ring pocket ${esc(pk.key)}: open Prospector FIELD">☄ Glaciem pocket ${esc(pk.key)}</a>`;
   }
   if (Math.abs(r - doc.ring.r_m) <= 75e6 && Math.abs(p.z) <= 75e6)
-    return ` · <a href="#/halo" title="Glaciem Ring (between pockets): open Halo Finder">☄ Glaciem Ring</a>`;
+    return ` · <a href="#/halo/field" title="Glaciem Ring (between pockets): open Prospector FIELD">☄ Glaciem Ring</a>`;
   // Keeger (#36): the org's surveyed pockets, then the region envelope
   for (const pk of doc.surveyed || []) {
     const d = Math.hypot(p.x - pk.x, p.y - pk.y, p.z - pk.z);
     if (d <= pk.grid_radius_m)
-      return ` · <a href="#/halo" title="Surveyed Keeger pocket ${esc(pk.key)}: open Halo Finder">☄ Keeger pocket ${esc(pk.key)}</a>`;
+      return ` · <a href="#/halo/field" title="Surveyed Keeger pocket ${esc(pk.key)}: open Prospector FIELD">☄ Keeger pocket ${esc(pk.key)}</a>`;
   }
   if (doc.keeger && Math.abs(r - doc.keeger.r_m) <= doc.keeger.radial_tol_m
       && Math.abs(p.z) <= doc.keeger.z_tol_m)
-    return ` · <a href="#/halo" title="Keeger Belt region: open Halo Finder and drop a survey mark">☄ Keeger Belt</a>`;
+    return ` · <a href="#/halo/field" title="Keeger Belt region: open Prospector FIELD and drop a survey mark">☄ Keeger Belt</a>`;
   return "";
 }
 
@@ -12547,6 +12642,7 @@ function renderHaloSystemPanel() {
   const ex = $("halo-export-link");
   if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(haloSystem);
   renderHaloOverview();   // overview tracks the active system's doc (#37)
+  renderHaloAtlas();      // so does the ATLAS coverage panel (#38)
 }
 
 // ⛏ survey mark (#36): arm a pre-typed survey capture; the next
@@ -12645,7 +12741,88 @@ async function loadHaloZones(sys) {
   } catch { return; }
   renderHaloZoneSelect();
   renderHaloZoneBanner();
-  renderHaloOverview();   // zone squares live on the overview map (#37)
+  renderHaloOverview();     // zone squares live on the overview map (#37)
+  renderHaloAtlasZones();   // and on the ATLAS zone list (#38)
+  renderHaloAtlas();        // no-op unless the ATLAS tab is showing
+}
+
+// ---- ATLAS tab (#38): the org's belt atlas — zones, coverage, export ----
+function renderHaloAtlas() {
+  if ($("halo-view").hidden || $("halo-tab-atlas").hidden) return;
+  const sysEl = $("halo-atlas-sys");
+  if (sysEl) sysEl.textContent = haloSystem;
+  const ex = $("halo-export-link");
+  if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(haloSystem);
+  renderHaloAtlasZones();
+  renderHaloAtlasCap();
+  requestAnimationFrame(() => {   // canvas needs layout after un-hide
+    const cv = $("halo-atlas-map");
+    if (cv) drawHaloSystemMap(cv, null);
+  });
+}
+
+function renderHaloAtlasZones() {
+  const el = $("halo-atlas-zones");
+  if (!el) return;
+  if (!haloZones.length) {
+    el.innerHTML = `<p class="muted" style="font-size:12px; margin:6px 0 0;">No survey zones in `
+      + `${esc(haloSystem)} yet. Start one with ＋ New zone, then drop ⛏ marks from FIELD.</p>`;
+    return;
+  }
+  el.innerHTML = haloZones.map(z => {
+    const active = z.zone_id === activeSurveyZone;
+    const bits = [`<b>${z.marks || 0}</b> mark${z.marks === 1 ? "" : "s"}`];
+    if (z.value) bits.push(surveyValueChip(z.value));
+    if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
+    if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
+    else if (z.status && z.status !== "empty") bits.push(`<b>${esc(z.status)}</b> rocks`);
+    if ((z.ores || []).length) bits.push(z.ores.map(esc).join(", "));
+    if (z.closed) bits.push(`<span class="halo-chip">closed</span>`);
+    return `<div class="halo-alt"><b>${esc(z.name)}</b>`
+      + (active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : "")
+      + ` · ${bits.join(" · ")}`
+      + (z.marks ? ` <button type="button" class="route-chip" data-zdetail="${z.zone_id}">▸ details</button>` : "")
+      + (z.marks ? ` <button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan a drop here</button>` : "")
+      + (!z.closed ? ` <button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
+          + `${active ? "filing here" : "Set active"}</button>` : "")
+      + `</div>`;
+  }).join("");
+  const byId = (id) => haloZones.find(x => x.zone_id === Number(id));
+  for (const b of el.querySelectorAll("[data-zdetail]"))
+    b.onclick = () => { const z = byId(b.dataset.zdetail); if (z) toggleHaloZoneDetail(z); };
+  for (const b of el.querySelectorAll("[data-zplan]"))
+    b.onclick = () => { const z = byId(b.dataset.zplan); if (z) planHaloZone(z); };
+  for (const b of el.querySelectorAll("[data-zactive]"))
+    b.onclick = () => setActiveSurveyZone(Number(b.dataset.zactive));
+}
+
+// Coverage caption: the Keeger arc numbers + the next-gap chip (Nyx), and a
+// standing pointer that targets pin in DROP.
+function renderHaloAtlasCap() {
+  const cap = $("halo-atlas-cap");
+  if (!cap) return;
+  const doc = haloDoc(haloSystem);
+  const bits = [];
+  if (doc && doc.gaps) {
+    bits.push(`Keeger arc surveyed: <b>${(doc.gaps.coverage * 100).toFixed(1)}%</b>`
+      + ` · ${doc.gaps.arcs.length} gap${doc.gaps.arcs.length === 1 ? "" : "s"}`
+      + ` <span style="color:rgba(224,162,74,.9)">(amber arcs)</span>`);
+    const reachable = (doc.gaps.arcs || []).filter(a => a.plannable)
+      .sort((a, b) => (a.probe_miss_m || 0) - (b.probe_miss_m || 0));
+    if (reachable.length) {
+      const g = reachable[0];
+      bits.push(`next gap: ≈<b>${fmtDist(g.arc_m)}</b> of unmapped arc`
+        + (g.near_key ? ` past <b>${esc(g.near_key)}</b>` : "")
+        + ` <button type="button" class="route-chip" id="halo-atlas-gap"`
+        + ` title="plan the drop leg of the most reachable unmapped arc">⛏ Survey the next gap</button>`);
+    } else if ((doc.gaps.arcs || []).length) {
+      bits.push(`<span class="muted">remaining gaps are expedition-only from the org's markers</span>`);
+    }
+  }
+  bits.push(`tap a pocket, zone or field to pin it as the plan destination in DROP`);
+  cap.innerHTML = bits.join(" · ");
+  const gb = $("halo-atlas-gap");
+  if (gb) gb.onclick = planHaloGap;   // hops to DROP itself
 }
 
 function renderHaloZoneSelect() {
@@ -12686,8 +12863,8 @@ function renderHaloZoneBanner() {
   const pb = $("halo-zone-plan");
   if (pb) pb.onclick = () => planHaloZone(z);
   const dbtn = $("halo-zone-details");
-  if (dbtn) dbtn.onclick = () => toggleHaloZoneDetail(z);
-  else { const d = $("halo-zone-detail"); if (d) { d.hidden = true; d.innerHTML = ""; } }
+  // Zone detail lives in ATLAS (#38): the banner's "▸ details" hops there.
+  if (dbtn) dbtn.onclick = () => { haloGoTab("atlas"); toggleHaloZoneDetail(z, true); };
 }
 
 // ---------- scan detail (#37 slice 3) ----------
@@ -12784,10 +12961,15 @@ $("halo-scan-toggle").onclick = () => {
 
 // Zone detail (#37 slice 3, doc §3.4): the per-zone expansion — evidence,
 // contributors, and the mark timeline where any mark can take a scan.
-async function toggleHaloZoneDetail(z) {
+let haloZoneDetailFor = null;   // which zone the ATLAS detail box shows (#38)
+async function toggleHaloZoneDetail(z, forceOpen) {
   const el = $("halo-zone-detail");
   if (!el) return;
-  if (!el.hidden) { el.hidden = true; el.innerHTML = ""; return; }
+  const same = haloZoneDetailFor === z.zone_id;
+  if (!el.hidden && same && !forceOpen) {
+    el.hidden = true; el.innerHTML = ""; haloZoneDetailFor = null; return;
+  }
+  haloZoneDetailFor = z.zone_id;
   el.hidden = false;
   el.innerHTML = `<span class="muted" style="font-size:12px;">loading zone detail…</span>`;
   let doc;
@@ -12882,6 +13064,7 @@ async function setActiveSurveyZone(zid) {
     activeSurveyZone = zid;
   } catch { return; }
   renderHaloZoneSelect(); renderHaloZoneBanner();
+  renderHaloAtlasZones();   // the ⛏ active chip lives there too (#38)
 }
 
 async function newSurveyZone() {
@@ -12939,6 +13122,7 @@ async function planHaloZone(z) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
     msg.textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    haloGoTab("drop");   // callable from ATLAS/FIELD — the result lives in DROP (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
   } catch { msg.textContent = "⚠ network error"; }
 }
@@ -12961,6 +13145,7 @@ async function planHaloGap() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
     msg.textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    haloGoTab("drop");   // reachable from the ATLAS coverage card too (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
   } catch { msg.textContent = "⚠ network error"; }
 }
@@ -13146,9 +13331,13 @@ function wireHaloFinder() {
   window.addEventListener("resize", () => {
     if ($("halo-view").hidden) return;
     clearTimeout(rsz);
-    rsz = setTimeout(() => {
-      if (haloLastPlan) drawHaloMap(haloLastPlan);
-      renderHaloOverview();
+    rsz = setTimeout(() => {   // redraw whichever tab's canvases are showing (#38)
+      if (!$("halo-tab-drop").hidden) {
+        if (haloLastPlan) drawHaloMap(haloLastPlan);
+        renderHaloOverview();
+      }
+      if (!$("halo-tab-field").hidden && haloRadarLast) drawPocketRadar(haloRadarLast);
+      if (!$("halo-tab-atlas").hidden) renderHaloAtlas();
     }, 150);
   });
 }
@@ -13219,7 +13408,8 @@ function haloLegRow(leg, i) {
     + `</div>`;
 }
 
-function haloDropHtml(plan) {
+function haloDropHtml(plan, copyId) {
+  const cid = copyId || "halo-copy";   // DROP result vs FIELD pinned copy (#38)
   const d = plan.drop;
   const leg = plan.legs[plan.legs.length - 1];
   const secs = fmtWinS(d.window_s);
@@ -13235,7 +13425,7 @@ function haloDropHtml(plan) {
     h += `<div class="halo-drop-step"><span class="ln">${plan.legs.length}.</span> Set destination `
       + `<b>${esc(d.marker_name)}</b>, jump, and watch “distance to destination”:</div>`
       + `<div class="halo-drop-code">EXIT AT ${peak[0]}<small>${peak[1]}</small>`
-      + `<button class="route-chip" id="halo-copy" type="button" title="copy the drop number">⧉ copy</button></div>`;
+      + `<button class="route-chip" id="${cid}" type="button" title="copy the drop number">⧉ copy</button></div>`;
   }
   if (d.arrival && d.pocket) {
     h += d.creep_m > 0
@@ -13298,8 +13488,7 @@ function haloDropHtml(plan) {
   return h;
 }
 
-function renderHaloPlan(plan) {
-  const el = $("halo-result");
+function haloPlanHead(plan) {   // shared by the DROP result + the FIELD pin (#38)
   let head = plan.band
     ? `BAND ${plan.band.band} DROP` + (plan.aim === "peak" ? " · DENSEST POINT" : "")
     : plan.mode === "pocket"
@@ -13311,10 +13500,46 @@ function renderHaloPlan(plan) {
         + ((plan.drop.pocket.survey || {}).status === "barren" ? " · ⚠ SURVEYED BARREN" : "")
       : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
   if (plan.ore) head = `⛏ ${esc(plan.ore).toUpperCase()} → ${head}`;   // ore goal (#37)
+  return head;
+}
+
+function wireHaloCopy(id, plan) {
+  const cp = $(id);
+  if (cp && navigator.clipboard) cp.onclick = () => {
+    navigator.clipboard.writeText(fmtHud(plan.drop.peak_m)).then(() => {
+      cp.textContent = "✓ copied"; setTimeout(() => { cp.textContent = "⧉ copy"; }, 1200);
+    }, () => {});
+  };
+}
+
+// The pinned working copy in FIELD (#38): legs + the drop block (its own copy
+// button id), no map/alternates — those stay on the full DROP card.
+function renderHaloFly(plan) {
+  const el = $("halo-fly");
+  if (!el) return;
+  if (!plan) { el.hidden = true; el.innerHTML = ""; return; }
+  let h = `<div class="panel"><h2>ARMED PLAN · ${haloPlanHead(plan)} <span class="muted"`
+    + ` style="font-weight:400; font-size:12px;">from ${esc(plan.start.name)}`
+    + `${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
+  for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
+  h += haloDropHtml(plan, "halo-fly-copy");
+  h += `<p class="muted" style="font-size:11px; margin:8px 0 0;">adjust the plan or browse `
+    + `alternates in <a href="#/halo">☄ DROP</a></p></div>`;
+  el.innerHTML = h; el.hidden = false;
+  wireHaloCopy("halo-fly-copy", plan);
+}
+
+function renderHaloPlan(plan) {
+  const el = $("halo-result");
+  const head = haloPlanHead(plan);
   let h = `<div class="panel"><h2>${head} <span class="muted" style="font-weight:400; font-size:12px;">`
     + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
   for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
   h += haloDropHtml(plan);
+  h += `<div class="route-actions" style="margin-top:10px;">`
+    + `<button id="halo-flyit" class="active" type="button" title="pin this plan in FIELD:`
+    + ` the live verdict, the pocket radar, and ⛏ survey marking">⛏ FLY IT →</button>`
+    + `<span class="muted" style="font-size:12px;">pins the drop number in FIELD, next to the live verdict + radar</span></div>`;
   h += `<div class="halo-map-wrap"><canvas id="halo-map"
     aria-label="top-down system map: the belt, your route, and the drop point"></canvas></div>`;
   if (plan.alternates && plan.alternates.length) {
@@ -13330,12 +13555,10 @@ function renderHaloPlan(plan) {
   }
   h += `<p class="muted" style="font-size:11px; margin:10px 0 0;">${esc(plan.attribution)}</p></div>`;
   el.innerHTML = h; el.hidden = false;
-  const cp = $("halo-copy");
-  if (cp && navigator.clipboard) cp.onclick = () => {
-    navigator.clipboard.writeText(fmtHud(plan.drop.peak_m)).then(() => {
-      cp.textContent = "✓ copied"; setTimeout(() => { cp.textContent = "⧉ copy"; }, 1200);
-    }, () => {});
-  };
+  wireHaloCopy("halo-copy", plan);
+  const fb = $("halo-flyit");
+  if (fb) fb.onclick = () => haloGoTab("field");
+  renderHaloFly(plan);   // keep the FIELD pin in lockstep (#38)
   // Promote an alternate to the main card (full drop+leg views came with the
   // plan, so no re-plan round trip); the old best swaps into its slot.
   el.querySelectorAll(".halo-promote").forEach(b => b.onclick = () => {
@@ -13640,7 +13863,8 @@ function drawHaloSystemMap(cv, plan) {
 // system switch, targets/zones load and resize — no plan required.
 function renderHaloOverview() {
   const cv = $("halo-overview");
-  if (!cv || $("halo-view").hidden) return;
+  // The overview lives in the DROP tab (#38) — a hidden canvas has no layout.
+  if (!cv || $("halo-view").hidden || $("halo-tab-drop").hidden) return;
   drawHaloSystemMap(cv, null);
   const cap = $("halo-overview-cap");
   if (!cap) return;
@@ -13656,35 +13880,40 @@ function renderHaloOverview() {
 }
 
 // Click-to-pin (#37 slice 4): hit-test the overview's collected dot
-// positions and fill the matching panel's pocket/field picker.
+// positions and fill the matching panel's pocket/field picker. Shared by the
+// DROP overview and the ATLAS coverage map (#38) — hits always describe the
+// canvas drawn last, which is the visible one (one tab at a time).
+function haloOverviewPick(cv, e, fromAtlas) {
+  const rect = cv.getBoundingClientRect();
+  const px = e.clientX - rect.left, py = e.clientY - rect.top;
+  let best = null, bd = 10;                    // 10px touch slop
+  for (const h of haloOverviewHits) {
+    const d = Math.hypot(h.x - px, h.y - py);
+    if (d < bd) { best = h; bd = d; }
+  }
+  if (!best) return;
+  if (best.kind === "field") {
+    const f = $("halo-field");
+    if (f) { f.value = best.name || best.key; f.dataset.uuid = best.key; }
+  } else if (best.kind === "zone" && haloSystem !== "Nyx") {
+    // Zones outside Nyx have no pocket-pin input — plan directly (v0.71.0).
+    const z = haloZones.find(x => x.zone_id === best.zone_id);
+    if (z) { planHaloZone(z); return; }          // planHaloZone hops to DROP itself
+  } else if (best.kind === "surveyed" || best.kind === "zone") {
+    setHaloBelt("keeger");
+    $("halo-keeger-pocket").value = best.key;
+  } else {                                      // glaciem pocket kinds
+    setHaloBelt("glaciem");
+    $("halo-pocket").value = best.key;
+  }
+  if (fromAtlas) haloGoTab("drop");   // the pinned picker lives in DROP (#38)
+  renderHaloOverview();   // cheap refresh; caption stays in sync
+}
 function wireHaloOverviewClicks() {
   const cv = $("halo-overview");
-  if (!cv) return;
-  cv.onclick = (e) => {
-    const rect = cv.getBoundingClientRect();
-    const px = e.clientX - rect.left, py = e.clientY - rect.top;
-    let best = null, bd = 10;                    // 10px touch slop
-    for (const h of haloOverviewHits) {
-      const d = Math.hypot(h.x - px, h.y - py);
-      if (d < bd) { best = h; bd = d; }
-    }
-    if (!best) return;
-    if (best.kind === "field") {
-      const f = $("halo-field");
-      if (f) { f.value = best.name || best.key; f.dataset.uuid = best.key; }
-    } else if (best.kind === "zone" && haloSystem !== "Nyx") {
-      // Zones outside Nyx have no pocket-pin input — plan directly (v0.71.0).
-      const z = haloZones.find(x => x.zone_id === best.zone_id);
-      if (z) planHaloZone(z);
-    } else if (best.kind === "surveyed" || best.kind === "zone") {
-      setHaloBelt("keeger");
-      $("halo-keeger-pocket").value = best.key;
-    } else {                                      // glaciem pocket kinds
-      setHaloBelt("glaciem");
-      $("halo-pocket").value = best.key;
-    }
-    renderHaloOverview();   // cheap refresh; caption stays in sync
-  };
+  if (cv) cv.onclick = (e) => haloOverviewPick(cv, e, false);
+  const av = $("halo-atlas-map");
+  if (av) av.onclick = (e) => haloOverviewPick(av, e, true);
 }
 
 // Magnified drop zone: individual band edges / pocket circles are visible
@@ -13884,7 +14113,9 @@ function updatePocketRadar(d) {
   wrap.hidden = false;
   haloRadarLast = p;
   ensureRadarLayers(p);
-  requestAnimationFrame(() => drawPocketRadar(p));
+  // The radar lives in the FIELD tab (#38) — skip the draw while it's hidden
+  // (0-size canvas); entering FIELD re-runs refreshHaloAfter and draws.
+  if (!$("halo-tab-field").hidden) requestAnimationFrame(() => drawPocketRadar(p));
 }
 
 // ---------- radar reference layers (#37 slice 0) ----------
@@ -14276,14 +14507,14 @@ function haloVerdictHtml(d) {
 // are account sub-pages; all analytics live under the Org Intel app (#/intel/*).
 // Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
-  "#/trade": "Trade Route Planner", "#/halo": "Halo Finder", "#/events": "Events",
+  "#/trade": "Trade Route Planner", "#/halo": "Prospector", "#/events": "Events",
   "#/goals": "Resource Manager",
   "#/market": "Marketplace", "#/online": "Who's Online", "#/lfg": "Group Finder",
   "#/pirates": "Danger Board", "#/intel": "Org Intel", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
-  "#/trade": "Trade Route Planner", "#/halo": "Halo Finder",
+  "#/trade": "Trade Route Planner", "#/halo": "Prospector",
   "#/events": "Event Planner", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/blueprints": "Resource Manager",
   "#/market": "Org Marketplace",
@@ -14324,7 +14555,9 @@ function applyView() {
   const nav = h === "#/nav" && authed;
   const route = h === "#/route" && authed;
   const trade = h === "#/trade" && authed;   // Trade Route Planner (commodity arbitrage)
-  const halo = h === "#/halo" && authed;     // Halo Finder — Aaron Halo drop planner (#31)
+  // Prospector (né Halo Finder, #31/#38) owns a tab sub-route family:
+  // #/halo = DROP, #/halo/field = FIELD, #/halo/atlas = ATLAS.
+  const halo = (h === "#/halo" || h.startsWith("#/halo/")) && authed;
   // The event planner owns a small sub-route family (board / new / detail), so
   // any hash under #/events counts as being in the app.
   const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
@@ -14359,7 +14592,7 @@ function applyView() {
   // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/intel/market) to
   // their app root for the header indicator and the "remember last app" jump.
   const appHash = events ? "#/events" : resourceMgr ? "#/goals" : market ? "#/market"
-    : intel ? "#/intel" : h;
+    : intel ? "#/intel" : halo ? "#/halo" : h;
 
   // The sign-in gate covers everything for anonymous users, except a legal page.
   $("login-gate").hidden = authed || legal;
@@ -14372,7 +14605,7 @@ function applyView() {
   $("route-view").hidden = !route;
   $("trade-view").hidden = !trade;
   $("halo-view").hidden = !halo;
-  if (halo) loadHaloFinder();   // seed bands/ships + the after-drop panel; WS keeps it live
+  if (halo) { applyHaloTab(h); loadHaloFinder(); }   // tab first (canvases need layout), then seed; WS keeps it live
   $("events-view").hidden = !events;
   $("goals-view").hidden = !goals;
   $("inventory-view").hidden = !inventory;
@@ -14856,8 +15089,8 @@ function loadSurveyStats() {
     url: "/api/intel/surveying", label: "Surveying",
     isEmpty: d => !((d.totals || {}).marks || 0),
     empty: { title: "No survey marks yet",
-      sub: "Stats build as your org maps the belts. Drop ⛏ marks from the Halo Finder's AFTER THE DROP panel and coverage, contributors, and zone activity appear here.",
-      action: { href: "#/halo", label: "Open the Halo Finder →" } },
+      sub: "Stats build as your org maps the belts. Drop ⛏ marks from Prospector's FIELD tab and coverage, contributors, and zone activity appear here.",
+      action: { href: "#/halo/field", label: "Open Prospector →" } },
     render: renderSurveyStats,
   });
 }
@@ -14909,7 +15142,7 @@ function renderSurveyStats(d) {
       `${esc(z.name)}${z.closed ? " (closed)" : ""}</span>` +
       `<span style="font-size:12px;">${surveyValueChip(z.value)} ` +
       `<span class="muted">${esc(z.system)}</span> · ${bits.join(" · ")}</span></div>`;
-  }).join("") : `<div class="stat-empty">No named zones yet — ＋ New zone in the Halo Finder starts one.</div>`;
+  }).join("") : `<div class="stat-empty">No named zones yet — ＋ New zone in Prospector's ATLAS tab starts one.</div>`;
 }
 
 // ---------- Org Intel (analytics app shell) ----------

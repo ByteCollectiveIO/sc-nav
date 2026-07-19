@@ -1,10 +1,10 @@
 # Survey platform — from drop helper to org prospecting suite (backlog #37) — design plan
 
-**Status: 🔨 IN BUILD (2026-07-19).** Slices 0–5 are BUILT (radar layers
+**Status: 🔨 slices 0–5 SHIPPED v0.64.0–v0.72.0 (2026-07-19).** Radar layers
 v0.64.0 · value layer v0.65.0 · ore-first routing v0.66.0 · scan detail +
 zone detail v0.67.0 · arrival routing v0.68.0 · coverage gaps + overview
-map §5.1 · survey stats + Intel section + Discord milestones §5.2 + radar
-nudge §5.3); phases 4–5 (§6–§7) remain design. Successor to
+map §5.1 v0.69.0 · survey stats + Intel section + Discord milestones §5.2 +
+radar nudge §5.3 v0.72.0; phases 4–5 (§6–§7) remain design. Successor to
 the shipped #36/#36.1 stack
 ([belt-survey.md](belt-survey.md), [survey-zones.md](survey-zones.md),
 [halo-finder-expansion.md](halo-finder-expansion.md)); assumes the v0.60–v0.63

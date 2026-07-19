@@ -16,14 +16,15 @@ drift — trust grep and CI, not the citation.
 | Doc | What it is |
 |---|---|
 | [product-overview.md](product-overview.md) | **The consolidated map**: apps, platform services, data sources, conventions |
-| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slices 0–4 shipped v0.64–0.69, rest designed) |
+| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slices 0–5 shipped v0.64–0.72, rest designed) |
 | [../PRODUCT.md](../PRODUCT.md) · [../DESIGN.md](../DESIGN.md) | Product scope/brand · visual design system |
 
 ## Active designs (not built)
 
 | Doc | Status | Covers |
 |---|---|---|
-| [survey-platform.md](survey-platform.md) | 🔨 slices 0–5 built (0–4 shipped v0.64–0.69) | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing, scan detail, arrival routing, coverage gaps + the always-on overview map live; survey stats + Org Intel Surveying + Discord milestones + radar drift nudge built**; remaining: patch staleness, cross-org import, mark kinds |
+| [survey-platform.md](survey-platform.md) | 🔨 slices 0–5 shipped v0.64–0.72 | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing, scan detail, arrival routing, coverage gaps + the always-on overview map, survey stats + Org Intel Surveying + Discord milestones + radar drift nudge ALL live**; remaining: patch staleness, cross-org import, mark kinds |
+| [survey-app-restructure.md](survey-app-restructure.md) | ✅ built 2026-07-19, pending release | #38: `#/halo` IA refactor — one app, three tabs (DROP · FIELD · ATLAS) + rename to **Prospector**; separates plan / cockpit / org-data surfaces without splitting the field loop; frontend-only, builds the shelf #37 import lands on; browser-verified |
 
 ## Shipped feature specs (reference for what's live)
 
