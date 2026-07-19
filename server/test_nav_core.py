@@ -4763,6 +4763,20 @@ class SurveyValueTests(unittest.TestCase):
         v = nav_core.survey_value(pk, self.PRICES)
         self.assertEqual((v["score"], v["basis"]), (400, "ores"))   # 1 × 400
 
+    def test_scanned_basis_outranks_presence(self):
+        # Scan comp × price is the strongest signal (#37 slice 3): a 20%
+        # Gold + 30% Quartz rock at dense (w=5) = 5 × (0.2×6000 + 0.3×400).
+        c = self._cluster(ores=["Gold (Raw)"], scans=2,
+                          scan_comp={"Gold (Raw)": 20.0, "Quartz (Raw)": 30.0})
+        v = nav_core.survey_value(c, self.PRICES)
+        self.assertEqual((v["basis"], v["scans"], v["score"]),
+                         ("scanned", 2, 6600))
+        # unpriced-only scan falls back to the ore-presence basis
+        v2 = nav_core.survey_value(
+            self._cluster(ores=["Gold (Raw)"], scans=1,
+                          scan_comp={"Unobtanium": 50.0}), self.PRICES)
+        self.assertEqual(v2["basis"], "ores")
+
     def test_annotate_pool_terciles_and_purity(self):
         clusters = [
             self._cluster("A", ores=["Gold (Raw)"]),                # 30000
@@ -4883,6 +4897,53 @@ class OreRoutingTests(unittest.TestCase):
               "ores": ["Gold (Raw)"], "salvage": False}], [])
         self.assertEqual(fit["ore_counts"],
                          {"Gold (Raw)": 2, "Quartz (Raw)": 1})
+        self.assertNotIn("scans", fit)          # nothing scanned → field absent
+
+    # --- scan detail (#37 slice 3) --------------------------------------------
+
+    def test_cluster_fit_scan_stats(self):
+        fit = nav_core.survey_cluster_fit(
+            [{"xyz": (self.KR, 0, 0), "positive": True, "rocks": "dense",
+              "ores": ["Gold (Raw)"], "salvage": False,
+              "scan": {"mass_kg": 3000, "comp": {"Gold (Raw)": 20.0}}},
+             {"xyz": (self.KR + 1e5, 0, 0), "positive": True, "rocks": "dense",
+              "ores": ["Gold (Raw)"], "salvage": False,
+              "scan": {"comp": {"Gold (Raw)": 40.0, "Quartz (Raw)": 10.0}}},
+             # unscanned mark says nothing about percentages — not averaged in
+             {"xyz": (self.KR + 2e5, 0, 0), "positive": True, "rocks": "dense",
+              "ores": ["Gold (Raw)"], "salvage": False}], [])
+        self.assertEqual(fit["scans"], 2)
+        self.assertEqual(fit["scan_comp"],
+                         {"Gold (Raw)": 30.0, "Quartz (Raw)": 10.0})
+
+    def test_scan_comp_sharpens_ranking_pool_relative(self):
+        def cluster(key, xyz, pct=None):
+            c = {"key": key, "kind": "surveyed", "xyz": xyz,
+                 "grid_radius_m": nav_core.GLACIEM_POCKET_RADIUS_M,
+                 "ores": ["Gold (Raw)"], "ore_counts": {"Gold (Raw)": 4},
+                 "positive": 5, "density": "dense", "salvage": False,
+                 "marks": 5}
+            if pct is not None:
+                c.update(scans=1, scan_comp={"Gold (Raw)": pct})
+            return c
+        nav = _synthetic_nav([], system="Nyx")
+        rich = cluster("RICH60", (self.KR, 0, 0), 60.0)
+        lean = cluster("LEAN10", (0, self.KR, 0), 10.0)
+        unknown = cluster("UNKNOWN", (-self.KR, 0, 0))
+        rows = nav_core.find_ore_in_space(nav, "gold", [lean, unknown, rich])
+        # pool-relative: rich scan up-ranks, lean down-ranks, the unscanned
+        # cluster sits at the pool mean (35%) between them — scanning above
+        # the mean is rewarded, never punished for existing.
+        self.assertEqual([r["key"] for r in rows],
+                         ["RICH60", "UNKNOWN", "LEAN10"])
+        by = {r["key"]: r for r in rows}
+        self.assertEqual(by["RICH60"]["scan_pct"], 60.0)
+        self.assertIsNone(by["UNKNOWN"]["scan_pct"])
+        # no scans anywhere → multiplier is neutral, scores match presence
+        plain = nav_core.find_ore_in_space(nav, "gold",
+                                           [cluster("A", (self.KR, 0, 0)),
+                                            cluster("B", (0, self.KR, 0))])
+        self.assertAlmostEqual(plain[0]["score"], plain[1]["score"], places=9)
 
 
 class ResourceValueTierTests(unittest.TestCase):

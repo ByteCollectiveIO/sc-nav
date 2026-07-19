@@ -1,9 +1,9 @@
 # Survey platform — from drop helper to org prospecting suite (backlog #37) — design plan
 
-**Status: 🔨 IN BUILD (2026-07-18).** Slice 0 (radar reference layers,
-§5.4–5.5, v0.64.0), slice 1 (value layer, §3.2–3.3, v0.65.0) and slice 2
-(ore-first routing + mined-out reports, §4) are BUILT; everything else
-remains design. Successor to the shipped #36/#36.1 stack
+**Status: 🔨 IN BUILD (2026-07-18).** Slices 0–3 are BUILT (radar layers
+v0.64.0 · value layer v0.65.0 · ore-first routing v0.66.0 · scan detail +
+zone detail view §3.1/§3.4); phases 3–5 (§5–§7) remain design. Successor to
+the shipped #36/#36.1 stack
 ([belt-survey.md](belt-survey.md), [survey-zones.md](survey-zones.md),
 [halo-finder-expansion.md](halo-finder-expansion.md)); assumes the v0.60–v0.63
 scaling work (version-keyed `survey_state` cache, incremental QT maintenance,
@@ -64,7 +64,7 @@ leverage-per-risk. Phase 1 is the one that changes what the tool *is*.
 
 ## 3. Phase 1 — the value layer ("is this field worth mining?")
 
-### 3.1 Optional scan detail on a mark
+### 3.1 Optional scan detail on a mark — ✅ BUILT (slice 3, 2026-07-18)
 
 The in-game scanner shows a rock's **mass** and **composition percentages**.
 Those two numbers turn "Iron, Quartz" into an actual value estimate. The
@@ -87,7 +87,7 @@ payload gains one optional block:
   only). Same row works for any mark selected from the zone detail view
   (§3.4), so a second crewman can enrich while the pilot flies.
 
-### 3.2 The value model (nav_core, pure) — ✅ ores/density bases BUILT (slice 1, 2026-07-18; "scanned" basis lands with §3.1)
+### 3.2 The value model (nav_core, pure) — ✅ ALL BASES BUILT (ores/density slice 1; "scanned" slice 3)
 
 `survey_value(cluster, prices) -> {score, tier, basis}` where `cluster` is
 any pocket/zone dict with a `survey` block and `prices` is the existing
@@ -135,7 +135,7 @@ pending) · every row of the ore-first finder (§4.2, pending). Also landed:
 `_refresh_feeds` now calls `nav.touch()` (the §3.2 decision) so a price
 refresh re-cuts cached tiers.
 
-### 3.4 Zone detail view
+### 3.4 Zone detail view — ✅ BUILT (slice 3: inline "▸ details" expansion; staleness column waits for §6.1)
 
 The zones panel gains a per-zone expansion (not a new app): mark timeline
 (who, when, density, ores, scan), contributor list, ore breakdown with
@@ -398,8 +398,12 @@ value model plus Phase 3's coverage to keep suggestions fresh.
 - ✅ `custom_pois.created` column (epoch, `_ensure_column`) — stamped on every
   new capture; threads through `Poi.created` → `survey_marks` (§5.5, and the
   prerequisite §5.2 was silently assuming).
-- `PATCH /api/custom_pois/{id}/survey` — attach/replace scan detail + kind
-  on an owned survey mark (§3.1).
+- ✅ `PATCH /api/custom_pois/{id}/survey` — attach/replace scan detail on an
+  owned survey mark (§3.1; empty body clears; `kind` joins in slice 8).
+  Marks views/export gained `zone_id`/`created`/`scan` (zone timeline feed).
+  Routing note (slice 3): the §4.1 comp% term is **pool-relative** —
+  unscanned clusters use the pool's mean scanned comp% as their multiplier,
+  so contributing a scan never down-ranks you against ignorance.
 - `GET /api/halo/survey` + `/export` + `/zones` — rows gain `value`
   (`{score, tier, basis}`), `freshness`, `kind` rollups; export `_meta`
   version bumps.
@@ -434,8 +438,8 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    the §11.6 mined-out report (decided into this slice). Also needs no new
    inputs — with slice 1 it completes the survey→mine loop on today's data.
    *The payoff feature; shipped before asking surveyors for anything more.*
-3. **Scan detail** (§3.1) + zone detail view (§3.4): the "scanned" basis,
-   sharpening both value tiers and routing likelihoods.
+3. ✅ **Scan detail** (§3.1) + zone detail view (§3.4), built 2026-07-18:
+   the "scanned" basis, sharpening both value tiers and routing likelihoods.
 4. **Coverage gaps + NEXT GAP + map arcs** (§5.1) — also wires the routing
    miss ("no mapped source") into survey direction.
 5. **Survey stats + Intel section + Discord milestones** (§5.2) + radar
@@ -472,9 +476,9 @@ value model plus Phase 3's coverage to keep suggestions fresh.
 
 ## 11. Open questions (answer before or during build)
 
-1. **Scan ergonomics:** is mass + comp% realistic to transcribe from the
-   scanner HUD mid-session, or should scan detail accept a single "best ore
-   %" shortcut? (Decides how rich basis-"scanned" gets in practice.)
+1. ~~**Scan ergonomics**~~ — DECIDED at slice-3 scoping (user): full form
+   with EVERYTHING optional — one "best ore %" is a valid scan, and a parked
+   surveyor can transcribe the whole readout. One form serves both.
 2. **Density weights:** tune the 0/1/2.5/5 weights against a real evening of
    marks. (~~Tercile pool~~ — decided at slice-1 build: per-system.)
 3. **Gap step size:** 0.25° sampling is a guess; validate against the real

@@ -4121,6 +4121,89 @@ class BeltSurveyApiTests(unittest.TestCase):
         names = self.client.get("/api/resource_ores").json()
         self.assertIn("Beltium Rare", names)
 
+    # --- scan detail (#37 slice 3) --------------------------------------------
+
+    def test_scan_patch_lifecycle(self):
+        rich, _ = self._priced_ores()
+        mark = self._mark_at((self.KR, 0.0, 0.0), ores=[rich])
+        mark.owner_id = 4242
+        mark.created = time.time()   # fixture marks don't stamp it; captures do
+        orig = app.handles.player_ids_for
+        app.handles.player_ids_for = lambda uid: {4242}
+        try:
+            r = self.client.patch(f"/api/custom_pois/{mark.id}/survey",
+                                  json={"mass_kg": 3500,
+                                        "comp": {rich: 21.5, "  ": 5,
+                                                 "Filler": 250}})
+            self.assertEqual(r.status_code, 200)
+            scan = r.json()["scan"]
+            self.assertEqual(scan["mass_kg"], 3500)
+            self.assertEqual(scan["comp"][rich], 21.5)
+            self.assertEqual(scan["comp"]["Filler"], 100.0)   # clamped
+            self.assertNotIn("  ", scan["comp"])              # blank dropped
+            # round-trips: live marks view (+ the new timeline fields) and db
+            m = self.client.get("/api/halo/survey").json()["marks"][0]
+            self.assertEqual(m["scan"]["comp"][rich], 21.5)
+            self.assertIsNone(m["zone_id"])
+            self.assertIsNotNone(m["created"])
+            stored = next(d for d in db.list_custom_pois()
+                          if d["id"] == mark.id)
+            self.assertEqual(stored["survey"]["scan"]["mass_kg"], 3500)
+            # value basis flips to "scanned" (strongest signal) with a count
+            row = self.client.get("/api/halo/targets",
+                                  params={"system": "Nyx"}).json()["surveyed"][0]
+            self.assertEqual((row["value"]["basis"], row["value"]["scans"]),
+                             ("scanned", 1))
+            # the router carries the mean comp for the ore
+            find = self.client.get("/api/survey/find",
+                                   params={"ore": rich}).json()
+            rows = find["results"] or find["elsewhere"]
+            self.assertEqual(rows[0]["scan_pct"], 21.5)
+            # attach/replace: an empty body clears the scan
+            r2 = self.client.patch(f"/api/custom_pois/{mark.id}/survey",
+                                   json={})
+            self.assertIsNone(r2.json()["scan"])
+            m2 = self.client.get("/api/halo/survey").json()["marks"][0]
+            self.assertIsNone(m2["scan"])
+        finally:
+            app.handles.player_ids_for = orig
+
+    def test_scan_patch_guards(self):
+        rich, _ = self._priced_ores()
+        # ownerless legacy mark + non-admin caller → 403
+        mark = self._mark_at((self.KR, 0.0, 0.0), ores=[rich])
+        self.assertEqual(self.client.patch(
+            f"/api/custom_pois/{mark.id}/survey",
+            json={"mass_kg": 100}).status_code, 403)
+        # not a survey mark → 400 (even for its owner)
+        plain = app.nav_core.Poi(
+            id=1_777_777, name="Just a rock", system="Nyx",
+            container_name=None, type="Custom", local_km=None,
+            global_m=(self.KR, 1e6, 0.0), latitude=None, longitude=None,
+            height_m=None, qt_marker=False, custom=True, owner_id=4242)
+        app.nav.pois[plain.id] = plain
+        orig = app.handles.player_ids_for
+        app.handles.player_ids_for = lambda uid: {4242}
+        try:
+            self.assertEqual(self.client.patch(
+                f"/api/custom_pois/{plain.id}/survey",
+                json={"mass_kg": 100}).status_code, 400)
+            # unknown id → 404; bad mass → 422; comp capped at 8 entries
+            self.assertEqual(self.client.patch(
+                "/api/custom_pois/999999999/survey",
+                json={"mass_kg": 100}).status_code, 404)
+            mark.owner_id = 4242
+            self.assertEqual(self.client.patch(
+                f"/api/custom_pois/{mark.id}/survey",
+                json={"mass_kg": 0}).status_code, 422)
+            big = {f"Ore {i}": 10 for i in range(12)}
+            r = self.client.patch(f"/api/custom_pois/{mark.id}/survey",
+                                  json={"comp": big})
+            self.assertEqual(len(r.json()["scan"]["comp"]), 8)
+        finally:
+            app.handles.player_ids_for = orig
+            app.nav.pois.pop(plain.id, None)
+
     # --- radar reference layers (#37 slice 0) --------------------------------
 
     def test_capture_stamps_created_epoch(self):

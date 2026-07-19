@@ -1374,6 +1374,19 @@ class SurveyPayloadIn(BaseModel):
     zone_id: int | None = None
 
 
+class ScanIn(BaseModel):
+    """Scan detail for an existing survey mark (#37 slice 3, doc §3.1): the
+    in-game scanner's readout, transcribed after the fact. EVERYTHING is
+    optional (a single "best ore %" is a valid scan — §11.1 decision); comp
+    percentages deliberately don't need to sum to 100 (inerts make up the
+    rest). An empty scan clears the block (attach/replace semantics)."""
+    mass_kg: float | None = Field(default=None, ge=1, le=10_000_000)
+    comp: dict[str, float] = Field(default_factory=dict)
+
+
+_SCAN_COMP_MAX = 8
+
+
 class CaptureIn(BaseModel):
     name: str = Field(max_length=_NAME_MAX)
     type: str = Field(default="Custom", max_length=_TYPE_MAX)
@@ -4775,7 +4788,11 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
         "marks": [{"id": m["id"], "name": m["name"],
                    "x": m["xyz"][0], "y": m["xyz"][1], "z": m["xyz"][2],
                    "rocks": m["rocks"], "ores": m["ores"],
-                   "salvage": m["salvage"], "owner_handle": m["owner_handle"]}
+                   "salvage": m["salvage"], "owner_handle": m["owner_handle"],
+                   # zone timeline + scan detail feed (#37 slice 3); the
+                   # export inherits these — shared datasets carry scans.
+                   "zone_id": m["zone_id"], "created": m["created"],
+                   "scan": m["scan"]}
                   for m in marks],
         "pockets": [({**p, "value": vk[p["key"]]} if p["key"] in vk else p)
                     for p in sstate["pockets"]],
@@ -7343,6 +7360,47 @@ async def update_custom_poi(poi_id: int, body: PoiEditIn, user: dict = Depends(r
                     nav_core.qt_marker_added(nav, poi)
         hub.mark_dataset_dirty()
     return {"ok": True, "note": poi.note, "private": poi.private}
+
+
+@app.patch("/api/custom_pois/{poi_id}/survey")
+async def update_survey_scan(poi_id: int, body: ScanIn,
+                             user: dict = Depends(require_session)):
+    """Attach/replace scan detail on an existing survey mark (#37 slice 3,
+    doc §3.1): the scanner's mass + composition %, transcribed AFTER the ⛏
+    tap so marking stays one-tap. Owner-or-admin (a second crewman enriching
+    a teammate's mark goes through their own marks or an admin). An empty
+    body clears the scan. Derived products (value tiers, ore routing, zone
+    detail) pick it up on the next read via nav.touch()."""
+    comp = {}
+    for name, pct in (body.comp or {}).items():
+        name = (name or "").strip()[:_NAME_MAX]
+        if not name or not isinstance(pct, (int, float)):
+            continue
+        comp[name] = round(max(0.0, min(100.0, float(pct))), 1)
+        if len(comp) >= _SCAN_COMP_MAX:
+            break
+    scan = {}
+    if body.mass_kg is not None:
+        scan["mass_kg"] = round(float(body.mass_kg))
+    if comp:
+        scan["comp"] = comp
+    async with hub.lock:
+        poi = nav.pois.get(poi_id)
+        if poi is None or not getattr(poi, "custom", False):
+            raise HTTPException(status_code=404, detail="unknown custom poi")
+        if (poi.type or "").strip().lower() != nav_core.SURVEY_POI_TYPE:
+            raise HTTPException(status_code=400, detail="not a survey mark")
+        ensure_owns(user, poi.owner_id)
+        sv = dict(getattr(poi, "survey", None) or {})
+        if scan:
+            sv["scan"] = scan
+        else:
+            sv.pop("scan", None)     # empty scan = clear (attach/replace)
+        poi.survey = sv
+        db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
+        nav.touch()
+        hub.mark_dataset_dirty()
+    return {"ok": True, "scan": scan or None}
 
 
 @app.delete("/api/custom_pois/{poi_id}")

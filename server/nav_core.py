@@ -5749,6 +5749,7 @@ def annotate_glaciem_survey(pockets: list[dict], marks: list[dict]) -> list[dict
                 "closest_center_m": min(d for _, d in mm),
                 "ores": sorted({o for m in positives for o in m["ores"]}),
                 "ore_counts": _survey_ore_counts(positives),
+                **_survey_scan_stats(positives),
                 "salvage": any(m["salvage"] for m, _ in mm),
             }
         out.append(pk2)
@@ -5941,6 +5942,32 @@ def _survey_ore_counts(positives: list[dict]) -> dict:
     return counts
 
 
+def _survey_scan_stats(positives: list[dict]) -> dict:
+    """Scanner evidence rollup (#37 slice 3): {"scans": n, "scan_comp":
+    {ore: mean pct}} over the positive marks that carry a scan comp — the
+    strongest per-cluster signal (actual composition, not just presence).
+    Mean is across SCANNED marks only: an unscanned mark says nothing about
+    percentages. Empty dict when nothing is scanned, so the field is absent
+    rather than zeroed."""
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    scans = 0
+    for m in positives:
+        comp = ((m.get("scan") or {}).get("comp")) or {}
+        if not comp:
+            continue
+        scans += 1
+        for ore, pct in comp.items():
+            if isinstance(pct, (int, float)):
+                sums[ore] = sums.get(ore, 0.0) + float(pct)
+                counts[ore] = counts.get(ore, 0) + 1
+    if not scans:
+        return {}
+    return {"scans": scans,
+            "scan_comp": {ore: round(sums[ore] / counts[ore], 1)
+                          for ore in sums}}
+
+
 def keeger_contains(pos) -> bool:
     """True when `pos` lies inside the Keeger Belt region envelope. Region
     classification only (locate/chip/capture notes) — never a system
@@ -5983,7 +6010,9 @@ def survey_marks(nav: NavData, system: str,
                     # Capture epoch (#37); None on pre-#37 marks — unknown age
                     # reads as "old" (age-windowed views keep it out of every
                     # window except ALL).
-                    "created": p.created})
+                    "created": p.created,
+                    # Scanner readout, attached after the fact (#37 slice 3).
+                    "scan": s.get("scan") or None})
     out.sort(key=lambda m: m["id"])
     return out
 
@@ -6023,6 +6052,8 @@ def survey_cluster_fit(members: list[dict], negatives: list[dict]) -> dict:
         # Per-ore positive-mark tally (#37 slice 2): how many positive marks
         # LIST each ore — the k of the ore-routing likelihood fraction.
         "ore_counts": _survey_ore_counts(positives),
+        # Scanner rollup (#37 slice 3): scans count + mean comp% per ore.
+        **_survey_scan_stats(positives),
         "salvage": any(m["salvage"] for m in members),
         "closest_center_m": min((dist3(m["xyz"], centroid) for m in members),
                                 default=0.0),
@@ -6197,6 +6228,24 @@ def _survey_value_from_index(sig: dict, idx: dict,
                  "salvage": True} if salvage else None)
     density = sig.get("density") or sig.get("status") or "medium"
     w = SURVEY_DENSITY_W.get(density, SURVEY_DENSITY_W["medium"])
+    # "scanned" basis (#37 slice 3) — the strongest signal: actual mean
+    # composition % × price, not mere ore presence. Any priced comp entry
+    # qualifies; unpriced-only scans fall through to the presence bases.
+    scan_comp = sig.get("scan_comp") or {}
+    if scan_comp:
+        expect = 0.0
+        priced = False
+        for ore, pct in scan_comp.items():
+            s = idx.get(ore.strip().lower())
+            if s is None:
+                s = idx.get(_ORE_SUFFIX_RE.sub("", ore).strip().lower())
+            if s is not None and isinstance(pct, (int, float)):
+                expect += (float(pct) / 100.0) * s
+                priced = True
+        if priced:
+            return {"score": round(w * expect), "tier": None,
+                    "basis": "scanned", "scans": int(sig.get("scans") or 0),
+                    "salvage": salvage}
     sells = []
     for ore in sig.get("ores") or []:
         s = idx.get(ore.strip().lower())
@@ -6299,6 +6348,19 @@ def find_ore_in_space(nav: NavData, ore: str, clusters: list[dict], *,
     if tot_n <= 0 or tot_k <= 0:
         return []
     prior_p = tot_k / tot_n
+    # Scan sharpening prior (#37 slice 3): the pool's mean scanned comp% for
+    # this ore. UNSCANNED clusters use it as their multiplier when any scans
+    # exist — so scanning above the pool mean up-ranks and below down-ranks,
+    # and nobody is ever punished for contributing a scan (a literal
+    # ×comp%-only-when-scanned would rank honest data below ignorance).
+    pool_pcts = []
+    for packed in sigs:
+        if packed is None:
+            continue
+        for name, v in (packed[0].get("scan_comp") or {}).items():
+            if _ore_key(name) == key and isinstance(v, (int, float)):
+                pool_pcts.append(float(v))
+    pool_scan_mean = (sum(pool_pcts) / len(pool_pcts)) if pool_pcts else None
     start_pos = (entity_global_m(nav, start, t_ref or ROTATION_EPOCH)
                  if start is not None else None)
     marker_pos = ([entity_global_m(nav, m, t_ref or ROTATION_EPOCH)
@@ -6314,6 +6376,16 @@ def find_ore_in_space(nav: NavData, ore: str, clusters: list[dict], *,
         density = sig.get("density") or sig.get("status") or "medium"
         w = SURVEY_DENSITY_W.get(density, SURVEY_DENSITY_W["medium"])
         p = (k + alpha * prior_p) / (n + alpha)
+        # Scan sharpening (#37 slice 3, §4.1): a cluster's own mean scanned
+        # comp% scales its rank; unscanned clusters fall back to the pool's
+        # scanned mean (see pool_scan_mean above) so the comparison is
+        # comp-vs-comp, never data-vs-ignorance.
+        scan_pct = next((float(v) for name, v in
+                         (sig.get("scan_comp") or {}).items()
+                         if _ore_key(name) == key
+                         and isinstance(v, (int, float))), None)
+        eff_pct = scan_pct if scan_pct is not None else pool_scan_mean
+        rank = p * w * (eff_pct / 100.0 if eff_pct is not None else 1.0)
         radius = c.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M
         reach = creep_m = dist_m = None
         if start_pos is not None and marker_pos:
@@ -6339,7 +6411,7 @@ def find_ore_in_space(nav: NavData, ore: str, clusters: list[dict], *,
             "xyz": list(c["xyz"]), "grid_radius_m": radius,
             "marks": sig.get("marks"), "n_pos": n, "n_ore": k,
             "p": (p if n >= 3 else None),           # §4.3 honesty gate
-            "score": p * w,
+            "score": rank, "scan_pct": scan_pct,
             "ores": sig.get("ores") or [], "value": c.get("value"),
             "salvage": bool(sig.get("salvage")),
             "depleted": is_dep, "reach": reach, "creep_m": creep_m,

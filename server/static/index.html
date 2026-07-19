@@ -3758,6 +3758,7 @@
           <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
         <div id="halo-zone-banner" hidden></div>
+        <div id="halo-zone-detail" hidden style="margin-top:8px;"></div>
         <div class="route-row" style="align-items:center; margin-top:8px;">
           <span class="seg" id="halo-survey-rocks" role="group" aria-label="Rock density here">
             <button data-rocks="none" type="button" aria-pressed="false">⛔ none</button>
@@ -3771,6 +3772,12 @@
           <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
           <button id="halo-survey-mark" type="button">⛏ Mark survey point</button>
           <span id="halo-survey-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
+        </div>
+        <div id="halo-scan-blk" hidden style="margin-top:8px;">
+          <button type="button" class="route-chip" id="halo-scan-toggle"
+            title="transcribe the scanner readout onto the mark you just dropped — everything optional">＋ scan detail
+            <span class="muted" style="text-transform:none;">(optional — scanner mass &amp; comp %)</span></button>
+          <div id="halo-scan-form" hidden></div>
         </div>
       </div>
     </div>
@@ -4329,7 +4336,9 @@ function surveyValueChip(v) {
   let h = "";
   if (v.tier && VALUE_TIERS[v.tier]) {
     const t = VALUE_TIERS[v.tier];
-    const basis = v.basis === "ores" ? "reported ore list" : "density only";
+    const basis = v.basis === "scanned"
+      ? `${v.scans || 0} scan${v.scans === 1 ? "" : "s"}`
+      : v.basis === "ores" ? "reported ore list" : "density only";
     h = `<span class="val-chip ${t[0]}" title="org survey value (${t[2]} in this system) · basis: ${basis}`
       + `${v.score ? ` · score ≈${v.score.toLocaleString()}` : ""}">${t[1]}</span>`;
   }
@@ -5401,6 +5410,8 @@ function renderFinderSpace(d) {
     bits.push(r.p != null
       ? `<span class="hm-key"><i style="background:${oreColor(finderOre)}"></i>${Math.round(r.p * 100)}%</span> of marks (${r.n_ore}/${r.n_pos})`
       : `<b>${r.n_ore}</b> of <b>${r.n_pos}</b> mark${r.n_pos === 1 ? "" : "s"}`);
+    if (r.scan_pct != null)
+      bits.push(`<span title="mean scanned composition for this ore across the cluster's scans">🔬 ≈${r.scan_pct}%</span>`);
     if (r.value) bits.push(surveyValueChip(r.value));
     if (r.dist_m != null) bits.push(fmtDist(r.dist_m));
     if (r._afar) bits.push(`<span class="halo-chip">travel there first</span>`);
@@ -12445,6 +12456,14 @@ function resolveHaloSurveyArm(capture) {
     loadHaloZones();          // the mark may have grown/created the active zone
     radarLayersInvalidate();  // the heatmap just gained a cell's worth (#37)
     if (haloRadarLast) ensureRadarLayers(haloRadarLast);
+    // Offer the after-the-fact scan attach for the mark that just resolved
+    // (#37 slice 3) — collapsed; the ⛏ tap itself stays one-tap.
+    if (capture.last && capture.last.id != null) {
+      haloLastMarkId = capture.last.id;
+      const blk = $("halo-scan-blk"), form = $("halo-scan-form");
+      if (blk) { blk.hidden = false; }
+      if (form) { form.hidden = true; form.innerHTML = ""; }
+    }
   }
 }
 
@@ -12525,10 +12544,175 @@ function renderHaloZoneBanner() {
   el.innerHTML = `<div class="halo-zone-active">⛏ Surveying <b>${esc(z.name)}</b> — ${bits.join(" · ")}`
     + ` <button type="button" class="route-chip" id="halo-zone-clear">Clear active</button>`
     + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-plan">Plan a drop here</button>` : "")
+    + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-details" title="mark timeline, contributors, ore breakdown — and attach scan detail to any mark">▸ details</button>` : "")
     + `</div>`;
   $("halo-zone-clear").onclick = () => setActiveSurveyZone(null);
   const pb = $("halo-zone-plan");
   if (pb) pb.onclick = () => planHaloZone(z);
+  const dbtn = $("halo-zone-details");
+  if (dbtn) dbtn.onclick = () => toggleHaloZoneDetail(z);
+  else { const d = $("halo-zone-detail"); if (d) { d.hidden = true; d.innerHTML = ""; } }
+}
+
+// ---------- scan detail (#37 slice 3) ----------
+// The scanner readout (mass + comp %), transcribed onto an existing mark
+// AFTER the ⛏ tap — marking stays one-tap; richness is an optional add-on.
+// One shared form serves the after-the-drop block and the zone timeline.
+let haloLastMarkId = null;   // the most recently resolved survey mark
+
+function scanCompRow(ore = "", pct = "") {
+  return `<div class="route-row scan-row" style="align-items:center; margin-top:4px;">
+    <input class="ti scan-ore" list="halo-survey-ore-list" autocomplete="off"
+           placeholder="ore" value="${esc(String(ore))}" style="flex:1; min-width:130px; max-width:240px;">
+    <input class="ti scan-pct" type="number" min="0" max="100" step="0.1"
+           placeholder="%" value="${pct === "" ? "" : pct}" style="width:72px;">
+    <button type="button" class="route-chip scan-rm" title="remove this ore row">✕</button>
+  </div>`;
+}
+
+function scanFormHtml(markId, scan) {
+  const comp = Object.entries((scan && scan.comp) || {});
+  const rows = comp.length ? comp.map(([o, p]) => scanCompRow(o, p)).join("")
+                           : scanCompRow();
+  return `<div class="scan-form" data-mark="${markId}">
+    <div class="route-row" style="align-items:center; margin-top:6px;">
+      <input class="ti scan-mass" type="number" min="1" max="10000000" step="1"
+             placeholder="rock mass (kg)" value="${scan && scan.mass_kg ? scan.mass_kg : ""}" style="width:150px;">
+      <button type="button" class="route-chip scan-add">＋ add ore %</button>
+      <button type="button" class="route-chip scan-save">Save scan</button>
+      <span class="muted scan-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    </div>
+    <div class="scan-rows">${rows}</div>
+    <p class="muted route-hint" style="margin:4px 0 0;">Percentages as the scanner shows them —
+      they don't need to add to 100 (inert rock makes up the rest). One “best ore %” is a
+      perfectly good scan.</p>
+  </div>`;
+}
+
+function wireScanForm(host, onSaved) {
+  const box = host.querySelector(".scan-form");
+  if (!box) return;
+  box.addEventListener("click", async (e) => {
+    if (e.target.closest(".scan-add")) {
+      box.querySelector(".scan-rows").insertAdjacentHTML("beforeend", scanCompRow());
+      return;
+    }
+    const rm = e.target.closest(".scan-rm");
+    if (rm) { rm.closest(".scan-row").remove(); return; }
+    if (!e.target.closest(".scan-save")) return;
+    const st = box.querySelector(".scan-status");
+    const comp = {};
+    for (const row of box.querySelectorAll(".scan-row")) {
+      const o = row.querySelector(".scan-ore").value.trim();
+      const p = parseFloat(row.querySelector(".scan-pct").value);
+      if (o && Number.isFinite(p)) comp[o] = p;
+    }
+    const body = { comp };
+    const mass = parseFloat(box.querySelector(".scan-mass").value);
+    if (Number.isFinite(mass) && mass >= 1) body.mass_kg = mass;
+    st.textContent = "saving…";
+    try {
+      const r = await fetch(`/api/custom_pois/${box.dataset.mark}/survey`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        st.textContent = "⚠ " + (d.detail || "couldn't save the scan");
+        return;
+      }
+      st.textContent = "✓ scan saved — value tiers sharpen on the next read";
+      if (onSaved) onSaved();
+    } catch { st.textContent = "⚠ network error"; }
+  });
+}
+
+// After-the-drop attach point: build lazily on first open, aimed at the mark
+// that just resolved.
+$("halo-scan-toggle").onclick = () => {
+  const form = $("halo-scan-form");
+  if (!form.hidden) { form.hidden = true; return; }
+  if (haloLastMarkId == null) return;
+  form.innerHTML = scanFormHtml(haloLastMarkId, null);
+  wireScanForm(form, () => {
+    delete haloTargets[haloSystem];
+    loadHaloTargets(haloSystem).then(renderHaloSystemPanel);
+    loadHaloZones();
+  });
+  form.hidden = false;
+};
+
+// Zone detail (#37 slice 3, doc §3.4): the per-zone expansion — evidence,
+// contributors, and the mark timeline where any mark can take a scan.
+async function toggleHaloZoneDetail(z) {
+  const el = $("halo-zone-detail");
+  if (!el) return;
+  if (!el.hidden) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  el.innerHTML = `<span class="muted" style="font-size:12px;">loading zone detail…</span>`;
+  let doc;
+  try {
+    doc = await fetch(`/api/halo/survey?system=${encodeURIComponent(z.system || haloSystem)}`)
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  } catch { el.innerHTML = `<span class="muted">⚠ couldn't load the zone's marks</span>`; return; }
+  const marks = (doc.marks || []).filter(m => m.zone_id === z.zone_id)
+    .sort((a, b) => (b.created || 0) - (a.created || 0));
+  renderHaloZoneDetail(el, z, marks);
+}
+
+function scanSummary(scan) {
+  if (!scan) return "";
+  const bits = [];
+  if (scan.mass_kg) bits.push(scan.mass_kg >= 1000
+    ? `${+(scan.mass_kg / 1000).toFixed(1)} t` : `${scan.mass_kg} kg`);
+  for (const [o, p] of Object.entries(scan.comp || {})) bits.push(`${esc(o)} ${p}%`);
+  return bits.length ? `🔬 ${bits.join(" · ")}` : "";
+}
+
+function renderHaloZoneDetail(el, z, marks) {
+  const now = Date.now() / 1000;
+  const contrib = {};
+  for (const m of marks) {
+    const who = m.owner_handle || "unknown";
+    contrib[who] = (contrib[who] || 0) + 1;
+  }
+  const basis = z.value
+    ? (z.value.basis === "scanned" ? `${z.value.scans || 0} scan${z.value.scans === 1 ? "" : "s"}`
+       : z.value.basis === "ores" ? "reported ore list" : "density only")
+    : null;
+  // Ore breakdown: listing counts, sharpened by mean scanned comp% where known.
+  const ores = Object.entries(z.ore_counts || {}).sort((a, b) => b[1] - a[1])
+    .map(([o, n]) => {
+      const sc = (z.scan_comp || {})[o];
+      return `<span class="halo-chip">${esc(o)} · ${n}×${sc != null ? ` · scan ≈${sc}%` : ""}</span>`;
+    }).join(" ");
+  let h = `<div style="border:1px solid var(--border); border-radius:6px; padding:8px 10px;">`
+    + `<div style="font-size:12px;">${surveyValueChip(z.value)}`
+    + (basis ? ` <span class="muted">value basis: ${basis}</span> · ` : " ")
+    + `<span class="muted">surveyors:</span> ${Object.entries(contrib)
+        .sort((a, b) => b[1] - a[1])
+        .map(([w, n]) => `${esc(w)} (${n})`).join(", ") || "—"}</div>`
+    + (ores ? `<div style="margin-top:6px;">${ores}</div>` : "");
+  h += marks.map(m => {
+    const age = m.created ? fmtAge(Math.max(0, now - m.created)) : "—";
+    const sc = scanSummary(m.scan);
+    return `<div class="halo-alt">`
+      + `<b>${esc(age)}</b> · ${esc(m.owner_handle || "?")} · ${esc(m.rocks)} rocks`
+      + ((m.ores || []).length ? ` · ${m.ores.map(esc).join(", ")}` : "")
+      + (sc ? ` · ${sc}` : "")
+      + ` <button type="button" class="route-chip" data-scanmark="${m.id}">${m.scan ? "✎ scan" : "＋ scan"}</button>`
+      + `</div><div class="scan-slot" data-slot="${m.id}"></div>`;
+  }).join("");
+  h += `</div>`;
+  el.innerHTML = h;
+  for (const b of el.querySelectorAll("[data-scanmark]"))
+    b.onclick = () => {
+      const id = Number(b.dataset.scanmark);
+      const slot = el.querySelector(`[data-slot="${id}"]`);
+      if (slot.innerHTML) { slot.innerHTML = ""; return; }
+      const m = marks.find(x => x.id === id);
+      slot.innerHTML = scanFormHtml(id, m && m.scan);
+      wireScanForm(slot, () => { el.hidden = true; toggleHaloZoneDetail(z); loadHaloZones(); });
+    };
 }
 
 async function setActiveSurveyZone(zid) {
