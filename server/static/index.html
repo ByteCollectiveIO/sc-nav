@@ -3697,11 +3697,25 @@
       <div id="halo-radar-wrap" hidden>
         <div class="halo-radar-head"><span class="fld-label">⌖ POCKET RADAR</span>
           <span id="halo-radar-sub" class="muted"></span></div>
+        <div class="route-row" id="halo-radar-ctl" style="align-items:center; margin-top:6px;">
+          <span class="seg" id="halo-radar-heat" role="group" aria-label="Survey heatmap layer">
+            <button class="on" data-heat="off" type="button" aria-pressed="true">HEAT OFF</button>
+            <button data-heat="rocks" type="button" aria-pressed="false">ROCKS</button>
+            <button data-heat="ores" type="button" aria-pressed="false">ORES</button>
+          </span>
+          <span class="seg" id="halo-radar-win" role="group" aria-label="Heatmap age window" hidden>
+            <button class="on" data-win="all" type="button" aria-pressed="true">ALL</button>
+            <button data-win="7d" type="button" aria-pressed="false">7D</button>
+            <button data-win="24h" type="button" aria-pressed="false">24H</button>
+          </span>
+        </div>
         <div class="halo-radar-plot"><canvas id="halo-radar"
           aria-label="live top-down radar of your position inside the asteroid pocket"></canvas></div>
+        <p class="muted halo-radar-tip" id="halo-radar-legend" hidden></p>
         <p class="muted halo-radar-tip">Deep space has no compass — steer so the
           <b>drift arrow</b> points at the <b>center dot</b>. Re-run
-          <b>/showlocation</b> as you move to update. Rings show scale.</p>
+          <b>/showlocation</b> as you move to update. Rings show scale.
+          ◇ marks are POIs near the pocket (bright = has an in-game quantum marker).</p>
       </div>
       <div id="halo-survey-blk" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);">
         <span class="fld-label">⛏ SURVEY <span class="muted" style="font-weight:400; text-transform:none;">— mark
@@ -6258,6 +6272,9 @@ function connect() {
       // would stampede the single-worker origin with synchronized refetches.
       clearTimeout(datasetRefreshTimer);
       datasetRefreshTimer = setTimeout(loadAll, 400 + Math.random() * 2600);
+      // Radar overlays derive from the same dataset (#37): drop the caches so
+      // the next radar tick refetches (no fetch here — the tick pulls it).
+      radarLayersInvalidate();
     } else if (msg.type === "online") {
       renderOnline(msg.count);
     } else if (msg.type === "online_roster") {
@@ -12279,6 +12296,8 @@ function resolveHaloSurveyArm(capture) {
     if (!$("halo-view").hidden && haloSystem === "Nyx")
       loadHaloTargets("Nyx").then(renderHaloSystemPanel);
     loadHaloZones();          // the mark may have grown/created the active zone
+    radarLayersInvalidate();  // the heatmap just gained a cell's worth (#37)
+    if (haloRadarLast) ensureRadarLayers(haloRadarLast);
   }
 }
 
@@ -12401,6 +12420,7 @@ function activeZonePocket() {
   const p = lastState.position, c = z.xyz;
   return { key: z.key, name: z.name, kind: "zone", center_xyz: c,
     grid_radius_m: z.grid_radius_m,
+    system: z.system, zone_id: z.zone_id,   // radar layer fetches (#37)
     dx: p.x - c[0], dy: p.y - c[1], dz: p.z - c[2],
     center_off_m: Math.hypot(p.x - c[0], p.y - c[1], p.z - c[2]),
     survey: z.survey };
@@ -13113,6 +13133,7 @@ function updatePocketRadar(d) {
   // survey zone (#36.1) so the radar works in open space / the ring dead-zone.
   const p = live ? dp : activeZonePocket();
   if (!p || !p.center_xyz) { wrap.hidden = true; haloRadarLast = null; haloRadar = { key: null, pts: [] }; return; }
+  if (live) p.system = d.system;   // zone-fallback pockets carry their own
   if (haloRadar.key !== p.key) haloRadar = { key: p.key, pts: [] };
   const last = haloRadar.pts[haloRadar.pts.length - 1];
   if (!last || last.dx !== p.dx || last.dy !== p.dy || last.dz !== p.dz) {
@@ -13125,7 +13146,107 @@ function updatePocketRadar(d) {
   $("halo-radar-sub").innerHTML = `${label} · <b style="color:var(--text)">${fmtDist(p.center_off_m)}</b> to center · ${zTxt}`;
   wrap.hidden = false;
   haloRadarLast = p;
+  ensureRadarLayers(p);
   requestAnimationFrame(() => drawPocketRadar(p));
+}
+
+// ---------- radar reference layers (#37 slice 0) ----------
+// Two overlays on the same scope: reference POIs (fixed landmarks, fetched
+// once per pocket key — they don't move) and the survey heatmap (per pocket
+// key + age window; refetched when a mark lands). Heat ON switches the radar
+// from path-auto-zoom (nav view) to full-pocket span (analysis view).
+let radarHeatMode = lsGet("radarHeat") || "off";        // off | rocks | ores
+if (!["off", "rocks", "ores"].includes(radarHeatMode)) radarHeatMode = "off";
+let radarHeatWin = lsGet("radarHeatWin") || "all";      // all | 7d | 24h
+const RADAR_WIN_H = { all: 0, "7d": 168, "24h": 24 };
+if (!(radarHeatWin in RADAR_WIN_H)) radarHeatWin = "all";
+let radarRefs = { key: null, pois: null };              // landmark cache
+let radarHeat = { key: null, win: null, data: null };   // heat-cell cache
+
+function radarSegSync() {
+  for (const b of $("halo-radar-heat").querySelectorAll("button")) {
+    const on = b.dataset.heat === radarHeatMode;
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
+  }
+  for (const b of $("halo-radar-win").querySelectorAll("button")) {
+    const on = b.dataset.win === radarHeatWin;
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
+  }
+  $("halo-radar-win").hidden = radarHeatMode === "off";
+}
+$("halo-radar-heat").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  radarHeatMode = b.dataset.heat;
+  try { localStorage.setItem("radarHeat", radarHeatMode); } catch {}
+  radarSegSync();
+  if (haloRadarLast) { ensureRadarLayers(haloRadarLast); drawPocketRadar(haloRadarLast); }
+  renderRadarLegend();
+};
+$("halo-radar-win").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  radarHeatWin = b.dataset.win;
+  try { localStorage.setItem("radarHeatWin", radarHeatWin); } catch {}
+  radarSegSync();
+  if (haloRadarLast) { ensureRadarLayers(haloRadarLast); drawPocketRadar(haloRadarLast); }
+};
+radarSegSync();
+
+// A capture/delete anywhere invalidates both layers (someone may have pinned
+// a new landmark or dropped a mark); cheap — next radar tick refetches.
+function radarLayersInvalidate() { radarRefs.key = null; radarHeat.key = null; }
+
+function ensureRadarLayers(p) {
+  const sys = p.system;
+  if (!sys) return;   // no system, no honest query (coords are per-system)
+  if (radarRefs.key !== p.key) {
+    radarRefs = { key: p.key, pois: null };
+    const c = p.center_xyz;
+    // r=0 → the server's default reach (2 merge distances); it clamps anyway.
+    const q = `system=${encodeURIComponent(sys)}&x=${c[0]}&y=${c[1]}&z=${c[2]}`
+      + `&r=${2 * (p.grid_radius_m || 0)}`;
+    fetch(`/api/halo/radar/refs?${q}`).then(r => r.json()).then(d => {
+      if (radarRefs.key !== p.key) return;   // stale response, pocket changed
+      radarRefs.pois = d.pois || [];
+      if (haloRadarLast && haloRadarLast.key === p.key) drawPocketRadar(haloRadarLast);
+    }).catch(() => {});
+  }
+  if (radarHeatMode === "off") return;
+  if (radarHeat.key === p.key && radarHeat.win === radarHeatWin) return;
+  radarHeat = { key: p.key, win: radarHeatWin, data: null };
+  const idq = p.kind === "zone" && p.zone_id != null
+    ? `zone_id=${p.zone_id}` : `key=${encodeURIComponent(p.key)}`;
+  const wq = RADAR_WIN_H[radarHeatWin] ? `&window_h=${RADAR_WIN_H[radarHeatWin]}` : "";
+  fetch(`/api/halo/radar/heat?system=${encodeURIComponent(sys)}&${idq}${wq}`)
+    .then(r => r.ok ? r.json() : null).then(d => {
+      if (!d || radarHeat.key !== p.key || radarHeat.win !== radarHeatWin) return;
+      radarHeat.data = d;
+      renderRadarLegend();
+      if (haloRadarLast && haloRadarLast.key === p.key) drawPocketRadar(haloRadarLast);
+    }).catch(() => {});
+}
+
+function renderRadarLegend() {
+  const el = $("halo-radar-legend");
+  if (!el) return;
+  const d = radarHeat.data;
+  if (radarHeatMode === "off" || !d) { el.hidden = true; el.innerHTML = ""; return; }
+  const winTxt = radarHeatWin === "all" ? "all marks" : `last ${radarHeatWin}`;
+  let h = `<b>${d.n_marks}</b> mark${d.n_marks === 1 ? "" : "s"} (${winTxt})`;
+  if (!d.n_marks) {
+    h += radarHeatWin === "all" ? "" : " — widen the window or ⛏ survey here";
+  } else if (radarHeatMode === "ores") {
+    const freq = {};
+    for (const c of (d.cells || [])) if (c.top) freq[c.top] = (freq[c.top] || 0) + 1;
+    const top = Object.keys(freq).sort((a, b) => freq[b] - freq[a]).slice(0, 4);
+    h += top.length
+      ? " · " + top.map(o =>
+          `<span style="color:${oreColor(o)}">■</span> ${esc(o)}`).join("  ")
+      : " · no ores logged yet — density only";
+  } else {
+    const barren = (d.cells || []).filter(c => c.barren).length;
+    if (barren) h += ` · ${barren} cell${barren === 1 ? "" : "s"} surveyed empty`;
+  }
+  el.innerHTML = h; el.hidden = false;
 }
 
 function radarDist(m) {   // plain-text for canvas (fmtDist returns HTML)
@@ -13164,9 +13285,34 @@ function drawPocketRadar(p) {
   const pts = haloRadar.pts;
   const reach = Math.max(Math.hypot(p.dx, p.dy),
     ...pts.map(q => Math.hypot(q.dx, q.dy)), 2000);
-  const span = Math.min(reach * 1.3, p.grid_radius_m);   // never zoom past the edge
+  // Heat ON = analysis view: hold the span at the full pocket so the cells
+  // read as a map. Heat OFF = nav view: auto-zoom to the flown path (#37).
+  const span = radarHeatMode !== "off" ? p.grid_radius_m
+    : Math.min(reach * 1.3, p.grid_radius_m);   // never zoom past the edge
   const sc = R / span;
   const SX = dx => mx + dx * sc, SY = dy => my - dy * sc;   // north = +dy = up
+
+  // survey heatmap cells (#37) — bottom layer, under the grid
+  if (radarHeatMode !== "off" && radarHeat.key === p.key && radarHeat.data) {
+    const hd = radarHeat.data, side = hd.cell_m * sc;
+    for (const c of hd.cells || []) {
+      const x = SX(c.dx), y = SY(c.dy);
+      if (x < mx - R - side || x > mx + R + side ||
+          y < my - R - side || y > my + R + side) continue;
+      let fill;
+      if (c.barren) {
+        fill = "rgba(134,147,166,.16)";        // surveyed empty ≠ unsurveyed
+      } else if (radarHeatMode === "ores" && c.top) {
+        fill = oreColor(c.top, Math.min(0.65, 0.15 + 0.5 * confOf(c.n)));
+      } else {                                  // rocks density, green scale
+        const a = Math.min(0.6, (0.10 + 0.50 * Math.min(1, c.density / 5))
+                                * (0.4 + 0.6 * confOf(c.n)));
+        fill = `rgba(102,187,106,${a.toFixed(3)})`;
+      }
+      ctx.fillStyle = fill;
+      ctx.fillRect(x - side / 2, y - side / 2, side, side);
+    }
+  }
 
   // range rings + labels
   ctx.textBaseline = "middle";
@@ -13190,6 +13336,48 @@ function drawPocketRadar(p) {
   } else {
     ctx.fillStyle = DIM; ctx.textAlign = "right";
     ctx.fillText("pocket radius " + radarDist(p.grid_radius_m), mx + R, my - R + 8);
+  }
+
+  // reference POIs (#37): fixed landmarks near the pocket — the frame of
+  // reference deep space lacks. Bright diamond = has an in-game QT marker
+  // (visible from the cockpit); dim diamond = catalog POI without one;
+  // square = an org/custom pin. Off-scope POIs become rim ticks: the
+  // direction cue matters more than the position.
+  if (radarRefs.key === p.key && radarRefs.pois) {
+    ctx.font = "9px ui-monospace, Menlo, monospace";
+    let rimLabels = 0;
+    for (const rp of radarRefs.pois) {
+      const dx = rp.x - p.center_xyz[0], dy = rp.y - p.center_xyz[1];
+      const rr = Math.hypot(dx, dy);
+      const col = rp.qt ? "#e8eef7" : DIM;
+      if (rr * sc <= R) {                       // on-scope: glyph + name
+        const x = SX(dx), y = SY(dy), s = rp.qt ? 4.5 : 3.5;
+        ctx.strokeStyle = col; ctx.lineWidth = rp.qt ? 1.6 : 1.1;
+        ctx.beginPath();
+        if (rp.custom) { ctx.rect(x - s + 1, y - s + 1, 2 * s - 2, 2 * s - 2); }
+        else { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s);
+               ctx.lineTo(x - s, y); ctx.closePath(); }
+        ctx.stroke();
+        ctx.fillStyle = col; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        ctx.fillText(rp.name.length > 18 ? rp.name.slice(0, 17) + "…" : rp.name,
+                     x + s + 3, y);
+      } else if (rimLabels < 3) {               // off-scope: rim tick + name
+        rimLabels++;
+        const a = Math.atan2(dy, dx);           // world angle; screen y flips
+        const ex = mx + Math.cos(a) * R, ey = my - Math.sin(a) * R;
+        ctx.strokeStyle = col; ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(ex - Math.cos(a) * 6, ey + Math.sin(a) * 6);
+        ctx.lineTo(ex, ey); ctx.stroke();
+        ctx.fillStyle = col;
+        ctx.textAlign = Math.cos(a) >= 0 ? "right" : "left";
+        ctx.textBaseline = Math.sin(a) >= 0 ? "top" : "bottom";
+        const nm = rp.name.length > 14 ? rp.name.slice(0, 13) + "…" : rp.name;
+        ctx.fillText(`${nm} ${radarDist(rr)}`,
+                     ex - Math.cos(a) * 9, ey + Math.sin(a) * 9);
+      }
+    }
+    ctx.font = "10px ui-monospace, Menlo, monospace";
   }
 
   // recent path

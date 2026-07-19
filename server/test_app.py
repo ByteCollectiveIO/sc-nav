@@ -3917,6 +3917,87 @@ class BeltSurveyApiTests(unittest.TestCase):
         r = self.client.get("/api/halo/survey", params={"system": "Castra"})
         self.assertEqual(r.status_code, 404)
 
+    # --- radar reference layers (#37 slice 0) --------------------------------
+
+    def test_capture_stamps_created_epoch(self):
+        s = app.Session(self._user)
+        t0 = time.time()
+        s.pos, s.t = (self.KR, 0.0, 0.0), t0
+        s.system = "Nyx"
+        app.hub.sessions["1"] = s
+        pending = {"kind": "poi", "name": "Keeger survey", "type": "survey",
+                   "qt_marker": False, "private": False, "note": None,
+                   "survey": {"rocks": "dense", "ores": [], "salvage": False}}
+        app._capture_poi(s, s.pos, s.t, pending,
+                         {"player_id": None, "handle": None})
+        mark = app.nav_core.survey_marks(app.nav, "Nyx")[0]
+        self.assertIsNotNone(mark["created"])
+        self.assertGreaterEqual(mark["created"], t0 - 1.0)
+        stored = next(d for d in db.list_custom_pois() if d["id"] == mark["id"])
+        self.assertEqual(stored["created"], mark["created"])
+
+    def test_radar_refs_filters_and_clamps(self):
+        g = app.nav_core.poi_global_m(app.nav, self.gate, time.time())
+        self._mark_at(g)   # a survey mark AT the landmark: must not be a ref
+        r = self.client.get("/api/halo/radar/refs", params={
+            "system": "Nyx", "x": g[0], "y": g[1], "z": g[2], "r": 5e6})
+        self.assertEqual(r.status_code, 200)
+        doc = r.json()
+        # r=5,000 km asked → floor-clamped no lower than 1,000 km, and the
+        # gateway itself is the zero-distance landmark
+        self.assertGreaterEqual(doc["r_m"], 5e6)
+        names = [p["name"] for p in doc["pois"]]
+        self.assertIn(self.gate.name, names)
+        self.assertTrue(all("mark" not in n for n in names))
+        self.assertTrue(next(p for p in doc["pois"]
+                             if p["name"] == self.gate.name)["qt"])
+        # ceiling clamp: an "everything please" radius comes back bounded
+        wide = self.client.get("/api/halo/radar/refs", params={
+            "system": "Nyx", "x": g[0], "y": g[1], "z": g[2], "r": 1e12}).json()
+        self.assertLessEqual(wide["r_m"], 4.0 * app.nav_core.SURVEY_MERGE_M)
+        # another system's frame never leaks in, even at identical coords
+        stanton = self.client.get("/api/halo/radar/refs", params={
+            "system": "Stanton", "x": g[0], "y": g[1], "z": g[2]}).json()
+        self.assertNotIn(self.gate.name, [p["name"] for p in stanton["pois"]])
+
+    def test_radar_heat_by_key_window_and_zone(self):
+        now = time.time()
+        fresh = self._mark_at((self.KR, 0.0, 0.0), ores=["Gold"])
+        fresh.created = now
+        db.add_custom_poi(app.nav_core.custom_poi_to_dict(fresh))
+        self._mark_at((self.KR + 1e6, 0.0, 0.0), ores=["Aluminum"])  # no created
+        app.nav.touch()
+        key = self.client.get("/api/halo/survey").json()["pockets"][0]["key"]
+        doc = self.client.get("/api/halo/radar/heat", params={
+            "system": "Nyx", "key": key}).json()
+        self.assertEqual(doc["n_marks"], 2)
+        self.assertGreater(doc["cell_m"], 0)
+        self.assertTrue(doc["cells"])
+        # 24h window: the created-less mark has unknown age → ALL-only
+        win = self.client.get("/api/halo/radar/heat", params={
+            "system": "Nyx", "key": key, "window_h": 24}).json()
+        self.assertEqual(win["n_marks"], 1)
+        self.assertEqual(win["cells"][0]["top"], "Gold")
+        # param validation + unknown pocket
+        self.assertEqual(self.client.get("/api/halo/radar/heat", params={
+            "system": "Nyx"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/halo/radar/heat", params={
+            "system": "Nyx", "key": "SVY-999999"}).status_code, 404)
+        # zone addressing: tag a mark to a named zone, heat by zone_id
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Radar Zone",
+                                     "system": "Nyx"}).json()["zone"]["id"]
+        try:
+            self._mark_at((0.0, self.KR, 0.0), ores=["Bexalite"], zone_id=zid)
+            zdoc = self.client.get("/api/halo/radar/heat", params={
+                "system": "Nyx", "zone_id": zid}).json()
+            self.assertEqual(zdoc["n_marks"], 1)
+            self.assertEqual(zdoc["cells"][0]["top"], "Bexalite")
+        finally:
+            self.client.put("/api/halo/survey/zones/active",
+                            json={"zone_id": None})
+            self.client.delete(f"/api/halo/survey/zones/{zid}")
+
     def test_admin_clear_wipes_marks(self):
         self._mark_at((self.KR, 0.0, 0.0))
         self._mark_at((0.0, self.KR, 0.0))

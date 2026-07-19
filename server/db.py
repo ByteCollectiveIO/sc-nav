@@ -500,6 +500,10 @@ def init(db_path) -> None:
         # Belt-survey payload (#36): JSON {rocks, ores, salvage, source} on
         # type=="survey" marks; NULL for every other POI.
         _ensure_column("custom_pois", "survey", "TEXT")
+        # Capture time, epoch seconds (#37): feeds the radar heatmap's age
+        # window and later survey-session derivation. NULL on pre-#37 rows —
+        # readers must treat unknown age as "old" (ALL-window only).
+        _ensure_column("custom_pois", "created", "REAL")
         _ensure_column("observations", "shard_id", "TEXT")
         _ensure_column("events", "event_location", "TEXT")
         _ensure_column("events", "signup_deadline", "TEXT")
@@ -593,6 +597,7 @@ def _custom_row_to_dict(r: sqlite3.Row) -> dict:
         "owner_id": r["owner_id"], "owner_handle": r["owner_handle"],
         "note": r["note"], "private": bool(r["private"]),
         "survey": _u(r["survey"]),
+        "created": r["created"],
     }
 
 
@@ -601,14 +606,14 @@ def add_custom_poi(d: dict) -> None:
         _conn.execute(
             "INSERT OR REPLACE INTO custom_pois "
             "(id,name,system,container,type,local_km,global_m,latitude,longitude,"
-            "height_m,qt_marker,owner_id,owner_handle,note,private,survey) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "height_m,qt_marker,owner_id,owner_handle,note,private,survey,created) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (d["id"], d.get("name"), d.get("system"), d.get("container"),
              d.get("type"), _j(d.get("local_km")), _j(d.get("global_m")),
              d.get("latitude"), d.get("longitude"), d.get("height_m"),
              1 if d.get("qt_marker") else 0, d.get("owner_id"), d.get("owner_handle"),
              d.get("note"), 1 if d.get("private") else 0,
-             _j(d.get("survey"))),
+             _j(d.get("survey")), d.get("created")),
         )
 
 

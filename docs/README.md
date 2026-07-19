@@ -16,12 +16,14 @@ drift — trust grep and CI, not the citation.
 | Doc | What it is |
 |---|---|
 | [product-overview.md](product-overview.md) | **The consolidated map**: apps, platform services, data sources, conventions |
-| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#35 shipped v0.55.0; #36 belt survey built 2026-07-16, pending release) |
+| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slice 0 shipped v0.64.0, rest designed) |
 | [../PRODUCT.md](../PRODUCT.md) · [../DESIGN.md](../DESIGN.md) | Product scope/brand · visual design system |
 
 ## Active designs (not built)
 
-None right now — pick the next item from [feature-backlog.md](feature-backlog.md).
+| Doc | Status | Covers |
+|---|---|---|
+| [survey-platform.md](survey-platform.md) | 🔨 slice 0 shipped v0.64.0 | #37: survey tool → prospecting suite — **slice 0 (radar POI overlay + in-pocket heatmap) live**; remaining: value tiers, **ore-first routing (deep-space element finder)**, coverage-gap targeting, patch staleness, cross-org import, mark kinds |
 
 ## Shipped feature specs (reference for what's live)
 

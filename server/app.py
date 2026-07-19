@@ -4956,6 +4956,61 @@ async def get_halo_locate(target_poi_id: int | None = None,
     return view
 
 
+# Radar reference-layer radius clamp (#37 slice 0): floor 1,000 km (a radar
+# query smaller than that can't see past its own pocket), ceiling 4 merge
+# distances (~41,600 km) — far enough for orientation landmarks, small enough
+# that "give me everything" isn't a query shape.
+_RADAR_REFS_R_MIN_M = 1_000e3
+_RADAR_REFS_R_MAX_M = 4.0 * nav_core.SURVEY_MERGE_M
+_RADAR_HEAT_WINDOW_MAX_H = 24.0 * 400.0
+
+
+@app.get("/api/halo/radar/refs")
+def get_radar_refs(system: str, x: float, y: float, z: float, r: float = 0,
+                   user: dict = Depends(require_session)):
+    """Reference POIs near a pocket center for the Pocket Radar overlay (#37
+    slice 0): fixed landmarks, glyph-coded client-side by source/QT — the
+    frame of reference deep space otherwise lacks. Static per pocket, so the
+    client fetches once per radar key, NOT per locate poll."""
+    radius = min(max(r or 2.0 * nav_core.SURVEY_MERGE_M, _RADAR_REFS_R_MIN_M),
+                 _RADAR_REFS_R_MAX_M)
+    pois = nav_core.radar_ref_pois(nav, system, (x, y, z), radius,
+                                   viewer_owner_ids(user))
+    return {"system": system, "r_m": radius, "pois": pois}
+
+
+@app.get("/api/halo/radar/heat")
+def get_radar_heat(system: str, key: str | None = None,
+                   zone_id: int | None = None, window_h: float = 0,
+                   user: dict = Depends(require_session)):
+    """Survey heatmap cells for one pocket/zone (#37 slice 0): the pocket-
+    plane mirror of /api/resource_cells. `key` addresses a datamined or
+    proximity pocket (Wtn-*/SVY-*), `zone_id` a named zone. `window_h` > 0
+    keeps only marks created inside the age window (ALL / 7D / 24H segs) —
+    comparing windows is how a spawn-pattern drift becomes visible. Derived
+    per read from the version-cached survey state; nothing stored."""
+    if key is None and zone_id is None:
+        raise HTTPException(status_code=400, detail="key or zone_id required")
+    sstate = nav_core.survey_state(nav, system)
+    pk = None
+    if zone_id is not None:
+        pk = next((zv for zv in _survey_zones_view(system)
+                   if zv["zone_id"] == zone_id and zv.get("xyz")), None)
+    else:
+        pk = next((p for p in (sstate["pockets"] + (sstate["glaciem"] or []))
+                   if p["key"] == key), None)
+    if pk is None:
+        raise HTTPException(status_code=404, detail="unknown pocket or zone")
+    window_h = min(max(window_h, 0.0), _RADAR_HEAT_WINDOW_MAX_H)
+    heat = nav_core.survey_heat_cells(
+        sstate["marks"], pk["xyz"],
+        pk.get("grid_radius_m") or nav_core.GLACIEM_POCKET_RADIUS_M,
+        window_s=window_h * 3600.0 if window_h else None,
+        t_ref=time.time())
+    return {"system": system, "key": pk.get("key"), "window_h": window_h,
+            **heat}
+
+
 # --- event planner (guild events) ------------------------------------------
 
 
