@@ -3884,6 +3884,60 @@ class BeltSurveyApiTests(unittest.TestCase):
                                     "start_poi_id": self.gate.id})
         self.assertEqual(r3.status_code, 400)
 
+    def test_targets_carry_markers_and_gaps(self):
+        doc = self.client.get("/api/halo/targets",
+                              params={"system": "Nyx"}).json()
+        names = [m["name"] for m in doc["markers"]]
+        self.assertIn(self.gate.name, names)           # gateways whitelist in
+        self.assertTrue(all("x" in m and "y" in m and "z" in m
+                            for m in doc["markers"]))
+        self.assertEqual(doc["gaps"]["coverage"], 0.0)  # nothing surveyed yet
+        self.assertEqual(len(doc["gaps"]["arcs"]), 1)   # one full-ring gap
+        self._mark_at((self.KR, 0.0, 0.0))
+        doc2 = self.client.get("/api/halo/targets",
+                               params={"system": "Nyx"}).json()
+        self.assertGreater(doc2["gaps"]["coverage"], 0.0)
+
+    def test_plan_gap_goal(self):
+        # exclusivity: gap is one goal among the others
+        r = self.client.post("/api/halo/plan", json={"gap": True, "band": 5})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("exactly one goal", r.json()["detail"])
+        # bare dataset: the two gateway chords never come near the 48 Gm ring
+        # midpoint → every gap is expedition-only, honestly explained
+        r2 = self.client.post("/api/halo/plan",
+                              json={"gap": True, "start_poi_id": self.gate.id})
+        self.assertEqual(r2.status_code, 400)
+        self.assertIn("expedition", r2.json()["detail"])
+        # a plannable gap (survey_state stubbed: arc mid ON the gate chord)
+        # plans through the standard pocket machinery
+        now = time.time()
+        other = next(p for p in app.nav.qt_markers
+                     if p.system == "Nyx" and p.id != self.gate.id)
+        g1 = app.nav_core.poi_global_m(app.nav, self.gate, now)
+        g2 = app.nav_core.poi_global_m(app.nav, other, now)
+        mid = [(a + b) / 2 for a, b in zip(g1, g2)]
+        orig = app.nav_core.survey_state
+        arc = {"a0_deg": 0.0, "a1_deg": 10.0, "span_deg": 10.0,
+               "arc_m": 1.0e9, "mid_xyz": mid, "near_key": None,
+               "plannable": True, "probe_miss_m": 0.0, "creep_m": None}
+
+        def stub(nav, system):
+            st = dict(orig(nav, system))
+            st["gaps"] = {"coverage": 0.4, "total_gap_m": 1e9, "arcs": [arc]}
+            return st
+        app.nav_core.survey_state = stub
+        try:
+            plan = self.client.post(
+                "/api/halo/plan",
+                json={"gap": True, "start_poi_id": self.gate.id})
+            self.assertEqual(plan.status_code, 200)
+            pk = plan.json()["drop"]["pocket"]
+            self.assertTrue(pk["key"].startswith("GAP-"))
+            self.assertEqual(pk["kind"], "gap")
+        finally:
+            app.nav_core.survey_state = orig
+
     def test_plan_arrival_when_marker_inside_pocket(self):
         # #37 routing fix: a mark cluster hugging a station (here: the Castra
         # gateway) plans as "jump to the marker, complete the jump" — no

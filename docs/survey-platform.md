@@ -1,8 +1,9 @@
 # Survey platform — from drop helper to org prospecting suite (backlog #37) — design plan
 
-**Status: 🔨 IN BUILD (2026-07-18).** Slices 0–3 are BUILT (radar layers
+**Status: 🔨 IN BUILD (2026-07-19).** Slices 0–4 are BUILT (radar layers
 v0.64.0 · value layer v0.65.0 · ore-first routing v0.66.0 · scan detail +
-zone detail view §3.1/§3.4); phases 3–5 (§5–§7) remain design. Successor to
+zone detail v0.67.0 · arrival routing v0.68.0 · coverage gaps + overview
+map §5.1); §5.2–§5.3 and phases 4–5 (§6–§7) remain design. Successor to
 the shipped #36/#36.1 stack
 ([belt-survey.md](belt-survey.md), [survey-zones.md](survey-zones.md),
 [halo-finder-expansion.md](halo-finder-expansion.md)); assumes the v0.60–v0.63
@@ -239,7 +240,7 @@ proximity pockets, and datamined Glaciem pockets carrying a survey overlay:
 
 ## 5. Phase 3 — direction ("where should I survey next?")
 
-### 5.1 Coverage gaps, honestly
+### 5.1 Coverage gaps, honestly — ✅ BUILT (slice 4, 2026-07-19)
 
 The trap: most of a 48 Gm ring is **not drop-plannable** (the
 `POCKET_MISS_CEILING_M` lesson — with sparse markers, only station-approach
@@ -263,6 +264,22 @@ is worse than none. Two-tier design:
 - Coverage fraction (the tier-2 model already computes one) gets a plain
   progress line per belt: "Keeger arc surveyed: 3.1%" — an honest number that
   doubles as the org's long-campaign scoreboard.
+- **Build decisions (slice 4, 2026-07-19):** the sampler is an **exact
+  angle-interval union**, not the 0.25° ring sampling sketched above — a
+  mark covers only ±SURVEY_MERGE_M (±0.0124°) of the 48 Gm ring, far finer
+  than any sane step, so sampling would miss real coverage between samples;
+  the union is O(marks log marks) and exact (`nav_core.survey_gaps`, cached
+  in `survey_state`). Plannability is the slice-2 chord-miss probe over
+  public **marker-pair** chords (start-independent), bounded to the largest
+  `GAP_PROBE_MAX` arcs. Gaps ride `/api/halo/targets` (the §8
+  "decide at build" call). **Always-on overview map (user ask, same
+  intent):** the Halo Finder now renders a per-system overview map on load —
+  belts, surveyed pockets/zones tinted by value tier, gap arcs in amber,
+  stations + gateways (`doc.markers`) — with **click-to-pin** (tap a
+  pocket/zone/field to set it as the plan destination) and the coverage
+  line as its caption. The NEXT GAP line + "⛏ Survey the next gap" button
+  live in the Keeger panel; the `gap` goal resolves the most reachable arc
+  into a synthetic pocket, so arrival/staging/cost-sanity all apply.
 
 ### 5.2 Survey activity — derived, not stored
 
@@ -426,9 +443,9 @@ value model plus Phase 3's coverage to keep suggestions fresh.
 - ✅ `POST /api/survey/depleted` + `POST /api/admin/survey/depletion/clear` +
   org setting `survey_depletion_ageoff_min` (§4.3 mined-out, §11.6).
 - ✅ `GET /api/resource_ores` unions survey-mark ores (finder picker).
-- `GET /api/halo/gaps?system=` — the §5.1 gap list (or folded into
-  `/api/halo/targets`; decide at build time by payload size).
-- `HaloPlanIn.gap: bool` — plan the nearest plannable gap.
+- ✅ `doc.gaps` on `/api/halo/targets` (folded in — decided at build) +
+  `doc.markers` (public station/gateway landmarks for the overview map).
+- ✅ `HaloPlanIn.gap: bool` — plan the most reachable plannable gap.
 - `GET /api/intel/surveying` — derived org survey stats (§5.2).
 - `POST /api/admin/survey/import` + `GET/POST /api/admin/survey/imports`
   (batch review) (§6.2).
@@ -452,8 +469,8 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    *The payoff feature; shipped before asking surveyors for anything more.*
 3. ✅ **Scan detail** (§3.1) + zone detail view (§3.4), built 2026-07-18:
    the "scanned" basis, sharpening both value tiers and routing likelihoods.
-4. **Coverage gaps + NEXT GAP + map arcs** (§5.1) — also wires the routing
-   miss ("no mapped source") into survey direction.
+4. ✅ **Coverage gaps + NEXT GAP + map arcs** (§5.1, built 2026-07-19) +
+   the always-on per-system overview map with click-to-pin (user ask).
 5. **Survey stats + Intel section + Discord milestones** (§5.2) + radar
    nudge (§5.3).
 6. **Patch stamping + staleness** (§6.1) — watcher release rides along;
@@ -493,8 +510,8 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    surveyor can transcribe the whole readout. One form serves both.
 2. **Density weights:** tune the 0/1/2.5/5 weights against a real evening of
    marks. (~~Tercile pool~~ — decided at slice-1 build: per-system.)
-3. **Gap step size:** 0.25° sampling is a guess; validate against the real
-   mark distribution before freezing the constant.
+3. ~~**Gap step size**~~ — MOOTED at slice-4 build: the exact interval
+   union has no step (see §5.1 build decisions).
 4. **Majority-build derivation** (§5.1): is hub-side majority robust with a
    handful of watchers, or should the admin pin the org's current build in
    settings instead?

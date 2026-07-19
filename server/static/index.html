@@ -3682,6 +3682,9 @@
           in <b><span id="halo-ore-system">the belt</span></b> — likelihood from the ⛏ survey marks,
           fresh “mined out” reports skipped. Alternates offer the runner-up clusters.</p>
       </div>
+      <div class="halo-map-wrap" style="margin-top:12px;"><canvas id="halo-overview"
+        aria-label="system overview: belts, surveyed pockets tinted by value, unmapped gap arcs, stations and gateways"></canvas></div>
+      <p class="muted route-hint" id="halo-overview-cap" style="margin-top:4px;"></p>
     </div>
 
     <div class="panel">
@@ -12328,6 +12331,7 @@ async function loadHaloFinder() {
   renderHaloIntro();
   loadHaloZones();
   refreshHaloAfter();
+  renderHaloOverview();   // the always-on system map (#37 slice 4)
   applyHaloOreSeed();   // a "⤓ Plan drop" hand-off from the element finder (#37)
 }
 
@@ -12397,7 +12401,25 @@ function renderHaloKeegerProgress() {
     : ` · ${s.positive}/${s.model_min} toward the field model`;
   if (s.total)
     h += ` · <a href="/api/halo/survey/export?system=Nyx" target="_blank" rel="noopener">⇩ export survey</a>`;
+  // NEXT GAP (#37 slice 4): coverage + the most reachable unmapped arc.
+  const gaps = doc.gaps;
+  if (gaps) {
+    h += `<br>Keeger arc surveyed: <b>${(gaps.coverage * 100).toFixed(1)}%</b>`;
+    const reachable = (gaps.arcs || []).filter(a => a.plannable)
+      .sort((a, b) => (a.probe_miss_m || 0) - (b.probe_miss_m || 0));
+    if (reachable.length) {
+      const g = reachable[0];
+      h += ` · next gap: ≈<b>${fmtDist(g.arc_m)}</b> of unmapped arc`
+        + (g.near_key ? ` past <b>${esc(g.near_key)}</b>` : "")
+        + ` <button type="button" class="route-chip" id="halo-gap-plan"`
+        + ` title="plan the drop leg of the most reachable unmapped arc — drop, then creep and ⛏ mark">⛏ Survey the next gap</button>`;
+    } else if ((gaps.arcs || []).length) {
+      h += ` · <span class="muted">remaining gaps are expedition-only from the org's markers</span>`;
+    }
+  }
   el.innerHTML = h;
+  const gb = $("halo-gap-plan");
+  if (gb) gb.onclick = planHaloGap;
   // Value-ranked pocket suggestions (#37): SELECTABLE — clicking pins that
   // pocket as the plan destination (parity with the Glaciem panel's picker).
   const rows = [
@@ -12469,6 +12491,7 @@ function renderHaloSystemPanel() {
                         "halo-pocket");
     renderHaloKeegerProgress();
   }
+  renderHaloOverview();   // overview tracks the active system's doc (#37)
 }
 
 // ⛏ survey mark (#36): arm a pre-typed survey capture; the next
@@ -12559,6 +12582,7 @@ async function loadHaloZones(sys) {
   } catch { return; }
   renderHaloZoneSelect();
   renderHaloZoneBanner();
+  renderHaloOverview();   // zone squares live on the overview map (#37)
 }
 
 function renderHaloZoneSelect() {
@@ -12829,6 +12853,28 @@ async function planHaloZone(z) {
   } catch { msg.textContent = "⚠ network error"; }
 }
 
+// ⛏ Survey the next gap (#37 slice 4): plan the drop leg of the most
+// reachable unmapped Keeger arc — a retrieval miss becomes survey direction.
+async function planHaloGap() {
+  const body = { gap: true, system: "Nyx",
+                 allow_staging: $("halo-staging").checked };
+  const sid = $("halo-start-poi").dataset.poiId;
+  if (sid) body.start_poi_id = Number(sid);
+  const ship = $("halo-ship").value.trim();
+  if (ship) { body.ship = ship; if (!$("halo-drive-wrap").hidden && $("halo-qd").value) body.qd = $("halo-qd").value; }
+  if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
+  const msg = $("halo-plan-msg");
+  msg.textContent = "planning…";
+  try {
+    const r = await fetch("/api/halo/plan", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
+    msg.textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
+  } catch { msg.textContent = "⚠ network error"; }
+}
+
 function renderHaloCredit() {
   const el = $("halo-credit-line");
   const doc = haloDoc(haloSystem);
@@ -13005,11 +13051,15 @@ function wireHaloFinder() {
   $("halo-plan").onclick = planHalo;
   $("halo-intro-dismiss").onclick = () => {
     try { localStorage.setItem("halo_intro_dismissed", "1"); } catch {} renderHaloIntro(); };
-  let rsz = null;   // keep the map crisp across window resizes
+  wireHaloOverviewClicks();
+  let rsz = null;   // keep the maps crisp across window resizes
   window.addEventListener("resize", () => {
-    if (!haloLastPlan || $("halo-view").hidden) return;
+    if ($("halo-view").hidden) return;
     clearTimeout(rsz);
-    rsz = setTimeout(() => drawHaloMap(haloLastPlan), 150);
+    rsz = setTimeout(() => {
+      if (haloLastPlan) drawHaloMap(haloLastPlan);
+      renderHaloOverview();
+    }, 150);
   });
 }
 
@@ -13245,10 +13295,20 @@ function haloRRect(ctx, x, y, w, h, r) {   // roundRect w/ pre-2022 fallback
   else ctx.rect(x, y, w, h);
 }
 
-function drawHaloMap(plan) {
-  const cv = $("halo-map");
-  const doc = haloDoc(plan && plan.system || "Stanton");
-  if (!cv || !doc || !plan) return;
+function drawHaloMap(plan) { drawHaloSystemMap($("halo-map"), plan); }
+
+// Overview-map click targets (#37 slice 4): collected during the last
+// overview draw so a tap on a pocket/zone/field pins it as the destination.
+let haloOverviewHits = [];
+
+function drawHaloSystemMap(cv, plan) {
+  // One draw path, two modes (#37 slice 4): with a plan = the route map
+  // inside the plan card (unchanged); with plan=null = the always-on
+  // OVERVIEW — belts, surveyed pockets by value, gaps, landmarks — the
+  // "what's mapped, where's it worth going" reference before any plan.
+  const doc = haloDoc(plan && plan.system || haloSystem || "Stanton");
+  if (!cv || !doc) return;
+  const overview = !plan;
   const cssW = cv.parentElement.clientWidth;
   if (!(cssW > 0)) return;                       // hidden / mid-layout: skip
   const cssH = Math.round(Math.min(430, Math.max(280, cssW * 0.58)));
@@ -13262,13 +13322,26 @@ function drawHaloMap(plan) {
     : ring ? ring.r_m - ring.pocket_radius_m : null;
   const beltOut = bands ? bands[bands.length - 1].outer_m
     : ring ? ring.r_m + ring.pocket_radius_m : null;
-  const P = haloMapPoints(plan);
-  const pts = [P.start, P.marker, P.cross].concat(P.stage ? [P.stage] : []);
-  const rFit = Math.max(beltOut || 0,
-                        ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
+  const P = plan ? haloMapPoints(plan) : null;
+  let rFit;
+  if (P) {
+    const pts = [P.start, P.marker, P.cross].concat(P.stage ? [P.stage] : []);
+    rFit = Math.max(beltOut || 0,
+                    ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
+  } else {
+    // Overview: fit the whole system — belts, the Keeger ring, planet
+    // orbits, fields and landmarks.
+    rFit = Math.max(
+      beltOut || 0,
+      doc.keeger ? doc.keeger.r_m : 0,
+      ...(doc.bodies || []).map(b => Math.hypot(b.x, b.y)),
+      ...(doc.fields || []).map(f => Math.hypot(f.x, f.y)),
+      ...(doc.markers || []).map(m => Math.hypot(m.x, m.y)), 1) * 1.1;
+  }
   const cx = cssW / 2, cy = cssH / 2;
   const s = (Math.min(cssW, cssH) / 2 - 12) / rFit;
   const X = (p) => cx + p[0] * s, Y = (p) => cy - p[1] * s;
+  const hits = overview ? [] : null;
 
   ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, cssH);
   ctx.font = "10px monospace";
@@ -13289,7 +13362,7 @@ function drawHaloMap(plan) {
     for (const r of [beltIn, beltOut]) {
       ctx.beginPath(); ctx.arc(cx, cy, r * s, 0, 2 * Math.PI); ctx.stroke();
     }
-    if (plan.band) {
+    if (plan && plan.band) {
       const b = bands[plan.band.band - 1];
       ctx.strokeStyle = C.band;
       ctx.lineWidth = Math.max(1.5, (b.outer_m - b.inner_m) * s);
@@ -13302,15 +13375,17 @@ function drawHaloMap(plan) {
     // dots (the chosen pocket brightened)
     ctx.strokeStyle = C.beltEdge;
     ctx.beginPath(); ctx.arc(cx, cy, ring.r_m * s, 0, 2 * Math.PI); ctx.stroke();
-    const sel = plan.drop && plan.drop.pocket;
+    const sel = plan && plan.drop.pocket;
     ctx.fillStyle = C.band;
     for (const pk of doc.pockets || []) {
       const px = cx + pk.x * s, py = cy - pk.y * s;
       // Surveyed ring pockets tint by org value tier (#37 slice 1).
       const vc = pk.value && SURVEY_VAL_MAP_C[pk.value.tier];
       if (vc) ctx.fillStyle = vc;
-      ctx.fillRect(px - 0.75, py - 0.75, 1.5, 1.5);
+      const sz = overview && vc ? 3 : 1.5;   // valued pockets pop on the overview
+      ctx.fillRect(px - sz / 2, py - sz / 2, sz, sz);
       if (vc) ctx.fillStyle = C.band;
+      if (hits) hits.push({ x: px, y: py, key: pk.key, kind: pk.kind });
     }
     // the Keeger Belt (#36): outer ring + the org's surveyed pockets (drawn
     // even when off-canvas for a Glaciem-scale fit — arcs clip harmlessly)
@@ -13319,11 +13394,36 @@ function drawHaloMap(plan) {
       ctx.setLineDash([3, 5]);
       ctx.beginPath(); ctx.arc(cx, cy, doc.keeger.r_m * s, 0, 2 * Math.PI); ctx.stroke();
       ctx.setLineDash([]);
+      // Coverage gaps (#37 slice 4): the UNMAPPED Keeger arcs, hollow amber.
+      const arcs = (doc.gaps || {}).arcs || [];
+      if (arcs.length) {
+        ctx.strokeStyle = "rgba(224,162,74,.55)";
+        ctx.lineWidth = 2;
+        for (const a of arcs) {
+          const a0 = a.a0_deg * Math.PI / 180, a1 = a.a1_deg * Math.PI / 180;
+          ctx.beginPath();
+          // canvas y is flipped: world angle a → canvas angle −a
+          ctx.arc(cx, cy, doc.keeger.r_m * s, -a0, -a1, true);
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1;
+      }
       for (const pk of doc.surveyed || []) {
         // Value-tinted survey dots (#37 slice 1); untiered stays C.window.
         ctx.fillStyle = (pk.value && SURVEY_VAL_MAP_C[pk.value.tier]) || C.window;
         ctx.beginPath();
-        ctx.arc(cx + pk.x * s, cy - pk.y * s, 2, 0, 2 * Math.PI); ctx.fill();
+        ctx.arc(cx + pk.x * s, cy - pk.y * s, overview ? 3 : 2, 0, 2 * Math.PI);
+        ctx.fill();
+        if (hits) hits.push({ x: cx + pk.x * s, y: cy - pk.y * s,
+                              key: pk.key, kind: "surveyed" });
+      }
+      // Named zones (#36.1) are pinnable too — value-tinted squares.
+      for (const z of (overview ? haloZones : [])) {
+        if (z.closed || !z.xyz || z.system !== doc.system) continue;
+        const zx = cx + z.xyz[0] * s, zy = cy - z.xyz[1] * s;
+        ctx.fillStyle = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.window;
+        ctx.fillRect(zx - 2.5, zy - 2.5, 5, 5);
+        hits.push({ x: zx, y: zy, key: z.key, kind: "zone" });
       }
     }
     if (sel) {
@@ -13331,6 +13431,31 @@ function drawHaloMap(plan) {
       ctx.beginPath();
       ctx.arc(cx + sel.xyz[0] * s, cy - sel.xyz[1] * s, 2.6, 0, 2 * Math.PI);
       ctx.fill();
+    }
+  } else if (doc.fields) {
+    // Pyro overview (#37 slice 4): the unmarked resource fields as dots.
+    for (const f of doc.fields) {
+      const fx = cx + f.x * s, fy = cy - f.y * s;
+      ctx.fillStyle = C.band;
+      ctx.beginPath(); ctx.arc(fx, fy, 2, 0, 2 * Math.PI); ctx.fill();
+      if (hits) hits.push({ x: fx, y: fy, key: f.uuid, kind: "field",
+                            name: f.name });
+    }
+  }
+  // Landmarks (#37 slice 4): stations + gateways — small diamonds, labeled
+  // when the set is small enough to read.
+  const marks = doc.markers || [];
+  ctx.strokeStyle = C.text; ctx.lineWidth = 1;
+  for (const m of marks) {
+    const mx2 = cx + m.x * s, my2 = cy - m.y * s;
+    ctx.beginPath();
+    ctx.moveTo(mx2, my2 - 3); ctx.lineTo(mx2 + 3, my2);
+    ctx.lineTo(mx2, my2 + 3); ctx.lineTo(mx2 - 3, my2);
+    ctx.closePath(); ctx.stroke();
+    if (marks.length <= 14) {
+      ctx.fillStyle = C.label;
+      ctx.fillText(m.name.length > 22 ? m.name.slice(0, 21) + "…" : m.name,
+                   mx2 + 6, my2 + 3);
     }
   }
   // bodies: star at its real offset, planets as dots + labels
@@ -13348,39 +13473,89 @@ function drawHaloMap(plan) {
   ctx.beginPath(); ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy);
   ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3); ctx.stroke();
 
-  // route: staging hop (dashed) then the drop chord
-  ctx.strokeStyle = C.chord; ctx.lineWidth = 1.4;
-  if (P.stage) {
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath(); ctx.moveTo(X(P.start), Y(P.start)); ctx.lineTo(X(P.stage), Y(P.stage)); ctx.stroke();
-    ctx.setLineDash([]);
+  if (P) {
+    // route: staging hop (dashed) then the drop chord
+    ctx.strokeStyle = C.chord; ctx.lineWidth = 1.4;
+    if (P.stage) {
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(X(P.start), Y(P.start)); ctx.lineTo(X(P.stage), Y(P.stage)); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.beginPath(); ctx.moveTo(X(P.from), Y(P.from)); ctx.lineTo(X(P.marker), Y(P.marker)); ctx.stroke();
+    // drop window: exit anywhere on the green stretch
+    ctx.strokeStyle = C.window; ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(X(P.wEnter), Y(P.wEnter)); ctx.lineTo(X(P.wExit), Y(P.wExit)); ctx.stroke();
+    ctx.lineWidth = 1;
+    // endpoints + drop ✕
+    const dot = (p, fill, label, dy) => {
+      ctx.fillStyle = fill;
+      ctx.beginPath(); ctx.arc(X(p), Y(p), 3, 0, 2 * Math.PI); ctx.fill();
+      if (label) { ctx.fillStyle = C.text; ctx.fillText(label, X(p) + 6, Y(p) + (dy || -5)); }
+    };
+    dot(P.start, C.chord, plan.start.name);
+    if (P.stage) dot(P.stage, C.chord, plan.legs[0].to, 10);
+    dot(P.marker, C.body, plan.drop.marker_name, 10);
+    ctx.strokeStyle = C.drop; ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(X(P.cross) - 5, Y(P.cross) - 5); ctx.lineTo(X(P.cross) + 5, Y(P.cross) + 5);
+    ctx.moveTo(X(P.cross) - 5, Y(P.cross) + 5); ctx.lineTo(X(P.cross) + 5, Y(P.cross) - 5);
+    ctx.stroke(); ctx.lineWidth = 1;
   }
-  ctx.beginPath(); ctx.moveTo(X(P.from), Y(P.from)); ctx.lineTo(X(P.marker), Y(P.marker)); ctx.stroke();
-  // drop window: exit anywhere on the green stretch
-  ctx.strokeStyle = C.window; ctx.lineWidth = 3.5;
-  ctx.beginPath(); ctx.moveTo(X(P.wEnter), Y(P.wEnter)); ctx.lineTo(X(P.wExit), Y(P.wExit)); ctx.stroke();
-  ctx.lineWidth = 1;
-  // endpoints + drop ✕
-  const dot = (p, fill, label, dy) => {
-    ctx.fillStyle = fill;
-    ctx.beginPath(); ctx.arc(X(p), Y(p), 3, 0, 2 * Math.PI); ctx.fill();
-    if (label) { ctx.fillStyle = C.text; ctx.fillText(label, X(p) + 6, Y(p) + (dy || -5)); }
-  };
-  dot(P.start, C.chord, plan.start.name);
-  if (P.stage) dot(P.stage, C.chord, plan.legs[0].to, 10);
-  dot(P.marker, C.body, plan.drop.marker_name, 10);
-  ctx.strokeStyle = C.drop; ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  ctx.moveTo(X(P.cross) - 5, Y(P.cross) - 5); ctx.lineTo(X(P.cross) + 5, Y(P.cross) + 5);
-  ctx.moveTo(X(P.cross) - 5, Y(P.cross) + 5); ctx.lineTo(X(P.cross) + 5, Y(P.cross) - 5);
-  ctx.stroke(); ctx.lineWidth = 1;
   // scale bar
   const bar = haloNiceScale(rFit * 0.5);
   ctx.strokeStyle = C.label; ctx.fillStyle = C.label;
   ctx.beginPath(); ctx.moveTo(12, cssH - 12); ctx.lineTo(12 + bar * s, cssH - 12); ctx.stroke();
   ctx.fillText((bar / 1e9) + " Gm", 12, cssH - 18);
 
-  drawHaloInset(ctx, plan, P, cssW, cssH, doc);
+  if (P) drawHaloInset(ctx, plan, P, cssW, cssH, doc);
+  if (hits) haloOverviewHits = hits;
+}
+
+// The always-on overview (#37 slice 4): draw + caption. Runs on view open,
+// system switch, targets/zones load and resize — no plan required.
+function renderHaloOverview() {
+  const cv = $("halo-overview");
+  if (!cv || $("halo-view").hidden) return;
+  drawHaloSystemMap(cv, null);
+  const cap = $("halo-overview-cap");
+  if (!cap) return;
+  const doc = haloDoc(haloSystem);
+  const bits = [];
+  if (doc && doc.gaps) {
+    bits.push(`Keeger arc surveyed: <b>${(doc.gaps.coverage * 100).toFixed(1)}%</b>`
+      + ` · ${doc.gaps.arcs.length} gap${doc.gaps.arcs.length === 1 ? "" : "s"}`
+      + ` <span style="color:rgba(224,162,74,.9)">(amber arcs)</span>`);
+  }
+  bits.push("tap a pocket, zone or field to set it as the plan destination");
+  cap.innerHTML = bits.join(" · ");
+}
+
+// Click-to-pin (#37 slice 4): hit-test the overview's collected dot
+// positions and fill the matching panel's pocket/field picker.
+function wireHaloOverviewClicks() {
+  const cv = $("halo-overview");
+  if (!cv) return;
+  cv.onclick = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    let best = null, bd = 10;                    // 10px touch slop
+    for (const h of haloOverviewHits) {
+      const d = Math.hypot(h.x - px, h.y - py);
+      if (d < bd) { best = h; bd = d; }
+    }
+    if (!best) return;
+    if (best.kind === "field") {
+      const f = $("halo-field");
+      if (f) { f.value = best.name || best.key; f.dataset.uuid = best.key; }
+    } else if (best.kind === "surveyed" || best.kind === "zone") {
+      setHaloBelt("keeger");
+      $("halo-keeger-pocket").value = best.key;
+    } else {                                      // glaciem pocket kinds
+      setHaloBelt("glaciem");
+      $("halo-pocket").value = best.key;
+    }
+    renderHaloOverview();   // cheap refresh; caption stays in sync
+  };
 }
 
 // Magnified drop zone: individual band edges / pocket circles are visible
