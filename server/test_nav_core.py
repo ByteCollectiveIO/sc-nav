@@ -4970,6 +4970,30 @@ class SurveyGapTests(unittest.TestCase):
         self.assertFalse(g2["arcs"][0]["plannable"])
         self.assertIsNone(g2["arcs"][0]["creep_m"])   # no chords at all
 
+    def test_pocket_reach_classification(self):
+        # A marker-pair chord through pocket A → reachable (flight 0); B
+        # sits 2 Gm off every chord → unreachable; no markers → unreachable.
+        a = _space_poi(11, "A", (self.KR - 4e9, -8e9, 0), system="Nyx")
+        b = _space_poi(12, "B", (self.KR + 4e9, 8e9, 0), system="Nyx")
+        nav = _synthetic_nav([a, b], system="Nyx")
+        R = nav_core.GLACIEM_POCKET_RADIUS_M
+        pockets = [
+            {"key": "ON", "xyz": (self.KR, 0.0, 0.0), "grid_radius_m": R},
+            {"key": "OFF", "xyz": (self.KR, 2.0e9, 0.0), "grid_radius_m": R},
+        ]
+        out = nav_core.pocket_reach(nav, "Nyx", pockets)
+        by = {p["key"]: p for p in out}
+        self.assertTrue(by["ON"]["reachable"])
+        self.assertEqual(by["ON"]["reach_m"], 0.0)     # chord hits the envelope
+        self.assertFalse(by["OFF"]["reachable"])
+        self.assertGreater(by["OFF"]["reach_m"], nav_core.POCKET_REACH_MAX_M)
+        # inputs never mutated (registry rows)
+        self.assertNotIn("reachable", pockets[0])
+        none = nav_core.pocket_reach(_synthetic_nav([], system="Nyx"),
+                                     "Nyx", pockets)
+        self.assertFalse(none[0]["reachable"])
+        self.assertIsNone(none[0]["reach_m"])
+
     def test_survey_state_carries_and_refreshes_gaps(self):
         nav = _synthetic_nav([], system="Nyx")
         nav.belts = {"Nyx": {"kind": "ring", "pockets": [],

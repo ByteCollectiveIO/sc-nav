@@ -3900,6 +3900,14 @@ class BeltSurveyApiTests(unittest.TestCase):
                             for m in pyro["markers"]))
         self.assertEqual(doc["gaps"]["coverage"], 0.0)  # nothing surveyed yet
         self.assertEqual(len(doc["gaps"]["arcs"]), 1)   # one full-ring gap
+        # Reachability (v0.70.0): every pocket row carries the verdict and
+        # the filter genuinely bites — with only the two gateways to chord
+        # between, most (here: all) of the 381 pockets are out of reach.
+        # (Plannable-count positivity is covered at the nav_core level with
+        # controlled geometry; it's dataset-dependent here.)
+        rows = doc["pockets"]
+        self.assertTrue(all("reachable" in p and "reach_m" in p for p in rows))
+        self.assertLess(sum(1 for p in rows if p["reachable"]), len(rows))
         self._mark_at((self.KR, 0.0, 0.0))
         doc2 = self.client.get("/api/halo/targets",
                                params={"system": "Nyx"}).json()

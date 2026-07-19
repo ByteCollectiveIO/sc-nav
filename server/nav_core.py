@@ -6198,6 +6198,39 @@ def survey_pockets(nav: NavData, system: str,
 # this is a backstop, not a working limit.
 GAP_PROBE_MAX = 24
 
+# Post-drop sublight flight a player will actually fly (user call,
+# v0.70.0): ~200 km is comfortable, 500 km is the ceiling — beyond that
+# it's too far to creep and too short to re-QT without overshooting.
+POCKET_REACH_MAX_M = 500e3
+
+
+def pocket_reach(nav: NavData, system: str, pockets: list[dict]) -> list[dict]:
+    """Reachability per ring pocket (#37, v0.70.0): Nyx has so few QT
+    markers that most of the 381 Glaciem pockets can't be dropped into with
+    any precision — the best marker-pair chord misses them by Mm. Annotate
+    each pocket with `reach_m` (post-drop sublight flight: best chord miss
+    minus the pocket envelope, floored at 0) and `reachable` (flight ≤
+    POCKET_REACH_MAX_M), so pickers/maps can hide the ones nobody can
+    actually get to. Non-mutating copies — inputs are registry/cache rows."""
+    mpos = []
+    for p in nav.qt_markers:
+        if p.system == system and poi_active(p) and not p.private:
+            g = entity_global_m(nav, p, ROTATION_EPOCH)
+            if g is not None:
+                mpos.append(g)
+    pairs = [(mpos[i], mpos[j]) for i in range(len(mpos))
+             for j in range(i + 1, len(mpos))]
+    out = []
+    for pk in pockets:
+        best = min((_seg_point_dist(a, b, pk["xyz"]) for a, b in pairs),
+                   default=None)
+        radius = pk.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M
+        flight = None if best is None else max(0.0, best - radius)
+        out.append({**pk, "reach_m": flight,
+                    "reachable": bool(flight is not None
+                                      and flight <= POCKET_REACH_MAX_M)})
+    return out
+
 
 def survey_gaps(nav: NavData, system: str, marks: list[dict],
                 pockets: list[dict] | None = None) -> dict:

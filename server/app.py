@@ -4505,10 +4505,14 @@ def get_halo_targets(system: str = "Stanton",
         # Overlay the org's in-pocket findings onto the datamined ring pockets
         # (#36): a surveyed-barren pocket carries a `survey` block so the picker
         # can badge it and the planner down-ranks it.
-        pockets = sstate["glaciem"] or []
+        # Reachability filter data (#37, v0.70.0): most ring pockets can't
+        # be dropped into from Nyx's few markers — annotate so the client
+        # can hide the unreachable ones from the map + picker.
+        pockets = nav_core.pocket_reach(nav, system, sstate["glaciem"] or [])
         doc["pockets"] = [{"key": p["key"], "kind": p["kind"],
                            "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
                            "grid_radius_m": p["grid_radius_m"],
+                           "reachable": p["reachable"], "reach_m": p["reach_m"],
                            **({"survey": p["survey"]} if p.get("survey") else {}),
                            **({"value": vk[p["key"]]} if p["key"] in vk else {})}
                           for p in pockets]

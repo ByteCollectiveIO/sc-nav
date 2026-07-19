@@ -12469,12 +12469,17 @@ function renderHaloSystemPanel() {
   if (!doc) return;
   if (doc.kind === "bands") renderHaloStrip();
   if (doc.kind === "ring") {
-    const n = (doc.pockets || []).filter(p => p.kind === "general").length;
+    // Count the pockets a player can actually drop into (v0.70.0).
+    const gen = (doc.pockets || []).filter(p => p.kind === "general");
+    const n = gen.filter(p => p.reachable !== false).length || gen.length;
     const cnt = $("halo-pocket-count");
     if (cnt) cnt.textContent = String(n);
     const dl = $("halo-pocket-keys");
     if (dl && !dl.children.length) {
       for (const p of doc.pockets || []) {
+        // Only pockets somebody can actually reach (v0.70.0) — plus
+        // anything the org has surveyed, which is knowledge worth keeping.
+        if (p.reachable === false && !p.value && !p.survey) continue;
         const o = document.createElement("option");
         o.value = p.key;
         // Surveyed pockets advertise their value tier in the picker (#37).
@@ -13418,6 +13423,10 @@ function drawHaloSystemMap(cv, plan) {
       } else {
         // Unsurveyed pocket: dim square — a real, selectable candidate
         // (v0.69.1: these were near-invisible; the map is FOR picking them).
+        // v0.70.0: pockets no marker chord can serve (post-drop flight
+        // > 500 km) are hidden — nobody can actually get to them, and 381
+        // dots were a solid unpickable ring.
+        if (overview && pk.reachable === false) continue;
         ctx.fillStyle = C.band;
         const sz = overview ? 2.6 : 1.5;
         ctx.fillRect(px - sz / 2, py - sz / 2, sz, sz);
