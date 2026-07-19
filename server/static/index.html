@@ -2328,6 +2328,11 @@
       <tbody></tbody>
     </table>
     </div>
+    <div id="finder-space" hidden style="margin-top:10px;">
+      <span class="fld-label">IN THE BELTS <span class="muted" style="font-weight:400; text-transform:none;">—
+        org survey clusters (player-measured, not game data)</span></span>
+      <div id="finder-space-body" style="margin-top:6px;"></div>
+    </div>
   </div>
 
   <div class="capture-grid">
@@ -2659,6 +2664,19 @@
       real shortage.
     </div>
     <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>⛏ MINED-OUT REPORTS</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Reports age off after
+      <input id="depletion-ageoff" type="number" min="1" max="10080" step="15" style="width:80px;"> min
+      <button id="depletion-ageoff-save">Save</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      A miner who finds a surveyed field emptied reports it from the element finder; while
+      the report is fresh the <b>ore router</b> ranks that cluster last (the survey map
+      itself is untouched — rocks respawn). Rock spawns rotate on the order of hours, so
+      the default is a play session (4&nbsp;h).
+    </div>
+    <div class="muted" id="depletion-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
     <h2>UEX PRICE DATA</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Auto-refresh prices every
@@ -3582,6 +3600,7 @@
         <span class="seg" id="halo-goal" role="group" aria-label="Target type">
           <button class="on" data-goal="band" type="button" aria-pressed="true">☄ Density band</button>
           <button data-goal="poi" type="button" aria-pressed="false">📍 My POI</button>
+          <button data-goal="ore" type="button" aria-pressed="false">⛏ Ore</button>
         </span>
         <span class="seg" id="halo-aim" role="group" aria-label="Where in the band">
           <button class="on" data-aim="band" type="button" aria-pressed="true">Anywhere in band</button>
@@ -3642,6 +3661,15 @@
         </div>
         <p class="muted route-hint">We plan the closest possible fly-by (no chord hits a point
           exactly). Drop, run <b>/showlocation</b>, then <b>Refine</b> below to close the distance.</p>
+      </div>
+      <div id="halo-ore-wrap" hidden>
+        <div class="route-row">
+          <input id="halo-ore" class="ti" list="halo-survey-ore-list" autocomplete="off"
+                 placeholder="which ore? (e.g. Quantanium)" style="flex:2; min-width:200px;">
+        </div>
+        <p class="muted route-hint">AUTO-targets the org's best surveyed source for this ore
+          in <b><span id="halo-ore-system">the belt</span></b> — likelihood from the ⛏ survey marks,
+          fresh “mined out” reports skipped. Alternates offer the runner-up clusters.</p>
       </div>
     </div>
 
@@ -5287,10 +5315,20 @@ $("finder-sort").onchange = runFinder;
 
 async function runFinder() {
   const table = $("finder-results"), status = $("finder-status");
-  if (!finderOre) { table.hidden = true; status.textContent = ""; return; }
+  if (!finderOre) {
+    table.hidden = true; status.textContent = "";
+    renderFinderSpace(null);
+    return;
+  }
   const sort = $("finder-sort").value;
   let data;
   status.textContent = "finding…";
+  // Deep-space survey clusters ride the same search (#37 slice 2) — belts
+  // and planets answer in parallel, harvestables stay planet-only.
+  const spaceReq = finderCategory === "resource"
+    ? fetch(`/api/survey/find?ore=${encodeURIComponent(finderOre)}&sort=${sort}`)
+        .then(r => r.ok ? r.json() : null).catch(() => null)
+    : Promise.resolve(null);
   try {
     const r = await fetch(
       `/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&sort=${sort}&limit=15` +
@@ -5301,12 +5339,15 @@ async function runFinder() {
     table.hidden = true;
     status.innerHTML = `couldn't load — <button type="button" id="finder-retry">Retry</button>`;
     const b = $("finder-retry"); if (b) b.onclick = runFinder;
+    renderFinderSpace(await spaceReq);
     return;
   }
+  const spaceRows = renderFinderSpace(await spaceReq);
   const hs = data.hotspots || [];
   if (!hs.length) {
     table.hidden = true;
-    status.textContent = `no ${finderOre} logged yet — log some and it'll appear here`;
+    status.textContent = `no ${finderOre} logged on planets yet`
+      + (spaceRows ? " — but the belts below have it" : " — log some and it'll appear here");
     return;
   }
   // The distance-aware orders need a live position to measure travel from.
@@ -5340,6 +5381,62 @@ async function runFinder() {
     tbody.appendChild(tr);
   }
   table.hidden = false;
+}
+
+// IN THE BELTS (#37 slice 2): the deep-space half of the element finder —
+// org survey clusters ranked for the chosen ore. Returns the row count so
+// the planet-side status line can point at us when planets come up empty.
+function renderFinderSpace(d) {
+  const wrap = $("finder-space"), body = $("finder-space-body");
+  if (!wrap || !body) return 0;
+  const rows = d ? [...(d.results || []),
+                    ...(d.elsewhere || []).map(r => ({ ...r, _afar: true }))] : [];
+  if (!rows.length) { wrap.hidden = true; body.innerHTML = ""; return 0; }
+  wrap.hidden = false;
+  body.innerHTML = rows.map(r => {
+    const label = esc(r.name || r.key);
+    const bits = [];
+    // §4.3 honesty: a percentage only from ≥3 positive marks; early data
+    // shows its raw mark count instead.
+    bits.push(r.p != null
+      ? `<span class="hm-key"><i style="background:${oreColor(finderOre)}"></i>${Math.round(r.p * 100)}%</span> of marks (${r.n_ore}/${r.n_pos})`
+      : `<b>${r.n_ore}</b> of <b>${r.n_pos}</b> mark${r.n_pos === 1 ? "" : "s"}`);
+    if (r.value) bits.push(surveyValueChip(r.value));
+    if (r.dist_m != null) bits.push(fmtDist(r.dist_m));
+    if (r._afar) bits.push(`<span class="halo-chip">travel there first</span>`);
+    if (r.reach === "expedition")
+      bits.push(`<span class="halo-chip warn" title="no jump chord passes near this cluster from here — plan the nearest drop, then creep at sublight">⚠ expedition · creep ≈${fmtDist(r.creep_m)}</span>`);
+    if (r.depleted)
+      bits.push(`<span class="halo-chip warn">⛏ mined out ${r.depleted_age_s != null ? fmtAge(r.depleted_age_s) : ""}</span>`);
+    return `<div class="halo-alt"><b>${label}</b> <span class="muted">${esc(r.system || "")}</span>`
+      + ` · ${bits.join(" · ")}`
+      + ` <button class="route-chip" type="button" data-plandrop="${esc(r.key)}" data-sys="${esc(r.system || "")}">⤓ Plan drop</button>`
+      + (r.depleted ? "" : ` <button class="route-chip" type="button" data-minedout="${esc(r.key)}" data-sys="${esc(r.system || "")}"`
+        + ` title="down-ranks this cluster here until the report ages off — the survey map is untouched">⛏ mined out</button>`)
+      + `</div>`;
+  }).join("");
+  for (const b of body.querySelectorAll("[data-plandrop]"))
+    b.onclick = () => {
+      haloOreSeed = { key: b.dataset.plandrop, system: b.dataset.sys };
+      location.hash = "#/halo";
+      applyHaloOreSeed();   // same-view hash changes don't re-fire the router
+    };
+  for (const b of body.querySelectorAll("[data-minedout]"))
+    b.onclick = () => reportMinedOut(b.dataset.minedout, b.dataset.sys);
+  return rows.length;
+}
+
+async function reportMinedOut(key, system) {
+  if (!(await confirmDialog(
+      `Reports ${key} mined out — the ore router down-ranks it until the report `
+      + `ages off. The survey map itself is untouched (rocks respawn).`,
+      { title: "Report mined out?", confirmLabel: "Report" }))) return;
+  try {
+    await fetch("/api/survey/depleted", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, system }) });
+  } catch { return; }
+  runFinder();
 }
 // ---------- teammate presence ----------
 // Live teammates keyed by Discord id (everyone but me — the server may include
@@ -12209,6 +12306,18 @@ async function loadHaloFinder() {
   renderHaloIntro();
   loadHaloZones();
   refreshHaloAfter();
+  applyHaloOreSeed();   // a "⤓ Plan drop" hand-off from the element finder (#37)
+}
+
+// The element finder's "⤓ Plan drop" hand-off (#37 slice 2): pin the chosen
+// survey cluster into the planner and plan immediately — one flow from "I
+// want Quantainium" to an EXIT AT number.
+let haloOreSeed = null;
+async function applyHaloOreSeed() {
+  if (!haloOreSeed || $("halo-view").hidden) return;
+  const seed = haloOreSeed; haloOreSeed = null;
+  if (seed.system && seed.system !== haloSystem) setHaloSystem(seed.system);
+  await planHaloZone({ key: seed.key, system: seed.system });   // pins by key
 }
 
 function renderHaloIntro() {
@@ -12531,17 +12640,20 @@ function renderHaloBandInfo() {
 }
 
 function setHaloGoal(goal) {
-  haloGoal = goal === "poi" ? "poi" : "band";      // "band" = system's primary
+  haloGoal = goal === "poi" ? "poi" : goal === "ore" ? "ore" : "band";
   for (const x of $("halo-goal").querySelectorAll("button")) {
     const on = x.dataset.goal === haloGoal;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
   }
-  const primary = haloGoal === "band";
+  const primary = haloGoal === "band";             // system's primary target UI
   $("halo-band-wrap").hidden = !(primary && haloSystem === "Stanton");
   $("halo-aim").hidden = !(primary && haloSystem === "Stanton");
   $("halo-nyx-wrap").hidden = !(primary && haloSystem === "Nyx");
   $("halo-pyro-wrap").hidden = !(primary && haloSystem === "Pyro");
-  $("halo-poi-wrap").hidden = primary;
+  $("halo-poi-wrap").hidden = haloGoal !== "poi";
+  $("halo-ore-wrap").hidden = haloGoal !== "ore";  // ⛏ ore goal (#37 slice 2)
+  const os = $("halo-ore-system");
+  if (os) os.textContent = haloSystem || "the belt";
 }
 
 function setHaloAim(aim) {
@@ -12675,7 +12787,11 @@ async function planHalo() {
     return;
   }
   const body = { allow_staging: $("halo-staging").checked, system: haloSystem };
-  if (haloGoal !== "band") {                       // "📍 My POI", any system
+  if (haloGoal === "ore") {                        // "⛏ Ore" (#37 slice 2)
+    const ore = $("halo-ore").value.trim();
+    if (!ore) { msg.textContent = "pick an ore first"; return; }
+    body.ore = ore;
+  } else if (haloGoal !== "band") {                // "📍 My POI", any system
     const id = $("halo-target-poi").dataset.poiId;
     if (!id) { msg.textContent = "pick one of your POIs first"; return; }
     body.target_poi_id = Number(id);
@@ -12787,7 +12903,7 @@ function haloDropHtml(plan) {
 
 function renderHaloPlan(plan) {
   const el = $("halo-result");
-  const head = plan.band
+  let head = plan.band
     ? `BAND ${plan.band.band} DROP` + (plan.aim === "peak" ? " · DENSEST POINT" : "")
     : plan.mode === "pocket"
       ? (plan.drop.pocket.kind === "zone"
@@ -12797,6 +12913,7 @@ function renderHaloPlan(plan) {
            : plan.drop.pocket.kind === "surveyed" ? " · ORG SURVEY" : "")
         + ((plan.drop.pocket.survey || {}).status === "barren" ? " · ⚠ SURVEYED BARREN" : "")
       : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
+  if (plan.ore) head = `⛏ ${esc(plan.ore).toUpperCase()} → ${head}`;   // ore goal (#37)
   let h = `<div class="panel"><h2>${head} <span class="muted" style="font-weight:400; font-size:12px;">`
     + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
   for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
@@ -14368,6 +14485,8 @@ async function loadSettings() {
       $("hazard-radius").value = s.hazard_radius_km;
     if (s.stock_ageoff_min && document.activeElement !== $("stock-ageoff"))
       $("stock-ageoff").value = s.stock_ageoff_min;
+    if (s.survey_depletion_ageoff_min && document.activeElement !== $("depletion-ageoff"))
+      $("depletion-ageoff").value = s.survey_depletion_ageoff_min;
     if (s.feed_refresh_h != null && document.activeElement !== $("feed-refresh"))
       $("feed-refresh").value = s.feed_refresh_h;
     if (s.feeds_refreshed_at)
@@ -14929,6 +15048,26 @@ $("stock-ageoff-save").onclick = async () => {
   }
 };
 $("stock-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("stock-ageoff-save").click(); } });
+
+// ⛏ mined-out report lifetime (#37 slice 2) — same shape as the stock window.
+$("depletion-ageoff-save").onclick = async () => {
+  const st = $("depletion-ageoff-status");
+  const min = parseInt($("depletion-ageoff").value, 10);
+  if (!(min >= 1 && min <= 10080)) { st.textContent = "enter 1 – 10,080 minutes"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ survey_depletion_ageoff_min: min }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `saved — mined-out reports down-rank clusters for ${d.survey_depletion_ageoff_min} min`;
+  } catch {
+    st.textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+$("depletion-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("depletion-ageoff-save").click(); } });
 
 // UEX price data (#33): auto-refresh interval (0 = off, else 2h floor) + manual pull.
 $("feed-refresh-save").onclick = async () => {

@@ -5748,6 +5748,7 @@ def annotate_glaciem_survey(pockets: list[dict], marks: list[dict]) -> list[dict
                 "positive": len(positives),
                 "closest_center_m": min(d for _, d in mm),
                 "ores": sorted({o for m in positives for o in m["ores"]}),
+                "ore_counts": _survey_ore_counts(positives),
                 "salvage": any(m["salvage"] for m, _ in mm),
             }
         out.append(pk2)
@@ -5928,6 +5929,18 @@ SURVEY_MODEL_MIN_MARKS = 25
 SURVEY_ATTRIBUTION = "Field map: this org's own survey marks (in-game fixes)"
 
 
+def _survey_ore_counts(positives: list[dict]) -> dict:
+    """{ore name: number of positive marks listing it} — the per-cluster
+    evidence the ore-first router's likelihood fraction is built from (#37
+    slice 2). Keys keep the surveyor's original spelling; matching normalizes
+    on both sides."""
+    counts: dict[str, int] = {}
+    for m in positives:
+        for ore in m.get("ores") or []:
+            counts[ore] = counts.get(ore, 0) + 1
+    return counts
+
+
 def keeger_contains(pos) -> bool:
     """True when `pos` lies inside the Keeger Belt region envelope. Region
     classification only (locate/chip/capture notes) — never a system
@@ -6007,6 +6020,9 @@ def survey_cluster_fit(members: list[dict], negatives: list[dict]) -> dict:
         "status": status,
         "density": status if positives else None,
         "ores": sorted({o for m in positives for o in m["ores"]}),
+        # Per-ore positive-mark tally (#37 slice 2): how many positive marks
+        # LIST each ore — the k of the ore-routing likelihood fraction.
+        "ore_counts": _survey_ore_counts(positives),
         "salvage": any(m["salvage"] for m in members),
         "closest_center_m": min((dist3(m["xyz"], centroid) for m in members),
                                 default=0.0),
@@ -6230,6 +6246,128 @@ def annotate_survey_values(clusters: list[dict], prices: dict) -> list[dict]:
         t = tiers.get(c["key"])
         out.append({**c, "value": ({**v, "tier": t["tier"]} if t else dict(v))})
     return out
+
+
+# --- ore-first routing (#37 slice 2) ----------------------------------------
+# "Take me to the Quantainium": rank every survey cluster that has EVIDENCE
+# of the ore (a positive mark listing it) by likelihood × density, gate by
+# drop plannability, and let the caller sort by likelihood / distance /
+# value. The planetary element-finder reflex, extended to the belts.
+
+
+def _ore_key(name) -> str:
+    """Normalized ore-name key for matching free-typed survey ores against a
+    requested ore ('gold' == 'Gold (Raw)' == 'GOLD (ORE)')."""
+    return _ORE_SUFFIX_RE.sub("", (name or "").strip()).strip().lower()
+
+
+def find_ore_in_space(nav: NavData, ore: str, clusters: list[dict], *,
+                      start=None, t_ref: float | None = None,
+                      sort: str = "likely", depleted=frozenset(),
+                      markers=None) -> list[dict]:
+    """Ranked deep-space sources for `ore` over one system's survey clusters
+    (#37 slice 2, design §4.1). Only clusters with EVIDENCE rank — at least
+    one positive mark listing the ore; an empty result is the honest "no
+    mapped source" answer, never a guess.
+
+    Likelihood = (k listing marks / n positive marks) shrunk toward the
+    pool-wide rate by RESOURCE_PRIOR_STRENGTH pseudo-marks — a lucky 2-mark
+    zone can't outrank a proven 20-mark one. Rank score multiplies by the
+    density weight (more rocks = more chances). `p` is emitted only at ≥3
+    positive marks (§4.3: early data guides, it doesn't promise).
+
+    Reach (needs `start` + `markers`): best closest-approach of any
+    start→marker jump chord to the cluster center — "hit" inside the pocket
+    envelope, "plannable" inside POCKET_MISS_CEILING_M, else "expedition"
+    with the sublight creep distance. Expeditions and `depleted` clusters
+    (the ⛏ mined-out board) always rank AFTER clean plannable rows, flagged
+    never hidden."""
+    key = _ore_key(ore)
+    alpha = RESOURCE_PRIOR_STRENGTH
+    sigs, tot_k, tot_n = [], 0, 0
+    for c in clusters:
+        sig = _cluster_survey_signal(c)
+        n = int(sig.get("positive") or 0)
+        if n <= 0:
+            sigs.append(None)
+            continue
+        k = sum(v for name, v in (sig.get("ore_counts") or {}).items()
+                if _ore_key(name) == key)
+        sigs.append((sig, n, k))
+        tot_k += k
+        tot_n += n
+    if tot_n <= 0 or tot_k <= 0:
+        return []
+    prior_p = tot_k / tot_n
+    start_pos = (entity_global_m(nav, start, t_ref or ROTATION_EPOCH)
+                 if start is not None else None)
+    marker_pos = ([entity_global_m(nav, m, t_ref or ROTATION_EPOCH)
+                   for m in markers or []] if start_pos is not None else [])
+    marker_pos = [p for p in marker_pos if p is not None]
+    rows = []
+    for c, packed in zip(clusters, sigs):
+        if packed is None:
+            continue
+        sig, n, k = packed
+        if k <= 0 or not c.get("xyz"):
+            continue
+        density = sig.get("density") or sig.get("status") or "medium"
+        w = SURVEY_DENSITY_W.get(density, SURVEY_DENSITY_W["medium"])
+        p = (k + alpha * prior_p) / (n + alpha)
+        radius = c.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M
+        reach = creep_m = dist_m = None
+        if start_pos is not None and marker_pos:
+            best_miss = min(_seg_point_dist(start_pos, mp, c["xyz"])
+                            for mp in marker_pos)
+            if best_miss <= radius:
+                reach = "hit"
+            elif best_miss <= POCKET_MISS_CEILING_M:
+                reach = "plannable"
+            else:
+                reach, creep_m = "expedition", best_miss
+        if start is not None:
+            dest = Poi(id=-2, name=c.get("name") or c["key"],
+                       system=getattr(start, "system", None) or "",
+                       container_name=None, type="", local_km=None,
+                       global_m=tuple(c["xyz"]), latitude=None,
+                       longitude=None, height_m=None, qt_marker=False)
+            dist_m = travel_cost(nav, start, dest, t_ref)["distance_m"]
+        is_dep = c["key"] in depleted
+        rows.append({
+            "key": c["key"], "kind": c.get("kind"),
+            "name": c.get("name"), "system": c.get("system"),
+            "xyz": list(c["xyz"]), "grid_radius_m": radius,
+            "marks": sig.get("marks"), "n_pos": n, "n_ore": k,
+            "p": (p if n >= 3 else None),           # §4.3 honesty gate
+            "score": p * w,
+            "ores": sig.get("ores") or [], "value": c.get("value"),
+            "salvage": bool(sig.get("salvage")),
+            "depleted": is_dep, "reach": reach, "creep_m": creep_m,
+            "dist_m": dist_m,
+            # rank bucket: clean → expedition → mined-out (never hidden)
+            "_b": 2 if is_dep else (1 if reach == "expedition" else 0),
+        })
+    if sort == "near" and start_pos is not None:
+        rows.sort(key=lambda r: (r["_b"],
+                                 r["dist_m"] if r["dist_m"] is not None
+                                 else math.inf, -r["score"]))
+    elif sort == "value":
+        dists = sorted(r["dist_m"] for r in rows if r["dist_m"] is not None)
+        scale = max(1.0, _pct(dists, 0.5)) if dists else None
+
+        def _vrank(r):
+            v = (r.get("value") or {}).get("score") or 0
+            base = r["score"] * (1.0 + v)
+            if scale is not None:
+                d = r["dist_m"] if r["dist_m"] is not None else scale * 10
+                base /= 1.0 + d / scale
+            return (r["_b"], -base)
+        rows.sort(key=_vrank)
+    else:
+        rows.sort(key=lambda r: (r["_b"], -r["score"], -r["n_pos"]))
+    for r in rows:
+        del r["_b"]
+    return rows
 
 
 # --- radar reference layers (#37 slice 0) ----------------------------------

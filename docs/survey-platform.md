@@ -1,9 +1,9 @@
 # Survey platform — from drop helper to org prospecting suite (backlog #37) — design plan
 
 **Status: 🔨 IN BUILD (2026-07-18).** Slice 0 (radar reference layers,
-§5.4–5.5, shipped v0.64.0) and slice 1 (value layer, §3.2–3.3, ores/density
-bases) are BUILT; everything else remains design. Successor to the shipped
-#36/#36.1 stack
+§5.4–5.5, v0.64.0), slice 1 (value layer, §3.2–3.3, v0.65.0) and slice 2
+(ore-first routing + mined-out reports, §4) are BUILT; everything else
+remains design. Successor to the shipped #36/#36.1 stack
 ([belt-survey.md](belt-survey.md), [survey-zones.md](survey-zones.md),
 [halo-finder-expansion.md](halo-finder-expansion.md)); assumes the v0.60–v0.63
 scaling work (version-keyed `survey_state` cache, incremental QT maintenance,
@@ -143,7 +143,7 @@ per-ore mean comp% when scanned, value tier + basis, staleness (§6.1), and
 the "plan a drop here" / rename / close / delete actions that already exist.
 This is also where "＋ scan detail" attaches to an arbitrary mark.
 
-## 4. Phase 2 — ore-first routing ("take me to the Quantainium")
+## 4. Phase 2 — ore-first routing ("take me to the Quantainium") — ✅ BUILT (slice 2, 2026-07-18)
 
 The planetary reflex, extended to the belts: **select an ore, get directed to
 the most efficient high-probability place the org has mapped, one tap from a
@@ -198,8 +198,32 @@ proximity pockets, and datamined Glaciem pockets carrying a survey overlay:
 - Cross-system candidates are listed but labeled "travel there first" (the
   same-system start rule); ranking never silently mixes systems.
 - Routing concentrates the org on the top result, and rocks deplete
-  server-side — see open question §11.6 on a "mined out" report (the trade
-  stock-report precedent) before this ships broadly.
+  server-side — ~~see open question §11.6~~ **decided + shipped with the
+  slice**: a one-tap "⛏ mined out" report (element-finder rows) files into
+  the `survey_depletion` table (stock-report recipe: one live row per key,
+  prune-on-read), down-ranks the cluster in ore routing ONLY (never hidden,
+  survey record untouched), ages off via org setting
+  `survey_depletion_ageoff_min` (default 240 = a 4 h play session, a user
+  call). The `⛏ Ore` plan goal skips fresh-depleted clusters outright.
+
+### 4.4 Build notes (slice 2, 2026-07-18)
+
+- Endpoint decision (§8): a **sibling `GET /api/survey/find?ore=&sort=`** —
+  the cluster rows share almost nothing with `resource_hotspots`' cell rows.
+  Fix-system rows rank with travel + plannability; every other system rides
+  in `elsewhere` ("travel there first") so rankings never mix systems.
+- Likelihood = (listing marks / positive marks) shrunk toward the pool rate
+  by `RESOURCE_PRIOR_STRENGTH`, × `SURVEY_DENSITY_W` — `survey_cluster_fit`
+  grew an `ore_counts` tally to feed it. Scan-comp% term waits for §3.1
+  (slice 3); the freshness discount waits for §6.1 (slice 6).
+- Plannability probe is geometric, not a solver call: min `_seg_point_dist`
+  over start→marker chords vs the miss ceiling → hit | plannable |
+  expedition (+ creep distance). The real solver runs only on "⤓ Plan drop".
+- The `⛏ Ore` goal hands the top-8 ranked clusters to `plan_halo_drop` as
+  the pocket pool — cross-cluster alternates come free from the
+  marker×pocket scan.
+- The element-finder picker now unions survey-mark ores into
+  `/api/resource_ores`, so a belt-only ore is findable.
 
 ## 5. Phase 3 — direction ("where should I survey next?")
 
@@ -379,12 +403,13 @@ value model plus Phase 3's coverage to keep suggestions fresh.
 - `GET /api/halo/survey` + `/export` + `/zones` — rows gain `value`
   (`{score, tier, basis}`), `freshness`, `kind` rollups; export `_meta`
   version bumps.
-- `GET /api/resource_find` (the element finder's endpoint) grows a
-  deep-space result set, or a sibling `GET /api/survey/find?ore=&sort=`
-  returns §4.1's ranked clusters — decide at build time by how much the two
-  responses actually share.
-- `HaloPlanIn.ore: str` — the `⛏ Ore` goal: AUTO-target the top-ranked
-  cluster for the ore (§4.2).
+- ✅ `GET /api/survey/find?ore=&sort=` — §4.1's ranked clusters (sibling
+  endpoint; decided at build — the responses share almost nothing).
+- ✅ `HaloPlanIn.ore: str` — the `⛏ Ore` goal: AUTO-target the top-ranked
+  clusters for the ore (§4.2); depleted skipped.
+- ✅ `POST /api/survey/depleted` + `POST /api/admin/survey/depletion/clear` +
+  org setting `survey_depletion_ageoff_min` (§4.3 mined-out, §11.6).
+- ✅ `GET /api/resource_ores` unions survey-mark ores (finder picker).
 - `GET /api/halo/gaps?system=` — the §5.1 gap list (or folded into
   `/api/halo/targets`; decide at build time by payload size).
 - `HaloPlanIn.gap: bool` — plan the nearest plannable gap.
@@ -404,10 +429,11 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    tiers on every existing surface, ores/density bases only. No new inputs
    needed — the org's current marks light up immediately. *Smallest slice,
    biggest reframe.*
-2. **Ore-first routing** (§4): `find_ore_in_space` + the element finder's
-   DEEP SPACE section + the `⛏ Ore` plan goal. Also needs no new inputs —
-   with slice 1 it completes the survey→mine loop on today's data. *The
-   payoff feature; ship it before asking surveyors for anything more.*
+2. ✅ **Ore-first routing** (§4, built 2026-07-18): `find_ore_in_space` +
+   the element finder's IN-THE-BELTS section + the `⛏ Ore` plan goal, plus
+   the §11.6 mined-out report (decided into this slice). Also needs no new
+   inputs — with slice 1 it completes the survey→mine loop on today's data.
+   *The payoff feature; shipped before asking surveyors for anything more.*
 3. **Scan detail** (§3.1) + zone detail view (§3.4): the "scanned" basis,
    sharpening both value tiers and routing likelihoods.
 4. **Coverage gaps + NEXT GAP + map arcs** (§5.1) — also wires the routing
@@ -458,12 +484,10 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    settings instead?
 5. **Import trust ceiling:** is batch-level approve enough, or do orgs want
    per-zone cherry-picking on import?
-6. **Mined-out reports (§4.3):** routing sends the whole org to the #1
-   result, and rocks deplete server-side. Do we need a "⛏ mined out" report
-   with time-based age-off (the trade stock-report precedent — depletion is
-   temporary, spawns rotate) that down-ranks a cluster in routing without
-   touching its survey record? Leaning yes, but it may belong in the routing
-   slice itself rather than after it — decide when slice 2 is scoped.
+6. ~~**Mined-out reports (§4.3)**~~ — DECIDED at slice-2 scoping (user):
+   yes, in the routing slice itself. Minimal shape shipped: routing-only
+   down-rank, survey record untouched, 4 h default age-off
+   (`survey_depletion_ageoff_min`), no Discord. See §4.3/§4.4.
 
 ## 12. Not in scope
 

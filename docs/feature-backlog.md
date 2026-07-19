@@ -16,12 +16,16 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 37. Survey platform — value, direction, lifecycle, scope 🔨 SLICE 0 SHIPPED
+### 37. Survey platform — value, direction, lifecycle, scope 🔨 SLICES 0–2 SHIPPED
 
-**Status: slice 0 (radar reference layers, doc §5.4–5.5) shipped v0.64.0 —
-Pocket Radar POI overlay (landmarks glyph-coded by source, rim ticks when
-off-zoom) + in-pocket survey heatmap (ROCKS/ORES modes, ALL/7D/24H age
-window, `custom_pois.created` landed). Everything below remains design.**
+**Status: slice 0 (radar reference layers §5.4–5.5, v0.64.0 — Pocket Radar
+POI overlay + in-pocket survey heatmap w/ ALL/7D/24H age window), slice 1
+(value layer §3.2–3.3, v0.65.0 — $$$ tiers on every survey surface,
+per-system tercile pool, salvage ⚙ lane, price-refresh re-tiering) and
+slice 2 (ore-first routing §4, v0.66.0 — `/api/survey/find` + the element
+finder's IN THE BELTS section + the halo `⛏ Ore` goal + ⛏ mined-out
+reports w/ 4 h age-off) are SHIPPED. Remaining slices (scan detail,
+coverage gaps, stats, staleness, import, kinds) stay design.**
 Full plan:
 [`survey-platform.md`](survey-platform.md). Evolves the shipped #36/#36.1
 survey stack from a mapping tool into an org **prospecting** suite, in
