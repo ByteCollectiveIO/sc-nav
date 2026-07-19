@@ -2877,6 +2877,7 @@
       <a href="#/intel/mapping" data-sec="mapping">Mapping</a>
       <a href="#/intel/hauling" data-sec="hauling">Hauling</a>
       <a href="#/intel/trading" data-sec="trading">Trading</a>
+      <a href="#/intel/surveying" data-sec="surveying">Surveying</a>
       <a href="#/intel/market" data-sec="market">Market</a>
       <a href="#/intel/boards" data-sec="boards">Leaderboards</a>
       <a href="#/intel/directory" data-sec="directory" id="intel-nav-directory" hidden>Directory</a>
@@ -3116,6 +3117,35 @@
   </div>
   </div><!-- /trade-stats-body -->
   </div><!-- /trade-stats-view -->
+
+  <!-- Org Intel · Surveying (#37 §5.2): belt-survey activity derived live from
+       the org's marks — no survey_runs table, deleting marks heals the stats. -->
+  <div id="survey-stats-view" hidden>
+  <div id="survey-stats-status" class="stats-status" hidden></div>
+  <div id="survey-stats-body">
+  <div class="panel">
+    <h2>GUILD SURVEYING OVERVIEW</h2>
+    <div class="stat-cards" id="survey-stat-cards" style="margin-top:12px;"></div>
+    <p class="muted" style="font-size:12px; margin:10px 0 0;" id="survey-stat-note">Sessions are derived
+      from the marks themselves: one surveyor, one zone, gaps bridged under 30 minutes.
+      Nothing extra to log; delete marks and the stats heal.</p>
+  </div>
+  <div class="panel">
+    <h2>BELT COVERAGE <span class="muted">(per system)</span></h2>
+    <div id="survey-stat-belts"></div>
+  </div>
+  <div class="stat-grid">
+    <div class="panel">
+      <h2>TOP SURVEYORS <span class="muted">(rock hits / marks)</span></h2>
+      <div class="hbars" id="survey-stat-members"></div>
+    </div>
+    <div class="panel">
+      <h2>FRESHEST ZONES <span class="muted">(latest mark first)</span></h2>
+      <div id="survey-stat-zones"></div>
+    </div>
+  </div>
+  </div><!-- /survey-stats-body -->
+  </div><!-- /survey-stats-view -->
 
   <div id="route-view" hidden>
     <div id="route-run" hidden></div>
@@ -3754,6 +3784,7 @@
         <div class="halo-radar-plot"><canvas id="halo-radar"
           aria-label="live top-down radar of your position inside the asteroid pocket"></canvas></div>
         <p class="muted halo-radar-tip" id="halo-radar-legend" hidden></p>
+        <p class="muted halo-radar-tip" id="halo-radar-nudge" hidden></p>
         <p class="muted halo-radar-tip">Deep space has no compass — steer so the
           <b>drift arrow</b> points at the <b>center dot</b>. Re-run
           <b>/showlocation</b> as you move to update. Rings show scale.
@@ -4163,9 +4194,11 @@ function confirmDialog(message, opts = {}) {
 // A single-line text prompt built on the same modal shell as confirmDialog.
 // Resolves to the entered string on OK / Enter, or null on Cancel / Esc / backdrop.
 let _promptDialogEl = null;
+// Pass opts.checkbox = { label, checked } for an opt-in row under the input;
+// the promise then resolves { value, checked } instead of the bare string.
 function promptDialog(message, opts = {}) {
   const { title = "Enter a value", confirmLabel = "OK", cancelLabel = "Cancel",
-          placeholder = "", value = "" } = opts;
+          placeholder = "", value = "", checkbox = null } = opts;
   let dlg = _promptDialogEl;
   if (!dlg) {
     dlg = _promptDialogEl = document.createElement("dialog");
@@ -4176,6 +4209,8 @@ function promptDialog(message, opts = {}) {
           '<h2 class="confirm-title"></h2>' +
           '<p class="confirm-msg"></p>' +
           '<input class="ti prompt-input" type="text" autocomplete="off">' +
+          '<label class="prompt-check" hidden style="display:flex; gap:6px; align-items:center; margin-top:8px; font-size:13px;">' +
+            '<input type="checkbox"> <span></span></label>' +
         '</div>' +
         '<menu class="confirm-actions">' +
           '<button type="button" class="confirm-cancel"></button>' +
@@ -4192,10 +4227,19 @@ function promptDialog(message, opts = {}) {
   dlg.querySelector(".confirm-ok").textContent = confirmLabel;
   dlg.querySelector(".confirm-cancel").textContent = cancelLabel;
   input.placeholder = placeholder; input.value = value;
+  const checkRow = dlg.querySelector(".prompt-check");
+  const checkBox = checkRow.querySelector("input");
+  checkRow.hidden = !checkbox;
+  if (checkbox) {
+    checkRow.querySelector("span").textContent = checkbox.label;
+    checkBox.checked = !!checkbox.checked;
+  }
   dlg.setAttribute("aria-label", title);
   return new Promise((resolve) => {
     const onClose = () => { dlg.removeEventListener("close", onClose);
-      resolve(dlg.returnValue === "ok" ? input.value : null); };
+      if (dlg.returnValue !== "ok") return resolve(null);
+      resolve(checkbox ? { value: input.value, checked: checkBox.checked }
+                       : input.value); };
     dlg.addEventListener("close", onClose);
     dlg.returnValue = "";           // clear a prior result so Esc/backdrop reads as cancel
     dlg.showModal();
@@ -12538,6 +12582,11 @@ function resolveHaloSurveyArm(capture) {
       loadHaloTargets("Nyx").then(renderHaloSystemPanel);
     loadHaloZones();          // the mark may have grown/created the active zone
     radarLayersInvalidate();  // the heatmap just gained a cell's worth (#37)
+    // The mark landed at the radar's current offset — remember it so the
+    // drift nudge (§5.3) can measure "how far past my last mark am I?".
+    if (haloRadarLast)
+      radarMarkAt = { key: haloRadarLast.key, dx: haloRadarLast.dx,
+                      dy: haloRadarLast.dy, dz: haloRadarLast.dz };
     if (haloRadarLast) ensureRadarLayers(haloRadarLast);
     // Offer the after-the-fact scan attach for the mark that just resolved
     // (#37 slice 3) — collapsed; the ⛏ tap itself stays one-tap.
@@ -12582,6 +12631,7 @@ async function haloMarkSurvey() {
 // active zone lives on the member record (server-side) so it follows you across
 // devices; this UI just sets it and shows what you're feeding.
 let haloZones = [];
+let haloZoneAnnounceOk = false;   // survey webhook configured (#37 §5.2)
 let activeSurveyZone = null;      // zone_id | null
 
 async function loadHaloZones(sys) {
@@ -12589,7 +12639,9 @@ async function loadHaloZones(sys) {
   try {
     const r = await fetch("/api/halo/survey/zones?system=" + encodeURIComponent(sys));
     if (!r.ok) return;
-    haloZones = (await r.json()).zones || [];
+    const doc = await r.json();
+    haloZones = doc.zones || [];
+    haloZoneAnnounceOk = !!doc.announce_available;   // gates the create dialog's Discord opt-in
   } catch { return; }
   renderHaloZoneSelect();
   renderHaloZoneBanner();
@@ -12833,15 +12885,19 @@ async function setActiveSurveyZone(zid) {
 }
 
 async function newSurveyZone() {
-  const name = await promptDialog(
+  const res = await promptDialog(
     "Name this asteroid field. Every ⛏ mark you drop now files into it — no proximity guessing.",
-    { title: "New survey zone", confirmLabel: "Create", placeholder: "e.g. Nyx Iron Field A" });
+    { title: "New survey zone", confirmLabel: "Create", placeholder: "e.g. Nyx Iron Field A",
+      checkbox: haloZoneAnnounceOk
+        ? { label: "📣 Announce it on Discord (calls surveyors to the field)" } : null });
+  const name = haloZoneAnnounceOk ? res && res.value : res;
   if (!name || !name.trim()) return;
   const st = $("halo-zone-status");
   try {
     const r = await fetch("/api/halo/survey/zones", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim(), system: haloSystem || "Nyx" }) });
+      body: JSON.stringify({ name: name.trim(), system: haloSystem || "Nyx",
+                             announce: !!(haloZoneAnnounceOk && res && res.checked) }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || "couldn't create zone"); } return; }
     activeSurveyZone = d.active_survey_zone;
@@ -13787,6 +13843,7 @@ async function refreshHaloAfter() {
 // /api/halo/locate's radar geometry (dx/dy/dz from center + envelope radius).
 let haloRadar = { key: null, pts: [] };   // rolling path buffer: {dx,dy,dz}
 let haloRadarLast = null;                 // last pocket drawn (for resize)
+let radarMarkAt = null;   // radar offset when my last ⛏ mark landed (§5.3 nudge)
 
 function updatePocketRadar(d) {
   const wrap = $("halo-radar-wrap");
@@ -13809,6 +13866,21 @@ function updatePocketRadar(d) {
     : `${fmtDist(Math.abs(p.dz))} ${p.dz >= 0 ? "above" : "below"} plane`;
   const label = p.kind === "zone" ? esc(p.name || p.key) : esc(p.key);
   $("halo-radar-sub").innerHTML = `${label} · <b style="color:var(--text)">${fmtDist(p.center_off_m)}</b> to center · ${zTxt}`;
+  // Drift nudge (#37 §5.3, client-only): once you've dropped a mark in this
+  // pocket/zone, flag when the current fix has wandered more than ½ the
+  // envelope radius from it — the map stays dense when you mark as you go.
+  const nudge = $("halo-radar-nudge");
+  if (nudge) {
+    let drift = 0;
+    if (radarMarkAt && radarMarkAt.key === p.key && p.grid_radius_m)
+      drift = Math.hypot(p.dx - radarMarkAt.dx, p.dy - radarMarkAt.dy,
+                         p.dz - radarMarkAt.dz);
+    const drifted = drift > 0.5 * (p.grid_radius_m || 0);
+    nudge.hidden = !drifted;
+    if (drifted)
+      nudge.innerHTML = `you've drifted <b>${fmtDist(drift)}</b> past your last mark` +
+        ` — <b>⛏ here</b> keeps the map dense`;
+  }
   wrap.hidden = false;
   haloRadarLast = p;
   ensureRadarLayers(p);
@@ -14272,7 +14344,7 @@ function applyView() {
   // Org Intel: one analytics app whose section is selected by the sub-route.
   const intelSec = h === "#/intel" ? "overview" : h === "#/intel/mapping" ? "mapping"
     : h === "#/intel/hauling" ? "hauling" : h === "#/intel/trading" ? "trading"
-    : h === "#/intel/market" ? "market"
+    : h === "#/intel/surveying" ? "surveying" : h === "#/intel/market" ? "market"
     : h === "#/intel/boards" ? "boards" : h === "#/intel/directory" ? "directory" : null;
   const intel = !!intelSec && authed;
   // Legal pages are public — readable before sign-in (linked from the login
@@ -14323,6 +14395,7 @@ function applyView() {
   $("cargo-leaderboard-view").hidden = true;
   $("cargo-stats-view").hidden = true;
   $("trade-stats-view").hidden = true;
+  $("survey-stats-view").hidden = true;
   if (intel) renderIntel(intelSec);
 
   // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
@@ -14774,6 +14847,71 @@ function renderTradeStats(d) {
     { items: (d.top_ships || []).map(s => ({ name: s.ship, count: s.count })) });
 }
 
+// ---------- guild surveying stats (#/intel/surveying, #37 slice 5) ----------
+// Belt-survey activity derived live from the org's marks (no survey_runs
+// table): totals + sessions, per-belt coverage, top contributors, freshest
+// zones. Ranked lists are logistics, not achievements.
+function loadSurveyStats() {
+  return loadSection("survey-stats-status", "survey-stats-body", {
+    url: "/api/intel/surveying", label: "Surveying",
+    isEmpty: d => !((d.totals || {}).marks || 0),
+    empty: { title: "No survey marks yet",
+      sub: "Stats build as your org maps the belts. Drop ⛏ marks from the Halo Finder's AFTER THE DROP panel and coverage, contributors, and zone activity appear here.",
+      action: { href: "#/halo", label: "Open the Halo Finder →" } },
+    render: renderSurveyStats,
+  });
+}
+function surveyAgo(epoch) {   // short "how fresh" label for zone rows
+  if (!epoch) return "age unknown";
+  const s = Date.now() / 1000 - epoch;
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+}
+function renderSurveyStats(d) {
+  const t = d.totals || {};
+  $("survey-stat-cards").innerHTML = [
+    [t.members || 0, "SURVEYORS"], [t.marks || 0, "MARKS"],
+    [t.positives || 0, "ROCK HITS"], [t.scans || 0, "SCANS"],
+    [t.sessions || 0, "SESSIONS"], [t.zones || 0, "ZONES"],
+  ].map(([n, k]) =>
+    `<div class="stat-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
+
+  // Per-belt coverage: each system states what its numbers mean (ring-arc
+  // coverage for Keeger, pocket overlay for Glaciem, marks elsewhere).
+  const belts = d.belts || [];
+  $("survey-stat-belts").innerHTML = belts.map(b => {
+    const bits = [`<b>${b.marks}</b> mark${b.marks === 1 ? "" : "s"} (${b.positives} rock hit${b.positives === 1 ? "" : "s"}, ${b.scans} scan${b.scans === 1 ? "" : "s"})`];
+    if (b.coverage != null)
+      bits.push(`belt ring <b>${(b.coverage * 100).toFixed(b.coverage < 0.1 ? 2 : 1)}%</b> surveyed`);
+    if (b.glaciem)
+      bits.push(`${b.glaciem.surveyed} of ${b.glaciem.total} datamined pockets surveyed`);
+    bits.push(b.model
+      ? `field model ✓ (${b.model.samples} samples)`
+      : `field model needs ${b.model_min} rock hits`);
+    return `<div class="hbar"><span class="hbar-label"><b>${esc(b.system)}</b></span>` +
+      `<span style="font-size:12px;">${bits.join(" · ")}</span></div>`;
+  }).join("") || `<div class="stat-empty">No belt registry.</div>`;
+
+  statBars("survey-stat-members",
+    { items: (d.members || []).slice(0, 15).map(m =>
+        ({ name: m.sessions ? `${m.handle} · ${m.sessions} session${m.sessions === 1 ? "" : "s"}` : m.handle,
+           count: m.marks, guild: m.positives })) });
+
+  const zones = (d.zones || []).slice(0, 12);
+  $("survey-stat-zones").innerHTML = zones.length ? zones.map(z => {
+    const bits = [`${z.marks} mark${z.marks === 1 ? "" : "s"}`];
+    if (z.surveyors > 1) bits.push(`${z.surveyors} surveyors`);
+    if (z.status === "barren") bits.push("barren so far");
+    else if (z.status && z.status !== "empty") bits.push(`${esc(z.status)} rocks`);
+    bits.push(surveyAgo(z.latest));
+    return `<div class="hbar"><span class="hbar-label" title="${esc(z.name)}">` +
+      `${esc(z.name)}${z.closed ? " (closed)" : ""}</span>` +
+      `<span style="font-size:12px;">${surveyValueChip(z.value)} ` +
+      `<span class="muted">${esc(z.system)}</span> · ${bits.join(" · ")}</span></div>`;
+  }).join("") : `<div class="stat-empty">No named zones yet — ＋ New zone in the Halo Finder starts one.</div>`;
+}
+
 // ---------- Org Intel (analytics app shell) ----------
 // Drives the section nav active state, shows the active section's view (Overview
 // + Market live inside #intel-view; Mapping / Hauling / Leaderboards reuse the
@@ -14790,6 +14928,7 @@ function renderIntel(section) {
   $("stats-view").hidden = section !== "mapping";
   $("cargo-stats-view").hidden = section !== "hauling";
   $("trade-stats-view").hidden = section !== "trading";
+  $("survey-stats-view").hidden = section !== "surveying";
   const boards = section === "boards";
   $("intel-boards-bar").hidden = !boards;
   $("leaderboard-view").hidden = !(boards && intelBoard === "mapping");
@@ -14799,6 +14938,7 @@ function renderIntel(section) {
   else if (section === "mapping") loadStats();
   else if (section === "hauling") loadCargoStats();
   else if (section === "trading") loadTradeStats();
+  else if (section === "surveying") loadSurveyStats();
   else if (section === "market") loadMarketStats();
   else if (boards) {
     document.querySelectorAll("#intel-board-toggle button").forEach(b => {
@@ -15199,6 +15339,7 @@ const DISCORD_CATS = [
   { key: "records",     label: "Records",     desc: "a new org hauling record" },
   { key: "lfg",         label: "Group Finder", desc: "new looking-for-group posts (opt-in per post)" },
   { key: "pirates",     label: "Danger Board", desc: "new pirate danger warnings (opt-in per post)" },
+  { key: "survey",      label: "Surveying",   desc: "new survey zones (opt-in per zone) + belt-survey milestones" },
 ];
 const WEBHOOK_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//;
 const discSt = (key) => $("dwh-st-" + key);

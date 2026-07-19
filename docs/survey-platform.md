@@ -1,9 +1,10 @@
 # Survey platform — from drop helper to org prospecting suite (backlog #37) — design plan
 
-**Status: 🔨 IN BUILD (2026-07-19).** Slices 0–4 are BUILT (radar layers
+**Status: 🔨 IN BUILD (2026-07-19).** Slices 0–5 are BUILT (radar layers
 v0.64.0 · value layer v0.65.0 · ore-first routing v0.66.0 · scan detail +
 zone detail v0.67.0 · arrival routing v0.68.0 · coverage gaps + overview
-map §5.1); §5.2–§5.3 and phases 4–5 (§6–§7) remain design. Successor to
+map §5.1 · survey stats + Intel section + Discord milestones §5.2 + radar
+nudge §5.3); phases 4–5 (§6–§7) remain design. Successor to
 the shipped #36/#36.1 stack
 ([belt-survey.md](belt-survey.md), [survey-zones.md](survey-zones.md),
 [halo-finder-expansion.md](halo-finder-expansion.md)); assumes the v0.60–v0.63
@@ -296,7 +297,7 @@ is worse than none. Two-tier design:
   live in the Keeger panel; the `gap` goal resolves the most reachable arc
   into a synthetic pocket, so arrival/staging/cost-sanity all apply.
 
-### 5.2 Survey activity — derived, not stored
+### 5.2 Survey activity — derived, not stored ✅ (slice 5, built 2026-07-19)
 
 No `survey_runs` table. A **survey session** is derived from the marks
 themselves (owner + zone + `created` gaps under 30 min bridge a session),
@@ -312,12 +313,25 @@ tallies (marks, positives, scans, sessions, first/latest) feeding:
   reaches the field-model gate, a belt's first model fit. Threshold
   crossings only — never per-mark.
 
-### 5.3 Radar nudge (client-only)
+Build decisions (slice 5): a session also splits when the **zone tag
+changes** (same sitting, deliberate new field = new session); marks without
+`created` (pre-#37) count in tallies but never in sessions or first/latest.
+Both milestones key on the rock-positive count equalling
+`SURVEY_MODEL_MIN_MARKS` **exactly** at mark-commit time
+(`_survey_capture_milestones` in `_capture_poi`), so they fire once at the
+crossing; the belt milestone uses the same not-`glaciem_contains` pool the
+export's `survey_field_model` reads. Private marks never fire milestones.
+The zone-created announce carries the per-member cooldown
+(`_survey_announce_ok`); the crossings need none by construction.
+
+### 5.3 Radar nudge (client-only) ✅ (slice 5, built 2026-07-19)
 
 The radar already tracks drift between fixes. When the current fix sits more
 than ~½ zone radius from the last mark in the active zone, the radar tip line
 gains "you've drifted past your last mark — ⛏ here keeps the map dense."
-Pure client logic on data it already has; no server change.
+Pure client logic on data it already has; no server change. (Built as
+`radarMarkAt`: the radar offset is snapshotted when a ⛏ capture resolves,
+and `updatePocketRadar` compares the live offset against it per fix.)
 
 ### 5.4 Radar reference POIs ✅ (slice 0, built 2026-07-18)
 
@@ -461,11 +475,14 @@ value model plus Phase 3's coverage to keep suggestions fresh.
 - ✅ `doc.gaps` on `/api/halo/targets` (folded in — decided at build) +
   `doc.markers` (public station/gateway landmarks for the overview map).
 - ✅ `HaloPlanIn.gap: bool` — plan the most reachable plannable gap.
-- `GET /api/intel/surveying` — derived org survey stats (§5.2).
+- ✅ `GET /api/intel/surveying` — derived org survey stats (§5.2): totals +
+  ranked members (`nav_core.derive_survey_stats`), per-belt coverage rows,
+  freshest zones. `ZoneIn.announce` + `announce_available` on the zones
+  snapshot ride along.
 - `POST /api/admin/survey/import` + `GET/POST /api/admin/survey/imports`
   (batch review) (§6.2).
 - `POST /api/position` gains optional `game_build` (§6.1).
-- New `notify` category `survey` in org settings (§5.2).
+- ✅ New `notify` category `survey` in org settings (§5.2).
 
 ## 9. Build order (each row ships alone)
 
@@ -486,8 +503,8 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    the "scanned" basis, sharpening both value tiers and routing likelihoods.
 4. ✅ **Coverage gaps + NEXT GAP + map arcs** (§5.1, built 2026-07-19) +
    the always-on per-system overview map with click-to-pin (user ask).
-5. **Survey stats + Intel section + Discord milestones** (§5.2) + radar
-   nudge (§5.3).
+5. ✅ **Survey stats + Intel section + Discord milestones** (§5.2) + radar
+   nudge (§5.3), built 2026-07-19.
 6. **Patch stamping + staleness** (§6.1) — watcher release rides along;
    routing picks up the freshness discount for free.
 7. **Import + review queue** (§6.2); promotion tool (§6.3) anytime.
@@ -508,11 +525,14 @@ value model plus Phase 3's coverage to keep suggestions fresh.
   cross-system flagging, all three sort modes, the sub-3-mark honesty
   rendering; gap sampler coverage classification +
   plannable/expedition split against synthetic marker layouts;
-  `derive_survey_stats` session bridging; freshness derivation across build
+  ✅ `derive_survey_stats` session bridging (gap split, zone split,
+  NULL-`created` honesty, tallies/ranking); freshness derivation across build
   changes; import dedupe polarity rules.
 - app: scan PATCH ownership/caps/type guard; `game_build` threading
-  position→mark; import validation/pending-exclusion/approve flow; gap and
-  stats endpoints; notify cooldowns.
+  position→mark; import validation/pending-exclusion/approve flow; ✅ gap and
+  stats endpoints; ✅ notify cooldowns (announce builder/gating, rate limit +
+  endpoint arming, `announce_available`, milestones fire exactly at the gate,
+  negatives/unconfigured never fire).
 - Browser (preview harness): value chips on zone banner/targets/plan card in
   both themes; zone detail; NEXT GAP card; import review panel.
 - Every new derivation keyed on `nav.version` gets a cache-invalidation test

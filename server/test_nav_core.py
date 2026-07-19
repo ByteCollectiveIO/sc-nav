@@ -5049,6 +5049,73 @@ class SurveyGapTests(unittest.TestCase):
         self.assertGreater(g1["coverage"], 0.0)
 
 
+class DeriveSurveyStatsTests(unittest.TestCase):
+    """Survey activity stats (#37 §5.2): sessions derived from the mark
+    stream (gap bridge + zone split), NULL-created honesty, tallies."""
+
+    @staticmethod
+    def _mk(who, created, zone_id=None, positive=True, scan=None,
+            system="Nyx"):
+        return {"owner_handle": who, "created": created, "zone_id": zone_id,
+                "positive": positive, "scan": scan, "system": system,
+                "rocks": "dense" if positive else "none", "ores": [],
+                "salvage": False, "id": 0, "name": "m", "xyz": (0, 0, 0)}
+
+    def test_gap_bridging_splits_sessions(self):
+        gap = nav_core.SURVEY_SESSION_GAP_S
+        marks = [self._mk("Ash", 1000.0), self._mk("Ash", 1000.0 + gap - 1),
+                 self._mk("Ash", 1000.0 + 2 * gap + 10)]   # >gap after #2
+        s = nav_core.derive_survey_stats(marks)
+        self.assertEqual(s["members"][0]["sessions"], 2)
+        self.assertEqual(s["totals"]["sessions"], 2)
+
+    def test_zone_change_splits_a_session(self):
+        marks = [self._mk("Ash", 1000.0, zone_id=1),
+                 self._mk("Ash", 1060.0, zone_id=2)]       # 1 min apart
+        s = nav_core.derive_survey_stats(marks)
+        self.assertEqual(s["members"][0]["sessions"], 2)
+
+    def test_null_created_counts_but_never_sessions(self):
+        marks = [self._mk("Ash", None), self._mk("Ash", None)]
+        s = nav_core.derive_survey_stats(marks)
+        row = s["members"][0]
+        self.assertEqual(row["marks"], 2)
+        self.assertEqual(row["sessions"], 0)
+        self.assertIsNone(row["first"])
+        self.assertIsNone(row["latest"])
+
+    def test_tallies_and_ranking(self):
+        marks = [
+            self._mk("Ash", 100.0, zone_id=7, scan={"mass_kg": 1}),
+            self._mk("Ash", 200.0, zone_id=7, positive=False),
+            self._mk("Bel", 150.0, system="Stanton"),
+        ]
+        s = nav_core.derive_survey_stats(marks)
+        self.assertEqual(s["totals"],
+                         {"marks": 3, "positives": 2, "scans": 1,
+                          "sessions": 2, "members": 2, "zones": 1})
+        ash = s["members"][0]                 # ranked by marks desc
+        self.assertEqual(ash["handle"], "Ash")
+        self.assertEqual((ash["marks"], ash["positives"], ash["scans"]), (2, 1, 1))
+        self.assertEqual((ash["first"], ash["latest"]), (100.0, 200.0))
+        self.assertEqual(ash["zones"], 1)
+        self.assertEqual(ash["systems"], ["Nyx"])
+        z = s["zones"][7]
+        self.assertEqual((z["marks"], z["positives"], z["scans"]), (2, 1, 1))
+        self.assertEqual(z["latest"], 200.0)
+        self.assertEqual(z["surveyors"], 1)
+
+    def test_anonymous_owner_buckets_as_unknown(self):
+        s = nav_core.derive_survey_stats([self._mk(None, 10.0)])
+        self.assertEqual(s["members"][0]["handle"], "unknown")
+
+    def test_empty_marks(self):
+        s = nav_core.derive_survey_stats([])
+        self.assertEqual(s["totals"]["marks"], 0)
+        self.assertEqual(s["members"], [])
+        self.assertEqual(s["zones"], {})
+
+
 class OreRoutingTests(unittest.TestCase):
     """Ore-first routing (#37 slice 2): find_ore_in_space likelihood
     shrinkage, plannability gating, sort modes, depletion down-rank, and the
