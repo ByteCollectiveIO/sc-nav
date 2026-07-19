@@ -86,6 +86,9 @@ class Poi:
     # Belt-survey payload (#36, type=="survey" customs only):
     # {rocks: none|sparse|medium|dense, ores: [...], salvage: bool, source: ...}
     survey: dict | None = None
+    # Capture time, epoch seconds (custom POIs, #37). None on pre-#37 rows and
+    # on imported catalog POIs — treat unknown as "old", never as "now".
+    created: float | None = None
     # Admin quality control (poi_overrides table). `disabled` = flagged bad →
     # excluded from routing + search + destination. `qt_marker_base` = the imported
     # qt_marker value captured on first override-apply, so clearing a QT override
@@ -1141,6 +1144,7 @@ def custom_poi_from_position(
         private=bool(private),
         note=note,
         survey=survey,
+        created=t_unix,
     )
     poi.nearest_qt, poi.nearest_qt_dist_m = nearest_qt_marker(nav, poi, t_unix)
     return poi
@@ -1164,6 +1168,7 @@ def custom_poi_to_dict(poi: Poi) -> dict:
         "private": poi.private,
         "note": poi.note,
         "survey": poi.survey,
+        "created": poi.created,
     }
 
 
@@ -1186,6 +1191,7 @@ def poi_from_custom_dict(d: dict) -> Poi:
         private=bool(d.get("private")),
         note=d.get("note"),
         survey=d.get("survey") or None,
+        created=d.get("created"),
     )
 
 
@@ -5886,6 +5892,10 @@ def _score_halo_pocket_cands(cands: list[dict]) -> None:
 
 SURVEY_POI_TYPE = "survey"
 SURVEY_ROCKS = ("none", "sparse", "medium", "dense")
+# Density → weight for aggregation (#37): the ratios matter, not the units —
+# scores only ever compare to each other. Shared by the radar heatmap now and
+# the survey value model (design doc §3.2) later; tune in ONE place.
+SURVEY_DENSITY_W = {"none": 0.0, "sparse": 1.0, "medium": 2.5, "dense": 5.0}
 
 # Keeger region envelope: centerline from the station ring (exactly 48.000 Gm,
 # z=0); width/thickness are generous starting constants, superseded by the
@@ -5954,7 +5964,11 @@ def survey_marks(nav: NavData, system: str,
                     "ores": list(s.get("ores") or []),
                     "salvage": bool(s.get("salvage")),
                     "zone_id": zid if isinstance(zid, int) else None,
-                    "owner_handle": p.owner_handle})
+                    "owner_handle": p.owner_handle,
+                    # Capture epoch (#37); None on pre-#37 marks — unknown age
+                    # reads as "old" (age-windowed views keep it out of every
+                    # window except ALL).
+                    "created": p.created})
     out.sort(key=lambda m: m["id"])
     return out
 
@@ -6115,6 +6129,121 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
                         "salvage": False})
         out.append(row)
     return out
+
+
+# --- radar reference layers (#37 slice 0) ----------------------------------
+
+
+def radar_ref_pois(nav: NavData, system: str, center, radius_m: float,
+                   viewer_owner_ids=None, cap: int = 16,
+                   t_ref: float | None = None) -> list[dict]:
+    """Reference POIs near a pocket center for the radar overlay: fixed
+    landmarks (stations, gateways, org pins) that orient a pilot the pocket
+    geometry can't — QT-marked ones are the only markers actually visible
+    in-game from deep space. Filters: admin-disabled out, survey marks out
+    (they're the heatmap's layer, not a landmark), private POIs only for
+    their owner, and SAME SYSTEM ONLY — every system's coords center on its
+    own (0,0,0), so a bare distance filter would pull cross-system phantoms.
+    Nearest `cap` within `radius_m`, distance-sorted."""
+    t_ref = ROTATION_EPOCH if t_ref is None else t_ref
+    owner_ids = viewer_owner_ids or set()
+    out = []
+    for p in list(nav.pois.values()):     # snapshot; see survey_marks
+        if not poi_active(p) or p.system != system:
+            continue
+        if (p.type or "").strip().lower() == SURVEY_POI_TYPE:
+            continue
+        if not poi_visible_to(p, owner_ids):
+            continue
+        g = poi_global_m(nav, p, t_ref)
+        if g is None:
+            continue
+        d = dist3(g, center)
+        if d > radius_m:
+            continue
+        out.append({"id": p.id, "name": p.name,
+                    "x": g[0], "y": g[1], "z": g[2], "dist_m": d,
+                    "type": p.type, "source": p.source,
+                    "custom": bool(p.custom), "qt": bool(p.qt_marker)})
+    out.sort(key=lambda r: r["dist_m"])
+    return out[:cap]
+
+
+def _heat_cell_size(grid_radius_m: float) -> float:
+    """Nice-rounded heatmap cell edge ≈ 1/8 of the pocket radius (a 16×16-ish
+    grid at full-pocket zoom — coarse enough that an evening of marks fills
+    cells, fine enough to show structure)."""
+    raw = max(grid_radius_m, 8_000.0) / 8.0
+    mag = 10.0 ** math.floor(math.log10(raw))
+    for mult in (5.0, 2.0, 1.0):
+        if mult * mag <= raw:
+            return mult * mag
+    return mag
+
+
+def survey_heat_cells(marks: list[dict], center, grid_radius_m: float,
+                      window_s: float | None = None,
+                      t_ref: float | None = None) -> dict:
+    """The pocket-plane mirror of resource_cells (#37): bucket a pocket's
+    survey marks into square (dx, dy) cells — top-down like the radar, z
+    ignored — so the heatmap can show where mineables actually spawn and, via
+    the age window, whether that pattern moves over time.
+
+    `window_s` keeps only marks created within the window of `t_ref`; a mark
+    with no `created` (pre-#37) has unknown age and appears in the ALL view
+    only — never guessed fresh. Per cell: mark counts, mean density weight
+    (SURVEY_DENSITY_W), plurality `top` ore, `comp` shrunk toward the
+    pocket-wide ore rate (the resource_cells prior discipline), `barren`
+    (surveyed-empty ≠ unsurveyed — negatives stay first-class), and the
+    newest member's epoch. Derived on read, never stored."""
+    members = [m for m in marks
+               if dist3(m["xyz"], center) <= 1.2 * grid_radius_m]
+    if window_s is not None:
+        cutoff = (t_ref or 0.0) - window_s
+        members = [m for m in members
+                   if m.get("created") is not None and m["created"] >= cutoff]
+    cell_m = _heat_cell_size(grid_radius_m)
+    # Pocket-wide ore rate = the shrinkage prior, from the SAME windowed pool
+    # so a 7-day view isn't dragged toward last patch's ores.
+    pool: dict[str, int] = {}
+    for m in members:
+        if m["positive"]:
+            for ore in m["ores"]:
+                pool[ore] = pool.get(ore, 0) + 1
+    pool_n = sum(pool.values())
+    prior = {ore: c / pool_n for ore, c in pool.items()} if pool_n else {}
+    cells: dict[tuple[int, int], list[dict]] = {}
+    for m in members:
+        key = (math.floor((m["xyz"][0] - center[0]) / cell_m),
+               math.floor((m["xyz"][1] - center[1]) / cell_m))
+        cells.setdefault(key, []).append(m)
+    out = []
+    for (i, j), ms in cells.items():
+        counts: dict[str, int] = {}
+        for m in ms:
+            if m["positive"]:
+                for ore in m["ores"]:
+                    counts[ore] = counts.get(ore, 0) + 1
+        n_ore = sum(counts.values())
+        pos_n = sum(1 for m in ms if m["positive"])
+        times = [m["created"] for m in ms if m.get("created") is not None]
+        out.append({
+            # Cell-center offset from the pocket center, radar dx/dy meters.
+            "dx": (i + 0.5) * cell_m, "dy": (j + 0.5) * cell_m,
+            "n": len(ms), "pos_n": pos_n,
+            "density": sum(SURVEY_DENSITY_W.get(m["rocks"], 0.0)
+                           for m in ms) / len(ms),
+            "barren": pos_n == 0,
+            # Plurality ore actually logged here (raw counts, ties broken
+            # alphabetically for determinism); comp = shrunk probabilities.
+            "top": (min(sorted(counts), key=lambda o: -counts[o])
+                    if counts else None),
+            "comp": _shrunk_composition(counts, n_ore, prior,
+                                        RESOURCE_PRIOR_STRENGTH),
+            "last_t": max(times) if times else None,
+        })
+    out.sort(key=lambda c: (c["dx"], c["dy"]))
+    return {"cell_m": cell_m, "cells": out, "n_marks": len(members)}
 
 
 def _pct(sorted_vals: list[float], p: float) -> float:

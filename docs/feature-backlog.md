@@ -16,6 +16,34 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 37. Survey platform — value, direction, lifecycle, scope 🔨 SLICE 0 SHIPPED
+
+**Status: slice 0 (radar reference layers, doc §5.4–5.5) shipped v0.64.0 —
+Pocket Radar POI overlay (landmarks glyph-coded by source, rim ticks when
+off-zoom) + in-pocket survey heatmap (ROCKS/ORES modes, ALL/7D/24H age
+window, `custom_pois.created` landed). Everything below remains design.**
+Full plan:
+[`survey-platform.md`](survey-platform.md). Evolves the shipped #36/#36.1
+survey stack from a mapping tool into an org **prospecting** suite, in
+independently shippable slices: **(1) value layer** — per-zone `$$$` tiers
+from the existing #32 price machinery (ores/density bases work on today's
+marks; optional after-the-fact scan detail adds a "scanned" basis); **(2)
+ore-first routing — the payoff loop (user's framing: mirror the planetary
+element finder)** — pick an ore → ranked high-probability survey clusters
+(likelihood shrinkage × travel cost, plannability-gated per the miss-ceiling
+lesson) → one tap to a drop plan; element finder grows a DEEP SPACE section
++ halo `⛏ Ore` goal; works on today's marks; **(3) direction** — honest
+coverage-gap targeting (plannable vs expedition gaps; a routing miss links
+to NEXT GAP), derived survey stats + Org Intel section + Discord `survey`
+milestones, radar drift nudge; **(4) lifecycle** — watcher game-build
+stamping → automatic staleness badges, cross-org import with a
+pending/review queue + dedupe, maintainer promotion tooling; **(5) scope** —
+mark kinds (salvage/ice/gas/derelict/hazard w/ Danger Board cross-file),
+surface zones (own doc #37.1 before build), value-aware mining circuit.
+Invariants: derived-never-stored, one-tap stays one-tap, tiers-with-basis
+honesty, no gamification. Build order in doc §9; slices 1+2 need zero new
+inputs and complete the survey→mine loop on existing data.
+
 ### 36. Belt survey — crowd-sourced field mapping (Keeger first) ✅ BUILT
 
 **Status: built 2026-07-16 (same day as the design), browser-verified

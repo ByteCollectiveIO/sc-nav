@@ -4445,13 +4445,13 @@ class BeltRegistryTests(unittest.TestCase):
 
 
 def _survey_mark(pid, xyz, rocks="dense", ores=(), private=False,
-                 system="Nyx", payload=True):
+                 system="Nyx", payload=True, created=None):
     return nav_core.Poi(
         id=pid, name=f"mark {pid}", system=system, container_name=None,
         type="survey", local_km=None,
         global_m=(float(xyz[0]), float(xyz[1]), float(xyz[2])),
         latitude=None, longitude=None, height_m=None, qt_marker=False,
-        custom=True, private=private,
+        custom=True, private=private, created=created,
         survey=({"rocks": rocks, "ores": list(ores)} if payload else None))
 
 
@@ -4577,6 +4577,129 @@ class BeltSurveyTests(unittest.TestCase):
         self.assertEqual(d["pocket"]["marks"], 1)          # confidence badge
         self.assertEqual(d["pocket"]["ores"], ["Aluminum"])
         self.assertAlmostEqual(d["peak_m"], 4.0e9, delta=1e6)
+
+
+class RadarLayerTests(unittest.TestCase):
+    """Radar reference layers (#37 slice 0): landmark POIs near a pocket
+    (radar_ref_pois) and the pocket-plane survey heatmap (survey_heat_cells).
+    Synthetic fixtures throughout."""
+
+    C = (48.0e9, 0.0, 0.0)   # pocket center on the Keeger ring
+    R = nav_core.GLACIEM_POCKET_RADIUS_M
+
+    # --- radar_ref_pois -----------------------------------------------------
+
+    def _ref_nav(self):
+        near = _space_poi(11, "Near Station", (self.C[0] + 2e6, 0, 0), system="Nyx")
+        far = _space_poi(12, "Far Station", (self.C[0] + 9e12, 0, 0), system="Nyx")
+        noqt = _space_poi(13, "Wreck Marker", (self.C[0], 3e6, 0), system="Nyx", qt=False)
+        alien = _space_poi(14, "Phantom", (self.C[0] + 2e6, 0, 0), system="Stanton")
+        mark = _survey_mark(1_000_001, (self.C[0], -1e6, 0))
+        mine = nav_core.Poi(
+            id=1_000_002, name="My Pin", system="Nyx", container_name=None,
+            type="Custom", local_km=None, global_m=(self.C[0], 0, 4e6),
+            latitude=None, longitude=None, height_m=None, qt_marker=False,
+            custom=True, owner_id=77, private=True)
+        bad = _space_poi(15, "Bogus Import", (self.C[0] - 2e6, 0, 0), system="Nyx")
+        bad.disabled = True
+        return _synthetic_nav([near, far, noqt, alien, mark, mine, bad],
+                              system="Nyx")
+
+    def test_ref_pois_filters(self):
+        nav = self._ref_nav()
+        rows = nav_core.radar_ref_pois(nav, "Nyx", self.C, 10e6)
+        names = [r["name"] for r in rows]
+        # in: the near landmarks; out: far (radius), Phantom (same coords but
+        # ANOTHER system's frame), the survey mark (heatmap's layer), the
+        # private pin (not my viewer), the admin-disabled import
+        self.assertEqual(names, ["Near Station", "Wreck Marker"])
+        self.assertTrue(rows[0]["qt"])
+        self.assertFalse(rows[1]["qt"])
+        self.assertLess(rows[0]["dist_m"], rows[1]["dist_m"])
+
+    def test_ref_pois_private_visible_to_owner_and_cap(self):
+        nav = self._ref_nav()
+        rows = nav_core.radar_ref_pois(nav, "Nyx", self.C, 10e6,
+                                       viewer_owner_ids={77})
+        self.assertIn("My Pin", [r["name"] for r in rows])
+        self.assertTrue(next(r for r in rows if r["name"] == "My Pin")["custom"])
+        capped = nav_core.radar_ref_pois(nav, "Nyx", self.C, 10e6,
+                                         viewer_owner_ids={77}, cap=1)
+        self.assertEqual([r["name"] for r in capped], ["Near Station"])
+
+    # --- survey_heat_cells ----------------------------------------------------
+
+    def _marks(self):
+        cx = self.C[0]
+        return nav_core.survey_marks(_synthetic_nav([
+            # cluster A: two dense Gold marks in one spot
+            _survey_mark(1_000_001, (cx + 1e6, 1e6, 0), ores=("Gold",),
+                         created=1000.0),
+            _survey_mark(1_000_002, (cx + 1.1e6, 1.1e6, 0), ores=("Gold", "Quartz"),
+                         created=2000.0),
+            # cluster B: a sparse Aluminum find on the far side, age unknown
+            _survey_mark(1_000_003, (cx - 3e6, -3e6, 0), rocks="sparse",
+                         ores=("Aluminum",)),
+            # cluster C: surveyed empty
+            _survey_mark(1_000_004, (cx, -4e6, 1e5), rocks="none",
+                         created=3000.0),
+            # far away: another pocket entirely — must not leak in
+            _survey_mark(1_000_005, (0.0, 48.0e9, 0), ores=("Bexalite",),
+                         created=3000.0),
+        ], system="Nyx"), "Nyx")
+
+    def test_heat_cells_bucketing_and_composition(self):
+        heat = nav_core.survey_heat_cells(self._marks(), self.C, self.R)
+        self.assertEqual(heat["n_marks"], 4)              # far mark excluded
+        # nice-rounded cell edge ≈ R/8 (5,196 km / 8 → 500 km bucket)
+        self.assertEqual(heat["cell_m"], 500e3)
+        cells = heat["cells"]
+        gold = next(c for c in cells if c["top"] == "Gold")
+        self.assertEqual((gold["n"], gold["pos_n"], gold["barren"]), (2, 2, False))
+        self.assertEqual(gold["density"], 5.0)            # both dense
+        self.assertEqual(gold["last_t"], 2000.0)
+        # comp: shrunk probabilities, Gold dominant over Quartz in this cell
+        self.assertGreater(gold["comp"]["Gold"], gold["comp"]["Quartz"])
+        barren = next(c for c in cells if c["barren"])
+        self.assertEqual((barren["pos_n"], barren["top"], barren["density"]),
+                         (0, None, 0.0))
+        sparse = next(c for c in cells if c["top"] == "Aluminum")
+        self.assertEqual(sparse["density"], 1.0)
+        self.assertIsNone(sparse["last_t"])               # created unknown
+
+    def test_heat_cells_age_window(self):
+        marks = self._marks()
+        # window ending at t_ref=2500 spanning 1000s: keeps created>=1500 —
+        # the t=2000 Gold mark and the t=3000 barren mark, nothing else
+        heat = nav_core.survey_heat_cells(marks, self.C, self.R,
+                                          window_s=1000.0, t_ref=2500.0)
+        self.assertEqual(heat["n_marks"], 2)
+        self.assertEqual({c["top"] for c in heat["cells"]}, {"Gold", None})
+        gold = next(c for c in heat["cells"] if c["top"] == "Gold")
+        self.assertEqual(gold["n"], 1)                    # t=1000 twin windowed out
+        # the created-less mark appears ONLY with no window (unknown ≠ fresh)
+        tops = {c["top"] for c in
+                nav_core.survey_heat_cells(marks, self.C, self.R)["cells"]}
+        self.assertIn("Aluminum", tops)
+        wide = nav_core.survey_heat_cells(marks, self.C, self.R,
+                                          window_s=1e9, t_ref=2500.0)
+        self.assertNotIn("Aluminum", {c["top"] for c in wide["cells"]})
+
+    def test_heat_cells_empty_and_top_tiebreak(self):
+        empty = nav_core.survey_heat_cells([], self.C, self.R)
+        self.assertEqual((empty["n_marks"], empty["cells"]), (0, []))
+        # equal counts → alphabetical winner, deterministic across runs
+        tie = nav_core.survey_marks(_synthetic_nav([
+            _survey_mark(1_000_001, (self.C[0], 0, 0), ores=("Zirconium", "Agricium")),
+        ], system="Nyx"), "Nyx")
+        cell = nav_core.survey_heat_cells(tie, self.C, self.R)["cells"][0]
+        self.assertEqual(cell["top"], "Agricium")
+
+    def test_survey_marks_carry_created(self):
+        marks = self._marks()
+        self.assertEqual(next(m for m in marks if m["id"] == 1_000_001)["created"],
+                         1000.0)
+        self.assertIsNone(next(m for m in marks if m["id"] == 1_000_003)["created"])
 
 
 class ResourceValueTierTests(unittest.TestCase):
