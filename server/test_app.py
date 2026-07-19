@@ -3887,10 +3887,17 @@ class BeltSurveyApiTests(unittest.TestCase):
     def test_targets_carry_markers_and_gaps(self):
         doc = self.client.get("/api/halo/targets",
                               params={"system": "Nyx"}).json()
-        names = [m["name"] for m in doc["markers"]]
-        self.assertIn(self.gate.name, names)           # gateways whitelist in
+        # Jumppoints are filtered (v0.69.1: their gateway STATION sits right
+        # next to them and carries the label) — the bare dataset's only Nyx
+        # markers are jumppoints, so the list is empty here…
+        self.assertEqual([m for m in doc["markers"]
+                          if (m["type"] or "").lower() == "jumppoint"], [])
+        # …while Pyro's stations pass the whitelist with full positions.
+        pyro = self.client.get("/api/halo/targets",
+                               params={"system": "Pyro"}).json()
+        self.assertIn("Ruin Station", [m["name"] for m in pyro["markers"]])
         self.assertTrue(all("x" in m and "y" in m and "z" in m
-                            for m in doc["markers"]))
+                            for m in pyro["markers"]))
         self.assertEqual(doc["gaps"]["coverage"], 0.0)  # nothing surveyed yet
         self.assertEqual(len(doc["gaps"]["arcs"]), 1)   # one full-ring gap
         self._mark_at((self.KR, 0.0, 0.0))

@@ -4428,8 +4428,10 @@ class HaloPlanIn(BaseModel):
 
 # Overview-map landmark types (#37 slice 4): stations/gateways, not the OM
 # swarm — Stanton alone has dozens of orbital markers that would bury the map.
-_HALO_MARKER_TYPES = {"station", "reststop", "jumppoint", "landingzone",
-                      "outpost"}
+# Jumppoints are deliberately OUT (user feedback, v0.69.1): every gateway
+# STATION sits right next to its jump point, so the two labels stack — the
+# station carries the meaning, the jumppoint is clutter.
+_HALO_MARKER_TYPES = {"station", "reststop", "landingzone", "outpost"}
 
 
 def _halo_markers(system: str) -> list[dict]:

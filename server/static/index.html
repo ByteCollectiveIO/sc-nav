@@ -12383,7 +12383,7 @@ function setHaloBelt(b) {
   }
   $("halo-glaciem-wrap").hidden = haloBelt !== "glaciem";
   $("halo-keeger-wrap").hidden = haloBelt !== "keeger";
-  renderHaloSystemPanel();
+  renderHaloSystemPanel();   // also re-fits the overview to the belt (v0.69.1)
 }
 
 function renderHaloKeegerProgress() {
@@ -13328,6 +13328,10 @@ function drawHaloSystemMap(cv, plan) {
     const pts = [P.start, P.marker, P.cross].concat(P.stage ? [P.stage] : []);
     rFit = Math.max(beltOut || 0,
                     ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
+  } else if (ring && haloBelt === "glaciem") {
+    // Overview, Glaciem selected (v0.69.1 feedback): the belt seg drives the
+    // view — zoom to the ring so its 381 pockets are actually readable.
+    rFit = (ring.r_m + (ring.pocket_radius_m || 0)) * 1.18;
   } else {
     // Overview: fit the whole system — belts, the Keeger ring, planet
     // orbits, fields and landmarks.
@@ -13338,6 +13342,9 @@ function drawHaloSystemMap(cv, plan) {
       ...(doc.fields || []).map(f => Math.hypot(f.x, f.y)),
       ...(doc.markers || []).map(m => Math.hypot(m.x, m.y)), 1) * 1.1;
   }
+  // Which Nyx belt the picker has focused (overview only) — it gets the
+  // bright treatment, the other dims to context.
+  const nyxFocus = overview && ring ? haloBelt : null;
   const cx = cssW / 2, cy = cssH / 2;
   const s = (Math.min(cssW, cssH) / 2 - 12) / rFit;
   const X = (p) => cx + p[0] * s, Y = (p) => cy - p[1] * s;
@@ -13351,6 +13358,23 @@ function drawHaloSystemMap(cv, plan) {
   for (const b of doc.bodies || []) {
     if (b.type === "Star") continue;
     ctx.beginPath(); ctx.arc(cx, cy, Math.hypot(b.x, b.y) * s, 0, 2 * Math.PI); ctx.stroke();
+  }
+  // Landmarks UNDER everything else (v0.69.1 feedback: the survey story is
+  // the point of this map — POIs are context, drawn first and dim so the
+  // survey dots overprint them, never the other way around).
+  const marks = doc.markers || [];
+  ctx.strokeStyle = C.label; ctx.lineWidth = 1;
+  for (const m of marks) {
+    const mx2 = cx + m.x * s, my2 = cy - m.y * s;
+    ctx.beginPath();
+    ctx.moveTo(mx2, my2 - 2.5); ctx.lineTo(mx2 + 2.5, my2);
+    ctx.lineTo(mx2, my2 + 2.5); ctx.lineTo(mx2 - 2.5, my2);
+    ctx.closePath(); ctx.stroke();
+    if (marks.length <= 14) {
+      ctx.fillStyle = C.label;
+      ctx.fillText(m.name.length > 22 ? m.name.slice(0, 21) + "…" : m.name,
+                   mx2 + 6, my2 + 3);
+    }
   }
   if (bands) {
     // the belt — a true-scale thin ring; the chosen band brightened
@@ -13372,33 +13396,49 @@ function drawHaloSystemMap(cv, plan) {
     }
   } else if (ring) {
     // the Glaciem Ring — one circle; the ~4%-coverage story IS the pocket
-    // dots (the chosen pocket brightened)
-    ctx.strokeStyle = C.beltEdge;
+    // dots (the chosen pocket brightened). When the belt seg focuses
+    // Glaciem, the ring gets the bright edge (v0.69.1).
+    ctx.strokeStyle = nyxFocus === "glaciem" ? C.band : C.beltEdge;
     ctx.beginPath(); ctx.arc(cx, cy, ring.r_m * s, 0, 2 * Math.PI); ctx.stroke();
     const sel = plan && plan.drop.pocket;
-    ctx.fillStyle = C.band;
     for (const pk of doc.pockets || []) {
       const px = cx + pk.x * s, py = cy - pk.y * s;
-      // Surveyed ring pockets tint by org value tier (#37 slice 1).
       const vc = pk.value && SURVEY_VAL_MAP_C[pk.value.tier];
-      if (vc) ctx.fillStyle = vc;
-      const sz = overview && vc ? 3 : 1.5;   // valued pockets pop on the overview
-      ctx.fillRect(px - sz / 2, py - sz / 2, sz, sz);
-      if (vc) ctx.fillStyle = C.band;
+      const barren = !vc && pk.survey && pk.survey.status === "barren";
+      if (vc) {
+        // Org-surveyed, valued: the headline dots — big, tinted (#37).
+        ctx.fillStyle = vc;
+        const rr = overview ? 4 : 2;
+        ctx.beginPath(); ctx.arc(px, py, rr, 0, 2 * Math.PI); ctx.fill();
+      } else if (barren) {
+        // Surveyed EMPTY: a hollow slate ring — mapped, don't bother.
+        ctx.strokeStyle = "#8693a6";
+        ctx.beginPath(); ctx.arc(px, py, overview ? 3 : 1.5, 0, 2 * Math.PI);
+        ctx.stroke();
+      } else {
+        // Unsurveyed pocket: dim square — a real, selectable candidate
+        // (v0.69.1: these were near-invisible; the map is FOR picking them).
+        ctx.fillStyle = C.band;
+        const sz = overview ? 2.6 : 1.5;
+        ctx.fillRect(px - sz / 2, py - sz / 2, sz, sz);
+      }
       if (hits) hits.push({ x: px, y: py, key: pk.key, kind: pk.kind });
     }
     // the Keeger Belt (#36): outer ring + the org's surveyed pockets (drawn
     // even when off-canvas for a Glaciem-scale fit — arcs clip harmlessly)
     if (doc.keeger) {
+      const kFocus = nyxFocus === "keeger";
       ctx.strokeStyle = C.orbit;
       ctx.setLineDash([3, 5]);
       ctx.beginPath(); ctx.arc(cx, cy, doc.keeger.r_m * s, 0, 2 * Math.PI); ctx.stroke();
       ctx.setLineDash([]);
-      // Coverage gaps (#37 slice 4): the UNMAPPED Keeger arcs, hollow amber.
+      // Coverage gaps (#37 slice 4): the UNMAPPED Keeger arcs, hollow amber —
+      // bright when the belt seg focuses Keeger, faint context otherwise.
       const arcs = (doc.gaps || {}).arcs || [];
       if (arcs.length) {
-        ctx.strokeStyle = "rgba(224,162,74,.55)";
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = kFocus || !overview
+          ? "rgba(224,162,74,.55)" : "rgba(224,162,74,.22)";
+        ctx.lineWidth = kFocus ? 2.5 : 2;
         for (const a of arcs) {
           const a0 = a.a0_deg * Math.PI / 180, a1 = a.a1_deg * Math.PI / 180;
           ctx.beginPath();
@@ -13410,9 +13450,10 @@ function drawHaloSystemMap(cv, plan) {
       }
       for (const pk of doc.surveyed || []) {
         // Value-tinted survey dots (#37 slice 1); untiered stays C.window.
+        // Big on the overview — the survey IS the story (v0.69.1).
         ctx.fillStyle = (pk.value && SURVEY_VAL_MAP_C[pk.value.tier]) || C.window;
         ctx.beginPath();
-        ctx.arc(cx + pk.x * s, cy - pk.y * s, overview ? 3 : 2, 0, 2 * Math.PI);
+        ctx.arc(cx + pk.x * s, cy - pk.y * s, overview ? 4 : 2, 0, 2 * Math.PI);
         ctx.fill();
         if (hits) hits.push({ x: cx + pk.x * s, y: cy - pk.y * s,
                               key: pk.key, kind: "surveyed" });
@@ -13422,7 +13463,7 @@ function drawHaloSystemMap(cv, plan) {
         if (z.closed || !z.xyz || z.system !== doc.system) continue;
         const zx = cx + z.xyz[0] * s, zy = cy - z.xyz[1] * s;
         ctx.fillStyle = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.window;
-        ctx.fillRect(zx - 2.5, zy - 2.5, 5, 5);
+        ctx.fillRect(zx - 3, zy - 3, 6, 6);
         hits.push({ x: zx, y: zy, key: z.key, kind: "zone" });
       }
     }
@@ -13440,22 +13481,6 @@ function drawHaloSystemMap(cv, plan) {
       ctx.beginPath(); ctx.arc(fx, fy, 2, 0, 2 * Math.PI); ctx.fill();
       if (hits) hits.push({ x: fx, y: fy, key: f.uuid, kind: "field",
                             name: f.name });
-    }
-  }
-  // Landmarks (#37 slice 4): stations + gateways — small diamonds, labeled
-  // when the set is small enough to read.
-  const marks = doc.markers || [];
-  ctx.strokeStyle = C.text; ctx.lineWidth = 1;
-  for (const m of marks) {
-    const mx2 = cx + m.x * s, my2 = cy - m.y * s;
-    ctx.beginPath();
-    ctx.moveTo(mx2, my2 - 3); ctx.lineTo(mx2 + 3, my2);
-    ctx.lineTo(mx2, my2 + 3); ctx.lineTo(mx2 - 3, my2);
-    ctx.closePath(); ctx.stroke();
-    if (marks.length <= 14) {
-      ctx.fillStyle = C.label;
-      ctx.fillText(m.name.length > 22 ? m.name.slice(0, 21) + "…" : m.name,
-                   mx2 + 6, my2 + 3);
     }
   }
   // bodies: star at its real offset, planets as dots + labels
