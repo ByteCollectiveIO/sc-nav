@@ -4788,6 +4788,103 @@ class SurveyValueTests(unittest.TestCase):
         self.assertEqual(nav_core.annotate_survey_values([], self.PRICES), [])
 
 
+class OreRoutingTests(unittest.TestCase):
+    """Ore-first routing (#37 slice 2): find_ore_in_space likelihood
+    shrinkage, plannability gating, sort modes, depletion down-rank, and the
+    §4.3 honesty rules. Synthetic cluster dicts in survey_cluster_fit shape."""
+
+    KR = nav_core.KEEGER_R_M
+
+    @staticmethod
+    def _cluster(key, xyz, n_pos, ore_counts, density="dense", **kw):
+        return {"key": key, "kind": "surveyed", "xyz": xyz,
+                "grid_radius_m": nav_core.GLACIEM_POCKET_RADIUS_M,
+                "marks": n_pos, "positive": n_pos, "density": density,
+                "ores": sorted(ore_counts), "ore_counts": dict(ore_counts),
+                "salvage": False, **kw}
+
+    def _pool(self):
+        # proven: 16/20 marks list Gold · fluke: 2/2 · counterweight: 20
+        # positive marks, no Gold — pulls the pool prior low enough that the
+        # fluke can't win on two lucky marks.
+        return [
+            self._cluster("PROVEN", (self.KR, 0, 0), 20, {"Gold (Raw)": 16}),
+            self._cluster("FLUKE", (0, self.KR, 0), 2, {"Gold (Raw)": 2}),
+            self._cluster("OTHER", (-self.KR, 0, 0), 20, {"Quartz (Raw)": 12}),
+        ]
+
+    def test_shrinkage_proven_beats_fluke(self):
+        rows = nav_core.find_ore_in_space(_synthetic_nav([], system="Nyx"),
+                                          "Gold (Raw)", self._pool())
+        self.assertEqual([r["key"] for r in rows], ["PROVEN", "FLUKE"])
+        self.assertGreater(rows[0]["score"], rows[1]["score"])
+        # OTHER has zero Gold evidence — not a "mapped source", never listed
+        self.assertNotIn("OTHER", [r["key"] for r in rows])
+
+    def test_ore_name_normalization_and_honesty_gate(self):
+        rows = nav_core.find_ore_in_space(_synthetic_nav([], system="Nyx"),
+                                          "gold", self._pool())
+        self.assertEqual(rows[0]["key"], "PROVEN")
+        self.assertIsNotNone(rows[0]["p"])          # 20 marks → a real pct
+        fluke = next(r for r in rows if r["key"] == "FLUKE")
+        self.assertIsNone(fluke["p"])               # 2 marks → count, not pct
+        self.assertEqual((fluke["n_ore"], fluke["n_pos"]), (2, 2))
+
+    def test_no_evidence_is_the_honest_empty_answer(self):
+        nav = _synthetic_nav([], system="Nyx")
+        self.assertEqual(
+            nav_core.find_ore_in_space(nav, "Bexalite", self._pool()), [])
+        self.assertEqual(nav_core.find_ore_in_space(nav, "Gold (Raw)", []), [])
+
+    def test_reach_classification_and_near_sort(self):
+        # Start and one marker on the x-axis: HIT sits on the chord, NEARBY
+        # misses by 50,000 km (plannable), FAR by 2 Gm (expedition).
+        start = _space_poi(11, "Start", (44.0e9, 0, 0), system="Nyx")
+        marker = _space_poi(12, "Gate", (52.0e9, 0, 0), system="Nyx")
+        pool = [
+            self._cluster("HIT", (48.0e9, 0.0, 0), 5, {"Gold (Raw)": 4}),
+            self._cluster("NEARBY", (48.0e9, 50_000e3, 0), 5, {"Gold (Raw)": 4}),
+            self._cluster("FAR", (48.0e9, 2.0e9, 0), 20, {"Gold (Raw)": 20}),
+        ]
+        nav = _synthetic_nav([start, marker], system="Nyx")
+        rows = nav_core.find_ore_in_space(nav, "Gold (Raw)", pool,
+                                          start=start, sort="near",
+                                          markers=[marker])
+        by = {r["key"]: r for r in rows}
+        self.assertEqual(by["HIT"]["reach"], "hit")
+        self.assertEqual(by["NEARBY"]["reach"], "plannable")
+        self.assertEqual(by["FAR"]["reach"], "expedition")
+        self.assertAlmostEqual(by["FAR"]["creep_m"], 2.0e9, delta=1e6)
+        # near sort: expedition ranks LAST despite its perfect evidence
+        self.assertEqual([r["key"] for r in rows], ["HIT", "NEARBY", "FAR"])
+        self.assertAlmostEqual(by["HIT"]["dist_m"], 4.0e9, delta=1e6)
+
+    def test_depleted_ranks_last_never_hidden(self):
+        rows = nav_core.find_ore_in_space(
+            _synthetic_nav([], system="Nyx"), "Gold (Raw)", self._pool(),
+            depleted=frozenset({"PROVEN"}))
+        self.assertEqual([r["key"] for r in rows], ["FLUKE", "PROVEN"])
+        self.assertTrue(rows[1]["depleted"])
+
+    def test_value_sort_prefers_valued_cluster(self):
+        pool = self._pool()
+        pool[1] = {**pool[1],
+                   "value": {"score": 500_000, "tier": "high",
+                             "basis": "ores", "salvage": False}}
+        rows = nav_core.find_ore_in_space(_synthetic_nav([], system="Nyx"),
+                                          "Gold (Raw)", pool, sort="value")
+        self.assertEqual(rows[0]["key"], "FLUKE")   # value term dominates
+
+    def test_cluster_fit_emits_ore_counts(self):
+        fit = nav_core.survey_cluster_fit(
+            [{"xyz": (self.KR, 0, 0), "positive": True, "rocks": "dense",
+              "ores": ["Gold (Raw)", "Quartz (Raw)"], "salvage": False},
+             {"xyz": (self.KR + 1e5, 0, 0), "positive": True, "rocks": "dense",
+              "ores": ["Gold (Raw)"], "salvage": False}], [])
+        self.assertEqual(fit["ore_counts"],
+                         {"Gold (Raw)": 2, "Quartz (Raw)": 1})
+
+
 class ResourceValueTierTests(unittest.TestCase):
     """resource_value_tiers: the mining-value badge buckets (#32)."""
 

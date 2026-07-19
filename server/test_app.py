@@ -3766,6 +3766,7 @@ class BeltSurveyApiTests(unittest.TestCase):
             app.nav.pois.pop(pid, None)
         app.nav.touch()
         db.clear_survey_pois("Nyx")
+        db.survey_depletion_clear()
 
     def _mark_at(self, xyz, rocks="dense", **kw):
         pid = db.next_custom_poi_id()
@@ -4011,6 +4012,114 @@ class BeltSurveyApiTests(unittest.TestCase):
             for name, val in patched.items():
                 setattr(app, name, val)
         self.assertGreater(app.nav.version, before)
+
+    # --- ore-first routing (#37 slice 2) --------------------------------------
+
+    def test_survey_find_ranks_and_flags(self):
+        rich, poor = self._priced_ores()
+        self._mark_at((self.KR, 0.0, 0.0), ores=[rich])
+        self._mark_at((0.0, self.KR, 0.0), rocks="sparse", ores=[poor])
+        s = app.Session(self._user)
+        s.pos, s.t, s.system = (self.KR + 1e6, 0.0, 0.0), time.time(), "Nyx"
+        app.hub.sessions["1"] = s
+        doc = self.client.get("/api/survey/find",
+                              params={"ore": rich, "sort": "near"}).json()
+        self.assertTrue(doc["has_position"])
+        self.assertEqual(doc["system"], "Nyx")
+        self.assertEqual(len(doc["results"]), 1)      # only the rich cluster
+        row = doc["results"][0]
+        self.assertEqual((row["n_ore"], row["n_pos"]), (1, 1))
+        self.assertIsNone(row["p"])                   # <3 marks: no fake pct
+        self.assertIn(row["reach"], ("hit", "plannable", "expedition"))
+        self.assertIsNotNone(row["dist_m"])
+        self.assertEqual(doc["elsewhere"], [])
+        # unknown ore = the honest empty answer, not an error
+        none = self.client.get("/api/survey/find",
+                               params={"ore": "Neverium"}).json()
+        self.assertEqual((none["results"], none["elsewhere"]), ([], []))
+        # blank ore is a shape error
+        self.assertEqual(self.client.get("/api/survey/find",
+                                         params={"ore": " "}).status_code, 400)
+
+    def test_mined_out_report_lifecycle(self):
+        rich, _ = self._priced_ores()
+        self._mark_at((self.KR, 0.0, 0.0), ores=[rich])
+        self._mark_at((0.0, self.KR, 0.0), ores=[rich])
+        s = app.Session(self._user)
+        s.pos, s.t, s.system = (self.KR, 1e6, 0.0), time.time(), "Nyx"
+        app.hub.sessions["1"] = s
+        keys = [p["key"] for p in
+                self.client.get("/api/halo/survey").json()["pockets"]]
+        r = self.client.post("/api/survey/depleted",
+                             json={"key": keys[0], "system": "Nyx"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["ageoff_min"], 240)     # the 4 h default
+        doc = self.client.get("/api/survey/find", params={"ore": rich}).json()
+        rows = {x["key"]: x for x in doc["results"]}
+        self.assertTrue(rows[keys[0]]["depleted"])
+        self.assertIsNotNone(rows[keys[0]]["depleted_age_s"])
+        # depleted ranks last despite identical evidence
+        self.assertEqual(doc["results"][-1]["key"], keys[0])
+        # unknown cluster → 404; admin clear heals
+        self.assertEqual(self.client.post(
+            "/api/survey/depleted",
+            json={"key": "SVY-999999", "system": "Nyx"}).status_code, 404)
+        self.assertEqual(self.client.post(
+            "/api/admin/survey/depletion/clear").json()["deleted"], 1)
+        doc2 = self.client.get("/api/survey/find", params={"ore": rich}).json()
+        self.assertFalse(any(x["depleted"] for x in doc2["results"]))
+
+    def test_depletion_ageoff_setting_roundtrip(self):
+        self.assertEqual(self.client.get("/api/settings").json()
+                         ["survey_depletion_ageoff_min"], 240)
+        ok = self.client.post("/api/settings",
+                              json={"survey_depletion_ageoff_min": 60})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["survey_depletion_ageoff_min"], 60)
+        self.assertEqual(self.client.post(
+            "/api/settings",
+            json={"survey_depletion_ageoff_min": 0}).status_code, 422)
+        db.set_setting("survey_depletion_ageoff_min", "240")   # restore
+
+    def test_plan_ore_goal(self):
+        rich, _ = self._priced_ores()
+        # exclusivity: ore is one goal among the others
+        r = self.client.post("/api/halo/plan", json={"ore": rich, "band": 5})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("exactly one goal", r.json()["detail"])
+        # no evidence yet → the survey-first 400
+        r2 = self.client.post("/api/halo/plan",
+                              json={"ore": rich, "start_poi_id": self.gate.id})
+        self.assertEqual(r2.status_code, 400)
+        self.assertIn("no mapped source", r2.json()["detail"])
+        # a mark on the gateway chord makes the ore goal plannable end-to-end
+        other = next(p for p in app.nav.qt_markers
+                     if p.system == "Nyx" and p.id != self.gate.id)
+        now = time.time()
+        g1 = app.nav_core.poi_global_m(app.nav, self.gate, now)
+        g2 = app.nav_core.poi_global_m(app.nav, other, now)
+        mid = tuple((a + b) / 2 for a, b in zip(g1, g2))
+        mark = self._mark_at(mid, ores=[rich])
+        plan = self.client.post("/api/halo/plan",
+                                json={"ore": rich,
+                                      "start_poi_id": self.gate.id})
+        self.assertEqual(plan.status_code, 200)
+        doc = plan.json()
+        self.assertEqual(doc["ore"], rich)             # header echo
+        self.assertEqual(doc["drop"]["pocket"]["key"],
+                         f"SVY-{mark.id % 1_000_000}")
+        # a fresh mined-out report on the only source → survey-first 400
+        self.client.post("/api/survey/depleted",
+                         json={"key": doc["drop"]["pocket"]["key"],
+                               "system": "Nyx"})
+        r3 = self.client.post("/api/halo/plan",
+                              json={"ore": rich, "start_poi_id": self.gate.id})
+        self.assertEqual(r3.status_code, 400)
+
+    def test_resource_ores_unions_survey_ores(self):
+        self._mark_at((self.KR, 0.0, 0.0), ores=["Beltium Rare"])
+        names = self.client.get("/api/resource_ores").json()
+        self.assertIn("Beltium Rare", names)
 
     # --- radar reference layers (#37 slice 0) --------------------------------
 

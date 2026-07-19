@@ -421,6 +421,22 @@ CREATE TABLE IF NOT EXISTS stock_reports (
 );
 CREATE INDEX IF NOT EXISTS stock_reports_pair ON stock_reports(poi_id, commodity);
 
+-- Survey depletion reports (#37 slice 2): "⛏ mined out" filed against a
+-- survey cluster (pocket key / zone slug). Down-ranks the cluster in
+-- ORE-FIRST ROUTING ONLY — the survey record itself is untouched (rocks
+-- respawn; the map is still right). Pure time age-off via the org setting
+-- survey_depletion_ageoff_min (not stored here); one live row per key —
+-- a newer report replaces the old.
+CREATE TABLE IF NOT EXISTS survey_depletion (
+    id          INTEGER PRIMARY KEY,
+    key         TEXT NOT NULL,        -- cluster key: SVY-* | Wtn-* | zone slug
+    system      TEXT NOT NULL,
+    poster      TEXT NOT NULL,        -- Discord member id of the reporter
+    poster_name TEXT,                 -- display name at post time
+    created     REAL NOT NULL         -- epoch seconds; drives age-off
+);
+CREATE INDEX IF NOT EXISTS survey_depletion_key ON survey_depletion(key);
+
 CREATE TABLE IF NOT EXISTS pirate_warnings (
     id            INTEGER PRIMARY KEY,
     poster        TEXT NOT NULL,      -- Discord member id of the reporter
@@ -2634,6 +2650,45 @@ def stock_reports_clear() -> int:
     """Admin wipe of the stock board. Returns rows removed."""
     with _lock, _conn:
         cur = _conn.execute("DELETE FROM stock_reports")
+        return cur.rowcount
+
+
+# --- survey depletion reports (#37 slice 2) ---------------------------------
+
+
+def survey_depletion_save(e: dict) -> int:
+    """File one ⛏ mined-out report, replacing any live report for the same
+    cluster key (case-insensitive — keys are slugs/SVY ids). Returns the new
+    row id."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM survey_depletion WHERE lower(key)=lower(?)",
+                      (e["key"],))
+        cur = _conn.execute(
+            "INSERT INTO survey_depletion (key,system,poster,poster_name,created) "
+            "VALUES (?,?,?,?,?)",
+            (e["key"], e["system"], e["poster"], e.get("poster_name") or "",
+             e["created"]))
+        return cur.lastrowid
+
+
+def survey_depletion_since(cutoff: float) -> list[dict]:
+    """Live mined-out reports filed after `cutoff`, freshest first; expired
+    rows are pruned in the same pass (the stock-report discipline)."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM survey_depletion WHERE created < ?", (cutoff,))
+        rows = _conn.execute(
+            "SELECT * FROM survey_depletion ORDER BY created DESC").fetchall()
+    return [{"id": r["id"], "key": r["key"], "system": r["system"],
+             "poster": r["poster"], "poster_name": r["poster_name"] or "",
+             "created": r["created"]} for r in rows]
+
+
+def survey_depletion_clear(system: str | None = None) -> int:
+    """Admin wipe of the mined-out board (optionally one system's)."""
+    with _lock, _conn:
+        cur = (_conn.execute("DELETE FROM survey_depletion WHERE system=?",
+                             (system,)) if system
+               else _conn.execute("DELETE FROM survey_depletion"))
         return cur.rowcount
 
 

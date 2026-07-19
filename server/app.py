@@ -274,6 +274,28 @@ def active_stock_reports() -> list[dict]:
     return reports
 
 
+def survey_depletion_ageoff_min() -> int:
+    """Minutes a ⛏ mined-out report (#37 slice 2) suppresses a survey cluster
+    in ore-first routing before it ages off. Rock spawns rotate server-side on
+    the order of hours; the default is a play session (240 = 4 h, a user
+    call), tuned like the stock window. Routing-only — the survey record is
+    never touched."""
+    try:
+        return max(1, int(db.get_setting("survey_depletion_ageoff_min", "240")))
+    except (TypeError, ValueError):
+        return 240
+
+
+def active_survey_depletion() -> list[dict]:
+    """Live mined-out reports (expired rows pruned on read), freshest first,
+    each with `age_s` for the client's badges."""
+    now = time.time()
+    reports = db.survey_depletion_since(now - survey_depletion_ageoff_min() * 60)
+    for r in reports:
+        r["age_s"] = max(0, int(now - (r.get("created") or now)))
+    return reports
+
+
 def load_wiki_locations() -> list[dict]:
     """The committed SC Wiki locations snapshot (poi/locations.json, #28) —
     regenerated per game patch by tools/sync_locations.py, never fetched at
@@ -3796,9 +3818,18 @@ async def get_resource_cells(system: str, body: str, category: str = "resource")
 
 @app.get("/api/resource_ores")
 async def get_resource_ores(category: str = "resource"):
-    """Type names present in sightings of `category` (element-finder picker)."""
+    """Type names present in sightings of `category` (element-finder picker).
+    For ores, deep-space survey-mark ores are unioned in (#37 slice 2) so an
+    ore the org has only ever seen in the belts is still findable."""
     _require_mappable_category(category)
-    return nav_core.resource_ore_names(nav, category=category)
+    names = set(nav_core.resource_ore_names(nav, category=category))
+    if category == "resource":
+        for p in list(nav.pois.values()):
+            s = getattr(p, "survey", None)
+            if (s and p.custom and not p.private
+                    and (p.type or "").strip().lower() == nav_core.SURVEY_POI_TYPE):
+                names.update(o for o in (s.get("ores") or []) if o)
+    return sorted(names)
 
 
 @app.get("/api/resource_hotspots")
@@ -4365,6 +4396,10 @@ class HaloPlanIn(BaseModel):
     # Nyx belt selector (#36): "glaciem" (datamined pockets, default) or
     # "keeger" (the org's surveyed pockets — live from the first mark).
     belt: str | None = Field(default=None, max_length=16)
+    # ⛏ Ore goal (#37 slice 2): AUTO-target the top-ranked survey clusters
+    # holding this ore (any system with survey evidence; fresh mined-out
+    # reports are skipped). One goal like band/pocket_key/target_poi_id.
+    ore: str | None = Field(default=None, max_length=64)
     # Nyx: also target QV-Breaker mission pockets (believed contract-gated)
     include_mission: bool = False
     start_poi_id: int | None = None
@@ -4422,7 +4457,7 @@ def get_halo_targets(system: str = "Stanton",
         sstate = nav_core.survey_state(nav, system)
         marks = sstate["marks"]
         # Org survey value tiers (#37 slice 1): one per-system pool.
-        vk, _ = _survey_valued(system)
+        vk, _, _pool = _survey_valued(system)
         # Overlay the org's in-pocket findings onto the datamined ring pockets
         # (#36): a surveyed-barren pocket carries a `survey` block so the picker
         # can badge it and the planner down-ranks it.
@@ -4522,6 +4557,11 @@ def _halo_goal_system(body: HaloPlanIn) -> str | None:
         return nav_core.GLACIEM_SYSTEM
     if body.belt is not None:
         return nav_core.GLACIEM_SYSTEM
+    if body.ore is not None:
+        # ⛏ Ore goal (#37 slice 2): without an explicit system, route where
+        # the org's survey evidence for deep-space mining lives — Nyx (the
+        # belts). Cross-system routing stays explicit ("travel there first").
+        return nav_core.GLACIEM_SYSTEM
     if body.target_poi_id is not None:
         tp = nav.pois.get(body.target_poi_id)
         if tp is None:
@@ -4541,15 +4581,34 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
     # goal may be named. (Without this, a zone pin resolved below would
     # silently win over an also-sent band/field/target.)
     picked = sum(x is not None for x in (body.band, body.field_uuid,
-                                         body.pocket_key, body.target_poi_id))
+                                         body.pocket_key, body.target_poi_id,
+                                         body.ore))
     if picked > 1:
         raise HTTPException(
             status_code=400,
-            detail="pick exactly one goal: band / field_uuid / pocket_key / target_poi_id")
+            detail="pick exactly one goal: band / field_uuid / pocket_key / target_poi_id / ore")
+    # ⛏ Ore goal (#37 slice 2): like a zone pin, valid in ANY system that has
+    # survey evidence — rank the system's clusters for the ore and hand the
+    # top plannable candidates to the solver as the pocket pool (cross-cluster
+    # alternates come free from the marker×pocket scan). Fresh mined-out
+    # reports are skipped here (routing only — the survey record stands).
+    if body.ore is not None:
+        _, _zv, pool = _survey_valued(system)
+        depleted = frozenset(r["key"] for r in active_survey_depletion())
+        ranked = nav_core.find_ore_in_space(nav, body.ore, pool,
+                                            depleted=depleted)
+        keys = [r["key"] for r in ranked if not r["depleted"]][:8]
+        picks = [c for c in pool if c["key"] in set(keys) and c.get("xyz")]
+        if not picks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"no mapped source for {body.ore} in {system} — "
+                       "⛏ survey it first (every rock mark teaches the router)")
+        return {"pockets": picks}
     # Named zones (#36.1) are plannable in ANY system — resolve a zone pin here,
     # before the ring-only pocket guard below.
     if body.pocket_key is not None:
-        _, zones_valued = _survey_valued(system)
+        _, zones_valued, _pool = _survey_valued(system)
         zone = next((z for z in zones_valued
                      if z["key"].lower() == body.pocket_key.lower()), None)
         if zone is not None:
@@ -4605,7 +4664,7 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
         sstate = nav_core.survey_state(nav, system)
         # Value chips ride the plan's pocket view too (#37 slice 1) — stamp
         # from the per-system pool so the drop card's tier matches the panels.
-        vk, _ = _survey_valued(system)
+        vk, _, _pool = _survey_valued(system)
         _val = lambda p: {**p, "value": vk[p["key"]]} if p["key"] in vk else p
         surveyed = [_val(p) for p in sstate["pockets"]]
         # Datamined ring pockets carry the org's survey overlay so the solver
@@ -4677,7 +4736,7 @@ def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> di
     fuel_req, max_range_m, qd = _resolve_drive(body.ship, body.qd)   # #27
     speed = (QUANTUM_DRIVES.get(qd) or {}).get("drive_speed") if qd else None
     try:
-        return nav_core.plan_halo_drop(
+        plan = nav_core.plan_halo_drop(
             nav, start=start, system=system, **goal,
             aim=(body.aim if body.aim in ("band", "peak") else "band"),
             markers=markers,
@@ -4687,6 +4746,9 @@ def _solve_halo_plan(body: HaloPlanIn, sess: "Session | None", user: dict) -> di
             fuel_req=fuel_req, max_range_m=max_range_m)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    if body.ore:
+        plan["ore"] = body.ore    # ⛏ ore goal: echo for the plan header (#37)
+    return plan
 
 
 @app.get("/api/halo/survey")
@@ -4700,7 +4762,7 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
     marks = sstate["marks"]
     # Org survey value tiers (#37 slice 1) — rides the export too, so a
     # shared dataset carries its economics (score + basis per cluster).
-    vk, zones_valued = _survey_valued(system)
+    vk, zones_valued, _pool = _survey_valued(system)
     # Ring pockets the org has surveyed (barren or rich): ties the otherwise
     # inert in-Glaciem marks back to their datamined pocket (#36).
     glaciem = ([{"key": p["key"], "kind": p["kind"],
@@ -4788,13 +4850,15 @@ def _survey_zones_view(system: str) -> list[dict]:
     return nav_core.survey_zones_state(nav, system, zones)
 
 
-def _survey_valued(system: str) -> tuple[dict, list[dict]]:
+def _survey_valued(system: str) -> tuple[dict, list[dict], list[dict]]:
     """ONE per-system value pool (#37 slice 1): surveyed pockets + org-
     overlaid Glaciem pockets + named zones, scored against the live price
     feed and tiered together — so a $$$ chip means the same thing on every
-    surface of this system. Returns ({key: value}, zones-view-with-values).
-    Recomputed per read; prices changing bumps nav.version (_refresh_feeds
-    touches nav), so cached survey products stay in step."""
+    surface of this system. Returns ({key: value}, zones-view-with-values,
+    the full valued cluster pool — the ore-first router ranks over the
+    latter, #37 slice 2). Recomputed per read; prices changing bumps
+    nav.version (_refresh_feeds touches nav), so cached survey products stay
+    in step."""
     sstate = nav_core.survey_state(nav, system)
     zones = _survey_zones_view(system)
     pool = [*sstate["pockets"],
@@ -4805,7 +4869,7 @@ def _survey_valued(system: str) -> tuple[dict, list[dict]]:
     vk = {c["key"]: c["value"] for c in valued if c.get("value")}
     zones_valued = [({**z, "value": vk[z["key"]]} if z.get("key") in vk else z)
                     for z in zones]
-    return vk, zones_valued
+    return vk, zones_valued, valued
 
 
 class ZoneIn(BaseModel):
@@ -4827,7 +4891,7 @@ def list_survey_zones(system: str = "Nyx", user: dict = Depends(require_session)
     """Every named survey zone in a system, with geometry derived live from its
     marks (#36.1). Feeds the zone picker + the active-zone banner + the planner
     pin list. Zones carry their org-survey value tier (#37 slice 1)."""
-    _, zones_valued = _survey_valued(system)
+    _, zones_valued, _pool = _survey_valued(system)
     return {"system": system, "zones": zones_valued}
 
 
@@ -5044,6 +5108,104 @@ def get_radar_heat(system: str, key: str | None = None,
         t_ref=time.time())
     return {"system": system, "key": pk.get("key"), "window_h": window_h,
             **heat}
+
+
+# --- ore-first routing (#37 slice 2) -----------------------------------------
+
+
+def _survey_find_systems() -> list[str]:
+    """Every system that can hold survey clusters: the belt systems plus any
+    system an org zone lives in (zones are allowed anywhere)."""
+    out = list(nav.belts or {})
+    for z in db.list_survey_zones():
+        if z.get("system") and z["system"] not in out:
+            out.append(z["system"])
+    return out
+
+
+@app.get("/api/survey/find")
+async def get_survey_find(ore: str, sort: str = "likely",
+                          user: dict = Depends(require_session)):
+    """Ore-first routing (#37 slice 2, design §4): ranked deep-space sources
+    for `ore` over the org's survey clusters. Rows for the caller's fix
+    system carry travel distance + drop plannability and honor `sort`
+    (likely | near | value); every other system's rows ride in `elsewhere`
+    (likelihood-ranked only) so rankings never silently mix systems. Fresh
+    ⛏ mined-out reports down-rank, never hide. Empty arrays are the honest
+    "no mapped source" answer."""
+    if not ore.strip():
+        raise HTTPException(status_code=400, detail="pick an ore")
+    if sort not in ("likely", "near", "value"):
+        sort = "likely"
+    async with hub.lock:
+        sess = hub.sessions.get(user["id"])
+        pos = sess.pos if sess else None
+        t = sess.t if sess else None
+    fix_system = _halo_fix_system(pos, sess) if pos is not None else None
+    start = None
+    if pos is not None:
+        start = nav_core.position_start(nav, pos)
+        start.system = fix_system
+    viewer = viewer_owner_ids(user)
+    dep = active_survey_depletion()
+    results, elsewhere = [], []
+    for sys_name in _survey_find_systems():
+        _, _zv, pool = _survey_valued(sys_name)
+        local = sys_name == fix_system
+        depleted = frozenset(r["key"] for r in dep if r["system"] == sys_name)
+        markers = ([p for p in nav.qt_markers
+                    if p.system == sys_name
+                    and nav_core.poi_visible_to(p, viewer)] if local else None)
+        rows = nav_core.find_ore_in_space(
+            nav, ore, pool, start=(start if local else None), t_ref=t,
+            sort=(sort if local else "likely"), depleted=depleted,
+            markers=markers)
+        ages = {r["key"]: r["age_s"] for r in dep if r["system"] == sys_name}
+        for r in rows:
+            r["system"] = r.get("system") or sys_name
+            if r["depleted"]:
+                r["depleted_age_s"] = ages.get(r["key"])
+        (results if local else elsewhere).extend(rows)
+    return {"ore": ore, "sort": sort, "has_position": pos is not None,
+            "system": fix_system, "ageoff_min": survey_depletion_ageoff_min(),
+            "results": results, "elsewhere": elsewhere,
+            "attribution": nav_core.SURVEY_ATTRIBUTION}
+
+
+class DepletedIn(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    system: str = Field(max_length=24)
+
+
+@app.post("/api/survey/depleted")
+async def post_survey_depleted(body: DepletedIn,
+                               user: dict = Depends(require_session)):
+    """File a ⛏ mined-out report against a survey cluster (#37 slice 2).
+    Down-ranks the cluster in ore-first routing until the report ages off
+    (org setting survey_depletion_ageoff_min) — the survey record itself is
+    untouched: rocks respawn, the map is still right."""
+    _, _zv, pool = _survey_valued(body.system)
+    match = next((c for c in pool
+                  if c["key"].lower() == body.key.lower() and c.get("xyz")),
+                 None)
+    if match is None:
+        raise HTTPException(status_code=404, detail="unknown survey cluster")
+    rec = {"key": match["key"], "system": body.system,
+           "poster": user["id"],
+           "poster_name": (user.get("display_name")
+                           or user.get("username") or ""),
+           "created": time.time()}
+    await asyncio.to_thread(db.survey_depletion_save, rec)
+    return {"ok": True, "key": match["key"],
+            "ageoff_min": survey_depletion_ageoff_min()}
+
+
+@app.post("/api/admin/survey/depletion/clear")
+async def clear_survey_depletion(admin: dict = Depends(require_admin)):
+    """Wipe the mined-out board (admin) — e.g. right after a patch reshuffles
+    every spawn."""
+    n = await asyncio.to_thread(db.survey_depletion_clear)
+    return {"ok": True, "deleted": n}
 
 
 # --- event planner (guild events) ------------------------------------------
@@ -7731,6 +7893,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "warning_stale_min": warning_stale_min(),
         "hazard_radius_km": hazard_radius_km(),      # snare-detour base radius (#24 v2)
         "stock_ageoff_min": stock_ageoff_min(),      # stock-report lifetime (#21)
+        "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
         "feeds_refreshed_at": int(feeds_refreshed_at),  # epoch of the last uexcorp pull
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
@@ -7765,6 +7928,9 @@ class SettingsIn(BaseModel):
     # Stock-report lifetime (minutes, #21): how long an out-of-stock report keeps
     # steering the trade solver away from that buy. Capped at a week.
     stock_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
+    # ⛏ mined-out report lifetime (minutes, #37 slice 2): how long a depletion
+    # report down-ranks a survey cluster in ore-first routing. Capped at a week.
+    survey_depletion_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
     # Automatic uexcorp feed-refresh interval (hours, #33). 0 = off; enabled
     # values must respect the 2h floor (enforced in the handler — "0 or >=2"
     # isn't expressible as a Field bound) so orgs can't hammer the community API.
@@ -7834,6 +8000,9 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting("hazard_radius_km", str(body.hazard_radius_km))
     if body.stock_ageoff_min is not None:
         db.set_setting("stock_ageoff_min", str(body.stock_ageoff_min))
+    if body.survey_depletion_ageoff_min is not None:
+        db.set_setting("survey_depletion_ageoff_min",
+                       str(body.survey_depletion_ageoff_min))
     if body.feed_refresh_h is not None:
         if 0 < body.feed_refresh_h < _FEED_REFRESH_FLOOR_H:
             raise HTTPException(
@@ -7876,6 +8045,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "warning_ageoff_min": warning_ageoff_min(), "warning_stale_min": warning_stale_min(),
             "hazard_radius_km": hazard_radius_km(),
             "stock_ageoff_min": stock_ageoff_min(),
+            "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),
             "extra_admin_ids": extra_admin_ids(),
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
