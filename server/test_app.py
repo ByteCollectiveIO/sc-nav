@@ -4249,6 +4249,15 @@ class BeltSurveyApiTests(unittest.TestCase):
                                    params={"ore": rich}).json()
             rows = find["results"] or find["elsewhere"]
             self.assertEqual(rows[0]["scan_pct"], 21.5)
+            # RS signature (v0.71.0): per-rock, rides the scan blob
+            r_rs = self.client.patch(f"/api/custom_pois/{mark.id}/survey",
+                                     json={"rs": 7170, "comp": {rich: 21.5}})
+            self.assertEqual(r_rs.json()["scan"]["rs"], 7170)
+            m_rs = self.client.get("/api/halo/survey").json()["marks"][0]
+            self.assertEqual(m_rs["scan"]["rs"], 7170)
+            self.assertEqual(self.client.patch(
+                f"/api/custom_pois/{mark.id}/survey",
+                json={"rs": 0}).status_code, 422)
             # attach/replace: an empty body clears the scan
             r2 = self.client.patch(f"/api/custom_pois/{mark.id}/survey",
                                    json={})

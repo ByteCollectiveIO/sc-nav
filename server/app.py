@@ -1382,6 +1382,10 @@ class ScanIn(BaseModel):
     rest). An empty scan clears the block (attach/replace semantics)."""
     mass_kg: float | None = Field(default=None, ge=1, le=10_000_000)
     comp: dict[str, float] = Field(default_factory=dict)
+    # RS signature (v0.71.0, user design): the rock's radar signature —
+    # every material has a base (Gold 3585) and every contact reads a
+    # multiple of it, visible from ~25 km. Per-rock, like mass.
+    rs: int | None = Field(default=None, ge=1, le=10_000_000)
 
 
 _SCAN_COMP_MAX = 8
@@ -7448,6 +7452,8 @@ async def update_survey_scan(poi_id: int, body: ScanIn,
         scan["mass_kg"] = round(float(body.mass_kg))
     if comp:
         scan["comp"] = comp
+    if body.rs is not None:
+        scan["rs"] = int(body.rs)
     async with hub.lock:
         poi = nav.pois.get(poi_id)
         if poi is None or not getattr(poi, "custom", False):

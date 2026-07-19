@@ -73,8 +73,16 @@ payload gains one optional block:
 
 ```json
 {"rocks": "dense", "ores": ["Quantainium (Raw)", "Iron (Ore)"],
- "scan": {"mass_kg": 3520, "comp": {"Quantainium (Raw)": 21, "Iron (Ore)": 44}}}
+ "scan": {"mass_kg": 3520, "comp": {"Quantainium (Raw)": 21, "Iron (Ore)": 44},
+  "rs": 7170}}
 ```
+
+`rs` (v0.71.0, user design) is the rock's radar signature: every material
+has a base (Gold 3585) and every contact reads an integer multiple,
+visible from ~25 km. Per-ore bases are derived org-side by GCD over
+single-ore scanned rocks; the zone detail renders a multiples table (the
+identify-at-a-distance cheat sheet) plus unmatched signatures. Export
+carries them; ranking/value deliberately don't use RS.
 
 - Caps per house guardrails: `mass_kg` 1–10,000,000; `comp` ≤ 8 entries,
   percentages 0–100 (sum NOT validated to 100 — players type what they see,
@@ -136,7 +144,7 @@ pending) · every row of the ore-first finder (§4.2, pending). Also landed:
 `_refresh_feeds` now calls `nav.touch()` (the §3.2 decision) so a price
 refresh re-cuts cached tiers.
 
-### 3.4 Zone detail view — ✅ BUILT (slice 3: inline "▸ details" expansion; staleness column waits for §6.1)
+### 3.4 Zone detail view — ✅ BUILT (slice 3: inline "▸ details" expansion + v0.71.0 RS signature table; staleness column waits for §6.1)
 
 The zones panel gains a per-zone expansion (not a new app): mark timeline
 (who, when, density, ores, scan), contributor list, ore breakdown with
@@ -225,6 +233,13 @@ proximity pockets, and datamined Glaciem pockets carrying a survey overlay:
   marker×pocket scan.
 - The element-finder picker now unions survey-mark ores into
   `/api/resource_ores`, so a belt-only ore is findable.
+- **Arrival creep window (v0.71.0, the ARC-L2 playtest):** the arrival
+  candidate now fires when the marker sits within the envelope PLUS a
+  500 km creep (`POCKET_REACH_MAX_M`) — marks ringing a station often fit
+  an envelope stopping just short of it, and the old strict inside-only
+  rule re-created the Levski staging bug at ARC-L2. Drop card says
+  "arrive, then creep ≈X". A zone `anchor_poi_id` declaration stays a
+  future option if 500 km proves insufficient.
 - **Arrival plans + staging cost sanity (routing fix, found in-game
   2026-07-18):** a live Levski→SVY-29 plan staged 70+ Gm through People's
   Service Station Alpha to reach rocks hugging QV Breaker BRK-320, because
