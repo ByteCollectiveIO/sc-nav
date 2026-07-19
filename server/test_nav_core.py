@@ -4584,6 +4584,49 @@ class BeltSurveyTests(unittest.TestCase):
         self.assertAlmostEqual(d["expected_miss_m"], 3.0e6, delta=1.0)
         self.assertEqual(len(plan["legs"]), 1)
 
+    def test_arrival_creep_window(self):
+        # The ARC-L2 shape (v0.71.0): marks ring the rocks but the fitted
+        # envelope stops 300 km short of the station — arrival still wins
+        # (arrive + creep), no cross-system staging hop.
+        start = _space_poi(11, "Far Start", (40.0e9, 0, 0), system="Nyx")
+        R = nav_core.GLACIEM_POCKET_RADIUS_M
+        stn = _space_poi(12, "ARC-L2-ish", (48.0e9 + R + 300e3, 0, 0),
+                         system="Nyx")
+        stage = _space_poi(13, "Stage", (48.0e9, 30.0e9, 0), system="Nyx")
+        mark = _survey_mark(1_000_001, (48.0e9, 0, 0))
+        nav = self._nav_with([mark], extra_pois=[start, stn, stage])
+        plan = nav_core.plan_halo_drop(
+            nav, start=start, pockets=nav_core.survey_pockets(nav, "Nyx"),
+            system="Nyx", markers=[stn, stage])
+        d = plan["drop"]
+        self.assertTrue(d.get("arrival"))
+        self.assertFalse(plan["staged"])
+        self.assertAlmostEqual(d["creep_m"], 300e3, delta=1e3)
+        # …but a station 2,000 km outside is past the creep doctrine: no
+        # arrival candidate, and with only that (too-close-to-drop) chord
+        # available the plan honestly rejects instead of over-extending.
+        stn2 = _space_poi(14, "Too Far", (48.0e9 + R + 2_000e3, 0, 0),
+                          system="Nyx")
+        nav2 = self._nav_with([_survey_mark(1_000_001, (48.0e9, 0, 0))],
+                              extra_pois=[start, stn2])
+        with self.assertRaises(ValueError):
+            nav_core.plan_halo_drop(
+                nav2, start=start, pockets=nav_core.survey_pockets(nav2, "Nyx"),
+                system="Nyx", markers=[stn2], allow_staging=False)
+
+    def test_scan_stats_rs_bases(self):
+        def mk(mid, ores, rs):
+            return {"xyz": (self.KR, 0, 0), "positive": True, "rocks": "dense",
+                    "ores": ores, "salvage": False,
+                    "scan": {"rs": rs} if rs else None, "id": mid}
+        fit = nav_core.survey_cluster_fit(
+            [mk(1, ["Gold (Raw)"], 3585), mk(2, ["Gold (Raw)"], 7170),
+             mk(3, ["Gold (Raw)", "Quartz (Raw)"], 10755),   # multi-ore: no base math
+             mk(4, ["Quartz (Raw)"], None)], [])
+        self.assertEqual(fit["rs_bases"], {"Gold (Raw)": 3585})   # gcd(3585,7170)
+        self.assertEqual(fit["rs_seen"], [3585, 7170, 10755])
+        self.assertEqual(fit["scans"], 3)      # rs-only rocks count as scans
+
     def test_arrival_bypasses_drop_floor_for_close_markers(self):
         # Marker 45,000 km away (well under the 200,000 km early-exit
         # run-up): arrival is still a plan — the old solver had nothing.

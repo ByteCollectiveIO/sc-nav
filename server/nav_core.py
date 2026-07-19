@@ -5319,6 +5319,12 @@ def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
         # Arrival plan (#37 routing fix): complete the jump, no early exit —
         # the client renders "ARRIVE AT <marker>" instead of an EXIT number.
         view["arrival"] = True
+        if cand.get("pocket") is not None:
+            # Post-arrival creep (v0.71.0): how far past the envelope the
+            # marker sits — 0 means you arrive inside the rocks.
+            radius = (cand["pocket"].get("grid_radius_m")
+                      or GLACIEM_POCKET_RADIUS_M)
+            view["creep_m"] = max(0.0, cand["miss_m"] - radius)
     if cand.get("pocket") is not None:                       # pocket mode (#35)
         pk = cand["pocket"]
         view["pocket"] = {"key": pk["key"], "kind": pk["kind"],
@@ -5437,8 +5443,12 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
                     continue
                 for pk in pockets:
                     radius = pk.get("grid_radius_m") or GLACIEM_POCKET_RADIUS_M
-                    if dist3(m_pos, pk["xyz"]) <= radius:
-                        # The marker IS inside this pocket: jump and arrive.
+                    # Arrival window (v0.71.0, the ARC-L2 lesson): the marker
+                    # counts as "in the rocks" out to a 500 km post-arrival
+                    # creep — marks ringing a station often fit an envelope
+                    # that stops just short of it, and staging across the
+                    # system to save a 5-minute creep is never the plan.
+                    if dist3(m_pos, pk["xyz"]) <= radius + POCKET_REACH_MAX_M:
                         a = _halo_arrival_candidate(from_pos, m, m_pos,
                                                     pk["xyz"], None)
                         if a is not None:
@@ -6034,24 +6044,47 @@ def _survey_scan_stats(positives: list[dict]) -> dict:
     strongest per-cluster signal (actual composition, not just presence).
     Mean is across SCANNED marks only: an unscanned mark says nothing about
     percentages. Empty dict when nothing is scanned, so the field is absent
-    rather than zeroed."""
+    rather than zeroed.
+
+    RS signatures (v0.71.0, user design): every material has a base radar
+    signature (Gold 3585) and every contact reads an integer multiple —
+    visible from ~25 km, the identify-at-a-distance trick. `rs_seen` lists
+    the distinct signatures recorded here; `rs_bases` derives {ore: base}
+    by GCD across rocks whose mark lists EXACTLY ONE ore (single-ore rocks
+    are the unambiguous samples)."""
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
+    rs_seen: set[int] = set()
+    rs_by_ore: dict[str, list[int]] = {}
     scans = 0
     for m in positives:
-        comp = ((m.get("scan") or {}).get("comp")) or {}
-        if not comp:
+        sc = m.get("scan") or {}
+        comp = sc.get("comp") or {}
+        rs = sc.get("rs")
+        if not comp and not rs:
             continue
         scans += 1
+        if isinstance(rs, int) and rs > 0:
+            rs_seen.add(rs)
+            ores = m.get("ores") or []
+            if len(ores) == 1:
+                rs_by_ore.setdefault(ores[0], []).append(rs)
         for ore, pct in comp.items():
             if isinstance(pct, (int, float)):
                 sums[ore] = sums.get(ore, 0.0) + float(pct)
                 counts[ore] = counts.get(ore, 0) + 1
     if not scans:
         return {}
-    return {"scans": scans,
-            "scan_comp": {ore: round(sums[ore] / counts[ore], 1)
-                          for ore in sums}}
+    out = {"scans": scans,
+           "scan_comp": {ore: round(sums[ore] / counts[ore], 1)
+                         for ore in sums}}
+    if rs_seen:
+        out["rs_seen"] = sorted(rs_seen)
+    bases = {ore: math.gcd(*vals) if len(vals) > 1 else vals[0]
+             for ore, vals in rs_by_ore.items()}
+    if bases:
+        out["rs_bases"] = bases
+    return out
 
 
 def keeger_contains(pos) -> bool:

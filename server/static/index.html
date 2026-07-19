@@ -3769,6 +3769,8 @@
             <option value="">— none (auto-cluster) —</option>
           </select>
           <button id="halo-zone-new" type="button" class="route-chip">＋ New zone</button>
+          <a id="halo-export-link" class="muted" target="_blank" rel="noopener" style="font-size:12px;"
+             title="download the current system's survey (marks + fitted model) as JSON">⇩ export survey</a>
           <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
         <div id="halo-zone-banner" hidden></div>
@@ -12496,6 +12498,10 @@ function renderHaloSystemPanel() {
                         "halo-pocket");
     renderHaloKeegerProgress();
   }
+  // Export is per-system and ALWAYS reachable (v0.71.0 playtest: it was
+  // buried in the Keeger panel — invisible while zone-surveying Stanton).
+  const ex = $("halo-export-link");
+  if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(haloSystem);
   renderHaloOverview();   // overview tracks the active system's doc (#37)
 }
 
@@ -12656,6 +12662,9 @@ function scanFormHtml(markId, scan) {
     <div class="route-row" style="align-items:center; margin-top:6px;">
       <input class="ti scan-mass" type="number" min="1" max="10000000" step="1"
              placeholder="rock mass (kg)" value="${scan && scan.mass_kg ? scan.mass_kg : ""}" style="width:150px;">
+      <input class="ti scan-rs" type="number" min="1" max="10000000" step="1"
+             title="the rock's radar signature — every material reads a multiple of its base (Gold 3585 → 7170, 10755…); visible from ~25 km"
+             placeholder="RS signature" value="${scan && scan.rs ? scan.rs : ""}" style="width:120px;">
       <button type="button" class="route-chip scan-add">＋ add ore %</button>
       <button type="button" class="route-chip scan-save">Save scan</button>
       <span class="muted scan-status" role="status" aria-live="polite" style="font-size:12px;"></span>
@@ -12688,6 +12697,8 @@ function wireScanForm(host, onSaved) {
     const body = { comp };
     const mass = parseFloat(box.querySelector(".scan-mass").value);
     if (Number.isFinite(mass) && mass >= 1) body.mass_kg = mass;
+    const rs = parseInt(box.querySelector(".scan-rs").value, 10);
+    if (Number.isFinite(rs) && rs >= 1) body.rs = rs;
     st.textContent = "saving…";
     try {
       const r = await fetch(`/api/custom_pois/${box.dataset.mark}/survey`, {
@@ -12742,6 +12753,7 @@ function scanSummary(scan) {
   const bits = [];
   if (scan.mass_kg) bits.push(scan.mass_kg >= 1000
     ? `${+(scan.mass_kg / 1000).toFixed(1)} t` : `${scan.mass_kg} kg`);
+  if (scan.rs) bits.push(`RS ${scan.rs}`);
   for (const [o, p] of Object.entries(scan.comp || {})) bits.push(`${esc(o)} ${p}%`);
   return bits.length ? `🔬 ${bits.join(" · ")}` : "";
 }
@@ -12770,6 +12782,23 @@ function renderHaloZoneDetail(el, z, marks) {
         .sort((a, b) => b[1] - a[1])
         .map(([w, n]) => `${esc(w)} (${n})`).join(", ") || "—"}</div>`
     + (ores ? `<div style="margin-top:6px;">${ores}</div>` : "");
+  // RS signature table (v0.71.0, user design): every material's contacts
+  // read as multiples of its base — the identify-at-25km cheat sheet,
+  // derived from the org's own single-ore scans (GCD).
+  const bases = z.rs_bases || {};
+  if (Object.keys(bases).length || (z.rs_seen || []).length) {
+    let rs = `<div class="muted" style="font-size:11px; margin-top:8px;">RS SIGNATURES
+      <span style="text-transform:none;">— match your scanner readout at range</span></div>`;
+    for (const [ore, base] of Object.entries(bases).sort((a, b) => a[1] - b[1]))
+      rs += `<div style="font-size:12px; margin-top:2px;"><b>${esc(ore)}</b> — ${base}`
+        + [2, 3, 4, 5, 6].map(k => ` · ×${k} ${(base * k).toLocaleString()}`).join("")
+        + `</div>`;
+    const unmatched = (z.rs_seen || []).filter(v =>
+      !Object.values(bases).some(b => v % b === 0));
+    if (unmatched.length)
+      rs += `<div class="muted" style="font-size:12px; margin-top:2px;">unmatched signatures seen: ${unmatched.join(", ")}</div>`;
+    h += rs;
+  }
   h += marks.map(m => {
     const age = m.created ? fmtAge(Math.max(0, now - m.created)) : "—";
     const sc = scanSummary(m.scan);
@@ -13153,8 +13182,11 @@ function haloDropHtml(plan) {
       + `<button class="route-chip" id="halo-copy" type="button" title="copy the drop number">⧉ copy</button></div>`;
   }
   if (d.arrival && d.pocket) {
-    h += `<div class="halo-window">the station sits <b>inside</b> pocket <b>${esc(d.pocket.key)}</b> — `
-      + `arrival puts you ≈<b>${fmtDist(d.expected_miss_m)}</b> from its center, in the rocks</div>`;
+    h += d.creep_m > 0
+      ? `<div class="halo-window">the station sits just <b>outside</b> pocket <b>${esc(d.pocket.key)}</b> — `
+        + `arrive, then creep ≈<b>${fmtDist(d.creep_m)}</b> to the rocks</div>`
+      : `<div class="halo-window">the station sits <b>inside</b> pocket <b>${esc(d.pocket.key)}</b> — `
+        + `arrival puts you ≈<b>${fmtDist(d.expected_miss_m)}</b> from its center, in the rocks</div>`;
   } else if (d.arrival && plan.target) {
     h += `<div class="halo-window">arrival at <b>${esc(d.marker_name)}</b> is `
       + `≈<b>${fmtDist(d.expected_miss_m)}</b> from <b>${esc(plan.target.name)}</b></div>`;
@@ -13345,7 +13377,9 @@ function drawHaloSystemMap(cv, plan) {
       doc.keeger ? doc.keeger.r_m : 0,
       ...(doc.bodies || []).map(b => Math.hypot(b.x, b.y)),
       ...(doc.fields || []).map(f => Math.hypot(f.x, f.y)),
-      ...(doc.markers || []).map(m => Math.hypot(m.x, m.y)), 1) * 1.1;
+      ...(doc.markers || []).map(m => Math.hypot(m.x, m.y)),
+      ...haloZones.filter(z => !z.closed && z.xyz && z.system === doc.system)
+        .map(z => Math.hypot(z.xyz[0], z.xyz[1])), 1) * 1.1;
   }
   // Which Nyx belt the picker has focused (overview only) — it gets the
   // bright treatment, the other dims to context.
@@ -13467,14 +13501,6 @@ function drawHaloSystemMap(cv, plan) {
         if (hits) hits.push({ x: cx + pk.x * s, y: cy - pk.y * s,
                               key: pk.key, kind: "surveyed" });
       }
-      // Named zones (#36.1) are pinnable too — value-tinted squares.
-      for (const z of (overview ? haloZones : [])) {
-        if (z.closed || !z.xyz || z.system !== doc.system) continue;
-        const zx = cx + z.xyz[0] * s, zy = cy - z.xyz[1] * s;
-        ctx.fillStyle = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.window;
-        ctx.fillRect(zx - 3, zy - 3, 6, 6);
-        hits.push({ x: zx, y: zy, key: z.key, kind: "zone" });
-      }
     }
     if (sel) {
       ctx.fillStyle = C.drop;
@@ -13491,6 +13517,15 @@ function drawHaloSystemMap(cv, plan) {
       if (hits) hits.push({ x: fx, y: fy, key: f.uuid, kind: "field",
                             name: f.name });
     }
+  }
+  // Named zones (#36.1) live in ANY system (v0.71.0: a zone at ARC-L2 is as
+  // real as one on the Keeger ring) — value-tinted squares, click-to-plan.
+  for (const z of (overview ? haloZones : [])) {
+    if (z.closed || !z.xyz || z.system !== doc.system) continue;
+    const zx = cx + z.xyz[0] * s, zy = cy - z.xyz[1] * s;
+    ctx.fillStyle = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.window;
+    ctx.fillRect(zx - 3, zy - 3, 6, 6);
+    hits.push({ x: zx, y: zy, key: z.key, kind: "zone", zone_id: z.zone_id });
   }
   // bodies: star at its real offset, planets as dots + labels
   ctx.textAlign = "left";
@@ -13581,6 +13616,10 @@ function wireHaloOverviewClicks() {
     if (best.kind === "field") {
       const f = $("halo-field");
       if (f) { f.value = best.name || best.key; f.dataset.uuid = best.key; }
+    } else if (best.kind === "zone" && haloSystem !== "Nyx") {
+      // Zones outside Nyx have no pocket-pin input — plan directly (v0.71.0).
+      const z = haloZones.find(x => x.zone_id === best.zone_id);
+      if (z) planHaloZone(z);
     } else if (best.kind === "surveyed" || best.kind === "zone") {
       setHaloBelt("keeger");
       $("halo-keeger-pocket").value = best.key;
@@ -14085,6 +14124,22 @@ addEventListener("resize", () => { if (haloRadarLast && !$("halo-radar-wrap").hi
 function haloVerdictHtml(d) {
   const zoff = (z) => `${fmtDist(Math.abs(z))} ${z >= 0 ? "above" : "below"} plane`;
   let main = "", meta = [];
+  // Zone-relative verdict (v0.71.0): the survey tool isn't belt-locked —
+  // when you're outside every belt but inside/near YOUR active zone, lead
+  // with the zone, not "beyond the belt's outer edge".
+  const OUTSIDE = ["outside", "off_ring", "space", "keeger", "other_system", "void"];
+  const zp = OUTSIDE.includes(d.status) ? activeZonePocket() : null;
+  if (zp && zp.center_off_m <= 3 * (zp.grid_radius_m || 0)) {
+    const inside = zp.center_off_m <= zp.grid_radius_m;
+    main = inside
+      ? `⛏ You're <span class="in-band">inside zone ${esc(zp.name || zp.key)}</span>`
+      : `⛏ You're <span class="off-band">near zone ${esc(zp.name || zp.key)}</span>`;
+    meta.push(`${fmtDist(zp.center_off_m)} from its center`, zoff(zp.dz));
+    if (d.target) meta.push(`📍 ${esc(d.target.name)}: <b>${fmtDist(d.target.miss_m)}</b> away`);
+    if (d.fix_age_s != null) meta.push(`fix ${fmtAge(d.fix_age_s)}`);
+    return `<div class="halo-verdict">${main}</div>`
+      + `<div class="halo-verdict-meta">${meta.join(" · ")}</div>`;
+  }
   if (d.status === "band") {
     main = `☄ You're <span class="in-band">in band ${d.band}</span>`;
     meta.push(`${fmtDist(d.inside_m)} past the inner edge`,
