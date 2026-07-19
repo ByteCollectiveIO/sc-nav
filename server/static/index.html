@@ -4292,6 +4292,31 @@ function oreValueChip(name, category = "resource") {
   return ` <span class="val-chip ${t[0]}" title="${t[2]} — sells ≈${v.sell.toLocaleString()} aUEC/SCU${basis}">${t[1]}${star}</span>`;
 }
 // Plain-text twin for <option> labels (no HTML allowed inside a <select>).
+// Survey value chips (#37 slice 1): a cluster's org-survey value from the
+// server ({score, tier, basis, salvage}). Same $-glyph vocabulary as the ore
+// chips; basis is always stated (tiers-with-basis honesty). ⚙ = salvage
+// logged (its own economy — never tiered against ores).
+function surveyValueChip(v) {
+  if (!v) return "";
+  let h = "";
+  if (v.tier && VALUE_TIERS[v.tier]) {
+    const t = VALUE_TIERS[v.tier];
+    const basis = v.basis === "ores" ? "reported ore list" : "density only";
+    h = `<span class="val-chip ${t[0]}" title="org survey value (${t[2]} in this system) · basis: ${basis}`
+      + `${v.score ? ` · score ≈${v.score.toLocaleString()}` : ""}">${t[1]}</span>`;
+  }
+  if (v.salvage) h += `<span class="val-chip" title="salvage logged here">⚙</span>`;
+  return h;
+}
+function surveyValueText(v) {   // plain-text twin for <option> labels / canvas
+  if (!v) return "";
+  const sym = v.tier && VALUE_TIERS[v.tier] ? VALUE_TIERS[v.tier][1] : "";
+  return (sym ? `  ${sym}` : "") + (v.salvage ? " ⚙" : "");
+}
+// Map-dot tint per tier — fixed scope palette (the map canvas stays dark in
+// both themes, like HALO_MAP_C / HALO_RADAR_C; never live tokens).
+const SURVEY_VAL_MAP_C = { high: "#66bb6a", medium: "#ffd54f", low: "#8693a6" };
+
 function oreValueText(name, category = "resource") {
   const v = (oreValues[category] || {})[name];
   return v && VALUE_TIERS[v.tier] ? `  ${VALUE_TIERS[v.tier][1]}${v.refined ? "*" : ""}` : "";
@@ -12241,6 +12266,16 @@ function renderHaloKeegerProgress() {
     : ` · ${s.positive}/${s.model_min} toward the field model`;
   if (s.total)
     h += ` · <a href="/api/halo/survey/export?system=Nyx" target="_blank" rel="noopener">⇩ export survey</a>`;
+  // Value-ranked pocket chips (#37 slice 1): the "where's it worth going"
+  // read at a glance — top pockets by org-survey value, best first.
+  const ranked = (doc.surveyed || []).slice()
+    .sort((a, b) => ((b.value && b.value.score) || 0) - ((a.value && a.value.score) || 0))
+    .slice(0, 6);
+  if (ranked.length)
+    h += `<div style="margin-top:6px;">` + ranked.map(pk =>
+      `<span class="halo-chip" title="${pk.marks} mark${pk.marks === 1 ? "" : "s"}`
+      + `${(pk.ores || []).length ? " · " + pk.ores.join(", ") : ""}">`
+      + `${esc(pk.key)}${surveyValueChip(pk.value)}</span>`).join(" ") + `</div>`;
   el.innerHTML = h;
 }
 
@@ -12257,6 +12292,9 @@ function renderHaloSystemPanel() {
       for (const p of doc.pockets || []) {
         const o = document.createElement("option");
         o.value = p.key;
+        // Surveyed pockets advertise their value tier in the picker (#37).
+        const vt = surveyValueText(p.value);
+        if (vt) o.label = p.key + vt;
         dl.appendChild(o);
       }
     }
@@ -12352,7 +12390,7 @@ function renderHaloZoneSelect() {
   const cur = activeSurveyZone;
   sel.innerHTML = '<option value="">— none (auto-cluster) —</option>'
     + haloZones.filter(z => !z.closed).map(z =>
-        `<option value="${z.zone_id}">${esc(z.name)}${z.marks ? ` · ${z.marks} mark${z.marks === 1 ? "" : "s"}` : ""}</option>`
+        `<option value="${z.zone_id}">${esc(z.name)}${z.marks ? ` · ${z.marks} mark${z.marks === 1 ? "" : "s"}` : ""}${surveyValueText(z.value)}</option>`
       ).join("");
   if (cur != null && !haloZones.some(z => z.zone_id === cur && !z.closed)) {
     const z = haloZones.find(x => x.zone_id === cur);   // keep a closed active zone visible
@@ -12370,6 +12408,7 @@ function renderHaloZoneBanner() {
   if (!z) { el.hidden = true; return; }
   el.hidden = false;
   const bits = [`<b>${z.marks || 0}</b> mark${z.marks === 1 ? "" : "s"}`];
+  if (z.value) bits.push(surveyValueChip(z.value));   // org value tier (#37)
   if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
   if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
   else if (z.status && z.status !== "empty") bits.push(`<b>${esc(z.status)}</b> rocks`);
@@ -12708,14 +12747,16 @@ function haloDropHtml(plan) {
          : `expected miss ≈<b>${fmtDist(d.expected_miss_m)}</b> `
            + `<span class="halo-chip warn">⚠ ~${fmtDist(Math.max(0, d.expected_miss_m - d.pocket.grid_radius_m))} outside the pocket — drop, /showlocation, re-plan</span>`)
       + ` · watch-window ${fmtHud(d.enter_m)} → ${fmtHud(d.exit_m)}</div>`;
-    if (d.pocket.kind === "surveyed")
+    if (d.pocket.kind === "surveyed" || d.pocket.kind === "zone")
       h += `<div class="halo-window">⛏ <b>org survey · ${d.pocket.marks} mark${d.pocket.marks === 1 ? "" : "s"}</b>`
+        + (d.pocket.value ? ` ${surveyValueChip(d.pocket.value)}` : "")
         + (d.pocket.density ? ` · ${esc(d.pocket.density)} rocks reported` : "")
         + ((d.pocket.ores || []).length ? ` · ${d.pocket.ores.map(esc).join(", ")}` : "")
         + ` — player-measured, not game data</div>`;
     if (d.pocket.survey) {          // org survey overlay on a datamined pocket
       const s = d.pocket.survey;
-      h += `<div class="halo-window">⛏ <b>org survey · ${s.marks} mark${s.marks === 1 ? "" : "s"}</b> · `
+      h += `<div class="halo-window">⛏ <b>org survey · ${s.marks} mark${s.marks === 1 ? "" : "s"}</b>`
+        + (d.pocket.value ? ` ${surveyValueChip(d.pocket.value)}` : "") + ` · `
         + (s.status === "barren"
            ? `<span class="halo-chip warn">surveyed BARREN — no rock to within ${fmtDist(s.closest_center_m)} of center; this target is down-ranked</span>`
            : `<b>${esc(s.status)}</b> rocks found`
@@ -12766,7 +12807,7 @@ function renderHaloPlan(plan) {
     h += `<div style="margin-top:12px;"><span class="fld-label">ALTERNATES</span></div>`;
     plan.alternates.forEach((a, i) => {
       h += `<div class="halo-alt">via <b>${esc(a.drop.marker_name)}</b> · exit at ${fmtHud(a.drop.peak_m)}`
-        + (a.drop.pocket ? ` · pocket ${esc(a.drop.pocket.key)}${a.drop.pocket.hit ? "" : " ⚠ near-miss"}` : "")
+        + (a.drop.pocket ? ` · pocket ${esc(a.drop.pocket.key)}${surveyValueChip(a.drop.pocket.value)}${a.drop.pocket.hit ? "" : " ⚠ near-miss"}` : "")
         + (a.drop.window_s != null ? ` · window ≈${fmtWinS(a.drop.window_s)}s` : "")
         + (a.drop.steep_deg != null ? ` · ${Math.round(a.drop.steep_deg)}°` : "")
         + (a.drop.expected_miss_m != null ? ` · miss ≈${fmtDist(a.drop.expected_miss_m)}` : "")
@@ -12894,7 +12935,11 @@ function drawHaloMap(plan) {
     ctx.fillStyle = C.band;
     for (const pk of doc.pockets || []) {
       const px = cx + pk.x * s, py = cy - pk.y * s;
+      // Surveyed ring pockets tint by org value tier (#37 slice 1).
+      const vc = pk.value && SURVEY_VAL_MAP_C[pk.value.tier];
+      if (vc) ctx.fillStyle = vc;
       ctx.fillRect(px - 0.75, py - 0.75, 1.5, 1.5);
+      if (vc) ctx.fillStyle = C.band;
     }
     // the Keeger Belt (#36): outer ring + the org's surveyed pockets (drawn
     // even when off-canvas for a Glaciem-scale fit — arcs clip harmlessly)
@@ -12903,8 +12948,9 @@ function drawHaloMap(plan) {
       ctx.setLineDash([3, 5]);
       ctx.beginPath(); ctx.arc(cx, cy, doc.keeger.r_m * s, 0, 2 * Math.PI); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = C.window;
       for (const pk of doc.surveyed || []) {
+        // Value-tinted survey dots (#37 slice 1); untiered stays C.window.
+        ctx.fillStyle = (pk.value && SURVEY_VAL_MAP_C[pk.value.tier]) || C.window;
         ctx.beginPath();
         ctx.arc(cx + pk.x * s, cy - pk.y * s, 2, 0, 2 * Math.PI); ctx.fill();
       }

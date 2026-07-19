@@ -4421,6 +4421,8 @@ def get_halo_targets(system: str = "Stanton",
         # heals the map on the next read, via nav.touch()).
         sstate = nav_core.survey_state(nav, system)
         marks = sstate["marks"]
+        # Org survey value tiers (#37 slice 1): one per-system pool.
+        vk, _ = _survey_valued(system)
         # Overlay the org's in-pocket findings onto the datamined ring pockets
         # (#36): a surveyed-barren pocket carries a `survey` block so the picker
         # can badge it and the planner down-ranks it.
@@ -4428,7 +4430,8 @@ def get_halo_targets(system: str = "Stanton",
         doc["pockets"] = [{"key": p["key"], "kind": p["kind"],
                            "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
                            "grid_radius_m": p["grid_radius_m"],
-                           **({"survey": p["survey"]} if p.get("survey") else {})}
+                           **({"survey": p["survey"]} if p.get("survey") else {}),
+                           **({"value": vk[p["key"]]} if p["key"] in vk else {})}
                           for p in pockets]
         doc["keeger"] = {"r_m": nav_core.KEEGER_R_M,
                          "radial_tol_m": nav_core.KEEGER_RADIAL_TOL_M,
@@ -4438,7 +4441,8 @@ def get_halo_targets(system: str = "Stanton",
                             "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
                             "grid_radius_m": p["grid_radius_m"],
                             "marks": p["marks"], "density": p["density"],
-                            "ores": p["ores"], "salvage": p["salvage"]}
+                            "ores": p["ores"], "salvage": p["salvage"],
+                            **({"value": vk[p["key"]]} if p["key"] in vk else {})}
                            for p in surveyed]
         doc["survey"] = {
             "total": len(marks),
@@ -4545,7 +4549,8 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
     # Named zones (#36.1) are plannable in ANY system — resolve a zone pin here,
     # before the ring-only pocket guard below.
     if body.pocket_key is not None:
-        zone = next((z for z in _survey_zones_view(system)
+        _, zones_valued = _survey_valued(system)
+        zone = next((z for z in zones_valued
                      if z["key"].lower() == body.pocket_key.lower()), None)
         if zone is not None:
             if not zone.get("xyz"):
@@ -4598,10 +4603,14 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
             latitude=None, longitude=None, height_m=None, qt_marker=False)}
     if kind == "ring":
         sstate = nav_core.survey_state(nav, system)
-        surveyed = sstate["pockets"]
+        # Value chips ride the plan's pocket view too (#37 slice 1) — stamp
+        # from the per-system pool so the drop card's tier matches the panels.
+        vk, _ = _survey_valued(system)
+        _val = lambda p: {**p, "value": vk[p["key"]]} if p["key"] in vk else p
+        surveyed = [_val(p) for p in sstate["pockets"]]
         # Datamined ring pockets carry the org's survey overlay so the solver
         # sees a barren verdict and down-ranks it (#36).
-        glac = sstate["glaciem"] or []
+        glac = [_val(p) for p in (sstate["glaciem"] or [])]
         if body.pocket_key is not None:
             # A pin names one pocket outright; both pools are searchable
             # (datamined Glaciem keys + org SVY-* keys), so a pinned survey
@@ -4689,11 +4698,15 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
         raise HTTPException(status_code=404, detail="unknown system")
     sstate = nav_core.survey_state(nav, system)
     marks = sstate["marks"]
+    # Org survey value tiers (#37 slice 1) — rides the export too, so a
+    # shared dataset carries its economics (score + basis per cluster).
+    vk, zones_valued = _survey_valued(system)
     # Ring pockets the org has surveyed (barren or rich): ties the otherwise
     # inert in-Glaciem marks back to their datamined pocket (#36).
     glaciem = ([{"key": p["key"], "kind": p["kind"],
                  "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
-                 "grid_radius_m": p["grid_radius_m"], **p["survey"]}
+                 "grid_radius_m": p["grid_radius_m"], **p["survey"],
+                 **({"value": vk[p["key"]]} if p["key"] in vk else {})}
                 for p in (sstate["glaciem"] or []) if p.get("survey")])
     return {
         "system": system,
@@ -4702,9 +4715,10 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
                    "rocks": m["rocks"], "ores": m["ores"],
                    "salvage": m["salvage"], "owner_handle": m["owner_handle"]}
                   for m in marks],
-        "pockets": sstate["pockets"],
+        "pockets": [({**p, "value": vk[p["key"]]} if p["key"] in vk else p)
+                    for p in sstate["pockets"]],
         "glaciem": glaciem,
-        "zones": _survey_zones_view(system),
+        "zones": zones_valued,
         "model": nav_core.survey_field_model(
             [m for m in marks if not nav_core.glaciem_contains(m["xyz"])]),
         "model_min": nav_core.SURVEY_MODEL_MIN_MARKS,
@@ -4774,6 +4788,26 @@ def _survey_zones_view(system: str) -> list[dict]:
     return nav_core.survey_zones_state(nav, system, zones)
 
 
+def _survey_valued(system: str) -> tuple[dict, list[dict]]:
+    """ONE per-system value pool (#37 slice 1): surveyed pockets + org-
+    overlaid Glaciem pockets + named zones, scored against the live price
+    feed and tiered together — so a $$$ chip means the same thing on every
+    surface of this system. Returns ({key: value}, zones-view-with-values).
+    Recomputed per read; prices changing bumps nav.version (_refresh_feeds
+    touches nav), so cached survey products stay in step."""
+    sstate = nav_core.survey_state(nav, system)
+    zones = _survey_zones_view(system)
+    pool = [*sstate["pockets"],
+            *(p for p in (sstate["glaciem"] or []) if p.get("survey")),
+            *zones]
+    valued = nav_core.annotate_survey_values(
+        pool, (resource_values or {}).get("resource") or {})
+    vk = {c["key"]: c["value"] for c in valued if c.get("value")}
+    zones_valued = [({**z, "value": vk[z["key"]]} if z.get("key") in vk else z)
+                    for z in zones]
+    return vk, zones_valued
+
+
 class ZoneIn(BaseModel):
     name: str = Field(min_length=1, max_length=48)
     system: str | None = Field(default=None, max_length=24)
@@ -4792,8 +4826,9 @@ class ActiveZoneIn(BaseModel):
 def list_survey_zones(system: str = "Nyx", user: dict = Depends(require_session)):
     """Every named survey zone in a system, with geometry derived live from its
     marks (#36.1). Feeds the zone picker + the active-zone banner + the planner
-    pin list."""
-    return {"system": system, "zones": _survey_zones_view(system)}
+    pin list. Zones carry their org-survey value tier (#37 slice 1)."""
+    _, zones_valued = _survey_valued(system)
+    return {"system": system, "zones": zones_valued}
 
 
 @app.post("/api/halo/survey/zones")
@@ -7524,6 +7559,10 @@ async def _refresh_feeds() -> None:
     trade_prices = await asyncio.to_thread(load_trade_prices)
     refresh_catalog()             # feeds changed → rebuild the shared item catalog
     rebuild_trade_terminals()     # re-resolve the crosswalk with the new terminal set
+    # Fresh prices re-cut the survey value tiers (#37 slice 1): the survey
+    # derivations are nav.version-keyed, so a price refresh must bump the
+    # version or cached $$$-tiers would outlive the prices they rank.
+    nav.touch()
     feeds_refreshed_at = time.time()
 
 

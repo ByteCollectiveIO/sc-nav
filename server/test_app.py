@@ -3917,6 +3917,101 @@ class BeltSurveyApiTests(unittest.TestCase):
         r = self.client.get("/api/halo/survey", params={"system": "Castra"})
         self.assertEqual(r.status_code, 404)
 
+    # --- survey value layer (#37 slice 1) ------------------------------------
+
+    def _priced_ores(self):
+        """Two really-priced ore names from the live feed, expensive first —
+        keeps the tests honest against feed drift."""
+        ores = sorted(app.resource_values["resource"].items(),
+                      key=lambda kv: -kv[1]["sell"])
+        self.assertGreaterEqual(len(ores), 2, "price feed has <2 priced ores")
+        return ores[0][0], ores[-1][0]
+
+    def test_value_tiers_on_targets_survey_and_plan(self):
+        rich, poor = self._priced_ores()
+        # two pockets, far apart on the ring → a 2-cluster pool: high & low
+        self._mark_at((self.KR, 0.0, 0.0), ores=[rich])
+        self._mark_at((0.0, self.KR, 0.0), rocks="sparse", ores=[poor])
+        doc = self.client.get("/api/halo/targets",
+                              params={"system": "Nyx"}).json()
+        vals = {p["key"]: p.get("value") for p in doc["surveyed"]}
+        tiers = sorted((v["tier"] for v in vals.values() if v), reverse=True)
+        self.assertEqual(tiers, ["low", "high"])
+        self.assertTrue(all(v["basis"] == "ores" for v in vals.values() if v))
+        # /api/halo/survey rows + export carry the same values
+        surv = self.client.get("/api/halo/survey").json()
+        svals = {p["key"]: p.get("value") for p in surv["pockets"]}
+        self.assertEqual({k: v and v["tier"] for k, v in svals.items()},
+                         {k: v and v["tier"] for k, v in vals.items()})
+        exp = self.client.get("/api/halo/survey/export").json()
+        self.assertIn("value", exp["pockets"][0])
+        # the drop card's pocket view carries value too (via the goal pockets)
+        other = next(p for p in app.nav.qt_markers
+                     if p.system == "Nyx" and p.id != self.gate.id)
+        g1 = app.nav_core.poi_global_m(app.nav, self.gate, time.time())
+        g2 = app.nav_core.poi_global_m(app.nav, other, time.time())
+        mid = tuple((a + b) / 2 for a, b in zip(g1, g2))
+        self._mark_at(mid, ores=[rich])
+        plan = self.client.post("/api/halo/plan",
+                                json={"belt": "keeger",
+                                      "start_poi_id": self.gate.id}).json()
+        self.assertIn(plan["drop"]["pocket"].get("value", {}).get("tier"),
+                      ("high", "medium", "low"))
+
+    def test_value_on_zones_and_salvage_lane(self):
+        rich, _ = self._priced_ores()
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Value Zone",
+                                     "system": "Nyx"}).json()["zone"]["id"]
+        try:
+            self._mark_at((self.KR, 1e9, 0.0), ores=[rich], zone_id=zid)
+            zones = self.client.get("/api/halo/survey/zones",
+                                    params={"system": "Nyx"}).json()["zones"]
+            z = next(x for x in zones if x["zone_id"] == zid)
+            self.assertEqual(z["value"]["basis"], "ores")
+            self.assertIn(z["value"]["tier"], ("high", "medium", "low"))
+            # salvage-only cluster: ⚙ lane — untiered, never pooled
+            self._mark_at((0.0, -self.KR, 0.0), rocks="none", salvage=True)
+            doc = self.client.get("/api/halo/survey").json()
+            # negatives don't cluster into pockets; the salvage lane is
+            # asserted at the unit level — here just confirm no crash and
+            # the zone row still tiers against the pool.
+            self.assertTrue(any(zz.get("value") for zz in doc["zones"]))
+        finally:
+            self.client.put("/api/halo/survey/zones/active",
+                            json={"zone_id": None})
+            self.client.delete(f"/api/halo/survey/zones/{zid}")
+
+    def test_refresh_feeds_touches_nav_for_value_retier(self):
+        # Price refresh must bump nav.version or cached survey $$$-tiers
+        # would outlive the prices they rank (#37 slice 1 decision).
+        patched = {}
+        keep = lambda name: patched.setdefault(name, getattr(app, name))
+        for name, val in [
+            ("load_raw_commodity_names", lambda: app.raw_commodity_names),
+            ("load_commodity_names", lambda: app.commodity_names),
+            ("load_ships", lambda: app.ships),
+            ("load_fleet_ships", lambda: app.fleet_ships),
+            ("load_item_names", lambda: app.item_names),
+            ("build_item_prices", lambda: app.item_prices),
+            ("build_resource_values", lambda: app.resource_values),
+            ("load_trade_terminals", lambda: (app.trade_terminals_raw,
+                                              app.trade_terminal_rows)),
+            ("load_trade_prices", lambda: app.trade_prices),
+            ("enrich_ships_quantum", lambda ships: None),
+            ("refresh_catalog", lambda: None),
+            ("rebuild_trade_terminals", lambda: None),
+        ]:
+            keep(name)
+            setattr(app, name, val)
+        before = app.nav.version
+        try:
+            asyncio.run(app._refresh_feeds())
+        finally:
+            for name, val in patched.items():
+                setattr(app, name, val)
+        self.assertGreater(app.nav.version, before)
+
     # --- radar reference layers (#37 slice 0) --------------------------------
 
     def test_capture_stamps_created_epoch(self):
