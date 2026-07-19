@@ -4702,6 +4702,92 @@ class RadarLayerTests(unittest.TestCase):
         self.assertIsNone(next(m for m in marks if m["id"] == 1_000_003)["created"])
 
 
+class SurveyValueTests(unittest.TestCase):
+    """Survey value layer (#37 slice 1): survey_value bases (ores/density/
+    salvage lane) and the per-pool tercile annotation. Prices are the
+    build_resource_values 'resource' category shape."""
+
+    PRICES = {
+        "Gold (Raw)": {"sell": 6000, "tier": "high"},
+        "Quartz (Raw)": {"sell": 400, "tier": "low"},
+        "Aluminum (Ore)": {"sell": 300, "tier": "low", "refined": True},
+    }   # median sell = 400
+
+    @staticmethod
+    def _cluster(key="SVY-1", positive=2, density="dense", ores=(),
+                 salvage=False, **kw):
+        return {"key": key, "positive": positive, "density": density,
+                "ores": list(ores), "salvage": salvage, "marks": positive,
+                **kw}
+
+    def test_ores_basis(self):
+        v = nav_core.survey_value(
+            self._cluster(ores=["Gold (Raw)", "Quartz (Raw)"]), self.PRICES)
+        # dense (w=5) × mean(6000, 400)
+        self.assertEqual((v["score"], v["basis"], v["tier"], v["salvage"]),
+                         (16000, "ores", None, False))
+
+    def test_suffix_and_case_tolerant_lookup(self):
+        v = nav_core.survey_value(self._cluster(ores=["gold"]), self.PRICES)
+        self.assertEqual((v["score"], v["basis"]), (30000, "ores"))
+        v2 = nav_core.survey_value(self._cluster(ores=["ALUMINUM (ORE)"]),
+                                   self.PRICES)
+        self.assertEqual(v2["score"], 1500)     # 5 × 300
+
+    def test_density_basis_when_no_priced_ores(self):
+        v = nav_core.survey_value(
+            self._cluster(density="medium", ores=["Unobtanium"]), self.PRICES)
+        # medium (w=2.5) × median sell 400
+        self.assertEqual((v["score"], v["basis"]), (1000, "density"))
+        # no prices at all → nothing honest to say
+        self.assertIsNone(nav_core.survey_value(self._cluster(ores=[]), {}))
+
+    def test_barren_and_salvage_lanes(self):
+        self.assertIsNone(nav_core.survey_value(
+            self._cluster(positive=0, density=None), self.PRICES))
+        v = nav_core.survey_value(
+            self._cluster(positive=0, density=None, salvage=True), self.PRICES)
+        self.assertEqual((v["score"], v["tier"], v["basis"], v["salvage"]),
+                         (None, None, "salvage", True))
+        # mixed: rocks + a wreck → ore economics stand, ⚙ rides along
+        mixed = nav_core.survey_value(
+            self._cluster(ores=["Gold (Raw)"], salvage=True), self.PRICES)
+        self.assertEqual((mixed["basis"], mixed["salvage"]), ("ores", True))
+        self.assertEqual(mixed["score"], 30000)
+
+    def test_glaciem_overlay_shape(self):
+        pk = {"key": "Wtn-042", "kind": "general",
+              "survey": {"positive": 1, "status": "sparse",
+                         "ores": ["Quartz (Raw)"], "salvage": False,
+                         "marks": 1}}
+        v = nav_core.survey_value(pk, self.PRICES)
+        self.assertEqual((v["score"], v["basis"]), (400, "ores"))   # 1 × 400
+
+    def test_annotate_pool_terciles_and_purity(self):
+        clusters = [
+            self._cluster("A", ores=["Gold (Raw)"]),                # 30000
+            self._cluster("B", density="medium", ores=["Unobtanium"]),  # 1000
+            self._cluster("C", density="sparse", ores=["Quartz (Raw)"]),  # 400
+            self._cluster("D", positive=0, density=None),           # no value
+            self._cluster("E", positive=0, density=None, salvage=True),  # ⚙
+        ]
+        out = nav_core.annotate_survey_values(clusters, self.PRICES)
+        tiers = {c["key"]: (c.get("value") or {}).get("tier") for c in out}
+        self.assertEqual(tiers,
+                         {"A": "high", "B": "medium", "C": "low",
+                          "D": None, "E": None})
+        self.assertNotIn("value", out[3])                  # barren: no key
+        self.assertEqual(out[4]["value"]["basis"], "salvage")
+        # inputs never mutated (they may come from the survey_state cache)
+        self.assertTrue(all("value" not in c for c in clusters))
+
+    def test_annotate_single_and_empty_pools(self):
+        one = nav_core.annotate_survey_values(
+            [self._cluster("A", ores=["Gold (Raw)"])], self.PRICES)
+        self.assertEqual(one[0]["value"]["tier"], "medium")   # flat pool
+        self.assertEqual(nav_core.annotate_survey_values([], self.PRICES), [])
+
+
 class ResourceValueTierTests(unittest.TestCase):
     """resource_value_tiers: the mining-value badge buckets (#32)."""
 

@@ -5294,6 +5294,8 @@ def _halo_drop_view(cand: dict, drive_speed_ms=None) -> dict:
             view["pocket"]["ores"] = pk.get("ores") or []
         if pk.get("survey"):     # datamined pocket with org survey overlay (#36)
             view["pocket"]["survey"] = pk["survey"]
+        if pk.get("value"):      # org survey value tier (#37 slice 1)
+            view["pocket"]["value"] = pk["value"]
     if cand.get("second"):
         s = cand["second"]
         view["second_crossing"] = {"enter_m": s["enter_m"], "peak_m": s["peak_m"],
@@ -6128,6 +6130,105 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
                         "positive": 0, "status": "empty", "ores": [],
                         "salvage": False})
         out.append(row)
+    return out
+
+
+# --- survey value layer (#37 slice 1) ---------------------------------------
+# "Is this field worth mining?" — a relative-value score per surveyed
+# pocket/zone from the org's own marks × the #32 price feed. Bases, honest and
+# stated: "ores" (listed ores are priced), "density" (rocks seen, no priced
+# ores — the category median stands in), "salvage" (wreck signal only — a
+# different economy, never tiered against ore scores). Tiers are terciles
+# across ONE per-system pool (a "$$$" means "best in this belt"), exactly the
+# #32 resource_value_tiers mechanics. Derived on read; nothing stored.
+
+_ORE_SUFFIX_RE = re.compile(r"\s*\((?:Raw|Ore)\)$", re.IGNORECASE)
+
+
+def _ore_price_index(prices: dict) -> tuple[dict, float | None]:
+    """(lookup, median_sell) from a build_resource_values category dict.
+    Lookup keys: exact lowercased names first, then suffix-stripped aliases
+    (a free-typed "Gold" still prices against "Gold (Raw)"; an alias never
+    shadows a real entry). Median is over the real entries only — it backs
+    the "density" basis when a cluster lists no priced ores."""
+    exact: dict[str, float] = {}
+    for name, entry in (prices or {}).items():
+        sell = entry.get("sell") if isinstance(entry, dict) else entry
+        if isinstance(sell, (int, float)) and sell > 0:
+            exact[name.strip().lower()] = float(sell)
+    idx = dict(exact)
+    for name in list(exact):
+        idx.setdefault(_ORE_SUFFIX_RE.sub("", name).strip(), exact[name])
+    median = _pct(sorted(exact.values()), 0.5) if exact else None
+    return idx, median
+
+
+def _cluster_survey_signal(cluster: dict) -> dict:
+    """The rocks/ores/salvage signal of any cluster shape we value: fit dicts
+    (surveyed pockets, zones) carry it at top level; datamined Glaciem pockets
+    carry it in their org-overlay `survey` sub-dict."""
+    return cluster if "positive" in cluster else (cluster.get("survey") or {})
+
+
+def _survey_value_from_index(sig: dict, idx: dict,
+                             median_sell: float | None) -> dict | None:
+    positives = int(sig.get("positive") or 0)
+    salvage = bool(sig.get("salvage"))
+    if positives <= 0:
+        # No rock signal: a salvage-only cluster gets the ⚙ lane (untiered);
+        # barren/empty gets NO value at all — the status line already says it.
+        return ({"score": None, "tier": None, "basis": "salvage",
+                 "salvage": True} if salvage else None)
+    density = sig.get("density") or sig.get("status") or "medium"
+    w = SURVEY_DENSITY_W.get(density, SURVEY_DENSITY_W["medium"])
+    sells = []
+    for ore in sig.get("ores") or []:
+        s = idx.get(ore.strip().lower())
+        if s is None:
+            s = idx.get(_ORE_SUFFIX_RE.sub("", ore).strip().lower())
+        if s is not None:
+            sells.append(s)
+    if sells:
+        return {"score": round(w * sum(sells) / len(sells)), "tier": None,
+                "basis": "ores", "salvage": salvage}
+    if median_sell:
+        return {"score": round(w * median_sell), "tier": None,
+                "basis": "density", "salvage": salvage}
+    return ({"score": None, "tier": None, "basis": "salvage",
+             "salvage": True} if salvage else None)
+
+
+def survey_value(cluster: dict, prices: dict) -> dict | None:
+    """Value one cluster against a build_resource_values category dict:
+    {score, tier: None, basis, salvage} or None when there's nothing honest
+    to say. Tier stays None here — it's relative, so only the pool step
+    (annotate_survey_values) can stamp it."""
+    idx, median = _ore_price_index(prices)
+    return _survey_value_from_index(_cluster_survey_signal(cluster), idx, median)
+
+
+def annotate_survey_values(clusters: list[dict], prices: dict) -> list[dict]:
+    """Value + tier every cluster of ONE tercile pool (call once per system —
+    tiers are only comparable within the pool they were cut from). Returns
+    copies ({**c, "value": ...}); never mutates the inputs — the pockets come
+    straight out of the version-keyed survey_state cache. Unscoreable rows
+    pass through without a `value` key: no signal, no badge."""
+    idx, median = _ore_price_index(prices)
+    vals: dict[str, dict] = {}
+    for c in clusters:
+        v = _survey_value_from_index(_cluster_survey_signal(c), idx, median)
+        if v is not None:
+            vals[c["key"]] = v
+    tiers = resource_value_tiers({k: v["score"] for k, v in vals.items()
+                                  if v["score"]})
+    out = []
+    for c in clusters:
+        v = vals.get(c["key"])
+        if v is None:
+            out.append(c)
+            continue
+        t = tiers.get(c["key"])
+        out.append({**c, "value": ({**v, "tier": t["tier"]} if t else dict(v))})
     return out
 
 

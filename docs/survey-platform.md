@@ -1,8 +1,9 @@
 # Survey platform — from drop helper to org prospecting suite (backlog #37) — design plan
 
 **Status: 🔨 IN BUILD (2026-07-18).** Slice 0 (radar reference layers,
-§5.4–5.5 — user-prioritized ahead of the value layer) is BUILT; everything
-else remains design. Successor to the shipped #36/#36.1 stack
+§5.4–5.5, shipped v0.64.0) and slice 1 (value layer, §3.2–3.3, ores/density
+bases) are BUILT; everything else remains design. Successor to the shipped
+#36/#36.1 stack
 ([belt-survey.md](belt-survey.md), [survey-zones.md](survey-zones.md),
 [halo-finder-expansion.md](halo-finder-expansion.md)); assumes the v0.60–v0.63
 scaling work (version-keyed `survey_state` cache, incremental QT maintenance,
@@ -86,7 +87,7 @@ payload gains one optional block:
   only). Same row works for any mark selected from the zone detail view
   (§3.4), so a second crewman can enrich while the pilot flies.
 
-### 3.2 The value model (nav_core, pure)
+### 3.2 The value model (nav_core, pure) — ✅ ores/density bases BUILT (slice 1, 2026-07-18; "scanned" basis lands with §3.1)
 
 `survey_value(cluster, prices) -> {score, tier, basis}` where `cluster` is
 any pocket/zone dict with a `survey` block and `prices` is the existing
@@ -106,6 +107,15 @@ any pocket/zone dict with a `survey` block and `prices` is the existing
   list only" / "density only"). Salvage-flagged clusters get a fixed `⚙`
   annotation instead of joining the ore terciles (different economy, no
   honest common denominator).
+- **Build decisions (slice 1, user-confirmed):** the tercile pool is
+  **per-system** (`app._survey_valued` pools surveyed pockets + org-overlaid
+  Glaciem pockets + named zones in one cut — "$$$" means "best in this
+  belt"); a **mixed salvage+ore cluster keeps its ore tier AND the ⚙
+  marker** — only salvage-with-no-positive-rocks clusters are ⚙-only and
+  untiered; barren/no-signal clusters carry no `value` at all (no chip —
+  the status line already says barren). Implemented as
+  `nav_core.survey_value` / `annotate_survey_values` (non-mutating; price
+  lookup is suffix/case-tolerant against the `raw_commodity_names` keys).
 
 Computed on read inside `survey_state` consumers; the math is trivial next to
 the clustering that's already cached, so no separate cache entry — but price
@@ -114,13 +124,16 @@ data changes on feed refresh, which already bumps nothing in `nav.version`.
 `resource_values` so value tiers refresh with prices (the feeds path already
 rebuilds catalogs; one touch is consistent with the mutation contract).
 
-### 3.3 Where value shows up
+### 3.3 Where value shows up — ✅ BUILT (slice 1) except the §5.2/§4.2 surfaces
 
-Zone banner and zone `<select>` options · Nyx/Keeger target panels (pocket
-list + surveyed pockets) · plan cards ("drop into **Iron Field A** · $$$ ·
-org survey, 12 marks") · halo map dots tinted by tier · the export (score +
-basis per zone, so a shared dataset carries its economics) · Org Intel
-(§5.2's Surveying section) · every row of the ore-first finder (§4.2).
+Zone banner and zone `<select>` options ✅ · Nyx/Keeger target panels ✅
+(value-ranked surveyed-pocket chips + picker-datalist labels) · plan cards ✅
+("⛏ org survey · 12 marks · $$$", alternates rows too) · halo map dots
+tinted by tier ✅ · the export ✅ (score + basis per cluster, so a shared
+dataset carries its economics) · Org Intel (§5.2's Surveying section,
+pending) · every row of the ore-first finder (§4.2, pending). Also landed:
+`_refresh_feeds` now calls `nav.touch()` (the §3.2 decision) so a price
+refresh re-cuts cached tiers.
 
 ### 3.4 Zone detail view
 
@@ -387,9 +400,10 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    2026-07-18): POI overlay + in-pocket heatmap with the age window.
    Pre-lands `custom_pois.created` (needed by §5.2/§6.1 later) and
    `SURVEY_DENSITY_W` (reused by §3.2's value model).
-1. **Value layer core** (§3.2–3.3): `survey_value` + tiers on every existing
-   surface, ores/density bases only. No new inputs needed — the org's
-   current marks light up immediately. *Smallest slice, biggest reframe.*
+1. ✅ **Value layer core** (§3.2–3.3, built 2026-07-18): `survey_value` +
+   tiers on every existing surface, ores/density bases only. No new inputs
+   needed — the org's current marks light up immediately. *Smallest slice,
+   biggest reframe.*
 2. **Ore-first routing** (§4): `find_ore_in_space` + the element finder's
    DEEP SPACE section + the `⛏ Ore` plan goal. Also needs no new inputs —
    with slice 1 it completes the survey→mine loop on today's data. *The
@@ -435,8 +449,8 @@ value model plus Phase 3's coverage to keep suggestions fresh.
 1. **Scan ergonomics:** is mass + comp% realistic to transcribe from the
    scanner HUD mid-session, or should scan detail accept a single "best ore
    %" shortcut? (Decides how rich basis-"scanned" gets in practice.)
-2. **Density weights & tercile pool:** tune the 0/1/2.5/5 weights against a
-   real evening of marks; should terciles pool per-system or org-wide?
+2. **Density weights:** tune the 0/1/2.5/5 weights against a real evening of
+   marks. (~~Tercile pool~~ — decided at slice-1 build: per-system.)
 3. **Gap step size:** 0.25° sampling is a guess; validate against the real
    mark distribution before freezing the constant.
 4. **Majority-build derivation** (§5.1): is hub-side majority robust with a
