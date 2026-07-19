@@ -23,7 +23,7 @@ drift — trust grep and CI, not the citation.
 
 | Doc | Status | Covers |
 |---|---|---|
-| [survey-platform.md](survey-platform.md) | 🔨 slices 0–4 shipped v0.64–0.69 | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing, scan detail, arrival routing, coverage gaps + the always-on overview map live**; remaining: survey stats, patch staleness, cross-org import, mark kinds |
+| [survey-platform.md](survey-platform.md) | 🔨 slices 0–5 built (0–4 shipped v0.64–0.69) | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing, scan detail, arrival routing, coverage gaps + the always-on overview map live; survey stats + Org Intel Surveying + Discord milestones + radar drift nudge built**; remaining: patch staleness, cross-org import, mark kinds |
 
 ## Shipped feature specs (reference for what's live)
 

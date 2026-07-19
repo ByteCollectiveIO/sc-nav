@@ -6022,6 +6022,9 @@ POCKET_MISS_CEILING_M = 100_000e3
 # Tier-2 gate: below this many rock-positive marks, ring statistics would be
 # noise dressed as knowledge. Tier-1 targeting never waits for this.
 SURVEY_MODEL_MIN_MARKS = 25
+# Survey-session bridge (#37 §5.2): consecutive marks by one member count as
+# one sitting while the gap stays under this and the zone tag doesn't change.
+SURVEY_SESSION_GAP_S = 30 * 60.0
 
 SURVEY_ATTRIBUTION = "Field map: this org's own survey marks (in-game fixes)"
 
@@ -6837,6 +6840,77 @@ def survey_field_model(marks: list[dict]) -> dict | None:
         "r_outer_m": _pct(rs, 0.95),
         "half_height_m": _pct(zs, 0.95),
         "coverage": len(bins) / 360.0,
+    }
+
+
+def derive_survey_stats(marks: list[dict]) -> dict:
+    """Org survey activity, derived live from the marks themselves (#37 §5.2).
+
+    No survey_runs table: a *session* is read out of the mark stream — one
+    member's consecutive marks bridge into a sitting while the `created` gap
+    stays under SURVEY_SESSION_GAP_S and the zone tag doesn't change — so
+    deleting marks heals the stats. Marks without a `created` stamp (pre-#37)
+    still count in every tally but never in sessions or first/latest: unknown
+    age is never guessed. Callers rolling up several systems tag each mark
+    with a `system` key first (survey_marks emits none).
+
+    Returns {totals, members (ranked marks desc), zones ({zone_id: activity})}.
+    """
+    members: dict[str, dict] = {}
+    zones: dict[int, dict] = {}
+    stamped: dict[str, list[dict]] = {}
+    for m in marks:
+        who = m.get("owner_handle") or "unknown"
+        row = members.setdefault(who, {
+            "handle": who, "marks": 0, "positives": 0, "scans": 0,
+            "sessions": 0, "first": None, "latest": None,
+            "systems": set(), "zones": set()})
+        row["marks"] += 1
+        row["positives"] += 1 if m.get("positive") else 0
+        row["scans"] += 1 if m.get("scan") else 0
+        if m.get("system"):
+            row["systems"].add(m["system"])
+        created = m.get("created")
+        if isinstance(created, (int, float)):
+            row["first"] = created if row["first"] is None else min(row["first"], created)
+            row["latest"] = created if row["latest"] is None else max(row["latest"], created)
+            stamped.setdefault(who, []).append(m)
+        zid = m.get("zone_id")
+        if zid is not None:
+            row["zones"].add(zid)
+            z = zones.setdefault(zid, {"marks": 0, "positives": 0, "scans": 0,
+                                       "latest": None, "surveyors": set()})
+            z["marks"] += 1
+            z["positives"] += 1 if m.get("positive") else 0
+            z["scans"] += 1 if m.get("scan") else 0
+            z["surveyors"].add(who)
+            if isinstance(created, (int, float)):
+                z["latest"] = created if z["latest"] is None else max(z["latest"], created)
+    for who, ms in stamped.items():
+        ms.sort(key=lambda m: m["created"])
+        prev = None
+        for m in ms:
+            if (prev is None or m["created"] - prev["created"] > SURVEY_SESSION_GAP_S
+                    or m.get("zone_id") != prev.get("zone_id")):
+                members[who]["sessions"] += 1
+            prev = m
+    out_members = sorted(
+        ({**row, "systems": sorted(row["systems"]), "zones": len(row["zones"])}
+         for row in members.values()),
+        key=lambda r: (-r["marks"], r["handle"].lower()))
+    out_zones = {zid: {**z, "surveyors": len(z["surveyors"])}
+                 for zid, z in zones.items()}
+    return {
+        "totals": {
+            "marks": len(marks),
+            "positives": sum(r["positives"] for r in out_members),
+            "scans": sum(r["scans"] for r in out_members),
+            "sessions": sum(r["sessions"] for r in out_members),
+            "members": len(out_members),
+            "zones": len(out_zones),
+        },
+        "members": out_members,
+        "zones": out_zones,
     }
 
 

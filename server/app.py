@@ -1608,6 +1608,12 @@ _warning_announce_at: dict[str, float] = {}   # poster id -> last announce (mono
 COMMISSION_ANNOUNCE_COOLDOWN_S = 600.0
 _commission_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
+# Survey-zone announce shouts (#37 §5.2) share the same per-member cooldown
+# shape. The threshold milestones (zone gate, first belt model) need no member
+# cooldown — a crossing fires once by construction (dedup-keyed besides).
+SURVEY_ANNOUNCE_COOLDOWN_S = 600.0
+_survey_announce_at: dict[str, float] = {}   # creator id -> last announce (monotonic)
+
 # How often the scheduled event-reminder loop scans for due events.
 REMINDER_TICK_S = 60.0
 
@@ -2695,6 +2701,7 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     # excluded from its own system's proximity clustering AND absent from the
     # zone's system view. The mark's own system wins; file it untagged.
     zone_mismatch = None
+    zone_kept = None            # the zone this mark actually filed into
     sv = poi.survey
     if sv and sv.get("zone_id") is not None:
         zone = db.get_survey_zone(sv["zone_id"])
@@ -2702,6 +2709,8 @@ def _capture_poi(sess, pos_m, now, pending, owner):
             sv.pop("zone_id", None)
             if zone is not None:
                 zone_mismatch = {"name": zone["name"], "system": zone["system"]}
+        else:
+            zone_kept = zone
     halo_tag = _halo_capture_note(poi)
     if halo_tag and halo_tag not in (poi.note or ""):
         poi.note = f"{poi.note} · {halo_tag}" if poi.note else halo_tag
@@ -2716,6 +2725,8 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     # full O(entities × markers) rebuild (this runs under hub.lock).
     if poi.qt_marker:
         nav_core.qt_marker_added(nav, poi)
+    if sv is not None:
+        _survey_capture_milestones(poi, zone_kept)
     sess.last_capture = {
         "kind": "poi", "id": poi.id, "name": poi.name, "type": poi.type,
         "container": poi.container_name or "Space", "system": poi.system,
@@ -2726,6 +2737,42 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     }
     if zone_mismatch is not None:
         sess.last_capture["zone_mismatch"] = zone_mismatch
+
+
+def _survey_capture_milestones(poi, zone: dict | None) -> None:
+    """Threshold-crossing Discord milestones (#37 §5.2), checked as a fresh
+    survey mark lands: the tagged zone reaching the field-model gate, and a
+    belt's first field-model fit. Both compare the post-commit rock-positive
+    count to SURVEY_MODEL_MIN_MARKS *exactly*, so a milestone fires once at
+    the crossing and never per-mark (dedup keys back that up in-process).
+    Runs under hub.lock; the Discord I/O goes to background tasks."""
+    if not notify.is_configured("survey"):
+        return
+    gate = nav_core.SURVEY_MODEL_MIN_MARKS
+    marks = nav_core.survey_marks(nav, poi.system)
+    mine = next((m for m in marks if m["id"] == poi.id), None)
+    if mine is None or not mine["positive"]:
+        return          # private marks are personal; negatives can't cross
+    if zone is not None:
+        zone_pos = sum(1 for m in marks
+                       if m["zone_id"] == zone["id"] and m["positive"])
+        if zone_pos == gate:
+            _notify_bg(_notify_survey_milestone(
+                f"⛏ **{zone['name']} hit {gate} rock-positive marks** "
+                f"({poi.system}) — enough for real field statistics. "
+                "Nice mapping.",
+                f"survey-zone-gate:{zone['id']}"))
+    # Belt model pool = marks outside the datamined Glaciem envelope (the
+    # same filter /api/halo/survey feeds survey_field_model).
+    if not nav_core.glaciem_contains(mine["xyz"]):
+        belt_pos = sum(1 for m in marks
+                       if m["positive"] and not nav_core.glaciem_contains(m["xyz"]))
+        if belt_pos == gate:
+            _notify_bg(_notify_survey_milestone(
+                f"📐 **{poi.system}'s belt survey just fit its first field "
+                f"model** — {gate} rock-positive marks. The survey export "
+                "now carries ring statistics.",
+                f"survey-model:{poi.system}"))
 
 
 def _capture_observation(sess, pos_m, now, pending, owner):
@@ -4960,6 +5007,7 @@ def _survey_valued(system: str) -> tuple[dict, list[dict], list[dict]]:
 class ZoneIn(BaseModel):
     name: str = Field(min_length=1, max_length=48)
     system: str | None = Field(default=None, max_length=24)
+    announce: bool = False   # opt-in Discord shout (#37 §5.2, LFG-style)
 
 
 class ZonePatchIn(BaseModel):
@@ -4975,9 +5023,12 @@ class ActiveZoneIn(BaseModel):
 def list_survey_zones(system: str = "Nyx", user: dict = Depends(require_session)):
     """Every named survey zone in a system, with geometry derived live from its
     marks (#36.1). Feeds the zone picker + the active-zone banner + the planner
-    pin list. Zones carry their org-survey value tier (#37 slice 1)."""
+    pin list. Zones carry their org-survey value tier (#37 slice 1).
+    `announce_available` gates the create dialog's Discord opt-in to when a
+    survey webhook is configured (#37 §5.2, mirrors the LFG composer)."""
     _, zones_valued, _pool = _survey_valued(system)
-    return {"system": system, "zones": zones_valued}
+    return {"system": system, "zones": zones_valued,
+            "announce_available": notify.is_configured("survey")}
 
 
 @app.post("/api/halo/survey/zones")
@@ -5003,7 +5054,10 @@ async def create_survey_zone(body: ZoneIn, user: dict = Depends(require_session)
         raise HTTPException(status_code=409,
                             detail="a zone with that name already exists in this system")
     members_dir.set_active_survey_zone(user["id"], zid)
-    return {"ok": True, "zone": db.get_survey_zone(zid), "active_survey_zone": zid}
+    zone = db.get_survey_zone(zid)
+    if body.announce and _survey_announce_ok(str(user["id"])):
+        _notify_bg(_notify_survey_zone_created(zone))
+    return {"ok": True, "zone": zone, "active_survey_zone": zid}
 
 
 @app.patch("/api/halo/survey/zones/{zone_id}")
@@ -5598,6 +5652,40 @@ def _warning_announce_ok(poster_id: str) -> bool:
         return False
     _warning_announce_at[poster_id] = now
     return True
+
+
+async def _notify_survey_zone_created(zone: dict) -> None:
+    """Announce a fresh survey zone to the org's Discord (#37 §5.2, opt-in per
+    zone). An open call for surveyors — no @mentions; members funnel back
+    through the deep link to fly out and add marks."""
+    if not notify.is_configured("survey"):
+        return
+    who = zone.get("owner_handle") or "an org surveyor"
+    lines = [f"⛏ **New survey zone — {zone['name']}** ({zone['system']})",
+             f"Started by {who}. Every mark maps the field — "
+             "“nothing here” counts too."]
+    await notify.send("survey", "\n".join(lines) + _deep_link("#/halo"),
+                      dedup_key=f"survey-zone-created:{zone['id']}")
+
+
+def _survey_announce_ok(creator_id: str) -> bool:
+    """Anti-spam gate for announcing a new survey zone: one announced zone per
+    member per cooldown. Returns True (and arms the cooldown) only when
+    allowed. Same membership-check discipline as _lfg_announce_ok."""
+    now = time.monotonic()
+    last = _survey_announce_at.get(creator_id)
+    if last is not None and now - last < SURVEY_ANNOUNCE_COOLDOWN_S:
+        return False
+    _survey_announce_at[creator_id] = now
+    return True
+
+
+async def _notify_survey_milestone(text: str, dedup: str) -> None:
+    """A survey threshold crossing (#37 §5.2): a zone reaching the field-model
+    gate, or a belt's first model fit. Crossings only — never per-mark."""
+    if not notify.is_configured("survey"):
+        return
+    await notify.send("survey", text + _deep_link("#/halo"), dedup_key=dedup)
 
 
 def _mentions(*discord_ids) -> tuple[list[str], str]:
@@ -8816,6 +8904,58 @@ async def member_directory(admin: dict = Depends(require_admin)):
         })
     rows.sort(key=lambda r: (r["display_name"] or r["username"] or r["discord_id"]).lower())
     return {"members": rows, "total": len(rows)}
+
+
+@app.get("/api/intel/surveying")
+def intel_surveying(user: dict = Depends(require_session)):
+    """Org-wide survey activity (#37 §5.2) for Org Intel's Surveying section:
+    totals + top contributors derived live from the marks themselves (no
+    survey_runs table — nav_core.derive_survey_stats), per-belt coverage, and
+    the freshest zones. Ranked lists are logistics, not achievements. Sync
+    def (threadpool) — survey_marks snapshots nav.pois atomically."""
+    all_marks: list[dict] = []
+    belts = []
+    zone_rows: list[dict] = []
+    for system, belt in (nav.belts or {}).items():
+        st = nav_core.survey_state(nav, system)
+        marks = st["marks"]
+        all_marks += [{**m, "system": system} for m in marks]
+        gl = st.get("glaciem")
+        model = nav_core.survey_field_model(
+            [m for m in marks if not nav_core.glaciem_contains(m["xyz"])])
+        belts.append({
+            "system": system, "kind": belt.get("kind"),
+            "marks": len(marks),
+            "positives": sum(1 for m in marks if m["positive"]),
+            "scans": sum(1 for m in marks if m.get("scan")),
+            # Ring systems only: exact belt-arc coverage (#37 slice 4) and the
+            # datamined-pocket survey overlay tally.
+            "coverage": (st["gaps"] or {}).get("coverage")
+                        if st.get("gaps") is not None else None,
+            "glaciem": ({"surveyed": sum(1 for p in gl if p.get("survey")),
+                         "total": len(gl)} if gl is not None else None),
+            "model": model,
+            "model_min": nav_core.SURVEY_MODEL_MIN_MARKS,
+        })
+        _, zones_valued, _pool = _survey_valued(system)
+        zone_rows += zones_valued
+    stats = nav_core.derive_survey_stats(all_marks)
+    activity = stats["zones"]
+    zones = []
+    for z in zone_rows:
+        act = activity.get(z.get("zone_id")) or {}
+        zones.append({"zone_id": z.get("zone_id"), "name": z.get("name"),
+                      "system": z.get("system"), "closed": bool(z.get("closed")),
+                      "owner_handle": z.get("owner_handle"),
+                      "status": z.get("status"), "marks": z.get("marks", 0),
+                      "positive": z.get("positive", 0), "value": z.get("value"),
+                      "latest": act.get("latest"),
+                      "surveyors": act.get("surveyors", 0)})
+    zones.sort(key=lambda z: (z["latest"] is None, -(z["latest"] or 0),
+                              (z["name"] or "").lower()))
+    return {"totals": stats["totals"], "members": stats["members"],
+            "belts": belts, "zones": zones,
+            "session_gap_min": int(nav_core.SURVEY_SESSION_GAP_S // 60)}
 
 
 @app.delete("/api/me")

@@ -4477,6 +4477,182 @@ class BeltSurveyApiTests(unittest.TestCase):
         self.assertIn("exactly one goal", r.json()["detail"])
 
 
+class SurveyStatsAndMilestonesTests(unittest.TestCase):
+    """#37 slice 5 (§5.2): the /api/intel/surveying rollup, the `survey`
+    notify category (zone-created announce + per-member cooldown), and the
+    threshold-crossing milestones (zone field-model gate, a belt's first
+    model fit) fired from the capture path."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "9", "display_name": "Surveyor", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        cls.KR = app.nav_core.KEEGER_R_M
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("9", None)
+        app._survey_announce_at.clear()
+        db.set_setting(notify._webhook_key("survey"), _GOOD_WEBHOOK)
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    def tearDown(self):
+        db.set_setting(notify._webhook_key("survey"), "")
+        for pid in [p.id for p in app.nav.pois.values()
+                    if getattr(p, "custom", False)
+                    and (p.type or "").lower() == "survey"]:
+            app.nav.pois.pop(pid, None)
+        app.nav.touch()
+        db.clear_survey_pois("Nyx")
+        db.clear_survey_zones("Nyx")
+        app.members_dir.set_active_survey_zone("9", None)
+
+    def _mark(self, xyz, rocks="dense", zone_id=None, owner="Keeg",
+              created=1000.0):
+        pid = db.next_custom_poi_id()
+        survey = {"rocks": rocks}
+        if zone_id is not None:
+            survey["zone_id"] = zone_id
+        poi = app.nav_core.Poi(
+            id=pid, name=f"mark {pid}", system="Nyx", container_name=None,
+            type="survey", local_km=None, global_m=xyz, latitude=None,
+            longitude=None, height_m=None, qt_marker=False, custom=True,
+            owner_handle=owner, survey=survey, created=created)
+        db.add_custom_poi(app.nav_core.custom_poi_to_dict(poi))
+        app.nav.pois[poi.id] = poi
+        app.nav.touch()     # the mutation contract: any nav.pois change bumps
+        return poi
+
+    def _run_milestones(self, poi, zone):
+        """Drive the sync hook + the _notify_bg tasks it schedules."""
+        async def _go():
+            app._survey_capture_milestones(poi, zone)
+            for _ in range(3):
+                await asyncio.sleep(0)
+        asyncio.run(_go())
+
+    def test_intel_surveying_rollup(self):
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Stats Zone", "system": "Nyx"}
+                               ).json()["zone"]["id"]
+        self._mark((self.KR, 0, 0), zone_id=zid, created=1000.0)
+        self._mark((self.KR, 5e6, 0), zone_id=zid, created=1200.0)
+        self._mark((self.KR, -5e6, 0), rocks="none", created=None)
+        doc = self.client.get("/api/intel/surveying").json()
+        self.assertEqual(doc["totals"],
+                         {"marks": 3, "positives": 2, "scans": 0,
+                          "sessions": 1, "members": 1, "zones": 1})
+        row = doc["members"][0]
+        self.assertEqual(row["handle"], "Keeg")
+        self.assertEqual(row["systems"], ["Nyx"])
+        self.assertEqual((row["first"], row["latest"]), (1000.0, 1200.0))
+        nyx = next(b for b in doc["belts"] if b["system"] == "Nyx")
+        self.assertEqual(nyx["kind"], "ring")
+        self.assertGreater(nyx["coverage"], 0.0)        # ring marks cover arc
+        self.assertIsNotNone(nyx["glaciem"])
+        self.assertIsNone(nyx["model"])                  # far below the gate
+        self.assertEqual(nyx["model_min"], app.nav_core.SURVEY_MODEL_MIN_MARKS)
+        z = next(z for z in doc["zones"] if z["zone_id"] == zid)
+        self.assertEqual((z["marks"], z["surveyors"], z["latest"]),
+                         (2, 1, 1200.0))
+        self.assertEqual(z["name"], "Stats Zone")
+        # Stanton/Pyro rows exist but carry no ring-only blocks
+        stanton = next(b for b in doc["belts"] if b["system"] == "Stanton")
+        self.assertIsNone(stanton["coverage"])
+        self.assertIsNone(stanton["glaciem"])
+
+    def test_zone_announce_builder_and_gating(self):
+        zone = {"id": 12, "name": "Iron Field A", "system": "Nyx",
+                "owner_handle": "Keeg"}
+        asyncio.run(app._notify_survey_zone_created(zone))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertEqual(msg["category"], "survey")
+        self.assertIn("Iron Field A", msg["text"])
+        self.assertIn("Keeg", msg["text"])
+        self.assertEqual(msg["dedup_key"], "survey-zone-created:12")
+        self.assertIsNone(msg["mentions"])               # broadcast, no pings
+        # silent when the webhook is unset
+        db.set_setting(notify._webhook_key("survey"), "")
+        asyncio.run(app._notify_survey_zone_created(zone))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_announce_rate_limit_and_endpoint_arming(self):
+        self.assertTrue(app._survey_announce_ok("9"))    # first arms
+        self.assertFalse(app._survey_announce_ok("9"))   # cooldown blocks
+        self.assertTrue(app._survey_announce_ok("8"))    # members independent
+        app._survey_announce_at.clear()
+        r = self.client.post("/api/halo/survey/zones",
+                             json={"name": "Shout Zone", "system": "Nyx",
+                                   "announce": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("9", app._survey_announce_at)      # route armed it
+        db.delete_survey_zone(r.json()["zone"]["id"])
+        app._survey_announce_at.clear()
+        r2 = self.client.post("/api/halo/survey/zones",
+                              json={"name": "Quiet Zone", "system": "Nyx"})
+        self.assertNotIn("9", app._survey_announce_at)   # no announce, no arm
+        db.delete_survey_zone(r2.json()["zone"]["id"])
+
+    def test_zones_snapshot_exposes_announce_available(self):
+        self.assertTrue(self.client.get("/api/halo/survey/zones?system=Nyx")
+                        .json()["announce_available"])
+        db.set_setting(notify._webhook_key("survey"), "")
+        self.assertFalse(self.client.get("/api/halo/survey/zones?system=Nyx")
+                         .json()["announce_available"])
+
+    def test_milestones_fire_exactly_at_the_gate(self):
+        gate = app.nav_core.SURVEY_MODEL_MIN_MARKS
+        zone = self.client.post("/api/halo/survey/zones",
+                                json={"name": "Gate Zone", "system": "Nyx"}
+                                ).json()["zone"]
+        # 24 rock-positive marks on the Keeger ring (outside Glaciem)
+        for i in range(gate - 1):
+            self._mark((self.KR, i * 5e6, 0.0), zone_id=zone["id"])
+        crossing = self._mark((self.KR, gate * 5e6, 0.0), zone_id=zone["id"])
+        self._run_milestones(crossing, zone)
+        keys = {m["dedup_key"] for m in self.sent}
+        self.assertIn(f"survey-zone-gate:{zone['id']}", keys)   # zone gate
+        self.assertIn("survey-model:Nyx", keys)                  # first model fit
+        self.assertTrue(all(m["category"] == "survey" for m in self.sent))
+        # one PAST the gate: no crossing, nothing new fires
+        n = len(self.sent)
+        extra = self._mark((self.KR, (gate + 1) * 5e6, 0.0), zone_id=zone["id"])
+        self._run_milestones(extra, zone)
+        self.assertEqual(len(self.sent), n)
+
+    def test_negative_and_unconfigured_marks_never_fire(self):
+        zone = self.client.post("/api/halo/survey/zones",
+                                json={"name": "Quiet Gate", "system": "Nyx"}
+                                ).json()["zone"]
+        neg = self._mark((self.KR, 0, 0), rocks="none", zone_id=zone["id"])
+        self._run_milestones(neg, zone)
+        self.assertEqual(self.sent, [])
+        db.set_setting(notify._webhook_key("survey"), "")
+        pos = self._mark((self.KR, 5e6, 0), zone_id=zone["id"])
+        self._run_milestones(pos, zone)
+        self.assertEqual(self.sent, [])
+
+
 class ResourceValueTests(unittest.TestCase):
     """/api/resource_values — the mining-value badge feed (#32): raw ores fall
     back to their refined commodity's sell price, unpriced names are absent,
