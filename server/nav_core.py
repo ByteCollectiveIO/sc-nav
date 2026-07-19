@@ -6194,6 +6194,99 @@ def survey_pockets(nav: NavData, system: str,
     return out
 
 
+# Gap probe bound (#37 slice 4): interval union yields ~clusters+1 arcs, so
+# this is a backstop, not a working limit.
+GAP_PROBE_MAX = 24
+
+
+def survey_gaps(nav: NavData, system: str, marks: list[dict],
+                pockets: list[dict] | None = None) -> dict:
+    """Keeger coverage gaps (#37 slice 4, design §5.1): where has nobody
+    surveyed yet, and can a drop plan even reach it?
+
+    Exact angle-interval union — NOT the design doc's 0.25° ring sampling: a
+    mark covers only ±SURVEY_MERGE_M along the 48 Gm ring (±0.0124°), far
+    finer than any sane sample step, so sampling would miss real coverage
+    between samples. Each near-ring mark covers [θ−w, θ+w]; the union's
+    complement IS the gap list, and coverage is the honest covered fraction.
+
+    Each gap arc carries a plannability verdict (the slice-2 chord-miss
+    probe, start-independent over public marker-PAIR chords): "plannable"
+    when some chord passes within POCKET_MISS_CEILING_M of the arc midpoint,
+    else expedition with the sublight creep distance. Derived on read;
+    cached by survey_state."""
+    R = KEEGER_R_M
+    w = SURVEY_MERGE_M / R
+    two_pi = 2.0 * math.pi
+    angles = []
+    for m in marks:
+        r = math.hypot(m["xyz"][0], m["xyz"][1])
+        if abs(r - R) > KEEGER_RADIAL_TOL_M + SURVEY_MERGE_M:
+            continue                     # off the belt — covers no ring arc
+        angles.append(math.atan2(m["xyz"][1], m["xyz"][0]) % two_pi)
+    gaps_rad: list[tuple[float, float]] = []
+    if not angles:
+        covered = 0.0
+        gaps_rad.append((0.0, two_pi))
+    else:
+        iv = sorted(((a - w), (a + w)) for a in angles)
+        merged = [list(iv[0])]
+        for lo, hi in iv[1:]:
+            if lo <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], hi)
+            else:
+                merged.append([lo, hi])
+        # Seam: the circle wraps — an interval past 2π (or below 0) touches
+        # the other end. Merge across the seam by comparing on the unrolled
+        # circle, then read gaps off the covered spans.
+        if len(merged) > 1 and merged[-1][1] >= merged[0][0] + two_pi:
+            merged[0][0] = merged[-1][0] - two_pi
+            merged.pop()
+        covered = min(1.0, sum(hi - lo for lo, hi in merged) / two_pi)
+        if covered < 1.0:
+            for i, (lo, hi) in enumerate(merged):
+                nxt = merged[(i + 1) % len(merged)][0] + (two_pi if i == len(merged) - 1 else 0.0)
+                if nxt - hi > 1e-9:
+                    gaps_rad.append((hi, nxt))
+    # Plannability probe chords: every pair of public markers in the system.
+    mpos = []
+    for p in nav.qt_markers:
+        if p.system == system and poi_active(p) and not p.private:
+            g = entity_global_m(nav, p, ROTATION_EPOCH)
+            if g is not None:
+                mpos.append(g)
+    pairs = [(mpos[i], mpos[j]) for i in range(len(mpos))
+             for j in range(i + 1, len(mpos))]
+    arcs = []
+    for lo, hi in gaps_rad:
+        mid = (lo + hi) / 2.0
+        mid_xyz = (R * math.cos(mid), R * math.sin(mid), 0.0)
+        arcs.append({
+            "a0_deg": round(math.degrees(lo % two_pi), 2),
+            "a1_deg": round(math.degrees(lo % two_pi) + math.degrees(hi - lo), 2),
+            "span_deg": round(math.degrees(hi - lo), 2),
+            "arc_m": (hi - lo) * R,
+            "mid_xyz": list(mid_xyz),
+            "near_key": min(
+                (pk for pk in (pockets or []) if pk.get("xyz")),
+                key=lambda pk: dist3(pk["xyz"], mid_xyz), default={}).get("key"),
+        })
+    arcs.sort(key=lambda a: -a["arc_m"])
+    for a in arcs[:GAP_PROBE_MAX]:
+        best = min((_seg_point_dist(pa, pb, a["mid_xyz"]) for pa, pb in pairs),
+                   default=None)
+        a["probe_miss_m"] = best
+        a["plannable"] = bool(best is not None
+                              and best <= POCKET_MISS_CEILING_M)
+        a["creep_m"] = None if a["plannable"] else best
+    for a in arcs[GAP_PROBE_MAX:]:
+        a["probe_miss_m"] = None
+        a["plannable"] = False
+        a["creep_m"] = None
+    return {"coverage": covered, "total_gap_m": sum(a["arc_m"] for a in arcs),
+            "arcs": arcs}
+
+
 def survey_state(nav: NavData, system: str) -> dict:
     """Version-keyed cache of a system's survey derivations at the default
     rotation reference: `marks` (all org-visible survey marks), `pockets`
@@ -6211,11 +6304,15 @@ def survey_state(nav: NavData, system: str) -> dict:
         return hit[1]
     belt = (nav.belts or {}).get(system) or {}
     marks = survey_marks(nav, system)
+    pockets = survey_pockets(nav, system)
     state = {
         "marks": marks,
-        "pockets": survey_pockets(nav, system),
+        "pockets": pockets,
         "glaciem": (annotate_glaciem_survey(belt.get("pockets") or [], marks)
                     if belt.get("kind") == "ring" else None),
+        # Keeger coverage gaps (#37 slice 4) — ring systems only.
+        "gaps": (survey_gaps(nav, system, marks, pockets)
+                 if belt.get("kind") == "ring" else None),
     }
     if cache is None:
         cache = {}

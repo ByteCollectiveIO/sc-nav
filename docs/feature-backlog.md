@@ -16,7 +16,7 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 37. Survey platform — value, direction, lifecycle, scope 🔨 SLICES 0–3 SHIPPED (Phase 1+2 complete)
+### 37. Survey platform — value, direction, lifecycle, scope 🔨 SLICES 0–4 SHIPPED
 
 **Status: slice 0 (radar reference layers §5.4–5.5, v0.64.0 — Pocket Radar
 POI overlay + in-pocket survey heatmap w/ ALL/7D/24H age window), slice 1
@@ -24,11 +24,14 @@ POI overlay + in-pocket survey heatmap w/ ALL/7D/24H age window), slice 1
 per-system tercile pool, salvage ⚙ lane, price-refresh re-tiering), slice 2
 (ore-first routing §4, v0.66.0 — `/api/survey/find` + the element finder's
 IN THE BELTS section + the halo `⛏ Ore` goal + ⛏ mined-out reports w/ 4 h
-age-off) and slice 3 (scan detail + zone detail view §3.1/§3.4, v0.67.0 —
+age-off) slice 3 (scan detail + zone detail view §3.1/§3.4, v0.67.0 —
 after-the-drop scanner transcription via `PATCH .../survey`, the "scanned"
-value basis, pool-relative routing comp% term, zone ▸ details timeline) are
-SHIPPED. Remaining slices (coverage gaps, stats, staleness, import, kinds)
-stay design.**
+value basis, pool-relative routing comp% term, zone ▸ details timeline),
+the v0.68.0 routing fix (arrival plans + staging cost sanity from a live
+in-game report, pocket picker parity, radar ☀ sun compass) and slice 4
+(coverage gaps §5.1 + the always-on 3-system overview map w/ click-to-pin
++ NEXT GAP, v0.69.0) are SHIPPED. Remaining slices (stats, staleness,
+import, kinds) stay design.**
 Full plan:
 [`survey-platform.md`](survey-platform.md). Evolves the shipped #36/#36.1
 survey stack from a mapping tool into an org **prospecting** suite, in

@@ -16,14 +16,14 @@ drift — trust grep and CI, not the citation.
 | Doc | What it is |
 |---|---|
 | [product-overview.md](product-overview.md) | **The consolidated map**: apps, platform services, data sources, conventions |
-| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slices 0–3 shipped v0.64–0.67, rest designed) |
+| [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slices 0–4 shipped v0.64–0.69, rest designed) |
 | [../PRODUCT.md](../PRODUCT.md) · [../DESIGN.md](../DESIGN.md) | Product scope/brand · visual design system |
 
 ## Active designs (not built)
 
 | Doc | Status | Covers |
 |---|---|---|
-| [survey-platform.md](survey-platform.md) | 🔨 slices 0–3 shipped v0.64–0.67 | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing (⛏ Ore goal + mined-out reports), and scan detail (scanned basis + zone detail view) live**; remaining: coverage-gap targeting, patch staleness, cross-org import, mark kinds |
+| [survey-platform.md](survey-platform.md) | 🔨 slices 0–4 shipped v0.64–0.69 | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing, scan detail, arrival routing, coverage gaps + the always-on overview map live**; remaining: survey stats, patch staleness, cross-org import, mark kinds |
 
 ## Shipped feature specs (reference for what's live)
 

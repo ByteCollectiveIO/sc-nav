@@ -4413,6 +4413,9 @@ class HaloPlanIn(BaseModel):
     # holding this ore (any system with survey evidence; fresh mined-out
     # reports are skipped). One goal like band/pocket_key/target_poi_id.
     ore: str | None = Field(default=None, max_length=64)
+    # Survey-the-next-gap goal (#37 slice 4, §5.1): plan the drop leg of the
+    # most reachable unmapped Keeger arc. One goal like the others.
+    gap: bool = False
     # Nyx: also target QV-Breaker mission pockets (believed contract-gated)
     include_mission: bool = False
     start_poi_id: int | None = None
@@ -4421,6 +4424,29 @@ class HaloPlanIn(BaseModel):
     ship: str | None = Field(default=None, max_length=_NAME_MAX)
     qd: str | None = Field(default=None, max_length=_NAME_MAX)
     avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
+
+
+# Overview-map landmark types (#37 slice 4): stations/gateways, not the OM
+# swarm — Stanton alone has dozens of orbital markers that would bury the map.
+_HALO_MARKER_TYPES = {"station", "reststop", "jumppoint", "landingzone",
+                      "outpost"}
+
+
+def _halo_markers(system: str) -> list[dict]:
+    """Public QT landmarks with absolute positions for the overview map —
+    the whole-system sibling of radar_ref_pois (same filters, no radius)."""
+    out = []
+    for p in nav.qt_markers:
+        if (p.system != system or p.private
+                or not nav_core.poi_active(p)
+                or (p.type or "").strip().lower() not in _HALO_MARKER_TYPES):
+            continue
+        g = nav_core.poi_global_m(nav, p, nav_core.ROTATION_EPOCH)
+        if g is None:
+            continue
+        out.append({"name": p.name, "x": g[0], "y": g[1], "z": g[2],
+                    "type": p.type, "qt": True})
+    return out
 
 
 def _halo_bodies(system: str) -> list[dict]:
@@ -4457,7 +4483,10 @@ def get_halo_targets(system: str = "Stanton",
     if belt is None:
         raise HTTPException(status_code=404, detail="unknown system")
     doc = {"system": system, "kind": belt["kind"],
-           "bodies": _halo_bodies(system), "attribution": belt["attribution"]}
+           "bodies": _halo_bodies(system),
+           # Overview-map landmarks (#37 slice 4): stations + gateways.
+           "markers": _halo_markers(system),
+           "attribution": belt["attribution"]}
     if belt["kind"] == "bands":
         doc["bands"] = [{**b, "width_m": b["outer_m"] - b["inner_m"]}
                         for b in belt["bands"]]
@@ -4499,6 +4528,9 @@ def get_halo_targets(system: str = "Stanton",
                 [m for m in marks if not nav_core.glaciem_contains(m["xyz"])]),
             "model_min": nav_core.SURVEY_MODEL_MIN_MARKS,
         }
+        # Keeger coverage gaps (#37 slice 4): where should the org survey
+        # next — drawn as hollow arcs on the map + the NEXT GAP line.
+        doc["gaps"] = sstate["gaps"]
     else:
         doc["fields"] = [{"uuid": f["uuid"], "name": f["name"],
                           "shell": f["shell"],
@@ -4575,6 +4607,8 @@ def _halo_goal_system(body: HaloPlanIn) -> str | None:
         # the org's survey evidence for deep-space mining lives — Nyx (the
         # belts). Cross-system routing stays explicit ("travel there first").
         return nav_core.GLACIEM_SYSTEM
+    if body.gap:
+        return nav_core.GLACIEM_SYSTEM   # the org-mapped belt (#37 slice 4)
     if body.target_poi_id is not None:
         tp = nav.pois.get(body.target_poi_id)
         if tp is None:
@@ -4595,11 +4629,35 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
     # silently win over an also-sent band/field/target.)
     picked = sum(x is not None for x in (body.band, body.field_uuid,
                                          body.pocket_key, body.target_poi_id,
-                                         body.ore))
+                                         body.ore)) + (1 if body.gap else 0)
     if picked > 1:
         raise HTTPException(
             status_code=400,
-            detail="pick exactly one goal: band / field_uuid / pocket_key / target_poi_id / ore")
+            detail="pick exactly one goal: band / field_uuid / pocket_key / target_poi_id / ore / gap")
+    # Survey-the-next-gap goal (#37 slice 4): resolve the most reachable
+    # unmapped Keeger arc into a synthetic pocket — the standard pocket
+    # machinery (arrival, staging, cost sanity) plans the rest.
+    if body.gap:
+        if kind != "ring":
+            raise HTTPException(status_code=400,
+                                detail=f"gap survey is a {nav_core.GLACIEM_SYSTEM} goal")
+        gaps = nav_core.survey_state(nav, system).get("gaps") or {}
+        arcs = gaps.get("arcs") or []
+        if not arcs:
+            raise HTTPException(status_code=400,
+                                detail="the belt arc is fully surveyed — no gaps left")
+        plannable = [a for a in arcs if a.get("plannable")]
+        if not plannable:
+            raise HTTPException(
+                status_code=400,
+                detail="every remaining gap is expedition-only from the org's "
+                       "markers — survey outward from a station approach first")
+        best = min(plannable, key=lambda a: a["probe_miss_m"])
+        return {"pockets": [{
+            "key": f"GAP-{int(best['a0_deg'])}", "kind": "gap",
+            "xyz": tuple(best["mid_xyz"]),
+            "grid_radius_m": nav_core.SURVEY_MERGE_M,
+        }]}
     # ⛏ Ore goal (#37 slice 2): like a zone pin, valid in ANY system that has
     # survey evidence — rank the system's clusters for the ore and hand the
     # top plannable candidates to the solver as the pocket pool (cross-cluster

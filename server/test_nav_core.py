@@ -4896,6 +4896,92 @@ class SurveyValueTests(unittest.TestCase):
         self.assertEqual(nav_core.annotate_survey_values([], self.PRICES), [])
 
 
+class SurveyGapTests(unittest.TestCase):
+    """Coverage gaps (#37 slice 4): the exact angle-interval union, wrap
+    handling, radial filtering, plannability probe and survey_state cache."""
+
+    KR = nav_core.KEEGER_R_M
+    TWO_PI = 2.0 * math.pi
+
+    @staticmethod
+    def _mk(angle, r=None, mid=1_000_001):
+        r = nav_core.KEEGER_R_M if r is None else r
+        return {"id": mid, "xyz": (r * math.cos(angle), r * math.sin(angle), 0.0),
+                "positive": True, "rocks": "dense", "ores": [], "salvage": False,
+                "zone_id": None, "created": None, "scan": None,
+                "name": "m", "owner_handle": None}
+
+    def test_empty_survey_is_one_full_gap(self):
+        nav = _synthetic_nav([], system="Nyx")
+        g = nav_core.survey_gaps(nav, "Nyx", [], [])
+        self.assertEqual(g["coverage"], 0.0)
+        self.assertEqual(len(g["arcs"]), 1)
+        self.assertAlmostEqual(g["arcs"][0]["arc_m"], self.TWO_PI * self.KR,
+                               delta=1.0)
+        self.assertAlmostEqual(g["total_gap_m"], self.TWO_PI * self.KR, delta=1.0)
+
+    def test_single_cluster_wraps_to_one_gap(self):
+        nav = _synthetic_nav([], system="Nyx")
+        g = nav_core.survey_gaps(nav, "Nyx", [self._mk(0.0)], [])
+        w = nav_core.SURVEY_MERGE_M / self.KR
+        self.assertAlmostEqual(g["coverage"], (2 * w) / self.TWO_PI, places=9)
+        self.assertEqual(len(g["arcs"]), 1)          # wraps the seam: ONE arc
+        self.assertAlmostEqual(g["arcs"][0]["arc_m"],
+                               (self.TWO_PI - 2 * w) * self.KR, delta=1.0)
+
+    def test_two_clusters_two_gaps_with_near_keys(self):
+        nav = _synthetic_nav([], system="Nyx")
+        marks = [self._mk(0.0, mid=1_000_001), self._mk(math.pi / 2, mid=1_000_002)]
+        pockets = [
+            {"key": "SVY-1", "xyz": marks[0]["xyz"]},
+            {"key": "SVY-2", "xyz": marks[1]["xyz"]},
+        ]
+        g = nav_core.survey_gaps(nav, "Nyx", marks, pockets)
+        self.assertEqual(len(g["arcs"]), 2)
+        # the short gap (0 → π/2) hugs both clusters; the long one wraps
+        short, long_ = sorted(g["arcs"], key=lambda a: a["arc_m"])
+        self.assertAlmostEqual(short["arc_m"] + long_["arc_m"]
+                               + 4 * nav_core.SURVEY_MERGE_M,
+                               self.TWO_PI * self.KR, delta=1.0)
+        self.assertIn(short["near_key"], ("SVY-1", "SVY-2"))
+
+    def test_off_ring_marks_cover_nothing(self):
+        nav = _synthetic_nav([], system="Nyx")
+        far = self._mk(0.0, r=self.KR + nav_core.KEEGER_RADIAL_TOL_M
+                       + nav_core.SURVEY_MERGE_M + 1e6)
+        g = nav_core.survey_gaps(nav, "Nyx", [far], [])
+        self.assertEqual(g["coverage"], 0.0)
+
+    def test_plannability_probe_against_marker_chords(self):
+        # A marker-pair chord passes EXACTLY through the big gap's midpoint
+        # → plannable; strip the markers → expedition (creep = probe miss).
+        marks = [self._mk(math.pi)]      # covered at π → gap mid lands at 0
+        mid_xyz = (self.KR, 0.0, 0.0)
+        a = _space_poi(11, "A", (self.KR - 4e9, -8e9, 0), system="Nyx")
+        b = _space_poi(12, "B", (self.KR + 4e9, 8e9, 0), system="Nyx")
+        nav = _synthetic_nav([a, b], system="Nyx")
+        g = nav_core.survey_gaps(nav, "Nyx", marks, [])
+        arc = g["arcs"][0]
+        self.assertAlmostEqual(arc["mid_xyz"][0], mid_xyz[0], delta=2e6)
+        self.assertTrue(arc["plannable"])
+        self.assertLess(arc["probe_miss_m"], nav_core.POCKET_MISS_CEILING_M)
+        g2 = nav_core.survey_gaps(_synthetic_nav([], system="Nyx"),
+                                  "Nyx", marks, [])
+        self.assertFalse(g2["arcs"][0]["plannable"])
+        self.assertIsNone(g2["arcs"][0]["creep_m"])   # no chords at all
+
+    def test_survey_state_carries_and_refreshes_gaps(self):
+        nav = _synthetic_nav([], system="Nyx")
+        nav.belts = {"Nyx": {"kind": "ring", "pockets": [],
+                             "attribution": "t"}}
+        g0 = nav_core.survey_state(nav, "Nyx")["gaps"]
+        self.assertEqual(g0["coverage"], 0.0)
+        nav.pois[1_000_001] = _survey_mark(1_000_001, (self.KR, 0, 0))
+        nav.touch()
+        g1 = nav_core.survey_state(nav, "Nyx")["gaps"]
+        self.assertGreater(g1["coverage"], 0.0)
+
+
 class OreRoutingTests(unittest.TestCase):
     """Ore-first routing (#37 slice 2): find_ore_in_space likelihood
     shrinkage, plannability gating, sort modes, depletion down-rank, and the
