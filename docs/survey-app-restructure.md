@@ -1,9 +1,10 @@
 # Survey app restructure — from "Halo Finder + addons" to a cohesive Exploration & Survey app (backlog #38) — design plan
 
-**Status: ✅ BUILT 2026-07-19 (all three slices R1–R3 in one pass), suites
-736 green, browser-verified via the preview harness (DROP/FIELD/ATLAS in both
-themes, FLY IT handoff, cold `#/halo/field` deep link, ATLAS zone list +
-Keeger coverage on Nyx, Prospector launcher card + logo). Unreleased.**
+**Status: ✅ SHIPPED v0.73.0 (PR #77, 2026-07-19 — designed, built and
+released the same day). Suites 736 green; browser-verified via the preview
+harness (DROP/FIELD/ATLAS in both themes, FLY IT handoff, cold `#/halo/field`
+deep link, ATLAS zone list + Keeger coverage on Nyx, Prospector launcher card
++ logo). User-confirmed live on the server.**
 Frontend information-architecture refactor of the `#/halo` app; zero backend
 changes (confirmed — no server diffs). Companion to
 [survey-platform.md](survey-platform.md) (#37) — this doc restructures the

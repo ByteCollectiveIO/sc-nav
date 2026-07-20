@@ -1,0 +1,799 @@
+{
+    "system": "Stanton",
+    "marks": [
+        {
+            "id": 1000002,
+            "name": "Survey 07-16 18:16",
+            "x": 17063773609.291063,
+            "y": -21292458781.036846,
+            "z": 380162863.868515,
+            "rocks": "medium",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": null,
+            "created": null,
+            "scan": null
+        },
+        {
+            "id": 1000239,
+            "name": "Survey 07-19 13:18",
+            "x": 20450999486.20116,
+            "y": -24368063400.959618,
+            "z": -307030.263303,
+            "rocks": "medium",
+            "ores": [
+                "Tungsten (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784481520.1870203,
+            "scan": null
+        },
+        {
+            "id": 1000240,
+            "name": "Survey 07-19 13:21",
+            "x": 20451008929.532337,
+            "y": -24368080266.926907,
+            "z": -330183.42558,
+            "rocks": "medium",
+            "ores": [
+                "Corundum (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784481693.9727902,
+            "scan": null
+        },
+        {
+            "id": 1000241,
+            "name": "Survey 07-19 13:22",
+            "x": 20451012604.018806,
+            "y": -24368089712.02511,
+            "z": -327500.570977,
+            "rocks": "medium",
+            "ores": [
+                "Corundum (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784481748.9565978,
+            "scan": null
+        },
+        {
+            "id": 1000242,
+            "name": "Survey 07-19 13:23",
+            "x": 20451015804.818977,
+            "y": -24368085903.338932,
+            "z": -318906.881072,
+            "rocks": "dense",
+            "ores": [
+                "Corundum (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784481795.1725976,
+            "scan": null
+        },
+        {
+            "id": 1000243,
+            "name": "Survey 07-19 13:24",
+            "x": 20451010625.97189,
+            "y": -24368080106.31822,
+            "z": -310419.765915,
+            "rocks": "dense",
+            "ores": [
+                "Corundum (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784481877.602827,
+            "scan": null
+        },
+        {
+            "id": 1000244,
+            "name": "Survey 07-19 13:26",
+            "x": 20451004285.19371,
+            "y": -24368087265.82415,
+            "z": -325100.168907,
+            "rocks": "sparse",
+            "ores": [
+                "Aluminum (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784481971.778433,
+            "scan": null
+        },
+        {
+            "id": 1000245,
+            "name": "Survey 07-19 13:26",
+            "x": 20451013438.44233,
+            "y": -24368090262.80325,
+            "z": -327431.482796,
+            "rocks": "sparse",
+            "ores": [
+                "Corundum (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482021.242917,
+            "scan": null
+        },
+        {
+            "id": 1000246,
+            "name": "Survey 07-19 13:27",
+            "x": 20451015533.531887,
+            "y": -24368085825.280624,
+            "z": -319480.648696,
+            "rocks": "medium",
+            "ores": [
+                "Corundum (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482074.3832862,
+            "scan": null
+        },
+        {
+            "id": 1000247,
+            "name": "Survey 07-19 13:29",
+            "x": 20451024122.45665,
+            "y": -24368089802.237362,
+            "z": -310402.45761,
+            "rocks": "medium",
+            "ores": [
+                "Taranite (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482145.4959896,
+            "scan": null
+        },
+        {
+            "id": 1000248,
+            "name": "Survey 07-19 13:30",
+            "x": 20451035825.586906,
+            "y": -24368082289.80335,
+            "z": -301154.857963,
+            "rocks": "medium",
+            "ores": [
+                "Taranite (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482226.7127512,
+            "scan": null
+        },
+        {
+            "id": 1000249,
+            "name": "Survey 07-19 13:31",
+            "x": 20451035958.558117,
+            "y": -24368080249.730724,
+            "z": -297496.276354,
+            "rocks": "medium",
+            "ores": [
+                "Aluminum (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482273.740368,
+            "scan": null
+        },
+        {
+            "id": 1000250,
+            "name": "Survey 07-19 13:32",
+            "x": 20451034764.44072,
+            "y": -24368078001.008423,
+            "z": -288173.97549,
+            "rocks": "medium",
+            "ores": [],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482347.0840302,
+            "scan": null
+        },
+        {
+            "id": 1000251,
+            "name": "Survey 07-19 13:36",
+            "x": 20451028854.89163,
+            "y": -24368018498.46901,
+            "z": -313670.471611,
+            "rocks": "sparse",
+            "ores": [
+                "Taranite (Raw)"
+            ],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482587.4045708,
+            "scan": null
+        },
+        {
+            "id": 1000252,
+            "name": "Survey 07-19 13:37",
+            "x": 20451028854.89163,
+            "y": -24368018498.46901,
+            "z": -313670.471611,
+            "rocks": "sparse",
+            "ores": [
+                "Taranite (Raw)"
+            ],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482647.6462297,
+            "scan": null
+        },
+        {
+            "id": 1000253,
+            "name": "Survey 07-19 13:38",
+            "x": 20451008160.405674,
+            "y": -24368005147.993366,
+            "z": -323990.803854,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482738.8661299,
+            "scan": null
+        },
+        {
+            "id": 1000254,
+            "name": "Survey 07-19 13:39",
+            "x": 20450984112.857197,
+            "y": -24368020629.094677,
+            "z": -309253.451089,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482787.8302717,
+            "scan": null
+        },
+        {
+            "id": 1000255,
+            "name": "Survey 07-19 13:40",
+            "x": 20450977288.899582,
+            "y": -24368035366.906,
+            "z": -295550.708859,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482846.3505168,
+            "scan": null
+        },
+        {
+            "id": 1000256,
+            "name": "Survey 07-19 13:41",
+            "x": 20450978593.35944,
+            "y": -24368054756.40407,
+            "z": -289734.933658,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482916.1478715,
+            "scan": null
+        },
+        {
+            "id": 1000257,
+            "name": "Survey 07-19 13:42",
+            "x": 20450990710.68735,
+            "y": -24368060639.340054,
+            "z": -285245.341643,
+            "rocks": "medium",
+            "ores": [],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784482971.973789,
+            "scan": null
+        },
+        {
+            "id": 1000258,
+            "name": "Survey 07-19 13:44",
+            "x": 20450990723.587738,
+            "y": -24368060645.453415,
+            "z": -285244.487899,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": null,
+            "created": 1784483062.0869074,
+            "scan": null
+        },
+        {
+            "id": 1000259,
+            "name": "Survey 07-19 13:44",
+            "x": 20451001585.03383,
+            "y": -24368063905.053295,
+            "z": -286213.303194,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784483070.1905313,
+            "scan": null
+        },
+        {
+            "id": 1000260,
+            "name": "Survey 07-19 13:45",
+            "x": 20451011761.85715,
+            "y": -24368059278.802074,
+            "z": -294273.904968,
+            "rocks": "none",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784483140.1994672,
+            "scan": null
+        },
+        {
+            "id": 1000261,
+            "name": "Survey 07-19 13:46",
+            "x": 20451006676.919548,
+            "y": -24368052918.62131,
+            "z": -293562.480707,
+            "rocks": "none",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 1,
+            "created": 1784483210.1059148,
+            "scan": null
+        },
+        {
+            "id": 1000262,
+            "name": "Survey 07-19 19:35",
+            "x": 16729239649.850779,
+            "y": -19942073835.059116,
+            "z": 2238047.199509,
+            "rocks": "sparse",
+            "ores": [
+                "Tungsten (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": null,
+            "created": 1784504159.7437904,
+            "scan": {
+                "rs": 11610
+            }
+        },
+        {
+            "id": 1000263,
+            "name": "Survey 07-19 19:39",
+            "x": 16729247245.68688,
+            "y": -19942059595.273342,
+            "z": 2229715.43081,
+            "rocks": "medium",
+            "ores": [
+                "Aluminum (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504349.6436112,
+            "scan": {
+                "rs": 17140
+            }
+        },
+        {
+            "id": 1000264,
+            "name": "Survey 07-19 19:40",
+            "x": 16729248313.937105,
+            "y": -19942051171.4807,
+            "z": 2243830.794823,
+            "rocks": "medium",
+            "ores": [
+                "Aluminum (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504437.6878266,
+            "scan": null
+        },
+        {
+            "id": 1000265,
+            "name": "Survey 07-19 19:41",
+            "x": 16729246277.560911,
+            "y": -19942050251.33148,
+            "z": 2242568.863175,
+            "rocks": "medium",
+            "ores": [
+                "Tungsten (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504505.8334196,
+            "scan": null
+        },
+        {
+            "id": 1000266,
+            "name": "Survey 07-19 19:42",
+            "x": 16729239076.003084,
+            "y": -19942074031.138577,
+            "z": 2237232.989927,
+            "rocks": "medium",
+            "ores": [
+                "Tungsten (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504579.0681336,
+            "scan": {
+                "rs": 11610
+            }
+        },
+        {
+            "id": 1000267,
+            "name": "Survey 07-19 19:43",
+            "x": 16729233075.02774,
+            "y": -19942075121.33402,
+            "z": 2231117.888206,
+            "rocks": "medium",
+            "ores": [],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504636.3624206,
+            "scan": null
+        },
+        {
+            "id": 1000268,
+            "name": "Survey 07-19 19:44",
+            "x": 16729233798.709013,
+            "y": -19942095020.08857,
+            "z": 2229262.625311,
+            "rocks": "medium",
+            "ores": [
+                "Taranite (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504701.0063052,
+            "scan": {
+                "rs": 7110
+            }
+        },
+        {
+            "id": 1000269,
+            "name": "Survey 07-19 19:46",
+            "x": 16729246866.981266,
+            "y": -19942078846.7905,
+            "z": 2236956.551464,
+            "rocks": "medium",
+            "ores": [
+                "Taranite (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504795.2483797,
+            "scan": {
+                "rs": 14220
+            }
+        },
+        {
+            "id": 1000270,
+            "name": "Survey 07-19 19:47",
+            "x": 16729254191.070484,
+            "y": -19942075047.023125,
+            "z": 2249241.577605,
+            "rocks": "medium",
+            "ores": [
+                "Hephaestanite (Raw)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504867.9054155,
+            "scan": {
+                "rs": 16720
+            }
+        },
+        {
+            "id": 1000271,
+            "name": "Survey 07-19 19:49",
+            "x": 16729233831.977818,
+            "y": -19942053165.39045,
+            "z": 2268997.164614,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784504975.1498008,
+            "scan": null
+        },
+        {
+            "id": 1000272,
+            "name": "Survey 07-19 19:50",
+            "x": 16729215743.905437,
+            "y": -19942038108.637398,
+            "z": 2258546.162018,
+            "rocks": "sparse",
+            "ores": [
+                "Aluminum (Ore)"
+            ],
+            "salvage": false,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784505028.4662066,
+            "scan": {
+                "rs": 12855
+            }
+        },
+        {
+            "id": 1000273,
+            "name": "Survey 07-19 19:53",
+            "x": 16729209020.480692,
+            "y": -19942042664.286346,
+            "z": 2234909.388439,
+            "rocks": "sparse",
+            "ores": [],
+            "salvage": true,
+            "owner_handle": "Bolvangar",
+            "zone_id": 2,
+            "created": 1784505229.3214445,
+            "scan": null
+        }
+    ],
+    "pockets": [
+        {
+            "key": "SVY-2",
+            "kind": "surveyed",
+            "xyz": [
+                17063773609.291063,
+                -21292458781.036846,
+                380162863.868515
+            ],
+            "grid_radius_m": 5196152.5,
+            "marks": 1,
+            "positive": 1,
+            "status": "medium",
+            "density": "medium",
+            "ores": [],
+            "ore_counts": {},
+            "salvage": false,
+            "closest_center_m": 0.0,
+            "value": {
+                "score": 64452,
+                "tier": "high",
+                "basis": "density",
+                "salvage": false
+            }
+        },
+        {
+            "key": "SVY-262",
+            "kind": "surveyed",
+            "xyz": [
+                16729239649.850779,
+                -19942073835.059116,
+                2238047.199509
+            ],
+            "grid_radius_m": 5196152.5,
+            "marks": 1,
+            "positive": 1,
+            "status": "sparse",
+            "density": "sparse",
+            "ores": [
+                "Tungsten (Ore)"
+            ],
+            "ore_counts": {
+                "Tungsten (Ore)": 1
+            },
+            "scans": 1,
+            "scan_comp": {},
+            "rs_seen": [
+                11610
+            ],
+            "rs_bases": {
+                "Tungsten (Ore)": 11610
+            },
+            "salvage": false,
+            "closest_center_m": 0.0,
+            "value": {
+                "score": 10330,
+                "tier": "low",
+                "basis": "ores",
+                "salvage": false
+            }
+        },
+        {
+            "key": "SVY-258",
+            "kind": "surveyed",
+            "xyz": [
+                20450990723.587738,
+                -24368060645.453415,
+                -285244.487899
+            ],
+            "grid_radius_m": 5196152.5,
+            "marks": 1,
+            "positive": 1,
+            "status": "sparse",
+            "density": "sparse",
+            "ores": [],
+            "ore_counts": {},
+            "salvage": false,
+            "closest_center_m": 0.0,
+            "value": {
+                "score": 25781,
+                "tier": "low",
+                "basis": "density",
+                "salvage": false
+            }
+        }
+    ],
+    "glaciem": [],
+    "zones": [
+        {
+            "key": "stanton-arc-l2-1",
+            "kind": "zone",
+            "zone_id": 1,
+            "name": "Stanton ARC-L2 1",
+            "system": "Stanton",
+            "closed": false,
+            "owner_handle": "Bolvangar",
+            "contributors": [
+                "Bolvangar"
+            ],
+            "xyz": [
+                20451010476.98899,
+                -24368063526.399307,
+                -309030.5130091
+            ],
+            "grid_radius_m": 500000.0,
+            "marks": 22,
+            "positive": 20,
+            "status": "dense",
+            "density": "dense",
+            "ores": [
+                "Aluminum (Ore)",
+                "Corundum (Raw)",
+                "Taranite (Raw)",
+                "Tungsten (Ore)"
+            ],
+            "ore_counts": {
+                "Tungsten (Ore)": 1,
+                "Corundum (Raw)": 6,
+                "Aluminum (Ore)": 2,
+                "Taranite (Raw)": 4
+            },
+            "salvage": true,
+            "closest_center_m": 11172.02538192247,
+            "survey": {
+                "status": "dense",
+                "marks": 22,
+                "positive": 20,
+                "ores": [
+                    "Aluminum (Ore)",
+                    "Corundum (Raw)",
+                    "Taranite (Raw)",
+                    "Tungsten (Ore)"
+                ],
+                "salvage": true,
+                "closest_center_m": 11172.02538192247
+            },
+            "value": {
+                "score": 54418,
+                "tier": "high",
+                "basis": "ores",
+                "salvage": true
+            }
+        },
+        {
+            "key": "stanton-arc-l1",
+            "kind": "zone",
+            "zone_id": 2,
+            "name": "Stanton ARC-L1",
+            "system": "Stanton",
+            "closed": false,
+            "owner_handle": "Bolvangar",
+            "contributors": [
+                "Bolvangar"
+            ],
+            "xyz": [
+                16729237040.121857,
+                -19942063002.070408,
+                2242034.494217455
+            ],
+            "grid_radius_m": 5196152.5,
+            "marks": 11,
+            "positive": 11,
+            "status": "medium",
+            "density": "medium",
+            "ores": [
+                "Aluminum (Ore)",
+                "Hephaestanite (Raw)",
+                "Taranite (Raw)",
+                "Tungsten (Ore)"
+            ],
+            "ore_counts": {
+                "Aluminum (Ore)": 3,
+                "Tungsten (Ore)": 2,
+                "Taranite (Raw)": 2,
+                "Hephaestanite (Raw)": 1
+            },
+            "scans": 6,
+            "scan_comp": {},
+            "rs_seen": [
+                7110,
+                11610,
+                12855,
+                14220,
+                16720,
+                17140
+            ],
+            "rs_bases": {
+                "Aluminum (Ore)": 4285,
+                "Tungsten (Ore)": 11610,
+                "Taranite (Raw)": 7110,
+                "Hephaestanite (Raw)": 16720
+            },
+            "salvage": true,
+            "closest_center_m": 12199.983626719695,
+            "survey": {
+                "status": "medium",
+                "marks": 11,
+                "positive": 11,
+                "ores": [
+                    "Aluminum (Ore)",
+                    "Hephaestanite (Raw)",
+                    "Taranite (Raw)",
+                    "Tungsten (Ore)"
+                ],
+                "salvage": true,
+                "closest_center_m": 12199.983626719695
+            },
+            "value": {
+                "score": 27823,
+                "tier": "medium",
+                "basis": "ores",
+                "salvage": true
+            }
+        }
+    ],
+    "model": {
+        "samples": 34,
+        "r_med_m": 31812650980.407784,
+        "r_inner_m": 26029835325.11892,
+        "r_outer_m": 31812704926.901913,
+        "half_height_m": 2262204.0129266,
+        "coverage": 0.008333333333333333
+    },
+    "model_min": 25,
+    "attribution": "Field map: this org's own survey marks (in-game fixes)",
+    "_meta": {
+        "document": "sc-nav belt survey export",
+        "app_version": "0.75.0",
+        "generated": "2026-07-20T01:08:33.663161+00:00",
+        "org": "Bytecollective Dev Server",
+        "license_note": "Positions are player-taken in-game measurements; share at your org's discretion."
+    }
+}

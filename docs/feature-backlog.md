@@ -16,11 +16,12 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 38. Survey app restructure — Halo Finder → Prospector ✅ BUILT
+### 38. Survey app restructure — Halo Finder → Prospector ✅ SHIPPED v0.73.0
 
-**Status: BUILT 2026-07-19 (designed + built same day; all three slices
-R1–R3 in one pass), suites 736 green, browser-verified via the preview
-harness; PENDING RELEASE.** Build deviations (no last-tab memory; FIELD pin
+**Status: SHIPPED v0.73.0 (PR #77 squash-merged + auto-tagged + deployed,
+user-confirmed live 2026-07-19 — designed + built + shipped same day),
+suites 736 green, browser-verified via the preview harness. In-game FIELD
+pass (radar/verdict behind the tab switch) still worth a flight.** Build deviations (no last-tab memory; FIELD pin
 reuses the full drop block; `.halo-tab-dot[hidden]` CSS gotcha) recorded in
 the doc's status header. Full plan:
 [`survey-app-restructure.md`](survey-app-restructure.md). The `#/halo` app
