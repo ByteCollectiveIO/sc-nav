@@ -7552,6 +7552,18 @@ async def update_survey_scan(poi_id: int, body: ScanIn,
         sv = dict(getattr(poi, "survey", None) or {})
         if scan:
             sv["scan"] = scan
+            # An ore named in the scan composition IS an "ore seen" — union
+            # the comp's ores into the mark's ore list so entering an ore in
+            # EITHER the mark box or the scan is enough (no double-entry;
+            # #38 playtest note 4). Never removes — a scan only adds evidence.
+            if comp:
+                have = list(sv.get("ores") or [])
+                low = {o.lower() for o in have}
+                for o in comp:
+                    if o.lower() not in low:
+                        have.append(o)
+                        low.add(o.lower())
+                sv["ores"] = have
         else:
             sv.pop("scan", None)     # empty scan = clear (attach/replace)
         poi.survey = sv

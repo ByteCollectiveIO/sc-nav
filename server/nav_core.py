@@ -6415,7 +6415,12 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
         row = {"key": z["slug"], "kind": "zone", "zone_id": z["id"],
                "name": z["name"], "system": z.get("system") or system,
                "closed": bool(z.get("closed")),
-               "owner_handle": z.get("owner_handle")}
+               "owner_handle": z.get("owner_handle"),
+               # Everyone who dropped a mark in this zone (#38 playtest note 1):
+               # backs the ATLAS "find my surveys" surveyor filter — the zone
+               # owner is only its creator, not necessarily a contributor.
+               "contributors": sorted({m["owner_handle"] for m in members
+                                       if m.get("owner_handle")})}
         if members:
             fit = survey_cluster_fit(members, negatives)
             row.update(fit)
