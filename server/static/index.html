@@ -654,7 +654,7 @@
   .fc-ore-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .fc-ore .val-chip { flex-shrink: 0; }
   .fc-bar-outer { background: var(--panel2); border-radius: 4px; height: 11px; overflow: hidden; }
-  .fc-bar-inner { height: 100%; border-radius: 4px; }
+  .fc-bar-inner { display: block; height: 100%; border-radius: 4px; }
   .fc-pct { text-align: right; font-variant-numeric: tabular-nums; }
   .fc-n { color: var(--dim); font-size: 11px; text-align: right; }
   .fc-low { color: var(--warn); }
@@ -1987,6 +1987,42 @@
     padding: 6px 0; border-bottom: 1px solid var(--border-soft); font-size: 12px;
     color: var(--dim); font-variant-numeric: tabular-nums; }
   .halo-alt:last-child { border-bottom: none; }
+  /* Survey summary card (#38 details view): a debrief-style zone report, built
+     from the app's own tokens (theme-aware) rather than the standalone export. */
+  .svy-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .svy-eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 8px; }
+  .svy-title { font-size: 24px; font-weight: 650; letter-spacing: -.01em; margin: 0; line-height: 1.12; }
+  .svy-title .svy-sub { display: block; font-size: 13px; font-weight: 400; color: var(--dim);
+    margin-top: 6px; letter-spacing: 0; }
+  .svy-verdict { display: inline-flex; align-items: center; gap: 9px; margin-top: 16px;
+    padding: 8px 14px; border-radius: 999px; font-size: 13px; border: 1px solid var(--border);
+    background: var(--panel2); }
+  .svy-verdict.bad { background: var(--bad-wash); border-color: var(--bad); color: var(--bad); }
+  .svy-verdict b { font-weight: 650; }
+  .svy-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+  .svy-dot.ok { background: var(--good);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 18%, transparent); }
+  .svy-verdict.bad .svy-dot { background: var(--bad);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--bad) 18%, transparent); }
+  .svy-stats { margin-top: 20px; }
+  .svy-stats .intel-stat { cursor: default; }
+  .svy-stats .intel-stat .n { font-size: 23px; }
+  .svy-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+  @media (max-width: 820px) { .svy-panels { grid-template-columns: 1fr; } }
+  .svy-card .card { background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; }
+  .svy-h { font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--text); margin: 0 0 4px; font-weight: 600; }
+  .svy-card .cap { color: var(--dim); font-size: 12px; margin: 0 0 12px; max-width: 46ch; }
+  .svy-rs-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0;
+    font-size: 12px; font-variant-numeric: tabular-nums; }
+  .svy-rs-row .fc-ore { min-width: 118px; }
+  .svy-rs-row b { color: var(--text); }
+  .svy-timeline { margin-top: 14px; }
+  .svy-foot { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);
+    color: var(--dim); font-size: 12px; max-width: 78ch; }
+  .svy-foot b { color: var(--text); }
   /* Route map: top-down system view + drop-zone inset. Like the navigator
      map, the canvas keeps dark scope colors in BOTH themes (--map-bg). */
   .halo-map-wrap { margin-top: 12px; border: 1px solid var(--border);
@@ -3864,35 +3900,39 @@
          administration lives here so FIELD stays a one-tap cockpit. -->
     <div id="halo-tab-atlas" hidden>
       <div class="panel">
-        <h2>SURVEY ZONES <span class="muted" style="font-weight:400; font-size:12px;">the org's
-          named fields in <span id="halo-atlas-sys">this system</span>, built from every ⛏ mark
-          dropped in FIELD</span></h2>
-        <div class="route-row" style="align-items:center;">
-          <button id="halo-zone-new" type="button" class="route-chip">＋ New zone</button>
-          <a id="halo-export-link" class="muted" target="_blank" rel="noopener" style="font-size:12px;"
-             title="download the current system's survey (marks + fitted model) as JSON">⇩ export survey</a>
-          <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
+        <!-- Browse mode: the zone list. A zone's ▸ Details button swaps this
+             whole block for the survey-summary card (#38 playtest, note follow-up). -->
+        <div id="halo-zones-browse">
+          <h2>SURVEY ZONES <span class="muted" style="font-weight:400; font-size:12px;">the org's
+            named fields in <span id="halo-atlas-sys">this system</span>, built from every ⛏ mark
+            dropped in FIELD</span></h2>
+          <div class="route-row" style="align-items:center;">
+            <button id="halo-zone-new" type="button" class="route-chip">＋ New zone</button>
+            <a id="halo-export-link" class="muted" target="_blank" rel="noopener" style="font-size:12px;"
+               title="download the current system's survey (marks + fitted model) as JSON">⇩ export survey</a>
+            <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+          <!-- Zone filters (#38 playtest note 1): search by name or ore, sort,
+               and narrow to your own surveys so a growing list stays scannable
+               and never crowds the coverage map below it off-screen. -->
+          <div id="halo-zone-filters" class="route-row" style="align-items:center; margin-top:8px; gap:8px;" hidden>
+            <input id="halo-zone-search" class="ti" type="search" autocomplete="off"
+                   placeholder="🔍 zone name or ore" style="min-width:180px; flex:1;"
+                   aria-label="Filter zones by name or ore">
+            <label class="fld-label" for="halo-zone-sort" style="margin:0;">SORT</label>
+            <select id="halo-zone-sort" class="sel" aria-label="Sort zones">
+              <option value="value">Profitability</option>
+              <option value="name">Name</option>
+              <option value="marks">Most marks</option>
+            </select>
+            <label class="trade-pref" title="only zones you've dropped a mark in">
+              <input id="halo-zone-mine" type="checkbox"> my surveys</label>
+            <label class="trade-pref" title="hide closed zones">
+              <input id="halo-zone-open" type="checkbox" checked> open only</label>
+          </div>
+          <div id="halo-atlas-zones" class="table-scroll table-x" style="margin-top:8px;"></div>
         </div>
-        <!-- Zone filters (#38 playtest note 1): search by name or ore, sort,
-             and narrow to your own surveys so a growing list stays scannable
-             and never crowds the coverage map below it off-screen. -->
-        <div id="halo-zone-filters" class="route-row" style="align-items:center; margin-top:8px; gap:8px;" hidden>
-          <input id="halo-zone-search" class="ti" type="search" autocomplete="off"
-                 placeholder="🔍 zone name or ore" style="min-width:180px; flex:1;"
-                 aria-label="Filter zones by name or ore">
-          <label class="fld-label" for="halo-zone-sort" style="margin:0;">SORT</label>
-          <select id="halo-zone-sort" class="sel" aria-label="Sort zones">
-            <option value="value">Profitability</option>
-            <option value="name">Name</option>
-            <option value="marks">Most marks</option>
-          </select>
-          <label class="trade-pref" title="only zones you've dropped a mark in">
-            <input id="halo-zone-mine" type="checkbox"> my surveys</label>
-          <label class="trade-pref" title="hide closed zones">
-            <input id="halo-zone-open" type="checkbox" checked> open only</label>
-        </div>
-        <div id="halo-atlas-zones" class="table-scroll table-x" style="margin-top:8px;"></div>
-        <div id="halo-zone-detail" hidden style="margin-top:8px;"></div>
+        <div id="halo-zone-detail" hidden></div>
       </div>
       <div class="panel">
         <h2>COVERAGE <span class="muted" style="font-weight:400; font-size:12px;">what the org
@@ -12560,6 +12600,7 @@ function setHaloSystem(sys, auto) {
   if (!haloDoc(sys)) loadHaloTargets(sys).then(renderHaloSystemPanel);
   else renderHaloSystemPanel();
   resetHaloAtlasView();                  // recenter the coverage map on the new system
+  closeHaloSurveyCard();                 // a survey card is for the old system's zone
   if (haloWired) loadHaloZones(sys);     // zones are per-system
 }
 
@@ -12937,7 +12978,8 @@ function renderHaloAtlasZones() {
       ? z.ores.map(o => `${esc(o)}${oreValueChip(o)}`).join(", ")
       : `<span class="muted">—</span>`;
     const size = z.grid_radius_m ? `⌀ ${fmtDist(2 * z.grid_radius_m)}` : "";
-    const acts = (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
+    const acts = (z.marks ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
+      + (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
       + (!z.closed ? `<button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
           + `${active ? "filing" : "Set active"}</button>` : "")
       + (z.closed ? `<span class="halo-chip">closed</span>` : "");
@@ -12958,12 +13000,8 @@ function renderHaloAtlasZones() {
     + `<th>ORES</th><th>SIZE</th><th></th></tr></thead><tbody>`
     + rows.map(cell).join("") + `</tbody></table>`;
   const byId = (id) => haloZones.find(x => x.zone_id === Number(id));
-  for (const tr of el.querySelectorAll("[data-zrow]"))
-    tr.onclick = (e) => {
-      if (e.target.closest("button")) return;    // action buttons handle themselves
-      const z = byId(tr.dataset.zrow);
-      if (z && z.marks) toggleHaloZoneDetail(z);
-    };
+  for (const b of el.querySelectorAll("[data-zdetails]"))
+    b.onclick = () => { const z = byId(b.dataset.zdetails); if (z) openHaloSurveyCard(z); };
   for (const b of el.querySelectorAll("[data-zplan]"))
     b.onclick = () => { const z = byId(b.dataset.zplan); if (z) planHaloZone(z); };
   for (const b of el.querySelectorAll("[data-zactive]"))
@@ -13068,8 +13106,8 @@ function renderHaloZoneBanner() {
   const pb = $("halo-zone-plan");
   if (pb) pb.onclick = () => planHaloZone(z);
   const dbtn = $("halo-zone-details");
-  // Zone detail lives in ATLAS (#38): the banner's "▸ details" hops there.
-  if (dbtn) dbtn.onclick = () => { haloGoTab("atlas"); toggleHaloZoneDetail(z, true); };
+  // Survey summary card lives in ATLAS (#38): the banner's "▸ details" hops there.
+  if (dbtn) dbtn.onclick = () => { haloGoTab("atlas"); openHaloSurveyCard(z); };
 }
 
 // ---------- scan detail (#37 slice 3) ----------
@@ -13169,27 +13207,40 @@ $("halo-scan-toggle").onclick = () => {
   form.hidden = false;
 };
 
-// Zone detail (#37 slice 3, doc §3.4): the per-zone expansion — evidence,
-// contributors, and the mark timeline where any mark can take a scan.
-let haloZoneDetailFor = null;   // which zone the ATLAS detail box shows (#38)
-async function toggleHaloZoneDetail(z, forceOpen) {
-  const el = $("halo-zone-detail");
+// Zone detail (#37 slice 3 → #38 survey summary card): a "details" button opens
+// a full debrief-style survey card (stat strip, ore-composition graph, RS
+// signatures, mark timeline) that replaces the zone list — no more annoying
+// auto-expand-on-row-click. Back button restores the list.
+let haloZoneDetailFor = null;   // which zone the ATLAS card shows
+
+function closeHaloSurveyCard() {
+  const el = $("halo-zone-detail"), browse = $("halo-zones-browse");
+  if (el) { el.hidden = true; el.innerHTML = ""; }
+  if (browse) browse.hidden = false;
+  haloZoneDetailFor = null;
+}
+
+async function openHaloSurveyCard(z) {
+  const el = $("halo-zone-detail"), browse = $("halo-zones-browse");
   if (!el) return;
-  const same = haloZoneDetailFor === z.zone_id;
-  if (!el.hidden && same && !forceOpen) {
-    el.hidden = true; el.innerHTML = ""; haloZoneDetailFor = null; return;
-  }
   haloZoneDetailFor = z.zone_id;
+  if (browse) browse.hidden = true;
   el.hidden = false;
-  el.innerHTML = `<span class="muted" style="font-size:12px;">loading zone detail…</span>`;
+  el.innerHTML = `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+    + `<p class="muted" style="font-size:12px; margin-top:8px;">loading survey summary…</p>`;
+  const bb = $("svy-back"); if (bb) bb.onclick = closeHaloSurveyCard;
   let doc;
   try {
     doc = await fetch(`/api/halo/survey?system=${encodeURIComponent(z.system || haloSystem)}`)
       .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
-  } catch { el.innerHTML = `<span class="muted">⚠ couldn't load the zone's marks</span>`; return; }
+  } catch {
+    el.innerHTML = `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+      + `<p class="muted" style="margin-top:8px;">⚠ couldn't load the zone's marks</p>`;
+    const b = $("svy-back"); if (b) b.onclick = closeHaloSurveyCard; return;
+  }
   const marks = (doc.marks || []).filter(m => m.zone_id === z.zone_id)
     .sort((a, b) => (b.created || 0) - (a.created || 0));
-  renderHaloZoneDetail(el, z, marks);
+  renderHaloSurveyCard(el, z, marks);
 }
 
 function scanSummary(scan) {
@@ -13202,59 +13253,118 @@ function scanSummary(scan) {
   return bits.length ? `🔬 ${bits.join(" · ")}` : "";
 }
 
-function renderHaloZoneDetail(el, z, marks) {
+// Ore-composition graph (#38): horizontal bars per ore. With scans, bars are
+// the mean scanned comp% (the "percentages seen" the surveyor asked for); with
+// none, they fall back to how often each ore appears across positive marks.
+function surveyOreChart(z) {
+  const counts = z.ore_counts || {}, comp = z.scan_comp || {};
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (!entries.length)
+    return `<div class="card"><h2 class="svy-h">Ore composition</h2>`
+      + `<p class="cap">No ore reported yet${z.positive ? " — rock seen here, contents unlogged" : ""}. `
+      + `Add ore in FIELD or attach a scan.</p></div>`;
+  const scanned = Object.keys(comp).length > 0;
+  const maxV = scanned ? Math.max(1, ...entries.map(([o]) => comp[o] || 0))
+                       : Math.max(1, ...entries.map(([, n]) => n));
+  const rows = entries.map(([ore, n]) => {
+    const pct = comp[ore];
+    const val = scanned ? (pct || 0) : n;
+    const w = Math.max(3, Math.round(val / maxV * 100));
+    const label = scanned ? (pct != null ? `${pct}%` : "—") : `${n}×`;
+    const sub = scanned ? `${n}×` : `${Math.round(n / (z.positive || n) * 100)}%`;
+    return `<div class="fc-row">`
+      + `<span class="fc-ore"><span class="fc-ore-name">${esc(ore)}</span>${oreValueChip(ore)}</span>`
+      + `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${w}%;background:${oreColor(ore)}"></span></span>`
+      + `<span class="fc-pct">${label}</span>`
+      + `<span class="fc-n">${sub}</span></div>`;
+  }).join("");
+  return `<div class="card"><h2 class="svy-h">Ore composition</h2>`
+    + `<p class="cap">${scanned
+        ? "Mean scanned composition per ore (bar); count = marks that listed it."
+        : "How often each ore was seen across the field's positive marks."}</p>`
+    + rows + `</div>`;
+}
+
+// RS-signature card (#38): the zone's own single-ore radar bases + multiples.
+function surveyRsCard(z) {
+  const bases = z.rs_bases || {}, seen = z.rs_seen || [];
+  if (!Object.keys(bases).length && !seen.length)
+    return `<div class="card"><h2 class="svy-h">RS signatures</h2>`
+      + `<p class="cap">No radar signatures logged. Add an RS value in a mark's scan detail — `
+      + `single-ore rocks derive a base.</p></div>`;
+  const rows = Object.entries(bases).sort((a, b) => a[1] - b[1]).map(([ore, base]) =>
+    `<div class="svy-rs-row"><span class="fc-ore"><span class="fc-ore-name">${esc(ore)}</span>${oreValueChip(ore)}</span>`
+    + `<span><b>${base.toLocaleString()}</b><span class="muted"> · ${[2, 3, 4, 5].map(k => `×${k} ${(base * k).toLocaleString()}`).join(" · ")}</span></span></div>`).join("");
+  const unmatched = seen.filter(v => !Object.values(bases).some(b => v % b === 0));
+  const foot = unmatched.length
+    ? `<p class="cap" style="margin:8px 0 0;">Unmatched signatures seen: ${unmatched.join(", ")}</p>` : "";
+  return `<div class="card"><h2 class="svy-h">RS signatures</h2>`
+    + `<p class="cap">Match your scanner readout at ~25 km — every contact reads an integer multiple of the base.</p>`
+    + (rows || "") + foot + `</div>`;
+}
+
+function renderHaloSurveyCard(el, z, marks) {
   const now = Date.now() / 1000;
   const contrib = {};
-  for (const m of marks) {
-    const who = m.owner_handle || "unknown";
-    contrib[who] = (contrib[who] || 0) + 1;
-  }
+  for (const m of marks) { const who = m.owner_handle || "unknown"; contrib[who] = (contrib[who] || 0) + 1; }
+  const surveyors = Object.entries(contrib).sort((a, b) => b[1] - a[1]);
+  const barren = (z.positive || 0) === 0;
   const basis = z.value
     ? (z.value.basis === "scanned" ? `${z.value.scans || 0} scan${z.value.scans === 1 ? "" : "s"}`
        : z.value.basis === "ores" ? "reported ore list" : "density only")
     : null;
-  // Ore breakdown: listing counts, sharpened by mean scanned comp% where known.
-  const ores = Object.entries(z.ore_counts || {}).sort((a, b) => b[1] - a[1])
-    .map(([o, n]) => {
-      const sc = (z.scan_comp || {})[o];
-      return `<span class="halo-chip">${esc(o)} · ${n}×${sc != null ? ` · scan ≈${sc}%` : ""}</span>`;
-    }).join(" ");
-  let h = `<div style="border:1px solid var(--border); border-radius:6px; padding:8px 10px;">`
-    + `<div style="font-size:12px;">${surveyValueChip(z.value)}`
-    + (basis ? ` <span class="muted">value basis: ${basis}</span> · ` : " ")
-    + `<span class="muted">surveyors:</span> ${Object.entries(contrib)
-        .sort((a, b) => b[1] - a[1])
-        .map(([w, n]) => `${esc(w)} (${n})`).join(", ") || "—"}</div>`
-    + (ores ? `<div style="margin-top:6px;">${ores}</div>` : "");
-  // RS signature table (v0.71.0, user design): every material's contacts
-  // read as multiples of its base — the identify-at-25km cheat sheet,
-  // derived from the org's own single-ore scans (GCD).
-  const bases = z.rs_bases || {};
-  if (Object.keys(bases).length || (z.rs_seen || []).length) {
-    let rs = `<div class="muted" style="font-size:11px; margin-top:8px;">RS SIGNATURES
-      <span style="text-transform:none;">— match your scanner readout at range</span></div>`;
-    for (const [ore, base] of Object.entries(bases).sort((a, b) => a[1] - b[1]))
-      rs += `<div style="font-size:12px; margin-top:2px;"><b>${esc(ore)}</b> — ${base}`
-        + [2, 3, 4, 5, 6].map(k => ` · ×${k} ${(base * k).toLocaleString()}`).join("")
-        + `</div>`;
-    const unmatched = (z.rs_seen || []).filter(v =>
-      !Object.values(bases).some(b => v % b === 0));
-    if (unmatched.length)
-      rs += `<div class="muted" style="font-size:12px; margin-top:2px;">unmatched signatures seen: ${unmatched.join(", ")}</div>`;
-    h += rs;
-  }
-  h += marks.map(m => {
-    const age = m.created ? fmtAge(Math.max(0, now - m.created)) : "—";
-    const sc = scanSummary(m.scan);
-    return `<div class="halo-alt">`
-      + `<b>${esc(age)}</b> · ${esc(m.owner_handle || "?")} · ${esc(m.rocks)} rocks`
-      + ((m.ores || []).length ? ` · ${m.ores.map(esc).join(", ")}` : "")
-      + (sc ? ` · ${sc}` : "")
-      + ` <button type="button" class="route-chip" data-scanmark="${m.id}">${m.scan ? "✎ scan" : "＋ scan"}</button>`
-      + `</div><div class="scan-slot" data-slot="${m.id}"></div>`;
-  }).join("");
-  h += `</div>`;
-  el.innerHTML = h;
+  const verdict = barren
+    ? `<div class="svy-verdict bad"><span class="svy-dot"></span><span><b>BARREN</b> — `
+      + `${marks.length} mark${marks.length === 1 ? "" : "s"}, no mineable rock found</span></div>`
+    : `<div class="svy-verdict"><span class="svy-dot ok"></span><span>${surveyValueChip(z.value) || ""} `
+      + `<b>${esc(z.status || "rock")}</b> field${basis ? ` · basis: ${basis}` : ""}</span></div>`;
+  const tiles = [
+    { k: "Marks", n: z.marks || 0 },
+    { k: "Rock hits", n: z.positive || 0, cls: barren ? "warn" : "" },
+    { k: "Surveyors", n: surveyors.length },
+    { k: "Value", n: z.value && z.value.score ? z.value.score.toLocaleString() : "—", cls: "accent" },
+    { k: "Field ⌀", n: z.grid_radius_m ? fmtDist(2 * z.grid_radius_m) : "—" },
+    { k: "Scans", n: z.scans || 0 },
+  ];
+  const stats = `<div class="intel-glance svy-stats">` + tiles.map(t =>
+    `<div class="intel-stat"><span class="k">${t.k}</span><span class="n ${t.cls || ""}">${t.n}</span></div>`).join("") + `</div>`;
+  const timeline = `<div class="card svy-timeline"><h2 class="svy-h">Mark timeline</h2>`
+    + `<p class="cap">Every ⛏ dropped here, newest first. Attach a scanner readout (mass, RS, comp %) to any mark.</p>`
+    + (marks.length ? marks.map(m => {
+        const age = m.created ? fmtAge(Math.max(0, now - m.created)) : "—";
+        const sc = scanSummary(m.scan);
+        return `<div class="halo-alt">`
+          + `<b>${esc(age)}</b> · ${esc(m.owner_handle || "?")} · ${esc(m.rocks)} rocks`
+          + ((m.ores || []).length ? ` · ${m.ores.map(esc).join(", ")}` : "")
+          + (sc ? ` · ${sc}` : "")
+          + ` <button type="button" class="route-chip" data-scanmark="${m.id}">${m.scan ? "✎ scan" : "＋ scan"}</button>`
+          + `</div><div class="scan-slot" data-slot="${m.id}"></div>`;
+      }).join("") : `<p class="muted" style="font-size:12px;">No marks.</p>`)
+    + `</div>`;
+  el.innerHTML = `<div class="svy-card">`
+    + `<div class="svy-head">`
+    + `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+    + (z.marks ? `<button type="button" class="route-chip" id="svy-plan">Plan a drop here</button>` : "")
+    + (!z.closed ? `<button type="button" class="route-chip" id="svy-active"${z.zone_id === activeSurveyZone ? " disabled" : ""}>`
+        + `${z.zone_id === activeSurveyZone ? "⛏ filing here" : "Set active"}</button>` : "")
+    + `<a class="muted" id="svy-export" target="_blank" rel="noopener" style="font-size:12px; margin-left:auto;"`
+    + ` title="download this system's survey as JSON">⇩ export survey</a>`
+    + `</div>`
+    + `<p class="svy-eyebrow">${esc(z.system || haloSystem)} · Survey Summary</p>`
+    + `<h2 class="svy-title">${esc(z.name)}<span class="svy-sub">`
+    + `${surveyors.length} surveyor${surveyors.length === 1 ? "" : "s"} · ${marks.length} mark${marks.length === 1 ? "" : "s"}${z.closed ? " · closed" : ""}</span></h2>`
+    + verdict
+    + stats
+    + `<div class="svy-panels">${surveyOreChart(z)}${surveyRsCard(z)}</div>`
+    + timeline
+    + `<p class="svy-foot">Reconstructed from <b>${marks.length}</b> ⛏ mark${marks.length === 1 ? "" : "s"}`
+    + (surveyors.length ? ` by <b>${surveyors.length}</b> surveyor${surveyors.length === 1 ? "" : "s"} (${surveyors.map(([w, n]) => `${esc(w)} ${n}`).join(", ")})` : "")
+    + `. Rock spawns can vary between instances — strong evidence, not proof.</p>`
+    + `</div>`;
+  const back = $("svy-back"); if (back) back.onclick = closeHaloSurveyCard;
+  const plan = $("svy-plan"); if (plan) plan.onclick = () => planHaloZone(z);
+  const act = $("svy-active"); if (act) act.onclick = () => { setActiveSurveyZone(z.zone_id); openHaloSurveyCard(z); };
+  const ex = $("svy-export"); if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(z.system || haloSystem);
   for (const b of el.querySelectorAll("[data-scanmark]"))
     b.onclick = () => {
       const id = Number(b.dataset.scanmark);
@@ -13262,7 +13372,9 @@ function renderHaloZoneDetail(el, z, marks) {
       if (slot.innerHTML) { slot.innerHTML = ""; return; }
       const m = marks.find(x => x.id === id);
       slot.innerHTML = scanFormHtml(id, m && m.scan, (m && m.ores) || []);
-      wireScanForm(slot, () => { el.hidden = true; toggleHaloZoneDetail(z); loadHaloZones(); });
+      // Re-open the card after a save so the graph + tiles pick up the new scan.
+      wireScanForm(slot, () => loadHaloZones().then(() =>
+        openHaloSurveyCard(haloZones.find(x => x.zone_id === z.zone_id) || z)));
     };
 }
 
