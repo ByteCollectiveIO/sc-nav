@@ -3818,6 +3818,10 @@
           <b>/showlocation</b> as you move to update. Rings show scale.
           ◇ marks are POIs near the pocket (bright = has an in-game quantum marker).</p>
       </div>
+      <!-- RS signature reference (#38 playtest note 5): the org's own scan
+           readouts, distilled to per-ore base signatures — the identify-at-
+           range cheat sheet a surveyor keeps open while scanning in game. -->
+      <div id="halo-rs-ref" hidden style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);"></div>
       <div id="halo-survey-blk" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);">
         <span class="fld-label">⛏ SURVEY <span class="muted" style="font-weight:400; text-transform:none;">— mark
           this spot for the org's belt map (“nothing here” counts too: it maps a field's edge)</span></span>
@@ -3828,7 +3832,7 @@
             <option value="">— none (auto-cluster) —</option>
           </select>
           <a class="muted" href="#/halo/atlas" style="font-size:12px;"
-             title="create zones, browse details and coverage, export — in ATLAS">manage zones →</a>
+             title="create zones, browse details and coverage, export — in ATLAS">Manage &amp; Create Survey Zones →</a>
         </div>
         <div id="halo-zone-banner" hidden></div>
         <div class="route-row" style="align-items:center; margin-top:8px;">
@@ -3839,7 +3843,8 @@
             <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
           </span>
           <input id="halo-survey-ores" class="ti" autocomplete="off" list="halo-survey-ore-list"
-                 placeholder="ore seen (type or pick; comma-separate if several)" style="width:230px;">
+                 placeholder="ore seen (comma-separate; carries into scan detail)" style="width:250px;"
+                 title="Ores you can see here. These pre-fill the scan detail's ore rows after the mark lands — no need to type them again.">
           <datalist id="halo-survey-ore-list"></datalist>
           <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
           <button id="halo-survey-mark" type="button">⛏ Mark survey point</button>
@@ -3868,7 +3873,25 @@
              title="download the current system's survey (marks + fitted model) as JSON">⇩ export survey</a>
           <span id="halo-zone-status" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
-        <div id="halo-atlas-zones" style="margin-top:8px;"></div>
+        <!-- Zone filters (#38 playtest note 1): search by name or ore, sort,
+             and narrow to your own surveys so a growing list stays scannable
+             and never crowds the coverage map below it off-screen. -->
+        <div id="halo-zone-filters" class="route-row" style="align-items:center; margin-top:8px; gap:8px;" hidden>
+          <input id="halo-zone-search" class="ti" type="search" autocomplete="off"
+                 placeholder="🔍 zone name or ore" style="min-width:180px; flex:1;"
+                 aria-label="Filter zones by name or ore">
+          <label class="fld-label" for="halo-zone-sort" style="margin:0;">SORT</label>
+          <select id="halo-zone-sort" class="sel" aria-label="Sort zones">
+            <option value="value">Profitability</option>
+            <option value="name">Name</option>
+            <option value="marks">Most marks</option>
+          </select>
+          <label class="trade-pref" title="only zones you've dropped a mark in">
+            <input id="halo-zone-mine" type="checkbox"> my surveys</label>
+          <label class="trade-pref" title="hide closed zones">
+            <input id="halo-zone-open" type="checkbox" checked> open only</label>
+        </div>
+        <div id="halo-atlas-zones" class="table-scroll table-x" style="margin-top:8px;"></div>
         <div id="halo-zone-detail" hidden style="margin-top:8px;"></div>
       </div>
       <div class="panel">
@@ -4422,8 +4445,32 @@ const confOf = (n) => n / (n + 4);   // 0..1 confidence from sample count
 // uexcorp sell refs, terciles within each category). A missing name means
 // "unpriced", so no badge — never imply an unknown ore is worthless.
 let oreValues = { resource: {}, harvestable: {} };
+// Suffix-tolerant lookup index (#38): the price feed keys ores "Iron (Ore)",
+// "Gold (Ore)", "Diamond (Raw)" while survey marks / forecasts name them bare
+// ("Iron", "Gold") — mirror the backend's _ore_price_index so a bare name
+// still finds its priced entry (exact match always wins over a stripped alias).
+let oreValueIdx = { resource: {}, harvestable: {} };
+const ORE_SUFFIX_RE = /\s*\((?:Raw|Ore)\)$/i;
+function buildOreValueIdx() {
+  for (const cat of ["resource", "harvestable"]) {
+    const idx = {};
+    for (const [name, entry] of Object.entries(oreValues[cat] || {}))
+      idx[name.toLowerCase()] = entry;
+    for (const [name, entry] of Object.entries(oreValues[cat] || {})) {
+      const stripped = name.replace(ORE_SUFFIX_RE, "").trim().toLowerCase();
+      if (!(stripped in idx)) idx[stripped] = entry;
+    }
+    oreValueIdx[cat] = idx;
+  }
+}
+function oreValueLookup(name, category = "resource") {
+  const idx = oreValueIdx[category] || {};
+  const n = (name || "").toLowerCase();
+  return idx[n] || idx[n.replace(ORE_SUFFIX_RE, "").trim()];
+}
 async function loadOreValues() {
   try { oreValues = await fetch("/api/resource_values").then(r => r.json()); } catch {}
+  buildOreValueIdx();
 }
 const VALUE_TIERS = { high: ["val-high", "$$$", "high value"],
                       medium: ["val-med", "$$", "medium value"],
@@ -4432,7 +4479,7 @@ const VALUE_TIERS = { high: ["val-high", "$$$", "high value"],
 // the badge reflects its refined commodity's price (fair relative signal, but
 // you'd refine before selling).
 function oreValueChip(name, category = "resource") {
-  const v = (oreValues[category] || {})[name], t = v && VALUE_TIERS[v.tier];
+  const v = oreValueLookup(name, category), t = v && VALUE_TIERS[v.tier];
   if (!t) return "";
   const star = v.refined ? "*" : "";
   const basis = v.refined ? ` (refined value — raw ${esc(name)} isn't sold directly)` : "";
@@ -4467,7 +4514,7 @@ function surveyValueText(v) {   // plain-text twin for <option> labels / canvas
 const SURVEY_VAL_MAP_C = { high: "#66bb6a", medium: "#ffd54f", low: "#8693a6" };
 
 function oreValueText(name, category = "resource") {
-  const v = (oreValues[category] || {})[name];
+  const v = oreValueLookup(name, category);
   return v && VALUE_TIERS[v.tier] ? `  ${VALUE_TIERS[v.tier][1]}${v.refined ? "*" : ""}` : "";
 }
 
@@ -12313,6 +12360,7 @@ function applyHaloTab(h) {
     const dot = $("halo-field-dot");
     if (dot) dot.hidden = true;
     refreshHaloAfter();          // redraw verdict + radar now the canvas has layout
+    renderHaloRsRef();           // RS cheat sheet under the radar (#38)
   }
   if (t === "atlas") renderHaloAtlas();
   if (t === "drop") requestAnimationFrame(() => {
@@ -12511,6 +12559,7 @@ function setHaloSystem(sys, auto) {
   renderHaloCredit();
   if (!haloDoc(sys)) loadHaloTargets(sys).then(renderHaloSystemPanel);
   else renderHaloSystemPanel();
+  resetHaloAtlasView();                  // recenter the coverage map on the new system
   if (haloWired) loadHaloZones(sys);     // zones are per-system
 }
 
@@ -12657,6 +12706,8 @@ function setHaloSurveyRocks(r) {
 }
 
 let haloSurveyArmed = false;
+let haloArmedOres = [];    // ores typed into the mark's "ore seen" box, kept to
+let haloLastMarkOres = []; // pre-seed the resolved mark's scan form (#38 note 4)
 // Called on every ws state frame: an armed survey mark resolving (capture no
 // longer pending, a fresh `last`) refreshes the Keeger pockets + progress —
 // the new mark may already BE a jumpable pocket.
@@ -12688,6 +12739,7 @@ function resolveHaloSurveyArm(capture) {
     // (#37 slice 3) — collapsed; the ⛏ tap itself stays one-tap.
     if (capture.last && capture.last.id != null) {
       haloLastMarkId = capture.last.id;
+      haloLastMarkOres = haloArmedOres.slice();   // seed the scan form (#38 note 4)
       const blk = $("halo-scan-blk"), form = $("halo-scan-form");
       if (blk) { blk.hidden = false; }
       if (form) { form.hidden = true; form.innerHTML = ""; }
@@ -12698,12 +12750,14 @@ function resolveHaloSurveyArm(capture) {
 async function haloMarkSurvey() {
   const msg = $("halo-survey-msg");
   const now = new Date();
+  const ores = $("halo-survey-ores").value.split(",").map(s => s.trim()).filter(Boolean);
+  haloArmedOres = ores;   // keep to pre-seed the scan form when this mark lands
   const body = {
     name: `Survey ${now.toISOString().slice(5, 10)} ${now.toTimeString().slice(0, 5)}`,
     type: "survey",
     survey: {
       rocks: haloSurveyRocks,
-      ores: $("halo-survey-ores").value.split(",").map(s => s.trim()).filter(Boolean),
+      ores,
       salvage: $("halo-survey-salvage").checked,
     },
   };
@@ -12741,12 +12795,67 @@ async function loadHaloZones(sys) {
   } catch { return; }
   renderHaloZoneSelect();
   renderHaloZoneBanner();
+  renderHaloRsRef();        // FIELD-tab RS cheat sheet grows with each scan (#38)
   renderHaloOverview();     // zone squares live on the overview map (#37)
   renderHaloAtlasZones();   // and on the ATLAS zone list (#38)
   renderHaloAtlas();        // no-op unless the ATLAS tab is showing
 }
 
 // ---- ATLAS tab (#38): the org's belt atlas — zones, coverage, export ----
+// Interactive viewport for the coverage map (#38 playtest note 2): zoom + pan
+// so overlapping survey dots can be teased apart. Reset on system switch.
+let haloAtlasView = { zoom: 1, panX: 0, panY: 0 };
+let haloAtlasPanWired = false;
+let haloAtlasDidPan = false;   // swallow the click that ends a drag (vs a pin tap)
+function resetHaloAtlasView() { haloAtlasView = { zoom: 1, panX: 0, panY: 0 }; }
+
+function wireHaloAtlasPan() {
+  if (haloAtlasPanWired) return;
+  const cv = $("halo-atlas-map");
+  if (!cv) return;
+  haloAtlasPanWired = true;
+  const redraw = () => drawHaloSystemMap(cv, null);
+  cv.style.touchAction = "none";
+  cv.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const cx0 = cv.clientWidth / 2, cy0 = cv.clientHeight / 2;
+    const z = haloAtlasView.zoom;
+    const z2 = Math.max(1, Math.min(12, z * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+    // Keep the point under the cursor fixed while zooming (screen-space only).
+    const r = z2 / z;
+    haloAtlasView.panX = (e.offsetX - cx0) - (e.offsetX - cx0 - haloAtlasView.panX) * r;
+    haloAtlasView.panY = (e.offsetY - cy0) - (e.offsetY - cy0 - haloAtlasView.panY) * r;
+    haloAtlasView.zoom = z2;
+    if (z2 === 1) { haloAtlasView.panX = 0; haloAtlasView.panY = 0; }   // snap back to fit
+    redraw();
+  }, { passive: false });
+  let drag = null;
+  cv.addEventListener("pointerdown", (e) => {
+    drag = { x: e.clientX, y: e.clientY, moved: false };
+    cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    drag.x = e.clientX; drag.y = e.clientY;
+    haloAtlasView.panX += dx; haloAtlasView.panY += dy;
+    cv.style.cursor = "grabbing";
+    redraw();
+  });
+  const endDrag = (e) => {
+    if (drag) {
+      if (drag.moved) haloAtlasDidPan = true;   // guard the trailing click
+      try { cv.releasePointerCapture(e.pointerId); } catch {}
+    }
+    drag = null; cv.style.cursor = "grab";
+  };
+  cv.addEventListener("pointerup", endDrag);
+  cv.addEventListener("pointercancel", endDrag);
+  cv.addEventListener("dblclick", () => { resetHaloAtlasView(); redraw(); });
+  cv.style.cursor = "grab";
+}
+
 function renderHaloAtlas() {
   if ($("halo-view").hidden || $("halo-tab-atlas").hidden) return;
   const sysEl = $("halo-atlas-sys");
@@ -12757,43 +12866,138 @@ function renderHaloAtlas() {
   renderHaloAtlasCap();
   requestAnimationFrame(() => {   // canvas needs layout after un-hide
     const cv = $("halo-atlas-map");
-    if (cv) drawHaloSystemMap(cv, null);
+    if (cv) { wireHaloAtlasPan(); drawHaloSystemMap(cv, null); }
   });
 }
 
+// Zone-table filter state (#38 playtest note 1) + one-time wiring of the
+// filter controls. Search matches name OR ore; "my surveys" narrows to zones
+// this member contributed a mark to (server-supplied `contributors`).
+let haloZoneFilter = { q: "", sort: "value", mine: false, openOnly: true };
+let haloZoneFiltersWired = false;
+function wireHaloZoneFilters() {
+  if (haloZoneFiltersWired) return;
+  haloZoneFiltersWired = true;
+  const s = $("halo-zone-search"), so = $("halo-zone-sort"),
+        mi = $("halo-zone-mine"), op = $("halo-zone-open");
+  if (s) s.oninput = () => { haloZoneFilter.q = s.value.trim().toLowerCase(); renderHaloAtlasZones(); };
+  if (so) so.onchange = () => { haloZoneFilter.sort = so.value; renderHaloAtlasZones(); };
+  if (mi) mi.onchange = () => { haloZoneFilter.mine = mi.checked; renderHaloAtlasZones(); };
+  if (op) op.onchange = () => { haloZoneFilter.openOnly = op.checked; renderHaloAtlasZones(); };
+}
+
+// Zones I contributed a mark to — any of my handles among the zone's surveyors
+// (primary handle included; it isn't always in the owned-handles list).
+function haloZoneIsMine(z) {
+  const mine = new Set([...(myIdentity.handles || []), myIdentity.primary_handle]
+    .filter(Boolean).map(h => h.toLowerCase()));
+  return (z.contributors || []).some(h => mine.has((h || "").toLowerCase()));
+}
+
+function haloZonesFiltered() {
+  const f = haloZoneFilter;
+  let rows = haloZones.slice();
+  if (f.openOnly) rows = rows.filter(z => !z.closed);
+  if (f.mine) rows = rows.filter(haloZoneIsMine);
+  if (f.q) rows = rows.filter(z =>
+    (z.name || "").toLowerCase().includes(f.q)
+    || (z.ores || []).some(o => (o || "").toLowerCase().includes(f.q)));
+  const score = (z) => (z.value && z.value.score) || 0;
+  rows.sort((a, b) =>
+    f.sort === "name" ? (a.name || "").localeCompare(b.name || "")
+    : f.sort === "marks" ? (b.marks || 0) - (a.marks || 0) || (a.name || "").localeCompare(b.name || "")
+    : (score(b) - score(a)) || (b.marks || 0) - (a.marks || 0)); // value (default)
+  return rows;
+}
+
 function renderHaloAtlasZones() {
-  const el = $("halo-atlas-zones");
+  const el = $("halo-atlas-zones"), filters = $("halo-zone-filters");
   if (!el) return;
+  wireHaloZoneFilters();
   if (!haloZones.length) {
+    if (filters) filters.hidden = true;
+    el.classList.remove("table-scroll", "table-x");
     el.innerHTML = `<p class="muted" style="font-size:12px; margin:6px 0 0;">No survey zones in `
       + `${esc(haloSystem)} yet. Start one with ＋ New zone, then drop ⛏ marks from FIELD.</p>`;
     return;
   }
-  el.innerHTML = haloZones.map(z => {
+  if (filters) filters.hidden = false;
+  el.classList.add("table-scroll", "table-x");
+  const rows = haloZonesFiltered();
+  if (!rows.length) {
+    el.innerHTML = `<p class="muted" style="font-size:12px; margin:6px 0 0;">No zones match `
+      + `these filters.</p>`;
+    return;
+  }
+  const cell = (z) => {
     const active = z.zone_id === activeSurveyZone;
-    const bits = [`<b>${z.marks || 0}</b> mark${z.marks === 1 ? "" : "s"}`];
-    if (z.value) bits.push(surveyValueChip(z.value));
-    if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
-    if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
-    else if (z.status && z.status !== "empty") bits.push(`<b>${esc(z.status)}</b> rocks`);
-    if ((z.ores || []).length) bits.push(z.ores.map(esc).join(", "));
-    if (z.closed) bits.push(`<span class="halo-chip">closed</span>`);
-    return `<div class="halo-alt"><b>${esc(z.name)}</b>`
-      + (active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : "")
-      + ` · ${bits.join(" · ")}`
-      + (z.marks ? ` <button type="button" class="route-chip" data-zdetail="${z.zone_id}">▸ details</button>` : "")
-      + (z.marks ? ` <button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan a drop here</button>` : "")
-      + (!z.closed ? ` <button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
-          + `${active ? "filing here" : "Set active"}</button>` : "")
-      + `</div>`;
-  }).join("");
+    const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
+      : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
+    const ores = (z.ores || []).length
+      ? z.ores.map(o => `${esc(o)}${oreValueChip(o)}`).join(", ")
+      : `<span class="muted">—</span>`;
+    const size = z.grid_radius_m ? `⌀ ${fmtDist(2 * z.grid_radius_m)}` : "";
+    const acts = (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
+      + (!z.closed ? `<button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
+          + `${active ? "filing" : "Set active"}</button>` : "")
+      + (z.closed ? `<span class="halo-chip">closed</span>` : "");
+    return `<tr data-zrow="${z.zone_id}"${active ? ' class="selected"' : ""}>`
+      + `<td><b>${esc(z.name)}</b>${active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : ""}`
+        + (z.contributors && z.contributors.length ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
+        + `</td>`
+      + `<td class="num">${z.marks || 0}</td>`
+      + `<td>${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
+      + `<td>${rocks}</td>`
+      + `<td>${ores}</td>`
+      + `<td class="muted" style="white-space:nowrap;">${size}</td>`
+      + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
+      + `</tr>`;
+  };
+  el.innerHTML = `<table><thead><tr>`
+    + `<th>ZONE</th><th class="num">MARKS</th><th>VALUE</th><th>ROCKS</th>`
+    + `<th>ORES</th><th>SIZE</th><th></th></tr></thead><tbody>`
+    + rows.map(cell).join("") + `</tbody></table>`;
   const byId = (id) => haloZones.find(x => x.zone_id === Number(id));
-  for (const b of el.querySelectorAll("[data-zdetail]"))
-    b.onclick = () => { const z = byId(b.dataset.zdetail); if (z) toggleHaloZoneDetail(z); };
+  for (const tr of el.querySelectorAll("[data-zrow]"))
+    tr.onclick = (e) => {
+      if (e.target.closest("button")) return;    // action buttons handle themselves
+      const z = byId(tr.dataset.zrow);
+      if (z && z.marks) toggleHaloZoneDetail(z);
+    };
   for (const b of el.querySelectorAll("[data-zplan]"))
     b.onclick = () => { const z = byId(b.dataset.zplan); if (z) planHaloZone(z); };
   for (const b of el.querySelectorAll("[data-zactive]"))
     b.onclick = () => setActiveSurveyZone(Number(b.dataset.zactive));
+}
+
+// RS signature reference (#38 playtest note 5): the FIELD-tab cheat sheet a
+// surveyor keeps open while scanning. Every material's radar signature reads a
+// fixed multiple of its base (Gold 3585 → 7170, 10755…), visible from ~25 km —
+// so the org's own single-ore scans, distilled to per-ore bases, let you name a
+// contact at range. Grows as more RS values are logged in scan detail.
+function renderHaloRsRef() {
+  const el = $("halo-rs-ref");
+  if (!el) return;
+  const gcd2 = (a, b) => { a = Math.abs(a); b = Math.abs(b); while (b) { const t = b; b = a % b; a = t; } return a; };
+  // Base is a physics constant per material; if two zones disagree (a bad
+  // sample), the GCD is the safe common base.
+  const bases = {};
+  for (const z of haloZones)
+    for (const [ore, base] of Object.entries(z.rs_bases || {})) {
+      if (!(base > 0)) continue;
+      bases[ore] = bases[ore] ? gcd2(bases[ore], base) : base;
+    }
+  const ores = Object.entries(bases).sort((a, b) => a[1] - b[1]);
+  if (!ores.length) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  const rows = ores.map(([ore, base]) =>
+    `<tr><td><b>${esc(ore)}</b>${oreValueChip(ore)}</td>`
+    + `<td class="num">${base.toLocaleString()}</td>`
+    + `<td class="muted" style="white-space:nowrap;">${[2, 3, 4, 5].map(k => `×${k} ${(base * k).toLocaleString()}`).join(" · ")}</td></tr>`).join("");
+  el.innerHTML = `<span class="fld-label">⌖ RS SIGNATURE REFERENCE <span class="muted" style="font-weight:400; text-transform:none;">— match your scanner readout at range; built from the org's single-ore scans</span></span>`
+    + `<div class="table-x" style="margin-top:6px;"><table><thead><tr><th>ORE</th>`
+    + `<th class="num">RS BASE</th><th>MULTIPLES SEEN AT RANGE</th></tr></thead><tbody>`
+    + rows + `</tbody></table></div>`;
 }
 
 // Coverage caption: the Keeger arc numbers + the next-gap chip (Nyx), and a
@@ -12820,6 +13024,7 @@ function renderHaloAtlasCap() {
     }
   }
   bits.push(`tap a pocket, zone or field to pin it as the plan destination in DROP`);
+  bits.push(`<span class="muted">scroll to zoom · drag to pan · double-click to reset</span>`);
   cap.innerHTML = bits.join(" · ");
   const gb = $("halo-atlas-gap");
   if (gb) gb.onclick = planHaloGap;   // hops to DROP itself
@@ -12883,10 +13088,15 @@ function scanCompRow(ore = "", pct = "") {
   </div>`;
 }
 
-function scanFormHtml(markId, scan) {
+function scanFormHtml(markId, scan, seedOres) {
   const comp = Object.entries((scan && scan.comp) || {});
+  // No scan yet? Pre-seed the ore rows from the mark's "ore seen" list so the
+  // surveyor never re-types an ore they already named — just add the % (#38
+  // playtest note 4). Saving the scan unions these back into the mark's ores.
+  const seed = (!comp.length && seedOres && seedOres.length)
+    ? seedOres.map(o => scanCompRow(o, "")).join("") : "";
   const rows = comp.length ? comp.map(([o, p]) => scanCompRow(o, p)).join("")
-                           : scanCompRow();
+                           : (seed || scanCompRow());
   return `<div class="scan-form" data-mark="${markId}">
     <div class="route-row" style="align-items:center; margin-top:6px;">
       <input class="ti scan-mass" type="number" min="1" max="10000000" step="1"
@@ -12950,7 +13160,7 @@ $("halo-scan-toggle").onclick = () => {
   const form = $("halo-scan-form");
   if (!form.hidden) { form.hidden = true; return; }
   if (haloLastMarkId == null) return;
-  form.innerHTML = scanFormHtml(haloLastMarkId, null);
+  form.innerHTML = scanFormHtml(haloLastMarkId, null, haloLastMarkOres);
   wireScanForm(form, () => {
     delete haloTargets[haloSystem];
     loadHaloTargets(haloSystem).then(renderHaloSystemPanel);
@@ -13051,7 +13261,7 @@ function renderHaloZoneDetail(el, z, marks) {
       const slot = el.querySelector(`[data-slot="${id}"]`);
       if (slot.innerHTML) { slot.innerHTML = ""; return; }
       const m = marks.find(x => x.id === id);
-      slot.innerHTML = scanFormHtml(id, m && m.scan);
+      slot.innerHTML = scanFormHtml(id, m && m.scan, (m && m.ores) || []);
       wireScanForm(slot, () => { el.hidden = true; toggleHaloZoneDetail(z); loadHaloZones(); });
     };
 }
@@ -13663,8 +13873,16 @@ function drawHaloSystemMap(cv, plan) {
   // Which Nyx belt the picker has focused (overview only) — it gets the
   // bright treatment, the other dims to context.
   const nyxFocus = overview && ring ? haloBelt : null;
-  const cx = cssW / 2, cy = cssH / 2;
-  const s = (Math.min(cssW, cssH) / 2 - 12) / rFit;
+  let cx = cssW / 2, cy = cssH / 2;
+  let s = (Math.min(cssW, cssH) / 2 - 12) / rFit;
+  // ATLAS map is interactive (#38 playtest note 2): apply the pan/zoom view so
+  // stacked survey dots can be spread apart. Purely a viewport transform —
+  // every screen coord (and the click hit-tests) is derived from cx/cy/s below.
+  if (cv.id === "halo-atlas-map") {
+    s *= haloAtlasView.zoom;
+    cx += haloAtlasView.panX;
+    cy += haloAtlasView.panY;
+  }
   const X = (p) => cx + p[0] * s, Y = (p) => cy - p[1] * s;
   const hits = overview ? [] : null;
 
@@ -13913,7 +14131,10 @@ function wireHaloOverviewClicks() {
   const cv = $("halo-overview");
   if (cv) cv.onclick = (e) => haloOverviewPick(cv, e, false);
   const av = $("halo-atlas-map");
-  if (av) av.onclick = (e) => haloOverviewPick(av, e, true);
+  if (av) av.onclick = (e) => {
+    if (haloAtlasDidPan) { haloAtlasDidPan = false; return; }   // was a drag, not a pin
+    haloOverviewPick(av, e, true);
+  };
 }
 
 // Magnified drop zone: individual band edges / pocket circles are visible
