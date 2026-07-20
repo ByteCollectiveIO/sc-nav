@@ -12,18 +12,22 @@ distance, ETA, route plans, and shared org data — pushed live over WebSocket t
 a browser on a second device (a laptop or phone beside the game).
 
 Around that navigator core has grown a **ten-app suite** in a single-file SPA,
-behind Discord-OAuth org gating: cargo and trade route planners, an Aaron Halo
-drop planner, an event planner with fleet rosters, a group finder, a pirate
-danger board, org inventory/goals, an aUEC marketplace, and guild analytics.
+behind Discord-OAuth org gating: cargo and trade route planners, **Prospector**
+(a mining drop planner + crowd-sourced belt-survey atlas), an event planner with
+fleet rosters, a group finder, a pirate danger board, org inventory/goals, an
+aUEC marketplace, and guild analytics.
+
+> 📖 **Each app has a full showcase & how-to guide** in
+> [`docs/apps/`](docs/apps/README.md) — screenshots, walkthroughs, and tips.
 
 > Unofficial fan project. Not affiliated with Cloud Imperium Games. Strictly
 > non-commercial under CIG's fan-content rules. Star Citizen®, Roberts Space
 > Industries®, and Cloud Imperium® are trademarks of Cloud Imperium Rights LLC.
 
 <div align="center">
-  <img src="images/readme_images/sc-navigator-routes.png" alt="The Resource Navigator: live position readouts, a north-up map, capture panels, and a nearby-POI table" width="440">
+  <img src="images/readme_images/launcher_screenshot.png" alt="The SC Org Navigator launcher: ten app badges grouped as Out in the 'Verse, Rally the Org, and Run the Org" width="820">
   <br>
-  <sub>The Resource Navigator — live readouts, map, and nearby POIs, refreshed on every <code>/showlocation</code>.</sub>
+  <sub>The launcher — ten tools grouped by what you're up to, one org, one sign-in.</sub>
 </div>
 
 ## How it works
@@ -47,32 +51,33 @@ and version together.
 Ten apps in three themed launcher groups, plus account and admin surfaces. All
 share one component language, one auth gate, and one live WebSocket.
 
-> 📸 **Each app name below links to a full-size screenshot.**
+> 📖 **Each app name below links to its showcase & how-to guide** (screenshots,
+> walkthroughs, tips) — the whole set lives in [`docs/apps/`](docs/apps/README.md).
 
 **Out in the 'Verse** — solo tools for a live session:
 
 | App | Route | What it does |
 |---|---|---|
-| [**Resource Navigator**](images/readme_images/sc-navigator-routes.png) | `#/nav` | Live position → bearing/distance/ETA to POIs; capture resource/fauna/harvestable observations; forecast, element finder, heatmaps; shard-aware, fresh-only markers; live teammate presence on the map |
-| [**Cargo Planner**](images/readme_images/cargo_planner_screenshot.png) | `#/route` | Pickup-and-delivery route solver for hauling contracts; run mode with arrival detection; rewards, history, quick-picks, guild hauling leaderboards |
-| [**Trade Route Planner**](images/readme_images/trade_route_planner.png) | `#/trade` | Buy-low/sell-high multi-leg planner on live commodity prices; run mode with live-position replan; realized-profit history/stats; saved routes; hazard-aware routing (ignore/warn/avoid + snare detours) |
-| [**Halo Finder**](images/readme_images/halo_navigator_screenshot.png) | `#/halo` | Aaron Halo QT-drop planner: pick a density band (or a deep-space POI) and get the exact quantum-travel distance to drop into it; true-scale system map, drop-zone inset, alternates, and a live post-drop refine loop |
+| [**Resource Navigator**](docs/apps/navigator.md) | `#/nav` | Live position → bearing/distance/ETA to POIs; capture resource/fauna/harvestable observations; forecast, element finder, heatmaps; shard-aware, fresh-only markers; live teammate presence on the map |
+| [**Cargo Planner**](docs/apps/cargo-planner.md) | `#/route` | Pickup-and-delivery route solver for hauling contracts; run mode with arrival detection; rewards, history, quick-picks, guild hauling leaderboards |
+| [**Trade Route Planner**](docs/apps/trade-planner.md) | `#/trade` | Buy-low/sell-high multi-leg planner on live commodity prices; run mode with live-position replan; realized-profit history/stats; saved routes; hazard-aware routing (ignore/warn/avoid + snare detours) |
+| [**Prospector**](docs/apps/prospector.md) | `#/halo` | Mining drop planner + crowd-sourced belt-survey atlas across three tabs (DROP · FIELD · ATLAS): jump into unmarked rock space (Aaron Halo bands, Nyx Glaciem pockets, Pyro fields), exit quantum at the exact readout distance, verify your fix live, ⛏ survey it, and build the org's shared belt map |
 
 **Rally the Org** — coordination:
 
 | App | Route | What it does |
 |---|---|---|
-| [**Event Planner**](images/readme_images/event_planner_screenshot.png) | `#/events` | Post events (multi-type, roles/targets), signups, fill tracking; fleet rosters with ship seat templates; manifest → Discord |
-| [**Group Finder**](images/readme_images/group_finder_screenshot.png) | `#/lfg` | LFG board (looking-for-members / looking-to-join), playstyle tags, suggested matches, promote-to-event, Discord announce |
-| [**Danger Board**](images/readme_images/danger_board_screenshot.png) | `#/pirates` | Community pirate warnings (point/lane, PvP/PvE, severity, still-active confirms, age-off); feeds hazard volumes into both planners' detour routing; "organize hunt" → event |
+| [**Event Planner**](docs/apps/event-planner.md) | `#/events` | Post events (multi-type, roles/targets), signups, fill tracking; fleet rosters with ship seat templates; manifest → Discord |
+| [**Group Finder**](docs/apps/group-finder.md) | `#/lfg` | LFG board (looking-for-members / looking-to-join), playstyle tags, suggested matches, promote-to-event, Discord announce |
+| [**Danger Board**](docs/apps/danger-board.md) | `#/pirates` | Community pirate warnings (point/lane, PvP/PvE, severity, still-active confirms, age-off); feeds hazard volumes into both planners' detour routing; "organize hunt" → event |
 
 **Run the Org** — logistics & management:
 
 | App | Route | What it does |
 |---|---|---|
-| **Resource Manager** ([goals](images/readme_images/goals_screenshot.png), [inventory](images/readme_images/inventory_screenshot.png), [blueprints](images/readme_images/blueprint_inventory_screenshot.png))| `#/goals` · `#/inventory` · `#/blueprints` | Shared item catalog; procurement goals with allocations drawn from real holdings; per-member holdings ledger; personal craftable-blueprint library |
-| [**Marketplace**](images/readme_images/marketplace_screenshot.png) | `#/market` | aUEC-only sale / auction / barter / **commission** board with dual-confirm handshake, search & filter, crafted-quality annotations, market-value hints, and a blueprint spec builder for craft requests |
-| [**Org Intel**](images/readme_images/org_intel_screenshot.png) | `#/intel` | Guild analytics: leaderboards, capture/hauling/trading stats, member directory |
+| [**Resource Manager**](docs/apps/resource-manager.md) | `#/goals` · `#/inventory` · `#/blueprints` | Shared item catalog; procurement goals with allocations drawn from real holdings; per-member holdings ledger; personal craftable-blueprint library |
+| [**Marketplace**](docs/apps/marketplace.md) | `#/market` | aUEC-only sale / auction / barter / **commission** board with dual-confirm handshake, search & filter, crafted-quality annotations, market-value hints, and a blueprint spec builder for craft requests |
+| [**Org Intel**](docs/apps/org-intel.md) | `#/intel` | Guild analytics: mapping, hauling, trading & **surveying** stats, leaderboards, member directory |
 
 Plus a live **Who's Online** roster (`#/online`), Settings (identity, playstyle
 profile, watcher tokens, org settings, branding, notifications), a Setup guide,
@@ -213,7 +218,7 @@ third parties on the request path.
 | [starmap.space](https://starmap.space) | POI / container catalog | Community dataset |
 | [UEXcorp](https://uexcorp.space) | Commodity & terminal prices, vehicles, equipment | Used with attribution |
 | [Star Citizen Wiki API](https://api.star-citizen.wiki) | Quantum fuel/range, blueprints, starmap positions, amenities | CC BY-SA 4.0 — attribution required |
-| [Cornerstone](https://cstone.space) (CaptSheppard) | Aaron Halo density-band survey powering the Halo Finder | Community dataset — credited in-app |
+| [Cornerstone](https://cstone.space) (CaptSheppard) | Aaron Halo density-band survey powering Prospector | Community dataset — credited in-app |
 | Your own `Game.log` (via the watcher) | Position, shard id | Your own game client |
 
 ## Development

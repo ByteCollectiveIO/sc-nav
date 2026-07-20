@@ -15,6 +15,7 @@ drift — trust grep and CI, not the citation.
 
 | Doc | What it is |
 |---|---|
+| [apps/README.md](apps/README.md) | **User-facing showcase & how-to guides** — one page per app (screenshots + walkthroughs). The player-facing counterpart to the design specs below |
 | [product-overview.md](product-overview.md) | **The consolidated map**: apps, platform services, data sources, conventions |
 | [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slices 0–5 shipped v0.64–0.72, rest designed) |
 | [../PRODUCT.md](../PRODUCT.md) · [../DESIGN.md](../DESIGN.md) | Product scope/brand · visual design system |
@@ -24,7 +25,7 @@ drift — trust grep and CI, not the citation.
 | Doc | Status | Covers |
 |---|---|---|
 | [survey-platform.md](survey-platform.md) | 🔨 slices 0–5 shipped v0.64–0.72 | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing, scan detail, arrival routing, coverage gaps + the always-on overview map, survey stats + Org Intel Surveying + Discord milestones + radar drift nudge ALL live**; remaining: patch staleness, cross-org import, mark kinds |
-| [survey-app-restructure.md](survey-app-restructure.md) | ✅ built 2026-07-19, pending release | #38: `#/halo` IA refactor — one app, three tabs (DROP · FIELD · ATLAS) + rename to **Prospector**; separates plan / cockpit / org-data surfaces without splitting the field loop; frontend-only, builds the shelf #37 import lands on; browser-verified |
+| [survey-app-restructure.md](survey-app-restructure.md) | v0.73.0 | #38: `#/halo` IA refactor — one app, three tabs (DROP · FIELD · ATLAS) + rename to **Prospector**; separates plan / cockpit / org-data surfaces without splitting the field loop; frontend-only, builds the shelf #37 import lands on |
 
 ## Shipped feature specs (reference for what's live)
 
@@ -50,8 +51,8 @@ drift — trust grep and CI, not the citation.
 | [wiki-poi-enrichment.md](wiki-poi-enrichment.md) | v0.46.0 | Wiki locations catalog: `wiki_pois_enabled` import (241 POIs + 206 QT promotions), per-POI arrival radii, trade-stop amenity chips (#28; closes #26) |
 | [halo-finder.md](halo-finder.md) | 2026-07-10 | Halo Finder, the tenth app (`#/halo`, #31): Aaron Halo band/POI drop planner, staging hops, verify-and-refine, navigator belt chip |
 | [halo-finder-expansion.md](halo-finder-expansion.md) | v0.55.0 | Halo Finder → Nyx Glaciem Ring pocket mode (381 datamined segments, ~4% coverage insight) + Pyro unmarked-field fly-bys (#35); Pyro VI/V rings researched-and-rejected (don't exist); in-game pass pending |
-| [belt-survey.md](belt-survey.md) | built 2026-07-16, pending release | Crowd-sourced belt mapping (#36): ⛏ survey marks → pockets live from mark #1 → Keeger drop plans + field-model export; Keeger region awareness + guarded system rung; miss-ceiling honesty guard; in-game pass pending |
-| [survey-zones.md](survey-zones.md) | built 2026-07-18, pending release | Named survey zones (#36.1): active-zone auto-tag so `⛏` marks localize into a deliberately-named, plannable field anywhere (incl. the Glaciem ring dead-zone); zone owns identity, geometry always derived; in-game pass pending |
+| [belt-survey.md](belt-survey.md) | v0.59.0 | Crowd-sourced belt mapping (#36): ⛏ survey marks → pockets live from mark #1 → Keeger drop plans + field-model export; Keeger region awareness + guarded system rung; miss-ceiling honesty guard; in-game pass pending |
+| [survey-zones.md](survey-zones.md) | v0.59.0 | Named survey zones (#36.1): active-zone auto-tag so `⛏` marks localize into a deliberately-named, plannable field anywhere (incl. the Glaciem ring dead-zone); zone owns identity, geometry always derived; in-game pass pending |
 
 ## Strategy / records
 
