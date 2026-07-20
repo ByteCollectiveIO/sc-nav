@@ -237,15 +237,23 @@ python3 watcher/test_parse.py       # /showlocation coordinate parsing
 
 ## License
 
-Code in this repository is released under the [MIT License](LICENSE) © 2026
-ByteCollective LLC.
+Code in this repository is released under the [PolyForm Noncommercial License
+1.0.0](LICENSE) © 2026 ByteCollective LLC. You are free to use, modify, and
+share this software **for any noncommercial purpose** — run it for your org,
+fork it, tinker with it. What you may **not** do is use it commercially, such as
+hosting or reselling it for profit.
+
+This is a **source-available** license, not an OSI-approved open-source one: the
+one thing it withholds is commercial use. (Older versions of this project
+released under the MIT License remain available under those terms.)
 
 This is an **unofficial fan project** and is **not affiliated with, endorsed by,
-or sponsored by Cloud Imperium Games**. It is provided for non-commercial use
-under CIG's fan-content guidelines. Star Citizen®, Roberts Space Industries®,
-and Cloud Imperium® are trademarks of Cloud Imperium Rights LLC. Game data is
-used under the terms of its respective sources (see *Data sources* above); those
-datasets are **not** covered by the MIT license.
+or sponsored by Cloud Imperium Games**. Independent of the license above, CIG's
+fan-content guidelines restrict this project — and anything built on CIG IP — to
+**non-commercial use only**. Star Citizen®, Roberts Space Industries®, and Cloud
+Imperium® are trademarks of Cloud Imperium Rights LLC. Game data is used under
+the terms of its respective sources (see *Data sources* above); those datasets
+are **not** covered by this repository's license.
 
 ## AI disclosure
 
