@@ -2830,6 +2830,35 @@ class ReferenceDataBundlingTests(unittest.TestCase):
                      "blueprints.json", "locations.json"):
             self.assertIn(f"poi/{name}", bundled, name)
 
+    def test_item_names_union_the_full_catalog_not_just_priced(self):
+        # The price feed (items_prices_all) only lists gear sold at a terminal, so
+        # an item UEX has no terminal price for (e.g. a S2 cooler "not traded
+        # in-game yet") would be missing from the picker. load_item_names must
+        # union the full item catalog (/2.0/items, walked per category) so those
+        # surface too. Stub the network: one priced item + one catalog-only item.
+        def fake_fetch(url, timeout=30):
+            if "items_prices_all" in url:
+                return {"data": [{"item_name": "Priced Widget", "price_buy": 5}]}
+            if "categories" in url:
+                return {"data": [{"id": 19, "type": "item"},
+                                 {"id": 99, "type": "vehicle"}]}  # non-item skipped
+            if "items?id_category=19" in url:
+                return {"data": [{"name": "Priced Widget"},
+                                 {"name": "Arctic"}]}  # unpriced, catalog-only
+            raise AssertionError(f"unexpected fetch {url}")
+        orig_fetch, orig_offline = app._fetch_json, app.OFFLINE
+        orig_save = app._save_json_list
+        app._fetch_json, app.OFFLINE = fake_fetch, False
+        app._save_json_list = lambda path, items: None  # don't clobber real caches
+        try:
+            names = app.load_item_names()
+        finally:
+            app._fetch_json, app.OFFLINE = orig_fetch, orig_offline
+            app._save_json_list = orig_save
+        self.assertIn("Arctic", names)          # catalog-only item present
+        self.assertIn("Priced Widget", names)   # priced item still present
+        self.assertEqual(len(names), len(set(names)))  # union de-duped
+
     def test_wiki_locations_load_from_a_code_dir_copy(self):
         # Simulate the prod layout: the file sits next to app.py, NOT in
         # DATA_DIR. The loader must find the code-dir copy first.

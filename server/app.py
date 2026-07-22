@@ -81,6 +81,13 @@ SHIPS_URL = os.environ.get("SC_NAV_SHIPS_URL", "https://api.uexcorp.uk/2.0/vehic
 # lists prices per terminal; we only consume the distinct item names for the
 # shared catalog. One row per (item, terminal), so it's large — cached to disk.
 ITEMS_URL = os.environ.get("SC_NAV_ITEMS_URL", "https://api.uexcorp.space/2.0/items_prices_all/")
+# The items_prices_all feed only lists gear that's *sold at a terminal* — items
+# UEX hasn't recorded a price for (a S2 cooler "not traded in-game yet", etc.)
+# never appear there, so they'd be missing from the picker. The full item
+# *catalog* (/2.0/items) covers those, but the endpoint requires a category
+# filter, so we walk the item-type categories (/2.0/categories, type=="item").
+CATEGORIES_URL = os.environ.get("SC_NAV_CATEGORIES_URL", "https://api.uexcorp.space/2.0/categories")
+ITEM_CATALOG_URL = os.environ.get("SC_NAV_ITEM_CATALOG_URL", "https://api.uexcorp.space/2.0/items")
 # Commodity trading (trade-route planner, #21): per-terminal buy/sell prices +
 # the terminal catalog that places them. Both are large (one row per commodity
 # per terminal / one row per terminal) so they're cached to disk like the feeds
@@ -379,6 +386,7 @@ def load_nav_data() -> nav_core.NavData:
 COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
 SHIPS_FILE = DATA_DIR / "ships.json"               # cached uexcorp vehicles
 ITEMS_FILE = DATA_DIR / "items.json"               # cached uexcorp items_prices_all
+ITEM_CATALOG_FILE = DATA_DIR / "item_catalog.json" # cached uexcorp full item catalog (all categories)
 TERMINALS_FILE = DATA_DIR / "trade_terminals.json" # cached uexcorp terminals
 TRADE_PRICES_FILE = DATA_DIR / "trade_prices.json" # cached uexcorp commodities_prices_all
 DB_FILE = DATA_DIR / "sc_nav.db"                   # user-contributed data (Phase 2)
@@ -654,13 +662,51 @@ def load_commodity_names() -> list[str]:
     return sorted({r["name"] for r in rows if r.get("name")})
 
 
+def load_item_catalog_names() -> list[str]:
+    """Distinct item names from uexcorp's full item *catalog* (/2.0/items), NOT
+    the price feed. The price feed (items_prices_all) only lists gear sold at a
+    terminal, so an item UEX hasn't recorded a price for (e.g. the S2 cooler
+    'Arctic', flagged "not traded in-game yet") never appears there. Walking the
+    catalog surfaces those too, so the inventory/goals + marketplace pickers stay
+    complete. The /2.0/items endpoint needs a category filter, so we pull the
+    category list and fetch each item-type category in turn (~66 calls). Cached
+    whole to disk for the offline/outage fallback; a partial walk (any category
+    fetch raising) falls back to the last good cache rather than persisting a
+    truncated catalog."""
+    rows = None
+    if not OFFLINE:
+        try:
+            cats_resp = _fetch_json(CATEGORIES_URL, timeout=30)
+            cats = cats_resp.get("data") if isinstance(cats_resp, dict) else cats_resp
+            collected = []
+            for c in cats or []:
+                if not isinstance(c, dict) or c.get("type") != "item":
+                    continue
+                cid = c.get("id")
+                if cid is None:
+                    continue
+                resp = _fetch_json(f"{ITEM_CATALOG_URL}?id_category={cid}", timeout=30)
+                items = resp.get("data") if isinstance(resp, dict) else resp
+                collected.extend(items or [])
+            if collected:
+                rows = collected
+                _save_json_list(ITEM_CATALOG_FILE, rows)
+        except Exception as exc:
+            print(f"[sc-nav] item catalog fetch failed, using cache: {exc}")
+    if rows is None:
+        rows = _load_json_list(ITEM_CATALOG_FILE)
+    return sorted({r["name"] for r in rows if r.get("name")})
+
+
 def load_item_names() -> list[str]:
-    """Distinct equipment / ship-part names from the uexcorp items_prices_all feed
-    (weapons, components, armor, attachments, …) for the shared item catalog, so
-    the inventory/goals + marketplace apps can reference gear that isn't a bulk
-    commodity or a vehicle. The feed lists one row per item *per terminal*, so the
-    same item recurs many times — we keep the distinct `item_name` set. Fetched
-    live with an on-disk cache fallback, mirroring the commodities loader."""
+    """Distinct equipment / ship-part names for the shared item catalog, so the
+    inventory/goals + marketplace apps can reference gear that isn't a bulk
+    commodity or a vehicle. Unions two uexcorp sources: the items_prices_all feed
+    (priced gear — one row per item *per terminal*, so items recur; we keep the
+    distinct `item_name` set) AND the full item catalog (`load_item_catalog_names`,
+    which also covers gear with no terminal price). Both fetch live with on-disk
+    cache fallback. The price feed's cache (ITEMS_FILE) is what `load_item_prices`
+    later reads, so this must run first in a refresh."""
     rows = None
     if not OFFLINE:
         try:
@@ -672,7 +718,8 @@ def load_item_names() -> list[str]:
             print(f"[sc-nav] items fetch failed, using cache: {exc}")
     if not rows:
         rows = _load_json_list(ITEMS_FILE)
-    return sorted({r["item_name"] for r in rows if r.get("item_name")})
+    priced = {r["item_name"] for r in rows if r.get("item_name")}
+    return sorted(priced | set(load_item_catalog_names()))
 
 
 def _price_map_from_rows(rows, name_key: str) -> dict:
