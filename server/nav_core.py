@@ -811,6 +811,16 @@ def _poi_base(poi) -> dict:
     }
 
 
+def obs_mined(obs) -> bool:
+    """True if this sighting has been flagged as already-mined. The flag lives
+    under the observation's `data` (so it round-trips through every persist path
+    without a schema change); a mined node is a depleted node — hidden from the
+    live NEARBY list + map for everyone, but kept in the log for the heatmaps
+    and still recoverable via search."""
+    data = getattr(obs, "data", None)
+    return bool(data and data.get("mined_at"))
+
+
 def _observation_base(obs) -> dict:
     cat = OBSERVATION_CATEGORIES[obs.category]
     # Flatten category data first (ore/band/quality or species for the UI),
@@ -920,9 +930,12 @@ def compute_state(
     prev_t: float | None = None,
     nearest_count: int = 10,
     viewer_owner_ids=frozenset(),
+    pinned_ids=frozenset(),
 ) -> dict:
     """Full navigation state for one position sample. `viewer_owner_ids` are the
-    PlayerIDs the viewer owns, used to hide other members' private POIs."""
+    PlayerIDs the viewer owns, used to hide other members' private POIs.
+    `pinned_ids` are observation ids this viewer bookmarked — always surfaced in
+    their own list regardless of distance rank."""
     container = detect_container(nav, pos_m)
 
     lat = lon = None
@@ -986,7 +999,34 @@ def compute_state(
     nearest_survey = _nearest(survey_pois, _poi_summary)
     nearest_observations = []
     for cat in OBSERVATION_CATEGORIES:
-        nearest_observations += _nearest(obs_by_cat.get(cat, []), _observation_summary)
+        # Mined-out nodes are depleted — drop them from the candidate pool so
+        # they neither draw on the map nor consume a scarce top-N NEARBY slot.
+        live = [o for o in obs_by_cat.get(cat, []) if not obs_mined(o)]
+        nearest_observations += _nearest(live, _observation_summary)
+
+    # Pinned observations (personal bookmarks) are surfaced in their own list
+    # regardless of distance rank — resolved from the whole dataset by id, since
+    # a bookmark you want to fly back to is usually NOT one of the nearest few.
+    pinned_observations = []
+    for oid in pinned_ids:
+        obs = nav.observations.get(oid)
+        if obs is None:
+            continue
+        same = (container is not None
+                and obs.container_name == container.name
+                and obs.system == container.system)
+        row = _observation_summary(
+            nav, obs, t_unix, pos_m,
+            lat if same else None,
+            lon if same else None,
+            surface_radius_m if same else None,
+        )
+        row["pinned"] = True
+        pinned_observations.append(row)
+    pinned_observations.sort(
+        key=lambda r: (r["surface_distance_m"] if r["surface_distance_m"] is not None
+                       else r["distance_m"] if r["distance_m"] is not None else math.inf)
+    )
 
     # "What's around me" forecast — only meaningful on a body surface. Ores and
     # harvestables are forecast separately (their compositions are never pooled).
@@ -1065,6 +1105,7 @@ def compute_state(
         "nearest_pois": nearest_pois,
         "nearest_survey": nearest_survey,
         "nearest_observations": nearest_observations,
+        "pinned_observations": pinned_observations,
         "resource_forecast": forecast,
         "harvestable_forecast": harvestable_forecast,
     }

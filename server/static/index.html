@@ -218,6 +218,13 @@
   .del:hover { font-weight: bold; }
   .edit { color: var(--dim); padding: 0 4px; cursor: pointer; }
   .edit:hover { color: var(--accent); }
+  .act { color: var(--dim); padding: 0 4px; cursor: pointer; }   /* row pin/mine glyphs */
+  .act:hover { color: var(--accent); }
+  .act.pin-on { color: var(--sel); }        /* actively pinned */
+  .act.mined-on { color: var(--warn); }      /* actively marked mined */
+  .row-actions { white-space: nowrap; }
+  .pin-mark { color: var(--sel); }           /* 📌 in the name cell */
+  .mined-mark { color: var(--warn); font-size: 11px; }
   .kind-badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
   .kind-poi { color: var(--accent); }
   .kind-resource { color: var(--node); }
@@ -2321,6 +2328,7 @@
           <label title="Resource nodes and fauna are ephemeral — SC respawns them. Checked hides stale sightings on the map + NEARBY list; uncheck to show the full observation history."><input type="checkbox" id="fresh-toggle" checked> fresh only</label>
           <label title="Ephemeral nodes only exist on the shard they were seen on. Checked hides nodes known to be on a different SC server than yours (needs the watcher's Game.log shard); uncheck to show every shard's nodes."><input type="checkbox" id="shard-toggle" checked> this shard</label>
           <label title="Belt-survey marks (⛏) map an asteroid pocket and can number in the hundreds — hidden from NEARBY by default so they don't swamp real POIs. Check to show them here; they're always findable via search/filter."><input type="checkbox" id="survey-toggle"> survey marks</label>
+          <label title="Nodes someone marked ⛏ mined are depleted — hidden from the live NEARBY list + map for the whole org. Check to reveal them in the browse/search view so you can review or un-mark one."><input type="checkbox" id="mined-toggle"> show mined</label>
           <label>heatmap
             <select id="heatmap-mode" class="sel">
               <option value="off">off</option>
@@ -4642,6 +4650,23 @@ function obsShardState(o) {
 // another shard; keep ours and untagged ones (don't hide what we can't judge).
 function onShard(o) { return !shardOnly || obsShardState(o) !== "other"; }
 
+// ---------- pins & mined ----------
+// Personal bookmarks: ids this member pinned (seeded from /api/me, kept in sync
+// on toggle + from each state's pinned_observations). A pinned node always shows
+// in NEARBY regardless of distance rank — the "fly back to this later" aid.
+let pinnedIds = new Set();
+function isPinned(o) { return pinnedIds.has(o.id); }
+function pinnedObs() { return (lastState && lastState.pinned_observations) || []; }
+// A mined-out node is depleted (shared, org-wide). The live near-me list already
+// excludes them server-side; this hides them from the browse/dataset view too,
+// unless you flip the toggle to review or un-mark them.
+let hideMined = true;
+function isMined(o) { return !!o.mined_at; }
+// Show this observation in the browse/dataset view? Pins always win; otherwise
+// honor the mined toggle. (Near-me rows never contain mined nodes — the server
+// drops them from the candidate pool.)
+function minedVisible(o) { return isPinned(o) || !hideMined || !isMined(o); }
+
 // Is this observation trustworthy *right now*? Prefer the definitive shard match;
 // fall back to the session-time heuristic when shards aren't known (legacy nodes,
 // or no Game.log). Used to dim suspect markers. Nodes you placed this session and
@@ -4811,17 +4836,28 @@ function renderNearby() {
   }
 
   rows = rows.filter(r =>
-    isFreshObs(r) && onShard(r) &&
+    isFreshObs(r) && onShard(r) && minedVisible(r) &&
     (surveyVisible || !isSurveyRow(r)) &&
     (!fc || r.container === fc) &&
     (!fo || r.owner_handle === fo) &&
     (!ft || `${r.name} ${r.type || ""} ${r.ore || ""} ${r.species || ""} ${r.quality || ""}`.toLowerCase().includes(ft))
   );
 
+  // Pinned bookmarks float to the top of the near-me view — always visible
+  // regardless of distance rank or the fresh/shard filters (that's the point of
+  // a pin). In an explicit filter/browse query they just carry a 📌 badge and
+  // obey the filters like any other row.
+  let pinRows = [];
+  if (nearMe) {
+    pinRows = pinnedObs().filter(matchKind);
+    const pinSet = new Set(pinRows.map(r => r.id));
+    rows = rows.filter(r => !pinSet.has(r.id));
+  }
+
   // Near-me lists are already small; the dataset view spans everything, so cap
   // the DOM rows and tell the user to refine.
-  const total = rows.length;
-  const shown = nearMe ? rows : rows.slice(0, TABLE_CAP);
+  const total = pinRows.length + rows.length;
+  const shown = pinRows.concat(nearMe ? rows : rows.slice(0, TABLE_CAP));
   $("nearby-title").textContent = nearMe ? "NEARBY" : (filtering ? "MATCHES" : "ALL POIs / OBSERVATIONS");
   $("nearby-hint").textContent = nearMe
     ? "(click to set destination)"
@@ -4841,18 +4877,41 @@ function renderNearby() {
   const selId = lastState && lastState.destination ? lastState.destination.id : null;
   for (const e of shown) {
     const tr = document.createElement("tr");
+    const pinned = e.pinned || isPinned(e);
     tr.innerHTML =
-      `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td>` +
+      `<td>${pinned ? '<span class="pin-mark" title="pinned">📌</span> ' : ""}${entLabel(e)}` +
+      `${isMined(e) ? ' <span class="mined-mark" title="marked mined — depleted">⛏</span>' : ""}</td>` +
+      `<td>${kindBadge(e)}</td>` +
       `<td class="muted">${esc(e.container)}</td><td class="muted">${entDetail(e)}</td>` +
       `<td>${qtLabel(e)}</td>` +
       `<td class="num">${fmtDist(e.surface_distance_m ?? e.distance_m)}</td>` +
       `<td class="num">${fmtBearing(e.bearing_deg)}</td>` +
-      `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
+      `<td class="muted">${ownerLabel(e)}</td><td class="row-actions">${actionCells(e, pinned)}</td>`;
     clickable(tr, () => setDestination(e.id));
     if (selId != null && e.id === selId) tr.classList.add("selected");
-    wireDelete(tr);
+    wireRowActions(tr);
     tbody.appendChild(tr);
   }
+}
+
+// Per-row actions: pin (bookmark), mine (mark depleted), delete. Pin + mine are
+// observation-only; delete covers observations and custom POIs.
+const MINEABLE_KINDS = new Set(["resource", "harvestable"]);
+function actionCells(e, pinned) {
+  let out = "";
+  if (OBS_KINDS.has(e.kind)) {
+    out += `<span class="act${pinned ? " pin-on" : ""}" tabindex="0" role="button" `
+      + `aria-label="${pinned ? "unpin" : "pin"} this node" title="${pinned ? "unpin — stop bookmarking" : "pin — keep in NEARBY so you can fly back"}" `
+      + `data-pin-obs="${e.id}" data-pinned="${pinned ? 1 : 0}">📌</span>`;
+  }
+  if (MINEABLE_KINDS.has(e.kind)) {
+    const m = isMined(e);
+    out += `<span class="act${m ? " mined-on" : ""}" tabindex="0" role="button" `
+      + `aria-label="${m ? "un-mark mined" : "mark mined"}" title="${m ? "un-mark — put back on the map" : "mark mined — hide this depleted node from everyone"}" `
+      + `data-mine-obs="${e.id}" data-mined="${m ? 1 : 0}">⛏</span>`;
+  }
+  out += delSpan(e);
+  return out;
 }
 
 function delSpan(e) {
@@ -4887,7 +4946,45 @@ async function afterDelete() {
   loadAll();   // refresh the dataset view so the removed row drops out
 }
 
-function wireDelete(tr) {
+async function pinObs(id, pinned) {
+  try {
+    const r = await fetch(`/api/observations/${id}/pin`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned }) });
+    if (!r.ok) throw new Error(r.status);
+    if (pinned) pinnedIds.add(id); else pinnedIds.delete(id);
+  } catch { await confirmDialog("Couldn't update the pin — try again.",
+    { title: "Pin", confirmLabel: "OK", cancelLabel: "OK" }); return; }
+  // The pinned_observations list rides on the next state frame; re-render the
+  // surfaces that show a 📌 badge now so the toggle feels immediate.
+  renderNearby();
+  if (!$("search-results").hidden) runSearch();
+}
+
+async function mineObs(id, mined) {
+  if (mined && !await confirmDialog(
+    "Mark this node as mined? It'll drop off the map and NEARBY list for everyone. You can un-mark it later from search.",
+    { title: "Mark mined", confirmLabel: "Mark mined" })) return;
+  try {
+    const r = await fetch(`/api/observations/${id}/mine`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mined }) });
+    if (!r.ok) throw new Error(r.status);
+  } catch { await confirmDialog("Couldn't update — try again.",
+    { title: "Mark mined", confirmLabel: "OK", cancelLabel: "OK" }); return; }
+  // Shared change: the server flags the dataset dirty and pushes a fresh state
+  // (which drops/re-adds the node). Refresh the browse + search views too.
+  loadAll();
+  if (!$("search-results").hidden) runSearch();
+}
+
+function wireRowActions(tr) {
+  const pin = tr.querySelector("[data-pin-obs]");
+  if (pin) pin.onclick = (ev) => { ev.stopPropagation();
+    pinObs(Number(pin.dataset.pinObs), pin.dataset.pinned !== "1"); };
+  const mine = tr.querySelector("[data-mine-obs]");
+  if (mine) mine.onclick = (ev) => { ev.stopPropagation();
+    mineObs(Number(mine.dataset.mineObs), mine.dataset.mined !== "1"); };
   const dp = tr.querySelector("[data-del-poi]");
   if (dp) dp.onclick = async (ev) => { ev.stopPropagation();
     // A ✕ sits one row-click away from "set destination" — confirm before it's gone.
@@ -5072,6 +5169,12 @@ $("shard-toggle").onchange = (e) => {
     localStorage.setItem("showSurvey", showSurvey ? "1" : "0");
     renderNearby();
   };
+})();
+(() => {
+  const t = $("mined-toggle");
+  if (!t) return;
+  t.checked = !hideMined;
+  t.onchange = (e) => { hideMined = !e.target.checked; renderNearby(); };
 })();
 
 // The map's secondary controls live behind a "Layers & settings" disclosure so the
@@ -5392,6 +5495,11 @@ function drawMap() {
   };
   drawEntities(lastState.nearest_pois || []);
   drawEntities(observations().filter(o => isFreshObs(o) && onShard(o)));
+  // Pinned bookmarks on the current body always draw, regardless of distance
+  // rank or the fresh/shard filters (mined ones excluded from the live list are
+  // still worth showing if you deliberately pinned them).
+  const curCont = lastState.container && lastState.container.name;
+  drawEntities(pinnedObs().filter(o => o.container === curCont && o.latitude != null));
 
   // teammates on this same body (north-up, like everything else)
   if (layers.teammates) {
@@ -5460,12 +5568,15 @@ async function runSearch() {
   tbody.innerHTML = "";
   for (const e of rows) {
     const tr = document.createElement("tr");
+    const pinned = isPinned(e);
     tr.innerHTML =
-      `<td>${entLabel(e)}</td><td>${kindBadge(e)}</td><td class="muted">${entDetail(e)}</td>` +
+      `<td>${pinned ? '<span class="pin-mark" title="pinned">📌</span> ' : ""}${entLabel(e)}` +
+      `${isMined(e) ? ' <span class="mined-mark" title="marked mined — depleted">⛏</span>' : ""}</td>` +
+      `<td>${kindBadge(e)}</td><td class="muted">${entDetail(e)}</td>` +
       `<td class="muted">${esc(e.container)}</td><td>${qtLabel(e)}</td>` +
-      `<td class="muted">${ownerLabel(e)}</td><td>${delSpan(e)}</td>`;
+      `<td class="muted">${ownerLabel(e)}</td><td class="row-actions">${actionCells(e, pinned)}</td>`;
     clickable(tr, () => setDestination(e.id));
-    wireDelete(tr);
+    wireRowActions(tr);
     tbody.appendChild(tr);
   }
   table.hidden = rows.length === 0;
@@ -6717,6 +6828,7 @@ function renderAccount(me) {
   myIdentity = { handles: me.handles || [], primary_handle: me.primary_handle || null,
                  directory_opt_out: !!me.directory_opt_out };
   myProfileTags = me.playstyle_tags || [];
+  pinnedIds = new Set(me.pinned_ids || []);
   activeSurveyZone = (typeof me.active_survey_zone === "number") ? me.active_survey_zone : null;
   // The watcher-token panel is for any member; the org-administration panels are
   // admin-only. Both groups live inside #settings-view, shown by the hash router

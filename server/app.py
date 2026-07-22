@@ -1658,6 +1658,10 @@ class Session:
         # but keep seeing others). In-memory + per-session (resets to share-on
         # on restart, matching the "share by default" decision).
         self.share_presence = True
+        # Personal observation bookmarks (#): ids this member pinned, cached from
+        # the DB at session creation and refreshed on every pin/unpin so the live
+        # NEARBY build stays a set lookup, not a per-sample query.
+        self.pinned_ids = frozenset(db.list_observation_pins(user["id"]))
         self.ws_clients: set[WebSocket] = set()
 
     def capture_status(self):
@@ -1709,6 +1713,7 @@ class Session:
             destination_id=self.destination_id,
             prev_pos=self.prev_pos, prev_t=self.prev_t,
             viewer_owner_ids=viewer_owner_ids(self.user),
+            pinned_ids=self.pinned_ids,
         )
         # The client's own shard rides on the state so it can flag which
         # observations / teammates share its server.
@@ -2380,6 +2385,8 @@ class SessionHub:
                 s.destination_id = None
             if s.last_capture and s.last_capture.get("id") == entity_id:
                 s.last_capture = None
+            if entity_id in s.pinned_ids:
+                s.pinned_ids = s.pinned_ids - {entity_id}
 
     def mark_dataset_dirty(self) -> None:
         """A shared POI/observation changed (capture/delete/feed refresh). Flag a
@@ -7620,6 +7627,63 @@ async def delete_observation(obs_id: int, user: dict = Depends(require_session))
         return {"ok": True}
 
 
+class PinIn(BaseModel):
+    pinned: bool
+
+
+@app.post("/api/observations/{obs_id}/pin")
+async def pin_observation(obs_id: int, body: PinIn,
+                          user: dict = Depends(require_session)):
+    """Toggle a PERSONAL bookmark on an observation. Pinned nodes always appear
+    in the pinning member's NEARBY list no matter how far they rank by distance
+    — the "let me fly back to this later" affordance. Private to the member;
+    others are unaffected."""
+    if obs_id not in nav.observations:
+        raise HTTPException(status_code=404, detail="unknown observation")
+    if body.pinned:
+        db.pin_observation(user["id"], obs_id, datetime.now(timezone.utc).isoformat())
+    else:
+        db.unpin_observation(user["id"], obs_id)
+    async with hub.lock:
+        sess = hub.get(user)
+        sess.pinned_ids = frozenset(db.list_observation_pins(user["id"]))
+        sess.recompute()
+        frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
+    return {"ok": True, "pinned": body.pinned, "pinned_ids": sorted(sess.pinned_ids)}
+
+
+class MineIn(BaseModel):
+    mined: bool
+
+
+@app.post("/api/observations/{obs_id}/mine")
+async def mine_observation(obs_id: int, body: MineIn,
+                           user: dict = Depends(require_session)):
+    """Mark a node mined-out (or clear it). Mining depletes a node for everyone
+    on the shard, so this is a SHARED flag: a mined node drops off the live
+    NEARBY list and map for the whole org, but its sighting is kept (it still
+    feeds the heatmaps) and stays findable via search so it can be un-marked.
+    Any member can flag or clear it; we record who last touched it."""
+    async with hub.lock:
+        obs = nav.observations.get(obs_id)
+        if obs is None:
+            raise HTTPException(status_code=404, detail="unknown observation")
+        if body.mined:
+            obs.data["mined_at"] = datetime.now(timezone.utc).isoformat()
+            obs.data["mined_by"] = user.get("display_name") or ""
+        else:
+            obs.data.pop("mined_at", None)
+            obs.data.pop("mined_by", None)
+        db.add_observation(nav_core.observation_to_dict(obs))
+        nav.touch()
+        hub.mark_dataset_dirty()
+    return {"ok": True, "mined": body.mined,
+            "mined_at": obs.data.get("mined_at"),
+            "mined_by": obs.data.get("mined_by")}
+
+
 @app.get("/api/leaderboard")
 async def leaderboard(user: dict = Depends(require_session)):
     """Per-contributor tallies for the Leaderboard page: custom POIs and each
@@ -8811,6 +8875,7 @@ async def api_me(user: dict = Depends(require_session)):
             "ships": db.list_user_ships(user["id"]),
             "playstyle_tags": member_playstyles(members_dir.get(user["id"])),
             "active_survey_zone": members_dir.active_survey_zone(user["id"]),
+            "pinned_ids": sorted(hub.get(user).pinned_ids),
             **_member_identity(user["id"])}
 
 

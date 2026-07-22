@@ -4860,5 +4860,148 @@ class FeedRefreshSettingTests(unittest.TestCase):
         self.assertEqual(app.feed_refresh_h(), 0)   # negatives read as "off"
 
 
+class PinAndMineTest(unittest.TestCase):
+    """Personal pin bookmarks + shared mark-mined on resource observations.
+
+    A far deep-space coordinate is used so the planted node has no container to
+    scope on — compute_state then draws from the whole-dataset pool and the
+    node (distance ~0 from the player) is unambiguously the nearest.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        # Admin so the delete-cascade test can remove an ownerless legacy node;
+        # pin/mine themselves don't care about the admin flag.
+        cls._user = {"id": "1", "display_name": "Miner", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+        self.P = (5.0e14, 0.0, 0.0)     # deep space, far from every container
+        self.obs = self._add_obs(self.P, ore="Quantainium", band=1)
+
+    def tearDown(self):
+        app.nav.observations.pop(self.obs.id, None)
+        db.delete_observation(self.obs.id)
+        app.nav.touch()
+        app.hub.sessions.pop("1", None)
+
+    def _add_obs(self, xyz, **data):
+        oid = db.next_observation_id()
+        obs = app.nav_core.Observation(
+            id=oid, category="resource", system="Stanton", container_name=None,
+            local_km=None, global_m=xyz, latitude=None, longitude=None,
+            height_m=None, biome=None, note=None, owner_id=None,
+            owner_handle=None, observed_at="2026-01-01T00:00:00+00:00",
+            data=app.nav_core._normalize_resource(data))
+        db.add_observation(app.nav_core.observation_to_dict(obs))
+        app.nav.observations[oid] = obs
+        app.nav.touch()
+        return obs
+
+    def _session_at(self, xyz):
+        s = app.Session(self._user)     # __init__ loads this member's pins
+        s.pos, s.t = xyz, time.time()
+        s.system = "Stanton"
+        app.hub.sessions["1"] = s
+        s.recompute()
+        return s
+
+    def _state(self):
+        return self.client.get("/api/state").json()["state"]
+
+    def test_pin_roundtrip(self):
+        self._session_at(self.P)
+        r = self.client.post(f"/api/observations/{self.obs.id}/pin",
+                             json={"pinned": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["pinned"])
+        self.assertIn(self.obs.id, r.json()["pinned_ids"])
+        # surfaced on /api/me and in the live state's pinned list
+        self.assertIn(self.obs.id, self.client.get("/api/me").json()["pinned_ids"])
+        self.assertIn(self.obs.id,
+                      [o["id"] for o in self._state()["pinned_observations"]])
+        # unpin clears it everywhere
+        r2 = self.client.post(f"/api/observations/{self.obs.id}/pin",
+                              json={"pinned": False})
+        self.assertFalse(r2.json()["pinned"])
+        self.assertNotIn(self.obs.id,
+                         self.client.get("/api/me").json()["pinned_ids"])
+        self.assertEqual(self._state()["pinned_observations"], [])
+
+    def test_pin_persists_for_a_new_session(self):
+        self._session_at(self.P)
+        self.client.post(f"/api/observations/{self.obs.id}/pin",
+                         json={"pinned": True})
+        # a brand-new session (reload / other device) reads the pin from the DB
+        app.hub.sessions.pop("1", None)
+        self._session_at(self.P)
+        self.assertIn(self.obs.id,
+                      [o["id"] for o in self._state()["pinned_observations"]])
+
+    def test_mined_drops_out_of_nearby_but_stays_in_db(self):
+        s = self._session_at(self.P)
+        self.assertIn(self.obs.id,
+                      [o["id"] for o in self._state()["nearest_observations"]])
+        r = self.client.post(f"/api/observations/{self.obs.id}/mine",
+                             json={"mined": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["mined"])
+        self.assertEqual(r.json()["mined_by"], "Miner")
+        s.recompute()
+        self.assertNotIn(self.obs.id,
+                         [o["id"] for o in self._state()["nearest_observations"]])
+        # the sighting is kept (feeds the heatmaps) with the mined stamp
+        row = next(d for d in db.list_observations() if d["id"] == self.obs.id)
+        self.assertTrue(row["data"].get("mined_at"))
+        # un-marking puts it back on the map
+        self.client.post(f"/api/observations/{self.obs.id}/mine",
+                         json={"mined": False})
+        s.recompute()
+        self.assertIn(self.obs.id,
+                      [o["id"] for o in self._state()["nearest_observations"]])
+        row2 = next(d for d in db.list_observations() if d["id"] == self.obs.id)
+        self.assertIsNone(row2["data"].get("mined_at"))
+
+    def test_pin_beats_mined(self):
+        # A pinned node stays in the personal list even after it's mined out.
+        self.client.post(f"/api/observations/{self.obs.id}/pin",
+                         json={"pinned": True})
+        self.client.post(f"/api/observations/{self.obs.id}/mine",
+                         json={"mined": True})
+        self._session_at(self.P)
+        st = self._state()
+        self.assertIn(self.obs.id, [o["id"] for o in st["pinned_observations"]])
+        self.assertNotIn(self.obs.id,
+                         [o["id"] for o in st["nearest_observations"]])
+
+    def test_deleting_observation_cascades_its_pins(self):
+        self.client.post(f"/api/observations/{self.obs.id}/pin",
+                         json={"pinned": True})
+        self.assertEqual(db.list_observation_pins("1"), [self.obs.id])
+        r = self.client.delete(f"/api/observations/{self.obs.id}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(db.list_observation_pins("1"), [])
+
+    def test_pin_unknown_observation_404s(self):
+        self._session_at(self.P)
+        r = self.client.post("/api/observations/999999999/pin",
+                             json={"pinned": True})
+        self.assertEqual(r.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
