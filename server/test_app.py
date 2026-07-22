@@ -2507,6 +2507,75 @@ class CommissionNotifyTests(unittest.TestCase):
         self.assertIn("Commission complete", self.sent[2]["text"])
 
 
+class InventorySpecTests(unittest.TestCase):
+    """A holding's item characteristics (category/manufacturer/size/class/grade)
+    ride the catalog `spec` and are joined onto the /api/inventory?owner=me rows at
+    read time (type-level, never stored per holding), so the list can chip + filter."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._u = {"id": "555", "username": "cass", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._u
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._u
+        # Inject a catalog carrying a spec'd item + a bare commodity, so the join
+        # is exercised without depending on the live UEX feed.
+        cls._orig_cat = app.item_catalog
+        cls._orig_idx = app.item_catalog_by_id
+        app.item_catalog = [
+            {"item_id": "item:turbodrive", "name": "TurboDrive", "kind": "item",
+             "unit": "each", "spec": {"category": "Power Plants",
+                                      "manufacturer": "Amon & Reese Co.",
+                                      "size": "2", "class": "Military", "grade": "C"}},
+            {"item_id": "commodity:titanium", "name": "Titanium", "kind": "commodity",
+             "unit": "SCU"},
+        ]
+        app.item_catalog_by_id = {it["item_id"]: it for it in app.item_catalog}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.item_catalog = cls._orig_cat
+        app.item_catalog_by_id = cls._orig_idx
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def test_mine_rows_carry_the_item_spec(self):
+        self.client.post("/api/inventory", json={"item_id": "item:turbodrive", "qty": 3})
+        self.client.post("/api/inventory", json={"item_id": "commodity:titanium", "qty": 50})
+        rows = self.client.get("/api/inventory?owner=me").json()["rows"]
+        by_name = {r["item_name"]: r for r in rows}
+        self.assertEqual(by_name["TurboDrive"]["spec"]["class"], "Military")
+        self.assertEqual(by_name["TurboDrive"]["spec"]["grade"], "C")
+        # a commodity holding gets an empty spec (no chips), never a missing key
+        self.assertEqual(by_name["Titanium"]["spec"], {})
+
+    def test_build_item_specs_joins_catalog_and_attributes(self):
+        # build_item_specs reads the catalog-row cache + attributes feed; stub both
+        # via the loaders so the join logic is covered without the network.
+        orig_attrs, orig_load = app.load_item_attributes, app._load_json_list
+        app.load_item_attributes = lambda: {1956: {"Class": "Military", "Grade": "C",
+                                                    "Size": "2"}}
+        app._load_json_list = lambda path: (
+            [{"id": 1956, "name": "TurboDrive", "category": "Power Plants",
+              "section": "Systems", "company_name": "Amon & Reese Co.", "size": "1"}]
+            if path == app.ITEM_CATALOG_FILE else orig_load(path))
+        try:
+            specs = app.build_item_specs()
+        finally:
+            app.load_item_attributes, app._load_json_list = orig_attrs, orig_load
+        s = specs["TurboDrive"]
+        self.assertEqual(s["manufacturer"], "Amon & Reese Co.")
+        self.assertEqual(s["category"], "Power Plants")
+        # attribute Size (2) wins over the catalog row's size field (1)
+        self.assertEqual(s["size"], "2")
+        self.assertEqual((s["class"], s["grade"]), ("Military", "C"))
+
+
 class CraftGoalTests(unittest.TestCase):
     """Personal vs org goals + blueprint-seeded craft goals (#14.2) and the member
     blueprint library / commission crafter-matching (#25.1). Drives the real

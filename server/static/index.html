@@ -1689,6 +1689,22 @@
   .rm-mine-actions { display: flex; gap: 6px; flex: 0 0 auto; }
   .rm-mine-row .rm-mine-loc { color: var(--dim); font-size: 12px; }
   .rm-avail { color: var(--good); font-size: 12px; font-variant-numeric: tabular-nums; }
+  /* item characteristic chips on a holding (category/size/class/grade + maker) */
+  .inv-specs { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 4px; }
+  .inv-chip { display: inline-flex; align-items: center; font-size: 11px; line-height: 1.5;
+    padding: 1px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim);
+    border: 1px solid var(--border); white-space: nowrap; }
+  .inv-chip.inv-chip-cat { color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .inv-chip-maker { color: var(--dim); font-size: 11px; }
+  /* facet filter bar above the holdings list */
+  .inv-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 12px; }
+  .inv-filter-bar select, .inv-filter-bar .ti { font-size: 12px; padding: 4px 8px; }
+  .inv-filter-clear { font-size: 12px; color: var(--dim); background: none; border: none;
+    cursor: pointer; text-decoration: underline; padding: 2px 4px; }
+  .inv-filter-count { font-size: 12px; color: var(--dim); margin-left: auto; }
   /* nested goal commitments under a holding (parent→child) */
   .rm-mine-alloc { color: var(--dim); font-size: 12px; margin: 3px 0 0 14px; }
   .rm-edit-item { align-self: center; white-space: nowrap; }
@@ -10969,6 +10985,20 @@ async function renderInvOrg() {
 }
 
 let rmMineRows = [];
+// Facet filters over your holdings, keyed on each row's item characteristics
+// (server-joined `spec`). Persist across re-renders within the session so an
+// edit/delete refetch keeps your active filters; `q` is a free-text name search.
+let rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "" };
+// Which spec fields become facet dropdowns, in display order. Category &
+// manufacturer apply to any item; size/class/grade only to ship components.
+const INV_FACETS = [
+  { key: "category", label: "Category", fmt: v => v },
+  { key: "manufacturer", label: "Maker", fmt: v => v },
+  { key: "class", label: "Class", fmt: v => v },
+  { key: "grade", label: "Grade", fmt: v => "Grade " + v },
+  { key: "size", label: "Size", fmt: v => "S" + v },
+];
+
 async function renderInvMine() {
   let data;
   try { data = await fetch("/api/inventory?owner=me").then(r => r.json()); }
@@ -10980,8 +11010,93 @@ async function renderInvMine() {
   }
   rmMineRows = data.rows || [];
   if (!rmMineRows.length) { $("inv-body").innerHTML = `<p class="stat-empty">You haven't logged any holdings yet.</p>`; return; }
-  $("inv-body").innerHTML = rmMineRows.map(invMineRowHtml).join("");
+  renderInvMineList();
+}
+
+// Sorted distinct values of a spec facet across ALL holdings (facet option sets
+// are independent of the active filters, so the dropdowns stay stable).
+function invDistinct(key) {
+  const vals = new Set();
+  for (const r of rmMineRows) { const v = r.spec && r.spec[key]; if (v) vals.add(String(v)); }
+  return [...vals].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+function invMatchesFilters(r) {
+  const q = rmInvFilters.q.trim().toLowerCase();
+  if (q && !String(r.item_name || "").toLowerCase().includes(q)) return false;
+  for (const f of INV_FACETS) {
+    const want = rmInvFilters[f.key];
+    if (want && String((r.spec && r.spec[f.key]) || "") !== want) return false;
+  }
+  return true;
+}
+
+// Renders the (stable) filter bar once, then the list into its own child so
+// keystrokes in the search box re-filter rows without re-rendering — and blurring
+// — the input. Prunes any active facet whose value no longer exists.
+function renderInvMineList() {
+  for (const f of INV_FACETS) {
+    if (rmInvFilters[f.key] && !invDistinct(f.key).includes(rmInvFilters[f.key])) rmInvFilters[f.key] = "";
+  }
+  $("inv-body").innerHTML = invFilterBarHtml() + `<div id="inv-list"></div>`;
+  wireInvFilters();
+  applyInvFilters();
+}
+
+function applyInvFilters() {
+  const shown = rmMineRows.filter(invMatchesFilters);
+  $("inv-list").innerHTML = shown.length
+    ? shown.map(invMineRowHtml).join("")
+    : `<p class="stat-empty">No holdings match these filters.</p>`;
+  const c = $("inv-filter-count");
+  if (c) c.textContent = `${shown.length} of ${rmMineRows.length}`;
   wireInvMine();
+}
+
+function invFilterBarHtml() {
+  const selects = INV_FACETS.map(f => {
+    const opts = invDistinct(f.key);
+    if (opts.length < 2) return "";   // nothing to choose between
+    const cur = rmInvFilters[f.key];
+    return `<select class="ti inv-facet" data-facet="${f.key}" aria-label="Filter by ${f.label}">` +
+      `<option value="">${esc(f.label)}: all</option>` +
+      opts.map(v => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(f.fmt(v))}</option>`).join("") +
+      `</select>`;
+  }).join("");
+  const anyActive = rmInvFilters.q || INV_FACETS.some(f => rmInvFilters[f.key]);
+  if (!selects && !anyActive) return "";   // nothing filterable, no bar
+  return `<div class="inv-filter-bar">` +
+    `<input class="ti" id="inv-filter-q" placeholder="Filter items…" value="${esc(rmInvFilters.q)}" style="min-width:130px">` +
+    selects +
+    (anyActive ? `<button class="inv-filter-clear" id="inv-filter-clear">Clear</button>` : "") +
+    `<span class="inv-filter-count" id="inv-filter-count"></span>` +
+  `</div>`;
+}
+
+function wireInvFilters() {
+  const q = $("inv-filter-q");
+  if (q) q.oninput = () => { rmInvFilters.q = q.value; applyInvFilters(); };
+  $("inv-body").querySelectorAll(".inv-facet").forEach(sel => {
+    sel.onchange = () => { rmInvFilters[sel.dataset.facet] = sel.value; renderInvMineList(); };
+  });
+  const clr = $("inv-filter-clear");
+  if (clr) clr.onclick = () => {
+    rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "" };
+    renderInvMineList();
+  };
+}
+
+// Category/size/class/grade chips + a muted maker line, from the item's live
+// characteristics (server-joined `spec`). Commodities/ships have none → no chips.
+function invSpecChips(spec) {
+  if (!spec) return "";
+  const chips = [];
+  if (spec.category) chips.push(`<span class="inv-chip inv-chip-cat">${esc(spec.category)}</span>`);
+  if (spec.size) chips.push(`<span class="inv-chip">S${esc(spec.size)}</span>`);
+  if (spec.class) chips.push(`<span class="inv-chip">${esc(spec.class)}</span>`);
+  if (spec.grade) chips.push(`<span class="inv-chip">Grade ${esc(spec.grade)}</span>`);
+  if (spec.manufacturer) chips.push(`<span class="inv-chip-maker">${esc(spec.manufacturer)}</span>`);
+  return chips.length ? `<div class="inv-specs">${chips.join("")}</div>` : "";
 }
 
 // A holding shows its quantity, and — when some of it is committed to goals —
@@ -10996,7 +11111,7 @@ function invMineRowHtml(r) {
   return `<div class="rm-mine-row" data-id="${r.id}"><div class="rm-mine-main">` +
     `<div><b>${esc(r.item_name)}</b> · ${fmtQty(r.qty)} ${unit}` +
     `${r.location ? ` <span class="rm-mine-loc">📍 ${esc(r.location)}</span>` : ""}${avail}` +
-    `${r.note ? ` <span class="muted">— ${esc(r.note)}</span>` : ""}</div>${sub}</div>` +
+    `${r.note ? ` <span class="muted">— ${esc(r.note)}</span>` : ""}</div>${invSpecChips(r.spec)}${sub}</div>` +
     `<div class="rm-mine-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
     `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></div></div>`;
 }

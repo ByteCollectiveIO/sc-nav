@@ -23,6 +23,7 @@ poi/commodities.json
 poi/ships.json
 poi/items.json
 poi/item_catalog.json
+poi/item_attributes.json
 poi/trade_terminals.json
 poi/trade_prices.json
 poi/watcher_tokens.json
