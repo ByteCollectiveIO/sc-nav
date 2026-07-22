@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 CREATE INDEX IF NOT EXISTS observations_category ON observations(category);
 
+-- Personal navigation bookmarks: one row = "this member pinned this observation."
+-- Pins are private (only the pinning member sees them) and keep a node reachable
+-- in the NEARBY list no matter how far it ranks by distance. Keyed by the member's
+-- Discord id (matches members.discord_id) + the observation id.
+CREATE TABLE IF NOT EXISTS observation_pins (
+    member_id TEXT NOT NULL,
+    obs_id    INTEGER NOT NULL,
+    created   TEXT,
+    PRIMARY KEY (member_id, obs_id)
+);
+CREATE INDEX IF NOT EXISTS observation_pins_member ON observation_pins(member_id);
+
 CREATE TABLE IF NOT EXISTS handles (
     player_id INTEGER PRIMARY KEY,
     handle TEXT UNIQUE,
@@ -856,6 +868,7 @@ def next_observation_id() -> int:
 
 def delete_observation(obs_id: int) -> bool:
     with _lock, _conn:
+        _conn.execute("DELETE FROM observation_pins WHERE obs_id=?", (obs_id,))
         cur = _conn.execute("DELETE FROM observations WHERE id=?", (obs_id,))
     return cur.rowcount > 0
 
@@ -865,8 +878,39 @@ def clear_observations() -> int:
     statistics'). Custom POIs and QT markers live in their own tables and are
     untouched. Returns the number of rows removed."""
     with _lock, _conn:
+        _conn.execute("DELETE FROM observation_pins")
         cur = _conn.execute("DELETE FROM observations")
     return cur.rowcount
+
+
+# --- observation pins (personal navigation bookmarks) ----------------------
+
+
+def list_observation_pins(member_id: str) -> list[int]:
+    """Observation ids this member has pinned (for their NEARBY bookmarks)."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT obs_id FROM observation_pins WHERE member_id=?", (str(member_id),)
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def pin_observation(member_id: str, obs_id: int, created: str) -> None:
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT OR IGNORE INTO observation_pins (member_id,obs_id,created) "
+            "VALUES (?,?,?)",
+            (str(member_id), obs_id, created),
+        )
+
+
+def unpin_observation(member_id: str, obs_id: int) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM observation_pins WHERE member_id=? AND obs_id=?",
+            (str(member_id), obs_id),
+        )
+    return cur.rowcount > 0
 
 
 # --- handles ---------------------------------------------------------------
