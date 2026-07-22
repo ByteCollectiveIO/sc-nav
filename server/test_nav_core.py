@@ -1903,6 +1903,23 @@ class CatalogTests(unittest.TestCase):
         cat = catalog.build(["Titanium"], [], [], ["Omnisky III Cannon"])
         self.assertTrue(any(h["name"] == "Omnisky III Cannon" for h in catalog.search(cat, "omni")))
 
+    def test_item_specs_ride_item_entries_only(self):
+        import catalog
+        specs = {"TurboDrive": {"category": "Power Plants", "size": "2",
+                                "class": "Military", "grade": "C"}}
+        cat = catalog.build(["Titanium"], [{"name": "Argo MOLE"}], [],
+                            ["TurboDrive"], item_specs=specs)
+        item = next(it for it in cat if it["item_id"] == "item:turbodrive")
+        self.assertEqual(item["spec"]["grade"], "C")
+        # commodities/ships never carry a spec (only kind=="item" does)
+        com = next(it for it in cat if it["item_id"] == "commodity:titanium")
+        ship = next(it for it in cat if it["item_id"] == "ship:argo-mole")
+        self.assertNotIn("spec", com)
+        self.assertNotIn("spec", ship)
+        # an item with no spec entry simply carries none
+        cat2 = catalog.build([], [], [], ["Mystery Gizmo"], item_specs=specs)
+        self.assertNotIn("spec", cat2[0])
+
     def test_custom_item_and_build_override(self):
         import catalog
         cust = catalog.custom_item({"id": 7, "name": "Size 3 Shield", "kind": "component"})

@@ -61,13 +61,17 @@ def default_unit(kind: str) -> str:
     return _DEFAULT_UNIT.get(kind, "each")
 
 
-def feed_items(commodity_names, ships, item_names=None) -> list[dict]:
+def feed_items(commodity_names, ships, item_names=None, item_specs=None) -> list[dict]:
     """Canonical catalog items from the uexcorp feeds.
 
     `commodity_names` is the flat name list (load_commodity_names); `ships` is the
     trimmed ship rows (load_ships, each `{name, company, scu}`); `item_names` is
     the flat equipment/ship-part name list (load_item_names). De-duped by
-    synthesized id so two feed rows that slug the same collapse to one item."""
+    synthesized id so two feed rows that slug the same collapse to one item.
+    `item_specs` ({name: {category, manufacturer, size, class, grade, …}}) stamps
+    an item-kind entry's characteristics under a `spec` key (the inventory list
+    displays + filters on them); a name with no spec just carries none."""
+    item_specs = item_specs or {}
     out, seen = [], set()
     for name in commodity_names or []:
         if not name:
@@ -93,7 +97,11 @@ def feed_items(commodity_names, ships, item_names=None) -> list[dict]:
         if iid in seen:
             continue
         seen.add(iid)
-        out.append({"item_id": iid, "name": name, "kind": "item", "unit": "each"})
+        it = {"item_id": iid, "name": name, "kind": "item", "unit": "each"}
+        spec = item_specs.get(name)
+        if spec:
+            it["spec"] = spec
+        out.append(it)
     return out
 
 
@@ -109,13 +117,15 @@ def custom_item(row: dict) -> dict:
 
 
 def build(commodity_names, ships, custom_rows, item_names=None,
-          prices=None) -> list[dict]:
+          prices=None, item_specs=None) -> list[dict]:
     """The full merged catalog (feeds + custom), sorted by name. Custom items win
     on an id clash so an org can override a feed name if they ever need to. When
     `prices` ({item_id: {"buy", "sell"}}) is given, each matching item is stamped
     with a `price` reference — the marketplace's suggested market value (aUEC); the
-    value rides the in-memory catalog like `unit`, no new table."""
-    by_id = {it["item_id"]: it for it in feed_items(commodity_names, ships, item_names)}
+    value rides the in-memory catalog like `unit`, no new table. `item_specs`
+    ({name: {characteristics}}) likewise rides each item-kind entry under `spec`."""
+    by_id = {it["item_id"]: it
+             for it in feed_items(commodity_names, ships, item_names, item_specs)}
     for r in custom_rows or []:
         it = custom_item(r)
         by_id[it["item_id"]] = it

@@ -88,6 +88,11 @@ ITEMS_URL = os.environ.get("SC_NAV_ITEMS_URL", "https://api.uexcorp.space/2.0/it
 # filter, so we walk the item-type categories (/2.0/categories, type=="item").
 CATEGORIES_URL = os.environ.get("SC_NAV_CATEGORIES_URL", "https://api.uexcorp.space/2.0/categories")
 ITEM_CATALOG_URL = os.environ.get("SC_NAV_ITEM_CATALOG_URL", "https://api.uexcorp.space/2.0/items")
+# Per-item characteristics (Size, Class, Grade, and per-category stats) live on a
+# separate endpoint, keyed by item — bulk-fetchable per category. The catalog row
+# already carries category/section/manufacturer/size; this adds Class + Grade,
+# which the item-detail page shows but the catalog row omits.
+ITEM_ATTRS_URL = os.environ.get("SC_NAV_ITEM_ATTRS_URL", "https://api.uexcorp.space/2.0/items_attributes")
 # Commodity trading (trade-route planner, #21): per-terminal buy/sell prices +
 # the terminal catalog that places them. Both are large (one row per commodity
 # per terminal / one row per terminal) so they're cached to disk like the feeds
@@ -387,6 +392,7 @@ COMMODITIES_FILE = DATA_DIR / "commodities.json"  # cached uexcorp commodities
 SHIPS_FILE = DATA_DIR / "ships.json"               # cached uexcorp vehicles
 ITEMS_FILE = DATA_DIR / "items.json"               # cached uexcorp items_prices_all
 ITEM_CATALOG_FILE = DATA_DIR / "item_catalog.json" # cached uexcorp full item catalog (all categories)
+ITEM_ATTRS_FILE = DATA_DIR / "item_attributes.json" # cached uexcorp per-item attributes (Class/Grade/…)
 TERMINALS_FILE = DATA_DIR / "trade_terminals.json" # cached uexcorp terminals
 TRADE_PRICES_FILE = DATA_DIR / "trade_prices.json" # cached uexcorp commodities_prices_all
 DB_FILE = DATA_DIR / "sc_nav.db"                   # user-contributed data (Phase 2)
@@ -662,40 +668,49 @@ def load_commodity_names() -> list[str]:
     return sorted({r["name"] for r in rows if r.get("name")})
 
 
-def load_item_catalog_names() -> list[str]:
-    """Distinct item names from uexcorp's full item *catalog* (/2.0/items), NOT
-    the price feed. The price feed (items_prices_all) only lists gear sold at a
-    terminal, so an item UEX hasn't recorded a price for (e.g. the S2 cooler
-    'Arctic', flagged "not traded in-game yet") never appears there. Walking the
-    catalog surfaces those too, so the inventory/goals + marketplace pickers stay
-    complete. The /2.0/items endpoint needs a category filter, so we pull the
-    category list and fetch each item-type category in turn (~66 calls). Cached
-    whole to disk for the offline/outage fallback; a partial walk (any category
-    fetch raising) falls back to the last good cache rather than persisting a
-    truncated catalog."""
-    rows = None
-    if not OFFLINE:
-        try:
-            cats_resp = _fetch_json(CATEGORIES_URL, timeout=30)
-            cats = cats_resp.get("data") if isinstance(cats_resp, dict) else cats_resp
-            collected = []
-            for c in cats or []:
-                if not isinstance(c, dict) or c.get("type") != "item":
-                    continue
-                cid = c.get("id")
-                if cid is None:
-                    continue
-                resp = _fetch_json(f"{ITEM_CATALOG_URL}?id_category={cid}", timeout=30)
-                items = resp.get("data") if isinstance(resp, dict) else resp
-                collected.extend(items or [])
-            if collected:
-                rows = collected
-                _save_json_list(ITEM_CATALOG_FILE, rows)
-        except Exception as exc:
-            print(f"[sc-nav] item catalog fetch failed, using cache: {exc}")
-    if rows is None:
+def _walk_item_categories(make_url, label: str):
+    """Concatenate the `data` rows of a per-category uexcorp endpoint across every
+    item-type category (from /2.0/categories, `type=="item"`). `make_url(cid)`
+    builds each per-category URL. Returns the combined rows, or None if the walk
+    couldn't complete (OFFLINE, or any fetch raised) — the caller then falls back
+    to its disk cache rather than persisting a truncated result. ~66 calls."""
+    if OFFLINE:
+        return None
+    try:
+        cats_resp = _fetch_json(CATEGORIES_URL, timeout=30)
+        cats = cats_resp.get("data") if isinstance(cats_resp, dict) else cats_resp
+        collected = []
+        for c in cats or []:
+            if not isinstance(c, dict) or c.get("type") != "item":
+                continue
+            cid = c.get("id")
+            if cid is None:
+                continue
+            resp = _fetch_json(make_url(cid), timeout=30)
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            collected.extend(rows or [])
+        return collected or None
+    except Exception as exc:
+        print(f"[sc-nav] {label} walk failed, using cache: {exc}")
+        return None
+
+
+def load_item_catalog_rows() -> list[dict]:
+    """Full uexcorp item *catalog* rows (/2.0/items walked per item-type category).
+    The price feed (items_prices_all) only lists gear sold at a terminal, so an
+    item UEX hasn't recorded a price for (e.g. the S2 cooler 'Arctic', flagged
+    "not traded in-game yet") never appears there — the catalog covers those. Each
+    row carries the item's characteristics (category, section, company_name,
+    size, uuid, …), consumed for both the picker names AND the inventory spec
+    chips. Cached whole to disk for the offline/outage fallback; a partial walk
+    falls back to the last good cache rather than persisting a truncated catalog."""
+    rows = _walk_item_categories(lambda cid: f"{ITEM_CATALOG_URL}?id_category={cid}",
+                                 "item catalog")
+    if rows is not None:
+        _save_json_list(ITEM_CATALOG_FILE, rows)
+    else:
         rows = _load_json_list(ITEM_CATALOG_FILE)
-    return sorted({r["name"] for r in rows if r.get("name")})
+    return rows
 
 
 def load_item_names() -> list[str]:
@@ -703,10 +718,11 @@ def load_item_names() -> list[str]:
     inventory/goals + marketplace apps can reference gear that isn't a bulk
     commodity or a vehicle. Unions two uexcorp sources: the items_prices_all feed
     (priced gear — one row per item *per terminal*, so items recur; we keep the
-    distinct `item_name` set) AND the full item catalog (`load_item_catalog_names`,
+    distinct `item_name` set) AND the full item catalog (`load_item_catalog_rows`,
     which also covers gear with no terminal price). Both fetch live with on-disk
     cache fallback. The price feed's cache (ITEMS_FILE) is what `load_item_prices`
-    later reads, so this must run first in a refresh."""
+    later reads, and the catalog cache (ITEM_CATALOG_FILE) is what `build_item_specs`
+    reads, so this must run first in a refresh."""
     rows = None
     if not OFFLINE:
         try:
@@ -719,7 +735,64 @@ def load_item_names() -> list[str]:
     if not rows:
         rows = _load_json_list(ITEMS_FILE)
     priced = {r["item_name"] for r in rows if r.get("item_name")}
-    return sorted(priced | set(load_item_catalog_names()))
+    catalog_names = {r["name"] for r in load_item_catalog_rows() if r.get("name")}
+    return sorted(priced | catalog_names)
+
+
+def load_item_attributes() -> dict:
+    """Per-item attribute map from uexcorp's items_attributes feed, walked per
+    item-type category (bulk). Returns `{id_item: {attribute_name: value}}` — e.g.
+    `{1956: {"Size": "2", "Class": "Military", "Grade": "C"}}`. The attributes are
+    category-shaped (ship components carry Class/Grade/Size; armor carries Armor
+    Class/Damage Reduction/…), so this keeps them all; `build_item_specs` selects
+    the identity subset. Best-effort: a failed walk falls back to the last-good
+    cache, and total absence just yields `{}` — attributes ENRICH the catalog, they
+    never gate it, so Class/Grade simply won't render rather than dropping items."""
+    rows = _walk_item_categories(lambda cid: f"{ITEM_ATTRS_URL}?id_category={cid}",
+                                 "item attributes")
+    if rows is not None:
+        _save_json_list(ITEM_ATTRS_FILE, rows)
+    else:
+        rows = _load_json_list(ITEM_ATTRS_FILE)
+    out: dict = {}
+    for r in rows or []:
+        iid, name = r.get("id_item"), r.get("attribute_name")
+        if iid is None or not name:
+            continue
+        out.setdefault(iid, {})[name] = r.get("value")
+    return out
+
+
+def build_item_specs() -> dict:
+    """`{item_name: {category, section, manufacturer, size, class, grade}}` — the
+    "what is this" identity fields the inventory list shows + filters on. Joins the
+    catalog-row cache (category/section/company_name/size, written by
+    `load_item_names`) with the attributes feed (Class/Grade + authoritative Size)
+    by numeric item id. Empty fields are dropped; keyed by NAME to match how
+    `catalog.feed_items` iterates item names (the catalog id is name-derived, so a
+    name is a stable enough key here). Core identity only — per-category stats
+    (Mass, Volume, …) are intentionally left off (design decision, #item-specs)."""
+    attrs = load_item_attributes()
+    out: dict = {}
+    for r in _load_json_list(ITEM_CATALOG_FILE):
+        name = r.get("name")
+        if not name:
+            continue
+        a = attrs.get(r.get("id"), {})
+        row_size = r.get("size")
+        spec = {
+            "category": r.get("category"),
+            "section": r.get("section"),
+            "manufacturer": r.get("company_name"),
+            # Attribute Size is the in-game value; fall back to the catalog row's.
+            "size": a.get("Size") or (str(row_size) if row_size not in (None, "", 0) else None),
+            "class": a.get("Class"),
+            "grade": a.get("Grade"),
+        }
+        spec = {k: v for k, v in spec.items() if v not in (None, "", 0)}
+        if spec:
+            out[name] = spec
+    return out
 
 
 def _price_map_from_rows(rows, name_key: str) -> dict:
@@ -1188,6 +1261,7 @@ fleet_ships = load_fleet_ships()
 blueprints_feed = load_blueprints()     # crafting recipes for commissions (#25)
 item_names = load_item_names()
 item_prices = build_item_prices()
+item_specs = build_item_specs()   # per-item characteristics (needs the catalog cache load_item_names wrote)
 resource_values = build_resource_values()   # mining-value badges (needs the name lists above)
 fauna_names = load_fauna_names()
 biomes = load_biomes()
@@ -1198,9 +1272,10 @@ def rebuild_catalog() -> list[dict]:
     shared by the inventory/goals and marketplace apps. Rebuilt at startup and
     whenever a custom item is added or the feeds are refreshed. Each item carries an
     optional `price` reference (aUEC buy/sell from the feeds) for the marketplace's
-    suggested market value."""
+    suggested market value, and an item-kind entry carries a `spec` (its
+    characteristics — category/manufacturer/size/class/grade) for the inventory list."""
     return catalog.build(commodity_names, ships, db.list_catalog_items(), item_names,
-                         prices=item_prices)
+                         prices=item_prices, item_specs=item_specs)
 
 
 item_catalog = rebuild_catalog()
@@ -6458,6 +6533,15 @@ def _holding_view(row: dict) -> dict:
             "available": round(float(row.get("qty") or 0) - committed, 6)}
 
 
+def _item_spec(item_id: str | None) -> dict:
+    """The characteristics (category/manufacturer/size/class/grade) of a holding's
+    item, resolved live from the catalog by id — a type-level property, so it's
+    joined at read time rather than stored per row (an item leaving the feed just
+    drops the chips, like `price`). `{}` for commodities/ships/customs with none."""
+    it = item_catalog_by_id.get(item_id) if item_id else None
+    return (it or {}).get("spec") or {}
+
+
 @app.get("/api/inventory")
 async def get_inventory(owner: str | None = None, goal: int | None = None,
                         user: dict = Depends(require_session)):
@@ -6477,6 +6561,7 @@ async def get_inventory(owner: str | None = None, goal: int | None = None,
             committed = sum(float(a["qty"] or 0) for a in allocs)
             out.append({**r, "committed": committed,
                         "available": round(float(r.get("qty") or 0) - committed, 6),
+                        "spec": _item_spec(r.get("item_id")),
                         "allocations": [{"goal_id": a["goal_id"],
                                          "goal_title": a.get("goal_title"),
                                          "qty": a["qty"]} for a in allocs]})
@@ -8044,7 +8129,7 @@ async def _refresh_feeds() -> None:
     loaders fall back to the disk cache on a failed fetch, so a UEX outage
     degrades to stale-but-served rather than raising."""
     global raw_commodity_names, commodity_names, ships, fleet_ships
-    global item_names, item_prices, resource_values
+    global item_names, item_prices, item_specs, resource_values
     global trade_terminals_raw, trade_terminal_rows, trade_prices, feeds_refreshed_at
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
@@ -8053,8 +8138,9 @@ async def _refresh_feeds() -> None:
     # or the drive picker's ranges vanish until the next restart.
     enrich_ships_quantum(ships)
     fleet_ships = await asyncio.to_thread(load_fleet_ships)
-    item_names = await asyncio.to_thread(load_item_names)
+    item_names = await asyncio.to_thread(load_item_names)       # also rewrites the catalog cache
     item_prices = await asyncio.to_thread(build_item_prices)   # fresh price refs
+    item_specs = await asyncio.to_thread(build_item_specs)     # fresh characteristics (reads that cache)
     resource_values = await asyncio.to_thread(build_resource_values)  # fresh value badges
     trade_terminals_raw, trade_terminal_rows = await asyncio.to_thread(load_trade_terminals)
     trade_prices = await asyncio.to_thread(load_trade_prices)
