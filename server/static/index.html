@@ -1673,41 +1673,37 @@
   .rm-row input.rm-qty { width: 110px; }
   .rm-row select.rm-unit { width: 84px; flex: 0 0 auto; }
   .rm-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
-  /* inventory rollup table */
-  .rm-inv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .rm-inv-table th { text-align: left; font-size: 11px; color: var(--dim); letter-spacing: .5px;
-    text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  .rm-inv-table td { padding: 8px; border-bottom: 1px solid var(--border); }
+  /* inventory tables (My holdings + Org rollup) — columnar, one attribute per
+     column, wrapped in .table-scroll so any number of rows scroll under a sticky
+     header (no arbitrary cap). */
+  .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .inv-table th { text-align: left; font-size: 11px; color: var(--dim); letter-spacing: .5px;
+    text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border);
+    white-space: nowrap; }
+  .inv-table td { padding: 7px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  .inv-table th.num, .inv-table td.num { text-align: right; font-variant-numeric: tabular-nums;
+    white-space: nowrap; }
+  .inv-cat { color: var(--accent); }
+  .inv-dim { color: var(--dim); white-space: nowrap; }
+  .inv-loc { white-space: nowrap; }
+  .inv-note { font-size: 12px; margin-top: 2px; }
+  .inv-actions { white-space: nowrap; text-align: right; }
+  .inv-actions .ev-btn { padding: 3px 9px; }
   .rm-inv-row { cursor: pointer; }
   .rm-inv-row:hover td { background: var(--panel2); }
   .rm-inv-detail td { background: var(--panel2); font-size: 12px; color: var(--dim); }
   .rm-inv-detail .rm-breakdown { display: flex; flex-wrap: wrap; gap: 6px 16px; }
-  .rm-num { font-variant-numeric: tabular-nums; text-align: right; }
-  .rm-mine-row { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between;
-    padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
-  .rm-mine-main { flex: 1; min-width: 220px; }
-  .rm-mine-actions { display: flex; gap: 6px; flex: 0 0 auto; }
-  .rm-mine-row .rm-mine-loc { color: var(--dim); font-size: 12px; }
   .rm-avail { color: var(--good); font-size: 12px; font-variant-numeric: tabular-nums; }
-  /* item characteristic chips on a holding (category/size/class/grade + maker) */
-  .inv-specs { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 4px; }
-  .inv-chip { display: inline-flex; align-items: center; font-size: 11px; line-height: 1.5;
-    padding: 1px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim);
-    border: 1px solid var(--border); white-space: nowrap; }
-  .inv-chip.inv-chip-cat { color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-    background: color-mix(in srgb, var(--accent) 12%, transparent); }
-  .inv-chip-maker { color: var(--dim); font-size: 11px; }
-  /* facet filter bar above the holdings list */
+  /* nested goal commitments under a holding (parent→child) */
+  .rm-mine-alloc { color: var(--dim); font-size: 12px; margin: 3px 0 0 0; }
+  .rm-edit-item { align-self: center; white-space: nowrap; }
+  /* facet filter bar above the inventory tables */
   .inv-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 12px; }
   .inv-filter-bar select, .inv-filter-bar .ti { font-size: 12px; padding: 4px 8px; }
   .inv-filter-clear { font-size: 12px; color: var(--dim); background: none; border: none;
     cursor: pointer; text-decoration: underline; padding: 2px 4px; }
   .inv-filter-count { font-size: 12px; color: var(--dim); margin-left: auto; }
-  /* nested goal commitments under a holding (parent→child) */
-  .rm-mine-alloc { color: var(--dim); font-size: 12px; margin: 3px 0 0 14px; }
-  .rm-edit-item { align-self: center; white-space: nowrap; }
   .rm-intro { font-size: 13px; line-height: 1.6; color: var(--dim); margin: 0 0 14px; max-width: 760px; }
   .rm-intro a { color: var(--accent); text-decoration: none; }
   /* craft goals + personal scope (#14.2) */
@@ -10948,6 +10944,7 @@ async function logHolding() {
   } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
 }
 
+let rmOrgItems = [];
 async function renderInvOrg() {
   let data;
   try { data = await fetch("/api/inventory").then(r => r.json()); }
@@ -10957,21 +10954,32 @@ async function renderInvOrg() {
     $("inv-retry").onclick = renderInvOrg;
     return;
   }
-  const items = data.items || [];
-  if (!items.length) { $("inv-body").innerHTML = `<p class="stat-empty">Nothing logged yet.</p>`; return; }
-  const rows = items.map((it, i) =>
-    `<tr class="rm-inv-row" data-i="${i}" aria-expanded="false" aria-controls="inv-d-${i}">` +
-    `<td><span class="rm-caret" aria-hidden="true">▸</span>${esc(it.name)}</td>` +
-    `<td class="rm-num">${fmtQty(it.total)} ${esc(it.unit || "")}</td>` +
-    `<td class="rm-num">${it.holders}</td></tr>` +
-    `<tr class="rm-inv-detail" id="inv-d-${i}" data-d="${i}" hidden><td colspan="3"><div class="rm-breakdown">` +
+  rmOrgItems = data.items || [];
+  if (!rmOrgItems.length) { $("inv-body").innerHTML = `<p class="stat-empty">Nothing logged yet.</p>`; return; }
+  renderInvList();
+}
+
+// Org rollup as a columnar table (one attribute per column, same characteristic
+// columns as My holdings); each row expands to its per-owner + per-location
+// breakdown. `i` indexes the CURRENT filtered list, matched by wireInvOrg.
+function invOrgTableHtml(rows) {
+  const body = rows.map((it, i) =>
+    `<tr class="rm-inv-row" data-i="${i}" aria-expanded="false">` +
+    `<td><span class="rm-caret" aria-hidden="true">▸</span><b>${esc(it.name)}</b></td>` +
+    invSpecCells(it.spec) +
+    `<td class="num">${fmtQty(it.total)} ${esc(it.unit || "")}</td>` +
+    `<td class="num">${it.holders}</td></tr>` +
+    `<tr class="rm-inv-detail" data-d="${i}" hidden><td colspan="8"><div class="rm-breakdown">` +
       it.by_owner.map(o => `<span>${esc(o.display_name)}: ${fmtQty(o.qty)}</span>`).join("") +
     `</div><div class="rm-breakdown" style="margin-top:6px;opacity:.8">` +
       it.by_location.map(l => `<span>📍 ${esc(l.location)}: ${fmtQty(l.qty)}</span>`).join("") +
     `</div></td></tr>`).join("");
-  $("inv-body").innerHTML = `<table class="rm-inv-table"><thead><tr>` +
-    `<th>Item</th><th class="rm-num">Total</th><th class="rm-num">Holders</th></tr></thead>` +
-    `<tbody>${rows}</tbody></table>`;
+  return `<table class="inv-table"><thead><tr>` +
+    `<th>Item</th><th>Category</th><th>Size</th><th>Class</th><th>Grade</th><th>Maker</th>` +
+    `<th class="num">Total</th><th class="num">Holders</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function wireInvOrg() {
   $("inv-body").querySelectorAll(".rm-inv-row").forEach(tr => {
     clickable(tr, () => {
       const d = $("inv-body").querySelector(`.rm-inv-detail[data-d="${tr.dataset.i}"]`);
@@ -10985,19 +10993,31 @@ async function renderInvOrg() {
 }
 
 let rmMineRows = [];
-// Facet filters over your holdings, keyed on each row's item characteristics
-// (server-joined `spec`). Persist across re-renders within the session so an
-// edit/delete refetch keeps your active filters; `q` is a free-text name search.
-let rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "" };
-// Which spec fields become facet dropdowns, in display order. Category &
-// manufacturer apply to any item; size/class/grade only to ship components.
+// Facet filters shared by BOTH inventory tabs, keyed on each item's characteristics
+// (server-joined `spec`) plus a location facet. Persist across re-renders and tab
+// switches within the session; `q` is a free-text name search.
+let rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "", location: "" };
+// Which facets become dropdowns, in display order. category/maker apply to any
+// item; size/class/grade only to ship components; location comes off each row (a
+// single stash for a holding, the whole spread for a rollup item — see `loc`).
 const INV_FACETS = [
   { key: "category", label: "Category", fmt: v => v },
   { key: "manufacturer", label: "Maker", fmt: v => v },
   { key: "class", label: "Class", fmt: v => v },
   { key: "grade", label: "Grade", fmt: v => "Grade " + v },
   { key: "size", label: "Size", fmt: v => "S" + v },
+  { key: "location", label: "Location", fmt: v => v, loc: true },
 ];
+
+// The dataset the filter bar currently operates on — mine holdings or org rollup.
+function invActiveRows() { return rmInvScope === "org" ? rmOrgItems : rmMineRows; }
+function invRowName(r) { return r.item_name || r.name || ""; }
+// Locations a row touches: a mine holding has one (blank → "—"); a rollup item
+// spreads across its by_location breakdown.
+function invRowLocations(r) {
+  if (r.by_location) return r.by_location.map(l => l.location || "—");
+  return [(r.location || "").trim() || "—"];
+}
 
 async function renderInvMine() {
   let data;
@@ -11010,52 +11030,59 @@ async function renderInvMine() {
   }
   rmMineRows = data.rows || [];
   if (!rmMineRows.length) { $("inv-body").innerHTML = `<p class="stat-empty">You haven't logged any holdings yet.</p>`; return; }
-  renderInvMineList();
+  renderInvList();
 }
 
-// Sorted distinct values of a spec facet across ALL holdings (facet option sets
-// are independent of the active filters, so the dropdowns stay stable).
-function invDistinct(key) {
+// Sorted distinct values of a facet across ALL rows in the active tab (option
+// sets stay stable regardless of the current filters).
+function invDistinct(f) {
   const vals = new Set();
-  for (const r of rmMineRows) { const v = r.spec && r.spec[key]; if (v) vals.add(String(v)); }
+  for (const r of invActiveRows()) {
+    if (f.loc) invRowLocations(r).forEach(v => { if (v) vals.add(v); });
+    else { const v = r.spec && r.spec[f.key]; if (v) vals.add(String(v)); }
+  }
   return [...vals].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 function invMatchesFilters(r) {
   const q = rmInvFilters.q.trim().toLowerCase();
-  if (q && !String(r.item_name || "").toLowerCase().includes(q)) return false;
+  if (q && !invRowName(r).toLowerCase().includes(q)) return false;
   for (const f of INV_FACETS) {
     const want = rmInvFilters[f.key];
-    if (want && String((r.spec && r.spec[f.key]) || "") !== want) return false;
+    if (!want) continue;
+    if (f.loc) { if (!invRowLocations(r).includes(want)) return false; }
+    else if (String((r.spec && r.spec[f.key]) || "") !== want) return false;
   }
   return true;
 }
 
-// Renders the (stable) filter bar once, then the list into its own child so
-// keystrokes in the search box re-filter rows without re-rendering — and blurring
-// — the input. Prunes any active facet whose value no longer exists.
-function renderInvMineList() {
+// Renders the (stable) filter bar once, then the scrollable table into its own
+// child so keystrokes in the search box re-filter without blurring the input.
+// Prunes any active facet whose value no longer exists in the active tab.
+function renderInvList() {
   for (const f of INV_FACETS) {
-    if (rmInvFilters[f.key] && !invDistinct(f.key).includes(rmInvFilters[f.key])) rmInvFilters[f.key] = "";
+    if (rmInvFilters[f.key] && !invDistinct(f).includes(rmInvFilters[f.key])) rmInvFilters[f.key] = "";
   }
-  $("inv-body").innerHTML = invFilterBarHtml() + `<div id="inv-list"></div>`;
+  $("inv-body").innerHTML = invFilterBarHtml() + `<div class="table-scroll" id="inv-list"></div>`;
   wireInvFilters();
   applyInvFilters();
 }
 
 function applyInvFilters() {
-  const shown = rmMineRows.filter(invMatchesFilters);
+  const org = rmInvScope === "org";
+  const all = invActiveRows();
+  const shown = all.filter(invMatchesFilters);
   $("inv-list").innerHTML = shown.length
-    ? shown.map(invMineRowHtml).join("")
-    : `<p class="stat-empty">No holdings match these filters.</p>`;
+    ? (org ? invOrgTableHtml(shown) : invMineTableHtml(shown))
+    : `<p class="stat-empty">No items match these filters.</p>`;
   const c = $("inv-filter-count");
-  if (c) c.textContent = `${shown.length} of ${rmMineRows.length}`;
-  wireInvMine();
+  if (c) c.textContent = `${shown.length} of ${all.length}`;
+  if (org) wireInvOrg(); else wireInvMine();
 }
 
 function invFilterBarHtml() {
   const selects = INV_FACETS.map(f => {
-    const opts = invDistinct(f.key);
+    const opts = invDistinct(f);
     if (opts.length < 2) return "";   // nothing to choose between
     const cur = rmInvFilters[f.key];
     return `<select class="ti inv-facet" data-facet="${f.key}" aria-label="Filter by ${f.label}">` +
@@ -11077,43 +11104,50 @@ function wireInvFilters() {
   const q = $("inv-filter-q");
   if (q) q.oninput = () => { rmInvFilters.q = q.value; applyInvFilters(); };
   $("inv-body").querySelectorAll(".inv-facet").forEach(sel => {
-    sel.onchange = () => { rmInvFilters[sel.dataset.facet] = sel.value; renderInvMineList(); };
+    sel.onchange = () => { rmInvFilters[sel.dataset.facet] = sel.value; renderInvList(); };
   });
   const clr = $("inv-filter-clear");
   if (clr) clr.onclick = () => {
-    rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "" };
-    renderInvMineList();
+    rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "", location: "" };
+    renderInvList();
   };
 }
 
-// Category/size/class/grade chips + a muted maker line, from the item's live
-// characteristics (server-joined `spec`). Commodities/ships have none → no chips.
-function invSpecChips(spec) {
-  if (!spec) return "";
-  const chips = [];
-  if (spec.category) chips.push(`<span class="inv-chip inv-chip-cat">${esc(spec.category)}</span>`);
-  if (spec.size) chips.push(`<span class="inv-chip">S${esc(spec.size)}</span>`);
-  if (spec.class) chips.push(`<span class="inv-chip">${esc(spec.class)}</span>`);
-  if (spec.grade) chips.push(`<span class="inv-chip">Grade ${esc(spec.grade)}</span>`);
-  if (spec.manufacturer) chips.push(`<span class="inv-chip-maker">${esc(spec.manufacturer)}</span>`);
-  return chips.length ? `<div class="inv-specs">${chips.join("")}</div>` : "";
+// The five characteristic columns, shared by both tables — blank cells when the
+// item has no spec (commodities/ships).
+function invSpecCells(spec) {
+  spec = spec || {};
+  return `<td>${spec.category ? `<span class="inv-cat">${esc(spec.category)}</span>` : ""}</td>` +
+    `<td class="inv-dim">${spec.size ? "S" + esc(spec.size) : ""}</td>` +
+    `<td class="inv-dim">${spec.class ? esc(spec.class) : ""}</td>` +
+    `<td class="inv-dim">${spec.grade ? esc(spec.grade) : ""}</td>` +
+    `<td class="inv-dim">${spec.manufacturer ? esc(spec.manufacturer) : ""}</td>`;
 }
 
-// A holding shows its quantity, and — when some of it is committed to goals —
-// the free remainder plus a nested sub-row per goal commitment (parent→child),
-// so a contribution reads as a portion of the holding, not a separate stash.
+// My holdings as a columnar table. The item cell also carries any note + goal
+// commitments (parent→child) so a holding stays one row; qty shows the free
+// remainder when some is committed.
+function invMineTableHtml(rows) {
+  const body = rows.map(invMineRowHtml).join("");
+  return `<table class="inv-table"><thead><tr>` +
+    `<th>Item</th><th>Category</th><th>Size</th><th>Class</th><th>Grade</th><th>Maker</th>` +
+    `<th class="num">Qty</th><th>Location</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function invMineRowHtml(r) {
   const unit = esc(r.unit || "");
   const committed = Number(r.committed) || 0;
-  const avail = committed > 0 ? ` <span class="rm-avail">${fmtQty(r.available)} ${unit} free</span>` : "";
-  const sub = (r.allocations || []).map(a =>
+  const free = committed > 0 ? `<div class="rm-avail">${fmtQty(r.available)} free</div>` : "";
+  const note = r.note ? `<div class="muted inv-note">— ${esc(r.note)}</div>` : "";
+  const allocs = (r.allocations || []).map(a =>
     `<div class="rm-mine-alloc">↳ ${fmtQty(a.qty)} ${unit} → ${a.goal_title ? esc(a.goal_title) : "goal #" + a.goal_id}</div>`).join("");
-  return `<div class="rm-mine-row" data-id="${r.id}"><div class="rm-mine-main">` +
-    `<div><b>${esc(r.item_name)}</b> · ${fmtQty(r.qty)} ${unit}` +
-    `${r.location ? ` <span class="rm-mine-loc">📍 ${esc(r.location)}</span>` : ""}${avail}` +
-    `${r.note ? ` <span class="muted">— ${esc(r.note)}</span>` : ""}</div>${invSpecChips(r.spec)}${sub}</div>` +
-    `<div class="rm-mine-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
-    `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></div></div>`;
+  return `<tr class="rm-mine-row" data-id="${r.id}">` +
+    `<td><b>${esc(r.item_name)}</b>${note}${allocs}</td>` +
+    invSpecCells(r.spec) +
+    `<td class="num">${fmtQty(r.qty)} ${unit}${free}</td>` +
+    `<td class="inv-loc">${r.location ? `📍 ${esc(r.location)}` : ""}</td>` +
+    `<td class="inv-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
+    `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></td></tr>`;
 }
 
 function wireInvMine() {
@@ -11132,14 +11166,15 @@ function wireInvMine() {
   $("inv-body").querySelectorAll(".rm-inv-edit").forEach(b => { b.onclick = () => openInvEdit(b.dataset.id); });
 }
 
-// Inline edit of a holding (item is fixed — delete + re-add to change it). Qty
-// can't drop below what's committed to goals; the server enforces it too.
+// Inline edit of a holding (item is fixed — delete + re-add to change it). The
+// row collapses to a single edit form spanning the columns. Qty can't drop below
+// what's committed to goals; the server enforces it too.
 function openInvEdit(id) {
   const r = rmMineRows.find(x => String(x.id) === String(id));
   const rowEl = $("inv-body").querySelector(`.rm-mine-row[data-id="${id}"]`);
   if (!r || !rowEl) return;
   rowEl.innerHTML =
-    `<div class="rm-row" style="flex:1">` +
+    `<td colspan="9"><div class="rm-row" style="flex-wrap:wrap">` +
       `<span class="rm-edit-item"><b>${esc(r.item_name)}</b></span>` +
       `<input class="ti rm-qty rm-e-qty" type="number" min="0" step="any" value="${fmtQty(r.qty)}">` +
       unitSelect("rm-e-unit", r.unit) +
@@ -11147,7 +11182,8 @@ function openInvEdit(id) {
       `<input class="ti rm-e-note" maxlength="500" placeholder="note (optional)" value="${esc(r.note || "")}" style="flex:1;min-width:120px">` +
       `<button class="ev-btn primary rm-e-save">Save</button>` +
       `<button class="ev-btn rm-e-cancel">Cancel</button>` +
-    `</div><span class="rm-e-msg muted"></span>`;
+      `<span class="rm-e-msg muted"></span>` +
+    `</div></td>`;
   attachPoiPicker(rowEl.querySelector(".rm-e-loc").parentElement);
   rowEl.querySelector(".rm-e-cancel").onclick = () => renderInvMine();
   rowEl.querySelector(".rm-e-save").onclick = async () => {

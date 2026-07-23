@@ -6574,6 +6574,7 @@ async def get_inventory(owner: str | None = None, goal: int | None = None,
     rollup = nav_core.derive_inventory_rollup(db.list_inventory())
     for it in rollup:
         _enrich_owner_names(it["by_owner"])
+        it["spec"] = _item_spec(it["item_id"])   # same characteristics as the mine view
     return {"scope": "org", "items": rollup}
 
 
