@@ -2554,6 +2554,15 @@ class InventorySpecTests(unittest.TestCase):
         # a commodity holding gets an empty spec (no chips), never a missing key
         self.assertEqual(by_name["Titanium"]["spec"], {})
 
+    def test_org_rollup_rows_carry_the_item_spec(self):
+        # Org rollup items carry the same characteristics (for the rollup table's
+        # columns + shared facet filters), resolved live from the catalog by id.
+        self.client.post("/api/inventory", json={"item_id": "item:turbodrive", "qty": 1})
+        items = self.client.get("/api/inventory").json()["items"]
+        by_name = {it["name"]: it for it in items}
+        self.assertEqual(by_name["TurboDrive"]["spec"]["category"], "Power Plants")
+        self.assertEqual(by_name["TurboDrive"]["spec"]["grade"], "C")
+
     def test_build_item_specs_joins_catalog_and_attributes(self):
         # build_item_specs reads the catalog-row cache + attributes feed; stub both
         # via the loaders so the join logic is covered without the network.
