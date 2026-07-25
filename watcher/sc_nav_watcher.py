@@ -19,10 +19,12 @@ import collections
 import json
 import os
 import platform
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -246,6 +248,10 @@ class Sender:
         self.dry_run = dry_run
         self.token = token
         self.pending = collections.deque(maxlen=50)
+        # Last `nav` object the server sent back on a successful post — the
+        # overlay's whole data feed (#40). The server already computes this for
+        # its own WS frame, so reading it here costs no extra request.
+        self.last_nav = None
 
     def send(self, payload):
         if self.dry_run:
@@ -278,7 +284,10 @@ class Sender:
         request = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as resp:
-                return 200 <= resp.status < 300
+                ok = 200 <= resp.status < 300
+                if ok:
+                    self._read_nav(resp)
+                return ok
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 # Retrying won't help, so drop it (don't jam the queue) and point
@@ -302,6 +311,17 @@ class Sender:
         except (urllib.error.URLError, OSError) as exc:
             log(f"send failed ({exc}); will retry ({len(self.pending)} queued)")
             return False
+
+    def _read_nav(self, resp):
+        """Pull the overlay slice out of a position-post response. Best-effort
+        by design: an older server (or a future body shape) must never break
+        position reporting, which is this program's actual job."""
+        try:
+            body = json.loads(resp.read(64_000).decode("utf-8", "replace"))
+        except Exception:
+            return
+        if isinstance(body, dict) and isinstance(body.get("nav"), dict):
+            self.last_nav = body["nav"]
 
 
 # ---------------------------------------------------------------------------
@@ -384,8 +404,31 @@ def _resolve_sticky(args_value, key):
     return (config.get(key) or "").strip() or None
 
 
+def _resolve_sticky_flag(args_value, key, default=False):
+    """Sticky resolution for a boolean, which `_resolve_sticky` can't do: a
+    False is a real answer, not "unset". argparse hands us None for "didn't
+    say", which must stay distinguishable from an explicit --no-overlay —
+    otherwise a saved `true` could never be turned back off."""
+    config = _load_config()
+    if args_value is not None:
+        value = bool(args_value)
+        if value != config.get(key):
+            config[key] = value
+            _save_config(config)
+        return value
+    saved = config.get(key)
+    return default if saved is None else bool(saved)
+
+
 def resolve_handle(args):
     return _resolve_sticky(args.handle, "handle")
+
+
+def resolve_overlay(args):
+    """Whether to show the in-game overlay. Off unless asked for: a window
+    appearing over someone's cockpit uninvited is the thing to avoid (#40 §7).
+    The launcher asks once and the answer sticks, exactly like --handle."""
+    return _resolve_sticky_flag(args.overlay, "overlay", default=False)
 
 
 def resolve_token(args):
@@ -399,7 +442,11 @@ def resolve_game_log(args):
     return chosen or default_game_log()
 
 
-def run(args):
+def run(args, sink=None, stop=None):
+    """The watch loop. `sink(nav, fix_t)` — when given — receives the server's
+    overlay slice plus the monotonic stamp of the fix it describes; `stop` is a
+    threading.Event that ends the loop. Both are None in the default
+    console-only mode, where this runs on the main thread exactly as before."""
     clipboard = make_clipboard()
     token = resolve_token(args)
     sender = Sender(args.server, timeout=args.timeout, dry_run=args.dry_run, token=token)
@@ -427,6 +474,10 @@ def run(args):
     last_sent_shard = None        # shard value last transmitted to the server
     last_send_t = time.monotonic()  # drives the heartbeat cadence
     sent_count = 0
+    # When the CURRENT position was actually observed. Only a clipboard read
+    # moves this: a heartbeat re-sends the same coordinates, so it must not
+    # reset the age the overlay shows, or a stale fix would look live (#40 §3.3).
+    fix_t = None
 
     log(
         f"watching clipboard every {args.interval}s -> "
@@ -438,7 +489,7 @@ def run(args):
             if args.heartbeat > 0 else "heartbeat: disabled (timed re-send off)"
         )
 
-    while True:
+    while stop is None or not stop.is_set():
         shard = shard_reader.poll() if shard_reader else None
         changed = args.once  # single-shot mode always reads
         seq = clipboard.sequence_number()
@@ -458,6 +509,7 @@ def run(args):
                 coords = parse_showlocation(text)
                 if coords:
                     last_coords, last_raw = coords, text
+                    fix_t = time.monotonic()
                     sender.send(build_payload(coords, text, handle, shard))
                     sent_count += 1
                     sent_this_loop = True
@@ -473,6 +525,9 @@ def run(args):
                 # late-joining UIs get the current position.
                 if last_text and (coords := parse_showlocation(last_text)):
                     last_coords, last_raw = coords, last_text
+                    # A re-copy IS a fresh observation (the player just ran
+                    # /showlocation again) even though the numbers match.
+                    fix_t = time.monotonic()
                     sender.send(build_payload(coords, last_text, handle, shard))
                     sent_this_loop = True
                     if args.verbose:
@@ -494,12 +549,105 @@ def run(args):
         if sent_this_loop:
             last_send_t = time.monotonic()
             last_sent_shard = shard
+            if sink is not None:
+                # Every send path funnels through here, so the overlay sees a
+                # /showlocation, a re-copy and a heartbeat alike — the heartbeat
+                # is how a destination changed in the BROWSER reaches the HUD.
+                sink(sender.last_nav, fix_t)
 
         if args.once:
             return 0 if sent_count else 1
         if sender.pending:
             sender.flush()
         time.sleep(args.interval)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Overlay mode (#40)
+# ---------------------------------------------------------------------------
+
+
+def _load_overlay_module():
+    """Import the sibling overlay module, or None. The launcher cd's into this
+    directory, but someone running the script by absolute path from elsewhere
+    shouldn't lose the overlay to sys.path."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import sc_nav_overlay
+
+        return sc_nav_overlay
+    except Exception as exc:
+        log(f"overlay module unavailable ({exc}) — continuing without it")
+        return None
+
+
+def _persist_overlay_config(cfg):
+    """Save just the overlay's own keys, re-reading the file first: the watch
+    thread writes the same config (sticky handle/token/game_log), so writing
+    back our whole startup snapshot would clobber anything it saved since."""
+    saved = _load_config()
+    changed = False
+    for key in ("overlay_x", "overlay_y"):
+        if key in cfg and cfg[key] != saved.get(key):
+            saved[key] = cfg[key]
+            changed = True
+    if changed:
+        _save_config(saved)
+
+
+def run_with_overlay(args):
+    """tkinter must own the main thread, so the watch loop moves to a daemon
+    thread and hands updates over a Queue. If the window can't be built (a
+    Python with no tcl/tk, a headless session), fall back to console-only in
+    this same process — losing position reporting to a cosmetic feature would
+    be a bad trade (#40 §7.3)."""
+    overlay = _load_overlay_module()
+    if overlay is None or not overlay.available():
+        if overlay is not None:
+            log("overlay unavailable on this Python (no tkinter) — "
+                "continuing without it")
+        try:
+            return run(args)
+        except KeyboardInterrupt:
+            log("stopped")
+            return 0
+
+    updates = queue.Queue()
+    stop = threading.Event()
+
+    def worker():
+        try:
+            run(args, sink=lambda nav, fix_t: updates.put((nav, fix_t)), stop=stop)
+        except Exception as exc:
+            log(f"watcher loop stopped: {exc}")
+        finally:
+            # Whatever happened, don't leave a window on screen showing a
+            # distance that will never update again.
+            stop.set()
+
+    thread = threading.Thread(target=worker, name="sc-nav-watcher", daemon=True)
+    thread.start()
+    log("overlay: on (drag it where you want it; borderless/windowed mode only)")
+
+    try:
+        started = overlay.start(
+            updates, config=_load_config(), on_close=_persist_overlay_config,
+            log=log, stop=stop,
+        )
+        if not started:
+            # Window construction failed but the watch loop is already running
+            # and doing its job — stay out of its way until Ctrl-C.
+            while thread.is_alive():
+                thread.join(0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+    log("stopped")
+    return 0
 
 
 def main():
@@ -540,6 +688,15 @@ def main():
         "Required by an authenticated server. Saved to watcher_config.json.",
     )
     parser.add_argument(
+        "--overlay",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Show a small always-on-top window over the game with your current "
+        "target, distance and ETA. Off unless asked for; the launcher asks once "
+        "and the answer is saved to watcher_config.json. Use --no-overlay to "
+        "turn a saved 'on' back off. Only visible in borderless/windowed mode.",
+    )
+    parser.add_argument(
         "--game-log",
         help="Path to Star Citizen's Game.log, used to tag captures with your "
         "current shard so nodes from other servers can be filtered out. "
@@ -551,6 +708,9 @@ def main():
     if not args.server and not args.dry_run:
         parser.error("--server is required unless --dry-run is set")
 
+    if resolve_overlay(args):
+        sys.exit(run_with_overlay(args))
+    log("overlay: off (answer Y at the launcher prompt to enable)")
     try:
         sys.exit(run(args))
     except KeyboardInterrupt:

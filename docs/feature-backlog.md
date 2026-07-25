@@ -16,6 +16,48 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 40. Watcher in-game overlay — target/distance on the glass 🔨 W1 BUILT
+
+**Status: slice W1 built 2026-07-25 (778 server + 37 watcher tests green),
+not shipped, NOT yet flown. Window renders under real tk 9.0 on macOS — never on
+Windows, and rendering it caught three things the tests couldn't (width jitter on
+every update, Consolas glyph coverage for `⟳`/`↘`, and unsanitized POI names); all
+fixed, see the doc's status header. W2 = click-through, opacity/scale, in-space
+closing/opening, capture dot.** Full plan:
+[`watcher-overlay.md`](watcher-overlay.md). Put the navigator's one useful line
+— **target · distance · ETA · bearing · staleness** — in a small always-on-top
+window over the game, hosted by the watcher (already running on that box,
+already authenticated). **Opt-in via a startup question in `run_watcher.bat`,
+modeled on the existing handle prompt and sticky in `watcher_config.json`;
+first-run default off** (§7) — an unasked-for window over someone's cockpit is
+the thing to avoid.
+
+Decisions worth not re-deriving:
+- **Network: nothing inbound, no firewall changes** (§4). Both halves are
+  client-initiated outbound HTTP to the same host/port/token the watcher already
+  uses; the tunnel means no exposed port server-side either. `/ws` is
+  cookie-only and stays that way — bearer tokens don't get a WS route for this.
+- **The server half is nearly free** (§5.1): `post_position` already builds
+  `state_frame()` and returns `{"ok": True}`, discarding it. Returning a lean
+  destination slice = zero new requests, zero new endpoints. A polling
+  `GET /api/nav/summary` is **slice W3 and conditional** — 2 s polling is 20–30×
+  current volume against the known single-worker `hub.lock` cliff, so it ships
+  only if W1's ≤60 s browser-retarget lag actually annoys people (§4.3).
+- **Three honesty constraints** (§3): exclusive fullscreen defeats an
+  always-on-top window (document, don't hook DirectX) · `bearing_deg` is a
+  surface bearing and is `None` in space because `/showlocation` gives position
+  not attitude — so in space we show closing/opening, not a fake compass ·
+  the reading is only as fresh as the last `/showlocation`, so staleness age is
+  a first-class element. **Auto-typing `/showlocation` is rejected** (synthetic
+  input into a live MMO).
+- **Stay a dumb sibling window** — no injection, no memory reads, no synthetic
+  input; same class as the Discord overlay.
+
+Real work is the watcher restructure (tk owns main, watch loop to a daemon
+thread + queue) and the ctypes click-through, not the data. W1 ≈ most of a day.
+Three §12 questions open — first-run default, second-monitor framing, and
+whether the org actually flies borderless (worth asking in Discord *before* W1).
+
 ### 38. Survey app restructure — Halo Finder → Prospector ✅ SHIPPED v0.73.0
 
 **Status: SHIPPED v0.73.0 (PR #77 squash-merged + auto-tagged + deployed,
@@ -309,7 +351,10 @@ opportunistically; none is urgent.
   this lane" — needs a presence-side design pass first) · exact B&B "thorough"
   solver option under a ≤4-stop cap · pad-size-vs-ship warning on stops (#28c
   chips already show the stop's max hangar/pad; needs ship size class plumbed
-  through `sync_quantum.py` — the uexcorp feed has none).
+  through `sync_quantum.py` — the uexcorp feed has none) · **local price
+  overlay** (#39 slice 0 — org-reported prices from run-mode confirms beat the
+  ≤6 h UEX scrape for our own planner; unblocked and self-contained, see
+  [`uex-data-contribution.md`](uex-data-contribution.md) §6.1).
 - **Danger board / routing (#24):** two-waypoint detour fallback (v2.1 — a
   `# v2.1` marker sits at the spot in `nav_core`) · severity-scale + radius
   tuning once the board has real data (partly superseded by #28b).
@@ -344,6 +389,21 @@ opportunistically; none is urgent.
 
 ## Parked (deliberate, with reasons)
 
+- **#39 UEX data contribution — post prices back to the community feed** —
+  [`uex-data-contribution.md`](uex-data-contribution.md), designed 2026-07-25,
+  **parked, not built**. Run mode already collects the exact observation UEX's
+  submit API wants (the typed price + SCU at the terminal) and throws it away;
+  legs already carry UEX's `id_terminal`. Parked because the value is lopsided:
+  the doc's **slice 0 — a local price overlay, org-reported prices beating the
+  ≤6 h feed scrape for our own planner — is pure win with zero external
+  dependency and can be lifted out and built alone**, while the outbound half
+  adds a credential store, a privacy-policy change, and a way for one member's
+  typo to cost the org its read access to the feed the trade planner runs on.
+  Two blockers on the outbound half: new UEX datarunners must attach a
+  **screenshot** for 90 days and we're a server-side app that cannot produce
+  one (so per-user tokens may simply fail), and the header contract (app
+  Bearer key vs per-user `secret-key` vs both) needs ~30 min of verification
+  against a real key before any estimate holds. Unpark triggers in doc §7.
 - **#22 Refinery job tracker** — real SC pain point but per-player utility, not
   org-oriented.
 - **#23 Recognition badges** — liked, but can get tacky fast; revisit with

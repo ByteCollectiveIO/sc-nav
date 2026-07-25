@@ -3464,6 +3464,97 @@ class HandleOwnershipTests(unittest.TestCase):
         self.assertEqual(e["discord_id"], "finder-discord")
 
 
+class NavSummaryTests(unittest.TestCase):
+    """The watcher-overlay slice returned from POST /api/position (#40 §5.1).
+
+    Two properties matter beyond the shape: it must stay LEAN (it crosses the
+    wire on every /showlocation and every 60 s heartbeat of every watcher, so
+    it must never grow the nearest-POI lists that make /api/state too heavy to
+    send this often), and it must carry `bearing_deg: None` through untouched
+    rather than inventing a heading — there is no attitude in /showlocation, so
+    a bearing simply does not exist off-body (§3.2)."""
+
+    _DEST = {
+        "kind": "poi", "id": 4, "name": "Lorville", "type": "landing",
+        "system": "Stanton", "container": "Hurston", "qt_marker": True,
+        "distance_m": 812345.0, "surface_distance_m": 41234.0,
+        "bearing_deg": 118.4, "latitude": 12.0, "longitude": -30.0,
+        "same_container": True, "eta_s": 96.0,
+    }
+
+    def test_no_state_yet(self):
+        self.assertIsNone(app.nav_summary(None))
+
+    def test_destination_slice_is_lean_and_complete(self):
+        out = app.nav_summary({
+            "t": 1753440000.0, "system": "Stanton",
+            "container": {"name": "Hurston", "type": "Planet", "is_body": True,
+                          "body_radius_m": 1e6, "distance_from_center_m": 2e6},
+            "destination": dict(self._DEST),
+            "nearest_pois": [{"name": "noise"}] * 10,
+            "resource_forecast": {"heavy": True},
+        })
+        self.assertEqual(set(out), {"t", "system", "container", "destination"})
+        self.assertEqual(out["container"], "Hurston")   # name only, not the dict
+        self.assertEqual(set(out["destination"]), {
+            "name", "distance_m", "surface_distance_m", "bearing_deg", "eta_s",
+            "same_container"})
+        self.assertEqual(out["destination"]["name"], "Lorville")
+        self.assertEqual(out["destination"]["surface_distance_m"], 41234.0)
+        self.assertAlmostEqual(out["destination"]["bearing_deg"], 118.4)
+
+    def test_deep_space_carries_nulls_not_substitutes(self):
+        out = app.nav_summary({
+            "t": 1.0, "system": "Stanton", "container": None,
+            "destination": {**self._DEST, "surface_distance_m": None,
+                            "bearing_deg": None, "eta_s": None,
+                            "same_container": False},
+        })
+        self.assertIsNone(out["container"])
+        self.assertIsNone(out["destination"]["bearing_deg"])
+        self.assertIsNone(out["destination"]["surface_distance_m"])
+        self.assertEqual(out["destination"]["distance_m"], 812345.0)
+
+    def test_no_destination_set(self):
+        out = app.nav_summary({"t": 1.0, "system": "Pyro", "container": None,
+                               "destination": None})
+        self.assertIsNone(out["destination"])
+        self.assertEqual(out["system"], "Pyro")
+
+
+class PositionPostReturnsNavTests(unittest.TestCase):
+    """Wiring guard: the overlay's entire data feed is the body of the position
+    post, so an accidental revert to a bare {"ok": true} would silently freeze
+    every HUD while position reporting kept working."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._user = {"id": "overlay-user", "username": "hud", "is_admin": False}
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.hub.sessions.pop("overlay-user", None)
+        app.hub.presence.pop("overlay-user", None)
+        app.hub._dirty.discard("overlay-user")
+        app.hub._removed.discard("overlay-user")
+
+    def test_position_post_carries_the_overlay_slice(self):
+        r = self.client.post("/api/position", json={
+            "x": 1.85e10, "y": -2.6e9, "z": 0.0, "source": "test"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertTrue(body["ok"])
+        self.assertIn("nav", body)
+        self.assertIsNotNone(body["nav"])
+        self.assertIn("destination", body["nav"])   # None here: no target set
+
+
 class PositionBroadcastLockTests(unittest.TestCase):
     """Regression: POST /api/position must NOT hold hub.lock while it fans the
     state frame out over WebSocket. A slow/backpressured browser tab would

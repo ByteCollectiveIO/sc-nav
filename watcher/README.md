@@ -15,6 +15,9 @@ only — no pip installs.
 1. Install Python 3.10+ from https://www.python.org/downloads/windows/
    (checking **"Add python.exe to PATH"** is nice but not required —
    `run_watcher.bat` finds Python via the `py` launcher either way).
+   Leave **"tcl/tk and IDLE"** ticked — it's on by default, and it's what the
+   optional in-game overlay draws with. Nothing else to install; the watcher
+   uses only the standard library.
 2. Copy this `watcher/` folder to the PC.
 3. Edit `run_watcher.bat` and set your Linux server's address.
 4. Double-click `run_watcher.bat` (or run from a terminal):
@@ -45,11 +48,47 @@ a three-keystroke action. A programmable keyboard/mouse macro can make it one.
 | `--once` | off | Read clipboard once, send if valid, exit (connectivity test) |
 | `--verbose` | off | Log non-location clipboard changes |
 | `--handle NAME` | — | Your in-game handle, attached to captures for attribution |
+| `--overlay` / `--no-overlay` | off | Show the in-game overlay (see below) |
 | `--game-log PATH` | autodetect | Path to SC's `Game.log`; tags captures with your current shard so nodes from other servers can be filtered out |
 
-`--handle`, `--token`, and `--game-log` are saved to `watcher_config.json` on
-first use and remembered after that, so you only need to pass each once (or set
-`HANDLE` in `run_watcher.bat`).
+`--handle`, `--token`, `--game-log`, and your overlay answer are saved to
+`watcher_config.json` on first use and remembered after that, so you only need
+to pass each once (or set `HANDLE` / `OVERLAY` in `run_watcher.bat`).
+
+## In-game overlay (optional)
+
+A small always-on-top window showing your **current target, distance, ETA** and
+how old the reading is — so you don't have to alt-tab to the browser for one
+line. It's **off until you ask for it**: `run_watcher.bat` asks once
+(`Show the in-game overlay (target/distance)? [Y/N]`) and remembers your answer.
+Answer `N`, or pass `--no-overlay`, to turn it back off. Drag it wherever you
+want; the position is remembered.
+
+Three things to know before you turn it on:
+
+- **Borderless/Windowed only.** In exclusive Fullscreen the game owns the
+  screen and no overlay — ours, Discord's, or anyone's — is drawn over it. If
+  you see nothing, check your graphics settings first.
+- **It shows a bearing only on a planet/moon surface.** `/showlocation` reports
+  where you are, not which way you're pointing, so in space there's no heading
+  to draw an arrow against. You get distance and ETA there instead.
+- **It's only as fresh as your last `/showlocation`.** The `⟳` age in the
+  corner is how old the reading is — it goes amber, then red. The number is
+  frozen between chat commands; the overlay tells you so rather than pretending
+  otherwise.
+
+It's an ordinary window that reads our own server — no game hooks, no memory
+reads, no automated keystrokes.
+
+**"The overlay needs Python's tcl/tk and IDLE component"?** The overlay draws
+with `tkinter`, which is part of Python itself — there's nothing to `pip
+install`. It comes from the **"tcl/tk and IDLE"** option in the Python
+installer, ticked by default, so you only see this if it was unticked (or on a
+trimmed/embedded Python). To add it: **Settings → Apps → Python → Modify → tick
+"tcl/tk and IDLE" → Install**, or reinstall from
+https://www.python.org/downloads/windows/ leaving that box ticked. Either way
+the watcher keeps reporting your position — you just don't get the overlay
+until it's there.
 
 The watcher tails `Game.log` for your **shard** (e.g. `pub_use1b_12030094_130`),
 read from the `<Join PU>` and `<Update Shard Id>` lines, and includes it in each

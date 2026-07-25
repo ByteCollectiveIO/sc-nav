@@ -116,10 +116,13 @@ Set the Discord OAuth environment variables first (see **Configuration** below)
 or sign-in will be disabled. Then open the server URL and sign in with Discord.
 
 **Gaming PC** (Windows) — see [`watcher/README.md`](watcher/README.md). Install
-Python 3.10+, generate a watcher token in the web app's Settings page, download
-the pre-configured watcher from the Setup page, and double-click
-`run_watcher.bat`. Then run `/showlocation` in-game and watch the readouts
-appear on your laptop.
+Python 3.10+ (leave the installer's "tcl/tk and IDLE" box ticked if you want the
+optional in-game overlay), generate a watcher token in the web app's Settings
+page, download the pre-configured watcher from the Setup page, and double-click
+`run_watcher.bat`. It asks for your handle and whether you want the overlay, then
+remembers both. Run `/showlocation` in-game and watch the readouts appear on your
+laptop — or, with the overlay on, in a small always-on-top window over the game
+showing target, distance and ETA.
 
 ## Configuration
 

@@ -4,6 +4,11 @@ import os
 import tempfile
 import unittest
 
+import sc_nav_watcher
+from sc_nav_overlay import (
+    age_color, compass_point, format_age, format_bearing, format_distance,
+    format_eta, hud_lines, trim_name, MAX_NAME, STALE,
+)
 from sc_nav_watcher import GameLogShardReader, heartbeat_due, parse_showlocation
 
 _JOIN = ("<2026-06-20T00:30:29.237Z> [Notice] <Join PU> address[34.21.5.134] "
@@ -133,6 +138,135 @@ class HeartbeatDueTests(unittest.TestCase):
         # Shard tagging off (no Game.log): None == None, so no spurious sends.
         self.assertEqual(heartbeat_due(10.0, 0.0, 60.0, None, None), "")
         self.assertEqual(heartbeat_due(60.0, 0.0, 60.0, None, None), "interval")
+
+
+class OverlayFormatTests(unittest.TestCase):
+    """The overlay's pure layer (#40 §8) — no tkinter, no display needed."""
+
+    def test_distance_units_match_the_spa(self):
+        self.assertEqual(format_distance(None), "--")
+        self.assertEqual(format_distance(412.0), "412 m")
+        self.assertEqual(format_distance(41234.0), "41.2 km")
+        self.assertEqual(format_distance(8.2e6), "8.20 Mm")
+        self.assertEqual(format_distance(1.85e10), "18.500 Gm")
+
+    def test_eta(self):
+        self.assertEqual(format_eta(None), "--")
+        self.assertEqual(format_eta(96), "1:36")
+        self.assertEqual(format_eta(9), "0:09")
+        self.assertEqual(format_eta(3720), "1h02m")
+        self.assertEqual(format_eta("nonsense"), "--")
+
+    def test_age(self):
+        self.assertEqual(format_age(0), "0s")
+        self.assertEqual(format_age(44.6), "44s")
+        self.assertEqual(format_age(75), "1m15s")
+        self.assertEqual(format_age(3700), "1h01m")
+
+    def test_age_color_escalates_and_unknown_reads_as_stale(self):
+        self.assertNotEqual(age_color(5), STALE)
+        self.assertNotEqual(age_color(50), age_color(5))     # amber warn band
+        self.assertEqual(age_color(300), STALE)
+        # No fix at all must never render as "fresh" (#40 §3.3).
+        self.assertEqual(age_color(None), STALE)
+
+    def test_compass_point_sectors(self):
+        self.assertEqual(compass_point(0), "N")
+        self.assertEqual(compass_point(90), "E")
+        self.assertEqual(compass_point(181), "S")
+        self.assertEqual(compass_point(359), "N")           # wraps to north
+        self.assertEqual(compass_point(None), "")           # in space: nothing
+        self.assertEqual(format_bearing(118.4), "SE 118°")
+
+    def test_every_glyph_we_emit_stays_inside_latin1(self):
+        # Consolas coverage of arrows and symbols (↘ ⟳ — …) isn't verifiable
+        # from the dev Mac, and a tofu box in the pilot's one readable line is a
+        # bad way to find out. Latin-1 (which includes °) is certainly covered.
+        emitted = [format_distance(None), format_eta(None), format_age(None)]
+        emitted += [format_bearing(d) for d in range(0, 360, 7)]
+        emitted += [format_distance(4.2e8), format_age(3700), format_eta(96)]
+        for row in hud_lines({"destination": {
+                "name": "Keeger Belt — survey pocket SVY-14",
+                "distance_m": None, "surface_distance_m": None,
+                "bearing_deg": None, "eta_s": None}}, None):
+            emitted.append(row)
+        for text in emitted:
+            self.assertTrue(all(ord(c) < 0x100 for c in text), repr(text))
+
+    def test_trim_name_keeps_one_width(self):
+        self.assertEqual(trim_name("Lorville"), "LORVILLE")
+        long = trim_name("Keeger Belt - survey pocket SVY-14")
+        self.assertLessEqual(len(long), MAX_NAME)
+        self.assertTrue(long.endswith("..."))
+        self.assertNotIn(" ...", long)          # no dangling space before the dots
+        self.assertEqual(trim_name(None), "TARGET")
+
+    def test_hud_without_a_fix(self):
+        self.assertEqual(hud_lines(None, None)[0], "waiting for /showlocation")
+
+    def test_hud_without_a_target(self):
+        target, where, age = hud_lines(
+            {"system": "Stanton", "container": "Hurston", "destination": None}, 12)
+        self.assertEqual(target, "no target set")
+        self.assertEqual(where, "Hurston")
+        self.assertEqual(age, "12s")
+
+    def test_hud_on_a_body_prefers_surface_distance_and_shows_bearing(self):
+        target, readout, _ = hud_lines({"destination": {
+            "name": "Lorville", "distance_m": 812345.0,
+            "surface_distance_m": 41234.0, "bearing_deg": 118.4,
+            "eta_s": 96.0, "same_container": True}}, 4)
+        self.assertEqual(target, "LORVILLE")
+        # Surface distance, not the 3D line through the planet.
+        self.assertIn("41.2 km", readout)
+        self.assertNotIn("812", readout)
+        self.assertIn("SE 118°", readout)
+        self.assertIn("ETA 1:36", readout)
+
+    def test_hud_in_space_omits_bearing_entirely(self):
+        _, readout, _ = hud_lines({"destination": {
+            "name": "Aaron Halo band 4", "distance_m": 1.85e10,
+            "surface_distance_m": None, "bearing_deg": None,
+            "eta_s": None, "same_container": False}}, 8)
+        self.assertEqual(readout, "18.500 Gm")   # no fake compass, no "—" ETA
+
+    def test_hud_standing_on_the_target_does_not_fall_back_to_3d(self):
+        # Explicit-None guard: surface distance 0.0 is a real answer.
+        _, readout, _ = hud_lines({"destination": {
+            "name": "Pad", "distance_m": 900.0, "surface_distance_m": 0.0,
+            "bearing_deg": None, "eta_s": None}}, 1)
+        self.assertEqual(readout, "0 m")
+
+
+class StickyOverlayFlagTests(unittest.TestCase):
+    """A boolean can't ride `_resolve_sticky`: False is an answer, not "unset"."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.unlink(self.path)                     # start with no config at all
+        self._real = sc_nav_watcher.CONFIG_PATH
+        sc_nav_watcher.CONFIG_PATH = self.path
+
+    def tearDown(self):
+        sc_nav_watcher.CONFIG_PATH = self._real
+        if os.path.exists(self.path):
+            os.unlink(self.path)
+
+    def _resolve(self, value):
+        return sc_nav_watcher._resolve_sticky_flag(value, "overlay", default=False)
+
+    def test_first_run_unanswered_is_off(self):
+        self.assertFalse(self._resolve(None))
+
+    def test_yes_sticks_across_runs(self):
+        self.assertTrue(self._resolve(True))
+        self.assertTrue(self._resolve(None))     # later run, no flag passed
+
+    def test_explicit_no_turns_a_saved_yes_back_off(self):
+        self._resolve(True)
+        self.assertFalse(self._resolve(False))   # --no-overlay
+        self.assertFalse(self._resolve(None))    # and the OFF is what sticks
 
 
 if __name__ == "__main__":
