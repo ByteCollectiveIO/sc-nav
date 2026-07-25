@@ -283,8 +283,19 @@ naturally alongside (1)–(3) since they share the `db.list_listings` query path
 
 - **Inventory bridge** — list from / decrement `inventory` rows; surplus from `met`
   goals → one-click listing. Both apps already share the tables.
-- **Discord announce** — post new/ending listings to a channel (same deferred hook
-  the event planner has).
+- **Discord announce** *(deal/offer pings shipped via #18; the poster's own opt-in
+  shipped for craft requests in #25 and **for every mode 2026-07-25**)* — a 📣
+  checkbox on the post form shouts the new listing to the marketplace channel with
+  its mode-appropriate headline terms (`🏷️ FOR SALE` price · `🔨 AUCTION` opening/
+  buyout/end · `🔄 TRADE WANTED` what they want · `🛠️ WANTED` spec/budget/mats).
+  Two rules worth keeping: **only the craft request @-mentions** (capable crafters,
+  from their blueprint library — nobody's phone should buzz because someone listed a
+  Cutlass), and the **per-member cooldown scales with how loud the message is**
+  (10 min for the pinging craft request, 60 s flood guard for the quiet modes —
+  posting several items in one sitting is ordinary marketplace behaviour, and a long
+  gate there silently ate announcements the member explicitly asked for). The create
+  response carries `announced` so a swallowed shout is reported honestly instead of
+  reading as sent. Still deferred: announcing *ending* listings.
 - **Saved searches / wanted ads** — a "WTB" listing is just the inverse `mode`;
   notify when a matching sale appears.
 - **Price history** — completed `sale`/`auction` rows already hold cleared prices;
