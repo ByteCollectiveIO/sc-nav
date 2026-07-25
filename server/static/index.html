@@ -1662,11 +1662,20 @@
   .rm-line-n a { color: inherit; text-decoration: none; }
   .rm-line-n a:hover { color: var(--accent); }
   .rm-line-bar { height: 8px; background: var(--panel2); border: 1px solid var(--border);
-    border-radius: 4px; overflow: hidden; }
+    border-radius: 4px; overflow: hidden; display: flex; }
   .rm-line-bar > span { display: block; height: 100%; background: var(--accent); }
   .rm-line.done .rm-line-bar > span { background: var(--good); }
+  /* Pledged-but-not-yet-gathered fill: hatched, so "promised" reads differently
+     from stock somebody has actually logged (same bar, honest about the split). */
+  .rm-line-bar > span.pledged, .rm-line.done .rm-line-bar > span.pledged {
+    background: repeating-linear-gradient(135deg, var(--warn) 0 4px, transparent 4px 8px);
+    opacity: .75; }
   .rm-line-ct { font-variant-numeric: tabular-nums; color: var(--dim); text-align: right; }
   .rm-line.done .rm-line-ct { color: var(--good); }
+  /* the "still gathering" annotation, wherever a pledge is shown */
+  .rm-pledge { color: var(--warn); font-size: 11px; white-space: nowrap;
+    font-variant-numeric: tabular-nums; }
+  .rm-line-ct .rm-pledge { display: block; }
   /* contribute + line-item editor rows */
   .rm-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .rm-row .poi-pick { flex: 1; min-width: 160px; }
@@ -1694,8 +1703,22 @@
   .rm-inv-detail td { background: var(--panel2); font-size: 12px; color: var(--dim); }
   .rm-inv-detail .rm-breakdown { display: flex; flex-wrap: wrap; gap: 6px 16px; }
   .rm-avail { color: var(--good); font-size: 12px; font-variant-numeric: tabular-nums; }
-  /* nested goal commitments under a holding (parent→child) */
+  .rm-short { color: var(--warn); font-size: 12px; font-variant-numeric: tabular-nums; }
+  /* free vs. promised on a holding: only stock actually free reads as good news */
+  .rm-commit { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .rm-commit .free { color: var(--good); }
+  /* nested goal commitments under a holding (parent→child), each withdrawable.
+     Inline flow, not flex: the ⏳/withdraw tail belongs to the sentence and should
+     wrap with it rather than dropping to a line of its own. */
   .rm-mine-alloc { color: var(--dim); font-size: 12px; margin: 3px 0 0 0; }
+  .rm-alloc-x { color: var(--bad); background: none; border: none; cursor: pointer;
+    font-size: 12px; line-height: 1; padding: 0 4px; }
+  .rm-alloc-x:hover { text-decoration: underline; }
+  /* "my contributions" rows on the goal detail — the withdraw surface there */
+  .rm-mine-c { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
+  .rm-mine-c-n { flex: 1; min-width: 150px; }
+  .rm-mine-c .ev-btn { padding: 3px 9px; }
   .rm-edit-item { align-self: center; white-space: nowrap; }
   /* facet filter bar above the inventory tables */
   .inv-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -10497,15 +10520,22 @@ async function consumeFinderPrefill() {
 function goalLineRow(l, minqMap) {
   const pct = l.needed ? Math.min(100, Math.round(100 * l.have / l.needed)) : 100;
   const done = l.needed && l.have >= l.needed;
-  // Target quality: stored per line (recipe minimum max'd with the goal's spec
-  // sliders); goals saved before that denormalization fall back to the recipe map.
+  // Of what's committed, the part nobody has actually logged as stock yet — drawn
+  // as a hatched tail on the fill bar so a line that reads "10/10" still says how
+  // much of that is a promise to go gather.
+  const promised = Number(l.promised) || 0;
+  const onHandPct = l.needed
+    ? Math.min(100, Math.round(100 * Math.max(0, l.have - promised) / l.needed)) : 100;
   const minq = l.min_q || (minqMap && minqMap[l.item_id]);
   return `<div class="rm-line ${done ? "done" : ""}">` +
     `<span class="rm-line-n"><a class="rm-finder-link" href="#/nav" data-finder="${esc(l.name)}" ` +
     `title="find ${esc(l.name)} in the navigator">${esc(l.name)}</a>` +
     `${minq ? `<span class="rm-minq" title="gather at least quality ${minq} (${bandTag(minq)})">≥Q${minq}</span>` : ""}</span>` +
-    `<span class="rm-line-bar"><span style="width:${pct}%"></span></span>` +
-    `<span class="rm-line-ct">${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")}${done ? " ✓" : ""}</span></div>`;
+    `<span class="rm-line-bar"><span style="width:${onHandPct}%"></span>` +
+    `<span class="pledged" style="width:${Math.max(0, pct - onHandPct)}%"></span></span>` +
+    `<span class="rm-line-ct">${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")}${done ? " ✓" : ""}` +
+    (promised > 0 ? `<span class="rm-pledge" title="pledged, but not logged as stock yet">` +
+      `⏳ ${fmtQty(promised)} gathering</span>` : "") + `</span></div>`;
 }
 
 async function renderGoalDetail(id) {
@@ -10562,15 +10592,107 @@ function goalSpecBox(g) {
     `Band ≈ quality ÷ 125 (B8 top). Gather targets, not hard requirements.</p></div>`;
 }
 
-function goalLocations(g) {
-  const groups = g.my_locations || [];
-  if (!groups.length) return "";
-  const body = groups.map(grp =>
-    `<div class="rm-loc-grp"><div class="rm-loc-h">${esc(grp.location)}</div>` +
-    `<div class="rm-loc-items">` + grp.items.map(it =>
-      `<span>${esc(it.name)} · ${fmtQty(it.qty)} ${esc(it.unit || "")}</span>`).join("") +
-    `</div></div>`).join("");
-  return `<div class="ev-section-h">Where my materials are</div>${body}`;
+// My commitments to this goal, grouped by where the materials are staged — the
+// "where my stuff is" read for a craft goal, with each line individually
+// withdrawable. A contribution is a promise the member made, so taking it back is
+// theirs to do: from here, or from the holding it draws on in #/inventory.
+function goalMyContribs(g) {
+  const mine = g.my_contributions || [];
+  if (!mine.length) return "";
+  const groups = new Map();
+  for (const c of mine) {
+    const k = c.location || "Unspecified";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(c);
+  }
+  const row = (c) => {
+    const short = Number(c.short) || 0;
+    return `<div class="rm-mine-c">` +
+      `<span class="rm-mine-c-n"><b>${esc(c.item_name)}</b> · ${fmtQty(c.qty)} ${esc(c.unit || "")}` +
+      (short > 0 ? ` <span class="rm-pledge" title="pledged, but not logged as stock yet">` +
+        `⏳ ${fmtQty(short)} still to gather</span>` : "") + `</span>` +
+      `<button class="ev-btn rm-c-edit" data-alloc="${c.allocation_id}" data-qty="${c.qty}" ` +
+      `data-name="${esc(c.item_name)}">Change amount</button>` +
+      `<button class="ev-btn danger rm-c-del" data-alloc="${c.allocation_id}" ` +
+      `data-name="${esc(c.item_name)}">Withdraw</button></div>`;
+  };
+  const body = [...groups].map(([loc, items]) =>
+    `<div class="rm-loc-grp"><div class="rm-loc-h">📍 ${esc(loc)}</div>` +
+    items.map(row).join("") + `</div>`).join("");
+  return `<div class="ev-section-h">My contributions</div>${body}` +
+    `<span class="ev-hint">Withdrawing hands the amount back to your inventory as free stock.</span>`;
+}
+
+// Where a commitment draws from: any holding of that item the member has already
+// logged, else one of the two ways to commit stock that isn't in the ledger yet —
+// "I have it" (logs it too) or "I'll gather it" (a pledge, flagged as such).
+function goalSourceHoldings(g, itemId) {
+  return (g.my_holdings || []).filter(h => h.item_id === itemId);
+}
+
+function goalSourceOptionsHtml(g, itemId) {
+  const holds = goalSourceHoldings(g, itemId);
+  const best = holds.find(h => h.available > 0) || holds[0];
+  return holds.map(h =>
+      `<option value="hold:${h.id}"${h === best ? " selected" : ""}>` +
+      `📍 ${esc(h.location || "no location")} — ${fmtQty(h.available)} free ` +
+      `of ${fmtQty(h.qty)} ${esc(h.unit || "")}</option>`).join("") +
+    `<option value="have">I have these — not logged yet</option>` +
+    `<option value="pledge"${best ? "" : " selected"}>I'll gather these — pledge</option>`;
+}
+
+const GOAL_SRC_HINTS = {
+  hold: "Draws from that stash: the amount moves from free to committed.",
+  have: "Logs the amount into your inventory at that location, then commits it.",
+  pledge: "Recorded as a promise — it shows as ⏳ gathering until you log the stock.",
+};
+
+// Over-filling a line is allowed, never silent. The server rejects the first
+// attempt with a 409 whose detail IS the prompt: it has the live numbers, and two
+// members filling the same goal at once are both reading a board that already moved.
+async function postContribution(goalId, body) {
+  const r = await fetch(`/api/goals/${goalId}/contribute`, { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (r.status === 409 && !body.allow_over) {
+    const err = await r.json().catch(() => ({}));
+    const ok = await confirmDialog(err.detail || "This goes past what the goal needs.",
+      { title: "More than the goal needs", confirmLabel: "Contribute anyway" });
+    return ok ? postContribution(goalId, { ...body, allow_over: true }) : null;
+  }
+  if (!r.ok) throw await r.json().catch(() => ({}));
+  return r.json();
+}
+
+// Shared by the goal detail and #/inventory: withdrawing a commitment returns it to
+// free stock — the holding it drew from is untouched.
+async function withdrawContribution(goalId, allocId, name) {
+  if (!(await confirmDialog(
+      `${name || "This contribution"} goes back to your inventory as free stock.`,
+      { title: "Withdraw this contribution?", confirmLabel: "Withdraw", danger: true }))) return false;
+  const r = await fetch(`/api/goals/${goalId}/contribute/${allocId}`, { method: "DELETE" });
+  return r.ok;
+}
+
+function wireGoalContribActions(g) {
+  document.querySelectorAll("#goal-detail-body .rm-c-del").forEach(b => {
+    b.onclick = async () => {
+      if (await withdrawContribution(g.id, b.dataset.alloc, b.dataset.name)) renderGoalDetail(g.id);
+    };
+  });
+  document.querySelectorAll("#goal-detail-body .rm-c-edit").forEach(b => {
+    b.onclick = async () => {
+      const v = await promptDialog(
+        `New amount of ${b.dataset.name} to commit — 0 withdraws it.`,
+        { title: "Change my contribution", value: b.dataset.qty, confirmLabel: "Save" });
+      if (v === null || v.trim() === "") return;
+      const qty = Number(v);
+      if (!(qty >= 0)) return;
+      const r = await fetch(`/api/goals/${g.id}/contribute/${b.dataset.alloc}`,
+        { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ qty }) });
+      if (r.ok) renderGoalDetail(g.id);
+    };
+  });
 }
 
 function renderGoalDetailBody(g) {
@@ -10580,7 +10702,9 @@ function renderGoalDetailBody(g) {
     `<option value="${esc(l.item_id)}">${esc(l.name)} (${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")})</option>`).join("");
   const contributors = pr.per_contributor || [];
   const contribList = contributors.length
-    ? contributors.map(c => `<span class="ev-name">${esc(c.display_name)} · ${fmtQty(c.qty)}</span>`).join("")
+    ? contributors.map(c => `<span class="ev-name">${esc(c.display_name)} · ${fmtQty(c.qty)}` +
+        (c.promised > 0 ? ` <span class="rm-pledge" title="of that, still to gather">` +
+          `⏳ ${fmtQty(c.promised)}</span>` : "") + `</span>`).join("")
     : `<span class="muted">No contributions logged yet.</span>`;
   const editBtns = g.can_edit
     ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "";
@@ -10598,14 +10722,15 @@ function renderGoalDetailBody(g) {
     `<span class="rm-headline-l">filled${met ? " · met ✓" : ""}</span></div>` +
     `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
     `<div class="ev-section-h">Line items</div>${pr.lines.map(l => goalLineRow(l, minqMap)).join("")}` +
-    goalLocations(g) +
+    goalMyContribs(g) +
     `<div class="ev-signup"><h3>Log a contribution</h3>` +
       `<div class="rm-row">` +
         `<select id="goal-c-item" class="sel" style="flex:1;min-width:180px">${lineSel}</select>` +
         `<input id="goal-c-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
-        `<span class="poi-pick" style="flex:1;min-width:140px"><input id="goal-c-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
+        `<select id="goal-c-src" class="sel" style="flex:1;min-width:210px" aria-label="Where this comes from"></select>` +
+        `<span class="poi-pick" id="goal-c-loc-wrap" style="flex:1;min-width:140px"><input id="goal-c-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
         `<button class="ev-btn primary" id="goal-c-save">Contribute</button>` +
-      `</div><span class="ev-hint">Committing draws from your holding at that location — it isn't a separate stash.</span>` +
+      `</div><span class="ev-hint" id="goal-c-hint"></span>` +
       `<span id="goal-c-msg" class="muted"></span></div>` +
     `<div class="ev-section-h">Contributors</div><div class="ev-roster-names">${contribList}</div>` +
     `<div class="ev-form-actions">${editBtns}</div>`;
@@ -10625,21 +10750,43 @@ function renderGoalDetailBody(g) {
     } catch { libBtn.textContent = "couldn't add"; }
   };
   attachPoiPicker($("goal-c-loc").parentElement);   // location autocompletes from POIs
+  // The source list depends on the item, and only the "not logged yet" sources
+  // need a location typed (an existing holding already has one).
+  const syncSource = () => {
+    const src = $("goal-c-src").value;
+    const kind = src.startsWith("hold:") ? "hold" : src;
+    // display, not [hidden]: .poi-pick sets its own display and would win.
+    $("goal-c-loc-wrap").style.display = kind === "hold" ? "none" : "";
+    $("goal-c-hint").textContent = GOAL_SRC_HINTS[kind] || "";
+  };
+  const syncItem = () => {
+    $("goal-c-src").innerHTML = goalSourceOptionsHtml(g, $("goal-c-item").value);
+    syncSource();
+  };
+  $("goal-c-item").onchange = syncItem;
+  $("goal-c-src").onchange = syncSource;
+  syncItem();
   $("goal-c-save").onclick = async () => {
     const item_id = $("goal-c-item").value;
     const qty = Number($("goal-c-qty").value);
     const msg = $("goal-c-msg");
     if (!item_id) { msg.textContent = "This goal has no line items."; return; }
     if (!(qty > 0) || $("goal-c-qty").value === "") { msg.textContent = "Enter an amount greater than 0."; return; }
+    const src = $("goal-c-src").value;
+    const body = { item_id, qty };
+    if (src.startsWith("hold:")) body.holding_id = Number(src.slice(5));
+    else {
+      body.location = $("goal-c-loc").value.trim();
+      body.on_hand = src === "have";
+    }
     msg.textContent = "Saving…";
     try {
-      const r = await fetch(`/api/goals/${g.id}/contribute`, { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id, qty, location: $("goal-c-loc").value.trim() }) });
-      if (!r.ok) throw await r.json().catch(() => ({}));
-      renderGoalDetail(g.id);   // re-fetch so fill + contributors refresh
+      const saved = await postContribution(g.id, body);
+      msg.textContent = saved ? "" : "Nothing contributed.";
+      if (saved) renderGoalDetail(g.id);   // re-fetch so fill + contributors refresh
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
   };
+  wireGoalContribActions(g);
   if (g.can_edit) {
     $("goal-edit").onclick = () => renderGoalEditForm(g);
     $("goal-del").onclick = async () => {
@@ -10904,7 +11051,9 @@ async function renderInventory() {
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">INVENTORY</h2></div>` +
     `<p class="rm-intro">What you're holding and where it's stashed — attributed ` +
     `pledges, not a vault (SC has no shared storage). Log holdings against catalog items and ` +
-    `locations; the org rollup sums everyone's attributed stock.</p>` +
+    `locations; the org rollup sums everyone's attributed stock. Anything you've promised to a ` +
+    `goal is listed under its holding, with the amount you still owe — withdraw it here or on ` +
+    `the goal.</p>` +
     `<div class="rm-row" style="margin-top:10px">` +
       `<span class="poi-pick"><input id="inv-item" class="ti" placeholder="item" autocomplete="off"></span>` +
       `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
@@ -11137,14 +11286,27 @@ function invMineTableHtml(rows) {
 function invMineRowHtml(r) {
   const unit = esc(r.unit || "");
   const committed = Number(r.committed) || 0;
-  const free = committed > 0 ? `<div class="rm-avail">${fmtQty(r.available)} free</div>` : "";
+  const short = Number(r.short) || 0;
+  // What this holding owes elsewhere: free remainder, plus anything promised past
+  // what's actually logged (the member still has to go gather that part).
+  const free = committed > 0
+    ? `<div class="rm-commit"><span class="${r.available > 0 ? "free" : ""}">` +
+      `${fmtQty(r.available)} free</span> · ${fmtQty(committed)} promised</div>` : "";
+  const gathering = short > 0
+    ? `<div class="rm-short" title="committed beyond what you've logged">⏳ ${fmtQty(short)} to gather</div>` : "";
   const note = r.note ? `<div class="muted inv-note">— ${esc(r.note)}</div>` : "";
   const allocs = (r.allocations || []).map(a =>
-    `<div class="rm-mine-alloc">↳ ${fmtQty(a.qty)} ${unit} → ${a.goal_title ? esc(a.goal_title) : "goal #" + a.goal_id}</div>`).join("");
+    `<div class="rm-mine-alloc">↳ ${fmtQty(a.qty)} ${unit} → ` +
+    `${a.goal_title ? esc(a.goal_title) : "goal #" + a.goal_id}` +
+    (a.short > 0 ? `<span class="rm-pledge" title="pledged, but not logged as stock yet">` +
+      `⏳ ${fmtQty(a.short)}</span>` : "") +
+    `<button class="rm-alloc-x" data-alloc="${a.id}" data-goal="${a.goal_id}" ` +
+    `data-name="${esc(a.goal_title || "This contribution")}" ` +
+    `title="withdraw this contribution">✕ withdraw</button></div>`).join("");
   return `<tr class="rm-mine-row" data-id="${r.id}">` +
     `<td><b>${esc(r.item_name)}</b>${note}${allocs}</td>` +
     invSpecCells(r.spec) +
-    `<td class="num">${fmtQty(r.qty)} ${unit}${free}</td>` +
+    `<td class="num">${fmtQty(r.qty)} ${unit}${free}${gathering}</td>` +
     `<td class="inv-loc">${r.location ? `📍 ${esc(r.location)}` : ""}</td>` +
     `<td class="inv-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
     `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></td></tr>`;
@@ -11164,11 +11326,20 @@ function wireInvMine() {
     };
   });
   $("inv-body").querySelectorAll(".rm-inv-edit").forEach(b => { b.onclick = () => openInvEdit(b.dataset.id); });
+  // Revoke a goal commitment without leaving the inventory screen — same call the
+  // goal detail makes; the freed amount lands back in this holding.
+  $("inv-body").querySelectorAll(".rm-alloc-x").forEach(b => {
+    b.onclick = async () => {
+      if (await withdrawContribution(b.dataset.goal, b.dataset.alloc,
+          `Your contribution to ${b.dataset.name}`)) renderInvMine();
+    };
+  });
 }
 
 // Inline edit of a holding (item is fixed — delete + re-add to change it). The
-// row collapses to a single edit form spanning the columns. Qty can't drop below
-// what's committed to goals; the server enforces it too.
+// row collapses to a single edit form spanning the columns. Qty may go below what's
+// committed to goals: spending stock you promised doesn't cancel the promise, it
+// turns the uncovered part into a ⏳ pledge to re-gather.
 function openInvEdit(id) {
   const r = rmMineRows.find(x => String(x.id) === String(id));
   const rowEl = $("inv-body").querySelector(`.rm-mine-row[data-id="${id}"]`);

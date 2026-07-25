@@ -4539,7 +4539,11 @@ def derive_inventory_rollup(rows) -> list[dict]:
     items: dict[str, dict] = {}
     for r in rows or []:
         iid = r.get("item_id")
-        if not iid:
+        qty = _qty(r.get("qty"))
+        # Empty rows never enter the rollup: a holding at 0 is either stock the
+        # member has run out of or the shell an un-gathered goal pledge hangs off,
+        # and neither is materials the org can count on.
+        if not iid or qty <= 0:
             continue
         it = items.get(iid)
         if it is None:
@@ -4551,7 +4555,6 @@ def derive_inventory_rollup(rows) -> list[dict]:
                 "by_owner": {},
                 "by_location": {},
             }
-        qty = _qty(r.get("qty"))
         it["total"] += qty
         owner = r.get("owner_id")
         it["by_owner"][owner] = it["by_owner"].get(owner, 0.0) + qty
@@ -4582,22 +4585,34 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
     with `goal_id == goal id`). Returns per-line `{item_id, name, unit, needed,
     have, pct, short}` plus an overall `pct` and a `per_contributor` breakdown.
 
+    A contribution row may carry a `short` — the part its member has pledged but
+    not actually logged as stock yet ("I'll go gather it"). Pledges still count
+    toward `have`, because a promise is what the goal board is *for*; the promised
+    total rides alongside as `promised` (per line and per contributor) so the org
+    can tell secured materials from ones still in the ground.
+
     The pinned rule: a line's `pct` is `have/needed` capped at 100, but the
     headline `overall_pct` is `total have / total needed` summed *across lines*
     (also capped) — so a goal one line over and one line short doesn't read as
     "done" off the average. `have` per line sums only contributions of that item,
     so a stray contribution of an off-list item doesn't inflate any line.
     `is_met` is true when every line is fully covered."""
-    # Sum contributed quantity per item, and total contributed per member.
+    # Sum contributed quantity per item, and total contributed per member — each
+    # with the still-being-gathered part tracked alongside it.
     have_by_item: dict[str, float] = {}
+    promised_by_item: dict[str, float] = {}
     by_contributor: dict[str, float] = {}
+    promised_by_contributor: dict[str, float] = {}
     for r in inventory_rows or []:
         iid = r.get("item_id")
         qty = _qty(r.get("qty"))
+        promised = min(_qty(r.get("short")), qty)
         if iid:
             have_by_item[iid] = have_by_item.get(iid, 0.0) + qty
+            promised_by_item[iid] = promised_by_item.get(iid, 0.0) + promised
         owner = r.get("owner_id")
         by_contributor[owner] = by_contributor.get(owner, 0.0) + qty
+        promised_by_contributor[owner] = promised_by_contributor.get(owner, 0.0) + promised
 
     lines, total_need, total_have, all_met = [], 0.0, 0.0, True
     for li in (goal.get("line_items") or []):
@@ -4611,6 +4626,7 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
         pct = 100.0 if needed <= 0 else min(100.0, have / needed * 100.0)
         if needed > 0 and have < needed:
             all_met = False
+        promised = min(promised_by_item.get(iid, 0.0), have)
         line = {
             "item_id": iid,
             "name": li.get("item_name") or iid,
@@ -4619,6 +4635,10 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
             "have": have,
             "pct": round(pct, 1),
             "short": max(0.0, needed - have),
+            # Of what's committed: how much is stock somebody has actually logged
+            # vs. still promised. `have` = on_hand + promised, always.
+            "promised": promised,
+            "on_hand": have - promised,
         }
         # Craft goals stamp a target quality per material (recipe minimum max'd
         # with the member's slider asks) — advisory, rides through to the UI badge.
@@ -4628,7 +4648,9 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
 
     overall = 100.0 if total_need <= 0 else min(100.0, total_have / total_need * 100.0)
     per_contributor = sorted(
-        ({"owner_id": o, "qty": q} for o, q in by_contributor.items()),
+        ({"owner_id": o, "qty": q,
+          "promised": min(promised_by_contributor.get(o, 0.0), q)}
+         for o, q in by_contributor.items()),
         key=lambda x: x["qty"], reverse=True)
     return {
         "lines": lines,

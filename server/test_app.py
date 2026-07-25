@@ -2833,16 +2833,18 @@ class CraftGoalTests(unittest.TestCase):
             "item_id": "commodity:agricium", "qty": 5, "location": "Area18"})
         self.assertEqual(self.sent, [])   # no goals-category broadcast
 
-    def test_detail_groups_my_materials_by_location(self):
+    def test_detail_lists_my_contributions_with_their_location(self):
         gid = self.client.post("/api/goals", json={
             "title": "stage it", "visibility": "personal",
             "line_items": [{"item_id": "commodity:agricium", "qty_needed": 20}]}).json()["id"]
         self.client.post(f"/api/goals/{gid}/contribute", json={
             "item_id": "commodity:agricium", "qty": 8, "location": "Area18"})
         g = self.client.get(f"/api/goals/{gid}").json()
-        locs = {grp["location"]: grp for grp in g["my_locations"]}
-        self.assertIn("Area18", locs)
-        self.assertAlmostEqual(locs["Area18"]["items"][0]["qty"], 8)
+        mine = g["my_contributions"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["location"], "Area18")   # the client groups on this
+        self.assertAlmostEqual(mine[0]["qty"], 8)
+        self.assertTrue(mine[0]["allocation_id"])         # withdrawable
 
     def test_org_goal_met_still_broadcasts(self):
         gid = self.client.post("/api/goals", json={
@@ -2888,6 +2890,231 @@ class CraftGoalTests(unittest.TestCase):
         card = next(c for c in cards if c.get("blueprint_key") == "TEST_BP")
         self.assertEqual(card["commission"]["can_craft_count"], 1)
         self.assertTrue(card["commission"]["i_can_craft"])
+
+
+class ContributionTests(unittest.TestCase):
+    """Goal contributions as a two-way, honest ledger: a member can take a pledge
+    back, a pledge they haven't gathered never invents stock, and over-filling a
+    line is confirmed rather than silent (the confirm has to be server-side — two
+    members filling the same goal are both reading a board that already moved)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._a = {"id": "111", "username": "ana", "is_admin": False}
+        cls._b = {"id": "222", "username": "bo", "is_admin": False}
+        cls._admin = {"id": "999", "username": "root", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._a
+        # The auth-gate middleware runs before the route dependency (see #29/#30).
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._a
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as(self._a)
+
+    def _as(self, u):
+        app.app.dependency_overrides[app.require_session] = lambda: u
+
+    def _goal(self, needed=10, item="commodity:agricium"):
+        return self.client.post("/api/goals", json={
+            "title": "haul it", "line_items": [
+                {"item_id": item, "qty_needed": needed}]}).json()["id"]
+
+    def _mine(self):
+        return self.client.get("/api/inventory?owner=me").json()["rows"]
+
+    def _line(self, goal, item="commodity:agricium"):
+        return next(l for l in goal["progress"]["lines"] if l["item_id"] == item)
+
+    # -- withdrawing a contribution --
+
+    def test_withdraw_returns_the_stock_and_reopens_the_goal(self):
+        gid = self._goal(needed=10)
+        holding = self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 10, "location": "Area18"}).json()
+        g = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 10,
+            "holding_id": holding["id"]}).json()
+        self.assertTrue(g["progress"]["is_met"])
+        alloc = g["my_contributions"][0]["allocation_id"]
+        row = next(r for r in self._mine() if r["id"] == holding["id"])
+        self.assertEqual((row["qty"], row["committed"], row["available"]), (10, 10, 0))
+        # take it back: the goal falls off 'met', the stock is free again, and the
+        # holding itself is untouched (withdrawing isn't spending).
+        r = self.client.delete(f"/api/goals/{gid}/contribute/{alloc}")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(r.json()["progress"]["is_met"])
+        self.assertEqual(self._line(r.json())["have"], 0)
+        self.assertEqual(r.json()["status"], "active")
+        row = next(r2 for r2 in self._mine() if r2["id"] == holding["id"])
+        self.assertEqual((row["qty"], row["committed"], row["available"]), (10, 0, 10))
+        self.assertEqual(row["allocations"], [])
+
+    def test_partial_withdraw_via_patch(self):
+        gid = self._goal(needed=10)
+        g = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 6, "on_hand": True}).json()
+        alloc = g["my_contributions"][0]["allocation_id"]
+        r = self.client.patch(f"/api/goals/{gid}/contribute/{alloc}", json={"qty": 2})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self._line(r.json())["have"], 2)
+        # 0 is the same as withdrawing it outright
+        r = self.client.patch(f"/api/goals/{gid}/contribute/{alloc}", json={"qty": 0})
+        self.assertEqual(self._line(r.json())["have"], 0)
+        self.assertEqual(r.json()["my_contributions"], [])
+
+    def test_only_the_contributor_or_an_admin_can_withdraw(self):
+        gid = self._goal(needed=10)
+        g = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "on_hand": True}).json()
+        alloc = g["my_contributions"][0]["allocation_id"]
+        self._as(self._b)
+        self.assertEqual(
+            self.client.delete(f"/api/goals/{gid}/contribute/{alloc}").status_code, 403)
+        self._as(self._admin)
+        self.assertEqual(
+            self.client.delete(f"/api/goals/{gid}/contribute/{alloc}").status_code, 200)
+
+    def test_withdraw_rejects_an_allocation_from_another_goal(self):
+        gid, other = self._goal(needed=10), self._goal(needed=10)
+        g = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "on_hand": True}).json()
+        alloc = g["my_contributions"][0]["allocation_id"]
+        self.assertEqual(
+            self.client.delete(f"/api/goals/{other}/contribute/{alloc}").status_code, 404)
+
+    # -- pledges: committing what you haven't gathered --
+
+    def test_pledge_shows_in_my_inventory_without_inventing_stock(self):
+        gid = self._goal(needed=10)
+        g = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "location": "Daymar"}).json()
+        line = self._line(g)
+        self.assertEqual((line["have"], line["promised"], line["on_hand"]), (4, 4, 0))
+        self.assertEqual(g["progress"]["per_contributor"][0]["promised"], 4)
+        # It appears in the member's inventory as something they owe, at qty 0 —
+        # so the org rollup never counts materials nobody has.
+        row = next(r for r in self._mine() if r["location"] == "Daymar")
+        self.assertEqual((row["qty"], row["short"]), (0, 4))
+        self.assertEqual(row["allocations"][0]["short"], 4)
+        org = self.client.get("/api/inventory").json()["items"]
+        agri = next((i for i in org if i["item_id"] == "commodity:agricium"), None)
+        self.assertNotIn("Daymar", [l["location"] for l in (agri or {}).get("by_location", [])])
+
+    def test_on_hand_declares_the_stock(self):
+        gid = self._goal(needed=10)
+        g = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "location": "Lorville",
+            "on_hand": True}).json()
+        line = self._line(g)
+        self.assertEqual((line["have"], line["promised"], line["on_hand"]), (4, 0, 4))
+        row = next(r for r in self._mine() if r["location"] == "Lorville")
+        self.assertEqual((row["qty"], row["committed"], row["short"]), (4, 4, 0))
+
+    def test_withdrawing_a_pledge_sweeps_its_empty_holding(self):
+        gid = self._goal(needed=10)
+        g = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "location": "Yela"}).json()
+        alloc = g["my_contributions"][0]["allocation_id"]
+        self.client.delete(f"/api/goals/{gid}/contribute/{alloc}")
+        self.assertNotIn("Yela", [r["location"] for r in self._mine()])
+
+    def test_spending_committed_stock_turns_it_into_a_pledge(self):
+        """Dropping a holding below what it owes is allowed — the promise stands,
+        and the uncovered part reads as 'still to gather' instead of vanishing."""
+        gid = self._goal(needed=10)
+        holding = self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 10, "location": "Hurston"}).json()
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 8, "holding_id": holding["id"]})
+        r = self.client.patch(f"/api/inventory/{holding['id']}", json={
+            "qty": 3, "location": "Hurston"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["short"], 5)
+        line = self._line(self.client.get(f"/api/goals/{gid}").json())
+        self.assertEqual((line["have"], line["promised"]), (8, 5))
+
+    def test_older_commitments_keep_the_stock_newer_ones_go_short(self):
+        """On-hand stock backs a holding's commitments oldest first, so making a new
+        pledge never retroactively turns an earlier one into a promise."""
+        first, second = self._goal(needed=10), self._goal(needed=10)
+        holding = self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 6, "location": "Microtech"}).json()
+        self.client.post(f"/api/goals/{first}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 6, "holding_id": holding["id"]})
+        self.client.post(f"/api/goals/{second}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "holding_id": holding["id"]})
+        self.assertEqual(self._line(self.client.get(f"/api/goals/{first}").json())["promised"], 0)
+        self.assertEqual(self._line(self.client.get(f"/api/goals/{second}").json())["promised"], 4)
+
+    def test_contribute_rejects_a_holding_that_is_not_mine(self):
+        gid = self._goal(needed=10)
+        holding = self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 5}).json()
+        self._as(self._b)
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 2, "holding_id": holding["id"]})
+        self.assertEqual(r.status_code, 400)
+
+    # -- over-filling a line --
+
+    def test_over_need_needs_confirmation_then_goes_through(self):
+        gid = self._goal(needed=10)
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 8, "on_hand": True})
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 5, "on_hand": True})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("still needed", r.json()["detail"])   # the confirm prompt
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 5, "on_hand": True,
+            "allow_over": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self._line(r.json())["have"], 13)
+
+    def test_a_second_member_filling_a_met_line_is_warned(self):
+        """The race the check exists for: bo's board still said 0/10 when ana filled
+        it, so the warning has to come from the server at write time."""
+        gid = self._goal(needed=10)
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 10, "on_hand": True})
+        self._as(self._b)
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 3, "on_hand": True})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("already fully committed", r.json()["detail"])
+
+    def test_filling_a_line_exactly_is_never_flagged(self):
+        gid = self._goal(needed=10)
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 6, "on_hand": True})
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "on_hand": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["progress"]["is_met"])
+
+    # -- the contribute form's source list --
+
+    def test_detail_offers_my_holdings_of_the_goals_items(self):
+        gid = self._goal(needed=10)
+        self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 7, "location": "Orison"})
+        self.client.post("/api/inventory", json={      # unrelated item, not offered
+            "item_id": "commodity:hadanite", "qty": 3, "location": "Orison"})
+        g = self.client.get(f"/api/goals/{gid}").json()
+        offered = {(h["item_id"], h["location"]): h for h in g["my_holdings"]}
+        self.assertIn(("commodity:agricium", "Orison"), offered)
+        self.assertNotIn(("commodity:hadanite", "Orison"), offered)
+        self.assertEqual(offered[("commodity:agricium", "Orison")]["available"], 7)
 
 
 class ReferenceDataBundlingTests(unittest.TestCase):

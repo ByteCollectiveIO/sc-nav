@@ -6526,11 +6526,15 @@ def _enrich_owner_names(entries: list[dict], key: str = "owner_id") -> list[dict
 
 
 def _holding_view(row: dict) -> dict:
-    """Enrich a holding with how much of it is committed to goals and what's left
-    free. `available = qty - Σ allocations`; a goal contribution can't exceed it."""
+    """Enrich a holding with how much of it is committed to goals, what's left free,
+    and what's been promised past it. `available = max(0, qty - Σ allocations)`;
+    committing MORE than the declared quantity is legal (a pledge to go gather it)
+    and surfaces as `short` rather than silently inflating the holding."""
     committed = db.committed_for_holding(row["id"])
+    qty = float(row.get("qty") or 0)
     return {**row, "committed": committed,
-            "available": round(float(row.get("qty") or 0) - committed, 6)}
+            "available": round(max(0.0, qty - committed), 6),
+            "short": round(max(0.0, committed - qty), 6)}
 
 
 def _item_spec(item_id: str | None) -> dict:
@@ -6559,12 +6563,19 @@ async def get_inventory(owner: str | None = None, goal: int | None = None,
         for r in rows:
             allocs = by_holding.get(r["id"], [])
             committed = sum(float(a["qty"] or 0) for a in allocs)
+            qty = float(r.get("qty") or 0)
             out.append({**r, "committed": committed,
-                        "available": round(float(r.get("qty") or 0) - committed, 6),
+                        "available": round(max(0.0, qty - committed), 6),
+                        "short": round(max(0.0, committed - qty), 6),
                         "spec": _item_spec(r.get("item_id")),
-                        "allocations": [{"goal_id": a["goal_id"],
+                        # `id` rides along so a commitment can be withdrawn straight
+                        # from the inventory screen; `short` flags the part of it the
+                        # member hasn't actually logged as stock yet.
+                        "allocations": [{"id": a["id"], "goal_id": a["goal_id"],
                                          "goal_title": a.get("goal_title"),
-                                         "qty": a["qty"]} for a in allocs]})
+                                         "qty": a["qty"],
+                                         "short": float(a.get("short") or 0)}
+                                        for a in allocs]})
         return {"scope": "mine", "rows": out}
     if goal is not None:
         rows = db.list_goal_contributions(goal_id=goal)
@@ -6605,18 +6616,15 @@ class InventoryEditIn(BaseModel):
 async def edit_inventory(inv_id: int, body: InventoryEditIn,
                          user: dict = Depends(require_session)):
     """Edit a holding's qty / location / note / unit (owner-or-admin). The item
-    can't be changed here (delete + re-add for that). Quantity can't drop below
-    what's already committed to goals from this holding."""
+    can't be changed here (delete + re-add for that). Quantity MAY drop below what's
+    committed to goals — spending or losing stock you've promised doesn't cancel the
+    promise; the uncovered part becomes a pledge to re-gather (`short`), which the
+    goal board shows rather than pretending the materials are in hand."""
     row = db.get_inventory(inv_id)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown inventory row")
     if row["owner_id"] != user["id"] and not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="you can only edit your own holdings")
-    committed = db.committed_for_holding(inv_id)
-    if body.qty < committed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{committed:g} is committed to goals; quantity can't go below that")
     fields = {"qty": body.qty,
               "location": body.location.strip() or None,
               "note": (body.note or "").strip() or None,
@@ -6770,16 +6778,37 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
     if detail:
         view["progress"]["per_contributor"] = _enrich_owner_names(
             progress["per_contributor"])
-        # "Where my materials are": the caller's own committed holdings grouped by
-        # location, so a craft-goal shows what's staged where.
-        locs: dict[str, list] = {}
-        for c in contributions:
-            if c.get("owner_id") != user["id"]:
-                continue
-            locs.setdefault(c.get("location") or "Unspecified", []).append(
-                {"name": c.get("item_name"), "qty": c.get("qty"), "unit": c.get("unit")})
-        view["my_locations"] = [{"location": k, "items": v} for k, v in locs.items()]
+        # Each of my commitments as its own withdrawable row (allocation id + the
+        # un-gathered part), so the goal screen can revoke one directly. The client
+        # groups them by location — that's the "where my materials are staged" read
+        # a craft goal wants, without a second list of the same numbers.
+        mine = [{k: c.get(k) for k in
+                 ("allocation_id", "holding_id", "item_id", "item_name",
+                  "unit", "qty", "location", "short")}
+                for c in contributions if c.get("owner_id") == user["id"]]
+        view["my_contributions"] = sorted(mine, key=lambda c: c["allocation_id"])
+        view["my_holdings"] = _my_holdings_for_goal(goal, user)
     return view
+
+
+def _my_holdings_for_goal(goal: dict, user: dict) -> list[dict]:
+    """The caller's holdings of this goal's line items — what the contribute form
+    offers as the *source* of a commitment, so contributing draws from the stock
+    they already logged instead of quietly minting a second row at a different
+    location (and so "I don't have these yet" is an explicit choice, not a guess)."""
+    wanted = {li.get("item_id") for li in (goal.get("line_items") or [])}
+    committed: dict[int, float] = {}
+    for a in db.allocations_for_owner(user["id"]):
+        committed[a["inventory_id"]] = committed.get(a["inventory_id"], 0.0) + float(a["qty"] or 0)
+    out = []
+    for r in db.list_inventory(owner_id=user["id"]):
+        if r.get("item_id") not in wanted:
+            continue
+        qty, c = float(r.get("qty") or 0), committed.get(r["id"], 0.0)
+        out.append({"id": r["id"], "item_id": r["item_id"], "item_name": r["item_name"],
+                    "unit": r.get("unit"), "qty": qty, "location": r.get("location"),
+                    "committed": c, "available": round(max(0.0, qty - c), 6)})
+    return out
 
 
 @app.get("/api/goals")
@@ -6854,37 +6883,82 @@ class ContributeIn(BaseModel):
     item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
     qty: float = Field(gt=0, le=_MAX_QTY)
     location: str = Field(default="", max_length=_LOCATION_MAX)
+    # Which stock this commitment draws from. `holding_id` names an existing
+    # holding (what the form offers); otherwise the (item, location) match is used,
+    # and a missing holding is created — declaring stock on hand only if `on_hand`,
+    # so an un-gathered pledge never invents inventory the member doesn't have.
+    holding_id: int | None = None
+    on_hand: bool = False
+    # The member has seen and accepted that this pushes the line past its need.
+    allow_over: bool = False
+
+
+def _over_need_message(line: dict, qty: float) -> str:
+    """The confirm prompt for over-filling a line — phrased with the *current*
+    numbers, because the two members racing to fill the same goal are both looking
+    at a board that was accurate when it rendered."""
+    unit = f" {line['unit']}" if line.get("unit") else ""
+    have, needed = line["have"], line["needed"]
+    over = have + qty - needed
+    if have >= needed:
+        return (f"{line['name']} is already fully committed at "
+                f"{have:g}/{needed:g}{unit}. Adding {qty:g} would put it {over:g}{unit} over.")
+    return (f"Only {needed - have:g}{unit} of {line['name']} is still needed "
+            f"({have:g}/{needed:g} committed). Adding {qty:g} would put it "
+            f"{over:g}{unit} over.")
 
 
 @app.post("/api/goals/{goal_id}/contribute")
 async def contribute_to_goal(goal_id: int, body: ContributeIn,
                              user: dict = Depends(require_session)):
     """Commit some of the caller's holding toward a goal. The commitment is an
-    *allocation* drawn from the member's (item, location) holding — not a duplicate
-    ledger row — so it never double-counts in the org rollup. If the holding
-    doesn't hold enough free quantity, it's topped up to cover the commitment (the
-    member is declaring they have at least that much on hand)."""
+    *allocation* drawn from one of the member's holdings — not a duplicate ledger
+    row — so it never double-counts in the org rollup.
+
+    A member may commit more than they hold: that's a pledge to go gather it, and
+    the uncovered part shows up as "still gathering" (derived) rather than inflating
+    their holding. Passing `on_hand` instead declares the stock is already in hand
+    and tops the holding up to cover the commitment.
+
+    Over-filling a line is allowed but never silent: unless `allow_over` is set, a
+    commitment that would push the line past its need is rejected with a 409 whose
+    detail is the confirm prompt — the check runs here, not in the browser, because
+    two members filling the same goal at once are both working off a stale board."""
     goal = db.get_goal(goal_id)
     if goal is None or not _can_view_goal(goal, user):
         raise HTTPException(status_code=404, detail="unknown goal")
     item = _resolve_or_400(body.item_id)
     loc = body.location.strip() or None
     now = datetime.now(timezone.utc).isoformat()
-    was_met = nav_core.derive_goal_progress(
-        goal, db.list_goal_contributions(goal_id=goal_id))["is_met"]
-    holding = db.get_holding(user["id"], item["item_id"], loc)
+    progress = nav_core.derive_goal_progress(
+        goal, db.list_goal_contributions(goal_id=goal_id))
+    was_met = progress["is_met"]
+    if not body.allow_over:
+        line = next((l for l in progress["lines"]
+                     if l["item_id"] == item["item_id"]), None)
+        if line and line["needed"] > 0 and line["have"] + body.qty > line["needed"] + 1e-9:
+            raise HTTPException(status_code=409, detail=_over_need_message(line, body.qty))
+    if body.holding_id is not None:
+        holding = db.get_inventory(body.holding_id)
+        if (holding is None or holding["owner_id"] != user["id"]
+                or holding["item_id"] != item["item_id"]):
+            raise HTTPException(status_code=400, detail="unknown holding for this item")
+    else:
+        holding = db.get_holding(user["id"], item["item_id"], loc)
     if holding is None:
-        # No matching holding yet: the contribution itself declares the holding.
+        # No matching holding yet: the contribution declares one — with stock only
+        # if the member says it's on hand, else an empty shell the pledge hangs off
+        # (so it still shows in their inventory as something they owe).
         holding = db.upsert_inventory(
-            user["id"], item["item_id"], item["name"], item["unit"], body.qty,
-            loc, None, None, now)
+            user["id"], item["item_id"], item["name"], item["unit"],
+            body.qty if body.on_hand else 0, loc, None, None, now)
     existing = db.find_allocation(holding["id"], goal_id)
-    # Free quantity must cover the (new portion of the) commitment; bump the
-    # holding up if the member is committing more than they'd declared on hand.
-    committed = db.committed_for_holding(holding["id"])
-    new_committed = committed - float((existing or {}).get("qty") or 0) + body.qty
-    if new_committed > float(holding["qty"] or 0):
-        db.update_inventory(holding["id"], {"qty": new_committed}, now)
+    if body.on_hand:
+        # Declaring it's in hand: bump the holding so the commitment is covered.
+        committed = db.committed_for_holding(holding["id"])
+        new_committed = committed - float((existing or {}).get("qty") or 0) + body.qty
+        if new_committed > float(holding["qty"] or 0):
+            db.update_inventory(holding["id"], {"qty": new_committed}, now)
     if existing:
         db.update_allocation(existing["id"], float(existing["qty"] or 0) + body.qty, now)
     else:
@@ -6898,6 +6972,61 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
             and nav_core.derive_goal_progress(goal, contributions)["is_met"]):
         _notify_bg(_notify_goal_met(goal, contributions))
     return _goal_view(db.get_goal(goal_id), contributions, user, detail=True)
+
+
+class ContributionEditIn(BaseModel):
+    qty: float = Field(ge=0, le=_MAX_QTY)
+
+
+def _my_contribution(goal_id: int, alloc_id: int, user: dict) -> dict:
+    """Resolve a contribution for withdrawal. It's the *contributor's* to take back
+    (or an admin's to clean up) — not the goal owner's: a pledge is a promise the
+    member made, so only they can un-make it."""
+    alloc = db.get_allocation_full(alloc_id)
+    if alloc is None or alloc["goal_id"] != goal_id:
+        raise HTTPException(status_code=404, detail="unknown contribution")
+    if alloc["owner_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="you can only change your own contributions")
+    return alloc
+
+
+def _contribution_result(goal_id: int, user: dict) -> dict:
+    """Post-withdrawal response: the refreshed goal when the caller can still see it
+    (the goal screen re-renders straight from this), else a bare ack — an admin
+    tidying someone's pledge on a personal goal mustn't be handed its contents."""
+    goal = db.get_goal(goal_id)
+    if goal is None:
+        return {"ok": True}
+    if not _can_view_goal(goal, user):
+        return {"ok": True}
+    return _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user, detail=True)
+
+
+@app.patch("/api/goals/{goal_id}/contribute/{alloc_id}")
+async def edit_contribution(goal_id: int, alloc_id: int, body: ContributionEditIn,
+                            user: dict = Depends(require_session)):
+    """Adjust one of my contributions to a goal (partial withdrawal). `qty` 0 is the
+    same as deleting it. The parent holding is untouched — pulling a commitment back
+    returns that stock to the member's free inventory, it doesn't consume it."""
+    _my_contribution(goal_id, alloc_id, user)
+    if body.qty <= 0:
+        return await withdraw_contribution(goal_id, alloc_id, user)
+    db.update_allocation(alloc_id, body.qty, datetime.now(timezone.utc).isoformat())
+    return _contribution_result(goal_id, user)
+
+
+@app.delete("/api/goals/{goal_id}/contribute/{alloc_id}")
+async def withdraw_contribution(goal_id: int, alloc_id: int,
+                                user: dict = Depends(require_session)):
+    """Withdraw one of my contributions from a goal. The stock goes back to being
+    free inventory; a holding that only ever existed to carry an un-gathered pledge
+    is swept up with it rather than left as a 0-qty ghost row."""
+    alloc = _my_contribution(goal_id, alloc_id, user)
+    db.delete_allocation(alloc_id)
+    if db.holding_is_empty(alloc["inventory_id"]):
+        db.delete_inventory(alloc["inventory_id"])
+    return _contribution_result(goal_id, user)
 
 
 # --- org marketplace (shares the item catalog) -----------------------------
