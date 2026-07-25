@@ -527,6 +527,9 @@
   .on-field .ti, .on-field .sel { text-transform: none; letter-spacing: 0;
     color: var(--text); font-size: 14px; }
   .on-invis { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
+  /* author display: beats the UA [hidden] rule — without this the announce
+     opt-ins (LFG, danger board, marketplace) show even with no webhook set up */
+  .on-invis[hidden] { display: none; }
   .on-saved { color: var(--good); font-size: 13px; }
   .on-saved.bad { color: var(--bad); }
   .on-help { font-size: 12px; margin: 12px 0 0; max-width: 68ch; }
@@ -1766,6 +1769,10 @@
     border: 1px solid var(--border); border-radius: 6px; padding: 6px 11px; margin: 4px 0 10px;
     background: var(--warn-wash); }
   .mk-banner b { color: var(--warn); font-weight: 600; }
+  /* one-shot "your Discord shout went out (or didn't)" note above a fresh listing */
+  .mk-post-note { font-size: 12px; line-height: 1.45; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 11px;
+    margin: 0 0 12px; background: var(--panel2); }
   /* mode chip — color-coded like the event categories */
   .mk-mode { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
     border-radius: 3px; padding: 1px 7px; border: 1px solid currentColor; }
@@ -11909,6 +11916,7 @@ async function loadMarketPage(reset) {
     if (pager) pager.hidden = true; return;
   }
   listEl.classList.remove("mk-busy");
+  mktAnnounceAvail = !!data.announce_available;   // gates the post form's Discord opt-in
   let ls = data.listings || [], total = data.total || 0;
   // "Requests I can craft": a client-side narrowing of the commission tab (like the
   // LFG suggested-matches filter). Scopes to the loaded page, so the pager reflects
@@ -12114,7 +12122,11 @@ function mkSellerControls(l) {
 function renderMarketDetailBody(l) {
   const isJob = l.mode === "commission";
   const wanted = isJob ? `<span class="mk-wanted">Wanted</span> ` : "";
-  let html = `<div class="ev-detail-title"><h2>${wanted}${esc(l.item_name)} ${mkQtyTag(l)}</h2>${mkCraftBadge(l)}${isJob ? mkMatsChip(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div>` +
+  // One-shot outcome of the post's Discord opt-in (set by the form, consumed here).
+  const posted = mktPostNotice ? `<div class="mk-post-note">${esc(mktPostNotice)}</div>` : "";
+  mktPostNotice = null;
+  let html = posted +
+    `<div class="ev-detail-title"><h2>${wanted}${esc(l.item_name)} ${mkQtyTag(l)}</h2>${mkCraftBadge(l)}${isJob ? mkMatsChip(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div>` +
     `<div class="ev-detail-meta">${isJob ? "requested" : "listed"} by <b class="mk-sellerlink" id="mk-seller" title="Show all from this seller">${esc(l.seller_name)}</b>${mkHandle(l)}${mkDeals(l.seller_deals)}</div>` +
     (l.note ? `<div class="ev-desc">${esc(l.note)}</div>` : "") + mkBanner();
   if (l.status === "open") html += mkOpenBlock(l);
@@ -12295,7 +12307,6 @@ function marketFormHtml(l) {
         `<div class="ev-field"><label>Needed by (time)</label><input id="mk-f-need-time" class="ti" type="time" ` +
           `value="${l && l.mode === "commission" && l.ends_at ? toLocalTime(l.ends_at) : ""}"><span class="ev-hint">Blank ⇒ end of day.</span></div>` +
       `</div>` +
-      (l ? "" : `<label class="on-invis" style="margin:4px 0 8px"><input type="checkbox" id="mk-f-announce"> 📣 Announce the request to the org's Discord <span class="muted">(pings members who can craft it)</span></label>`) +
     `</div>` +
     `<div class="mk-mode-fields" data-mode="sale">` +
       `<div class="ev-field"><label>Price (aUEC)</label><input id="mk-f-price" class="ti" type="number" min="0" step="any" ` +
@@ -12318,6 +12329,12 @@ function marketFormHtml(l) {
       `placeholder="Condition, location, timing…">${l ? esc(l.note || "") : ""}</textarea></div>` +
     mkHandleField(l) +
     mkCraftedFields(l) +
+    // Every mode can shout to the marketplace channel — a sale nobody sees is the
+    // same dead ad as a craft request nobody sees. Create-only, and hidden until
+    // the board confirms a webhook is actually configured.
+    (l ? "" : `<label class="on-invis mk-announce" id="mk-f-announce-row" hidden>` +
+      `<input type="checkbox" id="mk-f-announce"> 📣 Announce this listing to the org's Discord ` +
+      `<span class="muted" id="mk-f-announce-note"></span></label>`) +
     `<p class="mk-banner">In-game <b>aUEC only</b> — never real money.</p>` +
     `<div class="ev-form-actions"><button id="mk-f-save" class="ev-btn primary">${l ? "Save changes" : "Post listing"}</button>` +
       `<button class="ev-btn" id="mk-f-cancel">Cancel</button>` +
@@ -12360,6 +12377,29 @@ function mkSyncModeFields() {
   const qLbl = $("mk-f-q-lbl"), bLbl = $("mk-f-band-lbl");
   if (qLbl) qLbl.textContent = mode === "commission" ? "Min quality (1–1000)" : "Quality (1–1000)";
   if (bLbl) bLbl.textContent = mode === "commission" ? "Min band (1–8)" : "Band (1–8)";
+  // Only a craft request @-mentions anyone — say so, so nobody expects (or fears)
+  // a ping on an ordinary sale.
+  const annNote = $("mk-f-announce-note");
+  if (annNote) annNote.textContent = mode === "commission"
+    ? "(pings members who can craft it)" : "(posts to the channel, pings nobody)";
+}
+
+// The announce opt-in only makes sense once an admin has wired the marketplace
+// webhook. The board's snapshot carries the flag; a deep link straight to
+// #/market/new hasn't loaded it, so fall back to one cheap probe.
+let mktAnnounceAvail = null;
+// One-shot "did the Discord shout go out?" note, handed from the post form to the
+// listing detail it navigates to.
+let mktPostNotice = null;
+async function syncMktAnnounceAvail() {
+  if (mktAnnounceAvail === null) {
+    try {
+      const d = await fetch("/api/market?limit=1").then(r => r.json());
+      mktAnnounceAvail = !!d.announce_available;
+    } catch { mktAnnounceAvail = false; }
+  }
+  const row = $("mk-f-announce-row");
+  if (row) row.hidden = !mktAnnounceAvail;
 }
 
 // Optional crafted-item quality editor (SC 4.8): overall quality/band + free-form
@@ -12452,6 +12492,8 @@ function collectMarketForm() {
     note: $("mk-f-note").value.trim() || null, crafted };
   const handleEl = $("mk-f-handle");
   if (handleEl) payload.seller_handle = handleEl.value.trim() || null;
+  const ann = $("mk-f-announce");       // any mode may shout; create-only
+  if (ann && ann.checked) payload.announce = true;
   if (mode === "commission") {
     if ($("mk-f-budget").value !== "") {
       const budget = Number($("mk-f-budget").value);
@@ -12465,8 +12507,6 @@ function collectMarketForm() {
       if (ends <= new Date()) return { error: "The needed-by date must be in the future." };
       payload.ends_at = ends.toISOString();
     }
-    const ann = $("mk-f-announce");
-    if (ann && ann.checked) payload.announce = true;
     const specInputs = mkSpec.collectInputs();
     if (specInputs.length) payload.crafted.inputs = specInputs;
     return { payload };
@@ -12760,6 +12800,7 @@ function bindMarketForm(editId, onCancel) {
     if (rm) rm.closest(".mk-statrow").remove();
   });
   mkSyncModeFields();
+  syncMktAnnounceAvail();
   const modeSel = $("mk-f-mode");
   if (modeSel) modeSel.onchange = mkSyncModeFields;
   $("mk-f-cancel").onclick = onCancel;
@@ -12774,6 +12815,11 @@ function bindMarketForm(editId, onCancel) {
         headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!r.ok) throw await r.json().catch(() => ({}));
       const saved = await r.json();
+      // An announce the server's flood guard swallowed must not read as sent —
+      // carried to the detail page, which renders one turn from now.
+      if (payload.announce) mktPostNotice = saved.announced
+        ? "📣 Announced to the org's Discord."
+        : "📣 Not announced — you posted another announcement moments ago. Give it a minute and post the link yourself if it's urgent.";
       if (editId && marketSubRoute().id === saved.id) renderMarketDetail(saved.id);   // hash unchanged
       else location.hash = `#/market/${saved.id}`;
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }

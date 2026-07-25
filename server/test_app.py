@@ -2256,6 +2256,54 @@ class CommissionModeTests(unittest.TestCase):
         body.update(over)
         return self.client.post("/api/market", json=body)
 
+    # -- the Discord announce opt-in (every mode, not just craft requests) --
+
+    def _announce_post(self, **over):
+        """POST a listing with the Discord opt-in, with notify stubbed out."""
+        body = {"item_id": "commodity:TestOre", "mode": "sale", "qty": 5,
+                "price_auec": 1000, "announce": True}
+        body.update(over)
+        sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None):
+            sent.append({"category": category, "text": text})
+            return True
+        orig_send, orig_cfg = notify.send, notify.is_configured
+        notify.send = _capture
+        notify.is_configured = lambda cat: cat == "marketplace"
+        try:
+            return self.client.post("/api/market", json=body)
+        finally:
+            notify.send, notify.is_configured = orig_send, orig_cfg
+
+    def test_sale_auction_and_barter_can_announce(self):
+        """The opt-in used to be commission-only — a sale, auction, or barter post
+        could never reach the marketplace channel."""
+        for over in ({"mode": "sale", "price_auec": 1000},
+                     {"mode": "auction", "start_price": 500,
+                      "ends_at": "2027-05-01T00:00:00+00:00"},
+                     {"mode": "barter", "want": "200 SCU Quantanium"}):
+            with self.subTest(mode=over["mode"]):
+                app._listing_announce_at.clear()
+                r = self._announce_post(**over)
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertTrue(r.json()["announced"])
+
+    def test_a_swallowed_announce_is_reported_honestly(self):
+        app._listing_announce_at.clear()
+        self.assertTrue(self._announce_post().json()["announced"])
+        # inside the flood-guard window: posted, but NOT announced — and the
+        # response says so rather than letting the UI claim it went out.
+        second = self._announce_post()
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertFalse(second.json()["announced"])
+
+    def test_no_announce_flag_means_no_announced_field(self):
+        app._listing_announce_at.clear()
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "mode": "sale", "qty": 1, "price_auec": 5})
+        self.assertNotIn("announced", r.json())
+
     # -- blueprint feed endpoints --
 
     def test_blueprint_index_and_search(self):
@@ -2433,8 +2481,9 @@ class CommissionModeTests(unittest.TestCase):
 
 
 class CommissionNotifyTests(unittest.TestCase):
-    """#25 step 4 — the WANTED announce (terms in the headline, per-member
-    cooldown) and the commission-flavored quote/accept/complete copy."""
+    """The listing announce (mode-appropriate headline + terms, per-member cooldown
+    scaled to how loud the message is) and the commission-flavored quote/accept/
+    complete copy. Every mode may announce; only the craft request @-mentions."""
 
     @classmethod
     def setUpClass(cls):
@@ -2457,7 +2506,7 @@ class CommissionNotifyTests(unittest.TestCase):
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
-        app._commission_announce_at.clear()
+        app._listing_announce_at.clear()
 
     _LISTING = {"id": 7, "seller_id": "111", "buyer_id": "222",
                 "mode": "commission", "item_name": "Omnisky III Cannon",
@@ -2467,34 +2516,98 @@ class CommissionNotifyTests(unittest.TestCase):
     _OFFER = {"id": 4, "bidder_id": "222", "amount_auec": 40000}
 
     def test_wanted_announce_carries_the_terms(self):
-        asyncio.run(app._notify_commission_posted(self._LISTING))
+        asyncio.run(app._notify_listing_posted(self._LISTING))
         msg = self.sent[0]
         self.assertIn("WANTED: Omnisky III Cannon", msg["text"])
         self.assertIn("Q700+", msg["text"])
         self.assertIn("45,000 aUEC", msg["text"])
         self.assertIn("crafter sources mats", msg["text"])
         self.assertIn("needed by 2027-01-15", msg["text"])
-        self.assertEqual(msg["dedup_key"], "commission-posted:7")
+        self.assertEqual(msg["dedup_key"], "listing-posted:7")
+
+    def test_sale_announce_carries_the_price(self):
+        asyncio.run(app._notify_listing_posted({
+            "id": 8, "seller_id": "111", "mode": "sale", "item_name": "Titanium",
+            "qty": 200, "price_auec": 15000}))
+        msg = self.sent[0]
+        self.assertIn("FOR SALE: Titanium", msg["text"])
+        self.assertIn("×200", msg["text"])
+        self.assertIn("15,000 aUEC", msg["text"])
+        self.assertIn("Make an offer", msg["text"])
+        self.assertEqual(msg["mentions"], [])          # a sale pings nobody
+
+    def test_auction_announce_carries_opening_buyout_and_end(self):
+        asyncio.run(app._notify_listing_posted({
+            "id": 9, "seller_id": "111", "mode": "auction", "item_name": "Cutlass Black",
+            "qty": 1, "start_price": 5000, "buyout_auec": 40000,
+            "ends_at": "2027-02-03T00:00:00+00:00"}))
+        text = self.sent[0]["text"]
+        self.assertIn("AUCTION: Cutlass Black", text)
+        self.assertIn("opening 5,000 aUEC", text)
+        self.assertIn("buyout 40,000 aUEC", text)
+        self.assertIn("ends 2027-02-03", text)
+        self.assertNotIn("×1", text)                   # a quantity of one is noise
+
+    def test_barter_announce_carries_what_they_want(self):
+        asyncio.run(app._notify_listing_posted({
+            "id": 10, "seller_id": "111", "mode": "barter", "item_name": "Laranite",
+            "qty": 50, "want": "200 SCU Quantanium"}))
+        text = self.sent[0]["text"]
+        self.assertIn("TRADE WANTED: Laranite", text)
+        self.assertIn("wants 200 SCU Quantanium", text)
+
+    def test_barter_announce_truncates_a_long_want(self):
+        asyncio.run(app._notify_listing_posted({
+            "id": 11, "seller_id": "111", "mode": "barter", "item_name": "Agricium",
+            "qty": 1, "want": "x" * 300}))
+        self.assertIn("…", self.sent[0]["text"])
+        self.assertLess(len(self.sent[0]["text"]), 400)
 
     def test_announce_cooldown_gates_per_member(self):
-        self.assertTrue(app._commission_announce_ok("111"))
-        self.assertFalse(app._commission_announce_ok("111"))   # inside the cooldown
-        self.assertTrue(app._commission_announce_ok("999"))    # other members unaffected
+        self.assertTrue(app._listing_announce_ok("111", "commission"))
+        self.assertFalse(app._listing_announce_ok("111", "commission"))  # inside the cooldown
+        self.assertTrue(app._listing_announce_ok("999", "commission"))   # others unaffected
+
+    def test_quiet_modes_get_the_short_cooldown(self):
+        """Listing several items in one sitting is ordinary — only the pinging
+        craft request sits on the 10-minute fuse."""
+        self.assertGreater(app.COMMISSION_ANNOUNCE_COOLDOWN_S,
+                           app.LISTING_ANNOUNCE_COOLDOWN_S)
+        self.assertTrue(app._listing_announce_ok("111", "sale"))
+        self.assertFalse(app._listing_announce_ok("111", "sale"))   # back-to-back guarded
+        # ...but the window it has to clear is the short one
+        app._listing_announce_at["111"] = time.monotonic() - (
+            app.LISTING_ANNOUNCE_COOLDOWN_S + 1)
+        self.assertTrue(app._listing_announce_ok("111", "sale"))
+        # the same elapsed time is NOT enough for a craft request
+        app._listing_announce_at["111"] = time.monotonic() - (
+            app.LISTING_ANNOUNCE_COOLDOWN_S + 1)
+        self.assertFalse(app._listing_announce_ok("111", "commission"))
 
     def test_wanted_announce_mentions_capable_crafters(self):
         now = "2026-07-05T00:00:00+00:00"
         db.add_member_blueprint("222", "TEST_BP", now)
         db.add_member_blueprint("333", "TEST_BP", now)
         db.add_member_blueprint("111", "TEST_BP", now)   # the poster — never self-pinged
-        asyncio.run(app._notify_commission_posted(
+        asyncio.run(app._notify_listing_posted(
             {**self._LISTING, "blueprint_key": "TEST_BP"}))
         msg = self.sent[0]
         self.assertEqual(msg["mentions"], ["222", "333"])
         self.assertIn("Can craft: <@222> <@333>", msg["text"])
         self.assertNotIn("<@111>", msg["text"])
 
+    def test_crafted_sale_does_not_ping_crafters(self):
+        """A blueprint-linked SALE carries a recipe key too (#25.1) — but nobody
+        asked to be pinged about someone else's finished goods."""
+        db.add_member_blueprint("222", "TEST_BP", "2026-07-05T00:00:00+00:00")
+        asyncio.run(app._notify_listing_posted({
+            "id": 12, "seller_id": "111", "mode": "sale", "item_name": "Test Cannon",
+            "qty": 1, "price_auec": 90000, "blueprint_key": "TEST_BP"}))
+        self.assertEqual(self.sent[0]["mentions"], [])
+        self.assertNotIn("Can craft", self.sent[0]["text"])
+
     def test_wanted_announce_without_recipe_pings_nobody(self):
-        asyncio.run(app._notify_commission_posted(self._LISTING))
+        asyncio.run(app._notify_listing_posted(self._LISTING))
         self.assertEqual(self.sent[0]["mentions"], [])
         self.assertNotIn("Can craft", self.sent[0]["text"])
 

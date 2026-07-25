@@ -1726,9 +1726,15 @@ WARNING_ANNOUNCE_COOLDOWN_S = 600.0
 WARNINGS_MAX_PER_MEMBER = 12   # flood guard: distinct active dangers one member may hold
 _warning_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
-# Craft-request announce shouts (#25) share the same per-member cooldown shape.
+# Listing announce shouts share the same per-member cooldown shape, but the price
+# of the message sets the length: a craft request @-mentions every member whose
+# library holds the recipe, so it stays on the long fuse; a sale/auction/barter
+# announce pings nobody, and posting several items in one sitting is ordinary
+# marketplace behaviour — a 10-minute gate there would silently eat announcements
+# the member explicitly asked for. Short fuse = double-click/flood guard only.
 COMMISSION_ANNOUNCE_COOLDOWN_S = 600.0
-_commission_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
+LISTING_ANNOUNCE_COOLDOWN_S = 60.0
+_listing_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
 # Survey-zone announce shouts (#37 §5.2) share the same per-member cooldown
 # shape. The threshold milestones (zone gate, first belt model) need no member
@@ -5841,56 +5847,97 @@ def _offer_amount_text(offer: dict) -> str:
     return "offered " + (" — ".join(parts) if parts else "a trade")
 
 
-def _commission_announce_ok(poster_id: str) -> bool:
-    """Anti-spam gate for announcing a craft request: one shout per member per
-    cooldown. Returns True (and arms the cooldown) only when allowed."""
+def _listing_announce_ok(poster_id: str, mode: str) -> bool:
+    """Anti-spam gate for announcing a new listing: one shout per member per
+    cooldown, armed only when allowed. A craft request mass-pings capable crafters,
+    so it keeps the long cooldown; the quiet modes get the short flood guard."""
+    window = (COMMISSION_ANNOUNCE_COOLDOWN_S if mode == "commission"
+              else LISTING_ANNOUNCE_COOLDOWN_S)
     now = time.monotonic()
-    last = _commission_announce_at.get(poster_id)
-    if last is not None and now - last < COMMISSION_ANNOUNCE_COOLDOWN_S:
+    last = _listing_announce_at.get(poster_id)
+    if last is not None and now - last < window:
         return False
-    _commission_announce_at[poster_id] = now
+    _listing_announce_at[poster_id] = now
     return True
 
 
 _ANNOUNCE_MENTION_CAP = 15   # sanity cap on capable-crafter pings per announce
 
 
-async def _notify_commission_posted(listing: dict) -> None:
-    """Opt-in shout for a new craft request (#25) — the requester asked for
-    reach, so it broadcasts to the marketplace channel with the job's headline
-    terms (spec quality, budget, materials sourcing, needed-by). Members whose
-    blueprint library holds the recipe get an @-mention (#25.1) so the request
-    reaches the people who can actually take it; everyone else just sees the
-    channel post."""
-    if not notify.is_configured("marketplace"):
-        return
+# Headline + closing call-to-action per listing mode. A craft request is a *want*
+# ("WANTED"), the other three are *offers*, so the wording flips accordingly.
+_LISTING_ANNOUNCE_COPY = {
+    "sale": ("🏷️", "FOR SALE", "Make an offer on the board."),
+    "auction": ("🔨", "AUCTION", "Bid on the board."),
+    "barter": ("🔄", "TRADE WANTED", "Offer a swap on the board."),
+    "commission": ("🛠️", "WANTED", "Quote the job on the board."),
+}
+
+
+def _listing_announce_terms(listing: dict) -> list[str]:
+    """The headline terms of a listing, as a mode-appropriate bit list — what a
+    member needs to decide whether to open the board at all."""
+    mode = listing.get("mode")
     bits = []
-    spec = (listing.get("attributes") or {}).get("spec") or {}
-    if spec.get("quality"):
-        bits.append(f"Q{spec['quality']}+")
     qty = listing.get("qty") or 1
     if qty and float(qty) > 1:
-        bits.append(f"×{qty:g}")
-    if listing.get("price_auec"):
-        bits.append(f"budget {_auec(listing['price_auec'])}")
-    mats = {"requester": "materials supplied", "crafter": "crafter sources mats",
-            "split": "materials split"}.get(listing.get("materials") or "")
-    if mats:
-        bits.append(mats)
-    if listing.get("ends_at"):
-        bits.append(f"needed by {str(listing['ends_at'])[:10]}")
-    who = _resolve_member_name(listing["seller_id"], None)
+        bits.append(f"×{float(qty):g}")
+    if mode == "commission":
+        spec = (listing.get("attributes") or {}).get("spec") or {}
+        if spec.get("quality"):
+            bits.insert(0, f"Q{spec['quality']}+")
+        if listing.get("price_auec"):
+            bits.append(f"budget {_auec(listing['price_auec'])}")
+        mats = {"requester": "materials supplied", "crafter": "crafter sources mats",
+                "split": "materials split"}.get(listing.get("materials") or "")
+        if mats:
+            bits.append(mats)
+        if listing.get("ends_at"):
+            bits.append(f"needed by {str(listing['ends_at'])[:10]}")
+    elif mode == "sale":
+        if listing.get("price_auec") is not None:
+            bits.append(_auec(listing["price_auec"]))
+    elif mode == "auction":
+        if listing.get("start_price") is not None:
+            bits.append(f"opening {_auec(listing['start_price'])}")
+        if listing.get("buyout_auec") is not None:
+            bits.append(f"buyout {_auec(listing['buyout_auec'])}")
+        if listing.get("ends_at"):
+            bits.append(f"ends {str(listing['ends_at'])[:10]}")
+    elif mode == "barter":
+        want = (listing.get("want") or "").strip()
+        if want:
+            bits.append("wants " + (want[:77] + "…" if len(want) > 78 else want))
+    return bits
+
+
+async def _notify_listing_posted(listing: dict) -> None:
+    """Opt-in shout for a new listing — the poster asked for reach, so it
+    broadcasts to the marketplace channel with the listing's headline terms.
+
+    Every mode can announce (a sale nobody sees is the same dead ad as a craft
+    request nobody sees). Only the craft request @-mentions: members whose
+    blueprint library holds the recipe get pinged (#25.1) so the job reaches the
+    people who can actually take it. The quiet modes reach the channel and stop
+    there — nobody's notifications light up because someone listed a Cutlass."""
+    if not notify.is_configured("marketplace"):
+        return
+    mode = listing.get("mode") or "sale"
+    icon, headline, cta = _LISTING_ANNOUNCE_COPY.get(
+        mode, _LISTING_ANNOUNCE_COPY["sale"])
+    bits = _listing_announce_terms(listing)
     detail = (" — " + ", ".join(bits)) if bits else ""
+    who = _resolve_member_name(listing["seller_id"], None)
     # Ping the members who can craft this (library match), minus the requester.
-    key = listing.get("blueprint_key")
+    key = listing.get("blueprint_key") if mode == "commission" else None
     crafters = [m for m in (db.blueprint_crafters(key) if key else [])
                 if str(m) != str(listing["seller_id"])][:_ANNOUNCE_MENTION_CAP]
     craft_line = ("\nCan craft: " + " ".join(f"<@{m}>" for m in crafters)) if crafters else ""
     await notify.send(
         "marketplace",
-        f"🛠️ **WANTED: {listing.get('item_name')}**{detail}\n"
-        f"Posted by {who}. Quote the job on the board.{craft_line}{_deep_link('#/market')}",
-        dedup_key=f"commission-posted:{listing['id']}",
+        f"{icon} **{headline}: {listing.get('item_name')}**{detail}\n"
+        f"Posted by {who}. {cta}{craft_line}{_deep_link('#/market')}",
+        dedup_key=f"listing-posted:{listing['id']}",
         mentions=crafters)
 
 
@@ -7074,7 +7121,7 @@ class ListingIn(BaseModel):
     crafted: CraftedIn | None = None                            # crafted-quality blob
     seller_handle: str | None = Field(default=None, max_length=_HANDLE_MAX)  # in-game meetup name
     materials: str | None = Field(default=None, max_length=16)  # commission: requester|crafter|split
-    announce: bool = False                                      # commission: Discord shout
+    announce: bool = False                                      # opt-in Discord shout (any mode)
 
 
 class ListingPatchIn(BaseModel):
@@ -7444,8 +7491,9 @@ async def list_market(mode: str | None = None, item: str | None = None,
     return {"listings": [_listing_card(r, user, deals, craft_counts, my_bps)
                          for r in cards],
             "total": total, "limit": limit, "offset": offset,
-            # Whether the commission form should offer the Discord announce
-            # checkbox (mirrors the LFG board's announce_available flag).
+            # Whether the listing form should offer the Discord announce checkbox
+            # (mirrors the LFG board's announce_available flag). Applies to every
+            # mode — the form hides the row entirely when no webhook is set up.
             "announce_available": notify.is_configured("marketplace")}
 
 
@@ -7467,13 +7515,18 @@ async def create_listing(body: ListingIn, user: dict = Depends(require_session))
     now = datetime.now(timezone.utc).isoformat()
     lid = db.create_listing({**fields, "seller_id": user["id"], "seller_handle": handle,
                              "status": "open", "created_at": now, "updated_at": now})
-    # Opt-in Discord shout for craft requests (#25) — rate-limited per member so
-    # the channel never floods; silently skipped when webhooks aren't configured.
-    if (body.announce and fields["mode"] == "commission"
-            and notify.is_configured("marketplace")
-            and _commission_announce_ok(user["id"])):
-        _notify_bg(_notify_commission_posted(db.get_listing(lid)))
-    return _listing_view(db.get_listing(lid), user, detail=True)
+    # Opt-in Discord shout for ANY listing mode — rate-limited per member so the
+    # channel never floods; skipped when webhooks aren't configured. The result
+    # rides back on the response: a request the cooldown swallowed must not read
+    # as "announced" in the UI.
+    announced = bool(body.announce and notify.is_configured("marketplace")
+                     and _listing_announce_ok(user["id"], fields["mode"]))
+    if announced:
+        _notify_bg(_notify_listing_posted(db.get_listing(lid)))
+    view = _listing_view(db.get_listing(lid), user, detail=True)
+    if body.announce:
+        view["announced"] = announced
+    return view
 
 
 # NB: must be declared BEFORE /api/market/{listing_id} — FastAPI matches in order,
