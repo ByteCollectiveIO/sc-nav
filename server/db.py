@@ -255,6 +255,9 @@ CREATE INDEX IF NOT EXISTS goals_status ON goals(status);
 -- (qty 30) and leaves the holding's `available = qty - SUM(allocations)` at 20, so
 -- a contribution is never double-counted in the org rollup. One allocation per
 -- (holding, goal); deleting either the holding or the goal removes it.
+-- A holding may be committed PAST its quantity: pledging what you haven't gathered
+-- yet is legitimate ("I'll go mine it"), and the un-stocked remainder is derived,
+-- never stored (see _ALLOC_SHORT_SQL) — so a promise never inflates org stock.
 CREATE TABLE IF NOT EXISTS inventory_allocations (
     id INTEGER PRIMARY KEY,
     inventory_id INTEGER NOT NULL,      -- parent holding (inventory.id)
@@ -1882,15 +1885,29 @@ def delete_allocation(alloc_id: int) -> bool:
     return cur.rowcount > 0
 
 
+# How much of an allocation is NOT backed by stock the member has actually logged
+# — the "still gathering" part of a pledge. A holding can be committed past its
+# quantity (promising to gather is first-class), so on-hand stock is attributed to
+# that holding's allocations **oldest first** (by id): each allocation is backed by
+# whatever the holding has left after the earlier ones, and the remainder is short.
+# Deterministic, so a member's older commitments never flip to "gathering" because
+# they made a newer one.
+_ALLOC_SHORT_SQL = (
+    "MAX(0, MIN(a.qty, (SELECT COALESCE(SUM(x.qty),0) FROM inventory_allocations x "
+    "WHERE x.inventory_id = a.inventory_id AND x.id <= a.id) - i.qty))")
+
+
 def list_goal_contributions(goal_id: int | None = None) -> list[dict]:
     """Goal contributions as flat rows the fill math consumes — each allocation
     joined to its parent holding so it carries item/owner/location. Shaped like the
     old goal-tagged inventory rows ({item_id, item_name, unit, qty, owner_id,
     location, goal_id}) plus allocation/holding ids, so derive_goal_progress is
-    unchanged. `goal_id` None returns every goal's contributions (board grouping)."""
+    unchanged. `short` is the un-stocked ("still gathering") part of each pledge.
+    `goal_id` None returns every goal's contributions (board grouping)."""
     q = ("SELECT a.id AS allocation_id, a.goal_id, a.qty AS qty, "
          "a.inventory_id AS holding_id, i.owner_id, i.item_id, i.item_name, "
-         "i.unit, i.location FROM inventory_allocations a "
+         f"i.unit, i.location, i.qty AS holding_qty, {_ALLOC_SHORT_SQL} AS short "
+         "FROM inventory_allocations a "
          "JOIN inventory i ON i.id = a.inventory_id")
     params: list = []
     if goal_id is not None:
@@ -1903,14 +1920,40 @@ def list_goal_contributions(goal_id: int | None = None) -> list[dict]:
 
 def allocations_for_owner(owner_id: str) -> list[dict]:
     """A member's goal commitments, keyed to the holding they're drawn from, with
-    the goal title — powers the nested parent→child render in 'my holdings'."""
+    the goal title + the un-stocked `short` part — powers the nested parent→child
+    render in 'my holdings' (and the withdraw control on each commitment)."""
     with _lock:
         rows = _conn.execute(
-            "SELECT a.id, a.inventory_id, a.goal_id, a.qty, g.title AS goal_title "
+            "SELECT a.id, a.inventory_id, a.goal_id, a.qty, g.title AS goal_title, "
+            f"{_ALLOC_SHORT_SQL} AS short "
             "FROM inventory_allocations a JOIN inventory i ON i.id = a.inventory_id "
             "LEFT JOIN goals g ON g.id = a.goal_id WHERE i.owner_id=? "
             "ORDER BY a.id", (str(owner_id),)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_allocation_full(alloc_id: int) -> dict | None:
+    """An allocation joined to its parent holding — the shape the withdraw path
+    needs (owner for the permission check, item/unit for the response)."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT a.id, a.inventory_id, a.goal_id, a.qty, i.owner_id, i.item_id, "
+            "i.item_name, i.unit, i.location, i.qty AS holding_qty "
+            "FROM inventory_allocations a JOIN inventory i ON i.id = a.inventory_id "
+            "WHERE a.id=?", (alloc_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def holding_is_empty(inv_id: int) -> bool:
+    """True when a holding declares no stock AND backs no commitments — an empty
+    shell left behind by a withdrawn pledge, safe to delete so 'gathering' rows
+    don't pile up as 0-qty ghosts in the member's inventory."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT i.qty AS qty, (SELECT COUNT(*) FROM inventory_allocations a "
+            "WHERE a.inventory_id=i.id) AS n FROM inventory i WHERE i.id=?",
+            (inv_id,)).fetchone()
+    return bool(row) and float(row["qty"] or 0) <= 0 and not row["n"]
 
 
 # --- goals -----------------------------------------------------------------

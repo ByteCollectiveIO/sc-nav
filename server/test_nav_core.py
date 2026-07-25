@@ -1960,6 +1960,19 @@ class InventoryRollupTests(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(nav_core.derive_inventory_rollup([]), [])
 
+    def test_zero_qty_holdings_stay_out_of_the_rollup(self):
+        # The shell row an un-gathered goal pledge hangs off isn't org stock.
+        rows = [
+            {"item_id": "commodity:titanium", "item_name": "Titanium", "unit": "SCU",
+             "qty": 0, "owner_id": "A", "location": "Daymar"},
+            {"item_id": "commodity:titanium", "item_name": "Titanium", "unit": "SCU",
+             "qty": 12, "owner_id": "B", "location": "Area18"},
+        ]
+        roll = nav_core.derive_inventory_rollup(rows)
+        self.assertEqual(roll[0]["total"], 12)
+        self.assertEqual(roll[0]["holders"], 1)
+        self.assertEqual([l["location"] for l in roll[0]["by_location"]], ["Area18"])
+
 
 class GoalProgressTests(unittest.TestCase):
     GOAL = {"line_items": [
@@ -1982,7 +1995,8 @@ class GoalProgressTests(unittest.TestCase):
         self.assertEqual(tit["short"], 100)
         self.assertEqual(p["overall_pct"], 68.8)        # (400+150)/(500+300)
         self.assertFalse(p["is_met"])
-        self.assertEqual(p["per_contributor"][0], {"owner_id": "A", "qty": 470})
+        self.assertEqual(p["per_contributor"][0],
+                         {"owner_id": "A", "qty": 470, "promised": 0})
 
     def test_oversupply_one_line_does_not_mask_shortfall(self):
         rows = [
@@ -2001,6 +2015,28 @@ class GoalProgressTests(unittest.TestCase):
         p = nav_core.derive_goal_progress(self.GOAL, rows)
         self.assertEqual(p["overall_pct"], 100.0)
         self.assertTrue(p["is_met"])
+
+    def test_pledges_count_toward_fill_but_are_reported_apart(self):
+        # `short` on a contribution = pledged, not yet gathered. It still fills the
+        # goal (a promise is what the board is for) but never passes as stock.
+        rows = [
+            {"item_id": "commodity:titanium", "qty": 300, "owner_id": "A"},
+            {"item_id": "commodity:titanium", "qty": 200, "owner_id": "B", "short": 200},
+            {"item_id": "commodity:laranite", "qty": 300, "owner_id": "A", "short": 50},
+        ]
+        p = nav_core.derive_goal_progress(self.GOAL, rows)
+        tit = next(l for l in p["lines"] if l["item_id"] == "commodity:titanium")
+        self.assertEqual((tit["have"], tit["promised"], tit["on_hand"]), (500, 200, 300))
+        self.assertTrue(p["is_met"])                    # pledged still counts as filled
+        by = {c["owner_id"]: c for c in p["per_contributor"]}
+        self.assertEqual((by["B"]["qty"], by["B"]["promised"]), (200, 200))
+        self.assertEqual((by["A"]["qty"], by["A"]["promised"]), (600, 50))
+
+    def test_a_short_larger_than_the_contribution_is_clamped(self):
+        rows = [{"item_id": "commodity:titanium", "qty": 100, "owner_id": "A", "short": 999}]
+        p = nav_core.derive_goal_progress(self.GOAL, rows)
+        tit = next(l for l in p["lines"] if l["item_id"] == "commodity:titanium")
+        self.assertEqual((tit["promised"], tit["on_hand"]), (100, 0))
 
     def test_no_line_items_is_not_met(self):
         p = nav_core.derive_goal_progress({"line_items": []}, [])
