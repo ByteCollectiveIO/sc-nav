@@ -5,9 +5,11 @@ set SERVER=http://YOUR-SERVER:8765
 rem Your in-game handle (for attributing captured POIs/nodes). Once set, it is
 rem remembered in watcher_config.json, so you can blank this out afterward.
 set HANDLE=
-rem In-game overlay: Y or N to answer without being prompted, blank to be asked
-rem (your answer is remembered in watcher_config.json, so the prompt takes a
-rem blank afterward to mean "same as last time").
+rem In-game overlay: L (light HUD), H (heavy beta, opens the web app in a pinned
+rem browser window), or N (none) to answer without being prompted; blank to be
+rem asked. Your answer is remembered in watcher_config.json, so the prompt takes
+rem a blank afterward to mean "same as last time". (Y still means light, so an
+rem older copy of this file keeps working.)
 set OVERLAY=
 
 title SC Nav Watcher
@@ -34,10 +36,16 @@ rem saved in watcher_config.json from a previous run. (Single-line IF on
 rem purpose: the prompt text has parentheses, which would break a (...) block.)
 if "%HANDLE%"=="" set /p HANDLE=Enter your in-game handle [blank = use saved]:
 
-rem Same deal for the overlay: a small always-on-top window over the game with
-rem your target, distance and ETA. Off until you say otherwise. (Single-line IF
-rem again — the prompt text has parentheses, which would break a (...) block.)
-if "%OVERLAY%"=="" set /p OVERLAY=Show the in-game overlay (target/distance)? [Y/N, blank = use saved]:
+rem Same deal for the overlay. Two flavours: LIGHT is the small always-on-top
+rem HUD (target/distance/ETA); HEAVY is the beta that opens the whole web app in
+rem a browser window pinned over the game. Off until you say otherwise.
+rem (Single-line IF again — the prompt text has parentheses, which would break a
+rem (...) block.)
+if "%OVERLAY%"=="" echo.
+if "%OVERLAY%"=="" echo   Overlay:  L = light HUD (target/distance/ETA)
+if "%OVERLAY%"=="" echo             H = heavy BETA (full web app, pinned browser window)
+if "%OVERLAY%"=="" echo             N = none
+if "%OVERLAY%"=="" set /p OVERLAY=Choose [L/H/N, blank = use saved]:
 
 rem The overlay needs tkinter, which is part of Python itself — there is nothing
 rem to pip-install. It comes from the "tcl/tk and IDLE" option in the python.org
@@ -46,7 +54,11 @@ rem Say so plainly here rather than letting the watcher log one line and move on
 rem the person who just asked for the overlay is the one who needs to read it.
 rem (goto/errorlevel rather than a nested `||` inside an IF block — batch parses
 rem that inconsistently, and this file has to work first try on someone else's PC.)
-if /i not "%OVERLAY%"=="Y" goto tk_ok
+rem Only the LIGHT overlay needs tkinter; heavy mode drives a browser instead.
+if /i "%OVERLAY%"=="L" goto tk_check
+if /i "%OVERLAY%"=="Y" goto tk_check
+goto tk_ok
+:tk_check
 %PYTHON% -c "import tkinter" >nul 2>nul
 if not errorlevel 1 goto tk_ok
 echo.
@@ -66,8 +78,10 @@ rem Build the argument list up instead of branching: with two tri-state answers
 rem a nested-IF version would need four copies of the command line.
 set ARGS=--server %SERVER%
 if not "%HANDLE%"=="" set ARGS=%ARGS% --handle "%HANDLE%"
-if /i "%OVERLAY%"=="Y" set ARGS=%ARGS% --overlay
-if /i "%OVERLAY%"=="N" set ARGS=%ARGS% --no-overlay
+if /i "%OVERLAY%"=="L" set ARGS=%ARGS% --overlay-mode light
+if /i "%OVERLAY%"=="Y" set ARGS=%ARGS% --overlay-mode light
+if /i "%OVERLAY%"=="H" set ARGS=%ARGS% --overlay-mode heavy
+if /i "%OVERLAY%"=="N" set ARGS=%ARGS% --overlay-mode off
 
 %PYTHON% sc_nav_watcher.py %ARGS%
 pause

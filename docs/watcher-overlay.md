@@ -416,6 +416,77 @@ real use rather than guessed at up front.
 - Manual, on the Windows box: borderless vs fullscreen (§3.1), no-tkinter
   degradation (§7.3), Ctrl-C and window-close shutdown (§6).
 
+## 13. Heavy mode (beta) — pin the real app over the game
+
+**Decided 2026-07-25 (user):** rather than port the SPA's maps to a tk canvas
+(§13.1), offer the **whole web app** in a pinned app-mode browser window as an
+opt-in **beta** alongside the light overlay. Startup becomes a three-way choice:
+**none · light · heavy**.
+
+### 13.1 Why not a tk canvas map
+
+The obvious ask after W1 is "let me see the resource map over the game." Drawing
+it in `tk.Canvas` is very doable (stdlib, no bundler) but the projection,
+culling, labels and legend already exist in `index.html` — a Python port is a
+**second implementation that must track the first forever**, and every map
+change becomes two edits. Estimated 2.5–4 days plus permanent drift risk.
+
+Heavy mode gets *every* map — navigator, Prospector, coverage, radar — for a
+fraction of that, and it can never drift, because it **is** the SPA. It also
+gets **live WebSocket updates**, which the watcher itself can't have (`/ws` is
+cookie-only, §4.1) — so teammates move in real time, which the tk port could
+only fake by polling.
+
+### 13.2 The catch worth knowing up front
+
+Your **own** marker is the stale one. Everything else on that page updates live
+over the WS; your position only moves when you run `/showlocation`. This inverts
+W1's honesty model — there, *everything* was as old as the fix. Heavy mode is
+honest by construction (the SPA already renders teammate freshness), but the
+asymmetry will feel odd until you know it.
+
+### 13.3 Two Chromium behaviors that shape the implementation
+
+1. **`--app=` reuses a running browser.** If the user's browser is already open
+   on the default profile, our launch spawns a window in the *existing* process
+   and our child exits immediately. So **PID-based window finding and teardown
+   both break.** Windows are found by class + title, and closed with
+   `WM_CLOSE`, never by killing our subprocess.
+2. **A normal tab on the app has the same window title** (`Org Navigator`), so
+   title matching alone could pin the user's ordinary browser window over their
+   game. Fix: **snapshot matching HWNDs before launching** and adopt only a
+   window that wasn't there before.
+
+Use the **default profile** deliberately — that's what makes the session cookie
+(and therefore login) already work. A `--user-data-dir` would force a fresh
+Discord OAuth in a chrome-less window.
+
+### 13.4 Shape
+
+- Browser discovery: **Edge first** (guaranteed on Win10/11), then Chrome,
+  standard install paths plus `PATH`. Neither found → log and fall back.
+- Launch: `--app=<url>`, `--window-size`, `--window-position` (geometry via
+  launch flags is more reliable than moving it afterwards).
+- Pin: the same `SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE)` re-assert loop the
+  light overlay uses, for the same reason — topmost is lost, not sticky.
+- Teardown: `WM_CLOSE` to the adopted window when the watcher exits.
+- Never blocks the watcher: no browser, no window within the timeout, or a
+  non-Windows host → log one line and keep reporting position.
+
+### 13.5 Config migration
+
+`watcher_config.json` `overlay` was a **boolean**. It becomes a mode string;
+legacy values migrate `true → "light"`, `false → "off"`. `--overlay` /
+`--no-overlay` stay as aliases for light/off so existing launchers keep working;
+`--overlay-mode {off,light,heavy}` is the new authoritative flag.
+
+### 13.6 Why beta
+
+Everything in §13.3 is Windows-specific and **cannot be verified from the dev
+Mac** — browser discovery paths, HWND enumeration, the snapshot-diff adoption,
+`WM_CLOSE` teardown. The light overlay at least rendered on macOS. Heavy mode
+ships labelled beta because its riskiest half has never executed.
+
 ## 12. Open questions
 
 1. **First-run default** (§7.2) — designed as *off*. If you'd rather the

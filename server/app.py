@@ -71,7 +71,8 @@ WATCHER_DIR = next(
 # Files bundled into the download (everything else — tests, __pycache__, any
 # stale watcher_config.json — is left out).
 WATCHER_BUNDLE_FILES = (
-    "sc_nav_watcher.py", "sc_nav_overlay.py", "run_watcher.bat", "README.md",
+    "sc_nav_watcher.py", "sc_nav_overlay.py", "sc_nav_heavy.py",
+    "run_watcher.bat", "README.md",
 )
 
 # Live dataset endpoints (the files in DATA_DIR act as the offline cache).
