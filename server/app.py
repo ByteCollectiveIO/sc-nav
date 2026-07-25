@@ -70,7 +70,9 @@ WATCHER_DIR = next(
 )
 # Files bundled into the download (everything else — tests, __pycache__, any
 # stale watcher_config.json — is left out).
-WATCHER_BUNDLE_FILES = ("sc_nav_watcher.py", "run_watcher.bat", "README.md")
+WATCHER_BUNDLE_FILES = (
+    "sc_nav_watcher.py", "sc_nav_overlay.py", "run_watcher.bat", "README.md",
+)
 
 # Live dataset endpoints (the files in DATA_DIR act as the offline cache).
 OC_URL = os.environ.get("SC_NAV_OC_URL", "https://starmap.space/api/v3/oc/index.php")
@@ -2712,6 +2714,38 @@ async def _start_presence_broadcaster():
     notify.migrate_legacy_webhook()
 
 
+def nav_summary(state: dict | None) -> dict | None:
+    """The watcher-overlay slice of a nav_state (#40 §5.1): target, distance,
+    ETA and the fix timestamp — nothing else.
+
+    Returned from `POST /api/position`, which already builds the full frame and
+    used to discard it, so the overlay costs ZERO extra requests and zero extra
+    compute. Deliberately lean: this crosses the wire on every /showlocation and
+    every 60 s heartbeat of every watcher, so it must not grow the nearest-POI
+    lists or forecasts that make `/api/state` too heavy to send this often.
+
+    `bearing_deg` is a great-circle SURFACE bearing and is None off-body — the
+    game reports position, not attitude, so there is no heading to point with in
+    space (#40 §3.2). Clients must render the absence, not fake a compass."""
+    if not state:
+        return None
+    dest = state.get("destination")
+    container = state.get("container")
+    return {
+        "t": state.get("t"),
+        "system": state.get("system"),
+        "container": container.get("name") if container else None,
+        "destination": {
+            "name": dest.get("name"),
+            "distance_m": dest.get("distance_m"),
+            "surface_distance_m": dest.get("surface_distance_m"),
+            "bearing_deg": dest.get("bearing_deg"),
+            "eta_s": dest.get("eta_s"),
+            "same_container": dest.get("same_container"),
+        } if dest else None,
+    }
+
+
 @app.post("/api/position")
 async def post_position(body: PositionIn, user: dict = Depends(require_user)):
     frame = None                        # set when the fan-out happens after the lock
@@ -2762,9 +2796,12 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         # unresponsive to the tunnel (the delayed updates + upstream 502s seen with
         # two watchers live).
         frame = sess.state_frame()
+        # Snapshot the overlay slice under the same lock that built the frame, so
+        # the watcher's HUD can't read a half-updated state (#40 §5.1).
+        summary = nav_summary(sess.nav_state)
     if frame is not None:
         await sess.push_frame(frame)
-    return {"ok": True}
+    return {"ok": True, "nav": summary}
 
 
 def _halo_capture_note(poi) -> str | None:

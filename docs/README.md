@@ -25,6 +25,8 @@ drift — trust grep and CI, not the citation.
 | Doc | Status | Covers |
 |---|---|---|
 | [survey-platform.md](survey-platform.md) | 🔨 slices 0–5 shipped v0.64–0.72 | #37: survey tool → prospecting suite — **radar layers, $$$ value tiers, ore-first routing, scan detail, arrival routing, coverage gaps + the always-on overview map, survey stats + Org Intel Surveying + Discord milestones + radar drift nudge ALL live**; remaining: patch staleness, cross-org import, mark kinds |
+| [uex-data-contribution.md](uex-data-contribution.md) | 🅿 parked 2026-07-25 | #39: post run-mode price/SCU observations back to the UEX community feed — credential models (org app key vs per-user `secret-key`), the screenshot blocker, quality guardrails. **Slice 0 (local price overlay: org-reported prices beat the ≤6 h scrape) is unblocked and buildable alone**; the outbound half is parked |
+| [watcher-overlay.md](watcher-overlay.md) | 🔨 W1 built 2026-07-25 | #40: opt-in in-game HUD in the watcher bundle — target · distance · ETA · staleness over the game. Server half is nearly free (`post_position` already builds the frame and discards it); real work is the tk main-thread split + Windows window management. **No inbound traffic, no firewall changes** (§4); bearing exists on-body only and the fix is only as fresh as the last `/showlocation` (§3) |
 | [survey-app-restructure.md](survey-app-restructure.md) | v0.73.0 | #38: `#/halo` IA refactor — one app, three tabs (DROP · FIELD · ATLAS) + rename to **Prospector**; separates plan / cockpit / org-data surfaces without splitting the field loop; frontend-only, builds the shelf #37 import lands on |
 
 ## Shipped feature specs (reference for what's live)

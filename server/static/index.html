@@ -2923,7 +2923,8 @@
         <p>The watcher needs Python — a free program many apps use. Get it from
         <a href="https://www.python.org/downloads/windows/" target="_blank" rel="noopener">python.org</a>.
         In the installer, <b>check the box that says "Add python.exe to PATH"</b> before clicking
-        Install. If Python is already on this PC, skip this step.</p>
+        Install, and <b>leave "tcl/tk and IDLE" ticked</b> (it already is); that's what the
+        optional in-game overlay draws with. If Python is already on this PC, skip this step.</p>
       </li>
 
       <li>
@@ -2932,7 +2933,11 @@
         window opens and asks for your <b>in-game handle</b> — your RSI/Star Citizen name, so
         sightings you capture are credited to you. Type it and press
         <span class="kbd">Enter</span>.</p>
-        <p>That's the only thing it asks; your token is already built in. It remembers the handle,
+        <p>Then it asks whether you want the <b>in-game overlay</b> — a small always-on-top window
+        with your current target, distance and ETA, so you don't have to alt-tab here mid-flight.
+        Answer <span class="kbd">Y</span> or <span class="kbd">N</span> (it's off unless you say
+        yes; borderless/windowed mode only, and you can change your mind any time).</p>
+        <p>That's all it asks; your token is already built in. It remembers both answers,
         so next time you just double-click and play. Leave the window open (minimized is fine)
         while you play. When you see <code>listening for /showlocation</code>, it's working.</p>
         <details style="margin-top:8px;">
