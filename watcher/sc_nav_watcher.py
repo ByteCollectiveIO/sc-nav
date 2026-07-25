@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import collections
+import importlib
 import json
 import os
 import platform
@@ -424,11 +425,42 @@ def resolve_handle(args):
     return _resolve_sticky(args.handle, "handle")
 
 
+OVERLAY_MODES = ("off", "light", "heavy")
+
+
+def _migrate_overlay_mode(saved):
+    """`overlay` used to be a bool (W1). Map the old values onto the modes so
+    an existing watcher_config.json keeps working untouched (#40 §13.5)."""
+    if saved is True:
+        return "light"
+    if saved is False:
+        return "off"
+    if isinstance(saved, str) and saved.lower() in OVERLAY_MODES:
+        return saved.lower()
+    return None
+
+
 def resolve_overlay(args):
-    """Whether to show the in-game overlay. Off unless asked for: a window
-    appearing over someone's cockpit uninvited is the thing to avoid (#40 §7).
-    The launcher asks once and the answer sticks, exactly like --handle."""
-    return _resolve_sticky_flag(args.overlay, "overlay", default=False)
+    """Which overlay to run: off | light | heavy.
+
+    Off unless asked for — a window appearing over someone's cockpit uninvited
+    is the thing to avoid (#40 §7). The launcher asks once and the answer
+    sticks, exactly like --handle. `--overlay-mode` wins; the older
+    `--overlay`/`--no-overlay` remain aliases for light/off so launchers and
+    muscle memory from W1 keep working."""
+    chosen = None
+    if getattr(args, "overlay_mode", None):
+        chosen = args.overlay_mode.lower()
+    elif args.overlay is not None:
+        chosen = "light" if args.overlay else "off"
+
+    config = _load_config()
+    if chosen in OVERLAY_MODES:
+        if chosen != _migrate_overlay_mode(config.get("overlay")):
+            config["overlay"] = chosen
+            _save_config(config)
+        return chosen
+    return _migrate_overlay_mode(config.get("overlay")) or "off"
 
 
 def resolve_token(args):
@@ -568,19 +600,17 @@ def run(args, sink=None, stop=None):
 # ---------------------------------------------------------------------------
 
 
-def _load_overlay_module():
-    """Import the sibling overlay module, or None. The launcher cd's into this
+def _load_overlay_module(name="sc_nav_overlay"):
+    """Import a sibling overlay module, or None. The launcher cd's into this
     directory, but someone running the script by absolute path from elsewhere
     shouldn't lose the overlay to sys.path."""
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
         sys.path.insert(0, here)
     try:
-        import sc_nav_overlay
-
-        return sc_nav_overlay
+        return importlib.import_module(name)
     except Exception as exc:
-        log(f"overlay module unavailable ({exc}) — continuing without it")
+        log(f"{name} unavailable ({exc}) — continuing without it")
         return None
 
 
@@ -596,6 +626,45 @@ def _persist_overlay_config(cfg):
             changed = True
     if changed:
         _save_config(saved)
+
+
+def run_with_heavy(args):
+    """Heavy mode (BETA, #40 §13): the watch loop runs on the main thread as
+    normal, and the browser window is launched + held on top from a daemon
+    thread. Opposite arrangement to light mode, where tk demanded main.
+
+    The browser is a sibling process, not ours to babysit: if it can't start we
+    log one line and keep reporting position, because that is the actual job."""
+    if args.dry_run:
+        log("heavy overlay: skipped in --dry-run (nothing to point it at)")
+        return run(args)
+
+    heavy = _load_overlay_module("sc_nav_heavy")
+    url = heavy.heavy_url(args.server) if heavy else ""
+    if not heavy or not url:
+        log("heavy overlay unavailable — continuing without it")
+        try:
+            return run(args)
+        except KeyboardInterrupt:
+            log("stopped")
+            return 0
+
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=heavy.run,
+        kwargs={"url": url, "config": _load_config(), "log": log, "stop": stop},
+        name="sc-nav-heavy", daemon=True,
+    )
+    thread.start()
+    try:
+        return run(args, stop=stop)
+    except KeyboardInterrupt:
+        log("stopped")
+        return 0
+    finally:
+        # Close the window we opened, and give it a moment to actually go.
+        stop.set()
+        thread.join(timeout=3.0)
 
 
 def run_with_overlay(args):
@@ -688,6 +757,15 @@ def main():
         "Required by an authenticated server. Saved to watcher_config.json.",
     )
     parser.add_argument(
+        "--overlay-mode",
+        choices=OVERLAY_MODES,
+        default=None,
+        help="off = no overlay · light = the small always-on-top HUD "
+        "(target/distance/ETA) · heavy = BETA, opens the full web app in a "
+        "pinned browser window over the game (every map, live updates; needs "
+        "Edge or Chrome and a signed-in browser). Saved to watcher_config.json.",
+    )
+    parser.add_argument(
         "--overlay",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -708,9 +786,12 @@ def main():
     if not args.server and not args.dry_run:
         parser.error("--server is required unless --dry-run is set")
 
-    if resolve_overlay(args):
+    mode = resolve_overlay(args)
+    if mode == "light":
         sys.exit(run_with_overlay(args))
-    log("overlay: off (answer Y at the launcher prompt to enable)")
+    if mode == "heavy":
+        sys.exit(run_with_heavy(args))
+    log("overlay: off (answer L or H at the launcher prompt to enable)")
     try:
         sys.exit(run(args))
     except KeyboardInterrupt:

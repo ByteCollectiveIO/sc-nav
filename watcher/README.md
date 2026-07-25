@@ -48,7 +48,8 @@ a three-keystroke action. A programmable keyboard/mouse macro can make it one.
 | `--once` | off | Read clipboard once, send if valid, exit (connectivity test) |
 | `--verbose` | off | Log non-location clipboard changes |
 | `--handle NAME` | — | Your in-game handle, attached to captures for attribution |
-| `--overlay` / `--no-overlay` | off | Show the in-game overlay (see below) |
+| `--overlay-mode MODE` | off | `off` · `light` (the HUD) · `heavy` (beta browser window) — see below |
+| `--overlay` / `--no-overlay` | off | Older aliases for `--overlay-mode light` / `off` |
 | `--game-log PATH` | autodetect | Path to SC's `Game.log`; tags captures with your current shard so nodes from other servers can be filtered out |
 
 `--handle`, `--token`, `--game-log`, and your overlay answer are saved to
@@ -57,12 +58,24 @@ to pass each once (or set `HANDLE` / `OVERLAY` in `run_watcher.bat`).
 
 ## In-game overlay (optional)
 
-A small always-on-top window showing your **current target, distance, ETA** and
-how old the reading is — so you don't have to alt-tab to the browser for one
-line. It's **off until you ask for it**: `run_watcher.bat` asks once
-(`Show the in-game overlay (target/distance)? [Y/N]`) and remembers your answer.
-Answer `N`, or pass `--no-overlay`, to turn it back off. Drag it wherever you
-want; the position is remembered.
+`run_watcher.bat` asks once and remembers your answer. Three choices:
+
+| | What you get |
+|---|---|
+| **N** — none | No overlay. The watcher just reports your position. |
+| **L** — light | A small always-on-top window with your **target, distance, ETA** and how old the reading is. Tiny, no browser, no login. |
+| **H** — heavy *(beta)* | The **whole web app** in a browser window pinned over the game — every map, updating live. See below. |
+
+### Light overlay
+
+Shows your **current target, distance, ETA** and how old the reading is — so
+you don't have to alt-tab to the browser for one line. Answer `L`, or pass
+`--overlay-mode light`.
+
+**Moving it:** drag it wherever you want and the position is remembered. In
+game, **hold `F`** first — that's the key that frees your mouse cursor for
+in-game menus, and it works for grabbing the overlay too. (Without it the game
+keeps the cursor captive and the drag won't take.)
 
 Three things to know before you turn it on:
 
@@ -72,13 +85,38 @@ Three things to know before you turn it on:
 - **It shows a bearing only on a planet/moon surface.** `/showlocation` reports
   where you are, not which way you're pointing, so in space there's no heading
   to draw an arrow against. You get distance and ETA there instead.
-- **It's only as fresh as your last `/showlocation`.** The `⟳` age in the
+- **It's only as fresh as your last `/showlocation`.** The `fix` age in the
   corner is how old the reading is — it goes amber, then red. The number is
   frozen between chat commands; the overlay tells you so rather than pretending
   otherwise.
 
+**If it ever disappears behind the game:** it re-asserts itself on top every
+couple of seconds, so it should come back on its own. It has no taskbar button
+by design (it's a bare window with no title bar), so if it's genuinely gone,
+restarting the watcher always brings it back.
+
 It's an ordinary window that reads our own server — no game hooks, no memory
 reads, no automated keystrokes.
+
+### Heavy overlay (beta)
+
+Answer `H`, or pass `--overlay-mode heavy`. Instead of a HUD, the watcher opens
+the **real web app** in a chrome-less browser window and keeps it pinned over
+the game. You get every map and every app — navigator, Prospector, trade
+planner — and unlike the light overlay they **update live**, because the
+browser holds a real session.
+
+Needs **Edge or Chrome** (Edge ships with Windows) and a browser you're already
+signed into — it uses your normal profile, so the window opens logged in. If
+neither browser is found, the watcher says so and carries on without it.
+
+**One thing to know:** on that page, *your own* marker is the stale one.
+Teammates move in real time; you only move when you run `/showlocation`. It's
+the reverse of the light overlay, where everything is equally old.
+
+It's marked **beta** because the window-pinning is Windows-specific and hasn't
+been through much real use yet. If it misbehaves, answer `L` or `N` next
+launch — nothing else about the watcher changes.
 
 **"The overlay needs Python's tcl/tk and IDLE component"?** The overlay draws
 with `tkinter`, which is part of Python itself — there's nothing to `pip
