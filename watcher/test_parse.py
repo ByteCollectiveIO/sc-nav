@@ -1,9 +1,16 @@
 """Parser tests for sc_nav_watcher. Run: python3 test_parse.py"""
 
+import json
 import os
+import queue
+import sys
 import tempfile
+import threading
+import types
 import unittest
+from unittest import mock
 
+import sc_nav_heavy
 import sc_nav_watcher
 from sc_nav_overlay import (
     age_color, compass_point, format_age, format_bearing, format_distance,
@@ -238,8 +245,187 @@ class OverlayFormatTests(unittest.TestCase):
         self.assertEqual(readout, "0 m")
 
 
-class StickyOverlayFlagTests(unittest.TestCase):
-    """A boolean can't ride `_resolve_sticky`: False is an answer, not "unset"."""
+class _FakeWidget:
+    """Just enough tkinter to build the Overlay without a display."""
+
+    def __init__(self, master=None, **kw):
+        self.kw = dict(kw)
+        self._kids = []
+        self.binds = {}
+        if isinstance(master, _FakeWidget):
+            master._kids.append(self)
+
+    def pack(self, **kw): pass
+    def pack_propagate(self, _v): pass
+    def configure(self, **kw): self.kw.update(kw)
+    config = configure
+    def bind(self, seq, fn): self.binds[seq] = fn
+    def winfo_children(self): return list(self._kids)
+    def winfo_x(self): return 40
+    def winfo_y(self): return 40
+    def winfo_id(self): return 1
+    def winfo_screenwidth(self): return 1920
+    def winfo_screenheight(self): return 1080
+    def winfo_reqheight(self): return 85
+    def update_idletasks(self): pass
+
+
+class _FakeTkRoot(_FakeWidget):
+    def __init__(self, **kw):
+        super().__init__(None, **kw)
+        self.pending = []
+        self.attrs = {}
+        self.destroyed = False
+
+    tick_budget = 0     # how many after-callbacks mainloop() will pump
+
+    def title(self, _t): pass
+    def overrideredirect(self, _v): pass
+    def attributes(self, name, value=None): self.attrs[name] = value
+    def geometry(self, _g): pass
+    def after(self, _ms, fn): self.pending.append(fn)
+    def destroy(self): self.destroyed = True
+
+    def mainloop(self):
+        """Pump the after-chain like the real loop would. Bounded, because a
+        self-rescheduling tick would otherwise spin forever."""
+        for _ in range(self.tick_budget):
+            if not self.pending or self.destroyed:
+                break
+            self.pending.pop(0)()
+
+
+def _fake_tkinter():
+    mod = types.ModuleType("tkinter")
+    mod.Tk, mod.Frame, mod.Label = _FakeTkRoot, _FakeWidget, _FakeWidget
+    mod.TclError = Exception
+    return mod
+
+
+class OverlayLoopResilienceTests(unittest.TestCase):
+    """Field report 2026-07-25: the overlay sometimes froze or vanished and only
+    a watcher restart brought it back. Two distinct causes, both guarded here."""
+
+    def _overlay(self):
+        import sc_nav_overlay
+        with mock.patch.dict(sys.modules, {"tkinter": _fake_tkinter()}):
+            return sc_nav_overlay.Overlay(config={})
+
+    def test_a_raising_repaint_does_not_stop_the_loop(self):
+        # Tk drops the `after` chain on an unhandled exception, which left the
+        # HUD on screen showing a distance that would never update again — the
+        # worst possible state, because a frozen overlay lies.
+        ov = self._overlay()
+        ov._root.tick_budget = 5
+        logged = []
+        ov._log = logged.append
+        attempts = []
+
+        def bad_paint():
+            attempts.append(1)
+            raise RuntimeError("bad paint")
+        ov._render = bad_paint
+
+        ov.run(queue.Queue(), stop=threading.Event())
+
+        # Every scheduled tick ran despite each one raising — that IS the fix.
+        self.assertEqual(len(attempts), 5)
+        self.assertTrue(logged, "a persistent repaint fault must be visible")
+        self.assertLess(len(logged), 5, "but it must not flood the console")
+
+    def test_topmost_is_re_asserted_periodically(self):
+        # Setting -topmost once isn't enough: Windows supersedes it, and an
+        # overrideredirect popup has no taskbar button to click it back with.
+        def calls_over(ticks):
+            ov = self._overlay()
+            seen = []
+            ov._keep_on_top = lambda: seen.append(1)
+            ov._root.tick_budget = ticks
+            ov.run(queue.Queue(), stop=threading.Event())
+            return len(seen)
+
+        self.assertEqual(calls_over(self._every() - 1), 0,
+                         "shouldn't re-assert on every tick")
+        self.assertEqual(calls_over(self._every()), 1)
+        self.assertEqual(calls_over(self._every() * 2 + 1), 2,
+                         "re-asserts once per TOPMOST_EVERY ticks")
+
+    def _every(self):
+        import sc_nav_overlay
+        return sc_nav_overlay.Overlay.TOPMOST_EVERY
+
+    def test_worker_death_closes_the_window(self):
+        ov = self._overlay()
+        ov._root.tick_budget = 1
+        stop = threading.Event()
+        stop.set()                              # watcher thread already gone
+        ov.run(queue.Queue(), stop=stop)
+        self.assertTrue(ov._root.destroyed)
+
+
+class HeavyOverlayTests(unittest.TestCase):
+    """Heavy mode's pure layer (#40 §13). The Win32 half can't be tested off
+    Windows — that's exactly why the mode ships labelled beta."""
+
+    def test_browser_search_prefers_edge(self):
+        # Edge is guaranteed on Win10/11; Chrome may not be installed at all.
+        env = {"ProgramFiles": r"C:\PF", "ProgramFiles(x86)": r"C:\PF86"}
+        both = {r"C:\PF86\Microsoft\Edge\Application\msedge.exe",
+                r"C:\PF\Google\Chrome\Application\chrome.exe"}
+        path, name = sc_nav_heavy.find_browser(
+            env=env, exists=both.__contains__, which=lambda _c: None)
+        self.assertEqual(name, "Edge")
+
+    def test_falls_back_to_chrome_then_path_then_nothing(self):
+        env = {"ProgramFiles": r"C:\PF", "ProgramFiles(x86)": r"C:\PF86"}
+        chrome_only = {r"C:\PF\Google\Chrome\Application\chrome.exe"}
+        _p, name = sc_nav_heavy.find_browser(
+            env=env, exists=chrome_only.__contains__, which=lambda _c: None)
+        self.assertEqual(name, "Chrome")
+
+        _p, name = sc_nav_heavy.find_browser(
+            env=env, exists=lambda _p: False,
+            which=lambda c: "/usr/bin/msedge" if c == "msedge" else None)
+        self.assertEqual(name, "Edge")
+
+        path, name = sc_nav_heavy.find_browser(
+            env=env, exists=lambda _p: False, which=lambda _c: None)
+        self.assertIsNone(path)
+
+    def test_missing_env_var_does_not_yield_a_literal_path(self):
+        # A box with no %ProgramFiles(x86)% must skip that candidate, not hand
+        # back a path with the unexpanded variable still in it.
+        seen = []
+
+        def exists(p):
+            seen.append(p)
+            return False
+        sc_nav_heavy.find_browser(env={"ProgramFiles": r"C:\PF"}, exists=exists,
+                                  which=lambda _c: None)
+        self.assertTrue(seen, "should still probe the vars it does have")
+        for p in seen:
+            self.assertNotIn("%", p)
+
+    def test_launch_command_uses_the_default_profile(self):
+        cmd = sc_nav_heavy.browser_command("msedge.exe", "https://nav/#/",
+                                           (10, 20, 800, 600))
+        self.assertIn("--app=https://nav/#/", cmd)
+        self.assertIn("--window-size=800,600", cmd)
+        self.assertIn("--window-position=10,20", cmd)
+        # A private profile would strand the user at an OAuth prompt inside a
+        # window with no address bar — the default profile carries the cookie.
+        self.assertFalse([a for a in cmd if "user-data-dir" in a])
+
+    def test_url_building(self):
+        self.assertEqual(sc_nav_heavy.heavy_url("https://nav.example.org/"),
+                         "https://nav.example.org/#/")
+        self.assertEqual(sc_nav_heavy.heavy_url("http://box:8765", "#/halo"),
+                         "http://box:8765/#/halo")
+        self.assertEqual(sc_nav_heavy.heavy_url(None), "")
+
+
+class OverlayModeTests(unittest.TestCase):
+    """off | light | heavy, sticky, with the W1 boolean migrated (#40 §13.5)."""
 
     def setUp(self):
         fd, self.path = tempfile.mkstemp(suffix=".json")
@@ -253,20 +439,40 @@ class StickyOverlayFlagTests(unittest.TestCase):
         if os.path.exists(self.path):
             os.unlink(self.path)
 
-    def _resolve(self, value):
-        return sc_nav_watcher._resolve_sticky_flag(value, "overlay", default=False)
+    def _resolve(self, mode=None, overlay=None):
+        args = types.SimpleNamespace(overlay_mode=mode, overlay=overlay)
+        return sc_nav_watcher.resolve_overlay(args)
+
+    def _saved(self, value):
+        with open(self.path, "w", encoding="utf-8") as fh:
+            json.dump({"overlay": value}, fh)
 
     def test_first_run_unanswered_is_off(self):
-        self.assertFalse(self._resolve(None))
+        self.assertEqual(self._resolve(), "off")
 
-    def test_yes_sticks_across_runs(self):
-        self.assertTrue(self._resolve(True))
-        self.assertTrue(self._resolve(None))     # later run, no flag passed
+    def test_modes_stick_across_runs(self):
+        self.assertEqual(self._resolve(mode="heavy"), "heavy")
+        self.assertEqual(self._resolve(), "heavy")       # later run, no flag
+        self.assertEqual(self._resolve(mode="light"), "light")
+        self.assertEqual(self._resolve(), "light")
 
-    def test_explicit_no_turns_a_saved_yes_back_off(self):
-        self._resolve(True)
-        self.assertFalse(self._resolve(False))   # --no-overlay
-        self.assertFalse(self._resolve(None))    # and the OFF is what sticks
+    def test_legacy_boolean_config_migrates(self):
+        # W1 wrote a bool. An existing watcher_config.json must keep working.
+        self._saved(True)
+        self.assertEqual(self._resolve(), "light")
+        self._saved(False)
+        self.assertEqual(self._resolve(), "off")
+
+    def test_old_flags_remain_aliases(self):
+        self.assertEqual(self._resolve(overlay=True), "light")
+        self.assertEqual(self._resolve(overlay=False), "off")
+
+    def test_mode_flag_beats_the_legacy_flag(self):
+        self.assertEqual(self._resolve(mode="heavy", overlay=True), "heavy")
+
+    def test_garbage_saved_value_falls_back_to_off(self):
+        self._saved("sideways")
+        self.assertEqual(self._resolve(), "off")
 
 
 if __name__ == "__main__":

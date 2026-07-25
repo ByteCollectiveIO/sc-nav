@@ -218,6 +218,7 @@ class Overlay:
 
     TICK_MS = 250       # queue drain + age repaint + Ctrl-C window
     WIDTH = 300         # fixed: see _freeze_size
+    TOPMOST_EVERY = 8   # ticks between re-asserts (~2 s): see _keep_on_top
 
     def __init__(self, config=None, on_close=None, log=print):
         import tkinter as tk
@@ -229,6 +230,17 @@ class Overlay:
         self._nav = None
         self._fix_t = None          # monotonic stamp of the last real fix
         self._closing = False
+        self._ticks = 0
+        self._tick_errors = 0
+        # Win32 handle for the topmost re-assert; None everywhere else.
+        self._user32 = None
+        try:
+            import ctypes
+
+            if hasattr(ctypes, "WinDLL"):
+                self._user32 = ctypes.WinDLL("user32", use_last_error=True)
+        except Exception:
+            self._user32 = None
 
         root = tk.Tk()
         root.title("SC Nav")
@@ -260,8 +272,13 @@ class Overlay:
             frame, text="", bg=BG, fg=ACCENT, font=("Consolas", 13), anchor="w"
         )
         self._readout.pack(fill="x")
+        # In game the cursor is captive until you hold F — the same key that
+        # frees it for in-game menus — so the drag reads as a normal SC
+        # interaction rather than a thing this tool invented. Non-obvious
+        # enough that it belongs on the glass, not just in the README.
+        # (Latin-1 only, per _POINTS: the middle dot is U+00B7, Consolas-safe.)
         self._hint = tk.Label(
-            frame, text="drag to move · Ctrl-C in the console to quit",
+            frame, text="hold F to drag · Ctrl-C in console to quit",
             bg=BG, fg=DIM, font=("Consolas", 8), anchor="w",
         )
         self._hint.pack(fill="x")
@@ -338,6 +355,34 @@ class Overlay:
             yield child
             yield from self._all_children(child)
 
+    # -- staying visible ---------------------------------------------------
+    def _keep_on_top(self):
+        """Re-assert always-on-top, periodically, forever.
+
+        Setting `-topmost` once at construction is NOT enough: Windows drops or
+        supersedes topmost in ordinary situations — another topmost window
+        appears, the game toggles fullscreen, a UAC prompt hits the secure
+        desktop, the display mode changes. And because this is an
+        `overrideredirect` popup it has **no taskbar button and no alt-tab
+        entry**, so once it slips behind the game there is no handle left to
+        click and the only recovery is restarting the watcher. Reported from
+        real flight, hence this.
+
+        SetWindowPos with SWP_NOACTIVATE is the Windows-correct way — it raises
+        the window WITHOUT stealing focus from the game, which the Tk attribute
+        route can't promise. Everything else falls back to re-setting the
+        attribute, which is a harmless no-op when it's already true."""
+        try:
+            if self._user32 is not None:
+                hwnd = self._user32.GetParent(self._root.winfo_id()) or self._root.winfo_id()
+                # HWND_TOPMOST=-1; SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE
+                self._user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+            else:
+                self._root.attributes("-topmost", True)
+        except Exception:
+            # Never let a cosmetic re-assert break the update loop.
+            pass
+
     # -- painting ----------------------------------------------------------
     def _age_seconds(self):
         if self._fix_t is None:
@@ -369,16 +414,35 @@ class Overlay:
                 # update again.
                 self.close()
                 return
-            drained = None
+            # EVERYTHING below is guarded and the reschedule lives in `finally`.
+            # Tk drops the `after` chain on an unhandled exception, which froze
+            # the HUD permanently — still on screen, still showing a distance,
+            # never updating again — while the watcher carried on reporting
+            # position. A frozen overlay lies; it must never be one bad repaint
+            # away.
             try:
-                while True:
-                    drained = updates.get_nowait()
-            except queue.Empty:
-                pass
-            if drained is not None:
-                self.update(*drained)
-            self._render()          # repaint every tick so the age keeps moving
-            self._root.after(self.TICK_MS, tick)
+                drained = None
+                try:
+                    while True:
+                        drained = updates.get_nowait()
+                except queue.Empty:
+                    pass
+                if drained is not None:
+                    self.update(*drained)
+                self._render()      # repaint every tick so the age keeps moving
+                self._ticks += 1
+                if self._ticks % self.TOPMOST_EVERY == 0:
+                    self._keep_on_top()
+                self._tick_errors = 0
+            except Exception as exc:
+                self._tick_errors += 1
+                # Log the first, then every ~30 s, so a persistent fault is
+                # visible in the console without flooding it.
+                if self._tick_errors == 1 or self._tick_errors % 120 == 0:
+                    self._log(f"overlay repaint failed ({exc}); still running")
+            finally:
+                if not self._closing:
+                    self._root.after(self.TICK_MS, tick)
 
         self._root.after(self.TICK_MS, tick)
         try:
