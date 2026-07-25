@@ -416,6 +416,71 @@ class HeavyOverlayTests(unittest.TestCase):
         # window with no address bar — the default profile carries the cookie.
         self.assertFalse([a for a in cmd if "user-data-dir" in a])
 
+    def test_window_pick_prefers_a_new_matching_title(self):
+        before = {1}
+        windows = [(1, "Chrome_WidgetWin_1", "Org Navigator"),      # pre-existing
+                   (2, "Chrome_WidgetWin_1", "Inbox"),
+                   (3, "Chrome_WidgetWin_1", "Org Navigator")]      # ours
+        self.assertEqual(sc_nav_heavy.pick_window(before, windows, "Org Navigator"), 3)
+
+    def test_window_pick_never_adopts_a_pre_existing_window(self):
+        # The user's ordinary browser window welded on top of their game would
+        # be the worst possible bug here.
+        before = {1}
+        windows = [(1, "Chrome_WidgetWin_1", "Org Navigator")]
+        self.assertIsNone(sc_nav_heavy.pick_window(before, windows, "Org Navigator"))
+
+    def test_window_pick_falls_back_when_the_title_is_the_oauth_page(self):
+        # Not signed in: --app lands on Discord's OAuth page, so the title is
+        # "Discord". A strict title gate refused to adopt it and silently never
+        # pinned anything — the reported failure.
+        before = set()
+        windows = [(7, "Chrome_WidgetWin_1", "Discord")]
+        self.assertEqual(sc_nav_heavy.pick_window(before, windows, "Org Navigator"), 7)
+
+    def test_window_pick_handles_a_blank_title_while_loading(self):
+        before = set()
+        windows = [(9, "Chrome_WidgetWin_1", "")]
+        self.assertEqual(sc_nav_heavy.pick_window(before, windows, "Org Navigator"), 9)
+
+    def test_adoption_keeps_retrying_after_startup(self):
+        # Reported: browser opened, never pinned. Adoption used to run only
+        # during start(), so a window that showed up late — after a sign-in, or
+        # a slow first paint — was never picked up at all.
+        class _FakeWin:
+            def __init__(self):
+                self.windows, self.pinned = [], []
+
+            def browser_windows(self):
+                return list(self.windows)
+
+            def pin(self, hwnd):
+                self.pinned.append(hwnd)
+                return True
+
+            def alive(self, hwnd):
+                return any(w[0] == hwnd for w in self.windows)
+
+        ov = sc_nav_heavy.HeavyOverlay("http://x/", log=lambda *_a: None)
+        win = _FakeWin()
+        ov._win, ov._before, ov._title_match = win, set(), "Org Navigator"
+
+        ov.keep_pinned()                       # nothing to adopt yet
+        self.assertIsNone(ov.hwnd)
+        self.assertEqual(win.pinned, [])
+
+        win.windows.append((5, "Chrome_WidgetWin_1", "Org Navigator"))
+        ov.keep_pinned()                       # it appeared -> adopt + pin
+        self.assertEqual(ov.hwnd, 5)
+        self.assertEqual(win.pinned, [5])
+
+        ov.keep_pinned()                       # and keep re-asserting
+        self.assertEqual(win.pinned, [5, 5])
+
+        win.windows.clear()                    # user closed it
+        ov.keep_pinned()
+        self.assertIsNone(ov.hwnd)
+
     def test_url_building(self):
         self.assertEqual(sc_nav_heavy.heavy_url("https://nav.example.org/"),
                          "https://nav.example.org/#/")

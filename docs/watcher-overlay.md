@@ -487,6 +487,36 @@ Mac** — browser discovery paths, HWND enumeration, the snapshot-diff adoption,
 `WM_CLOSE` teardown. The light overlay at least rendered on macOS. Heavy mode
 ships labelled beta because its riskiest half has never executed.
 
+### 13.7 First in-game test failed — three causes (v0.84.1)
+
+Reported: *"the browser opened, it would not stay on top."* Beta earned its
+label. Three defects, any one of which produces exactly that:
+
+1. **No `argtypes`/`restype` on the ctypes calls — the fatal one.** ctypes
+   assumes C `int` (32-bit) for unspecified arguments and returns, so a 64-bit
+   `HWND` was **silently truncated** and `SetWindowPos` operated on a handle
+   that doesn't exist, failing with no error. This would fail 100% of the time
+   on 64-bit Windows. Every function now declares its signature.
+2. **The title gate was too strict.** If the browser profile isn't signed in,
+   `--app` lands on Discord's OAuth page, titled *"Discord"* — so the window was
+   never adopted. Selection now prefers a title match but falls back to **any
+   new browser window**, which is safe because pre-existing windows are already
+   excluded by the snapshot.
+3. **Adoption ran only during `start()`.** A window appearing later — after a
+   sign-in, or a slow first paint — was never picked up. `keep_pinned()` now
+   keeps hunting, so the overlay simply starts working whenever the window
+   turns up.
+
+Selection is now the pure `pick_window(before, windows, title_match)`, tested
+against all four cases (new match, pre-existing only, OAuth title, blank title
+while loading). A failed pin logs the **Win32 error code** — with no Windows
+here to reproduce on, that's the one diagnostic worth having.
+
+**Unrelated red herring:** Discord may pop its own "enable overlay for this
+app?" prompt when the browser launches. That's Discord's game overlay reacting
+to a new process; it has nothing to do with this feature, and answering either
+way changes nothing.
+
 ## 12. Open questions
 
 1. **First-run default** (§7.2) — designed as *off*. If you'd rather the
