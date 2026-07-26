@@ -110,6 +110,14 @@ Needs **Edge or Chrome** (Edge ships with Windows) and a browser you're already
 signed into — it uses your normal profile, so the window opens logged in. If
 neither browser is found, the watcher says so and carries on without it.
 
+**Alt-tab to the window before you click around.** Star Citizen keeps reading
+the mouse even when another window has your cursor, so moving the mouse over
+the overlay can still turn your ship. Alt-tabbing to the browser and back is
+the reliable way to park the game's controls while you use the app — holding
+`F` isn't enough here (that frees the cursor, it doesn't stop the game reading
+it). This is the game's input handling, not something the overlay can switch
+off from the outside.
+
 **One thing to know:** on that page, *your own* marker is the stale one.
 Teammates move in real time; you only move when you run `/showlocation`. It's
 the reverse of the light overlay, where everything is equally old.

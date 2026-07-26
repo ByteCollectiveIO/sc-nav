@@ -517,6 +517,31 @@ app?" prompt when the browser launches. That's Discord's game overlay reacting
 to a new process; it has nothing to do with this feature, and answering either
 way changes nothing.
 
+### 13.8 Second playtest — pinning works; two interaction findings (v0.84.2)
+
+**The window now sits over the game correctly.** Two things surfaced once it
+was actually usable:
+
+1. **Every dropdown in the app snapped shut before you could pick anything —
+   self-inflicted, by §13.7's fix.** Chromium dismisses an open `<select>`
+   popup when its parent window receives `WM_WINDOWPOSCHANGED`, and
+   `SetWindowPos` fires that **even with `SWP_NOMOVE|SWP_NOSIZE`**. Re-asserting
+   every 2 s therefore put a ≤2 s fuse on every menu. Fixed by
+   `should_repin(is_topmost, is_foreground)`: only touch the window when the
+   topmost flag has genuinely been **lost**, and never while it is the
+   foreground window — if the user is working in it, it's visible anyway, and
+   interrupting is precisely the bug. In the steady state we now send *nothing*.
+   **General lesson: an idle keep-alive that pokes a window is not free.**
+
+2. **Mouse movement still drives the ship while the browser has the cursor.**
+   Star Citizen reads the mouse via raw input regardless of which window has
+   focus, so hovering the overlay can still turn you. **Not fixable from
+   outside**: it would need input interception, which §3.4's no-injection rule
+   rules out — and should. Alt-tabbing to the browser and back is the reliable
+   way to park the game's controls; holding `F` frees the cursor but does not
+   stop the game reading it. Documented in the watcher README rather than
+   worked around.
+
 ## 12. Open questions
 
 1. **First-run default** (§7.2) — designed as *off*. If you'd rather the
