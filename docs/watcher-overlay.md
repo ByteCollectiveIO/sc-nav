@@ -1,10 +1,21 @@
 # Watcher in-game overlay — target, distance, bearing on the glass (backlog #40) — design plan
 
-**Status: 🔨 SLICE W1 BUILT 2026-07-25, not yet shipped or flown.** Scoped after
-a question about firewall/network impact (§4 is the answer: there is none). The
-data this needs is already computed and currently discarded (§2), so the server
-half is small; the real work is restructuring the watcher process around a UI
-event loop (§6) and the Windows window management (§8).
+**Status: ✅ SHIPPED + IN-GAME VERIFIED 2026-07-25.** Both modes are live and
+working in game:
+
+| | Shipped | State |
+|---|---|---|
+| **W1 — light HUD** | v0.83.0 | Verified in game the same day. Two follow-up fixes in v0.84.0 (§10.1). |
+| **Heavy mode (beta)** | v0.84.0 | Took v0.84.1 + v0.84.2 to actually work; verified in game (§13.7, §13.8). |
+
+Scoped after a question about firewall/network impact (§4 is the answer: there
+is none). The data this needs was already computed and discarded (§2), so the
+server half was small; the real work was restructuring the watcher around a UI
+event loop (§6) and the Windows window management (§8, §13).
+
+**Still open:** W2 (§10) — click-through, opacity/scale, in-space
+closing/opening, capture-armed dot. Note click-through would break the F-key
+drag, so W2 needs a non-mouse way to reposition first.
 
 **W1 build deviations** (two things pulled forward from W2, both because W1
 would have been worse without them):
@@ -35,13 +46,13 @@ Rendering it for real caught three things the stub could not, all fixed:
   custom POI names, and from our own capture notes ("Keeger Belt — survey
   pocket SVY-14"). `safe_text` folds them into Latin-1 at the boundary.
 
-Three caveats stand. The window has only been rendered **on macOS**, never on
-Windows — where the font, `overrideredirect`, and always-on-top behavior are all
-different code paths in Tk. **The rewritten `run_watcher.bat` has never been run
-by cmd.exe** (no Windows here), which is why §9.1's probe uses the most
-conservative batch constructs available. And **nothing has been flown**. §12.3
-(does the org fly borderless) is still open and still worth asking before anyone
-builds W2.
+Those three were caught pre-ship. **W1 then shipped as v0.83.0 and was verified
+in game the same day** — which also answered §12.3 (the org does fly borderless,
+at least on the machine tested; the exclusive-fullscreen caveat still stands for
+everyone else) and confirmed the parts that had never run on Windows: the
+rewritten `run_watcher.bat`, Consolas rendering, and always-on-top over the game.
+
+**First flight then found two W1 bugs**, both fixed in v0.84.0 — see §10.1.
 
 Companion to [`multi-user-migration.md`](multi-user-migration.md) (watcher token
 auth) and the watcher's own [`../watcher/README.md`](../watcher/README.md).
@@ -390,14 +401,41 @@ JSON, `_load_config` ~353 swallows a malformed one).
 
 Each ships alone.
 
-**W1 — the honest minimum. ✅ BUILT** (see the status header for the two
-deviations). §5.1 piggyback response · §6 threading split · §7 opt-in prompt +
-sticky config · §8 window showing target/distance/bearing/ETA/age, always-on-top,
-drag-to-place, no click-through yet. **Zero new requests, zero new endpoints.**
+**W1 — the honest minimum. ✅ SHIPPED v0.83.0** (see the status header for the
+two deviations). §5.1 piggyback response · §6 threading split · §7 opt-in prompt
++ sticky config · §8 window showing target/distance/bearing/ETA/age,
+always-on-top, drag-to-place, no click-through yet. **Zero new requests, zero
+new endpoints.**
+
+### 10.1 What first flight found (fixed in v0.84.0)
+
+Two faults, both of which left the HUD unusable until the watcher was restarted,
+and neither reachable by any test that existed:
+
+1. **It fell behind the game and could not be recovered.** `-topmost` was set
+   once at construction, and Windows supersedes it routinely (another topmost
+   window, a fullscreen toggle, UAC, a display change). Because an
+   `overrideredirect` popup has **no taskbar button and no alt-tab entry**,
+   there was then no handle left to grab. Now re-asserted every ~2 s via
+   `SetWindowPos` + `SWP_NOACTIVATE`, which raises it without taking focus from
+   the game. *(Heavy mode later showed this re-assert has a cost of its own —
+   §13.8.)*
+2. **A single bad repaint froze it permanently.** Tk drops the `after` chain on
+   an unhandled exception, so one raising `tick()` left the HUD on screen
+   showing a distance that would never update again, while the watcher kept
+   reporting position normally. **A frozen overlay lies**, which is worse than
+   no overlay: the tick body is now guarded with the reschedule in `finally`,
+   plus a throttled log line.
+
+Also added the `hold F to drag` hint on the glass — F is the in-game
+free-cursor key, so the drag rides a mechanic players already use rather than
+one we invented.
 
 **W2 — make it pleasant.** Click-through (`WS_EX_TRANSPARENT`) · opacity/scale
 controls · in-space closing/opening · capture-armed dot. *(bearing arrow and
-drag-to-place already landed in W1.)* Half a day.
+drag-to-place already landed in W1.)* Half a day. **Note:** click-through would
+break the F-key drag, so W2 needs a non-mouse way to reposition first — a
+console toggle or corner presets.
 
 **W3 — conditional.** §5.2 `GET /api/nav/summary` **only if** W1's ≤60 s
 browser-retarget lag actually annoys people in flight. Then: nearest-POI line,
@@ -482,10 +520,17 @@ legacy values migrate `true → "light"`, `false → "off"`. `--overlay` /
 
 ### 13.6 Why beta
 
-Everything in §13.3 is Windows-specific and **cannot be verified from the dev
+Everything in §13.3 is Windows-specific and **could not be verified from the dev
 Mac** — browser discovery paths, HWND enumeration, the snapshot-diff adoption,
 `WM_CLOSE` teardown. The light overlay at least rendered on macOS. Heavy mode
-ships labelled beta because its riskiest half has never executed.
+shipped labelled beta because its riskiest half had never executed.
+
+**That call was right.** It took two further releases to work (§13.7, §13.8),
+and every fault was in exactly the untested half. The label stays: it now works
+on one machine, which is not the same as working. What the failures also showed
+is that the *cheap* verification here isn't a Windows VM — it's keeping the
+decision logic in pure functions (`pick_window`, `should_repin`) so the part
+that can be reasoned about is separated from the part that can only be flown.
 
 ### 13.7 First in-game test failed — three causes (v0.84.1)
 
