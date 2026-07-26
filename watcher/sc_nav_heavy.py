@@ -118,8 +118,35 @@ def heavy_url(server, view="#/"):
 # ---------------------------------------------------------------------------
 
 
+def pick_window(before, windows, title_match):
+    """Choose the window we just opened. Pure, so the selection rule is
+    testable without Windows.
+
+    `before` = handles seen BEFORE launching, `windows` = [(hwnd, cls, title)].
+
+    Prefer a NEW window whose title matches, but fall back to ANY new browser
+    window: if the browser profile wasn't signed in, `--app` lands on Discord's
+    OAuth page — titled "Discord", not "Org Navigator" — and a strict title gate
+    would refuse to adopt it and silently never pin anything. A window that is
+    both new and a browser window, moments after we launched a browser, is ours."""
+    fresh = [w for w in windows if w[0] not in before]
+    if not fresh:
+        return None
+    wanted = (title_match or "").lower()
+    for hwnd, _cls, title in fresh:
+        if wanted and wanted in (title or "").lower():
+            return hwnd
+    return fresh[-1][0]
+
+
 class _Win32:
-    """Thin ctypes wrapper. Constructed only on Windows; None elsewhere."""
+    """Thin ctypes wrapper. Constructed only on Windows; None elsewhere.
+
+    EVERY function gets explicit argtypes/restype. Without them ctypes assumes
+    C `int` — 32 bits — for arguments and returns, so a 64-bit HWND is silently
+    TRUNCATED and calls like SetWindowPos operate on a handle that doesn't
+    exist and fail with no error. That is exactly why the first cut of heavy
+    mode opened the browser and never pinned it."""
 
     def __init__(self):
         import ctypes
@@ -127,13 +154,35 @@ class _Win32:
 
         self._ctypes = ctypes
         self._wintypes = wintypes
-        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
 
-    def matching_windows(self, title_match):
-        """Visible Chromium windows whose title contains `title_match`."""
-        ctypes, wintypes = self._ctypes, self._wintypes
+        self._proto = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows.argtypes = [self._proto, wintypes.LPARAM]
+        user32.EnumWindows.restype = wintypes.BOOL
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.IsWindowVisible.restype = wintypes.BOOL
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.IsWindow.restype = wintypes.BOOL
+        user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetClassNameW.restype = ctypes.c_int
+        user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+        user32.GetWindowTextLengthW.restype = ctypes.c_int
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        user32.PostMessageW.argtypes = [
+            wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.PostMessageW.restype = wintypes.BOOL
+        self.user32 = user32
+
+    def browser_windows(self):
+        """Every visible Chromium-class window as (hwnd, class, title)."""
+        ctypes = self._ctypes
         found = []
-        proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def callback(hwnd, _lparam):
             if not self.user32.IsWindowVisible(hwnd):
@@ -143,21 +192,25 @@ class _Win32:
             if cls.value != _CHROMIUM_CLASS:
                 return True
             length = self.user32.GetWindowTextLengthW(hwnd)
-            if not length:
-                return True
             buf = ctypes.create_unicode_buffer(length + 1)
-            self.user32.GetWindowTextW(hwnd, buf, length + 1)
-            if title_match.lower() in buf.value.lower():
-                found.append(hwnd)
+            if length:
+                self.user32.GetWindowTextW(hwnd, buf, length + 1)
+            found.append((hwnd, cls.value, buf.value))
             return True
 
-        self.user32.EnumWindows(proto(callback), 0)
+        # Keep a reference to the trampoline for the duration of the call —
+        # letting it be collected mid-enumeration would crash the interpreter.
+        cb = self._proto(callback)
+        self.user32.EnumWindows(cb, 0)
         return found
 
     def pin(self, hwnd):
         # HWND_TOPMOST=-1; SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE — raise it
         # without stealing focus from the game.
-        self.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+        ok = bool(self.user32.SetWindowPos(
+            hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010))
+        self.last_error = 0 if ok else self._ctypes.get_last_error()
+        return ok
 
     def close(self, hwnd):
         self.user32.PostMessageW(hwnd, 0x0010, 0, 0)     # WM_CLOSE
@@ -195,6 +248,9 @@ class HeavyOverlay:
         self.hwnd = None
         self._win = _win32(log)
         self._proc = None
+        self._before = set()
+        self._title_match = DEFAULT_TITLE_MATCH
+        self._misses = 0
 
     def _geometry(self):
         try:
@@ -217,7 +273,8 @@ class HeavyOverlay:
         # Snapshot first: a normal tab already on the app shares this title, and
         # pinning the user's ordinary browser window over their game would be a
         # genuinely bad bug (§13.3).
-        before = set(self._win.matching_windows(title_match)) if self._win else set()
+        self._title_match = title_match
+        self._before = {w[0] for w in self._win.browser_windows()} if self._win else set()
 
         cmd = browser_command(exe, self.url, self._geometry())
         try:
@@ -234,25 +291,57 @@ class HeavyOverlay:
 
         deadline = time.monotonic() + WINDOW_TIMEOUT_S
         while time.monotonic() < deadline:
-            fresh = [h for h in self._win.matching_windows(title_match)
-                     if h not in before]
-            if fresh:
-                self.hwnd = fresh[-1]
-                self._win.pin(self.hwnd)
+            if self._adopt():
                 return True
             time.sleep(0.25)
-        self.log("heavy overlay: the browser window never appeared — it may "
-                 "still be loading, or you may need to sign in. Not pinned.")
+        # NOT a failure: signing in, or a slow first paint, can easily outlast
+        # the startup window. keep_pinned() goes on trying, so the overlay
+        # simply starts working whenever the window finally shows up.
+        self.log("heavy overlay: no window yet (still loading, or you may need "
+                 "to sign in) — will keep watching for it")
+        return True
+
+    def _adopt(self):
+        """Find and pin the window we opened. Safe to call repeatedly."""
+        windows = self._win.browser_windows()
+        hwnd = pick_window(self._before, windows, self._title_match)
+        if hwnd is None:
+            return False
+        self.hwnd = hwnd
+        title = next((t for h, _c, t in windows if h == hwnd), "")
+        pinned = self._win.pin(hwnd)
+        if pinned:
+            self.log(f'heavy overlay: pinned "{title}"')
+        else:
+            # Surface the Win32 error code: if this ever fires it is the one
+            # piece of information worth having, and there's no Windows here
+            # to reproduce it on.
+            err = getattr(self._win, "last_error", 0)
+            self.log(f'heavy overlay: found "{title}" but Windows refused to '
+                     f"pin it (error {err})")
         return True
 
     def keep_pinned(self):
-        """Re-assert topmost; re-adopt if the window went away. Same reason as
-        the light overlay: topmost is lost, not sticky."""
+        """Re-assert topmost, and keep hunting for the window if we haven't
+        adopted one yet. Two reasons this must retry rather than run once:
+        topmost is lost rather than sticky (same as the light overlay), and the
+        window may not exist until the user finishes signing in."""
         if self._win is None:
             return
         try:
             if self.hwnd and self._win.alive(self.hwnd):
                 self._win.pin(self.hwnd)
+                return
+            self.hwnd = None
+            self._misses += 1
+            # Quietly retry; say something once, well after the obvious causes
+            # (sign-in, slow load) would have resolved.
+            if self._adopt():
+                self._misses = 0
+            elif self._misses == 30:
+                self.log("heavy overlay: still no browser window to pin. If you "
+                         "signed in, try relaunching; otherwise use the light "
+                         "overlay (answer L at the launcher).")
         except Exception:
             pass
 
