@@ -443,6 +443,65 @@ class HeavyOverlayTests(unittest.TestCase):
         windows = [(9, "Chrome_WidgetWin_1", "")]
         self.assertEqual(sc_nav_heavy.pick_window(before, windows, "Org Navigator"), 9)
 
+    def test_repin_only_when_topmost_was_actually_lost(self):
+        # Reported: every dropdown in the app snapped shut ~instantly. Chromium
+        # dismisses an open <select> popup when its parent gets
+        # WM_WINDOWPOSCHANGED, which SetWindowPos fires even with NOMOVE|NOSIZE
+        # — so a blind 2 s re-assert put a fuse on every menu.
+        self.assertFalse(sc_nav_heavy.should_repin(is_topmost=True,
+                                                   is_foreground=False))
+        self.assertFalse(sc_nav_heavy.should_repin(is_topmost=True,
+                                                   is_foreground=True))
+        # Never interrupt the window the user is actively working in.
+        self.assertFalse(sc_nav_heavy.should_repin(is_topmost=False,
+                                                   is_foreground=True))
+        # Genuinely lost it, and not in use -> put it back.
+        self.assertTrue(sc_nav_heavy.should_repin(is_topmost=False,
+                                                  is_foreground=False))
+
+    def test_pin_is_not_re_sent_while_the_flag_still_holds(self):
+        class _FakeWin:
+            def __init__(self):
+                self.windows = [(5, "Chrome_WidgetWin_1", "Org Navigator")]
+                self.pinned, self.topmost, self.foreground = [], True, False
+
+            def browser_windows(self):
+                return list(self.windows)
+
+            def pin(self, hwnd):
+                self.pinned.append(hwnd)
+                self.topmost = True
+                return True
+
+            def alive(self, hwnd):
+                return any(w[0] == hwnd for w in self.windows)
+
+            def is_topmost(self, _h):
+                return self.topmost
+
+            def is_foreground(self, _h):
+                return self.foreground
+
+        ov = sc_nav_heavy.HeavyOverlay("http://x/", log=lambda *_a: None)
+        win = _FakeWin()
+        ov._win, ov._before, ov._title_match = win, set(), "Org Navigator"
+        ov.keep_pinned()                      # adopts + pins once
+        self.assertEqual(win.pinned, [5])
+
+        for _ in range(20):                   # ~40 s of ticks, flag intact
+            ov.keep_pinned()
+        self.assertEqual(win.pinned, [5], "must not touch a window that is "
+                                          "already topmost")
+
+        win.topmost = False                   # something stole topmost...
+        win.foreground = True                 # ...but the user is using it
+        ov.keep_pinned()
+        self.assertEqual(win.pinned, [5], "never interrupt the focused window")
+
+        win.foreground = False                # user went back to the game
+        ov.keep_pinned()
+        self.assertEqual(win.pinned, [5, 5])
+
     def test_adoption_keeps_retrying_after_startup(self):
         # Reported: browser opened, never pinned. Adoption used to run only
         # during start(), so a window that showed up late — after a sign-in, or
@@ -461,6 +520,12 @@ class HeavyOverlayTests(unittest.TestCase):
             def alive(self, hwnd):
                 return any(w[0] == hwnd for w in self.windows)
 
+            def is_topmost(self, _h):
+                return True                    # pin held; nothing to re-assert
+
+            def is_foreground(self, _h):
+                return False
+
         ov = sc_nav_heavy.HeavyOverlay("http://x/", log=lambda *_a: None)
         win = _FakeWin()
         ov._win, ov._before, ov._title_match = win, set(), "Org Navigator"
@@ -473,9 +538,6 @@ class HeavyOverlayTests(unittest.TestCase):
         ov.keep_pinned()                       # it appeared -> adopt + pin
         self.assertEqual(ov.hwnd, 5)
         self.assertEqual(win.pinned, [5])
-
-        ov.keep_pinned()                       # and keep re-asserting
-        self.assertEqual(win.pinned, [5, 5])
 
         win.windows.clear()                    # user closed it
         ov.keep_pinned()

@@ -118,6 +118,24 @@ def heavy_url(server, view="#/"):
 # ---------------------------------------------------------------------------
 
 
+def should_repin(is_topmost, is_foreground):
+    """Whether to actually call SetWindowPos this round.
+
+    Re-pinning blindly is what broke every dropdown in the app: Chromium
+    dismisses an open <select> popup when its parent window receives
+    WM_WINDOWPOSCHANGED, and SetWindowPos fires that **even with
+    SWP_NOMOVE|SWP_NOSIZE**. A 2 s re-assert therefore put a ≤2 s fuse on every
+    menu the user tried to open.
+
+    So: only re-assert when the topmost flag has genuinely been lost, and never
+    while the window is in the foreground — if it's foreground the user is
+    working in it, it's plainly visible, and interrupting that is exactly the
+    bug. Nothing to fix means nothing to send."""
+    if is_topmost:
+        return False
+    return not is_foreground
+
+
 def pick_window(before, windows, title_match):
     """Choose the window we just opened. Pure, so the selection rule is
     testable without Windows.
@@ -177,7 +195,25 @@ class _Win32:
         user32.PostMessageW.argtypes = [
             wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         user32.PostMessageW.restype = wintypes.BOOL
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        # GetWindowLongPtrW only exists in the 64-bit user32; fall back on x86.
+        self._get_long = getattr(user32, "GetWindowLongPtrW", None) or \
+            user32.GetWindowLongW
+        self._get_long.argtypes = [wintypes.HWND, ctypes.c_int]
+        self._get_long.restype = ctypes.c_ssize_t
         self.user32 = user32
+
+    def is_topmost(self, hwnd):
+        # GWL_EXSTYLE = -20, WS_EX_TOPMOST = 0x8
+        return bool(self._get_long(hwnd, -20) & 0x8)
+
+    def is_foreground(self, hwnd):
+        fg = self.user32.GetForegroundWindow()
+        try:
+            return bool(fg) and int(fg) == int(hwnd)
+        except (TypeError, ValueError):
+            return False
 
     def browser_windows(self):
         """Every visible Chromium-class window as (hwnd, class, title)."""
@@ -330,7 +366,12 @@ class HeavyOverlay:
             return
         try:
             if self.hwnd and self._win.alive(self.hwnd):
-                self._win.pin(self.hwnd)
+                # Touch the window ONLY when the flag has actually been lost —
+                # see should_repin(). An unconditional re-assert closed every
+                # dropdown in the app within 2 s.
+                if should_repin(self._win.is_topmost(self.hwnd),
+                                self._win.is_foreground(self.hwnd)):
+                    self._win.pin(self.hwnd)
                 return
             self.hwnd = None
             self._misses += 1
