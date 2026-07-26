@@ -16,14 +16,27 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 40. Watcher in-game overlay — target/distance on the glass 🔨 W1 BUILT
+### 40. Watcher in-game overlay — target/distance on the glass ✅ SHIPPED
 
-**Status: slice W1 built 2026-07-25 (778 server + 37 watcher tests green),
-not shipped, NOT yet flown. Window renders under real tk 9.0 on macOS — never on
-Windows, and rendering it caught three things the tests couldn't (width jitter on
-every update, Consolas glyph coverage for `⟳`/`↘`, and unsanitized POI names); all
-fixed, see the doc's status header. W2 = click-through, opacity/scale, in-space
-closing/opening, capture dot.** Full plan:
+**Status: SHIPPED + IN-GAME VERIFIED 2026-07-25. Light HUD v0.83.0 (+ two
+first-flight fixes in v0.84.0); heavy mode BETA v0.84.0, working after v0.84.1
+and v0.84.2.** Six releases in a day; every failure after the first was
+Windows-specific and none reproducible on the dev Mac. **The gotchas worth
+keeping** (detail in the doc §10.1, §13.7, §13.8): ctypes with no
+`argtypes`/`restype` **truncates a 64-bit HWND** — silent, unconditional
+failure, check it first in any Win32 work · **`SetWindowPos` fires
+`WM_WINDOWPOSCHANGED` even with `NOMOVE|NOSIZE`**, and Chromium kills open
+`<select>` popups on it, so a 2 s topmost re-assert closed every dropdown in the
+app (an idle keep-alive that pokes a window is not free) · Tk drops the `after`
+chain on an unhandled exception, freezing the HUD on a stale distance forever ·
+`--app=` reuses a running browser so its PID is meaningless, and a normal tab
+shares the window title, so windows are snapshotted before launch. **Known and
+NOT fixable: SC reads the mouse via raw input regardless of window focus**, so
+hovering the overlay still turns the ship — alt-tab parks the controls; fixing
+it needs input interception, which the no-injection rule forbids.
+**Remaining: W2** (click-through, opacity/scale, in-space closing/opening,
+capture dot) — note click-through would break the F-key drag, so it needs a
+non-mouse reposition first. Full plan:
 [`watcher-overlay.md`](watcher-overlay.md). Put the navigator's one useful line
 — **target · distance · ETA · bearing · staleness** — in a small always-on-top
 window over the game, hosted by the watcher (already running on that box,
