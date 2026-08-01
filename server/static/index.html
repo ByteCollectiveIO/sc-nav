@@ -4220,7 +4220,10 @@
   <div class="foot-data">Game data: <a href="https://api.star-citizen.wiki" target="_blank"
       rel="noopener">Star Citizen Wiki</a>, <a href="https://creativecommons.org/licenses/by-sa/4.0/"
       target="_blank" rel="noopener">CC BY-SA 4.0</a>. Ship &amp; market data:
-    <a href="https://uexcorp.space" target="_blank" rel="noopener">UEX Corp</a>.</div>
+    <a href="https://uexcorp.space" target="_blank" rel="noopener">UEX Corp</a>.<!--
+    Strata's clause is filled in by loadOreSignatures and stays hidden when the
+    feed isn't synced — a deployment with no STRATA_API_KEY shows none of their
+    data and must not credit them for it. --><span id="foot-strata" hidden></span></div>
   <div class="foot-version">v{{APP_VERSION}}</div>
 </footer>
 
@@ -4629,6 +4632,17 @@ async function loadOreSignatures() {
     oreSigCredit = d.attribution || "";
   } catch { oreSigs = {}; oreSigCredit = ""; }
   buildOreSigIdx();
+  // Site-wide credit, alongside the wiki + UEX clauses. Strata asks for a
+  // visible credit and a link back where their data is surfaced; the FIELD card
+  // carries one, but the footer is where a reader looks for provenance. Only
+  // shown when the feed actually loaded (see the markup comment).
+  const fs = $("foot-strata");
+  if (fs) {
+    const on = Object.keys(oreSigs).length > 0;
+    fs.hidden = !on;
+    fs.innerHTML = on ? ` Ore scan signatures: <a href="https://strata.celd.space"`
+      + ` target="_blank" rel="noopener">Strata (CELD)</a>.` : "";
+  }
 }
 const VALUE_TIERS = { high: ["val-high", "$$$", "high value"],
                       medium: ["val-med", "$$", "medium value"],
