@@ -681,6 +681,13 @@
     margin-left: 5px; color: var(--dim); cursor: default; }
   .rs-src.ok { color: var(--good); }
   .rs-src.warn { color: var(--warn); }
+  /* RS chart: 9 multiple columns + ore + base. Tighter cells than the default
+     table so the grid fits without wrapping six-digit values; the .table-x
+     wrapper scrolls it on narrow viewports rather than crushing the columns.
+     The ore name is the one column that must not shrink. */
+  #halo-rs-ref table { font-size: 12px; }
+  #halo-rs-ref th, #halo-rs-ref td { padding: 4px 6px; white-space: nowrap; }
+  #halo-rs-ref tbody td:first-child { padding-right: 12px; }
   .fc-sec-head { font-size: 11px; color: var(--dim); letter-spacing: 1px;
     text-transform: uppercase; margin-bottom: 4px; }
   .fc-sec-head .muted { text-transform: none; letter-spacing: 0; }
@@ -13613,6 +13620,13 @@ function rsFlatScales() {
   });
 }
 
+// One column per multiple, ×2 through ×10 (user, post-playtest): a contact at
+// range reads some integer multiple of the base, and the org routinely sees
+// well past ×5. A column grid beats the old inline "×2 7,170 · ×3 10,755 · …"
+// list — same information, far less width, and the eye can scan DOWN a single
+// multiple across ores instead of re-reading a run-on string per row.
+const RS_MULTIPLES = [2, 3, 4, 5, 6, 7, 8, 9, 10];
+
 // Provenance marks. A feed-only row carries nothing — the reference table is
 // the unremarkable default, and marking every row would be noise.
 const RS_SRC = {
@@ -13636,7 +13650,8 @@ function renderHaloRsRef() {
   const rows = ores.map(r =>
     `<tr><td><b>${esc(r.ore)}</b>${oreValueChip(r.ore)}${nFeed ? (RS_SRC[r.src] || "") : ""}</td>`
     + `<td class="num">${r.base.toLocaleString()}</td>`
-    + `<td class="muted" style="white-space:nowrap;">${[2, 3, 4, 5].map(k => `×${k} ${(r.base * k).toLocaleString()}`).join(" · ")}</td></tr>`).join("");
+    + RS_MULTIPLES.map(k =>
+        `<td class="num muted">${(r.base * k).toLocaleString()}</td>`).join("") + `</tr>`).join("");
   const basis = nFeed
     ? `— match your scanner readout at range; ${nFeed} from the reference table, `
       + `${ores.length - nFeed} from the org's own scans`
@@ -13650,7 +13665,9 @@ function renderHaloRsRef() {
     ? `<p class="cap" style="margin:6px 0 0;">${esc(oreSigCredit)}</p>` : "";
   el.innerHTML = `<span class="fld-label">⌖ RS SIGNATURE REFERENCE <span class="muted" style="font-weight:400; text-transform:none;">${basis}</span></span>`
     + `<div class="table-x" style="margin-top:6px;"><table><thead><tr><th>ORE</th>`
-    + `<th class="num">RS BASE</th><th>MULTIPLES SEEN AT RANGE</th></tr></thead><tbody>`
+    + `<th class="num">RS BASE</th>`
+    + RS_MULTIPLES.map(k => `<th class="num">×${k}</th>`).join("")
+    + `</tr></thead><tbody>`
     + rows + `</tbody></table></div>` + foot + credit;
 }
 
