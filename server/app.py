@@ -16,6 +16,8 @@ import os
 import re
 import secrets
 import sqlite3
+import subprocess
+import sys
 import time
 import traceback
 import urllib.parse
@@ -612,23 +614,21 @@ def load_blueprints() -> dict:
 
 
 def load_ore_signatures() -> dict:
-    """Load the committed RS-signature feed distilled from the Strata (CELD)
-    public API by tools/sync_strata.py. Returns the whole document
-    ({_meta, ores, locations}); empty if absent — the Prospector RS card then
-    falls back to the org's own GCD-derived bases exactly as it did before, so
-    a missing file degrades the cheat sheet rather than breaking FIELD.
+    """Load the RS-signature feed distilled from the Strata (CELD) public API by
+    tools/sync_strata.py. Returns the whole document ({_meta, ores, locations});
+    empty if absent — the Prospector RS card then falls back to the org's own
+    GCD-derived bases exactly as it did before, so a missing file degrades the
+    cheat sheet rather than breaking FIELD.
 
-    Same code-bundled-first loading rationale as load_quantum/load_blueprints
-    (see that docstring + the Dockerfile COPY): the volume copy is a stale
-    first-boot snapshot, the image copy ships with the release."""
-    for base in (Path(__file__).parent, DATA_DIR):     # code-bundled wins over the volume
-        try:
-            doc = json.loads((base / "ore_signatures.json").read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if doc.get("ores"):
-            return doc
-    return {}
+    DATA_DIR only, unlike load_quantum/load_blueprints: this feed is NOT
+    committed (Strata states no redistribution license), so there is no
+    code-bundled copy to prefer. Each deployment syncs its own with its own key
+    via _sync_strata_feed(), which writes here."""
+    try:
+        doc = json.loads((DATA_DIR / "ore_signatures.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return doc if doc.get("ores") else {}
 
 
 def _blueprint_index_row(key: str, bp: dict) -> dict:
@@ -2715,6 +2715,63 @@ async def feed_refresh_loop():
             print(f"[sc-nav] scheduled feed refresh failed: {exc}")
 
 
+# Strata's own guidance is to refresh per game patch, daily at most. A deploy is
+# the natural trigger (you redeploy for a patch anyway); the age gate keeps a
+# crash-restart loop from turning that into polling.
+_STRATA_MAX_AGE_H = 24
+
+
+def _strata_tool() -> Path | None:
+    """tools/sync_strata.py, in the image (/app/tools) or a dev clone
+    (repo/tools). None when absent — e.g. an older image."""
+    for p in (Path(__file__).parent / "tools" / "sync_strata.py",
+              Path(__file__).parent.parent / "tools" / "sync_strata.py"):
+        if p.is_file():
+            return p
+    return None
+
+
+def _run_strata_sync(tool: Path, key: str) -> subprocess.CompletedProcess:
+    """Blocking subprocess call — a separate process, not an import, so a bug or
+    a hang in the sync can never take the server with it."""
+    return subprocess.run(
+        [sys.executable, str(tool), "--out", str(DATA_DIR),
+         "--max-age-h", str(_STRATA_MAX_AGE_H), "--quiet"],
+        env={**os.environ, "STRATA_API_KEY": key},
+        capture_output=True, text=True, timeout=180)
+
+
+async def _sync_strata_feed():
+    """Deploy-time refresh of the Strata RS feed (optional, opt-in via
+    STRATA_API_KEY). Every self-hosting org syncs its own copy with its own key,
+    so no third-party dataset rides in the repo.
+
+    Entirely best-effort: no key, no tool, a network failure or a bad key all
+    leave whatever is already on the volume in place and the RS card falls back
+    to the org's own scans. Startup must never depend on Strata being up."""
+    global ore_signatures
+    key = os.environ.get("STRATA_API_KEY", "").strip()
+    if not key:
+        return          # feature off; not an error, don't log on every boot
+    tool = _strata_tool()
+    if not tool:
+        print("[sc-nav] STRATA_API_KEY set but tools/sync_strata.py is missing")
+        return
+    try:
+        r = await asyncio.to_thread(_run_strata_sync, tool, key)
+    except Exception as exc:   # timeout, spawn failure — never fatal
+        print(f"[sc-nav] strata sync failed to run: {exc}")
+        return
+    if r.returncode != 0:
+        # stderr carries the tool's own diagnosis (bad key, rate limit, ...).
+        print(f"[sc-nav] strata sync failed: {(r.stderr or r.stdout).strip()[:300]}")
+        return
+    doc = await asyncio.to_thread(load_ore_signatures)
+    if doc.get("ores"):
+        ore_signatures = doc
+        print(f"[sc-nav] strata RS feed: {len(doc['ores'])} ores")
+
+
 @app.on_event("startup")
 async def _start_presence_broadcaster():
     # Re-hydrate the Group Finder board so a redeploy/restart no longer wipes it.
@@ -2730,6 +2787,7 @@ async def _start_presence_broadcaster():
     asyncio.create_task(presence_broadcaster())
     asyncio.create_task(event_reminder_loop())
     asyncio.create_task(feed_refresh_loop())
+    asyncio.create_task(_sync_strata_feed())   # optional RS feed, opt-in via key
     # v0.13.0 stored one shared Discord webhook; move it to the new per-category
     # settings so notifications keep flowing after this upgrade (one-time, no-op
     # thereafter).

@@ -38,7 +38,12 @@ poi/quantum_match_report.txt
 poi/blueprint_sync_report.txt
 # locations.json IS committed (#28 wiki catalog); its sync report is a build artifact.
 poi/locations_sync_report.txt
-# ore_signatures.json IS committed (Strata RS feed); its sync report is a build artifact.
+# Strata RS feed — NOT committed, unlike the wiki/starmap feeds above. Strata
+# states no redistribution license (their terms cover API use + crediting them
+# when you surface the data), and this repo only commits feeds whose license
+# explicitly allows it. Each deployment syncs its own copy with its own key at
+# deploy time; with no key the feature is simply absent. See tools/sync_strata.py.
+poi/ore_signatures.json
 poi/strata_sync_report.txt
 
 # Third-party reference data kept locally for development only — NOT committed.

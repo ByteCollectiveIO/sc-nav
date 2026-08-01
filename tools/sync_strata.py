@@ -11,14 +11,26 @@ GCD-derived values become a cross-check instead of the only source.
 
 Writes two artifacts:
 
-    poi/ore_signatures.json        — per-ore RS + hardness, keyed by OUR ore
+    <out>/ore_signatures.json      — per-ore RS + hardness, keyed by OUR ore
                                      name, plus per-belt ore concentration
-    poi/strata_sync_report.txt     — crosswalk/coverage audit (NOT loaded)
+    <out>/strata_sync_report.txt   — crosswalk/coverage audit (NOT loaded)
 
-Run this OFFLINE, manually, once per CIG patch; commit the regenerated JSON.
-The server never calls Strata — it reads only the committed file. That is also
-what Strata asks for: the data only changes when CIG ships a patch, so cache
-aggressively rather than polling.
+Two ways this runs, both optional — with no key configured the whole feature
+is simply absent and the RS card falls back to the org's own scans:
+
+  * by hand, from a clone: `python3 tools/sync_strata.py` (key from
+    $STRATA_API_KEY or the repo's gitignored .env)
+  * at deploy time, by the server: app._sync_strata_feed() invokes this with
+    `--out $SC_NAV_DATA --max-age-h`, so every self-hosting org refreshes with
+    its OWN key and no dataset is redistributed in the repo.
+
+The output is NOT committed (see .gitignore): Strata states no redistribution
+license, and this repo's convention is that only explicitly-licensed feeds
+(SC Wiki CC BY-SA, CIG starmap) get committed.
+
+Strata asks for aggressive caching rather than polling — the data only changes
+when CIG ships a patch. --max-age-h enforces that: a restart loop can't hammer
+the API, and the deploy-time default is a full day.
 
 Source: Strata Mining Tools by Celestial Dynamics [CELD]
 (https://strata.celd.space), key-gated public API. A key is self-service and
@@ -30,6 +42,7 @@ and link back — that credit ships in the FIELD-tab RS card, don't drop it.
 Usage:
     export STRATA_API_KEY=celd_...
     python3 tools/sync_strata.py                 # fetch live + write poi/
+    python3 tools/sync_strata.py --out /data --max-age-h 24 --quiet
     python3 tools/sync_strata.py --dry-run       # fetch + report, write nothing
     python3 tools/sync_strata.py --all-locations # every mineable location, not
                                                  # just the three surveyed belts
@@ -67,6 +80,22 @@ BELTS = {
     "glaciem": ("glaciem-ring", "Glaciem Ring"),
     "keeger": ("keeger-belt", "Keeger Belt"),
 }
+
+
+def _key_from_env_file() -> str | None:
+    """STRATA_API_KEY out of the repo's gitignored .env, so a self-hosting org
+    has ONE documented place for it (.env.example lists it) instead of needing
+    a shell export. Deliberately minimal: this is a fallback for humans running
+    the tool by hand — the container gets the key from its environment."""
+    try:
+        with open(os.path.join(REPO, ".env")) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("STRATA_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip("'\"") or None
+    except OSError:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------- fetch
@@ -115,7 +144,7 @@ def _slugify(name: str) -> str:
     return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", s))
 
 
-def load_local_ores() -> list[str]:
+def load_local_ores(data_dir: str = POI) -> list[str]:
     """Our ore vocabulary — the uexcorp raw-commodity names the survey marks,
     forecast and value badges are all keyed by (app.load_raw_commodity_names).
     Read from the local feed cache so this tool needs no server import.
@@ -123,7 +152,7 @@ def load_local_ores() -> list[str]:
     That cache is gitignored, so a fresh clone won't have it: start the server
     once (or run with OFFLINE unset) to populate it. Without it every ore lands
     in NOT CARRIED — loud and obvious in the report, never a silent half-sync."""
-    path = os.path.join(POI, "commodities.json")
+    path = os.path.join(data_dir, "commodities.json")
     try:
         with open(path) as f:
             rows = json.load(f)
@@ -237,22 +266,46 @@ def main() -> None:
     ap.add_argument("--all-locations", action="store_true",
                     help="pull the ore table for EVERY mineable location "
                          "(~1 request each) instead of just the surveyed belts")
-    ap.add_argument("--key", default=os.environ.get("STRATA_API_KEY"),
-                    help="Strata API key (default: $STRATA_API_KEY)")
+    ap.add_argument("--key", default=os.environ.get("STRATA_API_KEY") or _key_from_env_file(),
+                    help="Strata API key (default: $STRATA_API_KEY, else STRATA_API_KEY "
+                         "in the repo's .env)")
+    ap.add_argument("--out", default=POI, metavar="DIR",
+                    help="where to write the artifacts (default: poi/). The server "
+                         "passes its data dir so a deploy-time sync lands on the volume.")
+    ap.add_argument("--max-age-h", type=float, default=0, metavar="H",
+                    help="skip entirely when the existing output is younger than H "
+                         "hours. Used by the deploy-time sync so a restart loop can't "
+                         "hammer the API; 0 (default) always syncs.")
+    ap.add_argument("--quiet", action="store_true",
+                    help="only report problems (deploy-time sync)")
     args = ap.parse_args()
+
+    def say(*a, **kw):
+        if not args.quiet:
+            print(*a, **kw)
 
     if not args.key:
         sys.exit("[strata] no API key — set STRATA_API_KEY or pass --key.\n"
                  f"         Self-service, free: {BASE}/api-keys")
 
-    local = load_local_ores()
-    keys = build_crosswalk(local)
-    print(f"local ore vocabulary: {len(local)} names")
+    out_path = os.path.join(args.out, "ore_signatures.json")
+    if args.max_age_h > 0:
+        try:
+            age_h = (time.time() - os.path.getmtime(out_path)) / 3600
+        except OSError:
+            age_h = None                      # no file yet — always sync
+        if age_h is not None and age_h < args.max_age_h:
+            say(f"[strata] feed is {age_h:.1f}h old (< {args.max_age_h}h) — skipping sync")
+            return
 
-    print("fetching ore catalog ...", end=" ", flush=True)
+    local = load_local_ores(args.out)
+    keys = build_crosswalk(local)
+    say(f"local ore vocabulary: {len(local)} names")
+
+    say("fetching ore catalog ...", end=" ", flush=True)
     ores_resp = _get("/api/public/ores", args.key)
     rows = ores_resp.get("ores") or []
-    print(f"{len(rows)}")
+    say(f"{len(rows)}")
     time.sleep(THROTTLE_S)
 
     ores: dict[str, dict] = {}
@@ -271,13 +324,13 @@ def main() -> None:
             continue
         ores[name] = rec
 
-    print(f"  mapped {len(ores)}/{len(rows)} onto our ore names "
+    say(f"  mapped {len(ores)}/{len(rows)} onto our ore names "
           f"({len(unmapped)} not carried, {len(no_rs)} without an RS value)")
 
-    print("fetching location catalog ...", end=" ", flush=True)
+    say("fetching location catalog ...", end=" ", flush=True)
     loc_resp = _get("/api/public/locations", args.key)
     locations = loc_resp.get("locations") or []
-    print(f"{len(locations)}")
+    say(f"{len(locations)}")
     time.sleep(THROTTLE_S)
 
     if args.all_locations:
@@ -292,17 +345,17 @@ def main() -> None:
     belts: dict[str, dict] = {}
     for i, (key, row) in enumerate(sorted(targets.items())):
         loc_id = row.get("id")
-        print(f"  location {i + 1}/{len(targets)}: {row.get('name')}", flush=True)
+        say(f"  location {i + 1}/{len(targets)}: {row.get('name')}", flush=True)
         payload = _get(f"/api/public/location-ores/{urllib.parse.quote(str(loc_id))}",
                        args.key)
         belts[key] = distill_location(payload, keys)
         time.sleep(THROTTLE_S)
 
     ore_rows = sum(len(b["ores"]) for b in belts.values())
-    print(f"\n  ores {len(ores)} · locations {len(belts)} · ore rows {ore_rows}")
+    say(f"\n  ores {len(ores)} · locations {len(belts)} · ore rows {ore_rows}")
 
     if args.dry_run:
-        print("\n[dry-run] nothing written")
+        say("\n[dry-run] nothing written")
         return
 
     out = {
@@ -320,8 +373,8 @@ def main() -> None:
         "ores": ores,
         "locations": belts,
     }
-    os.makedirs(POI, exist_ok=True)
-    with open(os.path.join(POI, "ore_signatures.json"), "w") as f:
+    os.makedirs(args.out, exist_ok=True)
+    with open(out_path, "w") as f:
         json.dump(out, f, indent=1, ensure_ascii=False, sort_keys=True)
 
     report = [
@@ -344,10 +397,10 @@ def main() -> None:
         f"BELTS NOT FOUND ({len(missing_belts)}):",
         *(f"  {b}" for b in sorted(missing_belts)),
     ]
-    with open(os.path.join(POI, "strata_sync_report.txt"), "w") as f:
+    with open(os.path.join(args.out, "strata_sync_report.txt"), "w") as f:
         f.write("\n".join(report) + "\n")
 
-    print("\n  wrote poi/ore_signatures.json, poi/strata_sync_report.txt")
+    say(f"\n  wrote {out_path}, {os.path.join(args.out, 'strata_sync_report.txt')}")
 
 
 if __name__ == "__main__":
