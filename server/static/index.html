@@ -675,6 +675,12 @@
   .val-high { color: var(--good); }
   .val-med { color: var(--warn); }
   .val-low { color: var(--dim); }
+  /* RS provenance mark: whose evidence backs this signature base — the org's
+     own scans, the datamined reference, or a disagreement worth a look. */
+  .rs-src { font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    margin-left: 5px; color: var(--dim); cursor: default; }
+  .rs-src.ok { color: var(--good); }
+  .rs-src.warn { color: var(--warn); }
   .fc-sec-head { font-size: 11px; color: var(--dim); letter-spacing: 1px;
     text-transform: uppercase; margin-bottom: 4px; }
   .fc-sec-head .muted { text-transform: none; letter-spacing: 0; }
@@ -4568,6 +4574,54 @@ function oreValueLookup(name, category = "resource") {
 async function loadOreValues() {
   try { oreValues = await fetch("/api/resource_values").then(r => r.json()); } catch {}
   buildOreValueIdx();
+}
+
+// ---------- RS signatures (datamined reference) ----------
+// Per-ore radar-signature base from /api/ore_signatures (Strata/CELD feed,
+// synced per patch by tools/sync_strata.py). Complements — never replaces —
+// the org's own GCD-derived bases: this table is complete from day one, ours
+// is evidence we gathered. renderHaloRsRef merges the two and shows which is
+// which. Empty until the feed is synced; every consumer degrades to org-only.
+let oreSigs = {}, oreSigIdx = {}, oreSigCredit = "";
+// Same suffix-tolerant join as oreValueIdx, and for the same reason: the feed
+// keys ores "Iron (Ore)" while survey marks name them bare ("Iron").
+// Index maps a lookup name to the CANONICAL feed key, not straight to the
+// record: callers need the key to fold an org row ("Iron") into the feed row
+// ("Iron (Ore)") without guessing at identity by comparing RS values.
+function buildOreSigIdx() {
+  const idx = {};
+  for (const name of Object.keys(oreSigs)) idx[name.toLowerCase()] = name;
+  for (const name of Object.keys(oreSigs)) {
+    const bare = name.toLowerCase().replace(ORE_SUFFIX_RE, "").trim();
+    if (!(bare in idx)) idx[bare] = name;         // exact match always wins
+  }
+  oreSigIdx = idx;
+}
+function oreSigKey(name) {
+  const n = (name || "").toLowerCase();
+  return oreSigIdx[n] || oreSigIdx[n.replace(ORE_SUFFIX_RE, "").trim()];
+}
+function oreSigLookup(name) {
+  const k = oreSigKey(name);
+  return k ? oreSigs[k] : undefined;
+}
+// [name, rec] for ship-mining ores with a usable RS — the only ores whose
+// signature identifies them. Every FPS ore shares one flat constant and every
+// ground-vehicle ore another (3000 / 4000 as of 4.x), so those can neither be
+// named from a reading nor used to explain one; including them would bury the
+// real candidate under coincidental divisors. Categories absent from the feed
+// (older sync) are treated as ship rather than dropped.
+function shipSigEntries() {
+  return Object.entries(oreSigs).filter(([, r]) =>
+    r && r.rs > 0 && (!r.category || r.category === "ship"));
+}
+async function loadOreSignatures() {
+  try {
+    const d = await fetch("/api/ore_signatures").then(r => r.json());
+    oreSigs = d.ores || {};
+    oreSigCredit = d.attribution || "";
+  } catch { oreSigs = {}; oreSigCredit = ""; }
+  buildOreSigIdx();
 }
 const VALUE_TIERS = { high: ["val-high", "$$$", "high value"],
                       medium: ["val-med", "$$", "medium value"],
@@ -13500,9 +13554,7 @@ function renderHaloAtlasZones() {
 // fixed multiple of its base (Gold 3585 → 7170, 10755…), visible from ~25 km —
 // so the org's own single-ore scans, distilled to per-ore bases, let you name a
 // contact at range. Grows as more RS values are logged in scan detail.
-function renderHaloRsRef() {
-  const el = $("halo-rs-ref");
-  if (!el) return;
+function orgRsBases() {
   const gcd2 = (a, b) => { a = Math.abs(a); b = Math.abs(b); while (b) { const t = b; b = a % b; a = t; } return a; };
   // Base is a physics constant per material; if two zones disagree (a bad
   // sample), the GCD is the safe common base.
@@ -13512,17 +13564,94 @@ function renderHaloRsRef() {
       if (!(base > 0)) continue;
       bases[ore] = bases[ore] ? gcd2(bases[ore], base) : base;
     }
-  const ores = Object.entries(bases).sort((a, b) => a[1] - b[1]);
+  return bases;
+}
+
+// Merge the datamined table with the org's own evidence into one row per ore.
+// Datamined wins the BASE when both exist: our GCD is only as good as the
+// samples behind it, and an org that never scanned an odd multiple lands on a
+// clean 2× of the truth. That case is agreement, not conflict (org % base ==
+// 0) and stays quiet. A NON-multiple is the interesting one — the sample or
+// the feed is wrong — so it's the only thing we flag.
+function mergeRsRows() {
+  const org = orgRsBases(), rows = new Map();
+  // Ship ores only (shipSigEntries) — a per-ore row for the flat hand/ROC
+  // constants would promise an identification the number cannot make, and they
+  // sort to the TOP of the table where they'd be read first. Those get the
+  // rsFlatScales footnote instead. Org-derived rows are never filtered: they
+  // are evidence of what the org actually scanned.
+  for (const [name, rec] of shipSigEntries())
+    rows.set(name, { ore: name, base: rec.rs, src: "feed", org: null });
+  for (const [ore, base] of Object.entries(org)) {
+    const key = oreSigKey(ore);                 // same material, bare mark name
+    const row = key ? rows.get(key) : null;
+    if (row) {
+      row.org = base;
+      row.src = base % row.base === 0 ? "both" : "clash";
+    } else {
+      rows.set(ore, { ore, base, src: "org", org: base });
+    }
+  }
+  return [...rows.values()].sort((a, b) => a.base - b.base);
+}
+
+// The non-ship categories, each collapsed to its shared constant: "6 FPS ores
+// all read 3000". Derived, never hardcoded — if a patch splits them into real
+// per-ore signatures the footnote turns into per-value groups on its own, and
+// mergeRsRows' filter is the only thing to revisit.
+function rsFlatScales() {
+  const cats = {};
+  for (const rec of Object.values(oreSigs)) {
+    if (!(rec && rec.rs > 0) || !rec.category || rec.category === "ship") continue;
+    (cats[rec.category] ||= {})[rec.rs] = (cats[rec.category][rec.rs] || 0) + 1;
+  }
+  const LABEL = { fps: "hand", ground_vehicle: "ROC" };
+  return Object.entries(cats).map(([cat, byRs]) => {
+    const parts = Object.entries(byRs).sort((a, b) => a[0] - b[0]).map(([rs, n]) =>
+      `${n} ${LABEL[cat] || cat} ore${n === 1 ? "" : "s"} at ${Number(rs).toLocaleString()}`);
+    return parts.join(", ");
+  });
+}
+
+// Provenance marks. A feed-only row carries nothing — the reference table is
+// the unremarkable default, and marking every row would be noise.
+const RS_SRC = {
+  feed: "",
+  both: `<span class="rs-src ok" title="the org's own scans agree with the reference">✓</span>`,
+  org: `<span class="rs-src" title="derived from the org's single-ore scans — not in the reference table">org</span>`,
+  clash: `<span class="rs-src warn" title="the org's scans derive a base that is not a multiple of the reference — check the sample, or re-sync the feed after a patch">!</span>`,
+};
+
+function renderHaloRsRef() {
+  const el = $("halo-rs-ref");
+  if (!el) return;
+  const ores = mergeRsRows();
   if (!ores.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.hidden = false;
-  const rows = ores.map(([ore, base]) =>
-    `<tr><td><b>${esc(ore)}</b>${oreValueChip(ore)}</td>`
-    + `<td class="num">${base.toLocaleString()}</td>`
-    + `<td class="muted" style="white-space:nowrap;">${[2, 3, 4, 5].map(k => `×${k} ${(base * k).toLocaleString()}`).join(" · ")}</td></tr>`).join("");
-  el.innerHTML = `<span class="fld-label">⌖ RS SIGNATURE REFERENCE <span class="muted" style="font-weight:400; text-transform:none;">— match your scanner readout at range; built from the org's single-ore scans</span></span>`
+  // Caption states the basis honestly: which half of the table you're looking
+  // at depends on whether the feed synced, so say so rather than claiming both.
+  const nFeed = ores.filter(r => r.src !== "org").length;
+  // With no feed every row is org-derived and the caption says so — marking
+  // each one would be pure noise. Provenance only earns space once mixed.
+  const rows = ores.map(r =>
+    `<tr><td><b>${esc(r.ore)}</b>${oreValueChip(r.ore)}${nFeed ? (RS_SRC[r.src] || "") : ""}</td>`
+    + `<td class="num">${r.base.toLocaleString()}</td>`
+    + `<td class="muted" style="white-space:nowrap;">${[2, 3, 4, 5].map(k => `×${k} ${(r.base * k).toLocaleString()}`).join(" · ")}</td></tr>`).join("");
+  const basis = nFeed
+    ? `— match your scanner readout at range; ${nFeed} from the reference table, `
+      + `${ores.length - nFeed} from the org's own scans`
+    : `— match your scanner readout at range; built from the org's single-ore scans`;
+  const flat = nFeed ? rsFlatScales() : [];
+  const foot = flat.length
+    ? `<p class="cap" style="margin:6px 0 0;">Ship mining only — RS names the rock. `
+      + `Hand and ROC mining read one flat signature per category (${esc(flat.join("; "))}), `
+      + `so it can't tell them apart.</p>` : "";
+  const credit = nFeed && oreSigCredit
+    ? `<p class="cap" style="margin:6px 0 0;">${esc(oreSigCredit)}</p>` : "";
+  el.innerHTML = `<span class="fld-label">⌖ RS SIGNATURE REFERENCE <span class="muted" style="font-weight:400; text-transform:none;">${basis}</span></span>`
     + `<div class="table-x" style="margin-top:6px;"><table><thead><tr><th>ORE</th>`
     + `<th class="num">RS BASE</th><th>MULTIPLES SEEN AT RANGE</th></tr></thead><tbody>`
-    + rows + `</tbody></table></div>`;
+    + rows + `</tbody></table></div>` + foot + credit;
 }
 
 // Coverage caption: the Keeger arc numbers + the next-gap chip (Nyx), and a
@@ -13779,12 +13908,36 @@ function surveyRsCard(z) {
     return `<div class="card"><h2 class="svy-h">RS signatures</h2>`
       + `<p class="cap">No radar signatures logged. Add an RS value in a mark's scan detail — `
       + `single-ore rocks derive a base.</p></div>`;
-  const rows = Object.entries(bases).sort((a, b) => a[1] - b[1]).map(([ore, base]) =>
-    `<div class="svy-rs-row"><span class="fc-ore"><span class="fc-ore-name">${esc(ore)}</span>${oreValueChip(ore)}</span>`
-    + `<span><b>${base.toLocaleString()}</b><span class="muted"> · ${[2, 3, 4, 5].map(k => `×${k} ${(base * k).toLocaleString()}`).join(" · ")}</span></span></div>`).join("");
-  const unmatched = seen.filter(v => !Object.values(bases).some(b => v % b === 0));
-  const foot = unmatched.length
-    ? `<p class="cap" style="margin:8px 0 0;">Unmatched signatures seen: ${unmatched.join(", ")}</p>` : "";
+  const rows = Object.entries(bases).sort((a, b) => a[1] - b[1]).map(([ore, base]) => {
+    // Cross-check this zone's own derivation against the reference (#38).
+    const rec = oreSigLookup(ore);
+    const mark = !rec || !(rec.rs > 0) ? ""
+      : base % rec.rs === 0 ? RS_SRC.both
+      : `<span class="rs-src warn" title="reference base is ${rec.rs.toLocaleString()} — this zone's sample doesn't divide by it">!</span>`;
+    return `<div class="svy-rs-row"><span class="fc-ore"><span class="fc-ore-name">${esc(ore)}</span>${oreValueChip(ore)}${mark}</span>`
+      + `<span><b>${base.toLocaleString()}</b><span class="muted"> · ${[2, 3, 4, 5].map(k => `×${k} ${(base * k).toLocaleString()}`).join(" · ")}</span></span></div>`;
+  }).join("");
+  // Unmatched = not a multiple of any base this zone derived, NOR of any known
+  // reference base — otherwise every signature for an ore the zone happens not
+  // to have sampled reads as "unmatched", which is the opposite of useful.
+  // Ship ores only, per mergeRsRows: the flat hand/ROC constants divide a lot
+  // of readings by coincidence and would bury the real candidate in noise.
+  const unmatched = [], named = [];
+  for (const v of seen) {
+    if (Object.values(bases).some(b => v % b === 0)) continue;   // zone explains it
+    // The reference can name a signature this zone never derived itself — the
+    // whole point of carrying a datamined table. Ambiguity is real (two ores
+    // whose bases both divide v), so name every candidate, not a winner.
+    const hits = shipSigEntries()
+      .filter(([, r]) => v % r.rs === 0)
+      .map(([n, r]) => `${esc(n)} ×${v / r.rs}`);
+    if (hits.length) named.push(`${v.toLocaleString()} = ${hits.join(" or ")}`);
+    else unmatched.push(v.toLocaleString());
+  }
+  const foot = (named.length
+      ? `<p class="cap" style="margin:8px 0 0;">Identified from the reference: ${named.join(" · ")}</p>` : "")
+    + (unmatched.length
+      ? `<p class="cap" style="margin:8px 0 0;">Unmatched signatures seen: ${unmatched.join(", ")}</p>` : "");
   return `<div class="card"><h2 class="svy-h">RS signatures</h2>`
     + `<p class="cap">Match your scanner readout at ~25 km — every contact reads an integer multiple of the base.</p>`
     + (rows || "") + foot + `</div>`;
@@ -17202,6 +17355,9 @@ function init() {
     loadFinderOres();
     if (lastState) { renderForecast(lastState); renderNearby(); }
   });
+  // Datamined RS bases (#38): independent of the value badges, so it loads on
+  // its own. Repaint the FIELD cheat sheet if it rendered org-only first.
+  loadOreSignatures().then(() => { if (haloTabCur === "field") renderHaloRsRef(); });
   // Show the map from the start so the feature is discoverable; drawMap paints
   // an "awaiting location" notice on the blank canvas until the first
   // /showlocation arrives (render() repopulates it once a fix lands).

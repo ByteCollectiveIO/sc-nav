@@ -5246,6 +5246,49 @@ class ResourceValueTests(unittest.TestCase):
         self.assertEqual(doc["harvestable"]["Ranta Dung"]["tier"], "low")
 
 
+class OreSignatureTests(unittest.TestCase):
+    """/api/ore_signatures — the datamined RS feed (Strata/CELD) behind
+    Prospector's FIELD cheat sheet. The endpoint is a thin pass-through, so what
+    matters is the two states the client has to survive: synced and not-synced.
+    Attribution rides along because the card renders it as a condition of use."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._user = {"id": "9", "username": "surveyor", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls._orig = app.ore_signatures
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.ore_signatures = cls._orig
+
+    def test_serves_feed_with_attribution(self):
+        app.ore_signatures = {
+            "_meta": {"attribution": "Ore signatures: Strata (CELD) — strata.celd.space"},
+            "ores": {"Gold (Ore)": {"id": "gold_ore", "rs": 3585, "instability": 0.0}},
+            "locations": {"keeger": {"id": "keeger_belt", "ores": []}},
+        }
+        doc = self.client.get("/api/ore_signatures").json()
+        self.assertEqual(doc["ores"]["Gold (Ore)"]["rs"], 3585)
+        # instability 0 is real data, not missing — it must survive the hop.
+        self.assertEqual(doc["ores"]["Gold (Ore)"]["instability"], 0.0)
+        self.assertIn("keeger", doc["locations"])
+        self.assertIn("Strata", doc["attribution"])
+
+    def test_unsynced_feed_degrades_empty(self):
+        """No committed file = empty maps, not a 500: the FIELD card then shows
+        the org's own GCD-derived bases exactly as it did before this feed."""
+        app.ore_signatures = {}
+        r = self.client.get("/api/ore_signatures")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"ores": {}, "locations": {}, "attribution": None})
+
+
 class TradeStopFilterApiTests(unittest.TestCase):
     """Stop-kind filter (#34): keep a big hauler out of places it can't use. The
     solver drops unusable stops; manual legs (the player's explicit pick) are

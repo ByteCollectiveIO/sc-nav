@@ -26,6 +26,11 @@ ENV SC_NAV_DATA=/data
 # load_wiki_locations() read the code-dir copy first.
 COPY poi/quantum_drives.json poi/quantum_profiles.json poi/blueprints.json poi/locations.json ./
 
+# The Strata RS sync tool (not committed data — the tool). The server runs it at
+# startup when STRATA_API_KEY is set, writing ore_signatures.json to the data
+# volume; with no key nothing runs and the RS card falls back to org scans.
+COPY tools/sync_strata.py ./tools/
+
 RUN useradd --system --home /app scnav && chown -R scnav:scnav /data
 USER scnav
 
