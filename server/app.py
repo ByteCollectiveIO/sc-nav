@@ -611,6 +611,26 @@ def load_blueprints() -> dict:
     return {}
 
 
+def load_ore_signatures() -> dict:
+    """Load the committed RS-signature feed distilled from the Strata (CELD)
+    public API by tools/sync_strata.py. Returns the whole document
+    ({_meta, ores, locations}); empty if absent — the Prospector RS card then
+    falls back to the org's own GCD-derived bases exactly as it did before, so
+    a missing file degrades the cheat sheet rather than breaking FIELD.
+
+    Same code-bundled-first loading rationale as load_quantum/load_blueprints
+    (see that docstring + the Dockerfile COPY): the volume copy is a stale
+    first-boot snapshot, the image copy ships with the release."""
+    for base in (Path(__file__).parent, DATA_DIR):     # code-bundled wins over the volume
+        try:
+            doc = json.loads((base / "ore_signatures.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if doc.get("ores"):
+            return doc
+    return {}
+
+
 def _blueprint_index_row(key: str, bp: dict) -> dict:
     """One search-index row for GET /api/blueprints — enough for the picker
     (name + disambiguating category + a materials summary), never the full
@@ -1262,6 +1282,7 @@ QUANTUM_DRIVES, QUANTUM_PROFILES, QUANTUM_UEX = load_quantum()
 enrich_ships_quantum(ships)     # attach per-ship quantum fuel/range (#27), when matched
 fleet_ships = load_fleet_ships()
 blueprints_feed = load_blueprints()     # crafting recipes for commissions (#25)
+ore_signatures = load_ore_signatures()  # datamined RS bases for Prospector's FIELD card
 item_names = load_item_names()
 item_prices = build_item_prices()
 item_specs = build_item_specs()   # per-item characteristics (needs the catalog cache load_item_names wrote)
@@ -3164,6 +3185,19 @@ async def get_resource_values():
     per ore / harvestable name — the navigator's value badges. Absent name =
     unpriced, and the client shows no badge rather than implying worthless."""
     return resource_values
+
+
+@app.get("/api/ore_signatures")
+async def get_ore_signatures():
+    """Datamined RS (radar signature) base per ore, keyed by our ore name, for
+    Prospector's FIELD cheat sheet. `attribution` is NOT decoration — Strata
+    asks that tools surfacing this data credit them, and the card renders it.
+
+    Empty `ores` is the normal degraded state (feed not synced yet); the client
+    then shows only the org's own GCD-derived bases."""
+    return {"ores": ore_signatures.get("ores") or {},
+            "locations": ore_signatures.get("locations") or {},
+            "attribution": (ore_signatures.get("_meta") or {}).get("attribution")}
 
 
 @app.get("/api/commodities")

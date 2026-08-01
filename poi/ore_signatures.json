@@ -1,0 +1,562 @@
+{
+ "_meta": {
+  "api_attribution": "Data from celd.space / Strata Mining Tools",
+  "attribution": "Ore signatures: Strata (CELD) — strata.celd.space",
+  "endpoints": [
+   "/api/public/ores",
+   "/api/public/locations",
+   "/api/public/location-ores/{location}"
+  ],
+  "generated_by": "tools/sync_strata.py",
+  "location_count": 3,
+  "ore_count": 35,
+  "scope": "surveyed-belts",
+  "source": "Strata Mining Tools (strata.celd.space) by Celestial Dynamics [CELD]"
+ },
+ "locations": {
+  "glaciem": {
+   "id": "nyx_glaciemring",
+   "name": "Glaciem Ring",
+   "ores": [
+    {
+     "conc": 0.285,
+     "id": "torite_ore",
+     "ore": "Torite (Ore)",
+     "rs": 3900,
+     "tier": 6,
+     "tier_name": "Pure"
+    },
+    {
+     "conc": 0.2075,
+     "id": "ice_raw",
+     "ore": "Ice (Raw)",
+     "rs": 4300,
+     "tier": 5,
+     "tier_name": "Major"
+    },
+    {
+     "conc": 0.2075,
+     "id": "iron_ore",
+     "ore": "Iron (Ore)",
+     "rs": 4270,
+     "tier": 5,
+     "tier_name": "Major"
+    },
+    {
+     "conc": 0.18,
+     "id": "bexalite_raw",
+     "ore": "Bexalite (Raw)",
+     "rs": 3600,
+     "tier": 5,
+     "tier_name": "Major"
+    },
+    {
+     "conc": 0.1,
+     "id": "lindinium_ore",
+     "ore": "Lindinium (Ore)",
+     "rs": 3400,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.02,
+     "id": "savrilium_ore",
+     "ore": "Savrilium (Ore)",
+     "rs": 3200,
+     "tier": 2,
+     "tier_name": "Trace"
+    }
+   ],
+   "system": "Nyx",
+   "type": "asteroid_field"
+  },
+  "halo": {
+   "id": "aaronhalo",
+   "name": "Aaron Halo",
+   "ores": [
+    {
+     "conc": 0.18,
+     "id": "beryl_raw",
+     "ore": "Beryl (Raw)",
+     "rs": 3540,
+     "tier": 5,
+     "tier_name": "Major"
+    },
+    {
+     "conc": 0.142,
+     "id": "aslarite_raw",
+     "ore": "Aslarite (Raw)",
+     "rs": 3840,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.142,
+     "id": "titanium_ore",
+     "ore": "Titanium (Ore)",
+     "rs": 3855,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.104,
+     "id": "ice_raw",
+     "ore": "Ice (Raw)",
+     "rs": 4300,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.103,
+     "id": "aluminium_ore",
+     "ore": "Aluminum (Ore)",
+     "rs": 4285,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.103,
+     "id": "silicon_raw",
+     "ore": "Silicon (Raw)",
+     "rs": 4255,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.103,
+     "id": "iron_ore",
+     "ore": "Iron (Ore)",
+     "rs": 4270,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.103,
+     "id": "copper_ore",
+     "ore": "Copper (Ore)",
+     "rs": 4240,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.02,
+     "id": "quantainium_raw",
+     "ore": "Quantainium (Raw)",
+     "rs": 3170,
+     "tier": 2,
+     "tier_name": "Trace"
+    }
+   ],
+   "system": "Stanton",
+   "type": "asteroid_field"
+  },
+  "keeger": {
+   "id": "nyx_keegerbelt",
+   "name": "Keeger Belt",
+   "ores": [
+    {
+     "conc": 0.285,
+     "id": "torite_ore",
+     "ore": "Torite (Ore)",
+     "rs": 3900,
+     "tier": 6,
+     "tier_name": "Pure"
+    },
+    {
+     "conc": 0.2075,
+     "id": "aluminium_ore",
+     "ore": "Aluminum (Ore)",
+     "rs": 4285,
+     "tier": 5,
+     "tier_name": "Major"
+    },
+    {
+     "conc": 0.2075,
+     "id": "ice_raw",
+     "ore": "Ice (Raw)",
+     "rs": 4300,
+     "tier": 5,
+     "tier_name": "Major"
+    },
+    {
+     "conc": 0.18,
+     "id": "bexalite_raw",
+     "ore": "Bexalite (Raw)",
+     "rs": 3600,
+     "tier": 5,
+     "tier_name": "Major"
+    },
+    {
+     "conc": 0.1,
+     "id": "lindinium_ore",
+     "ore": "Lindinium (Ore)",
+     "rs": 3400,
+     "tier": 4,
+     "tier_name": "Notable"
+    },
+    {
+     "conc": 0.02,
+     "id": "savrilium_ore",
+     "ore": "Savrilium (Ore)",
+     "rs": 3200,
+     "tier": 2,
+     "tier_name": "Trace"
+    }
+   ],
+   "system": "Nyx",
+   "type": "asteroid_field"
+  }
+ },
+ "ores": {
+  "Agricium (Ore)": {
+   "category": "ship",
+   "id": "agricium_ore",
+   "instability": 350,
+   "resistance": 0.5,
+   "rs": 3885,
+   "slug": "agricium",
+   "strata_name": "Agricium (Ore)",
+   "tier": null
+  },
+  "Aluminum (Ore)": {
+   "category": "ship",
+   "id": "aluminium_ore",
+   "instability": 0,
+   "resistance": -0.4,
+   "rs": 4285,
+   "slug": "aluminum",
+   "strata_name": "Aluminum (Ore)",
+   "tier": null
+  },
+  "Aphorite": {
+   "category": "fps",
+   "id": "minableelement_fps_aphorite",
+   "instability": 0,
+   "resistance": 0,
+   "rs": 3000,
+   "slug": "aphorite",
+   "strata_name": "Aphorite (Raw)",
+   "tier": null
+  },
+  "Aslarite (Raw)": {
+   "category": "ship",
+   "id": "aslarite_raw",
+   "instability": 700,
+   "resistance": 0.5,
+   "rs": 3840,
+   "slug": "aslarite",
+   "strata_name": "Aslarite (Raw)",
+   "tier": null
+  },
+  "Beradom": {
+   "category": "ground_vehicle",
+   "id": "minableelement_groundvehicle_beradom",
+   "instability": 0,
+   "resistance": 0,
+   "rs": 4000,
+   "slug": "beradom",
+   "strata_name": "Beradom (Raw)",
+   "tier": null
+  },
+  "Beryl (Raw)": {
+   "category": "ship",
+   "id": "beryl_raw",
+   "instability": 350,
+   "resistance": 0.65,
+   "rs": 3540,
+   "slug": "beryl",
+   "strata_name": "Beryl (Raw)",
+   "tier": null
+  },
+  "Bexalite (Raw)": {
+   "category": "ship",
+   "id": "bexalite_raw",
+   "instability": 600,
+   "resistance": 0.6,
+   "rs": 3600,
+   "slug": "bexalite",
+   "strata_name": "Bexalite (Raw)",
+   "tier": null
+  },
+  "Borase (Ore)": {
+   "category": "ship",
+   "id": "borase_ore",
+   "instability": 40,
+   "resistance": 0.3,
+   "rs": 3570,
+   "slug": "borase",
+   "strata_name": "Borase (Ore)",
+   "tier": null
+  },
+  "Copper (Ore)": {
+   "category": "ship",
+   "id": "copper_ore",
+   "instability": 50,
+   "resistance": -0.7,
+   "rs": 4240,
+   "slug": "copper",
+   "strata_name": "Copper (Ore)",
+   "tier": null
+  },
+  "Corundum (Raw)": {
+   "category": "ship",
+   "id": "corundum_raw",
+   "instability": 50,
+   "resistance": 0.1,
+   "rs": 4225,
+   "slug": "corundum",
+   "strata_name": "Corundum (Raw)",
+   "tier": null
+  },
+  "Dolivine": {
+   "category": "fps",
+   "id": "minableelement_fps_dolivine",
+   "instability": 0,
+   "resistance": 0.1,
+   "rs": 3000,
+   "slug": "dolivine",
+   "strata_name": "Dolivine (Raw)",
+   "tier": null
+  },
+  "Feynmaline": {
+   "category": "ground_vehicle",
+   "id": "minableelement_groundvehicle_feynmaline",
+   "instability": 200,
+   "resistance": 0,
+   "rs": 4000,
+   "slug": "feynmaline",
+   "strata_name": "Feynmaline (Raw)",
+   "tier": null
+  },
+  "Glacosite": {
+   "category": "ground_vehicle",
+   "id": "minableelement_groundvehicle_glacosite",
+   "instability": 0,
+   "resistance": 0.1,
+   "rs": 4000,
+   "slug": "glacosite",
+   "strata_name": "Glacosite (Raw)",
+   "tier": null
+  },
+  "Gold (Ore)": {
+   "category": "ship",
+   "id": "gold_ore",
+   "instability": 550,
+   "resistance": 0.5,
+   "rs": 3585,
+   "slug": "gold",
+   "strata_name": "Gold (Ore)",
+   "tier": null
+  },
+  "Hadanite": {
+   "category": "fps",
+   "id": "minableelement_fps_hadanite",
+   "instability": 200,
+   "resistance": 0,
+   "rs": 3000,
+   "slug": "hadanite",
+   "strata_name": "Hadanite (Raw)",
+   "tier": null
+  },
+  "Hephaestanite (Raw)": {
+   "category": "ship",
+   "id": "hephaestanite_raw",
+   "instability": 400,
+   "resistance": -0.3,
+   "rs": 4180,
+   "slug": "hephaestanite",
+   "strata_name": "Hephaestanite (R)",
+   "tier": null
+  },
+  "Ice (Raw)": {
+   "category": "ship",
+   "id": "ice_raw",
+   "instability": 0,
+   "resistance": -0.5,
+   "rs": 4300,
+   "slug": "ice",
+   "strata_name": "Ice (Raw)",
+   "tier": null
+  },
+  "Iron (Ore)": {
+   "category": "ship",
+   "id": "iron_ore",
+   "instability": 50,
+   "resistance": -0.4,
+   "rs": 4270,
+   "slug": "iron",
+   "strata_name": "Iron (Ore)",
+   "tier": null
+  },
+  "Jaclium (Ore)": {
+   "category": "fps",
+   "id": "minableelement_fps_jaclium",
+   "instability": 100,
+   "resistance": 0.5,
+   "rs": 3000,
+   "slug": "jaclium",
+   "strata_name": "Jaclium (Ore)",
+   "tier": null
+  },
+  "Janalite": {
+   "category": "fps",
+   "id": "minableelement_fps_janalite",
+   "instability": 300,
+   "resistance": 0.3,
+   "rs": 3000,
+   "slug": "janalite",
+   "strata_name": "Janalite (Raw)",
+   "tier": null
+  },
+  "Laranite (Raw)": {
+   "category": "ship",
+   "id": "laranite_raw",
+   "instability": 400,
+   "resistance": 0.5,
+   "rs": 3825,
+   "slug": "laranite",
+   "strata_name": "Laranite (Raw)",
+   "tier": null
+  },
+  "Lindinium (Ore)": {
+   "category": "ship",
+   "id": "lindinium_ore",
+   "instability": 1000,
+   "resistance": 0.95,
+   "rs": 3400,
+   "slug": "lindinium",
+   "strata_name": "Lindinium (Ore)",
+   "tier": null
+  },
+  "Ouratite (Raw)": {
+   "category": "ship",
+   "id": "ouratite_raw",
+   "instability": 600,
+   "resistance": 0.6,
+   "rs": 3370,
+   "slug": "ouratite",
+   "strata_name": "Ouratite",
+   "tier": null
+  },
+  "Quantainium (Raw)": {
+   "category": "ship",
+   "id": "quantainium_raw",
+   "instability": 1000,
+   "resistance": 0.95,
+   "rs": 3170,
+   "slug": "quantainium",
+   "strata_name": "Quantainium (Raw)",
+   "tier": null
+  },
+  "Quartz (Raw)": {
+   "category": "ship",
+   "id": "quartz_raw",
+   "instability": 50,
+   "resistance": -0.7,
+   "rs": 4210,
+   "slug": "quartz",
+   "strata_name": "Quartz (Raw)",
+   "tier": null
+  },
+  "Riccite (Ore)": {
+   "category": "ship",
+   "id": "riccite_ore",
+   "instability": 850,
+   "resistance": 0.95,
+   "rs": 3385,
+   "slug": "riccite",
+   "strata_name": "Riccite (Ore)",
+   "tier": null
+  },
+  "Sadaryx (Raw)": {
+   "category": "fps",
+   "id": "minableelement_fps_sadaryx",
+   "instability": 200,
+   "resistance": 0,
+   "rs": 3000,
+   "slug": "sadaryx",
+   "strata_name": "Sadaryx (Raw)",
+   "tier": null
+  },
+  "Savrilium (Ore)": {
+   "category": "ship",
+   "id": "savrilium_ore",
+   "instability": 1000,
+   "resistance": 0.95,
+   "rs": 3200,
+   "slug": "savrilium",
+   "strata_name": "Savrilium (Ore)",
+   "tier": null
+  },
+  "Silicon (Raw)": {
+   "category": "ship",
+   "id": "silicon_raw",
+   "instability": 50,
+   "resistance": -0.2,
+   "rs": 4255,
+   "slug": "silicon",
+   "strata_name": "Silicon",
+   "tier": null
+  },
+  "Stileron (Raw)": {
+   "category": "ship",
+   "id": "sileron_ore",
+   "instability": 870,
+   "resistance": 0.6,
+   "rs": 3185,
+   "slug": "stileron",
+   "strata_name": "Stileron (Ore)",
+   "tier": null
+  },
+  "Taranite (Raw)": {
+   "category": "ship",
+   "id": "taranite_raw",
+   "instability": 700,
+   "resistance": 0.5,
+   "rs": 3555,
+   "slug": "taranite",
+   "strata_name": "Taranite (Raw)",
+   "tier": null
+  },
+  "Tin (Ore)": {
+   "category": "ship",
+   "id": "tin_ore",
+   "instability": 0,
+   "resistance": -0.2,
+   "rs": 4195,
+   "slug": "tin",
+   "strata_name": "Tin (Ore)",
+   "tier": null
+  },
+  "Titanium (Ore)": {
+   "category": "ship",
+   "id": "titanium_ore",
+   "instability": 0,
+   "resistance": 0.1,
+   "rs": 3855,
+   "slug": "titanium",
+   "strata_name": "Titanium (Ore)",
+   "tier": null
+  },
+  "Torite (Ore)": {
+   "category": "ship",
+   "id": "torite_ore",
+   "instability": 550,
+   "resistance": 0.25,
+   "rs": 3900,
+   "slug": "torite",
+   "strata_name": "Torite (Ore)",
+   "tier": null
+  },
+  "Tungsten (Ore)": {
+   "category": "ship",
+   "id": "tungsten_ore",
+   "instability": 0,
+   "resistance": -0.4,
+   "rs": 3870,
+   "slug": "tungsten",
+   "strata_name": "Tungsten (Ore)",
+   "tier": null
+  }
+ }
+}

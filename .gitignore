@@ -38,6 +38,8 @@ poi/quantum_match_report.txt
 poi/blueprint_sync_report.txt
 # locations.json IS committed (#28 wiki catalog); its sync report is a build artifact.
 poi/locations_sync_report.txt
+# ore_signatures.json IS committed (Strata RS feed); its sync report is a build artifact.
+poi/strata_sync_report.txt
 
 # Third-party reference data kept locally for development only — NOT committed.
 # erkul.games content is CC BY-NC-ND 4.0; redistributing their compiled feed /

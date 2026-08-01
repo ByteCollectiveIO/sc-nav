@@ -23,8 +23,10 @@ ENV SC_NAV_DATA=/data
 # /data is a named volume that shadows the image's seed and is only populated
 # on the volume's first creation, so files added in a later release never reach
 # an existing volume. app.load_quantum()/load_blueprints()/
-# load_wiki_locations() read the code-dir copy first.
-COPY poi/quantum_drives.json poi/quantum_profiles.json poi/blueprints.json poi/locations.json ./
+# load_wiki_locations()/load_ore_signatures() read the code-dir copy first.
+# NOTE: every path here must exist at build time — run tools/sync_strata.py and
+# commit poi/ore_signatures.json before building, or drop it from this line.
+COPY poi/quantum_drives.json poi/quantum_profiles.json poi/blueprints.json poi/locations.json poi/ore_signatures.json ./
 
 RUN useradd --system --home /app scnav && chown -R scnav:scnav /data
 USER scnav
