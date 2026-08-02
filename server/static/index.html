@@ -1341,6 +1341,12 @@
     background: var(--bad-wash); font-size: 13px; color: var(--bad); font-weight: 600; }
   .reroute-nudge .reroute-x { margin-left: auto; border: 0; background: none;
     color: var(--dim); cursor: pointer; font-size: 16px; line-height: 1; }
+  /* Log-detected transaction nudge (#41): the terminal already reported the
+     numbers — confirming applies them. Accent-colored, not alarm-colored. */
+  .txn-nudge { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--accent);
+    border-radius: 8px; background: var(--accent-wash, rgba(79,195,247,.08));
+    font-size: 13px; color: var(--text); }
+  .txn-nudge b { color: var(--accent); }
   /* Live "best trades right now" suggestion board (manual-mode helper). Each row
      decomposes the economics — buy/sell prices, the per-SCU spread, and (with a
      ship set) the per-run throughput — so the headline number is never ambiguous. */
@@ -9238,6 +9244,10 @@ function submitTradeLeg(action, leg, btn) {
   const body = { action, leg };
   if (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0) body.price = Number(priceEl.value);
   if (scuEl && scuEl.value !== "" && Number(scuEl.value) > 0) body.scu = Number(scuEl.value);
+  // Log-detected transaction (#41): whichever button confirms this leg, name
+  // the pending txn so the server learns the guid/shop mappings from it.
+  const tx = tradeCurrentRun && tradeCurrentRun.txn;
+  if (tx && tx.leg === leg && tx.side === action) body.txn_id = tx.id;
   patchTradeRun(body);
 }
 
@@ -9373,6 +9383,18 @@ function renderTradeRun(run) {
   h += `<div class="route-actions"><button id="trade-replan">↻ re-plan from here</button>`
     + `<span class="muted" style="font-size:12px;">re-solve from your live position, keeping cargo aboard</span>`
     + `<span id="trade-replan-msg" class="route-warn" style="font-size:12px;"></span></div>`;
+  // Log-detected transaction nudge (#41): the watcher saw this trade in
+  // Game.log. Confirming the leg applies these numbers (they pre-fill the
+  // inputs below, and the server defaults from the txn even if cleared).
+  if (run.txn) {
+    const tx = run.txn;
+    h += `<div class="txn-nudge">⚡ Terminal reported: `
+      + `<b>${tx.side === "sell" ? "SOLD" : "BOUGHT"} ${tx.scu != null ? tx.scu : "?"} SCU`
+      + (tx.unit_price != null ? ` @ ${fmtAuec(tx.unit_price)}/SCU` : "")
+      + `</b>${tx.total != null ? ` (${fmtAuec(tx.total)} total)` : ""}`
+      + `${tx.commodity ? ", " + esc(tx.commodity) : ""}. `
+      + `Confirming the ${tx.side} records these numbers.</div>`;
+  }
   (run.legs || []).forEach((lg, i) => { h += renderTradeRunLeg(lg, i, run); });
   h += `</div>`;
   box.innerHTML = h;
@@ -9383,6 +9405,16 @@ function renderTradeRun(run) {
   box.querySelectorAll("[data-skip]").forEach(b => b.onclick = () => patchTradeRun({ action: "advance", leg: +b.dataset.skip }));
   box.querySelectorAll("[data-nostock]").forEach(b => b.onclick = () => reportNoStock(+b.dataset.nostock));
   box.querySelectorAll("[data-nodemand]").forEach(b => b.onclick = () => reportNoDemand(+b.dataset.nodemand));
+  // Pre-fill the active leg's actuals from the detected transaction (#41) so
+  // the pilot sees exactly what an unedited confirm will record.
+  if (run.txn) {
+    const btn = box.querySelector(`[data-${run.txn.side === "sell" ? "sell" : "buy"}="${run.txn.leg}"]`);
+    const stop = btn && btn.closest(".run-stop");
+    const p = stop && stop.querySelector(".ta-price");
+    const s = stop && stop.querySelector(".ta-scu");
+    if (p && p.value === "" && run.txn.unit_price != null) p.value = run.txn.unit_price;
+    if (s && s.value === "" && run.txn.scu != null) s.value = run.txn.scu;
+  }
 }
 
 // The no-stock skip is org-visible (it steers everyone's routing for a while),

@@ -14,8 +14,13 @@ server half was small; the real work was restructuring the watcher around a UI
 event loop (§6) and the Windows window management (§8, §13).
 
 **Still open:** W2 (§10) — click-through, opacity/scale, in-space
-closing/opening, capture-armed dot. Note click-through would break the F-key
-drag, so W2 needs a non-mouse way to reposition first.
+closing/opening, capture-armed dot. ~~Note click-through would break the F-key
+drag, so W2 needs a non-mouse way to reposition first.~~ **Superseded
+2026-08-01 by [`watcher-hud-interaction.md`](watcher-hud-interaction.md)
+(#40.1)**, which replaces W2 wholesale: hover-polled click-through leaves the
+window interactive while the cursor is inside it, so the drag survives and the
+non-mouse-reposition prerequisite is **deleted, not satisfied**. That doc also
+adds the in-game target chooser. Read it instead of §10's W2 line.
 
 **W1 build deviations** (two things pulled forward from W2, both because W1
 would have been worse without them):

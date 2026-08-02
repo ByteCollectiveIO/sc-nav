@@ -16,6 +16,79 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 41. Trade transaction capture — the log confirms the trade 🔨 BUILT, awaiting live test
+
+[`trade-transaction-capture.md`](trade-transaction-capture.md). Born from the
+#40.2 Game.log spike: commodity kiosks log both sides of every trade (total,
+unit price, SCU, commodity GUID, shop — verified against a real run). The
+watcher now tails them out of the log it already tails and POSTs to
+`/api/trade/transactions` (token-auth, on by default, `--no-trade-capture`
+opts out); run mode surfaces a "⚡ terminal reported" confirm nudge with the
+real numbers pre-filled; confirming teaches the guid→commodity and shop→POI
+mappings and files rows into the #39 §6.1 `price_reports` ledger. Server +
+watcher + SPA + tests done on the Mac; **needs one live run on the Windows
+box** (tail → POST → nudge end-to-end). Follow-ups parked in the doc §4:
+auto-confirm, the #39 slice-0 planner overlay (ledger now filling), kiosk
+commodity boards, mission hauling.
+
+### 40.1 Watcher HUD interaction — click-through, focus, in-game target chooser 📐 DESIGNED
+
+**Status: designed 2026-08-01, not built.** Full plan:
+[`watcher-hud-interaction.md`](watcher-hud-interaction.md). **Replaces #40's
+open W2** — W2 was blocked on its own ordering problem ("click-through would
+break the F-key drag, so it needs a non-mouse reposition first"), and
+hover-polled click-through **dissolves that blocker instead of solving it**: the
+window is inert except while the cursor is inside its one rect, so drag survives
+unchanged and the corner-presets prerequisite is deleted from the plan.
+
+Scoped by surveying [`sc-overlay`](https://github.com/SubliminalsTV-Projects/sc-overlay)
+(Electron, same game, mature). **Techniques and conclusions only — no code
+copied**; it is FSL-1.1-MIT, which would not permit vendoring, consistent with
+erkul-rejected and Strata-uncommitted.
+
+Decisions worth not re-deriving:
+- **Taking focus is the mechanism, not the cost.** #40 recorded that SC reads
+  the mouse via raw input regardless of focus (hovering the HUD turns the ship)
+  and that alt-tab parks the controls. So a chooser that takes focus **parks the
+  ship while you pick**. The first sketch had a no-focus keyboard-driven list;
+  that is wrong twice — our key observation would be passive and
+  non-consuming, so every keystroke driving the list *also* reaches the cockpit.
+  **Failing to return focus is the real danger** (your next WASD types into a
+  search box while the ship drifts), so `Escape` + idle watchdog + a taskbar
+  entry, because the HUD's `overrideredirect` has no alt-tab handle — which is
+  exactly what made §10.1's stuck window unrecoverable.
+- **The watcher can't set a destination today.** `POST /api/destination` is
+  `require_session` → 401 for a bearer token. Nastier: `/api/pois` takes
+  `current_user`, so a token caller gets empty `viewer_owner_ids` and **their own
+  survey marks silently vanish from search** — missing rows, not an error.
+  `/api/observations` has no route-level dep and works as-is. **This breaks W1's
+  "zero new endpoints" property**, deliberately.
+- **Search is two calls** — `search_pois` never returns observations; the SPA
+  fans out and concatenates. Their sort keys differ (POIs by prefix/length,
+  observations by recency), which a 100-row table absorbs and an 8-row HUD list
+  cannot: type `quant` and ore nodes fall off the bottom. Cap each side rather
+  than interleave — the cap can't drift from the SPA.
+- **`GET /api/nav/targets` on chooser-open, not on the heartbeat.**
+  `nav_summary`'s docstring forbids growing it with nearest-POI lists. This is
+  W3's endpoint through a different door, and W3's volume objection (2 s polling
+  vs the single-worker `hub.lock` cliff) **does not apply** to one request per
+  open — W3 stays deferred.
+- **A separate `Toplevel`, never a taller HUD** — `_freeze_size` exists because
+  a window that changes shape in peripheral vision reads as an event.
+- **Not a POI browser** — it answers "what is my next target." §13.1's refusal to
+  port SPA views into tk holds; a list of strings is fine, filters are heavy
+  mode's job.
+
+Also found, unrelated and **out of scope**: heavy mode passes `--app=` and
+nothing else, and Chromium's `CalculateNativeWinOcclusion` decides a covered
+window need not paint. First suspect if heavy mode ever stalls or holds a stale
+frame over the game.
+
+Slices: **I1** inert HUD (watcher-only, no server change) · **I2** auth +
+targets endpoint (server-only, fully testable off Windows) · **I3** the chooser.
+Split so the unverifiable-off-Windows half and the fully-testable half don't
+ship together.
+
 ### 40. Watcher in-game overlay — target/distance on the glass ✅ SHIPPED
 
 **Status: SHIPPED + IN-GAME VERIFIED 2026-07-25. Light HUD v0.83.0 (+ two

@@ -37,7 +37,9 @@ def surface_pois(container_name, system="Stanton"):
 
 class DataLoadingTests(unittest.TestCase):
     def test_counts(self):
-        self.assertEqual(len(NAV.containers), 496)
+        # 495 as of the 2026-08-02 feed sync (upstream removed Stanton's
+        # "TEST Moon" dummy container).
+        self.assertEqual(len(NAV.containers), 495)
         # Starmap POIs (ids well below the synthesized-station range) are the
         # data-integrity snapshot; container-stations are added on top.
         starmap = [p for p in NAV.pois.values() if p.id < nav_core.CONTAINER_POI_START]
