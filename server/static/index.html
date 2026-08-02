@@ -966,6 +966,22 @@
   .setup-conn[data-state="live"] .setup-conn-dot { background: var(--good);
     box-shadow: 0 0 6px var(--good); }
   @keyframes setup-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* "What the watcher does on your PC" — a trust surface, not an aside. You are
+     asking a member to run a program on the machine they play on, so this sits
+     ABOVE the download button, in ink, never inside a <details>. Same panel
+     treatment as a step so it reads as part of the flow rather than fine print. */
+  .setup-facts { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px; margin: 0 0 18px; }
+  .setup-facts h3 { margin: 0 0 4px; font-size: 14px; color: var(--text);
+    letter-spacing: 0.5px; }
+  .setup-facts > p { font-size: 13px; color: var(--text); line-height: 1.6; margin: 7px 0; }
+  .setup-facts ul { margin: 8px 0 0; padding: 0 0 0 18px;
+    display: flex; flex-direction: column; gap: 8px; }
+  .setup-facts li { font-size: 13px; color: var(--text); line-height: 1.6; }
+  .setup-facts b { color: var(--text); }
+  .setup-facts .facts-never { border-top: 1px solid var(--border); margin-top: 12px;
+    padding-top: 10px; }
   @media (prefers-reduced-motion: reduce) {
     .setup-conn[data-state="waiting"] .setup-conn-dot { animation: none; }
   }
@@ -2925,13 +2941,54 @@
     <h2>SET UP THE WATCHER</h2>
     <p class="setup-intro">
       Org Navigator shows where you are in the 'verse on this screen, but it needs a small
-      helper — the <b>watcher</b> — running on your gaming PC. The watcher reads the
-      <code>/showlocation</code> coordinates the game copies to your clipboard and sends them
-      here. Set it up once, then forget it. The steps below take about five minutes.
+      helper — the <b>watcher</b> — running on your gaming PC. It reads the
+      <code>/showlocation</code> coordinates the game copies to your clipboard, plus a couple of
+      lines the game writes to its own log, and sends those here. Set it up once, then forget it.
+      The steps below take about five minutes.
     </p>
 
     <p class="setup-signedin"><span class="ok">Signed in ✓</span> — everything below happens on the
     <b>gaming PC</b> where you play Star Citizen.</p>
+
+    <div class="setup-facts">
+      <h3>WHAT THE WATCHER DOES ON YOUR PC</h3>
+      <p>All of it, before you download anything. It runs only while its window is open.</p>
+      <ul>
+        <li><b>Watches your clipboard</b>, four times a second, for <code>/showlocation</code>
+        output. Only text that parses as coordinates gets sent: the x/y/z, that line itself, your
+        handle and your shard. Anything else you copy is ignored and never leaves your PC.</li>
+
+        <li><b>Reads your shard</b> from the game's <code>Game.log</code>, a plain text file Star
+        Citizen writes as you play, so the ore and creature sightings you capture are matched to the
+        right server instance.</li>
+
+        <li><b>Reads commodity terminal buys and sells</b> from that same log: price, SCU,
+        commodity and terminal, which pre-fill your trade-run confirmations and feed the org's price
+        data. Only the values named here are sent; the log file itself is never uploaded. This one
+        is <b>on by default</b>. To turn it off, run the watcher once with
+        <code>--no-trade-capture</code> (the choice sticks), or add that to the
+        <code>set ARGS=</code> line in <code>run_watcher.bat</code>.</li>
+
+        <li><b>Re-sends your last position every 60 seconds</b> so you don't drop off your
+        teammates' maps while you sit parked, and immediately if your shard changes. It re-sends the
+        <em>same</em> coordinates, so a heartbeat never makes an old fix look fresh.</li>
+
+        <li><b>Draws the overlay, if you asked for one</b> (step 3). The light HUD is a small window
+        of its own; the heavy beta opens Edge or Chrome in a separate browser profile pinned over
+        the game. Both ignore your mouse while Star Citizen is the active window, so neither can eat
+        a click meant for the game.</li>
+
+        <li><b>Remembers your answers</b> in <code>watcher_config.json</code> beside the script:
+        your handle, your access token, where <code>Game.log</code> is and which overlay you chose.
+        Nothing else is stored.</li>
+      </ul>
+      <p class="facts-never">It never sends keystrokes or clicks into the game, never reads the
+      game's memory, never changes a game file, and never looks at anything else on your PC. It's an
+      ordinary program reading a text file, the same class of citizen as the Discord overlay. Every
+      line of it is public:
+      <a href="https://github.com/ByteCollectiveIO/sc-nav/tree/main/watcher" target="_blank"
+      rel="noopener">read the watcher's source</a>.</p>
+    </div>
 
     <ol class="steps">
       <li>
@@ -2973,7 +3030,10 @@
         borderless/windowed mode, and you can change your mind any launch.</p>
         <p>That's all it asks; your token is already built in. It remembers both answers,
         so next time you just double-click and play. Leave the window open (minimized is fine)
-        while you play. When you see <code>listening for /showlocation</code>, it's working.</p>
+        while you play. It's working once it prints
+        <code>watching clipboard every 0.25s</code> followed by this server's address. The lines
+        above that tell you what it turned on: your handle, whether it found
+        <code>Game.log</code>, and whether terminal capture is on.</p>
         <details style="margin-top:8px;">
           <summary class="muted" style="cursor:pointer; font-size:12px;">Prefer the command line?</summary>
           <pre><code id="setup-cmd">python sc_nav_watcher.py --server SERVER --handle "YourName"</code></pre>
