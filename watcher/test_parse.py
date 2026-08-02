@@ -16,13 +16,35 @@ from sc_nav_overlay import (
     age_color, compass_point, format_age, format_bearing, format_distance,
     format_eta, hud_lines, trim_name, MAX_NAME, STALE,
 )
-from sc_nav_watcher import GameLogShardReader, heartbeat_due, parse_showlocation
+from sc_nav_watcher import (
+    GameLogShardReader, heartbeat_due, parse_showlocation, parse_trade_txn,
+)
 
 _JOIN = ("<2026-06-20T00:30:29.237Z> [Notice] <Join PU> address[34.21.5.134] "
          "port[64317] shard[pub_use1b_12030094_130] locationId[562954248454145] "
          "[Team_GameServices][GIM][Matchmaking]\n")
 _UPDATE = ("<2026-06-20T00:30:29.514Z> [Notice] <Update Shard Id> New Shard Id: "
            "{shard}. Old Shard Id [Team_OnlineTech][Telemetry][Services]\n")
+
+# Real commodity-kiosk lines from the verified 2026-08-02 capture (#41), player
+# ids scrubbed. The buy quantity is centi-SCU; the sell quantity is plain SCU.
+_TXN_BUY = (
+    "<2026-08-02T17:34:48.023Z> [Notice] "
+    "<CEntityComponentCommodityUIProvider::SendCommodityBuyRequest> Sending "
+    "SShopCommodityBuyRequest - playerId[123] shopId[729880064990] "
+    "shopName[SCShop_ht_delta_rayari_m_store] kioskId[729880064989] "
+    "price[98840.000000] shopPricePerCentiSCU[34.082699] "
+    "resourceGUID[d5506a24-5729-4354-81fb-0959173357c4] autoLoading[0] "
+    "quantity[2900.000000 cSCU] Cargo Box Data: boxSize[1.000000] | "
+    "unitAmount[29] [Team_CoreGameplayFeatures][Shops][UI]\n")
+_TXN_SELL = (
+    "<2026-08-02T18:00:08.511Z> [Notice] "
+    "<CEntityComponentCommodityUIProvider::SendCommoditySellRequest> Sending "
+    "SShopCommoditySellRequest - playerId[123] shopId[730441176477] "
+    "shopName[TDD_SCShop-001] kioskId[730441176513] amount[161211.000000] "
+    "resourceGUID[d5506a24-5729-4354-81fb-0959173357c4] autoLoading[1] "
+    "quantity[29] transactionMode[ResourceContainer] Cargo Box Data:  "
+    "[boxSize[1] | unitAmount[29]] [Team_CoreGameplayFeatures][Shops][UI]\n")
 
 
 class ParseShowLocationTests(unittest.TestCase):
@@ -119,6 +141,61 @@ class GameLogShardReaderTests(unittest.TestCase):
 
     def test_missing_file(self):
         self.assertIsNone(GameLogShardReader("/no/such/Game.log").poll())
+
+    def test_collects_trade_transactions(self):
+        # One tail, two consumers (#41): the same poll that tracks the shard
+        # collects commodity transactions; pop drains them exactly once.
+        self._write(_JOIN + _TXN_BUY + _TXN_SELL)
+        self.reader.poll()
+        txns = self.reader.pop_transactions()
+        self.assertEqual([t["side"] for t in txns], ["buy", "sell"])
+        self.assertEqual(self.reader.pop_transactions(), [])
+        # Later appends are picked up incrementally, same as shard lines.
+        self._write(_TXN_BUY)
+        self.reader.poll()
+        self.assertEqual(len(self.reader.pop_transactions()), 1)
+
+
+class TradeTxnParseTests(unittest.TestCase):
+    """parse_trade_txn (#41) against the captured, independently-verified
+    lines: 29 SCU Medical Supplies bought at 3,408.27/SCU (98,840 total) and
+    sold at 5,559/SCU (161,211 total)."""
+
+    def test_buy_line(self):
+        t = parse_trade_txn(_TXN_BUY.strip())
+        self.assertEqual(t["side"], "buy")
+        self.assertEqual(t["shop"], "SCShop_ht_delta_rayari_m_store")
+        self.assertEqual(t["guid"], "d5506a24-5729-4354-81fb-0959173357c4")
+        self.assertEqual(t["total"], 98840.0)
+        self.assertEqual(t["scu"], 29.0)              # 2900 cSCU
+        self.assertAlmostEqual(t["unit_price"], 3408.27, places=2)
+        self.assertEqual(t["t"], "2026-08-02T17:34:48.023Z")
+
+    def test_sell_line(self):
+        t = parse_trade_txn(_TXN_SELL.strip())
+        self.assertEqual(t["side"], "sell")
+        self.assertEqual(t["shop"], "TDD_SCShop-001")
+        self.assertEqual(t["total"], 161211.0)
+        self.assertEqual(t["scu"], 29.0)              # sell qty is plain SCU
+        self.assertAlmostEqual(t["unit_price"], 5559.0, places=2)
+
+    def test_foreign_lines_return_none(self):
+        self.assertIsNone(parse_trade_txn(_JOIN.strip()))
+        self.assertIsNone(parse_trade_txn(""))
+        # The kiosk-board inventory line mentions the component but is not a
+        # transaction — it must not parse as one.
+        self.assertIsNone(parse_trade_txn(
+            "<2026-08-02T17:33:56.573Z> [Notice] "
+            "<CEntityComponentCommodityUIProvider::LoadShopInventoryData::"
+            "<lambda_1>::operator ()> AddingCommodityBox - playerId[123] "
+            "shopName[SCShop_x] commodityName[ResourceType.Iron] "
+            "Available Box Sizes:  boxSize[1] [Team_CoreGameplayFeatures][Shops][UI]"))
+
+    def test_unstamped_or_zero_quantity_rejected(self):
+        # No leading timestamp -> not a real transaction line.
+        self.assertIsNone(parse_trade_txn(_TXN_BUY.strip().split("> ", 1)[1]))
+        self.assertIsNone(parse_trade_txn(
+            _TXN_SELL.strip().replace("quantity[29]", "quantity[0]")))
 
 
 class HeartbeatDueTests(unittest.TestCase):

@@ -192,6 +192,62 @@ def default_game_log():
     return None
 
 
+# Trade transaction capture (#41, docs/trade-transaction-capture.md §2).
+# Commodity kiosks log both sides of every trade (verified in-game 2026-08-02):
+#   <ts> [Notice] <CEntityComponentCommodityUIProvider::SendCommodityBuyRequest>
+#     ... shopName[X] ... price[98840.000000] shopPricePerCentiSCU[34.082699]
+#     ... resourceGUID[uuid] ... quantity[2900.000000 cSCU] ...
+#   <ts> [Notice] <...::SendCommoditySellRequest> ... shopName[X] ...
+#     amount[161211.000000] ... resourceGUID[uuid] ... quantity[29] ...
+# Buy quantities are centi-SCU; sell quantities are plain SCU. Parsed
+# defensively: a game patch that rewords these lines turns the feature off,
+# never breaks the watcher.
+_TXN_TS_RE = re.compile(r"^<(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)>")
+_TXN_BUY_RE = re.compile(
+    r"<CEntityComponentCommodityUIProvider::SendCommodityBuyRequest>.*?"
+    r"shopName\[([^\]]+)\].*?price\[([\d.]+)\].*?"
+    r"shopPricePerCentiSCU\[([\d.]+)\].*?resourceGUID\[([0-9a-fA-F-]{8,})\].*?"
+    r"quantity\[([\d.]+)\s*cSCU\]")
+_TXN_SELL_RE = re.compile(
+    r"<CEntityComponentCommodityUIProvider::SendCommoditySellRequest>.*?"
+    r"shopName\[([^\]]+)\].*?amount\[([\d.]+)\].*?"
+    r"resourceGUID\[([0-9a-fA-F-]{8,})\].*?quantity\[([\d.]+)\]")
+
+
+def parse_trade_txn(line):
+    """One Game.log line -> a transaction dict shaped for
+    POST /api/trade/transactions, or None. Pure — unit-tested in test_parse.py
+    against the lines captured from a real, independently-verified trade."""
+    ts = _TXN_TS_RE.match(line)
+    if not ts:
+        return None                    # every real transaction line is stamped
+    t = ts.group(1)
+    m = _TXN_BUY_RE.search(line)
+    if m:
+        shop, total, per_centi, guid, centi = m.groups()
+        try:
+            total, per_centi, centi = float(total), float(per_centi), float(centi)
+        except ValueError:
+            return None
+        if centi <= 0:
+            return None
+        return {"side": "buy", "shop": shop, "guid": guid, "total": total,
+                "unit_price": round(per_centi * 100.0, 2),
+                "scu": centi / 100.0, "t": t}
+    m = _TXN_SELL_RE.search(line)
+    if m:
+        shop, total, guid, qty = m.groups()
+        try:
+            total, qty = float(total), float(qty)
+        except ValueError:
+            return None
+        if qty <= 0:
+            return None
+        return {"side": "sell", "shop": shop, "guid": guid, "total": total,
+                "unit_price": round(total / qty, 2), "scu": qty, "t": t}
+    return None
+
+
 class GameLogShardReader:
     """Tails Star Citizen's Game.log and tracks the current shard id.
 
@@ -199,12 +255,21 @@ class GameLogShardReader:
     every loop. The whole file is scanned once on the first poll so a session
     already in progress is picked up. The log is truncated when the game
     relaunches; a shrink in size re-seeks to the start.
+
+    Also collects commodity transactions (#41) from the same line scan — one
+    tail, two consumers; drain them with pop_transactions().
     """
 
     def __init__(self, path):
         self.path = path
         self._offset = 0
         self.shard = None
+        self.transactions = []
+
+    def pop_transactions(self):
+        """Drain the transactions collected since the last call."""
+        txns, self.transactions = self.transactions, []
+        return txns
 
     def poll(self):
         """Scan new log lines; return the current shard id (or None)."""
@@ -228,6 +293,9 @@ class GameLogShardReader:
             if match and match.group(1) != self.shard:
                 self.shard = match.group(1)
                 log(f"shard: {self.shard}")
+            txn = parse_trade_txn(line)
+            if txn is not None:
+                self.transactions.append(txn)
         return self.shard
 
 
@@ -245,10 +313,15 @@ class Sender:
 
     def __init__(self, server_url, timeout=3.0, dry_run=False, token=None):
         self.url = server_url.rstrip("/") + POSITION_ENDPOINT if server_url else None
+        self.txn_url = (server_url.rstrip("/") + "/api/trade/transactions"
+                        if server_url else None)
         self.timeout = timeout
         self.dry_run = dry_run
         self.token = token
         self.pending = collections.deque(maxlen=50)
+        # Trade transactions awaiting delivery (#41). Its own queue: a jammed
+        # transaction batch must never block a position post, or vice versa.
+        self.txn_pending = collections.deque(maxlen=40)
         # Last `nav` object the server sent back on a successful post — the
         # overlay's whole data feed (#40). The server already computes this for
         # its own WS frame, so reading it here costs no extra request.
@@ -272,17 +345,38 @@ class Sender:
                 break
         return ok
 
+    def send_transactions(self, txns):
+        """Queue + deliver log-detected commodity transactions (#41). The
+        server dedups on a natural key, so a batch that half-delivered and
+        gets re-sent is harmless."""
+        if self.dry_run:
+            log(f"DRY-RUN txns {json.dumps(txns)}")
+            return True
+        self.txn_pending.extend(txns)
+        return self.flush_txns()
+
+    def flush_txns(self):
+        if not self.txn_pending or not self.txn_url:
+            return True
+        batch = list(self.txn_pending)[:20]     # server-side batch cap
+        if self._post({"txns": batch}, url=self.txn_url):
+            for _ in batch:
+                self.txn_pending.popleft()
+            return not self.txn_pending or self.flush_txns()
+        return False
+
     # A descriptive User-Agent — the default "Python-urllib/x.y" is flagged as a
     # bot by Cloudflare (in front of the tunnel) and gets a 403 before reaching
     # the app.
     USER_AGENT = "sc-nav-watcher/1.0"
 
-    def _post(self, payload):
+    def _post(self, payload, url=None):
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "User-Agent": self.USER_AGENT}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        request = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
+        request = urllib.request.Request(url or self.url, data=data,
+                                         headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as resp:
                 ok = 200 <= resp.status < 300
@@ -467,6 +561,22 @@ def resolve_token(args):
     return _resolve_sticky(args.token, "token")
 
 
+def resolve_trade_capture(args):
+    """#41: report commodity buys/sells read from Game.log. Default ON — a
+    member already streaming live position isn't surprised by trade capture,
+    and the data only ever feeds their own org's tools. Sticky like the other
+    knobs; --no-trade-capture turns a saved 'on' back off."""
+    config = _load_config()
+    val = getattr(args, "trade_capture", None)
+    if val is not None:
+        if config.get("trade_capture") != val:
+            config["trade_capture"] = val
+            _save_config(config)
+        return val
+    saved = config.get("trade_capture")
+    return True if saved is None else bool(saved)
+
+
 def resolve_game_log(args):
     """The Game.log path: --game-log (sticky), else the saved one, else a
     common-install autodetect. None disables shard detection."""
@@ -495,6 +605,11 @@ def run(args, sink=None, stop=None):
     else:
         log("no Game.log found — shard tagging off (pass --game-log to enable; "
             "nodes won't be filtered by server)")
+    trade_capture = resolve_trade_capture(args) and shard_reader is not None
+    if shard_reader:
+        log("trade capture: on — commodity buys/sells from Game.log feed the "
+            "org's price + run tools (--no-trade-capture to turn off)"
+            if trade_capture else "trade capture: off")
     if not token and not args.dry_run:
         log("WARNING: no auth token set — the server will reject positions. "
             "Generate one in the web UI ('Watcher token') and pass --token \"...\"")
@@ -523,6 +638,15 @@ def run(args, sink=None, stop=None):
 
     while stop is None or not stop.is_set():
         shard = shard_reader.poll() if shard_reader else None
+        if trade_capture:
+            txns = shard_reader.pop_transactions()
+            for t in txns:
+                log(f"trade: {t['side'].upper()} {t['scu']:g} SCU @ "
+                    f"{t['unit_price']:,.0f}/SCU at {t['shop']} — reporting")
+            if txns:
+                sender.send_transactions(txns)
+            elif sender.txn_pending:
+                sender.flush_txns()      # retry an earlier failed batch
         changed = args.once  # single-shot mode always reads
         seq = clipboard.sequence_number()
         if seq is not None:
@@ -780,6 +904,15 @@ def main():
         "current shard so nodes from other servers can be filtered out. "
         "Autodetected from the default install if omitted. Saved to "
         "watcher_config.json.",
+    )
+    parser.add_argument(
+        "--trade-capture",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Report commodity buys/sells read from Game.log to the org's "
+        "trade tools: run-mode confirms get the real price/SCU pre-filled and "
+        "the org price board learns actual prices. On by default when a "
+        "Game.log is being watched; --no-trade-capture opts out (sticky).",
     )
     args = parser.parse_args()
 

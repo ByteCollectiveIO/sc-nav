@@ -5584,5 +5584,159 @@ class PinAndMineTest(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class TradeTxnCaptureTests(unittest.TestCase):
+    """Trade transaction capture (#41, docs/trade-transaction-capture.md): the
+    watcher posts commodity buys/sells read from Game.log; a matching one
+    becomes the run card's confirm nudge; confirming with txn_id defaults the
+    actuals from the log, learns the guid/shop mappings, and files the price
+    observation into the #39 §6.1 ledger."""
+
+    GUID = "d5506a24-5729-4354-81fb-0959173357c4"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "9", "display_name": "Trader", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user   # bearer path: watcher token
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.hub.sessions.pop("9", None)
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        # Isolation without table-truncate helpers: every test uses its own
+        # timestamps/guids where identity matters; mapping tables reset here.
+        with db._lock, db._conn:
+            for table in ("trade_transactions", "commodity_guids", "shop_pois",
+                          "price_reports"):
+                db._conn.execute(f"DELETE FROM {table}")
+        legs = [
+            {"commodity": "Gold", "buy_poi_id": 11, "sell_poi_id": 12,
+             "buy_terminal_id": 101, "sell_terminal_id": 102,
+             "buy_terminal": "A", "sell_terminal": "B", "buy_price": 100,
+             "sell_price": 300, "scu": 40, "profit": 8000, "held": False},
+        ]
+        sess = app.hub.get(self._member)
+        sess.trade_run = {"id": 1, "ship": "C2", "usable_scu": 64, "legs": legs,
+                          "leg_states": app._initial_trade_states(legs), "active": 0,
+                          "summary": {"total_profit": 8000}}
+        sess.pending_txn = None
+
+    def _post_txn(self, **over):
+        txn = {"side": "buy", "shop": "SCShop_hicks", "guid": self.GUID,
+               "total": 98840.0, "unit_price": 3408.27, "scu": 29.0,
+               "t": "2026-08-02T17:34:48.023Z"}
+        txn.update(over)
+        return self.client.post("/api/trade/transactions", json={"txns": [txn]})
+
+    def test_stored_and_deduped(self):
+        r = self._post_txn()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["stored"], 1)
+        self.assertTrue(r.json()["matched"])
+        # The watcher re-sends failed batches; a resend must not double-file.
+        self.assertEqual(self._post_txn().json()["stored"], 0)
+
+    def test_matching_txn_becomes_run_nudge(self):
+        self._post_txn()
+        view = self.client.get("/api/trade/run").json()["trade_run"]
+        self.assertIsNotNone(view["txn"])
+        self.assertEqual(view["txn"]["leg"], 0)
+        self.assertEqual(view["txn"]["side"], "buy")
+        self.assertEqual(view["txn"]["scu"], 29.0)
+
+    def test_wrong_side_is_stored_but_not_nudged(self):
+        r = self._post_txn(side="sell")          # leg is awaiting a BUY
+        self.assertEqual(r.json()["stored"], 1)
+        self.assertFalse(r.json()["matched"])
+        view = self.client.get("/api/trade/run").json()["trade_run"]
+        self.assertIsNone(view["txn"])
+
+    def test_known_commodity_mismatch_is_not_nudged(self):
+        # A guid already validated as some OTHER commodity is a different
+        # purchase at the same kiosk, not this leg's confirm.
+        db.guid_mapping_confirm(self.GUID, "Copper", 0.0)
+        r = self._post_txn()
+        self.assertEqual(r.json()["stored"], 1)
+        self.assertFalse(r.json()["matched"])
+
+    def test_confirm_with_txn_id_defaults_learns_and_files(self):
+        txn_view = None
+        self._post_txn()
+        txn_view = self.client.get("/api/trade/run").json()["trade_run"]["txn"]
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "buy", "leg": 0,
+                                    "txn_id": txn_view["id"]})
+        self.assertEqual(r.status_code, 200)
+        leg = r.json()["trade_run"]["legs"][0]
+        # The log's numbers became the actuals the pilot didn't type.
+        self.assertAlmostEqual(leg["actual_buy_price"], 3408.27, places=2)
+        self.assertEqual(leg["actual_buy_scu"], 29.0)
+        # The confirm is the human validation that teaches both mappings.
+        self.assertEqual(db.guid_commodity(self.GUID), "Gold")
+        self.assertEqual(db.shop_poi("SCShop_hicks"), 11)
+        # The ledger row is stamped with the run leg that consumed it.
+        row = db.trade_txn_get(txn_view["id"], "9")
+        self.assertEqual((row["run_id"], row["leg"], row["commodity"]),
+                         (1, 0, "Gold"))
+        # And the price observation was filed (resolution happened here).
+        reports = db.price_reports_for(11)
+        self.assertEqual(len(reports), 1)
+        self.assertEqual((reports[0]["commodity"], reports[0]["side"]),
+                         ("Gold", "buy"))
+        self.assertAlmostEqual(reports[0]["price"], 3408.27, places=2)
+        # Consumed nudge is gone from the view.
+        self.assertIsNone(r.json()["trade_run"]["txn"])
+
+    def test_typed_actuals_beat_txn_defaults(self):
+        self._post_txn()
+        txn_id = self.client.get("/api/trade/run").json()["trade_run"]["txn"]["id"]
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "buy", "leg": 0, "txn_id": txn_id,
+                                    "price": 3500, "scu": 25})
+        leg = r.json()["trade_run"]["legs"][0]
+        self.assertEqual(leg["actual_buy_price"], 3500)
+        self.assertEqual(leg["actual_buy_scu"], 25)
+
+    def test_any_action_clears_the_nudge(self):
+        self._post_txn()
+        self.client.patch("/api/trade/run", json={"action": "advance", "leg": 0})
+        self.assertIsNone(app.hub.get(self._member).pending_txn)
+
+    def test_resolved_ingest_files_price_report_immediately(self):
+        db.guid_mapping_confirm(self.GUID, "Gold", 0.0)
+        db.shop_mapping_confirm("SCShop_hicks", 11, 0.0)
+        self._post_txn()
+        reports = db.price_reports_for(11)
+        self.assertEqual(len(reports), 1)
+        self.assertAlmostEqual(reports[0]["price"], 3408.27, places=2)
+
+    def test_sell_unit_price_derived_when_absent(self):
+        sess = app.hub.get(self._member)
+        sess.trade_run["leg_states"][0] = "bought"     # now awaiting the sell
+        r = self._post_txn(side="sell", shop="TDD_SCShop-001",
+                           total=161211.0, unit_price=None, scu=29.0,
+                           t="2026-08-02T18:00:08.511Z")
+        self.assertTrue(r.json()["matched"])
+        txn = self.client.get("/api/trade/run").json()["trade_run"]["txn"]
+        self.assertAlmostEqual(txn["unit_price"], 5559.0, places=2)
+
+    def test_anonymous_caller_rejected(self):
+        app.token_user = lambda request: None
+        try:
+            r = self._post_txn()
+            self.assertEqual(r.status_code, 401)
+        finally:
+            app.token_user = lambda request: self._member
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

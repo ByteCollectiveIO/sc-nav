@@ -1797,6 +1797,11 @@ class Session:
         self.destination_id = None
         self.run = None            # active cargo-planner run blob (or None)
         self.trade_run = None      # active trade-route run blob (or None)
+        # Latest unconsumed log-detected transaction matching the active trade
+        # leg (#41) — the run card's "⚡ terminal reported" nudge. In-memory
+        # only: the txn itself is in trade_transactions; the nudge dies with
+        # the state it described (cursor motion, replan, abandon, restart).
+        self.pending_txn = None
         self.nav_state = None
         # capture_pending: {"kind": "poi"} or
         # {"kind": "observation", "category", "data", "biome", "note"} while armed
@@ -1962,7 +1967,14 @@ class Session:
         realized = sum(nav_core.trade_leg_realized(l) or 0
                        for l, st in zip(legs, states)
                        if st == "sold" and not l.get("skipped"))
+        # The confirm nudge (#41): only rendered while it still describes the
+        # active leg + phase — a cursor that moved past it makes it a lie.
+        txn = self.pending_txn
+        if txn is not None and (done or txn.get("leg") != active
+                                or txn.get("side") != phase):
+            txn = None
         return {
+            "txn": txn,
             "id": run["id"], "ship": run.get("ship"), "usable_scu": run.get("usable_scu"),
             "active": active, "phase": phase, "done": done,
             "arrived": (not done) and self._arrived_at_active(ns),
@@ -3452,6 +3464,26 @@ class TradeRunPatchIn(BaseModel):
     # happened rather than UEX's scrape; unset falls back to the plan's figures.
     price: float | None = Field(default=None, ge=0, le=100_000_000)
     scu: float | None = Field(default=None, gt=0, le=100_000)
+    # Log-detected transaction being applied to this confirm (#41): defaults
+    # price/scu from the log's numbers and validates the guid/shop mappings.
+    txn_id: int | None = Field(default=None, ge=1)
+
+
+class TradeTxnIn(BaseModel):
+    """One commodity transaction read from Game.log by the watcher (#41,
+    docs/trade-transaction-capture.md §2). `t` is the log line's own UTC
+    stamp — the dedup key's time component, not a server clock."""
+    side: str = Field(max_length=8)                 # buy | sell
+    shop: str = Field(min_length=1, max_length=120)
+    guid: str = Field(min_length=8, max_length=40)
+    total: float = Field(ge=0, le=1_000_000_000)
+    unit_price: float | None = Field(default=None, ge=0, le=100_000_000)
+    scu: float | None = Field(default=None, gt=0, le=100_000)
+    t: str = Field(min_length=4, max_length=40)
+
+
+class TradeTxnBatchIn(BaseModel):
+    txns: list[TradeTxnIn] = Field(max_length=20)
 
 
 class TradeReplanIn(BaseModel):
@@ -3870,6 +3902,7 @@ async def start_trade_run(body: TradePlanIn, user: dict = Depends(require_sessio
         run = _new_trade_run(user, body, plan)
         run["id"] = db.start_trade_run(user["id"], body.ship, run["started_at"], run)
         sess.trade_run = run
+        sess.pending_txn = None
         _point_at_active_trade_leg(sess)
         sess.recompute()
         frame = sess.state_frame()
@@ -3884,6 +3917,100 @@ async def get_trade_run(user: dict = Depends(require_session)):
     """The caller's active trade run (or null) — for the UI to load / resume."""
     async with hub.lock:
         return {"trade_run": hub.get(user).trade_run_view()}
+
+
+def _consume_trade_txn(user: dict, sess, txn: dict | None, run: dict,
+                       leg_idx: int, leg: dict, side: str) -> None:
+    """A confirm that names a detected transaction (#41): the human validation
+    that this log line WAS this leg. Learn both mappings, stamp the ledger row
+    with the run/leg, and file the price observation if this confirm is what
+    just made it resolvable (ingest files it only when both mappings were
+    already known)."""
+    if not txn:
+        return
+    now = time.time()
+    commodity = leg.get("commodity")
+    poi_id = leg.get(f"{side}_poi_id")
+    if commodity:
+        db.guid_mapping_confirm(txn["guid"], commodity, now)
+    if poi_id is not None:
+        db.shop_mapping_confirm(txn["shop"], poi_id, now)
+    db.trade_txn_consume(txn["id"], user["id"], commodity=commodity,
+                         poi_id=poi_id, run_id=run.get("id"), leg=leg_idx)
+    if commodity and not (txn.get("commodity") and txn.get("poi_id")):
+        db.price_report_save({
+            "terminal_id": leg.get(f"{side}_terminal_id"), "poi_id": poi_id,
+            "commodity": commodity, "side": side,
+            "price": txn.get("unit_price"), "scu": txn.get("scu"),
+            "reporter": user["id"],
+            "reporter_name": user.get("display_name") or "",
+            "created": now})
+
+
+@app.post("/api/trade/transactions")
+async def post_trade_transactions(body: TradeTxnBatchIn,
+                                  user: dict = Depends(require_user)):
+    """Ingest commodity transactions the watcher read from Game.log (#41,
+    docs/trade-transaction-capture.md). `require_user`: the watcher's bearer
+    token is the normal caller. Each transaction is stored once (natural-key
+    dedup — failed batches get re-sent), resolved through the learned
+    guid/shop mappings, filed as a price observation when both resolve, and —
+    if it matches the caller's active trade leg's expected side + commodity —
+    parked as the run card's confirm nudge and pushed live over the WS."""
+    now = time.time()
+    stored = 0
+    matched = False
+    frame = None
+    async with hub.lock:
+        sess = hub.get(user)
+        for txn in body.txns:
+            side = txn.side.lower()
+            if side not in ("buy", "sell"):
+                continue
+            commodity = db.guid_commodity(txn.guid)
+            poi_id = db.shop_poi(txn.shop)
+            unit = txn.unit_price
+            if unit is None and txn.scu:
+                unit = round(txn.total / txn.scu, 2)
+            txn_id, created = db.trade_txn_save({
+                "member_id": user["id"], "t": txn.t, "side": side,
+                "resource_guid": txn.guid, "commodity": commodity,
+                "shop_name": txn.shop, "poi_id": poi_id, "scu": txn.scu,
+                "unit_price": unit, "total": txn.total, "created": now})
+            if not created:
+                continue
+            stored += 1
+            if commodity is not None and poi_id is not None:
+                db.price_report_save({
+                    "poi_id": poi_id, "commodity": commodity, "side": side,
+                    "price": unit, "scu": txn.scu, "reporter": user["id"],
+                    "reporter_name": user.get("display_name") or "",
+                    "created": now})
+            run = sess.trade_run
+            if not run or run["active"] >= len(run["legs"]):
+                continue
+            active = run["active"]
+            leg = run["legs"][active]
+            phase = "sell" if run["leg_states"][active] == "bought" else "buy"
+            if side != phase:
+                continue
+            # A known commodity that isn't the plan's is some other purchase
+            # at the same kiosk — not this leg's confirm. Unknown passes: the
+            # confirm is exactly how the mapping gets learned.
+            if commodity is not None and commodity.lower() != str(
+                    leg.get("commodity") or "").lower():
+                continue
+            sess.pending_txn = {
+                "id": txn_id, "side": side, "shop": txn.shop, "guid": txn.guid,
+                "commodity": commodity, "poi_id": poi_id, "scu": txn.scu,
+                "unit_price": unit, "total": txn.total, "t": txn.t,
+                "leg": active}
+            matched = True
+        if matched:
+            frame = sess.state_frame()
+    if frame is not None:
+        await sess.push_frame(frame)
+    return {"ok": True, "stored": stored, "matched": matched}
 
 
 @app.patch("/api/trade/run")
@@ -3917,6 +4044,18 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             raise HTTPException(status_code=409, detail="stale leg — the run has moved on")
         st = run["leg_states"][active]
         leg = run["legs"][active]
+        # A confirm naming the pending detected transaction (#41): the log's
+        # numbers become the defaults the pilot didn't type.
+        txn = None
+        if body.txn_id is not None and body.action in ("buy", "sell"):
+            pt = sess.pending_txn
+            if pt and pt.get("id") == body.txn_id and pt.get("leg") == active \
+                    and pt.get("side") == body.action:
+                txn = pt
+                if body.price is None and txn.get("unit_price") is not None:
+                    body.price = round(float(txn["unit_price"]), 2)
+                if body.scu is None and txn.get("scu"):
+                    body.scu = float(txn["scu"])
         if body.action == "buy":
             if st != "pending":
                 raise HTTPException(status_code=409, detail="active leg is not awaiting a buy")
@@ -3928,6 +4067,7 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                 if planned and body.scu < planned * _LOW_STOCK_FRACTION:
                     _file_stock_report(user, leg, "low", scu=body.scu)
             run["leg_states"][active] = "bought"
+            _consume_trade_txn(user, sess, txn, run, active, leg, "buy")
         elif body.action == "sell":
             if st != "bought":
                 raise HTTPException(status_code=409, detail="active leg is not awaiting a sell")
@@ -3939,6 +4079,7 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                 if planned and body.scu < planned * _LOW_STOCK_FRACTION:
                     _file_stock_report(user, leg, "low", scu=body.scu, side="demand")
             run["leg_states"][active] = "sold"
+            _consume_trade_txn(user, sess, txn, run, active, leg, "sell")
         elif body.action == "advance":
             leg["skipped"] = True                  # abandon the leg, move on —
             run["leg_states"][active] = "sold"     # never counted as realized
@@ -3960,6 +4101,9 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             _file_stock_report(user, leg, "out", side="demand")
         else:
             raise HTTPException(status_code=400, detail="bad action")
+        # Any action moves or re-frames the run state, so the nudge that
+        # described the old state must not survive it (#41).
+        sess.pending_txn = None
         _point_at_active_trade_leg(sess)
         completed = _advance_trade_run(sess)
         if completed:
@@ -4088,6 +4232,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)
+        sess.pending_txn = None      # the nudge described the pre-replan legs (#41)
         run["active"] = len(done_legs)
         run["summary"] = new_plan.get("summary") or {}
         _point_at_active_trade_leg(sess)
@@ -4115,6 +4260,7 @@ async def abandon_trade_run(user: dict = Depends(require_session)):
         sess = hub.get(user)
         had = db.abandon_trade_run(user["id"])
         sess.trade_run = None
+        sess.pending_txn = None
         sess.destination_id = None
         sess.recompute()
         frame = sess.state_frame()

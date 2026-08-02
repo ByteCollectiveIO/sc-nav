@@ -501,6 +501,62 @@ CREATE TABLE IF NOT EXISTS survey_zones (
     UNIQUE (system, slug)
 );
 CREATE INDEX IF NOT EXISTS survey_zones_system ON survey_zones(system);
+
+-- Trade transaction capture (#41): commodity buys/sells read from Game.log by
+-- the watcher. A raw ledger — rows are never rewritten, only annotated with
+-- the run/leg that consumed them and names resolved via the mapping tables.
+CREATE TABLE IF NOT EXISTS trade_transactions (
+    id            INTEGER PRIMARY KEY,
+    member_id     INTEGER NOT NULL,
+    t             TEXT NOT NULL,          -- the log line's own UTC stamp
+    side          TEXT NOT NULL,          -- buy | sell (the player's side)
+    resource_guid TEXT NOT NULL,          -- the game's commodity uuid
+    commodity     TEXT,                   -- resolved name, when the mapping is known
+    shop_name     TEXT NOT NULL,          -- the log's shop string
+    poi_id        INTEGER,                -- resolved terminal POI, when known
+    scu           REAL,
+    unit_price    REAL,                   -- per SCU
+    total         REAL,
+    run_id        INTEGER,                -- trade run that consumed it (confirm)
+    leg           INTEGER,
+    created       REAL
+);
+CREATE INDEX IF NOT EXISTS trade_txns_member ON trade_transactions(member_id, created);
+
+-- Learned mappings (#41): a pilot applying a detected transaction to a run leg
+-- validates guid→commodity and shop→POI in one gesture; `confirms` counts
+-- those validations. First validated mapping wins ties (see the helpers).
+CREATE TABLE IF NOT EXISTS commodity_guids (
+    guid      TEXT PRIMARY KEY,
+    commodity TEXT NOT NULL,
+    confirms  INTEGER NOT NULL DEFAULT 1,
+    created   REAL
+);
+CREATE TABLE IF NOT EXISTS shop_pois (
+    shop_name TEXT PRIMARY KEY,
+    poi_id    INTEGER NOT NULL,
+    confirms  INTEGER NOT NULL DEFAULT 1,
+    created   REAL
+);
+
+-- Org price observation ledger (#39 §6.1, created by #41): one row per real
+-- observed price. `uex_state` is reserved for the parked outbound half so
+-- slice 1 never needs a second concept.
+CREATE TABLE IF NOT EXISTS price_reports (
+    id            INTEGER PRIMARY KEY,
+    terminal_id   INTEGER,               -- UEX terminal id, when known
+    poi_id        INTEGER,
+    commodity     TEXT NOT NULL,
+    side          TEXT NOT NULL,          -- buy | sell (the player's side)
+    price         REAL,                   -- per SCU
+    scu           REAL,
+    is_missing    INTEGER NOT NULL DEFAULT 0,
+    reporter      INTEGER,
+    reporter_name TEXT,
+    created       REAL,
+    uex_state     TEXT NOT NULL DEFAULT 'none'
+);
+CREATE INDEX IF NOT EXISTS price_reports_pair ON price_reports(poi_id, commodity);
 """
 
 
@@ -2844,3 +2900,130 @@ def import_legacy_json(data_dir, observation_categories) -> None:
 
     _meta_set("legacy_imported", "1")
     print("[sc-nav] legacy JSON imported into SQLite")
+
+
+# ---------------------------------------------------------------------------
+# Trade transaction capture (#41) — see docs/trade-transaction-capture.md
+# ---------------------------------------------------------------------------
+
+
+def trade_txn_save(e: dict) -> tuple[int, bool]:
+    """Store one log-observed transaction. Dedup on the natural key (member +
+    log timestamp + side + guid + total): the watcher re-sends failed batches,
+    and a resend must never double-file. Returns (row id, created?)."""
+    with _lock, _conn:
+        row = _conn.execute(
+            "SELECT id FROM trade_transactions WHERE member_id=? AND t=? AND "
+            "side=? AND resource_guid=? AND total=?",
+            (e["member_id"], e["t"], e["side"], e["resource_guid"],
+             e["total"])).fetchone()
+        if row:
+            return row["id"], False
+        cur = _conn.execute(
+            "INSERT INTO trade_transactions (member_id,t,side,resource_guid,"
+            "commodity,shop_name,poi_id,scu,unit_price,total,created) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (e["member_id"], e["t"], e["side"], e["resource_guid"],
+             e.get("commodity"), e["shop_name"], e.get("poi_id"), e.get("scu"),
+             e.get("unit_price"), e.get("total"), e["created"]))
+        return cur.lastrowid, True
+
+
+def trade_txn_get(txn_id: int, member_id: int) -> dict | None:
+    """One transaction, scoped to its owner (a txn_id from a request body must
+    never reach another member's row)."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM trade_transactions WHERE id=? AND member_id=?",
+            (txn_id, member_id)).fetchone()
+    return dict(row) if row else None
+
+
+def trade_txn_consume(txn_id: int, member_id: int, *, commodity: str | None,
+                      poi_id: int | None, run_id, leg: int) -> None:
+    """Stamp the run leg that confirmed this transaction, plus any resolution
+    the confirm just established."""
+    with _lock, _conn:
+        _conn.execute(
+            "UPDATE trade_transactions SET commodity=COALESCE(?,commodity), "
+            "poi_id=COALESCE(?,poi_id), run_id=?, leg=? "
+            "WHERE id=? AND member_id=?",
+            (commodity, poi_id, run_id, leg, txn_id, member_id))
+
+
+def guid_commodity(guid: str) -> str | None:
+    """The learned commodity name for a resource guid, or None."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT commodity FROM commodity_guids WHERE guid=?",
+            (guid,)).fetchone()
+    return row["commodity"] if row else None
+
+
+def guid_mapping_confirm(guid: str, commodity: str, now: float) -> None:
+    """Record one validated guid→commodity observation. Agreement increments
+    `confirms`; disagreement leaves the incumbent alone — the first validated
+    mapping wins, and a genuinely wrong one is an admin DELETE, not a race."""
+    with _lock, _conn:
+        row = _conn.execute("SELECT commodity FROM commodity_guids WHERE guid=?",
+                            (guid,)).fetchone()
+        if row is None:
+            _conn.execute(
+                "INSERT INTO commodity_guids (guid,commodity,confirms,created) "
+                "VALUES (?,?,1,?)", (guid, commodity, now))
+        elif row["commodity"].lower() == commodity.lower():
+            _conn.execute(
+                "UPDATE commodity_guids SET confirms=confirms+1 WHERE guid=?",
+                (guid,))
+
+
+def shop_poi(shop_name: str) -> int | None:
+    """The learned POI id for a log shop string, or None."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT poi_id FROM shop_pois WHERE shop_name=?",
+            (shop_name,)).fetchone()
+    return row["poi_id"] if row else None
+
+
+def shop_mapping_confirm(shop_name: str, poi_id: int, now: float) -> None:
+    """Same policy as guid_mapping_confirm, for shop→POI."""
+    with _lock, _conn:
+        row = _conn.execute("SELECT poi_id FROM shop_pois WHERE shop_name=?",
+                            (shop_name,)).fetchone()
+        if row is None:
+            _conn.execute(
+                "INSERT INTO shop_pois (shop_name,poi_id,confirms,created) "
+                "VALUES (?,?,1,?)", (shop_name, poi_id, now))
+        elif row["poi_id"] == poi_id:
+            _conn.execute(
+                "UPDATE shop_pois SET confirms=confirms+1 WHERE shop_name=?",
+                (shop_name,))
+
+
+def price_report_save(e: dict) -> int:
+    """Append one observed-price row to the #39 §6.1 ledger."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO price_reports (terminal_id,poi_id,commodity,side,"
+            "price,scu,is_missing,reporter,reporter_name,created) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (e.get("terminal_id"), e.get("poi_id"), e["commodity"], e["side"],
+             e.get("price"), e.get("scu"), 1 if e.get("is_missing") else 0,
+             e.get("reporter"), e.get("reporter_name") or "", e["created"]))
+        return cur.lastrowid
+
+
+def price_reports_for(poi_id: int | None = None, limit: int = 100) -> list[dict]:
+    """Recent price observations, freshest first — the ledger reader the #39
+    slice-0 overlay will grow into; today it serves tests and admin curiosity."""
+    with _lock:
+        if poi_id is None:
+            rows = _conn.execute(
+                "SELECT * FROM price_reports ORDER BY created DESC LIMIT ?",
+                (limit,)).fetchall()
+        else:
+            rows = _conn.execute(
+                "SELECT * FROM price_reports WHERE poi_id=? "
+                "ORDER BY created DESC LIMIT ?", (poi_id, limit)).fetchall()
+    return [dict(r) for r in rows]
