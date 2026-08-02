@@ -71,3 +71,7 @@ server/static/.impeccable/
 .impeccable/
 output/
 images/trade_route_planner.png
+
+# Game.log research captures (#40.2 spike / #41): the pilot's own session logs,
+# analyzed locally with tools/gamelog_spike.py — 60+ MB, never committed.
+docs/game_log_files/
