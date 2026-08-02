@@ -823,7 +823,8 @@ def run_with_overlay(args):
 
     thread = threading.Thread(target=worker, name="sc-nav-watcher", daemon=True)
     thread.start()
-    log("overlay: on (drag it where you want it; borderless/windowed mode only)")
+    log("overlay: on (hold F to move it or click it while you're in game; "
+        "borderless/windowed mode only)")
 
     try:
         started = overlay.start(

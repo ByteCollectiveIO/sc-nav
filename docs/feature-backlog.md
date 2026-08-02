@@ -32,10 +32,39 @@ followed immediately (v0.87.0)** — org prices now overlay the UEX feed with
 `⚡ org` badges. Still parked in the doc §4: auto-confirm, kiosk commodity
 boards, mission hauling.
 
-### 40.1 Watcher HUD interaction — click-through, focus, in-game target chooser 📐 DESIGNED
+### 40.1 Watcher HUD interaction — click-through, focus, in-game target chooser 🔨 I1 BUILT
 
-**Status: designed 2026-08-01, not built.** Full plan:
-[`watcher-hud-interaction.md`](watcher-hud-interaction.md). **Replaces #40's
+**Status: I1 built 2026-08-02, awaiting a flight. I2/I3 still design.** Full
+plan: [`watcher-hud-interaction.md`](watcher-hud-interaction.md), whose **§11 is
+the flight report that pulled I1 forward** and specifies the heavy-mode half.
+
+Two things happened in one session on v0.87.0, and they were linked. The heavy
+overlay **ate clicks meant for the game** (swing a tractor-beamed box across the
+screen, the cursor crosses the overlay, the beam drops) — §1's first bullet,
+reported before the fix existed, and *not* the raw-input problem #40 recorded as
+unfixable: that one is the game reading movement it doesn't own, this one is our
+window accepting input it should never be a candidate for. Then, after several
+of those crossings, **the overlay wedged** and only a watcher restart brought it
+back — which **§2.5 had called in advance**: `CalculateNativeWinOcclusion`,
+Chromium deciding a window pinned over a fullscreen game need not paint.
+
+Shipped in I1: shared `watcher/sc_nav_win32.py` (one argtypes-correct binding —
+the light HUD's re-assert had been a bare `WinDLL` with none), click-through
+gated on the game being foreground, auto-hide, focus-change-driven topmost
+re-assert; and for heavy mode a **private browser profile** (the only way
+`--disable-features=…` is guaranteed to apply — `--app=` handed to a running
+browser is forwarded to a process that never saw it), **pid-based window
+adoption** and an `IsHungAppWindow` **watchdog** that reopens a wedged window up
+to 3×. Root cause of the wedge is unconfirmed; the flags are the hypothesis, the
+watchdog is what makes it survivable either way.
+
+Heavy's interaction rule deliberately differs from the HUD's (§11.1): inert
+whenever SC is in front, interactive on alt-tab, **no** hold-to-interact — it is
+a window you type in, and a momentary key would turn it click-through under an
+open dropdown. Hover-polled click-through (§3.2's cursor-in-rect) was **not**
+built: the key gate already answers the question (§11.5).
+
+**Replaces #40's
 open W2** — W2 was blocked on its own ordering problem ("click-through would
 break the F-key drag, so it needs a non-mouse reposition first"), and
 hover-polled click-through **dissolves that blocker instead of solving it**: the

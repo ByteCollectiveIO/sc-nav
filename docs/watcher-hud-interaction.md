@@ -1,6 +1,10 @@
 # Watcher HUD — interaction pass: click-through, focus, and an in-game target chooser (#40.1) — design plan
 
-**Status: 📐 design, not built.** Written 2026-08-01 after surveying
+**Status: 🔨 I1 built 2026-08-02, NOT yet flown. I2/I3 still design.** I1 was
+pulled forward by a flight report that hit both of the problems §1 predicted, in
+order — see [§11](#11-what-the-first-flight-reported-and-what-it-changed), which
+is also where the heavy-mode half of I1 (not part of the original plan) is
+specified. Written 2026-08-01 after surveying
 [`SubliminalsTV-Projects/sc-overlay`](https://github.com/SubliminalsTV-Projects/sc-overlay),
 a mature Electron overlay for the same game, and re-reading our own endpoints.
 
@@ -332,10 +336,17 @@ W3 stays deferred.
 
 ## 6. Slices
 
-**I1 — inert HUD.** §3.1 foreground watcher · §3.2 hover click-through · §3.3
-hold-to-interact · auto-hide · fullscreen warning · re-assert on change. All in
-`sc_nav_overlay.py`, no server change. This is the parent doc's W2 minus its
-blocker, and it is independently shippable.
+**I1 — inert HUD. 🔨 built 2026-08-02, not yet flown.** §3.1 foreground watcher ·
+§3.2 click-through (key-gated, not hover-polled — §11.5) · §3.3
+hold-to-interact · auto-hide · fullscreen warning · re-assert on change. No
+server change. This is the parent doc's W2 minus its blocker, and it is
+independently shippable.
+
+Built as `watcher/sc_nav_win32.py` (new, shared) + `sc_nav_overlay.py`, and — not
+in the original plan — **`sc_nav_heavy.py` too**, because the flight report that
+pulled I1 forward was against heavy mode. See §11 for that half: a different
+interaction rule (§11.1), a private browser profile (§11.2) and a hang watchdog
+(§11.3).
 
 **I2 — auth + targets endpoint.** §5.1 dependency changes · `GET
 /api/nav/targets`. Server-only, testable in `test_app.py` without a display, and
@@ -406,3 +417,102 @@ monitor.
 
 Treat I1 and I3 the way W1 was treated: unproven until flown, with the
 expectation that first flight finds something no test could.
+
+## 11. What the first flight reported, and what it changed
+
+Written 2026-08-02 from a session flown on v0.87.0, before I1 existed. Two
+reports, in the order they happened, and they are causally linked.
+
+**1. The overlay ate clicks meant for the game.** Multi-tool tractor beam:
+grab a cargo box on the left of the screen, swing it right to set it on the
+ship's grid, and the cursor crosses the heavy overlay sitting on the right —
+which takes the input, drops the beam, and costs a click back into the game to
+carry on. Worse for heavy mode precisely because it is large.
+
+This is §1's first bullet, reported before the fix shipped. Note it is **not**
+the raw-input problem #40 recorded as unfixable — that one is the game reading
+mouse *movement* it doesn't own. This is our window accepting input it should
+never have been a candidate for, which is exactly what `WS_EX_TRANSPARENT`
+fixes, and the reason §3.2 is worth its weight.
+
+**2. Then the overlay wedged.** After several of those crossings it stopped
+responding to clicks entirely; the only way out was alt-tab → console →
+Ctrl-C → relaunch. (The trade run survived, being server-side.)
+
+**§2.5 called this shot before it happened** — "if heavy mode ever appears to
+stall or hold a stale frame, `CalculateNativeWinOcclusion` is the first
+suspect." A window pinned over a fullscreen game looks occluded to that
+heuristic; Chromium then stops painting and backgrounds the renderer. From the
+cockpit a stale frame and a dead window are indistinguishable. Fixing #1 also
+removes most of what triggers #2, since the trigger was the foreground churn.
+
+### 11.1 Heavy mode's rule is different from the HUD's, deliberately
+
+§3.3's hold-to-interact is right for a one-line HUD and wrong for heavy mode:
+it is a window you *type* in and open menus in, and a momentary key would turn
+the window click-through underneath an open `<select>`. So:
+
+| | inert when | interactive when |
+|---|---|---|
+| light HUD | SC in front, key not held | key held · not SC · mid-drag |
+| heavy | SC in front | anything else in front (alt-tab) |
+
+Heavy has a taskbar button (the HUD's `overrideredirect` does not), so alt-tab
+is a real handle — and alt-tab parks the ship's controls, which is the property
+§4.1 wants anyway. One shared rule (`overlay_interactive`) with `key_held=False`
+passed by heavy expresses both.
+
+### 11.2 The private browser profile, and why the freeze forced it
+
+`--app=` handed to an **already-running** browser is forwarded to that process
+over the singleton, and a process only ever reads its own command line — so
+`--disable-features=…` is silently dropped. The fix for #2 is a set of
+process-level flags, so on the shared profile the fix would apply *only when the
+pilot happened to have no browser open*. Non-deterministic, and it would look
+like the fix didn't work.
+
+So heavy mode now runs in `overlay-profile/` beside the script
+(`heavy_shared_profile: true` reverts). The original refusal — §13 of the parent
+doc, "a private profile would strand the user at a Discord OAuth prompt in a
+window with no address bar" — was written when there was nothing on the other
+side of the trade. There is now, and OAuth in an app-mode window works; it is a
+one-time sign-in. Two things fall out that the shared profile could never give:
+
+- **Window adoption by pid.** With nothing reused, our child process *is* the
+  browser, so the window can be matched by pid — certainty where title matching
+  was a heuristic. It retires the "we pinned the user's own browser over their
+  game" hazard rather than mitigating it.
+- **Safe recovery.** A hung window ignores `WM_CLOSE`. Killing its pid is
+  unthinkable on the shared profile (that's the pilot's browsing session) and
+  routine on ours.
+
+### 11.3 Noticing the wedge
+
+`IsWindow` stays true for a hung window, which is why nothing noticed. The tick
+now asks `IsHungAppWindow`, requires ~5 consecutive seconds of it (on top of the
+~5 s the API itself waits) so a slow first paint isn't mistaken for a wedge, and
+then closes → kills → relaunches. Capped at 3 per session: an unrecoverable
+cause must not become a relaunch loop, which would be worse than the freeze.
+
+Root cause is treated as **unconfirmed**. The flags are the leading hypothesis
+and cost nothing if wrong; the watchdog is what makes the failure survivable
+either way. If it wedges again with the flags in place, §2.5's second half is
+next: GPU compositing over the game's Vulkan swapchain, for which sc-overlay
+disables hardware acceleration outright.
+
+### 11.4 Also fixed in passing
+
+`sc_nav_overlay.py`'s topmost re-assert was a bare `WinDLL` with **no
+`argtypes`** — the truncation trap this doc's §3.1 flags as mandatory to avoid,
+getting away with it only because HWND values usually fit in 32 bits. Both
+overlays now share one binding (`sc_nav_win32.py`) where every function is
+typed.
+
+### 11.5 What is deliberately not in I1
+
+Hover-polled click-through (§3.2's cursor-in-rect refinement) is **not built**:
+with the key gate, one rect adds a poll per tick to answer a question the key
+already answers. If the key gate turns out to feel wrong in flight, the rect
+test is the first thing to add. The auto-hide horizon (5 minutes since the game
+was last in front) is new here — the plain rule would have hidden the HUD
+forever once the game exited, with no taskbar button to get it back.

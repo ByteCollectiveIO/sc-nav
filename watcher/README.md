@@ -72,10 +72,20 @@ Shows your **current target, distance, ETA** and how old the reading is — so
 you don't have to alt-tab to the browser for one line. Answer `L`, or pass
 `--overlay-mode light`.
 
-**Moving it:** drag it wherever you want and the position is remembered. In
-game, **hold `F`** first — that's the key that frees your mouse cursor for
-in-game menus, and it works for grabbing the overlay too. (Without it the game
-keeps the cursor captive and the drag won't take.)
+**It ignores your mouse while you're flying.** Clicks pass straight through it
+to the game, so a cursor that wanders across it — swinging a tractor-beamed box
+to the far side of your screen, say — can't grab the overlay and drop what you
+were doing. **Hold `F`** to make it clickable: that's the key that frees your
+cursor for in-game menus anyway, and it's what the hint on the overlay has
+always meant.
+
+**Moving it:** hold `F` and drag it wherever you want; the position is
+remembered.
+
+**It gets out of the way.** Once you've been in game, alt-tabbing to Discord or
+your browser hides the overlay instead of leaving it stuck on top of them. It
+comes back the moment Star Citizen is in front again (and on its own a few
+minutes after you quit the game).
 
 Three things to know before you turn it on:
 
@@ -90,13 +100,24 @@ Three things to know before you turn it on:
   frozen between chat commands; the overlay tells you so rather than pretending
   otherwise.
 
-**If it ever disappears behind the game:** it re-asserts itself on top every
-couple of seconds, so it should come back on its own. It has no taskbar button
-by design (it's a bare window with no title bar), so if it's genuinely gone,
-restarting the watcher always brings it back.
+**If it ever disappears behind the game:** it puts itself back on top whenever
+it notices the flag was lost. It has no taskbar button by design (it's a bare
+window with no title bar), so if it's genuinely gone, restarting the watcher
+always brings it back.
 
 It's an ordinary window that reads our own server — no game hooks, no memory
-reads, no automated keystrokes.
+reads, no automated keystrokes. Making it click-through and noticing which
+window is in front are ordinary Windows calls about *our own* window — nothing
+is hooked, intercepted or injected anywhere near the game.
+
+**Knobs** (optional, in `watcher_config.json` next to the script):
+
+| Key | Default | What it does |
+|---|---|---|
+| `overlay_interact_key` | `"F"` | The hold-to-click key. Single letter or digit. |
+| `overlay_clickthrough` | `true` | Set `false` for the old always-clickable behaviour. |
+| `overlay_autohide` | `true` | Set `false` to keep it on screen over other apps. |
+| `game_exe` | `"StarCitizen.exe"` | Only change this if CIG renames the binary. |
 
 ### Heavy overlay (beta)
 
@@ -106,17 +127,31 @@ the game. You get every map and every app — navigator, Prospector, trade
 planner — and unlike the light overlay they **update live**, because the
 browser holds a real session.
 
-Needs **Edge or Chrome** (Edge ships with Windows) and a browser you're already
-signed into — it uses your normal profile, so the window opens logged in. If
-neither browser is found, the watcher says so and carries on without it.
+Needs **Edge or Chrome** (Edge ships with Windows). If neither is found, the
+watcher says so and carries on without it.
 
-**Alt-tab to the window before you click around.** Star Citizen keeps reading
-the mouse even when another window has your cursor, so moving the mouse over
-the overlay can still turn your ship. Alt-tabbing to the browser and back is
-the reliable way to park the game's controls while you use the app — holding
-`F` isn't enough here (that frees the cursor, it doesn't stop the game reading
-it). This is the game's input handling, not something the overlay can switch
-off from the outside.
+**First run asks you to sign in, once.** The overlay uses its own browser
+profile (an `overlay-profile` folder next to the script) rather than your
+everyday one. That's what lets it start the browser with the settings that keep
+it from freezing behind a fullscreen game — handing a window to a browser
+that's *already running* silently ignores them. Sign in once and it stays
+signed in.
+
+**Alt-tab to the window when you want to use it.** While Star Citizen is the
+active window the overlay ignores your mouse entirely — clicks go to the game,
+so it can't eat one — and it becomes a normal window again as soon as you
+alt-tab to it. Click back into the game and it goes quiet again.
+
+Note that Star Citizen keeps reading the mouse even when another window has
+your cursor, so *moving* the mouse over the overlay can still turn your ship
+while the game has focus. Alt-tabbing parks the controls. That part is the
+game's input handling, not something the overlay can switch off from the
+outside.
+
+**If it ever locks up**, the watcher notices within a few seconds and reopens
+it — up to three times, after which it says so and leaves it alone. Whatever
+you had running (a trade route, a cargo run) lives on the server and is
+unaffected either way.
 
 **One thing to know:** on that page, *your own* marker is the stale one.
 Teammates move in real time; you only move when you run `/showlocation`. It's
@@ -125,6 +160,15 @@ the reverse of the light overlay, where everything is equally old.
 It's marked **beta** because the window-pinning is Windows-specific and hasn't
 been through much real use yet. If it misbehaves, answer `L` or `N` next
 launch — nothing else about the watcher changes.
+
+**Knobs** (optional, in `watcher_config.json`):
+
+| Key | Default | What it does |
+|---|---|---|
+| `heavy_clickthrough` | `"on"` | `"off"` keeps it always clickable; `"layered"` is a stronger form to try if clicks still land on the overlay while you fly. |
+| `heavy_autorecover` | `true` | Set `false` to be told about a locked-up window instead of having it reopened. |
+| `heavy_shared_profile` | `false` | `true` goes back to your everyday browser profile — no sign-in, but the anti-freeze settings only apply if no browser window is already open. |
+| `heavy_x` / `heavy_y` / `heavy_w` / `heavy_h` | 60 / 60 / 720 / 520 | Where the window opens and how big. |
 
 **"The overlay needs Python's tcl/tk and IDLE component"?** The overlay draws
 with `tkinter`, which is part of Python itself — there's nothing to `pip
