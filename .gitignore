@@ -15,6 +15,10 @@ __pycache__/
 # (The dataset cache poi/containers.json + poi/poi.json IS committed as an
 # offline seed so a fresh clone runs and the tests pass.)
 watcher/watcher_config.json
+# Heavy overlay's own browser profile (#40.1): a Chromium user-data-dir the
+# watcher creates on first run so its stability flags actually apply. Local
+# state + the pilot's session cookie — never committed.
+watcher/overlay-profile/
 poi/custom_pois.json
 poi/resource_nodes.json
 poi/wildlife.json

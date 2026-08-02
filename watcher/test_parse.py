@@ -12,6 +12,7 @@ from unittest import mock
 
 import sc_nav_heavy
 import sc_nav_watcher
+import sc_nav_win32
 from sc_nav_overlay import (
     age_color, compass_point, format_age, format_bearing, format_distance,
     format_eta, hud_lines, trim_name, MAX_NAME, STALE,
@@ -362,6 +363,10 @@ class _FakeTkRoot(_FakeWidget):
     def geometry(self, _g): pass
     def after(self, _ms, fn): self.pending.append(fn)
     def destroy(self): self.destroyed = True
+    def withdraw(self): self.shown = False
+    def deiconify(self): self.shown = True
+
+    shown = True
 
     def mainloop(self):
         """Pump the after-chain like the real loop would. Bounded, because a
@@ -413,10 +418,13 @@ class OverlayLoopResilienceTests(unittest.TestCase):
     def test_topmost_is_re_asserted_periodically(self):
         # Setting -topmost once isn't enough: Windows supersedes it, and an
         # overrideredirect popup has no taskbar button to click it back with.
+        # This is the no-Win32 path — the fallback that keeps the W1 behaviour
+        # on any box where the foreground watcher can't run. With Win32 the
+        # re-assert is driven by focus changes instead (LightOverlayInertTests).
         def calls_over(ticks):
             ov = self._overlay()
             seen = []
-            ov._keep_on_top = lambda: seen.append(1)
+            ov._keep_on_top = lambda force=False: seen.append(1)
             ov._root.tick_budget = ticks
             ov.run(queue.Queue(), stop=threading.Event())
             return len(seen)
@@ -438,6 +446,283 @@ class OverlayLoopResilienceTests(unittest.TestCase):
         stop.set()                              # watcher thread already gone
         ov.run(queue.Queue(), stop=stop)
         self.assertTrue(ov._root.destroyed)
+
+
+class _StubWin32:
+    """Stand-in for sc_nav_win32.Win32 — the shape both overlays call through.
+
+    Not a mock of Windows, and it can't be: it proves the *decisions* (adopt,
+    pin, go inert, recover) are wired to the right conditions. Whether
+    WS_EX_TRANSPARENT actually stops a click reaching Chromium is a question
+    only the Windows box can answer."""
+
+    def __init__(self, windows=None):
+        self.windows = list(windows or [])
+        self.pinned, self.closed, self.terminated = [], [], []
+        self.styles = {}
+        self.topmost, self.foreground, self.hung = True, False, False
+        self.fg_hwnd, self.fg_path = 0, ""
+        self.path_lookups = 0
+        self.key = False
+        self.rect, self.monitor = (0, 0, 2560, 1440), (0, 0, 2560, 1440)
+
+    # window discovery / state
+    def windows_of_class(self, _cls):
+        return list(self.windows)
+
+    def alive(self, hwnd):
+        return any(w[0] == hwnd for w in self.windows)
+
+    def is_topmost(self, _hwnd):
+        return self.topmost
+
+    def is_foreground(self, _hwnd):
+        return self.foreground
+
+    def is_hung(self, _hwnd):
+        return self.hung
+
+    # control
+    def pin(self, hwnd):
+        self.pinned.append(hwnd)
+        self.topmost = True
+        return True
+
+    def click_through(self, hwnd, on, layered=False):
+        self.styles[hwnd] = (on, layered)
+        return True
+
+    def close(self, hwnd):
+        self.closed.append(hwnd)
+
+    def terminate(self, pid):
+        self.terminated.append(pid)
+        return True
+
+    # identity
+    def foreground_window(self):
+        return self.fg_hwnd
+
+    def window_pid(self, hwnd):
+        return 1000 + int(hwnd)
+
+    def own_pid(self):
+        return 1
+
+    def process_path(self, _pid):
+        self.path_lookups += 1
+        return self.fg_path
+
+    def key_down(self, _vk):
+        return self.key
+
+    def window_rect(self, _hwnd):
+        return self.rect
+
+    def monitor_rect(self, _hwnd):
+        return self.monitor
+
+
+def _spin(overlay, ticks=None):
+    """Run enough ticks to cross the adoption throttle at least once."""
+    for _ in range(ticks or sc_nav_heavy.HeavyOverlay.ADOPT_EVERY):
+        overlay.keep_pinned()
+
+
+class Win32HelperTests(unittest.TestCase):
+    """The shared pure layer (#40.1 I1) — no ctypes, runs anywhere."""
+
+    def test_game_detection_is_by_exe_name(self):
+        self.assertTrue(sc_nav_win32.is_game(r"D:\Games\LIVE\Bin64\StarCitizen.exe"))
+        self.assertTrue(sc_nav_win32.is_game("/mnt/g/StarCitizen.EXE"))
+        self.assertFalse(sc_nav_win32.is_game(r"C:\...\RSI Launcher.exe"))
+        self.assertFalse(sc_nav_win32.is_game(""))
+
+    def test_interactive_fails_safe_until_the_watcher_answers(self):
+        # The failure to design out: an overlay that is silently unclickable
+        # is worse than one that occasionally eats a click.
+        self.assertTrue(sc_nav_win32.overlay_interactive(
+            known=False, game_foreground=True))
+
+    def test_inert_only_while_the_game_is_in_front(self):
+        self.assertFalse(sc_nav_win32.overlay_interactive(
+            known=True, game_foreground=True))
+        self.assertTrue(sc_nav_win32.overlay_interactive(
+            known=True, game_foreground=False))
+
+    def test_interact_key_and_drag_both_override(self):
+        self.assertTrue(sc_nav_win32.overlay_interactive(
+            known=True, game_foreground=True, key_held=True))
+        # Mid-drag the key may already be released; flipping click-through on
+        # then would drop the window somewhere between where it was and where
+        # the pilot was putting it.
+        self.assertTrue(sc_nav_win32.overlay_interactive(
+            known=True, game_foreground=True, key_held=False, busy=True))
+
+    def test_covers_monitor_tolerates_a_pixel_or_two(self):
+        mon = (0, 0, 2560, 1440)
+        self.assertTrue(sc_nav_win32.covers_monitor((0, 0, 2560, 1440), mon))
+        self.assertTrue(sc_nav_win32.covers_monitor((-1, 0, 2561, 1441), mon))
+        self.assertFalse(sc_nav_win32.covers_monitor((100, 100, 900, 700), mon))
+        self.assertFalse(sc_nav_win32.covers_monitor(None, mon))
+
+    def test_vk_code_defaults_rather_than_raising(self):
+        self.assertEqual(sc_nav_win32.vk_code("f"), ord("F"))
+        self.assertEqual(sc_nav_win32.vk_code("4"), ord("4"))
+        # Hand-edited config: a typo must not take the overlay down.
+        self.assertEqual(sc_nav_win32.vk_code("Left Alt"), ord("F"))
+        self.assertEqual(sc_nav_win32.vk_code(None), ord("F"))
+
+    def test_foreground_watcher_resolves_a_path_once_per_window(self):
+        win = _StubWin32()
+        win.fg_hwnd, win.fg_path = 10, r"D:\LIVE\Bin64\StarCitizen.exe"
+        fg = sc_nav_win32.ForegroundWatcher(win)
+
+        self.assertTrue(fg.poll())              # first sight = a change
+        self.assertTrue(fg.known)
+        self.assertTrue(fg.game_foreground)
+        for _ in range(20):                     # a flight's worth of ticks
+            fg.poll()
+        self.assertEqual(win.path_lookups, 1,
+                         "the image path must be cached against the HWND")
+
+        win.fg_hwnd, win.fg_path = 11, r"C:\Discord\Discord.exe"
+        self.assertTrue(fg.poll())
+        self.assertFalse(fg.game_foreground)
+        self.assertEqual(win.path_lookups, 2)
+        # Back to the game: still cached, and the game HWND is remembered so
+        # the fullscreen check has something to measure.
+        win.fg_hwnd, win.fg_path = 10, ""
+        fg.poll()
+        self.assertTrue(fg.game_foreground)
+        self.assertEqual(fg.game_hwnd, 10)
+        self.assertEqual(win.path_lookups, 2)
+
+    def test_watcher_without_win32_stays_unknown(self):
+        fg = sc_nav_win32.ForegroundWatcher(None)
+        self.assertFalse(fg.poll())
+        self.assertFalse(fg.known)
+
+
+class LightOverlayInertTests(unittest.TestCase):
+    """The light HUD's I1 pass: inert while you fly, out of the way otherwise.
+
+    Same caveat as heavy mode — these prove the decisions, not that Windows
+    honours them."""
+
+    _GAME = r"D:\LIVE\Bin64\StarCitizen.exe"
+
+    def _overlay(self, **config):
+        import sc_nav_overlay
+        with mock.patch.dict(sys.modules, {"tkinter": _fake_tkinter()}):
+            ov = sc_nav_overlay.Overlay(config=config, log=lambda *_a: None)
+        win = _StubWin32()
+        ov._win, ov._hwnd, ov._pid = win, 1, 7
+        ov._fg = sc_nav_win32.ForegroundWatcher(win)
+        ov._vk = ord("F")
+        return ov, win
+
+    def _front(self, ov, win, hwnd, path):
+        win.fg_hwnd, win.fg_path = hwnd, path
+        ov._interact()
+
+    def test_click_through_follows_the_game(self):
+        ov, win = self._overlay()
+        self._front(ov, win, 99, self._GAME)
+        self.assertEqual(win.styles[1], (True, False))
+        self._front(ov, win, 12, r"C:\Discord\Discord.exe")
+        self.assertEqual(win.styles[1], (False, False))
+
+    def test_holding_the_interact_key_makes_it_live(self):
+        # F is the same key SC uses to free the cursor, so "cursor free" and
+        # "HUD clickable" are one gesture — and it's what the on-glass hint has
+        # always said the drag needs.
+        ov, win = self._overlay()
+        self._front(ov, win, 99, self._GAME)
+        self.assertEqual(win.styles[1], (True, False))
+        win.key = True
+        ov._interact()
+        self.assertEqual(win.styles[1], (False, False))
+
+    def test_a_drag_in_progress_is_never_interrupted(self):
+        ov, win = self._overlay()
+        win.key = True
+        self._front(ov, win, 99, self._GAME)
+        ov._dragging = True
+        win.key = False                      # let go of F mid-gesture
+        ov._interact()
+        self.assertEqual(win.styles[1], (False, False))
+        ov._dragging = False
+        ov._interact()
+        self.assertEqual(win.styles[1], (True, False))
+
+    def test_it_hides_for_other_apps_but_only_once_the_game_has_run(self):
+        ov, win = self._overlay()
+        # Before the game has ever been in front the HUD must stay put — this
+        # is the window you position while you're setting it up, from a console
+        # that necessarily has focus.
+        self._front(ov, win, 12, r"C:\Discord\Discord.exe")
+        self.assertTrue(ov._root.shown)
+
+        self._front(ov, win, 99, self._GAME)
+        self.assertTrue(ov._root.shown)
+        self._front(ov, win, 12, r"C:\Discord\Discord.exe")
+        self.assertFalse(ov._root.shown, "topmost over Discord all session was "
+                                         "the complaint")
+        self._front(ov, win, 99, self._GAME)
+        self.assertTrue(ov._root.shown)
+
+    def test_the_hud_comes_back_when_the_game_exits(self):
+        # Otherwise "the game ran once" would hide the HUD for the rest of the
+        # session, with no taskbar button to get it back.
+        ov, win = self._overlay()
+        self._front(ov, win, 99, self._GAME)
+        self._front(ov, win, 12, r"C:\Discord\Discord.exe")
+        self.assertFalse(ov._root.shown)
+        ov._game_seen_t -= (sc_nav_overlay_module().GAME_RECENT_S + 1)
+        ov._interact()
+        self.assertTrue(ov._root.shown)
+
+    def test_autohide_and_clickthrough_can_be_switched_off(self):
+        ov, win = self._overlay(overlay_clickthrough=False,
+                                overlay_autohide=False)
+        self._front(ov, win, 99, self._GAME)
+        self.assertEqual(win.styles, {})
+        self._front(ov, win, 12, r"C:\Discord\Discord.exe")
+        self.assertTrue(ov._root.shown)
+
+    def test_topmost_is_re_asserted_on_a_focus_change_not_a_timer(self):
+        ov, win = self._overlay()
+        self._front(ov, win, 99, self._GAME)
+        self.assertEqual(win.pinned, [1])
+        for _ in range(20):                  # same window still in front
+            ov._interact()
+        self.assertEqual(win.pinned, [1], "a periodic re-assert is not free")
+        win.topmost = False                  # something superseded us
+        ov._interact()
+        self.assertEqual(win.pinned, [1, 1])
+
+    def test_fullscreen_hint_is_logged_once(self):
+        ov, win = self._overlay()
+        logged = []
+        ov._log = logged.append
+        for _ in range(5):
+            self._front(ov, win, 99, self._GAME)
+        self.assertEqual(len(logged), 1)
+        self.assertIn("Borderless", logged[0])
+
+    def test_no_fullscreen_hint_for_a_windowed_game(self):
+        ov, win = self._overlay()
+        logged = []
+        ov._log = logged.append
+        win.rect = (100, 100, 1900, 1100)
+        self._front(ov, win, 99, self._GAME)
+        self.assertEqual(logged, [])
+
+
+def sc_nav_overlay_module():
+    import sc_nav_overlay
+    return sc_nav_overlay
 
 
 class HeavyOverlayTests(unittest.TestCase):
@@ -483,14 +768,25 @@ class HeavyOverlayTests(unittest.TestCase):
         for p in seen:
             self.assertNotIn("%", p)
 
-    def test_launch_command_uses_the_default_profile(self):
+    def test_launch_command_carries_profile_and_stability_flags(self):
         cmd = sc_nav_heavy.browser_command("msedge.exe", "https://nav/#/",
-                                           (10, 20, 800, 600))
+                                           (10, 20, 800, 600), r"C:\w\profile")
         self.assertIn("--app=https://nav/#/", cmd)
         self.assertIn("--window-size=800,600", cmd)
         self.assertIn("--window-position=10,20", cmd)
-        # A private profile would strand the user at an OAuth prompt inside a
-        # window with no address bar — the default profile carries the cookie.
+        self.assertIn(r"--user-data-dir=C:\w\profile", cmd)
+        # The freeze fix. These only take effect when Chromium actually starts
+        # a browser process — which is precisely why the private profile is no
+        # longer optional-by-default: --app= handed to an already-running
+        # browser is forwarded to a process that never saw these.
+        self.assertIn("--disable-features=CalculateNativeWinOcclusion", cmd)
+        self.assertIn("--disable-renderer-backgrounding", cmd)
+        # A fresh profile must not open a first-run interstitial in a window
+        # with no address bar to escape it.
+        self.assertIn("--no-first-run", cmd)
+
+    def test_shared_profile_escape_hatch_omits_user_data_dir(self):
+        cmd = sc_nav_heavy.browser_command("msedge.exe", "https://nav/#/")
         self.assertFalse([a for a in cmd if "user-data-dir" in a])
 
     def test_window_pick_prefers_a_new_matching_title(self):
@@ -537,27 +833,10 @@ class HeavyOverlayTests(unittest.TestCase):
                                                   is_foreground=False))
 
     def test_pin_is_not_re_sent_while_the_flag_still_holds(self):
-        class _FakeWin:
+        class _FakeWin(_StubWin32):
             def __init__(self):
-                self.windows = [(5, "Chrome_WidgetWin_1", "Org Navigator")]
-                self.pinned, self.topmost, self.foreground = [], True, False
-
-            def browser_windows(self):
-                return list(self.windows)
-
-            def pin(self, hwnd):
-                self.pinned.append(hwnd)
+                super().__init__([(5, "Chrome_WidgetWin_1", "Org Navigator")])
                 self.topmost = True
-                return True
-
-            def alive(self, hwnd):
-                return any(w[0] == hwnd for w in self.windows)
-
-            def is_topmost(self, _h):
-                return self.topmost
-
-            def is_foreground(self, _h):
-                return self.foreground
 
         ov = sc_nav_heavy.HeavyOverlay("http://x/", log=lambda *_a: None)
         win = _FakeWin()
@@ -583,28 +862,8 @@ class HeavyOverlayTests(unittest.TestCase):
         # Reported: browser opened, never pinned. Adoption used to run only
         # during start(), so a window that showed up late — after a sign-in, or
         # a slow first paint — was never picked up at all.
-        class _FakeWin:
-            def __init__(self):
-                self.windows, self.pinned = [], []
-
-            def browser_windows(self):
-                return list(self.windows)
-
-            def pin(self, hwnd):
-                self.pinned.append(hwnd)
-                return True
-
-            def alive(self, hwnd):
-                return any(w[0] == hwnd for w in self.windows)
-
-            def is_topmost(self, _h):
-                return True                    # pin held; nothing to re-assert
-
-            def is_foreground(self, _h):
-                return False
-
         ov = sc_nav_heavy.HeavyOverlay("http://x/", log=lambda *_a: None)
-        win = _FakeWin()
+        win = _StubWin32([])
         ov._win, ov._before, ov._title_match = win, set(), "Org Navigator"
 
         ov.keep_pinned()                       # nothing to adopt yet
@@ -612,13 +871,101 @@ class HeavyOverlayTests(unittest.TestCase):
         self.assertEqual(win.pinned, [])
 
         win.windows.append((5, "Chrome_WidgetWin_1", "Org Navigator"))
-        ov.keep_pinned()                       # it appeared -> adopt + pin
+        _spin(ov)                              # it appeared -> adopt + pin
         self.assertEqual(ov.hwnd, 5)
         self.assertEqual(win.pinned, [5])
 
         win.windows.clear()                    # user closed it
         ov.keep_pinned()
         self.assertIsNone(ov.hwnd)
+
+    def test_window_pick_prefers_our_own_process(self):
+        # With a private profile nothing is reused, so our child IS the
+        # browser — a pid match is certainty where a title match is a guess.
+        before = set()
+        windows = [(4, "Chrome_WidgetWin_1", "Org Navigator"),
+                   (6, "Chrome_WidgetWin_1", "Discord")]
+        self.assertEqual(
+            sc_nav_heavy.pick_window(before, windows, "Org Navigator",
+                                     pids={4: 900, 6: 4242}, want_pid=4242), 6)
+        # No pid to go on -> the old title rule, unchanged.
+        self.assertEqual(
+            sc_nav_heavy.pick_window(before, windows, "Org Navigator"), 4)
+
+    def _adopted(self, **config):
+        ov = sc_nav_heavy.HeavyOverlay("http://x/", config=config,
+                                       log=lambda *_a: None)
+        win = _StubWin32([(5, "Chrome_WidgetWin_1", "Org Navigator")])
+        ov._win, ov._before, ov._title_match = win, set(), "Org Navigator"
+        ov._fg = sc_nav_win32.ForegroundWatcher(win)
+        ov.keep_pinned()                       # adopt
+        return ov, win
+
+    def test_goes_inert_while_the_game_is_in_front(self):
+        # The reported bug: swinging a tractor-beamed box across the screen
+        # walked the cursor onto the overlay, which ate the click and dropped
+        # the beam. A click-through window is not a hit-test target at all.
+        ov, win = self._adopted()
+        win.fg_hwnd, win.fg_path = 99, r"D:\LIVE\Bin64\StarCitizen.exe"
+        ov.keep_pinned()
+        self.assertEqual(win.styles[5], (True, False))
+
+        win.fg_hwnd, win.fg_path = 5, r"C:\Edge\msedge.exe"   # alt-tabbed to it
+        ov.keep_pinned()
+        self.assertEqual(win.styles[5], (False, False))
+
+    def test_click_through_is_only_written_when_it_changes(self):
+        # Same lesson as the pin: touching a Chromium window has costs, so
+        # never write a style word that already says what we want.
+        ov, win = self._adopted()
+        win.fg_hwnd, win.fg_path = 99, r"D:\LIVE\Bin64\StarCitizen.exe"
+        ov.keep_pinned()
+        win.styles.clear()
+        for _ in range(20):
+            ov.keep_pinned()
+        self.assertEqual(win.styles, {})
+
+    def test_click_through_can_be_turned_off_or_made_layered(self):
+        ov, win = self._adopted(heavy_clickthrough="off")
+        win.fg_hwnd, win.fg_path = 99, r"D:\LIVE\Bin64\StarCitizen.exe"
+        ov.keep_pinned()
+        self.assertEqual(win.styles, {})
+
+        ov, win = self._adopted(heavy_clickthrough="layered")
+        win.fg_hwnd, win.fg_path = 99, r"D:\LIVE\Bin64\StarCitizen.exe"
+        ov.keep_pinned()
+        self.assertEqual(win.styles[5], (True, True))
+
+    def test_a_wedged_window_is_reopened_but_not_forever(self):
+        # Reported from flight: the overlay froze and stopped taking clicks;
+        # the only way out was alt-tabbing to the console and restarting the
+        # watcher. IsWindow stays true for a hung window, so nothing noticed.
+        ov, win = self._adopted()
+        restarts = []
+        ov.start = lambda: (restarts.append(1), True)[1]
+
+        win.hung = True
+        _spin(ov, sc_nav_heavy.HeavyOverlay.HANG_TICKS - 2)
+        self.assertEqual(restarts, [], "a slow first paint is not a wedge")
+
+        _spin(ov, 2)
+        self.assertEqual(len(restarts), 1)
+        self.assertIn(5, win.closed)
+        # WM_CLOSE is what a hung window ignores; on our own profile the
+        # browser process is ours alone, so ending it is safe.
+        self.assertEqual(win.terminated, [1005])
+
+        _spin(ov, sc_nav_heavy.HeavyOverlay.HANG_TICKS * 8)
+        self.assertEqual(len(restarts), sc_nav_heavy.HeavyOverlay.MAX_RECOVERIES,
+                         "an unrecoverable cause must not become a relaunch loop")
+
+    def test_recovery_can_be_switched_off(self):
+        ov, win = self._adopted(heavy_autorecover=False)
+        restarts = []
+        ov.start = lambda: (restarts.append(1), True)[1]
+        win.hung = True
+        _spin(ov, sc_nav_heavy.HeavyOverlay.HANG_TICKS * 3)
+        self.assertEqual(restarts, [])
 
     def test_url_building(self):
         self.assertEqual(sc_nav_heavy.heavy_url("https://nav.example.org/"),

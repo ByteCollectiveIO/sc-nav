@@ -19,12 +19,28 @@ Design constraints this file deliberately honors (docs/watcher-overlay.md §3):
   * This is an ordinary sibling window — no injection, no memory reads, no
     synthetic input. Same class of citizen as the Discord overlay.
 
+Slice I1 (#40.1) makes it **inert while you fly**: click-through whenever Star
+Citizen is the foreground app, so a cursor that drifts across it cannot eat a
+click meant for the game — hold the interact key (F by default, the same key SC
+uses to free the cursor) to make it live and drag it. It also hides itself once
+you alt-tab away to something that isn't the game, and stops re-asserting
+always-on-top on a blind timer now that it can see when focus actually changed.
+All of it fails safe: if the foreground watcher can't answer, the window
+behaves exactly as it did in W1, because a HUD you cannot click is a worse bug
+than the one being fixed.
+
 tkinter is stdlib but not present on every Python build, so `available()` lets
 the watcher degrade to console-only instead of dying. Everything above the
 `Overlay` class is pure and testable without a display.
 """
 
 import queue
+import time
+
+try:
+    import sc_nav_win32 as w32
+except Exception:                                # pragma: no cover - packaging
+    w32 = None
 
 # --- palette (DESIGN.md tokens) --------------------------------------------
 BG = "#141a23"          # panel
@@ -38,6 +54,12 @@ STALE = "#ef5350"       # bad
 # Age thresholds (seconds) for the "fix" readout: fresh → amber → red.
 AGE_WARN_S = 45
 AGE_STALE_S = 120
+
+# How long after the game was last in front we keep auto-hiding for another
+# app. Without a horizon the HUD would vanish for good the moment you quit SC
+# — "the game was running once" is not a state worth remembering forever — and
+# with it, quitting the game brings the HUD back on its own.
+GAME_RECENT_S = 300
 
 # Compass points for the on-body bearing, 45° per sector starting at N.
 #
@@ -232,15 +254,22 @@ class Overlay:
         self._closing = False
         self._ticks = 0
         self._tick_errors = 0
-        # Win32 handle for the topmost re-assert; None everywhere else.
-        self._user32 = None
-        try:
-            import ctypes
-
-            if hasattr(ctypes, "WinDLL"):
-                self._user32 = ctypes.WinDLL("user32", use_last_error=True)
-        except Exception:
-            self._user32 = None
+        # Win32, or None everywhere but Windows. Shared with heavy mode so
+        # there is exactly one argtypes-correct binding — this used to be a
+        # bare WinDLL with no argtypes at all, which is the documented way to
+        # get a silently truncated HWND and a re-assert that does nothing.
+        self._win = w32.load(log) if w32 is not None else None
+        self._hwnd = None
+        self._fg = w32.ForegroundWatcher(
+            self._win, self._game_exes()) if w32 is not None else None
+        self._pid = None
+        self._vk = w32.vk_code(
+            self._config.get("overlay_interact_key")) if w32 is not None else 0
+        self._dragging = False
+        self._inert = None          # None = never applied
+        self._hidden = False
+        self._game_seen_t = None
+        self._fullscreen_warned = False
 
         root = tk.Tk()
         root.title("SC Nav")
@@ -274,11 +303,15 @@ class Overlay:
         self._readout.pack(fill="x")
         # In game the cursor is captive until you hold F — the same key that
         # frees it for in-game menus — so the drag reads as a normal SC
-        # interaction rather than a thing this tool invented. Non-obvious
-        # enough that it belongs on the glass, not just in the README.
+        # interaction rather than a thing this tool invented. As of I1 the key
+        # is also literally what makes the window clickable, so this line is
+        # now the instruction rather than the convention. Non-obvious enough
+        # that it belongs on the glass, not just in the README.
         # (Latin-1 only, per _POINTS: the middle dot is U+00B7, Consolas-safe.)
+        key = safe_text(str(self._config.get("overlay_interact_key")
+                            or "F")).upper()[:1] or "F"
         self._hint = tk.Label(
-            frame, text="hold F to drag · Ctrl-C in console to quit",
+            frame, text=f"hold {key} to drag · Ctrl-C in console to quit",
             bg=BG, fg=DIM, font=("Consolas", 8), anchor="w",
         )
         self._hint.pack(fill="x")
@@ -323,15 +356,21 @@ class Overlay:
         self._root.geometry(self._geometry(x, y))
 
     def _bind_drag(self):
-        """Click-drag to reposition. Click-through (so the HUD can never eat a
-        shot) is slice W2; until then the window is interactive, which is
-        exactly what makes dragging possible."""
+        """Click-drag to reposition, while the interact key is held.
+
+        The window is click-through whenever the game is in front (I1), so a
+        press can only reach us if you asked for it — which is what the on-glass
+        hint has always said. `_dragging` pins the window interactive for the
+        length of the gesture: flipping click-through back on mid-drag, because
+        you happened to let go of F, would drop the window on the floor
+        somewhere between where it was and where you wanted it."""
         state = {}
 
         def press(ev):
             state["x"], state["y"] = ev.x_root, ev.y_root
             state["gx"] = self._root.winfo_x()
             state["gy"] = self._root.winfo_y()
+            self._dragging = True
 
         def drag(ev):
             if "x" not in state:
@@ -344,6 +383,7 @@ class Overlay:
             self._config["overlay_x"] = self._root.winfo_x()
             self._config["overlay_y"] = self._root.winfo_y()
             state.clear()
+            self._dragging = False
 
         for widget in (self._root, *self._all_children(self._root)):
             widget.bind("<Button-1>", press)
@@ -356,8 +396,28 @@ class Overlay:
             yield from self._all_children(child)
 
     # -- staying visible ---------------------------------------------------
-    def _keep_on_top(self):
-        """Re-assert always-on-top, periodically, forever.
+    def _game_exes(self):
+        name = self._config.get("game_exe")
+        return (str(name).lower(),) if name else w32.GAME_EXES
+
+    def _window(self):
+        """Our top-level HWND, resolved once.
+
+        tk's `winfo_id` is the frame; on Windows the top-level that carries the
+        ex-style bits is its parent. Resolved lazily because it only exists once
+        the window has been mapped."""
+        if self._hwnd or self._win is None:
+            return self._hwnd
+        try:
+            child = self._root.winfo_id()
+            self._hwnd = self._win.user32.GetParent(child) or child
+            self._pid = self._win.own_pid()
+        except Exception:
+            self._hwnd = None
+        return self._hwnd
+
+    def _keep_on_top(self, force=False):
+        """Re-assert always-on-top when it has actually been lost.
 
         Setting `-topmost` once at construction is NOT enough: Windows drops or
         supersedes topmost in ordinary situations — another topmost window
@@ -368,27 +428,129 @@ class Overlay:
         click and the only recovery is restarting the watcher. Reported from
         real flight, hence this.
 
+        W1 re-asserted on a blind ~2 s timer. Now that the foreground watcher
+        can say *when* focus changed, the call happens on the events that
+        actually drop the flag plus a cheap ex-style check — the same lesson
+        heavy mode learned expensively (a periodic SetWindowPos is not free;
+        it dismisses open menus).
+
         SetWindowPos with SWP_NOACTIVATE is the Windows-correct way — it raises
         the window WITHOUT stealing focus from the game, which the Tk attribute
         route can't promise. Everything else falls back to re-setting the
         attribute, which is a harmless no-op when it's already true."""
         try:
-            if self._user32 is not None:
-                hwnd = self._user32.GetParent(self._root.winfo_id()) or self._root.winfo_id()
-                # HWND_TOPMOST=-1; SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE
-                self._user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+            hwnd = self._window()
+            if hwnd:
+                if force or not self._win.is_topmost(hwnd):
+                    self._win.pin(hwnd)
             else:
                 self._root.attributes("-topmost", True)
         except Exception:
             # Never let a cosmetic re-assert break the update loop.
             pass
 
+    # -- being inert (#40.1 I1) -------------------------------------------
+    def _interact(self):
+        """One tick of the interaction layer: who's in front, and what that
+        means for click-through, visibility and the topmost flag."""
+        if self._fg is None or self._win is None:
+            # No Win32 (not Windows, or ctypes couldn't bind): nothing here is
+            # available, so fall back to W1's blind periodic re-assert via the
+            # Tk attribute. Everything else in I1 is simply absent.
+            if self._ticks % self.TOPMOST_EVERY == 0:
+                self._keep_on_top()
+            return
+        # Resolve our own window first, unconditionally: `_apply_autohide`
+        # needs the pid to tell "the pilot is using the HUD" from "some other
+        # app has focus", and turning click-through off must not cost it that.
+        self._window()
+        changed = self._fg.poll()
+        if self._fg.game_foreground:
+            self._game_seen_t = time.monotonic()
+            self._warn_fullscreen()
+        self._apply_click_through()
+        self._apply_autohide()
+        if changed:
+            # A foreground change is the moment topmost is most likely to have
+            # been superseded, and the only moment worth spending a call on.
+            self._keep_on_top(force=True)
+        elif self._ticks % self.TOPMOST_EVERY == 0:
+            self._keep_on_top()
+
+    def _apply_click_through(self):
+        """Inert while the game is in front, unless you're asking for it."""
+        if not self._config.get("overlay_clickthrough", True):
+            return
+        hwnd = self._window()
+        if not hwnd:
+            return
+        key_held = False
+        if self._fg.game_foreground and self._vk:
+            try:
+                key_held = self._win.key_down(self._vk)
+            except Exception:
+                key_held = False
+        inert = not w32.overlay_interactive(
+            self._fg.known, self._fg.game_foreground,
+            key_held=key_held, busy=self._dragging)
+        if inert == self._inert:
+            return
+        # `layered` is never passed: tk's `-alpha` already made this window
+        # layered, and asking for the bit again would be a no-op at best.
+        self._win.click_through(hwnd, inert)
+        self._inert = inert
+
+    def _apply_autohide(self):
+        """Get out of the way of everything that isn't the game.
+
+        The HUD is topmost and has no taskbar button, so left alone it sits on
+        top of Discord, the browser and everything else for the whole session.
+        It hides only once the game has actually been in front (so it is
+        visible and draggable before you ever launch SC, and while you're
+        setting it up) and comes back on its own if the game exits."""
+        if not self._config.get("overlay_autohide", True):
+            return
+        if self._game_seen_t is None:
+            return
+        recent = (time.monotonic() - self._game_seen_t) < GAME_RECENT_S
+        ours = self._pid is not None and self._fg.foreground_is(self._pid)
+        want_hidden = recent and not (self._fg.game_foreground or ours)
+        if want_hidden == self._hidden:
+            return
+        self._hidden = want_hidden
+        if want_hidden:
+            self._root.withdraw()
+        else:
+            self._root.deiconify()
+            # Coming back from withdrawn drops the flag and can re-order us
+            # behind the game; re-assert without taking focus.
+            self._keep_on_top(force=True)
+
+    def _warn_fullscreen(self):
+        """Say the one thing that explains an invisible HUD, once.
+
+        Borderless and exclusive fullscreen produce the same window rect, so
+        this cannot detect the mode — which is why it is phrased as a
+        conditional and logged exactly once per run. It is still the answer to
+        the only "I see nothing" question this design can produce."""
+        if self._fullscreen_warned or not self._fg.game_hwnd:
+            return
+        self._fullscreen_warned = True
+        try:
+            rect = self._win.window_rect(self._fg.game_hwnd)
+            monitor = self._win.monitor_rect(self._fg.game_hwnd)
+        except Exception:
+            return
+        if w32.covers_monitor(rect, monitor):
+            self._log("overlay: Star Citizen is covering the whole screen. If "
+                      "you can't see the HUD, it's running in exclusive "
+                      "Fullscreen — switch Graphics > Display Mode to "
+                      "Borderless and it will appear.")
+
     # -- painting ----------------------------------------------------------
     def _age_seconds(self):
         if self._fix_t is None:
             return None
-        import time
-
         return time.monotonic() - self._fix_t
 
     def _render(self):
@@ -431,8 +593,13 @@ class Overlay:
                     self.update(*drained)
                 self._render()      # repaint every tick so the age keeps moving
                 self._ticks += 1
-                if self._ticks % self.TOPMOST_EVERY == 0:
-                    self._keep_on_top()
+                try:
+                    self._interact()   # foreground -> click-through/hide/pin
+                except Exception as exc:
+                    # Its own guard: a Win32 hiccup must not read as a failed
+                    # repaint, and must never cost the pilot the readout.
+                    if self._ticks % 240 == 0:
+                        self._log(f"overlay: window state check failed ({exc})")
                 self._tick_errors = 0
             except Exception as exc:
                 self._tick_errors += 1
