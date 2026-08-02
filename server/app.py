@@ -1364,7 +1364,70 @@ def _serialize_trade_price(row: dict, term: dict) -> dict:
         "status_buy": row.get("status_buy") or 0,
         "status_sell": row.get("status_sell") or 0,
         "updated_at": row.get("date_modified") or row.get("date_added"),
+        # UEX's commodity id, retained for the parked #39 outbound half —
+        # free to carry now, required the day slice 1 unparks.
+        "id_commodity": row.get("id_commodity"),
     }
+
+
+# --- org price overlay (#39 slice 0, fed by #41) ---------------------------
+# A member's real transaction price beats the UEX scrape for the same terminal
+# + commodity side while it is the newer of the two. Observations come from
+# the price_reports ledger (log-detected transactions + run confirms).
+
+# An ingest-time price write trusts two *learned* mappings; require each to
+# have been human-validated at least twice before its observations feed the
+# planner. Confirm-path writes are direct validations and always count.
+_ORG_PRICE_MIN_CONFIRMS = 2
+
+
+def _overlay_point(p: dict, side: str, report: dict) -> None:
+    """Apply one org observation to one price point's side, newest-wins:
+    the org price stands until a UEX row with a newer scrape arrives."""
+    created = report.get("created")
+    price = report.get("price")
+    if not price or created is None or created <= (p.get("updated_at") or 0):
+        return
+    p[side] = price
+    p[f"{side}_updated_at"] = created     # per-side freshness (badge + age filter)
+    p[f"{side}_src"] = "org"
+
+
+def _overlay_org_report(report: dict) -> None:
+    """Live-patch the in-memory price points with one just-filed observation so
+    the next plan sees it without waiting for a feed rebuild."""
+    commodity = (report.get("commodity") or "").lower()
+    for p in trade_price_points:
+        if (p.get("commodity") or "").lower() != commodity:
+            continue
+        if report.get("terminal_id"):
+            if p["terminal_id"] != report["terminal_id"]:
+                continue
+        elif p["poi_id"] != report.get("poi_id"):
+            continue
+        _overlay_point(p, report["side"], report)
+
+
+def _apply_org_price_overlay() -> None:
+    """Overlay every stored observation onto the freshly-rebuilt price points.
+    Runs inside rebuild_trade_terminals, so a feed refresh naturally retires
+    org prices that UEX has since re-scraped."""
+    try:
+        reports = db.latest_org_prices()
+    except Exception:
+        return          # a rebuild must never die on the overlay's account
+    applied = 0
+    by_key = {(r["poi_id"], (r["commodity"] or "").lower(), r["side"]): r
+              for r in reports}
+    for p in trade_price_points:
+        for side in ("buy", "sell"):
+            r = by_key.get((p["poi_id"], (p.get("commodity") or "").lower(), side))
+            if r is not None:
+                before = p.get(f"{side}_src")
+                _overlay_point(p, side, r)
+                applied += 1 if p.get(f"{side}_src") == "org" != before else 0
+    if applied:
+        print(f"[sc-nav] org price overlay: {applied} side(s) fresher than UEX")
 
 
 def rebuild_trade_terminals() -> None:
@@ -1382,6 +1445,7 @@ def rebuild_trade_terminals() -> None:
         for row in trade_prices
         if (tid := row.get("id_terminal")) in trade_terminals_by_id
     ]
+    _apply_org_price_overlay()           # #39 slice 0: org observations beat stale scrape
     # Stop kinds (#34) classify over the *unfiltered* feed — see load_trade_terminals.
     trade_stop_kinds = nav_core.terminal_stop_kinds(nav, trade_terminal_rows)
     if trade_terminals_raw:
@@ -3832,6 +3896,18 @@ def _file_stock_report(user: dict, leg: dict, kind: str, scu=None,
         "poster": user["id"], "poster_name": user.get("display_name") or "",
         "created": time.time(),
     })
+    # A hard out is also a ledger observation (#39 §6.1): is_missing=1, no
+    # price. Ledger-only — the stock board above owns the routing effect, and
+    # the overlay reader deliberately skips is_missing rows.
+    if kind == "out":
+        db.price_report_save({
+            "terminal_id": leg.get("sell_terminal_id" if side == "demand"
+                                   else "buy_terminal_id"),
+            "poi_id": poi_id, "commodity": leg["commodity"],
+            "side": "sell" if side == "demand" else "buy",
+            "is_missing": 1, "reporter": user["id"],
+            "reporter_name": user.get("display_name") or "",
+            "created": time.time()})
 
 
 def _initial_trade_states(legs: list[dict]) -> list[str]:
@@ -3938,13 +4014,15 @@ def _consume_trade_txn(user: dict, sess, txn: dict | None, run: dict,
     db.trade_txn_consume(txn["id"], user["id"], commodity=commodity,
                          poi_id=poi_id, run_id=run.get("id"), leg=leg_idx)
     if commodity and not (txn.get("commodity") and txn.get("poi_id")):
-        db.price_report_save({
+        report = {
             "terminal_id": leg.get(f"{side}_terminal_id"), "poi_id": poi_id,
             "commodity": commodity, "side": side,
             "price": txn.get("unit_price"), "scu": txn.get("scu"),
             "reporter": user["id"],
             "reporter_name": user.get("display_name") or "",
-            "created": now})
+            "created": now}
+        db.price_report_save(report)
+        _overlay_org_report(report)      # #39 slice 0: next plan sees it now
 
 
 @app.post("/api/trade/transactions")
@@ -3967,8 +4045,10 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
             side = txn.side.lower()
             if side not in ("buy", "sell"):
                 continue
-            commodity = db.guid_commodity(txn.guid)
-            poi_id = db.shop_poi(txn.shop)
+            gm = db.guid_mapping(txn.guid)
+            sm = db.shop_mapping(txn.shop)
+            commodity = gm["commodity"] if gm else None
+            poi_id = sm["poi_id"] if sm else None
             unit = txn.unit_price
             if unit is None and txn.scu:
                 unit = round(txn.total / txn.scu, 2)
@@ -3980,12 +4060,18 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
             if not created:
                 continue
             stored += 1
-            if commodity is not None and poi_id is not None:
-                db.price_report_save({
+            # Feed the planner only through mappings validated ≥2× — an
+            # ingest-time write leans on both learned mappings at once, and a
+            # single mislearned one must not misfile prices (#39 slice 0).
+            if (gm and sm
+                    and min(gm["confirms"], sm["confirms"]) >= _ORG_PRICE_MIN_CONFIRMS):
+                report = {
                     "poi_id": poi_id, "commodity": commodity, "side": side,
                     "price": unit, "scu": txn.scu, "reporter": user["id"],
                     "reporter_name": user.get("display_name") or "",
-                    "created": now})
+                    "created": now}
+                db.price_report_save(report)
+                _overlay_org_report(report)
             run = sess.trade_run
             if not run or run["active"] >= len(run["legs"]):
                 continue

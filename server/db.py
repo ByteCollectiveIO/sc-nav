@@ -3027,3 +3027,35 @@ def price_reports_for(poi_id: int | None = None, limit: int = 100) -> list[dict]
                 "SELECT * FROM price_reports WHERE poi_id=? "
                 "ORDER BY created DESC LIMIT ?", (poi_id, limit)).fetchall()
     return [dict(r) for r in rows]
+
+
+def guid_mapping(guid: str) -> dict | None:
+    """Full guid→commodity mapping row (incl. `confirms`), or None."""
+    with _lock:
+        row = _conn.execute("SELECT * FROM commodity_guids WHERE guid=?",
+                            (guid,)).fetchone()
+    return dict(row) if row else None
+
+
+def shop_mapping(shop_name: str) -> dict | None:
+    """Full shop→POI mapping row (incl. `confirms`), or None."""
+    with _lock:
+        row = _conn.execute("SELECT * FROM shop_pois WHERE shop_name=?",
+                            (shop_name,)).fetchone()
+    return dict(row) if row else None
+
+
+def latest_org_prices() -> list[dict]:
+    """#39 slice 0 overlay reader: the newest real price observation per
+    (poi_id, commodity, side). `is_missing` rows are ledger-only — the stock
+    board owns absence semantics; mixing them in here would duplicate them."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM price_reports "
+            "WHERE is_missing=0 AND price IS NOT NULL AND poi_id IS NOT NULL "
+            "ORDER BY created ASC").fetchall()
+    latest: dict[tuple, dict] = {}
+    for r in rows:                       # ASC + overwrite = newest per key wins
+        d = dict(r)
+        latest[(d["poi_id"], (d["commodity"] or "").lower(), d["side"])] = d
+    return list(latest.values())

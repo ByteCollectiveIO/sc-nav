@@ -5459,5 +5459,38 @@ class ScopeIndexTests(unittest.TestCase):
         self.assertEqual(ids, {1, 2})
 
 
+class OrgPriceSideFieldsTests(unittest.TestCase):
+    """#39 slice 0 plumbing in nav_core: per-side freshness stamps + `org`
+    provenance ride trade rows, and _price_fresh judges each side by its own
+    stamp so an org-refreshed side can outlive a stale scrape."""
+
+    def _point(self, **over):
+        p = {"commodity": "Gold", "terminal_id": 1, "terminal": "A",
+             "system": "Stanton", "poi_id": 11, "buy": 100, "sell": 300,
+             "scu_buy": 0, "scu_sell_stock": 0, "updated_at": 1000.0}
+        p.update(over)
+        return p
+
+    def test_trade_row_passes_side_stamps_and_src(self):
+        src = self._point(buy_updated_at=5000.0, buy_src="org")
+        dst = self._point(terminal_id=2, poi_id=12)
+        row = nav_core._trade_row("Gold", src, dst, 200, None)
+        self.assertEqual(row["buy_updated_at"], 5000.0)   # org stamp wins
+        self.assertEqual(row["sell_updated_at"], 1000.0)  # scrape fallback
+        self.assertEqual(row["buy_src"], "org")
+        self.assertIsNone(row["sell_src"])
+
+    def test_price_fresh_is_side_aware(self):
+        now = 10_000.0
+        max_age = 3600.0
+        p = self._point(updated_at=now - 7200, buy_updated_at=now - 60)
+        # The org-refreshed buy side is fresh; the sell side (scrape-stamped)
+        # is not — and side=None keeps the old row-level behavior.
+        self.assertTrue(nav_core._price_fresh(p, max_age, now, side="buy"))
+        self.assertFalse(nav_core._price_fresh(p, max_age, now, side="sell"))
+        self.assertFalse(nav_core._price_fresh(p, max_age, now))
+        self.assertTrue(nav_core._price_fresh(p, None, now, side="sell"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

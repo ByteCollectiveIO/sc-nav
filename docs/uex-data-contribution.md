@@ -1,11 +1,19 @@
 # UEX data contribution — post prices back to the community feed (backlog #39) — design plan
 
-**Status: 🅿 PARKED 2026-07-25 (designed, not built).** Parked on purpose: the
-outbound half depends on facts we can only learn with a real UEX key (§3), and
-the whole external-posting story carries reputational risk we don't have to take
-to get most of the value. **Slice 0 (§6.1) is the local half, has zero external
-dependency, and can be lifted out and built alone at any time** — if only one
-thing here ever ships, it should be that one.
+**Status: 🔨 SLICE 0 BUILT 2026-08-02 (v0.87.0); outbound half still 🅿 PARKED
+2026-07-25.** The parked half depends on facts we can only learn with a real
+UEX key (§3), and the external-posting story carries reputational risk we
+don't have to take to get most of the value. **Slice 0 (§6.1) — the local
+price overlay — is now built**, and better than designed: #41 (trade
+transaction capture, [trade-transaction-capture.md](trade-transaction-capture.md))
+made its observations *log-derived* rather than typed, so the ledger fills
+with zero manual entry. Org prices overlay the feed per (terminal, commodity,
+side), newest-wins vs the scrape stamp, with per-side freshness, `⚡ org`
+badges on plan legs + the best-trades board, side-aware `max_price_age`
+filtering, and `is_missing=1` observations from stockout/demand-out skips.
+Ingest-time observations are gated on both learned mappings having ≥2 human
+validations (`_ORG_PRICE_MIN_CONFIRMS`); confirm-path observations always
+count. `id_commodity` now rides the price points, as §6.1 asked.
 
 Companion to [trade-route-planner.md](trade-route-planner.md) (#21/#34, the app
 this lives in) and the shipped stock/demand reports (#21 step 6), whose data

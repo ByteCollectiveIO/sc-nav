@@ -27,9 +27,10 @@ opts out); run mode surfaces a "⚡ terminal reported" confirm nudge with the
 real numbers pre-filled; confirming teaches the guid→commodity and shop→POI
 mappings and files rows into the #39 §6.1 `price_reports` ledger. Server +
 watcher + SPA + tests done on the Mac; **needs one live run on the Windows
-box** (tail → POST → nudge end-to-end). Follow-ups parked in the doc §4:
-auto-confirm, the #39 slice-0 planner overlay (ledger now filling), kiosk
-commodity boards, mission hauling.
+box** (tail → POST → nudge end-to-end). **The #39 slice-0 planner overlay
+followed immediately (v0.87.0)** — org prices now overlay the UEX feed with
+`⚡ org` badges. Still parked in the doc §4: auto-confirm, kiosk commodity
+boards, mission hauling.
 
 ### 40.1 Watcher HUD interaction — click-through, focus, in-game target chooser 📐 DESIGNED
 
@@ -437,10 +438,10 @@ opportunistically; none is urgent.
   this lane" — needs a presence-side design pass first) · exact B&B "thorough"
   solver option under a ≤4-stop cap · pad-size-vs-ship warning on stops (#28c
   chips already show the stop's max hangar/pad; needs ship size class plumbed
-  through `sync_quantum.py` — the uexcorp feed has none) · **local price
-  overlay** (#39 slice 0 — org-reported prices from run-mode confirms beat the
-  ≤6 h UEX scrape for our own planner; unblocked and self-contained, see
-  [`uex-data-contribution.md`](uex-data-contribution.md) §6.1).
+  through `sync_quantum.py` — the uexcorp feed has none) · ~~local price
+  overlay~~ ✅ **BUILT v0.87.0** (#39 slice 0, fed by #41's log-derived
+  observations instead of typed confirms — see
+  [`uex-data-contribution.md`](uex-data-contribution.md) status header).
 - **Danger board / routing (#24):** two-waypoint detour fallback (v2.1 — a
   `# v2.1` marker sits at the spot in `nav_core`) · severity-scale + radius
   tuning once the board has real data (partly superseded by #28b).

@@ -5712,12 +5712,24 @@ class TradeTxnCaptureTests(unittest.TestCase):
         self.assertIsNone(app.hub.get(self._member).pending_txn)
 
     def test_resolved_ingest_files_price_report_immediately(self):
-        db.guid_mapping_confirm(self.GUID, "Gold", 0.0)
-        db.shop_mapping_confirm("SCShop_hicks", 11, 0.0)
+        # #39 slice 0 gate: mappings must be human-validated ≥2× before an
+        # ingest-time observation feeds the planner.
+        for _ in range(2):
+            db.guid_mapping_confirm(self.GUID, "Gold", 0.0)
+            db.shop_mapping_confirm("SCShop_hicks", 11, 0.0)
         self._post_txn()
         reports = db.price_reports_for(11)
         self.assertEqual(len(reports), 1)
         self.assertAlmostEqual(reports[0]["price"], 3408.27, places=2)
+
+    def test_single_confirm_mappings_do_not_file_ingest_price(self):
+        # One validation each: the txn stores, resolves, and can nudge — but
+        # its price stays out of the ledger until the mappings mature.
+        db.guid_mapping_confirm(self.GUID, "Gold", 0.0)
+        db.shop_mapping_confirm("SCShop_hicks", 11, 0.0)
+        r = self._post_txn()
+        self.assertEqual(r.json()["stored"], 1)
+        self.assertEqual(db.price_reports_for(11), [])
 
     def test_sell_unit_price_derived_when_absent(self):
         sess = app.hub.get(self._member)
@@ -5736,6 +5748,124 @@ class TradeTxnCaptureTests(unittest.TestCase):
             self.assertEqual(r.status_code, 401)
         finally:
             app.token_user = lambda request: self._member
+
+
+class OrgPriceOverlayTests(unittest.TestCase):
+    """#39 slice 0: org-observed prices overlay the UEX feed per (terminal,
+    commodity, side), newest wins, with per-side freshness stamps and `org`
+    provenance — applied on rebuild and live-patched as reports are filed."""
+
+    GUID = "d5506a24-5729-4354-81fb-0959173357c4"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "9", "display_name": "Trader", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.hub.sessions.pop("9", None)
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        with db._lock, db._conn:
+            for table in ("trade_transactions", "commodity_guids", "shop_pois",
+                          "price_reports", "stock_reports"):
+                db._conn.execute(f"DELETE FROM {table}")
+        # A planted feed row: UEX scraped Gold at this terminal an hour ago.
+        self._scrape_t = time.time() - 3600
+        self._orig_points = app.trade_price_points
+        app.trade_price_points = [{
+            "commodity": "Gold", "terminal_id": 101, "terminal": "A",
+            "system": "Stanton", "poi_id": 11, "buy": 100, "sell": None,
+            "scu_buy": 500, "scu_sell_stock": 0, "status_buy": 4,
+            "status_sell": 0, "updated_at": self._scrape_t, "id_commodity": 5,
+        }]
+        legs = [
+            {"commodity": "Gold", "buy_poi_id": 11, "sell_poi_id": 12,
+             "buy_terminal_id": 101, "sell_terminal_id": 102,
+             "buy_terminal": "A", "sell_terminal": "B", "buy_price": 100,
+             "sell_price": 300, "scu": 40, "profit": 8000, "held": False},
+        ]
+        sess = app.hub.get(self._member)
+        sess.trade_run = {"id": 1, "ship": "C2", "usable_scu": 64, "legs": legs,
+                          "leg_states": app._initial_trade_states(legs), "active": 0,
+                          "summary": {"total_profit": 8000}}
+        sess.pending_txn = None
+
+    def tearDown(self):
+        app.trade_price_points = self._orig_points
+
+    def _post_txn(self, **over):
+        txn = {"side": "buy", "shop": "SCShop_hicks", "guid": self.GUID,
+               "total": 98840.0, "unit_price": 3408.27, "scu": 29.0,
+               "t": "2026-08-02T17:34:48.023Z"}
+        txn.update(over)
+        return self.client.post("/api/trade/transactions", json={"txns": [txn]})
+
+    def test_confirm_live_patches_the_feed(self):
+        # End to end: detected txn -> confirm with txn_id -> the in-memory
+        # price point now carries the org price, its own stamp, and `org` src.
+        self._post_txn()
+        txn_id = self.client.get("/api/trade/run").json()["trade_run"]["txn"]["id"]
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "leg": 0, "txn_id": txn_id})
+        p = app.trade_price_points[0]
+        self.assertAlmostEqual(p["buy"], 3408.27, places=2)
+        self.assertEqual(p["buy_src"], "org")
+        self.assertGreater(p["buy_updated_at"], self._scrape_t)
+        # The row's own scrape stamp is untouched — provenance stays honest.
+        self.assertEqual(p["updated_at"], self._scrape_t)
+
+    def test_rebuild_overlay_applies_newest_stored_report(self):
+        db.price_report_save({"poi_id": 11, "commodity": "Gold", "side": "buy",
+                              "price": 3500.0, "scu": 10, "reporter": "9",
+                              "created": time.time()})
+        app._apply_org_price_overlay()
+        p = app.trade_price_points[0]
+        self.assertEqual((p["buy"], p["buy_src"]), (3500.0, "org"))
+
+    def test_older_org_report_never_beats_a_newer_scrape(self):
+        db.price_report_save({"poi_id": 11, "commodity": "Gold", "side": "buy",
+                              "price": 999.0, "scu": 10, "reporter": "9",
+                              "created": self._scrape_t - 60})
+        app._apply_org_price_overlay()
+        p = app.trade_price_points[0]
+        self.assertEqual(p["buy"], 100)
+        self.assertNotIn("buy_src", p)
+
+    def test_is_missing_rows_are_ledger_only(self):
+        db.price_report_save({"poi_id": 11, "commodity": "Gold", "side": "buy",
+                              "is_missing": 1, "reporter": "9",
+                              "created": time.time()})
+        self.assertEqual(db.latest_org_prices(), [])
+        app._apply_org_price_overlay()
+        self.assertEqual(app.trade_price_points[0]["buy"], 100)
+
+    def test_stockout_files_missing_observation(self):
+        r = self.client.patch("/api/trade/run", json={"action": "stockout", "leg": 0})
+        self.assertEqual(r.status_code, 200)
+        rows = db.price_reports_for(11)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["is_missing"], rows[0]["side"],
+                          rows[0]["price"]), (1, "buy", None))
+
+    def test_prices_endpoint_carries_overlay_fields(self):
+        db.price_report_save({"poi_id": 11, "commodity": "Gold", "side": "buy",
+                              "price": 3500.0, "scu": 10, "reporter": "9",
+                              "created": time.time()})
+        app._apply_org_price_overlay()
+        rows = self.client.get("/api/trade/prices", params={"terminal": 101}).json()
+        self.assertEqual(rows[0]["buy_src"], "org")
+        self.assertEqual(rows[0]["id_commodity"], 5)
 
 
 if __name__ == "__main__":

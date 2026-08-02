@@ -3134,7 +3134,11 @@ def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
         "profit_per_scu": margin,
         "supply_scu": src.get("scu_buy") or 0,
         "demand_scu": dst.get("scu_sell_stock") or 0,
-        "buy_updated_at": src.get("updated_at"), "sell_updated_at": dst.get("updated_at"),
+        # Per-side stamps: an org-overlaid side (#39 slice 0) carries its own
+        # observation time; otherwise both fall back to the row's scrape time.
+        "buy_updated_at": src.get("buy_updated_at") or src.get("updated_at"),
+        "sell_updated_at": dst.get("sell_updated_at") or dst.get("updated_at"),
+        "buy_src": src.get("buy_src"), "sell_src": dst.get("sell_src"),
         "distance_m": None, "eta_s": None, "cross_system": None, "via_gate": None,
         "max_scu": None, "trade_profit": None, "buy_cost": None, "profit_per_hour": None,
     }
@@ -3179,11 +3183,12 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
             continue
         if system and p.get("system") != system:
             continue
-        if not _price_fresh(p, max_age_s, now):
-            continue
-        if p.get("buy"):
+        # Freshness is judged per side: an org-overlaid buy price (#39 slice 0)
+        # can rescue a point whose sell-side scrape has gone stale, and vice
+        # versa — the sides are independent observations.
+        if p.get("buy") and _price_fresh(p, max_age_s, now, side="buy"):
             buyers.setdefault(name, []).append(p)
-        if p.get("sell"):
+        if p.get("sell") and _price_fresh(p, max_age_s, now, side="sell"):
             sellers.setdefault(name, []).append(p)
 
     # positive-margin candidate pairs (cheap — no travel cost yet).
@@ -3258,13 +3263,15 @@ def _dist_of(leg) -> float:
     return (leg["distance_m"] or 0.0) if leg else 0.0
 
 
-def _price_fresh(p, max_age_s, now) -> bool:
-    """Whether a price point is fresh enough to plan on. When `max_age_s` is set,
+def _price_fresh(p, max_age_s, now, side=None) -> bool:
+    """Whether a price point is fresh enough to plan on. `side` checks that
+    side's own stamp when an org overlay refreshed it (#39 slice 0), falling
+    back to the row-level scrape time. When `max_age_s` is set,
     a point older than that — or one with no scrape timestamp at all (we can't
     vouch for it) — is dropped."""
     if not max_age_s:
         return True
-    ts = p.get("updated_at")
+    ts = (side and p.get(f"{side}_updated_at")) or p.get("updated_at")
     return ts is not None and (now - ts) <= max_age_s
 
 
@@ -3300,11 +3307,12 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
             continue
         if system and p.get("system") != system:
             continue
-        if not _price_fresh(p, max_age_s, now):
-            continue
-        if p.get("buy"):
+        # Freshness is judged per side: an org-overlaid buy price (#39 slice 0)
+        # can rescue a point whose sell-side scrape has gone stale, and vice
+        # versa — the sides are independent observations.
+        if p.get("buy") and _price_fresh(p, max_age_s, now, side="buy"):
             buyers.setdefault(name, []).append(p)
-        if p.get("sell"):
+        if p.get("sell") and _price_fresh(p, max_age_s, now, side="sell"):
             sellers.setdefault(name, []).append(p)
     rows = []
     for name, srcs in buyers.items():
@@ -3487,11 +3495,13 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
             if ts is not None and (oldest_ts is None or ts < oldest_ts):
                 oldest_ts = ts
         legs.append({
-            k: row[k] for k in (
+            # .get: a row that skipped _trade_row (manual legs) lacks the
+            # provenance keys — absent must read as None, not KeyError.
+            k: row.get(k) for k in (
                 "commodity", "buy_terminal_id", "buy_terminal", "buy_poi_id", "buy_system",
                 "sell_terminal_id", "sell_terminal", "sell_poi_id", "sell_system",
                 "buy_price", "sell_price", "profit_per_scu", "supply_scu", "demand_scu",
-                "buy_updated_at", "sell_updated_at")
+                "buy_updated_at", "sell_updated_at", "buy_src", "sell_src")
         } | {
             "scu": row["max_scu"], "profit": row["trade_profit"], "buy_cost": row["buy_cost"],
             "held": held,
