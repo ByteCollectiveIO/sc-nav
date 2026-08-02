@@ -95,8 +95,10 @@ does not depend on which button the pilot presses.
 
 - **Auto-confirm without a tap** — revisit only after mappings mature and
   fulfillment ambiguity (§1) has an answer; likely an org setting.
-- **The planner-facing price overlay + freshness badges** — #39 slice 0
-  proper; this build feeds its ledger and stops.
+- ~~**The planner-facing price overlay + freshness badges**~~ — **built as
+  the immediate follow-up (v0.87.0)**: see the #39 doc's status header for
+  what shipped (overlay, `⚡ org` badges, side-aware age filter, ≥2-confirm
+  ingest gate, `is_missing` from stockouts).
 - **Kiosk-board (`AddingCommodityBox`) ingestion** for terminal commodity
   lists / stock presence — real signal, separate decision.
 - **Mission-hauling companion** (#40.2 §9.2.3 item 4) — its own feature.

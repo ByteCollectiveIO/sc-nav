@@ -1376,6 +1376,9 @@
   .trade-fresh-line.warn { color: var(--warn); } .trade-fresh-line b { color: var(--text); }
   .tl-fresh { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
   .tl-fresh.stale { color: var(--warn); }
+  /* Org-observed price in the mix (#39 slice 0): a member's real transaction
+     beat the UEX scrape on at least one side of this leg/row. */
+  .tl-fresh.org, .sg-age.org { color: var(--accent); }
   /* trade run mode (execute) — reuses .route-run-panel/.run-* from the cargo run. */
   .trade-run-tally { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 2px;
     font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -9079,8 +9082,12 @@ function renderTradeLeg(lg, i) {
   // Age of the older of the two price sides drives the leg's freshness badge.
   const ts = [lg.buy_updated_at, lg.sell_updated_at].filter(v => v != null);
   const age = tradeAgeInfo(ts.length ? Math.min(...ts) : null);
-  const fresh = `<span class="tl-fresh${age.stale ? " stale" : ""}" title="UEX price age">`
-    + `${age.stale ? "⚠ " : ""}${age.txt}</span>`;
+  // Org-observed price on either side (#39 slice 0): badge it — a member's
+  // real transaction, fresher than the scrape it replaced.
+  const org = lg.buy_src === "org" || lg.sell_src === "org";
+  const fresh = `<span class="tl-fresh${age.stale ? " stale" : ""}${org ? " org" : ""}"`
+    + ` title="${org ? "includes an org-reported price (member transaction)" : "UEX price age"}">`
+    + `${age.stale ? "⚠ " : ""}${org ? "⚡ " : ""}${age.txt}</span>`;
   // Pirate danger board (#24): warn/avoid mode tags a leg with the warnings touching
   // it (deadliest first). One line names the worst; a title lists them all.
   const warns = lg.warnings || [];
@@ -9182,12 +9189,15 @@ async function renderTradeSuggest() {
     if (r.max_scu && r.trade_profit)
       econ += ` · move <b>${money(r.max_scu)}</b> SCU = <b>${money(r.trade_profit)}</b> aUEC/run`;
     const age = tradeRowAge(r);   // older side's scrape age; always shown, filter on or off
+    const orgRow = r.buy_src === "org" || r.sell_src === "org";
     h += `<div class="trade-sug-row"><span class="sg-rank">${i + 1}</span>`
       + `<div class="sg-main"><div class="sg-top"><span class="sg-name">${esc(r.commodity)}</span>`
       + `<span class="sg-head">${head}</span></div>`
       + `<div class="sg-econ">${econ}</div>`
       + `<div class="sg-lane">${esc(r.buy_terminal)} → ${esc(r.sell_terminal)}`
-      + ` <span class="sg-age${age.stale ? " warn" : ""}">· ${age.txt}</span></div></div>`
+      + ` <span class="sg-age${age.stale ? " warn" : ""}${orgRow ? " org" : ""}"`
+      + `${orgRow ? ' title="includes an org-reported price (member transaction)"' : ""}>`
+      + `· ${orgRow ? "⚡ " : ""}${age.txt}</span></div></div>`
       + `<button class="route-chip" data-use="${i}" type="button">use</button></div>`;
   });
   el.innerHTML = h; el.hidden = false;
