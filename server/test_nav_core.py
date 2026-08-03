@@ -2560,6 +2560,102 @@ class TradeSolverTests(unittest.TestCase):
                            nav_core._route_score(high, "per_hour", 3.0))
 
 
+class TradeLegalityTests(unittest.TestCase):
+    """nav_core commodity legality filter (#42): plan over the whole market,
+    legal goods only, or contraband only. Same three-POI fixture as the solver
+    tests, with a WiDoW leg (buy @A -> sell @C) alongside legal Gold."""
+
+    ILLICIT = frozenset({"widow"})
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": None}
+
+    def _prices(self):
+        return [self._pt("Gold", 1, self.A, buy=100, scu_buy=500),
+                self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500),
+                self._pt("WiDoW", 5, self.A, buy=200, scu_buy=500),
+                self._pt("WiDoW", 6, self.C, sell=900, scu_sell_stock=500)]
+
+    def _plan(self, legality, **kw):
+        return nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="profit",
+            legality=legality, illicit=self.ILLICIT, **kw)
+
+    def test_predicate_truth_table(self):
+        allows = nav_core.legality_allows
+        for mode in ("any", "", None, "nonsense"):
+            self.assertTrue(allows("WiDoW", mode, self.ILLICIT))
+        self.assertFalse(allows("WiDoW", "legal", self.ILLICIT))
+        self.assertTrue(allows("Gold", "legal", self.ILLICIT))
+        self.assertTrue(allows("WiDoW", "illicit", self.ILLICIT))
+        self.assertFalse(allows("Gold", "illicit", self.ILLICIT))
+        # Case and stray whitespace come from the feed, not the player.
+        self.assertFalse(allows("  widow ", "legal", self.ILLICIT))
+
+    def test_unknown_commodity_counts_as_legal(self):
+        # A commodity the flag feed doesn't list must never vanish from a
+        # legal-only plan — and must not be guessed into the contraband set.
+        self.assertTrue(nav_core.legality_allows("Quantanium", "legal", self.ILLICIT))
+        self.assertFalse(nav_core.legality_allows("Quantanium", "illicit", self.ILLICIT))
+
+    def test_no_flags_loaded_degrades_safely(self):
+        # Feed missing: legal plans the whole market, illicit finds nothing —
+        # never the reverse (which would quietly plan legal goods as "illicit").
+        self.assertTrue(nav_core.legality_allows("WiDoW", "legal", frozenset()))
+        self.assertFalse(nav_core.legality_allows("WiDoW", "illicit", frozenset()))
+
+    def test_any_plans_both(self):
+        self.assertEqual({lg["commodity"] for lg in self._plan("any")["legs"]},
+                         {"Gold", "WiDoW"})
+
+    def test_legal_drops_contraband(self):
+        self.assertEqual({lg["commodity"] for lg in self._plan("legal")["legs"]},
+                         {"Gold"})
+
+    def test_illicit_keeps_only_contraband(self):
+        self.assertEqual({lg["commodity"] for lg in self._plan("illicit")["legs"]},
+                         {"WiDoW"})
+
+    def test_illicit_with_no_contraband_market_is_infeasible(self):
+        # Not "fall back to legal goods": say there's no run to make.
+        plan = nav_core.plan_trade_route(
+            NAV, [p for p in self._prices() if p["commodity"] == "Gold"], 100,
+            start_id=self.A, legality="illicit", illicit=self.ILLICIT)
+        self.assertFalse(plan["summary"]["feasible"])
+        self.assertEqual(plan["legs"], [])
+
+    def test_legality_stacks_with_the_commodity_filter(self):
+        # Orthogonal axes: picking WiDoW in filtered mode and then asking for
+        # legal-only leaves nothing, rather than one silently beating the other.
+        self.assertEqual(self._plan("legal", commodities=["WiDoW"])["legs"], [])
+        self.assertEqual(
+            {lg["commodity"] for lg in self._plan("illicit", commodities=["WiDoW"])["legs"]},
+            {"WiDoW"})
+
+    def test_held_contraband_still_gets_a_buyer_under_legal(self):
+        # The guarantee that makes legality a preference rather than a wall:
+        # switching to LEGAL mid-run must not strand the WiDoW already aboard.
+        # (Same reasoning as avoid_poi_ids, opposite of the #34 stop exclusion.)
+        held = {"commodity": "WiDoW", "scu": 100, "buy_price": 200}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, held=held, max_stops=6,
+            legality="legal", illicit=self.ILLICIT)
+        self.assertTrue(plan["legs"])
+        self.assertEqual(plan["legs"][0]["commodity"], "WiDoW")
+        self.assertTrue(plan["legs"][0]["held"])
+        # ...while the continuation it chains obeys the new preference.
+        self.assertNotIn("WiDoW", {lg["commodity"] for lg in plan["legs"][1:]})
+
+
 class TradeDangerAvoidTests(unittest.TestCase):
     """nav_core pirate danger-board avoidance (#24): the avoid_poi_ids / avoid_pairs
     solver filter and the trade_avoid_sets / trade_leg_warnings pure helpers. Reuses

@@ -1413,6 +1413,11 @@
   .trade-actual .ta-x { color: var(--dim); }
   .tl-actual-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--accent); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  /* Contraband (#42): marks a leg's cargo as illicit in every legality mode —
+     an Any-mode plan is exactly where the pilot needs to spot it. Same chip
+     shape as .tl-actual-tag, in the warning hue. */
+  .tl-illicit { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--warn); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
   /* Stop amenities (#28c): station facility chips on a leg's buy/sell lines. */
   .tl-amen { font-size: 11px; color: var(--dim); white-space: nowrap; }
   /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
@@ -3567,6 +3572,16 @@
           <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
         </span>
         <span class="muted trade-danger-hint" id="trade-stopkind-hint" style="font-size:11px;"></span>
+      </div>
+
+      <div class="route-row trade-danger-row" style="margin-top:12px;">
+        <span class="muted" style="font-size:12px;">Cargo</span>
+        <span class="seg" id="trade-legality" role="group" aria-label="Which cargo the route may carry">
+          <button class="on" data-legality="any" type="button" aria-pressed="true">Any</button>
+          <button data-legality="legal" type="button" aria-pressed="false">Legal only</button>
+          <button data-legality="illicit" type="button" aria-pressed="false">Illicit only</button>
+        </span>
+        <span class="muted trade-danger-hint" id="trade-legality-hint" style="font-size:11px;"></span>
       </div>
 
       <div class="route-row trade-danger-row" style="margin-top:12px;">
@@ -8289,6 +8304,25 @@ function setTradeStops(mode, why) {
   const hint = $("trade-stopkind-hint");
   if (hint) hint.textContent = why || TRADE_STOPS_HINT[tradeStops];
 }
+// Cargo legality (#42): contraband pays better and draws scans, CrimeStat and
+// monitored airspace, so it's a three-way choice, not a checkbox. Server-side the
+// filter governs what the route BUYS — a mid-run switch to Legal never strands
+// contraband already in the hold.
+let tradeLegality = "any";               // any | legal | illicit
+const TRADE_LEGALITY_HINT = {
+  any: "Plan over the whole market, legal or not. Illicit legs are badged.",
+  legal: "No contraband — nothing that draws a scan.",
+  illicit: "Contraband only. Sold at scrapyards and lawless outposts.",
+};
+function setTradeLegality(mode) {
+  tradeLegality = ["legal", "illicit"].includes(mode) ? mode : "any";
+  for (const x of $("trade-legality").children) {
+    const on = x.dataset.legality === tradeLegality;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
+  const hint = $("trade-legality-hint");
+  if (hint) hint.textContent = TRADE_LEGALITY_HINT[tradeLegality];
+}
 // A ship that loads only through a station cargo dock (server sets `dock` on the
 // /api/ships row) can't use a planetary stop at all, so pick the honest default the
 // moment the ship is known. Left overridable: it's a nudge, not a lock.
@@ -8688,6 +8722,7 @@ function applyTradeConfig(cfg) {
   // Hull-C favorite must not silently start routing through outposts it can't land on.
   setTradeStops(cfg.stops || "any");
   if (!cfg.stops) tradeStopsForShip();
+  setTradeLegality(cfg.legality || "any");    // #42 — also every mode
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
     if ($("trade-system")) $("trade-system").value = cfg.system || "";
@@ -8738,6 +8773,9 @@ function wireTradePlanner() {
   for (const b of $("trade-stopkind").querySelectorAll("button"))
     b.onclick = () => setTradeStops(b.dataset.stops);   // an explicit pick clears the ship hint
   setTradeStops(tradeStops);
+  for (const b of $("trade-legality").querySelectorAll("button"))
+    b.onclick = () => setTradeLegality(b.dataset.legality);
+  setTradeLegality(tradeLegality);
   // Shared avoided-locations blacklist (#24 v2): re-plan on edit if a plan is showing.
   mountAvoidBlacklist($("trade-avoid-blk"), () => { if (tradeLastInput) planTrade(); });
   attachTradeShipPicker();
@@ -8960,7 +8998,7 @@ function buildTradePlanBody(msg) {
   // `stops` (#34) rides on every mode: the solver drops unusable stops, manual legs
   // just get badged. Like avoid_mode, it's a property of the ship, not of the mode.
   const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid,
-                 stops: tradeStops, ...tradeStartPayload() };
+                 stops: tradeStops, legality: tradeLegality, ...tradeStartPayload() };
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
   const ship = $("trade-ship").value.trim();
   if (ship) body.ship = ship;
@@ -9189,6 +9227,7 @@ function renderTradeLeg(lg, i) {
   }
   return `<div class="trade-leg-card${(warns.length || blk.length) ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
+    + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span>` : "")
     + `<span class="tl-scu">${lg.scu} SCU</span>${fresh}</div>`
     + dngr
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
@@ -9525,7 +9564,9 @@ function renderTradeRunLeg(lg, i, run) {
   const seq = past ? (lg.skipped ? "✗" : "✓") : i + 1;
   let h = `<div class="run-stop${active ? " active" : ""}${past ? " past" : ""}">`
     + `<div class="run-stop-head"><span class="seq">${seq}</span>`
-    + `<span class="stop-name">${esc(lg.commodity)} <span class="stop-sys">${lg.scu} SCU</span></span></div>`;
+    + `<span class="stop-name">${esc(lg.commodity)} `
+    + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span> ` : "")
+    + `<span class="stop-sys">${lg.scu} SCU</span></span></div>`;
   // A skipped leg was never transacted: one line says why, no phantom profit.
   if (lg.skipped) {
     h += lg.stockout

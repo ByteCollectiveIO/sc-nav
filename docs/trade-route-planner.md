@@ -474,6 +474,55 @@ packages/precedence):
 
 ---
 
+## Cargo legality filter (#42) — AS BUILT
+
+A tester wanted contraband **in**, **out**, or **exclusively**: smuggling pays
+better and costs you scans, CrimeStat and monitored airspace, so which market
+you're in is a decision, not a detail. `legality` on `TradePlanIn` /
+`TradeReplanIn` — `any | legal | illicit`, default `any`.
+
+- **Source of truth** — UEX already flags it per commodity (`is_illegal`, 18 of
+  204: WiDoW, SLAM, E'tam, Altruciatoxin, Osoian Hides, Neon…).
+  `app.load_illicit_commodities()` reads the same on-disk cache
+  `load_commodity_names` just refreshed (no extra fetch, can't disagree with the
+  name list) into a lowered name set, rebuilt by `_refresh_feeds` (#33).
+- **Where it filters** — `nav_core.legality_allows(name, mode, illicit)` inside
+  `_trade_candidates`, so it lands once and covers plan, re-plan and the
+  held-cargo continuation. Orthogonal to filtered mode's `commodities` set:
+  both apply, so picking WiDoW and asking for LEGAL yields nothing rather than
+  one filter quietly beating the other.
+- **A preference, not physics.** This is the #34 distinction again, on the other
+  side: an unusable *stop* is never an option (`exclude_poi_ids` binds even the
+  held-cargo sell leg), but legality is a choice about what you newly **buy**.
+  Switching to LEGAL mid-run must not strand the WiDoW already in your hold, so
+  `_held_sell_leg` ignores it — you always get to finish the run you started,
+  and only the continuation obeys the new preference.
+- **Both degradations are deliberate.** A commodity the feed doesn't list counts
+  as *legal* (a newly-added commodity must never vanish from a legal-only plan,
+  and we don't guess contraband); with no flags loaded at all, ILLICIT matches
+  *nothing* rather than quietly handing back the legal market. An unrecognized
+  `legality` value widens to `any` — same rule as `_norm_stops`.
+- **The ☠ badge runs in every mode**, not just the filtered ones
+  (`_annotate_leg_legality`): a pilot planning over the whole market is exactly
+  who needs to see which leg draws a scan. Manual legs are badged, never
+  dropped — same contract as `stops` / `in_range_only` / `avoid_mode`.
+- **Persisted** in the run's `params.legality`, so a mid-run re-plan keeps the
+  choice (and can flip it).
+
+**Operational dependency — `wiki_pois_enabled` (#28).** Contraband's sellers are
+lawless outposts (Rat's Nest, The Golden Riviera, Fallow Field, Ashland), and
+those POIs reach the map only through the wiki locations catalog. With that
+toggle off, every contraband **buy** terminal fails the terminal crosswalk while
+the sell side survives — the market looks one-way and ILLICIT can never plan.
+Measured on the live feed: toggle off → 21/114 terminals resolve, zero
+contraband buy rows; toggle on → 114/114, and ILLICIT plans a real 2.35M
+Osoian Hides run (The Golden Riviera → Devlin Scrap & Salvage). An empty
+ILLICIT plan therefore names the setting (`_explain_empty_illicit`) rather than
+blaming the filters — but only when no contraband buy exists at all, so an
+ordinary near-miss keeps its ordinary reason.
+
+---
+
 ## Favorites (saved routes) — AS BUILT (v0.32.0)
 
 A frequent trader re-enters the same setup constantly (their ship, their

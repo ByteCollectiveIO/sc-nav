@@ -196,9 +196,11 @@ def default_game_log():
 # Commodity kiosks log both sides of every trade (verified in-game 2026-08-02):
 #   <ts> [Notice] <CEntityComponentCommodityUIProvider::SendCommodityBuyRequest>
 #     ... shopName[X] ... price[98840.000000] shopPricePerCentiSCU[34.082699]
-#     ... resourceGUID[uuid] ... quantity[2900.000000 cSCU] ...
+#     ... resourceGUID[uuid] autoLoading[0] quantity[2900.000000 cSCU]
+#     Cargo Box Data: boxSize[1.000000] | unitAmount[29] ...
 #   <ts> [Notice] <...::SendCommoditySellRequest> ... shopName[X] ...
-#     amount[161211.000000] ... resourceGUID[uuid] ... quantity[29] ...
+#     amount[161211.000000] ... resourceGUID[uuid] autoLoading[1] quantity[29]
+#     ... Cargo Box Data:  [boxSize[1] | unitAmount[29]] ...
 # Buy quantities are centi-SCU; sell quantities are plain SCU. Parsed
 # defensively: a game patch that rewords these lines turns the feature off,
 # never breaks the watcher.
@@ -212,6 +214,39 @@ _TXN_SELL_RE = re.compile(
     r"<CEntityComponentCommodityUIProvider::SendCommoditySellRequest>.*?"
     r"shopName\[([^\]]+)\].*?amount\[([\d.]+)\].*?"
     r"resourceGUID\[([0-9a-fA-F-]{8,})\].*?quantity\[([\d.]+)\]")
+
+# The same lines also say HOW the cargo moves, which is what a loading-time
+# model needs: `autoLoading[0|1]` (0 = freight elevator / hand-load, 1 = the
+# kiosk moves it to or from the ship) and the box breakdown `boxSize[n] |
+# unitAmount[n]` (SCU per box × box count). Box count matters more than SCU:
+# cargo moves a box at a time, so 32 × 1 SCU and 1 × 32 SCU are the same load
+# and almost certainly not the same wait. Captured now, modelled later.
+#
+# Deliberately separate optional searches rather than groups on the two
+# regexes above: the field set differs per side already (the sell line wraps
+# the box data in its own brackets and drops the trailing zeros), so a patch
+# that rewords one of them must cost us that field, not the transaction.
+_TXN_AUTOLOAD_RE = re.compile(r"autoLoading\[([01])\]")
+_TXN_BOX_SIZE_RE = re.compile(r"boxSize\[([\d.]+)\]")
+_TXN_BOX_COUNT_RE = re.compile(r"unitAmount\[([\d.]+)\]")
+
+
+def _txn_cargo_handling(line):
+    """The optional loading-method fields off a transaction line, as a dict
+    holding only the ones actually present (never raises, never blocks)."""
+    out = {}
+    m = _TXN_AUTOLOAD_RE.search(line)
+    if m:
+        out["auto_load"] = m.group(1) == "1"
+    for key, rx, cast in (("box_size", _TXN_BOX_SIZE_RE, float),
+                          ("box_count", _TXN_BOX_COUNT_RE, lambda s: int(float(s)))):
+        m = rx.search(line)
+        if m:
+            try:
+                out[key] = cast(m.group(1))
+            except ValueError:
+                pass
+    return out
 
 
 def parse_trade_txn(line):
@@ -233,7 +268,7 @@ def parse_trade_txn(line):
             return None
         return {"side": "buy", "shop": shop, "guid": guid, "total": total,
                 "unit_price": round(per_centi * 100.0, 2),
-                "scu": centi / 100.0, "t": t}
+                "scu": centi / 100.0, "t": t, **_txn_cargo_handling(line)}
     m = _TXN_SELL_RE.search(line)
     if m:
         shop, total, guid, qty = m.groups()
@@ -244,7 +279,8 @@ def parse_trade_txn(line):
         if qty <= 0:
             return None
         return {"side": "sell", "shop": shop, "guid": guid, "total": total,
-                "unit_price": round(total / qty, 2), "scu": qty, "t": t}
+                "unit_price": round(total / qty, 2), "scu": qty, "t": t,
+                **_txn_cargo_handling(line)}
     return None
 
 

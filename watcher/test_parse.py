@@ -171,6 +171,11 @@ class TradeTxnParseTests(unittest.TestCase):
         self.assertEqual(t["scu"], 29.0)              # 2900 cSCU
         self.assertAlmostEqual(t["unit_price"], 3408.27, places=2)
         self.assertEqual(t["t"], "2026-08-02T17:34:48.023Z")
+        # Cargo handling: this buy went to the freight elevator, as 29 boxes
+        # of 1 SCU (box count is what a load actually costs time on).
+        self.assertIs(t["auto_load"], False)
+        self.assertEqual(t["box_size"], 1.0)
+        self.assertEqual(t["box_count"], 29)
 
     def test_sell_line(self):
         t = parse_trade_txn(_TXN_SELL.strip())
@@ -179,6 +184,22 @@ class TradeTxnParseTests(unittest.TestCase):
         self.assertEqual(t["total"], 161211.0)
         self.assertEqual(t["scu"], 29.0)              # sell qty is plain SCU
         self.assertAlmostEqual(t["unit_price"], 5559.0, places=2)
+        # Sold straight off the ship — and the sell line writes its box data in
+        # its own bracket style, which must parse the same as the buy's.
+        self.assertIs(t["auto_load"], True)
+        self.assertEqual(t["box_size"], 1.0)
+        self.assertEqual(t["box_count"], 29)
+
+    def test_cargo_handling_is_optional(self):
+        # A patch that stops writing autoLoading / Cargo Box Data must cost us
+        # those fields only — the money still lands.
+        line = _TXN_BUY.strip().replace("autoLoading[0] ", "").replace(
+            "Cargo Box Data: boxSize[1.000000] | unitAmount[29] ", "")
+        t = parse_trade_txn(line)
+        self.assertEqual(t["total"], 98840.0)
+        self.assertNotIn("auto_load", t)
+        self.assertNotIn("box_size", t)
+        self.assertNotIn("box_count", t)
 
     def test_foreign_lines_return_none(self):
         self.assertIsNone(parse_trade_txn(_JOIN.strip()))
