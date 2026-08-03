@@ -691,6 +691,17 @@ def load_commodity_names() -> list[str]:
     return sorted({r["name"] for r in rows if r.get("name")})
 
 
+def load_illicit_commodities() -> frozenset:
+    """Lowered names of the commodities UEX flags `is_illegal` (#42) — the
+    contraband set the trade planner's legality filter reads. Off the same
+    on-disk cache load_commodity_names just refreshed, so this costs no extra
+    fetch and can't disagree with the name list. Empty is a safe degradation:
+    LEGAL plans everything, ILLICIT finds nothing (nav_core.legality_allows)."""
+    return frozenset(
+        r["name"].strip().lower() for r in _load_json_list(COMMODITIES_FILE)
+        if r.get("name") and r.get("is_illegal") in (1, "1", True))
+
+
 def _walk_item_categories(make_url, label: str):
     """Concatenate the `data` rows of a per-category uexcorp endpoint across every
     item-type category (from /2.0/categories, `type=="item"`). `make_url(cid)`
@@ -1276,6 +1287,7 @@ tokens = TokenStore()
 members_dir = MemberDirectory()
 raw_commodity_names = load_raw_commodity_names()
 commodity_names = load_commodity_names()
+illicit_commodities = load_illicit_commodities()   # #42 legality filter
 harvestable_names = load_harvestable_names()
 ships = load_ships()
 QUANTUM_DRIVES, QUANTUM_PROFILES, QUANTUM_UEX = load_quantum()
@@ -3516,6 +3528,11 @@ class TradePlanIn(BaseModel):
     # Auto/filtered modes drop excluded stops; manual legs are the player's explicit
     # choice and are only ever badged (same contract as in_range_only / avoid_mode).
     stops: str = "any"                                  # any | stations | dock
+    # Commodity legality (#42): `any` = plan over the whole market; `legal` = no
+    # contraband; `illicit` = contraband only (the smuggling run). Orthogonal to
+    # `commodities` — a filtered-mode pick still gets legality applied on top.
+    # Manual legs are badged, never dropped, like every other preference here.
+    legality: str = "any"                               # any | legal | illicit
 
 
 class TradeRunPatchIn(BaseModel):
@@ -3544,6 +3561,14 @@ class TradeTxnIn(BaseModel):
     unit_price: float | None = Field(default=None, ge=0, le=100_000_000)
     scu: float | None = Field(default=None, gt=0, le=100_000)
     t: str = Field(min_length=4, max_length=40)
+    # How the cargo moved (optional — an older watcher omits them): auto_load
+    # = the kiosk loaded/unloaded the ship rather than a freight elevator, and
+    # box_size × box_count is the SCU breakdown. Stored, not yet acted on;
+    # they're the input to a real loading-time model, and unlike price they
+    # can never be reconstructed after the fact.
+    auto_load: bool | None = None
+    box_size: float | None = Field(default=None, ge=0, le=100_000)
+    box_count: int | None = Field(default=None, ge=0, le=100_000)
 
 
 class TradeTxnBatchIn(BaseModel):
@@ -3565,6 +3590,7 @@ class TradeReplanIn(BaseModel):
     qd: str | None = Field(default=None, max_length=_NAME_MAX)
     in_range_only: bool | None = None
     stops: str | None = None                            # any | stations | dock (#34)
+    legality: str | None = None                         # any | legal | illicit (#42)
 
 
 class TradeFavoriteIn(BaseModel):
@@ -3588,6 +3614,13 @@ def _norm_stops(mode) -> str:
     """The stop-kind filter (#34), defaulting an unknown value to 'any'. An
     unrecognized restriction must never silently drop stops."""
     return mode if mode in nav_core.STOP_MODES else "any"
+
+
+def _norm_legality(mode) -> str:
+    """The commodity legality filter (#42), defaulting an unknown value to
+    'any' — same rule as _norm_stops: a filter we don't recognize must widen
+    the market, never silently narrow it."""
+    return mode if mode in nav_core.TRADE_LEGALITY else "any"
 
 
 def _build_hazard_volumes(warnings, blacklist, t_ref):
@@ -3698,6 +3731,42 @@ def _annotate_leg_stops(plan: dict, exclude: frozenset) -> dict:
                if lg.get(id_key) in exclude]
         if bad:
             lg["no_stop"] = bad          # ["buy"], ["sell"] or both
+    return plan
+
+
+def _explain_empty_illicit(plan: dict) -> dict:
+    """Name the real reason an ILLICIT-only plan came back empty (#42).
+
+    Contraband is bought at lawless outposts — Rat's Nest, The Golden Riviera,
+    Fallow Field — and those POIs reach the map only through the wiki locations
+    catalog (#28). With `wiki_pois_enabled` off, every contraband *buy* terminal
+    fails the crosswalk while the sell side survives, so the market looks
+    one-way and the solver correctly finds nothing. 'No profitable trades for
+    these filters' sends the pilot hunting a pricing problem that isn't there;
+    this points at the setting that actually fixes it. Mutates + returns."""
+    sm = plan.get("summary") or {}
+    if plan.get("legs") or not illicit_commodities:
+        return plan
+    if any(p.get("buy") and p.get("commodity", "").strip().lower() in illicit_commodities
+           for p in trade_price_points):
+        return plan                      # a real market exists; the filters just missed
+    sm["reason"] = ("no contraband is for sale on the map — its sellers are lawless "
+                    "outposts, which need the wiki POI catalog enabled in ORG SETTINGS")
+    plan["summary"] = sm
+    return plan
+
+
+def _annotate_leg_legality(plan: dict) -> dict:
+    """Badge every leg carrying contraband (#42). Runs in *all* modes, not just
+    the filtered ones: in ANY mode the badge is the whole point — the pilot who
+    plans over the full market still wants to know which legs will draw a scan
+    before committing. Mutates + returns the plan."""
+    if not illicit_commodities:
+        return plan
+    for lg in plan.get("legs") or ():
+        if not nav_core.legality_allows(lg.get("commodity"), "legal",
+                                        illicit_commodities):
+            lg["illicit"] = True
     return plan
 
 
@@ -3858,6 +3927,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 nav, trade_price_points, body.usable_scu,
                 start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
                 commodities=(body.commodities if body.mode == "filtered" else None),
+                legality=_norm_legality(body.legality), illicit=illicit_commodities,
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -3871,6 +3941,9 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     _annotate_leg_stock(plan, stock_reports)
     _annotate_leg_amenities(plan)
     _annotate_leg_stops(plan, exclude)
+    _annotate_leg_legality(plan)
+    if _norm_legality(body.legality) == "illicit":
+        _explain_empty_illicit(plan)
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
 
 
@@ -3960,6 +4033,7 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "avoid_poi_ids": list(body.avoid_poi_ids or ()),                    # #24 v2 blacklist
             "qd": body.qd, "in_range_only": body.in_range_only,                 # #27
             "stops": _norm_stops(body.stops),                                   # #34
+            "legality": _norm_legality(body.legality),                          # #42
         },
     }
 
@@ -4056,7 +4130,9 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
                 "member_id": user["id"], "t": txn.t, "side": side,
                 "resource_guid": txn.guid, "commodity": commodity,
                 "shop_name": txn.shop, "poi_id": poi_id, "scu": txn.scu,
-                "unit_price": unit, "total": txn.total, "created": now})
+                "unit_price": unit, "total": txn.total,
+                "auto_load": txn.auto_load, "box_size": txn.box_size,
+                "box_count": txn.box_count, "created": now})
             if not created:
                 continue
             stored += 1
@@ -4265,6 +4341,11 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         # still can't, and this is the path that re-homes sunk cargo.
         stops = _norm_stops(body.stops if body.stops is not None else p.get("stops"))
         exclude = nav_core.stop_exclusions(trade_stop_kinds, stops)
+        # #42: legality survives a re-plan too, and can be flipped mid-run. It
+        # only governs what the continuation *buys* — cargo already aboard keeps
+        # its buyer either way (nav_core.replan_trade_route).
+        legality = _norm_legality(body.legality if body.legality is not None
+                                  else p.get("legality"))
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
@@ -4280,7 +4361,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         nav_core.replan_trade_route,
         nav, trade_price_points, usable_scu, start_pos=start_pos, held=held,
         max_stops=max_stops, commodities=commodities, system=system, sort=sort,
-        budget=budget,
+        budget=budget, legality=legality, illicit=illicit_commodities,
         deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
         max_age_s=max_age_s, t_ref=t_ref,
         avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -4291,6 +4372,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
     _annotate_leg_stock(new_plan, stock_reports)
     _annotate_leg_amenities(new_plan)
+    _annotate_leg_legality(new_plan)
     _annotate_trade_legs(new_plan, warnings, mode, volumes, t_ref)
     new_legs = new_plan.get("legs") or []
     if not new_legs:
@@ -4315,6 +4397,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         p["qd"], p["in_range_only"] = qd, in_range   # persist the params used
         p["avoid_mode"] = mode                       # persist the mode used
         p["stops"] = stops                           # #34
+        p["legality"] = legality                     # #42
         run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)
@@ -8673,11 +8756,13 @@ async def _refresh_feeds() -> None:
     by the manual /api/refresh and the scheduled feed_refresh_loop (#33). The
     loaders fall back to the disk cache on a failed fetch, so a UEX outage
     degrades to stale-but-served rather than raising."""
-    global raw_commodity_names, commodity_names, ships, fleet_ships
+    global raw_commodity_names, commodity_names, illicit_commodities, ships, fleet_ships
     global item_names, item_prices, item_specs, resource_values
     global trade_terminals_raw, trade_terminal_rows, trade_prices, feeds_refreshed_at
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
+    # Reads the cache the line above just rewrote — order matters (#42).
+    illicit_commodities = await asyncio.to_thread(load_illicit_commodities)
     ships = await asyncio.to_thread(load_ships)
     # Startup enriches ships with quantum fuel/range (#27); a refresh must too,
     # or the drive picker's ranges vanish until the next restart.

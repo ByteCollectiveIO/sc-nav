@@ -5378,6 +5378,117 @@ class TradeStopFilterApiTests(unittest.TestCase):
         self.assertEqual(run["params"]["stops"], "dock")
 
 
+class TradeLegalityApiTests(unittest.TestCase):
+    """Commodity legality filter (#42): plan over the whole market, legal goods
+    only, or contraband only — plus the ☠ badge that marks illicit legs in every
+    mode, and persistence onto the run so a re-plan keeps the choice."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Smuggler", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+
+        def pt(commodity, tid, poi, buy=None, sell=None):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 500 if buy else 0,
+                    "scu_sell_stock": 500 if sell else 0, "updated_at": None}
+
+        # Gold A -> B (legal), WiDoW A -> C (contraband).
+        self._orig_pts, self._orig_ill = app.trade_price_points, app.illicit_commodities
+        app.trade_price_points = [
+            pt("Gold", 1, self.A, buy=100), pt("Gold", 2, self.B, sell=300),
+            pt("WiDoW", 5, self.A, buy=200), pt("WiDoW", 6, self.C, sell=900)]
+        app.illicit_commodities = frozenset({"widow"})
+
+    def tearDown(self):
+        app.trade_price_points, app.illicit_commodities = self._orig_pts, self._orig_ill
+
+    def _plan(self, **kw):
+        body = {"usable_scu": 100, "start_id": self.A, "sort": "profit",
+                "system": "Stanton"}
+        body.update(kw)
+        return self.client.post("/api/trade/plan", json=body)
+
+    def _names(self, **kw):
+        return {l["commodity"] for l in self._plan(**kw).json()["legs"]}
+
+    def test_default_plans_the_whole_market(self):
+        self.assertEqual(self._names(), {"Gold", "WiDoW"})
+
+    def test_legal_only_drops_contraband(self):
+        self.assertEqual(self._names(legality="legal"), {"Gold"})
+
+    def test_illicit_only_keeps_contraband(self):
+        self.assertEqual(self._names(legality="illicit"), {"WiDoW"})
+
+    def test_unknown_value_never_silently_narrows_the_market(self):
+        self.assertEqual(self._names(legality="bogus"), {"Gold", "WiDoW"})
+
+    def test_illicit_legs_are_badged_in_every_mode(self):
+        # The badge is most valuable in ANY mode: the pilot who plans over the
+        # whole market still needs to see which leg will draw a scan.
+        for mode in ("any", "illicit"):
+            legs = self._plan(legality=mode).json()["legs"]
+            widow = [l for l in legs if l["commodity"] == "WiDoW"]
+            self.assertTrue(widow, mode)
+            self.assertTrue(widow[0]["illicit"], mode)
+        gold = [l for l in self._plan().json()["legs"] if l["commodity"] == "Gold"]
+        self.assertNotIn("illicit", gold[0])
+
+    def test_manual_contraband_leg_is_badged_not_dropped(self):
+        # Same contract as stops/in_range: an explicit pick is never rewritten.
+        legs = self._plan(mode="manual", legality="legal",
+                          legs=[{"commodity": "WiDoW", "buy_terminal_id": 5,
+                                 "sell_terminal_id": 6}]).json()["legs"]
+        self.assertEqual(len(legs), 1)
+        self.assertTrue(legs[0]["illicit"])
+
+    def test_empty_illicit_plan_names_the_real_cause(self):
+        # Contraband sells everywhere and is bought only at lawless outposts, so
+        # with the wiki POI catalog off the buy side vanishes entirely. Point at
+        # the setting instead of blaming the filters.
+        app.trade_price_points = [p for p in app.trade_price_points
+                                  if not (p["commodity"] == "WiDoW" and p["buy"])]
+        sm = self._plan(legality="illicit").json()["summary"]
+        self.assertFalse(sm["feasible"])
+        self.assertIn("wiki POI catalog", sm["reason"])
+
+    def test_normal_empty_result_keeps_the_ordinary_reason(self):
+        # A contraband market that exists but yields nothing here is a filter
+        # problem, not a catalog problem — don't mis-blame the setting.
+        sm = self._plan(legality="illicit", budget=1).json()["summary"]
+        self.assertFalse(sm["feasible"])
+        self.assertNotIn("wiki POI catalog", sm["reason"])
+
+    def test_legality_persists_onto_the_run_for_replan(self):
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 100, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "legality": "illicit"})
+        self.assertEqual(r.status_code, 200)
+        run = db.get_active_trade_run("1")
+        self.assertEqual(run["params"]["legality"], "illicit")
+        self.assertEqual({l["commodity"] for l in run["legs"]}, {"WiDoW"})
+
+
 class FeedRefreshSettingTests(unittest.TestCase):
     """feed_refresh_h (#33): default 6h, 0 = off, and a hard 2h floor on
     enabled values — the community-run uexcorp API must not be hammerable
@@ -5644,6 +5755,26 @@ class TradeTxnCaptureTests(unittest.TestCase):
         self.assertTrue(r.json()["matched"])
         # The watcher re-sends failed batches; a resend must not double-file.
         self.assertEqual(self._post_txn().json()["stored"], 0)
+
+    def test_cargo_handling_stored(self):
+        # #41 follow-up: how the cargo moved (kiosk auto-load vs freight
+        # elevator, and the box breakdown) is the input to a real loading-time
+        # model, and it can't be reconstructed after the fact — so it lands in
+        # the ledger at ingest even though nothing reads it yet.
+        self._post_txn(auto_load=True, box_size=1.0, box_count=29)
+        txn = self.client.get("/api/trade/run").json()["trade_run"]["txn"]
+        row = db.trade_txn_get(txn["id"], "9")
+        self.assertEqual((row["auto_load"], row["box_size"], row["box_count"]),
+                         (1, 1.0, 29))
+
+    def test_cargo_handling_optional(self):
+        # An older watcher omits them entirely; the transaction still stores.
+        self.assertEqual(self._post_txn().json()["stored"], 1)
+        txn = self.client.get("/api/trade/run").json()["trade_run"]["txn"]
+        row = db.trade_txn_get(txn["id"], "9")
+        self.assertIsNone(row["auto_load"])
+        self.assertIsNone(row["box_size"])
+        self.assertIsNone(row["box_count"])
 
     def test_matching_txn_becomes_run_nudge(self):
         self._post_txn()

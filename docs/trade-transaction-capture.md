@@ -37,6 +37,11 @@ happened. Stop asking; start reading:
   … quantity[N cSCU]`. Unit price = perCentiSCU × 100; SCU = cSCU ÷ 100.
 - **Sell** — `…::SendCommoditySellRequest>`: `shopName[…] amount[TOTAL]
   resourceGUID[uuid] … quantity[N]` (already SCU). Unit = total ÷ quantity.
+- **Cargo handling**, on both lines: `autoLoading[0|1]` (1 = the kiosk moved
+  the cargo to/from the ship, 0 = freight elevator / hand-load) and
+  `Cargo Box Data: boxSize[n] | unitAmount[n]` (SCU per box × box count; the
+  sell line wraps its pair in extra brackets and drops the trailing zeros).
+  Captured since the follow-up build — see §6.
 - Timestamps are the line's own UTC stamp. Patch-fragility rule (#40.2 §9.2):
   parse defensively, and everything downstream degrades to absence — run mode
   without a watcher (or after a format change) behaves exactly as today.
@@ -47,7 +52,9 @@ happened. Stop asking; start reading:
 
 - `parse_trade_txn(line)` — pure, in `sc_nav_watcher.py`, tested in
   `test_parse.py`. Returns `{side, shop, guid, total, unit_price, scu, t}`
-  or None.
+  or None, plus `{auto_load, box_size, box_count}` when the line carries them
+  (`_txn_cargo_handling`, separate optional searches — a reworded box-data
+  string must cost that field, never the transaction).
 - `GameLogShardReader` collects matches while scanning the lines it already
   scans; `pop_transactions()` drains. One tail, two consumers.
 - `Sender.send_transactions()` → `POST /api/trade/transactions` (same token,
@@ -113,3 +120,35 @@ does not depend on which button the pilot presses.
   PATCH with `txn_id` defaults actuals, learns both mappings, stamps the
   transaction row, files the price report; anonymous callers rejected.
 - Live tail → POST on the Windows box: the one manual step, next real run.
+
+## 6. Cargo handling — capture now, model later
+
+The kiosk lines also state *how* the cargo moves (§2). That's the missing term
+in aUEC/hour: the planner charges a flat `STOP_DWELL_S = 120` per stop
+(`nav_core.py`), method-blind, and that constant feeds leg `profit_per_hour`,
+route totals, and the solver's `per_hour` score. Auto-loading a hold costs real
+minutes; the plan prices them at zero.
+
+CIG has never published a rate and it moves every patch, so the answer isn't
+research — it's measurement. **What shipped is only the capture**:
+`auto_load` / `box_size` / `box_count` on `TradeTxnIn` and the
+`trade_transactions` ledger (`_ensure_column` for pre-existing DBs). Nothing
+reads them yet. They land now because price can be re-derived later and this
+cannot: an unlabelled run is lost to the model forever.
+
+Modelling notes for whoever picks this up:
+
+- **Fit on box count, not SCU.** Cargo moves a box at a time, so 32 × 1 SCU and
+  1 × 32 SCU are the same tonnage and almost certainly not the same wait. The
+  2026-08-02 capture is 29 × 1 SCU on both sides.
+- **Dwell is already observable** — transaction timestamp → the ship's first
+  sustained motion away from the POI, off the position stream we already have.
+  It also covers hand-loading, which the log never mentions.
+- **Robust stats only.** A pilot who went AFK at the kiosk is in that sample;
+  medians and trimming, not means.
+- **Seed it in-game before the data accrues**: three autoload buys at equal SCU
+  but deliberately different box counts pin the fixed overhead and confirm
+  whether boxes or SCU drive the wait.
+- Then a dwell model replaces the constant, behind an auto-load toggle on the
+  plan form. Because dwell feeds the solver *score*, this re-ranks routes —
+  fewer, fatter stops win once loading is priced honestly.

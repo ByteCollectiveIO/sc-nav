@@ -517,6 +517,14 @@ CREATE TABLE IF NOT EXISTS trade_transactions (
     scu           REAL,
     unit_price    REAL,                   -- per SCU
     total         REAL,
+    -- How the cargo moved. auto_load 1 = the kiosk loaded/unloaded the ship,
+    -- 0 = freight elevator / hand-load; box_size × box_count is the SCU
+    -- breakdown. Raw material for the loading-time model that turns dwell into
+    -- an honest aUEC/hour — captured from day one because it can't be
+    -- backfilled. NULL = an older watcher, or a patch that stopped saying.
+    auto_load     INTEGER,
+    box_size      REAL,                   -- SCU per box
+    box_count     INTEGER,                -- boxes moved
     run_id        INTEGER,                -- trade run that consumed it (confirm)
     leg           INTEGER,
     created       REAL
@@ -611,6 +619,11 @@ def init(db_path) -> None:
         _ensure_column("goals", "blueprint_inputs", "TEXT")
         # Demand-side stock reports: v0.38.0 created the table without `side`.
         _ensure_column("stock_reports", "side", "TEXT NOT NULL DEFAULT 'supply'")
+        # Cargo-handling fields on the transaction ledger (#41 follow-up): the
+        # first #41 build stored the money and not how the cargo moved.
+        _ensure_column("trade_transactions", "auto_load", "INTEGER")
+        _ensure_column("trade_transactions", "box_size", "REAL")
+        _ensure_column("trade_transactions", "box_count", "INTEGER")
         denorm_added = _ensure_column("listings", "sort_price", "REAL")
         denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("listings", "attributes", "TEXT")
@@ -2919,13 +2932,17 @@ def trade_txn_save(e: dict) -> tuple[int, bool]:
              e["total"])).fetchone()
         if row:
             return row["id"], False
+        auto = e.get("auto_load")
         cur = _conn.execute(
             "INSERT INTO trade_transactions (member_id,t,side,resource_guid,"
-            "commodity,shop_name,poi_id,scu,unit_price,total,created) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "commodity,shop_name,poi_id,scu,unit_price,total,auto_load,"
+            "box_size,box_count,created) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (e["member_id"], e["t"], e["side"], e["resource_guid"],
              e.get("commodity"), e["shop_name"], e.get("poi_id"), e.get("scu"),
-             e.get("unit_price"), e.get("total"), e["created"]))
+             e.get("unit_price"), e.get("total"),
+             None if auto is None else int(auto),
+             e.get("box_size"), e.get("box_count"), e["created"]))
         return cur.lastrowid, True
 
 

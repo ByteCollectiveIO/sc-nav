@@ -3275,14 +3275,43 @@ def _price_fresh(p, max_age_s, now, side=None) -> bool:
     return ts is not None and (now - ts) <= max_age_s
 
 
+# Commodity legality filter (#42). UEX flags contraband per commodity
+# (`is_illegal` — 18 of 204: WiDoW, SLAM, Altruciatoxin, Osoian Hides…), and
+# running it is a different game: better margins, but scans, CrimeStat and
+# monitored airspace. Some pilots want it out of every plan, some want nothing
+# else, so it's a three-way filter rather than a checkbox.
+#
+# A preference, not a physical constraint — so, like avoid_poi_ids and unlike
+# exclude_poi_ids (#34), it filters what you newly *buy* and never touches a
+# held-cargo sell leg. Switching to LEGAL mid-run must not strand the WiDoW
+# already in your hold with no buyer; you finish the run you started.
+TRADE_LEGALITY = ("any", "legal", "illicit")
+
+
+def legality_allows(name, mode, illicit) -> bool:
+    """Does this commodity pass the legality filter? `illicit` is a set of
+    lowered commodity names (the org's copy of UEX `is_illegal`).
+
+    Both degradations are deliberate: a name the feed doesn't list counts as
+    legal, so an unknown or newly-added commodity can never vanish from a
+    LEGAL-only plan; and with no flags loaded at all, ILLICIT-only matches
+    nothing rather than quietly returning the legal market."""
+    if mode not in ("legal", "illicit"):
+        return True
+    return (str(name or "").strip().lower() in illicit) == (mode == "illicit")
+
+
 def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       budget=None, max_age_s=None, now_ts=None,
+                      legality="any", illicit=frozenset(),
                       avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
                       avoid_buys=frozenset(), avoid_sells=frozenset(),
                       exclude_poi_ids=frozenset()) -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
-    name set) restricts to filtered mode; `system` keeps both ends in-system.
+    name set) restricts to filtered mode; `legality` + `illicit` filter
+    contraband in or out (#42, orthogonal to `commodities` — both apply);
+    `system` keeps both ends in-system.
     `budget` caps each load to what the player can afford; `max_age_s` drops price
     points older than that (stale-data opt-out). `avoid_poi_ids` drops any trade
     that buys or sells at a warned POI (a camped station); `avoid_pairs` (a set of
@@ -3304,6 +3333,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     for p in prices:
         name = p.get("commodity")
         if not name or (cset and name.strip().lower() not in cset):
+            continue
+        if not legality_allows(name, legality, illicit):
             continue
         if system and p.get("system") != system:
             continue
@@ -3638,6 +3669,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      start_pos=None, max_stops=6, commodities=None, system=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
+                     legality="any", illicit=None,
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
                      avoid_buys=None, avoid_sells=None, exclude_poi_ids=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -3645,7 +3677,9 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     maximize profit (sort='profit') or profit/hour (sort='per_hour', default) for a
     `usable_scu` hold, starting from a POI (`start_id`) or live position
     (`start_pos`), within a `max_stops` budget. `commodities` (name list) restricts
-    to filtered mode; `system` locks to intra-system trades. `budget` caps each
+    to filtered mode; `legality` ('any'|'legal'|'illicit') + `illicit` (lowered
+    contraband names) filter by legality (#42); `system` locks to intra-system
+    trades. `budget` caps each
     hold-fill to affordable aUEC; `deadhead_weight` > 1 trades profit for less
     empty-hold flight; `max_age_s` drops stale price points; `exclude_poi_ids`
     (#34) drops stops the ship can't physically use. Returns {summary, legs, start}
@@ -3669,6 +3703,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     cand_pairs = frozenset() if avoid_volumes else avoid_pairs
     cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
                               budget=budget, max_age_s=max_age_s, now_ts=now_ts,
+                              legality=legality, illicit=frozenset(illicit or ()),
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
                               avoid_sells=frozenset(avoid_sells or ()),
@@ -3809,7 +3844,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        start_pos=None, held=None, max_stops=6, commodities=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
-                       t_ref=None, avoid_poi_ids=None, avoid_pairs=None,
+                       t_ref=None, legality="any", illicit=None,
+                       avoid_poi_ids=None, avoid_pairs=None,
                        avoid_volumes=None, avoid_buys=None, avoid_sells=None,
                        exclude_poi_ids=None,
                        fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -3836,7 +3872,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             nav, prices, usable_scu, start_id=start_id, start_pos=start_pos,
             max_stops=max_stops, commodities=commodities, system=system, sort=sort,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
-            now_ts=now_ts, t_ref=t_ref, avoid_poi_ids=avoid_poi_ids,
+            now_ts=now_ts, t_ref=t_ref, legality=legality, illicit=illicit,
+            avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
             avoid_buys=avoid_buys, avoid_sells=avoid_sells,
             exclude_poi_ids=exclude_poi_ids,
@@ -3874,11 +3911,14 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
 
     # Chain further trades from the sell terminal with the freed (full) hold. The
     # held-cargo sell leg above is left unfiltered — a sunk load must be offloadable
-    # even if its only buyer sits in a warned zone — but the continuation avoids danger.
+    # even if its only buyer sits in a warned zone, and switching to LEGAL mid-run
+    # (#42) must not strand contraband already aboard — but the continuation
+    # honors both preferences.
     cand_pairs = frozenset() if avoid_volumes else avoid_pairs
     cands = _trade_candidates(prices, usable_scu, system=system,
                               commodities=commodities, budget=budget,
                               max_age_s=max_age_s, now_ts=now,
+                              legality=legality, illicit=frozenset(illicit or ()),
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
                               avoid_sells=frozenset(avoid_sells or ()),

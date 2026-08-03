@@ -16,6 +16,33 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 42. Trade planner: cargo legality filter 🔨 BUILT
+
+Tester ask: plan over the whole market, **legal goods only**, or **contraband
+only**. `legality` on `TradePlanIn`/`TradeReplanIn` (`any|legal|illicit`) reads
+UEX's `is_illegal` flag (18 of 204 commodities) through
+`nav_core.legality_allows` into `_trade_candidates`; every leg carrying
+contraband gets a ☠ badge in *all* modes, because an Any-mode plan is exactly
+where you want to spot the leg that draws a scan. Detail in
+[`trade-route-planner.md`](trade-route-planner.md).
+
+Two decisions worth keeping: legality is a **preference, not physics** — like
+`avoid_poi_ids` and unlike #34's stop exclusion, it filters what you newly buy
+and never touches a held-cargo sell leg, so switching to LEGAL mid-run can't
+strand contraband already aboard. And an unlisted commodity counts as **legal**
+(a new commodity must not vanish from a legal-only plan), while an empty flag
+set makes ILLICIT match **nothing** rather than silently returning the legal
+market.
+
+**⚠️ Depends on `wiki_pois_enabled`.** Contraband's *sellers* are lawless
+outposts (Rat's Nest, The Golden Riviera, Fallow Field), which reach the map
+only via the wiki locations catalog (#28) — with it off, every contraband buy
+terminal fails the crosswalk, the market looks sell-only, and ILLICIT can never
+plan. Verified locally: toggle off → 21/114 terminals resolve and zero
+contraband buys; toggle on → 114/114 and a real 2.35M run (Osoian Hides,
+Golden Riviera → Devlin Scrap & Salvage). An empty ILLICIT plan says so
+(`_explain_empty_illicit`) instead of blaming the filters.
+
 ### 41. Trade transaction capture — the log confirms the trade 🔨 BUILT, awaiting live test
 
 [`trade-transaction-capture.md`](trade-transaction-capture.md). Born from the
@@ -29,8 +56,12 @@ mappings and files rows into the #39 §6.1 `price_reports` ledger. Server +
 watcher + SPA + tests done on the Mac; **needs one live run on the Windows
 box** (tail → POST → nudge end-to-end). **The #39 slice-0 planner overlay
 followed immediately (v0.87.0)** — org prices now overlay the UEX feed with
-`⚡ org` badges. Still parked in the doc §4: auto-confirm, kiosk commodity
-boards, mission hauling.
+`⚡ org` badges. The same lines' **cargo-handling fields** (`autoLoading`,
+`boxSize`/`unitAmount`) are now captured into the ledger too (doc §6): nothing
+reads them yet, but they're the raw material for a real loading-time model to
+replace the flat `STOP_DWELL_S` in every aUEC/hour figure, and unlike price
+they can't be reconstructed after the run. Still parked in the doc §4:
+auto-confirm, kiosk commodity boards, mission hauling.
 
 ### 40.1 Watcher HUD interaction — click-through, focus, in-game target chooser 🔨 I1 BUILT
 
