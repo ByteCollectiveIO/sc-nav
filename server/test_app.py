@@ -5378,6 +5378,111 @@ class TradeStopFilterApiTests(unittest.TestCase):
         self.assertEqual(run["params"]["stops"], "dock")
 
 
+class TradeReturnApiTests(unittest.TestCase):
+    """Return on capital + the minimum-return floor (#43) end to end: the plan,
+    the board, manual-leg badging, and persistence onto the run."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Trader", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+
+        def pt(commodity, tid, poi, buy=None, sell=None):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 500 if buy else 0,
+                    "scu_sell_stock": 500 if sell else 0, "updated_at": None}
+
+        # Waste 10->30 = 200% return but small money; Gold 1000->1300 = 30%
+        # return but 10x the aUEC. The tension the feature exists to expose.
+        self._orig_pts = app.trade_price_points
+        app.trade_price_points = [
+            pt("Waste", 1, self.A, buy=10), pt("Waste", 2, self.B, sell=30),
+            pt("Gold", 3, self.A, buy=1000), pt("Gold", 4, self.B, sell=1300)]
+
+    def tearDown(self):
+        app.trade_price_points = self._orig_pts
+
+    def _plan(self, **kw):
+        body = {"usable_scu": 100, "start_id": self.A, "sort": "profit",
+                "system": "Stanton"}
+        body.update(kw)
+        return self.client.post("/api/trade/plan", json=body)
+
+    def test_plan_carries_leg_and_route_return(self):
+        r = self._plan(mode="filtered", commodities=["Gold"]).json()
+        self.assertEqual(r["legs"][0]["return_pct"], 30.0)
+        self.assertEqual(r["summary"]["return_pct"], 30.0)
+
+    def test_floor_drops_low_return_legs(self):
+        legs = self._plan(min_return_pct=50).json()["legs"]
+        self.assertEqual({l["commodity"] for l in legs}, {"Waste"})
+
+    def test_no_floor_by_default(self):
+        legs = self._plan().json()["legs"]
+        self.assertIn("Gold", {l["commodity"] for l in legs})
+
+    def test_zero_floor_is_not_a_filter(self):
+        # A blank input posts nothing, but 0 must not be read as "reject all".
+        legs = self._plan(min_return_pct=0).json()["legs"]
+        self.assertIn("Gold", {l["commodity"] for l in legs})
+
+    def test_negative_floor_rejected_by_validation(self):
+        self.assertEqual(self._plan(min_return_pct=-5).status_code, 422)
+
+    def test_manual_leg_under_the_floor_is_badged_not_dropped(self):
+        # Same contract as stops/legality: an explicit pick is never rewritten.
+        legs = self._plan(mode="manual", min_return_pct=50,
+                          legs=[{"commodity": "Gold", "buy_terminal_id": 3,
+                                 "sell_terminal_id": 4}]).json()["legs"]
+        self.assertEqual(len(legs), 1)
+        self.assertEqual(legs[0]["return_pct"], 30.0)
+        self.assertTrue(legs[0]["low_return"])
+
+    def test_manual_leg_above_the_floor_is_not_badged(self):
+        legs = self._plan(mode="manual", min_return_pct=50,
+                          legs=[{"commodity": "Waste", "buy_terminal_id": 1,
+                                 "sell_terminal_id": 2}]).json()["legs"]
+        self.assertNotIn("low_return", legs[0])
+
+    def test_board_honors_the_floor_and_reports_return(self):
+        rows = self.client.get(
+            "/api/trade/trades?system=Stanton&capacity_scu=100&sort=margin").json()
+        self.assertEqual({r["commodity"]: r["return_pct"] for r in rows},
+                         {"Gold": 30.0, "Waste": 200.0})
+        filtered = self.client.get(
+            "/api/trade/trades?system=Stanton&capacity_scu=100&sort=margin"
+            "&min_return_pct=50").json()
+        self.assertEqual([r["commodity"] for r in filtered], ["Waste"])
+
+    def test_floor_persists_onto_the_run_for_replan(self):
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 100, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "min_return_pct": 50})
+        self.assertEqual(r.status_code, 200)
+        run = db.get_active_trade_run("1")
+        self.assertEqual(run["params"]["min_return_pct"], 50)
+        self.assertEqual({l["commodity"] for l in run["legs"]}, {"Waste"})
+
+
 class TradeLegalityApiTests(unittest.TestCase):
     """Commodity legality filter (#42): plan over the whole market, legal goods
     only, or contraband only — plus the ☠ badge that marks illicit legs in every

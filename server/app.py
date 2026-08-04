@@ -3470,6 +3470,7 @@ async def list_trade_prices(commodity: str | None = None, terminal: int | None =
 async def list_trade_trades(
     commodity: str | None = None, system: str | None = None,
     capacity_scu: float | None = None, min_margin: int = 0,
+    min_return_pct: float | None = None,
     sort: str = "auto", limit: int = 50,
     budget: int | None = None, max_price_age_days: int | None = None,
 ):
@@ -3478,11 +3479,14 @@ async def list_trade_trades(
     `capacity_scu` (usually the member's ship's usable SCU) unlocks the throughput
     fields (max_scu, trade_profit, profit_per_hour) and the per-hour ranking.
     `budget` caps each load to affordable aUEC; `max_price_age_days` drops stale
-    price points so the board matches the planner's freshness filter."""
+    price points so the board matches the planner's freshness filter.
+    `min_margin` is an aUEC/SCU floor; `min_return_pct` (#43) is the percentage
+    floor on return of capital — different questions, both applied."""
     max_age_s = max_price_age_days * 86400 if max_price_age_days else None
     return nav_core.rank_trades(
         nav, trade_price_points, commodity=commodity, system=system,
         capacity_scu=capacity_scu, min_margin=max(0, min_margin),
+        min_return_pct=_norm_return_pct(min_return_pct),
         sort=sort, limit=max(1, min(limit, 200)),
         budget=(budget if budget and budget > 0 else None), max_age_s=max_age_s,
     )
@@ -3533,6 +3537,11 @@ class TradePlanIn(BaseModel):
     # `commodities` — a filtered-mode pick still gets legality applied on top.
     # Manual legs are badged, never dropped, like every other preference here.
     legality: str = "any"                               # any | legal | illicit
+    # Minimum return on capital (#43), percent: drop any trade whose
+    # profit/buy-cost is under this. A percentage floor, NOT the board's
+    # aUEC/SCU `min_margin` — a fat spread on a cheap commodity and a thin one
+    # on Quantanium are opposite trades by this measure. 0/None = no floor.
+    min_return_pct: float | None = Field(default=None, ge=0, le=10_000)
 
 
 class TradeRunPatchIn(BaseModel):
@@ -3591,6 +3600,7 @@ class TradeReplanIn(BaseModel):
     in_range_only: bool | None = None
     stops: str | None = None                            # any | stations | dock (#34)
     legality: str | None = None                         # any | legal | illicit (#42)
+    min_return_pct: float | None = Field(default=None, ge=0, le=10_000)   # #43
 
 
 class TradeFavoriteIn(BaseModel):
@@ -3614,6 +3624,17 @@ def _norm_stops(mode) -> str:
     """The stop-kind filter (#34), defaulting an unknown value to 'any'. An
     unrecognized restriction must never silently drop stops."""
     return mode if mode in nav_core.STOP_MODES else "any"
+
+
+def _norm_return_pct(pct):
+    """The #43 return-on-capital floor, or None for 'no floor'. A negative or
+    zero value is not a filter, and None must survive as None so a re-plan can
+    tell 'unset' from 'explicitly cleared'."""
+    try:
+        v = float(pct)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
 
 
 def _norm_legality(mode) -> str:
@@ -3753,6 +3774,20 @@ def _explain_empty_illicit(plan: dict) -> dict:
     sm["reason"] = ("no contraband is for sale on the map — its sellers are lawless "
                     "outposts, which need the wiki POI catalog enabled in ORG SETTINGS")
     plan["summary"] = sm
+    return plan
+
+
+def _annotate_leg_return(plan: dict, floor) -> dict:
+    """Badge any leg whose return on capital is under the player's floor (#43).
+    The solver drops those, so like `no_stop` this only ever fires on a *manual*
+    leg — the player's explicit pick, which gets told rather than rewritten.
+    Mutates + returns the plan."""
+    if not floor:
+        return plan
+    for lg in plan.get("legs") or ():
+        ret = lg.get("return_pct")
+        if ret is not None and ret < floor:
+            lg["low_return"] = True
     return plan
 
 
@@ -3928,6 +3963,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 start_id=body.start_id, start_pos=start_pos, max_stops=body.max_stops,
                 commodities=(body.commodities if body.mode == "filtered" else None),
                 legality=_norm_legality(body.legality), illicit=illicit_commodities,
+                min_return_pct=_norm_return_pct(body.min_return_pct),
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -3942,6 +3978,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     _annotate_leg_amenities(plan)
     _annotate_leg_stops(plan, exclude)
     _annotate_leg_legality(plan)
+    _annotate_leg_return(plan, _norm_return_pct(body.min_return_pct))
     if _norm_legality(body.legality) == "illicit":
         _explain_empty_illicit(plan)
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
@@ -4034,6 +4071,7 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "qd": body.qd, "in_range_only": body.in_range_only,                 # #27
             "stops": _norm_stops(body.stops),                                   # #34
             "legality": _norm_legality(body.legality),                          # #42
+            "min_return_pct": _norm_return_pct(body.min_return_pct),             # #43
         },
     }
 
@@ -4346,6 +4384,8 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         # its buyer either way (nav_core.replan_trade_route).
         legality = _norm_legality(body.legality if body.legality is not None
                                   else p.get("legality"))
+        min_ret = _norm_return_pct(body.min_return_pct if body.min_return_pct is not None
+                                   else p.get("min_return_pct"))
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
@@ -4362,6 +4402,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         nav, trade_price_points, usable_scu, start_pos=start_pos, held=held,
         max_stops=max_stops, commodities=commodities, system=system, sort=sort,
         budget=budget, legality=legality, illicit=illicit_commodities,
+        min_return_pct=min_ret,
         deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
         max_age_s=max_age_s, t_ref=t_ref,
         avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -4373,6 +4414,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
     _annotate_leg_stock(new_plan, stock_reports)
     _annotate_leg_amenities(new_plan)
     _annotate_leg_legality(new_plan)
+    _annotate_leg_return(new_plan, min_ret)
     _annotate_trade_legs(new_plan, warnings, mode, volumes, t_ref)
     new_legs = new_plan.get("legs") or []
     if not new_legs:
@@ -4398,6 +4440,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         p["avoid_mode"] = mode                       # persist the mode used
         p["stops"] = stops                           # #34
         p["legality"] = legality                     # #42
+        p["min_return_pct"] = min_ret                # #43
         run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)

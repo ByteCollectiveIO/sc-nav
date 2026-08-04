@@ -3115,6 +3115,23 @@ def _clamp_scu(capacity, supply, demand):
     return scu
 
 
+def trade_return_pct(buy_price, profit_per_scu):
+    """Return on capital for one buy->sell trade, as a percent: what the aUEC
+    you tie up earns you. profit / cost, NOT profit / revenue — capital is the
+    binding constraint in trading, so 'I turned 100k into 163k' is the number a
+    trader acts on (#43).
+
+    Deliberately computed from PRICES, not from the costed totals: both profit
+    and cost scale with SCU, so the ratio is identical at any load size. That
+    makes it well-defined before a hold size, a budget or a supply cap is known,
+    and immune to the zero-SCU edge. None when there's no capital at risk — a
+    held leg's cargo is already paid for, so its return isn't this leg's to
+    claim."""
+    if not buy_price or buy_price <= 0 or profit_per_scu is None:
+        return None
+    return round(100.0 * profit_per_scu / buy_price, 1)
+
+
 def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
     """A single buy->sell trade record (no travel yet) from a buy price point
     `src` and sell price point `dst`. Travel fields (distance/eta/via_gate) and
@@ -3132,6 +3149,7 @@ def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
         "sell_poi_id": dst.get("poi_id"), "sell_system": dst.get("system"),
         "buy_price": int(src["buy"]), "sell_price": int(dst["sell"]),
         "profit_per_scu": margin,
+        "return_pct": trade_return_pct(int(src["buy"]), margin),   # #43
         "supply_scu": src.get("scu_buy") or 0,
         "demand_scu": dst.get("scu_sell_stock") or 0,
         # Per-side stamps: an org-overlaid side (#39 slice 0) carries its own
@@ -3153,7 +3171,8 @@ def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
 
 
 def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
-                capacity_scu=None, min_margin=0, limit=50, sort="auto",
+                capacity_scu=None, min_margin=0, min_return_pct=None,
+                limit=50, sort="auto",
                 budget=None, max_age_s=None, now_ts=None, t_ref=None) -> list[dict]:
     """Best buy->sell trades over the live price feed, richest first.
 
@@ -3164,7 +3183,11 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
     price) at a positive margin, then cost the QT leg between the two POIs.
 
     Filters: `commodity` (one name), `system` (both ends in-system — no gate hop),
-    `min_margin` (aUEC/SCU floor). `capacity_scu` (usable SCU) enables the
+    `min_margin` (an aUEC/SCU floor — an absolute spread, NOT a percentage) and
+    `min_return_pct` (#43, the percentage floor: return on capital). The two
+    answer different questions and both apply: 500 aUEC/SCU on a cheap commodity
+    is a huge return on little capital, while the same spread on Quantanium is
+    noise. `capacity_scu` (usable SCU) enables the
     throughput fields (max_scu, trade_profit, buy_cost, profit_per_hour). `sort`:
       "margin"    — profit per SCU (needs no capacity or travel),
       "per_hour"  — trade_profit / leg time (needs capacity; travel-priced),
@@ -3204,6 +3227,10 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
                 margin = int(dst["sell"]) - int(src["buy"])
                 if margin <= 0 or margin < min_margin:
                     continue
+                if min_return_pct:                # #43 percentage floor
+                    ret = trade_return_pct(int(src["buy"]), margin)
+                    if ret is None or ret < min_return_pct:
+                        continue
                 cand.append((margin, name, src, dst))
     cand.sort(key=lambda c: -c[0])
 
@@ -3303,7 +3330,7 @@ def legality_allows(name, mode, illicit) -> bool:
 
 def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       budget=None, max_age_s=None, now_ts=None,
-                      legality="any", illicit=frozenset(),
+                      legality="any", illicit=frozenset(), min_return_pct=None,
                       avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
                       avoid_buys=frozenset(), avoid_sells=frozenset(),
                       exclude_poi_ids=frozenset()) -> list[dict]:
@@ -3311,7 +3338,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     total-profit first — the pool the greedy chain draws from. `commodities` (a
     name set) restricts to filtered mode; `legality` + `illicit` filter
     contraband in or out (#42, orthogonal to `commodities` — both apply);
-    `system` keeps both ends in-system.
+    `min_return_pct` drops trades whose return on capital is below the player's
+    floor (#43); `system` keeps both ends in-system.
     `budget` caps each load to what the player can afford; `max_age_s` drops price
     points older than that (stale-data opt-out). `avoid_poi_ids` drops any trade
     that buys or sells at a warned POI (a camped station); `avoid_pairs` (a set of
@@ -3366,6 +3394,10 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                 margin = int(dst["sell"]) - int(src["buy"])
                 if margin <= 0:
                     continue
+                if min_return_pct:              # #43 minimum return on capital
+                    ret = trade_return_pct(int(src["buy"]), margin)
+                    if ret is None or ret < min_return_pct:
+                        continue
                 row = _trade_row(name, src, dst, margin, capacity_scu, budget=budget)
                 if row["max_scu"]:            # need a movable quantity to be real
                     rows.append(row)
@@ -3536,6 +3568,10 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
         } | {
             "scu": row["max_scu"], "profit": row["trade_profit"], "buy_cost": row["buy_cost"],
             "held": held,
+            # Return on capital (#43). None on a held leg: its cargo is already
+            # paid for (buy_cost 0), so there is no capital at risk for this leg
+            # to be a return *on* — showing one next to "0 capital" would lie.
+            "return_pct": None if held else row.get("return_pct"),
             "to_buy": None if held else (_leg_view(approach, fuel_req, max_range_m) if approach else None),
             "haul": _leg_view(haul, fuel_req, max_range_m) if haul else None,
         })
@@ -3555,6 +3591,13 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
         "loaded_pct": int(round(100 * loaded_time / move)) if move > 0 else None,
         "oldest_updated_at": oldest_ts,
         "profit_per_hour": int(round(total_profit / hours)) if hours > 0 else None,
+        # Route return on capital (#43) is measured against PEAK capital, not the
+        # sum of the buys: trades are sequential, so the same aUEC is recycled
+        # leg after leg. What the trader has to front is the largest single
+        # hold-fill, and that's what the profit is a return *on*. Summing the
+        # buys would understate a good multi-leg route badly.
+        "return_pct": (round(100.0 * total_profit / peak_capital, 1)
+                       if peak_capital > 0 else None),
     }
     if fuel_req is not None:
         views = [lv for leg in legs for lv in (leg.get("to_buy"), leg.get("haul"))]
@@ -3669,7 +3712,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      start_pos=None, max_stops=6, commodities=None, system=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
-                     legality="any", illicit=None,
+                     legality="any", illicit=None, min_return_pct=None,
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
                      avoid_buys=None, avoid_sells=None, exclude_poi_ids=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -3704,6 +3747,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
                               budget=budget, max_age_s=max_age_s, now_ts=now_ts,
                               legality=legality, illicit=frozenset(illicit or ()),
+                              min_return_pct=min_return_pct,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
                               avoid_sells=frozenset(avoid_sells or ()),
@@ -3845,7 +3889,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, legality="any", illicit=None,
-                       avoid_poi_ids=None, avoid_pairs=None,
+                       min_return_pct=None, avoid_poi_ids=None, avoid_pairs=None,
                        avoid_volumes=None, avoid_buys=None, avoid_sells=None,
                        exclude_poi_ids=None,
                        fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -3873,7 +3917,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             max_stops=max_stops, commodities=commodities, system=system, sort=sort,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
             now_ts=now_ts, t_ref=t_ref, legality=legality, illicit=illicit,
-            avoid_poi_ids=avoid_poi_ids,
+            min_return_pct=min_return_pct, avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
             avoid_buys=avoid_buys, avoid_sells=avoid_sells,
             exclude_poi_ids=exclude_poi_ids,
@@ -3919,6 +3963,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               commodities=commodities, budget=budget,
                               max_age_s=max_age_s, now_ts=now,
                               legality=legality, illicit=frozenset(illicit or ()),
+                              min_return_pct=min_return_pct,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
                               avoid_sells=frozenset(avoid_sells or ()),
