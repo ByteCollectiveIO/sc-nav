@@ -1228,19 +1228,40 @@
      (see its rule near the top) rather than a bespoke chassis, so every flat-divider
      segmented control in the suite shares one radius, one `.on` active class, and one
      focus ring. Only `.trade-tabs` stays distinct — it's the higher-tier mode tablist. */
-  /* Advanced-options disclosure: keeps the resting HOW-TO-PLAN decision at
-     mode + optimize-for + Plan (≤4 choices) with sensible defaults tucked away.
-     Native <details> = keyboard/SR-operable for free; caret mirrors .rm-caret. */
-  .trade-tuning { margin-top: 12px; }
-  .trade-tuning > summary { display: inline-flex; align-items: center; gap: 7px; width: fit-content;
-    list-style: none; cursor: pointer; font-size: 12px; letter-spacing: .04em; color: var(--dim); padding: 3px 0; }
-  .trade-tuning > summary::-webkit-details-marker { display: none; }
-  .trade-tuning > summary::before { content: "▸"; font-size: 10px; color: var(--dim);
+  /* Route-rules disclosure: durable policy (budget, legality, danger, blacklist,
+     solver knobs) folded behind one native <details>, keeping the resting PLAN
+     decision at mode + optimize-for + Plan. The summary line doubles as a state
+     instrument via chips (see .rule-chip). Caret mirrors .rm-caret. */
+  .trade-rules { margin-top: 12px; }
+  .trade-rules > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px;
+    list-style: none; cursor: pointer; font-size: 12px; letter-spacing: .04em; color: var(--dim);
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2); }
+  .trade-rules > summary::-webkit-details-marker { display: none; }
+  .trade-rules > summary::before { content: "▸"; font-size: 10px; color: var(--dim);
     transition: transform .12s ease-out; }
-  .trade-tuning[open] > summary::before { transform: rotate(90deg); color: var(--accent); }
-  .trade-tuning > summary:hover { color: var(--text); }
-  .trade-tuning > summary:focus-visible { outline: none; color: var(--accent); box-shadow: none; }
-  @media (prefers-reduced-motion: reduce) { .trade-tuning > summary::before { transition: none; } }
+  .trade-rules[open] > summary::before { transform: rotate(90deg); color: var(--accent); }
+  .trade-rules > summary:hover { color: var(--text); }
+  .trade-rules > summary:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .trade-rules > summary::before { transition: none; } }
+  /* Summary state chips: dim = default policy, cyan = deliberate deviation, amber =
+     risk-raising deviation (ignoring danger, contraband-only, unbounded price age).
+     Non-interactive; the whole summary is the disclosure toggle. */
+  .rules-chips { display: contents; }
+  .rule-chip { border: 1px solid transparent; border-radius: 14px; padding: 0 8px;
+    font-size: 11px; color: var(--dim); white-space: nowrap; }
+  .rule-chip.dev { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+  .rule-chip.risk { border-color: var(--warn); color: var(--warn); background: var(--warn-wash); }
+  /* Aligned label column inside the opened disclosure; hint lines stay visible
+     (touch-reachable, and each seg points at its hint via aria-describedby). */
+  .rules-grid { display: grid; grid-template-columns: minmax(90px, max-content) 1fr;
+    gap: 12px; align-items: start; margin-top: 12px; }
+  .rules-grid .rg-label { font-size: 12px; color: var(--dim); padding-top: 5px; }
+  .rules-grid .rg-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
+  /* display:flex beats the UA [hidden] rule (the .on-invis[hidden] trap) — without
+     this, manual mode's hidden solver rows stay visible and shift grid placement. */
+  .rules-grid .rg-row[hidden] { display: none; }
+  .rules-grid .rg-span { grid-column: 1 / -1; }
+  .rule-hint { font-size: 11px; color: var(--dim); }
   /* Commodity filter chips. */
   .trade-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .trade-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
@@ -1292,8 +1313,10 @@
   .trade-leg-card .tl-move { font-size: 11px; color: var(--dim); margin-top: 3px; }
   .trade-leg-card .tl-move .gate { color: var(--warn); }
   /* Pirate danger board (#24): the danger toggle, a per-leg warning line, and the
-     route-level callout. Severity color matches the Danger Board's ramp. */
-  .trade-danger-row { align-items: center; }
+     route-level callout. Severity color matches the Danger Board's ramp.
+     .rule-row = a labeled seg row (shared by the cargo planner's danger row and
+     the trade SHIP panel's stop-kind row). */
+  .rule-row { align-items: center; }
   .trade-danger-link { color: var(--accent); }
   .trade-leg-card.danger { background: var(--bad-wash); }
   .trade-leg-card .tl-danger { font-size: 12px; font-weight: 600; color: var(--warn); margin: 4px 0; }
@@ -3419,15 +3442,16 @@
           title="For a contract that gives a commodity total across several pickup spots without saying how much is at each — enter the total once, then list every pickup.">+ add multi-pickup delivery</button>
       </div>
       <div id="route-rewards" hidden></div>
-      <div class="route-row trade-danger-row" style="margin-top:12px;">
+      <div class="route-row rule-row" style="margin-top:12px;">
         <span class="muted" style="font-size:12px;">Pirate danger
           <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
-        <span class="seg" id="route-avoid" role="group" aria-label="Pirate danger handling">
+        <span class="seg" id="route-avoid" role="group" aria-label="Pirate danger handling"
+              aria-describedby="route-avoid-hint">
           <button data-avoid="ignore" type="button" aria-pressed="false">Ignore</button>
           <button data-avoid="warn" type="button" aria-pressed="false">Warn</button>
           <button class="on" data-avoid="avoid" type="button" aria-pressed="true">Avoid</button>
         </span>
-        <span class="muted trade-danger-hint" id="route-avoid-hint" style="font-size:11px;"></span>
+        <span class="muted rule-hint" id="route-avoid-hint"></span>
       </div>
       <div class="avoid-blk" id="route-avoid-blk"></div>
       <div class="route-actions">
@@ -3469,7 +3493,7 @@
     <div id="trade-favorites" class="panel" hidden></div>
 
     <div class="panel">
-      <h2>SHIP</h2>
+      <h2>SHIP &amp; LOADOUT</h2>
       <div class="route-row">
         <span class="poi-pick" style="flex:2; min-width:160px;">
           <input id="trade-ship" class="ti"
@@ -3477,15 +3501,6 @@
         </span>
         <label class="muted" style="font-size:12px;">usable SCU
           <input id="trade-scu" class="ti" type="number" min="0" step="1" style="width:90px;">
-        </label>
-        <label class="muted" style="font-size:12px;">max spend (aUEC)
-          <input id="trade-budget" class="ti" type="number" min="0" step="1000"
-                 placeholder="unlimited" style="width:120px;">
-        </label>
-        <label class="muted" style="font-size:12px;"
-               title="Drop trades that return less than this on the aUEC you tie up. Profit ÷ buy cost — buy at 100, sell at 163, that's 63%.">min return
-          <input id="trade-minreturn" class="ti" type="number" min="0" step="5"
-                 placeholder="any" style="width:80px;">%
         </label>
         <span id="trade-ship-msg" class="muted" style="font-size:12px;"></span>
       </div>
@@ -3499,8 +3514,22 @@
         </label>
         <span id="trade-range" class="range-readout"></span>
       </div>
-      <p class="muted route-hint">Bigger holds move more per leg. Set what actually fits,
-        and cap <b>max spend</b> to the aUEC you have to trade with.</p>
+      <!-- Stop kind is a SHIP fact, not a route preference: the catalog knows a Hull-C
+           has no landing gear, and tradeStopsForShip auto-sets this the moment the ship
+           is known (a nudge, not a lock — any explicit pick overrides it). -->
+      <div class="route-row rule-row">
+        <span class="muted" style="font-size:12px;">Can stop at</span>
+        <span class="seg" id="trade-stopkind" role="group" aria-label="Which stops the ship can use"
+              aria-describedby="trade-stopkind-hint">
+          <button class="on" data-stops="any" type="button" aria-pressed="true">Any</button>
+          <button data-stops="no_outposts" type="button" aria-pressed="false">Stations &amp; cities</button>
+          <button data-stops="stations" type="button" aria-pressed="false">Stations only</button>
+          <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
+        </span>
+        <span class="muted rule-hint" id="trade-stopkind-hint"></span>
+      </div>
+      <p class="muted route-hint">Bigger holds move more per leg — set what actually fits.
+        Picking a ship also sets where it can stop; pick another option to override.</p>
     </div>
 
     <div class="panel">
@@ -3518,7 +3547,7 @@
     </div>
 
     <div class="panel">
-      <h2>HOW TO PLAN</h2>
+      <h2>PLAN</h2>
       <div class="trade-tabs" id="trade-mode-tabs" role="tablist" aria-label="How to plan the run">
         <button class="trade-tab active" id="trade-tab-auto" data-mode="auto" role="tab" type="button" aria-selected="true" aria-controls="trade-mode-panel">Auto</button>
         <button class="trade-tab" id="trade-tab-filtered" data-mode="filtered" role="tab" type="button" aria-selected="false" tabindex="-1" aria-controls="trade-mode-panel">Pick commodities</button>
@@ -3529,35 +3558,23 @@
            to the active tab, the correct pattern when tabs reconfigure a shared region. -->
       <div id="trade-mode-panel" role="tabpanel" aria-labelledby="trade-tab-auto">
       <div id="trade-solver-opts">
+        <!-- The intent row (#43/#44): the sort and its floor answer the same trader
+             question from opposite ends, so they live on one row. -->
         <div class="route-row" style="margin-top:12px; align-items:center;">
-          <span class="muted" style="font-size:12px;">optimize for</span>
+          <span class="muted" style="font-size:12px;">Optimize for</span>
           <span class="seg" id="trade-sort" role="group" aria-label="Optimize for">
             <button class="on" data-sort="per_hour" type="button" aria-pressed="true">Best aUEC/hr</button>
             <button data-sort="profit" type="button" aria-pressed="false">Most profit</button>
             <button data-sort="return" type="button" aria-pressed="false"
                     title="Ranks by profit per aUEC invested. Favours cheap cargo with a big multiple, which can mean a great percentage on very little money — watch TOTAL PROFIT alongside it.">Best return</button>
           </span>
+          <label class="muted" style="font-size:12px;">min return
+            <input id="trade-minreturn" class="ti" type="number" min="0" step="5"
+                   placeholder="any" style="width:80px;"> %
+          </label>
         </div>
-        <details class="trade-tuning">
-          <summary>Tuning — stops, system, price freshness</summary>
-          <div class="route-row" style="margin-top:12px;">
-            <label class="muted" style="font-size:12px;">max stops
-              <input id="trade-stops" class="ti" type="number" min="2" max="12" step="1" value="6"
-                     style="width:70px;">
-            </label>
-            <label class="muted" style="font-size:12px;">system
-              <select id="trade-system" class="sel"></select>
-            </label>
-          </div>
-          <div class="route-row trade-pref-row" style="margin-top:10px;">
-            <label class="trade-pref" title="Weigh empty-hold repositioning more heavily so the plan keeps you loaded, even if it gives up some profit.">
-              <input id="trade-deadhead" type="checkbox"> minimize empty-hold flight</label>
-            <label class="trade-pref" title="UEX prices are community-scraped and can lag. Skip any terminal whose price hasn't been updated within this many days. On by default at 2 days so stale terminals stay out of the plan and the best-trades board.">
-              <input id="trade-fresh-on" type="checkbox" checked> only prices newer than
-              <input id="trade-fresh-days" class="ti" type="number" min="1" max="365" step="1"
-                     value="2" style="width:56px;"> days</label>
-          </div>
-        </details>
+        <p class="muted route-hint">Min return skips trades that earn less than this % on the
+          aUEC you tie up: buy at 100, sell at 163 is a 63% return.</p>
         <div id="trade-filter-row" class="route-row" hidden style="margin-top:10px;">
           <span class="poi-pick" style="flex:1; min-width:180px;">
             <input id="trade-commodity-add" class="ti" list="trade-commodities"
@@ -3576,38 +3593,68 @@
       </div>
       </div><!-- /trade-mode-panel -->
 
-      <div class="route-row trade-danger-row" style="margin-top:12px;">
-        <span class="muted" style="font-size:12px;">Stops</span>
-        <span class="seg" id="trade-stopkind" role="group" aria-label="Which stops the ship can use">
-          <button class="on" data-stops="any" type="button" aria-pressed="true">Any</button>
-          <button data-stops="no_outposts" type="button" aria-pressed="false">Stations &amp; cities</button>
-          <button data-stops="stations" type="button" aria-pressed="false">Stations only</button>
-          <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
-        </span>
-        <span class="muted trade-danger-hint" id="trade-stopkind-hint" style="font-size:11px;"></span>
-      </div>
+      <!-- Route rules (#34/#42/#43 regroup): durable policy in one disclosure. The
+           summary chips are the "what's non-default" instrument — dim = default,
+           cyan = deviation, amber = risk-raising deviation (renderTradeRuleChips). -->
+      <details class="trade-rules" id="trade-rules">
+        <summary>Route rules <span id="trade-rules-chips" class="rules-chips"></span></summary>
+        <div class="rules-grid">
+          <span class="rg-label">Max spend</span>
+          <div class="rg-row">
+            <label class="muted" style="font-size:12px;">
+              <input id="trade-budget" class="ti" type="number" min="0" step="1000"
+                     placeholder="unlimited" style="width:120px;"> aUEC
+            </label>
+            <span class="muted rule-hint">caps the capital tied up in any single hold-fill</span>
+          </div>
 
-      <div class="route-row trade-danger-row" style="margin-top:12px;">
-        <span class="muted" style="font-size:12px;">Cargo</span>
-        <span class="seg" id="trade-legality" role="group" aria-label="Which cargo the route may carry">
-          <button class="on" data-legality="any" type="button" aria-pressed="true">Any</button>
-          <button data-legality="legal" type="button" aria-pressed="false">Legal only</button>
-          <button data-legality="illicit" type="button" aria-pressed="false">Illicit only</button>
-        </span>
-        <span class="muted trade-danger-hint" id="trade-legality-hint" style="font-size:11px;"></span>
-      </div>
+          <span class="rg-label">Cargo legality</span>
+          <div class="rg-row">
+            <span class="seg" id="trade-legality" role="group" aria-label="Which cargo the route may carry"
+                  aria-describedby="trade-legality-hint">
+              <button class="on" data-legality="any" type="button" aria-pressed="true">Any</button>
+              <button data-legality="legal" type="button" aria-pressed="false">Legal only</button>
+              <button data-legality="illicit" type="button" aria-pressed="false">Illicit only</button>
+            </span>
+            <span class="muted rule-hint" id="trade-legality-hint"></span>
+          </div>
 
-      <div class="route-row trade-danger-row" style="margin-top:12px;">
-        <span class="muted" style="font-size:12px;">Pirate danger
-          <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
-        <span class="seg" id="trade-avoid" role="group" aria-label="Pirate danger handling">
-          <button data-avoid="ignore" type="button" aria-pressed="false">Ignore</button>
-          <button data-avoid="warn" type="button" aria-pressed="false">Warn</button>
-          <button class="on" data-avoid="avoid" type="button" aria-pressed="true">Avoid</button>
-        </span>
-        <span class="muted trade-danger-hint" id="trade-avoid-hint" style="font-size:11px;"></span>
-      </div>
-      <div class="avoid-blk" id="trade-avoid-blk"></div>
+          <span class="rg-label">Danger
+            <a href="#/pirates" class="trade-danger-link" title="Open the Danger Board">board ↗</a></span>
+          <div class="rg-row">
+            <span class="seg" id="trade-avoid" role="group" aria-label="Pirate danger handling"
+                  aria-describedby="trade-avoid-hint">
+              <button data-avoid="ignore" type="button" aria-pressed="false">Ignore</button>
+              <button data-avoid="warn" type="button" aria-pressed="false">Warn</button>
+              <button class="on" data-avoid="avoid" type="button" aria-pressed="true">Avoid</button>
+            </span>
+            <span class="muted rule-hint" id="trade-avoid-hint"></span>
+          </div>
+
+          <div class="rg-span avoid-blk" id="trade-avoid-blk"></div>
+
+          <span class="rg-label rules-solver">Search</span>
+          <div class="rg-row rules-solver">
+            <label class="muted" style="font-size:12px;">max stops
+              <input id="trade-stops" class="ti" type="number" min="2" max="12" step="1" value="6"
+                     style="width:70px;">
+            </label>
+            <label class="muted" style="font-size:12px;">system
+              <select id="trade-system" class="sel"></select>
+            </label>
+            <label class="trade-pref" title="Weigh empty-hold repositioning more heavily so the plan keeps you loaded, even if it gives up some profit.">
+              <input id="trade-deadhead" type="checkbox"> minimize empty-hold flight</label>
+          </div>
+
+          <span class="rg-label rules-solver">Prices</span>
+          <div class="rg-row rules-solver">
+            <label class="trade-pref" title="UEX prices are community-scraped and can lag. Skip any terminal whose price hasn't been updated within this many days. On by default at 2 days so stale terminals stay out of the plan and the best-trades board.">
+              <input id="trade-fresh-on" type="checkbox" checked> only prices newer than
+              <input id="trade-fresh-days" class="ti" type="number" min="1" max="365" step="1"
+                     value="2" style="width:56px;"> days</label>
+          </div>
+        </div>
+      </details>
 
       <datalist id="trade-commodities"></datalist>
       <div class="route-actions">
@@ -8296,6 +8343,7 @@ function setTradeAvoid(mode) {
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
   }
   const hint = $("trade-avoid-hint"); if (hint) hint.textContent = TRADE_AVOID_HINT[tradeAvoid];
+  renderTradeRuleChips();
 }
 // Stop kinds (#34): which places the ship can actually trade at. "stations" skips
 // planet/moon surface landings (a chore in a big hauler); "dock" keeps only stations
@@ -8336,6 +8384,7 @@ function setTradeLegality(mode) {
   }
   const hint = $("trade-legality-hint");
   if (hint) hint.textContent = TRADE_LEGALITY_HINT[tradeLegality];
+  renderTradeRuleChips();
 }
 // A ship that loads only through a station cargo dock (server sets `dock` on the
 // /api/ships row) can't use a planetary stop at all, so pick the honest default the
@@ -8343,8 +8392,15 @@ function setTradeLegality(mode) {
 function tradeStopsForShip() {
   const cat = tradeShipsByName[$("trade-ship").value.trim().toLowerCase()];
   if (cat && cat.dock && tradeStops !== "dock") {
-    setTradeStops("dock", `${cat.name} can't land planetside — cargo-dock stations only.`);
+    setTradeStops("dock", `${cat.name} can't land planetside — auto-set to Cargo dock; pick another to override.`);
   }
+}
+// The override acknowledgment half of the auto-lock: when an explicit pick departs
+// from what the ship demands, say so instead of silently swapping the hint.
+function noteTradeStopsOverride() {
+  const cat = tradeShipsByName[$("trade-ship").value.trim().toLowerCase()];
+  if (cat && cat.dock && tradeStops !== "dock")
+    $("trade-stopkind-hint").textContent = `Overridden — ${cat.name} normally needs a cargo dock.`;
 }
 // Single source of truth for the optimize-for seg (used by the click wiring and by
 // applyTradeConfig) so the visual, the state, and aria-pressed never drift apart.
@@ -8354,6 +8410,39 @@ function setTradeSort(sort) {
     const on = x.dataset.sort === tradeSort;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
   }
+}
+// Route-rules summary chips: the one-glance "what's non-default" readout on the
+// closed disclosure. Dim = default policy; cyan (.dev) = a deliberate deviation;
+// amber (.risk) = a deviation that raises risk (ignoring danger, contraband-only,
+// unbounded price age). Solver-only chips drop out in manual mode, where those
+// knobs don't apply. Fed by every rules setter + input so it can't go stale.
+let tradeDefaultSystem = "";             // busiest system — populateTradeSystems' pick
+function renderTradeRuleChips() {
+  const box = $("trade-rules-chips"); if (!box) return;
+  const chips = [];
+  const chip = (txt, cls) =>
+    chips.push(`<span class="rule-chip${cls ? " " + cls : ""}">${esc(txt)}</span>`);
+  if (tradeLegality === "legal") chip("legal only", "dev");
+  else if (tradeLegality === "illicit") chip("illicit only", "risk");
+  else chip("any cargo");
+  if (tradeAvoid === "ignore") chip("ignoring danger", "risk");
+  else if (tradeAvoid === "warn") chip("warn only", "dev");
+  else chip("avoiding danger");
+  const budget = Number($("trade-budget").value);
+  if (budget > 0) chip("spend ≤ " + budget.toLocaleString(), "dev");
+  const avoided = avoidPoiIds().length;
+  if (avoided) chip(avoided + " avoided place" + (avoided === 1 ? "" : "s"), "dev");
+  if (tradeMode !== "manual") {
+    if ($("trade-fresh-on").checked) {
+      const d = tradeStaleDays();
+      chip("prices ≤ " + d + "d", d === 2 ? "" : "dev");
+    } else chip("any price age", "risk");
+    const sys = $("trade-system").value;
+    const stops = Number($("trade-stops").value) || 6;
+    chip((sys || "any system") + " · " + stops + " stops",
+         (stops !== 6 || sys !== tradeDefaultSystem) ? "dev" : "");
+  }
+  box.innerHTML = chips.join("");
 }
 let tradeFilter = [];                    // commodity names (filtered mode)
 let tradeStartHere = false;              // start from the caller's live position
@@ -8404,6 +8493,8 @@ function populateTradeSystems() {
   sel.innerHTML = `<option value="">Any system</option>`
     + systems.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
   if (systems.length) sel.value = systems[0];
+  tradeDefaultSystem = sel.value;   // the chip's baseline for "deviation"
+  renderTradeRuleChips();
 }
 
 function renderTradeIntro() {
@@ -8749,12 +8840,18 @@ function applyTradeConfig(cfg) {
     if (freshOn) $("trade-fresh-days").value = cfg.max_price_age_days;
     tradeFilter = (cfg.mode === "filtered" && Array.isArray(cfg.commodities)) ? cfg.commodities.slice() : [];
     renderTradeChips();
-    // Surface loaded tuning if it departs from defaults (stops 6 / no system lock /
-    // no deadhead / fresh-at-2d) so a favorite's custom settings aren't hidden.
-    const tuning = document.querySelector(".trade-tuning");
-    if (tuning) tuning.open = (cfg.max_stops && cfg.max_stops !== 6) || !!cfg.system
-      || !!cfg.minimize_deadhead || !freshOn || (freshOn && cfg.max_price_age_days !== 2);
   }
+  // Surface the Route rules disclosure when the loaded config departs from defaults
+  // so a favorite's custom policy isn't hidden behind a closed summary. The chips
+  // re-render regardless — they're the closed-state readout of the same state.
+  const rules = $("trade-rules");
+  if (rules) rules.open = !!cfg.budget
+    || (cfg.legality && cfg.legality !== "any")
+    || (cfg.avoid_mode && cfg.avoid_mode !== "avoid")
+    || (cfg.mode !== "manual" && ((cfg.max_stops && cfg.max_stops !== 6)
+        || (cfg.system && cfg.system !== tradeDefaultSystem)
+        || !!cfg.minimize_deadhead || cfg.max_price_age_days !== 2));
+  renderTradeRuleChips();
   if (cfg.mode === "manual") {
     $("trade-legs").innerHTML = "";
     for (const l of (cfg.legs || [])) {
@@ -8788,26 +8885,31 @@ function wireTradePlanner() {
     b.onclick = () => setTradeAvoid(b.dataset.avoid);
   setTradeAvoid(tradeAvoid);
   for (const b of $("trade-stopkind").querySelectorAll("button"))
-    b.onclick = () => setTradeStops(b.dataset.stops);   // an explicit pick clears the ship hint
+    // An explicit pick replaces the ship hint — with an acknowledgment, not silence,
+    // when it departs from what a dock-only hull demands.
+    b.onclick = () => { setTradeStops(b.dataset.stops); noteTradeStopsOverride(); };
   setTradeStops(tradeStops);
   for (const b of $("trade-legality").querySelectorAll("button"))
     b.onclick = () => setTradeLegality(b.dataset.legality);
   setTradeLegality(tradeLegality);
   // Shared avoided-locations blacklist (#24 v2): re-plan on edit if a plan is showing.
-  mountAvoidBlacklist($("trade-avoid-blk"), () => { if (tradeLastInput) planTrade(); });
+  mountAvoidBlacklist($("trade-avoid-blk"), () => {
+    renderTradeRuleChips(); if (tradeLastInput) planTrade(); });
   attachTradeShipPicker();
   // Re-rank the "best trades" board whenever the ship (SCU) or system changes so
   // it reflects the same profit/hour objective the Auto planner optimizes — a bare
   // SCU edit shouldn't leave a stale margin-only board (see renderTradeSuggest).
   $("trade-scu").addEventListener("input", renderTradeSuggest);
-  $("trade-system").addEventListener("change", renderTradeSuggest);
-  $("trade-budget").addEventListener("input", renderTradeSuggest);
+  $("trade-system").addEventListener("change", () => { renderTradeSuggest(); renderTradeRuleChips(); });
+  $("trade-stops").addEventListener("input", renderTradeRuleChips);
+  $("trade-budget").addEventListener("input", () => { renderTradeSuggest(); renderTradeRuleChips(); });
   $("trade-minreturn").addEventListener("input", renderTradeSuggest);   // #43
   // Freshness: the day count only matters while the filter is on; keep the board
   // in sync with the same freshness the planner will apply.
   $("trade-fresh-on").addEventListener("change", () => {
-    $("trade-fresh-days").disabled = !$("trade-fresh-on").checked; renderTradeSuggest(); });
-  $("trade-fresh-days").addEventListener("input", renderTradeSuggest);
+    $("trade-fresh-days").disabled = !$("trade-fresh-on").checked;
+    renderTradeSuggest(); renderTradeRuleChips(); });
+  $("trade-fresh-days").addEventListener("input", () => { renderTradeSuggest(); renderTradeRuleChips(); });
   attachPoiPicker($("trade-start-poi").parentElement, () => cancelTradeHere());
   $("trade-here").onclick = toggleTradeHere;
   $("trade-commodity-btn").onclick = addTradeCommodity;
@@ -8885,6 +8987,10 @@ function setTradeMode(mode) {
   $("trade-solver-opts").hidden = mode === "manual";
   $("trade-filter-row").hidden = mode !== "filtered";
   $("trade-manual").hidden = mode !== "manual";
+  // Solver-only rules (max stops / system / deadhead / freshness) don't apply to
+  // hand-built legs; all-mode policy (budget, legality, danger, blacklist) stays.
+  for (const r of document.querySelectorAll("#trade-rules .rules-solver")) r.hidden = mode === "manual";
+  renderTradeRuleChips();
   if (mode === "manual" && !$("trade-legs").children.length) addTradeLegRow();
 }
 
