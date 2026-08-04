@@ -2833,6 +2833,63 @@ class TradeReturnTests(unittest.TestCase):
         self.assertEqual([r["commodity"] for r in rows], ["Gold", "Waste"])
 
 
+class TradeSortOrderingTests(unittest.TestCase):
+    """Cross-sort ordering guarantee (#45, user-reported live inversion: the
+    per-hour sort returned 389k/hr while the profit sort's route ran 489k/hr).
+    Each sort must meet or beat the other sorts ON ITS OWN METRIC. _solve_route
+    makes this structural by pooling chains built under every leg-scoring
+    heuristic and ranking the superset by the requested objective — so the
+    guarantee holds on any data, not just where one greedy happens to
+    converge."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:4]
+        cls.A, cls.B, cls.C, cls.D = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": 500 if buy else 0,
+                "scu_sell_stock": 500 if sell else 0, "updated_at": None}
+
+    def _prices(self):
+        # A spread of shapes so the per-mode greedies genuinely diverge: a fat
+        # ratio on pocket change, a rich slow hauler, and two middling chains.
+        return [self._pt("Waste", 1, self.A, buy=10),
+                self._pt("Waste", 2, self.B, sell=30),
+                self._pt("Gold", 3, self.A, buy=1000),
+                self._pt("Gold", 4, self.D, sell=1400),
+                self._pt("Meds", 5, self.B, buy=200),
+                self._pt("Meds", 6, self.C, sell=290),
+                self._pt("Scrap", 7, self.C, buy=40),
+                self._pt("Scrap", 8, self.D, sell=70)]
+
+    def _plans(self, budget=None):
+        return {sort: nav_core.plan_trade_route(
+                    NAV, self._prices(), 100, start_id=self.A, max_stops=8,
+                    sort=sort, budget=budget)["summary"]
+                for sort in ("per_hour", "profit", "return")}
+
+    def test_each_sort_wins_its_own_metric(self):
+        for budget in (None, 100_000):
+            sms = self._plans(budget)
+            ph = {k: (v.get("profit_per_hour") or 0) for k, v in sms.items()}
+            pf = {k: v["total_profit"] for k, v in sms.items()}
+            self.assertGreaterEqual(ph["per_hour"], max(ph.values()), budget)
+            self.assertGreaterEqual(pf["profit"], max(pf.values()), budget)
+
+    def test_return_sort_wins_its_own_metric(self):
+        # No bankroll: the deployed-capital ratio. With one: the bankroll
+        # multiple (which every summary carries once a budget is passed).
+        sms = self._plans()
+        rp = {k: (v.get("return_pct") or 0) for k, v in sms.items()}
+        self.assertGreaterEqual(rp["return"], max(rp.values()))
+        sms = self._plans(100_000)
+        rb = {k: (v.get("return_on_budget_pct") or 0) for k, v in sms.items()}
+        self.assertGreaterEqual(rb["return"], max(rb.values()))
+
+
 class TradeLegalityTests(unittest.TestCase):
     """nav_core commodity legality filter (#42): plan over the whole market,
     legal goods only, or contraband only. Same three-POI fixture as the solver

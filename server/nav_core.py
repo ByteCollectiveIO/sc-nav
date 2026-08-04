@@ -3754,25 +3754,38 @@ def _route_score(summary, optimize, deadhead_weight, budget=None) -> float:
 
 def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
                  *, avoid=None, memo=None, max_leg_m=None, budget=None) -> list[dict]:
-    """Multi-start greedy over the candidate pool: an unforced chain plus one
-    forced from each of the top seeds, keeping the best-scoring complete route.
+    """Multi-start greedy over the candidate pool, keeping the best route BY THE
+    REQUESTED OBJECTIVE from chains built under EVERY leg-scoring heuristic —
+    not just the requested one. Greedy chains diverge per scoring mode, and on
+    live data a chain built chasing raw profit can turn out to be the best
+    route per HOUR; before this pooling, the per-hour pool simply never
+    contained it (user-reported live inversion: per_hour 389k/hr while the
+    profit sort's route ran 489k/hr). Ranking a pooled superset makes the
+    ordering guarantee structural: Best aUEC/hr meets or beats the other
+    sorts on aUEC/hr, Most profit on profit, Best return on return — because
+    each mode's selection considers every chain the others would have built.
     Returns the chosen trade rows (empty if nothing chains). `avoid`/`memo`
     thread snare-detour costing into every leg cost; `max_leg_m` enforces the
     in-range-only cap (#27); `budget` re-denominates return mode (#44 fix)."""
     if not cands or max_legs < 1:
         return []
-    routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
-                            deadhead_weight=deadhead_weight, avoid=avoid, memo=memo,
-                            max_leg_m=max_leg_m, budget=budget)]
-    for seed in cands[:_TRADE_RESTARTS]:
-        routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
-                                    first=seed, deadhead_weight=deadhead_weight,
-                                    avoid=avoid, memo=memo, max_leg_m=max_leg_m,
-                                    budget=budget))
+    routes, seen = [], set()
+    def add(chain):
+        sig = tuple((r["commodity"], r["buy_poi_id"], r["sell_poi_id"]) for r in chain)
+        if chain and sig not in seen:
+            seen.add(sig)
+            routes.append(chain)
+    for builder in ("per_hour", "profit", "return"):
+        add(_greedy_route(nav, cands, start, max_legs, builder, t_ref,
+                          deadhead_weight=deadhead_weight, avoid=avoid, memo=memo,
+                          max_leg_m=max_leg_m, budget=budget))
+        for seed in cands[:_TRADE_RESTARTS]:
+            add(_greedy_route(nav, cands, start, max_legs, builder, t_ref,
+                              first=seed, deadhead_weight=deadhead_weight,
+                              avoid=avoid, memo=memo, max_leg_m=max_leg_m,
+                              budget=budget))
     best, best_score = [], -1.0
     for chosen in routes:
-        if not chosen:
-            continue
         score = _route_score(_cost_route(nav, chosen, start, t_ref,
                                          avoid=avoid, memo=memo)["summary"],
                              optimize, deadhead_weight, budget=budget)
