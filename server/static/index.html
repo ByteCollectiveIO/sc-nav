@@ -1262,6 +1262,9 @@
   .rules-grid .rg-row[hidden] { display: none; }
   .rules-grid .rg-span { grid-column: 1 / -1; }
   .rule-hint { font-size: 11px; color: var(--dim); }
+  /* Best-return-without-a-bankroll nudge (#44 fix): amber because the ranking is
+     misleading in that state, not merely non-default. */
+  .trade-sort-note { color: var(--warn); }
   /* Commodity filter chips. */
   .trade-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .trade-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
@@ -3566,7 +3569,7 @@
             <button class="on" data-sort="per_hour" type="button" aria-pressed="true">Best aUEC/hr</button>
             <button data-sort="profit" type="button" aria-pressed="false">Most profit</button>
             <button data-sort="return" type="button" aria-pressed="false"
-                    title="Ranks by profit per aUEC invested. Favours cheap cargo with a big multiple, which can mean a great percentage on very little money — watch TOTAL PROFIT alongside it.">Best return</button>
+                    title="With a max spend set, ranks routes by the multiple on that bankroll (profit ÷ max spend). Without one it ranks profit per aUEC deployed, which favours cheap cargo with a big multiple on very little money.">Best return</button>
           </span>
           <label class="muted" style="font-size:12px;">min return
             <input id="trade-minreturn" class="ti" type="number" min="0" step="5"
@@ -3574,7 +3577,8 @@
           </label>
         </div>
         <p class="muted route-hint">Min return skips trades that earn less than this % on the
-          aUEC you tie up: buy at 100, sell at 163 is a 63% return.</p>
+          aUEC you tie up: buy at 100, sell at 163 is a 63% return.
+          <span id="trade-sort-note" class="trade-sort-note"></span></p>
         <div id="trade-filter-row" class="route-row" hidden style="margin-top:10px;">
           <span class="poi-pick" style="flex:1; min-width:180px;">
             <input id="trade-commodity-add" class="ti" list="trade-commodities"
@@ -8410,6 +8414,17 @@ function setTradeSort(sort) {
     const on = x.dataset.sort === tradeSort;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
   }
+  syncTradeSortNote();
+}
+// Best return is only meaningful against a bankroll (#44 fix): without a max
+// spend the solver falls back to profit-per-aUEC-deployed, which favours a fat
+// multiple on pocket change. Say so instead of letting the ranking mislead.
+function syncTradeSortNote() {
+  const note = $("trade-sort-note"); if (!note) return;
+  const bankroll = Number($("trade-budget").value) > 0;
+  note.textContent = (tradeSort === "return" && !bankroll)
+    ? " Best return ranks the multiple on your max spend: set one in Route rules, or tiny-capital trades will top the list."
+    : "";
 }
 // Route-rules summary chips: the one-glance "what's non-default" readout on the
 // closed disclosure. Dim = default policy; cyan (.dev) = a deliberate deviation;
@@ -8902,7 +8917,8 @@ function wireTradePlanner() {
   $("trade-scu").addEventListener("input", renderTradeSuggest);
   $("trade-system").addEventListener("change", () => { renderTradeSuggest(); renderTradeRuleChips(); });
   $("trade-stops").addEventListener("input", renderTradeRuleChips);
-  $("trade-budget").addEventListener("input", () => { renderTradeSuggest(); renderTradeRuleChips(); });
+  $("trade-budget").addEventListener("input", () => {
+    renderTradeSuggest(); renderTradeRuleChips(); syncTradeSortNote(); });
   $("trade-minreturn").addEventListener("input", renderTradeSuggest);   // #43
   // Freshness: the day count only matters while the filter is on; keep the board
   // in sync with the same freshness the planner will apply.
@@ -9221,7 +9237,13 @@ function renderTradePlan(res) {
                metric(fmtAuec(sm.peak_capital), "CAPITAL NEEDED")];
   // #43: profit as a share of the capital you front. Measured against PEAK
   // capital because sequential trades recycle the same aUEC (see _cost_route).
-  if (sm.return_pct != null) sub.push(metric(sm.return_pct + "%", "RETURN"));
+  // With a max spend set (#44 fix), the headline % is the multiple on the
+  // BANKROLL instead — 1,005 profit on a 100k budget honestly reads 1%, not
+  // 874% on the 115 aUEC the route happened to deploy. The deployed-capital
+  // figure stays available beside CAPITAL NEEDED.
+  if (sm.return_on_budget_pct != null)
+    sub.push(metric(sm.return_on_budget_pct + "%", "RETURN ON SPEND"));
+  else if (sm.return_pct != null) sub.push(metric(sm.return_pct + "%", "RETURN"));
   if (sm.loaded_pct != null) sub.push(metric(sm.loaded_pct + "%", "HOLD LOADED"));
   if (sm.total_fuel_scu != null) sub.push(metric(fmtScu(sm.total_fuel_scu), "QT FUEL"));   // #27
   h += `<div class="route-substats">` + sub.join("") + `</div>`;
@@ -9407,7 +9429,16 @@ async function renderTradeSuggest() {
   // The note makes the ranking basis explicit — and why it can disagree with Auto.
   // Margin-per-SCU ignores how much you can carry and how far it is; Auto optimizes
   // profit/hour. Set a ship and the board switches to that same measure and aligns.
-  const note = perHour
+  const note = byReturn
+    // #44 fix: with a bankroll the return sort ranks by what the run actually
+    // earns (profit ÷ a constant max spend); without one it's the raw ratio and
+    // the amber nudge under "optimize for" explains the trap.
+    ? (budget > 0
+      ? `Ranked by <b>profit per run within your max spend</b> — the multiple on the `
+        + `<b>${budget.toLocaleString()} aUEC</b> you bring${where}, not on whatever slice a trade happens to use.`
+      : `Ranked by <b>% return on the aUEC each trade deploys</b>${where}. A fat multiple on pocket `
+        + `change can top this list — <b>set max spend</b> to rank by the multiple on your bankroll instead.`)
+    : perHour
     ? `Ranked by <b>profit / hour</b> for your ${scu.toLocaleString()}-SCU hold — the same measure `
       + `<b>Auto</b> uses, so the top rows are close to what Auto plans${where}. Figures are gross `
       + `(before fuel), for one buy→sell leg. Tap “use” to seed a manual leg.`
@@ -9424,7 +9455,11 @@ async function renderTradeSuggest() {
     + `<p class="trade-fresh-line${freshOn ? "" : " warn"}">${freshLine}</p>`;
   const money = n => (Number(n) || 0).toLocaleString();
   rows.forEach((r, i) => {
-    const head = byReturn && r.return_pct != null
+    // #44 fix: bankroll-ranked rows headline what the run earns — leading with
+    // the raw % would contradict the order the server just ranked them in.
+    const head = byReturn && budget > 0 && r.trade_profit != null
+      ? `<b>${money(r.trade_profit)}</b> aUEC/run`
+      : byReturn && r.return_pct != null
       ? `<b>${r.return_pct}%</b> return`
       : (perHour && r.profit_per_hour)
         ? `<b>${money(r.profit_per_hour)}</b> aUEC/hr`

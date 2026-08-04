@@ -3266,7 +3266,12 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
 
     keyfn = {
         "margin": lambda r: r["profit_per_scu"],
-        "return": lambda r: (r["return_pct"] if r["return_pct"] is not None else -1),
+        # Return with a budget = the multiple on the bankroll (#44 fix): the
+        # denominator is the constant max spend, so ranking reduces to the run's
+        # profit and a fat % on pocket change stops topping the board. Without a
+        # budget the raw price ratio stands (no honest bankroll to divide by).
+        "return": (lambda r: (r["trade_profit"] if r["trade_profit"] is not None else -1)) if budget
+                  else (lambda r: (r["return_pct"] if r["return_pct"] is not None else -1)),
         "per_hour": lambda r: (r["profit_per_hour"] if r["profit_per_hour"] is not None else -1),
     }.get(sort)
     if keyfn is None:                             # "auto"
@@ -3527,13 +3532,15 @@ def leg_hazards(nav: NavData, src, dst, volumes, t_ref) -> list:
 
 
 def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
-                *, avoid=None, memo=None, fuel_req=None, max_range_m=None) -> dict:
+                *, avoid=None, memo=None, fuel_req=None, max_range_m=None,
+                budget=None) -> dict:
     """Walk an ordered list of trade rows from `start`, costing the QT legs
     (reposition to each buy terminal, then the loaded haul to its sell terminal)
     and accumulating profit/time/distance. Returns {summary, legs}. `avoid`
     (hazard volumes) + `memo` thread snare-detour costing into every leg;
     `fuel_req`/`max_range_m` (when a drive is known, #27) annotate each leg with
-    fuel_scu/over_range and add fuel totals to the summary."""
+    fuel_scu/over_range and add fuel totals to the summary. `budget` (max spend)
+    adds `return_on_budget_pct` — the multiple on the player's bankroll."""
     legs, pos, prev_sell = [], start, None
     total_profit = total_dist = total_time = 0.0
     deadhead_time = loaded_time = 0.0
@@ -3610,6 +3617,13 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
         "return_pct": (round(100.0 * total_profit / peak_capital, 1)
                        if peak_capital > 0 else None),
     }
+    if budget:
+        # Return on the BANKROLL (#44 fix): what the player's max-spend money
+        # earned, not what the (possibly tiny) deployed slice earned. max() keeps
+        # it honest if a manual route fronts more than the stated budget.
+        summary["return_on_budget_pct"] = (
+            round(100.0 * total_profit / max(peak_capital, budget), 1)
+            if bool(legs) else None)
     if fuel_req is not None:
         views = [lv for leg in legs for lv in (leg.get("to_buy"), leg.get("haul"))]
         tf, oc, wl = _fuel_summary(views)
@@ -3620,7 +3634,8 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
 
 
 def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
-                  deadhead_weight=1.0, *, avoid=None, memo=None, max_leg_m=None) -> list[dict]:
+                  deadhead_weight=1.0, *, avoid=None, memo=None, max_leg_m=None,
+                  budget=None) -> list[dict]:
     """Build a trade chain by repeatedly taking the best-scoring reachable trade
     from the current position. `optimize` = 'profit' (raw), 'per_hour'
     (throughput) or 'return' (#43, profit per aUEC of capital). `deadhead_weight` > 1 penalizes empty-hold repositioning: it
@@ -3630,7 +3645,8 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
     With `avoid` (hazard volumes) a candidate whose haul can't be routed around a
     danger (`blocked`) is skipped — the snare-aware analog of avoid mode.
     `max_leg_m` (in-range only, #27) drops a candidate whose haul OR approach hop
-    exceeds the ship's tank — an over-range trade is simply unusable from here."""
+    exceeds the ship's tank — an over-range trade is simply unusable from here.
+    `budget` re-denominates return mode onto the player's BANKROLL (see below)."""
     chosen, pos, used = [], start, set()
     # Return mode needs the running route ratio, because a leg that scores well
     # on its own can still make the ROUTE worse (see the accept test below).
@@ -3666,13 +3682,21 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                 continue                      # empty reposition out of range — skip
             approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
             if optimize == "return":
-                # Return on capital (#43): the ratio is SCU-independent, so this
-                # deliberately ignores how much money the trade makes. Chasing it
-                # favours cheap cargo with a fat multiple — which is the honest
-                # meaning of "sort by return", not a bug. Same deadhead shrink as
-                # profit mode so 'minimize empty-hold flight' still bites.
-                score = ((r.get("return_pct") or 0.0)
-                         / (1.0 + (deadhead_weight - 1.0) * (approach_t / 3600.0)))
+                # Return (#43/#44). Two denominators, deliberately:
+                #  - With a BUDGET (max spend), return means "the multiple on the
+                #    money you brought": profit / max(buy_cost, budget). The
+                #    bankroll is a constant, so under-deploying capital stops
+                #    paying — a 200%-on-1k Waste run reads 1% against a 100k
+                #    bankroll and loses to the route that actually uses it.
+                #    (Live regression this fixes: 874% return, 115 aUEC capital,
+                #    1,005 profit in 40 min beating every real route.)
+                #  - Without a budget there is no honest denominator but the
+                #    trade's own capital, so the raw scale-invariant ratio
+                #    stands (the UI nudges toward setting max spend).
+                # Same deadhead shrink as profit mode either way.
+                raw = ((r["trade_profit"] or 0.0) / max(r.get("buy_cost") or 0, budget)
+                       if budget else (r.get("return_pct") or 0.0))
+                score = raw / (1.0 + (deadhead_weight - 1.0) * (approach_t / 3600.0))
             elif optimize == "profit":
                 # empty-hold hours shrink the score; weight 1.0 => raw profit.
                 score = profit / (1.0 + (deadhead_weight - 1.0) * (approach_t / 3600.0))
@@ -3684,7 +3708,7 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                 pick, pick_score = r, score
         if pick is None:
             break
-        if optimize == "return":
+        if optimize == "return" and not budget:
             # Greedy is myopic about a RATIO in a way it isn't about a sum. Route
             # return is total_profit / peak_capital, so appending a leg with a
             # bigger buy_cost raises the denominator for everyone: chaining a
@@ -3692,7 +3716,9 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
             # to 32%. Profit and per-hour modes can't lose by adding a positive
             # leg; this one can, so it stops when the route stops improving.
             # Exact, not a heuristic — the summary is built from these same two
-            # numbers, so no route costing is needed here.
+            # numbers, so no route costing is needed here. With a budget the
+            # denominator is the constant bankroll, so any positive leg improves
+            # the route (same monotonicity as profit mode) and no stop applies.
             cost = pick.get("buy_cost") or 0
             new_peak = max(run_peak, cost)
             cur = (run_profit / run_peak) if run_peak else 0.0
@@ -3708,15 +3734,18 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
     return chosen
 
 
-def _route_score(summary, optimize, deadhead_weight) -> float:
+def _route_score(summary, optimize, deadhead_weight, budget=None) -> float:
     """Rank a costed route. profit mode -> total profit shrunk by empty-hold hours;
     per_hour mode -> profit over time with deadhead time up-weighted; return mode
-    (#43) -> the route's return on capital, same shrink as profit. weight 1.0
-    reduces to raw total_profit / profit_per_hour (unchanged behavior)."""
+    (#43) -> the route's return on capital, same shrink as profit — except with a
+    `budget` (#44 fix), where return is re-denominated on the bankroll
+    (profit / max(peak_capital, budget)) so under-deployment stops winning.
+    weight 1.0 reduces to raw total_profit / profit_per_hour (unchanged behavior)."""
     dh = summary.get("deadhead_time_s") or 0.0
     if optimize == "return":
-        return (summary.get("return_pct") or 0.0) / (
-            1.0 + (deadhead_weight - 1.0) * (dh / 3600.0))
+        raw = (100.0 * summary["total_profit"] / max(summary.get("peak_capital") or 0, budget)
+               if budget else (summary.get("return_pct") or 0.0))
+        return raw / (1.0 + (deadhead_weight - 1.0) * (dh / 3600.0))
     if optimize == "profit":
         return summary["total_profit"] / (1.0 + (deadhead_weight - 1.0) * (dh / 3600.0))
     eff_hours = (summary["total_time_s"] + (deadhead_weight - 1.0) * dh) / 3600.0
@@ -3724,28 +3753,29 @@ def _route_score(summary, optimize, deadhead_weight) -> float:
 
 
 def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
-                 *, avoid=None, memo=None, max_leg_m=None) -> list[dict]:
+                 *, avoid=None, memo=None, max_leg_m=None, budget=None) -> list[dict]:
     """Multi-start greedy over the candidate pool: an unforced chain plus one
     forced from each of the top seeds, keeping the best-scoring complete route.
     Returns the chosen trade rows (empty if nothing chains). `avoid`/`memo`
     thread snare-detour costing into every leg cost; `max_leg_m` enforces the
-    in-range-only cap (#27)."""
+    in-range-only cap (#27); `budget` re-denominates return mode (#44 fix)."""
     if not cands or max_legs < 1:
         return []
     routes = [_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
                             deadhead_weight=deadhead_weight, avoid=avoid, memo=memo,
-                            max_leg_m=max_leg_m)]
+                            max_leg_m=max_leg_m, budget=budget)]
     for seed in cands[:_TRADE_RESTARTS]:
         routes.append(_greedy_route(nav, cands, start, max_legs, optimize, t_ref,
                                     first=seed, deadhead_weight=deadhead_weight,
-                                    avoid=avoid, memo=memo, max_leg_m=max_leg_m))
+                                    avoid=avoid, memo=memo, max_leg_m=max_leg_m,
+                                    budget=budget))
     best, best_score = [], -1.0
     for chosen in routes:
         if not chosen:
             continue
         score = _route_score(_cost_route(nav, chosen, start, t_ref,
                                          avoid=avoid, memo=memo)["summary"],
-                             optimize, deadhead_weight)
+                             optimize, deadhead_weight, budget=budget)
         if score > best_score:
             best, best_score = chosen, score
     return best
@@ -3805,9 +3835,10 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
 
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     chosen = _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
-                          avoid=avoid_volumes, memo=memo, max_leg_m=max_leg_m)
+                          avoid=avoid_volumes, memo=memo, max_leg_m=max_leg_m,
+                          budget=budget)
     best = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo=memo,
-                       fuel_req=fuel_req, max_range_m=max_range_m)
+                       fuel_req=fuel_req, max_range_m=max_range_m, budget=budget)
     best["summary"]["usable_scu"] = float(usable_scu)
     best["start"] = _start_ref(start)
     return best
@@ -3847,7 +3878,7 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
     elif start_pos is not None:
         start = position_start(nav, start_pos)
     costed = _cost_route(nav, chosen, start, t_ref, avoid=avoid_volumes, memo={},
-                         fuel_req=fuel_req, max_range_m=max_range_m)
+                         fuel_req=fuel_req, max_range_m=max_range_m, budget=budget)
     costed["summary"]["usable_scu"] = float(usable_scu)
     costed["start"] = _start_ref(start)
     return costed
@@ -4015,9 +4046,9 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,
                         deadhead_weight, avoid=avoid_volumes, memo=memo,
-                        max_leg_m=max_leg_m) if cont_legs else []
+                        max_leg_m=max_leg_m, budget=budget) if cont_legs else []
     best = _cost_route(nav, [held_row] + cont, start, t_ref, avoid=avoid_volumes, memo=memo,
-                       fuel_req=fuel_req, max_range_m=max_range_m)
+                       fuel_req=fuel_req, max_range_m=max_range_m, budget=budget)
     best["summary"]["usable_scu"] = float(usable_scu)
     best["summary"]["carried_commodity"] = held.get("commodity")
     best["summary"]["carried_scu"] = held_scu
