@@ -5356,6 +5356,21 @@ class TradeStopFilterApiTests(unittest.TestCase):
         for lg in legs:
             self.assertNotIn(self.C, (lg["buy_poi_id"], lg["sell_poi_id"]))
 
+    def test_no_outposts_keeps_cities_but_drops_the_outpost(self):
+        # #44: C is the surface outpost in this fixture, so the Iron leg that
+        # sells there goes; anything at a station or city stays.
+        legs = self._plan(stops="no_outposts").json()["legs"]
+        self.assertEqual({l["commodity"] for l in legs}, {"Gold"})
+        for lg in legs:
+            self.assertNotIn(self.C, (lg["buy_poi_id"], lg["sell_poi_id"]))
+
+    def test_no_outposts_persists_onto_the_run(self):
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 100, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "stops": "no_outposts"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(db.get_active_trade_run("1")["params"]["stops"], "no_outposts")
+
     def test_unknown_stops_value_never_silently_drops_stops(self):
         legs = self._plan(stops="bogus").json()["legs"]
         self.assertEqual({l["commodity"] for l in legs}, {"Gold", "Iron"})
@@ -5472,6 +5487,31 @@ class TradeReturnApiTests(unittest.TestCase):
             "/api/trade/trades?system=Stanton&capacity_scu=100&sort=margin"
             "&min_return_pct=50").json()
         self.assertEqual([r["commodity"] for r in filtered], ["Waste"])
+
+    def test_sort_by_return_is_a_different_route_than_sort_by_profit(self):
+        # The objectives genuinely disagree: return takes 200%-on-pocket-change
+        # Waste, profit takes 30%-on-real-money Gold.
+        by_return = self._plan(sort="return").json()
+        by_profit = self._plan(sort="profit").json()
+        self.assertEqual({l["commodity"] for l in by_return["legs"]}, {"Waste"})
+        self.assertIn("Gold", {l["commodity"] for l in by_profit["legs"]})
+        self.assertGreater(by_return["summary"]["return_pct"],
+                           by_profit["summary"]["return_pct"])
+        self.assertGreater(by_profit["summary"]["total_profit"],
+                           by_return["summary"]["total_profit"])
+
+    def test_board_can_sort_by_return(self):
+        rows = self.client.get(
+            "/api/trade/trades?system=Stanton&capacity_scu=100&sort=return").json()
+        self.assertEqual([r["commodity"] for r in rows], ["Waste", "Gold"])
+
+    def test_return_sort_persists_onto_the_run(self):
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 100, "start_id": self.A, "system": "Stanton",
+            "sort": "return"})
+        self.assertEqual(r.status_code, 200)
+        run = db.get_active_trade_run("1")
+        self.assertEqual(run["params"]["sort"], "return")
 
     def test_floor_persists_onto_the_run_for_replan(self):
         r = self.client.post("/api/trade/run", json={

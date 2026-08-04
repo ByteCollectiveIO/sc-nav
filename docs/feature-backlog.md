@@ -16,6 +16,33 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 44. Trade planner: sort by return + "Stations & cities" stops 🔨 BUILT
+
+Two follow-ons in one pass. **`sort="return"`** — the option #43 predicted would
+be needed once members had a percentage to chase, so the solver optimizes what
+they're filtering on. **`stops="no_outposts"`** — a member asked to skip small
+surface outposts (suit up, haul boxes across the dirt) while keeping cities,
+which load indoors through a freight elevator. Detail in
+[`trade-route-planner.md`](trade-route-planner.md).
+
+**The bug worth remembering:** greedy is myopic about a *ratio* in a way it
+isn't about a *sum*. Route return is `total_profit / peak_capital`, so appending
+a leg with a bigger buy cost re-denominates the whole route — chaining a
+30%-on-100k trade after a 200%-on-1k one drops it from 200% to 32%, and the
+greedy did exactly that until an accept test stopped it. Profit and per-hour
+modes can't lose by adding a positive leg; a ratio objective can.
+
+**"Stations only" was the wrong tool for the outpost preference** and had been
+since #34: `place` already carried station/city/outpost, but nothing consumed
+`city`, so `stations` threw the five biggest hubs away along with the outposts.
+Live: 45 stations · 5 cities · 78 outposts; `no_outposts` plans 1.28M vs 825k
+for `stations` at 96 SCU — the cities were carrying real value.
+
+Sort-by-return is deliberately narrow: 874% on 1,005 aUEC of Waste at 96 SCU.
+Maximizing a ratio ignores volume by construction. The tooltip says so, TOTAL
+PROFIT sits beside RETURN, and the genuinely useful combination remains
+*min-return floor + sort by profit/hour*.
+
 ### 43. Trade planner: profit margin % + minimum-return threshold 🔨 BUILT
 
 Members wanted a percentage next to the aUEC, and a floor to filter by.

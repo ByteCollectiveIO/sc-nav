@@ -474,6 +474,62 @@ packages/precedence):
 
 ---
 
+## Sort by return + "Stations & cities" stop mode (#44) — AS BUILT
+
+Two follow-ons: the #43 doc predicted that if members chase the percentage the
+answer is to let the solver optimize it, and a member asked to exclude small
+surface outposts (suiting up and hauling boxes across the dirt) while keeping
+the indoor loading of a city.
+
+### `sort="return"`
+
+A third objective beside `per_hour` and `profit`, threaded the same way
+(`plan_trade_route` / `replan_trade_route` `optimize`, `_greedy_route`,
+`_route_score`, plus `rank_trades` so the board mirrors it). The board follows
+the planner's objective — that's the v0.28.1 disparity fix, and a third
+objective is a third way for a stale board to disagree.
+
+**The non-obvious part: greedy is myopic about a ratio in a way it is not about
+a sum.** Route return is `total_profit / peak_capital`, so appending a leg with
+a bigger buy cost raises the denominator for *every* leg already chosen.
+Chaining a 30%-on-100k trade after a 200%-on-1k one drops the route from 200% to
+**32%** — the greedy would happily do it, because the leg scores fine on its own
+and there's stop budget left. Profit and per-hour modes cannot lose by adding a
+positive leg; this one can. So return mode carries an accept test: take the leg
+only if it improves the running ratio, otherwise stop. It's exact rather than a
+heuristic — the summary is built from those same two numbers, so no route
+costing is needed. Regression test pins both directions (refuses the diluting
+leg, still chains a same-capital one).
+
+**It does what it says, and what it says is narrow.** On the live feed at 96
+SCU: `per_hour` 4,340,160 aUEC at 234% · `profit` 4,356,796 at 290% · `return`
+**1,005 aUEC at 874%** (three Waste runs). Maximizing a ratio ignores volume by
+construction — that IS return on capital, not a bug. The seg's tooltip says so
+and TOTAL PROFIT sits next to RETURN. In practice the useful combination is
+still *floor + profit/hour*: "only decent-margin trades, and among those make
+the most money."
+
+### `stops="no_outposts"` — Stations & cities
+
+Nearly free: `terminal_stop_kinds` already classified `place` as
+station/city/outpost (#34), and nothing had ever consumed the `city` value —
+`stations` lumped cities in with outposts and threw both away. The new mode
+excludes `place == "outpost"` only.
+
+That distinction is the whole point: a player avoiding outposts wants to stay
+**indoors**, not to stay in orbit. Cities (Lorville, Area18, New Babbage,
+Orison, Levski) load through a freight elevator under a roof; an outpost means
+suiting up. "Stations only" was the wrong tool for that preference and quietly
+cost them the five biggest trade hubs in the system.
+
+Live classification: **45 stations · 5 cities · 78 outposts**. At 96 SCU,
+`no_outposts` keeps 50 of 128 stops and plans 1,281,960 aUEC — against 825,312
+for `stations`, which confirms the cities were carrying real value. Unclassified
+places still default to `outpost` (the strict case), so a stop we can't vouch
+for is never sold as an indoor city.
+
+---
+
 ## Profit margin + minimum-return threshold (#43) — AS BUILT
 
 User ask: the planner showed total aUEC but never *what the money earned*, and

@@ -575,7 +575,7 @@ def match_terminals(nav: NavData, rows: list[dict]) -> tuple[list[dict], list[di
 # hate surface landings" vs "my ship physically cannot land").
 # ---------------------------------------------------------------------------
 
-STOP_MODES = ("any", "stations", "dock")
+STOP_MODES = ("any", "no_outposts", "stations", "dock")
 
 # Jump gateways are one station template, stamped out once per jump point, and
 # every one of them has a cargo deck. UEX only flags `has_loading_dock` on some
@@ -619,7 +619,8 @@ def terminal_stop_kinds(nav: NavData, rows: list[dict]) -> dict[int, dict]:
 
 
 def stop_exclusions(stop_kinds: dict[int, dict], mode: str) -> frozenset[int]:
-    """The POIs a `mode` ('stations' | 'dock') forbids as a buy or sell stop —
+    """The POIs a `mode` ('no_outposts' | 'stations' | 'dock') forbids as a buy
+    or sell stop —
     ready to hand the solver as `exclude_poi_ids`. Empty for 'any' (and for any
     unrecognized mode: an unknown restriction must never silently drop stops).
 
@@ -629,6 +630,14 @@ def stop_exclusions(stop_kinds: dict[int, dict], mode: str) -> frozenset[int]:
     know and that fails the test is always excluded. A Hull-C is never routed to
     a stop we merely failed to classify, because such stops don't exist in the
     price feed."""
+    if mode == "no_outposts":
+        # Stations + cities, no outposts. A city (Lorville, Area18, New Babbage,
+        # Orison, Levski) loads under a roof through a freight elevator; an
+        # outpost means suiting up and hauling boxes across the surface. Players
+        # who want the indoor experience are excluding the *outpost*, not asking
+        # for orbit — which is exactly what 'stations' would have given them.
+        return frozenset(pid for pid, rec in stop_kinds.items()
+                         if rec["place"] == "outpost")
     if mode == "stations":
         return frozenset(pid for pid, rec in stop_kinds.items()
                          if rec["place"] != "station")
@@ -3191,6 +3200,7 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
     throughput fields (max_scu, trade_profit, buy_cost, profit_per_hour). `sort`:
       "margin"    — profit per SCU (needs no capacity or travel),
       "per_hour"  — trade_profit / leg time (needs capacity; travel-priced),
+      "return"    — return on capital (#43; needs neither capacity nor travel),
       "auto"      — per_hour when capacity is given, else margin.
     Returns up to `limit` trade dicts."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
@@ -3234,7 +3244,7 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
                 cand.append((margin, name, src, dst))
     cand.sort(key=lambda c: -c[0])
 
-    want_hour = bool(capacity_scu) and sort in ("per_hour", "auto")
+    want_hour = bool(capacity_scu) and sort in ("per_hour", "auto")   # 'return' needs no travel
     window = cand[:_TRADE_TRAVEL_BUDGET] if want_hour else cand[:max(limit, 1)]
 
     out = []
@@ -3256,6 +3266,7 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
 
     keyfn = {
         "margin": lambda r: r["profit_per_scu"],
+        "return": lambda r: (r["return_pct"] if r["return_pct"] is not None else -1),
         "per_hour": lambda r: (r["profit_per_hour"] if r["profit_per_hour"] is not None else -1),
     }.get(sort)
     if keyfn is None:                             # "auto"
@@ -3611,8 +3622,8 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
 def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                   deadhead_weight=1.0, *, avoid=None, memo=None, max_leg_m=None) -> list[dict]:
     """Build a trade chain by repeatedly taking the best-scoring reachable trade
-    from the current position. `optimize` = 'profit' (raw) or 'per_hour'
-    (throughput). `deadhead_weight` > 1 penalizes empty-hold repositioning: it
+    from the current position. `optimize` = 'profit' (raw), 'per_hour'
+    (throughput) or 'return' (#43, profit per aUEC of capital). `deadhead_weight` > 1 penalizes empty-hold repositioning: it
     scales the approach (empty) leg's time in the per-hour score, and in profit
     mode shrinks a trade's score by its approach time — so a fuller-hold chain wins
     even at some profit cost. `first` forces the opening leg (multi-start seed).
@@ -3621,6 +3632,9 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
     `max_leg_m` (in-range only, #27) drops a candidate whose haul OR approach hop
     exceeds the ship's tank — an over-range trade is simply unusable from here."""
     chosen, pos, used = [], start, set()
+    # Return mode needs the running route ratio, because a leg that scores well
+    # on its own can still make the ROUTE worse (see the accept test below).
+    run_profit, run_peak = 0.0, 0
     key = lambda r: (r["commodity"], r["buy_poi_id"], r["sell_poi_id"])
     while len(chosen) < max_legs:
         pool = [first] if (first is not None and not chosen) else cands
@@ -3651,7 +3665,15 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                     and approach["distance_m"] > max_leg_m):
                 continue                      # empty reposition out of range — skip
             approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
-            if optimize == "profit":
+            if optimize == "return":
+                # Return on capital (#43): the ratio is SCU-independent, so this
+                # deliberately ignores how much money the trade makes. Chasing it
+                # favours cheap cargo with a fat multiple — which is the honest
+                # meaning of "sort by return", not a bug. Same deadhead shrink as
+                # profit mode so 'minimize empty-hold flight' still bites.
+                score = ((r.get("return_pct") or 0.0)
+                         / (1.0 + (deadhead_weight - 1.0) * (approach_t / 3600.0)))
+            elif optimize == "profit":
                 # empty-hold hours shrink the score; weight 1.0 => raw profit.
                 score = profit / (1.0 + (deadhead_weight - 1.0) * (approach_t / 3600.0))
             else:
@@ -3662,6 +3684,23 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                 pick, pick_score = r, score
         if pick is None:
             break
+        if optimize == "return":
+            # Greedy is myopic about a RATIO in a way it isn't about a sum. Route
+            # return is total_profit / peak_capital, so appending a leg with a
+            # bigger buy_cost raises the denominator for everyone: chaining a
+            # 30%-on-100k trade after a 200%-on-1k one drops the route from 200%
+            # to 32%. Profit and per-hour modes can't lose by adding a positive
+            # leg; this one can, so it stops when the route stops improving.
+            # Exact, not a heuristic — the summary is built from these same two
+            # numbers, so no route costing is needed here.
+            cost = pick.get("buy_cost") or 0
+            new_peak = max(run_peak, cost)
+            cur = (run_profit / run_peak) if run_peak else 0.0
+            nxt = ((run_profit + (pick["trade_profit"] or 0)) / new_peak) if new_peak else 0.0
+            if chosen and nxt <= cur:
+                break
+            run_profit += pick["trade_profit"] or 0
+            run_peak = new_peak
         chosen.append(pick)
         used.add(key(pick))
         sp = nav.pois.get(pick["sell_poi_id"])
@@ -3671,9 +3710,13 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
 
 def _route_score(summary, optimize, deadhead_weight) -> float:
     """Rank a costed route. profit mode -> total profit shrunk by empty-hold hours;
-    per_hour mode -> profit over time with deadhead time up-weighted. weight 1.0
+    per_hour mode -> profit over time with deadhead time up-weighted; return mode
+    (#43) -> the route's return on capital, same shrink as profit. weight 1.0
     reduces to raw total_profit / profit_per_hour (unchanged behavior)."""
     dh = summary.get("deadhead_time_s") or 0.0
+    if optimize == "return":
+        return (summary.get("return_pct") or 0.0) / (
+            1.0 + (deadhead_weight - 1.0) * (dh / 3600.0))
     if optimize == "profit":
         return summary["total_profit"] / (1.0 + (deadhead_weight - 1.0) * (dh / 3600.0))
     eff_hours = (summary["total_time_s"] + (deadhead_weight - 1.0) * dh) / 3600.0
@@ -3728,7 +3771,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     (#34) drops stops the ship can't physically use. Returns {summary, legs, start}
     — the same shape cost_trade_legs produces for manual mode."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
-    optimize = "profit" if sort == "profit" else "per_hour"
+    optimize = sort if sort in ("profit", "return") else "per_hour"
     avoid_poi_ids = frozenset(avoid_poi_ids or ())
     avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))
     exclude_poi_ids = frozenset(exclude_poi_ids or ())
@@ -3903,7 +3946,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     shape; the summary carries `carried_commodity`/`carried_scu` when a sunk load
     was folded in."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
-    optimize = "profit" if sort == "profit" else "per_hour"
+    optimize = sort if sort in ("profit", "return") else "per_hour"
     now = now_ts if now_ts is not None else time.time()
     avoid_poi_ids = frozenset(avoid_poi_ids or ())
     avoid_pairs = frozenset(frozenset(p) for p in (avoid_pairs or ()))

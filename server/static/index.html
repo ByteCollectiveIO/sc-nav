@@ -3534,6 +3534,8 @@
           <span class="seg" id="trade-sort" role="group" aria-label="Optimize for">
             <button class="on" data-sort="per_hour" type="button" aria-pressed="true">Best aUEC/hr</button>
             <button data-sort="profit" type="button" aria-pressed="false">Most profit</button>
+            <button data-sort="return" type="button" aria-pressed="false"
+                    title="Ranks by profit per aUEC invested. Favours cheap cargo with a big multiple, which can mean a great percentage on very little money — watch TOTAL PROFIT alongside it.">Best return</button>
           </span>
         </div>
         <details class="trade-tuning">
@@ -3578,6 +3580,7 @@
         <span class="muted" style="font-size:12px;">Stops</span>
         <span class="seg" id="trade-stopkind" role="group" aria-label="Which stops the ship can use">
           <button class="on" data-stops="any" type="button" aria-pressed="true">Any</button>
+          <button data-stops="no_outposts" type="button" aria-pressed="false">Stations &amp; cities</button>
           <button data-stops="stations" type="button" aria-pressed="false">Stations only</button>
           <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
         </span>
@@ -8302,11 +8305,12 @@ function setTradeAvoid(mode) {
 let tradeStops = "any";                  // any | stations | dock
 const TRADE_STOPS_HINT = {
   any: "Buy and sell anywhere, including surface outposts.",
+  no_outposts: "Stations and cities only — everything loads indoors, no surface outposts.",
   stations: "Orbital stations only — no planet or moon landings.",
   dock: "Only stations with a cargo dock (Hull C/D/E, Kraken).",
 };
 function setTradeStops(mode, why) {
-  tradeStops = ["stations", "dock"].includes(mode) ? mode : "any";
+  tradeStops = ["no_outposts", "stations", "dock"].includes(mode) ? mode : "any";
   for (const x of $("trade-stopkind").children) {
     const on = x.dataset.stops === tradeStops;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
@@ -8345,7 +8349,7 @@ function tradeStopsForShip() {
 // Single source of truth for the optimize-for seg (used by the click wiring and by
 // applyTradeConfig) so the visual, the state, and aria-pressed never drift apart.
 function setTradeSort(sort) {
-  tradeSort = sort === "profit" ? "profit" : "per_hour";
+  tradeSort = ["profit", "return"].includes(sort) ? sort : "per_hour";
   for (const x of $("trade-sort").children) {
     const on = x.dataset.sort === tradeSort;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
@@ -8777,7 +8781,9 @@ function wireTradePlanner() {
     setTradeMode(next.dataset.mode); next.focus(); e.preventDefault();
   };
   for (const b of $("trade-sort").querySelectorAll("button"))
-    b.onclick = () => setTradeSort(b.dataset.sort);
+    // Re-rank the board too: it mirrors the planner's objective (#43 adds a
+    // third one, so a stale board would now disagree in a new way).
+    b.onclick = () => { setTradeSort(b.dataset.sort); renderTradeSuggest(); };
   for (const b of $("trade-avoid").querySelectorAll("button"))
     b.onclick = () => setTradeAvoid(b.dataset.avoid);
   setTradeAvoid(tradeAvoid);
@@ -9228,7 +9234,8 @@ function renderTradeLeg(lg, i) {
   if (noStop.length) {
     const where = noStop.map(s => s === "buy" ? "buy" : "sell").join(" and ");
     dngr += `<div class="tl-stock out">⛔ your ship can't use this leg's <b>${esc(where)}</b> stop `
-      + `<span class="muted">(${tradeStops === "dock" ? "no cargo dock" : "planetary landing"})</span></div>`;
+      + `<span class="muted">(${{ dock: "no cargo dock", no_outposts: "surface outpost",
+                                    stations: "planetary landing" }[tradeStops] || "excluded stop"})</span></div>`;
   }
   // Stock reports (#21): a member recently found this leg's buy short/empty or
   // its sell end not buying (auto/filtered plans never route through a fresh ⛔
@@ -9268,9 +9275,14 @@ async function renderTradeSuggest() {
   const el = $("trade-suggest"); if (!el) return;
   const scu = Number($("trade-scu").value) || 0;
   const sys = $("trade-system") ? $("trade-system").value : "";
-  const perHour = scu > 0;   // a ship's hold unlocks throughput + the per-hour ranking
-  const qs = new URLSearchParams({ sort: perHour ? "per_hour" : "margin", limit: "8" });
-  if (perHour) qs.set("capacity_scu", String(scu));
+  // The board ranks by whatever the planner is optimizing for, or the two
+  // disagree about the "best" trade (the v0.28.1 disparity fix). Return needs no
+  // hold or travel pricing; per-hour needs both, so it waits for a ship's SCU.
+  const byReturn = tradeSort === "return";
+  const perHour = scu > 0 && !byReturn;
+  const boardSort = byReturn ? "return" : (perHour ? "per_hour" : "margin");
+  const qs = new URLSearchParams({ sort: boardSort, limit: "8" });
+  if (scu > 0) qs.set("capacity_scu", String(scu));
   if (sys) qs.set("system", sys);
   const budget = Number($("trade-budget").value);
   if (budget > 0) qs.set("budget", String(Math.round(budget)));
@@ -9306,9 +9318,11 @@ async function renderTradeSuggest() {
     + `<p class="trade-fresh-line${freshOn ? "" : " warn"}">${freshLine}</p>`;
   const money = n => (Number(n) || 0).toLocaleString();
   rows.forEach((r, i) => {
-    const head = (perHour && r.profit_per_hour)
-      ? `<b>${money(r.profit_per_hour)}</b> aUEC/hr`
-      : `<b>+${money(r.profit_per_scu)}</b> aUEC/SCU`;
+    const head = byReturn && r.return_pct != null
+      ? `<b>${r.return_pct}%</b> return`
+      : (perHour && r.profit_per_hour)
+        ? `<b>${money(r.profit_per_hour)}</b> aUEC/hr`
+        : `<b>+${money(r.profit_per_scu)}</b> aUEC/SCU`;
     let econ = `buy <b>${money(r.buy_price)}</b> → sell <b>${money(r.sell_price)}</b> aUEC`
       + ` · spread <b>+${money(r.profit_per_scu)}</b>/SCU`;
     if (r.return_pct != null) econ += ` · <b>${r.return_pct}%</b> return`;   // #43

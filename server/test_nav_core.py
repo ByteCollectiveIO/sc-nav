@@ -2279,6 +2279,29 @@ class TradeStopKindTests(unittest.TestCase):
         self.assertIn(2, ex)            # outpost: no dock
         self.assertIn(5, ex)            # station, but no dock
 
+    def test_no_outposts_mode_keeps_cities(self):
+        # "Stations & cities" (#44): players avoiding outposts want to stay
+        # INDOORS, not to stay in orbit — a city loads through a freight
+        # elevator under a roof. So this drops only the outpost, keeping the
+        # city that "stations only" would have thrown out with it.
+        ex = nav_core.stop_exclusions(self._kinds(), "no_outposts")
+        self.assertEqual(ex, frozenset({2}))    # the surface outpost, and only it
+        self.assertNotIn(4, ex)                 # Levski (city) survives
+        self.assertNotIn(1, ex)                 # stations survive
+        self.assertNotIn(5, ex)                 # including dockless ones
+
+    def test_no_outposts_is_looser_than_stations_only(self):
+        k = self._kinds()
+        self.assertLess(len(nav_core.stop_exclusions(k, "no_outposts")),
+                        len(nav_core.stop_exclusions(k, "stations")))
+
+    def test_unclassifiable_stop_counts_as_an_outpost(self):
+        # terminal_stop_kinds defaults an unknown place to "outpost" (the strict
+        # case). That default must hold here too — a stop we can't vouch for is
+        # not silently sold as an indoor city.
+        self.assertIn(9, nav_core.stop_exclusions(
+            {9: {"place": "outpost", "dock": False}}, "no_outposts"))
+
     def test_any_and_unknown_modes_exclude_nothing(self):
         # An unrecognized restriction must never silently drop stops.
         self.assertEqual(nav_core.stop_exclusions(self._kinds(), "any"), frozenset())
@@ -2673,6 +2696,67 @@ class TradeReturnTests(unittest.TestCase):
         cont = [lg for lg in plan["legs"] if not lg.get("held")]
         self.assertTrue(cont)
         self.assertEqual({lg["commodity"] for lg in cont}, {"Waste"})
+
+    def test_sort_by_return_picks_the_ratio_not_the_money(self):
+        # Waste is 200% on pocket change; Gold is 30% on ten times the aUEC.
+        # 'return' must take Waste — that IS what maximizing return on capital
+        # means, and it's why the UI warns to watch TOTAL PROFIT beside it.
+        by_return = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="return")
+        self.assertEqual({lg["commodity"] for lg in by_return["legs"]}, {"Waste"})
+        by_profit = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="profit")
+        self.assertIn("Gold", {lg["commodity"] for lg in by_profit["legs"]})
+        # ...and the two objectives really do disagree in opposite directions.
+        self.assertGreater(by_return["summary"]["return_pct"],
+                           by_profit["summary"]["return_pct"])
+        self.assertGreater(by_profit["summary"]["total_profit"],
+                           by_return["summary"]["total_profit"])
+
+    def test_return_mode_refuses_a_route_diluting_leg(self):
+        # The regression that motivated the greedy accept test: taking Waste
+        # (200% on 1k) then chaining Gold (30% on 100k) raises peak capital for
+        # the whole route and drops it to 32%. A ratio objective must stop, even
+        # though Gold is a fine trade and there's stop budget left over.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="return")
+        self.assertEqual([lg["commodity"] for lg in plan["legs"]], ["Waste"])
+        self.assertEqual(plan["summary"]["return_pct"], 200.0)
+
+    def test_return_mode_still_chains_non_diluting_legs(self):
+        # ...but a second leg at the same capital is pure gain: more profit, same
+        # denominator. Stopping short would be just as wrong as over-chaining.
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        prices = self._prices() + [
+            self._pt("Scrap", 7, self.B, buy=10), self._pt("Scrap", 8, self.C, sell=30)]
+        plan = nav_core.plan_trade_route(
+            NAV, prices, 100, start_id=self.A, max_stops=6, sort="return")
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Waste", "Scrap"})
+        self.assertEqual(plan["summary"]["return_pct"], 400.0)   # 4000 profit / 1000 peak
+
+    def test_unknown_sort_still_means_per_hour(self):
+        # Same rule as the other filters: an unrecognized value falls back to the
+        # default objective rather than silently becoming a new one.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="bogus")
+        self.assertTrue(plan["summary"]["feasible"])
+
+    def test_route_score_return_mode(self):
+        low = {"total_profit": 1000, "total_time_s": 4000, "deadhead_time_s": 500,
+               "return_pct": 40.0}
+        high = {"total_profit": 1000, "total_time_s": 4000, "deadhead_time_s": 500,
+                "return_pct": 90.0}
+        self.assertEqual(nav_core._route_score(low, "return", 1.0), 40.0)
+        self.assertGreater(nav_core._route_score(high, "return", 1.0),
+                           nav_core._route_score(low, "return", 1.0))
+        # Missing return (no capital at risk) scores 0, never crashes.
+        self.assertEqual(nav_core._route_score({"total_profit": 5, "total_time_s": 1,
+                                                "deadhead_time_s": 0}, "return", 1.0), 0.0)
+
+    def test_rank_trades_sort_by_return(self):
+        rows = nav_core.rank_trades(NAV, self._prices(), capacity_scu=100,
+                                    sort="return")
+        self.assertEqual([r["commodity"] for r in rows], ["Waste", "Gold"])
 
     def test_rank_trades_floor_and_field(self):
         rows = nav_core.rank_trades(NAV, self._prices(), capacity_scu=100,
