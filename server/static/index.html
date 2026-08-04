@@ -2179,6 +2179,16 @@
     background: var(--accent-wash); border: 1px solid var(--border);
     border-radius: 8px; padding: 8px 10px; }
   .halo-zone-active b { color: var(--text); }
+  /* ATLAS map ↔ zone-list selection. Two DIFFERENT states share this table, so
+     they get two different hues: gold `.selected` = the ACTIVE zone (marks file
+     into it — the app-wide "current destination" gold), cyan `.zone-sel` = the
+     zone you just tapped on the coverage map. */
+  #halo-atlas-sel { margin-top: 8px; }
+  #halo-atlas-zones tbody tr[data-zrow] { cursor: pointer; }
+  #halo-atlas-zones tbody tr.zone-sel { background: var(--accent-wash);
+    box-shadow: inset 2px 0 0 var(--accent); }
+  #halo-atlas-zones tbody tr.zone-sel.selected {
+    box-shadow: inset 2px 0 0 var(--accent), inset 5px 0 0 var(--sel); }
   /* After-the-drop verdict */
   .halo-verdict { font-size: 14px; }
   .halo-verdict .in-band { color: var(--good); font-weight: 700; }
@@ -4167,6 +4177,10 @@
           has mapped, and where to survey next</span></h2>
         <div class="halo-map-wrap"><canvas id="halo-atlas-map"
           aria-label="system overview: belts, surveyed pockets tinted by value, unmapped gap arcs, stations and gateways"></canvas></div>
+        <!-- Tapping a zone square selects it: this bar names what you hit and
+             carries the same actions as its table row, so the map is a real
+             index into the zone list instead of a decoration. -->
+        <div id="halo-atlas-sel" role="status" aria-live="polite" hidden></div>
         <p class="muted route-hint" id="halo-atlas-cap" style="margin-top:4px;"></p>
       </div>
     </div><!-- /halo-tab-atlas -->
@@ -13497,6 +13511,7 @@ function setHaloSystem(sys, auto) {
   if (!haloDoc(sys)) loadHaloTargets(sys).then(renderHaloSystemPanel);
   else renderHaloSystemPanel();
   resetHaloAtlasView();                  // recenter the coverage map on the new system
+  haloAtlasSelZone = null;               // …and drop a pin on a square that's gone
   closeHaloSurveyCard();                 // a survey card is for the old system's zone
   if (haloWired) loadHaloZones(sys);     // zones are per-system
 }
@@ -13769,6 +13784,10 @@ function wireHaloAtlasPan() {
   }, { passive: false });
   let drag = null;
   cv.addEventListener("pointerdown", (e) => {
+    // Scope the guard to THIS gesture. It used to be cleared only by the click
+    // that follows a drag — but a pan that ends in pointercancel (touch) never
+    // fires one, leaving the flag set to eat the next real tap.
+    haloAtlasDidPan = false;
     drag = { x: e.clientX, y: e.clientY, moved: false };
     cv.setPointerCapture(e.pointerId);
   });
@@ -13801,11 +13820,59 @@ function renderHaloAtlas() {
   const ex = $("halo-export-link");
   if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(haloSystem);
   renderHaloAtlasZones();
+  renderHaloAtlasSel();
   renderHaloAtlasCap();
   requestAnimationFrame(() => {   // canvas needs layout after un-hide
     const cv = $("halo-atlas-map");
     if (cv) { wireHaloAtlasPan(); drawHaloSystemMap(cv, null); }
   });
+}
+
+// The zone the coverage map is pointing at. Distinct from `activeSurveyZone`
+// (where new ⛏ marks file): selecting on the map is a browse gesture and must
+// not silently redirect someone's marks. Cleared on a system switch — a zone id
+// from another system has no square on this map.
+let haloAtlasSelZone = null;
+
+function selectHaloAtlasZone(zid) {
+  const z = zid == null ? null : haloZones.find(x => x.zone_id === zid);
+  haloAtlasSelZone = z ? z.zone_id : null;
+  renderHaloAtlasSel();
+  renderHaloAtlasZones();       // repaints the row highlight
+  const cv = $("halo-atlas-map");
+  if (cv) drawHaloSystemMap(cv, null);
+  if (!z) return;
+  const row = document.querySelector(`#halo-atlas-zones tr[data-zrow="${z.zone_id}"]`);
+  if (row) row.scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
+}
+
+// Selected-zone bar: names what the tap hit and repeats its row's actions, so
+// the map answers "which survey is this?" without a trip back to the table.
+function renderHaloAtlasSel() {
+  const el = $("halo-atlas-sel");
+  if (!el) return;
+  const z = haloAtlasSelZone == null ? null
+    : haloZones.find(x => x.zone_id === haloAtlasSelZone);
+  if (!z) { el.hidden = true; el.innerHTML = ""; haloAtlasSelZone = null; return; }
+  el.hidden = false;
+  const bits = [`<b>${z.marks || 0}</b> mark${z.marks === 1 ? "" : "s"}`];
+  if (z.value) bits.push(surveyValueChip(z.value));
+  if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
+  if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
+  else if (z.status && z.status !== "empty") bits.push(`<b>${esc(z.status)}</b> rocks`);
+  if ((z.ores || []).length) bits.push(z.ores.map(o => `${esc(o)}${oreValueChip(o)}`).join(", "));
+  const active = z.zone_id === activeSurveyZone;
+  el.innerHTML = `<div class="halo-zone-active">📍 <b>${esc(z.name)}</b>`
+    + (active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : "")
+    + ` — ${bits.join(" · ")}`
+    + (z.marks ? ` <button type="button" class="route-chip" id="halo-sel-details">▸ Details</button>` : "")
+    + (z.marks ? ` <button type="button" class="route-chip" id="halo-sel-plan">Plan a drop here</button>` : "")
+    + (active ? "" : ` <button type="button" class="route-chip" id="halo-sel-active">Set active</button>`)
+    + ` <button type="button" class="route-chip" id="halo-sel-clear">Clear</button></div>`;
+  const d = $("halo-sel-details"); if (d) d.onclick = () => openHaloSurveyCard(z);
+  const p = $("halo-sel-plan"); if (p) p.onclick = () => planHaloZone(z);
+  const a = $("halo-sel-active"); if (a) a.onclick = () => setActiveSurveyZone(z.zone_id);
+  $("halo-sel-clear").onclick = () => selectHaloAtlasZone(null);
 }
 
 // Zone-table filter state (#38 playtest note 1) + one-time wiring of the
@@ -13880,7 +13947,10 @@ function renderHaloAtlasZones() {
       + (!z.closed ? `<button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
           + `${active ? "filing" : "Set active"}</button>` : "")
       + (z.closed ? `<span class="halo-chip">closed</span>` : "");
-    return `<tr data-zrow="${z.zone_id}"${active ? ' class="selected"' : ""}>`
+    const cls = [active ? "selected" : "", z.zone_id === haloAtlasSelZone ? "zone-sel" : ""]
+      .filter(Boolean).join(" ");
+    return `<tr data-zrow="${z.zone_id}"${cls ? ` class="${cls}"` : ""}`
+      + ` title="click to point the coverage map at this zone">`
       + `<td><b>${esc(z.name)}</b>${active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : ""}`
         + (z.contributors && z.contributors.length ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
         + `</td>`
@@ -13903,6 +13973,14 @@ function renderHaloAtlasZones() {
     b.onclick = () => { const z = byId(b.dataset.zplan); if (z) planHaloZone(z); };
   for (const b of el.querySelectorAll("[data-zactive]"))
     b.onclick = () => setActiveSurveyZone(Number(b.dataset.zactive));
+  // Row → map: the other half of the link. Buttons handle themselves, so the
+  // row only claims clicks that missed one.
+  for (const tr of el.querySelectorAll("tr[data-zrow]"))
+    tr.onclick = (e) => {
+      if (e.target.closest("button, a")) return;
+      const id = Number(tr.dataset.zrow);
+      selectHaloAtlasZone(id === haloAtlasSelZone ? null : id);
+    };
 }
 
 // RS signature reference (#38 playtest note 5): the FIELD-tab cheat sheet a
@@ -14060,7 +14138,8 @@ function renderHaloAtlasCap() {
       bits.push(`<span class="muted">remaining gaps are expedition-only from the org's markers</span>`);
     }
   }
-  bits.push(`tap a pocket, zone or field to pin it as the plan destination in DROP`);
+  bits.push(`tap a named zone to select it · tap a pocket or field to pin it as`
+    + ` the plan destination in DROP`);
   bits.push(`<span class="muted">scroll to zoom · drag to pan · double-click to reset</span>`);
   cap.innerHTML = bits.join(" · ");
   const gb = $("halo-atlas-gap");
@@ -14410,6 +14489,12 @@ async function setActiveSurveyZone(zid) {
   } catch { return; }
   renderHaloZoneSelect(); renderHaloZoneBanner();
   renderHaloAtlasZones();   // the ⛏ active chip lives there too (#38)
+  renderHaloAtlasSel();
+  // …and the gold ⛏ ring on both maps, so "which square am I filing into?"
+  // is answerable without reading the table.
+  renderHaloOverview();
+  const av = $("halo-atlas-map");
+  if (av && !$("halo-tab-atlas").hidden) drawHaloSystemMap(av, null);
 }
 
 async function newSurveyZone() {
@@ -14449,6 +14534,19 @@ function activeZonePocket() {
     survey: z.survey };
 }
 
+// A plan that FAILED has to be seen. planHaloZone/planHaloGap are reachable
+// from ATLAS and FIELD, but #halo-plan-msg lives in DROP — so "⚠ no live
+// position yet — run /showlocation, or pick a start POI" was landing in a
+// hidden tab and the button read as dead. Success already hops to DROP to show
+// the plan; failure hops there too, because every fix the message names (start
+// POI, ship, staging) is a DROP control.
+function haloPlanFailed(text) {
+  const msg = $("halo-plan-msg");
+  if (msg) msg.textContent = text;
+  haloGoTab("drop");
+  if (msg) msg.scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
+}
+
 async function planHaloZone(z) {
   // Pin by slug + the zone's own system (slugs are only unique per system,
   // so a bare slug can be ambiguous across systems).
@@ -14459,17 +14557,16 @@ async function planHaloZone(z) {
   const ship = $("halo-ship").value.trim();
   if (ship) { body.ship = ship; if (!$("halo-drive-wrap").hidden && $("halo-qd").value) body.qd = $("halo-qd").value; }
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
-  const msg = $("halo-plan-msg");
-  msg.textContent = "planning…";
+  $("halo-plan-msg").textContent = "planning…";
   try {
     const r = await fetch("/api/halo/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
-    msg.textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    if (!r.ok) { haloPlanFailed("⚠ " + (d.detail || "plan failed")); return; }
+    $("halo-plan-msg").textContent = ""; haloLastPlan = d; renderHaloPlan(d);
     haloGoTab("drop");   // callable from ATLAS/FIELD — the result lives in DROP (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
-  } catch { msg.textContent = "⚠ network error"; }
+  } catch { haloPlanFailed("⚠ network error"); }
 }
 
 // ⛏ Survey the next gap (#37 slice 4): plan the drop leg of the most
@@ -14482,17 +14579,16 @@ async function planHaloGap() {
   const ship = $("halo-ship").value.trim();
   if (ship) { body.ship = ship; if (!$("halo-drive-wrap").hidden && $("halo-qd").value) body.qd = $("halo-qd").value; }
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
-  const msg = $("halo-plan-msg");
-  msg.textContent = "planning…";
+  $("halo-plan-msg").textContent = "planning…";
   try {
     const r = await fetch("/api/halo/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
-    msg.textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    if (!r.ok) { haloPlanFailed("⚠ " + (d.detail || "plan failed")); return; }
+    $("halo-plan-msg").textContent = ""; haloLastPlan = d; renderHaloPlan(d);
     haloGoTab("drop");   // reachable from the ATLAS coverage card too (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
-  } catch { msg.textContent = "⚠ network error"; }
+  } catch { haloPlanFailed("⚠ network error"); }
 }
 
 function renderHaloCredit() {
@@ -14989,9 +15085,13 @@ function drawHaloSystemMap(cv, plan) {
     const pts = [P.start, P.marker, P.cross].concat(P.stage ? [P.stage] : []);
     rFit = Math.max(beltOut || 0,
                     ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
-  } else if (ring && haloBelt === "glaciem") {
-    // Overview, Glaciem selected (v0.69.1 feedback): the belt seg drives the
-    // view — zoom to the ring so its 381 pockets are actually readable.
+  } else if (ring && haloBelt === "glaciem" && cv.id !== "halo-atlas-map") {
+    // DROP overview, Glaciem selected (v0.69.1 feedback): the belt seg drives
+    // the view — zoom to the ring so its 381 pockets are actually readable.
+    // ATLAS is explicitly excluded: the belt seg lives in DROP, and in Nyx that
+    // fit (~15 Gm) puts the Keeger belt at 48 Gm — and every zone the org has
+    // actually surveyed — off-canvas, on a map whose whole claim is "what the
+    // org has mapped".
     rFit = (ring.r_m + (ring.pocket_radius_m || 0)) * 1.18;
   } else {
     // Overview: fit the whole system — belts, the Keeger ring, planet
@@ -15150,15 +15250,6 @@ function drawHaloSystemMap(cv, plan) {
                             name: f.name });
     }
   }
-  // Named zones (#36.1) live in ANY system (v0.71.0: a zone at ARC-L2 is as
-  // real as one on the Keeger ring) — value-tinted squares, click-to-plan.
-  for (const z of (overview ? haloZones : [])) {
-    if (z.closed || !z.xyz || z.system !== doc.system) continue;
-    const zx = cx + z.xyz[0] * s, zy = cy - z.xyz[1] * s;
-    ctx.fillStyle = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.window;
-    ctx.fillRect(zx - 3, zy - 3, 6, 6);
-    hits.push({ x: zx, y: zy, key: z.key, kind: "zone", zone_id: z.zone_id });
-  }
   // bodies: star at its real offset, planets as dots + labels
   ctx.textAlign = "left";
   for (const b of doc.bodies || []) {
@@ -15168,6 +15259,43 @@ function drawHaloSystemMap(cv, plan) {
     ctx.beginPath();
     ctx.arc(bx, by, Math.max(isStar ? 4 : 2.2, b.r * s), 0, 2 * Math.PI); ctx.fill();
     if (!isStar) { ctx.fillStyle = C.label; ctx.fillText(b.name, bx + 5, by + 3); }
+  }
+  // Named zones (#36.1) live in ANY system (v0.71.0: a zone at ARC-L2 is as
+  // real as one on the Keeger ring) — value-tinted squares. Drawn LAST of the
+  // survey layer, after the bodies, because a zone square that a planet label
+  // overprints is unidentifiable — and naming the org's own fields is the whole
+  // point of the ATLAS map. Each square carries its NAME (a bare dot answers
+  // "something is here" but not "which survey"); the active zone gets the gold
+  // ⛏ ring, the map-selected one the cyan ring.
+  for (const z of (overview ? haloZones : [])) {
+    if (z.closed || !z.xyz || z.system !== doc.system) continue;
+    const zx = cx + z.xyz[0] * s, zy = cy - z.xyz[1] * s;
+    const isActive = z.zone_id != null && z.zone_id === activeSurveyZone;
+    const isSel = z.zone_id != null && z.zone_id === haloAtlasSelZone;
+    ctx.fillStyle = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.window;
+    ctx.fillRect(zx - 3, zy - 3, 6, 6);
+    if (isSel) {   // cyan halo: "this is the one you just tapped"
+      ctx.strokeStyle = C.chord; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(zx, zy, 8, 0, 2 * Math.PI); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (isActive) {   // gold ring: marks are filing here right now
+      ctx.strokeStyle = C.drop; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(zx, zy, 5.5, 0, 2 * Math.PI); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    const nm = z.name && z.name.length > 20 ? z.name.slice(0, 19) + "…" : (z.name || z.key);
+    const label = (isActive ? "⛏ " : "") + nm;
+    const lx = zx + (isSel ? 11 : 7), ly = zy + 3;
+    // Dark halo first: zones sit wherever the org found rocks, which is often
+    // right on an orbit ring or a planet's label. The outline keeps the name
+    // readable without reserving space the map doesn't have.
+    ctx.strokeStyle = C.bg; ctx.lineWidth = 3; ctx.lineJoin = "round";
+    ctx.strokeText(label, lx, ly); ctx.lineWidth = 1;
+    ctx.fillStyle = isSel ? C.chord : isActive ? C.drop : C.text;
+    ctx.fillText(label, lx, ly);
+    hits.push({ x: zx, y: zy, key: z.key, kind: "zone", zone_id: z.zone_id,
+                name: z.name });
   }
   // origin tick: the Stanton starmap marker, the band datum
   ctx.strokeStyle = C.label;
@@ -15239,12 +15367,28 @@ function renderHaloOverview() {
 function haloOverviewPick(cv, e, fromAtlas) {
   const rect = cv.getBoundingClientRect();
   const px = e.clientX - rect.left, py = e.clientY - rect.top;
-  let best = null, bd = 10;                    // 10px touch slop
-  for (const h of haloOverviewHits) {
-    const d = Math.hypot(h.x - px, h.y - py);
-    if (d < bd) { best = h; bd = d; }
+  const nearest = (pool) => {
+    let best = null, bd = 10;                  // 10px touch slop
+    for (const h of pool) {
+      const d = Math.hypot(h.x - px, h.y - py);
+      if (d < bd) { best = h; bd = d; }
+    }
+    return best;
+  };
+  // A named zone usually sits ON a proximity-clustered pocket (same marks, two
+  // views of them), and the pocket hit is pushed first — so a plain nearest
+  // wins ties for the anonymous SVY-key. In ATLAS the named zone is what the
+  // tab is about, so it gets first refusal.
+  let best = fromAtlas ? nearest(haloOverviewHits.filter(h => h.kind === "zone")) : null;
+  if (!best) best = nearest(haloOverviewHits);
+  if (!best) { if (fromAtlas) selectHaloAtlasZone(null); return; }
+  if (fromAtlas && best.kind === "zone") {
+    // ATLAS is the browse surface: tapping a zone SELECTS it (ring on the map,
+    // its row highlighted, actions in the bar below) rather than silently
+    // firing a plan whose only feedback lives on the hidden DROP tab.
+    selectHaloAtlasZone(best.zone_id);
+    return;
   }
-  if (!best) return;
   if (best.kind === "field") {
     const f = $("halo-field");
     if (f) { f.value = best.name || best.key; f.dataset.uuid = best.key; }
