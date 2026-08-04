@@ -2560,6 +2560,134 @@ class TradeSolverTests(unittest.TestCase):
                            nav_core._route_score(high, "per_hour", 3.0))
 
 
+class TradeReturnTests(unittest.TestCase):
+    """Return on capital (#43): profit ÷ buy cost, per leg and per route, plus
+    the minimum-return floor. Uses the same three-POI fixture as the solver
+    tests, with a cheap high-return trade against a rich low-return one."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": 500 if buy else 0,
+                "scu_sell_stock": 500 if sell else 0, "updated_at": None}
+
+    def _prices(self):
+        # Waste: 10 -> 30 = +20/SCU on 10 capital = 200% return, but only 2,000
+        # aUEC on a 100 SCU hold. Gold: 1000 -> 1300 = +300/SCU = 30% return,
+        # and 30,000 aUEC. The whole point of the feature is that these are
+        # different questions.
+        return [self._pt("Waste", 1, self.A, buy=10),
+                self._pt("Waste", 2, self.B, sell=30),
+                self._pt("Gold", 3, self.A, buy=1000),
+                self._pt("Gold", 4, self.B, sell=1300)]
+
+    def test_helper_is_profit_over_cost(self):
+        # The real trade from the 2026-08-02 capture: 3,408 -> 5,559.
+        self.assertEqual(nav_core.trade_return_pct(3408, 5559 - 3408), 63.1)
+        self.assertEqual(nav_core.trade_return_pct(100, 30), 30.0)
+
+    def test_helper_is_scale_invariant(self):
+        # Computed from prices, so hold size / budget / supply caps can't move
+        # it — that's why it's well-defined before a load is known.
+        self.assertEqual(nav_core.trade_return_pct(1000, 300),
+                         nav_core.trade_return_pct(1000, 300))
+        for scu in (1, 50, 100):
+            plan = nav_core.plan_trade_route(
+                NAV, self._prices(), scu, start_id=self.A, commodities=["Gold"],
+                sort="profit")
+            self.assertEqual(plan["legs"][0]["return_pct"], 30.0, scu)
+
+    def test_helper_guards(self):
+        self.assertIsNone(nav_core.trade_return_pct(0, 100))     # free cargo isn't ∞%
+        self.assertIsNone(nav_core.trade_return_pct(None, 100))
+        self.assertIsNone(nav_core.trade_return_pct(100, None))
+
+    def test_leg_and_route_return(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, commodities=["Gold"],
+            sort="profit")
+        leg = plan["legs"][0]
+        self.assertEqual(leg["return_pct"], 30.0)
+        self.assertEqual(leg["profit"], 30000)
+        self.assertEqual(leg["buy_cost"], 100000)
+        self.assertEqual(plan["summary"]["return_pct"], 30.0)
+
+    def test_route_return_is_against_peak_not_summed_capital(self):
+        # Two Gold-sized legs recycle the same aUEC, so the trader fronts one
+        # hold-fill, not two. Summing the buys would halve the stated return.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit", max_stops=6)
+        sm = plan["summary"]
+        self.assertGreater(len(plan["legs"]), 1)
+        self.assertEqual(sm["return_pct"],
+                         round(100.0 * sm["total_profit"] / sm["peak_capital"], 1))
+
+    def test_floor_drops_low_return_trades(self):
+        # 30% Gold is out at a 50% floor; 200% Waste survives — even though Gold
+        # is by far the richer trade in absolute aUEC.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit", max_stops=6,
+            min_return_pct=50)
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]}, {"Waste"})
+
+    def test_floor_boundary_is_inclusive(self):
+        # "minimum 30%" must keep a 30.0% trade, not round it out.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, commodities=["Gold"],
+            sort="profit", min_return_pct=30)
+        self.assertTrue(plan["legs"])
+
+    def test_no_floor_keeps_everything(self):
+        for floor in (None, 0):
+            plan = nav_core.plan_trade_route(
+                NAV, self._prices(), 100, start_id=self.A, sort="profit",
+                max_stops=6, min_return_pct=floor)
+            self.assertIn("Gold", {lg["commodity"] for lg in plan["legs"]}, floor)
+
+    def test_impossible_floor_is_infeasible(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, sort="profit",
+            min_return_pct=10_000)
+        self.assertFalse(plan["summary"]["feasible"])
+        self.assertEqual(plan["legs"], [])
+
+    def test_held_leg_has_no_return(self):
+        # Sunk cargo: buy_cost is 0, so there's no capital for this leg to be a
+        # return on. None, not a number computed off what was already spent.
+        held = {"commodity": "Gold", "scu": 100, "buy_price": 1000}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, held=held, max_stops=2)
+        self.assertTrue(plan["legs"][0]["held"])
+        self.assertIsNone(plan["legs"][0]["return_pct"])
+
+    def test_floor_survives_into_the_replan_continuation(self):
+        held = {"commodity": "Gold", "scu": 100, "buy_price": 1000}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, held=held, max_stops=6,
+            min_return_pct=50)
+        cont = [lg for lg in plan["legs"] if not lg.get("held")]
+        self.assertTrue(cont)
+        self.assertEqual({lg["commodity"] for lg in cont}, {"Waste"})
+
+    def test_rank_trades_floor_and_field(self):
+        rows = nav_core.rank_trades(NAV, self._prices(), capacity_scu=100,
+                                    sort="margin")
+        self.assertEqual({r["commodity"]: r["return_pct"] for r in rows},
+                         {"Gold": 30.0, "Waste": 200.0})
+        # The two floors answer different questions and both apply.
+        only_rich = nav_core.rank_trades(NAV, self._prices(), capacity_scu=100,
+                                         sort="margin", min_margin=100)
+        self.assertEqual([r["commodity"] for r in only_rich], ["Gold"])
+        only_return = nav_core.rank_trades(NAV, self._prices(), capacity_scu=100,
+                                           sort="margin", min_return_pct=50)
+        self.assertEqual([r["commodity"] for r in only_return], ["Waste"])
+
+
 class TradeLegalityTests(unittest.TestCase):
     """nav_core commodity legality filter (#42): plan over the whole market,
     legal goods only, or contraband only. Same three-POI fixture as the solver

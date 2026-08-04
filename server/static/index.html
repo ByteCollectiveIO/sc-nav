@@ -1413,6 +1413,11 @@
   .trade-actual .ta-x { color: var(--dim); }
   .tl-actual-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--accent); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  /* Return on capital (#43). Neutral by default — it's information, not a
+     warning; `.low` only appears on a manual leg the player's own floor would
+     have dropped. */
+  .tl-return { color: var(--dim); }
+  .tl-return.low { color: var(--warn); font-weight: 600; }
   /* Contraband (#42): marks a leg's cargo as illicit in every legality mode —
      an Any-mode plan is exactly where the pilot needs to spot it. Same chip
      shape as .tl-actual-tag, in the warning hue. */
@@ -3476,6 +3481,11 @@
         <label class="muted" style="font-size:12px;">max spend (aUEC)
           <input id="trade-budget" class="ti" type="number" min="0" step="1000"
                  placeholder="unlimited" style="width:120px;">
+        </label>
+        <label class="muted" style="font-size:12px;"
+               title="Drop trades that return less than this on the aUEC you tie up. Profit ÷ buy cost — buy at 100, sell at 163, that's 63%.">min return
+          <input id="trade-minreturn" class="ti" type="number" min="0" step="5"
+                 placeholder="any" style="width:80px;">%
         </label>
         <span id="trade-ship-msg" class="muted" style="font-size:12px;"></span>
       </div>
@@ -8723,6 +8733,7 @@ function applyTradeConfig(cfg) {
   setTradeStops(cfg.stops || "any");
   if (!cfg.stops) tradeStopsForShip();
   setTradeLegality(cfg.legality || "any");    // #42 — also every mode
+  $("trade-minreturn").value = cfg.min_return_pct || "";   // #43
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
     if ($("trade-system")) $("trade-system").value = cfg.system || "";
@@ -8785,6 +8796,7 @@ function wireTradePlanner() {
   $("trade-scu").addEventListener("input", renderTradeSuggest);
   $("trade-system").addEventListener("change", renderTradeSuggest);
   $("trade-budget").addEventListener("input", renderTradeSuggest);
+  $("trade-minreturn").addEventListener("input", renderTradeSuggest);   // #43
   // Freshness: the day count only matters while the filter is on; keep the board
   // in sync with the same freshness the planner will apply.
   $("trade-fresh-on").addEventListener("change", () => {
@@ -8999,6 +9011,8 @@ function buildTradePlanBody(msg) {
   // just get badged. Like avoid_mode, it's a property of the ship, not of the mode.
   const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid,
                  stops: tradeStops, legality: tradeLegality, ...tradeStartPayload() };
+  const minRet = Number($("trade-minreturn").value);
+  if (minRet > 0) body.min_return_pct = minRet;      // #43 (blank/0 = no floor)
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
   const ship = $("trade-ship").value.trim();
   if (ship) body.ship = ship;
@@ -9093,6 +9107,9 @@ function renderTradePlan(res) {
                metric(fmtGm(sm.total_distance_m), "QT DISTANCE"),
                metric(fmtDur(sm.total_time_s), "EST. TIME"),
                metric(fmtAuec(sm.peak_capital), "CAPITAL NEEDED")];
+  // #43: profit as a share of the capital you front. Measured against PEAK
+  // capital because sequential trades recycle the same aUEC (see _cost_route).
+  if (sm.return_pct != null) sub.push(metric(sm.return_pct + "%", "RETURN"));
   if (sm.loaded_pct != null) sub.push(metric(sm.loaded_pct + "%", "HOLD LOADED"));
   if (sm.total_fuel_scu != null) sub.push(metric(fmtScu(sm.total_fuel_scu), "QT FUEL"));   // #27
   h += `<div class="route-substats">` + sub.join("") + `</div>`;
@@ -9235,7 +9252,12 @@ function renderTradeLeg(lg, i) {
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
     + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span>${amenChips(lg.sell_amen)}</div>`
     + `<div class="tl-econ">+${fmtAuec(lg.profit_per_scu)}/SCU · profit <b>${fmtAuec(lg.profit)}</b>`
-    + ` · ${fmtAuec(lg.buy_cost)} capital</div>`
+    + ` · ${fmtAuec(lg.buy_cost)} capital`
+    + (lg.return_pct != null
+        ? ` · <span class="tl-return${lg.low_return ? " low" : ""}"`
+          + ` title="Return on the capital this leg ties up (profit ÷ buy cost)">`
+          + `${lg.return_pct}% return</span>` : "")
+    + `</div>`
     + (move.length ? `<div class="tl-move">${move.join(" · ")}</div>` : "")
     + `</div></div>`;
 }
@@ -9252,6 +9274,10 @@ async function renderTradeSuggest() {
   if (sys) qs.set("system", sys);
   const budget = Number($("trade-budget").value);
   if (budget > 0) qs.set("budget", String(Math.round(budget)));
+  // #43: the board must obey the same return floor as the planner, or the two
+  // disagree about what counts as a trade worth showing.
+  const minRet = Number($("trade-minreturn").value);
+  if (minRet > 0) qs.set("min_return_pct", String(minRet));
   const freshOn = $("trade-fresh-on").checked;
   const freshDays = tradeStaleDays();
   if (freshOn) qs.set("max_price_age_days", String(freshDays));
@@ -9285,6 +9311,7 @@ async function renderTradeSuggest() {
       : `<b>+${money(r.profit_per_scu)}</b> aUEC/SCU`;
     let econ = `buy <b>${money(r.buy_price)}</b> → sell <b>${money(r.sell_price)}</b> aUEC`
       + ` · spread <b>+${money(r.profit_per_scu)}</b>/SCU`;
+    if (r.return_pct != null) econ += ` · <b>${r.return_pct}%</b> return`;   // #43
     if (r.max_scu && r.trade_profit)
       econ += ` · move <b>${money(r.max_scu)}</b> SCU = <b>${money(r.trade_profit)}</b> aUEC/run`;
     const age = tradeRowAge(r);   // older side's scrape age; always shown, filter on or off

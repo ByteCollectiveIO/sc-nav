@@ -16,6 +16,30 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 43. Trade planner: profit margin % + minimum-return threshold 🔨 BUILT
+
+Members wanted a percentage next to the aUEC, and a floor to filter by.
+**Definition: return on capital (profit ÷ buy cost)**, not the accounting
+profit ÷ revenue — capital is the binding constraint, and the same trade reads
+63% one way and 39% the other, so the choice is recorded in
+`nav_core.trade_return_pct`. Per-leg + per-route `return_pct`, `min_return_pct`
+filtering in `_trade_candidates`, manual legs badged (`low_return`) not dropped,
+board honors the same floor. Detail in
+[`trade-route-planner.md`](trade-route-planner.md).
+
+Worth not re-deriving: route return is against **`peak_capital`**, not summed
+buys (sequential trades recycle the same aUEC); a **held leg has no return**
+(cargo already paid for, `buy_cost` 0); and `min_return_pct` is deliberately
+NOT merged with the board's older `min_margin`, which is an aUEC/SCU spread —
+they answer different questions and both apply.
+
+**The tension is real and intentional:** the solver still optimizes profit/hour,
+so the floor buys percentage with absolute money. Live measurements at 96 SCU —
+no floor: 60% return / 423k profit · 60% floor: 290% / 49k · 200% floor: 874% /
+1,005 aUEC of Waste. Both numbers sit together in the summary so it's visible.
+If members start chasing the percentage, the next move is a "sort by return"
+option, not a smarter default.
+
 ### 42. Trade planner: cargo legality filter 🔨 BUILT
 
 Tester ask: plan over the whole market, **legal goods only**, or **contraband

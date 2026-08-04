@@ -474,6 +474,57 @@ packages/precedence):
 
 ---
 
+## Profit margin + minimum-return threshold (#43) — AS BUILT
+
+User ask: the planner showed total aUEC but never *what the money earned*, and
+members wanted a percentage plus a floor ("only show me 30%+ trades").
+
+**Definition: return on capital — profit ÷ buy cost.** Chosen over the
+accounting "gross margin" (profit ÷ revenue) because capital is the binding
+constraint in trading: the planner already has a budget cap and a CAPITAL
+NEEDED stat, and "my 100k came back as 163k" is the number a trader acts on.
+The same real trade reads 63% as return and 39% as revenue-margin, so the
+choice matters — it is stated in `nav_core.trade_return_pct`'s docstring so
+nobody re-derives it.
+
+- **Computed from prices, not from costed totals.** Profit and cost both scale
+  with SCU, so the ratio is identical at any load size. That makes it
+  well-defined *before* a hold size, budget or supply cap is known, and immune
+  to the zero-SCU edge. `_trade_row` stamps `return_pct`, so the best-trades
+  board gets it for free.
+- **Route-level return is measured against `peak_capital`, not summed buys.**
+  Trades are sequential — the same aUEC is recycled leg after leg — so what the
+  trader actually fronts is the largest single hold-fill. Summing the buys would
+  badly understate a good multi-leg route. Test pins the identity.
+- **A held leg has no return.** Its cargo is already paid for (`buy_cost` 0), so
+  there's no capital at risk for it to be a return *on*; showing a percentage
+  next to "0 capital" would be a lie. `None`, deliberately.
+- **`min_return_pct` filters in `_trade_candidates`** — same place as legality
+  and the stock/danger sets, so plan, re-plan and the held-cargo continuation
+  are all covered once. Manual legs are badged (`low_return`), never dropped.
+- **Two floors, different questions, both applied.** The board's existing
+  `min_margin` is an *aUEC/SCU spread*; `min_return_pct` is a *percentage*. 500
+  aUEC/SCU on cheap cargo is a huge return on little capital; the same spread on
+  Quantanium is noise. The naming is deliberate — do not merge them.
+
+**Known tension, by design not by accident.** The solver still optimizes profit
+or profit/hour; the floor is a *constraint*, not an objective. Raising it
+therefore trades absolute money for percentage. Measured on the live feed at a
+96 SCU hold:
+
+| floor | route return | total profit | what it picks |
+|---|---|---|---|
+| none | 60% | 423,564 | Hephaestanite + Laranite |
+| 30% | 119% | 392,652 | Hephaestanite + Nitrogen |
+| 60% | 290% | 49,725 | Waste |
+| 200% | 874% | 1,005 | Waste |
+
+A 200% floor is a wonderful percentage on a rounding error. Both numbers sit
+side by side in the route summary precisely so the trade-off is visible; the
+input's tooltip explains the ratio rather than implying "higher is better."
+
+---
+
 ## Cargo legality filter (#42) — AS BUILT
 
 A tester wanted contraband **in**, **out**, or **exclusively**: smuggling pays
