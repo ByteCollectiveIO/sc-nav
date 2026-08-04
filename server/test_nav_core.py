@@ -2771,6 +2771,67 @@ class TradeReturnTests(unittest.TestCase):
                                            sort="margin", min_return_pct=50)
         self.assertEqual([r["commodity"] for r in only_return], ["Waste"])
 
+    # --- return on the BANKROLL (#44 fix) -----------------------------------
+    # The v0.92.0 live regression: 'return' + a 100k max spend produced a
+    # 115-aUEC Waste loop at 874% — the best ratio on DEPLOYED capital, useless
+    # on the money the player actually brought. With a budget the denominator
+    # becomes the constant bankroll, so under-deployment stops winning.
+
+    def test_bankroll_return_picks_the_money_not_the_ratio(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6,
+            sort="return", budget=100_000)
+        self.assertIn("Gold", {lg["commodity"] for lg in plan["legs"]})
+        sm = plan["summary"]
+        self.assertEqual(sm["return_on_budget_pct"],
+                         round(100.0 * sm["total_profit"]
+                               / max(sm["peak_capital"], 100_000), 1))
+
+    def test_bankroll_return_keeps_chaining_positive_legs(self):
+        # A constant denominator restores profit-mode monotonicity: any
+        # positive leg improves the route, so the no-budget early-stop must
+        # NOT fire and Waste chains alongside Gold instead of excluding it.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6,
+            sort="return", budget=100_000)
+        self.assertEqual({lg["commodity"] for lg in plan["legs"]},
+                         {"Waste", "Gold"})
+
+    def test_bankroll_return_readout_divides_by_the_budget(self):
+        # A route that deploys less than the bankroll reads the honest smaller
+        # multiple: 32k profit is 32% of the 100k fronted but 3.2% of a 1M
+        # bankroll. Both figures ship — return_pct stays deployed-capital.
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6,
+            sort="return", budget=1_000_000)
+        sm = plan["summary"]
+        self.assertEqual(sm["return_on_budget_pct"],
+                         round(100.0 * sm["total_profit"] / 1_000_000, 1))
+        self.assertEqual(sm["return_pct"],
+                         round(100.0 * sm["total_profit"] / sm["peak_capital"], 1))
+        self.assertLess(sm["return_on_budget_pct"], sm["return_pct"])
+
+    def test_no_budget_summary_has_no_bankroll_field(self):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, max_stops=6, sort="return")
+        self.assertNotIn("return_on_budget_pct", plan["summary"])
+
+    def test_route_score_return_with_budget(self):
+        lowcap = {"total_profit": 1000, "deadhead_time_s": 0,
+                  "peak_capital": 500, "return_pct": 200.0}
+        bigcap = {"total_profit": 30000, "deadhead_time_s": 0,
+                  "peak_capital": 100_000, "return_pct": 30.0}
+        # Without a bankroll the ratio wins; with one, the money does.
+        self.assertGreater(nav_core._route_score(lowcap, "return", 1.0),
+                           nav_core._route_score(bigcap, "return", 1.0))
+        self.assertGreater(nav_core._route_score(bigcap, "return", 1.0, budget=100_000),
+                           nav_core._route_score(lowcap, "return", 1.0, budget=100_000))
+
+    def test_rank_trades_bankroll_return_ranks_by_run_profit(self):
+        rows = nav_core.rank_trades(NAV, self._prices(), capacity_scu=100,
+                                    sort="return", budget=100_000)
+        self.assertEqual([r["commodity"] for r in rows], ["Gold", "Waste"])
+
 
 class TradeLegalityTests(unittest.TestCase):
     """nav_core commodity legality filter (#42): plan over the whole market,
