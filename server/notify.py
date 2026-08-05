@@ -87,10 +87,19 @@ def any_configured() -> bool:
 
 
 def webhook_status() -> dict[str, dict]:
-    """Per-category webhook state for the settings API: whether one is set and a
-    masked tail to confirm which. NEVER exposes the raw URL (it's a credential)."""
-    return {c: {"set": is_configured(c), "tail": mask(webhook_url(c))}
-            for c in CATEGORIES}
+    """Per-category webhook state for the settings API: whether one is set, a
+    masked tail to confirm which, and the last delivery outcome (a revoked
+    webhook 404s forever and would otherwise look healthy). NEVER exposes the
+    raw URL (it's a credential)."""
+    out: dict[str, dict] = {}
+    for c in CATEGORIES:
+        h = _health.get(c) or {}
+        out[c] = {"set": is_configured(c), "tail": mask(webhook_url(c)),
+                  "last_ok": h.get("ok_at") or None,
+                  "last_error": h.get("err") or "",
+                  "last_error_at": h.get("err_at") or None,
+                  "fails": int(h.get("fails") or 0)}
+    return out
 
 
 def migrate_legacy_webhook() -> None:
@@ -112,6 +121,7 @@ def set_webhook(category: str, url: str) -> None:
     """Store (or clear, with '') a category's webhook URL. Caller validates."""
     if category in CATEGORIES:
         db.set_setting(_webhook_key(category), (url or "").strip())
+        _health.pop(category, None)   # new hook = clean delivery slate
 
 
 def reminder_lead_min() -> int:
@@ -119,6 +129,24 @@ def reminder_lead_min() -> int:
         return max(1, int(db.get_setting(REMINDER_LEAD_KEY, "30") or "30"))
     except (TypeError, ValueError):
         return 30
+
+
+# --- delivery health ----------------------------------------------------------
+# Webhooks die silently: a revoked/deleted webhook 404s on every send, forever,
+# and the only trace used to be a stdout line. Track the last outcome per
+# category so the settings UI can say "last delivery failed" instead of showing
+# a green light on a dead hook. In-memory by design (single-process app): a
+# restart clears it, and the next real send repopulates it.
+_health: dict[str, dict] = {}
+
+
+def _note_result(category: str, ok: bool, error: str = "") -> None:
+    h = _health.setdefault(category, {"ok_at": 0.0, "err": "", "err_at": 0.0,
+                                      "fails": 0})
+    if ok:
+        h.update(ok_at=time.time(), err="", fails=0)
+    else:
+        h.update(err=error[:200], err_at=time.time(), fails=int(h["fails"]) + 1)
 
 
 # --- dedup --------------------------------------------------------------------
@@ -169,8 +197,12 @@ def _post(url: str, payload: dict) -> None:
             raise
 
 
+MENTIONS_PER_MESSAGE = 50    # Discord's allowed_mentions.users hard cap
+_CONTENT_CAP = 1900          # Discord hard-caps content at 2000 chars
+
+
 async def send(category: str, text: str, *, mentions: list[str] | None = None,
-               dedup_key: str | None = None) -> bool:
+               dedup_key: str | None = None, embed: dict | None = None) -> bool:
     """Post ``text`` to ``category``'s Discord webhook. Returns True on a
     best-effort success, False if that category has no webhook / deduped /
     failed. NEVER raises — a notification problem must not break the caller's
@@ -178,7 +210,12 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
 
     ``mentions`` is a list of Discord user-id strings; prefix the relevant id in
     the text with ``<@id>`` to actually ping them. We scope allowed_mentions to
-    exactly those ids and never allow @everyone/@here/role pings.
+    exactly those ids and never allow @everyone/@here/role pings. Callers with
+    more than MENTIONS_PER_MESSAGE ids to ping must use ``send_paged``.
+
+    ``embed`` is an optional Discord embed object (title/description/url/color/
+    fields) sent alongside the text — webhook-native, no bot needed. Mentions
+    inside embeds don't ping, so pings always ride in ``text``.
     """
     url = webhook_url(category)
     if not is_valid_webhook_url(url):
@@ -186,14 +223,48 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
     if dedup_key and _dedup_seen(dedup_key):
         return False
 
-    users = [str(m) for m in (mentions or []) if str(m).isdigit()][:50]
+    users = [str(m) for m in (mentions or []) if str(m).isdigit()][:MENTIONS_PER_MESSAGE]
     payload = {
-        "content": text[:1900],   # Discord hard-caps content at 2000 chars
+        "content": text[:_CONTENT_CAP],
         "allowed_mentions": {"parse": [], "users": users},
     }
+    if embed:
+        payload["embeds"] = [embed]
     try:
         await asyncio.to_thread(_post, url, payload)
+        _note_result(category, True)
         return True
     except Exception as exc:   # log and swallow — see module docstring
+        _note_result(category, False, str(exc))
         print(f"[sc-nav] discord notify failed: {exc}")
         return False
+
+
+async def send_paged(category: str, body: str, *,
+                     mentions: list[str] | None = None,
+                     dedup_key: str | None = None,
+                     embed: dict | None = None) -> bool:
+    """Post ``body`` plus a ``<@id>`` ping for EVERY mention, split across as
+    many messages as Discord's caps require. ``send`` silently drops pings past
+    50 ids and truncation eats trailing pings first — at 180-member org scale
+    that means a third of an event's roster never hears about it. Message 1 =
+    body + first ping batch; later messages are ping continuations. The body is
+    truncated before pings, never the other way around. Returns True only if
+    every page posted."""
+    seen: set[str] = set()
+    ids = [str(m) for m in (mentions or []) if str(m).isdigit()]
+    ids = [i for i in ids if not (i in seen or seen.add(i))]
+    if not ids:
+        return await send(category, body, dedup_key=dedup_key, embed=embed)
+    batches = [ids[i:i + MENTIONS_PER_MESSAGE]
+               for i in range(0, len(ids), MENTIONS_PER_MESSAGE)]
+    ok = True
+    for n, batch in enumerate(batches):
+        pings = " ".join(f"<@{i}>" for i in batch)
+        head = (body if n == 0 else "↳ (continued)")[:_CONTENT_CAP - len(pings) - 1]
+        # Page 0 keeps the caller's dedup key; continuations get their own so a
+        # racing double-call drops every page, not just the first.
+        key = dedup_key if (dedup_key is None or n == 0) else f"{dedup_key}:p{n}"
+        ok = await send(category, f"{head}\n{pings}", mentions=batch,
+                        dedup_key=key, embed=embed if n == 0 else None) and ok
+    return ok

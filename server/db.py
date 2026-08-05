@@ -589,6 +589,7 @@ def init(db_path) -> None:
         _ensure_column("members", "online_activity", "TEXT")
         _ensure_column("members", "appear_offline", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("members", "playstyle_tags", "TEXT")   # JSON list, member profile (#30)
+        _ensure_column("members", "notify_opt_out", "INTEGER NOT NULL DEFAULT 0")  # no Discord @-pings
         _ensure_column("members", "active_survey_zone", "INTEGER")   # #36.1 active zone id
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
@@ -1053,6 +1054,30 @@ def set_primary_handle(discord_id: str, handle: str | None) -> None:
             (did, handle))
 
 
+def set_notify_opt_out(discord_id: str, opt_out: bool) -> None:
+    """Member preference: never @-ping me on Discord (channel messages still
+    mention my name in text — I'm just not in allowed_mentions)."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, notify_opt_out) VALUES (?,?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET notify_opt_out=excluded.notify_opt_out",
+            (str(discord_id), 1 if opt_out else 0),
+        )
+
+
+def notify_opted_out(ids) -> set:
+    """Which of these members have opted out of Discord @-pings."""
+    ids = [str(i) for i in ids if i]
+    if not ids:
+        return set()
+    q = ",".join("?" * len(ids))
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT discord_id FROM members WHERE notify_opt_out=1 "
+            f"AND discord_id IN ({q})", ids).fetchall()
+    return {r["discord_id"] for r in rows}
+
+
 def set_directory_opt_out(discord_id: str, opt_out: bool) -> None:
     did = str(discord_id)
     with _lock, _conn:
@@ -1493,10 +1518,17 @@ def list_events(scope: str, now_iso: str) -> list[dict]:
     anything else → scheduled events from now on, soonest first. Cancelled future
     events drop out of both (soft-hidden) but stay reachable by id."""
     if scope == "past":
-        sql = "SELECT * FROM events WHERE start_at < ? ORDER BY start_at DESC"
+        # status='completed' rides along regardless of the clock: an event the
+        # organizer wrapped up early is history even if its start_at hasn't
+        # passed yet (it left the upcoming scope the moment it completed).
+        sql = ("SELECT * FROM events WHERE start_at < ? OR status='completed' "
+               "ORDER BY start_at DESC")
     else:
-        sql = ("SELECT * FROM events WHERE status='scheduled' AND start_at >= ? "
-               "ORDER BY start_at ASC")
+        # Cancelled-but-future events stay on the board (with their Cancelled
+        # badge) — a signed-up member who missed the Discord ping used to watch
+        # the event just vanish.
+        sql = ("SELECT * FROM events WHERE status IN ('scheduled','cancelled') "
+               "AND start_at >= ? ORDER BY start_at ASC")
     with _lock:
         rows = _conn.execute(sql, (now_iso,)).fetchall()
     return [_event_row_to_dict(r) for r in rows]
@@ -1525,6 +1557,15 @@ def mark_event_reminded(event_id: int, ts: str) -> bool:
     return cur.rowcount > 0
 
 
+def reset_event_reminder(event_id: int) -> None:
+    """Re-arm the reminder after a reschedule. The reminder loop only fires on
+    `reminded_at IS NULL`, so a moved event whose stamp survives the edit would
+    never remind for its NEW time (and one moved earlier already advertised the
+    wrong time in its fired ping)."""
+    with _lock, _conn:
+        _conn.execute("UPDATE events SET reminded_at=NULL WHERE id=?", (event_id,))
+
+
 def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
     """Replace the editable columns of an event (organizer/admin check is the
     caller's job). Returns whether a row matched."""
@@ -1535,6 +1576,18 @@ def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
         cur = _conn.execute(
             f"UPDATE events SET {sets}, updated_at=? WHERE id=?",
             (*vals, updated_at, event_id),
+        )
+    return cur.rowcount > 0
+
+
+def complete_event(event_id: int, updated_at: str) -> bool:
+    """Organizer wrap-up: flip status to 'completed', which turns the row into
+    attendance history (phase derives to 'ended' regardless of the clock)."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE events SET status='completed', updated_at=? WHERE id=? "
+            "AND status='scheduled'",
+            (updated_at, event_id),
         )
     return cur.rowcount > 0
 
@@ -2316,11 +2369,15 @@ def _like_needle(s: str) -> str:
 
 def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
                         q, kind, min_price, max_price,
-                        min_quality=None, max_quality=None, band=None, stat=None):
+                        min_quality=None, max_quality=None, band=None, stat=None,
+                        bidder_id=None, craftable_by=None):
     """Build the shared WHERE clause (+ params) for list_listings / count_listings
     so the browse and count queries can never drift apart. Crafted-quality filters
     (`min_quality`/`max_quality`/`band`/`stat`) read the JSON `attributes` blob with
-    SQLite's json functions; a NULL blob (non-crafted listing) never matches them."""
+    SQLite's json functions; a NULL blob (non-crafted listing) never matches them.
+    `bidder_id` = listings this member has a live offer/bid/quote on or a struck
+    deal in ("my activity"); `craftable_by` = commissions whose recipe is in this
+    member's blueprint library (server-side, so it sees past the loaded page)."""
     where, params = [], []
     if mode:
         where.append("mode=?"); params.append(mode)
@@ -2328,6 +2385,20 @@ def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
         where.append("item_id=?"); params.append(item_id)
     if seller_id:
         where.append("seller_id=?"); params.append(str(seller_id))
+    if bidder_id:
+        # Their side of the deal-flow: an active offer, an accepted one (pending
+        # deal awaiting confirms), or being the bound buyer. Withdrawn/lost
+        # offers don't keep a listing in "my activity".
+        where.append(
+            "(buyer_id=? OR EXISTS (SELECT 1 FROM listing_offers lo "
+            "WHERE lo.listing_id=listings.id AND lo.bidder_id=? "
+            "AND lo.status IN ('active','accepted')))")
+        params += [str(bidder_id), str(bidder_id)]
+    if craftable_by:
+        where.append(
+            "blueprint_key IS NOT NULL AND blueprint_key IN "
+            "(SELECT blueprint_key FROM member_blueprints WHERE member_id=?)")
+        params.append(str(craftable_by))
     if status:
         where.append("status=?"); params.append(status)
     elif open_only:
@@ -2371,7 +2442,9 @@ def list_listings(mode: str | None = None, item_id: str | None = None,
                   max_price: float | None = None, sort: str = "recent",
                   limit: int | None = None, offset: int = 0,
                   min_quality: float | None = None, max_quality: float | None = None,
-                  band: int | None = None, stat: str | None = None) -> tuple[list[dict], int]:
+                  band: int | None = None, stat: str | None = None,
+                  bidder_id: str | None = None,
+                  craftable_by: str | None = None) -> tuple[list[dict], int]:
     """Browse listings with optional filters, a sort, and paging. Filters: mode /
     exact item / seller / status (or `open_only`), free-text `q` over the item name,
     item `kind` (catalog-id prefix), a `min_price`/`max_price` band over the
@@ -2382,7 +2455,8 @@ def list_listings(mode: str | None = None, item_id: str | None = None,
     board can show "1–25 of N"."""
     clause, params = _listing_filter_sql(mode, item_id, seller_id, status,
                                          open_only, q, kind, min_price, max_price,
-                                         min_quality, max_quality, band, stat)
+                                         min_quality, max_quality, band, stat,
+                                         bidder_id, craftable_by)
     order = _LISTING_SORTS.get(sort, _LISTING_SORTS["recent"])
     sql = f"SELECT * FROM listings{clause} ORDER BY {order}"
     if limit is not None:
@@ -2469,6 +2543,15 @@ def set_listing_status(listing_id: int, status: str, updated_at: str) -> bool:
             "UPDATE listings SET status=?, updated_at=? WHERE id=?",
             (status, updated_at, listing_id))
         _recompute_denorm(listing_id)
+    return cur.rowcount > 0
+
+
+def touch_listing(listing_id: int, updated_at: str) -> bool:
+    """Refresh a listing's `updated_at` without changing anything else — the
+    one-click renew that clears the board's stale badge."""
+    with _lock, _conn:
+        cur = _conn.execute("UPDATE listings SET updated_at=? WHERE id=?",
+                            (updated_at, listing_id))
     return cur.rowcount > 0
 
 

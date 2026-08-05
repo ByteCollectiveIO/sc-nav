@@ -4666,6 +4666,12 @@ def build_event_manifest(event, board) -> str:
     glance, ready to paste or auto-post (#18). `event` supplies the header
     (title/start/rally); `board` is a derive_roster_board() result. Pure text."""
     lines = [f"**{event.get('title') or 'Event'} — Fleet Manifest**"]
+    start = _parse_event_dt(event.get("start_at"))
+    if start:
+        # Discord renders <t:…> in each viewer's timezone; an op order without
+        # its H-hour isn't an op order.
+        ts = int(start.timestamp())
+        lines.append(f"Starts: <t:{ts}:F> (<t:{ts}:R>)")
     where = event.get("location")
     if where:
         lines.append(f"Rally: {where}")

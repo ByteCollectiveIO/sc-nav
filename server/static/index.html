@@ -1600,6 +1600,26 @@
   .ev-name { font-size: 12px; padding: 3px 9px; border-radius: 12px; background: var(--panel2);
     border: 1px solid var(--border); }
   .ev-name.maybe { opacity: .7; font-style: italic; }
+  .ev-name.wait { opacity: .8; border-style: dashed; border-color: var(--warn); }
+  /* board bar (2026-08 review): range seg + mine toggle + category chips */
+  .ev-boardbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .ev-boardchips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+  .ev-catchip { cursor: pointer; background: none; }
+  .ev-catchip.on { background: var(--accent-wash); box-shadow: inset 0 0 0 1px currentColor; }
+  #ev-mine-tog { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; cursor: pointer;
+    background: none; border: 1px solid var(--border); border-radius: 12px; padding: 3px 10px; color: var(--dim); }
+  #ev-mine-tog.on { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
+  .ev-mine-chip { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    color: var(--good); border: 1px solid var(--good); border-radius: 4px; padding: 0 5px; }
+  .ev-mine-chip.maybe { color: var(--dim); border-color: var(--dim); }
+  .ev-mine-chip.wait { color: var(--warn); border-color: var(--warn); }
+  /* organizer attendee management */
+  .ev-attmgr { margin-top: 10px; }
+  .ev-attmgr summary { font-size: 11px; color: var(--dim); letter-spacing: 1px;
+    text-transform: uppercase; cursor: pointer; }
+  .ev-attmgr-box { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .ev-att-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ev-att-acts { display: inline-flex; gap: 6px; margin-left: auto; }
   /* signup + role pickers */
   .ev-signup { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 14px; }
   .ev-signup h3 { font-size: 13px; color: var(--accent); margin: 0 0 10px; letter-spacing: .5px; }
@@ -1918,6 +1938,14 @@
   .mk-ends.soon { color: var(--warn); }
   .mk-ends.over { color: var(--bad); }
   .mk-deals { color: var(--good); font-size: 12px; }
+  /* board lifecycle chips: an untouched-open-listing badge, and the caller's
+     stake on the "My activity" tab. Same quiet-chip chassis as .mk-unverified. */
+  .mk-stale { font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 0 4px; }
+  .mk-stake { font-size: 11px; color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 4px; padding: 0 5px; font-variant-numeric: tabular-nums; }
+  .mk-stake.outbid { color: var(--warn); border-color: var(--warn); }
+  .mk-stake.confirm { color: var(--good); border-color: var(--good); font-weight: 700; }
   /* in-game meetup handle: name reads plainly (not an accent — it's data, not a
      live control); the glyph is dim, and an unverified handle gets an amber chip. */
   .mk-handle { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -2688,6 +2716,16 @@
     <div class="on-tags" id="profile-tags"></div>
     <span class="muted" id="profile-status" role="status" aria-live="polite"
           style="font-size:12px; display:block; margin-top:6px;"></span>
+    <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; cursor:pointer;">
+      <input type="checkbox" id="profile-noping">
+      Don't @-ping me on Discord
+    </label>
+    <div class="muted" style="font-size:12px; margin-top:2px;">
+      App notifications (offers, reminders, waitlist promotions) still name you in the
+      channel, but won't light up your phone.
+    </div>
+    <span class="muted" id="profile-noping-status" role="status" aria-live="polite"
+          style="font-size:12px; display:block; margin-top:4px;"></span>
   </div>
   <div class="settings-grp-h">Support the project</div>
   <div class="panel" id="support-panel">
@@ -2888,6 +2926,18 @@
       real shortage.
     </div>
     <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>MARKETPLACE LISTINGS</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Listings look stale after
+      <input id="listing-stale" type="number" min="0" max="365" step="1" style="width:80px;"> days
+      <button id="listing-stale-save">Save</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      An open listing untouched this long gets an amber <b>stale</b> badge on the board and a
+      one-click "Still available" renew for its seller. Keeps the board leading with live
+      offers instead of dead ads. 0 turns the badge off. Nothing is auto-removed.
+    </div>
+    <div class="muted" id="listing-stale-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
     <h2>⛏ MINED-OUT REPORTS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Reports age off after
@@ -7228,6 +7278,26 @@ async function renderProfilePanel() {
     `<button type="button" class="on-tag${myProfileTags.includes(t) ? " active" : ""}" ` +
     `aria-pressed="${myProfileTags.includes(t)}" data-tag="${esc(t)}">${esc(t)}</button>`).join("");
   el.querySelectorAll(".on-tag").forEach(b => b.onclick = () => toggleProfileTag(b.dataset.tag));
+  const np = $("profile-noping");
+  if (np && !np.dataset.wired) {
+    np.dataset.wired = "1";
+    np.checked = !!(currentMe && currentMe.notify_opt_out);
+    np.onchange = async () => {
+      const st = $("profile-noping-status");
+      st.textContent = "Saving…";
+      try {
+        const r = await fetch("/api/me", { method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notify_opt_out: np.checked }) });
+        if (!r.ok) throw 0;
+        if (currentMe) currentMe.notify_opt_out = np.checked;
+        st.textContent = np.checked ? "Saved — you won't be pinged." : "Saved — pings back on.";
+      } catch {
+        np.checked = !np.checked;   // revert the visual on failure
+        st.textContent = "Couldn't save — try again.";
+      }
+    };
+  }
 }
 async function toggleProfileTag(tag) {
   const st = $("profile-status");
@@ -9876,6 +9946,9 @@ function renderTradeRunLeg(lg, i, run) {
 // is chosen from the sub-hash so each is deep-linkable and the back button works.
 let evTaxonomy = null;        // cached {types, categories, role_groups, roles}
 let evBoardEvents = [];       // last board fetch (so calendar nav doesn't refetch)
+let evBoardRange = "upcoming";   // upcoming | past (2026-08 review: past = attendance history)
+let evBoardCat = "";             // category chip filter ("" = all)
+let evBoardMine = false;         // only events I'm signed up for / organizing
 let evCalMonth = null;        // Date at the first of the displayed month
 let evFilterDay = null;       // "YYYY-MM-DD" (local) day filter, or null
 
@@ -9964,9 +10037,14 @@ function eventCard(e) {
   const pct = capNum ? Math.min(100, Math.round(100 * f.total_going / capNum)) : (f.total_going ? 100 : 0);
   const bar = capNum
     ? `<div class="ev-card-bar ${f.min_met ? "met" : ""}"><span style="width:${pct}%"></span></div>` : "";
+  const mineBadge = e.my_signup
+    ? { going: `<span class="ev-mine-chip">✓ going</span>`,
+        maybe: `<span class="ev-mine-chip maybe">? maybe</span>`,
+        waitlist: `<span class="ev-mine-chip wait">⏳ waitlisted</span>` }[e.my_signup.status] || ""
+    : "";
   return `<a class="ev-card" href="#/events/${e.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(e.title)}</div>` +
-    `<div class="ev-chips">${phaseBadge(e)}${eventChips(e)}</div></div>` +
+    `<div class="ev-chips">${mineBadge}${phaseBadge(e)}${eventChips(e)}</div></div>` +
     `<div class="ev-meta">${evGlyph("◷")}${esc(fmtEventTime(e.start_at))} &nbsp;·&nbsp; ` +
     `${evGlyph("◎")}${esc(where || "—")} &nbsp;·&nbsp; by ${esc(e.organizer_name)}</div>` +
     `<div class="ev-fill"><div class="ev-players ${f.min_met ? "met" : ""}">` +
@@ -10007,14 +10085,20 @@ function bindCalendar() {
 }
 
 function renderBoardList() {
-  const shown = evFilterDay ? evBoardEvents.filter(e => localDayKey(e.start_at) === evFilterDay) : evBoardEvents;
+  let shown = evFilterDay ? evBoardEvents.filter(e => localDayKey(e.start_at) === evFilterDay) : evBoardEvents;
+  if (evBoardCat) shown = shown.filter(e => (e.categories || []).includes(evBoardCat));
+  if (evBoardMine) shown = shown.filter(e => e.my_signup || e.is_organizer);
   const note = evFilterDay
     ? `<div class="ev-filter-note">Showing ${esc(evFilterDay)} · <a class="ev-back" href="javascript:void 0" id="ev-clear-filter" style="margin:0">clear</a></div>`
     : "";
+  const empty = evBoardRange === "past"
+    ? "No past events yet."
+    : evBoardMine
+      ? "You're not signed up for anything coming up."
+      : `No upcoming events${evFilterDay ? " on this day" : ""}${evBoardCat ? " in this category" : ""}.`;
   $("ev-list").innerHTML = note + (shown.length
     ? shown.map(eventCard).join("")
-    : `<p class="stat-empty">No upcoming events${evFilterDay ? " on this day" : ""}. ` +
-      `<a href="#/events/new">Create one →</a></p>`);
+    : `<p class="stat-empty">${empty} <a href="#/events/new">Create one →</a></p>`);
   const clr = $("ev-clear-filter");
   if (clr) clr.onclick = () => { evFilterDay = null; bindCalendar(); renderBoardList(); };
 }
@@ -10025,11 +10109,19 @@ async function renderEventBoard() {
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">EVENTS</h2>` +
     `<a class="ev-btn primary" href="#/events/new">+ Create event</a></div>` +
     `<p class="ev-intro">Rally the org around in-game ops, expeditions, and meetups. Pick a day ` +
-    `to see what's scheduled, or <a href="#/events/new">create your own</a> and gather a crew.</p></div>` +
-    `<div class="panel"><div id="ev-cal"></div></div>` +
+    `to see what's scheduled, or <a href="#/events/new">create your own</a> and gather a crew.</p>` +
+    `<div class="ev-boardbar"><span class="seg" role="group">` +
+      `<button id="ev-range-up" class="${evBoardRange === "upcoming" ? "on" : ""}" aria-pressed="${evBoardRange === "upcoming"}">Upcoming</button>` +
+      `<button id="ev-range-past" class="${evBoardRange === "past" ? "on" : ""}" aria-pressed="${evBoardRange === "past"}">Past</button></span>` +
+    `<button id="ev-mine-tog" class="ev-tab${evBoardMine ? " on" : ""}" aria-pressed="${evBoardMine}">My events</button>` +
+    `<span class="ev-boardchips" id="ev-catchips"></span></div></div>` +
+    (evBoardRange === "upcoming" ? `<div class="panel"><div id="ev-cal"></div></div>` : "") +
     `<div id="ev-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
+  $("ev-range-up").onclick = () => { if (evBoardRange !== "upcoming") { evBoardRange = "upcoming"; renderEventBoard(); } };
+  $("ev-range-past").onclick = () => { if (evBoardRange !== "past") { evBoardRange = "past"; renderEventBoard(); } };
+  $("ev-mine-tog").onclick = () => { evBoardMine = !evBoardMine; renderEventBoard(); };
   let data;
-  try { data = await fetch("/api/events?range=upcoming").then(r => r.json()); }
+  try { data = await fetch(`/api/events?range=${evBoardRange}`).then(r => r.json()); }
   catch {
     $("ev-list").innerHTML = `<p class="stat-empty">Couldn't load events. ` +
       `<button class="ev-btn" id="ev-retry">Retry</button></p>`;
@@ -10037,9 +10129,27 @@ async function renderEventBoard() {
     return;
   }
   evBoardEvents = data.events || [];
-  evCalMonth = new Date(); evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth(), 1);
   evFilterDay = null;
-  bindCalendar();
+  // Category chips come from the loaded events, so the row only offers filters
+  // that would actually match something.
+  const cats = [...new Set(evBoardEvents.flatMap(e => e.categories || []))].sort();
+  if (evBoardCat && !cats.includes(evBoardCat)) evBoardCat = "";
+  const chipBox = $("ev-catchips");
+  chipBox.innerHTML = cats.length > 1 ? cats.map(c =>
+    `<button class="ev-chip ${catClass(c)} ev-catchip${evBoardCat === c ? " on" : ""}" data-cat="${esc(c)}" aria-pressed="${evBoardCat === c}">${esc(c)}</button>`).join("") : "";
+  chipBox.querySelectorAll(".ev-catchip").forEach(b =>
+    b.onclick = () => {
+      evBoardCat = evBoardCat === b.dataset.cat ? "" : b.dataset.cat;
+      chipBox.querySelectorAll(".ev-catchip").forEach(x => {
+        x.classList.toggle("on", x.dataset.cat === evBoardCat);
+        x.setAttribute("aria-pressed", String(x.dataset.cat === evBoardCat));
+      });
+      renderBoardList();
+    });
+  if (evBoardRange === "upcoming") {
+    evCalMonth = new Date(); evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth(), 1);
+    bindCalendar();
+  }
   renderBoardList();
 }
 
@@ -10053,9 +10163,10 @@ function attendeesByRole(attendees, targetRoles) {
   });
   // Order: the event's target roles first, then any extra roles members claimed.
   const ordered = [];
-  (targetRoles || []).forEach(t => { if (byRole[t]) ordered.push([t, byRole[t]]); });
+  (targetRoles || []).forEach(t => { if (byRole[t.role]) ordered.push([t.role, byRole[t.role]]); });
   Object.keys(byRole).forEach(r => { if (!(targetRoles || []).some(t => t.role === r) && !ordered.some(o => o[0] === r)) ordered.push([r, byRole[r]]); });
-  return { ordered, noRole, maybe: attendees.filter(a => a.status === "maybe") };
+  return { ordered, noRole, maybe: attendees.filter(a => a.status === "maybe"),
+           waitlist: attendees.filter(a => a.status === "waitlist") };
 }
 
 async function renderEventDetail(id) {
@@ -10089,7 +10200,8 @@ async function renderDetailBody(e) {
     evGlyph("⚑") + `Rally <b>${esc(e.location || "—")}</b>`,
     e.event_location ? evGlyph("◎") + `Event <b>${esc(e.event_location)}</b>` : "",
     evGlyph("▣") + `<b class="${f.min_met ? "ev-players met" : ""}">${f.total_going}/${cap}</b> signed up` +
-      (f.min_players ? ` (min ${f.min_players})` : ""),
+      (f.min_players ? ` (min ${f.min_players})` : "") +
+      (e.waitlist_count ? ` <span class="ev-mine-chip wait">+${e.waitlist_count} waitlisted</span>` : ""),
   ].filter(Boolean);
   const secondary = [
     e.signup_deadline ? evGlyph("⊘") + `Signups close <b>${esc(fmtEventTime(e.signup_deadline))}</b>` : "",
@@ -10124,9 +10236,19 @@ async function renderDetailBody(e) {
     ? `<div class="ev-section-h">Tentative (${grouped.maybe.length})</div>` +
       `<div class="ev-roster-names">${grouped.maybe.map(a => `<span class="ev-name maybe">${esc(a.display_name)}</span>`).join("")}</div>`
     : "";
+  // First-come waitlist: shown in join order (the promote order), so everyone
+  // can see where they stand.
+  const waitRow = grouped.waitlist.length
+    ? `<div class="ev-section-h">Waitlist (${grouped.waitlist.length})</div>` +
+      `<div class="ev-roster-names">${grouped.waitlist.map((a, i) =>
+        `<span class="ev-name wait">#${i + 1} ${esc(a.display_name)}</span>`).join("")}</div>`
+    : "";
 
   const editControls = e.can_edit
     ? `<button class="ev-btn" id="ev-edit">Edit</button>` +
+      `<button class="ev-btn" id="ev-clone" title="Create a new event pre-filled from this one">Clone</button>` +
+      (cancelled || e.phase === "ended" ? ""
+        : `<button class="ev-btn" id="ev-complete" title="Wrap up — moves it to the past tab as attendance history">Mark completed</button>`) +
       (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
     : "";
 
@@ -10141,15 +10263,25 @@ async function renderDetailBody(e) {
     meta +
     (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
-    maybeRow +
+    maybeRow + waitRow +
+    (e.can_edit && !cancelled ? organizerAttendeePanel(e) : "") +
     `<div id="ev-fleet"></div>` +
     signupSection +
     (editControls ? `<div class="ev-form-actions">${editControls}</div>` : "");
 
   if (!cancelled) bindSignup(e);
   if (!cancelled) renderFleetSection(e);
+  if (e.can_edit && !cancelled) bindAttendeePanel(e);
   if (e.can_edit) {
     const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
+    const cl = $("ev-clone"); if (cl) cl.onclick = () => cloneEvent(e);
+    const cp = $("ev-complete"); if (cp) cp.onclick = async () => {
+      if (!(await confirmDialog(
+          "Signups are kept as attendance history and the event moves to the past tab.",
+          { title: "Mark this event completed?", confirmLabel: "Mark completed" }))) return;
+      const r = await fetch(`/api/events/${e.id}/complete`, { method: "POST" });
+      if (r.ok) renderDetailBody(await r.json());
+    };
     const cn = $("ev-cancel"); if (cn) cn.onclick = async () => {
       if (!(await confirmDialog(
           "Signups are kept, but it's hidden from the board.",
@@ -10160,19 +10292,87 @@ async function renderDetailBody(e) {
   }
 }
 
+// Clone: the create form pre-filled from an existing event (the cheap answer to
+// recurring weekly ops). A past start date rolls forward in 7-day steps so the
+// prefill lands on the next same-weekday slot.
+function cloneEvent(e) {
+  let start = new Date(e.start_at);
+  while (start < new Date()) start = new Date(start.getTime() + 7 * 86400000);
+  eventSeed = { title: e.title, description: e.description,
+    types: e.types, categories: e.categories,
+    location: e.location, event_location: e.event_location,
+    start_at: start.toISOString(), duration_min: e.duration_min,
+    signup_deadline: null,
+    min_players: e.min_players, max_players: e.max_players,
+    roles: e.fill && e.fill.roster
+      ? e.fill.roster.map(r => ({ role: r.role, needed: r.needed })) : (e.roles || []) };
+  location.hash = "#/events/new";
+}
+
+// Day-of attendee management (organizer/admin): drop a no-show, seat a
+// waitlisted member early, firm up a maybe — works even after signups lock.
+function organizerAttendeePanel(e) {
+  const rows = (e.attendees || []).map(a => {
+    const acts =
+      (a.status !== "going" ? `<button class="ev-btn sm ev-att-seat" data-did="${esc(a.discord_id)}">Seat now</button>` : "") +
+      `<button class="ev-btn sm danger ev-att-drop" data-did="${esc(a.discord_id)}">Drop</button>`;
+    return `<div class="ev-att-row"><span class="ev-name ${a.status === "maybe" ? "maybe" : a.status === "waitlist" ? "wait" : ""}">${esc(a.display_name)}</span>` +
+      `<span class="muted" style="font-size:12px;">${esc(a.status)}</span><span class="ev-att-acts">${acts}</span></div>`;
+  }).join("");
+  if (!rows) return "";
+  return `<details class="ev-attmgr"><summary>Manage attendees (organizer)</summary>` +
+    `<div class="ev-attmgr-box">${rows}` +
+    `<span id="ev-att-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></details>`;
+}
+
+function bindAttendeePanel(e) {
+  const put = async (did, status, btn) => {
+    const msg = $("ev-att-msg"); if (msg) msg.textContent = "Saving…";
+    if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(`/api/events/${e.id}/attendees`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discord_id: did, status }) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      renderDetailBody(await r.json());
+    } catch (err) {
+      if (btn) btn.disabled = false;
+      if (msg) msg.textContent = (err && err.detail) || "Couldn't update.";
+    }
+  };
+  document.querySelectorAll(".ev-att-seat").forEach(b =>
+    b.onclick = () => put(b.dataset.did, "going", b));
+  document.querySelectorAll(".ev-att-drop").forEach(b =>
+    b.onclick = async () => {
+      if (await confirmDialog("They're marked withdrawn (they can re-join). A freed seat promotes the first waitlisted member.",
+          { title: "Drop this attendee?", confirmLabel: "Drop", danger: true }))
+        put(b.dataset.did, "withdrawn", b);
+    });
+}
+
 function signupForm(e, tax) {
   const mine = e.my_signup;
+  const onList = mine && mine.status === "waitlist";
+  // Full for ME: capacity reached and I don't already hold a going seat.
+  const full = e.fill && e.fill.is_full && !(mine && mine.status === "going");
   const checked = new Set(mine ? mine.roles : []);
   const groups = tax.role_groups.map(g =>
     `<div class="ev-rolegrp"><div class="ev-rolegrp-h">${esc(g.group)}</div>` +
     `<div class="ev-rolegrp-roles">${g.roles.map(r =>
       `<label class="ev-rolechk"><input type="checkbox" value="${esc(r)}" ${checked.has(r) ? "checked" : ""}> ${esc(r)}</label>`).join("")}</div></div>`).join("");
-  return `<div class="ev-signup"><h3>${mine ? "Your signup" : "Sign up"}</h3>` +
+  const head = onList ? "Your signup — ⏳ waitlisted" : mine ? "Your signup" : "Sign up";
+  const fullNote = full
+    ? `<p class="muted" style="font-size:12px; margin:0 0 10px;">This event is full — joining as ` +
+      `<b>Going</b> puts you on the waitlist (first come, first served); you'll be pinged if a spot opens.` +
+      `${e.waitlist_count ? ` ${e.waitlist_count} waiting.` : ""}</p>`
+    : "";
+  const joinLabel = mine ? "Update signup" : full ? "Join waitlist" : "Join event";
+  return `<div class="ev-signup"><h3>${head}</h3>${fullNote}` +
     `<div class="ev-roles-pick">${groups}</div>` +
     `<div class="ev-signup-row"><label class="muted" style="font-size:12px;">Status ` +
-    `<select id="ev-status"><option value="going" ${!mine || mine.status === "going" ? "selected" : ""}>Going</option>` +
+    `<select id="ev-status"><option value="going" ${!mine || mine.status !== "maybe" ? "selected" : ""}>Going${full ? " (waitlist)" : ""}</option>` +
     `<option value="maybe" ${mine && mine.status === "maybe" ? "selected" : ""}>Maybe</option></select></label>` +
-    `<button id="ev-join" class="ev-btn primary">${mine ? "Update signup" : "Join event"}</button>` +
+    `<button id="ev-join" class="ev-btn primary">${joinLabel}</button>` +
     (mine ? `<button id="ev-withdraw" class="ev-btn danger">Withdraw</button>` : "") +
     `<span id="ev-signup-msg" class="muted" style="font-size:12px;"></span></div></div>`;
 }
@@ -10479,6 +10679,16 @@ async function saveGroup(e) {
     leader_id: $("ev-grp-leader").value || null,
   };
   const editing = fleetFormFor !== "new";
+  if (editing && fleetBoard) {
+    // PATCH replaces the full editable set server-side — fields with no form
+    // control (notes, hierarchy, sort) must round-trip or the edit wipes them.
+    const cur = (fleetBoard.groups || []).find(g => g.id === fleetFormFor);
+    if (cur) {
+      body.notes = cur.notes ?? null;
+      body.parent_id = cur.parent_id ?? null;
+      body.sort = cur.sort ?? 0;
+    }
+  }
   const url = editing ? `/api/events/${e.id}/groups/${fleetFormFor}` : `/api/events/${e.id}/groups`;
   msg.textContent = "Saving…";
   try {
@@ -11878,15 +12088,43 @@ function mkStatusBadge(s) {
 }
 
 // Auction countdown: amber within the last hour, "ended" once past.
-function mkCountdown(iso) {
-  if (!iso) return "";
+function mkCountdownText(iso) {
   const ms = new Date(iso) - new Date();
-  if (ms <= 0) return `<span class="mk-ends over">ended</span>`;
+  if (ms <= 0) return { cls: "over", txt: "ended" };
   const mins = Math.floor(ms / 60000);
   const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
   const txt = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
-  return `<span class="mk-ends ${mins <= 60 ? "soon" : ""}">ends in ${txt}</span>`;
+  return { cls: mins <= 60 ? "soon" : "", txt: `ends in ${txt}` };
 }
+
+function mkCountdown(iso) {
+  if (!iso) return "";
+  const c = mkCountdownText(iso);
+  // data-ends lets the live ticker refresh the text in place — a static
+  // "ends in 4m" that never changes is the page lying about a deadline.
+  return `<span class="mk-ends ${c.cls}" data-ends="${esc(iso)}">${c.txt}</span>`;
+}
+
+// One shared 30s ticker keeps every visible countdown honest (board, strip,
+// detail). No-op when no countdown is on screen.
+setInterval(() => {
+  document.querySelectorAll(".mk-ends[data-ends]").forEach(el => {
+    const c = mkCountdownText(el.dataset.ends);
+    el.textContent = c.txt;
+    el.classList.toggle("soon", c.cls === "soon");
+    el.classList.toggle("over", c.cls === "over");
+  });
+}, 30000);
+
+// Coming back to a market tab after being away refetches it — two members
+// acting on a stale detail otherwise meet the server's 400 as a surprise.
+let mktHiddenAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { mktHiddenAt = Date.now(); return; }
+  if (!location.hash.startsWith("#/market")) return;
+  if (Date.now() - mktHiddenAt < 60000) return;
+  loadMarket();
+});
 
 // Completed-deals count — the only reputation signal in v1.
 function mkDeals(n) {
@@ -12106,11 +12344,34 @@ function mkCraftMatch(l) {
   return "";
 }
 
+// Amber "stale" chip once an open listing sits untouched past the org's window
+// (0 = display off). Keys off updated_at, so an edit or one-click renew clears it.
+function mkStaleBadge(l) {
+  if (!mktStaleDays || l.status !== "open") return "";
+  const ref = l.updated_at || l.created_at;
+  if (!ref) return "";
+  const days = (Date.now() - new Date(ref).getTime()) / 86400000;
+  if (!(days >= mktStaleDays)) return "";
+  return `<span class="mk-stale" title="No activity for ${Math.floor(days)} days — still available?">⏳ stale</span>`;
+}
+
+// "My activity" tab: what's my position on this listing, at a glance.
+function mkStakeBadge(l) {
+  const s = l.my_stake;
+  if (!s) return "";
+  if (s.awaiting_my_confirm) return `<span class="mk-stake confirm">⚡ confirm your handoff</span>`;
+  if (s.status === "accepted" || s.status === "deal") return `<span class="mk-stake">🤝 deal pending</span>`;
+  if (l.mode === "auction" && l.auction && l.auction.high_bid != null
+      && s.amount != null && l.auction.high_bid > s.amount)
+    return `<span class="mk-stake outbid">📈 outbid — you: ${fmtAuec(s.amount)}</span>`;
+  return `<span class="mk-stake">you: ${s.amount != null ? fmtAuec(s.amount) : "offer in"}</span>`;
+}
+
 function listingCard(l) {
   const wanted = l.mode === "commission" ? `<span class="mk-wanted">Wanted</span> ` : "";
   return `<a class="ev-card${l.commission && l.commission.i_can_craft ? " mk-match" : ""}" href="#/market/${l.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${wanted}${esc(l.item_name)} ${mkQtyTag(l)}</div>` +
-    `<div class="ev-chips">${mkCraftBadge(l)}${l.mode === "commission" ? mkMatsChip(l) + mkCraftMatch(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div></div>` +
+    `<div class="ev-chips">${mkStakeBadge(l)}${mkStaleBadge(l)}${mkCraftBadge(l)}${l.mode === "commission" ? mkMatsChip(l) + mkCraftMatch(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div></div>` +
     `<div class="ev-meta">${mkPriceLine(l)}</div>` +
     `<div class="ev-meta">by ${esc(l.seller_name)}${mkHandle(l)}${mkDeals(l.seller_deals)}</div></a>`;
 }
@@ -12135,7 +12396,7 @@ function mkRowPrice(l) {
 function listingRow(l) {
   return `<a class="mk-row" href="#/market/${l.id}">` +
     `<span class="mk-row-item"><span class="mk-row-name">${esc(l.item_name)}</span>` +
-      `<span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>${mkCraftBadge(l)}</span>` +
+      `<span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>${mkCraftBadge(l)}${mkStakeBadge(l)}${mkStaleBadge(l)}</span>` +
     `<span class="mk-row-mode">${mkModeChip(l.mode)}</span>` +
     `<span class="mk-row-price">${mkRowPrice(l)}</span>` +
     `<span class="mk-row-seller">${esc(l.seller_name)}</span>` +
@@ -12184,17 +12445,19 @@ function loadMarket() {
 // Board filter/sort/page state, persisted across re-renders so a search survives a
 // detail round-trip. `mine` and `seller` are mutually exclusive (My listings vs.
 // "from this seller").
-let mktFilter = { mode: "", mine: false, q: "", sort: "recent", kind: "",
-                  min: "", max: "", seller: "", sellerName: "",
+let mktFilter = { mode: "", mine: false, activity: false, q: "", sort: "recent",
+                  kind: "", min: "", max: "", seller: "", sellerName: "",
                   qmin: "", qmax: "", band: "", stat: "", canCraft: false };
-let mktOffset = 0, mktSearchTimer = null;
+let mktOffset = 0, mktSearchTimer = null, mktStaleDays = 0;
 let mktView = lsGet("mktView") || "card";   // card grid | compact rows
 const MKT_PAGE = 25;
 
 function mktQuery() {
   const p = new URLSearchParams();
   if (mktFilter.mine) p.set("seller", "me");
+  else if (mktFilter.activity) p.set("activity", "me");
   else if (mktFilter.seller) p.set("seller", mktFilter.seller);
+  if (mktFilter.canCraft && mktFilter.mode === "commission") p.set("craft", "1");
   if (mktFilter.mode) p.set("mode", mktFilter.mode);
   if (mktFilter.q) p.set("q", mktFilter.q);
   if (mktFilter.kind) p.set("kind", mktFilter.kind);
@@ -12213,7 +12476,8 @@ function mktQuery() {
 // True when no filter is narrowing the board (drives the empty message + whether
 // the "ending soon" strip shows).
 function mktUnfiltered() {
-  return !mktFilter.mine && !mktFilter.seller && !mktFilter.mode && !mktFilter.q
+  return !mktFilter.mine && !mktFilter.activity && !mktFilter.seller
+    && !mktFilter.mode && !mktFilter.q
     && !mktFilter.kind && mktFilter.min === "" && mktFilter.max === ""
     && mktFilter.qmin === "" && mktFilter.qmax === "" && mktFilter.band === ""
     && !mktFilter.stat;
@@ -12223,6 +12487,8 @@ function mktEmptyMsg() {
   if (mktFilter.canCraft && mktFilter.mode === "commission")
     return "No open requests match recipes in your library. Add recipes in " +
       "<a href=\"#/blueprints\">Resource Manager › Blueprints</a>.";
+  if (mktFilter.activity)
+    return "No live bids, offers, or pending deals right now — anything you bid on shows up here.";
   if (mktFilter.mine) return "You haven't posted any listings yet.";
   if (mktFilter.seller) return "Nothing on the board from this seller right now.";
   if (!mktUnfiltered()) return "No listings match those filters. Try widening them.";
@@ -12241,7 +12507,8 @@ function mktFilterBySeller(id, name) {
 function syncMktControls(root) {
   root.querySelectorAll(".mk-tab").forEach(b => {
     if (b.dataset.mine) b.classList.toggle("on", mktFilter.mine);
-    else b.classList.toggle("on", mktFilter.mode === b.dataset.mode && !mktFilter.mine && !mktFilter.seller);
+    else if (b.dataset.activity) b.classList.toggle("on", mktFilter.activity);
+    else b.classList.toggle("on", mktFilter.mode === b.dataset.mode && !mktFilter.mine && !mktFilter.activity && !mktFilter.seller);
   });
   const chip = $("mk-sellerchip");
   if (mktFilter.seller && !mktFilter.mine) {
@@ -12279,6 +12546,7 @@ async function renderMarketBoard() {
     `<p class="rm-intro">Buy, auction &amp; barter with your org in <b>aUEC only</b> — post a listing, ` +
     `settle the handoff in-game, mark it done. No strangers, no real money.</p>` +
     `<div class="mk-filter">${tabs}<span class="mk-spacer"></span>` +
+    `<button class="mk-tab" data-activity="1" title="Listings you've bid, offered, or quoted on + your pending deals">My activity</button>` +
     `<button class="mk-tab" data-mine="1">My listings</button></div>` +
     (mktFilter.mode === "commission"
       ? `<label class="mk-cancraft"><input type="checkbox" id="mk-cancraft"${mktFilter.canCraft ? " checked" : ""}> ✨ Requests I can craft</label>`
@@ -12306,8 +12574,16 @@ async function renderMarketBoard() {
     `<div id="market-list" class="panel"></div>` +
     `<div id="mk-pager" class="mk-pager" hidden></div>`;
   root.querySelectorAll(".mk-tab").forEach(b => b.onclick = () => {
-    if (b.dataset.mine) { mktFilter.mine = !mktFilter.mine; if (mktFilter.mine) mktFilter.seller = ""; }
-    else { mktFilter.mode = b.dataset.mode; mktFilter.mine = false; mktFilter.seller = ""; }
+    if (b.dataset.mine) {
+      mktFilter.mine = !mktFilter.mine;
+      if (mktFilter.mine) { mktFilter.seller = ""; mktFilter.activity = false; }
+    } else if (b.dataset.activity) {
+      mktFilter.activity = !mktFilter.activity;
+      if (mktFilter.activity) { mktFilter.seller = ""; mktFilter.mine = false; }
+    } else {
+      mktFilter.mode = b.dataset.mode; mktFilter.mine = false;
+      mktFilter.activity = false; mktFilter.seller = "";
+    }
     if (mktFilter.mode !== "commission") mktFilter.canCraft = false;   // toggle only applies to Requests
     renderMarketBoard();   // re-render so the can-craft toggle shows/hides with the tab
   });
@@ -12382,14 +12658,11 @@ async function loadMarketPage(reset) {
   }
   listEl.classList.remove("mk-busy");
   mktAnnounceAvail = !!data.announce_available;   // gates the post form's Discord opt-in
-  let ls = data.listings || [], total = data.total || 0;
-  // "Requests I can craft": a client-side narrowing of the commission tab (like the
-  // LFG suggested-matches filter). Scopes to the loaded page, so the pager reflects
-  // the filtered subset rather than the server total.
-  if (mktFilter.canCraft && mktFilter.mode === "commission") {
-    ls = ls.filter(l => l.commission && l.commission.i_can_craft);
-    total = ls.length;
-  }
+  mktStaleDays = data.stale_days || 0;            // org staleness window (0 = off)
+  // "Requests I can craft" is server-side (`craft=1`) since the 2026-08 review:
+  // the old client-side narrowing only saw the loaded page, so matches on later
+  // pages were invisible and the pager lied.
+  const ls = data.listings || [], total = data.total || 0;
   const render = mktView === "compact" ? listingRow : listingCard;
   const cards = ls.map(render).join("");
   if (reset) {
@@ -12562,9 +12835,12 @@ function mkOfferRow(l, o) {
   let btns = "";
   if (l.status === "open" && o.status === "active") {
     if (l.can_edit) btns += `<button class="ev-btn sm mk-accept" data-oid="${o.id}" data-who="${esc(o.bidder_name)}">Accept</button>`;
+    // Auction bids are binding — no declining those; elsewhere a low-ball
+    // shouldn't sit "active" forever waiting on an answer that won't come.
+    if (l.can_edit && l.mode !== "auction") btns += `<button class="ev-btn sm mk-decline" data-oid="${o.id}">Decline</button>`;
     if (o.is_mine) btns += `<button class="ev-btn sm mk-withdraw" data-oid="${o.id}">Withdraw</button>`;
   }
-  return `<div class="mk-offer-row"><span class="mk-offer-who">${esc(o.bidder_name)}</span>` +
+  return `<div class="mk-offer-row"><span class="mk-offer-who">${esc(o.bidder_name)}${mkDeals(o.bidder_deals)}</span>` +
     `<span class="mk-offer-what">${what}${st}</span>` +
     `<span class="mk-offer-when muted">${esc(when)}</span>` +
     `<span class="mk-offer-act">${btns}</span></div>`;
@@ -12579,8 +12855,18 @@ function mkOffersBlock(l) {
 
 function mkSellerControls(l) {
   let btns = "";
-  if (l.status === "open") btns += `<button class="ev-btn" id="mk-edit">Edit</button>`;
+  if (l.status === "open") {
+    btns += `<button class="ev-btn" id="mk-edit">Edit</button>`;
+    btns += `<button class="ev-btn" id="mk-renew" title="Refresh this listing's freshness — clears the stale badge">↻ Still available</button>`;
+  }
+  // A closed listing (sold, expired, cancelled) can be re-posted without
+  // retyping — seeds the create form with this listing's terms. Seller only:
+  // the new listing posts under whoever clicks.
+  if (l.is_seller && ["completed", "expired", "cancelled"].includes(l.status))
+    btns += `<button class="ev-btn" id="mk-relist">Relist</button>`;
   if (l.status === "open" || l.status === "pending") btns += `<button class="ev-btn danger" id="mk-cancel">Cancel listing</button>`;
+  if (currentMe && currentMe.is_admin && !l.is_seller)
+    btns += `<button class="ev-btn danger" id="mk-admindelete" title="Moderation: hard-delete this listing and its offers">Delete (admin)</button>`;
   return btns ? `<div class="ev-form-actions">${btns}</div>` : "";
 }
 
@@ -12725,7 +13011,21 @@ function wireMarketDetail(l) {
     });
   document.querySelectorAll(".mk-withdraw").forEach(b =>
     b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "withdraw" }, "PATCH", b));
+  document.querySelectorAll(".mk-decline").forEach(b =>
+    b.onclick = () => act(`/api/market/${id}/offer/${b.dataset.oid}`, { action: "decline" }, "PATCH", b));
   on("mk-edit", () => renderMarketEditForm(l));
+  on("mk-renew", (btn) => act(`/api/market/${id}/renew`, null, "POST", btn));
+  on("mk-relist", () => renderMarketRelistForm(l));
+  on("mk-admindelete", async (btn) => {
+    if (!(await confirmDialog(
+        "Hard-deletes the listing and every offer on it — the moderation tool for scam or abusive content. Ordinary listings should be cancelled instead.",
+        { title: "Delete this listing?", confirmLabel: "Delete permanently", danger: true }))) return;
+    try {
+      const r = await fetch(`/api/market/${id}`, { method: "DELETE" });
+      if (!r.ok) throw 0;
+      location.hash = "#/market";
+    } catch { setMsg("Couldn't delete the listing.", "err", btn); }
+  });
   on("mk-cancel", async (btn) => {
     if (await confirmDialog(
         "It'll be closed and removed from the board. This can't be undone.",
@@ -13309,6 +13609,21 @@ function renderMarketEditForm(l) {
   }
   $("market-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT LISTING</h2>${marketFormHtml(l)}`;
   bindMarketForm(l.id, () => renderMarketDetail(l.id));
+}
+
+// Relist a closed listing: the create form seeded with its terms, posting a
+// fresh copy (POST, not PATCH — the old record keeps its history).
+function renderMarketRelistForm(l) {
+  mkSpec.initQ = null;
+  const specIn = ((l.attributes || {}).spec || {}).inputs;
+  if (l.mode === "commission" && (specIn || []).length) {
+    mkSpec.initQ = {};
+    specIn.forEach(i => { mkSpec.initQ[i.slot] = i.min_q; });
+  }
+  $("market-detail-body").innerHTML = `<h2 class="ev-screen-h">RELIST</h2>` +
+    `<p class="rm-intro">Posting a fresh copy — tweak anything (auction and needed-by dates must be re-set), then post.</p>` +
+    marketFormHtml(l);
+  bindMarketForm(null, () => renderMarketDetail(l.id));
 }
 
 // ---------- halo finder / Prospector (#31, multi-system #35, tabs #38) ----------
@@ -16930,6 +17245,8 @@ async function loadSettings() {
       $("hazard-radius").value = s.hazard_radius_km;
     if (s.stock_ageoff_min && document.activeElement !== $("stock-ageoff"))
       $("stock-ageoff").value = s.stock_ageoff_min;
+    if (s.listing_stale_days != null && document.activeElement !== $("listing-stale"))
+      $("listing-stale").value = s.listing_stale_days;
     if (s.survey_depletion_ageoff_min && document.activeElement !== $("depletion-ageoff"))
       $("depletion-ageoff").value = s.survey_depletion_ageoff_min;
     if (s.feed_refresh_h != null && document.activeElement !== $("feed-refresh"))
@@ -17117,6 +17434,16 @@ function renderDiscordRows(webhooks) {
   box.innerHTML = "";
   for (const c of DISCORD_CATS) {
     const st = (webhooks && webhooks[c.key]) || { set: false, tail: "" };
+    // A revoked webhook 404s forever while looking "connected" — surface the
+    // last delivery outcome so a dead hook is visible without tailing logs.
+    let health = "";
+    if (st.set && st.last_error) {
+      health = `<div style="color:var(--warn); font-size:12px; margin-top:2px;">⚠ Last delivery failed` +
+        `${st.last_error_at ? " " + esc(surveyAgo(st.last_error_at)) : ""}` +
+        `${st.fails > 1 ? ` (×${st.fails})` : ""} — check the webhook still exists in Discord.</div>`;
+    } else if (st.set && st.last_ok) {
+      health = `<div class="muted" style="font-size:12px; margin-top:2px;">Last delivered ${esc(surveyAgo(st.last_ok))}.</div>`;
+    }
     const row = document.createElement("div");
     row.style.marginTop = "10px";
     row.innerHTML =
@@ -17126,7 +17453,7 @@ function renderDiscordRows(webhooks) {
         `<button class="disc-save">Save</button>` +
         `<button class="disc-test"${st.set ? "" : " disabled"}>Test</button>` +
         `<button class="disc-clear danger-btn"${st.set ? "" : " hidden"}>Clear</button>` +
-      `</div>` +
+      `</div>` + health +
       `<div class="muted" id="dwh-st-${c.key}" role="status" aria-live="polite" style="font-size:12px; margin-top:2px;"></div>`;
     row.querySelector(".disc-save").onclick = () => saveDiscordWebhook(c.key);
     row.querySelector(".disc-test").onclick = () => testDiscordWebhook(c.key);
@@ -17495,6 +17822,28 @@ $("stock-ageoff-save").onclick = async () => {
   }
 };
 $("stock-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("stock-ageoff-save").click(); } });
+
+// Marketplace staleness window (2026-08 review) — same shape as the stock window.
+$("listing-stale-save").onclick = async () => {
+  const st = $("listing-stale-status");
+  const days = parseInt($("listing-stale").value, 10);
+  if (!(days >= 0 && days <= 365)) { st.textContent = "enter 0 (off) – 365 days"; return; }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ listing_stale_days: days }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = d.listing_stale_days
+      ? `saved — listings badge as stale after ${d.listing_stale_days} days`
+      : "saved — stale badge off";
+  } catch {
+    st.textContent = "failed to update — try again";
+    loadSettings();
+  }
+};
+$("listing-stale").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("listing-stale-save").click(); } });
 
 // ⛏ mined-out report lifetime (#37 slice 2) — same shape as the stock window.
 $("depletion-ageoff-save").onclick = async () => {

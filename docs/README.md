@@ -43,7 +43,8 @@ drift — trust grep and CI, not the citation.
 | [org-inventory-goals.md](org-inventory-goals.md) | 2026-06-24/25 | Resource Manager v1 + v1.1 allocations model |
 | [marketplace.md](marketplace.md) | 2026-06-25/26 | Marketplace v1 + scaling/search pass; some "Deferred" items since built — see its build-log notes |
 | [member-identity-and-directory.md](member-identity-and-directory.md) | 2026-06-29 | members table, primary handle, seller_handle, admin directory |
-| [discord-notifications.md](discord-notifications.md) | v0.14.0–v0.17.0 | Per-category webhook pushes (#18) |
+| [discord-notifications.md](discord-notifications.md) | v0.14.0–v0.17.0 | Per-category webhook pushes (#18); coverage + platform much expanded by the 2026-08 org-launch batch below |
+| [org-launch-review-2026-08.md](org-launch-review-2026-08.md) | 2026-08-04 | **Org-launch hardening batch**: 4-agent review of Marketplace/Events/webhooks + competitor research → P0 roster fix, auction/outbid/reschedule/waitlist notifications, mention paging past 50, webhook health, my-activity tab, staleness+renew, admin delete, capacity+waitlist, clone/past/attendee mgmt, market sweep loop, ping opt-out. Open boxes = next-pass batch |
 | [who-is-online-lfg.md](who-is-online-lfg.md) | v0.18.0–v0.22.0 | Online roster + Group Finder (#19) |
 | [fleet-roster-squad-organizer.md](fleet-roster-squad-organizer.md) | v0.23.0–v0.24.1 | Event groups/assignments, seat + group templates (#20) |
 | [trade-route-planner.md](trade-route-planner.md) | v0.28.1–v0.33.0 | Trade Route Planner, all 6 steps (#21) |
