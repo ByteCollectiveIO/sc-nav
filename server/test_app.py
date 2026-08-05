@@ -7265,7 +7265,49 @@ class CompetitorIdeasTests(unittest.TestCase):
         crafters = self.client.get("/api/market/crafters").json()["crafters"]
         self.assertNotIn("111", [c["discord_id"] for c in crafters])
 
+    def test_crafter_directory_filters_by_recipe(self):
+        now = datetime.now(timezone.utc).isoformat()
+        db.set_member_note("310", "crafter_note", "guns r us")
+        db.set_member_note("311", "crafter_note", "armor only")
+        db.add_member_blueprint("310", "BP_X", now)
+        try:
+            self._as("111")
+            allc = self.client.get("/api/market/crafters").json()["crafters"]
+            self.assertLessEqual({"310", "311"},
+                                 {c["discord_id"] for c in allc})
+            got = self.client.get("/api/market/crafters",
+                                  params={"blueprint": "BP_X"}).json()["crafters"]
+            ids = {c["discord_id"] for c in got}
+            self.assertIn("310", ids)      # holds the recipe
+            self.assertNotIn("311", ids)   # storefront, but can't build it
+        finally:
+            db.delete_member_blueprint("310", "BP_X")
+            db.set_member_note("310", "crafter_note", None)
+            db.set_member_note("311", "crafter_note", None)
+
+    def test_blueprint_index_scopes_to_a_crafter_library(self):
+        db.add_member_blueprint("777", "BP_X", datetime.now(timezone.utc).isoformat())
+        try:
+            self._as("111")
+            scoped = self.client.get("/api/blueprints", params={"crafter": "777"}).json()
+            self.assertEqual([b["key"] for b in scoped["blueprints"]], ["BP_X"])
+            empty = self.client.get("/api/blueprints", params={"crafter": "404"}).json()
+            self.assertEqual(empty["blueprints"], [])
+        finally:
+            db.delete_member_blueprint("777", "BP_X")
+
+    def test_directed_commission_requires_recipe_in_target_library(self):
+        # 777 does NOT have BP_X → the directed request is a dead letter → 400.
+        self._as("111")
+        r = self.client.post("/api/market", json={
+            "item_id": "blueprint:BP_X", "qty": 1, "mode": "commission",
+            "price_auec": 1000, "materials": "crafter", "directed_to": "770"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("library", r.json()["detail"])
+
     def test_directed_commission_gates_quotes_and_pings_target(self):
+        # The target must hold the recipe (see the dead-letter guard test).
+        db.add_member_blueprint("777", "BP_X", datetime.now(timezone.utc).isoformat())
         self.sent.clear()
         self._as("111")
         r = self.client.post("/api/market", json={

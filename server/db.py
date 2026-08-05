@@ -1076,15 +1076,21 @@ def set_member_note(discord_id: str, column: str, text: str | None) -> None:
             (str(discord_id), text))
 
 
-def list_crafter_storefronts() -> list[dict]:
+def list_crafter_storefronts(blueprint_key: str | None = None) -> list[dict]:
     """Members with a crafter storefront (a non-empty crafter_note): their note
-    + blueprint-library size, biggest library first."""
+    + blueprint-library size, biggest library first. `blueprint_key` narrows to
+    storefronts whose library holds that recipe ("who can build me an X?")."""
+    sql = ("SELECT m.discord_id, m.crafter_note, "
+           "(SELECT COUNT(*) FROM member_blueprints b WHERE b.member_id=m.discord_id) AS bp_count "
+           "FROM members m WHERE m.crafter_note IS NOT NULL AND m.crafter_note != ''")
+    params: list = []
+    if blueprint_key:
+        sql += (" AND EXISTS (SELECT 1 FROM member_blueprints b2 "
+                "WHERE b2.member_id=m.discord_id AND b2.blueprint_key=?)")
+        params.append(blueprint_key)
+    sql += " ORDER BY bp_count DESC, m.discord_id"
     with _lock:
-        rows = _conn.execute(
-            "SELECT m.discord_id, m.crafter_note, "
-            "(SELECT COUNT(*) FROM member_blueprints b WHERE b.member_id=m.discord_id) AS bp_count "
-            "FROM members m WHERE m.crafter_note IS NOT NULL AND m.crafter_note != '' "
-            "ORDER BY bp_count DESC, m.discord_id").fetchall()
+        rows = _conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
