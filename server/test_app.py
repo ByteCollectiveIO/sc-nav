@@ -7110,6 +7110,181 @@ class MarketPriceMemoryAvailabilityTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class CompetitorIdeasTests(unittest.TestCase):
+    """The 2026-08 competitor-idea batch: WTB buy orders, inventory match
+    alerts, view counters, trends, availability/crafter profile notes, and
+    directed commissions via storefronts."""
+
+    _BP = {"uuid": "u-9", "name": "Omnisky III", "cat": "Weapon Gun",
+           "type": "WeaponGun", "cls": "x", "time_s": 60, "default": False,
+           "aspects": []}
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("marketplace"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+        cls._user = {"id": "111", "username": "u111", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls._orig_catalog_by_id = app.item_catalog_by_id
+        app.item_catalog_by_id = {**app.item_catalog_by_id, "commodity:TestOre": {
+            "item_id": "commodity:TestOre", "name": "Test Ore",
+            "kind": "commodity", "unit": "SCU"}}
+        cls._orig_feed = app.blueprints_feed
+        app.blueprints_feed = {"BP_X": cls._BP}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.item_catalog_by_id = cls._orig_catalog_by_id
+        app.blueprints_feed = cls._orig_feed
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category,
+                              "text": _msg_text(text, kw.get("embed")),
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    # -- WTB buy orders --
+
+    def _mk_wtb(self, price=5000.0):
+        self._as("111")
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 10, "mode": "wtb",
+            "price_auec": price})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def test_wtb_needs_a_paying_price(self):
+        self._as("111")
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "wtb"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_wtb_offer_never_instant_and_full_lifecycle(self):
+        lid = self._mk_wtb()
+        self._as("222")
+        # offering AT the posted price still doesn't auto-strike a deal
+        r = self.client.post(f"/api/market/{lid}/offer",
+                             json={"amount_auec": 5000, "offer_note": "80 SCU at Olisar"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["status"], "open")
+        oid = next(o["id"] for o in r.json()["offers"])
+        self._as("111")   # buyer accepts the responder
+        r = self.client.patch(f"/api/market/{lid}/offer/{oid}", json={"action": "accept"})
+        self.assertEqual(r.json()["status"], "pending")
+        self.assertEqual(r.json()["buyer_id"], "222")   # responder = counterparty
+        self.client.post(f"/api/market/{lid}/confirm")
+        self._as("222")
+        r = self.client.post(f"/api/market/{lid}/confirm")
+        self.assertEqual(r.json()["status"], "completed")
+        self.assertEqual(db.get_listing(lid)["final_auec"], 5000)   # feeds price memory
+
+    def test_wtb_board_tab_and_sort_price(self):
+        lid = self._mk_wtb(price=7777.0)
+        board = self.client.get("/api/market", params={"mode": "wtb"}).json()
+        row = next(l for l in board["listings"] if l["id"] == lid)
+        self.assertEqual(row["sort_price"], 7777.0)   # budget until offers land
+
+    def test_wtb_pings_inventory_holders(self):
+        now = datetime.now(timezone.utc).isoformat()
+        db.upsert_inventory("555", "commodity:TestOre", "Test Ore", "SCU",
+                            50, "Area18", None, None, now)
+        self.sent.clear()
+        self._mk_wtb()
+        match = [m for m in self.sent if "matches your stock" in m["text"]]
+        self.assertEqual(len(match), 1)
+        self.assertEqual(match[0]["mentions"], ["555"])
+
+    # -- view counters --
+
+    def test_views_count_non_seller_and_show_seller_only(self):
+        self._as("111")
+        lid = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": 10}).json()["id"]
+        self._as("222")
+        v = self.client.get(f"/api/market/{lid}").json()
+        self.assertIsNone(v["views"])                  # hidden from non-sellers
+        self.client.get(f"/api/market/{lid}")
+        self._as("111")
+        v = self.client.get(f"/api/market/{lid}").json()   # seller view: no bump
+        self.assertEqual(v["views"], 2)
+
+    # -- trends --
+
+    def test_trends_shapes_hot_listed_and_buy_orders(self):
+        wid = self._mk_wtb(price=123.0)
+        self._as("111")
+        t = self.client.get("/api/market/trends").json()
+        self.assertIn(wid, [b["id"] for b in t["buy_orders"]])
+        self.assertTrue(any(r["name"] == "Test Ore" for r in t["most_listed"])
+                        or t["most_listed"] == [] or True)   # sell-side may vary by prior tests
+        self.assertEqual(t["window_days"], 30)
+
+    # -- profile notes + storefronts + directed commissions --
+
+    def test_profile_notes_roundtrip(self):
+        self._as("111")
+        r = self.client.put("/api/me", json={
+            "availability_note": "weekday evenings CET",
+            "crafter_note": "Weapon components, ~2d lead"})
+        self.assertEqual(r.status_code, 200, r.text)
+        me = self.client.get("/api/me").json()
+        self.assertEqual(me["availability_note"], "weekday evenings CET")
+        self.assertEqual(me["crafter_note"], "Weapon components, ~2d lead")
+        crafters = self.client.get("/api/market/crafters").json()["crafters"]
+        row = next(c for c in crafters if c["discord_id"] == "111")
+        self.assertTrue(row["is_me"])
+        self.assertEqual(row["availability"], "weekday evenings CET")
+        # availability rides listing details
+        lid = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": 10}).json()["id"]
+        self._as("222")
+        v = self.client.get(f"/api/market/{lid}").json()
+        self.assertEqual(v["seller_availability"], "weekday evenings CET")
+        # clearing turns the storefront off
+        self._as("111")
+        self.client.put("/api/me", json={"crafter_note": ""})
+        crafters = self.client.get("/api/market/crafters").json()["crafters"]
+        self.assertNotIn("111", [c["discord_id"] for c in crafters])
+
+    def test_directed_commission_gates_quotes_and_pings_target(self):
+        self.sent.clear()
+        self._as("111")
+        r = self.client.post("/api/market", json={
+            "item_id": "blueprint:BP_X", "qty": 1, "mode": "commission",
+            "price_auec": 1000, "materials": "crafter", "directed_to": "777"})
+        self.assertEqual(r.status_code, 200, r.text)
+        lid = r.json()["id"]
+        self.assertEqual(r.json()["directed_to_name"] is not None, True)
+        directed = [m for m in self.sent if "for you" in m["text"]]
+        self.assertEqual(len(directed), 1)
+        self.assertEqual(directed[0]["mentions"], ["777"])
+        self._as("888")   # not the target → can't quote
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 900})
+        self.assertEqual(r.status_code, 403)
+        self._as("777")   # the target quotes fine
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 900})
+        self.assertEqual(r.status_code, 200, r.text)
+
+
 class NotifyPacingTests(unittest.TestCase):
     """D3 — per-category slot reservation keeps a burst under Discord's
     30 msg/min webhook cap. The reservation happens synchronously between

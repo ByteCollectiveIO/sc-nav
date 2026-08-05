@@ -590,6 +590,8 @@ def init(db_path) -> None:
         _ensure_column("members", "appear_offline", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("members", "playstyle_tags", "TEXT")   # JSON list, member profile (#30)
         _ensure_column("members", "notify_opt_out", "INTEGER NOT NULL DEFAULT 0")  # no Discord @-pings
+        _ensure_column("members", "availability_note", "TEXT")   # "usually on: weekday evenings CET"
+        _ensure_column("members", "crafter_note", "TEXT")        # storefront blurb; presence = storefront on
         _ensure_column("members", "active_survey_zone", "INTEGER")   # #36.1 active zone id
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
@@ -639,6 +641,11 @@ def init(db_path) -> None:
         # can actually change hands — the #1 coordination question in-org.
         _ensure_column("listings", "availability", "TEXT")
         _ensure_column("listings", "pickup_poi", "TEXT")
+        # Detail-view counter (competitor idea #6): the seller's reprice signal
+        # ("34 views, no offers"). Counted server-side, shown to the seller only.
+        _ensure_column("listings", "views", "INTEGER NOT NULL DEFAULT 0")
+        # Directed commission (storefronts): only this member may quote it.
+        _ensure_column("listings", "directed_to", "TEXT")
         # Index the board's sort column now that it's guaranteed to exist (see the
         # note in SCHEMA — it can't be created inside the schema script on upgrade).
         _conn.execute("CREATE INDEX IF NOT EXISTS listings_sort_price ON listings(sort_price)")
@@ -1056,6 +1063,29 @@ def set_primary_handle(discord_id: str, handle: str | None) -> None:
             "INSERT INTO members (discord_id, primary_handle) VALUES (?,?) "
             "ON CONFLICT(discord_id) DO UPDATE SET primary_handle=excluded.primary_handle",
             (did, handle))
+
+
+def set_member_note(discord_id: str, column: str, text: str | None) -> None:
+    """Set one of the member free-text profile columns (availability_note /
+    crafter_note). Column name is code-supplied, never user input."""
+    assert column in ("availability_note", "crafter_note")
+    with _lock, _conn:
+        _conn.execute(
+            f"INSERT INTO members (discord_id, {column}) VALUES (?,?) "
+            f"ON CONFLICT(discord_id) DO UPDATE SET {column}=excluded.{column}",
+            (str(discord_id), text))
+
+
+def list_crafter_storefronts() -> list[dict]:
+    """Members with a crafter storefront (a non-empty crafter_note): their note
+    + blueprint-library size, biggest library first."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT m.discord_id, m.crafter_note, "
+            "(SELECT COUNT(*) FROM member_blueprints b WHERE b.member_id=m.discord_id) AS bp_count "
+            "FROM members m WHERE m.crafter_note IS NOT NULL AND m.crafter_note != '' "
+            "ORDER BY bp_count DESC, m.discord_id").fetchall()
+    return [dict(r) for r in rows]
 
 
 def set_notify_opt_out(discord_id: str, opt_out: bool) -> None:
@@ -2287,9 +2317,10 @@ def _recompute_denorm(listing_id: int) -> None:
             "SELECT MAX(amount_auec) AS m FROM listing_offers WHERE listing_id=? "
             "AND status IN ('active','accepted')", (listing_id,)).fetchone()["m"]
         sort_price = high if high is not None else row["start_price"]
-    elif row["mode"] == "commission":
-        # A craft request's board price is the best (lowest) standing quote,
-        # else the requester's budget (which may be NULL = open to quotes).
+    elif row["mode"] in ("commission", "wtb"):
+        # A craft request's / buy order's board price is the best (lowest)
+        # standing quote/offer, else the poster's budget (commission budget may
+        # be NULL = open to quotes; a wtb always posts its paying price).
         best = _conn.execute(
             "SELECT MIN(amount_auec) AS m FROM listing_offers WHERE listing_id=? "
             "AND status IN ('active','accepted')", (listing_id,)).fetchone()["m"]
@@ -2327,14 +2358,14 @@ def create_listing(d: dict) -> int:
             "INSERT INTO listings (seller_id, seller_handle, item_id, item_name, unit, "
             "qty, mode, price_auec, start_price, buyout_auec, ends_at, want, status, "
             "note, attributes, blueprint_key, materials, availability, pickup_poi, "
-            "created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "directed_to, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["seller_id"]), d.get("seller_handle"), d["item_id"],
              d.get("item_name"), d.get("unit"), d.get("qty", 1), d.get("mode", "sale"),
              d.get("price_auec"), d.get("start_price"), d.get("buyout_auec"),
              d.get("ends_at"), d.get("want"), d.get("status", "open"), d.get("note"),
              _j(d.get("attributes")), d.get("blueprint_key"), d.get("materials"),
-             d.get("availability"), d.get("pickup_poi"),
+             d.get("availability"), d.get("pickup_poi"), d.get("directed_to"),
              d.get("created_at"), d.get("updated_at")),
         )
         _recompute_denorm(cur.lastrowid)        # seed the board columns
@@ -2556,6 +2587,13 @@ def set_listing_status(listing_id: int, status: str, updated_at: str) -> bool:
     return cur.rowcount > 0
 
 
+def bump_listing_views(listing_id: int) -> None:
+    """Count a non-seller detail view. A raw counter, not analytics — no viewer
+    identity is stored."""
+    with _lock, _conn:
+        _conn.execute("UPDATE listings SET views=views+1 WHERE id=?", (listing_id,))
+
+
 def touch_listing(listing_id: int, updated_at: str) -> bool:
     """Refresh a listing's `updated_at` without changing anything else — the
     one-click renew that clears the board's stale badge."""
@@ -2586,6 +2624,35 @@ def list_completed_listings(since: str | None = None) -> list[dict]:
     with _lock:
         rows = _conn.execute(sql, params).fetchall()
     return [_listing_row_to_dict(r) for r in rows]
+
+
+def item_holders(item_id: str, exclude: str | None = None, limit: int = 15) -> list[str]:
+    """Members whose Resource Manager holdings include this item (qty > 0),
+    biggest stash first — the audience for a buy-order match alert. `exclude`
+    drops the poster (no point telling a buyer about their own stock)."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT owner_id, SUM(qty) AS total FROM inventory WHERE item_id=? "
+            "GROUP BY owner_id HAVING total > 0 ORDER BY total DESC LIMIT ?",
+            (item_id, int(limit) + 1)).fetchall()
+    return [str(r["owner_id"]) for r in rows
+            if str(r["owner_id"]) != str(exclude)][:limit]
+
+
+def market_trend_rows(since_iso: str) -> dict:
+    """Raw aggregates for the org market-trends panel: open listing counts per
+    (item, mode) and settled per-unit deal prices since `since_iso`. Shaping
+    (medians, top-N) happens in app code."""
+    with _lock:
+        open_rows = _conn.execute(
+            "SELECT item_id, item_name, mode, COUNT(*) AS n FROM listings "
+            "WHERE status='open' GROUP BY item_id, mode").fetchall()
+        deals = _conn.execute(
+            "SELECT item_id, item_name, final_auec, qty, completed_at FROM listings "
+            "WHERE status='completed' AND final_auec IS NOT NULL "
+            "AND completed_at >= ? ORDER BY completed_at DESC",
+            (since_iso,)).fetchall()
+    return {"open": [dict(r) for r in open_rows], "deals": [dict(r) for r in deals]}
 
 
 def item_deal_prices(item_id: str, limit: int = 50) -> list[dict]:

@@ -1948,6 +1948,15 @@
   .mk-stake.confirm { color: var(--good); border-color: var(--good); font-weight: 700; }
   .mk-avail { font-size: 11px; color: var(--dim); border: 1px solid var(--border);
     border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+  /* org market trends disclosure + crafter storefront rows */
+  .mk-trends-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px; margin-top: 8px; }
+  .mk-trend-row { display: flex; justify-content: space-between; gap: 10px;
+    font-size: 13px; padding: 2px 0; color: inherit; text-decoration: none; }
+  a.mk-trend-row:hover span:first-child { color: var(--accent); }
+  .mk-crafter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 6px 0; border-top: 1px solid var(--border); }
+  .mk-crafter-row:first-of-type { border-top: none; }
   /* in-game meetup handle: name reads plainly (not an accent — it's data, not a
      live control); the glyph is dim, and an unverified handle gets an amber chip. */
   .mk-handle { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -2728,6 +2737,35 @@
     </div>
     <span class="muted" id="profile-noping-status" role="status" aria-live="polite"
           style="font-size:12px; display:block; margin-top:4px;"></span>
+    <div style="margin-top:14px;">
+      <label style="font-size:13px; display:block; margin-bottom:4px;">Usually on</label>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="profile-avail" class="ti" maxlength="120" autocomplete="off"
+               placeholder="e.g. weekday evenings CET, weekend mornings" style="flex:1; min-width:220px;">
+        <button id="profile-avail-save">Save</button>
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:2px;">
+        Shown on your marketplace listings and storefront so trade partners know when to
+        find you for the handoff. Blank = not shown.
+      </div>
+      <span class="muted" id="profile-avail-status" role="status" aria-live="polite"
+            style="font-size:12px;"></span>
+    </div>
+    <div style="margin-top:14px;">
+      <label style="font-size:13px; display:block; margin-bottom:4px;">Crafter storefront</label>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="profile-craft" class="ti" maxlength="200" autocomplete="off"
+               placeholder="e.g. Taking weapon component orders — ~2 day lead" style="flex:1; min-width:220px;">
+        <button id="profile-craft-save">Save</button>
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:2px;">
+        Setting a blurb lists you under the marketplace's <b>Crafter storefronts</b> — members can
+        send craft requests directly to you (only you can quote those). Your recipe list comes
+        from <a href="#/blueprints">My Blueprints</a>. Blank = storefront off.
+      </div>
+      <span class="muted" id="profile-craft-status" role="status" aria-live="polite"
+            style="font-size:12px;"></span>
+    </div>
   </div>
   <div class="settings-grp-h">Support the project</div>
   <div class="panel" id="support-panel">
@@ -7280,6 +7318,30 @@ async function renderProfilePanel() {
     `<button type="button" class="on-tag${myProfileTags.includes(t) ? " active" : ""}" ` +
     `aria-pressed="${myProfileTags.includes(t)}" data-tag="${esc(t)}">${esc(t)}</button>`).join("");
   el.querySelectorAll(".on-tag").forEach(b => b.onclick = () => toggleProfileTag(b.dataset.tag));
+  // The two free-text profile notes share one save path (PUT /api/me).
+  const noteField = (inputId, saveId, statusId, field) => {
+    const inp = $(inputId);
+    if (!inp || inp.dataset.wired) return;
+    inp.dataset.wired = "1";
+    inp.value = (currentMe && currentMe[field]) || "";
+    $(saveId).onclick = async () => {
+      const st = $(statusId);
+      st.textContent = "Saving…";
+      try {
+        const r = await fetch("/api/me", { method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [field]: inp.value.trim() }) });
+        if (!r.ok) throw 0;
+        if (currentMe) currentMe[field] = inp.value.trim();
+        st.textContent = inp.value.trim() ? "Saved." : "Saved — cleared.";
+      } catch { st.textContent = "Couldn't save — try again."; }
+    };
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); $(saveId).click(); }
+    });
+  };
+  noteField("profile-avail", "profile-avail-save", "profile-avail-status", "availability_note");
+  noteField("profile-craft", "profile-craft-save", "profile-craft-status", "crafter_note");
   const np = $("profile-noping");
   if (np && !np.dataset.wired) {
     np.dataset.wired = "1";
@@ -12070,7 +12132,7 @@ function fmtAuec(n) {
 
 function mkModeChip(mode) {
   const lbl = { sale: "Sale", auction: "Auction", barter: "Barter",
-    commission: "Request" }[mode] || mode;
+    commission: "Request", wtb: "Buying" }[mode] || mode;
   return `<span class="mk-mode ${esc(mode)}">${esc(lbl)}</span>`;
 }
 
@@ -12333,6 +12395,11 @@ function mkPriceLine(l) {
       ? ` · <span class="muted" title="estimated materials cost (priced inputs only)">mats ≈ ${fmtAuec(c.mats_est)}</span>` : "";
     return `${cur} · ${c.quote_count || 0} quote${c.quote_count === 1 ? "" : "s"}${mats}${ends}`;
   }
+  if (l.mode === "wtb") {
+    const cnt = l.commission ? l.commission.quote_count : (l.offer_count || 0);
+    return `<b class="mk-price">${fmtAuec(l.price_auec)}</b> <span class="muted">paying</span>` +
+      ` · ${cnt || 0} offer${cnt === 1 ? "" : "s"}`;
+  }
   return `<span class="muted">wants:</span> ${esc(l.want || "")}`;
 }
 
@@ -12402,6 +12469,7 @@ function mkRowPrice(l) {
     if (c.best_quote != null) return fmtAuec(c.best_quote);
     return c.budget != null ? fmtAuec(c.budget) : `<span class="muted">quotes</span>`;
   }
+  if (l.mode === "wtb") return fmtAuec(l.sort_price != null ? l.sort_price : l.price_auec);
   return `<span class="muted">barter</span>`;
 }
 
@@ -12414,6 +12482,69 @@ function listingRow(l) {
     `<span class="mk-row-price">${mkRowPrice(l)}</span>` +
     `<span class="mk-row-seller">${esc(l.seller_name)}</span>` +
     `<span class="mk-row-time">${l.mode === "auction" ? mkCountdown(l.ends_at) : ""}</span></a>`;
+}
+
+// Org market trends (competitor idea #4): what's hot, what's saturated, what
+// people want — all from the org's own listings. Lazy: fetched when the
+// disclosure first opens (and refreshed on re-open, it's cheap).
+async function loadMarketTrends() {
+  const body = $("mk-trends-body");
+  if (!body) return;
+  let t;
+  try { t = await fetch("/api/market/trends").then(r => r.json()); }
+  catch { body.innerHTML = `<p class="muted" style="font-size:12px;">Couldn't load trends.</p>`; return; }
+  const col = (title, rows, empty) =>
+    `<div class="mk-trend-col"><div class="ev-section-h" style="margin:0 0 6px">${title}</div>` +
+    (rows.length ? rows.join("") : `<p class="muted" style="font-size:12px;">${empty}</p>`) + `</div>`;
+  const hot = (t.hot || []).map(r =>
+    `<div class="mk-trend-row"><span>${esc(r.name)}</span>` +
+    `<span class="muted">${r.deals} deal${r.deals === 1 ? "" : "s"} · ${fmtAuec(r.median)}/u</span></div>`);
+  const listed = (t.most_listed || []).map(r =>
+    `<div class="mk-trend-row"><span>${esc(r.name)}</span><span class="muted">×${r.count} open</span></div>`);
+  const wtb = (t.buy_orders || []).map(r =>
+    `<a class="mk-trend-row" href="#/market/${r.id}"><span>${esc(r.name)} ×${fmtQty(r.qty)}</span>` +
+    `<span class="muted">paying ${fmtAuec(r.paying)}</span></a>`);
+  body.innerHTML = `<div class="mk-trends-grid">` +
+    col(`🔥 Hot (settled, ${t.window_days}d)`, hot, "No settled deals yet.") +
+    col("🏷️ Most listed", listed, "Nothing listed right now.") +
+    col("📥 Open buy orders", wtb, "Nobody's buying right now — post a buy order.") +
+    `</div>`;
+}
+
+// Crafter storefronts (competitor idea #2): members who hung out a shingle.
+// Shown on the Requests tab; "Request a craft" prefills a DIRECTED commission.
+let mktFormDirect = null;   // {id, name} — consumed by the create form
+async function loadCrafterPanel() {
+  const el = $("mk-crafters");
+  if (!el) return;
+  if (mktFilter.mode !== "commission") { el.hidden = true; el.innerHTML = ""; return; }
+  let d;
+  try { d = await fetch("/api/market/crafters").then(r => r.json()); }
+  catch { el.hidden = true; return; }
+  const rows = (d.crafters || []).filter(c => !c.is_me);
+  const mineFront = (d.crafters || []).some(c => c.is_me);
+  if (!rows.length && !mineFront) {
+    // Nobody's opened a storefront — quiet teaching line instead of a panel.
+    el.innerHTML = `<div class="panel mk-soon"><div class="mk-soon-h">🛠️ Crafter storefronts</div>` +
+      `<p class="muted" style="font-size:12px; margin:6px 0 0;">No storefronts yet — crafters can open one in ` +
+      `<a href="#/settings">Settings › Profile</a> to take direct orders.</p></div>`;
+    el.hidden = false;
+    return;
+  }
+  el.innerHTML = `<div class="panel mk-soon"><div class="mk-soon-h">🛠️ Crafter storefronts</div>` +
+    rows.map(c =>
+      `<div class="mk-crafter-row"><span class="mk-offer-who">${esc(c.name)}${mkDeals(c.deals)}</span>` +
+      `<span class="muted" style="flex:1; font-size:12px;">${esc(c.note)}` +
+      ` · ⚒ ${c.bp_count} recipe${c.bp_count === 1 ? "" : "s"}` +
+      (c.availability ? ` · usually on: ${esc(c.availability)}` : "") + `</span>` +
+      `<button class="ev-btn sm mk-direct" data-id="${esc(c.discord_id)}" data-name="${esc(c.name)}">Request a craft</button></div>`).join("") +
+    (mineFront ? `<p class="muted" style="font-size:12px; margin:6px 0 0;">Your storefront is listed here for others.</p>` : "") +
+    `</div>`;
+  el.hidden = false;
+  el.querySelectorAll(".mk-direct").forEach(b => b.onclick = () => {
+    mktFormDirect = { id: b.dataset.id, name: b.dataset.name };
+    location.hash = "#/market/new";
+  });
 }
 
 // "Ending soon" strip — perishable open auctions closing within 24h, surfaced above
@@ -12538,10 +12669,11 @@ function syncMktControls(root) {
 
 async function renderMarketBoard() {
   const root = $("market-root");
+  mktFormDirect = null;   // leaving the create form drops any directed-to seed
   const tabLbl = { "": "All", sale: "Sales", auction: "Auctions", barter: "Barter",
-    commission: "Requests" };
-  const tabs = ["", "sale", "auction", "barter", "commission"].map(m =>
-    `<button class="mk-tab" data-mode="${m}">${tabLbl[m]}</button>`).join("");
+    commission: "Requests", wtb: "Buying" };
+  const tabs = ["", "sale", "auction", "barter", "commission", "wtb"].map(m =>
+    `<button class="mk-tab" data-mode="${m}"${m === "wtb" ? ' title="Buy orders — members paying for items they want"' : ""}>${tabLbl[m]}</button>`).join("");
   const opts = (pairs, cur) => pairs.map(([v, l]) =>
     `<option value="${v}"${v === cur ? " selected" : ""}>${l}</option>`).join("");
   const sortOpts = opts([["recent", "Newest"], ["oldest", "Oldest"], ["price_asc", "Price ↑"],
@@ -12589,10 +12721,16 @@ async function renderMarketBoard() {
         `<input class="mk-statf" type="search" placeholder="crafted stat name or value…" title="crafted stat" autocomplete="off">` +
       `</div></details>` +
     `<div id="mk-sellerchip"></div>` +
+    `<details class="mk-morefilters" id="mk-trends"><summary>📊 Org market trends</summary>` +
+      `<div id="mk-trends-body" class="mk-trends-body"><p class="muted" style="font-size:12px;">Loading…</p></div></details>` +
     `</div>` +
+    `<div id="mk-crafters" hidden></div>` +
     `<div id="mk-endingsoon" hidden></div>` +
     `<div id="market-list" class="panel"></div>` +
     `<div id="mk-pager" class="mk-pager" hidden></div>`;
+  $("mk-trends").addEventListener("toggle", () => {
+    if ($("mk-trends").open) loadMarketTrends();
+  }, { once: false });
   root.querySelectorAll(".mk-tab").forEach(b => b.onclick = () => {
     if (b.dataset.mine) {
       mktFilter.mine = !mktFilter.mine;
@@ -12662,7 +12800,7 @@ function mktSkeleton(n) {
 }
 
 async function loadMarketPage(reset) {
-  if (reset) { mktOffset = 0; loadEndingSoon(); }
+  if (reset) { mktOffset = 0; loadEndingSoon(); loadCrafterPanel(); }
   const listEl = $("market-list"), pager = $("mk-pager");
   if (!listEl) return;
   listEl.classList.toggle("mk-compact", mktView === "compact");
@@ -12781,6 +12919,21 @@ function mkOpenBlock(l) {
     }
     return h + `<span id="mk-msg" class="mk-msg" role="status" aria-live="polite"></span></div>`;
   }
+  if (l.mode === "wtb") {
+    let h = `<div class="mk-state"><div class="mk-bigprice">${fmtAuec(l.price_auec)} <span class="muted">paying</span></div>` +
+      `<div class="ev-meta">${l.offer_count || 0} offer${l.offer_count === 1 ? "" : "s"} to sell</div>`;
+    if (l.is_seller) h += `<p class="muted">Your buy order is live — accept an offer below when one lands.</p>`;
+    else {
+      h += `<div class="mk-offerform"><span class="ev-hint">Got some? Offer to sell (at or under the paying price usually wins):</span>` +
+        `<div class="rm-row"><input id="mk-sell-amt" class="ti rm-qty" type="number" min="0" step="any" placeholder="your price (aUEC)">` +
+        `<input id="mk-sell-note" class="ti" maxlength="500" placeholder="stock on hand, where (optional)" style="flex:1;min-width:140px">` +
+        `<button class="ev-btn primary" id="mk-sell">Offer to sell</button></div>`;
+      if (l.my_offer && l.my_offer.amount_auec != null)
+        h += `<span class="muted">You offered ${fmtAuec(l.my_offer.amount_auec)}.</span>`;
+      h += `</div>`;
+    }
+    return h + `<span id="mk-msg" class="mk-msg" role="status" aria-live="polite"></span></div>`;
+  }
   // barter
   let h = `<div class="mk-state"><div class="mk-want"><span class="muted">Wants in return:</span> ${esc(l.want || "")}</div>`;
   if (l.is_seller) h += `<p class="muted">Waiting for barter offers.</p>`;
@@ -12797,9 +12950,11 @@ function mkOpenBlock(l) {
 // Display roles: a commission inverts the money/goods flow, so the poster reads
 // as "Requester" and the accepted bidder as "Crafter" (columns are unchanged).
 function mkRoles(l) {
-  return l.mode === "commission"
-    ? { seller: "Requester", buyer: "Crafter" }
-    : { seller: "Seller", buyer: "Buyer" };
+  // Commission + buy order invert the money/goods flow: the poster (seller_id
+  // column) is the paying side, the accepted responder delivers the goods.
+  if (l.mode === "commission") return { seller: "Requester", buyer: "Crafter" };
+  if (l.mode === "wtb") return { seller: "Buyer", buyer: "Seller" };
+  return { seller: "Seller", buyer: "Buyer" };
 }
 
 function mkPendingBlock(l) {
@@ -12871,7 +13026,8 @@ function mkOfferRow(l, o) {
 function mkOffersBlock(l) {
   const offers = l.offers || [];
   if (!offers.length) return "";
-  const title = l.mode === "auction" ? "Bids" : l.mode === "commission" ? "Quotes" : "Offers";
+  const title = l.mode === "auction" ? "Bids" : l.mode === "commission" ? "Quotes"
+    : l.mode === "wtb" ? "Offers to sell" : "Offers";
   return `<div class="ev-section-h">${title}</div><div class="mk-offers">${offers.map(o => mkOfferRow(l, o)).join("")}</div>`;
 }
 
@@ -12900,7 +13056,10 @@ function renderMarketDetailBody(l) {
   mktPostNotice = null;
   let html = posted +
     `<div class="ev-detail-title"><h2>${wanted}${esc(l.item_name)} ${mkQtyTag(l)}</h2>${mkCraftBadge(l)}${isJob ? mkMatsChip(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div>` +
-    `<div class="ev-detail-meta">${isJob ? "requested" : "listed"} by <b class="mk-sellerlink" id="mk-seller" title="Show all from this seller">${esc(l.seller_name)}</b>${mkHandle(l)}${mkDeals(l.seller_deals)}</div>` +
+    `<div class="ev-detail-meta">${isJob ? "requested" : l.mode === "wtb" ? "wanted" : "listed"} by <b class="mk-sellerlink" id="mk-seller" title="Show all from this seller">${esc(l.seller_name)}</b>${mkHandle(l)}${mkDeals(l.seller_deals)}` +
+      (l.seller_availability ? ` · <span class="muted" title="their declared play window">usually on: ${esc(l.seller_availability)}</span>` : "") +
+      (l.views != null ? ` · <span class="muted" title="how many members opened this listing (anonymous count)">${l.views} view${l.views === 1 ? "" : "s"}</span>` : "") + `</div>` +
+    (l.directed_to_name ? `<div class="ev-detail-meta">🎯 Directed to <b>${esc(l.directed_to_name)}</b> — only they can quote it.</div>` : "") +
     (l.availability || l.pickup_poi ? `<div class="ev-detail-meta">` +
       (l.availability && MK_AVAIL[l.availability]
         ? `${MK_AVAIL[l.availability][0]} ${esc(MK_AVAIL[l.availability][1])}` : "") +
@@ -13016,6 +13175,12 @@ function wireMarketDetail(l) {
     const note = $("mk-quote-note").value.trim();
     act(`/api/market/${id}/offer`, { amount_auec: amt, offer_note: note || null }, "POST", btn);
   });
+  on("mk-sell", (btn) => {
+    const amt = Number($("mk-sell-amt").value);
+    if (!(amt > 0)) return setMsg("Enter your selling price (aUEC).", "err", btn);
+    const note = $("mk-sell-note").value.trim();
+    act(`/api/market/${id}/offer`, { amount_auec: amt, offer_note: note || null }, "POST", btn);
+  });
   on("mk-jobquit", async (btn) => {
     if (!(await confirmDialog(
         "The request goes back on the board for other crafters to quote.",
@@ -13027,6 +13192,7 @@ function wireMarketDetail(l) {
   submitOnEnter("mk-bid-amt", "mk-bid");
   submitOnEnter("mk-barter-note", "mk-barter");
   submitOnEnter("mk-quote-note", "mk-quote");
+  submitOnEnter("mk-sell-note", "mk-sell");
   // Accept strikes the deal and binds both parties → guard it like the app's other
   // commit/destructive actions (confirmDialog), which Cancel below already uses.
   document.querySelectorAll(".mk-accept").forEach(b =>
@@ -13070,7 +13236,8 @@ function marketFormHtml(l) {
   const mode = l ? l.mode : "sale";
   const picked = l && l.item_id ? ` data-item-id="${esc(l.item_id)}" data-unit="${esc(l.unit || "")}"` : "";
   const modeOpts = { sale: "Sale (fixed price)", auction: "Auction (timed bids)",
-    barter: "Barter (trade)", commission: "Craft request (commission)" };
+    barter: "Barter (trade)", commission: "Craft request (commission)",
+    wtb: "Buy order (WTB — I'm buying)" };
   const bpPicked = l && l.blueprint_key ? ` data-bp-key="${esc(l.blueprint_key)}" disabled` : "";
   return `<div class="ev-form">` +
     `<div class="ev-field" id="mk-f-item-field"><label>Item</label><span class="poi-pick"><input id="mk-f-item" class="ti" ` +
@@ -13082,7 +13249,7 @@ function marketFormHtml(l) {
       `<div class="ev-field"><label>Quantity</label><input id="mk-f-qty" class="ti" type="number" min="0" step="any" ` +
         `value="${l ? fmtQty(l.qty) : "1"}"></div>` +
       `<div class="ev-field"><label>Listing type</label><select id="mk-f-mode" ${l ? "disabled" : ""}>` +
-        ["sale", "auction", "barter", "commission"].map(m =>
+        ["sale", "auction", "barter", "commission", "wtb"].map(m =>
           `<option value="${m}" ${mode === m ? "selected" : ""}>${modeOpts[m]}</option>`).join("") +
       `</select>${l ? `<span class="ev-hint">Type can't change after posting.</span>` : ""}</div>` +
     `</div>` +
@@ -13108,6 +13275,10 @@ function marketFormHtml(l) {
     `<div class="mk-mode-fields" data-mode="sale">` +
       `<div class="ev-field"><label>Price (aUEC)</label><input id="mk-f-price" class="ti" type="number" min="0" step="any" ` +
         `value="${l && l.mode === "sale" && l.price_auec != null ? fmtQty(l.price_auec) : ""}"></div></div>` +
+    `<div class="mk-mode-fields" data-mode="wtb">` +
+      `<div class="ev-field"><label>Paying (aUEC)</label><input id="mk-f-paying" class="ti" type="number" min="0" step="any" ` +
+        `value="${l && l.mode === "wtb" && l.price_auec != null ? fmtQty(l.price_auec) : ""}">` +
+        `<span class="ev-hint">For the whole quantity above. Sellers respond with offers; you pick one — never automatic.</span></div></div>` +
     `<div class="mk-mode-fields" data-mode="auction"><div class="ev-form-grid">` +
       `<div class="ev-field"><label>Starting bid (aUEC)</label><input id="mk-f-start" class="ti" type="number" min="0" step="any" ` +
         `value="${l && l.start_price != null ? fmtQty(l.start_price) : ""}" ${l ? "disabled" : ""}>` +
@@ -13311,6 +13482,7 @@ function collectMarketForm() {
       payload.price_auec = budget;
     }
     payload.materials = $("mk-f-mats").value;
+    if (mktFormDirect) payload.directed_to = mktFormDirect.id;
     const date = $("mk-f-need-date").value, time = $("mk-f-need-time").value;
     if (date) {
       const ends = new Date(`${date}T${time || "23:59"}`);
@@ -13338,6 +13510,10 @@ function collectMarketForm() {
       if (buyout < start) return { error: "Buyout must be at or above the starting bid." };
       payload.buyout_auec = buyout;
     }
+  } else if (mode === "wtb") {
+    if ($("mk-f-paying").value === "" || !(Number($("mk-f-paying").value) >= 0))
+      return { error: "Enter what you're paying." };
+    payload.price_auec = Number($("mk-f-paying").value);
   } else {
     const want = $("mk-f-want").value.trim();
     if (!want) return { error: "Say what you want in return." };
@@ -13668,9 +13844,19 @@ function bindMarketForm(editId, onCancel) {
 
 function renderMarketForm() {
   mkSpec.initQ = null;
+  const directNote = mktFormDirect
+    ? `<p class="rm-intro">🎯 Craft request directed to <b>${esc(mktFormDirect.name)}</b> — only they can quote it. ` +
+      `<a href="javascript:void 0" id="mk-undirect">Send to the whole board instead</a></p>`
+    : "";
   $("market-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/market">← All listings</a>` +
-    `<h2 class="ev-screen-h">NEW LISTING</h2>${marketFormHtml(null)}</div>`;
+    `<h2 class="ev-screen-h">NEW LISTING</h2>${directNote}${marketFormHtml(null)}</div>`;
   bindMarketForm(null, () => { location.hash = "#/market"; });
+  if (mktFormDirect) {
+    $("mk-f-mode").value = "commission";
+    mkSyncModeFields();
+    const un = $("mk-undirect");
+    if (un) un.onclick = () => { mktFormDirect = null; renderMarketForm(); };
+  }
 }
 
 function renderMarketEditForm(l) {
