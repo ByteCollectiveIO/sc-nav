@@ -3517,14 +3517,23 @@ async def list_blueprint_stat_names():
 
 
 @app.get("/api/blueprints")
-async def list_blueprints(q: str | None = None, category: str | None = None):
+async def list_blueprints(q: str | None = None, category: str | None = None,
+                          crafter: str | None = None):
     """Crafting-blueprint search index for the commission picker (#25): key,
     item name, category, craft time, input summary. Filter with `?q=` (substring
     over name/inputs/key) and/or `?category=`; capped — the client autocompletes,
-    it never pages the whole feed. Categories ride along for the filter UI."""
+    it never pages the whole feed. Categories ride along for the filter UI.
+    `?crafter=<discord_id>` narrows to that member's blueprint LIBRARY — the
+    directed-commission picker uses it so you can only ask a crafter for
+    something they can actually build."""
     needle = (q or "").strip().lower()
+    library = None
+    if crafter:
+        library = {b["blueprint_key"] for b in db.list_member_blueprints(crafter)}
     rows = []
     for key, bp in blueprints_feed.items():
+        if library is not None and key not in library:
+            continue
         row = _blueprint_index_row(key, bp)
         if category and row["cat"] != category:
             continue
@@ -8295,10 +8304,18 @@ def _validate_listing(body: ListingIn) -> dict:
         fields["attributes"] = {"spec": spec} if spec else None
         # Directed commission (storefronts): sent to ONE crafter, who alone may
         # quote it. Board-visible but badged; withdraw/expiry semantics unchanged.
+        # The recipe must be in the target's library — a directed request for
+        # something they can't build is a dead letter by construction (the
+        # picker is scoped too; this catches API calls and library races).
         if body.directed_to:
             target = body.directed_to.strip()
             if not target.isdigit():
                 raise HTTPException(status_code=400, detail="invalid crafter id")
+            if not db.member_has_blueprint(target, fields.get("blueprint_key")):
+                raise HTTPException(
+                    status_code=400,
+                    detail="that crafter doesn't have this recipe in their library — "
+                           "pick one of their recipes, or send the request to the whole board")
             fields["directed_to"] = target
     elif body.mode == "auction":
         if body.start_price is None:
@@ -8737,11 +8754,13 @@ async def market_stats(range: str = "all", user: dict = Depends(require_session)
 
 
 @app.get("/api/market/crafters")
-async def market_crafters(user: dict = Depends(require_session)):
+async def market_crafters(blueprint: str | None = None,
+                          user: dict = Depends(require_session)):
     """The crafter storefront directory (competitor idea #2): members who set a
     storefront blurb, with their library size + completed-deal count — the
-    "who do I send this job to?" answer. Registered before /{listing_id}."""
-    fronts = db.list_crafter_storefronts()
+    "who do I send this job to?" answer. `?blueprint=<key>` narrows to
+    storefronts holding that recipe. Registered before /{listing_id}."""
+    fronts = db.list_crafter_storefronts(blueprint_key=blueprint or None)
     deals = db.completed_deals_counts([f["discord_id"] for f in fronts])
     return {"crafters": [
         {"discord_id": f["discord_id"],

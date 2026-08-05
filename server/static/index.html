@@ -1957,6 +1957,12 @@
   .mk-crafter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     padding: 6px 0; border-top: 1px solid var(--border); }
   .mk-crafter-row:first-of-type { border-top: none; }
+  .mk-bplist-tog { background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: 12px; padding: 0; }
+  .mk-bplist-tog:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .mk-crafter-bps { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px;
+    padding: 4px 0 2px; }
+  .mk-crafter-bps[hidden] { display: none; }   /* display:flex beats the UA hidden rule */
   /* in-game meetup handle: name reads plainly (not an accent — it's data, not a
      live control); the glyph is dim, and an unverified handle gets an amber chip. */
   .mk-handle { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -12513,17 +12519,19 @@ async function loadMarketTrends() {
 
 // Crafter storefronts (competitor idea #2): members who hung out a shingle.
 // Shown on the Requests tab; "Request a craft" prefills a DIRECTED commission.
-let mktFormDirect = null;   // {id, name} — consumed by the create form
+let mktFormDirect = null;    // {id, name, bp?} — consumed by the create form
+let mktCrafterBp = null;     // {key, name} — "who can build me an X?" filter
 async function loadCrafterPanel() {
   const el = $("mk-crafters");
   if (!el) return;
   if (mktFilter.mode !== "commission") { el.hidden = true; el.innerHTML = ""; return; }
   let d;
-  try { d = await fetch("/api/market/crafters").then(r => r.json()); }
+  const bpq = mktCrafterBp ? `?blueprint=${encodeURIComponent(mktCrafterBp.key)}` : "";
+  try { d = await fetch(`/api/market/crafters${bpq}`).then(r => r.json()); }
   catch { el.hidden = true; return; }
   const rows = (d.crafters || []).filter(c => !c.is_me);
   const mineFront = (d.crafters || []).some(c => c.is_me);
-  if (!rows.length && !mineFront) {
+  if (!rows.length && !mineFront && !mktCrafterBp) {
     // Nobody's opened a storefront — quiet teaching line instead of a panel.
     el.innerHTML = `<div class="panel mk-soon"><div class="mk-soon-h">🛠️ Crafter storefronts</div>` +
       `<p class="muted" style="font-size:12px; margin:6px 0 0;">No storefronts yet — crafters can open one in ` +
@@ -12531,19 +12539,67 @@ async function loadCrafterPanel() {
     el.hidden = false;
     return;
   }
-  el.innerHTML = `<div class="panel mk-soon"><div class="mk-soon-h">🛠️ Crafter storefronts</div>` +
+  // "Who can build me an X?" — a recipe filter over the storefront list. Picking
+  // a recipe narrows the list AND pre-fills it on "Request a craft".
+  const bpFilter = mktCrafterBp
+    ? `<span class="mk-sellerchip">Can craft <b>${esc(mktCrafterBp.name)}</b>` +
+      `<button class="mk-clear" id="mk-crafterbp-clear">clear ✕</button></span>`
+    : `<span class="poi-pick" style="display:inline-block; min-width:200px;">` +
+      `<input id="mk-crafterbp" class="ti" placeholder="who can craft… (recipe)" autocomplete="off" style="font-size:12px;"></span>`;
+  const emptyLine = !rows.length
+    ? `<p class="muted" style="font-size:12px; margin:6px 0 0;">` +
+      (mktCrafterBp
+        ? `No storefront has ${esc(mktCrafterBp.name)} — post the request to the whole board and any crafter can quote it.`
+        : `No other storefronts yet.`) + `</p>`
+    : "";
+  el.innerHTML = `<div class="panel mk-soon"><div class="mk-soon-h">🛠️ Crafter storefronts ` +
+    `<span style="float:right; font-weight:400;">${bpFilter}</span></div>` + emptyLine +
     rows.map(c =>
       `<div class="mk-crafter-row"><span class="mk-offer-who">${esc(c.name)}${mkDeals(c.deals)}</span>` +
       `<span class="muted" style="flex:1; font-size:12px;">${esc(c.note)}` +
-      ` · ⚒ ${c.bp_count} recipe${c.bp_count === 1 ? "" : "s"}` +
+      ` · <button type="button" class="mk-bplist-tog" data-id="${esc(c.discord_id)}" ` +
+        `aria-expanded="false" title="Show their recipe list">⚒ ${c.bp_count} recipe${c.bp_count === 1 ? "" : "s"} ▾</button>` +
       (c.availability ? ` · usually on: ${esc(c.availability)}` : "") + `</span>` +
-      `<button class="ev-btn sm mk-direct" data-id="${esc(c.discord_id)}" data-name="${esc(c.name)}">Request a craft</button></div>`).join("") +
+      `<button class="ev-btn sm mk-direct" data-id="${esc(c.discord_id)}" data-name="${esc(c.name)}">Request a craft</button>` +
+      `<div class="mk-crafter-bps" data-for="${esc(c.discord_id)}" hidden></div></div>`).join("") +
     (mineFront ? `<p class="muted" style="font-size:12px; margin:6px 0 0;">Your storefront is listed here for others.</p>` : "") +
     `</div>`;
   el.hidden = false;
+  const bpIn = $("mk-crafterbp");
+  if (bpIn) attachBlueprintPicker(bpIn.parentElement, bp => {
+    mktCrafterBp = { key: bp.key, name: bp.name };
+    loadCrafterPanel();
+  });
+  const bpClear = $("mk-crafterbp-clear");
+  if (bpClear) bpClear.onclick = () => { mktCrafterBp = null; loadCrafterPanel(); };
   el.querySelectorAll(".mk-direct").forEach(b => b.onclick = () => {
-    mktFormDirect = { id: b.dataset.id, name: b.dataset.name };
+    // An active recipe filter rides into the request — crafter AND blueprint
+    // arrive pre-picked, so the form is two fields from done.
+    mktFormDirect = { id: b.dataset.id, name: b.dataset.name,
+                      bp: mktCrafterBp ? { ...mktCrafterBp } : null };
     location.hash = "#/market/new";
+  });
+  // "⚒ 16 recipes" expands their actual library — you shouldn't have to start
+  // a request just to find out what someone builds.
+  el.querySelectorAll(".mk-bplist-tog").forEach(b => b.onclick = async () => {
+    const box = el.querySelector(`.mk-crafter-bps[data-for="${CSS.escape(b.dataset.id)}"]`);
+    if (!box) return;
+    if (!box.hidden) { box.hidden = true; b.setAttribute("aria-expanded", "false"); return; }
+    if (!box.dataset.loaded) {
+      box.innerHTML = `<span class="muted" style="font-size:12px;">Loading…</span>`;
+      box.hidden = false;
+      try {
+        const d = await fetch(`/api/blueprints?crafter=${encodeURIComponent(b.dataset.id)}`).then(r => r.json());
+        const bps = d.blueprints || [];
+        box.innerHTML = bps.length
+          ? bps.map(bp => `<span class="ev-name" title="${esc(bp.cat || "")}">${esc(bp.name)}</span>`).join("")
+          : `<span class="muted" style="font-size:12px;">Their library is empty.</span>`;
+        box.dataset.loaded = "1";
+      } catch {
+        box.innerHTML = `<span class="muted" style="font-size:12px;">Couldn't load their list.</span>`;
+      }
+    } else box.hidden = false;
+    b.setAttribute("aria-expanded", "true");
   });
 }
 
@@ -13585,12 +13641,16 @@ function attachBlueprintPicker(wrap, onPick) {
   async function refresh() {
     const q = input.value.trim();
     const mine = ++seq;
+    // A directed request scopes the picker to the target crafter's LIBRARY
+    // (wrap.dataset.crafter) — you can only ask for what they can build, and
+    // focusing the empty field browses their whole list.
+    const scope = wrap.dataset.crafter ? `&crafter=${encodeURIComponent(wrap.dataset.crafter)}` : "";
     let rows = [];
-    try { rows = ((await fetch(`/api/blueprints?q=${encodeURIComponent(q)}`).then(r => r.json())) || {}).blueprints || []; }
+    try { rows = ((await fetch(`/api/blueprints?q=${encodeURIComponent(q)}${scope}`).then(r => r.json())) || {}).blueprints || []; }
     catch { rows = []; }
     if (mine !== seq) return;
     drop.innerHTML = "";
-    for (const bp of rows.slice(0, 12)) {
+    for (const bp of rows.slice(0, wrap.dataset.crafter ? 50 : 12)) {
       const opt = document.createElement("div");
       opt.className = "poi-opt";
       opt.setAttribute("role", "option");
@@ -13854,6 +13914,24 @@ function renderMarketForm() {
   if (mktFormDirect) {
     $("mk-f-mode").value = "commission";
     mkSyncModeFields();
+    // Scope the blueprint picker to the target's library: focus the empty
+    // field to browse everything they can build; anything else is un-askable.
+    const bpEl = $("mk-f-bp");
+    if (bpEl) {
+      const bpWrap = bpEl.closest(".poi-pick");
+      if (bpWrap) bpWrap.dataset.crafter = mktFormDirect.id;
+      const hint = bpEl.closest(".ev-field").querySelector(".ev-hint");
+      if (hint) hint.textContent =
+        `Showing only recipes ${mktFormDirect.name} can craft — focus the field to browse their list.`;
+      // A recipe filter from the storefront panel arrives pre-picked (same
+      // effect as choosing it in the dropdown, spec builder included).
+      if (mktFormDirect.bp) {
+        bpEl.value = mktFormDirect.bp.name;
+        bpEl.dataset.bpKey = mktFormDirect.bp.key;
+        if (bpWrap) bpWrap.classList.add("picked");
+        mkSpec.load(mktFormDirect.bp.key).then(mkFillStatNames);
+      }
+    }
     const un = $("mk-undirect");
     if (un) un.onclick = () => { mktFormDirect = null; renderMarketForm(); };
   }
