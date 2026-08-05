@@ -8092,6 +8092,8 @@ class ListingIn(BaseModel):
     crafted: CraftedIn | None = None                            # crafted-quality blob
     seller_handle: str | None = Field(default=None, max_length=_HANDLE_MAX)  # in-game meetup name
     materials: str | None = Field(default=None, max_length=16)  # commission: requester|crafter|split
+    availability: str | None = Field(default=None, max_length=16)  # instock|pickup|ondemand|scheduled
+    pickup_poi: str | None = Field(default=None, max_length=120)   # where the handoff happens
     announce: bool = False                                      # opt-in Discord shout (any mode)
 
 
@@ -8105,6 +8107,8 @@ class ListingPatchIn(BaseModel):
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     crafted: CraftedIn | None = None       # present (even if empty) ⇒ replace/clear
     materials: str | None = Field(default=None, max_length=16)  # commission only
+    availability: str | None = Field(default=None, max_length=16)  # "" clears
+    pickup_poi: str | None = Field(default=None, max_length=120)   # "" clears
 
 
 class OfferIn(BaseModel):
@@ -8121,6 +8125,7 @@ _LISTING_PUBLIC = ("id", "seller_id", "seller_handle", "item_id", "item_name", "
                    "qty", "mode", "price_auec", "start_price", "buyout_auec", "ends_at",
                    "want", "status", "note", "buyer_id", "seller_confirmed",
                    "buyer_confirmed", "attributes", "blueprint_key", "materials",
+                   "availability", "pickup_poi",
                    "created_at", "updated_at", "completed_at")
 
 # The columns a board card needs — a subset of _LISTING_PUBLIC, served without the
@@ -8129,7 +8134,8 @@ _LISTING_PUBLIC = ("id", "seller_id", "seller_handle", "item_id", "item_name", "
 _LISTING_CARD = ("id", "seller_id", "seller_handle", "item_id", "item_name", "unit",
                  "qty", "mode", "price_auec", "start_price", "ends_at", "want",
                  "status", "sort_price", "offer_count", "attributes",
-                 "blueprint_key", "materials", "created_at", "updated_at",
+                 "blueprint_key", "materials", "availability", "pickup_poi",
+                 "created_at", "updated_at",
                  "buyer_id", "seller_confirmed", "buyer_confirmed")
 
 
@@ -8158,6 +8164,22 @@ def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
 _MARKET_PAGE = 25          # default board page size
 _MARKET_PAGE_MAX = 100     # cap a client-supplied ?limit=
 
+# When/how the goods actually change hands (B8, after UEX's availability
+# vocabulary): the single question a buyer coordinates a play session around.
+# Optional — None = unspecified, rendered as nothing.
+_LISTING_AVAILABILITY = ("instock", "pickup", "ondemand", "scheduled")
+
+
+def _norm_availability(v: str | None) -> str | None:
+    """Normalize an availability value; '' clears; unknown → 400."""
+    v = (v or "").strip().lower()
+    if not v:
+        return None
+    if v not in _LISTING_AVAILABILITY:
+        raise HTTPException(status_code=400,
+                            detail="availability must be instock, pickup, ondemand or scheduled")
+    return v
+
 
 def _validate_listing(body: ListingIn) -> dict:
     """Validate a new listing against the catalog + its mode, normalizing into the
@@ -8171,6 +8193,8 @@ def _validate_listing(body: ListingIn) -> dict:
               "qty": body.qty, "mode": body.mode,
               "note": (body.note or "").strip() or None,
               "attributes": _clean_crafted(body.crafted),
+              "availability": _norm_availability(body.availability),
+              "pickup_poi": (body.pickup_poi or "").strip() or None,
               "price_auec": None, "start_price": None, "buyout_auec": None,
               "ends_at": None, "want": None, "blueprint_key": None, "materials": None}
     # Any listing whose item is a craftable recipe carries its blueprint_key
@@ -8274,6 +8298,25 @@ def _resolve_listing_expiry(listing: dict, offers, now: datetime) -> dict:
     return final
 
 
+def _org_price_memory(item_id: str) -> dict | None:
+    """The org's own settled-price memory for an item (2026-08 review B7):
+    per-UNIT figures derived from completed deals' final_auec (the accepted
+    amount — what was really paid, not the ask). More trustworthy than any
+    external feed for org-internal goods, because it's this org's actual deals.
+    None until at least one aUEC deal has settled."""
+    rows = db.item_deal_prices(item_id)
+    units = sorted(float(r["final_auec"]) / max(float(r.get("qty") or 1), 1)
+                   for r in rows)
+    if not units:
+        return None
+    n = len(units)
+    median = (units[n // 2] if n % 2 else (units[n // 2 - 1] + units[n // 2]) / 2)
+    last = rows[0]
+    return {"count": n, "median": round(median),
+            "last": round(float(last["final_auec"]) / max(float(last.get("qty") or 1), 1)),
+            "last_at": last.get("completed_at")}
+
+
 def _commission_mats_est(listing: dict) -> float | None:
     """A craft request's estimated total materials cost (#25.1 §12): the recipe's
     per-craft estimate × the requested quantity. None when the recipe left the
@@ -8353,6 +8396,8 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
             # Fair-price anchor for buyers of a crafted good (commissions carry
             # theirs under the commission block).
             view["mats_est"] = _commission_mats_est(listing)
+        # Org price memory (B7): what this item actually settled for in-org.
+        view["org_price"] = _org_price_memory(listing["item_id"])
     return view
 
 
@@ -8442,6 +8487,7 @@ async def list_market(mode: str | None = None, item: str | None = None,
                       min_quality: float | None = None, max_quality: float | None = None,
                       band: int | None = None, stat: str | None = None,
                       activity: str | None = None, craft: int = 0,
+                      avail: str | None = None,
                       user: dict = Depends(require_session)):
     """The marketplace board — a paged, filterable, sortable slice of listings.
     Defaults to open listings; `seller=me` lists all of the caller's own (any
@@ -8467,7 +8513,8 @@ async def list_market(mode: str | None = None, item: str | None = None,
         max_price=max_price, sort=sort, limit=limit, offset=offset,
         min_quality=min_quality, max_quality=max_quality, band=band, stat=stat,
         bidder_id=user["id"] if my_activity else None,
-        craftable_by=user["id"] if craft else None)
+        craftable_by=user["id"] if craft else None,
+        avail=avail if avail in _LISTING_AVAILABILITY else None)
     now = datetime.now(timezone.utc)
     cards = []
     for r in rows:
@@ -8588,6 +8635,14 @@ async def market_stats(range: str = "all", user: dict = Depends(require_session)
     return {"range": range, **stats, "activity": activity}
 
 
+@app.get("/api/market/item_history")
+async def market_item_history(item: str, user: dict = Depends(require_session)):
+    """Org settled-price memory for one catalog item — the create form's "last
+    sold in-org for…" hint. MUST register before GET /api/market/{listing_id},
+    whose path param would otherwise swallow the literal segment as a 422."""
+    return {"item": item, "org_price": _org_price_memory(item)}
+
+
 @app.get("/api/market/{listing_id}")
 async def get_market_listing(listing_id: int, user: dict = Depends(require_session)):
     """One listing with its offer/bid list + derived auction state."""
@@ -8628,6 +8683,10 @@ async def edit_listing(listing_id: int, body: ListingPatchIn,
         fields["qty"] = body.qty
     if body.note is not None:
         fields["note"] = body.note.strip() or None
+    if body.availability is not None:
+        fields["availability"] = _norm_availability(body.availability)
+    if body.pickup_poi is not None:
+        fields["pickup_poi"] = body.pickup_poi.strip() or None
     if body.crafted is not None:           # present (even if empty) ⇒ replace/clear
         spec = _clean_crafted(body.crafted)
         # Commission specs live under attributes.spec (a future as-delivered

@@ -55,10 +55,14 @@ One true P0: the event detail roster never matches signups to target roles.
       (completed-deals count) in the seller's offers list.
 - [x] B6 **Liveness**: auction countdown ticks client-side + refetch on
       `visibilitychange`; `ends_at` lock (extend-only) once bids exist.
-- [ ] B7 **Settled price**: record actual `deal_value` at confirm; **org price
-      memory** hint on create/detail ("last sold in-org for 45K, 3 deals").
-- [ ] B8 **Availability enum** on listings: in-stock · ready-for-pickup ·
-      on-demand · scheduled (+ filter chip); **pickup POI** field.
+- [x] B7 **Org price memory**: per-unit last/median/count derived from completed
+      deals' `final_auec` (already the ACCEPTED amount — what was really paid —
+      so no confirm-time input was needed); surfaced on the listing detail
+      ("⚖ Sold in-org before") + the create form's "Sold in-org" hint with a
+      one-click use (`/api/market/item_history`).
+- [x] B8 **Availability enum** on listings (instock · pickup · ondemand ·
+      scheduled) + **pickup/handoff location** w/ POI autocomplete; board chip +
+      filter (`avail=`), detail line, editable.
 - [x] B9 **Quote-with-message** on commissions — already existed (`offer_note`
       on quotes); no work needed.
 
@@ -94,17 +98,18 @@ One true P0: the event detail roster never matches signups to target roles.
       manifest post stays plain text on purpose — it's a chunked document).
       Goals/records/LFG/pirates/survey builders stay plain for now — same
       `_embed()` helper when wanted.
-- [ ] D3 **Send pacing**: per-category queue, min inter-send spacing, honor full
-      `retry_after` (Discord 30 msg/min/webhook) — hangs health tracking (A8).
+- [x] D3 **Send pacing**: per-category slot reservation (2.0s spacing = ≤30
+      msg/min, Discord's webhook cap; atomic in the single-threaded loop, no
+      queue thread needed) + 429 `retry_after` honored up to 30s (was capped 5s).
 - [x] D4 **Member opt-out**: `notify_opt_out` profile flag honored in
       `_mentions()` (name stays in text, ping dropped).
 
 ## Shipped state
 
-The A–D batch above shipped as **v0.96.0** (2026-08-05, confirmed live). D2
-embeds followed in the next pass (913 tests). Remaining open boxes (B7
-settled-price/org price memory, B8 availability + pickup POI, D3 send pacing)
-are queued — none blocks anything.
+The A–D batch shipped as **v0.96.0**; D2 embeds as **v0.97.0** (both
+confirmed live 2026-08-05). B7 + B8 + D3 followed the same day (919 tests) —
+every box in this review is now closed. What remains are the parked competitor
+ideas below.
 
 ## Deliberately NOT doing (validated by competitor research)
 

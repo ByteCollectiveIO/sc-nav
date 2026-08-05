@@ -171,10 +171,28 @@ def _dedup_seen(key: str) -> bool:
 
 
 # --- dispatch -----------------------------------------------------------------
+# Discord allows ~30 messages/min per webhook. Sends used to fire as independent
+# threads, so a burst (bidding war, event rush) could blow past the limit and
+# shed messages after one capped retry. Pacing: each category reserves the next
+# send slot SYNCHRONOUSLY (single-threaded event loop → atomic between awaits,
+# no lock needed) and sleeps until its slot. 2.0s spacing = ≤30/min exactly.
+SEND_SPACING_S = 2.0
+_next_send: dict[str, float] = {}
+
+
+async def _pace(category: str) -> None:
+    now = time.monotonic()
+    slot = max(now, _next_send.get(category, 0.0))
+    _next_send[category] = slot + SEND_SPACING_S   # reserve BEFORE awaiting
+    if slot > now:
+        await asyncio.sleep(slot - now)
+
+
 def _post(url: str, payload: dict) -> None:
     """Blocking POST of one Discord webhook message. Runs in a worker thread.
-    Honors a single 429 retry_after (capped) so a brief rate-limit doesn't drop
-    the message; any other failure is logged by the caller."""
+    Honors a 429's full retry_after (capped at 30s — beyond that the message is
+    better dropped than a thread parked); any other failure is logged by the
+    caller."""
     body = json.dumps(payload).encode("utf-8")
     for attempt in range(2):
         req = urllib.request.Request(
@@ -189,7 +207,7 @@ def _post(url: str, payload: dict) -> None:
             if exc.code == 429 and attempt == 0:
                 try:
                     info = json.loads(exc.read().decode("utf-8") or "{}")
-                    delay = min(float(info.get("retry_after", 1.0)), 5.0)
+                    delay = min(float(info.get("retry_after", 1.0)), 30.0)
                 except Exception:
                     delay = 1.0
                 time.sleep(delay)
@@ -247,6 +265,7 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
         return False   # Discord rejects an empty message; nothing to say
 
     try:
+        await _pace(category)
         await asyncio.to_thread(_post, url, payload)
         _note_result(category, True)
         return True

@@ -1946,6 +1946,8 @@
     border-radius: 4px; padding: 0 5px; font-variant-numeric: tabular-nums; }
   .mk-stake.outbid { color: var(--warn); border-color: var(--warn); }
   .mk-stake.confirm { color: var(--good); border-color: var(--good); font-weight: 700; }
+  .mk-avail { font-size: 11px; color: var(--dim); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0 5px; white-space: nowrap; }
   /* in-game meetup handle: name reads plainly (not an accent — it's data, not a
      live control); the glyph is dim, and an unverified handle gets an amber chip. */
   .mk-handle { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -12344,6 +12346,17 @@ function mkCraftMatch(l) {
   return "";
 }
 
+// Availability chip (B8): do the goods exist yet, and where do they change
+// hands — the coordination facts a buyer plans a session around.
+const MK_AVAIL = { instock: ["📦", "in stock"], pickup: ["📍", "pickup ready"],
+                   ondemand: ["⚒", "on demand"], scheduled: ["🗓", "scheduled"] };
+function mkAvailChip(l) {
+  const a = MK_AVAIL[l.availability];
+  if (!a) return "";
+  const at = l.pickup_poi ? ` title="Handoff at ${esc(l.pickup_poi)}"` : "";
+  return `<span class="mk-avail"${at}>${a[0]} ${a[1]}</span>`;
+}
+
 // Amber "stale" chip once an open listing sits untouched past the org's window
 // (0 = display off). Keys off updated_at, so an edit or one-click renew clears it.
 function mkStaleBadge(l) {
@@ -12371,7 +12384,7 @@ function listingCard(l) {
   const wanted = l.mode === "commission" ? `<span class="mk-wanted">Wanted</span> ` : "";
   return `<a class="ev-card${l.commission && l.commission.i_can_craft ? " mk-match" : ""}" href="#/market/${l.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${wanted}${esc(l.item_name)} ${mkQtyTag(l)}</div>` +
-    `<div class="ev-chips">${mkStakeBadge(l)}${mkStaleBadge(l)}${mkCraftBadge(l)}${l.mode === "commission" ? mkMatsChip(l) + mkCraftMatch(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div></div>` +
+    `<div class="ev-chips">${mkStakeBadge(l)}${mkStaleBadge(l)}${mkAvailChip(l)}${mkCraftBadge(l)}${l.mode === "commission" ? mkMatsChip(l) + mkCraftMatch(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div></div>` +
     `<div class="ev-meta">${mkPriceLine(l)}</div>` +
     `<div class="ev-meta">by ${esc(l.seller_name)}${mkHandle(l)}${mkDeals(l.seller_deals)}</div></a>`;
 }
@@ -12396,7 +12409,7 @@ function mkRowPrice(l) {
 function listingRow(l) {
   return `<a class="mk-row" href="#/market/${l.id}">` +
     `<span class="mk-row-item"><span class="mk-row-name">${esc(l.item_name)}</span>` +
-      `<span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>${mkCraftBadge(l)}${mkStakeBadge(l)}${mkStaleBadge(l)}</span>` +
+      `<span class="mk-qty">×${fmtQty(l.qty)} ${esc(l.unit || "")}</span>${mkCraftBadge(l)}${mkStakeBadge(l)}${mkStaleBadge(l)}${mkAvailChip(l)}</span>` +
     `<span class="mk-row-mode">${mkModeChip(l.mode)}</span>` +
     `<span class="mk-row-price">${mkRowPrice(l)}</span>` +
     `<span class="mk-row-seller">${esc(l.seller_name)}</span>` +
@@ -12447,7 +12460,8 @@ function loadMarket() {
 // "from this seller").
 let mktFilter = { mode: "", mine: false, activity: false, q: "", sort: "recent",
                   kind: "", min: "", max: "", seller: "", sellerName: "",
-                  qmin: "", qmax: "", band: "", stat: "", canCraft: false };
+                  qmin: "", qmax: "", band: "", stat: "", canCraft: false,
+                  avail: "" };
 let mktOffset = 0, mktSearchTimer = null, mktStaleDays = 0;
 let mktView = lsGet("mktView") || "card";   // card grid | compact rows
 const MKT_PAGE = 25;
@@ -12461,6 +12475,7 @@ function mktQuery() {
   if (mktFilter.mode) p.set("mode", mktFilter.mode);
   if (mktFilter.q) p.set("q", mktFilter.q);
   if (mktFilter.kind) p.set("kind", mktFilter.kind);
+  if (mktFilter.avail) p.set("avail", mktFilter.avail);
   if (mktFilter.min !== "") p.set("min_price", mktFilter.min);
   if (mktFilter.max !== "") p.set("max_price", mktFilter.max);
   if (mktFilter.qmin !== "") p.set("min_quality", mktFilter.qmin);
@@ -12480,7 +12495,7 @@ function mktUnfiltered() {
     && !mktFilter.mode && !mktFilter.q
     && !mktFilter.kind && mktFilter.min === "" && mktFilter.max === ""
     && mktFilter.qmin === "" && mktFilter.qmax === "" && mktFilter.band === ""
-    && !mktFilter.stat;
+    && !mktFilter.stat && !mktFilter.avail;
 }
 
 function mktEmptyMsg() {
@@ -12538,8 +12553,12 @@ async function renderMarketBoard() {
     [1, 2, 3, 4, 5, 6, 7, 8].map(n => [String(n), `Band ${n}`])), mktFilter.band);
   // Secondary filters (type, price, crafted quality) live behind one disclosure so
   // the board leads with listings, not chrome. It springs open if any are active.
+  const availOpts = opts([["", "Any availability"], ["instock", "In stock now"],
+    ["pickup", "Ready for pickup"], ["ondemand", "On demand"],
+    ["scheduled", "Scheduled"]], mktFilter.avail);
   const filtersOn = !!(mktFilter.kind || mktFilter.min !== "" || mktFilter.max !== ""
-    || mktFilter.qmin !== "" || mktFilter.qmax !== "" || mktFilter.band !== "" || mktFilter.stat);
+    || mktFilter.qmin !== "" || mktFilter.qmax !== "" || mktFilter.band !== ""
+    || mktFilter.stat || mktFilter.avail);
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG MARKETPLACE</h2>` +
     `<a class="ev-btn primary" href="#/market/new">+ New listing</a></div>` +
@@ -12558,6 +12577,7 @@ async function renderMarketBoard() {
     `<details class="mk-morefilters"${filtersOn ? " open" : ""}><summary>⚙ Filters${filtersOn ? " · active" : ""}</summary>` +
       `<div class="mk-craftrow">` +
         `<select class="mk-kind" title="Item type">${kindOpts}</select>` +
+        `<select class="mk-availsel" title="Availability">${availOpts}</select>` +
         `<input class="mk-pr mk-min" type="number" min="0" placeholder="min aUEC" title="min aUEC">` +
         `<span class="mk-prsep">–</span>` +
         `<input class="mk-pr mk-max" type="number" min="0" placeholder="max aUEC" title="max aUEC">` +
@@ -12598,6 +12618,8 @@ async function renderMarketBoard() {
   sortEl.onchange = () => { mktFilter.sort = sortEl.value; loadMarketPage(true); };
   const kindEl = root.querySelector(".mk-kind");
   kindEl.onchange = () => { mktFilter.kind = kindEl.value; loadMarketPage(true); };
+  const availEl = root.querySelector(".mk-availsel");
+  availEl.onchange = () => { mktFilter.avail = availEl.value; loadMarketPage(true); };
   const minEl = root.querySelector(".mk-min"), maxEl = root.querySelector(".mk-max");
   minEl.value = mktFilter.min; maxEl.value = mktFilter.max;
   const onPrice = () => {
@@ -12879,6 +12901,15 @@ function renderMarketDetailBody(l) {
   let html = posted +
     `<div class="ev-detail-title"><h2>${wanted}${esc(l.item_name)} ${mkQtyTag(l)}</h2>${mkCraftBadge(l)}${isJob ? mkMatsChip(l) : ""}${mkModeChip(l.mode)}${mkStatusBadge(l.status)}</div>` +
     `<div class="ev-detail-meta">${isJob ? "requested" : "listed"} by <b class="mk-sellerlink" id="mk-seller" title="Show all from this seller">${esc(l.seller_name)}</b>${mkHandle(l)}${mkDeals(l.seller_deals)}</div>` +
+    (l.availability || l.pickup_poi ? `<div class="ev-detail-meta">` +
+      (l.availability && MK_AVAIL[l.availability]
+        ? `${MK_AVAIL[l.availability][0]} ${esc(MK_AVAIL[l.availability][1])}` : "") +
+      (l.pickup_poi ? `${l.availability ? " · " : ""}handoff at <b>${esc(l.pickup_poi)}</b>` : "") +
+      `</div>` : "") +
+    (l.org_price ? `<div class="ev-detail-meta" title="Median of actual settled deals between orgmates — not asking prices">` +
+      `⚖ Sold in-org before: <b>${fmtAuec(l.org_price.last)}</b> last` +
+      (l.org_price.count > 1 ? ` · <b>${fmtAuec(l.org_price.median)}</b> median (${l.org_price.count} deals)` : "") +
+      ` <span class="muted">per unit</span></div>` : "") +
     (l.note ? `<div class="ev-desc">${esc(l.note)}</div>` : "") + mkBanner();
   if (l.status === "open") html += mkOpenBlock(l);
   else if (l.status === "pending") html += mkPendingBlock(l);
@@ -13045,7 +13076,8 @@ function marketFormHtml(l) {
     `<div class="ev-field" id="mk-f-item-field"><label>Item</label><span class="poi-pick"><input id="mk-f-item" class="ti" ` +
       `placeholder="search the catalog…" autocomplete="off"${picked} value="${l && l.mode !== "commission" ? esc(l.item_name || "") : ""}"></span>` +
       `<span class="ev-hint">Pick from the suggestions so it resolves to a catalog item.</span>` +
-      `<div id="mk-mv" class="mk-mv" hidden></div></div>` +
+      `<div id="mk-mv" class="mk-mv" hidden></div>` +
+      `<div id="mk-orghist" class="mk-mv" hidden></div></div>` +
     `<div class="ev-form-grid">` +
       `<div class="ev-field"><label>Quantity</label><input id="mk-f-qty" class="ti" type="number" min="0" step="any" ` +
         `value="${l ? fmtQty(l.qty) : "1"}"></div>` +
@@ -13090,6 +13122,17 @@ function marketFormHtml(l) {
     `<div class="mk-mode-fields" data-mode="barter">` +
       `<div class="ev-field"><label>What you want in return</label><input id="mk-f-want" class="ti" maxlength="500" ` +
         `value="${l && l.want ? esc(l.want) : ""}" placeholder="e.g. 200 SCU Quantanium, or a Cutlass Black"></div></div>` +
+    `<div class="ev-form-grid">` +
+      `<div class="ev-field"><label>Availability</label><select id="mk-f-avail">` +
+        [["", "— not specified —"], ["instock", "In stock now"], ["pickup", "Ready for pickup"],
+         ["ondemand", "On demand (will gather / craft)"], ["scheduled", "Scheduled (see note)"]].map(([v, t]) =>
+          `<option value="${v}"${l && (l.availability || "") === v ? " selected" : ""}>${t}</option>`).join("") +
+      `</select><span class="ev-hint">Do you have it, or will you make it? Buyers plan sessions around this.</span></div>` +
+      `<div class="ev-field"><label>Pickup / handoff location</label><span class="poi-pick">` +
+        `<input id="mk-f-pickup" class="ti" maxlength="120" autocomplete="off" ` +
+        `value="${l ? esc(l.pickup_poi || "") : ""}" placeholder="e.g. Everus Harbor"></span>` +
+        `<span class="ev-hint">Optional — where the goods change hands.</span></div>` +
+    `</div>` +
     `<div class="ev-field"><label>Note (optional)</label><textarea id="mk-f-note" maxlength="500" ` +
       `placeholder="Condition, location, timing…">${l ? esc(l.note || "") : ""}</textarea></div>` +
     mkHandleField(l) +
@@ -13254,7 +13297,9 @@ function collectMarketForm() {
   if (crafted.band != null && !(crafted.band >= 1 && crafted.band <= 8))
     return { error: "Crafted band must be between 1 and 8." };
   const payload = { item_id, qty, mode, unit,
-    note: $("mk-f-note").value.trim() || null, crafted };
+    note: $("mk-f-note").value.trim() || null, crafted,
+    availability: $("mk-f-avail") ? $("mk-f-avail").value : null,
+    pickup_poi: $("mk-f-pickup") ? $("mk-f-pickup").value.trim() : null };
   const handleEl = $("mk-f-handle");
   if (handleEl) payload.seller_handle = handleEl.value.trim() || null;
   const ann = $("mk-f-announce");       // any mode may shout; create-only
@@ -13307,14 +13352,41 @@ function mkShowMarketValue(it) {
   const mv = $("mk-mv");
   if (!mv) return;
   const p = it && it.price;
-  if (!p || (!p.buy && !p.sell)) { mv.hidden = true; mv.innerHTML = ""; return; }
-  const parts = [];
-  if (p.buy) parts.push(`<b>${Number(p.buy).toLocaleString()}</b> buy`);
-  if (p.sell) parts.push(`<b>${Number(p.sell).toLocaleString()}</b> sell`);
-  mv.innerHTML = `<span class="mk-mv-lbl">Market value:</span> ${parts.join(" · ")} aUEC` +
-    `<button type="button" class="mk-mv-use" id="mk-mv-use">use</button>`;
-  mv.hidden = false;
-  $("mk-mv-use").onclick = () => mkUseMarketPrice(p.buy || p.sell);
+  if (!p || (!p.buy && !p.sell)) { mv.hidden = true; mv.innerHTML = ""; }
+  else {
+    const parts = [];
+    if (p.buy) parts.push(`<b>${Number(p.buy).toLocaleString()}</b> buy`);
+    if (p.sell) parts.push(`<b>${Number(p.sell).toLocaleString()}</b> sell`);
+    mv.innerHTML = `<span class="mk-mv-lbl">Market value:</span> ${parts.join(" · ")} aUEC` +
+      `<button type="button" class="mk-mv-use" id="mk-mv-use">use</button>`;
+    mv.hidden = false;
+    $("mk-mv-use").onclick = () => mkUseMarketPrice(p.buy || p.sell);
+  }
+  mkShowOrgHistory(it && it.item_id);
+}
+
+// Org price memory (B7): what this item actually settled for between orgmates —
+// real deals, not asks, so it's the better anchor than the game-feed value.
+let mkOrgHistSeq = 0;
+async function mkShowOrgHistory(itemId) {
+  const el = $("mk-orghist");
+  if (!el) return;
+  el.hidden = true; el.innerHTML = "";
+  if (!itemId) return;
+  const mine = ++mkOrgHistSeq;
+  let op = null;
+  try {
+    op = (await fetch(`/api/market/item_history?item=${encodeURIComponent(itemId)}`)
+      .then(r => r.json())).org_price;
+  } catch { return; }
+  if (mine !== mkOrgHistSeq || !op) return;
+  el.innerHTML = `<span class="mk-mv-lbl">Sold in-org:</span> ` +
+    `<b>${Number(op.last).toLocaleString()}</b> last` +
+    (op.count > 1 ? ` · <b>${Number(op.median).toLocaleString()}</b> median (${op.count} deals)` : ` (1 deal)`) +
+    ` <span class="muted">/unit</span>` +
+    `<button type="button" class="mk-mv-use" id="mk-orghist-use">use</button>`;
+  el.hidden = false;
+  $("mk-orghist-use").onclick = () => mkUseMarketPrice(op.median || op.last);
 }
 
 function mkUseMarketPrice(v) {
@@ -13566,6 +13638,9 @@ function bindMarketForm(editId, onCancel) {
   });
   mkSyncModeFields();
   syncMktAnnounceAvail();
+  const pickupEl = $("mk-f-pickup");
+  if (pickupEl && !pickupEl.parentElement.querySelector(".poi-drop"))
+    attachPoiPicker(pickupEl.parentElement);   // free-text-tolerant POI autocomplete
   const modeSel = $("mk-f-mode");
   if (modeSel) modeSel.onchange = mkSyncModeFields;
   $("mk-f-cancel").onclick = onCancel;
