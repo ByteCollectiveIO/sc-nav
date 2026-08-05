@@ -635,6 +635,10 @@ def init(db_path) -> None:
         _ensure_column("listings", "materials", "TEXT")
         # Marketplace meetup handle (display only; ownership stays on seller_id).
         _ensure_column("listings", "seller_handle", "TEXT")
+        # Availability + pickup point (2026-08 review B8): when/how the goods
+        # can actually change hands — the #1 coordination question in-org.
+        _ensure_column("listings", "availability", "TEXT")
+        _ensure_column("listings", "pickup_poi", "TEXT")
         # Index the board's sort column now that it's guaranteed to exist (see the
         # note in SCHEMA — it can't be created inside the schema script on upgrade).
         _conn.execute("CREATE INDEX IF NOT EXISTS listings_sort_price ON listings(sort_price)")
@@ -2249,7 +2253,8 @@ def blueprint_crafter_counts(keys=None) -> dict[str, int]:
 
 
 _LISTING_EDITABLE = ("qty", "price_auec", "start_price", "buyout_auec", "ends_at",
-                      "want", "note", "status", "attributes", "materials")
+                      "want", "note", "status", "attributes", "materials",
+                      "availability", "pickup_poi")
 _LISTING_JSON = ("attributes",)
 
 
@@ -2321,13 +2326,15 @@ def create_listing(d: dict) -> int:
         cur = _conn.execute(
             "INSERT INTO listings (seller_id, seller_handle, item_id, item_name, unit, "
             "qty, mode, price_auec, start_price, buyout_auec, ends_at, want, status, "
-            "note, attributes, blueprint_key, materials, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "note, attributes, blueprint_key, materials, availability, pickup_poi, "
+            "created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["seller_id"]), d.get("seller_handle"), d["item_id"],
              d.get("item_name"), d.get("unit"), d.get("qty", 1), d.get("mode", "sale"),
              d.get("price_auec"), d.get("start_price"), d.get("buyout_auec"),
              d.get("ends_at"), d.get("want"), d.get("status", "open"), d.get("note"),
              _j(d.get("attributes")), d.get("blueprint_key"), d.get("materials"),
+             d.get("availability"), d.get("pickup_poi"),
              d.get("created_at"), d.get("updated_at")),
         )
         _recompute_denorm(cur.lastrowid)        # seed the board columns
@@ -2370,7 +2377,7 @@ def _like_needle(s: str) -> str:
 def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
                         q, kind, min_price, max_price,
                         min_quality=None, max_quality=None, band=None, stat=None,
-                        bidder_id=None, craftable_by=None):
+                        bidder_id=None, craftable_by=None, avail=None):
     """Build the shared WHERE clause (+ params) for list_listings / count_listings
     so the browse and count queries can never drift apart. Crafted-quality filters
     (`min_quality`/`max_quality`/`band`/`stat`) read the JSON `attributes` blob with
@@ -2399,6 +2406,8 @@ def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
             "blueprint_key IS NOT NULL AND blueprint_key IN "
             "(SELECT blueprint_key FROM member_blueprints WHERE member_id=?)")
         params.append(str(craftable_by))
+    if avail:
+        where.append("availability=?"); params.append(avail)
     if status:
         where.append("status=?"); params.append(status)
     elif open_only:
@@ -2444,7 +2453,8 @@ def list_listings(mode: str | None = None, item_id: str | None = None,
                   min_quality: float | None = None, max_quality: float | None = None,
                   band: int | None = None, stat: str | None = None,
                   bidder_id: str | None = None,
-                  craftable_by: str | None = None) -> tuple[list[dict], int]:
+                  craftable_by: str | None = None,
+                  avail: str | None = None) -> tuple[list[dict], int]:
     """Browse listings with optional filters, a sort, and paging. Filters: mode /
     exact item / seller / status (or `open_only`), free-text `q` over the item name,
     item `kind` (catalog-id prefix), a `min_price`/`max_price` band over the
@@ -2456,7 +2466,7 @@ def list_listings(mode: str | None = None, item_id: str | None = None,
     clause, params = _listing_filter_sql(mode, item_id, seller_id, status,
                                          open_only, q, kind, min_price, max_price,
                                          min_quality, max_quality, band, stat,
-                                         bidder_id, craftable_by)
+                                         bidder_id, craftable_by, avail)
     order = _LISTING_SORTS.get(sort, _LISTING_SORTS["recent"])
     sql = f"SELECT * FROM listings{clause} ORDER BY {order}"
     if limit is not None:
@@ -2576,6 +2586,20 @@ def list_completed_listings(since: str | None = None) -> list[dict]:
     with _lock:
         rows = _conn.execute(sql, params).fetchall()
     return [_listing_row_to_dict(r) for r in rows]
+
+
+def item_deal_prices(item_id: str, limit: int = 50) -> list[dict]:
+    """Settled aUEC prices for one item, freshest first: the org's own price
+    memory. final_auec is the ACCEPTED amount (a below-ask offer records what
+    was really paid), so this is deals, not asks. Barter completions carry no
+    final_auec and drop out."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT final_auec, qty, completed_at FROM listings "
+            "WHERE status='completed' AND item_id=? AND final_auec IS NOT NULL "
+            "ORDER BY completed_at DESC LIMIT ?",
+            (item_id, int(limit))).fetchall()
+    return [dict(r) for r in rows]
 
 
 def completed_deals_count(member_id: str) -> int:

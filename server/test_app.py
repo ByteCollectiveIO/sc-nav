@@ -6319,6 +6319,8 @@ class NotifyPagingTests(unittest.TestCase):
         self.posted = []
         notify._post = lambda url, payload: self.posted.append(payload)
         notify._recent.clear()
+        notify._next_send.clear()
+        notify.SEND_SPACING_S = 0.0   # pacing itself is covered by NotifyPacingTests
 
     def test_small_ping_list_is_one_message(self):
         ids = [str(100 + i) for i in range(3)]
@@ -6391,6 +6393,8 @@ class NotifyHealthTests(unittest.TestCase):
     def setUp(self):
         notify._health.clear()
         notify._recent.clear()
+        notify._next_send.clear()
+        notify.SEND_SPACING_S = 0.0   # pacing itself is covered by NotifyPacingTests
 
     def test_success_then_failure_then_recovery(self):
         notify._post = lambda url, payload: None
@@ -6949,6 +6953,8 @@ class EmbedNotifyTests(unittest.TestCase):
         self.posted = []
         notify._post = lambda url, payload: self.posted.append(payload)
         notify._recent.clear()
+        notify._next_send.clear()
+        notify.SEND_SPACING_S = 0.0   # pacing itself is covered by NotifyPacingTests
 
     def test_embed_only_message_is_valid_and_empty_is_dropped(self):
         ok = asyncio.run(notify.send("events", "", embed={"title": "T"}))
@@ -7008,6 +7014,137 @@ class EmbedNotifyTests(unittest.TestCase):
         self.assertNotIn("embeds", self.posted[1])   # continuation is pings only
         self.assertEqual(len(self.posted[0]["allowed_mentions"]["users"]), 50)
         self.assertEqual(len(self.posted[1]["allowed_mentions"]["users"]), 10)
+
+
+class MarketPriceMemoryAvailabilityTests(unittest.TestCase):
+    """B7 org price memory (settled deals → per-unit last/median hints) and
+    B8 availability + pickup location on listings."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "111", "username": "u111", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls._orig_catalog_by_id = app.item_catalog_by_id
+        app.item_catalog_by_id = {**app.item_catalog_by_id, "commodity:TestOre": {
+            "item_id": "commodity:TestOre", "name": "Test Ore",
+            "kind": "commodity", "unit": "SCU"}}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.item_catalog_by_id = cls._orig_catalog_by_id
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _settle_deal(self, price, qty=1):
+        """Full lifecycle: post → instant buy → both confirm → completed."""
+        self._as("111")
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": qty, "mode": "sale",
+            "price_auec": price})
+        lid = r.json()["id"]
+        self._as("222")
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": price})
+        self.client.post(f"/api/market/{lid}/confirm")
+        self._as("111")
+        self.client.post(f"/api/market/{lid}/confirm")
+        self.assertEqual(db.get_listing(lid)["status"], "completed")
+        return lid
+
+    def test_org_price_memory_from_settled_deals(self):
+        self._settle_deal(1000)
+        self._settle_deal(3000)
+        lid = self._settle_deal(2000, qty=2)         # 1000/unit — newest
+        op = app._org_price_memory("commodity:TestOre")
+        self.assertEqual(op["count"], 3)
+        self.assertEqual(op["last"], 1000)           # newest deal, per unit
+        self.assertEqual(op["median"], 1000)         # [1000, 1000, 3000]
+        # surfaces on the detail view + the item_history endpoint
+        self._as("333")
+        detail = self.client.get(f"/api/market/{lid}").json()
+        self.assertEqual(detail["org_price"]["count"], 3)
+        hist = self.client.get("/api/market/item_history",
+                               params={"item": "commodity:TestOre"}).json()
+        self.assertEqual(hist["org_price"]["median"], 1000)
+
+    def test_no_deals_means_no_memory(self):
+        self.assertIsNone(app._org_price_memory("commodity:NeverSold"))
+
+    def test_availability_and_pickup_roundtrip_and_filter(self):
+        self._as("111")
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": 10, "availability": "ondemand",
+            "pickup_poi": "Everus Harbor"})
+        self.assertEqual(r.status_code, 200, r.text)
+        lid = r.json()["id"]
+        self.assertEqual(r.json()["availability"], "ondemand")
+        self.assertEqual(r.json()["pickup_poi"], "Everus Harbor")
+        plain = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": 10}).json()["id"]
+        board = self.client.get("/api/market", params={"avail": "ondemand"}).json()
+        ids = {l["id"] for l in board["listings"]}
+        self.assertIn(lid, ids)
+        self.assertNotIn(plain, ids)
+        # edit can change and clear both
+        r = self.client.patch(f"/api/market/{lid}",
+                              json={"availability": "instock", "pickup_poi": ""})
+        self.assertEqual(r.json()["availability"], "instock")
+        self.assertIsNone(r.json()["pickup_poi"])
+
+    def test_bad_availability_is_rejected(self):
+        self._as("111")
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": 10, "availability": "yesterday"})
+        self.assertEqual(r.status_code, 400)
+
+
+class NotifyPacingTests(unittest.TestCase):
+    """D3 — per-category slot reservation keeps a burst under Discord's
+    30 msg/min webhook cap. The reservation happens synchronously between
+    awaits (single-threaded loop), so no lock is involved."""
+
+    def setUp(self):
+        self._orig = notify.SEND_SPACING_S
+        notify._next_send.clear()
+
+    def tearDown(self):
+        notify.SEND_SPACING_S = self._orig
+        notify._next_send.clear()
+
+    def test_first_send_is_immediate_and_reserves_the_next_slot(self):
+        notify.SEND_SPACING_S = 100.0
+
+        async def run():
+            t0 = time.monotonic()
+            await notify._pace("events")
+            self.assertLess(time.monotonic() - t0, 0.5)      # no wait
+            self.assertGreater(notify._next_send["events"], t0 + 99)
+        asyncio.run(run())
+
+    def test_burst_is_spaced_and_categories_are_independent(self):
+        notify.SEND_SPACING_S = 0.05
+
+        async def run():
+            t0 = time.monotonic()
+            for _ in range(3):
+                await notify._pace("goals")
+            self.assertGreaterEqual(time.monotonic() - t0, 0.09)   # 2 gaps
+            t1 = time.monotonic()
+            await notify._pace("records")                     # own lane
+            self.assertLess(time.monotonic() - t1, 0.04)
+        asyncio.run(run())
 
 
 if __name__ == "__main__":
