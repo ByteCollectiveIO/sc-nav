@@ -30,7 +30,11 @@ jobs:
       # feed loaders fall back to the committed poi/ cache).
       - name: Install runtime deps
         working-directory: server
-        run: pip install -r requirements.txt httpx  # httpx: TestClient transport
+        # httpx2: the TestClient transport. Starlette 1.x imports httpx2 first and
+        # only falls back to httpx with a deprecation warning, so this is the
+        # supported spelling. Test-only — it is NOT in requirements.txt and never
+        # reaches the image (Dockerfile installs requirements.txt alone).
+        run: pip install -r requirements.txt httpx2
 
       - name: Run app (HTTP) tests
         working-directory: server

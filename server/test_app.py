@@ -1,7 +1,7 @@
 """HTTP-level tests for the app shell's CSP nonce backstop (backlog #9).
 
 Unlike test_nav_core.py (pure stdlib), this imports `app` and drives it through
-a TestClient, so it needs the runtime deps (fastapi/starlette/httpx). It runs as
+a TestClient, so it needs the runtime deps (fastapi/starlette/httpx2). It runs as
 its own CI step. Importing `app` boots offline: the feed loaders fall back to the
 committed poi/ cache when the live fetch fails, so no network is required.
 
