@@ -40,6 +40,44 @@ def _script_src(csp: str) -> str:
     return ""
 
 
+class EnvFlagTests(unittest.TestCase):
+    """COOKIE_SECURE once tested == "true" while SC_NAV_OFFLINE tested == "1",
+    so `COOKIE_SECURE=1` — the spelling .env.example itself recommended, and the
+    house convention everywhere else — silently evaluated FALSE and dropped the
+    Secure attribute from session cookies. Blank did the same, so copying
+    .env.example without filling the line was enough to trigger it."""
+
+    def _flag(self, raw, default=False):
+        import os
+        key = "SC_NAV_TEST_FLAG"
+        if raw is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = raw
+        try:
+            return app._env_flag(key, default)
+        finally:
+            os.environ.pop(key, None)
+
+    def test_truthy_spellings(self):
+        for raw in ("1", "true", "TRUE", "True", "yes", "on", " true "):
+            self.assertTrue(self._flag(raw), f"{raw!r} should be True")
+
+    def test_falsey_spellings(self):
+        for raw in ("0", "false", "FALSE", "no", "off", " 0 "):
+            self.assertFalse(self._flag(raw, default=True), f"{raw!r} should be False")
+
+    def test_unset_blank_and_garbage_take_the_default(self):
+        # The regression: blank must NOT read as false when the default is
+        # secure. Garbage likewise fails toward the caller's safe default.
+        for raw in (None, "", "   ", "maybe"):
+            self.assertTrue(self._flag(raw, default=True), f"{raw!r} should keep default")
+            self.assertFalse(self._flag(raw, default=False), f"{raw!r} should keep default")
+
+    def test_cookie_secure_defaults_on(self):
+        self.assertTrue(app._env_flag("COOKIE_SECURE_UNSET_NAME", True))
+
+
 class CspNonceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

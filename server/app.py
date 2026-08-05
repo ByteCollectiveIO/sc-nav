@@ -105,7 +105,29 @@ ITEM_ATTRS_URL = os.environ.get("SC_NAV_ITEM_ATTRS_URL", "https://api.uexcorp.sp
 # each to a routable POI by name.
 TERMINALS_URL = os.environ.get("SC_NAV_TERMINALS_URL", "https://api.uexcorp.space/2.0/terminals")
 TRADE_PRICES_URL = os.environ.get("SC_NAV_TRADE_PRICES_URL", "https://api.uexcorp.space/2.0/commodities_prices_all")
-OFFLINE = os.environ.get("SC_NAV_OFFLINE") == "1"
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read a boolean env var, accepting 1/true/yes/on and 0/false/no/off in any
+    case. Unset, blank, or unrecognized falls back to `default`.
+
+    Deliberately permissive because the two flags below used to disagree:
+    SC_NAV_OFFLINE tested == "1" while COOKIE_SECURE tested == "true", so a
+    deployer following one convention silently got the wrong value for the
+    other. For COOKIE_SECURE that silent value was the INSECURE one — and
+    blank counted as false, so copying .env.example and leaving the line
+    unfilled dropped Secure off every session cookie. Defaulting unrecognized
+    input to `default` keeps that failure direction safe."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    v = raw.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+OFFLINE = _env_flag("SC_NAV_OFFLINE")
 
 # Canonical public URL (e.g. https://nav.bytecollective.io). When set it is the
 # only address baked into the watcher download bundle, so a spoofed Host /
@@ -1216,7 +1238,7 @@ async def auth_gate(request: Request, call_next):
 
 # Signed session cookie (Discord login state). The secret must be stable across
 # restarts so sessions survive a redeploy; a random fallback keeps dev working.
-COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
+COOKIE_SECURE = _env_flag("COOKIE_SECURE", True)
 _SESSION_SECRET = os.environ.get("SESSION_SECRET")
 if not _SESSION_SECRET:
     # A per-process random key invalidates every session on each restart and

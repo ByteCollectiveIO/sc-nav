@@ -9,6 +9,13 @@ name: tag-release
 # commit-subject parsing), and pushes vX.Y.Z if that tag doesn't exist yet. The tag
 # is pure bookkeeping — the server is still rebuilt by hand — so auto-creating it is
 # safe. The manual PR merge stays the deliberate review gate; the tag is not a gate.
+#
+# It then publishes a GitHub Release for that tag, because a tag alone notifies
+# nobody: self-hosting orgs subscribe via Watch -> Custom -> Releases to learn an
+# update exists and whether it needs action. Notes come from the release PR's body,
+# NOT from --generate-notes — /deploy is squash-only, so every commit subject on
+# main is just "Release vX.Y.Z (#N)" and generated notes would say nothing. The
+# "(#N)" suffix this file works around above is what makes the PR easy to find.
 on:
   workflow_run:
     workflows: ["tests"]
@@ -51,3 +58,30 @@ jobs:
           git tag -a "v$V" -m "v$V"
           git push origin "v$V"
           echo "Tagged and pushed v$V."
+
+      - name: Publish release from the PR body
+        env:
+          V: ${{ steps.ver.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Independent of the tag check above: a re-run, or a version tagged
+          # before this step existed, should still get its release.
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "v$V already released — nothing to do."
+            exit 0
+          fi
+          # Squash merges end the subject with "(#N)"; that N is the release PR.
+          pr=$(git log -1 --pretty=%s | sed -n 's/.*(#\([0-9][0-9]*\))$/\1/p')
+          if [ -n "$pr" ] && gh pr view "$pr" --json body -q .body > notes.md \
+             && [ -s notes.md ]; then
+            echo "Notes from PR #$pr."
+          else
+            # Never block the release on note-fetching — an untitled release is
+            # still a notification; a failed job is not.
+            printf 'See the release PR for details: %s/commit/%s\n' \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              "$(git rev-parse HEAD)" > notes.md
+            echo "No PR body found — published with a fallback pointer."
+          fi
+          gh release create "v$V" --title "v$V" --notes-file notes.md
+          echo "Released v$V."
