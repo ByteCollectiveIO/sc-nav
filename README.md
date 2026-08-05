@@ -143,7 +143,7 @@ your host's secret store).
 | `SESSION_SECRET` | recommended | Random string used to sign session cookies. If unset, a new one is generated per boot — which logs everyone out on every restart |
 | `SC_NAV_PUBLIC_URL` | recommended | Public base URL (e.g. `https://nav.example.com`); used to build absolute links in Discord notifications and the watcher download |
 | `ORG_MEMBER_ROLE_ID` | optional | Restrict sign-in to holders of a specific guild role; empty = any guild member (editable in-app afterward) |
-| `COOKIE_SECURE` | optional | `true` (default) issues HTTPS-only cookies; set `false` only for plain-HTTP local dev |
+| `COOKIE_SECURE` | optional | HTTPS-only cookies, **on by default**. `1`/`true`/`yes`/`on` enable, `0`/`false`/`no`/`off` disable (set one only for plain-HTTP local dev); blank or unrecognized stays on |
 | `CLOUDFLARE_TUNNEL_TOKEN` | optional | Only for the bundled `cloudflared` sidecar (see *Hosting it publicly*) |
 
 Advanced/rarely-changed overrides (dataset URLs, cache dir, offline mode) are
