@@ -341,7 +341,7 @@ class EventNotifyTests(unittest.TestCase):
     def setUp(self):
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -403,7 +403,7 @@ class EventReminderTests(unittest.TestCase):
     def setUp(self):
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -484,7 +484,7 @@ class MarketNotifyTests(unittest.TestCase):
     def setUp(self):
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -586,7 +586,7 @@ class GoalRecordNotifyTests(unittest.TestCase):
     def setUp(self):
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -1141,7 +1141,7 @@ class LFGAnnounceTests(unittest.TestCase):
         db.set_setting(notify._webhook_key("lfg"), _GOOD_WEBHOOK)   # restore after silent test
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -1428,7 +1428,7 @@ class WarningAnnounceTests(unittest.TestCase):
         db.set_setting(notify._webhook_key("pirates"), _GOOD_WEBHOOK)
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -2303,7 +2303,7 @@ class CommissionModeTests(unittest.TestCase):
         body.update(over)
         sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             sent.append({"category": category, "text": text})
             return True
         orig_send, orig_cfg = notify.send, notify.is_configured
@@ -2539,7 +2539,7 @@ class CommissionNotifyTests(unittest.TestCase):
     def setUp(self):
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -2790,7 +2790,7 @@ class CraftGoalTests(unittest.TestCase):
         self._as(self._a)
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text})
             return True
         notify.send = _capture
@@ -5085,7 +5085,7 @@ class SurveyStatsAndMilestonesTests(unittest.TestCase):
         db.set_setting(notify._webhook_key("survey"), _GOOD_WEBHOOK)
         self.sent = []
 
-        async def _capture(category, text, *, mentions=None, dedup_key=None):
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category, "text": text,
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
@@ -6281,6 +6281,635 @@ class UpdateCheckTests(unittest.TestCase):
         for bad in ("https://evil.invalid/x", "owner", "owner/name/extra", "own er/name"):
             self.assertIsNone(app._UPDATE_REPO_RE.match(bad), bad)
         self.assertIsNotNone(app._UPDATE_REPO_RE.match("ByteCollectiveIO/sc-nav"))
+
+
+class NotifyPagingTests(unittest.TestCase):
+    """send_paged — the at-scale fix: Discord caps allowed_mentions at 50 users
+    per message and send() truncates trailing pings first, so a 180-member org's
+    event reminder used to silently skip a third of the roster."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._orig_post = notify._post
+
+    @classmethod
+    def tearDownClass(cls):
+        notify._post = cls._orig_post
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.posted = []
+        notify._post = lambda url, payload: self.posted.append(payload)
+        notify._recent.clear()
+
+    def test_small_ping_list_is_one_message(self):
+        ids = [str(100 + i) for i in range(3)]
+        ok = asyncio.run(notify.send_paged("events", "⏰ **Soon**", mentions=ids))
+        self.assertTrue(ok)
+        self.assertEqual(len(self.posted), 1)
+        self.assertEqual(self.posted[0]["allowed_mentions"]["users"], ids)
+        for i in ids:
+            self.assertIn(f"<@{i}>", self.posted[0]["content"])
+
+    def test_eighty_pings_page_into_two_full_batches(self):
+        ids = [str(1000 + i) for i in range(80)]
+        ok = asyncio.run(notify.send_paged("events", "⏰ **Fleet op**",
+                                           mentions=ids, dedup_key="ev:1"))
+        self.assertTrue(ok)
+        self.assertEqual(len(self.posted), 2)
+        self.assertEqual(len(self.posted[0]["allowed_mentions"]["users"]), 50)
+        self.assertEqual(len(self.posted[1]["allowed_mentions"]["users"]), 30)
+        # Every id is both pinged in text AND allowed to actually ping.
+        all_allowed = (self.posted[0]["allowed_mentions"]["users"]
+                       + self.posted[1]["allowed_mentions"]["users"])
+        self.assertEqual(all_allowed, ids)
+        self.assertIn("Fleet op", self.posted[0]["content"])   # body on page 1
+        self.assertIn("continued", self.posted[1]["content"])  # continuation marker
+        for n, page in enumerate(self.posted):
+            for i in page["allowed_mentions"]["users"]:
+                self.assertIn(f"<@{i}>", page["content"])
+            self.assertLessEqual(len(page["content"]), 1900)
+
+    def test_paged_dedup_drops_every_page_on_double_call(self):
+        ids = [str(1000 + i) for i in range(80)]
+        asyncio.run(notify.send_paged("events", "x", mentions=ids, dedup_key="ev:2"))
+        asyncio.run(notify.send_paged("events", "x", mentions=ids, dedup_key="ev:2"))
+        self.assertEqual(len(self.posted), 2)   # second call fully deduped
+
+    def test_body_truncates_before_pings(self):
+        ids = [str(1000 + i) for i in range(50)]
+        ok = asyncio.run(notify.send_paged("events", "B" * 3000, mentions=ids))
+        self.assertTrue(ok)
+        page = self.posted[0]
+        for i in ids:
+            self.assertIn(f"<@{i}>", page["content"])   # pings survive, body gave way
+        self.assertLessEqual(len(page["content"]), 1900)
+
+    def test_no_mentions_falls_through_to_plain_send(self):
+        ok = asyncio.run(notify.send_paged("events", "hello"))
+        self.assertTrue(ok)
+        self.assertEqual(len(self.posted), 1)
+        self.assertEqual(self.posted[0]["allowed_mentions"]["users"], [])
+
+
+class NotifyHealthTests(unittest.TestCase):
+    """Delivery-health tracking: a dead webhook (revoked → 404 forever) must be
+    visible in webhook_status instead of an eternal green light."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._orig_post = notify._post
+
+    @classmethod
+    def tearDownClass(cls):
+        notify._post = cls._orig_post
+        notify._health.clear()
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        notify._health.clear()
+        notify._recent.clear()
+
+    def test_success_then_failure_then_recovery(self):
+        notify._post = lambda url, payload: None
+        asyncio.run(notify.send("events", "ok"))
+        st = notify.webhook_status()["events"]
+        self.assertTrue(st["last_ok"])
+        self.assertEqual(st["last_error"], "")
+        self.assertEqual(st["fails"], 0)
+
+        def _boom(url, payload):
+            raise RuntimeError("HTTP Error 404: Not Found")
+        notify._post = _boom
+        asyncio.run(notify.send("events", "x"))
+        asyncio.run(notify.send("events", "y"))
+        st = notify.webhook_status()["events"]
+        self.assertIn("404", st["last_error"])
+        self.assertTrue(st["last_error_at"])
+        self.assertEqual(st["fails"], 2)
+
+        notify._post = lambda url, payload: None
+        asyncio.run(notify.send("events", "back"))
+        st = notify.webhook_status()["events"]
+        self.assertEqual(st["last_error"], "")   # recovery clears the alarm
+        self.assertEqual(st["fails"], 0)
+
+    def test_replacing_the_webhook_resets_health(self):
+        def _boom(url, payload):
+            raise RuntimeError("nope")
+        notify._post = _boom
+        asyncio.run(notify.send("events", "x"))
+        self.assertEqual(notify.webhook_status()["events"]["fails"], 1)
+        notify.set_webhook("events", _GOOD_WEBHOOK)
+        self.assertEqual(notify.webhook_status()["events"]["fails"], 0)
+
+
+class EventRescheduleNotifyTests(unittest.TestCase):
+    """Editing an event's start (or place) pings active signups and re-arms the
+    scheduled reminder — a moved event must remind for its NEW time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+        member = {"id": "1", "username": "organizer", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture   # send_paged routes through the module-global send
+
+    def _mk(self, **extra):
+        start = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        body = {"title": "Op Overdrive", "start_at": start,
+                "types": ["Raid"], "categories": ["PvE"], **extra}
+        r = self.client.post("/api/events", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json(), body
+
+    def test_start_change_resets_reminder_and_pings_signups(self):
+        ev, body = self._mk()
+        eid = ev["id"]
+        now = datetime.now(timezone.utc).isoformat()
+        db.upsert_signup(eid, "555", [], "going", None, now)
+        db.upsert_signup(eid, "666", [], "withdrawn", None, now)
+        db.mark_event_reminded(eid, now)   # pretend the reminder already fired
+        self.sent.clear()
+        new_start = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        r = self.client.patch(f"/api/events/{eid}", json={**body, "start_at": new_start})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(db.get_event(eid)["reminded_at"])   # re-armed
+        moved = [m for m in self.sent if "updated" in m["text"].lower()]
+        self.assertEqual(len(moved), 1)
+        self.assertIn("Now starts", moved[0]["text"])
+        self.assertIn("555", moved[0]["mentions"])
+        self.assertNotIn("666", moved[0]["mentions"])   # withdrawn never pinged
+
+    def test_unchanged_time_and_place_stays_silent(self):
+        ev, body = self._mk(title="Static Op")
+        now = datetime.now(timezone.utc).isoformat()
+        db.mark_event_reminded(ev["id"], now)
+        self.sent.clear()
+        r = self.client.patch(f"/api/events/{ev['id']}",
+                              json={**body, "description": "new words only"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.sent, [])
+        self.assertIsNotNone(db.get_event(ev["id"])["reminded_at"])   # not re-armed
+
+
+class MarketLifecycleNotifyTests(unittest.TestCase):
+    """The silent lifecycle moments found in the 2026-08 launch review: lazy
+    auction settlement ("you won"), outbid, decline, cancel-with-commitments,
+    crafter bail, and commission quotes-lost — each now speaks."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("marketplace"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+        cls._user = {"id": "111", "username": "u111", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls._orig_catalog_by_id = app.item_catalog_by_id
+        app.item_catalog_by_id = {**app.item_catalog_by_id, "commodity:TestOre": {
+            "item_id": "commodity:TestOre", "name": "Test Ore",
+            "kind": "commodity", "unit": "SCU"}}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        app.item_catalog_by_id = cls._orig_catalog_by_id
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _mk_sale(self, seller="111", price=1000.0):
+        self._as(seller)
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": price})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def _mk_auction(self, seller="111", start=100.0, minutes=-5, buyout=None):
+        """minutes<0 → already-lapsed auction (created via db to skip the
+        future-end validation, mirroring how a listing ages in place)."""
+        ts = datetime.now(timezone.utc).isoformat()
+        ends = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+        return db.create_listing({
+            "seller_id": seller, "seller_handle": None,
+            "item_id": "commodity:TestOre", "item_name": "Test Ore",
+            "unit": "SCU", "qty": 1, "mode": "auction", "price_auec": None,
+            "start_price": start, "buyout_auec": buyout, "ends_at": ends,
+            "want": None, "note": None, "attributes": None,
+            "blueprint_key": None, "materials": None,
+            "status": "open", "created_at": ts, "updated_at": ts})
+
+    def test_lapsed_auction_settle_pings_winner_and_seller(self):
+        lid = self._mk_auction()
+        ts = datetime.now(timezone.utc).isoformat()
+        db.add_offer(lid, "222", 150.0, None, None, None, ts)
+        db.add_offer(lid, "333", 200.0, None, None, None, ts)
+        self.sent.clear()
+        self._as("444")
+        r = self.client.get(f"/api/market/{lid}")   # read triggers lazy settle
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["status"], "pending")
+        won = [m for m in self.sent if "Auction ended" in m["text"]]
+        self.assertEqual(len(won), 1)
+        self.assertIn("won at", won[0]["text"])
+        self.assertEqual(sorted(won[0]["mentions"]), ["111", "333"])
+        # the winning offer really is accepted (float-match regression guard)
+        offers = db.list_offers(lid)
+        self.assertEqual([o["status"] for o in offers if o["bidder_id"] == "333"],
+                         ["accepted"])
+
+    def test_lapsed_auction_no_bids_tells_seller(self):
+        lid = self._mk_auction()
+        self.sent.clear()
+        self._as("444")
+        r = self.client.get(f"/api/market/{lid}")
+        self.assertEqual(r.json()["status"], "expired")
+        died = [m for m in self.sent if "no bids" in m["text"]]
+        self.assertEqual(len(died), 1)
+        self.assertEqual(died[0]["mentions"], ["111"])
+
+    def test_outbid_pings_displaced_leader(self):
+        lid = self._mk_auction(minutes=60)   # still open
+        self._as("222")
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 150})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.sent.clear()
+        self._as("333")
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 300})
+        self.assertEqual(r.status_code, 200, r.text)
+        outbid = [m for m in self.sent if "outbid" in m["text"].lower()]
+        self.assertEqual(len(outbid), 1)
+        self.assertEqual(outbid[0]["mentions"], ["222"])
+        self.assertIn("301", outbid[0]["text"])   # next min = high + increment
+
+    def test_first_bid_pings_nobody_about_outbid(self):
+        lid = self._mk_auction(minutes=60)
+        self.sent.clear()
+        self._as("222")
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 150})
+        self.assertEqual([m for m in self.sent if "outbid" in m["text"].lower()], [])
+
+    def test_decline_rejects_offer_and_pings_bidder(self):
+        lid = self._mk_sale()
+        self._as("222")
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 500})
+        oid = next(o["id"] for o in r.json()["offers"])
+        self.sent.clear()
+        self._as("111")
+        r = self.client.patch(f"/api/market/{lid}/offer/{oid}",
+                              json={"action": "decline"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(db.get_offer(oid)["status"], "rejected")
+        declined = [m for m in self.sent if "declined" in m["text"]]
+        self.assertEqual(len(declined), 1)
+        self.assertEqual(declined[0]["mentions"], ["222"])
+
+    def test_only_seller_or_admin_can_decline(self):
+        lid = self._mk_sale()
+        self._as("222")
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 500})
+        oid = next(o["id"] for o in r.json()["offers"])
+        self._as("333")
+        r = self.client.patch(f"/api/market/{lid}/offer/{oid}",
+                              json={"action": "decline"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_cancel_pending_deal_pings_bound_buyer(self):
+        lid = self._mk_sale(price=1000.0)
+        self._as("222")
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 1000})
+        self.assertEqual(db.get_listing(lid)["status"], "pending")
+        self.sent.clear()
+        self._as("111")
+        r = self.client.patch(f"/api/market/{lid}", json={"status": "cancelled"})
+        self.assertEqual(r.status_code, 200, r.text)
+        called_off = [m for m in self.sent if "called off" in m["text"]]
+        self.assertEqual(len(called_off), 1)
+        self.assertEqual(called_off[0]["mentions"], ["222"])
+
+    def test_cancel_open_listing_pings_active_offerers(self):
+        lid = self._mk_sale(price=1000.0)
+        self._as("222")
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 400})
+        self._as("333")
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 500})
+        self.sent.clear()
+        self._as("111")
+        self.client.patch(f"/api/market/{lid}", json={"status": "cancelled"})
+        gone = [m for m in self.sent if "withdrawn" in m["text"].lower()
+                or "took it down" in m["text"]]
+        self.assertEqual(len(gone), 1)
+        self.assertEqual(sorted(gone[0]["mentions"]), ["222", "333"])
+
+    def test_cancel_open_listing_with_no_offers_is_silent(self):
+        lid = self._mk_sale()
+        self.sent.clear()
+        self._as("111")
+        self.client.patch(f"/api/market/{lid}", json={"status": "cancelled"})
+        self.assertEqual([m for m in self.sent if "market" in m["category"]], [])
+
+    # -- board lifecycle additions (2026-08 launch review) --
+
+    def test_my_activity_lists_bids_and_pending_deals(self):
+        open_lid = self._mk_sale(seller="900", price=5000)
+        deal_lid = self._mk_sale(seller="900", price=1000)
+        other_lid = self._mk_sale(seller="900", price=750)   # untouched by 222
+        self._as("222")
+        self.client.post(f"/api/market/{open_lid}/offer", json={"amount_auec": 100})
+        self.client.post(f"/api/market/{deal_lid}/offer", json={"amount_auec": 1000})
+        r = self.client.get("/api/market", params={"activity": "me"})
+        ids = {l["id"] for l in r.json()["listings"]}
+        self.assertIn(open_lid, ids)
+        self.assertIn(deal_lid, ids)      # pending deal rides along (not open)
+        self.assertNotIn(other_lid, ids)
+        stakes = {l["id"]: l["my_stake"] for l in r.json()["listings"]}
+        self.assertTrue(stakes[deal_lid]["awaiting_my_confirm"])
+        self.assertEqual(stakes[open_lid]["status"], "active")
+
+    def test_withdrawn_offer_leaves_my_activity(self):
+        lid = self._mk_sale(seller="900", price=5000)
+        self._as("222")
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 100})
+        oid = next(o["id"] for o in r.json()["offers"] if o["is_mine"])
+        self.client.patch(f"/api/market/{lid}/offer/{oid}", json={"action": "withdraw"})
+        ids = {l["id"] for l in
+               self.client.get("/api/market", params={"activity": "me"}).json()["listings"]}
+        self.assertNotIn(lid, ids)
+
+    def test_renew_touches_updated_at_seller_only(self):
+        lid = self._mk_sale()
+        db.touch_listing(lid, "2026-01-01T00:00:00+00:00")   # backdate
+        self._as("222")
+        self.assertEqual(self.client.post(f"/api/market/{lid}/renew").status_code, 403)
+        self._as("111")
+        r = self.client.post(f"/api/market/{lid}/renew")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertGreater(db.get_listing(lid)["updated_at"], "2026-01-01T00:00:01")
+
+    def test_admin_delete_is_admin_only_and_hard(self):
+        lid = self._mk_sale()
+        self._as("222")
+        self.assertEqual(self.client.delete(f"/api/market/{lid}").status_code, 403)
+        self._as("999", admin=True)
+        r = self.client.delete(f"/api/market/{lid}")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(db.get_listing(lid))
+        self.assertEqual(db.list_offers(lid), [])
+
+    def test_board_carries_stale_days_setting(self):
+        db.set_setting("listing_stale_days", "21")
+        try:
+            self._as("111")
+            r = self.client.get("/api/market")
+            self.assertEqual(r.json()["stale_days"], 21)
+        finally:
+            db.set_setting("listing_stale_days", "")
+
+    def test_offer_rows_carry_bidder_deals(self):
+        lid = self._mk_sale(price=9999)
+        self._as("222")
+        r = self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 10})
+        row = next(o for o in r.json()["offers"] if o["bidder_id"] == "222")
+        self.assertIn("bidder_deals", row)
+
+    def test_ending_soon_auction_broadcasts_with_high_bid(self):
+        lid = self._mk_auction(minutes=30)
+        ts = datetime.now(timezone.utc).isoformat()
+        db.add_offer(lid, "222", 500.0, None, None, None, ts)
+        self.sent.clear()
+        asyncio.run(app._notify_listing_ending_soon(
+            db.get_listing(lid), datetime.now(timezone.utc)))
+        self.assertEqual(len(self.sent), 1)
+        msg = self.sent[0]
+        self.assertIn("Auction ending", msg["text"])
+        self.assertIn("500", msg["text"])
+        self.assertIsNone(msg["mentions"])   # channel broadcast, no pings
+
+    def test_ending_soon_commission_pings_requester_with_quote_count(self):
+        ts = datetime.now(timezone.utc).isoformat()
+        ends = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+        lid = db.create_listing({
+            "seller_id": "111", "seller_handle": None,
+            "item_id": "blueprint:BP_X", "item_name": "Omnisky III",
+            "unit": "unit", "qty": 1, "mode": "commission", "price_auec": 1000,
+            "start_price": None, "buyout_auec": None, "ends_at": ends,
+            "want": None, "note": None, "attributes": None,
+            "blueprint_key": "BP_X", "materials": "crafter",
+            "status": "open", "created_at": ts, "updated_at": ts})
+        db.add_offer(lid, "222", 900.0, None, None, "can do", ts)
+        self.sent.clear()
+        asyncio.run(app._notify_listing_ending_soon(
+            db.get_listing(lid), datetime.now(timezone.utc)))
+        msg = self.sent[0]
+        self.assertIn("needed-by", msg["text"])
+        self.assertIn("1 quote", msg["text"])
+        self.assertEqual(msg["mentions"], ["111"])
+
+    def test_auction_end_time_extend_only_once_bid(self):
+        lid = self._mk_auction(minutes=60)
+        self._as("222")
+        self.client.post(f"/api/market/{lid}/offer", json={"amount_auec": 150})
+        self._as("111")
+        sooner = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+        r = self.client.patch(f"/api/market/{lid}", json={"ends_at": sooner})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("extended", r.json()["detail"])
+        later = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
+        r = self.client.patch(f"/api/market/{lid}", json={"ends_at": later})
+        self.assertEqual(r.status_code, 200, r.text)
+
+
+class EventCapacityWaitlistTests(unittest.TestCase):
+    """max_players is enforced (2026-08 review): a full event waitlists new
+    joiners first-come, a freed seat auto-promotes (+ Discord ping), organizers
+    can seat/drop attendees day-of, and completed/cancelled lifecycle works."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._orig_send = notify.send
+        cls._user = {"id": "1", "username": "org", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category, "text": text,
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _mk_event(self, max_players=2, **extra):
+        self._as("1")
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        r = self.client.post("/api/events", json={
+            "title": "Cap Op", "start_at": start, "types": ["Raid"],
+            "categories": ["PvE"], "max_players": max_players, **extra})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def _join(self, eid, uid, status="going"):
+        self._as(uid)
+        r = self.client.post(f"/api/events/{eid}/signup",
+                             json={"roles": [], "status": status})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_full_event_waitlists_then_promotes_on_withdraw(self):
+        eid = self._mk_event(max_players=2)
+        self._join(eid, "11")
+        self._join(eid, "12")
+        v = self._join(eid, "13")               # full → waitlist
+        self.assertEqual(v["my_signup"]["status"], "waitlist")
+        self.assertEqual(v["waitlist_count"], 1)
+        self.assertEqual(v["fill"]["total_going"], 2)   # waitlist doesn't inflate
+        v = self._join(eid, "14")               # second in line
+        self.assertEqual(v["waitlist_count"], 2)
+        self.sent.clear()
+        self._as("11")
+        r = self.client.delete(f"/api/events/{eid}/signup")
+        self.assertEqual(r.status_code, 200)
+        v = r.json()
+        self.assertEqual(v["fill"]["total_going"], 2)   # 13 promoted
+        self.assertEqual(v["waitlist_count"], 1)
+        statuses = {a["discord_id"]: a["status"] for a in v["attendees"]}
+        self.assertEqual(statuses["13"], "going")       # earliest waiter first
+        self.assertEqual(statuses["14"], "waitlist")
+        promo = [m for m in self.sent if "You're in" in m["text"]]
+        self.assertEqual(len(promo), 1)
+        self.assertEqual(promo[0]["mentions"], ["13"])
+
+    def test_existing_goer_can_update_when_full(self):
+        eid = self._mk_event(max_players=1)
+        self._join(eid, "11")
+        v = self._join(eid, "11")               # role/note update, not a waitlist demotion
+        self.assertEqual(v["my_signup"]["status"], "going")
+
+    def test_maybe_never_waitlists(self):
+        eid = self._mk_event(max_players=1)
+        self._join(eid, "11")
+        v = self._join(eid, "12", status="maybe")
+        self.assertEqual(v["my_signup"]["status"], "maybe")
+
+    def test_organizer_can_seat_and_drop_attendees(self):
+        eid = self._mk_event(max_players=5)
+        self._join(eid, "11")
+        self._as("22")                           # not the organizer
+        r = self.client.put(f"/api/events/{eid}/attendees",
+                            json={"discord_id": "33", "status": "going"})
+        self.assertEqual(r.status_code, 403)
+        self._as("1")                            # organizer seats a walk-up
+        r = self.client.put(f"/api/events/{eid}/attendees",
+                            json={"discord_id": "33", "status": "going"})
+        self.assertEqual(r.status_code, 200, r.text)
+        ids = {a["discord_id"] for a in r.json()["attendees"]}
+        self.assertIn("33", ids)
+        r = self.client.put(f"/api/events/{eid}/attendees",
+                            json={"discord_id": "11", "status": "withdrawn"})
+        self.assertEqual(r.status_code, 200)
+        ids = {a["discord_id"] for a in r.json()["attendees"]}
+        self.assertNotIn("11", ids)
+
+    def test_complete_moves_event_to_past(self):
+        eid = self._mk_event()
+        self._as("22")
+        self.assertEqual(self.client.post(f"/api/events/{eid}/complete").status_code, 403)
+        self._as("1")
+        r = self.client.post(f"/api/events/{eid}/complete")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["phase"], "ended")
+        upcoming = self.client.get("/api/events?range=upcoming").json()["events"]
+        self.assertNotIn(eid, [e["id"] for e in upcoming])
+        past = self.client.get("/api/events?range=past").json()["events"]
+        self.assertIn(eid, [e["id"] for e in past])
+
+    def test_ping_opt_out_drops_mention_everywhere(self):
+        db.set_notify_opt_out("77", True)
+        try:
+            mentions, ping = app._mentions("77", "88")
+            self.assertEqual(mentions, ["88"])          # 77 silenced
+            self.assertNotIn("<@77>", ping)
+            self.assertIn("<@88>", ping)
+            eid = self._mk_event(max_players=5)
+            self._join(eid, "77")
+            self._join(eid, "88")
+            self.assertEqual(app._event_attendee_ids(eid), ["88"])
+        finally:
+            db.set_notify_opt_out("77", False)
+
+    def test_cancelled_future_event_stays_on_board(self):
+        eid = self._mk_event()
+        self._as("1")
+        self.client.delete(f"/api/events/{eid}")
+        upcoming = self.client.get("/api/events?range=upcoming").json()["events"]
+        row = next((e for e in upcoming if e["id"] == eid), None)
+        self.assertIsNotNone(row)                # visible, badged — not vanished
+        self.assertEqual(row["phase"], "cancelled")
 
 
 if __name__ == "__main__":

@@ -286,6 +286,16 @@ def stock_ageoff_min() -> int:
         return 180
 
 
+def _listing_stale_days() -> int:
+    """Days before an open marketplace listing counts as stale on the board
+    (amber badge + renew nudge). 0 = staleness display off. Staleness keys off
+    `updated_at`, so any seller edit — or the one-click renew — refreshes it."""
+    try:
+        return max(0, int(db.get_setting("listing_stale_days", "14")))
+    except (TypeError, ValueError):
+        return 14
+
+
 _FEED_REFRESH_FLOOR_H = 2    # hard floor — be kind to the community-run uexcorp API
 _FEED_REFRESH_MAX_H = 720    # a month; sanity cap on the meta value, not a policy
 
@@ -1117,6 +1127,11 @@ class MemberDirectory:
         did = str(discord_id)
         db.set_directory_opt_out(did, opt_out)
         self.by_id.setdefault(did, {"discord_id": did})["directory_opt_out"] = 1 if opt_out else 0
+
+    def set_notify_opt_out(self, discord_id: str, opt_out: bool) -> None:
+        did = str(discord_id)
+        db.set_notify_opt_out(did, opt_out)
+        self.by_id.setdefault(did, {"discord_id": did})["notify_opt_out"] = 1 if opt_out else 0
 
     def set_playstyles(self, discord_id: str, tags: list[str]) -> None:
         # Cache the raw column value (JSON or None) so reads parse uniformly
@@ -2800,6 +2815,77 @@ async def event_reminder_loop():
             print(f"[sc-nav] event reminder loop error: {exc}")
 
 
+MARKET_SWEEP_TICK_S = 60.0
+_ENDING_SOON_LEAD_S = 3600           # 1h heads-up on timed listings
+_ending_soon_warned: set[int] = set()   # in-memory once-per-process marker
+
+
+async def market_sweep_loop():
+    """Marketplace scheduled sweep (2026-08 review): the timed-listing moments a
+    lazy, on-read model can't deliver on time.
+    1. Proactively settles lapsed auctions/commissions — the settle already
+       notifies (see _resolve_listing_expiry), so "you won" arrives when the
+       clock runs out instead of whenever someone next opens the board.
+    2. "Ending soon" heads-up one hour out (channel broadcast; auctions name the
+       standing bid). Once per process — a restart may repeat one, which dedup
+       can't span; harmless.
+    Idle when the marketplace webhook isn't configured — the sweep exists only
+    to notify, and the lazy path still guarantees state correctness."""
+    while True:
+        await asyncio.sleep(MARKET_SWEEP_TICK_S)
+        try:
+            if not notify.is_configured("marketplace"):
+                continue
+            now = datetime.now(timezone.utc)
+            rows, _ = db.list_listings(open_only=True)
+            timed = [r for r in rows if r.get("ends_at")
+                     and r["mode"] in ("auction", "commission")]
+            for r in timed:
+                if _auction_time_up(r, now):
+                    _resolve_listing_expiry(r, db.list_offers(r["id"]), now)
+                    _ending_soon_warned.discard(r["id"])
+                    continue
+                try:
+                    ends = datetime.fromisoformat(r["ends_at"])
+                except ValueError:
+                    continue
+                left = (ends - now).total_seconds()
+                if 0 < left <= _ENDING_SOON_LEAD_S and r["id"] not in _ending_soon_warned:
+                    _ending_soon_warned.add(r["id"])
+                    await _notify_listing_ending_soon(r, now)
+        except Exception as exc:   # never let the loop die on a transient error
+            print(f"[sc-nav] market sweep loop error: {exc}")
+
+
+async def _notify_listing_ending_soon(listing: dict, now: datetime) -> None:
+    """One-hour warning on a timed listing — the last call that makes auctions
+    competitive and keeps a commission from expiring with quotes unpicked."""
+    if not notify.is_configured("marketplace"):
+        return
+    item = listing.get("item_name") or "a listing"
+    link = _deep_link(f"#/market/{listing['id']}")
+    ends = _discord_ts(listing["ends_at"], "R")
+    if listing["mode"] == "auction":
+        state = nav_core.derive_auction_state(listing, db.list_offers(listing["id"]), now)
+        bid = (f"High bid {_auec(state['high_bid'])}" if state["high_bid"] is not None
+               else f"No bids yet — starts at {_auec(listing.get('start_price'))}")
+        await notify.send(
+            "marketplace",
+            f"⏳ **Auction ending {ends}: {item}**\n{bid}.{link}",
+            dedup_key=f"market-ending:{listing['id']}")
+    else:
+        mentions, ping = _mentions(listing["seller_id"])
+        quotes = sum(1 for o in db.list_offers(listing["id"])
+                     if (o.get("status") or "active") == "active")
+        line = (f"{quotes} quote{'s' if quotes != 1 else ''} waiting — pick one "
+                f"before it expires." if quotes
+                else "No quotes yet — consider extending the needed-by date.")
+        await notify.send(
+            "marketplace",
+            f"⏳ **Craft request needed-by {ends}: {item}**\n{line}{link}{ping}",
+            mentions=mentions, dedup_key=f"market-ending:{listing['id']}")
+
+
 _FEED_REFRESH_TICK_S = 300   # how often the loop re-checks the elapsed time / setting
 
 
@@ -2896,6 +2982,7 @@ async def _start_presence_broadcaster():
     hub._warning_seq = max([0, *hub.warnings])
     asyncio.create_task(presence_broadcaster())
     asyncio.create_task(event_reminder_loop())
+    asyncio.create_task(market_sweep_loop())
     asyncio.create_task(feed_refresh_loop())
     asyncio.create_task(_sync_strata_feed())   # optional RS feed, opt-in via key
     # v0.13.0 stored one shared Discord webhook; move it to the new per-category
@@ -6131,12 +6218,13 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
     view.update(nav_core.derive_event_phase(ev, datetime.now(timezone.utc)))
     view["my_signup"] = ({"roles": mine["roles"], "status": mine["status"]}
                          if mine else None)
+    view["waitlist_count"] = sum(1 for s in signups if s["status"] == "waitlist")
     if detail:
         view["attendees"] = [
             {"discord_id": s["discord_id"],
              "display_name": _resolve_member_name(s["discord_id"], None),
              "roles": s["roles"], "status": s["status"]}
-            for s in signups if s["status"] in ("going", "maybe")
+            for s in signups if s["status"] in ("going", "maybe", "waitlist")
         ]
     return view
 
@@ -6165,16 +6253,31 @@ def _discord_ts(iso: str, style: str = "F") -> str:
         return iso or ""
 
 
+_notify_tasks: set[asyncio.Task] = set()
+
+
 def _notify_bg(coro) -> None:
     """Fire a notification coroutine as a background task so it can't delay the
     request. Any error is logged and swallowed — a notification must never break
-    the action that triggered it."""
+    the action that triggered it. The task keeps a strong ref until done:
+    asyncio only weak-refs scheduled tasks, so an unreferenced one can be
+    garbage-collected mid-flight and the ping silently never sends."""
     async def _run():
         try:
             await coro
         except Exception as exc:   # defensive: notify.send already swallows, but the builders read settings
             print(f"[sc-nav] notify task failed: {exc}")
-    asyncio.create_task(_run())
+    wrapper = _run()
+    try:
+        task = asyncio.create_task(wrapper)
+    except RuntimeError:
+        # No running loop (sync test helper / script context) — a notification
+        # is best-effort by contract, so drop it rather than crash the caller.
+        wrapper.close()
+        coro.close()
+        return
+    _notify_tasks.add(task)
+    task.add_done_callback(_notify_tasks.discard)
 
 
 async def _notify_event_created(ev: dict) -> None:
@@ -6182,11 +6285,12 @@ async def _notify_event_created(ev: dict) -> None:
         return
     where = (ev.get("event_location") or ev.get("location") or "").strip()
     loc = f"\n📍 {where}" if where else ""
+    link = _deep_link(f"#/events/{ev['id']}")
     await notify.send(
         "events",
         f"📅 **New event: {ev['title']}**\n"
         f"Starts {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
-        f"{loc}{_deep_link('#/events')}",
+        f"{loc}{link}",
         dedup_key=f"event-created:{ev['id']}")
 
 
@@ -6200,24 +6304,69 @@ async def _notify_event_cancelled(ev: dict) -> None:
         dedup_key=f"event-cancelled:{ev['id']}")
 
 
+def _event_attendee_ids(event_id: int) -> list[str]:
+    """Discord ids of every non-withdrawn signup — the ping list for reminders
+    and reschedule notices. Honors the member ping opt-out."""
+    ids = [str(s["discord_id"]) for s in db.list_signups(event_id)
+           if s.get("status") != "withdrawn"
+           and str(s.get("discord_id") or "").isdigit()]
+    opted = db.notify_opted_out(ids)
+    return [i for i in ids if i not in opted]
+
+
 async def _notify_event_reminder(ev: dict) -> None:
     """The marquee "starting soon" ping. Pings each signed-up member by id so the
-    reminder actually pulls them back in-game (the whole point of the feature)."""
+    reminder actually pulls them back in-game (the whole point of the feature).
+    send_paged chunks past Discord's 50-mention/message cap — an 80-signup fleet
+    op used to silently ping only the first 50."""
     if not notify.is_configured("events"):
         return
     where = (ev.get("event_location") or ev.get("location") or "").strip()
     loc = f"\n📍 {where}" if where else ""
-    attendees = [str(s["discord_id"]) for s in db.list_signups(ev["id"])
-                 if s.get("status") != "withdrawn"
-                 and str(s.get("discord_id") or "").isdigit()]
-    pings = ("\n" + " ".join(f"<@{d}>" for d in attendees)) if attendees else ""
-    await notify.send(
+    link = _deep_link(f"#/events/{ev['id']}")
+    await notify.send_paged(
         "events",
         f"⏰ **Starting soon: {ev['title']}**\n"
         f"Begins {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
-        f"{loc}{_deep_link('#/events')}{pings}",
-        mentions=attendees,
+        f"{loc}{link}",
+        mentions=_event_attendee_ids(ev["id"]),
         dedup_key=f"event-reminder:{ev['id']}")
+
+
+async def _notify_event_rescheduled(ev: dict, old_start: str | None,
+                                    old_where: str | None) -> None:
+    """An edited time or place is exactly what signed-up members must not miss —
+    the created-ping advertised the OLD details. Pings active signups."""
+    if not notify.is_configured("events"):
+        return
+    lines = [f"📌 **Event updated: {ev['title']}**"]
+    if old_start and old_start != ev["start_at"]:
+        lines.append(f"Now starts {_discord_ts(ev['start_at'])} "
+                     f"({_discord_ts(ev['start_at'], 'R')}) — was {_discord_ts(old_start)}")
+    new_where = (ev.get("event_location") or ev.get("location") or "").strip()
+    if old_where is not None and old_where != new_where and new_where:
+        lines.append(f"📍 Now at {new_where}")
+    lines.append(_deep_link(f"#/events/{ev['id']}").strip())
+    await notify.send_paged(
+        "events", "\n".join(x for x in lines if x),
+        mentions=_event_attendee_ids(ev["id"]),
+        dedup_key=f"event-moved:{ev['id']}:{ev['start_at']}")
+
+
+async def _notify_waitlist_promoted(ev: dict, discord_id: str) -> None:
+    """A seat opened and this member is in — time-sensitive (they may have made
+    other plans), so it's a directed ping."""
+    if not notify.is_configured("events"):
+        return
+    mentions, ping = _mentions(discord_id)
+    link = _deep_link(f"#/events/{ev['id']}")
+    await notify.send(
+        "events",
+        f"🎟️ **You're in: {ev['title']}**\n"
+        f"A spot opened and you moved off the waitlist. Starts "
+        f"{_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')}).{link}{ping}",
+        mentions=mentions,
+        dedup_key=f"event-promoted:{ev['id']}:{discord_id}")
 
 
 async def _notify_lfg_posted(pub: dict) -> None:
@@ -6336,8 +6485,13 @@ async def _notify_survey_milestone(text: str, dedup: str) -> None:
 def _mentions(*discord_ids) -> tuple[list[str], str]:
     """(allowed-mentions list, trailing ping text) for one or more members, deduped
     and order-preserving. Only real Discord snowflakes can be pinged — legacy or
-    synthetic ids are dropped so a message never carries a dead `<@id>`."""
+    synthetic ids are dropped so a message never carries a dead `<@id>` — and
+    members who opted out of pings (Settings → Profile) are dropped too: the
+    message still names them in its body, their phone just stays quiet."""
     valid = list(dict.fromkeys(str(i) for i in discord_ids if str(i or "").isdigit()))
+    if valid:
+        opted = db.notify_opted_out(valid)
+        valid = [d for d in valid if d not in opted]
     ping = ("\n" + " ".join(f"<@{d}>" for d in valid)) if valid else ""
     return valid, ping
 
@@ -6526,6 +6680,140 @@ async def _notify_market_completed(listing: dict) -> None:
         mentions=mentions, dedup_key=f"market-complete:{listing['id']}")
 
 
+async def _notify_auction_settled(listing: dict, offer: dict | None) -> None:
+    """A lapsed auction just settled (lazily, on read — there's no background
+    job). This is the moment with the highest emotional payoff ("you won") and
+    it used to be completely silent. Pings winner + seller when it sold; just
+    the seller when it died unbid."""
+    if not notify.is_configured("marketplace"):
+        return
+    item = listing.get("item_name") or "your auction"
+    link = _deep_link(f"#/market/{listing['id']}")
+    if offer:
+        mentions, ping = _mentions(offer["bidder_id"], listing["seller_id"])
+        winner = _resolve_member_name(offer["bidder_id"], None)
+        await notify.send(
+            "marketplace",
+            f"🔨 **Auction ended: {item}**\n"
+            f"{winner} won at {_auec(offer['amount_auec'])} — coordinate the "
+            f"handoff and confirm to close the deal.{link}{ping}",
+            mentions=mentions, dedup_key=f"auction-settled:{listing['id']}")
+    else:
+        mentions, ping = _mentions(listing["seller_id"])
+        await notify.send(
+            "marketplace",
+            f"🔨 **Auction ended with no bids: {item}**\n"
+            f"Relist it or adjust the start price.{link}{ping}",
+            mentions=mentions, dedup_key=f"auction-expired:{listing['id']}")
+
+
+async def _notify_commission_expired(listing: dict, quote_count: int) -> None:
+    """A craft request hit its needed-by date unawarded. The requester should
+    hear it — especially if quotes were sitting there waiting for a decision."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(listing["seller_id"])
+    item = listing.get("item_name") or "your craft request"
+    quotes = (f"{quote_count} quote{'s' if quote_count != 1 else ''} were waiting."
+              if quote_count else "No quotes came in.")
+    link = _deep_link(f"#/market/{listing['id']}")
+    await notify.send(
+        "marketplace",
+        f"⌛ **Craft request expired: {item}**\n{quotes} "
+        f"Repost with a later needed-by date if you still want it.{link}{ping}",
+        mentions=mentions, dedup_key=f"commission-expired:{listing['id']}")
+
+
+async def _notify_outbid(listing: dict, prev_bidder: str, next_min: float) -> None:
+    """The classic auction engagement loop: tell the displaced high bidder they've
+    been passed, while there's still time to answer."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(prev_bidder)
+    item = listing.get("item_name") or "an auction"
+    ends = (" — ends " + _discord_ts(listing["ends_at"], "R")) if listing.get("ends_at") else ""
+    link = _deep_link(f"#/market/{listing['id']}")
+    await notify.send(
+        "marketplace",
+        f"📈 **You've been outbid on {item}**\n"
+        f"It now takes {_auec(next_min)} to retake the lead{ends}.{link}{ping}",
+        mentions=mentions,
+        dedup_key=f"market-outbid:{listing['id']}:{prev_bidder}:{next_min:g}")
+
+
+async def _notify_listing_cancelled(listing: dict, offers) -> None:
+    """A called-off listing used to vanish silently on everyone with skin in it:
+    the bound buyer of a pending deal, or the members holding active offers on
+    an open one. Tell them so the deal doesn't just rot in their heads."""
+    if not notify.is_configured("marketplace"):
+        return
+    item = listing.get("item_name") or "a listing"
+    seller = _resolve_member_name(listing["seller_id"], None)
+    if listing.get("buyer_id"):
+        who = [listing["buyer_id"]]
+        body = (f"🚫 **Deal called off: {item}**\n"
+                f"{seller} cancelled the listing — the pending deal is void.")
+    else:
+        who = [o["bidder_id"] for o in (offers or [])
+               if (o.get("status") or "active") == "active"]
+        if not who:
+            return
+        body = (f"🚫 **Listing withdrawn: {item}**\n"
+                f"{seller} took it down — your offer no longer stands.")
+    mentions, ping = _mentions(*who)
+    await notify.send(
+        "marketplace", f"{body}{_deep_link('#/market')}{ping}",
+        mentions=mentions, dedup_key=f"market-cancelled:{listing['id']}")
+
+
+async def _notify_offer_declined(listing: dict, offer: dict) -> None:
+    """A quiet close-out so a declined bidder isn't left waiting on an answer
+    that already happened."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(offer["bidder_id"])
+    item = listing.get("item_name") or "a listing"
+    label = "quote" if listing.get("mode") == "commission" else "offer"
+    link = _deep_link(f"#/market/{listing['id']}")
+    await notify.send(
+        "marketplace",
+        f"↩️ **Your {label} on {item} was declined**\n"
+        f"The listing is still open if you want to try different terms.{link}{ping}",
+        mentions=mentions, dedup_key=f"market-decline:{offer['id']}")
+
+
+async def _notify_crafter_bailed(listing: dict, crafter_id: str) -> None:
+    """The accepted crafter backed out of a commission — the request is back on
+    the board, and the requester needs to pick a new quote."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(listing["seller_id"])
+    who = _resolve_member_name(crafter_id, None)
+    item = listing.get("item_name") or "your craft request"
+    link = _deep_link(f"#/market/{listing['id']}")
+    await notify.send(
+        "marketplace",
+        f"🔁 **{who} withdrew from {item}**\n"
+        f"The request is open again — other quotes still stand.{link}{ping}",
+        mentions=mentions,
+        dedup_key=f"market-bail:{listing['id']}:{crafter_id}")
+
+
+async def _notify_quotes_lost(listing: dict, loser_ids: list[str]) -> None:
+    """Commission awarded — close the loop for the crafters who quoted and lost
+    (a quote is a commitment to do work; leaving it dangling is rude)."""
+    if not notify.is_configured("marketplace") or not loser_ids:
+        return
+    mentions, ping = _mentions(*loser_ids)
+    item = listing.get("item_name") or "a craft request"
+    await notify.send(
+        "marketplace",
+        f"ℹ️ **{item} went to another crafter**\n"
+        f"Thanks for quoting — keep an eye on the board for the next one."
+        f"{_deep_link('#/market')}{ping}",
+        mentions=mentions, dedup_key=f"market-quotes-lost:{listing['id']}")
+
+
 async def _notify_goal_met(goal: dict, contributions) -> None:
     """Celebrate a procurement goal crossing 100% — a communal win, so it broadcasts
     to the channel and pings the goal's creator so they know it's fulfilled."""
@@ -6613,14 +6901,25 @@ async def get_event(event_id: int, user: dict = Depends(require_session)):
 
 @app.patch("/api/events/{event_id}")
 async def edit_event(event_id: int, body: EventIn, user: dict = Depends(require_session)):
-    """Edit an event (organizer or admin) — full replace of the editable fields."""
+    """Edit an event (organizer or admin) — full replace of the editable fields.
+    A changed start re-arms the scheduled reminder (else the moved event never
+    reminds for its new time), and a changed start/place pings active signups —
+    they planned around the details the created-ping advertised."""
     ev = db.get_event(event_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="unknown event")
     _require_event_owner(ev, user)
+    old_start = ev.get("start_at")
+    old_where = (ev.get("event_location") or ev.get("location") or "").strip()
     fields = _validate_event(body)
     db.update_event(event_id, fields, datetime.now(timezone.utc).isoformat())
-    return _event_view(db.get_event(event_id), user, detail=True)
+    updated = db.get_event(event_id)
+    new_where = (updated.get("event_location") or updated.get("location") or "").strip()
+    if updated.get("start_at") != old_start:
+        db.reset_event_reminder(event_id)
+    if updated.get("start_at") != old_start or new_where != old_where:
+        _notify_bg(_notify_event_rescheduled(updated, old_start, old_where))
+    return _event_view(updated, user, detail=True)
 
 
 @app.delete("/api/events/{event_id}")
@@ -6649,18 +6948,96 @@ async def signup_event(event_id: int, body: SignupIn,
         raise HTTPException(status_code=400, detail=detail)
     roles = _validate_signup_roles(body.roles)
     status = body.status if body.status in ("going", "maybe") else "going"
+    if status == "going":
+        # Capacity is a promise, not advice: a full event takes new joiners as
+        # waitlist (first-come), auto-promoted when a going member withdraws.
+        # Members already going just update their roles/note.
+        signups = db.list_signups(event_id)
+        fill = nav_core.derive_event_fill(ev, signups)
+        already_going = any(s["discord_id"] == user["id"] and s["status"] == "going"
+                            for s in signups)
+        if fill["is_full"] and not already_going:
+            status = "waitlist"
     db.upsert_signup(event_id, user["id"], roles, status, body.note,
                      datetime.now(timezone.utc).isoformat())
     return _event_view(db.get_event(event_id), user, detail=True)
 
 
+def _promote_from_waitlist(event_id: int) -> None:
+    """A going member left — move the earliest-joined waitlisted member up and
+    tell them. No-op when the event isn't open for signups, is still full, or
+    nobody waits."""
+    ev = db.get_event(event_id)
+    if ev is None or ev.get("status") != "scheduled":
+        return
+    if not nav_core.derive_event_phase(ev, datetime.now(timezone.utc))["signups_open"]:
+        return
+    signups = db.list_signups(event_id)
+    if nav_core.derive_event_fill(ev, signups)["is_full"]:
+        return
+    nxt = next((s for s in signups if s.get("status") == "waitlist"), None)
+    if nxt is None:
+        return   # list_signups is oldest-first, so the first hit is the earliest
+    db.upsert_signup(event_id, nxt["discord_id"], nxt.get("roles") or [], "going",
+                     nxt.get("note"), datetime.now(timezone.utc).isoformat())
+    _notify_bg(_notify_waitlist_promoted(ev, nxt["discord_id"]))
+
+
 @app.delete("/api/events/{event_id}/signup")
 async def withdraw_signup(event_id: int, user: dict = Depends(require_session)):
-    """Withdraw the caller from an event (kept as 'withdrawn' so re-joining is easy)."""
+    """Withdraw the caller from an event (kept as 'withdrawn' so re-joining is
+    easy). A freed seat promotes the first waitlisted member."""
     ev = db.get_event(event_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="unknown event")
-    db.withdraw_signup(event_id, user["id"])
+    had = db.withdraw_signup(event_id, user["id"])
+    if had:
+        _promote_from_waitlist(event_id)
+    return _event_view(db.get_event(event_id), user, detail=True)
+
+
+class AttendeeIn(BaseModel):
+    discord_id: str = Field(min_length=1, max_length=24)
+    status: str = Field(max_length=16)          # going | maybe | withdrawn
+    roles: list[str] | None = None
+
+
+@app.put("/api/events/{event_id}/attendees")
+async def manage_attendee(event_id: int, body: AttendeeIn,
+                          user: dict = Depends(require_session)):
+    """Organizer/admin attendee management: seat a walk-up or drop a no-show even
+    after signups lock — the exact moment day-of tools are needed. Deliberately
+    skips the signups-open check (that gate is for self-service) and the
+    capacity gate (the organizer is overriding the plan on purpose)."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    did = body.discord_id.strip()
+    if not did.isdigit():
+        raise HTTPException(status_code=400, detail="invalid Discord id")
+    if body.status not in ("going", "maybe", "withdrawn"):
+        raise HTTPException(status_code=400, detail="status must be going, maybe or withdrawn")
+    roles = _validate_signup_roles(body.roles or [])
+    if body.status == "withdrawn":
+        db.withdraw_signup(event_id, did)
+        _promote_from_waitlist(event_id)
+    else:
+        db.upsert_signup(event_id, did, roles, body.status, None,
+                         datetime.now(timezone.utc).isoformat())
+    return _event_view(db.get_event(event_id), user, detail=True)
+
+
+@app.post("/api/events/{event_id}/complete")
+async def complete_event(event_id: int, user: dict = Depends(require_session)):
+    """Mark an event completed (organizer or admin) — it moves to the past tab
+    as attendance history instead of lingering by the clock."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    if not db.complete_event(event_id, datetime.now(timezone.utc).isoformat()):
+        raise HTTPException(status_code=400, detail="only a scheduled event can be completed")
     return _event_view(db.get_event(event_id), user, detail=True)
 
 
@@ -6829,9 +7206,27 @@ async def event_manifest(event_id: int, user: dict = Depends(require_session)):
             "can_post": notify.is_configured("events")}
 
 
+def _manifest_chunks(text: str, cap: int = 1800) -> list[str]:
+    """Split a manifest into Discord-sized messages on group boundaries (blank
+    lines), so a big fleet's op order posts complete instead of truncating
+    mid-roster with "Posted." reported as success."""
+    chunks, cur = [], ""
+    for block in text.split("\n\n"):
+        cand = f"{cur}\n\n{block}" if cur else block
+        if len(cand) > cap and cur:
+            chunks.append(cur)
+            cur = block
+        else:
+            cur = cand
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 @app.post("/api/events/{event_id}/manifest/post")
 async def post_manifest(event_id: int, user: dict = Depends(require_session)):
-    """Post the manifest to the org's Discord channel (organizer or admin)."""
+    """Post the manifest to the org's Discord channel (organizer or admin).
+    Long manifests go out as several ordered messages."""
     ev = db.get_event(event_id)
     if ev is None:
         raise HTTPException(status_code=404, detail="unknown event")
@@ -6839,10 +7234,16 @@ async def post_manifest(event_id: int, user: dict = Depends(require_session)):
     if not notify.is_configured("events"):
         raise HTTPException(status_code=400, detail="Discord notifications aren't configured")
     board = _roster_board_view(ev, user)
-    text = nav_core.build_event_manifest(ev, board)
-    _notify_bg(notify.send("events", f"{text}{_deep_link('#/events')}",
-                           dedup_key=None))
-    return {"ok": True}
+    chunks = _manifest_chunks(nav_core.build_event_manifest(ev, board))
+    link = _deep_link(f"#/events/{event_id}")
+
+    async def _post_all():
+        for i, chunk in enumerate(chunks):
+            tail = link if i == len(chunks) - 1 else ""
+            await notify.send("events", f"{chunk}{tail}")
+
+    _notify_bg(_post_all())
+    return {"ok": True, "messages": len(chunks)}
 
 
 # --- saved group templates (#20 v1.1) --------------------------------------
@@ -7653,7 +8054,7 @@ class OfferIn(BaseModel):
 
 
 class OfferActionIn(BaseModel):
-    action: str = Field(max_length=16)                         # accept | withdraw
+    action: str = Field(max_length=16)                # accept | decline | withdraw
 
 
 _LISTING_PUBLIC = ("id", "seller_id", "seller_handle", "item_id", "item_name", "unit",
@@ -7668,7 +8069,8 @@ _LISTING_PUBLIC = ("id", "seller_id", "seller_handle", "item_id", "item_name", "
 _LISTING_CARD = ("id", "seller_id", "seller_handle", "item_id", "item_name", "unit",
                  "qty", "mode", "price_auec", "start_price", "ends_at", "want",
                  "status", "sort_price", "offer_count", "attributes",
-                 "blueprint_key", "materials", "created_at")
+                 "blueprint_key", "materials", "created_at", "updated_at",
+                 "buyer_id", "seller_confirmed", "buyer_confirmed")
 
 
 def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
@@ -7778,8 +8180,12 @@ def _resolve_listing_expiry(listing: dict, offers, now: datetime) -> dict:
         return listing
     if listing["mode"] == "commission":
         if _auction_time_up(listing, now):
+            quotes = sum(1 for o in (offers or [])
+                         if (o.get("status") or "active") == "active")
             db.set_listing_status(listing["id"], "expired", now.isoformat())
-            return db.get_listing(listing["id"])
+            final = db.get_listing(listing["id"])
+            _notify_bg(_notify_commission_expired(final, quotes))
+            return final
         return listing
     if listing["mode"] != "auction":
         return listing
@@ -7788,15 +8194,24 @@ def _resolve_listing_expiry(listing: dict, offers, now: datetime) -> dict:
         return listing
     ts = now.isoformat()
     if state["winner_id"]:
-        win = next((o for o in offers if o["bidder_id"] == state["winner_id"]
-                    and float(o.get("amount_auec") or 0) == state["winning_amount"]), None)
+        # The winner's standing bid = their highest live offer. Matched by max,
+        # not float equality against winning_amount — a repr mismatch used to
+        # leave the listing pending with NO accepted offer (final_auec NULL).
+        cands = [o for o in offers if o["bidder_id"] == state["winner_id"]
+                 and (o.get("status") or "active") in ("active", "accepted")
+                 and o.get("amount_auec") is not None]
+        win = max(cands, key=lambda o: float(o["amount_auec"]), default=None)
         db.settle_listing(listing["id"], state["winner_id"], "pending", ts)
         if win:
             db.set_offer_status(win["id"], "accepted")
             db.reject_other_offers(listing["id"], win["id"])
-    else:
-        db.set_listing_status(listing["id"], "expired", ts)
-    return db.get_listing(listing["id"])
+        final = db.get_listing(listing["id"])
+        _notify_bg(_notify_auction_settled(final, win))
+        return final
+    db.set_listing_status(listing["id"], "expired", ts)
+    final = db.get_listing(listing["id"])
+    _notify_bg(_notify_auction_settled(final, None))
+    return final
 
 
 def _commission_mats_est(listing: dict) -> float | None:
@@ -7861,9 +8276,13 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
         view["buyer_name"], view["is_buyer"], view["can_confirm"] = None, False, False
         view["buyer_handle"] = None
     if detail:
+        # Per-bidder completed-deal counts so a seller picks a winner with the
+        # same trust signal buyers get on the seller line (one grouped query).
+        bidder_deals = db.completed_deals_counts([o["bidder_id"] for o in offers])
         view["offers"] = [
             {"id": o["id"], "bidder_id": o["bidder_id"],
              "bidder_name": _resolve_member_name(o["bidder_id"], None),
+             "bidder_deals": bidder_deals.get(str(o["bidder_id"]), 0),
              "amount_auec": o["amount_auec"], "offer_item_id": o.get("offer_item_id"),
              "offer_item_name": o.get("offer_item_name"), "offer_note": o.get("offer_note"),
              "status": o["status"], "created_at": o["created_at"],
@@ -7962,12 +8381,18 @@ async def list_market(mode: str | None = None, item: str | None = None,
                       limit: int = _MARKET_PAGE, offset: int = 0,
                       min_quality: float | None = None, max_quality: float | None = None,
                       band: int | None = None, stat: str | None = None,
+                      activity: str | None = None, craft: int = 0,
                       user: dict = Depends(require_session)):
     """The marketplace board — a paged, filterable, sortable slice of listings.
     Defaults to open listings; `seller=me` lists all of the caller's own (any
-    status), `seller=<id>` another member's open listings. Filters: `mode`, exact
-    `item`, free-text `q` over the item name, `kind` (commodity/ship/item/custom),
-    a `min_price`/`max_price` band, and the crafted-quality filters
+    status), `seller=<id>` another member's open listings; `activity=me` lists
+    the caller's buy-side deal-flow (listings they hold a live offer/bid/quote
+    on, plus pending deals they're bound to — the retention surface a bidder
+    needs to track three auctions without camping pages). `craft=1` narrows
+    commissions to recipes in the caller's blueprint library — server-side, so
+    it sees past the loaded page. Other filters: `mode`, exact `item`, free-text
+    `q` over the item name, `kind` (commodity/ship/item/custom), a
+    `min_price`/`max_price` band, and the crafted-quality filters
     `min_quality`/`max_quality`/`band`/`stat`. `sort` ∈ recent|oldest|price_asc|
     price_desc|ending. Returns a lightweight card per listing (no N+1) plus `total`
     for paging. A lapsed auction the page surfaces is settled lazily here (per-page,
@@ -7975,18 +8400,21 @@ async def list_market(mode: str | None = None, item: str | None = None,
     limit = max(1, min(int(limit), _MARKET_PAGE_MAX))
     offset = max(0, int(offset))
     mine = seller == "me"
+    my_activity = activity == "me"
     rows, total = db.list_listings(
         mode=mode, item_id=item, seller_id=user["id"] if mine else seller,
-        open_only=not mine, q=q, kind=kind, min_price=min_price,
+        open_only=not (mine or my_activity), q=q, kind=kind, min_price=min_price,
         max_price=max_price, sort=sort, limit=limit, offset=offset,
-        min_quality=min_quality, max_quality=max_quality, band=band, stat=stat)
+        min_quality=min_quality, max_quality=max_quality, band=band, stat=stat,
+        bidder_id=user["id"] if my_activity else None,
+        craftable_by=user["id"] if craft else None)
     now = datetime.now(timezone.utc)
     cards = []
     for r in rows:
         if (r["mode"] in ("auction", "commission") and r["status"] == "open"
                 and _auction_time_up(r, now)):
             r = _resolve_listing_expiry(r, db.list_offers(r["id"]), now)
-            if not mine and r["status"] != "open":   # left the open board
+            if not (mine or my_activity) and r["status"] != "open":   # left the open board
                 total -= 1
                 continue
         cards.append(r)
@@ -7998,9 +8426,29 @@ async def list_market(mode: str | None = None, item: str | None = None,
     craft_counts = db.blueprint_crafter_counts(bp_keys) if bp_keys else {}
     my_bps = ({b["blueprint_key"] for b in db.list_member_blueprints(user["id"])}
               if bp_keys else set())
-    return {"listings": [_listing_card(r, user, deals, craft_counts, my_bps)
-                         for r in cards],
+    out = [_listing_card(r, user, deals, craft_counts, my_bps) for r in cards]
+    if my_activity:
+        # Annotate each card with the caller's stake so the activity tab reads
+        # at a glance. A page is ≤ _MARKET_PAGE_MAX rows, so per-row offers here
+        # is bounded — the open board never takes this path.
+        for card, r in zip(out, cards):
+            mine_offers = [o for o in db.list_offers(r["id"])
+                           if str(o["bidder_id"]) == str(user["id"])
+                           and (o.get("status") or "active") in ("active", "accepted")]
+            best = next((o for o in mine_offers if o["status"] == "accepted"),
+                        mine_offers[-1] if mine_offers else None)
+            card["my_stake"] = ({
+                "status": best["status"] if best else "deal",
+                "amount": best.get("amount_auec") if best else None,
+                "awaiting_my_confirm": (r["status"] == "pending"
+                                        and str(r.get("buyer_id")) == str(user["id"])
+                                        and not r.get("buyer_confirmed")),
+            } if (best or str(r.get("buyer_id")) == str(user["id"])) else None)
+    return {"listings": out,
             "total": total, "limit": limit, "offset": offset,
+            # How many days before an open listing counts as stale on the board
+            # (org setting; 0 = staleness display off).
+            "stale_days": _listing_stale_days(),
             # Whether the listing form should offer the Discord announce checkbox
             # (mirrors the LFG board's announce_available flag). Applies to every
             # mode — the form hides the row entirely when no webhook is set up.
@@ -8107,7 +8555,11 @@ async def edit_listing(listing_id: int, body: ListingPatchIn,
             raise HTTPException(status_code=400, detail="the only status you can set is 'cancelled'")
         if listing["status"] in ("completed", "cancelled"):
             raise HTTPException(status_code=400, detail="this listing is already closed")
+        offers_before = db.list_offers(listing_id)
         db.set_listing_status(listing_id, "cancelled", ts)
+        # Cancelling voids real commitments — a bound buyer's struck deal or
+        # standing offers — and used to do it in total silence.
+        _notify_bg(_notify_listing_cancelled(listing, offers_before))
         return _listing_view(db.get_listing(listing_id), user, detail=True)
     if listing["status"] != "open":
         raise HTTPException(status_code=400, detail="only an open listing can be edited")
@@ -8151,6 +8603,14 @@ async def edit_listing(listing_id: int, body: ListingPatchIn,
             ends_at = _normalize_event_start(body.ends_at)
             if datetime.fromisoformat(ends_at) <= datetime.now(timezone.utc):
                 raise HTTPException(status_code=400, detail="auction end time must be in the future")
+            # With live bids the clock is a commitment: extend-only, so a seller
+            # can't snipe their own bidders by yanking the end time forward.
+            has_bids = any((o.get("status") or "active") == "active"
+                           and o.get("amount_auec") is not None
+                           for o in db.list_offers(listing_id))
+            if has_bids and listing.get("ends_at") and ends_at < listing["ends_at"]:
+                raise HTTPException(status_code=400,
+                                    detail="bids are in — the end time can only be extended")
             fields["ends_at"] = ends_at
         if body.buyout_auec is not None:
             if float(body.buyout_auec) < float(listing["start_price"] or 0):
@@ -8159,6 +8619,36 @@ async def edit_listing(listing_id: int, body: ListingPatchIn,
     if fields:
         db.update_listing(listing_id, fields, ts)
     return _listing_view(db.get_listing(listing_id), user, detail=True)
+
+
+@app.post("/api/market/{listing_id}/renew")
+async def renew_listing(listing_id: int, user: dict = Depends(require_session)):
+    """One-click "still available" (seller or admin, open listings): refreshes
+    `updated_at`, which is what the stale badge keys off. Mirrors the danger
+    board's confirm-refresh — cheap upkeep beats letting the board lead with
+    dead ads."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="unknown listing")
+    if listing["seller_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="only the seller or an admin can renew this listing")
+    if listing["status"] != "open":
+        raise HTTPException(status_code=400, detail="only an open listing can be renewed")
+    db.touch_listing(listing_id, datetime.now(timezone.utc).isoformat())
+    return _listing_view(db.get_listing(listing_id), user, detail=True)
+
+
+@app.delete("/api/market/{listing_id}")
+async def delete_listing_admin(listing_id: int, admin: dict = Depends(require_admin)):
+    """Hard-delete a listing and its offers (admin only) — the moderation tool
+    for scam/abusive content. Cancel keeps the record readable at its URL; this
+    removes it. Ordinary lifecycle stays cancel/expire."""
+    listing = db.get_listing(listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="unknown listing")
+    db.delete_listing(listing_id)
+    return {"ok": True, "deleted": listing_id}
 
 
 @app.post("/api/market/{listing_id}/offer")
@@ -8186,6 +8676,7 @@ async def place_offer(listing_id: int, body: OfferIn,
         if float(body.amount_auec) < state["next_min_bid"]:
             raise HTTPException(status_code=400,
                                 detail=f"bid must be at least {state['next_min_bid']:g} aUEC")
+        prev_high = state["high_bidder"]
         oid = db.add_offer(listing_id, user["id"], float(body.amount_auec),
                            None, None, None, ts)
         state = nav_core.derive_auction_state(listing, db.list_offers(listing_id), now)
@@ -8193,6 +8684,12 @@ async def place_offer(listing_id: int, body: OfferIn,
             db.settle_listing(listing_id, user["id"], "pending", ts)
             db.set_offer_status(oid, "accepted")
             db.reject_other_offers(listing_id, oid)
+        elif (prev_high and prev_high != user["id"]
+              and state["high_bidder"] == user["id"]):
+            # The previous leader just got passed — tell them while there's
+            # still time to answer (nobody camps the page in a 180-member org).
+            _notify_bg(_notify_outbid(db.get_listing(listing_id), prev_high,
+                                      state["next_min_bid"]))
     elif mode == "commission":
         # A crafter's quote: their price (may differ from the posted budget) +
         # a note (ETA, proposed quality, material notes). Never an instant deal
@@ -8230,7 +8727,9 @@ async def place_offer(listing_id: int, body: OfferIn,
 async def act_on_offer(listing_id: int, offer_id: int, body: OfferActionIn,
                        user: dict = Depends(require_session)):
     """Accept an offer (seller or admin → the listing goes pending with that
-    bidder, the rest are dropped) or withdraw your own active offer."""
+    bidder, the rest are dropped), decline one (seller or admin → the bidder
+    stops waiting on an answer that already happened), or withdraw your own
+    active offer."""
     listing = db.get_listing(listing_id)
     if listing is None:
         raise HTTPException(status_code=404, detail="unknown listing")
@@ -8248,10 +8747,18 @@ async def act_on_offer(listing_id: int, offer_id: int, body: OfferActionIn,
             # that were already lost stay lost.
             db.set_offer_status(offer_id, "withdrawn")
             db.settle_listing(listing_id, None, "open", ts)
+            _notify_bg(_notify_crafter_bailed(db.get_listing(listing_id), user["id"]))
         elif offer["status"] != "active":
             raise HTTPException(status_code=400, detail="that offer is no longer active")
         else:
             db.set_offer_status(offer_id, "withdrawn")
+    elif body.action == "decline":
+        if listing["seller_id"] != user["id"] and not user.get("is_admin"):
+            raise HTTPException(status_code=403, detail="only the seller can decline an offer")
+        if offer["status"] != "active":
+            raise HTTPException(status_code=400, detail="that offer is no longer active")
+        db.set_offer_status(offer_id, "rejected")
+        _notify_bg(_notify_offer_declined(listing, offer))
     elif body.action == "accept":
         if listing["seller_id"] != user["id"] and not user.get("is_admin"):
             raise HTTPException(status_code=403, detail="only the seller can accept an offer")
@@ -8259,10 +8766,15 @@ async def act_on_offer(listing_id: int, offer_id: int, body: OfferActionIn,
             raise HTTPException(status_code=400, detail="this listing is no longer open")
         if offer["status"] != "active":
             raise HTTPException(status_code=400, detail="that offer is no longer active")
+        losers = [o["bidder_id"] for o in db.list_offers(listing_id)
+                  if (o.get("status") or "active") == "active"
+                  and o["id"] != offer_id] if listing["mode"] == "commission" else []
         db.settle_listing(listing_id, offer["bidder_id"], "pending", ts)
         db.set_offer_status(offer_id, "accepted")
         db.reject_other_offers(listing_id, offer_id)
         _notify_bg(_notify_market_accepted(db.get_listing(listing_id), offer))
+        if losers:
+            _notify_bg(_notify_quotes_lost(listing, losers))
     else:
         raise HTTPException(status_code=400, detail="unknown action")
     return _listing_view(db.get_listing(listing_id), user, detail=True)
@@ -9114,6 +9626,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "warning_stale_min": warning_stale_min(),
         "hazard_radius_km": hazard_radius_km(),      # snare-detour base radius (#24 v2)
         "stock_ageoff_min": stock_ageoff_min(),      # stock-report lifetime (#21)
+        "listing_stale_days": _listing_stale_days(),  # marketplace stale badge (0 = off)
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
         "feeds_refreshed_at": int(feeds_refreshed_at),  # epoch of the last uexcorp pull
@@ -9149,6 +9662,9 @@ class SettingsIn(BaseModel):
     # Stock-report lifetime (minutes, #21): how long an out-of-stock report keeps
     # steering the trade solver away from that buy. Capped at a week.
     stock_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
+    # Marketplace staleness (days): open listings older than this (by updated_at)
+    # get an amber "stale" badge + renew nudge. 0 turns the display off.
+    listing_stale_days: int | None = Field(default=None, ge=0, le=365)
     # ⛏ mined-out report lifetime (minutes, #37 slice 2): how long a depletion
     # report down-ranks a survey cluster in ore-first routing. Capped at a week.
     survey_depletion_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
@@ -9221,6 +9737,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting("hazard_radius_km", str(body.hazard_radius_km))
     if body.stock_ageoff_min is not None:
         db.set_setting("stock_ageoff_min", str(body.stock_ageoff_min))
+    if body.listing_stale_days is not None:
+        db.set_setting("listing_stale_days", str(body.listing_stale_days))
     if body.survey_depletion_ageoff_min is not None:
         db.set_setting("survey_depletion_ageoff_min",
                        str(body.survey_depletion_ageoff_min))
@@ -9266,6 +9784,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "warning_ageoff_min": warning_ageoff_min(), "warning_stale_min": warning_stale_min(),
             "hazard_radius_km": hazard_radius_km(),
             "stock_ageoff_min": stock_ageoff_min(),
+            "listing_stale_days": _listing_stale_days(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),
             "extra_admin_ids": extra_admin_ids(),
@@ -9803,6 +10322,7 @@ async def api_me(user: dict = Depends(require_session)):
             "motd": motd["text"], "motd_updated": motd["updated"],
             "ships": db.list_user_ships(user["id"]),
             "playstyle_tags": member_playstyles(members_dir.get(user["id"])),
+            "notify_opt_out": bool((members_dir.get(user["id"]) or {}).get("notify_opt_out")),
             "active_survey_zone": members_dir.active_survey_zone(user["id"]),
             "pinned_ids": sorted(hub.get(user).pinned_ids),
             **_member_identity(user["id"])}
@@ -9813,6 +10333,8 @@ class ProfileIn(BaseModel):
     # Declared playstyle tags (#30). None = untouched; [] = clear. Oversized
     # payloads are rejected outright (mirrors LFGPostIn.tags).
     playstyle_tags: list[str] | None = Field(default=None, max_length=_PROFILE_MAX_TAGS)
+    # Never @-ping me on Discord (2026-08 review). None = untouched.
+    notify_opt_out: bool | None = None
 
 
 class ShipPrefIn(BaseModel):
@@ -9835,6 +10357,8 @@ async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
         tags = [t for t in dict.fromkeys(body.playstyle_tags)
                 if t in PLAYSTYLE_TAGS][:_PROFILE_MAX_TAGS]
         members_dir.set_playstyles(uid, tags)
+    if body.notify_opt_out is not None:
+        members_dir.set_notify_opt_out(uid, body.notify_opt_out)
     async with hub.lock:
         sess = hub.get(user)
         if body.share_presence is not None:
