@@ -1133,6 +1133,11 @@ class MemberDirectory:
         db.set_notify_opt_out(did, opt_out)
         self.by_id.setdefault(did, {"discord_id": did})["notify_opt_out"] = 1 if opt_out else 0
 
+    def set_member_note(self, discord_id: str, column: str, text: str | None) -> None:
+        did = str(discord_id)
+        db.set_member_note(did, column, text)
+        self.by_id.setdefault(did, {"discord_id": did})[column] = text
+
     def set_playstyles(self, discord_id: str, tags: list[str]) -> None:
         # Cache the raw column value (JSON or None) so reads parse uniformly
         # whether the row came from the DB load or this setter.
@@ -6582,6 +6587,7 @@ _LISTING_ANNOUNCE_COPY = {
     "auction": ("🔨", "AUCTION", "Bid on the board."),
     "barter": ("🔄", "TRADE WANTED", "Offer a swap on the board."),
     "commission": ("🛠️", "WANTED", "Quote the job on the board."),
+    "wtb": ("📥", "BUYING", "Got some? Offer to sell on the board."),
 }
 
 
@@ -6619,6 +6625,9 @@ def _listing_announce_terms(listing: dict) -> list[str]:
         want = (listing.get("want") or "").strip()
         if want:
             bits.append("wants " + (want[:77] + "…" if len(want) > 78 else want))
+    elif mode == "wtb":
+        if listing.get("price_auec") is not None:
+            bits.append(f"paying {_auec(listing['price_auec'])}")
     return bits
 
 
@@ -6639,7 +6648,10 @@ async def _notify_listing_posted(listing: dict) -> None:
     bits = _listing_announce_terms(listing)
     who = _resolve_member_name(listing["seller_id"], None)
     # Ping the members who can craft this (library match), minus the requester.
-    key = listing.get("blueprint_key") if mode == "commission" else None
+    # A DIRECTED commission never mass-pings — its target already got the
+    # dedicated ping; the announce is channel-reach only.
+    key = (listing.get("blueprint_key")
+           if mode == "commission" and not listing.get("directed_to") else None)
     crafters = [m for m in (db.blueprint_crafters(key) if key else [])
                 if str(m) != str(listing["seller_id"])][:_ANNOUNCE_MENTION_CAP]
     craft_line = ("Can craft: " + " ".join(f"<@{m}>" for m in crafters)) if crafters else ""
@@ -6664,6 +6676,10 @@ async def _notify_market_offer(listing: dict, offer: dict, *, deal: bool) -> Non
     if listing.get("mode") == "commission":
         title = f"🛠️ New quote on {item}"
         desc = f"{who} quoted {_auec(offer['amount_auec'])}."
+        color = _EMBED_INFO
+    elif listing.get("mode") == "wtb":
+        title = f"📥 Offer on your buy order: {item}"
+        desc = f"{who} will sell for {_auec(offer['amount_auec'])}."
         color = _EMBED_INFO
     elif deal:
         title = f"🎉 {item} sold!"
@@ -6691,6 +6707,9 @@ async def _notify_market_accepted(listing: dict, offer: dict) -> None:
     if listing.get("mode") == "commission":
         title = "🛠️ You got the job"
         desc = f"{seller} accepted your quote on {item}{amount}. Get crafting."
+    elif listing.get("mode") == "wtb":
+        title = "🤝 Your sell offer was accepted"
+        desc = f"{seller} is buying {item} from you{amount}. Coordinate the handoff."
     else:
         title = "🤝 Your offer was accepted"
         desc = f"{seller} accepted your offer on {item}{amount}. Coordinate the handoff."
@@ -6735,6 +6754,49 @@ async def _notify_market_completed(listing: dict) -> None:
                      f"{seller} ↔ {buyer}{amount}. Nice doing business.",
                      color=_EMBED_GOOD, url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions, dedup_key=f"market-complete:{listing['id']}")
+
+
+async def _notify_commission_directed(listing: dict) -> None:
+    """A craft request sent to ONE crafter (via their storefront) — tell them
+    directly; nobody else can quote it."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(listing["directed_to"])
+    if not mentions:
+        return
+    who = _resolve_member_name(listing["seller_id"], None)
+    item = listing.get("item_name") or "a craft"
+    budget = (f" Budget {_auec(listing['price_auec'])}."
+              if listing.get("price_auec") is not None else "")
+    await notify.send(
+        "marketplace", ping.strip(),
+        embed=_embed(f"🛠️ Craft request for you: {item}",
+                     f"{who} sent this to your storefront — only you can quote it."
+                     f"{budget}",
+                     color=_EMBED_INFO, url=_app_url(f"#/market/{listing['id']}")),
+        mentions=mentions, dedup_key=f"commission-directed:{listing['id']}")
+
+
+async def _notify_wtb_match(listing: dict, holder_ids: list[str]) -> None:
+    """A buy order just went up for an item these members hold in their Resource
+    Manager stashes — the match only an org-internal market can make. Directed
+    ping so the stock actually finds the buyer."""
+    if not notify.is_configured("marketplace"):
+        return
+    mentions, ping = _mentions(*holder_ids)
+    if not mentions:
+        return
+    who = _resolve_member_name(listing["seller_id"], None)
+    item = listing.get("item_name") or "an item"
+    price = (f" — paying {_auec(listing['price_auec'])}"
+             if listing.get("price_auec") is not None else "")
+    await notify.send(
+        "marketplace", ping.strip(),
+        embed=_embed(f"📥 Buy order matches your stock: {item}",
+                     f"{who} wants {item}{price}, and your holdings carry some. "
+                     f"Offer to sell straight from your stash.",
+                     color=_EMBED_GOOD, url=_app_url(f"#/market/{listing['id']}")),
+        mentions=mentions, dedup_key=f"wtb-match:{listing['id']}")
 
 
 async def _notify_auction_settled(listing: dict, offer: dict | None) -> None:
@@ -8053,7 +8115,7 @@ async def withdraw_contribution(goal_id: int, alloc_id: int,
 # in-game on trust. aUEC ONLY, never real money (fan project under CIG's IP).
 
 
-_LISTING_MODES = ("sale", "auction", "barter", "commission")
+_LISTING_MODES = ("sale", "auction", "barter", "commission", "wtb")
 
 # Who sources a commission's input materials — changes the price of the job more
 # than anything else, so it's first-class (column + board chip), not note text.
@@ -8094,6 +8156,7 @@ class ListingIn(BaseModel):
     materials: str | None = Field(default=None, max_length=16)  # commission: requester|crafter|split
     availability: str | None = Field(default=None, max_length=16)  # instock|pickup|ondemand|scheduled
     pickup_poi: str | None = Field(default=None, max_length=120)   # where the handoff happens
+    directed_to: str | None = Field(default=None, max_length=24)   # commission → this crafter only
     announce: bool = False                                      # opt-in Discord shout (any mode)
 
 
@@ -8125,7 +8188,7 @@ _LISTING_PUBLIC = ("id", "seller_id", "seller_handle", "item_id", "item_name", "
                    "qty", "mode", "price_auec", "start_price", "buyout_auec", "ends_at",
                    "want", "status", "note", "buyer_id", "seller_confirmed",
                    "buyer_confirmed", "attributes", "blueprint_key", "materials",
-                   "availability", "pickup_poi",
+                   "availability", "pickup_poi", "directed_to",
                    "created_at", "updated_at", "completed_at")
 
 # The columns a board card needs — a subset of _LISTING_PUBLIC, served without the
@@ -8135,7 +8198,7 @@ _LISTING_CARD = ("id", "seller_id", "seller_handle", "item_id", "item_name", "un
                  "qty", "mode", "price_auec", "start_price", "ends_at", "want",
                  "status", "sort_price", "offer_count", "attributes",
                  "blueprint_key", "materials", "availability", "pickup_poi",
-                 "created_at", "updated_at",
+                 "directed_to", "created_at", "updated_at",
                  "buyer_id", "seller_confirmed", "buyer_confirmed")
 
 
@@ -8230,6 +8293,13 @@ def _validate_listing(body: ListingIn) -> dict:
             fields["ends_at"] = ends_at
         spec = _clean_crafted(body.crafted)
         fields["attributes"] = {"spec": spec} if spec else None
+        # Directed commission (storefronts): sent to ONE crafter, who alone may
+        # quote it. Board-visible but badged; withdraw/expiry semantics unchanged.
+        if body.directed_to:
+            target = body.directed_to.strip()
+            if not target.isdigit():
+                raise HTTPException(status_code=400, detail="invalid crafter id")
+            fields["directed_to"] = target
     elif body.mode == "auction":
         if body.start_price is None:
             raise HTTPException(status_code=400, detail="an auction needs a start price")
@@ -8245,6 +8315,16 @@ def _validate_listing(body: ListingIn) -> dict:
                 raise HTTPException(status_code=400,
                                     detail="buyout must be at or above the start price")
             fields["buyout_auec"] = float(body.buyout_auec)
+    elif body.mode == "wtb":
+        # A buy order (WTB): "I want X, paying up to Y" — the poster is the
+        # BUYING side (seller_id = poster, mirroring commission's requester);
+        # the member who fills it becomes buyer_id at accept. price_auec is the
+        # posted paying price for the whole lot; never an instant deal — stock
+        # can't be verified, so the poster picks a responder.
+        if body.price_auec is None:
+            raise HTTPException(status_code=400,
+                                detail="a buy order needs the price you're paying")
+        fields["price_auec"] = float(body.price_auec)
     else:   # barter
         want = (body.want or "").strip()
         if not want:
@@ -8349,9 +8429,19 @@ def _listing_view(listing: dict, user: dict, detail: bool = False) -> dict:
     view["handle_verified"] = handles.owns_handle(
         listing["seller_id"], listing.get("seller_handle"))
     view["seller_deals"] = db.completed_deals_count(listing["seller_id"])
+    # "Usually on: …" — handoffs need co-presence; the poster's declared window
+    # answers the "when are you around?" DM before it's sent.
+    view["seller_availability"] = (members_dir.get(listing["seller_id"]) or {}
+                                   ).get("availability_note") or None
     view["is_seller"] = listing["seller_id"] == user["id"]
     view["can_edit"] = view["is_seller"] or bool(user.get("is_admin"))
+    # View counter is the seller's own reprice signal — not a public popularity
+    # score (in a 180-member org "3 views" is nearly identifiable people).
+    view["views"] = int(listing.get("views") or 0) if view["is_seller"] else None
     view["auction"] = state if listing["mode"] == "auction" else None
+    if listing.get("directed_to"):
+        view["directed_to_name"] = _resolve_member_name(listing["directed_to"], None)
+        view["is_directed_to_me"] = str(listing["directed_to"]) == str(user["id"])
     if listing["mode"] == "commission":
         comm = nav_core.commission_board_state(listing, offers)
         key = listing.get("blueprint_key")
@@ -8588,6 +8678,17 @@ async def create_listing(body: ListingIn, user: dict = Depends(require_session))
                      and _listing_announce_ok(user["id"], fields["mode"]))
     if announced:
         _notify_bg(_notify_listing_posted(db.get_listing(lid)))
+    # A buy order automatically pings members whose RM holdings carry the item
+    # (the match only WE can make — public marketplaces have no org inventory).
+    # Directed + dedup'd + opt-out-honoring; independent of the announce opt-in.
+    if fields["mode"] == "wtb":
+        holders = db.item_holders(fields["item_id"], exclude=user["id"])
+        if holders:
+            _notify_bg(_notify_wtb_match(db.get_listing(lid), holders))
+    # A directed commission pings its target crafter — that's the whole point
+    # of directing it, so it doesn't ride the announce opt-in either.
+    if fields.get("directed_to"):
+        _notify_bg(_notify_commission_directed(db.get_listing(lid)))
     view = _listing_view(db.get_listing(lid), user, detail=True)
     if body.announce:
         view["announced"] = announced
@@ -8635,6 +8736,61 @@ async def market_stats(range: str = "all", user: dict = Depends(require_session)
     return {"range": range, **stats, "activity": activity}
 
 
+@app.get("/api/market/crafters")
+async def market_crafters(user: dict = Depends(require_session)):
+    """The crafter storefront directory (competitor idea #2): members who set a
+    storefront blurb, with their library size + completed-deal count — the
+    "who do I send this job to?" answer. Registered before /{listing_id}."""
+    fronts = db.list_crafter_storefronts()
+    deals = db.completed_deals_counts([f["discord_id"] for f in fronts])
+    return {"crafters": [
+        {"discord_id": f["discord_id"],
+         "name": _resolve_member_name(f["discord_id"], None),
+         "note": f["crafter_note"], "bp_count": f["bp_count"],
+         "deals": deals.get(str(f["discord_id"]), 0),
+         "availability": (members_dir.get(f["discord_id"]) or {}
+                          ).get("availability_note") or None,
+         "is_me": str(f["discord_id"]) == str(user["id"])}
+        for f in fronts]}
+
+
+@app.get("/api/market/trends")
+async def market_trends(user: dict = Depends(require_session)):
+    """The org-economy pulse for the board's trends panel (competitor idea #4):
+    what's hot (most settled deals, 30d, with per-unit medians), what's
+    saturated (most open sell-side listings), and what people WANT (open buy
+    orders). All derived from the org's own listings — no external feed."""
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    raw = db.market_trend_rows(since)
+    # Hot items: settled deals in the window, per-unit median + count.
+    by_item: dict[str, dict] = {}
+    for d in raw["deals"]:
+        rec = by_item.setdefault(d["item_id"], {"name": d["item_name"], "units": []})
+        rec["units"].append(float(d["final_auec"]) / max(float(d.get("qty") or 1), 1))
+    hot = []
+    for iid, rec in by_item.items():
+        u = sorted(rec["units"])
+        n = len(u)
+        hot.append({"item_id": iid, "name": rec["name"], "deals": n,
+                    "median": round(u[n // 2] if n % 2 else (u[n // 2 - 1] + u[n // 2]) / 2)})
+    hot.sort(key=lambda r: -r["deals"])
+    # Most-listed: open sell-side supply (wtb is demand — separate list).
+    listed: dict[str, dict] = {}
+    for r in raw["open"]:
+        if r["mode"] == "wtb":
+            continue
+        rec = listed.setdefault(r["item_id"], {"name": r["item_name"], "count": 0})
+        rec["count"] += int(r["n"])
+    most_listed = sorted(({"item_id": k, **v} for k, v in listed.items()),
+                         key=lambda r: -r["count"])
+    # Open buy orders, freshest first — the "someone will pay for this" board.
+    wtb_rows, _ = db.list_listings(mode="wtb", open_only=True, limit=8)
+    buy_orders = [{"id": r["id"], "name": r["item_name"], "qty": r["qty"],
+                   "paying": r["price_auec"]} for r in wtb_rows]
+    return {"window_days": 30, "hot": hot[:8], "most_listed": most_listed[:8],
+            "buy_orders": buy_orders}
+
+
 @app.get("/api/market/item_history")
 async def market_item_history(item: str, user: dict = Depends(require_session)):
     """Org settled-price memory for one catalog item — the create form's "last
@@ -8645,10 +8801,14 @@ async def market_item_history(item: str, user: dict = Depends(require_session)):
 
 @app.get("/api/market/{listing_id}")
 async def get_market_listing(listing_id: int, user: dict = Depends(require_session)):
-    """One listing with its offer/bid list + derived auction state."""
+    """One listing with its offer/bid list + derived auction state. A non-seller
+    view bumps the anonymous view counter (the seller's reprice signal)."""
     listing = db.get_listing(listing_id)
     if listing is None:
         raise HTTPException(status_code=404, detail="unknown listing")
+    if listing["seller_id"] != user["id"]:
+        db.bump_listing_views(listing_id)
+        listing = db.get_listing(listing_id)
     return _listing_view(listing, user, detail=True)
 
 
@@ -8695,7 +8855,7 @@ async def edit_listing(listing_id: int, body: ListingPatchIn,
             fields["attributes"] = {"spec": spec} if spec else None
         else:
             fields["attributes"] = spec
-    if listing["mode"] == "sale" and body.price_auec is not None:
+    if listing["mode"] in ("sale", "wtb") and body.price_auec is not None:
         fields["price_auec"] = float(body.price_auec)
     if listing["mode"] == "commission":
         if body.price_auec is not None:
@@ -8812,9 +8972,22 @@ async def place_offer(listing_id: int, body: OfferIn,
     elif mode == "commission":
         # A crafter's quote: their price (may differ from the posted budget) +
         # a note (ETA, proposed quality, material notes). Never an instant deal
-        # — the requester picks a quote manually.
+        # — the requester picks a quote manually. A directed commission takes
+        # quotes from its target crafter only.
+        if (listing.get("directed_to")
+                and str(listing["directed_to"]) != str(user["id"])):
+            raise HTTPException(status_code=403,
+                                detail="this request is directed to a specific crafter")
         if body.amount_auec is None:
             raise HTTPException(status_code=400, detail="a quote needs an aUEC amount")
+        oid = db.add_offer(listing_id, user["id"], float(body.amount_auec), None, None,
+                           (body.offer_note or "").strip() or None, ts)
+    elif mode == "wtb":
+        # A seller answering a buy order: their asking price (often at or under
+        # the posted paying price) + a note (stock on hand, where). Never an
+        # instant deal — the buyer picks a responder (stock is unverifiable).
+        if body.amount_auec is None:
+            raise HTTPException(status_code=400, detail="an offer needs an aUEC amount")
         oid = db.add_offer(listing_id, user["id"], float(body.amount_auec), None, None,
                            (body.offer_note or "").strip() or None, ts)
     elif mode == "sale":
@@ -10442,6 +10615,8 @@ async def api_me(user: dict = Depends(require_session)):
             "ships": db.list_user_ships(user["id"]),
             "playstyle_tags": member_playstyles(members_dir.get(user["id"])),
             "notify_opt_out": bool((members_dir.get(user["id"]) or {}).get("notify_opt_out")),
+            "availability_note": (members_dir.get(user["id"]) or {}).get("availability_note") or "",
+            "crafter_note": (members_dir.get(user["id"]) or {}).get("crafter_note") or "",
             "active_survey_zone": members_dir.active_survey_zone(user["id"]),
             "pinned_ids": sorted(hub.get(user).pinned_ids),
             **_member_identity(user["id"])}
@@ -10454,6 +10629,12 @@ class ProfileIn(BaseModel):
     playstyle_tags: list[str] | None = Field(default=None, max_length=_PROFILE_MAX_TAGS)
     # Never @-ping me on Discord (2026-08 review). None = untouched.
     notify_opt_out: bool | None = None
+    # "Usually on: weekday evenings CET" — the light availability answer.
+    # "" clears; None = untouched.
+    availability_note: str | None = Field(default=None, max_length=120)
+    # Crafter storefront blurb ("Taking weapon component orders, ~2d lead").
+    # Non-empty = storefront on (listed under the board's Crafters panel).
+    crafter_note: str | None = Field(default=None, max_length=200)
 
 
 class ShipPrefIn(BaseModel):
@@ -10478,6 +10659,12 @@ async def update_me(body: ProfileIn, user: dict = Depends(require_session)):
         members_dir.set_playstyles(uid, tags)
     if body.notify_opt_out is not None:
         members_dir.set_notify_opt_out(uid, body.notify_opt_out)
+    if body.availability_note is not None:
+        members_dir.set_member_note(uid, "availability_note",
+                                    body.availability_note.strip() or None)
+    if body.crafter_note is not None:
+        members_dir.set_member_note(uid, "crafter_note",
+                                    body.crafter_note.strip() or None)
     async with hub.lock:
         sess = hub.get(user)
         if body.share_presence is not None:

@@ -118,11 +118,29 @@ right model) · Discord bot/threads (webhook-only is a project decision) ·
 cross-org public market · image hosting · rent mode · star-ratings (org-internal
 social cost; light trade-stats instead) · full reviews system.
 
-## Competitor ideas parked for later
+## Competitor ideas — ALL BUILT 2026-08-05 (927 tests)
 
-WTB/buy-order mode (M) · crafter storefronts / directed commissions (M-L) ·
-availability weekly grid (M) · org trends panel (M) · WTB-matches-your-inventory
-alert (M) · view counters (S).
+- [x] **WTB / buy-order mode** — 5th listing mode ("I want X, paying Y"); sellers
+      respond with offers, the buyer picks one (never automatic — stock is
+      unverifiable). Board BUYING tab; full accept→dual-confirm lifecycle; settled
+      WTB deals feed the org price memory.
+- [x] **WTB-matches-your-inventory alert** — posting a buy order pings members
+      whose Resource Manager holdings carry the item (biggest stash first, cap 15,
+      opt-out honored). The match only an org-internal market can make.
+- [x] **View counters** — anonymous per-listing view count, shown to the seller
+      only (their reprice signal, not a public popularity score).
+- [x] **Org market trends** — board disclosure: hot items (30d settled deals w/
+      per-unit medians), most-listed, open buy orders. `GET /api/market/trends`.
+- [x] **Availability notes** (the light weekly-grid) — free-text "usually on: …"
+      on profiles; shown on listing details + crafter storefronts.
+- [x] **Crafter storefronts + directed commissions** — a profile blurb opens a
+      storefront (listed on the Requests tab w/ library size, deals, availability);
+      "Request a craft" sends a commission to that ONE crafter — only they can
+      quote it, they get a dedicated ping, and the announce never mass-pings
+      other crafters on a directed job.
+
+Not built (still deliberately rejected): star ratings/reviews, escrow, bots,
+real money, cross-org, images, rent mode.
 
 ## Source review details
 
