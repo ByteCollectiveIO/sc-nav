@@ -65,17 +65,29 @@ these events is how the org's own map actually gets better.
 
 ### Sign up
 
-1. Open an event card from the board (`#/events`) or the calendar.
+1. Open an event card from the board (`#/events`) or the calendar. Use the
+   `Upcoming | Past` tabs, the category chips, or the **My events** toggle to
+   narrow the board; cards you've joined carry a `✓ going` badge (or
+   `? maybe` / `⏳ waitlisted`).
 2. Under **Sign up**, pick the role(s) you'll fill (a multi-select over the
    same grouped role list) and a status — `Going` or `Maybe` — then click
    `Join event`.
-3. Your name appears under each role you picked in the roster, grouped by
+3. **If the event is full**, joining as Going puts you on a first-come
+   **waitlist** instead (the button says so up front). The waitlist shows in
+   join order on the event page, and the moment a spot opens — someone
+   withdraws or the organizer drops a no-show — the first member in line is
+   promoted automatically and pinged on Discord: *"🎟️ You're in."* `Maybe`
+   never waitlists.
+4. Your name appears under each role you picked in the roster, grouped by
    role with a fill bar per role. If you change your mind, reopen the event
    and click `Update signup` to change roles/status, or `Withdraw` to drop
-   out entirely.
-4. The headline count (`3/5 players`) always reflects distinct people, even
+   out entirely (which promotes the first waitlisted member, if any).
+5. The headline count (`3/5 players`) always reflects distinct people, even
    if someone double-covers two roles — the per-role bars reflect coverage,
    the headline reflects headcount, and neither over- nor under-counts you.
+6. If the organizer moves the event — new time or place — every active
+   signup gets a Discord ping with the change, and the "starting soon"
+   reminder re-arms for the new time automatically.
 
 ### Build the Fleet roster
 
@@ -103,24 +115,46 @@ roster**:
    `Templates` again and apply a saved one to stamp the same units onto the
    new plan.
 6. When the roster's set, click `Manifest` to render the whole plan as
-   Discord-flavored markdown — units, seats, and names, ready to read at a
-   glance. Copy it manually, or, if your org has the Discord `events` webhook
-   configured, click `Post to Discord` to push it straight to your event
-   channel.
+   Discord-flavored markdown — the start time (as a per-viewer local
+   timestamp), units, seats, and names, ready to read at a glance. Copy it
+   manually, or, if your org has the Discord `events` webhook configured,
+   click `Post to Discord` — big fleets post as several ordered messages
+   split on unit boundaries, so nothing truncates.
+
+### Day-of and after
+
+<div align="center">
+  <img src="../../images/readme_images/event_detail_waitlist_screenshot.png" alt="A full event's detail page: per-role roster bars all green, a '+1 waitlisted' chip in the header, the waitlist section showing '#1' in line, and the organizer's Manage attendees panel with Seat now and Drop buttons per member" width="820">
+</div>
+
+- **Manage attendees** (organizer/admin, on the event detail): seat a
+  walk-up or firm up a `maybe` with `Seat now`, or `Drop` a no-show — even
+  after signups have locked. Dropping someone auto-promotes the first
+  waitlisted member.
+- **Clone** any event to create the next run — the create form arrives
+  pre-filled, with a past start date rolled forward to the next same-weekday
+  slot. Weekly ops become one click plus a sanity check.
+- **Mark completed** when the op wraps — the event moves to the board's
+  **Past** tab as attendance history instead of lingering by the clock.
+  Cancelled events stay visible on the board with a `Cancelled` badge (and
+  their roster intact) rather than silently vanishing.
 
 ## Features
 
 | Area | What you get |
 |---|---|
 | Taxonomy | Three independent axes — multi-select **Type**, multi-select **Category**, and grouped **Roles** — so combinations like a PvP+PvE mixed raid stay expressible without forcing a single label. |
-| Board | Month **calendar** with dots on event days, above a scrollable, filterable list of event cards (fill bars + type/category chips). |
+| Board | Month **calendar** with dots on event days, `Upcoming | Past` tabs, category filter chips, a **My events** toggle, and `✓ going` badges on cards you've joined. |
+| Capacity & waitlist | `max_players` is enforced: a full event waitlists new joiners first-come, auto-promotes when a spot opens, and pings the promoted member on Discord. |
+| Notifications | Color-coded Discord embed cards for created / cancelled / **rescheduled** (pings signups, re-arms the reminder) / waitlist promotion, plus the scheduled "starting soon" reminder that pings the whole roster — chunked past Discord's 50-mention cap, so a 100-signup fleet op reaches everyone. |
 | Fill math | A pure, unit-tested `derive_event_fill`: headline count = distinct going signups; per-role bars count every role a signup lists — a dual-role signup fills both bars without inflating the headcount. |
 | Roster grouping | The event detail roster is grouped **by target role**, each with its own fill bar and member list, rather than one flat name list. |
 | Fleet roster | Organizer-owned squads/squadrons/crews/sections/wings, nested seat assignment, per-unit capacity tracking against the target roster, and a live "your assignment" callout for every member. |
 | Ship-aware seats | Picking a known ship on a unit auto-fills its crew size and offers that hull's real seat layout (Pilot, Co-Pilot, specialist, Turret N) when assigning members. |
 | Saved templates | Snapshot a unit structure (names/kinds/ships/capacities, no members) into an org-shared template and stamp it onto a future event in one click. |
-| Manifest export | One-click Discord-flavored markdown export of the full plan, copyable or pushed straight to your configured Discord channel. |
-| Ownership | Any signed-in member can create an event and sign up; only the organizer or an org admin can edit, cancel, or manage the Fleet roster/manifest for that event. |
+| Manifest export | One-click Discord-flavored markdown export of the full plan — start time included — copyable or pushed straight to your configured Discord channel (long manifests split cleanly across messages). |
+| Day-of tools | Organizer attendee management (seat walk-ups, drop no-shows, promote from the waitlist) that works even after signups lock; **Clone** for recurring ops; **Mark completed** for attendance history on the Past tab. |
+| Ownership | Any signed-in member can create an event and sign up; only the organizer or an org admin can edit, cancel, complete, or manage attendees / the Fleet roster / the manifest for that event. |
 | Survey/Exploration roles | `Surveyor`, `Naturalist`, `Cartographer`, and `Pathfinder / Scout` map 1:1 onto the navigator's own capture domains — running one of these events is how the org grows its shared map. |
 
 ## Works with the rest of the suite
@@ -143,9 +177,17 @@ webhook for the `events` category.
   both role bars.
 - `needed` on the target roster is a soft target. A fully "surplus" role
   still shows green/complete — nobody gets turned away for over-signing up.
+  `max_players`, by contrast, is a hard cap: past it, joiners waitlist.
+- Joining a full event as `Going` is worth it — the waitlist is first-come,
+  promotion is automatic, and you're pinged the moment you're in. Don't
+  downgrade yourself to `Maybe` just because it's full.
+- Running the same op weekly? **Clone** last week's event instead of
+  retyping it — the date rolls forward to the next same-weekday slot, and
+  the roles/roster template comes with it.
 - Cancelling an event keeps its record and roster (recoverable) instead of
   deleting it, so an accidental cancel or a "wait, it's back on" doesn't lose
-  the signup list.
+  the signup list — and the cancelled event stays visible on the board so
+  nobody shows up to a ghost op.
 - Save a **template** the first time you build a squadron structure you like
   (e.g. a standard 3-squad raid layout) — every future event of that shape is
   then one `Apply` click instead of rebuilding units from scratch.

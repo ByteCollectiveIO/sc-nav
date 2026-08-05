@@ -67,7 +67,7 @@ share one component language, one auth gate, and one live WebSocket.
 
 | App | Route | What it does |
 |---|---|---|
-| [**Event Planner**](docs/apps/event-planner.md) | `#/events` | Post events (multi-type, roles/targets), signups, fill tracking; fleet rosters with ship seat templates; manifest → Discord |
+| [**Event Planner**](docs/apps/event-planner.md) | `#/events` | Post events (multi-type, roles/targets), signups with capacity + first-come **waitlist** (auto-promote + ping), fill tracking, reschedule notifications; clone for weekly ops, day-of attendee management, past-events history; fleet rosters with ship seat templates; manifest → Discord |
 | [**Group Finder**](docs/apps/group-finder.md) | `#/lfg` | LFG board (looking-for-members / looking-to-join), playstyle tags, suggested matches, promote-to-event, Discord announce |
 | [**Danger Board**](docs/apps/danger-board.md) | `#/pirates` | Community pirate warnings (point/lane, PvP/PvE, severity, still-active confirms, age-off); feeds hazard volumes into both planners' detour routing; "organize hunt" → event |
 
@@ -76,7 +76,7 @@ share one component language, one auth gate, and one live WebSocket.
 | App | Route | What it does |
 |---|---|---|
 | [**Resource Manager**](docs/apps/resource-manager.md) | `#/goals` · `#/inventory` · `#/blueprints` | Shared item catalog; procurement goals with allocations drawn from real holdings; per-member holdings ledger; personal craftable-blueprint library |
-| [**Marketplace**](docs/apps/marketplace.md) | `#/market` | aUEC-only sale / auction / barter / **commission** board with dual-confirm handshake, search & filter, crafted-quality annotations, market-value hints, and a blueprint spec builder for craft requests |
+| [**Marketplace**](docs/apps/marketplace.md) | `#/market` | aUEC-only sale / auction / barter / **commission** / **buy-order (WTB)** board with dual-confirm handshake; **crafter storefronts** with directed requests, org settled-price memory, market trends, availability + pickup locations, my-activity tracking, and a blueprint spec builder for craft requests |
 | [**Org Intel**](docs/apps/org-intel.md) | `#/intel` | Guild analytics: mapping, hauling, trading & **surveying** stats, leaderboards, member directory |
 
 Plus a live **Who's Online** roster (`#/online`), Settings (identity, playstyle
@@ -89,9 +89,13 @@ and legal pages.
   (`server/static/index.html`) served as-is — no bundler, no npm.
 - **Live everything.** A single WebSocket fans out nav state, teammate presence
   (surface- and shard-aware), the online roster, LFG, and danger warnings.
-- **Discord-native.** OAuth sign-in gated to one guild; opt-in webhook
-  notifications per category (events, marketplace, goals, records, LFG,
-  pirates). No bot required.
+- **Discord-native.** OAuth sign-in gated to one guild; webhook notifications
+  per category (events, marketplace, goals, records, LFG, pirates, survey) as
+  color-coded embed cards with deep links — auction outcomes, outbid alerts,
+  event reminders and reschedules, waitlist promotions, and more. Delivery
+  health surfaces in org settings, sends are paced under Discord's rate
+  limit, mention paging reaches rosters past 50 people, and every member has
+  a personal "don't @-ping me" opt-out. No bot required.
 - **Pure, tested nav core.** All coordinate math and route/trade solvers live in
   `server/nav_core.py` with their own unit-test suite — straight-line quantum
   legs over a QT-marker graph, a 3-system gate chain (Stanton—Pyro—Nyx), and
