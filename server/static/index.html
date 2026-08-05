@@ -777,6 +777,16 @@
   .motd-dismiss { flex: none; background: none; border: none; color: var(--dim);
     font-size: 15px; cursor: pointer; padding: 0 2px; line-height: 1.2; }
   .motd-dismiss:hover { color: var(--text); }
+  /* "a newer release is out" notice in ORG ADMIN → SERVER VERSION. Same wash as
+     the MOTD banner; [hidden] must beat the flex or it shows on every load. */
+  .upd-banner { display: flex; align-items: flex-start; gap: 10px; margin: 8px 0 4px;
+    padding: 10px 12px; background: var(--accent-wash); border: 1px solid var(--accent);
+    border-radius: 8px; }
+  .upd-banner[hidden] { display: none; }
+  .upd-banner .upd-icon { font-size: 16px; line-height: 1.4; flex: none; }
+  .upd-ver { font-family: var(--mono, monospace); color: var(--text); }
+  /* DESIGN.md §2: links speak in the accent, not the UA's blue/purple. */
+  .upd-banner a { color: var(--accent); }
   /* each themed group is its own labeled section + 3-across grid */
   .app-group { margin-top: 26px; }
   .app-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px;
@@ -2730,6 +2740,30 @@
 
   <div id="admin-section" hidden>
   <div class="settings-grp-h">Org administration <span class="muted">— these settings affect everyone in your org</span></div>
+
+  <div class="panel admin-grp" id="version-panel">
+    <h2>SERVER VERSION</h2>
+    <div class="upd-banner" id="upd-banner" hidden role="status">
+      <span class="upd-icon" aria-hidden="true">⬆</span>
+      <div>
+        <div id="upd-headline"></div>
+        <div class="muted" style="font-size:12px; margin-top:2px;">
+          Pull the latest code and redeploy your stack to update.
+          <a id="upd-link" href="#" target="_blank" rel="noopener noreferrer">Release notes</a>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Running <span class="upd-ver" id="upd-current">—</span>
+      <button id="upd-check">Check for updates</button>
+      <span class="muted" id="upd-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Compares this server against the newest release published on the project's
+      GitHub repo. Checked at most once every 6&nbsp;hours; nothing is sent about your
+      org, and updating is always your call.
+    </div>
+  </div>
 
   <div class="panel admin-grp" id="access-panel">
     <h2>ACCESS</h2>
@@ -16907,6 +16941,7 @@ async function loadSettings() {
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
     loadPoiOverrides();
+    loadUpdateCheck();   // cached server-side; a page load never re-polls GitHub
     applyOrgLogoAdmin(!!s.org_logo);
     if (document.activeElement !== $("org-name-input"))
       $("org-name-input").value = s.org_name || "";
@@ -17516,6 +17551,40 @@ $("feed-refresh-now").onclick = async () => {
   }
   b.disabled = false;
 };
+
+// ---------- update check (admin) ----------
+// Self-hosting orgs don't watch the repo, so the server tells them when a newer
+// release exists. Read-only: we never update anything, we point at the notes.
+async function loadUpdateCheck(force) {
+  const st = $("upd-status"), banner = $("upd-banner"), btn = $("upd-check");
+  btn.disabled = true;
+  if (force) st.textContent = "checking…";
+  try {
+    const d = await fetch(`/api/updates${force ? "?force=1" : ""}`).then(r => {
+      if (!r.ok) throw new Error(); return r.json();
+    });
+    $("upd-current").textContent = "v" + d.current;
+    if (d.update_available) {
+      $("upd-headline").textContent = `Version ${d.latest} is available (you're on ${d.current}).`;
+      $("upd-link").href = d.release_url || "#";
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+    if (!d.enabled) st.textContent = d.disabled_reason || "update checks are off";
+    else if (d.error) st.textContent = "couldn't reach GitHub — try again later";
+    else if (d.update_available) st.textContent = "";
+    else if (d.latest) st.textContent = `up to date${d.checked_at
+      ? ` (checked ${new Date(d.checked_at * 1000).toLocaleString()})` : ""}`;
+    else st.textContent = "no release information";
+  } catch {
+    banner.hidden = true;
+    st.textContent = "update check failed";
+  }
+  btn.disabled = false;
+}
+
+$("upd-check").onclick = () => loadUpdateCheck(true);
 
 $("member-role-save").onclick = async () => {
   const id = $("member-role").value.trim();

@@ -6182,5 +6182,106 @@ class OrgPriceOverlayTests(unittest.TestCase):
         self.assertEqual(rows[0]["id_commodity"], 5)
 
 
+class UpdateCheckTests(unittest.TestCase):
+    """`GET /api/updates` tells a self-hosting admin their copy is behind. The
+    parts worth pinning: the SemVer comparison (a string compare would call
+    0.9.0 newer than 0.10.0), the cache (the anonymous GitHub API allows 60
+    requests an hour per IP — every settings-page load must not spend one), and
+    the promise that a GitHub outage degrades to a message, never a 500."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._admin = {"id": "1", "display_name": "Admin", "is_admin": True}
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._admin
+        # The auth gate is HTTP middleware, ahead of the route — overriding the
+        # dependency alone still 401s.
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._admin
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+
+    def setUp(self):
+        self._offline, self._repo = app.OFFLINE, app.UPDATE_REPO
+        self._cache = dict(app._update_cache)
+        self._fetch = app._fetch_json
+        app.OFFLINE, app.UPDATE_REPO = False, "Org/repo"
+        self.calls = []
+
+    def tearDown(self):
+        app.OFFLINE, app.UPDATE_REPO = self._offline, self._repo
+        app._update_cache.update(self._cache)
+        app._fetch_json = self._fetch
+
+    def _serve(self, tag, url="https://example.invalid/rel"):
+        def fake(u, timeout=30):
+            self.calls.append(u)
+            return {"tag_name": tag, "html_url": url,
+                    "published_at": "2026-08-05T00:59:44Z"}
+        app._fetch_json = fake
+        app._update_cache["checked_at"] = 0.0    # force a live look
+
+    def test_semver_compare_is_numeric_not_lexical(self):
+        self.assertTrue(app.update_available("0.10.0", "0.9.0"))
+        self.assertFalse(app.update_available("0.9.0", "0.10.0"))
+        self.assertFalse(app.update_available("0.94.1", "0.94.1"))
+        self.assertTrue(app.update_available("v1.0.0", "0.94.1"))   # tolerates the v prefix
+
+    def test_unparseable_versions_never_nag(self):
+        for latest in (None, "", "latest", "nightly-2026-08-05"):
+            self.assertFalse(app.update_available(latest, "0.94.1"))
+
+    def test_newer_release_reports_available(self):
+        self._serve("v99.0.0")
+        d = self.client.get("/api/updates").json()
+        self.assertTrue(d["update_available"])
+        self.assertEqual((d["latest"], d["current"]), ("99.0.0", app.APP_VERSION))
+        self.assertEqual(d["release_url"], "https://example.invalid/rel")
+
+    def test_same_version_reports_no_update(self):
+        self._serve("v" + app.APP_VERSION)
+        d = self.client.get("/api/updates").json()
+        self.assertFalse(d["update_available"])
+        self.assertTrue(d["enabled"])
+        self.assertIsNone(d["error"])
+
+    def test_result_is_cached_across_requests(self):
+        self._serve("v99.0.0")
+        self.client.get("/api/updates")
+        self.client.get("/api/updates")
+        self.client.get("/api/updates", params={"force": 1})   # inside the 5-min floor
+        self.assertEqual(len(self.calls), 1)
+
+    def test_github_failure_degrades_to_a_message(self):
+        def boom(u, timeout=30):
+            raise OSError("no route to host")
+        app._fetch_json = boom
+        app._update_cache["checked_at"] = 0.0
+        r = self.client.get("/api/updates")
+        self.assertEqual(r.status_code, 200)
+        d = r.json()
+        self.assertFalse(d["update_available"])
+        self.assertIn("no route to host", d["error"])
+
+    def test_offline_and_unset_repo_skip_the_network(self):
+        self._serve("v99.0.0")
+        app.OFFLINE = True
+        d = self.client.get("/api/updates").json()
+        self.assertFalse(d["enabled"])
+        app.OFFLINE, app.UPDATE_REPO = False, ""
+        d = self.client.get("/api/updates").json()
+        self.assertFalse(d["enabled"])
+        self.assertFalse(d["update_available"])
+        self.assertEqual(self.calls, [])
+
+    def test_repo_env_must_look_like_owner_slash_name(self):
+        for bad in ("https://evil.invalid/x", "owner", "owner/name/extra", "own er/name"):
+            self.assertIsNone(app._UPDATE_REPO_RE.match(bad), bad)
+        self.assertIsNotNone(app._UPDATE_REPO_RE.match("ByteCollectiveIO/sc-nav"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
