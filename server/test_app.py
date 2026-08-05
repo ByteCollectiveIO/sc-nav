@@ -24,6 +24,20 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+def _msg_text(text, embed):
+    """The user-visible message, flattened: content + embed title/description/
+    fields. Since the 2026-08 embed conversion the body of an events/marketplace
+    notification lives in the embed; assertions target the whole rendered
+    message, not one half of it."""
+    if not embed:
+        return text
+    parts = [text or "", str(embed.get("title") or ""),
+             str(embed.get("description") or "")]
+    parts += [f"{f.get('name', '')} {f.get('value', '')}"
+              for f in embed.get("fields", [])]
+    return "\n".join(p for p in parts if p)
+
+
 import app
 import db
 import notify
@@ -342,7 +356,7 @@ class EventNotifyTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -404,7 +418,7 @@ class EventReminderTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -485,7 +499,7 @@ class MarketNotifyTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -587,7 +601,7 @@ class GoalRecordNotifyTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -1142,7 +1156,7 @@ class LFGAnnounceTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -1429,7 +1443,7 @@ class WarningAnnounceTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -2304,7 +2318,7 @@ class CommissionModeTests(unittest.TestCase):
         sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            sent.append({"category": category, "text": text})
+            sent.append({"category": category, "text": _msg_text(text, kw.get("embed"))})
             return True
         orig_send, orig_cfg = notify.send, notify.is_configured
         notify.send = _capture
@@ -2540,7 +2554,7 @@ class CommissionNotifyTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -2791,7 +2805,7 @@ class CraftGoalTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text})
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed"))})
             return True
         notify.send = _capture
 
@@ -5086,7 +5100,7 @@ class SurveyStatsAndMilestonesTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -6440,7 +6454,7 @@ class EventRescheduleNotifyTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture   # send_paged routes through the module-global send
@@ -6517,7 +6531,7 @@ class MarketLifecycleNotifyTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -6749,7 +6763,7 @@ class MarketLifecycleNotifyTests(unittest.TestCase):
         asyncio.run(app._notify_listing_ending_soon(
             db.get_listing(lid), datetime.now(timezone.utc)))
         msg = self.sent[0]
-        self.assertIn("needed-by", msg["text"])
+        self.assertIn("Needed by", msg["text"])
         self.assertIn("1 quote", msg["text"])
         self.assertEqual(msg["mentions"], ["111"])
 
@@ -6796,7 +6810,7 @@ class EventCapacityWaitlistTests(unittest.TestCase):
         self.sent = []
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
-            self.sent.append({"category": category, "text": text,
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
@@ -6910,6 +6924,90 @@ class EventCapacityWaitlistTests(unittest.TestCase):
         row = next((e for e in upcoming if e["id"] == eid), None)
         self.assertIsNotNone(row)                # visible, badged — not vanished
         self.assertEqual(row["phase"], "cancelled")
+
+
+class EmbedNotifyTests(unittest.TestCase):
+    """The 2026-08 embed conversion: events/marketplace notifications carry a
+    color-coded Discord embed; pings live in content (mentions inside embeds
+    never ping); the dispatcher accepts embed-only messages and caps sizes."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        db.set_setting(notify._webhook_key("marketplace"), _GOOD_WEBHOOK)
+        cls._orig_post = notify._post
+
+    @classmethod
+    def tearDownClass(cls):
+        notify._post = cls._orig_post
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.posted = []
+        notify._post = lambda url, payload: self.posted.append(payload)
+        notify._recent.clear()
+
+    def test_embed_only_message_is_valid_and_empty_is_dropped(self):
+        ok = asyncio.run(notify.send("events", "", embed={"title": "T"}))
+        self.assertTrue(ok)
+        self.assertNotIn("content", self.posted[0])   # no empty-string content
+        self.assertEqual(self.posted[0]["embeds"][0]["title"], "T")
+        self.assertFalse(asyncio.run(notify.send("events", "")))   # nothing to say
+        self.assertEqual(len(self.posted), 1)
+
+    def test_embed_sizes_are_capped(self):
+        asyncio.run(notify.send("events", "", embed={
+            "title": "T" * 999, "description": "D" * 9999,
+            "fields": [{"name": "N" * 999, "value": "V" * 9999}]}))
+        e = self.posted[0]["embeds"][0]
+        self.assertEqual(len(e["title"]), 256)
+        self.assertEqual(len(e["description"]), 4096)
+        self.assertEqual(len(e["fields"][0]["name"]), 256)
+        self.assertEqual(len(e["fields"][0]["value"]), 1024)
+
+    def test_event_created_is_an_embed_broadcast(self):
+        ev = {"id": 7, "title": "Xenothreat Push",
+              "start_at": "2026-09-01T18:00:00+00:00",
+              "event_location": "Pyro Gateway", "location": "Everus Harbor"}
+        asyncio.run(app._notify_event_created(ev))
+        p = self.posted[0]
+        self.assertNotIn("content", p)               # broadcast: embed only
+        e = p["embeds"][0]
+        self.assertIn("Xenothreat Push", e["title"])
+        self.assertIn("<t:", e["description"])       # timestamps render in body
+        self.assertNotIn("<t:", e["title"])          # never in the title
+        self.assertEqual(e["color"], app._EMBED_INFO)
+        self.assertEqual(p["allowed_mentions"]["users"], [])
+
+    def test_directed_ping_rides_content_not_embed(self):
+        listing = {"id": 5, "seller_id": "111", "buyer_id": "222",
+                   "item_name": "Quantanium", "final_auec": 250000}
+        asyncio.run(app._notify_market_completed(listing))
+        p = self.posted[0]
+        self.assertIn("<@111>", p["content"])        # pings must be in content
+        self.assertIn("<@222>", p["content"])
+        e = p["embeds"][0]
+        self.assertNotIn("<@", e.get("description", "") + e["title"])
+        self.assertEqual(e["color"], app._EMBED_GOOD)
+        self.assertEqual(p["allowed_mentions"]["users"], ["111", "222"])
+
+    def test_reminder_embed_rides_page_zero_only(self):
+        now = datetime.now(timezone.utc).isoformat()
+        eid = db.create_event({"organizer_id": "1", "title": "Big Op",
+                               "start_at": "2026-09-01T18:00:00+00:00",
+                               "status": "scheduled", "created_at": now,
+                               "updated_at": now})
+        for i in range(60):
+            db.upsert_signup(eid, str(1000 + i), [], "going", None, now)
+        asyncio.run(app._notify_event_reminder(db.get_event(eid)))
+        self.assertEqual(len(self.posted), 2)        # 60 pings → 2 pages
+        self.assertIn("embeds", self.posted[0])
+        self.assertNotIn("embeds", self.posted[1])   # continuation is pings only
+        self.assertEqual(len(self.posted[0]["allowed_mentions"]["users"]), 50)
+        self.assertEqual(len(self.posted[1]["allowed_mentions"]["users"]), 10)
 
 
 if __name__ == "__main__":

@@ -85,20 +85,26 @@ One true P0: the event detail roster never matches signups to target roles.
       ending-soon (1h), proactive settlement (supersedes lazy-only), commission
       needed-by approaching. (Stale-pending-deal nudge not included — the
       confirm-nudge ping already covers the common case.)
-- [ ] D2 **Discord embeds** for events + marketplace (webhook-native, no bot;
-      color-coded, deep-link as embed URL; `content` keeps the `<@id>` pings).
-      Also retires markdown-injection cosmetics from raw title interpolation.
+- [x] D2 **Discord embeds** for events + marketplace (18 builders; webhook-native,
+      no bot; app-palette colors — cyan facts / green wins / amber time-pressure /
+      red endings; deep-link as embed URL; `content` carries only the `<@id>`
+      pings, since mentions inside embeds never ping; user names live in embed
+      titles, which don't render markdown — retiring the `**`-injection
+      cosmetics; `<t:>` timestamps kept out of titles, where they don't render;
+      manifest post stays plain text on purpose — it's a chunked document).
+      Goals/records/LFG/pirates/survey builders stay plain for now — same
+      `_embed()` helper when wanted.
 - [ ] D3 **Send pacing**: per-category queue, min inter-send spacing, honor full
       `retry_after` (Discord 30 msg/min/webhook) — hangs health tracking (A8).
 - [x] D4 **Member opt-out**: `notify_opt_out` profile flag honored in
       `_mentions()` (name stays in text, ping dropped).
 
-## Shipped state (2026-08-04)
+## Shipped state
 
-Everything checked above landed in one pass: 908 tests green (63 new), JS
-parse clean. Open boxes (B7 settled-price/org price memory, B8 availability +
-pickup POI, D2 embeds, D3 send pacing) are the next-pass batch — none blocks
-the launch; `notify.send` already accepts `embed=` so D2 is builder work only.
+The A–D batch above shipped as **v0.96.0** (2026-08-05, confirmed live). D2
+embeds followed in the next pass (913 tests). Remaining open boxes (B7
+settled-price/org price memory, B8 availability + pickup POI, D3 send pacing)
+are queued — none blocks anything.
 
 ## Deliberately NOT doing (validated by competitor research)
 

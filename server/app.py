@@ -2863,15 +2863,19 @@ async def _notify_listing_ending_soon(listing: dict, now: datetime) -> None:
     if not notify.is_configured("marketplace"):
         return
     item = listing.get("item_name") or "a listing"
-    link = _deep_link(f"#/market/{listing['id']}")
+    url = _app_url(f"#/market/{listing['id']}")
     ends = _discord_ts(listing["ends_at"], "R")
     if listing["mode"] == "auction":
         state = nav_core.derive_auction_state(listing, db.list_offers(listing["id"]), now)
         bid = (f"High bid {_auec(state['high_bid'])}" if state["high_bid"] is not None
                else f"No bids yet — starts at {_auec(listing.get('start_price'))}")
+        # <t:> tags don't render in embed TITLES (only descriptions) — keep the
+        # countdown in the body.
         await notify.send(
-            "marketplace",
-            f"⏳ **Auction ending {ends}: {item}**\n{bid}.{link}",
+            "marketplace", "",
+            embed=_embed(f"⏳ Auction ending soon: {item}",
+                         f"Ends {ends}. {bid}.",
+                         color=_EMBED_WARN, url=url),
             dedup_key=f"market-ending:{listing['id']}")
     else:
         mentions, ping = _mentions(listing["seller_id"])
@@ -2881,8 +2885,10 @@ async def _notify_listing_ending_soon(listing: dict, now: datetime) -> None:
                 f"before it expires." if quotes
                 else "No quotes yet — consider extending the needed-by date.")
         await notify.send(
-            "marketplace",
-            f"⏳ **Craft request needed-by {ends}: {item}**\n{line}{link}{ping}",
+            "marketplace", ping.strip(),
+            embed=_embed(f"⏳ Craft request expiring soon: {item}",
+                         f"Needed by {ends}. {line}",
+                         color=_EMBED_WARN, url=url),
             mentions=mentions, dedup_key=f"market-ending:{listing['id']}")
 
 
@@ -6243,6 +6249,41 @@ def _deep_link(hash_path: str) -> str:
     return f"\n{PUBLIC_BASE_URL}/{hash_path}" if PUBLIC_BASE_URL else ""
 
 
+def _app_url(hash_path: str) -> str | None:
+    """Absolute URL into the SPA for an embed's clickable title, or None when
+    SC_NAV_PUBLIC_URL is unset (embeds simply lose the link, never break)."""
+    return f"{PUBLIC_BASE_URL}/{hash_path}" if PUBLIC_BASE_URL else None
+
+
+# Embed accent colors — the app's own palette (index.html tokens), so the
+# Discord cards read as the same product: cyan facts, green wins, amber
+# time-pressure, red endings.
+_EMBED_INFO = 0x4FC3F7   # --accent
+_EMBED_GOOD = 0x66BB6A   # --good
+_EMBED_WARN = 0xFFB74D   # --warn
+_EMBED_BAD = 0xEF5350    # --bad
+_EMBED_MUTE = 0x90A4AE   # neutral close-outs
+
+
+def _embed(title: str, description: str = "", *, url: str | None = None,
+           color: int = _EMBED_INFO, fields: list[dict] | None = None) -> dict:
+    """A Discord embed object (webhook-native — no bot needed). Discord does
+    NOT render markdown in embed titles, so user-supplied names are safe there
+    from `**`/backtick garbling; descriptions and field values do render
+    markdown (timestamps, bold) — keep user text out of markdown wrappers.
+    Mentions inside embeds never ping: `<@id>` lines stay in the message
+    content. notify.send caps the sizes defensively."""
+    e: dict = {"title": title, "color": color}
+    if description:
+        e["description"] = description
+    if url:
+        e["url"] = url
+    if fields:
+        e["fields"] = [{"name": f["name"], "value": f["value"], "inline": True}
+                       for f in fields]
+    return e
+
+
 def _discord_ts(iso: str, style: str = "F") -> str:
     """Render an ISO8601 UTC time as a Discord `<t:unix:style>` tag so every
     member sees it in their own timezone. Falls back to the raw string."""
@@ -6285,12 +6326,13 @@ async def _notify_event_created(ev: dict) -> None:
         return
     where = (ev.get("event_location") or ev.get("location") or "").strip()
     loc = f"\n📍 {where}" if where else ""
-    link = _deep_link(f"#/events/{ev['id']}")
     await notify.send(
-        "events",
-        f"📅 **New event: {ev['title']}**\n"
-        f"Starts {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
-        f"{loc}{link}",
+        "events", "",
+        embed=_embed(
+            f"📅 New event: {ev['title']}",
+            f"Starts {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
+            f"{loc}",
+            url=_app_url(f"#/events/{ev['id']}")),
         dedup_key=f"event-created:{ev['id']}")
 
 
@@ -6298,9 +6340,11 @@ async def _notify_event_cancelled(ev: dict) -> None:
     if not notify.is_configured("events"):
         return
     await notify.send(
-        "events",
-        f"🚫 **Event cancelled: {ev['title']}**\n"
-        f"Was set for {_discord_ts(ev['start_at'])}.{_deep_link('#/events')}",
+        "events", "",
+        embed=_embed(
+            f"🚫 Event cancelled: {ev['title']}",
+            f"Was set for {_discord_ts(ev['start_at'])}.",
+            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_BAD),
         dedup_key=f"event-cancelled:{ev['id']}")
 
 
@@ -6323,14 +6367,15 @@ async def _notify_event_reminder(ev: dict) -> None:
         return
     where = (ev.get("event_location") or ev.get("location") or "").strip()
     loc = f"\n📍 {where}" if where else ""
-    link = _deep_link(f"#/events/{ev['id']}")
     await notify.send_paged(
-        "events",
-        f"⏰ **Starting soon: {ev['title']}**\n"
-        f"Begins {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
-        f"{loc}{link}",
+        "events", "",
         mentions=_event_attendee_ids(ev["id"]),
-        dedup_key=f"event-reminder:{ev['id']}")
+        dedup_key=f"event-reminder:{ev['id']}",
+        embed=_embed(
+            f"⏰ Starting soon: {ev['title']}",
+            f"Begins {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
+            f"{loc}",
+            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN))
 
 
 async def _notify_event_rescheduled(ev: dict, old_start: str | None,
@@ -6339,18 +6384,19 @@ async def _notify_event_rescheduled(ev: dict, old_start: str | None,
     the created-ping advertised the OLD details. Pings active signups."""
     if not notify.is_configured("events"):
         return
-    lines = [f"📌 **Event updated: {ev['title']}**"]
+    lines = []
     if old_start and old_start != ev["start_at"]:
         lines.append(f"Now starts {_discord_ts(ev['start_at'])} "
                      f"({_discord_ts(ev['start_at'], 'R')}) — was {_discord_ts(old_start)}")
     new_where = (ev.get("event_location") or ev.get("location") or "").strip()
     if old_where is not None and old_where != new_where and new_where:
         lines.append(f"📍 Now at {new_where}")
-    lines.append(_deep_link(f"#/events/{ev['id']}").strip())
     await notify.send_paged(
-        "events", "\n".join(x for x in lines if x),
+        "events", "",
         mentions=_event_attendee_ids(ev["id"]),
-        dedup_key=f"event-moved:{ev['id']}:{ev['start_at']}")
+        dedup_key=f"event-moved:{ev['id']}:{ev['start_at']}",
+        embed=_embed(f"📌 Event updated: {ev['title']}", "\n".join(lines),
+                     url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN))
 
 
 async def _notify_waitlist_promoted(ev: dict, discord_id: str) -> None:
@@ -6359,12 +6405,13 @@ async def _notify_waitlist_promoted(ev: dict, discord_id: str) -> None:
     if not notify.is_configured("events"):
         return
     mentions, ping = _mentions(discord_id)
-    link = _deep_link(f"#/events/{ev['id']}")
     await notify.send(
-        "events",
-        f"🎟️ **You're in: {ev['title']}**\n"
-        f"A spot opened and you moved off the waitlist. Starts "
-        f"{_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')}).{link}{ping}",
+        "events", ping.strip(),
+        embed=_embed(
+            f"🎟️ You're in: {ev['title']}",
+            f"A spot opened and you moved off the waitlist. Starts "
+            f"{_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')}).",
+            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_GOOD),
         mentions=mentions,
         dedup_key=f"event-promoted:{ev['id']}:{discord_id}")
 
@@ -6590,17 +6637,17 @@ async def _notify_listing_posted(listing: dict) -> None:
     icon, headline, cta = _LISTING_ANNOUNCE_COPY.get(
         mode, _LISTING_ANNOUNCE_COPY["sale"])
     bits = _listing_announce_terms(listing)
-    detail = (" — " + ", ".join(bits)) if bits else ""
     who = _resolve_member_name(listing["seller_id"], None)
     # Ping the members who can craft this (library match), minus the requester.
     key = listing.get("blueprint_key") if mode == "commission" else None
     crafters = [m for m in (db.blueprint_crafters(key) if key else [])
                 if str(m) != str(listing["seller_id"])][:_ANNOUNCE_MENTION_CAP]
-    craft_line = ("\nCan craft: " + " ".join(f"<@{m}>" for m in crafters)) if crafters else ""
+    craft_line = ("Can craft: " + " ".join(f"<@{m}>" for m in crafters)) if crafters else ""
+    desc = ((" · ".join(bits) + "\n") if bits else "") + f"Posted by {who}. {cta}"
     await notify.send(
-        "marketplace",
-        f"{icon} **{headline}: {listing.get('item_name')}**{detail}\n"
-        f"Posted by {who}. {cta}{craft_line}{_deep_link('#/market')}",
+        "marketplace", craft_line,
+        embed=_embed(f"{icon} {headline}: {listing.get('item_name')}", desc,
+                     url=_app_url(f"#/market/{listing['id']}")),
         dedup_key=f"listing-posted:{listing['id']}",
         mentions=crafters)
 
@@ -6615,15 +6662,21 @@ async def _notify_market_offer(listing: dict, offer: dict, *, deal: bool) -> Non
     who = _resolve_member_name(offer["bidder_id"], None)
     item = listing.get("item_name") or "your listing"
     if listing.get("mode") == "commission":
-        body = (f"🛠️ **New quote on {item}**\n{who} quoted "
-                f"{_auec(offer['amount_auec'])}.")
+        title = f"🛠️ New quote on {item}"
+        desc = f"{who} quoted {_auec(offer['amount_auec'])}."
+        color = _EMBED_INFO
     elif deal:
-        body = (f"🎉 **{item} sold!**\n"
-                f"{who} bought it for {_auec(offer['amount_auec'])} — confirm the "
-                f"handoff once you meet up in-game.")
+        title = f"🎉 {item} sold!"
+        desc = (f"{who} bought it for {_auec(offer['amount_auec'])} — confirm "
+                f"the handoff once you meet up in-game.")
+        color = _EMBED_GOOD
     else:
-        body = f"💰 **New offer on {item}**\n{who} {_offer_amount_text(offer)}."
-    await notify.send("marketplace", f"{body}{_deep_link('#/market')}{ping}",
+        title = f"💰 New offer on {item}"
+        desc = f"{who} {_offer_amount_text(offer)}."
+        color = _EMBED_INFO
+    await notify.send("marketplace", ping.strip(),
+                      embed=_embed(title, desc, color=color,
+                                   url=_app_url(f"#/market/{listing['id']}")),
                       mentions=mentions, dedup_key=f"market-offer:{offer['id']}")
 
 
@@ -6636,13 +6689,15 @@ async def _notify_market_accepted(listing: dict, offer: dict) -> None:
     item = listing.get("item_name") or "a listing"
     amount = f" — {_auec(offer['amount_auec'])}" if offer.get("amount_auec") is not None else ""
     if listing.get("mode") == "commission":
-        body = (f"🛠️ **You got the job**\n{seller} accepted your quote on {item}"
-                f"{amount}. Get crafting.")
+        title = "🛠️ You got the job"
+        desc = f"{seller} accepted your quote on {item}{amount}. Get crafting."
     else:
-        body = (f"🤝 **Your offer was accepted**\n{seller} accepted your offer on "
-                f"{item}{amount}. Coordinate the handoff.")
+        title = "🤝 Your offer was accepted"
+        desc = f"{seller} accepted your offer on {item}{amount}. Coordinate the handoff."
     await notify.send(
-        "marketplace", f"{body}{_deep_link('#/market')}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(title, desc, color=_EMBED_GOOD,
+                     url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions, dedup_key=f"market-accept:{offer['id']}")
 
 
@@ -6656,9 +6711,10 @@ async def _notify_market_confirm_needed(listing: dict, confirmed_by: str) -> Non
                                else listing["buyer_id"], None)
     item = listing.get("item_name") or "your deal"
     await notify.send(
-        "marketplace",
-        f"📦 **{who} confirmed the handoff for {item}**\n"
-        f"Confirm on your side to close the deal.{_deep_link('#/market')}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(f"📦 {who} confirmed the handoff for {item}",
+                     "Confirm on your side to close the deal.",
+                     color=_EMBED_WARN, url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions,
         dedup_key=f"market-confirm:{listing['id']}:{confirmed_by}")
 
@@ -6674,9 +6730,10 @@ async def _notify_market_completed(listing: dict) -> None:
     amount = f", {_auec(listing['final_auec'])}" if listing.get("final_auec") is not None else ""
     label = "Commission complete" if listing.get("mode") == "commission" else "Deal complete"
     await notify.send(
-        "marketplace",
-        f"✅ **{label}: {item}**\n{seller} ↔ {buyer}{amount}. Nice doing "
-        f"business.{_deep_link('#/market')}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(f"✅ {label}: {item}",
+                     f"{seller} ↔ {buyer}{amount}. Nice doing business.",
+                     color=_EMBED_GOOD, url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions, dedup_key=f"market-complete:{listing['id']}")
 
 
@@ -6688,22 +6745,24 @@ async def _notify_auction_settled(listing: dict, offer: dict | None) -> None:
     if not notify.is_configured("marketplace"):
         return
     item = listing.get("item_name") or "your auction"
-    link = _deep_link(f"#/market/{listing['id']}")
+    url = _app_url(f"#/market/{listing['id']}")
     if offer:
         mentions, ping = _mentions(offer["bidder_id"], listing["seller_id"])
         winner = _resolve_member_name(offer["bidder_id"], None)
         await notify.send(
-            "marketplace",
-            f"🔨 **Auction ended: {item}**\n"
-            f"{winner} won at {_auec(offer['amount_auec'])} — coordinate the "
-            f"handoff and confirm to close the deal.{link}{ping}",
+            "marketplace", ping.strip(),
+            embed=_embed(f"🔨 Auction ended: {item}",
+                         f"{winner} won at {_auec(offer['amount_auec'])} — "
+                         f"coordinate the handoff and confirm to close the deal.",
+                         color=_EMBED_GOOD, url=url),
             mentions=mentions, dedup_key=f"auction-settled:{listing['id']}")
     else:
         mentions, ping = _mentions(listing["seller_id"])
         await notify.send(
-            "marketplace",
-            f"🔨 **Auction ended with no bids: {item}**\n"
-            f"Relist it or adjust the start price.{link}{ping}",
+            "marketplace", ping.strip(),
+            embed=_embed(f"🔨 Auction ended with no bids: {item}",
+                         "Relist it or adjust the start price.",
+                         color=_EMBED_MUTE, url=url),
             mentions=mentions, dedup_key=f"auction-expired:{listing['id']}")
 
 
@@ -6716,11 +6775,11 @@ async def _notify_commission_expired(listing: dict, quote_count: int) -> None:
     item = listing.get("item_name") or "your craft request"
     quotes = (f"{quote_count} quote{'s' if quote_count != 1 else ''} were waiting."
               if quote_count else "No quotes came in.")
-    link = _deep_link(f"#/market/{listing['id']}")
     await notify.send(
-        "marketplace",
-        f"⌛ **Craft request expired: {item}**\n{quotes} "
-        f"Repost with a later needed-by date if you still want it.{link}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(f"⌛ Craft request expired: {item}",
+                     f"{quotes} Repost with a later needed-by date if you still want it.",
+                     color=_EMBED_WARN, url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions, dedup_key=f"commission-expired:{listing['id']}")
 
 
@@ -6732,11 +6791,11 @@ async def _notify_outbid(listing: dict, prev_bidder: str, next_min: float) -> No
     mentions, ping = _mentions(prev_bidder)
     item = listing.get("item_name") or "an auction"
     ends = (" — ends " + _discord_ts(listing["ends_at"], "R")) if listing.get("ends_at") else ""
-    link = _deep_link(f"#/market/{listing['id']}")
     await notify.send(
-        "marketplace",
-        f"📈 **You've been outbid on {item}**\n"
-        f"It now takes {_auec(next_min)} to retake the lead{ends}.{link}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(f"📈 You've been outbid on {item}",
+                     f"It now takes {_auec(next_min)} to retake the lead{ends}.",
+                     color=_EMBED_WARN, url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions,
         dedup_key=f"market-outbid:{listing['id']}:{prev_bidder}:{next_min:g}")
 
@@ -6751,18 +6810,19 @@ async def _notify_listing_cancelled(listing: dict, offers) -> None:
     seller = _resolve_member_name(listing["seller_id"], None)
     if listing.get("buyer_id"):
         who = [listing["buyer_id"]]
-        body = (f"🚫 **Deal called off: {item}**\n"
-                f"{seller} cancelled the listing — the pending deal is void.")
+        title = f"🚫 Deal called off: {item}"
+        desc = f"{seller} cancelled the listing — the pending deal is void."
     else:
         who = [o["bidder_id"] for o in (offers or [])
                if (o.get("status") or "active") == "active"]
         if not who:
             return
-        body = (f"🚫 **Listing withdrawn: {item}**\n"
-                f"{seller} took it down — your offer no longer stands.")
+        title = f"🚫 Listing withdrawn: {item}"
+        desc = f"{seller} took it down — your offer no longer stands."
     mentions, ping = _mentions(*who)
     await notify.send(
-        "marketplace", f"{body}{_deep_link('#/market')}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(title, desc, color=_EMBED_BAD),
         mentions=mentions, dedup_key=f"market-cancelled:{listing['id']}")
 
 
@@ -6774,11 +6834,11 @@ async def _notify_offer_declined(listing: dict, offer: dict) -> None:
     mentions, ping = _mentions(offer["bidder_id"])
     item = listing.get("item_name") or "a listing"
     label = "quote" if listing.get("mode") == "commission" else "offer"
-    link = _deep_link(f"#/market/{listing['id']}")
     await notify.send(
-        "marketplace",
-        f"↩️ **Your {label} on {item} was declined**\n"
-        f"The listing is still open if you want to try different terms.{link}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(f"↩️ Your {label} on {item} was declined",
+                     "The listing is still open if you want to try different terms.",
+                     color=_EMBED_MUTE, url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions, dedup_key=f"market-decline:{offer['id']}")
 
 
@@ -6790,11 +6850,11 @@ async def _notify_crafter_bailed(listing: dict, crafter_id: str) -> None:
     mentions, ping = _mentions(listing["seller_id"])
     who = _resolve_member_name(crafter_id, None)
     item = listing.get("item_name") or "your craft request"
-    link = _deep_link(f"#/market/{listing['id']}")
     await notify.send(
-        "marketplace",
-        f"🔁 **{who} withdrew from {item}**\n"
-        f"The request is open again — other quotes still stand.{link}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(f"🔁 {who} withdrew from {item}",
+                     "The request is open again — other quotes still stand.",
+                     color=_EMBED_WARN, url=_app_url(f"#/market/{listing['id']}")),
         mentions=mentions,
         dedup_key=f"market-bail:{listing['id']}:{crafter_id}")
 
@@ -6807,10 +6867,10 @@ async def _notify_quotes_lost(listing: dict, loser_ids: list[str]) -> None:
     mentions, ping = _mentions(*loser_ids)
     item = listing.get("item_name") or "a craft request"
     await notify.send(
-        "marketplace",
-        f"ℹ️ **{item} went to another crafter**\n"
-        f"Thanks for quoting — keep an eye on the board for the next one."
-        f"{_deep_link('#/market')}{ping}",
+        "marketplace", ping.strip(),
+        embed=_embed(f"ℹ️ {item} went to another crafter",
+                     "Thanks for quoting — keep an eye on the board for the next one.",
+                     color=_EMBED_MUTE),
         mentions=mentions, dedup_key=f"market-quotes-lost:{listing['id']}")
 
 
