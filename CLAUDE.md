@@ -138,6 +138,19 @@ library at `#/blueprints`, #29)
   `loadPoiOverrides`/`renderPoiQcResults`/`poiOverrideSet`). Name-key collisions
   intentionally apply to all siblings. Trade-terminal feed + NEARBY list out of scope.
 - Auth/account: `/auth/login|callback|logout`, `/api/me*`, `/api/tokens`. **Member profile (#30):** `members.playstyle_tags` (JSON via `_ensure_column`, `db.set_member_playstyles`); `PUT /api/me` `playstyle_tags` (allowlist `PLAYSTYLE_TAGS`, dedup, cap `_PROFILE_MAX_TAGS`=6, parses via `member_playstyles`, mirrors onto the live online record + roster rebroadcast); carried on `GET /api/me`, `/api/intel/directory` rows, and online-roster records (`tags`); UI = Settings PROFILE chips + roster/directory `.on-ptag` chips
+- Update check (self-hosting orgs): `GET /api/updates?force=` (admin-only) polls
+  `api.github.com/repos/{UPDATE_REPO}/releases/latest` (anon; releases are published
+  per version by `.github/workflows/tag-release.yml`) and compares against
+  `version.py` via `update_available`/`_semver_parts` (numeric, not lexical; an
+  unparseable tag reports "no update"). Module-global `_update_cache`, 6h TTL +
+  300s force floor (anon GitHub API = 60 req/h/IP), fetch in `asyncio.to_thread`;
+  a network failure caches the error string and still 200s. Repo from
+  `SC_NAV_UPDATE_REPO` (regex-validated `owner/name`; blank OR `SC_NAV_OFFLINE`
+  = check off, `enabled:false` + `disabled_reason`) — compose passes it with a
+  single `-` default so unset ≠ empty. Frontend = ORG ADMIN **SERVER VERSION**
+  panel (`#version-panel`, `loadUpdateCheck` called from `loadSettings`,
+  `.upd-banner` — `[hidden]` rule required, it's a flex). Read-only by design:
+  never self-updates.
 - Misc: `/api/health`, `/api/branding` (public org name + logo flag), `/download/watcher`, `/` + `/index.html`
 
 ## db.py tables

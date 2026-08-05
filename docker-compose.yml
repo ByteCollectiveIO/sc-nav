@@ -18,6 +18,10 @@ services:
       # server re-syncs Prospector's RS signature feed at startup, at most daily.
       # Blank = feature off, RS card falls back to the org's own scans.
       - STRATA_API_KEY=${STRATA_API_KEY:-}
+      # Which repo the admin update check compares this server against. Note the
+      # single `-`, not `:-`: unset falls back to upstream, while explicitly
+      # setting it EMPTY is how an operator turns the check off.
+      - SC_NAV_UPDATE_REPO=${SC_NAV_UPDATE_REPO-ByteCollectiveIO/sc-nav}
     # Bound to localhost only: the cloudflared sidecar reaches the app over the
     # internal Docker network (http://sc-nav:8765), so there's no need to expose
     # it on the LAN — doing so would bypass the Cloudflare Access/WAF layer.

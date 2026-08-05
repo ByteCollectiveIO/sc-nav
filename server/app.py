@@ -8999,6 +8999,107 @@ async def delete_poi_override_admin(override_id: int, admin: dict = Depends(requ
     return {"ok": True}
 
 
+# --- update check (self-hosting orgs) --------------------------------------
+# A second org now runs its own server, so "is my copy current?" has to be
+# answerable from inside the app — nobody watches a repo they didn't clone. We
+# poll the upstream GitHub Releases feed (published per version by
+# .github/workflows/tag-release.yml), compare against version.py, and let the
+# admin settings page say so. Read-only, anonymous, no auto-update: the deploy
+# is still the operator's hand on the wheel.
+
+# Upstream repo, "owner/name". Overridable so a fork can point at itself; empty
+# turns the check off entirely (as does SC_NAV_OFFLINE) for orgs that want no
+# outbound calls. Validated here, not at use — the value is interpolated into a
+# URL, so a junk env var must never become a request to somewhere else.
+_UPDATE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
+UPDATE_REPO = os.environ.get("SC_NAV_UPDATE_REPO", "ByteCollectiveIO/sc-nav").strip()
+if UPDATE_REPO and not _UPDATE_REPO_RE.match(UPDATE_REPO):
+    print(f"[sc-nav] ignoring malformed SC_NAV_UPDATE_REPO {UPDATE_REPO!r}")
+    UPDATE_REPO = ""
+
+_UPDATE_TTL_S = 6 * 3600     # how long a result is served from cache
+_UPDATE_MIN_S = 300          # floor between forced re-checks (anon GitHub API = 60/h/IP)
+_UPDATE_TIMEOUT_S = 10
+
+# Cached upstream answer, shared by every admin on the instance. checked_at 0 =
+# never looked; a failure caches the error too, so a network outage costs one
+# request per TTL instead of one per settings page load.
+_update_cache: dict = {"checked_at": 0.0, "latest": None, "url": None,
+                       "published_at": None, "error": None}
+
+
+def _semver_parts(v: str) -> tuple[int, int, int] | None:
+    """('v0.94.1' | '0.94.1' | '0.94.1-rc1') -> (0, 94, 1); None if unparseable.
+    Pre-release suffixes are dropped, not ranked — this project only ever tags
+    plain MAJOR.MINOR.PATCH, and a wrong ranking would be worse than none."""
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", (v or "").strip())
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def update_available(latest: str | None, current: str) -> bool:
+    """True only when both versions parse AND latest is strictly newer. An
+    unparseable tag reports "no update" rather than nagging on garbage."""
+    a, b = _semver_parts(latest or ""), _semver_parts(current)
+    return bool(a and b and a > b)
+
+
+def _fetch_latest_release() -> dict:
+    """Blocking call to the GitHub Releases API (anonymous, public repo). Returns
+    the cache-shaped dict; never raises — a check that can't reach GitHub reports
+    an error string, it doesn't break the settings page."""
+    url = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+    try:
+        rel = _fetch_json(url, timeout=_UPDATE_TIMEOUT_S)
+        tag = str(rel.get("tag_name") or "").strip()
+        if not _semver_parts(tag):
+            return {"checked_at": time.time(), "latest": None, "url": None,
+                    "published_at": None, "error": "no versioned release found"}
+        return {
+            "checked_at": time.time(),
+            "latest": tag.lstrip("v"),
+            # Link the release page from GitHub's own payload, not a string we
+            # build — one less place to drift if the repo ever moves.
+            "url": str(rel.get("html_url") or f"https://github.com/{UPDATE_REPO}/releases"),
+            "published_at": rel.get("published_at"),
+            "error": None,
+        }
+    except Exception as exc:
+        return {"checked_at": time.time(), "latest": None, "url": None,
+                "published_at": None, "error": f"{type(exc).__name__}: {exc}"[:200]}
+
+
+def _update_view(disabled: str | None = None) -> dict:
+    c = _update_cache
+    return {
+        "enabled": not disabled,
+        "disabled_reason": disabled,
+        "repo": UPDATE_REPO,
+        "current": APP_VERSION,
+        "latest": c["latest"],
+        "update_available": update_available(c["latest"], APP_VERSION),
+        "release_url": c["url"],
+        "published_at": c["published_at"],
+        "checked_at": int(c["checked_at"]) or None,
+        "error": c["error"],
+    }
+
+
+@app.get("/api/updates")
+async def get_update_check(force: bool = False, admin: dict = Depends(require_admin)):
+    """Is a newer upstream release out? Admin-only — it's an operator concern,
+    and it keeps the outbound poll behind the same gate as the rest of org
+    administration. Served from a 6h cache; `force=1` re-checks, no faster than
+    every 5 minutes."""
+    if OFFLINE:
+        return _update_view("this server runs in offline mode")
+    if not UPDATE_REPO:
+        return _update_view("update checks are turned off on this server")
+    age = time.time() - _update_cache["checked_at"]
+    if age > _UPDATE_TTL_S or (force and age > _UPDATE_MIN_S):
+        _update_cache.update(await asyncio.to_thread(_fetch_latest_release))
+    return _update_view()
+
+
 @app.get("/api/settings")
 async def get_settings(user: dict = Depends(require_session)):
     """Org-wide settings (any member can read; admins change them)."""
