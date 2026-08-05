@@ -31,7 +31,12 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v7: the runners force Node-20 actions onto Node 24 and warn; v5+ targets
+      # Node 24 natively. v7 also refuses to check out FORK pull-request code from
+      # a workflow_run job (the "pwn request" hole) — this job is unaffected: it
+      # only ever runs off a push to main, whose workflow_run.event is "push", not
+      # "pull_request*", so the guard returns before it ever looks at the ref.
+      - uses: actions/checkout@v7
         with:
           # Tag the exact commit tests ran on, and fetch tags to check existence.
           ref: ${{ github.event.workflow_run.head_sha }}
