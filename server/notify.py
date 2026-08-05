@@ -225,11 +225,27 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
 
     users = [str(m) for m in (mentions or []) if str(m).isdigit()][:MENTIONS_PER_MESSAGE]
     payload = {
-        "content": text[:_CONTENT_CAP],
         "allowed_mentions": {"parse": [], "users": users},
     }
+    text = (text or "").strip()
+    if text:
+        payload["content"] = text[:_CONTENT_CAP]
     if embed:
-        payload["embeds"] = [embed]
+        # Defensive caps (Discord: title 256, description 4096, field value
+        # 1024) so an oversized user string degrades to truncation, not a 400
+        # that silently drops the whole message.
+        e = dict(embed)
+        if e.get("title"):
+            e["title"] = str(e["title"])[:256]
+        if e.get("description"):
+            e["description"] = str(e["description"])[:4096]
+        for f in e.get("fields", []):
+            f["name"] = str(f.get("name", ""))[:256]
+            f["value"] = str(f.get("value", ""))[:1024]
+        payload["embeds"] = [e]
+    if "content" not in payload and "embeds" not in payload:
+        return False   # Discord rejects an empty message; nothing to say
+
     try:
         await asyncio.to_thread(_post, url, payload)
         _note_result(category, True)
