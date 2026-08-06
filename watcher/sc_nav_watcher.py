@@ -32,6 +32,10 @@ import urllib.request
 from datetime import datetime, timezone
 
 POSITION_ENDPOINT = "/api/position"
+# Handle registration. Binding also rides every position post, but positions only
+# happen once the player runs /showlocation in-game — pinging this at startup is
+# what makes the web UI's IN-GAME IDENTITY panel fill in right away.
+HANDLE_ENDPOINT = "/api/handle"
 
 # ---------------------------------------------------------------------------
 # Clipboard access
@@ -351,6 +355,8 @@ class Sender:
         self.url = server_url.rstrip("/") + POSITION_ENDPOINT if server_url else None
         self.txn_url = (server_url.rstrip("/") + "/api/trade/transactions"
                         if server_url else None)
+        self.handle_url = (server_url.rstrip("/") + HANDLE_ENDPOINT
+                           if server_url else None)
         self.timeout = timeout
         self.dry_run = dry_run
         self.token = token
@@ -362,6 +368,9 @@ class Sender:
         # overlay's whole data feed (#40). The server already computes this for
         # its own WS frame, so reading it here costs no extra request.
         self.last_nav = None
+        # Last handle verdict the server reported, so _note_handle logs only on a
+        # change (the verdict rides every position and every 60 s heartbeat).
+        self.handle_state = None
 
     def send(self, payload):
         if self.dry_run:
@@ -380,6 +389,22 @@ class Sender:
                 ok = False
                 break
         return ok
+
+    def register_handle(self, handle):
+        """Announce the handle at startup so the org's web UI binds it to this
+        member immediately. Without it the binding waits for the player's first
+        in-game /showlocation, which made it look like nothing was binding.
+
+        Best-effort by design: an older server 404s here and the position path
+        still does the binding, so a failure is a note, never a stop."""
+        if not handle or not self.handle_url:
+            return
+        if self.dry_run:
+            log(f"DRY-RUN register handle {handle}")
+            return
+        if not self.token:
+            return   # a guaranteed 401; the loop already warns about the missing token
+        self._post({"handle": handle}, url=self.handle_url, what="handle registration")
 
     def send_transactions(self, txns):
         """Queue + deliver log-detected commodity transactions (#41). The
@@ -406,7 +431,10 @@ class Sender:
     # the app.
     USER_AGENT = "sc-nav-watcher/1.0"
 
-    def _post(self, payload, url=None):
+    def _post(self, payload, url=None, what=None):
+        """POST one payload. `what` names a one-shot side request (the handle
+        registration) so its failures don't claim a retry that never comes —
+        only the position/txn queues are retried."""
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "User-Agent": self.USER_AGENT}
         if self.token:
@@ -417,7 +445,7 @@ class Sender:
             with urllib.request.urlopen(request, timeout=self.timeout) as resp:
                 ok = 200 <= resp.status < 300
                 if ok:
-                    self._read_nav(resp)
+                    self._read_response(resp)
                 return ok
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
@@ -437,22 +465,54 @@ class Sender:
                     log(f"AUTH FAILED (HTTP {exc.code}): set a valid --token "
                         "(generate one in the web UI under 'Watcher token')")
                 return True
-            log(f"send failed (HTTP {exc.code}); will retry ({len(self.pending)} queued)")
+            if what:
+                log(f"{what} failed (HTTP {exc.code}) — the binding will still "
+                    "happen on your first /showlocation")
+            else:
+                log(f"send failed (HTTP {exc.code}); will retry "
+                    f"({len(self.pending)} queued)")
             return False
         except (urllib.error.URLError, OSError) as exc:
-            log(f"send failed ({exc}); will retry ({len(self.pending)} queued)")
+            if what:
+                log(f"{what} failed ({exc})")
+            else:
+                log(f"send failed ({exc}); will retry ({len(self.pending)} queued)")
             return False
 
-    def _read_nav(self, resp):
-        """Pull the overlay slice out of a position-post response. Best-effort
-        by design: an older server (or a future body shape) must never break
-        position reporting, which is this program's actual job."""
+    def _read_response(self, resp):
+        """Pull the overlay slice (#40) and the handle verdict out of a successful
+        response. Best-effort by design: an older server (or a future body shape)
+        must never break position reporting, which is this program's actual job."""
         try:
             body = json.loads(resp.read(64_000).decode("utf-8", "replace"))
         except Exception:
             return
-        if isinstance(body, dict) and isinstance(body.get("nav"), dict):
+        if not isinstance(body, dict):
+            return
+        if isinstance(body.get("nav"), dict):
             self.last_nav = body["nav"]
+        if isinstance(body.get("handle"), dict):
+            self._note_handle(body["handle"])
+
+    def _note_handle(self, status):
+        """Log the server's verdict on the handle we're reporting — once per
+        change, since it rides every position and every heartbeat. A handle that
+        another account already owns is refused on purpose (it would otherwise
+        let anyone claim a member's captures), but the refusal used to be
+        completely silent, so it read as 'binding is broken'."""
+        key = (status.get("handle"), bool(status.get("bound")), status.get("conflict"))
+        if key == self.handle_state:
+            return
+        self.handle_state = key
+        name = status.get("handle") or "?"
+        if status.get("bound"):
+            log(f'handle bound: "{name}" is verified as yours on the server')
+        elif status.get("conflict") == "owned_by_other":
+            log(f'HANDLE NOT BOUND: "{name}" is already claimed by another '
+                "member's account, so your captures stay unattributed. Ask an org "
+                "admin to clear the old binding, or pass the handle you play as.")
+        else:
+            log(f'handle not bound: "{name}" ({status.get("conflict")})')
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +691,10 @@ def run(args, sink=None, stop=None):
     handle = resolve_handle(args)
     if handle:
         log(f"reporting as handle: {handle}")
+        # Bind now rather than at the first /showlocation, so the web UI's
+        # IN-GAME IDENTITY panel fills in as soon as the watcher is up. Logs the
+        # server's verdict via _note_handle.
+        sender.register_handle(handle)
     else:
         log("no handle set (captures will be unattributed) — pass --handle \"YourName\"")
 

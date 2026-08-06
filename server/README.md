@@ -209,7 +209,9 @@ server restart, by design. Crumbs are capped at 5000 points.
 | `GET /api/state` | latest nav state (`nearest_pois`, `nearest_observations`, `path`, `tracking`, destination, capture) |
 | `GET /api/pois?q=&system=&container=&type=&owner_id=&limit=` | POI search |
 | `GET /api/observations?q=&category=&system=&container=&type=&owner_id=&limit=` | observation search (resource/wildlife) |
-| `GET /api/handles` | contributor registry (handle → PlayerID) |
+| `GET /api/handles` | contributor registry (handle → PlayerID). Member-facing, so `{player_id, handle}` only — the owning `discord_id` is admin-only (see `/api/admin/handles`), or it would defeat the directory opt-out |
+| `POST /api/handle {"handle": "…"}` | bind an in-game handle without a position fix (the watcher's startup ping) |
+| `GET /api/admin/handles?q=` · `DELETE /api/admin/handles/{player_id}/owner` | admin: view handle→member bindings; unbind a handle stuck on the wrong account |
 | `GET /api/raw_commodities` | raw-ore names (uexcorp `is_raw==1`) for the ore datalist |
 | `GET /api/fauna` | curated fauna/species names for the Add Fauna datalist |
 | `GET /api/biomes` | biome lookups (by_body / by_system / all) for the biome datalist |
