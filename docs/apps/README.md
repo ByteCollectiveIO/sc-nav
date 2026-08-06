@@ -27,7 +27,7 @@ to use it step by step, and how they fit together.
 
 | App | Route | What it does |
 |---|---|---|
-| [**Event Planner**](event-planner.md) | `#/events` | Post events (multi-type, roles/targets), signups, fill tracking; fleet roster with ship seat templates; manifest → Discord. |
+| [**Event Planner**](event-planner.md) | `#/events` | Post events (multi-type, roles/targets), signups with capacity + auto-promoting waitlist, fill tracking, reschedule pings; clone, day-of attendee tools, past-events history; fleet roster with ship seat templates; manifest → Discord. |
 | [**Group Finder**](group-finder.md) | `#/lfg` | LFG board (looking-for-members / looking-to-join), playstyle tags, suggested matches, promote-to-event, Discord announce; live Who's Online roster. |
 | [**Danger Board**](danger-board.md) | `#/pirates` | Community pirate warnings (point/lane, PvP/PvE, severity, still-active confirms, age-off); feeds hazard-volume detours into both planners; "organize hunt" → event. |
 
@@ -36,7 +36,7 @@ to use it step by step, and how they fit together.
 | App | Route | What it does |
 |---|---|---|
 | [**Resource Manager**](resource-manager.md) | `#/goals` · `#/inventory` · `#/blueprints` | Shared item catalog; procurement goals with allocations from real holdings; per-member holdings ledger; craftable-blueprint library. |
-| [**Marketplace**](marketplace.md) | `#/market` | aUEC-only sale / auction / barter / commission board with dual-confirm handshake, search & filter, crafted-quality annotations, and a blueprint spec builder. |
+| [**Marketplace**](marketplace.md) | `#/market` | aUEC-only sale / auction / barter / commission / buy-order board with dual-confirm handshake; crafter storefronts + directed requests, org price memory, market trends, availability + pickup, and a blueprint spec builder. |
 | [**Org Intel**](org-intel.md) | `#/intel` | Guild analytics deck: mapping, hauling, trading, surveying, market, contributor leaderboards, and the member directory — all derived automatically. |
 
 ---
