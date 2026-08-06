@@ -1,7 +1,7 @@
 name: tests
 
-# Safety net: run the nav_core suite on every push and PR so a regression is
-# caught before it reaches main (and before a release tag is cut from it).
+# Safety net: run every suite on push and PR so a regression is caught before it
+# reaches main (and before a release tag is cut from it).
 on:
   push:
   pull_request:
@@ -24,6 +24,16 @@ jobs:
       - name: Run nav_core tests
         working-directory: server
         run: python test_nav_core.py
+
+      # The watcher suite is the code that runs on members' own machines, so it
+      # gets the same gate as the server. Also pure stdlib — tkinter is imported
+      # lazily inside the overlay's functions, never at module scope — so it runs
+      # before the dependency install and can't be broken by one.
+      # It went unenforced until v1.1.1, which is how a token-leak fix nearly
+      # shipped with no CI covering its regression test.
+      - name: Run watcher tests
+        working-directory: watcher
+        run: python test_parse.py
 
       # The app suite drives the FastAPI shell through a TestClient to pin the
       # CSP nonce backstop, so it needs the runtime deps. It boots offline (the
