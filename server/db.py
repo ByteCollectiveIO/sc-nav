@@ -18,6 +18,7 @@ thread-safe for the occasional asyncio.to_thread caller.
 """
 
 import json
+import math
 import sqlite3
 import threading
 
@@ -593,6 +594,11 @@ def init(db_path) -> None:
         _ensure_column("members", "availability_note", "TEXT")   # "usually on: weekday evenings CET"
         _ensure_column("members", "crafter_note", "TEXT")        # storefront blurb; presence = storefront on
         _ensure_column("members", "active_survey_zone", "INTEGER")   # #36.1 active zone id
+        # Off-boarding: unix seconds when an admin revoked this member's access.
+        # Guild membership is only checked at OAuth login, so kicking someone
+        # from Discord otherwise left their signed session valid for its full
+        # 8h life and their watcher token valid forever.
+        _ensure_column("members", "access_revoked_at", "REAL NOT NULL DEFAULT 0")
         _ensure_column("custom_pois", "note", "TEXT")
         _ensure_column("custom_pois", "private", "INTEGER DEFAULT 0")
         # Belt-survey payload (#36): JSON {rocks, ores, salvage, source} on
@@ -744,10 +750,39 @@ def clear_survey_pois(system: str) -> list[int]:
     return ids
 
 
+def _coords_finite(d: dict) -> bool:
+    """False for a POI carrying NaN/Infinity coordinates.
+
+    Such a row can never be serialized again (JSONResponse uses
+    allow_nan=False), so one poisoned POI used to 500 the shared list for the
+    whole org on every read — and reloaded from SQLite after a restart. The
+    schema edge now rejects non-finite positions (`PositionIn`), so this is the
+    recovery half: a row written before that fix is skipped rather than allowed
+    to keep breaking the endpoint."""
+    for key in ("local_km", "global_m"):
+        v = d.get(key)
+        if isinstance(v, (list, tuple)) and not all(
+                isinstance(c, (int, float)) and math.isfinite(c) for c in v):
+            return False
+    return all(v is None or math.isfinite(v)
+               for v in (d.get("latitude"), d.get("longitude"), d.get("height_m"))
+               if isinstance(v, (int, float)) or v is None)
+
+
 def list_custom_pois() -> list[dict]:
     with _lock:
         rows = _conn.execute("SELECT * FROM custom_pois").fetchall()
-    return [_custom_row_to_dict(r) for r in rows]
+    out, skipped = [], 0
+    for r in rows:
+        d = _custom_row_to_dict(r)
+        if _coords_finite(d):
+            out.append(d)
+        else:
+            skipped += 1
+    if skipped:
+        print(f"[sc-nav] skipped {skipped} custom POI(s) with non-finite "
+              f"coordinates (unroutable + unserializable)")
+    return out
 
 
 # --- named survey zones (#36.1) --------------------------------------------
@@ -1115,6 +1150,31 @@ def set_notify_opt_out(discord_id: str, opt_out: bool) -> None:
             "ON CONFLICT(discord_id) DO UPDATE SET notify_opt_out=excluded.notify_opt_out",
             (str(discord_id), 1 if opt_out else 0),
         )
+
+
+def set_access_revoked(discord_id: str, ts: float) -> None:
+    """Stamp (or clear, with ts=0) a member's access-revocation time.
+
+    Every session issued before `ts` stops being honored, so this is the
+    off-boarding switch for someone who's been removed from the org. Keeping a
+    timestamp rather than a boolean means re-admitting them is just a fresh
+    login — their new session is issued after the stamp and passes."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO members (discord_id, access_revoked_at) VALUES (?,?) "
+            "ON CONFLICT(discord_id) DO UPDATE SET access_revoked_at=excluded.access_revoked_at",
+            (str(discord_id), float(ts)),
+        )
+
+
+def all_access_revocations() -> dict[str, float]:
+    """Every revoked member -> when. Loaded once at startup into the in-memory
+    mirror the per-request check reads (app.revoked_access)."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT discord_id, access_revoked_at FROM members "
+            "WHERE access_revoked_at > 0").fetchall()
+    return {r["discord_id"]: float(r["access_revoked_at"]) for r in rows}
 
 
 def notify_opted_out(ids) -> set:
@@ -2369,6 +2429,16 @@ def _backfill_listing_denorm() -> None:
         _recompute_denorm(lid)
 
 
+def open_listing_count(seller_id: str) -> int:
+    """How many live listings this member is holding open — the flood guard's
+    input. Closed/cancelled/settled rows don't count against them."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT COUNT(*) AS n FROM listings WHERE seller_id=? AND status='open'",
+            (str(seller_id),)).fetchone()
+    return int(row["n"] if row else 0)
+
+
 def create_listing(d: dict) -> int:
     """Insert a listing (caller supplies validated fields + seller_id + timestamps)."""
     with _lock, _conn:
@@ -3221,6 +3291,21 @@ def price_report_save(e: dict) -> int:
              e.get("price"), e.get("scu"), 1 if e.get("is_missing") else 0,
              e.get("reporter"), e.get("reporter_name") or "", e["created"]))
         return cur.lastrowid
+
+
+def price_reports_clear(reporter: str | None = None) -> int:
+    """Admin purge of the observed-price ledger, org-wide or for one reporter.
+
+    The overlay re-applies this ledger onto the feed on every rebuild, so a bad
+    (or fabricated) run of reports outlives restarts and feed refreshes. Without
+    this, the only way to retire them was hand-editing SQLite. Scoping to a
+    `reporter` is the surgical version: drop one member's reports and leave
+    everyone else's evidence intact. Returns rows removed."""
+    with _lock, _conn:
+        cur = (_conn.execute("DELETE FROM price_reports WHERE reporter=?",
+                             (reporter,)) if reporter
+               else _conn.execute("DELETE FROM price_reports"))
+        return cur.rowcount
 
 
 def price_reports_for(poi_id: int | None = None, limit: int = 100) -> list[dict]:

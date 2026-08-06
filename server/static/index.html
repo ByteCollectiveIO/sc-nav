@@ -2733,7 +2733,9 @@
     </label>
     <div class="muted" style="font-size:12px; margin-top:4px;">
       Keeps your Discord-name to in-game-handle link off member-facing views.
-      Org admins can still see it.
+      Org admins can still see it. Note that posting to the marketplace shows
+      your handle on the listing either way, since a buyer has to know who to
+      meet in-game.
     </div>
     <span class="muted" id="identity-status" role="status" aria-live="polite"
           style="font-size:12px; display:block; margin-top:6px;"></span>
@@ -9589,7 +9591,7 @@ function renderTradeLeg(lg, i) {
     move.push(`reposition ${fmtGm(lg.to_buy.distance_m)}`);
   if (lg.haul && lg.haul.distance_m != null) {
     let hl = `haul ${fmtGm(lg.haul.distance_m)}`;
-    if (lg.haul.cross_system) hl += ` <span class="gate">· via ${(lg.haul.via_gate || []).join(" → ")}</span>`;
+    if (lg.haul.cross_system) hl += ` <span class="gate">· via ${esc((lg.haul.via_gate || []).join(" → "))}</span>`;
     move.push(hl);
   }
   // Snare-detour (#24 v2): a "dodge via …" span on whichever sub-leg was rerouted.
@@ -14366,7 +14368,7 @@ function renderPocketSuggest(elId, rows, inputId) {
     + ranked.map(pk =>
       `<button type="button" class="route-chip" data-pinpocket="${esc(pk.key)}"`
       + ` title="${pk.marks || 0} mark${pk.marks === 1 ? "" : "s"}`
-      + `${(pk.ores || []).length ? " · " + pk.ores.join(", ") : ""}`
+      + `${(pk.ores || []).length ? " · " + pk.ores.map(esc).join(", ") : ""}`
       + ` — click to set as the plan destination">`
       + `${esc(pk.name || pk.key)}${surveyValueChip(pk.value)}</button>`).join(" ");
   for (const b of el.querySelectorAll("[data-pinpocket]"))

@@ -1,5 +1,6 @@
 """Parser tests for sc_nav_watcher. Run: python3 test_parse.py"""
 
+import inspect
 import json
 import os
 import queue
@@ -220,6 +221,30 @@ class TradeTxnParseTests(unittest.TestCase):
         self.assertIsNone(parse_trade_txn(_TXN_BUY.strip().split("> ", 1)[1]))
         self.assertIsNone(parse_trade_txn(
             _TXN_SELL.strip().replace("quantity[29]", "quantity[0]")))
+
+
+class BuildPayloadTests(unittest.TestCase):
+    """The position payload is the whole of what leaves a member's machine on a
+    fix, so it gets pinned field-by-field."""
+
+    def test_payload_carries_only_the_parsed_fix(self):
+        p = sc_nav_watcher.build_payload(
+            {"x": 1.5, "y": -2.0, "z": 3.0}, "Nomad_77", "pub_use1b_1_1")
+        self.assertEqual(set(p), {"x", "y", "z", "client_time", "source",
+                                  "handle", "shard"})
+        self.assertEqual((p["x"], p["y"], p["z"]), (1.5, -2.0, 3.0))
+
+    def test_clipboard_text_is_never_transmitted(self):
+        # Regression: the payload used to carry a `raw` field with 512 chars of
+        # clipboard text that the server never read — anything sharing the
+        # clipboard with the fix went to the org server, and the heartbeat
+        # re-sent it. Nothing here may reintroduce a free-text passenger.
+        p = sc_nav_watcher.build_payload({"x": 0.0, "y": 0.0, "z": 0.0})
+        self.assertNotIn("raw", p)
+        # build_payload takes no clipboard argument at all, so there is nothing
+        # for a future edit to forward by accident.
+        params = inspect.signature(sc_nav_watcher.build_payload).parameters
+        self.assertEqual(list(params), ["coords", "handle", "shard"])
 
 
 class HeartbeatDueTests(unittest.TestCase):

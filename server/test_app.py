@@ -23,6 +23,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 def _msg_text(text, embed):
@@ -191,16 +192,17 @@ class DiscordSettingsTests(unittest.TestCase):
         cls._admin = {"id": "1", "username": "tester", "is_admin": True}
         # require_session reads request.session — bypass it with an override.
         app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        app.app.dependency_overrides[app.require_user] = lambda: cls._admin
         # auth_gate is middleware (runs before DI), so it can't see the override;
         # it accepts a bearer-token user, so stub token_user to satisfy the gate.
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -269,8 +271,9 @@ class PoiOverrideApiTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._admin = {"id": "1", "username": "tester", "display_name": "Boss", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._admin
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._admin
+        app.app.dependency_overrides[app.require_user] = lambda: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
         cls.client = TestClient(app.app)
         cls.poi = next(p for p in app.nav.pois.values() if p.qt_marker and not p.private)
 
@@ -278,7 +281,7 @@ class PoiOverrideApiTests(unittest.TestCase):
     def tearDownClass(cls):
         cls._reset()
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     @classmethod
@@ -291,6 +294,7 @@ class PoiOverrideApiTests(unittest.TestCase):
     def setUp(self):
         self._reset()
         app.app.dependency_overrides[app.require_session] = lambda: self._admin
+        app.app.dependency_overrides[app.require_user] = lambda: self._admin
 
     def test_requires_admin(self):
         app.app.dependency_overrides[app.require_session] = lambda: {"id": "2", "is_admin": False}
@@ -672,14 +676,15 @@ class OnlineRosterTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "1", "username": "tester", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -797,9 +802,10 @@ class ProfileTagsTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "1", "username": "tester", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
         app.app.dependency_overrides[app.require_admin] = lambda: cls._member
-        cls._orig_token_user = app.token_user   # the auth middleware's bearer path
-        app.token_user = lambda request: cls._member
+        cls._orig_session_user = app.session_user   # the auth middleware's bearer path
+        app.session_user = lambda request: cls._member
         # The module-global directory cache was loaded from the real DB at import;
         # park it and run against the temp DB only, restoring on teardown.
         cls._orig_members = app.members_dir.by_id
@@ -809,7 +815,7 @@ class ProfileTagsTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.members_dir.by_id = cls._orig_members
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -952,14 +958,15 @@ class LFGBoardTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "1", "username": "tester", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -1137,15 +1144,16 @@ class LFGAnnounceTests(unittest.TestCase):
         db.set_setting(notify._webhook_key("lfg"), _GOOD_WEBHOOK)
         cls._member = {"id": "1", "username": "tester", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
         cls._orig_send = notify.send
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         notify.send = cls._orig_send
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -1224,8 +1232,9 @@ class WarningBoardTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "1", "username": "tester", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
         # A real POI id so anchor + system resolution is exercised against nav data.
         cls._poi_id = next(iter(app.nav.pois))
@@ -1234,7 +1243,7 @@ class WarningBoardTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -1287,12 +1296,27 @@ class WarningBoardTests(unittest.TestCase):
         self.assertIn("8", again["confirmations"])
         self.assertGreater(again["created"], time.time() - 5)   # clock reset
 
-    def test_confirm_by_poster_refreshes_without_self_credit(self):
+    def test_confirm_by_poster_neither_credits_nor_refreshes(self):
+        # Warnings steer everyone's routes (avoid_mode defaults to avoid), so a
+        # poster who could refresh their own warning could keep it — and the
+        # detour it forces on the org — alive forever. Only a new corroborator
+        # resets the age-off clock.
         w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
-        w["created"] = time.time() - 100
+        stamp = w["created"] = time.time() - 100
         again = app.hub.confirm_warning(w["id"], "7")
         self.assertEqual(again["confirmations"], [])            # poster isn't a confirmer
-        self.assertGreater(again["created"], time.time() - 5)   # but it still refreshes
+        self.assertEqual(again["created"], stamp)               # and can't self-refresh
+
+    def test_repeat_confirmer_cannot_keep_refreshing(self):
+        # The same member on a cron is the other way to make a warning immortal.
+        w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
+        app.hub.confirm_warning(w["id"], "8")                   # genuine corroboration
+        stamp = w["created"] = time.time() - 100
+        app.hub.confirm_warning(w["id"], "8")                   # ...and again, and again
+        self.assertEqual(w["created"], stamp)
+        # A second, distinct corroborator is real news and does refresh it.
+        app.hub.confirm_warning(w["id"], "9")
+        self.assertGreater(w["created"], time.time() - 5)
 
     def test_confirm_is_idempotent_per_member(self):
         w = app.hub.post_warning("7", "point", "pvp", "active", self._poi_id, None, "x", "")
@@ -1424,15 +1448,16 @@ class WarningAnnounceTests(unittest.TestCase):
         db.set_setting(notify._webhook_key("pirates"), _GOOD_WEBHOOK)
         cls._member = {"id": "1", "username": "tester", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
         cls._orig_send = notify.send
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         notify.send = cls._orig_send
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -1648,14 +1673,15 @@ class HazardRadiusSettingTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._admin = {"id": "1", "username": "tester", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._admin
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._admin
+        app.app.dependency_overrides[app.require_user] = lambda: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def test_default_is_5000(self):
@@ -1687,14 +1713,15 @@ class FleetTemplateTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "1", "username": "organizer", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def _make_event(self, title):
@@ -1893,14 +1920,15 @@ class TradeStockReportTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "9", "display_name": "Trader", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.hub.sessions.pop("9", None)
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -2134,14 +2162,15 @@ class TradeFavoritesTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "42", "username": "trader", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -2187,10 +2216,12 @@ class TradeFavoritesTests(unittest.TestCase):
         # A different member sees none of it.
         other = {"id": "99", "username": "other", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: other
+        app.app.dependency_overrides[app.require_user] = lambda: other
         try:
             self.assertEqual(self.client.get("/api/trade/favorites").json()["favorites"], [])
         finally:
             app.app.dependency_overrides[app.require_session] = lambda: self._user
+            app.app.dependency_overrides[app.require_user] = lambda: self._user
 
     def test_invalid_config_is_rejected(self):
         r = self._save("Bad", {"mode": "auto", "usable_scu": 0})   # SCU must be > 0
@@ -2204,13 +2235,13 @@ class QuantumEnrichmentTests(unittest.TestCase):
     def setUpClass(cls):
         # auth_gate is middleware (runs before DI): satisfy it with a stub token user.
         cls._member = {"id": "1", "username": "tester", "is_admin": False}
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
 
     def test_ships_endpoint_carries_quantum_for_matched(self):
         rows = self.client.get("/api/ships").json()
@@ -2275,8 +2306,9 @@ class CommissionModeTests(unittest.TestCase):
         cls._other = {"id": "333", "username": "third", "is_admin": False}
         cls._current = cls._requester
         app.app.dependency_overrides[app.require_session] = lambda: cls._current
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._current
+        app.app.dependency_overrides[app.require_user] = lambda: cls._current
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._current
         cls._orig_feed = app.blueprints_feed
         app.blueprints_feed = {"BP_CRAFT_AMRS_LaserCannon_S1": cls._BP}
         cls._orig_catalog_by_id = app.item_catalog_by_id
@@ -2289,7 +2321,7 @@ class CommissionModeTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.blueprints_feed = cls._orig_feed
         app.item_catalog_by_id = cls._orig_catalog_by_id
         Path(cls._tmp.name).unlink(missing_ok=True)
@@ -2685,8 +2717,9 @@ class InventorySpecTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._u = {"id": "555", "username": "cass", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._u
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._u
+        app.app.dependency_overrides[app.require_user] = lambda: cls._u
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._u
         # Inject a catalog carrying a spec'd item + a bare commodity, so the join
         # is exercised without depending on the live UEX feed.
         cls._orig_cat = app.item_catalog
@@ -2705,7 +2738,7 @@ class InventorySpecTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.item_catalog = cls._orig_cat
         app.item_catalog_by_id = cls._orig_idx
         Path(cls._tmp.name).unlink(missing_ok=True)
@@ -2779,10 +2812,11 @@ class CraftGoalTests(unittest.TestCase):
         cls._a = {"id": "111", "username": "ana", "is_admin": False}
         cls._b = {"id": "222", "username": "bo", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._a
+        app.app.dependency_overrides[app.require_user] = lambda: cls._a
         # The auth-gate middleware runs before the route dependency, so token_user
         # must also resolve to *some* member for the request to reach the route.
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._a
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._a
         cls._orig_feed = app.blueprints_feed
         app.blueprints_feed = cls._FEED
         # A controlled price map so the materials-cost estimate is deterministic
@@ -2795,7 +2829,7 @@ class CraftGoalTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.blueprints_feed = cls._orig_feed
         app.item_prices = cls._orig_prices
         notify.send = cls._orig_send
@@ -2812,6 +2846,7 @@ class CraftGoalTests(unittest.TestCase):
 
     def _as(self, u):
         app.app.dependency_overrides[app.require_session] = lambda: u
+        app.app.dependency_overrides[app.require_user] = lambda: u
 
     # -- blueprint seeding --
 
@@ -3073,15 +3108,16 @@ class ContributionTests(unittest.TestCase):
         cls._b = {"id": "222", "username": "bo", "is_admin": False}
         cls._admin = {"id": "999", "username": "root", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._a
+        app.app.dependency_overrides[app.require_user] = lambda: cls._a
         # The auth-gate middleware runs before the route dependency (see #29/#30).
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._a
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._a
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -3089,6 +3125,7 @@ class ContributionTests(unittest.TestCase):
 
     def _as(self, u):
         app.app.dependency_overrides[app.require_session] = lambda: u
+        app.app.dependency_overrides[app.require_user] = lambda: u
 
     def _goal(self, needed=10, item="commodity:agricium"):
         return self.client.post("/api/goals", json={
@@ -3360,9 +3397,10 @@ class WikiCatalogTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._admin = {"id": "9", "username": "boss", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        app.app.dependency_overrides[app.require_user] = lambda: cls._admin
         app.app.dependency_overrides[app.require_admin] = lambda: cls._admin
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
         # _rebuild_nav re-runs load_nav_data; force the offline/cache path so a
         # toggle test never fetches starmap.space.
         cls._orig_offline = app.OFFLINE
@@ -3373,7 +3411,7 @@ class WikiCatalogTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.OFFLINE = cls._orig_offline
         app.nav = cls._orig_nav
         app.rebuild_trade_terminals()
@@ -3588,6 +3626,71 @@ class NavSummaryTests(unittest.TestCase):
         self.assertEqual(out["system"], "Pyro")
 
 
+class NonFiniteCoordinateTests(unittest.TestCase):
+    """A position must be a real, finite point.
+
+    json.loads accepts the non-standard literals NaN/Infinity and Pydantic used
+    to pass them straight through, but JSONResponse serializes with
+    allow_nan=False — so a capture posted at NaN persisted a custom POI that
+    could never be read back, 500ing the shared list for every member on every
+    request, across restarts."""
+
+    @classmethod
+    def setUpClass(cls):
+        # This class WRITES POIs, so it must own its database — importing app
+        # points db at the real one, and a stray row would land there.
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "nan-user", "username": "nan", "is_admin": False}
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        app.hub.sessions.pop("nan-user", None)
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def test_non_finite_and_absurd_coordinates_are_refused(self):
+        for body in ('{"x": NaN, "y": 1.0, "z": 1.0}',
+                     '{"x": Infinity, "y": 1.0, "z": 1.0}',
+                     '{"x": -Infinity, "y": 1.0, "z": 1.0}',
+                     '{"x": 1e300, "y": 1.0, "z": 1.0}'):
+            r = self.client.post("/api/position", content=body,
+                                 headers={"content-type": "application/json"})
+            self.assertEqual(r.status_code, 422, body)
+
+    def test_real_coordinates_still_pass(self):
+        # The bound must not clip a legitimate deep-space fix (a surveyed belt
+        # sits ~5e10 m out).
+        r = self.client.post("/api/position",
+                             json={"x": -4.8e10, "y": 2.6e10, "z": -1.5e9})
+        self.assertEqual(r.status_code, 200)
+
+    def test_a_poisoned_row_cannot_break_the_shared_list(self):
+        # Recovery half: a row written before the schema fix is skipped, not
+        # allowed to keep raising on every read.
+        good = {"id": 90001, "name": "Real", "system": "Stanton",
+                "container": None, "type": "custom", "local_km": None,
+                "global_m": [1.0, 2.0, 3.0], "latitude": None, "longitude": None,
+                "height_m": None, "qt_marker": 0, "owner_id": None,
+                "owner_handle": None, "note": None, "private": 0,
+                "survey": None, "created": "2026-08-05T00:00:00Z"}
+        db.add_custom_poi(good)
+        db.add_custom_poi({**good, "id": 90002, "name": "Poison",
+                           "global_m": [float("nan")] * 3})
+        names = [p["name"] for p in db.list_custom_pois()]
+        self.assertIn("Real", names)
+        self.assertNotIn("Poison", names)
+        # And the endpoint that used to 500 serializes cleanly again.
+        self.assertEqual(self.client.get("/api/custom_pois").status_code, 200)
+
+
 class PositionPostReturnsNavTests(unittest.TestCase):
     """Wiring guard: the overlay's entire data feed is the body of the position
     post, so an accidental revert to a bare {"ok": true} would silently freeze
@@ -3597,14 +3700,14 @@ class PositionPostReturnsNavTests(unittest.TestCase):
     def setUpClass(cls):
         cls._user = {"id": "overlay-user", "username": "hud", "is_admin": False}
         app.app.dependency_overrides[app.require_user] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.hub.sessions.pop("overlay-user", None)
         app.hub.presence.pop("overlay-user", None)
         app.hub._dirty.discard("overlay-user")
@@ -3642,14 +3745,15 @@ class HandleRegistrationTests(unittest.TestCase):
         # /api/me is what the Settings panel reads back — override it too so the
         # bind -> picker round-trip is covered end to end.
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -3750,14 +3854,15 @@ class HandleRegistryExposureTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "nosy-1", "username": "member", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -3799,14 +3904,14 @@ class NewHandleRateLimitTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "squatter", "username": "s", "is_admin": False}
         app.app.dependency_overrides[app.require_user] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -3886,14 +3991,15 @@ class AdminHandleBindingTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._admin = {"id": "admin-1", "username": "boss", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._admin
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._admin
+        app.app.dependency_overrides[app.require_user] = lambda: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -3971,12 +4077,14 @@ class AdminHandleBindingTests(unittest.TestCase):
     def test_non_admin_is_refused(self):
         member = {"id": "member-1", "username": "rank-and-file", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: member
+        app.app.dependency_overrides[app.require_user] = lambda: member
         try:
             self.assertEqual(self.client.get("/api/admin/handles").status_code, 403)
             self.assertEqual(
                 self.client.delete("/api/admin/handles/1/owner").status_code, 403)
         finally:
             app.app.dependency_overrides[app.require_session] = lambda: self._admin
+            app.app.dependency_overrides[app.require_user] = lambda: self._admin
 
 
 class PositionBroadcastLockTests(unittest.TestCase):
@@ -4163,6 +4271,208 @@ class DatasetRefreshCoalesceTests(unittest.TestCase):
         asyncio.run(_run())
 
 
+class RateLimitTests(unittest.TestCase):
+    """Per-member flood guards. Everything limited is authenticated, so the unit
+    is the member — an org member looping an endpoint is the realistic case, and
+    it's attributable. The solvers matter most: they run heavy work that, under
+    the GIL, pins the single worker for everyone else."""
+
+    def setUp(self):
+        app._rate_hits.clear()
+
+    def tearDown(self):
+        app._rate_hits.clear()
+
+    def test_allowance_is_spent_then_refused(self):
+        limit, _ = app._RATE_LIMITS["solve"]
+        for _ in range(limit):
+            app.rate_limit("solve", "42")          # within budget
+        with self.assertRaises(HTTPException) as caught:
+            app.rate_limit("solve", "42")
+        self.assertEqual(caught.exception.status_code, 429)
+
+    def test_budgets_are_per_member_and_per_bucket(self):
+        limit, _ = app._RATE_LIMITS["solve"]
+        for _ in range(limit):
+            app.rate_limit("solve", "42")
+        app.rate_limit("solve", "43")              # a different member is fine
+        app.rate_limit("watcher", "42")            # ...as is a different bucket
+
+    def test_window_rolls_forward(self):
+        limit, window = app._RATE_LIMITS["token"]
+        for _ in range(limit):
+            app.rate_limit("token", "42")
+        # Age every recorded hit past the window rather than sleeping through it.
+        key = ("token", "42")
+        app._rate_hits[key] = [t - window - 1 for t in app._rate_hits[key]]
+        app.rate_limit("token", "42")              # allowance has come back
+
+    def test_limits_are_above_real_use(self):
+        # A guard, not a quota. If someone tightens these, it should be a
+        # deliberate act with a test to argue about, not a silent squeeze.
+        self.assertGreaterEqual(app._RATE_LIMITS["solve"][0], 30)
+        # A fix per /showlocation plus a 60s heartbeat is nowhere near this.
+        self.assertGreaterEqual(app._RATE_LIMITS["watcher"][0], 100)
+
+
+class MemberAccessRevocationTests(unittest.TestCase):
+    """Off-boarding. Guild membership is only checked at OAuth login, so without
+    this, removing a disgruntled member from the Discord org left their session
+    working for the rest of its 8h life and their watcher token working forever."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "display_name": "Admin", "is_admin": True}
+        cls._member = {"id": "4242", "display_name": "Leaver", "is_admin": False}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        db.set_access_revoked(self._member["id"], 0)
+        app.revoked_access.clear()   # the in-memory mirror the checks read
+        app.app.dependency_overrides[app.require_admin] = lambda: self._admin
+        app.app.dependency_overrides[app.require_session] = lambda: self._admin
+        app.session_user = lambda request: self._admin
+
+    def _revoke(self, revoked=True):
+        return self.client.post(f"/api/admin/members/{self._member['id']}/access",
+                                json={"revoked": revoked})
+
+    def test_revoking_kills_sessions_issued_before_it(self):
+        issued = time.time() - 60
+        self.assertFalse(app.access_revoked(self._member["id"], issued))
+        self.assertEqual(self._revoke().status_code, 200)
+        self.assertTrue(app.access_revoked(self._member["id"], issued))
+        # A later, legitimate re-login is unaffected — that's why it's a stamp
+        # and not a boolean.
+        self.assertFalse(app.access_revoked(self._member["id"], time.time() + 1))
+
+    def test_watcher_tokens_are_deleted_not_merely_expired(self):
+        raw, _ = app.tokens.mint(self._member["id"], "Leaver", "watcher")
+        self.assertIsNotNone(app.tokens.resolve(raw))
+        self.assertEqual(self._revoke().json()["tokens_deleted"], 1)
+        # A token carries no issue time and never expires, so revocation has to
+        # remove it outright.
+        self.assertIsNone(app.tokens.resolve(raw))
+        self.assertEqual(app.tokens.list_for(self._member["id"]), [])
+
+    def test_revocation_survives_a_restart(self):
+        # The per-request check reads an in-memory mirror; the mirror is
+        # rebuilt from this query at boot. If that ever stopped matching, a
+        # restart would quietly re-admit everyone who had been removed.
+        self._revoke()
+        self.assertIn(self._member["id"], db.all_access_revocations())
+        app.revoked_access.clear()                       # simulate a fresh process
+        app.revoked_access.update(db.all_access_revocations())
+        self.assertTrue(app.access_revoked(self._member["id"], time.time() - 60))
+
+    def test_restoring_clears_the_stamp(self):
+        self._revoke()
+        self.assertTrue(app.access_revoked(self._member["id"], time.time() - 60))
+        self.assertEqual(self._revoke(revoked=False).status_code, 200)
+        self.assertFalse(app.access_revoked(self._member["id"], time.time() - 60))
+
+    def test_an_admin_cannot_be_revoked(self):
+        # Otherwise the recovery path is SQL. Grant real admin (the dependency
+        # override fakes the *caller*; this guard reads the live admin set).
+        db.set_setting("extra_admin_ids", self._admin["id"])
+        try:
+            r = self.client.post(f"/api/admin/members/{self._admin['id']}/access",
+                                 json={"revoked": True})
+            self.assertEqual(r.status_code, 400, r.text)
+            self.assertFalse(app.access_revoked(self._admin["id"], time.time() - 60))
+        finally:
+            db.set_setting("extra_admin_ids", "")
+
+    def test_non_admins_cannot_revoke_anyone(self):
+        app.app.dependency_overrides.pop(app.require_admin, None)
+        app.app.dependency_overrides[app.require_session] = lambda: self._member
+        r = self._revoke()
+        self.assertEqual(r.status_code, 403)
+
+    def test_member_id_must_be_a_discord_id(self):
+        r = self.client.post("/api/admin/members/not-an-id/access",
+                             json={"revoked": True})
+        self.assertEqual(r.status_code, 400)
+
+
+class AuthGateTests(unittest.TestCase):
+    """The gate is deny-by-default. These pin the two properties that a
+    permissive gate silently lost: nothing outside the public allowlist is
+    anonymous, and a watcher token reaches only the watcher's own endpoints."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "77", "display_name": "Watcher", "is_admin": False}
+        cls._orig_session_user = app.session_user
+        cls._orig_token_user = app.token_user
+        app.session_user = lambda request: None          # nobody is signed in
+        app.token_user = lambda request: None            # ...and no token, by default
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.session_user = cls._orig_session_user
+        app.token_user = cls._orig_token_user
+        app.hub.sessions.pop("77", None)
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def test_interactive_api_docs_are_not_served(self):
+        # They sit outside /api/, carry no auth of their own, and the docstrings
+        # in this app are detailed design notes — an anonymous visitor could read
+        # the entire endpoint map and every request schema.
+        # Two independent layers say no: the gate refuses them (401) because
+        # they aren't on the public allowlist, and FastAPI was built with the
+        # doc routes disabled so there is nothing behind it (404). Either answer
+        # is a pass; 200 is the regression.
+        for path in ("/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"):
+            self.assertIn(self.client.get(path).status_code, (401, 404), path)
+
+    def test_static_tree_is_not_anonymously_browsable(self):
+        # The mount serves all of server/static/, which on a dev checkout can
+        # hold a stray .DS_Store or .impeccable/. Only /images/ is public.
+        for path in ("/.DS_Store", "/.impeccable/hook.cache.json"):
+            self.assertEqual(self.client.get(path).status_code, 401, path)
+
+    def test_public_allowlist_still_serves_the_login_splash(self):
+        for path in ("/", "/index.html", "/api/health", "/api/branding"):
+            self.assertEqual(self.client.get(path).status_code, 200, path)
+
+    def test_public_exemptions_are_method_scoped(self):
+        # GET is public so the splash can read it; writing is admin-gated.
+        self.assertEqual(self.client.post("/api/branding").status_code, 401)
+        self.assertEqual(self.client.delete("/api/org-logo").status_code, 401)
+
+    def test_watcher_token_reaches_only_the_watcher_endpoints(self):
+        app.token_user = lambda request: self._member
+        try:
+            # Its own three endpoints: the gate lets them through (whatever the
+            # route then makes of the body).
+            self.assertNotEqual(
+                self.client.post("/api/position",
+                                 json={"x": 1.0, "y": 2.0, "z": 3.0}).status_code, 401)
+            self.assertNotEqual(
+                self.client.post("/api/handle", json={"handle": "Nomad"}).status_code, 401)
+            # Everything else is refused. These are the org's accumulated data —
+            # the asset the tool exists to build — and a token is an unattended
+            # credential sitting in plaintext on a member's gaming PC.
+            for path in ("/api/handles", "/api/observations", "/api/pois",
+                         "/api/custom_pois", "/api/trade/prices", "/api/blueprints"):
+                self.assertEqual(self.client.get(path).status_code, 401, path)
+        finally:
+            app.token_user = lambda request: None
+
+
 class BrandingAndMotdTests(unittest.TestCase):
     """Custom guild branding: the admin-set org name (shown pre-auth on the login
     splash + app chooser) and the message-of-the-day broadcast banner."""
@@ -4174,14 +4484,15 @@ class BrandingAndMotdTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "1", "username": "tester", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -4205,13 +4516,14 @@ class BrandingAndMotdTests(unittest.TestCase):
         # route would 401 here; /api/branding is exempt so the login splash can
         # read the name pre-auth.
         app.app.dependency_overrides.pop(app.require_session, None)
-        app.token_user = lambda request: None
+        app.session_user = lambda request: None
         try:
             self.assertEqual(self.client.get("/api/me").status_code, 401)   # gate is live
             r = self.client.get("/api/branding")
         finally:
             app.app.dependency_overrides[app.require_session] = lambda: self._member
-            app.token_user = lambda request: self._member
+            app.app.dependency_overrides[app.require_user] = lambda: self._member
+            app.session_user = lambda request: self._member
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["org_name"], "Aurora Trading Co.")
@@ -4261,8 +4573,9 @@ class HaloFinderApiTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "1", "display_name": "Pilot", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
         cls.arc = next(p for p in app.nav.pois.values()
                        if "(ARC-L1)" in p.name and p.qt_marker)
@@ -4270,7 +4583,7 @@ class HaloFinderApiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -4704,9 +5017,10 @@ class BeltSurveyApiTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "1", "display_name": "Surveyor", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
         app.app.dependency_overrides[app.require_admin] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
         cls.KR = app.nav_core.KEEGER_R_M
         cls.gate = next(p for p in app.nav.qt_markers
@@ -4715,7 +5029,7 @@ class BeltSurveyApiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -5452,8 +5766,9 @@ class SurveyStatsAndMilestonesTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "9", "display_name": "Surveyor", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
         cls.KR = app.nav_core.KEEGER_R_M
         cls._orig_send = notify.send
@@ -5461,7 +5776,7 @@ class SurveyStatsAndMilestonesTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         notify.send = cls._orig_send
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -5624,8 +5939,9 @@ class ResourceValueTests(unittest.TestCase):
     def setUpClass(cls):
         cls._user = {"id": "7", "username": "miner", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         # Controlled feeds: build against known names/prices, not the live cache.
         cls._orig = (app.raw_commodity_names, app.harvestable_names,
                      app.load_commodity_prices, app.resource_values)
@@ -5649,7 +5965,7 @@ class ResourceValueTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         (app.raw_commodity_names, app.harvestable_names,
          app.load_commodity_prices, app.resource_values) = cls._orig
 
@@ -5680,15 +5996,16 @@ class OreSignatureTests(unittest.TestCase):
     def setUpClass(cls):
         cls._user = {"id": "9", "username": "surveyor", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls._orig = app.ore_signatures
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.ore_signatures = cls._orig
 
     def test_serves_feed_with_attribution(self):
@@ -5725,8 +6042,9 @@ class TradeStopFilterApiTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "1", "display_name": "Hauler", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
         pois = [p for p in app.nav.pois.values()
                 if p.system == "Stanton" and p.global_m][:3]
@@ -5735,11 +6053,12 @@ class TradeStopFilterApiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
         app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()   # the suite plans far faster than a human does
 
         def pt(commodity, tid, poi, buy=None, sell=None):
             return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
@@ -5828,8 +6147,9 @@ class TradeReturnApiTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "1", "display_name": "Trader", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
         pois = [p for p in app.nav.pois.values()
                 if p.system == "Stanton" and p.global_m][:3]
@@ -5838,11 +6158,12 @@ class TradeReturnApiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
         app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()   # the suite plans far faster than a human does
 
         def pt(commodity, tid, poi, buy=None, sell=None):
             return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
@@ -5959,8 +6280,9 @@ class TradeLegalityApiTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "1", "display_name": "Smuggler", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
         pois = [p for p in app.nav.pois.values()
                 if p.system == "Stanton" and p.global_m][:3]
@@ -5969,11 +6291,12 @@ class TradeLegalityApiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
         app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()   # the suite plans far faster than a human does
 
         def pt(commodity, tid, poi, buy=None, sell=None):
             return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
@@ -6070,14 +6393,15 @@ class FeedRefreshSettingTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._admin = {"id": "1", "username": "tester", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._admin
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._admin
+        app.app.dependency_overrides[app.require_user] = lambda: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -6138,15 +6462,16 @@ class PinAndMineTest(unittest.TestCase):
         # pin/mine themselves don't care about the admin flag.
         cls._user = {"id": "1", "display_name": "Miner", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
         app.app.dependency_overrides[app.require_admin] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -6280,14 +6605,15 @@ class TradeTxnCaptureTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "9", "display_name": "Trader", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user   # bearer path: watcher token
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user   # bearer path: watcher token
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.hub.sessions.pop("9", None)
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -6442,12 +6768,12 @@ class TradeTxnCaptureTests(unittest.TestCase):
         self.assertAlmostEqual(txn["unit_price"], 5559.0, places=2)
 
     def test_anonymous_caller_rejected(self):
-        app.token_user = lambda request: None
+        app.session_user = lambda request: None
         try:
             r = self._post_txn()
             self.assertEqual(r.status_code, 401)
         finally:
-            app.token_user = lambda request: self._member
+            app.session_user = lambda request: self._member
 
 
 class OrgPriceOverlayTests(unittest.TestCase):
@@ -6464,14 +6790,15 @@ class OrgPriceOverlayTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._member = {"id": "9", "display_name": "Trader", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.hub.sessions.pop("9", None)
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -6480,15 +6807,22 @@ class OrgPriceOverlayTests(unittest.TestCase):
             for table in ("trade_transactions", "commodity_guids", "shop_pois",
                           "price_reports", "stock_reports"):
                 db._conn.execute(f"DELETE FROM {table}")
-        # A planted feed row: UEX scraped Gold at this terminal an hour ago.
+        # A planted feed row: UEX scraped Gold at this terminal an hour ago. The
+        # scrape sits near what the members go on to observe — an org report is
+        # a *correction* to the scrape, and one that disagrees by 34× is now
+        # rejected as fabricated (see the plausibility-band tests below).
         self._scrape_t = time.time() - 3600
         self._orig_points = app.trade_price_points
+        self._orig_base = dict(app._uex_price_base)
         app.trade_price_points = [{
             "commodity": "Gold", "terminal_id": 101, "terminal": "A",
-            "system": "Stanton", "poi_id": 11, "buy": 100, "sell": None,
+            "system": "Stanton", "poi_id": 11, "buy": 3300, "sell": None,
             "scu_buy": 500, "scu_sell_stock": 0, "status_buy": 4,
             "status_sell": 0, "updated_at": self._scrape_t, "id_commodity": 5,
         }]
+        # rebuild_trade_terminals normally does this; these tests plant the
+        # points directly, so snapshot the baseline the band is measured against.
+        app._snapshot_uex_prices()
         legs = [
             {"commodity": "Gold", "buy_poi_id": 11, "sell_poi_id": 12,
              "buy_terminal_id": 101, "sell_terminal_id": 102,
@@ -6503,6 +6837,8 @@ class OrgPriceOverlayTests(unittest.TestCase):
 
     def tearDown(self):
         app.trade_price_points = self._orig_points
+        app._uex_price_base.clear()
+        app._uex_price_base.update(self._orig_base)
 
     def _post_txn(self, **over):
         txn = {"side": "buy", "shop": "SCShop_hicks", "guid": self.GUID,
@@ -6539,7 +6875,7 @@ class OrgPriceOverlayTests(unittest.TestCase):
                               "created": self._scrape_t - 60})
         app._apply_org_price_overlay()
         p = app.trade_price_points[0]
-        self.assertEqual(p["buy"], 100)
+        self.assertEqual(p["buy"], 3300)
         self.assertNotIn("buy_src", p)
 
     def test_is_missing_rows_are_ledger_only(self):
@@ -6548,7 +6884,7 @@ class OrgPriceOverlayTests(unittest.TestCase):
                               "created": time.time()})
         self.assertEqual(db.latest_org_prices(), [])
         app._apply_org_price_overlay()
-        self.assertEqual(app.trade_price_points[0]["buy"], 100)
+        self.assertEqual(app.trade_price_points[0]["buy"], 3300)
 
     def test_stockout_files_missing_observation(self):
         r = self.client.patch("/api/trade/run", json={"action": "stockout", "leg": 0})
@@ -6567,6 +6903,61 @@ class OrgPriceOverlayTests(unittest.TestCase):
         self.assertEqual(rows[0]["buy_src"], "org")
         self.assertEqual(rows[0]["id_commodity"], 5)
 
+    # --- plausibility band --------------------------------------------------
+    # The confirms gate validates the learned guid/shop MAPPINGS; it never
+    # looked at the price. Anyone able to post a transaction could set any
+    # terminal to any number, and it survived feed refreshes because the overlay
+    # is re-applied from the ledger on every rebuild.
+
+    def _file(self, price):
+        db.price_report_save({"poi_id": 11, "commodity": "Gold", "side": "buy",
+                              "price": price, "scu": 10, "reporter": "9",
+                              "created": time.time()})
+        app._apply_org_price_overlay()
+        return app.trade_price_points[0]
+
+    def test_fabricated_price_never_reaches_the_planner(self):
+        p = self._file(99_999_999.0)
+        self.assertEqual(p["buy"], 3300)          # scrape stands
+        self.assertNotIn("buy_src", p)
+
+    def test_absurdly_low_price_is_refused_too(self):
+        # The mirror image: a 1 aUEC buy manufactures a fake infinite-margin leg.
+        self.assertEqual(self._file(1.0)["buy"], 3300)
+
+    def test_ordinary_disagreement_still_overrides_the_scrape(self):
+        # The band rejects fabrication, not disagreement — real prices move.
+        self.assertEqual(self._file(4700.0)["buy"], 4700.0)
+
+    def test_report_cannot_invent_a_side_uex_does_not_price(self):
+        # `sell` is None on the planted row: as far as the feed knows this
+        # terminal doesn't buy Gold. Inventing a lucrative market is the
+        # cheapest poisoning move, so a baseline-less side is refused.
+        db.price_report_save({"poi_id": 11, "commodity": "Gold", "side": "sell",
+                              "price": 5000.0, "scu": 10, "reporter": "9",
+                              "created": time.time()})
+        app._apply_org_price_overlay()
+        p = app.trade_price_points[0]
+        self.assertIsNone(p["sell"])
+        self.assertNotIn("sell_src", p)
+
+    def test_reports_cannot_ratchet_the_price_upward(self):
+        # Each report is judged against the SCRAPE, not against the running
+        # value — otherwise a series of in-band steps walks the price anywhere.
+        for _ in range(4):
+            self._file(app.trade_price_points[0]["buy"] * 4)
+        self.assertLessEqual(app.trade_price_points[0]["buy"],
+                             3300 * app._ORG_PRICE_MAX_RATIO)
+
+    def test_admin_can_purge_the_ledger_and_the_overlay_lifts(self):
+        self.assertEqual(self._file(4700.0)["buy"], 4700.0)
+        self.assertEqual(db.price_reports_clear("nobody-else"), 0)   # scoped
+        self.assertEqual(db.price_reports_clear("9"), 1)
+        app.trade_price_points[0].pop("buy_src", None)
+        app.trade_price_points[0]["buy"] = 3300
+        app._apply_org_price_overlay()
+        self.assertEqual(app.trade_price_points[0]["buy"], 3300)
+
 
 class UpdateCheckTests(unittest.TestCase):
     """`GET /api/updates` tells a self-hosting admin their copy is behind. The
@@ -6581,14 +6972,14 @@ class UpdateCheckTests(unittest.TestCase):
         app.app.dependency_overrides[app.require_admin] = lambda: cls._admin
         # The auth gate is HTTP middleware, ahead of the route — overriding the
         # dependency alone still 401s.
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
 
     def setUp(self):
         self._offline, self._repo = app.OFFLINE, app.UPDATE_REPO
@@ -6815,15 +7206,16 @@ class EventRescheduleNotifyTests(unittest.TestCase):
         cls._orig_send = notify.send
         member = {"id": "1", "username": "organizer", "is_admin": True}
         app.app.dependency_overrides[app.require_session] = lambda: member
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: member
+        app.app.dependency_overrides[app.require_user] = lambda: member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: member
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         notify.send = cls._orig_send
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -6887,8 +7279,9 @@ class MarketLifecycleNotifyTests(unittest.TestCase):
         cls._orig_send = notify.send
         cls._user = {"id": "111", "username": "u111", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls._orig_catalog_by_id = app.item_catalog_by_id
         app.item_catalog_by_id = {**app.item_catalog_by_id, "commodity:TestOre": {
             "item_id": "commodity:TestOre", "name": "Test Ore",
@@ -6899,7 +7292,7 @@ class MarketLifecycleNotifyTests(unittest.TestCase):
     def tearDownClass(cls):
         notify.send = cls._orig_send
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.item_catalog_by_id = cls._orig_catalog_by_id
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -7171,15 +7564,16 @@ class EventCapacityWaitlistTests(unittest.TestCase):
         cls._orig_send = notify.send
         cls._user = {"id": "1", "username": "org", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
 
     @classmethod
     def tearDownClass(cls):
         notify.send = cls._orig_send
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
@@ -7399,8 +7793,9 @@ class MarketPriceMemoryAvailabilityTests(unittest.TestCase):
         db.init(Path(cls._tmp.name))
         cls._user = {"id": "111", "username": "u111", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls._orig_catalog_by_id = app.item_catalog_by_id
         app.item_catalog_by_id = {**app.item_catalog_by_id, "commodity:TestOre": {
             "item_id": "commodity:TestOre", "name": "Test Ore",
@@ -7410,7 +7805,7 @@ class MarketPriceMemoryAvailabilityTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.item_catalog_by_id = cls._orig_catalog_by_id
         Path(cls._tmp.name).unlink(missing_ok=True)
 
@@ -7500,8 +7895,9 @@ class CompetitorIdeasTests(unittest.TestCase):
         cls._orig_send = notify.send
         cls._user = {"id": "111", "username": "u111", "is_admin": False}
         app.app.dependency_overrides[app.require_session] = lambda: cls._user
-        cls._orig_token_user = app.token_user
-        app.token_user = lambda request: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
         cls._orig_catalog_by_id = app.item_catalog_by_id
         app.item_catalog_by_id = {**app.item_catalog_by_id, "commodity:TestOre": {
             "item_id": "commodity:TestOre", "name": "Test Ore",
@@ -7514,13 +7910,16 @@ class CompetitorIdeasTests(unittest.TestCase):
     def tearDownClass(cls):
         notify.send = cls._orig_send
         app.app.dependency_overrides.clear()
-        app.token_user = cls._orig_token_user
+        app.session_user = cls._orig_session_user
         app.item_catalog_by_id = cls._orig_catalog_by_id
         app.blueprints_feed = cls._orig_feed
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
         self.sent = []
+        # Both are module-global flood guards, so they leak between tests.
+        app._listing_announce_at.clear()
+        app._directed_ping_at.clear()
 
         async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
             self.sent.append({"category": category,
@@ -7572,6 +7971,37 @@ class CompetitorIdeasTests(unittest.TestCase):
         board = self.client.get("/api/market", params={"mode": "wtb"}).json()
         row = next(l for l in board["listings"] if l["id"] == lid)
         self.assertEqual(row["sort_price"], 7777.0)   # budget until offers land
+
+    def test_directed_pings_are_flood_gated_per_member(self):
+        # The directed paths ignore the `announce` opt-in by design — being told
+        # is the point — which left them the one ungated way to fire @-mentions
+        # at other members in a loop. The listing still posts; only the ping stops.
+        now = datetime.now(timezone.utc).isoformat()
+        db.upsert_inventory("555", "commodity:TestOre", "Test Ore", "SCU",
+                            50, "Area18", None, None, now)
+        self.sent.clear()
+        for _ in range(5):
+            self._mk_wtb()          # asserts 200 internally
+        pings = [m for m in self.sent if "matches your stock" in m["text"]]
+        self.assertEqual(len(pings), 1)
+
+    def test_open_listings_are_capped_per_member(self):
+        self._as("777")
+        cap = app._MAX_OPEN_LISTINGS_PER_MEMBER
+        for i in range(cap):
+            r = self.client.post("/api/market", json={
+                "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+                "price_auec": 10 + i})
+            self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": 99})
+        self.assertEqual(r.status_code, 429, r.text)
+        # A different member has their own budget.
+        self._as("778")
+        self.assertEqual(self.client.post("/api/market", json={
+            "item_id": "commodity:TestOre", "qty": 1, "mode": "sale",
+            "price_auec": 99}).status_code, 200)
 
     def test_wtb_pings_inventory_holders(self):
         now = datetime.now(timezone.utc).isoformat()

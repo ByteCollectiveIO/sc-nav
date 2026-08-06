@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -417,8 +418,12 @@ def load_nav_data() -> nav_core.NavData:
             )
             return _apply_wiki_catalog(fresh)
         except Exception as exc:
-            data_info["error"] = str(exc)
-            print(f"[sc-nav] live fetch failed, using cached data: {exc}")
+            # The class name, not str(exc): this surfaces on /api/health, and an
+            # OSError raised while applying the catalog stringifies with the
+            # absolute path it failed on. The full text goes to the log, where
+            # the operator can read it and a visitor can't.
+            data_info["error"] = type(exc).__name__
+            print(f"[sc-nav] live fetch failed, using cached data: {exc!r}")
     data_info["source"] = "offline" if OFFLINE else "cache"
     oc_raw = json.loads((DATA_DIR / "containers.json").read_text())
     poi_raw = json.loads((DATA_DIR / "poi.json").read_text()) if want_pois else []
@@ -1249,25 +1254,77 @@ def merge_all_observations(target_nav) -> None:
     nav_core.merge_observations(target_nav, db.list_observations())
 
 
-app = FastAPI(title="SC Nav")
+# The interactive API docs are off. They aren't auth-gated by FastAPI, they sit
+# outside /api/, and this app's docstrings are detailed design notes — an
+# anonymous visitor could read the whole endpoint map, every request schema, and
+# the reasoning behind each guard. Nothing in the SPA consumes them.
+app = FastAPI(title="SC Nav", docs_url=None, redoc_url=None, openapi_url=None)
 
 
-# Auth gate: every /api/* call needs a logged-in org member (session) or a valid
-# watcher token; the SPA shell, /auth/* and /api/health stay open. Registered
-# BEFORE SessionMiddleware below so that (being the inner layer) it runs after
-# the session has been loaded from the cookie.
+# Auth gate. **Deny by default**: a request is answered only if it names a public
+# route, carries an org member's session, or is a watcher on one of its own
+# endpoints. Registered BEFORE SessionMiddleware below so that (being the inner
+# layer) it runs after the session has been loaded from the cookie.
+#
+# This used to read "deny /api/*, allow everything else", which made the whole
+# non-/api namespace public unless each route remembered to check for itself —
+# and /openapi.json, /docs, /redoc didn't, nor did the static mount, which
+# happily served a stray .DS_Store or .impeccable/ out of server/static/. An
+# allowlist makes that class of mistake impossible rather than merely absent:
+# a new route is private until someone deliberately lists it here.
+_PUBLIC_EXACT = {
+    ("GET", "/"), ("GET", "/index.html"),   # the SPA shell (login splash)
+    ("GET", "/api/health"),                 # liveness (compose healthcheck)
+    # Shown on the pre-auth splash. GET only — POST/DELETE stay admin-gated.
+    ("GET", "/api/branding"), ("GET", "/api/org-logo"),
+}
+_PUBLIC_PREFIXES = ("/auth/", "/images/")   # OAuth flow + the shell's own assets
+
+# A watcher token is an unattended credential that lives in plaintext next to a
+# script on a member's gaming PC, so it gets exactly the three endpoints the
+# watcher actually posts to — not the whole read surface. It previously reached
+# every dependency-less GET (`/api/handles`, `/api/observations`, the trade
+# feeds, the POI catalog), which turned a leaked token into a silent export of
+# the entire org dataset the tool exists to build. Keep in sync with the
+# watcher's POSITION_ENDPOINT / HANDLE_ENDPOINT / txn_url.
+_WATCHER_PATHS = {"/api/position", "/api/handle", "/api/trade/transactions"}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 for a malformed body, without echoing the offending value back.
+
+    FastAPI's default handler includes the rejected `input` in the detail. That
+    turned a *successful* rejection into a 500: a NaN coordinate fails
+    validation, and then serializing the error that says so raises, because
+    JSONResponse uses allow_nan=False. Reducing each error to type/loc/msg fixes
+    that and stops reflecting request payloads back to the caller."""
+    return JSONResponse(
+        {"detail": [{"type": e.get("type"), "loc": [str(p) for p in e.get("loc", ())],
+                     "msg": e.get("msg")} for e in exc.errors()]},
+        status_code=422)
+
+
+def session_user(request: Request) -> dict | None:
+    """The signed-in member as the *gate* sees them — the raw session payload,
+    with no admin recompute (that's `current_user`'s job, per route). Its own
+    function so the middleware has a seam the test harness can stand in for;
+    middleware runs before dependency injection, so `dependency_overrides`
+    can't reach it."""
+    user = request.session.get("user")
+    if user and access_revoked(user["id"], request.session.get("iat")):
+        return None
+    return user
+
+
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
-    path = request.url.path
-    # The org logo + name are shown on the pre-auth login splash, so reading them
-    # is public (GET only — POST/DELETE still fall through to the admin-gated
-    # route). /api/branding carries the public name; the logo is its own image
-    # route.
-    if (not path.startswith("/api/") or path == "/api/health"
-            or (path == "/api/branding" and request.method == "GET")
-            or (path == "/api/org-logo" and request.method == "GET")):
+    path, method = request.url.path, request.method
+    if (method, path) in _PUBLIC_EXACT or path.startswith(_PUBLIC_PREFIXES):
         return await call_next(request)
-    if request.session.get("user") or token_user(request):
+    if session_user(request):
+        return await call_next(request)
+    if path in _WATCHER_PATHS and token_user(request):
         return await call_next(request)
     return JSONResponse({"detail": "not authenticated"}, status_code=401)
 
@@ -1343,6 +1400,9 @@ nav = load_nav_data()
 handles = HandleRegistry()
 tokens = TokenStore()
 members_dir = MemberDirectory()
+# Revoked members -> when (see access_revoked). Mirrored in memory because it's
+# consulted on every authenticated request; written only by the admin endpoint.
+revoked_access: dict[str, float] = db.all_access_revocations()
 raw_commodity_names = load_raw_commodity_names()
 commodity_names = load_commodity_names()
 illicit_commodities = load_illicit_commodities()   # #42 legality filter
@@ -1450,13 +1510,57 @@ def _serialize_trade_price(row: dict, term: dict) -> dict:
 # planner. Confirm-path writes are direct validations and always count.
 _ORG_PRICE_MIN_CONFIRMS = 2
 
+# How far an org observation may move a price away from the scraped one, as a
+# ratio either way. The `_ORG_PRICE_MIN_CONFIRMS` gate validates the learned
+# guid/shop MAPPINGS — it never looked at the price itself, so anyone who could
+# post a transaction could set any terminal's price to any number. That is the
+# whole trade planner's input: a fabricated 99,999,999 sell price routes the
+# entire org to a terminal that pays nothing, and it SURVIVED a feed refresh,
+# because the overlay is re-applied from the ledger on every rebuild.
+#
+# 5× is deliberately loose — real prices differ by tens of percent across
+# terminals and patches, so this rejects fabrication, not disagreement.
+_ORG_PRICE_MAX_RATIO = 5.0
+
+# The scraped price per (terminal, side), snapshotted before any overlay runs.
+# The band has to be measured against UEX, not against the current value —
+# comparing to an already-overlaid price would let a series of reports ratchet
+# it anywhere, 5× at a time. Rebuilt with the feed in rebuild_trade_terminals.
+_uex_price_base: dict[tuple[int, str], float] = {}
+
+
+def _snapshot_uex_prices() -> None:
+    """Record the scraped buy/sell price of every point, pre-overlay."""
+    _uex_price_base.clear()
+    for p in trade_price_points:
+        for side in ("buy", "sell"):
+            if p.get(side):
+                _uex_price_base[(p["terminal_id"], side)] = p[side]
+
+
+def _overlay_price_plausible(p: dict, side: str, price: float) -> bool:
+    """Is this org observation a believable correction to the scraped price?
+
+    A missing baseline is a refusal, not a pass: the overlay exists to correct
+    a price UEX already records. If UEX has no price for that side, the terminal
+    doesn't trade it as far as the feed knows, and a report claiming otherwise
+    is the cheapest way to invent a lucrative fake market. The ledger still
+    keeps the row — the stock board owns 'this terminal isn't trading'."""
+    base = _uex_price_base.get((p["terminal_id"], side))
+    if not base:
+        return False
+    return base / _ORG_PRICE_MAX_RATIO <= price <= base * _ORG_PRICE_MAX_RATIO
+
 
 def _overlay_point(p: dict, side: str, report: dict) -> None:
     """Apply one org observation to one price point's side, newest-wins:
-    the org price stands until a UEX row with a newer scrape arrives."""
+    the org price stands until a UEX row with a newer scrape arrives. An
+    implausible price is dropped (see `_overlay_price_plausible`)."""
     created = report.get("created")
     price = report.get("price")
     if not price or created is None or created <= (p.get("updated_at") or 0):
+        return
+    if not _overlay_price_plausible(p, side, price):
         return
     p[side] = price
     p[f"{side}_updated_at"] = created     # per-side freshness (badge + age filter)
@@ -1515,6 +1619,7 @@ def rebuild_trade_terminals() -> None:
         for row in trade_prices
         if (tid := row.get("id_terminal")) in trade_terminals_by_id
     ]
+    _snapshot_uex_prices()               # the band the overlay is judged against
     _apply_org_price_overlay()           # #39 slice 0: org observations beat stale scrape
     # Stop kinds (#34) classify over the *unfiltered* feed — see load_trade_terminals.
     trade_stop_kinds = nav_core.terminal_stop_kinds(nav, trade_terminal_rows)
@@ -1530,12 +1635,33 @@ rebuild_trade_terminals()
 
 
 # --- auth dependencies (defined before the endpoints that use them) ---------
+def access_revoked(user_id: str, issued_at: float | None) -> bool:
+    """Has this member's access been revoked since their credential was issued?
+
+    Guild membership is checked once, at OAuth login. Without this, removing
+    someone from the Discord org — the app's whole off-boarding story — left
+    their signed session valid for the rest of its 8h life and their watcher
+    token valid indefinitely. A credential with no issue time (a watcher token,
+    which is long-lived by design) is revoked outright.
+
+    Reads the in-memory mirror, not the DB: this is on the path of EVERY
+    authenticated request (twice — the gate and the route dependency), while
+    revocations are rare and only written through one endpoint."""
+    revoked = revoked_access.get(str(user_id))
+    if not revoked:
+        return False
+    return issued_at is None or issued_at < revoked
+
+
 def current_user(request: Request) -> dict | None:
     """The signed-in member. `is_admin` is recomputed against the live admin set
     (not read from the login-time session value) so a UI grant/revoke applies on
-    the member's next request rather than only at their next sign-in."""
+    the member's next request rather than only at their next sign-in. A revoked
+    member is treated as signed out on their very next request."""
     user = request.session.get("user")
     if user is None:
+        return None
+    if access_revoked(user["id"], request.session.get("iat")):
         return None
     return {**user, "is_admin": user["id"] in admin_ids()}
 
@@ -1545,7 +1671,10 @@ def token_user(request: Request) -> dict | None:
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
         return None
-    return tokens.resolve(header[7:].strip())
+    user = tokens.resolve(header[7:].strip())
+    if user and access_revoked(user["id"], None):
+        return None
+    return user
 
 
 def require_session(request: Request) -> dict:
@@ -1560,6 +1689,45 @@ def require_admin(user: dict = Depends(require_session)) -> dict:
     if not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="admin only")
     return user
+
+
+# --- per-member rate limiting ----------------------------------------------
+# Everything here is authenticated, so the unit is the member, not the IP — an
+# org member looping an endpoint is the realistic case, and it's attributable.
+# The limits are deliberately far above real use: this is a flood guard, not a
+# quota, and a member should never meet one by playing normally.
+#
+# In-process and per-worker (the deployment runs one). Rolling window rather
+# than a true bucket — same shape as the handle-claim guard it generalizes.
+_rate_hits: dict[tuple[str, str], list[float]] = {}
+
+# bucket -> (max events, window seconds)
+_RATE_LIMITS = {
+    # Solvers: heavy work in a thread, but the GIL still pins the single worker,
+    # so one member in a loop degrades the app for everyone.
+    "solve": (40, 60.0),
+    # Watcher writes. A fix per /showlocation plus a 60 s heartbeat is nowhere
+    # near this; a log-injection loop appending ledger rows is.
+    "watcher": (120, 60.0),
+    # Credential minting. Each one is long-lived, and /download/watcher mints a
+    # fresh token per call.
+    "token": (10, 3600.0),
+}
+
+
+def rate_limit(bucket: str, uid: str) -> None:
+    """Spend one unit of `uid`'s allowance for `bucket`, or raise 429."""
+    limit, window = _RATE_LIMITS[bucket]
+    now = time.monotonic()
+    key = (bucket, str(uid))
+    hits = [t for t in _rate_hits.get(key, ()) if now - t < window]
+    if len(hits) >= limit:
+        _rate_hits[key] = hits
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests — give it a moment and try again.")
+    hits.append(now)
+    _rate_hits[key] = hits
 
 
 def ensure_owns(user: dict, owner_id: int | None) -> None:
@@ -1624,11 +1792,25 @@ _MAX_LINE_ITEMS = 50     # line items on one goal
 # out by derived phase. Generous enough to cover most op lengths + the live grace.
 _EVENT_BOARD_LOOKBACK_MIN = 24 * 60
 
+# Coordinate sanity bound, in meters. Star Citizen positions are system-centered
+# and run to ~5e10 m at the far edge of a surveyed belt, so 1e15 (~0.1 light
+# year) is astronomically generous while still finite.
+#
+# The bound matters less than `allow_inf_nan=False`. Python's json.loads accepts
+# the non-standard literals NaN/Infinity, and Pydantic passes them through
+# floats by default — but JSONResponse serializes with allow_nan=False. So a
+# capture posted at NaN wrote a custom POI that could never be serialized again:
+# GET /api/custom_pois raised for EVERY member, permanently, and survived a
+# restart because the row reloads from SQLite. Values like 1e300 were the milder
+# variant — OverflowError inside the distance math. Rejecting them at the schema
+# edge is the whole fix.
+_COORD_MAX = 1e15
+
 
 class PositionIn(BaseModel):
-    x: float
-    y: float
-    z: float
+    x: float = Field(allow_inf_nan=False, ge=-_COORD_MAX, le=_COORD_MAX)
+    y: float = Field(allow_inf_nan=False, ge=-_COORD_MAX, le=_COORD_MAX)
+    z: float = Field(allow_inf_nan=False, ge=-_COORD_MAX, le=_COORD_MAX)
     raw: str | None = Field(default=None, max_length=_RAW_MAX)
     client_time: str | None = Field(default=None, max_length=_META_MAX)
     source: str | None = Field(default=None, max_length=_META_MAX)
@@ -2582,16 +2764,23 @@ class SessionHub:
         return entry
 
     def confirm_warning(self, warning_id: int, uid: str) -> dict | None:
-        """Community "still active" refresh: bump `created` (resetting the age-off
-        clock) and, for anyone other than the poster, record the confirmer. Returns the
-        updated warning, or None if it's gone. Call under the lock."""
+        """Community "still active" refresh: record the confirmer and reset the
+        age-off clock. Returns the updated warning, or None if it's gone.
+
+        Only a NEW corroborator resets `created`. Bumping it on every call let
+        the poster (or one confirmer on a cron) keep a warning alive forever,
+        and warnings steer every member's routes by default (`avoid_mode`
+        defaults to avoid) — so an un-ageable warning is a quiet org-wide
+        route-poisoning primitive. Re-posting is still possible, but it costs
+        the poster against WARNINGS_MAX_PER_MEMBER and throws away the
+        confirmations that make a warning credible. Call under the lock."""
         w = self.warnings.get(warning_id)
         if w is None:
             return None
         if uid != w["poster"] and uid not in w["confirmations"]:
             w["confirmations"].append(uid)
-        w["created"] = time.time()
-        db.warning_upsert(w)
+            w["created"] = time.time()
+            db.warning_upsert(w)
         return w
 
     def close_warning(self, warning_id: int, uid: str, is_admin: bool) -> bool:
@@ -3154,6 +3343,7 @@ async def post_handle(body: HandleIn, user: dict = Depends(require_user)):
 
 @app.post("/api/position")
 async def post_position(body: PositionIn, user: dict = Depends(require_user)):
+    rate_limit("watcher", user["id"])
     frame = None                        # set when the fan-out happens after the lock
     async with hub.lock:
         sess = hub.get(user)
@@ -4153,6 +4343,7 @@ async def post_trade_plan(body: TradePlanIn, user: dict = Depends(require_sessio
     Start from a POI (`start_id`) or the caller's live position (`start_here`).
     `avoid_mode` (#24) layers the pirate danger board over the result. Returns
     {summary, legs, start} — feasibility, per-leg buy/sell + travel, route totals."""
+    rate_limit("solve", user["id"])
     async with hub.lock:
         sess = hub.sessions.get(user["id"])
         warnings = hub.active_trade_warnings()
@@ -4337,6 +4528,7 @@ async def start_trade_run(body: TradePlanIn, user: dict = Depends(require_sessio
     """Start (and persist) an active trade run from the same input as /plan.
     Re-solves server-side, points guidance at the first leg's buy terminal, and
     replaces any prior active trade run. 409 if the plan yields no feasible legs."""
+    rate_limit("solve", user["id"])
     async with hub.lock:
         sess = hub.get(user)
         plan = _solve_trade_plan(body, sess, hub.active_trade_warnings())
@@ -4403,6 +4595,7 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
     guid/shop mappings, filed as a price observation when both resolve, and —
     if it matches the caller's active trade leg's expected side + commodity —
     parked as the run card's confirm nudge and pushed live over the WS."""
+    rate_limit("watcher", user["id"])
     now = time.time()
     stored = 0
     matched = False
@@ -4585,6 +4778,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
     cargo — if it's been bought but not yet sold — is carried forward and offloaded
     first, then fresh trades chain onto the freed hold. Optional knobs override the
     run's stored plan params."""
+    rate_limit("solve", user["id"])
     # Phase 1 — snapshot everything the solver needs under the lock, then release
     # it so the pure-Python solve (100s of ms at production scale) doesn't freeze
     # the event loop OR serialize every other request behind hub.lock.
@@ -4834,6 +5028,7 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
     pickups/dropoffs, arrival leg detail, running onboard SCU) plus a feasibility
     + totals summary (payout + aUEC/hour when rewards are supplied). Leg distances
     reflect the caller's live rotation time."""
+    rate_limit("solve", user["id"])
     sess = hub.sessions.get(user["id"])
     if body.start_id is not None and body.start_id not in nav.pois:
         raise HTTPException(status_code=404, detail="unknown start_id")
@@ -6017,6 +6212,7 @@ async def post_halo_plan(body: HaloPlanIn, user: dict = Depends(require_session)
     direct chord exists. Geometry is time-invariant, so a plan can be
     computed now and flown later. Returns {system, mode, start, band|target,
     legs, drop, alternates, attribution}."""
+    rate_limit("solve", user["id"])
     async with hub.lock:
         sess = hub.sessions.get(user["id"])
     return await asyncio.to_thread(_solve_halo_plan, body, sess, user)
@@ -6712,6 +6908,33 @@ def _listing_announce_ok(poster_id: str, mode: str) -> bool:
     _listing_announce_at[poster_id] = now
     return True
 
+
+# Directed pings (a WTB matching members' inventory, a commission aimed at one
+# crafter) deliberately ignore the `announce` opt-in — being told is the point.
+# That left them ungated entirely: nothing capped listing creation, so a loop of
+# WTB posts fired an @-mention at up to _ANNOUNCE_MENTION_CAP members per
+# request, and aiming commissions at one crafter targeted a single person. The
+# victim's only defence was `notify_opt_out`, which silences EVERY notification
+# the app sends. Same window as a commission announce: these reach phones.
+DIRECTED_PING_COOLDOWN_S = 600.0
+_directed_ping_at: dict[str, float] = {}
+
+
+def _directed_ping_ok(poster_id: str) -> bool:
+    """One directed-ping event per member per cooldown. Its own window, not the
+    announce one, so a legitimate announced WTB still notifies its holders."""
+    now = time.monotonic()
+    last = _directed_ping_at.get(poster_id)
+    if last is not None and now - last < DIRECTED_PING_COOLDOWN_S:
+        return False
+    _directed_ping_at[poster_id] = now
+    return True
+
+
+# Open listings one member may hold. Nothing bounded creation before, so a
+# disgruntled member could bury the board (and, via the directed paths above,
+# the org's Discord) in a shell loop. Generous vs. a real trader's shopfront.
+_MAX_OPEN_LISTINGS_PER_MEMBER = 60
 
 _ANNOUNCE_MENTION_CAP = 15   # sanity cap on capable-crafter pings per announce
 
@@ -8810,6 +9033,11 @@ async def create_listing(body: ListingIn, user: dict = Depends(require_session))
     live at read time from the handle registry, so it self-upgrades once a watcher
     binds the handle."""
     fields = _validate_listing(body)
+    if db.open_listing_count(user["id"]) >= _MAX_OPEN_LISTINGS_PER_MEMBER:
+        raise HTTPException(
+            status_code=429,
+            detail=f"You already have {_MAX_OPEN_LISTINGS_PER_MEMBER} open listings — "
+                   "close or cancel some before posting more.")
     handle = (body.seller_handle or "").strip() or _meetup_handle(user["id"])
     now = datetime.now(timezone.utc).isoformat()
     lid = db.create_listing({**fields, "seller_id": user["id"], "seller_handle": handle,
@@ -8825,13 +9053,15 @@ async def create_listing(body: ListingIn, user: dict = Depends(require_session))
     # A buy order automatically pings members whose RM holdings carry the item
     # (the match only WE can make — public marketplaces have no org inventory).
     # Directed + dedup'd + opt-out-honoring; independent of the announce opt-in.
+    # Both directed paths are flood-gated per member (see _directed_ping_ok) —
+    # the listing is still posted, it just doesn't ping.
     if fields["mode"] == "wtb":
         holders = db.item_holders(fields["item_id"], exclude=user["id"])
-        if holders:
+        if holders and _directed_ping_ok(user["id"]):
             _notify_bg(_notify_wtb_match(db.get_listing(lid), holders))
     # A directed commission pings its target crafter — that's the whole point
     # of directing it, so it doesn't ride the announce opt-in either.
-    if fields.get("directed_to"):
+    if fields.get("directed_to") and _directed_ping_ok(user["id"]):
         _notify_bg(_notify_commission_directed(db.get_listing(lid)))
     view = _listing_view(db.get_listing(lid), user, detail=True)
     if body.announce:
@@ -9849,6 +10079,25 @@ async def clear_trade_stats(admin: dict = Depends(require_admin)):
     return {"ok": True, "deleted": deleted}
 
 
+class PriceReportClearIn(BaseModel):
+    reporter: str | None = Field(default=None, max_length=_META_MAX)
+
+
+@app.post("/api/admin/prices/clear")
+async def clear_price_reports(body: PriceReportClearIn,
+                              admin: dict = Depends(require_admin)):
+    """Purge the org observed-price ledger (admin only), org-wide or for one
+    `reporter` (a Discord id).
+
+    Org observations overlay the UEX feed and are re-applied from this ledger on
+    every rebuild, so bad data outlives restarts and feed refreshes — this is the
+    way back. Rebuilds the terminal crosswalk afterwards so the planner drops the
+    retired prices immediately rather than at the next scheduled refresh."""
+    deleted = await asyncio.to_thread(db.price_reports_clear, body.reporter)
+    await asyncio.to_thread(rebuild_trade_terminals)
+    return {"ok": True, "deleted": deleted}
+
+
 # --- POI quality control (admin overrides) ---------------------------------
 # Imported POIs (starmap/wiki) are sometimes wrong: a place that doesn't exist,
 # or a mis-set QT-marker flag. These admin overrides flag a POI 'bad' (excluded
@@ -10024,6 +10273,74 @@ async def clear_handle_binding_admin(player_id: int,
     print(f"[sc-nav] admin {admin.get('id')} cleared the binding on "
           f"{entry['handle']!r} (player_id {player_id})")
     return {"ok": True, "handle": entry["handle"], "player_id": player_id}
+
+
+async def _drop_member_session(uid: str) -> None:
+    """Close a member's open tabs and forget their live session.
+
+    Revocation is enforced per request, so an idle HTTP client is already
+    locked out — but an open WebSocket was authenticated once, at handshake,
+    and would otherwise keep receiving org broadcasts indefinitely."""
+    async with hub.lock:
+        sess = hub.sessions.pop(uid, None)
+        hub.drop_presence(uid)
+    if sess is not None:
+        for ws in list(sess.ws_clients):
+            try:
+                await ws.close(code=1008)      # policy violation
+            except Exception:
+                pass
+            sess.ws_clients.discard(ws)
+    await hub.broadcast_online()
+
+
+class MemberAccessIn(BaseModel):
+    revoked: bool = True
+
+
+@app.post("/api/admin/members/{member_id}/access")
+async def set_member_access(member_id: str, body: MemberAccessIn,
+                            admin: dict = Depends(require_admin)):
+    """Revoke (or restore) a member's access — the off-boarding switch.
+
+    Discord guild membership is only checked at login, so removing someone from
+    the org's server used to leave their signed session working for the rest of
+    its 8-hour life and their watcher token working forever. Revoking stamps a
+    time: every credential issued before it stops being honored on the member's
+    very next request, their watcher tokens are deleted outright (long-lived by
+    design, so there is nothing to expire), and any live session and WebSocket
+    is dropped.
+
+    Restoring just clears the stamp — the member signs in again normally, and
+    the new session post-dates the (now zero) stamp. Admins can't be revoked:
+    that would be a self-inflicted lockout, and the fix would be SQL. Demote
+    them in ORG SETTINGS first."""
+    member_id = member_id.strip()
+    if not member_id.isdigit():
+        raise HTTPException(status_code=400, detail="member id must be a Discord id")
+    if body.revoked and member_id in admin_ids():
+        raise HTTPException(
+            status_code=400,
+            detail="remove this member's admin role before revoking their access")
+    stamp = time.time() if body.revoked else 0.0
+    await asyncio.to_thread(db.set_access_revoked, member_id, stamp)
+    if body.revoked:
+        revoked_access[member_id] = stamp
+    else:
+        revoked_access.pop(member_id, None)
+    dropped = 0
+    if body.revoked:
+        # Their watcher tokens carry no issue time and never expire, so the only
+        # honest revocation is deletion.
+        for t in tokens.list_for(member_id):
+            if tokens.revoke(t["id"], member_id, True):
+                dropped += 1
+        await _drop_member_session(member_id)
+    print(f"[sc-nav] admin {admin.get('id')} "
+          f"{'revoked' if body.revoked else 'restored'} access for {member_id} "
+          f"({dropped} watcher token(s) deleted)")
+    return {"ok": True, "member_id": member_id, "revoked": body.revoked,
+            "tokens_deleted": dropped}
 
 
 # --- update check (self-hosting orgs) --------------------------------------
@@ -10401,7 +10718,17 @@ async def delete_org_logo(admin: dict = Depends(require_admin)):
 
 
 @app.get("/api/health")
-async def health():
+async def health(request: Request):
+    """Liveness, plus dataset diagnostics for anyone signed in.
+
+    This is the one route that answers before authentication (the compose
+    healthcheck hits it over loopback), so the anonymous half is a bare `ok`.
+    The detail it used to hand to the whole internet was a targeting aid: the
+    exact SemVer against public release notes says precisely what is unpatched,
+    `active_sessions` and `handles` profile the org's size and when it plays,
+    and `data.error` is a raw `str(exc)` that can carry absolute paths."""
+    if not session_user(request):
+        return {"ok": True}
     return {
         "ok": True,
         "version": APP_VERSION,
@@ -10794,6 +11121,10 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
         _clear_oauth_state_cookie(resp)
         return resp
     request.session["user"] = profile
+    # When this session was issued. `access_revoked` compares against it, so an
+    # admin revoking a member kills the sessions they already hold while a
+    # later, legitimate re-login still works.
+    request.session["iat"] = time.time()
     # Persist the Discord identity so display names survive past the session cookie
     # and back the member directory (step: docs/member-identity-and-directory.md).
     try:
@@ -11128,6 +11459,7 @@ async def create_token(request: Request, body: TokenCreateIn):
     """Mint a watcher token for the signed-in member. The raw token is returned
     once and never stored in the clear."""
     user = require_session(request)
+    rate_limit("token", user["id"])
     raw, public = tokens.mint(user["id"], user.get("display_name"), body.label)
     return {"token": raw, **public}
 
@@ -11191,6 +11523,7 @@ async def download_watcher(request: Request):
     ready-to-run watcher bundle (Setup page, step 2). The token is baked into the
     zip rather than put in a URL, so it never lands in a log or browser history."""
     user = require_session(request)
+    rate_limit("token", user["id"])   # every call mints another long-lived token
     if WATCHER_DIR is None:
         raise HTTPException(status_code=503, detail="watcher bundle unavailable")
     raw, _ = tokens.mint(user["id"], user.get("display_name"), "watcher download")

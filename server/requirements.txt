@@ -1,4 +1,9 @@
+# Floors are security-relevant, not just compatibility: the image is built with
+# a plain `pip install -r`, so whatever the resolver picks on build day ships.
+# Raise a floor when a fix lands upstream rather than relying on "latest".
 fastapi>=0.115
 uvicorn[standard]>=0.30
 itsdangerous>=2.0   # signed session cookies (Starlette SessionMiddleware)
-python-multipart>=0.0.7   # multipart form parsing (org-logo upload, UploadFile)
+# 0.0.18 fixes CVE-2024-53981 (multipart parsing DoS). Reachable from the one
+# multipart route we expose, the org-logo upload.
+python-multipart>=0.0.18

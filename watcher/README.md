@@ -36,6 +36,38 @@ only — no pip installs.
 Tip: chat history (up-arrow in the chat box) makes re-sending `/showlocation`
 a three-keystroke action. A programmable keyboard/mouse macro can make it one.
 
+## What the watcher sends (and what it doesn't)
+
+You are installing software on your gaming PC that talks to your org's server,
+so here is the complete list. Everything below is verifiable in this folder —
+it's plain Python, no build step, no dependencies.
+
+| Sent to the org server | When |
+|---|---|
+| Your position (x/y/z, in meters) | Each time you run `/showlocation`, plus a re-send every 60 s while you're parked |
+| Your in-game handle | You supply it yourself (`--handle`, or the prompt on first run) |
+| Your shard id, e.g. `pub_use1b_…` | Read from `Game.log`, so teammates' maps can filter out other servers |
+| Commodity kiosk buys/sells: shop name, commodity, total price, unit price, SCU, auto-load flag, box size/count | **On by default** — read from `Game.log` and used to keep the org's trade prices current. `--no-trade-capture` turns it off, and the choice sticks |
+
+**Not sent, and not read at all:** the text on your clipboard (only the parsed
+coordinates leave), chat, other players' names, your RSI account name, your IP
+or the game server's, and anything outside `Game.log`. There is no keylogging,
+no screenshots, and no reading of the game's memory.
+
+**It does not touch the game.** The overlay is an ordinary always-on-top window
+drawn beside Star Citizen — nothing is injected into the game process, no input
+is simulated, and no graphics calls are hooked. Position data comes from CIG's
+own `/showlocation` command and a read-only tail of `Game.log`.
+
+**It never updates itself.** The watcher downloads no code and runs nothing it
+didn't ship with. Updating means downloading a new bundle from the Setup page,
+which is a deliberate act you take.
+
+**Your access token is stored in plain text** in `watcher_config.json` next to
+the script — that's what authenticates you to the org server. Keep the folder
+out of OneDrive/Dropbox-synced locations, and if you think it leaked, revoke it
+in the web UI under Settings → watcher tokens and download a fresh bundle.
+
 ## Options
 
 | Flag | Default | Purpose |
@@ -51,6 +83,7 @@ a three-keystroke action. A programmable keyboard/mouse macro can make it one.
 | `--overlay-mode MODE` | off | `off` · `light` (the HUD) · `heavy` (beta browser window) — see below |
 | `--overlay` / `--no-overlay` | off | Older aliases for `--overlay-mode light` / `off` |
 | `--game-log PATH` | autodetect | Path to SC's `Game.log`; tags captures with your current shard so nodes from other servers can be filtered out |
+| `--no-trade-capture` | capture on | Stop reporting your commodity kiosk buys/sells to the org's price data. Sticky — set it once and it's remembered |
 
 `--handle`, `--token`, `--game-log`, and your overlay answer are saved to
 `watcher_config.json` on first use and remembered after that, so you only need
@@ -207,13 +240,17 @@ The watcher POSTs to `{server}/api/position` with `Content-Type: application/jso
   "x": -18930539540.392,
   "y": -2610158765.392,
   "z": 0.0,
-  "raw": "Coordinates: x:-18930539540.392 y:-2610158765.392 z:0.0",
   "client_time": "2026-06-12T22:26:12.461474+00:00",
   "source": "sc_nav_watcher",
   "handle": "YourInGameName",
   "shard": "pub_use1b_12030094_130"
 }
 ```
+
+The parsed numbers are sent, never the clipboard text they came from. (A `raw`
+field carrying up to 512 characters of clipboard text used to ride along; the
+server never read it, so it was dropped. The server still accepts it so older
+watchers keep working.)
 
 `shard` is `null` when no `Game.log` is available.
 
