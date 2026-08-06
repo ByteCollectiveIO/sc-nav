@@ -15,6 +15,7 @@ What it pins down — the things a pure unit test can't:
 """
 
 import asyncio
+import json
 import re
 import tempfile
 import time
@@ -3488,6 +3489,19 @@ class HandleOwnershipTests(unittest.TestCase):
     victim's contributions + verified marketplace identity by reporting their
     handle (security regression guard)."""
 
+    @classmethod
+    def setUpClass(cls):
+        # register() persists through db.upsert_handle, so point at a throwaway
+        # file — without this these fixtures land in the real handles table
+        # (import app already ran db.init on the real db).
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
     def _registry(self):
         reg = app.HandleRegistry.__new__(app.HandleRegistry)
         reg.by_handle = {}
@@ -3605,6 +3619,277 @@ class PositionPostReturnsNavTests(unittest.TestCase):
         self.assertIn("nav", body)
         self.assertIsNotNone(body["nav"])
         self.assertIn("destination", body["nav"])   # None here: no target set
+
+
+class HandleRegistrationTests(unittest.TestCase):
+    """POST /api/handle: bind the watcher's in-game handle WITHOUT a position fix.
+
+    Binding used to ride /api/position alone, so a member with the watcher up and
+    --handle set still saw "no watcher-bound handle yet" in Settings until their
+    first in-game /showlocation — the bind looked broken when it was only waiting.
+    The refusal path (handle owned by another account) must also be *reported*,
+    not silent: that silence is what made a stuck binding undiagnosable."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Binding persists through db.upsert_handle, so point at a throwaway file
+        # (import app already ran db.init on the real db).
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "bind-user", "username": "binder", "is_admin": False}
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        # /api/me is what the Settings panel reads back — override it too so the
+        # bind -> picker round-trip is covered end to end.
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._saved_handles = dict(app.handles.by_handle)
+        app.handles.by_handle.clear()
+
+    def tearDown(self):
+        app.handles.by_handle.clear()
+        app.handles.by_handle.update(self._saved_handles)
+        for uid in ("bind-user",):
+            app.hub.sessions.pop(uid, None)
+            app.hub.presence.pop(uid, None)
+            app.hub._dirty.discard(uid)
+            app.hub._removed.discard(uid)
+
+    def test_binds_without_a_position_fix(self):
+        r = self.client.post("/api/handle", json={"handle": "Prospector7"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertTrue(body["bound"])
+        self.assertIsNone(body["conflict"])
+        self.assertEqual(body["handle"], "Prospector7")
+        # Verified for the member — this is what /api/me's picker reads.
+        self.assertEqual(app.handles.handles_for("bind-user"), ["Prospector7"])
+        # ...and claimed as the session's capture owner, with no position posted.
+        sess = app.hub.sessions["bind-user"]
+        self.assertEqual(sess.owner["handle"], "Prospector7")
+        self.assertIsNone(sess.pos)
+
+    def test_handle_owned_by_another_member_is_refused_out_loud(self):
+        app.handles.register("Taken", "someone-else")
+        r = self.client.post("/api/handle", json={"handle": "Taken"})
+        self.assertEqual(r.status_code, 200)      # not an error; a verdict
+        body = r.json()
+        self.assertFalse(body["bound"])
+        self.assertEqual(body["conflict"], "owned_by_other")
+        self.assertIsNone(body["player_id"])
+        # Ownership is untouched, and the session reports WHY it has no owner.
+        self.assertEqual(app.handles.handles_for("bind-user"), [])
+        sess = app.hub.sessions["bind-user"]
+        self.assertIsNone(sess.owner)
+        self.assertEqual(sess.handle_conflict, "Taken")
+        self.assertEqual(sess.capture_status()["handle_conflict"], "Taken")
+
+    def test_conflict_clears_once_a_real_handle_binds(self):
+        app.handles.register("Taken", "someone-else")
+        self.client.post("/api/handle", json={"handle": "Taken"})
+        self.client.post("/api/handle", json={"handle": "Mine"})
+        sess = app.hub.sessions["bind-user"]
+        self.assertIsNone(sess.handle_conflict)
+        self.assertEqual(sess.owner["handle"], "Mine")
+
+    def test_blank_handle_rejected(self):
+        r = self.client.post("/api/handle", json={"handle": "   "})
+        self.assertEqual(r.status_code, 400)
+        # An all-whitespace name must not land in the registry as "".
+        self.assertEqual(list(app.handles.by_handle), [])
+
+    def test_position_post_reports_the_same_verdict(self):
+        """The watcher logs this, so a refused bind is visible in its console."""
+        app.handles.register("Taken", "someone-else")
+        r = self.client.post("/api/position", json={
+            "x": 1.0, "y": 2.0, "z": 3.0, "handle": "Taken"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["handle"],
+                         {"handle": "Taken", "bound": False,
+                          "conflict": "owned_by_other", "player_id": None})
+
+    def test_registered_handle_reaches_the_settings_picker(self):
+        """The panel's options come from /api/me — the surface that looked broken."""
+        before = self.client.get("/api/me").json()
+        self.assertEqual(before["handles"], [])
+        self.assertIsNone(before["primary_handle"])
+        self.client.post("/api/handle", json={"handle": "Prospector7"})
+        after = self.client.get("/api/me").json()
+        self.assertEqual(after["handles"], ["Prospector7"])
+        self.assertEqual(after["primary_handle"], "Prospector7")
+
+    def test_position_post_without_a_handle_omits_the_verdict(self):
+        r = self.client.post("/api/position", json={"x": 1.0, "y": 2.0, "z": 3.0})
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("handle", r.json())
+
+
+class HandleRegistryExposureTests(unittest.TestCase):
+    """GET /api/handles is member-facing, so it must not carry `discord_id`.
+
+    The member directory has an opt-out whose entire job is keeping the
+    Discord-identity <-> in-game-handle link off member-facing views. This
+    endpoint used to return the raw registry entry, handing every signed-in
+    member that whole mapping and defeating the opt-out silently. Privacy
+    regression guard: the link is admin-only."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "nosy-1", "username": "member", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._saved = dict(app.handles.by_handle)
+        app.handles.by_handle.clear()
+
+    def tearDown(self):
+        app.handles.by_handle.clear()
+        app.handles.by_handle.update(self._saved)
+
+    def test_public_registry_omits_the_discord_link(self):
+        app.handles.register("Nomad_77", "410288675309219921")
+        rows = self.client.get("/api/handles").json()
+        self.assertEqual(rows, [{"player_id": 1, "handle": "Nomad_77"}])
+        # Belt and braces: the id must not appear anywhere in the payload.
+        self.assertNotIn("410288675309219921", json.dumps(rows))
+
+    def test_registry_still_serves_its_documented_purpose(self):
+        """handle -> PlayerID is what labels captures and leaderboard rows."""
+        app.handles.register("Kessler", "d1")
+        app.handles.register("Prospector7", "d2")
+        rows = self.client.get("/api/handles").json()
+        self.assertEqual({r["handle"]: r["player_id"] for r in rows},
+                         {"Kessler": 1, "Prospector7": 2})
+
+
+class AdminHandleBindingTests(unittest.TestCase):
+    """The admin escape hatch for the one-way binding guard.
+
+    `register` refuses to transfer a claimed handle on purpose (anti-hijack), so a
+    handle bound to the wrong account — a test login, a re-made Discord account,
+    another member's watcher posting it first — was permanently stuck with no fix
+    short of hand-written SQL. Unbinding re-arms trust-on-first-use."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "admin-1", "username": "boss", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._admin
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._saved = dict(app.handles.by_handle)
+        app.handles.by_handle.clear()
+
+    def tearDown(self):
+        app.handles.by_handle.clear()
+        app.handles.by_handle.update(self._saved)
+        app.hub.sessions.pop("stuck-member", None)
+
+    def test_lists_bindings_and_flags_an_unknown_owner(self):
+        app.handles.register("Nomad_77", "ghost-account")
+        rows = self.client.get("/api/admin/handles").json()["handles"]
+        row = next(r for r in rows if r["handle"] == "Nomad_77")
+        self.assertEqual(row["discord_id"], "ghost-account")
+        # Never logged in -> no resolved name, flagged for the admin.
+        self.assertFalse(row["owner_known"])
+        self.assertIsNone(row["owner_name"])
+
+    def test_blocked_member_is_named_on_the_row(self):
+        """The signal that identifies WHICH binding is the stuck one."""
+        app.handles.register("Nomad_77", "ghost-account")
+        sess = app.hub.get({"id": "stuck-member", "display_name": "Jeremiah"})
+        app._bind_handle(sess, "Nomad_77")          # refused; records the conflict
+        self.assertIsNone(sess.owner)
+        rows = self.client.get("/api/admin/handles").json()["handles"]
+        row = next(r for r in rows if r["handle"] == "Nomad_77")
+        self.assertEqual(row["blocking"], ["Jeremiah"])
+        # Actively-blocking rows sort to the top so the admin lands on it.
+        self.assertEqual(rows[0]["handle"], "Nomad_77")
+
+    def test_unbind_rearms_trust_on_first_use(self):
+        entry = app.handles.register("Nomad_77", "ghost-account")
+        pid = entry["player_id"]
+        r = self.client.delete(f"/api/admin/handles/{pid}/owner")
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(app.handles.by_handle["Nomad_77"]["discord_id"])
+        # The PlayerID survives, so existing captures keep their attribution...
+        self.assertEqual(app.handles.by_handle["Nomad_77"]["player_id"], pid)
+        # ...and the rightful owner's next report now claims it.
+        again = app.handles.register("Nomad_77", "stuck-member")
+        self.assertEqual(again["discord_id"], "stuck-member")
+        self.assertEqual(again["player_id"], pid)
+
+    def test_unbind_clears_the_live_session_that_held_it(self):
+        """A session must stop claiming a handle it no longer owns, or its
+        captures keep landing on a PlayerID that isn't its own any more."""
+        entry = app.handles.register("Nomad_77", "stuck-member")
+        sess = app.hub.get({"id": "stuck-member", "display_name": "J"})
+        app._bind_handle(sess, "Nomad_77")
+        self.assertEqual(sess.owner["handle"], "Nomad_77")
+        self.client.delete(f"/api/admin/handles/{entry['player_id']}/owner")
+        self.assertIsNone(sess.owner)
+
+    def test_unbind_clears_a_stale_conflict_warning(self):
+        app.handles.register("Nomad_77", "ghost-account")
+        sess = app.hub.get({"id": "stuck-member", "display_name": "J"})
+        app._bind_handle(sess, "Nomad_77")
+        self.assertEqual(sess.handle_conflict, "Nomad_77")
+        pid = app.handles.by_handle["Nomad_77"]["player_id"]
+        self.client.delete(f"/api/admin/handles/{pid}/owner")
+        self.assertIsNone(sess.handle_conflict)
+
+    def test_unknown_player_id_404s(self):
+        self.assertEqual(
+            self.client.delete("/api/admin/handles/999999/owner").status_code, 404)
+
+    def test_search_filters_by_handle(self):
+        app.handles.register("Nomad_77", "a")
+        app.handles.register("Prospector7", "b")
+        rows = self.client.get("/api/admin/handles?q=prosp").json()["handles"]
+        self.assertEqual([r["handle"] for r in rows], ["Prospector7"])
+
+    def test_non_admin_is_refused(self):
+        member = {"id": "member-1", "username": "rank-and-file", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: member
+        try:
+            self.assertEqual(self.client.get("/api/admin/handles").status_code, 403)
+            self.assertEqual(
+                self.client.delete("/api/admin/handles/1/owner").status_code, 403)
+        finally:
+            app.app.dependency_overrides[app.require_session] = lambda: self._admin
 
 
 class PositionBroadcastLockTests(unittest.TestCase):

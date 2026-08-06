@@ -1058,6 +1058,22 @@ class HandleRegistry:
                     print(f"[sc-nav] handle owner bind failed: {exc}")
         return entry
 
+    def set_owner(self, player_id: int, discord_id: str | None) -> dict | None:
+        """Admin override of a binding — the one path that MAY move a handle off
+        an account. `register` refuses transfers on purpose (it's the anti-hijack
+        guard), which is correct for client-supplied input but leaves a handle
+        stuck when it bound to the wrong account: a test/second Discord login, a
+        re-created account, or another member's watcher posting it first. Clearing
+        (discord_id=None) re-arms trust-on-first-use so the rightful owner's next
+        report takes it. Returns the updated entry, or None if unknown."""
+        entry = next((e for e in self.by_handle.values()
+                      if e["player_id"] == player_id), None)
+        if entry is None:
+            return None
+        entry["discord_id"] = discord_id
+        db.set_handle_owner(player_id, discord_id)
+        return entry
+
     def player_ids_for(self, discord_id: str) -> set[int]:
         """Every PlayerID owned by a Discord member (alts/renames included).
         Used to scope deletes to a member's own contributions."""
@@ -1926,6 +1942,11 @@ class Session:
         self.capture_pending = None
         self.last_capture = None      # summary of this member's most recent capture
         self.owner = None             # {"player_id","handle"} from latest position
+        # A handle this member's watcher is reporting that is already bound to a
+        # DIFFERENT account, so `owner` stays None (see _bind_handle). Held here
+        # purely so the UI can say *why* captures are unattributed instead of the
+        # misleading "no handle yet".
+        self.handle_conflict = None
         self.shard = None             # current SC shard id (from the watcher's Game.log)
         self.tracking = False
         self.path = []                # crumbs: {lat, lon, container}
@@ -1945,6 +1966,7 @@ class Session:
             "pending": self.capture_pending,
             "last": self.last_capture,
             "owner": self.owner,
+            "handle_conflict": self.handle_conflict,
         }
 
     def recompute(self):
@@ -3034,6 +3056,64 @@ def nav_summary(state: dict | None) -> dict | None:
     }
 
 
+def _bind_handle(sess: "Session", raw: str) -> dict | None:
+    """Register the in-game handle a client is reporting and, if it's actually
+    this member's, claim it as the session's capture owner. None for an
+    all-whitespace handle (which would otherwise register as an empty name).
+
+    Only claim ownership when the registry says the handle belongs to this member
+    — otherwise a caller reporting someone else's handle would get their captures
+    attributed to the victim's PlayerID. That refusal used to be completely
+    silent (the watcher got a 200, the UI said "no handle yet"), so the verdict
+    is returned to the caller and parked on the session for the UI to explain.
+
+    Call under hub.lock — it mutates the session."""
+    if not raw.strip():
+        return None
+    entry = handles.register(raw, sess.user["id"])
+    name = entry["handle"]
+    if entry.get("discord_id") == sess.user["id"]:
+        sess.owner = {"player_id": entry["player_id"], "handle": name}
+        sess.handle_conflict = None
+        return {"handle": name, "bound": True, "conflict": None,
+                "player_id": entry["player_id"]}
+    # Bound elsewhere. Log the first time we see it (this rides every position
+    # post and 60 s heartbeat, so never per-sample) — a stuck binding is
+    # otherwise invisible to the org admin who has to clear it.
+    if sess.handle_conflict != name:
+        print(f"[sc-nav] handle {name!r} reported by {sess.user['id']} is bound to "
+              f"{entry.get('discord_id')!r} — not rebinding")
+    sess.handle_conflict = name
+    return {"handle": name, "bound": False, "conflict": "owned_by_other",
+            "player_id": None}
+
+
+class HandleIn(BaseModel):
+    handle: str = Field(min_length=1, max_length=_HANDLE_MAX)
+
+
+@app.post("/api/handle")
+async def post_handle(body: HandleIn, user: dict = Depends(require_user)):
+    """Register the caller's in-game handle without a position fix.
+
+    The watcher calls this once at startup. Binding used to ride POST
+    /api/position exclusively, which meant a member could have the watcher
+    running with --handle set and still see "no watcher-bound handle yet" in
+    Settings until their first in-game /showlocation — the binding looked
+    broken when it was only waiting."""
+    async with hub.lock:
+        sess = hub.get(user)
+        status = _bind_handle(sess, body.handle)
+        # Built under the lock, fanned out after it — the same discipline as
+        # /api/position. An open tab learns the binding the moment the watcher
+        # starts, instead of on the member's next page reload.
+        frame = sess.state_frame()
+    if status is None:
+        raise HTTPException(status_code=400, detail="handle cannot be blank")
+    await sess.push_frame(frame)
+    return {"ok": True, **status}
+
+
 @app.post("/api/position")
 async def post_position(body: PositionIn, user: dict = Depends(require_user)):
     frame = None                        # set when the fan-out happens after the lock
@@ -3047,13 +3127,7 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         if body.shard:
             sess.shard = body.shard.strip() or None
 
-        if body.handle:
-            entry = handles.register(body.handle, sess.user["id"])
-            # Only claim the handle as this session's owner when it is actually
-            # bound to this member — otherwise a caller reporting someone else's
-            # handle would get their captures attributed to the victim's PlayerID.
-            if entry.get("discord_id") == sess.user["id"]:
-                sess.owner = {"player_id": entry["player_id"], "handle": entry["handle"]}
+        handle_status = _bind_handle(sess, body.handle) if body.handle else None
 
         captured = False
         if sess.capture_pending is not None:
@@ -3089,7 +3163,12 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         summary = nav_summary(sess.nav_state)
     if frame is not None:
         await sess.push_frame(frame)
-    return {"ok": True, "nav": summary}
+    out = {"ok": True, "nav": summary}
+    if handle_status is not None:
+        # The watcher logs this (once, on change) so a refused binding is visible
+        # where the operator actually looks — its own console.
+        out["handle"] = handle_status
+    return out
 
 
 def _halo_capture_note(poi) -> str | None:
@@ -3436,7 +3515,17 @@ async def capture_cancel(user: dict = Depends(require_session)):
 
 @app.get("/api/handles")
 async def list_handles():
-    return handles.list()
+    """The contributor registry: in-game handle -> stable PlayerID, which is what
+    every member-facing surface needs to label a capture or a leaderboard row.
+
+    Projected on purpose. The registry entry also carries `discord_id` — the
+    Discord-identity link that the member directory's opt-out exists to keep off
+    member-facing views — plus first/last-seen activity stamps. Returning the raw
+    entry handed every signed-in member the whole Discord<->handle mapping,
+    quietly defeating that opt-out. The link stays admin-only, on
+    /api/intel/directory and /api/admin/handles."""
+    return [{"player_id": e["player_id"], "handle": e["handle"]}
+            for e in handles.list()]
 
 
 @app.get("/api/raw_commodities")
@@ -9820,6 +9909,83 @@ async def delete_poi_override_admin(override_id: int, admin: dict = Depends(requ
         raise HTTPException(status_code=404, detail="unknown override id")
     await _apply_poi_overrides_live()
     return {"ok": True}
+
+
+_ADMIN_HANDLE_ROWS = 200
+
+
+async def _apply_handle_binding_live(handle: str) -> None:
+    """Re-sync live sessions after an admin moves a binding. A session that owned
+    the handle must stop claiming it (its captures would otherwise keep landing on
+    a PlayerID it no longer owns), and a session that was BLOCKED on it has a now
+    stale conflict — clear it so the UI stops warning and the next position post
+    re-runs the binding cleanly. Mirrors _apply_poi_overrides_live."""
+    async with hub.lock:
+        for sess in hub.sessions.values():
+            if sess.owner and sess.owner.get("handle") == handle:
+                sess.owner = None
+            if sess.handle_conflict == handle:
+                sess.handle_conflict = None
+
+
+@app.get("/api/admin/handles")
+async def list_handle_bindings_admin(q: str | None = None,
+                                     admin: dict = Depends(require_admin)):
+    """Every in-game handle and the member it's bound to.
+
+    Exists because the binding guard is deliberately one-way: `register` never
+    transfers a handle that's already claimed, so a handle bound to the wrong
+    account (a test login, a re-created Discord account, another member's watcher
+    posting it first) is stuck forever with no way out short of SQL. Each row
+    carries the live signals that identify a stuck one: `owner_known` false means
+    the owning Discord id isn't a member who has ever logged in, and `blocking`
+    names the members whose watchers are being refused this handle right now."""
+    needle = (q or "").strip().lower()
+    # Who is currently being refused this handle (the whole point of the panel).
+    blocked: dict[str, list[str]] = {}
+    async with hub.lock:
+        for sess in hub.sessions.values():
+            if sess.handle_conflict:
+                blocked.setdefault(sess.handle_conflict, []).append(
+                    _resolve_member_name(sess.user["id"], sess.user.get("display_name")))
+    rows = []
+    for e in handles.list():
+        if needle and needle not in e["handle"].lower():
+            continue
+        did = e.get("discord_id")
+        # A binding whose owner never logged in is almost always the stale one.
+        known = bool(did and members_dir.get(did))
+        rows.append({
+            "player_id": e["player_id"], "handle": e["handle"],
+            "first_seen": e.get("first_seen"), "last_seen": e.get("last_seen"),
+            "discord_id": did,
+            # Only name a member we actually know. _resolve_member_name falls back
+            # to a bound handle, which for a stale row echoes the handle itself
+            # ("Taken is bound to Taken") — the raw id is the useful diagnostic.
+            "owner_name": _resolve_member_name(did, None) if known else None,
+            "owner_known": known,
+            "blocking": blocked.get(e["handle"], []),
+        })
+    # Stuck bindings first: actively blocking somebody, then unknown owners.
+    rows.sort(key=lambda r: (not r["blocking"], r["owner_known"],
+                             r["handle"].lower()))
+    return {"handles": rows[:_ADMIN_HANDLE_ROWS],
+            "total": len(rows), "shown": min(len(rows), _ADMIN_HANDLE_ROWS)}
+
+
+@app.delete("/api/admin/handles/{player_id}/owner")
+async def clear_handle_binding_admin(player_id: int,
+                                     admin: dict = Depends(require_admin)):
+    """Unbind a handle from its member, re-arming trust-on-first-use so the next
+    watcher to report it claims it. The PlayerID survives, so captures already
+    attributed to it keep their attribution — only the Discord link drops."""
+    entry = await asyncio.to_thread(handles.set_owner, player_id, None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown player_id")
+    await _apply_handle_binding_live(entry["handle"])
+    print(f"[sc-nav] admin {admin.get('id')} cleared the binding on "
+          f"{entry['handle']!r} (player_id {player_id})")
+    return {"ok": True, "handle": entry["handle"], "player_id": player_id}
 
 
 # --- update check (self-hosting orgs) --------------------------------------

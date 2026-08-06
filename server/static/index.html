@@ -787,6 +787,12 @@
   .upd-ver { font-family: var(--mono, monospace); color: var(--text); }
   /* DESIGN.md §2: links speak in the accent, not the UA's blue/purple. */
   .upd-banner a { color: var(--accent); }
+  /* "that handle belongs to someone else" notice in SETTINGS → IN-GAME IDENTITY.
+     Same shape as .upd-banner in the warn hue; [hidden] must beat the flex. */
+  .handle-warn { display: block; margin: 10px 0 0; padding: 10px 12px;
+    color: var(--text); background: var(--warn-wash);
+    border: 1px solid var(--warn); border-radius: 8px; }
+  .handle-warn[hidden] { display: none; }
   /* each themed group is its own labeled section + 3-across grid */
   .app-group { margin-top: 26px; }
   .app-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px;
@@ -2711,8 +2717,16 @@
         the in-game name people should look for.</span>
     </div>
     <div class="muted" id="no-handle-note" hidden style="font-size:12px;">
-      No watcher-bound handle yet. Run the watcher with
-      <code>--handle "YourName"</code> and it'll appear here, verified.
+      No watcher-bound handle yet. Start the watcher with
+      <code>--handle "YourName"</code> — it registers the name on startup and it
+      appears here, verified, within a few seconds. If the watcher is already
+      running, run <b>/showlocation</b> in-game to bind it.
+    </div>
+    <div id="handle-conflict-note" hidden class="handle-warn" style="font-size:12px;">
+      ⚠ Your watcher is reporting <b><span id="handle-conflict-name"></span></b>, but
+      that handle is already bound to another member's account, so it can't be
+      claimed and your captures stay unattributed. Ask an org admin to clear the
+      old binding, or set the watcher to the handle you actually play as.
     </div>
     <label style="display:flex; gap:8px; align-items:center; font-size:13px; margin-top:12px;">
       <input type="checkbox" id="directory-optout"> Hide me from the member directory
@@ -3069,6 +3083,23 @@
     <h3 style="margin-top:16px; margin-bottom:4px; font-size:13px; letter-spacing:.04em;">ACTIVE OVERRIDES</h3>
     <div id="poi-qc-overrides" style="display:flex; flex-direction:column; gap:6px;"></div>
     <div class="muted" id="poi-qc-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+  </div>
+
+  <div class="panel admin-grp" id="handle-bind-panel">
+    <h2>IN-GAME HANDLE BINDINGS</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      A watcher's in-game handle binds to whoever reports it first, and then
+      <b>never transfers</b> — that guard is what stops a member claiming someone
+      else's captures and verified marketplace identity. The cost is that a handle
+      bound to the <b>wrong</b> account (a test login, a re-made Discord account,
+      another member's watcher posting it first) stays stuck. <b>Unbind</b> it here
+      and the next watcher to report it claims it. Captures already recorded keep
+      their attribution.
+    </div>
+    <input id="handle-bind-search" class="ti" placeholder="Search a handle…"
+           aria-label="Search in-game handle bindings" style="width:100%; max-width:360px;">
+    <div id="handle-bind-rows" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+    <div class="muted" id="handle-bind-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
   </div>
 
   <div class="panel admin-grp" id="motd-panel">
@@ -5473,8 +5504,14 @@ function renderCapture(cap) {
   if (armedRes) $("node-armed-label").textContent = `ARMED for ${p.data.ore} (B${p.data.band})`;
   if (armedWild) $("wild-armed-label").textContent = `ARMED for ${p.category === "harvestable" ? p.data.name : p.data.species}`;
 
+  noteHandleBind(cap);
+  // Three states, not two: the old copy blamed a missing handle even when one was
+  // being reported but refused because another account already owns it.
   const credit = cap.owner ? `captures credited to ${esc(cap.owner.handle)}` :
-    "no handle yet — set one in the watcher to attribute captures";
+    cap.handle_conflict
+      ? `⚠ "${esc(cap.handle_conflict)}" is bound to another member — captures ` +
+        `stay unattributed (<a href="#/settings">details</a>)`
+      : "no handle yet — set one in the watcher to attribute captures";
   $("poi-credit").innerHTML = credit;
   $("node-credit").innerHTML = credit;
   $("wild-credit").innerHTML = credit;
@@ -7290,12 +7327,60 @@ function renderIdentityPanel() {
   } else {
     field.hidden = true; none.hidden = false;
   }
+  const conflict = $("handle-conflict-note");
+  conflict.hidden = !handleConflict;
+  if (handleConflict) $("handle-conflict-name").textContent = handleConflict;
   const opt = $("directory-optout");
   opt.checked = !!myIdentity.directory_opt_out;
   opt.onchange = async () => {
     await saveIdentity("/api/me/directory-opt-out", { opt_out: opt.checked },
                        () => { myIdentity.directory_opt_out = opt.checked; });
   };
+}
+
+// Live bind state from the WS state frame: the handle this session's watcher is
+// posting that is bound to somebody ELSE (so it can't be claimed). Rendered as
+// the panel's ⚠ note and the navigator's capture-credit line — the refusal is
+// deliberate but used to be completely silent, which read as "binding is broken".
+let handleConflict = null;
+// The handle we last pulled a fresh identity for, so a bind triggers exactly one
+// refetch rather than one per state frame.
+let identityBindSeen = null;
+let identityFetch = null;
+
+// Re-read /api/me and repaint the identity panel. renderAccount only runs once at
+// boot, so without this the panel is a page-load snapshot: a handle that binds
+// while the tab is open (the normal case — sign in, then start the watcher) would
+// keep showing "no watcher-bound handle yet" until a reload.
+function refreshIdentity() {
+  if (identityFetch) return identityFetch;
+  identityFetch = (async () => {
+    try {
+      const r = await fetch("/api/me");
+      if (!r.ok) return;
+      const me = await r.json();
+      currentMe = me;
+      myIdentity = { handles: me.handles || [], primary_handle: me.primary_handle || null,
+                     directory_opt_out: !!me.directory_opt_out };
+      renderIdentityPanel();
+    } catch {}
+    finally { identityFetch = null; }
+  })();
+  return identityFetch;
+}
+
+// Called on every state frame with the frame's capture block. Cheap by design:
+// it only touches the DOM when the bind state actually changes, because this
+// runs at watcher cadence and repainting would stomp an open <select>.
+function noteHandleBind(cap) {
+  if (!cap) return;
+  const bound = cap.owner ? cap.owner.handle : null;
+  const conflict = cap.handle_conflict || null;
+  if (conflict !== handleConflict) { handleConflict = conflict; renderIdentityPanel(); }
+  if (bound && bound !== identityBindSeen && !(myIdentity.handles || []).includes(bound)) {
+    identityBindSeen = bound;      // one refetch per newly-bound handle
+    refreshIdentity();
+  }
 }
 
 async function saveIdentity(url, body, apply) {
@@ -16846,6 +16931,9 @@ function applyView() {
   if (settings) {
     // Lazy-load: don't fetch tokens/settings for members who never open the page.
     loadTokens();
+    // Identity is bound by the watcher out-of-band, so re-read it on entry rather
+    // than trusting the boot-time /api/me snapshot.
+    refreshIdentity();
     renderProfilePanel();
     if (currentMe.is_admin) loadSettings();
   } else if (route) {
@@ -17597,6 +17685,7 @@ async function loadSettings() {
     extraAdmins = s.extra_admin_ids || [];
     renderAdmins();
     loadPoiOverrides();
+    loadHandleBindings();
     loadUpdateCheck();   // cached server-side; a page load never re-polls GitHub
     applyOrgLogoAdmin(!!s.org_logo);
     if (document.activeElement !== $("org-name-input"))
@@ -17640,6 +17729,107 @@ async function loadPoiOverrides() {
       `<span class="muted" style="font-size:12px;">couldn't load overrides</span>`;
   }
 }
+
+// ---------- admin: in-game handle bindings ----------
+// The escape hatch for the one-way binding guard in _bind_handle. Without it a
+// handle stuck on the wrong account can only be freed with SQL.
+let handleBindTimer = null;
+
+// last_seen is an ISO stamp (and is None on rows that predate it) — keep the
+// row short: a date is enough to spot a binding nobody has used in months.
+function handleSeenText(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleDateString();
+}
+
+async function loadHandleBindings() {
+  const q = $("handle-bind-search").value.trim();
+  const box = $("handle-bind-rows");
+  try {
+    const d = await fetch("/api/admin/handles?q=" + encodeURIComponent(q))
+      .then(r => r.json());
+    renderHandleBindings(d);
+  } catch {
+    box.innerHTML = `<span class="muted" style="font-size:12px;">couldn't load bindings</span>`;
+  }
+}
+
+function renderHandleBindings(d) {
+  const box = $("handle-bind-rows");
+  const rows = d.handles || [];
+  box.innerHTML = "";
+  if (!rows.length) {
+    box.innerHTML = `<span class="muted" style="font-size:12px;">`
+      + (d.total === 0 ? "No handles have been reported yet."
+                       : "No handle matches that search.") + `</span>`;
+    return;
+  }
+  for (const h of rows) {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; gap:8px; align-items:center; flex-wrap:wrap;"
+                      + " border:1px solid var(--border); border-radius:6px; padding:6px 8px;";
+    // An unknown owner id is the strongest "this is stale" signal there is, so
+    // show the raw id rather than hiding it behind a resolved-looking name.
+    const owner = h.owner_known
+      ? "bound to " + esc(h.owner_name || h.discord_id)
+      : h.discord_id
+        ? `bound to <span style="font-family:var(--mono,monospace);">${esc(h.discord_id)}</span>`
+          + poiQcTag("never signed in", "bad")
+        // Already claimable — the next watcher to report it takes it.
+        : `<span style="color:var(--good);">unbound</span> — free to claim`;
+    const blocking = (h.blocking || []).length
+      ? `<div style="font-size:12px; color:var(--warn);">⚠ blocking ${
+           h.blocking.map(esc).join(", ")}</div>`
+      : "";
+    row.innerHTML = `<div style="flex:1; min-width:160px;">
+        <div style="font-weight:600;">${esc(h.handle)}</div>
+        <div class="muted" style="font-size:12px;">${owner}${
+          handleSeenText(h.last_seen) ? " · seen " + esc(handleSeenText(h.last_seen)) : ""}</div>
+        ${blocking}
+      </div>`;
+    if (h.discord_id) {
+      const btn = document.createElement("button");
+      btn.textContent = "Unbind";
+      btn.className = "danger-btn";
+      btn.onclick = () => unbindHandle(h);
+      row.appendChild(btn);
+    }
+    box.appendChild(row);
+  }
+  if (d.total > d.shown) {
+    const more = document.createElement("span");
+    more.className = "muted";
+    more.style.fontSize = "12px";
+    more.textContent = `showing ${d.shown} of ${d.total} — search to narrow`;
+    box.appendChild(more);
+  }
+}
+
+async function unbindHandle(h) {
+  const who = h.owner_known ? (h.owner_name || h.discord_id) : h.discord_id;
+  const ok = await confirmDialog(
+    `Unbind "${h.handle}" from ${who}? The next watcher to report that handle `
+    + `claims it. Captures already recorded keep their attribution.`,
+    { title: "Unbind handle", confirmLabel: "Unbind", danger: true });
+  if (!ok) return;
+  const s = $("handle-bind-status");
+  s.textContent = "Unbinding…";
+  try {
+    const r = await fetch(`/api/admin/handles/${h.player_id}/owner`, { method: "DELETE" });
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    s.textContent = `"${h.handle}" is now unbound — it binds to the next watcher `
+                  + `that reports it.`;
+    await loadHandleBindings();
+  } catch (err) {
+    s.textContent = (err && err.detail) || "Couldn't unbind — try again.";
+  }
+}
+
+$("handle-bind-search").addEventListener("input", () => {
+  clearTimeout(handleBindTimer);
+  handleBindTimer = setTimeout(loadHandleBindings, 200);
+});
 
 function poiQcTag(text, tone) {
   const c = tone === "bad" ? "var(--bad)" : "var(--dim)";

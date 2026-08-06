@@ -1016,6 +1016,18 @@ def upsert_handle(entry: dict) -> None:
         )
 
 
+def set_handle_owner(player_id: int, discord_id: str | None) -> bool:
+    """Re-point (or clear) a handle's owning member. Admin-only surgery: the
+    normal binding path is trust-on-first-use and deliberately never transfers,
+    so a handle stuck on a dead/wrong account can only be freed from here.
+    Clearing leaves the PlayerID — and therefore every capture attributed to it —
+    intact; only the Discord link drops."""
+    with _lock, _conn:
+        cur = _conn.execute("UPDATE handles SET discord_id=? WHERE player_id=?",
+                            (discord_id, player_id))
+    return cur.rowcount > 0
+
+
 # --- members (Discord identity directory) ----------------------------------
 
 
