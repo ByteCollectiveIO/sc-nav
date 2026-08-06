@@ -3056,6 +3056,32 @@ def nav_summary(state: dict | None) -> dict | None:
     }
 
 
+# Creating a NEVER-BEFORE-SEEN handle is the squatting primitive: an org's
+# in-game names are public (the RSI org roster), so an authenticated member could
+# otherwise script a claim on every teammate's name before they first run the
+# watcher, and inherit their captures + verified marketplace identity. Claiming an
+# EXISTING unbound handle is not rate-limited — that's the admin-unbind recovery
+# path and the legitimate re-claim. Legit creation is 1 handle, occasionally an
+# alt; a roster sweep is dozens. This caps the sweep at a slow, noisy, fully
+# attributable trickle rather than a five-second script.
+_NEW_HANDLE_LIMIT = 3
+_NEW_HANDLE_WINDOW_S = 3600.0
+_new_handle_claims: dict[str, list[float]] = {}
+
+
+def _new_handle_allowed(discord_id: str) -> bool:
+    """Rolling-window check + record for first-time handle registrations."""
+    now = time.time()
+    hits = [t for t in _new_handle_claims.get(discord_id, ())
+            if now - t < _NEW_HANDLE_WINDOW_S]
+    if len(hits) >= _NEW_HANDLE_LIMIT:
+        _new_handle_claims[discord_id] = hits
+        return False
+    hits.append(now)
+    _new_handle_claims[discord_id] = hits
+    return True
+
+
 def _bind_handle(sess: "Session", raw: str) -> dict | None:
     """Register the in-game handle a client is reporting and, if it's actually
     this member's, claim it as the session's capture owner. None for an
@@ -3070,6 +3096,14 @@ def _bind_handle(sess: "Session", raw: str) -> dict | None:
     Call under hub.lock — it mutates the session."""
     if not raw.strip():
         return None
+    # Gate CREATION only (see _NEW_HANDLE_LIMIT). A handle already in the registry
+    # — including one an admin just unbound — takes the normal path, so neither
+    # the first-run fix nor the recovery flow is affected.
+    if raw.strip() not in handles.by_handle and not _new_handle_allowed(sess.user["id"]):
+        print(f"[sc-nav] {sess.user['id']} hit the new-handle rate limit "
+              f"(refused {raw.strip()!r})")
+        return {"handle": raw.strip(), "bound": False, "conflict": "rate_limited",
+                "player_id": None}
     entry = handles.register(raw, sess.user["id"])
     name = entry["handle"]
     if entry.get("discord_id") == sess.user["id"]:
@@ -3110,6 +3144,10 @@ async def post_handle(body: HandleIn, user: dict = Depends(require_user)):
         frame = sess.state_frame()
     if status is None:
         raise HTTPException(status_code=400, detail="handle cannot be blank")
+    if status.get("conflict") == "rate_limited":
+        raise HTTPException(
+            status_code=429,
+            detail="too many new handles registered — try again later")
     await sess.push_frame(frame)
     return {"ok": True, **status}
 

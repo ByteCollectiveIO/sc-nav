@@ -344,6 +344,24 @@ class GameLogShardReader:
 # ---------------------------------------------------------------------------
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect, so the org token can never follow one.
+
+    urllib preserves the `Authorization` header across a redirect INCLUDING to a
+    different host — `redirect_request` strips only content-length/content-type —
+    and downgrades a 301/302/303 POST to a GET. So a single redirect from a
+    compromised, proxied, or MITM'd server (trivially injectable on a plain-http
+    server URL) would hand the member's watcher token to whatever host the
+    redirect names. The watcher talks to exactly one configured server and has no
+    legitimate reason to follow a hop, so refusing is free.
+
+    Returning None makes urllib raise the 3xx as an HTTPError, which _post
+    reports and drops without ever opening the second request."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class Sender:
     """POSTs position payloads to the nav server.
 
@@ -360,6 +378,14 @@ class Sender:
         self.timeout = timeout
         self.dry_run = dry_run
         self.token = token
+        # Our own opener so the token never follows a redirect (see _NoRedirect).
+        # Not urlopen's global default — this is per-Sender, so importing this
+        # module can't change urllib behaviour for anything else in the process.
+        self._opener = urllib.request.build_opener(_NoRedirect)
+        if server_url and not server_url.lower().startswith("https://"):
+            log("WARNING: server URL is not https — your watcher token and "
+                "positions travel in the clear and can be read or altered by "
+                "anything on the network path.")
         self.pending = collections.deque(maxlen=50)
         # Trade transactions awaiting delivery (#41). Its own queue: a jammed
         # transaction batch must never block a position post, or vice versa.
@@ -442,12 +468,22 @@ class Sender:
         request = urllib.request.Request(url or self.url, data=data,
                                          headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            with self._opener.open(request, timeout=self.timeout) as resp:
                 ok = 200 <= resp.status < 300
                 if ok:
                     self._read_response(resp)
                 return ok
         except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                # _NoRedirect refused this before a second request was opened, so
+                # the token did NOT leave for the new host. Retrying can't help —
+                # the configured URL is wrong (missing /api prefix, http->https
+                # upgrade, a proxy in front) — so drop it and say what to fix.
+                log(f"REDIRECT REFUSED (HTTP {exc.code} -> "
+                    f"{exc.headers.get('Location', '?')}): refusing to send your "
+                    "token to a redirect target. Point --server at the app's real "
+                    "https URL.")
+                return True
             if exc.code in (401, 403):
                 # Retrying won't help, so drop it (don't jam the queue) and point
                 # at the likely cause: the app 401s a bad token, Cloudflare 403s
@@ -511,6 +547,10 @@ class Sender:
             log(f'HANDLE NOT BOUND: "{name}" is already claimed by another '
                 "member's account, so your captures stay unattributed. Ask an org "
                 "admin to clear the old binding, or pass the handle you play as.")
+        elif status.get("conflict") == "rate_limited":
+            log(f'handle not bound yet: "{name}" is new to the server and this '
+                "account has registered several new handles recently. It'll bind "
+                "on a later report — check the handle spelling meanwhile.")
         else:
             log(f'handle not bound: "{name}" ({status.get("conflict")})')
 

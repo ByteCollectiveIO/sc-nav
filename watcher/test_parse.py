@@ -8,6 +8,8 @@ import tempfile
 import threading
 import types
 import unittest
+import urllib.error
+import urllib.request
 from unittest import mock
 
 import sc_nav_heavy
@@ -1049,3 +1051,75 @@ class OverlayModeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TokenRedirectTests(unittest.TestCase):
+    """The watcher token must never follow a redirect.
+
+    urllib preserves `Authorization` across a redirect *including to another
+    host* (redirect_request strips only content-length/content-type) and turns a
+    301/302/303 POST into a GET — so one redirect from a compromised, proxied or
+    MITM'd server would hand the org token to whatever host it names. Verified
+    against real urllib machinery, not a stub, because the whole risk lives in
+    stdlib behaviour that a mock would paper over."""
+
+    def test_stdlib_would_have_leaked_the_auth_header(self):
+        """Pin the upstream behaviour this defends against, so a future stdlib
+        change that makes it safe (or worse) shows up here."""
+        handler = urllib.request.HTTPRedirectHandler()
+        req = urllib.request.Request(
+            "https://nav.example.org/api/position", data=b"{}",
+            headers={"Authorization": "Bearer secret-token",
+                     "Content-Type": "application/json"},
+            method="POST")
+        new = handler.redirect_request(
+            req, None, 302, "Found", {}, "https://evil.example.com/collect")
+        self.assertIsNotNone(new)
+        self.assertEqual(new.get_header("Authorization"), "Bearer secret-token")
+        self.assertNotEqual(new.host, req.host)   # cross-host, token intact
+
+    def test_our_handler_refuses_instead(self):
+        new = sc_nav_watcher._NoRedirect().redirect_request(
+            urllib.request.Request("https://nav.example.org/api/position"),
+            None, 302, "Found", {}, "https://evil.example.com/collect")
+        self.assertIsNone(new)
+
+    def test_post_reports_a_redirect_and_drops_it(self):
+        sender = sc_nav_watcher.Sender("https://nav.example.org", token="tok")
+        err = urllib.error.HTTPError(
+            "https://nav.example.org/api/position", 302, "Found",
+            {"Location": "https://evil.example.com/collect"}, None)
+        with mock.patch.object(sender._opener, "open", side_effect=err):
+            # True == "handled, don't retry": a redirect loop must not jam the
+            # queue, and retrying can't fix a misconfigured URL.
+            self.assertTrue(sender._post({"x": 1}))
+
+    def test_opener_is_per_sender_not_global(self):
+        """Installing this globally would change urllib for the whole process."""
+        before = urllib.request._opener
+        sc_nav_watcher.Sender("https://nav.example.org", token="tok")
+        self.assertIs(urllib.request._opener, before)
+
+
+class HandleVerdictLogTests(unittest.TestCase):
+    """_note_handle logs once per change — it rides every position + heartbeat."""
+
+    def _sender(self):
+        return sc_nav_watcher.Sender("https://nav.example.org", token="tok")
+
+    def test_logs_once_per_change(self):
+        s = self._sender()
+        with mock.patch.object(sc_nav_watcher, "log") as lg:
+            for _ in range(3):
+                s._note_handle({"handle": "Nomad_77", "bound": True, "conflict": None})
+            self.assertEqual(lg.call_count, 1)
+            s._note_handle({"handle": "Nomad_77", "bound": False,
+                            "conflict": "owned_by_other"})
+            self.assertEqual(lg.call_count, 2)
+
+    def test_rate_limited_verdict_has_its_own_message(self):
+        s = self._sender()
+        with mock.patch.object(sc_nav_watcher, "log") as lg:
+            s._note_handle({"handle": "New", "bound": False,
+                            "conflict": "rate_limited"})
+        self.assertIn("new to the server", lg.call_args[0][0])

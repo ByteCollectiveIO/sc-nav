@@ -3784,6 +3784,93 @@ class HandleRegistryExposureTests(unittest.TestCase):
                          {"Kessler": 1, "Prospector7": 2})
 
 
+class NewHandleRateLimitTests(unittest.TestCase):
+    """Squatting guard: an org's in-game names are public (the RSI roster), so an
+    authenticated member could otherwise script a claim on every teammate's handle
+    before they first run the watcher and inherit their captures + verified
+    marketplace identity. Only CREATION is limited — claiming an existing unbound
+    handle is the admin-unbind recovery path and must stay unthrottled, as must
+    position reporting itself."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "squatter", "username": "s", "is_admin": False}
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_token_user = app.token_user
+        app.token_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.token_user = cls._orig_token_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._saved = dict(app.handles.by_handle)
+        app.handles.by_handle.clear()
+        app._new_handle_claims.clear()
+
+    def tearDown(self):
+        app.handles.by_handle.clear()
+        app.handles.by_handle.update(self._saved)
+        app._new_handle_claims.clear()
+        app.hub.sessions.pop("squatter", None)
+
+    def test_a_roster_sweep_is_cut_off(self):
+        codes = [self.client.post("/api/handle", json={"handle": f"Mate{i}"}).status_code
+                 for i in range(app._NEW_HANDLE_LIMIT + 2)]
+        self.assertEqual(codes[:app._NEW_HANDLE_LIMIT],
+                         [200] * app._NEW_HANDLE_LIMIT)
+        self.assertEqual(set(codes[app._NEW_HANDLE_LIMIT:]), {429})
+        # The refused names were never registered, so they stay claimable.
+        self.assertEqual(len(app.handles.by_handle), app._NEW_HANDLE_LIMIT)
+
+    def test_limit_is_per_member(self):
+        for i in range(app._NEW_HANDLE_LIMIT):
+            self.client.post("/api/handle", json={"handle": f"Mate{i}"})
+        other = {"id": "innocent", "username": "i", "is_admin": False}
+        app.app.dependency_overrides[app.require_user] = lambda: other
+        try:
+            r = self.client.post("/api/handle", json={"handle": "TheirOwnName"})
+            self.assertEqual(r.status_code, 200)
+        finally:
+            app.app.dependency_overrides[app.require_user] = lambda: self._user
+            app.hub.sessions.pop("innocent", None)
+
+    def test_existing_unbound_handle_is_never_throttled(self):
+        """The admin-unbind recovery path must work even at the limit."""
+        app.handles.by_handle["Freed"] = {
+            "player_id": 99, "handle": "Freed", "first_seen": "t",
+            "last_seen": "t", "discord_id": None}
+        for i in range(app._NEW_HANDLE_LIMIT):
+            self.client.post("/api/handle", json={"handle": f"Mate{i}"})
+        r = self.client.post("/api/handle", json={"handle": "Freed"})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["bound"])
+
+    def test_re_reporting_your_own_handle_is_never_throttled(self):
+        """The watcher re-sends its handle on every heartbeat, forever."""
+        self.client.post("/api/handle", json={"handle": "Mine"})
+        for _ in range(app._NEW_HANDLE_LIMIT + 5):
+            r = self.client.post("/api/handle", json={"handle": "Mine"})
+            self.assertEqual(r.status_code, 200)
+
+    def test_position_reporting_survives_the_limit(self):
+        """A throttled binding must never break position posting — the watcher's
+        actual job. The verdict rides the response instead."""
+        for i in range(app._NEW_HANDLE_LIMIT):
+            self.client.post("/api/handle", json={"handle": f"Mate{i}"})
+        r = self.client.post("/api/position", json={
+            "x": 1.0, "y": 2.0, "z": 3.0, "handle": "BrandNew"})
+        self.assertEqual(r.status_code, 200)          # position still accepted
+        self.assertEqual(r.json()["handle"]["conflict"], "rate_limited")
+        self.assertNotIn("BrandNew", app.handles.by_handle)
+
+
 class AdminHandleBindingTests(unittest.TestCase):
     """The admin escape hatch for the one-way binding guard.
 
