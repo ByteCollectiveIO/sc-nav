@@ -36,8 +36,7 @@ jobs:
         run: python test_parse.py
 
       # The app suite drives the FastAPI shell through a TestClient to pin the
-      # CSP nonce backstop, so it needs the runtime deps. It boots offline (the
-      # feed loaders fall back to the committed poi/ cache).
+      # CSP nonce backstop, so it needs the runtime deps.
       - name: Install runtime deps
         working-directory: server
         # httpx2: the TestClient transport. Starlette 1.x imports httpx2 first and
@@ -48,4 +47,10 @@ jobs:
 
       - name: Run app (HTTP) tests
         working-directory: server
+        # SC_NAV_OFFLINE pins the suite to the committed poi/ cache. Without it
+        # the app live-fetches starmap.space at import and the tests run against
+        # whatever that feed says today — a 2026-08-06 upstream revision (dropped
+        # ARC-L1 station container) broke the suite with zero code change.
+        env:
+          SC_NAV_OFFLINE: "1"
         run: python test_app.py
