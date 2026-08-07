@@ -4748,6 +4748,59 @@ class BeltRegistryTests(unittest.TestCase):
         angles = [math.atan2(p["xyz"][1], p["xyz"][0]) for p in pockets]
         self.assertEqual(angles, sorted(angles))
 
+    def test_keeger_segments_registry(self):
+        """#36 phase 1: the datamined mission arcs (2026-08 upstream) claimed
+        geometrically into the Nyx registry with belt-qualified KGR- keys —
+        never as Glaciem pockets, never in any AUTO pool."""
+        segs = self.belts["Nyx"]["segments"]
+        self.assertEqual(len(segs), 30)
+        for s in segs:
+            self.assertTrue(s["key"].startswith("KGR-"), s["key"])
+            self.assertEqual(s["kind"], "mission")
+            r = math.hypot(s["xyz"][0], s["xyz"][1])
+            self.assertAlmostEqual(r, nav_core.KEEGER_R_M, delta=nav_core.KEEGER_RADIAL_TOL_M)
+            self.assertGreater(s["grid_radius_m"], 0)
+        # belt-qualified on purpose: the SAME trailing key names a tombstoned
+        # Glaciem pocket at 15 Gm — and no segment leaked into the ring pool
+        self.assertIn("KGR-Mission_Genrl_001_001", {s["key"] for s in segs})
+        self.assertFalse({s["key"] for s in segs}
+                         & {p["key"] for p in self.belts["Nyx"]["pockets"]})
+
+    def test_keeger_segment_key_fold(self):
+        self.assertEqual(
+            nav_core.keeger_segment_key("keeger_segment_mission_genrl_001_001"),
+            "KGR-mission_genrl_001_001")
+        self.assertEqual(nav_core.keeger_segment_key("Keeger_Segment_Wtn-004_Fstreamable"),
+                         "KGR-Wtn-004")
+
+    def test_keeger_locate_names_datamined_segment(self):
+        segs = self.belts["Nyx"]["segments"]
+        pos = segs[0]["xyz"]
+        # No org pocket there: segment annotation carries the radar geometry.
+        kg = nav_core.keeger_locate(pos, [], segs)
+        self.assertEqual(kg["status"], "keeger")
+        self.assertEqual(kg["segment"]["key"], segs[0]["key"])
+        self.assertIn("center_xyz", kg["segment"])
+        # An org surveyed pocket at the same spot stays the PRIMARY identity.
+        pk = {"key": "SVY-9", "marks": 3, "xyz": pos,
+              "grid_radius_m": nav_core.GLACIEM_POCKET_RADIUS_M}
+        kg = nav_core.keeger_locate(pos, [pk], segs)
+        self.assertEqual(kg["status"], "keeger_pocket")
+        self.assertEqual(kg["pocket"]["key"], "SVY-9")
+        self.assertEqual(kg["segment"]["key"], segs[0]["key"])
+
+    def test_kgr_pin_rejects_with_contract_guidance(self):
+        """No marker chord passes near any datamined arc (measured: best
+        approach 0.59 Gm off with every station marker loaded) — a KGR pin
+        must fail with the contract-access explanation, not a generic error."""
+        segs = self.belts["Nyx"]["segments"]
+        start = next(p for p in self.nav.pois.values()
+                     if p.system == "Nyx" and p.qt_marker)
+        with self.assertRaises(ValueError) as cm:
+            nav_core.plan_halo_drop(self.nav, start=start, pockets=[segs[0]])
+        self.assertIn("contract", str(cm.exception))
+        self.assertIn("⛏", str(cm.exception))
+
     def test_glaciem_pockets_reject_off_ring_segments(self):
         """The 2026-08-06 starmap revision relocated 30 mission arcs to the
         48 Gm Keeger Belt while keeping them Nyx AsteroidBelt containers —

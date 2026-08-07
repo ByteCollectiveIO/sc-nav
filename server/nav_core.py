@@ -5919,6 +5919,16 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
                            and staged[0]["miss_m"] < 0.6 * direct[0]["miss_m"]))
     pool = staged if use_staged else direct
     if not pool:
+        if pockets is not None and str(pockets[0].get("key", "")).startswith("KGR-"):
+            # Datamined Keeger arcs sit BETWEEN the station chords — measured
+            # against the live dataset, the best marker-pair approach misses
+            # every arc by 0.6–27 Gm, so no drop can deliver you there.
+            raise ValueError(
+                "no jump route passes anywhere near this datamined arc — the "
+                "Keeger mission arcs sit between the station chords, Gm off "
+                "every marker pair. Believed contract-gated: accept the mining "
+                "contract and QT to its mission marker, then ⛏ mark what you "
+                "find — your marks are the org's verification record")
         if pockets is not None and pockets[0].get("kind") == "surveyed":
             raise ValueError(
                 "no jump route passes near this pocket — surveyed rocks are "
@@ -6288,6 +6298,9 @@ def build_belt_registry(nav: NavData, locations: list[dict]) -> dict:
         GLACIEM_SYSTEM: {"kind": "ring", "r_m": GLACIEM_R_M,
                          "pocket_radius_m": GLACIEM_POCKET_RADIUS_M,
                          "pockets": glaciem_pockets(nav),
+                         # Datamined Keeger arcs (#36 phase 1): reference
+                         # geometry + explicit pin targets, never AUTO.
+                         "segments": keeger_segments(nav),
                          "attribution": GLACIEM_ATTRIBUTION},
         PYRO_SYSTEM: {"kind": "fields", "fields": pyro_fields(nav, locations),
                       "attribution": PYRO_FIELDS_ATTRIBUTION},
@@ -6434,6 +6447,52 @@ def keeger_contains(pos) -> bool:
     r = math.hypot(pos[0], pos[1])
     return (abs(r - KEEGER_R_M) <= KEEGER_RADIAL_TOL_M
             and abs(pos[2]) <= KEEGER_Z_TOL_M)
+
+
+def keeger_segment_key(container_name: str) -> str:
+    """Belt-qualified key for a datamined Keeger segment container:
+    'keeger_segment_mission_genrl_001_001' -> 'KGR-mission_genrl_001_001'.
+    The KGR- prefix is load-bearing: the 2026-08 upstream revision moved these
+    arcs FROM the Glaciem Ring, where the same trailing key names a tombstoned
+    pocket at 15 Gm — an unqualified key would point at two different places
+    across the org's data layers (old capture notes, saved pins)."""
+    key = container_name.strip()
+    key = key.split("_", 1)[1] if "_" in key else key      # drop "keeger_"
+    if key.lower().startswith("segment_"):
+        key = key[len("segment_"):]
+    return "KGR-" + re.sub(r"_?Fstreamable$", "", key, flags=re.IGNORECASE)
+
+
+def keeger_segments(nav: NavData) -> list[dict]:
+    """Datamined Keeger Belt segments (2026-08 upstream revision — the belt
+    finally has container geometry). Claimed GEOMETRICALLY, like the Glaciem
+    gate: a Nyx AsteroidBelt container belongs to whichever belt envelope
+    holds it, and one in neither is reported rather than silently classified.
+    These are REFERENCE + explicit drop targets only: they never join a
+    planner's AUTO pool (all current segments are mission arcs, believed
+    contract-gated and unverified in-game — the org's ⛏ marks inside them are
+    the verification instrument) and they never displace the org's surveyed
+    pockets/zones, which stay the belt's primary map."""
+    out, unclaimed = [], []
+    for c in nav.containers.values():
+        if c.system != GLACIEM_SYSTEM or c.type != "AsteroidBelt":
+            continue
+        if glaciem_contains(c.pos):
+            continue
+        if not keeger_contains(c.pos):
+            unclaimed.append(c.name)
+            continue
+        name = c.internal_name or c.name
+        out.append({"key": keeger_segment_key(name),
+                    "kind": ("mission" if "mission" in name.lower()
+                             else "general"),
+                    "xyz": c.pos,
+                    "grid_radius_m": c.grid_radius or GLACIEM_POCKET_RADIUS_M})
+    if unclaimed:
+        print(f"[sc-nav] {len(unclaimed)} Nyx belt container(s) fit neither "
+              f"the Glaciem nor Keeger envelope: {', '.join(sorted(unclaimed)[:5])}")
+    out.sort(key=lambda p: math.atan2(p["xyz"][1], p["xyz"][0]))
+    return out
 
 
 def survey_marks(nav: NavData, system: str,
@@ -7256,11 +7315,28 @@ def derive_survey_stats(marks: list[dict]) -> dict:
     }
 
 
-def keeger_locate(pos, pockets: list[dict]) -> dict | None:
+def _segment_at(pos, segments) -> dict | None:
+    """The datamined Keeger segment whose envelope holds `pos`, as a locate
+    annotation (key/kind/offset + radar geometry), or None."""
+    for sg in segments or ():
+        d = dist3(pos, sg["xyz"])
+        if d <= sg["grid_radius_m"]:
+            return {"key": sg["key"], "kind": sg["kind"], "center_off_m": d,
+                    **_pocket_radar_fields(pos, sg)}
+    return None
+
+
+def keeger_locate(pos, pockets: list[dict],
+                  segments: list[dict] | None = None) -> dict | None:
     """Classify a fix against the Keeger region + the org's surveyed pockets:
     inside a surveyed pocket, in the region between them, or None (not Keeger
-    space — the caller falls back to its other verdicts)."""
+    space — the caller falls back to its other verdicts). A fix inside a
+    datamined segment (#36 phase 1) gets a `segment` annotation on WHICHEVER
+    verdict applies — the org's surveyed pocket stays the primary identity
+    (surveyed-by-players is the belt's theme; the arc is context), but with no
+    org pocket there the segment's envelope feeds the radar."""
     r, z = math.hypot(pos[0], pos[1]), pos[2]
+    seg = _segment_at(pos, segments)
     nearest, d = None, math.inf
     for pk in pockets or ():
         dd = dist3(pos, pk["xyz"])
@@ -7269,11 +7345,14 @@ def keeger_locate(pos, pockets: list[dict]) -> dict | None:
     if nearest is not None and d <= nearest["grid_radius_m"]:
         return {"status": "keeger_pocket", "r_m": r, "z_m": z,
                 "pocket": {"key": nearest["key"], "marks": nearest["marks"],
-                           "center_off_m": d, **_pocket_radar_fields(pos, nearest)}}
+                           "center_off_m": d, **_pocket_radar_fields(pos, nearest)},
+                **({"segment": seg} if seg else {})}
     if not keeger_contains(pos):
         return None
     view = {"status": "keeger", "r_m": r, "z_m": z,
             "to_ring_m": abs(r - KEEGER_R_M)}
+    if seg:
+        view["segment"] = seg
     if nearest is not None:
         view["pocket"] = {"key": nearest["key"], "marks": nearest["marks"],
                           "center_off_m": d}

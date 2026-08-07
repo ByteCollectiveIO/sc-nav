@@ -3452,11 +3452,16 @@ def _halo_capture_note(poi) -> str | None:
             near = f", {pocket['key']} nearest" if pocket else ""
             return f"Glaciem Ring (between pockets{near})"
         # Not Glaciem space — the Keeger region (#36); surveyed pockets get
-        # their key into the note so marks self-organize.
+        # their key into the note so marks self-organize. A datamined arc's
+        # key rides along too — a ⛏ mark inside one IS the org's verification
+        # evidence for whether the arc holds rocks without a contract.
         kg = nav_core.keeger_locate(
-            poi.global_m, nav_core.survey_state(nav, poi.system)["pockets"])
+            poi.global_m, nav_core.survey_state(nav, poi.system)["pockets"],
+            belt.get("segments"))
         if kg is not None and kg["status"] == "keeger_pocket":
             return f"Keeger Belt — survey pocket {kg['pocket']['key']}"
+        if kg is not None and kg.get("segment"):
+            return f"Keeger Belt — datamined arc {kg['segment']['key']}"
         if kg is not None:
             return "Keeger Belt region"
         return None
@@ -5660,6 +5665,15 @@ def get_halo_targets(system: str = "Stanton",
         doc["keeger"] = {"r_m": nav_core.KEEGER_R_M,
                          "radial_tol_m": nav_core.KEEGER_RADIAL_TOL_M,
                          "z_tol_m": nav_core.KEEGER_Z_TOL_M}
+        # Datamined Keeger arcs (#36 phase 1): reference outlines + explicit
+        # pin targets. Reachability rides along so the picker can say up
+        # front which arcs a marker chord can actually deliver a drop to.
+        doc["segments"] = [{"key": s["key"], "kind": s["kind"],
+                            "x": s["xyz"][0], "y": s["xyz"][1], "z": s["xyz"][2],
+                            "grid_radius_m": s["grid_radius_m"],
+                            "reachable": s["reachable"], "reach_m": s["reach_m"]}
+                           for s in nav_core.pocket_reach(
+                               nav, system, belt.get("segments") or [])]
         surveyed = sstate["pockets"]
         doc["surveyed"] = [{"key": p["key"], "kind": p["kind"],
                             "x": p["xyz"][0], "y": p["xyz"][1], "z": p["xyz"][2],
@@ -5889,10 +5903,14 @@ def _halo_goal(body: HaloPlanIn, system: str, viewer) -> dict:
         # sees a barren verdict and down-ranks it (#36).
         glac = [_val(p) for p in (sstate["glaciem"] or [])]
         if body.pocket_key is not None:
-            # A pin names one pocket outright; both pools are searchable
-            # (datamined Glaciem keys + org SVY-* keys), so a pinned survey
-            # pocket needs no belt selector.
-            pin = next((p for p in glac + surveyed
+            # A pin names one pocket outright; all three pools are searchable
+            # (datamined Glaciem keys, org SVY-* keys, datamined Keeger KGR-*
+            # arcs), so a pinned pocket needs no belt selector. KGR arcs are
+            # pin-ONLY (#36 phase 1): explicitly selectable so a tester can
+            # fly one and ⛏-mark what they find, but never in any AUTO pool —
+            # they're believed contract-gated and unverified in-game.
+            segments = belt.get("segments") or []
+            pin = next((p for p in glac + surveyed + segments
                         if p["key"].lower() == body.pocket_key.lower()), None)
             if pin is None:
                 raise HTTPException(status_code=404, detail="unknown pocket_key")
@@ -6265,8 +6283,10 @@ async def get_halo_locate(target_poi_id: int | None = None,
         view = nav_core.glaciem_locate(pos, sstate["glaciem"] or [])
         if view["status"] == "off_ring":
             # Not Glaciem space — maybe Keeger (#36): the region envelope or
-            # one of the org's surveyed pockets.
-            kg = nav_core.keeger_locate(pos, sstate["pockets"])
+            # one of the org's surveyed pockets. Datamined segments annotate
+            # the verdict (and feed the radar where no org pocket exists).
+            kg = nav_core.keeger_locate(pos, sstate["pockets"],
+                                        belt.get("segments"))
             if kg is not None:
                 view = kg
     elif belt["kind"] == "fields":
