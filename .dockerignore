@@ -1,5 +1,11 @@
 server/.venv
 **/__pycache__
+# server/static/ is served as a tree, so anything that lands in it ships. These
+# are gitignored (so a clone-built image never sees them) but an image built
+# from a working copy would otherwise serve a developer's .DS_Store and the
+# tooling cache, which carries absolute local paths.
+**/.DS_Store
+**/.impeccable
 watcher/watcher_config.json
 Dockerfile
 docker-compose.yml

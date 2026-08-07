@@ -16,6 +16,24 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 45. `HaloFinderApiTests` depends on test ordering (latent, CI-invisible) 🐞 OPEN
+Found during the 2026-08 security review. `HaloFinderApiTests.setUpClass` does
+`next(p for p in app.nav.pois.values() if "(ARC-L1)" in p.name and p.qt_marker)`,
+but ARC-L1 only enters `app.nav` once **`WikiCatalogTests`** has flipped
+`wiki_pois_enabled` and rebuilt the catalog — a global mutation it relies on
+from another class. Run the class alone and all 21 of its tests error.
+
+It's invisible on CI because CI pins **Python 3.12**, whose unittest loader
+walks classes in *definition* order (`WikiCatalogTests` at ~line 3386 precedes
+`HaloFinderApiTests` at ~line 4566). On **3.14** the loader sorts
+alphabetically, Halo runs first, and `python test_app.py` fails — so the bug
+surfaces the day CI's `python-version` moves past 3.12, or when anyone runs the
+suite locally on a newer Python. `pytest` is unaffected (file order).
+
+Fix: make the class self-sufficient — enable the wiki catalog in its own
+`setUpClass` and rebuild, rather than inheriting another class's global state.
+Worth auditing the other `db.init`-per-class suites for the same assumption.
+
 ### 44. Trade planner: sort by return + "Stations & cities" stops 🔨 BUILT
 
 Two follow-ons in one pass. **`sort="return"`** — the option #43 predicted would

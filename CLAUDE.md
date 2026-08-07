@@ -166,7 +166,38 @@ listing_offers.
 
 ## Guardrails (don't regress these)
 - **Security**: CSP/nonce + defense-in-depth headers (app.py `_csp`, http middleware);
-  host-header pin; WS origin check; image magic-byte sniff (`_sniff_image`, no SVG);
-  input caps on Pydantic models. Don't widen these casually.
+  WS origin check; image magic-byte sniff (`_sniff_image`, no SVG); input caps on
+  Pydantic models. Don't widen these casually. Full posture + threat model:
+  `docs/security-review-2026-08.md`. The load-bearing pieces:
+  - **`auth_gate` is deny-by-default.** `_PUBLIC_EXACT` (method+path) +
+    `_PUBLIC_PREFIXES` (`/auth/`, `/images/`) are the ENTIRE anonymous surface;
+    everything else needs a session. A new route is private unless you list it.
+    It used to be "deny `/api/*`, allow the rest", which silently published
+    `/openapi.json`, `/docs`, `/redoc` and anything dropped in `server/static/`.
+    Interactive API docs are off (`FastAPI(docs_url=None, ...)`).
+  - **Watcher tokens are scoped** to `_WATCHER_PATHS` (`/api/position`,
+    `/api/handle`, `/api/trade/transactions`) — keep in sync with the watcher.
+    They previously reached every dependency-less GET, i.e. the whole org
+    dataset, from a credential stored in plaintext on a member's gaming PC.
+  - **Off-boarding**: `POST /api/admin/members/{id}/access` → `access_revoked()`
+    checked in `session_user`/`current_user`/`token_user`. Guild membership is
+    only verified at OAuth login, so this is the ONLY thing that ejects a
+    removed member before their 8h cookie expires; it also deletes their
+    (never-expiring) watcher tokens.
+  - **Coordinates are bounded + finite** (`PositionIn`, `_COORD_MAX`). A NaN
+    persisted a custom POI that could never be serialized again, permanently
+    500ing `/api/custom_pois` org-wide. `validation_error` also strips the
+    rejected value from 422 bodies — echoing a NaN back re-raised it.
+  - **Org price observations are banded** (`_ORG_PRICE_MAX_RATIO`, judged
+    against the pre-overlay UEX snapshot `_uex_price_base`, never the running
+    value) and purgeable (`POST /api/admin/prices/clear`). The confirms gate
+    validates the learned guid/shop mappings, never the price itself.
+  - **Rate limiting**: `rate_limit(bucket, uid)` + `_RATE_LIMITS` — per MEMBER
+    (everything limited is authenticated), buckets `solve` (the three planners),
+    `watcher` (position + txn ingest), `token` (`/api/tokens`,
+    `/download/watcher`). Limits sit far above real use; tests clear
+    `app._rate_hits`.
+  - **Frontend escaping**: `esc()` covers text AND quoted-attribute context.
+    The trap is `.join()` inside a template literal — use `.map(esc).join(...)`.
 - **Design**: follow `DESIGN.md` (tokens, components) and `PRODUCT.md` (scope).
 - **No build step**: the SPA is served as-is. Don't introduce a bundler.

@@ -564,12 +564,17 @@ def log(message):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
 
 
-def build_payload(coords, raw_text, handle=None, shard=None):
+def build_payload(coords, handle=None, shard=None):
+    # The parsed coordinates are the whole point — the surrounding clipboard text
+    # is never sent. A `raw` field used to ride along here and the server has
+    # never read it, so it was pure privacy surface: whatever else shared the
+    # clipboard with a /showlocation fix went to the org server, and the 60 s
+    # heartbeat re-sent it. The server still ACCEPTS `raw` so older watchers keep
+    # working; nothing consumes it there either.
     return {
         "x": coords["x"],
         "y": coords["y"],
         "z": coords["z"],
-        "raw": raw_text.strip()[:512],
         "client_time": datetime.now(timezone.utc).isoformat(),
         "source": "sc_nav_watcher",
         "handle": handle,
@@ -757,7 +762,6 @@ def run(args, sink=None, stop=None):
     last_seq = clipboard.sequence_number()
     last_text = None
     last_coords = None            # most recent successfully-parsed location
-    last_raw = ""                 # its raw clipboard text (for the payload)
     last_sent_shard = None        # shard value last transmitted to the server
     last_send_t = time.monotonic()  # drives the heartbeat cadence
     sent_count = 0
@@ -804,9 +808,9 @@ def run(args, sink=None, stop=None):
                 last_text = text
                 coords = parse_showlocation(text)
                 if coords:
-                    last_coords, last_raw = coords, text
+                    last_coords = coords
                     fix_t = time.monotonic()
-                    sender.send(build_payload(coords, text, handle, shard))
+                    sender.send(build_payload(coords, handle, shard))
                     sent_count += 1
                     sent_this_loop = True
                     log(
@@ -820,11 +824,11 @@ def run(args, sink=None, stop=None):
                 # stationary) — forward it so an armed capture still fires and
                 # late-joining UIs get the current position.
                 if last_text and (coords := parse_showlocation(last_text)):
-                    last_coords, last_raw = coords, last_text
+                    last_coords = coords
                     # A re-copy IS a fresh observation (the player just ran
                     # /showlocation again) even though the numbers match.
                     fix_t = time.monotonic()
-                    sender.send(build_payload(coords, last_text, handle, shard))
+                    sender.send(build_payload(coords, handle, shard))
                     sent_this_loop = True
                     if args.verbose:
                         log("re-copy of same position forwarded")
@@ -835,7 +839,7 @@ def run(args, sink=None, stop=None):
             reason = heartbeat_due(time.monotonic(), last_send_t, args.heartbeat,
                                    shard, last_sent_shard)
             if reason:
-                sender.send(build_payload(last_coords, last_raw, handle, shard))
+                sender.send(build_payload(last_coords, handle, shard))
                 sent_this_loop = True
                 if reason == "shard":
                     log(f"heartbeat: shard changed -> {shard}")
