@@ -14286,9 +14286,13 @@ function setHaloSystem(sys, auto) {
   if (main) main.textContent = HALO_GOAL_LABELS[sys];
   setHaloGoal(haloGoal);                 // re-apply per-system wrap visibility
   renderHaloCredit();
-  if (!haloDoc(sys)) loadHaloTargets(sys).then(renderHaloSystemPanel);
+  if (!haloDoc(sys)) loadHaloTargets(sys).then(() => {
+    presetDropBeltZoom();   // doc wasn't there when the switch preset ran
+    renderHaloSystemPanel();
+  });
   else renderHaloSystemPanel();
   resetHaloAtlasView();                  // recenter the coverage map on the new system
+  presetDropBeltZoom();                  // Nyx + Glaciem focus opens on the ring closeup
   haloAtlasSelZone = null;               // …and drop a pin on a square that's gone
   closeHaloSurveyCard();                 // a survey card is for the old system's zone
   if (haloWired) loadHaloZones(sys);     // zones are per-system
@@ -14297,14 +14301,35 @@ function setHaloSystem(sys, auto) {
 // The Nyx panel serves two belts (#36): Glaciem (datamined pockets) and
 // Keeger (the org's own survey — live from the first rock mark).
 function setHaloBelt(b) {
-  haloBelt = b === "keeger" ? "keeger" : "glaciem";
+  const next = b === "keeger" ? "keeger" : "glaciem";
+  const changed = next !== haloBelt;
+  haloBelt = next;
   for (const x of $("halo-nyx-belt").querySelectorAll("button")) {
     const on = x.dataset.belt === haloBelt;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
   }
   $("halo-glaciem-wrap").hidden = haloBelt !== "glaciem";
   $("halo-keeger-wrap").hidden = haloBelt !== "keeger";
-  renderHaloSystemPanel();   // also re-fits the overview to the belt (v0.69.1)
+  // Only on an actual belt CHANGE: re-clicking a pocket while zoomed must not
+  // yank the viewport.
+  if (changed) presetDropBeltZoom();
+  renderHaloSystemPanel();
+}
+
+// v0.69.1's ring closeup, re-expressed through the shared viewport (#126
+// follow-up): the belt seg (and entering Nyx with Glaciem focused) PRESETS
+// the DROP overview's zoom instead of swapping its base fit, so the wheel can
+// always come back out — the old base-fit swap left min-zoom stranded at the
+// ring with the 48 Gm Keeger belt unreachable. No-op outside Nyx.
+function presetDropBeltZoom() {
+  const doc = haloDoc("Nyx");
+  if (!doc || !doc.ring || haloSystem !== "Nyx") return;
+  const v = haloMapView("halo-overview");
+  const beltOut = doc.ring.r_m + doc.ring.pocket_radius_m;
+  const ringFit = (doc.ring.r_m + (doc.ring.pocket_radius_m || 0)) * 1.18;
+  v.zoom = haloBelt === "glaciem"
+    ? Math.min(12, Math.max(1, haloWholeFitR(doc, beltOut) / ringFit)) : 1;
+  v.panX = 0; v.panY = 0;
 }
 
 function renderHaloKeegerProgress() {
@@ -15870,6 +15895,21 @@ function haloRRect(ctx, x, y, w, h, r) {   // roundRect w/ pre-2022 fallback
   else ctx.rect(x, y, w, h);
 }
 
+// Whole-system fit radius for a system map: belts, the Keeger ring, planet
+// orbits, fields, markers and the org's zones. Shared by drawHaloSystemMap's
+// base fit AND setHaloBelt's ring-closeup zoom preset, so "zoom 1" and the
+// preset ratio are computed from the same frame.
+function haloWholeFitR(doc, beltOut) {
+  return Math.max(
+    beltOut || 0,
+    doc.keeger ? doc.keeger.r_m : 0,
+    ...(doc.bodies || []).map(b => Math.hypot(b.x, b.y)),
+    ...(doc.fields || []).map(f => Math.hypot(f.x, f.y)),
+    ...(doc.markers || []).map(m => Math.hypot(m.x, m.y)),
+    ...haloZones.filter(z => !z.closed && z.xyz && z.system === doc.system)
+      .map(z => Math.hypot(z.xyz[0], z.xyz[1])), 1) * 1.1;
+}
+
 function drawHaloMap(plan) { drawHaloSystemMap($("halo-map"), plan); }
 
 // Overview-map click targets (#37 slice 4): collected during the last
@@ -15897,31 +15937,27 @@ function drawHaloSystemMap(cv, plan) {
     : ring ? ring.r_m - ring.pocket_radius_m : null;
   const beltOut = bands ? bands[bands.length - 1].outer_m
     : ring ? ring.r_m + ring.pocket_radius_m : null;
+  // (whole-system fit lives in haloWholeFitR so setHaloBelt's zoom preset
+  // computes the same frame this draw does)
   const P = plan ? haloMapPoints(plan) : null;
   let rFit;
   if (P) {
     const pts = [P.start, P.marker, P.cross].concat(P.stage ? [P.stage] : []);
     rFit = Math.max(beltOut || 0,
                     ...pts.map(p => Math.hypot(p[0], p[1]))) * 1.1;
-  } else if (ring && haloBelt === "glaciem" && cv.id !== "halo-atlas-map") {
-    // DROP overview, Glaciem selected (v0.69.1 feedback): the belt seg drives
-    // the view — zoom to the ring so its 381 pockets are actually readable.
-    // ATLAS is explicitly excluded: the belt seg lives in DROP, and in Nyx that
-    // fit (~15 Gm) puts the Keeger belt at 48 Gm — and every zone the org has
-    // actually surveyed — off-canvas, on a map whose whole claim is "what the
-    // org has mapped".
+  } else if (ring && haloBelt === "glaciem" && cv.id === "halo-map") {
+    // Static plan canvas, Glaciem selected (v0.69.1 feedback): zoom to the
+    // ring so its pockets are actually readable. The two INTERACTIVE maps
+    // (ATLAS + the DROP overview) are excluded: their base fit must stay
+    // whole-system so wheel-zoom 1 always means "everything" — the belt seg's
+    // ring closeup reaches the DROP overview as a zoom PRESET in setHaloBelt
+    // instead (the old base-fit swap left min-zoom stranded at the ring, with
+    // the 48 Gm Keeger belt unreachable — user report after #126).
     rFit = (ring.r_m + (ring.pocket_radius_m || 0)) * 1.18;
   } else {
     // Overview: fit the whole system — belts, the Keeger ring, planet
     // orbits, fields and landmarks.
-    rFit = Math.max(
-      beltOut || 0,
-      doc.keeger ? doc.keeger.r_m : 0,
-      ...(doc.bodies || []).map(b => Math.hypot(b.x, b.y)),
-      ...(doc.fields || []).map(f => Math.hypot(f.x, f.y)),
-      ...(doc.markers || []).map(m => Math.hypot(m.x, m.y)),
-      ...haloZones.filter(z => !z.closed && z.xyz && z.system === doc.system)
-        .map(z => Math.hypot(z.xyz[0], z.xyz[1])), 1) * 1.1;
+    rFit = haloWholeFitR(doc, beltOut);
   }
   // Which Nyx belt the picker has focused (overview only) — it gets the
   // bright treatment, the other dims to context.
