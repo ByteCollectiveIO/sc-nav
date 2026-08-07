@@ -25,20 +25,20 @@ server/
 
 ## Dataset
 
-On startup (and on `POST /api/refresh`) the server fetches the live dataset
-from starmap.space:
+The starmap.space catalogs (`poi/containers.json`, `poi/poi.json`) are
+**vendored snapshots** — committed, reviewed reference data, never fetched at
+runtime. After a game patch, run `python3 tools/sync_containers.py`, review
+its diff report (renames, deletions, moved containers — station-class
+deletions are flagged loudly), commit, and release. Containers upstream
+deleted are kept in `poi/container_tombstones.json` so org data anchored to
+them (survey marks, observations) stays resolvable.
 
-- containers: https://starmap.space/api/v3/oc/index.php
-- POIs: https://starmap.space/api/v3/pois/index.php
+The uexcorp price/ship feeds still refresh live (`POST /api/refresh`, or the
+scheduled interval in ORG SETTINGS). `GET /api/health` reports
+`"source": "snapshot"` for the nav dataset.
 
-A successful fetch is written to the cache folder (`../poi` by default); if
-starmap.space is unreachable, the server starts from that cache instead.
-`GET /api/health` reports which one you're running on (`"source": "live"` or
-`"cache"`). After a game patch moves things, `curl -X POST
-http://<server>:8765/api/refresh` picks up the new data — no restart.
-
-Env overrides: `SC_NAV_DATA` (cache dir), `SC_NAV_OC_URL`, `SC_NAV_POI_URL`,
-`SC_NAV_OFFLINE=1` (skip fetching entirely).
+Env overrides: `SC_NAV_DATA` (data dir), `SC_NAV_OFFLINE=1` (skip the live
+uexcorp fetches; the vendored nav snapshots load either way).
 
 ## Custom POIs
 

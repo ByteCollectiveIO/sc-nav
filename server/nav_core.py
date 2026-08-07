@@ -5978,9 +5978,12 @@ def plan_halo_drop(nav: NavData, *, start, band: int | None = None,
 # deep-space asteroid fields. Full design: docs/halo-finder-expansion.md.
 #
 # The Glaciem Ring is a circumstellar ring at 15.000 Gm from the Nyx origin —
-# but its minable content covers only ~4% of the circumference, in 381
-# discrete pocket containers (datamined; already in containers.json as
-# Type=="AsteroidBelt"). An Aaron-style "exit at radius R" drop lands in empty
+# but its minable content covers only ~4% of the circumference, in 351
+# discrete pocket containers (datamined; in containers.json as
+# Type=="AsteroidBelt"; 381 until the 2026-08 upstream revision moved 30
+# mission arcs to the 48 Gm Keeger Belt — the ring-envelope gate in
+# glaciem_pockets is what keeps those out). An Aaron-style "exit at radius R"
+# drop lands in empty
 # ring ~96% of the time, so the planner aims chords at POCKET CENTERS instead
 # (pocket mode below — POI closest-approach over the whole target set).
 #
@@ -5995,7 +5998,7 @@ GLACIEM_SYSTEM = "Nyx"
 PYRO_SYSTEM = "Pyro"
 
 # Ring geometry from the datamined segment containers (build 10679008,
-# 2025-11-12): 381 centers at cylindrical r = 14.9968–15.0025 Gm, z = 0 (max
+# 2025-11-12): centers at cylindrical r = 14.9968–15.0025 Gm, z = 0 (max
 # |z| 114 km, the Levski segment), each a ~6,000 km cube grid (GRIDRadius
 # 5,196 km = sqrt(3) x 3,000 km). Some rows carry GRIDRadius 0 upstream — the
 # pocket constant is the fallback.

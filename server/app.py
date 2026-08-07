@@ -79,8 +79,9 @@ WATCHER_BUNDLE_FILES = (
 )
 
 # Live dataset endpoints (the files in DATA_DIR act as the offline cache).
-OC_URL = os.environ.get("SC_NAV_OC_URL", "https://starmap.space/api/v3/oc/index.php")
-POI_URL = os.environ.get("SC_NAV_POI_URL", "https://starmap.space/api/v3/pois/index.php")
+# The starmap.space catalogs are NOT here: containers.json / poi.json are
+# vendored snapshots, re-synced only by tools/sync_containers.py (reviewed
+# diff -> commit -> release). See load_nav_data for why.
 COMMODITIES_URL = os.environ.get("SC_NAV_COMMODITIES_URL", "https://api.uexcorp.uk/2.0/commodities")
 SHIPS_URL = os.environ.get("SC_NAV_SHIPS_URL", "https://api.uexcorp.uk/2.0/vehicles")
 # Equipment / ship parts (weapons, components, armor, attachments, …). The feed
@@ -370,22 +371,16 @@ wiki_locations = load_wiki_locations()
 
 
 def load_shipped_containers() -> list[dict]:
-    """The committed containers snapshot, for ghost-anchor recovery
-    (nav_core.register_ghost_containers). Same two-path rule as
-    load_wiki_locations and for the same v0.37.1 reason — plus one more here:
-    the DATA_DIR copy is the live-fetch CACHE, overwritten by whatever
-    upstream serves, so after a degraded fetch it no longer knows the very
-    containers we need to recover. The code-bundled copy is the last feed
-    revision a human reviewed at commit time."""
-    for base in (Path(__file__).parent, DATA_DIR):     # code-bundled wins over the volume
-        try:
-            rows = json.loads((base / "containers.json").read_text())
-            if rows:
-                return rows
-        except (OSError, json.JSONDecodeError):
-            continue
-    print("[sc-nav] containers snapshot not found — vanished anchors stay unresolved")
-    return []
+    """Geometry pool for ghost-anchor recovery
+    (nav_core.register_ghost_containers): the vendored snapshot plus the
+    tombstones file — containers upstream deleted or truly renamed, moved
+    there by tools/sync_containers.py so stored org data anchored to them
+    stays resolvable across re-syncs. Tombstones are resolution-only by
+    construction: they never enter nav.containers."""
+    snapshot = _static_feed("containers.json")
+    if snapshot is None:
+        print("[sc-nav] containers snapshot not found — vanished anchors stay unresolved")
+    return (snapshot or []) + (_static_feed("container_tombstones.json") or [])
 
 
 def _register_ghost_anchors(target_nav: nav_core.NavData) -> None:
@@ -415,67 +410,38 @@ def _apply_wiki_catalog(fresh: nav_core.NavData) -> nav_core.NavData:
     return fresh
 
 
-def load_nav_data() -> nav_core.NavData:
-    """Fetch live data from starmap.space; fall back to the on-disk cache.
-
-    A successful fetch refreshes the cache files, so the newest good dataset
-    survives restarts and network outages. The POI catalog is skipped when the
-    org has opted out (containers are always loaded). The wiki locations
-    catalog (committed snapshot) is folded in last, so its dedup sees the
-    complete starmap set.
-    """
-    want_pois = starmap_pois_enabled()
-    if not OFFLINE:
+def _static_feed(fname: str) -> list | None:
+    """A vendored starmap snapshot, code-bundled copy first (the Dockerfile
+    ships these next to the server code; DATA_DIR is the dev/CI fallback AND
+    holds stale pre-vendoring fetch caches on existing prod volumes, which the
+    code-bundled copy must shadow)."""
+    for base in (Path(__file__).parent, DATA_DIR):
         try:
-            oc_raw = _fetch_json(OC_URL)
-            poi_raw = _fetch_json(POI_URL) if want_pois else []
-            if len(oc_raw) < 50 or (want_pois and len(poi_raw) < 100):
-                raise ValueError(
-                    f"suspiciously small dataset ({len(oc_raw)} containers, "
-                    f"{len(poi_raw)} pois) — keeping cache"
-                )
-            fresh = nav_core.parse_data(oc_raw, poi_raw)
-            try:
-                # A fetch that silently DROPS station containers the cache
-                # still has (2026-08-06: upstream lost Wide Forest Station /
-                # ARC-L1) passes the size guard and then overwrites the last
-                # dataset that knew about them — log the loss while both
-                # datasets are still in hand. Names are .strip()ed: the old
-                # feed carried 'Wide Forest Station\t'.
-                old_raw = json.loads((DATA_DIR / "containers.json").read_text())
-                def _stations(rows):
-                    return {(r.get("System"), (r.get("ObjectContainer") or "").strip())
-                            for r in rows
-                            if r.get("Type") in nav_core._STATION_CONTAINER_TYPES}
-                lost = _stations(old_raw) - _stations(oc_raw)
-                if lost:
-                    names = ", ".join(sorted(f"{n} ({s})" for s, n in lost))
-                    print(f"[sc-nav] live containers feed dropped "
-                          f"{len(lost)} station container(s) the cache had: {names}")
-            except (OSError, json.JSONDecodeError):
-                pass
-            try:
-                (DATA_DIR / "containers.json").write_text(json.dumps(oc_raw))
-                if want_pois:
-                    (DATA_DIR / "poi.json").write_text(json.dumps(poi_raw))
-            except OSError as exc:
-                print(f"[sc-nav] cache write failed (continuing): {exc}")
-            data_info.update(
-                source="live",
-                fetched_at=datetime.now(timezone.utc).isoformat(),
-                error=None,
-            )
-            return _apply_wiki_catalog(fresh)
-        except Exception as exc:
-            # The class name, not str(exc): this surfaces on /api/health, and an
-            # OSError raised while applying the catalog stringifies with the
-            # absolute path it failed on. The full text goes to the log, where
-            # the operator can read it and a visitor can't.
-            data_info["error"] = type(exc).__name__
-            print(f"[sc-nav] live fetch failed, using cached data: {exc!r}")
-    data_info["source"] = "offline" if OFFLINE else "cache"
-    oc_raw = json.loads((DATA_DIR / "containers.json").read_text())
-    poi_raw = json.loads((DATA_DIR / "poi.json").read_text()) if want_pois else []
+            rows = json.loads((base / fname).read_text())
+            if rows:
+                return rows
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def load_nav_data() -> nav_core.NavData:
+    """Build NavData from the vendored starmap snapshots.
+
+    containers.json / poi.json are committed, reviewed reference data —
+    re-synced per game patch by tools/sync_containers.py, never fetched at
+    runtime. The old boot-time fetch let a 2026-08-06 upstream revision
+    delete station containers, relocate belt segments 33 Gm, and overwrite
+    every deployment's cache before anyone saw a diff; now a revision lands
+    the way code does. The POI catalog is skipped when the org has opted out
+    (containers are always loaded). The wiki locations catalog is folded in
+    last, so its dedup sees the complete starmap set.
+    """
+    oc_raw = _static_feed("containers.json") or []
+    poi_raw = (_static_feed("poi.json") or []) if starmap_pois_enabled() else []
+    if not oc_raw:
+        print("[sc-nav] containers snapshot missing — navigation will be empty")
+    data_info.update(source="snapshot", fetched_at=None, error=None)
     return _apply_wiki_catalog(nav_core.parse_data(oc_raw, poi_raw))
 
 
