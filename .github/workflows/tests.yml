@@ -47,10 +47,15 @@ jobs:
 
       - name: Run app (HTTP) tests
         working-directory: server
-        # SC_NAV_OFFLINE pins the suite to the committed poi/ cache. Without it
-        # the app live-fetches starmap.space at import and the tests run against
-        # whatever that feed says today — a 2026-08-06 upstream revision (dropped
-        # ARC-L1 station container) broke the suite with zero code change.
+        # Pin the starmap.space feeds to the committed poi/ cache by pointing
+        # their URLs at an unroutable address: the fetch fails instantly and
+        # load_nav_data falls back to the committed snapshot. Without this the
+        # suite runs against whatever starmap.space says today — a 2026-08-06
+        # upstream revision (dropped the ARC-L1 station container) broke it with
+        # zero code change. NOT SC_NAV_OFFLINE: that would also disable the
+        # uexcorp fetches, whose caches are gitignored, and the quantum/craft/
+        # contribution tests fail without that data.
         env:
-          SC_NAV_OFFLINE: "1"
+          SC_NAV_OC_URL: "http://127.0.0.1:9/oc"
+          SC_NAV_POI_URL: "http://127.0.0.1:9/pois"
         run: python test_app.py
