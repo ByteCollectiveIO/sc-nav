@@ -136,6 +136,14 @@ class Observation:
     nearest_qt_dist_m: float | None = None  # distance to that marker, meters
 
 
+def container_name_key(name: str) -> str:
+    """Drift-stable form of a container name: lowercased, every non-alnum run
+    (hyphens, tabs, spaces) folded to one space. 'ARC-L1', 'ARC L1' and
+    'Wide Forest Station\\t' all key identically, so stored data anchored under
+    one feed revision's spelling resolves under another's."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", name.lower()).split())
+
+
 @dataclass
 class NavData:
     containers: dict[tuple[str, str], Container] = field(default_factory=dict)
@@ -147,6 +155,13 @@ class NavData:
     qt_by_container: dict = field(default_factory=dict)           # (system,container) -> [Poi]
     # Per-system asteroid drop-target registry (#35, filled by build_belt_registry)
     belts: dict = field(default_factory=dict)                     # system -> registry row
+    # Drift-tolerant container resolution (see resolve_container):
+    # (system, container_name_key) -> Container over the parsed set, plus
+    # resolution-ONLY ghosts for anchors that vanished upstream. Ghosts are
+    # deliberately absent from `containers` so they never synth POIs, never
+    # detect_container a new capture, and never enter the belt registry.
+    container_keys: dict = field(default_factory=dict)
+    ghost_containers: dict = field(default_factory=dict)
     # Monotonic mutation counter: bump (via touch()) after ANY in-place change
     # to pois/observations — including field edits that don't change a count
     # (note/private/survey edits, override flips). Derived-product caches key
@@ -156,12 +171,30 @@ class NavData:
     def touch(self) -> None:
         self.version += 1
 
+    def resolve_container(self, system: str, name: str) -> Container | None:
+        """Container by (system, name), tolerant of upstream naming drift.
+        Exact key first, then a case/hyphen/whitespace-folded match (the
+        2026-08-06 starmap revision renamed 'ARC-L1' -> 'ARC L1', and the old
+        feed carried warts like 'Wide Forest Station\\t'), then ghost geometry
+        registered for anchors that vanished from the dataset entirely (see
+        register_ghost_containers). Stored custom POIs/observations reference
+        containers by the name current at capture time — this is what keeps
+        that data resolvable across feed revisions."""
+        hit = self.containers.get((system, name))
+        if hit is not None:
+            return hit
+        key = (system, container_name_key(name))
+        hit = self.container_keys.get(key)
+        if hit is not None:
+            return hit
+        return self.ghost_containers.get(key)
+
     def container_of(self, entity) -> Container | None:
         """Parent container of any positioned entity (Poi or Observation —
         both carry container_name + system)."""
         if entity.container_name is None:
             return None
-        return self.containers.get((entity.system, entity.container_name))
+        return self.resolve_container(entity.system, entity.container_name)
 
 
 def load_data(data_dir: str | Path) -> NavData:
@@ -189,6 +222,13 @@ def parse_data(containers_raw: list[dict], pois_raw: list[dict]) -> NavData:
             rotation_adjustment=float(c.get("RotationAdjustmentX") or 0),
         )
         nav.containers[(cont.system, cont.name)] = cont
+
+    # Folded-name index for drift-tolerant resolution (resolve_container).
+    # setdefault: if one dataset ever carried both spellings, first row wins —
+    # the exact-key lookup still reaches the other.
+    for cont in nav.containers.values():
+        nav.container_keys.setdefault(
+            (cont.system, container_name_key(cont.name)), cont)
 
     for p in pois_raw:
         is_space = p["Planet"] == "Space"
@@ -1253,6 +1293,40 @@ def merge_custom_pois(nav: NavData, custom_dicts: list[dict]) -> None:
             print(f"[sc-nav] skipping bad custom POI record: {exc}")
             continue
         nav.pois[poi.id] = poi
+
+
+def register_ghost_containers(nav: NavData, snapshot_loader) -> list[str]:
+    """Recover position resolution for stored data whose anchor container
+    vanished from the current dataset. A capture inside a container's grid is
+    stored container-relative (local_km, no global_m) — correct for rotating
+    bodies, but it makes the data unreadable the day upstream deletes the
+    container (2026-08-06: 'Wide Forest Station', whose 70,000 km grid held
+    the org's ARC-L1 cluster survey marks). For each unresolvable anchor
+    referenced by a merged custom POI or observation, pull the container's
+    geometry from the shipped snapshot (`snapshot_loader()` -> raw feed rows,
+    called only when something is actually missing) and register it as a
+    resolution-only ghost. Returns the ghosted names for the caller's log.
+
+    Space containers don't rotate (rotation_speed 0), so snapshot geometry
+    resolves those anchors exactly; for a rotating body the snapshot's
+    rotation params are the same physical constants. Anchors absent from the
+    snapshot too stay unresolved — better dark than guessed."""
+    entities = [p for p in nav.pois.values() if p.custom] + \
+               list(nav.observations.values())
+    missing = {(e.system, e.container_name) for e in entities
+               if e.container_name is not None and e.global_m is None
+               and nav.resolve_container(e.system, e.container_name) is None}
+    if not missing:
+        return []
+    snap = parse_data(snapshot_loader() or [], [])
+    ghosted = []
+    for system, name in missing:
+        cont = snap.resolve_container(system, name)
+        if cont is None:
+            continue
+        nav.ghost_containers[(system, container_name_key(name))] = cont
+        ghosted.append(f"{name.strip()} ({system})")
+    return sorted(ghosted)
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,11 @@ ENV SC_NAV_DATA=/data
 # on the volume's first creation, so files added in a later release never reach
 # an existing volume. app.load_quantum()/load_blueprints()/
 # load_wiki_locations() read the code-dir copy first.
-COPY poi/quantum_drives.json poi/quantum_profiles.json poi/blueprints.json poi/locations.json ./
+# containers.json rides along for ghost-anchor recovery
+# (app.load_shipped_containers): the /data copy is the live-fetch cache, so
+# after a degraded upstream fetch it has forgotten the very containers that
+# stored survey marks/observations were anchored to.
+COPY poi/quantum_drives.json poi/quantum_profiles.json poi/blueprints.json poi/locations.json poi/containers.json ./
 
 # The Strata RS sync tool (not committed data — the tool). The server runs it at
 # startup when STRATA_API_KEY is set, writing ore_signatures.json to the data
