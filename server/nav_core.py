@@ -5988,6 +5988,15 @@ def glaciem_pockets(nav: NavData) -> list[dict]:
     for c in nav.containers.values():
         if c.system != GLACIEM_SYSTEM or c.type != "AsteroidBelt":
             continue
+        # A Nyx AsteroidBelt container is no longer proof of ring membership:
+        # the 2026-08-06 starmap revision moved 30 QV Breaker mission arcs
+        # (same Mission_Genrl keys, new keeger_segment_* container names) out
+        # to the 48 Gm Keeger Belt. Planned as Glaciem pockets they'd aim
+        # drops 33 Gm off the ring, so gate on the ring envelope. The excluded
+        # segments stay out of the registry for now — surfacing them as
+        # datamined Keeger pockets is a #36 design question, not a side effect.
+        if not glaciem_contains(c.pos):
+            continue
         key = glaciem_pocket_key(c.internal_name or c.name)
         low = key.lower()
         kind = ("mission" if low.startswith("mission")

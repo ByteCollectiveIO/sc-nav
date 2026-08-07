@@ -4663,6 +4663,25 @@ class BeltRegistryTests(unittest.TestCase):
         angles = [math.atan2(p["xyz"][1], p["xyz"][0]) for p in pockets]
         self.assertEqual(angles, sorted(angles))
 
+    def test_glaciem_pockets_reject_off_ring_segments(self):
+        """The 2026-08-06 starmap revision relocated 30 mission arcs to the
+        48 Gm Keeger Belt while keeping them Nyx AsteroidBelt containers —
+        ring membership must be geometric, not taxonomic, or the planner aims
+        drops 33 Gm off the ring."""
+        nav = nav_core.NavData()
+        for name, pos in [
+            ("Glaciemring_Segment_Wtn-001", (nav_core.GLACIEM_R_M, 0.0, 0.0)),
+            ("keeger_segment_mission_genrl_001_001", (48.0e9, 0.0, 0.0)),
+        ]:
+            nav.containers[("Nyx", name)] = nav_core.Container(
+                name=name, system="Nyx", type="AsteroidBelt",
+                internal_name=name, pos=pos, body_radius=0, om_radius=0,
+                grid_radius=nav_core.GLACIEM_POCKET_RADIUS_M,
+                rotation_speed=0, rotation_adjustment=0,
+            )
+        keys = [p["key"] for p in nav_core.glaciem_pockets(nav)]
+        self.assertEqual(keys, ["Wtn-001"])
+
     def test_pyro_field_registry(self):
         fields = self.belts["Pyro"]["fields"]
         self.assertEqual(len(fields), 102)                  # 16 L-points + 86 RMBs
