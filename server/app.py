@@ -369,6 +369,36 @@ def load_wiki_locations() -> list[dict]:
 wiki_locations = load_wiki_locations()
 
 
+def load_shipped_containers() -> list[dict]:
+    """The committed containers snapshot, for ghost-anchor recovery
+    (nav_core.register_ghost_containers). Same two-path rule as
+    load_wiki_locations and for the same v0.37.1 reason — plus one more here:
+    the DATA_DIR copy is the live-fetch CACHE, overwritten by whatever
+    upstream serves, so after a degraded fetch it no longer knows the very
+    containers we need to recover. The code-bundled copy is the last feed
+    revision a human reviewed at commit time."""
+    for base in (Path(__file__).parent, DATA_DIR):     # code-bundled wins over the volume
+        try:
+            rows = json.loads((base / "containers.json").read_text())
+            if rows:
+                return rows
+        except (OSError, json.JSONDecodeError):
+            continue
+    print("[sc-nav] containers snapshot not found — vanished anchors stay unresolved")
+    return []
+
+
+def _register_ghost_anchors(target_nav: nav_core.NavData) -> None:
+    """Recover stored custom POIs/observations whose anchor container the
+    current feed no longer has (upstream deletes/renames — 2026-08-06 lost
+    'Wide Forest Station' and orphaned the ARC-L1 cluster survey marks).
+    Call after the DB customs/observations are merged into a fresh nav."""
+    ghosts = nav_core.register_ghost_containers(target_nav, load_shipped_containers)
+    if ghosts:
+        print(f"[sc-nav] {len(ghosts)} anchor container(s) missing from the "
+              f"dataset, resolving via the shipped snapshot: {', '.join(ghosts)}")
+
+
 def _apply_wiki_catalog(fresh: nav_core.NavData) -> nav_core.NavData:
     """Fold the wiki locations catalog into a freshly parsed NavData: new POIs
     + QT-marker promotion of starmap POIs the game now allows jumping to, when
@@ -1481,6 +1511,7 @@ def refresh_catalog() -> None:
     item_catalog_by_id = {it["item_id"]: it for it in item_catalog}
 nav_core.merge_custom_pois(nav, db.list_custom_pois())
 merge_all_observations(nav)
+_register_ghost_anchors(nav)
 nav_core.apply_poi_overrides(nav, db.list_poi_overrides())
 nav_core.assign_qt_markers(nav)
 
@@ -9995,6 +10026,7 @@ async def _rebuild_nav() -> None:
     fresh = await asyncio.to_thread(load_nav_data)
     nav_core.merge_custom_pois(fresh, db.list_custom_pois())
     merge_all_observations(fresh)
+    _register_ghost_anchors(fresh)
     nav_core.apply_poi_overrides(fresh, db.list_poi_overrides())
     nav_core.assign_qt_markers(fresh)
     async with hub.lock:

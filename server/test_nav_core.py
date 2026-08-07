@@ -4627,6 +4627,79 @@ class HaloFinderTests(unittest.TestCase):
         self.assertEqual(poi.global_m, pos)
 
 
+class ContainerDriftTests(unittest.TestCase):
+    """Upstream feed revisions rename containers ('ARC-L1' -> 'ARC L1') and
+    delete them outright ('Wide Forest Station', whose 70,000 km grid held the
+    org's ARC-L1 cluster survey marks) — 2026-08-06. Stored custom POIs and
+    observations reference their anchor by name, so resolve_container folds
+    naming drift and register_ghost_containers recovers deleted anchors from
+    the shipped snapshot."""
+
+    STATION_POS = (16_729_220_034.0, -19_942_048_185.0, 2_239_765.0)
+
+    def _row(self, name):
+        x, y, z = self.STATION_POS
+        return {"ObjectContainer": name, "System": "Stanton",
+                "Type": "Refinery Station", "InternalName": "",
+                "XCoord": x, "YCoord": y, "ZCoord": z,
+                "BodyRadius": 0, "OrbitalMarkerRadius": 0,
+                "GRIDRadius": 70_148_056, "RotationSpeedX": 0,
+                "RotationAdjustmentX": 0}
+
+    def _mark(self, cname):
+        return nav_core.Poi(
+            id=1_000_001, name="cluster mark", system="Stanton",
+            container_name=cname, type="survey",
+            local_km=(10.0, 0.0, 0.0), global_m=None,
+            latitude=None, longitude=None, height_m=None,
+            qt_marker=False, custom=True,
+            survey={"rocks": "dense", "zone_id": 7},
+        )
+
+    def test_resolve_container_folds_naming_drift(self):
+        nav = nav_core.parse_data([self._row("ARC L1")], [])
+        cont = nav.containers[("Stanton", "ARC L1")]
+        # old-spelling anchor, tab wart, case — all reach the renamed row
+        self.assertIs(nav.resolve_container("Stanton", "ARC-L1"), cont)
+        self.assertIs(nav.resolve_container("Stanton", "arc l1\t"), cont)
+        self.assertIsNone(nav.resolve_container("Nyx", "ARC-L1"))     # system-scoped
+        self.assertIsNone(nav.resolve_container("Stanton", "CRU-L1"))
+
+    def test_ghost_recovers_deleted_anchor(self):
+        nav = nav_core.parse_data([], [])          # feed lost the station
+        mark = self._mark("Wide Forest Station")
+        nav.pois[mark.id] = mark
+        ghosted = nav_core.register_ghost_containers(
+            nav, lambda: [self._row("Wide Forest Station\t")])   # snapshot's tab wart
+        self.assertEqual(ghosted, ["Wide Forest Station (Stanton)"])
+        g = poi_global_m(nav, mark, nav_core.ROTATION_EPOCH)
+        self.assertIsNotNone(g)
+        self.assertAlmostEqual(g[0], self.STATION_POS[0] + 10_000.0, delta=1.0)
+        # the mark is back on the survey surfaces, zone tag intact
+        marks = nav_core.survey_marks(nav, "Stanton")
+        self.assertEqual([m["zone_id"] for m in marks], [7])
+        # ghosts resolve stored anchors ONLY — a new capture at the old
+        # station position must not detect a deleted container
+        self.assertIsNone(nav_core.detect_container(nav, self.STATION_POS))
+
+    def test_ghosts_not_loaded_when_anchors_resolve(self):
+        nav = nav_core.parse_data([self._row("Wide Forest Station")], [])
+        nav.pois[1_000_001] = self._mark("Wide Forest Station")
+
+        def _boom():
+            raise AssertionError("snapshot loaded with nothing missing")
+        self.assertEqual(nav_core.register_ghost_containers(nav, _boom), [])
+
+    def test_anchor_absent_from_snapshot_stays_dark(self):
+        nav = nav_core.parse_data([], [])
+        nav.pois[1_000_001] = self._mark("Never Existed Station")
+        ghosted = nav_core.register_ghost_containers(
+            nav, lambda: [self._row("Wide Forest Station")])
+        self.assertEqual(ghosted, [])
+        self.assertIsNone(poi_global_m(nav, nav.pois[1_000_001],
+                                       nav_core.ROTATION_EPOCH))
+
+
 class BeltRegistryTests(unittest.TestCase):
     """Multi-system expansion (#35): the per-system belt registry (Glaciem
     Ring pockets from the datamined containers, Pyro fields from the wiki
