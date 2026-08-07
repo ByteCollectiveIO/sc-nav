@@ -18,7 +18,7 @@ drift — trust grep and CI, not the citation.
 | [apps/README.md](apps/README.md) | **User-facing showcase & how-to guides** — one page per app (screenshots + walkthroughs). The player-facing counterpart to the design specs below |
 | [product-overview.md](product-overview.md) | **The consolidated map**: apps, platform services, data sources, conventions |
 | [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slices 0–5 shipped v0.64–0.72, rest designed) |
-| [org-deployment-guide.md](org-deployment-guide.md) | **Runbook for an org self-hosting an instance** — VPS sizing, Cloudflare Tunnel + Portainer install, day-one settings, backups, maintenance. Written for volunteers, not sysadmins |
+| [org-deployment-guide.md](org-deployment-guide.md) | **Runbook for an org self-hosting an instance** — VPS sizing, registrar→Cloudflare DNS migration (§5, step-by-step incl. DNSSEC + email records), Cloudflare Tunnel + Portainer install, day-one settings, backups, maintenance, runbook. Written for volunteers, not sysadmins. Printable copy: [SC-Nav-Org-Deployment-Guide.pdf](SC-Nav-Org-Deployment-Guide.pdf) — **rendered, not a source of truth; regenerate it when the markdown changes** |
 | [security-review-2026-08.md](security-review-2026-08.md) | **Threat model + security posture** across four surfaces (watcher→app, app→member, insider, external): what was fixed, what is verified sound and shouldn't be re-reviewed, what's still open and in what order |
 | [../PRODUCT.md](../PRODUCT.md) · [../DESIGN.md](../DESIGN.md) | Product scope/brand · visual design system |
 
