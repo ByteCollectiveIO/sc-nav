@@ -406,6 +406,25 @@ def load_nav_data() -> nav_core.NavData:
                 )
             fresh = nav_core.parse_data(oc_raw, poi_raw)
             try:
+                # A fetch that silently DROPS station containers the cache
+                # still has (2026-08-06: upstream lost Wide Forest Station /
+                # ARC-L1) passes the size guard and then overwrites the last
+                # dataset that knew about them — log the loss while both
+                # datasets are still in hand. Names are .strip()ed: the old
+                # feed carried 'Wide Forest Station\t'.
+                old_raw = json.loads((DATA_DIR / "containers.json").read_text())
+                def _stations(rows):
+                    return {(r.get("System"), (r.get("ObjectContainer") or "").strip())
+                            for r in rows
+                            if r.get("Type") in nav_core._STATION_CONTAINER_TYPES}
+                lost = _stations(old_raw) - _stations(oc_raw)
+                if lost:
+                    names = ", ".join(sorted(f"{n} ({s})" for s, n in lost))
+                    print(f"[sc-nav] live containers feed dropped "
+                          f"{len(lost)} station container(s) the cache had: {names}")
+            except (OSError, json.JSONDecodeError):
+                pass
+            try:
                 (DATA_DIR / "containers.json").write_text(json.dumps(oc_raw))
                 if want_pois:
                     (DATA_DIR / "poi.json").write_text(json.dumps(poi_raw))
