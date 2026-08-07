@@ -4577,8 +4577,12 @@ class HaloFinderApiTests(unittest.TestCase):
         cls._orig_session_user = app.session_user
         app.session_user = lambda request: cls._user
         cls.client = TestClient(app.app)
+        # ARC-L2: the ARC-L1 station left the container catalog in the 2026-08
+        # upstream revision, and the app's default nav (starmap POIs off) only
+        # synthesizes stations from containers. Any halo-adjacent QT station
+        # works — the tests exercise plan/locate structure, not ARC-L1 numbers.
         cls.arc = next(p for p in app.nav.pois.values()
-                       if "(ARC-L1)" in p.name and p.qt_marker)
+                       if "(ARC-L2)" in p.name and p.qt_marker)
 
     @classmethod
     def tearDownClass(cls):
@@ -4871,7 +4875,7 @@ class HaloFinderApiTests(unittest.TestCase):
         self.assertEqual(len(st["bands"]), 10)
         nyx = self.client.get("/api/halo/targets", params={"system": "Nyx"}).json()
         self.assertEqual(nyx["kind"], "ring")
-        self.assertEqual(len(nyx["pockets"]), 381)
+        self.assertEqual(len(nyx["pockets"]), 351)   # 2026-08-07 sync: 30 mission arcs moved to Keeger
         self.assertAlmostEqual(nyx["ring"]["r_m"], 15.0e9)
         self.assertIn("starmap.space", nyx["attribution"])
         pyro = self.client.get("/api/halo/targets", params={"system": "Pyro"}).json()

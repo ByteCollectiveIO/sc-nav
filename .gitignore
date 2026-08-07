@@ -42,6 +42,7 @@ poi/quantum_match_report.txt
 poi/blueprint_sync_report.txt
 # locations.json IS committed (#28 wiki catalog); its sync report is a build artifact.
 poi/locations_sync_report.txt
+poi/containers_sync_report.txt
 # Strata RS feed — NOT committed, unlike the wiki/starmap feeds above. Strata
 # states no redistribution license (their terms cover API use + crediting them
 # when you surface the data), and this repo only commits feeds whose license

@@ -37,20 +37,23 @@ def surface_pois(container_name, system="Stanton"):
 
 class DataLoadingTests(unittest.TestCase):
     def test_counts(self):
-        # 495 as of the 2026-08-02 feed sync (upstream removed Stanton's
-        # "TEST Moon" dummy container).
-        self.assertEqual(len(NAV.containers), 495)
+        # 493 as of the 2026-08-07 sync (tools/sync_containers.py): upstream
+        # moved the Glaciem mission arcs to Keeger and the ARC-L1/CRU-L4-class
+        # refinery stations out of the container catalog into the POI catalog.
+        self.assertEqual(len(NAV.containers), 493)
         # Starmap POIs (ids well below the synthesized-station range) are the
         # data-integrity snapshot; container-stations are added on top.
         starmap = [p for p in NAV.pois.values() if p.id < nav_core.CONTAINER_POI_START]
-        self.assertEqual(len(starmap), 1885)
+        self.assertEqual(len(starmap), 1937)
         self.assertIn("Stanton", NAV.systems)
 
     def test_container_stations_synthesized(self):
         synth = [p for p in NAV.pois.values() if p.id >= nav_core.CONTAINER_POI_START]
         self.assertTrue(synth)
         # Lagrange stations are searchable by their L-code (folded into the name).
-        self.assertTrue(any(p.name.startswith("Wide Forest Station") and "ARC-L1" in p.name
+        # (Wide Forest / ARC-L1 lives in the POI catalog since the 2026-08
+        # upstream revision — Lively Pathway / ARC-L2 still proves the fold.)
+        self.assertTrue(any(p.name.startswith("Lively Pathway Station") and "ARC-L2" in p.name
                             for p in synth))
         # all are directly-QT-able space POIs at the container's position
         self.assertTrue(all(p.container_name is None and p.global_m is not None and p.qt_marker
@@ -4185,7 +4188,9 @@ class WikiPoiImportTests(unittest.TestCase):
 
     def test_import_adds_wiki_only_pois_in_reserved_id_range(self):
         added = nav_core.add_wiki_pois(self.nav, self.locations)
-        self.assertGreater(added, 200)      # ~241 wiki-only places as of 4.8.2
+        # ~186 as of the 2026-08-07 starmap sync — the catalog grew 52 records
+        # (stations moved in from the container catalog), deduping more wiki rows.
+        self.assertGreater(added, 150)
         wiki = [p for p in self.nav.pois.values() if p.source == "wiki"]
         self.assertEqual(len(wiki), added)
         self.assertTrue(all(p.id >= nav_core.WIKI_POI_START for p in wiki))
@@ -4295,7 +4300,12 @@ class HaloFinderTests(unittest.TestCase):
         cls.nav = load_data(DATA_DIR)
         nav_core.assign_qt_markers(cls.nav)
         cls.t = nav_core.ROTATION_EPOCH
-        cls.arc = _halo_marker(cls.nav, "(ARC-L1)")
+        # The ARC-L1 station moved from the container catalog to the POI
+        # catalog in the 2026-08 upstream revision; it resolves through the
+        # 'ARC L1' Lagrange container to the same physical position, so the
+        # published route-chart numbers still anchor exactly.
+        cls.arc = next(p for p in cls.nav.pois.values()
+                       if p.name == "ARC-L1 Wide Forest Station")
         cls.cru = _halo_marker(cls.nav, "(CRU-L4)")
         cls.p_arc = poi_global_m(cls.nav, cls.arc, cls.t)
         cls.p_cru = poi_global_m(cls.nav, cls.cru, cls.t)
@@ -4724,8 +4734,10 @@ class BeltRegistryTests(unittest.TestCase):
         pockets = nyx["pockets"]
         kinds = {k: sum(1 for p in pockets if p["kind"] == k)
                  for k in ("general", "mission", "levski")}
-        self.assertEqual(len(pockets), 381)
-        self.assertEqual(kinds, {"general": 300, "mission": 80, "levski": 1})
+        # 351 since the 2026-08-07 sync: upstream relocated 30 mission arcs to
+        # the 48 Gm Keeger Belt (they're tombstoned, not Glaciem pockets).
+        self.assertEqual(len(pockets), 351)
+        self.assertEqual(kinds, {"general": 300, "mission": 50, "levski": 1})
         for p in pockets:
             r = math.hypot(p["xyz"][0], p["xyz"][1])
             self.assertAlmostEqual(r, nav_core.GLACIEM_R_M, delta=5e6)
