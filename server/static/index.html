@@ -4128,7 +4128,10 @@
           <p class="muted route-hint" style="margin-top:10px;">The <b>Keeger Belt</b> rings the
             outer system at 48.00 Gm (the People's Service Stations sit inside it) — but the game
             data has no rock map, so <b>your org builds one</b>: drop ⛏ survey marks below and
-            every rock mark becomes a jumpable pocket here, instantly.</p>
+            every rock mark becomes a jumpable pocket here, instantly. The violet outlines on the
+            ATLAS map are <b>datamined mission arcs</b>: believed contract-gated and unverified.
+            They're pinnable by key, but no marker chord passes near them, so reach one via its
+            mining contract and ⛏ mark what you find (rocks or none, both teach the org's map).</p>
           <p class="muted route-hint" id="halo-keeger-progress" role="status" aria-live="polite"></p>
           <div class="route-row" style="align-items:center;">
             <label class="muted" style="font-size:12px;">pocket
@@ -14348,10 +14351,15 @@ function renderHaloKeegerProgress() {
   ];
   renderPocketSuggest("halo-keeger-suggest", rows, "halo-keeger-pocket");
   const dl = $("halo-keeger-keys");
+  // Datamined mission arcs (#36 phase 1) ride the DATALIST only — pinnable by
+  // name, but never in the value-ranked suggest chips: those rank the org's
+  // own evidence, and an unverified contract-gated arc has none.
   if (dl) dl.innerHTML = rows.map(pk => {
     const vt = surveyValueText(pk.value);
     return `<option value="${esc(pk.key)}"${vt ? ` label="${esc(pk.key)}${vt}"` : ""}>`;
-  }).join("");
+  }).join("") + ((doc || {}).segments || []).map(sg =>
+    `<option value="${esc(sg.key)}" label="${esc(sg.key)} — datamined mission arc (contract access)">`
+  ).join("");
 }
 
 // Shared value-ranked pocket suggestions (#37 picker parity): best first,
@@ -14901,6 +14909,9 @@ function renderHaloAtlasCap() {
     bits.push(`Keeger arc surveyed: <b>${(doc.gaps.coverage * 100).toFixed(1)}%</b>`
       + ` · ${doc.gaps.arcs.length} gap${doc.gaps.arcs.length === 1 ? "" : "s"}`
       + ` <span style="color:rgba(224,162,74,.9)">(amber arcs)</span>`);
+    if ((doc.segments || []).length)
+      bits.push(`${doc.segments.length} <span style="color:rgba(159,123,211,.9)">datamined`
+        + ` mission arcs</span> (violet outlines, contract access, unverified)`);
     const reachable = (doc.gaps.arcs || []).filter(a => a.plannable)
       .sort((a, b) => (a.probe_miss_m || 0) - (b.probe_miss_m || 0));
     if (reachable.length) {
@@ -15998,6 +16009,24 @@ function drawHaloSystemMap(cv, plan) {
         }
         ctx.lineWidth = 1;
       }
+      // Datamined mission arcs (#36 phase 1): hollow violet outlines + key
+      // labels on Keeger focus. Deliberately outlined-not-filled so the org's
+      // filled survey dots and zone squares stay the belt's real map; the
+      // outline says "the game data claims mission rocks here", nothing more.
+      for (const sg of doc.segments || []) {
+        const sx = cx + sg.x * s, sy = cy - sg.y * s;
+        const rr = Math.max(3, sg.grid_radius_m * s);
+        ctx.strokeStyle = kFocus || !overview
+          ? "rgba(159,123,211,.65)" : "rgba(159,123,211,.25)";
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.arc(sx, sy, rr, 0, 2 * Math.PI); ctx.stroke();
+        ctx.setLineDash([]);
+        if (kFocus && overview) {
+          ctx.fillStyle = "rgba(159,123,211,.85)";
+          ctx.fillText(sg.key.replace("KGR-Mission_Genrl_", "arc "), sx + rr + 4, sy + 3);
+        }
+        if (hits) hits.push({ x: sx, y: sy, key: sg.key, kind: "segment" });
+      }
       for (const pk of doc.surveyed || []) {
         // Value-tinted survey dots (#37 slice 1); untiered stays C.window.
         // Big on the overview — the survey IS the story (v0.69.1).
@@ -16130,6 +16159,9 @@ function renderHaloOverview() {
     bits.push(`Keeger arc surveyed: <b>${(doc.gaps.coverage * 100).toFixed(1)}%</b>`
       + ` · ${doc.gaps.arcs.length} gap${doc.gaps.arcs.length === 1 ? "" : "s"}`
       + ` <span style="color:rgba(224,162,74,.9)">(amber arcs)</span>`);
+    if ((doc.segments || []).length)
+      bits.push(`${doc.segments.length} <span style="color:rgba(159,123,211,.9)">datamined`
+        + ` mission arcs</span> (violet outlines, contract access, unverified)`);
   }
   bits.push("tap a pocket, zone or field to set it as the plan destination");
   cap.innerHTML = bits.join(" · ");
@@ -16171,7 +16203,9 @@ function haloOverviewPick(cv, e, fromAtlas) {
     // Zones outside Nyx have no pocket-pin input — plan directly (v0.71.0).
     const z = haloZones.find(x => x.zone_id === best.zone_id);
     if (z) { planHaloZone(z); return; }          // planHaloZone hops to DROP itself
-  } else if (best.kind === "surveyed" || best.kind === "zone") {
+  } else if (best.kind === "surveyed" || best.kind === "zone" || best.kind === "segment") {
+    // "segment" = a datamined mission arc outline: pin it like a surveyed
+    // pocket — the plan endpoint answers honestly (today: contract-access 400).
     setHaloBelt("keeger");
     $("halo-keeger-pocket").value = best.key;
   } else {                                      // glaciem pocket kinds
@@ -16755,11 +16789,21 @@ function haloVerdictHtml(d) {
     main = `☄ You're <span class="in-band">in surveyed pocket ${esc(d.pocket.key)}</span> (Keeger Belt)`;
     meta.push(`${fmtDist(d.pocket.center_off_m)} from its center`,
       `${d.pocket.marks} mark${d.pocket.marks === 1 ? "" : "s"}`);
+    if (d.segment) meta.push(`inside datamined arc ${esc(d.segment.key)}`);
   } else if (d.status === "keeger") {
-    main = `You're in the <span class="off-band">Keeger Belt region</span>`;
-    meta.push(`${fmtDist(d.to_ring_m)} off the 48 Gm centerline`, zoff(d.z_m));
+    if (d.segment) {
+      // Inside a datamined mission arc with no org pocket yet: whatever you
+      // find here IS the verification — a "none" mark answers the
+      // contract-gating question as loudly as a rock does.
+      main = `☄ You're <span class="in-band">inside datamined arc ${esc(d.segment.key)}</span> (Keeger Belt)`;
+      meta.push(`${fmtDist(d.segment.center_off_m)} from its center`,
+        `unverified mission arc: ⛏ mark what you find (rocks or none, both count)`);
+    } else {
+      main = `You're in the <span class="off-band">Keeger Belt region</span>`;
+      meta.push(`${fmtDist(d.to_ring_m)} off the 48 Gm centerline`, zoff(d.z_m));
+      meta.push(`⛏ see rocks? drop a survey mark below`);
+    }
     if (d.pocket) meta.push(`nearest surveyed pocket ${esc(d.pocket.key)}: ${fmtDist(d.pocket.center_off_m)}`);
-    meta.push(`⛏ see rocks? drop a survey mark below`);
   } else if (d.status === "field") {
     main = `☄ You're <span class="in-band">at the ${esc(d.field.name)} field</span>`;
     meta.push(`${fmtDist(d.field.miss_m)} from its anchor`);

@@ -4917,6 +4917,30 @@ class HaloFinderApiTests(unittest.TestCase):
                                     "start_poi_id": gate.id})
         self.assertEqual(r4.status_code, 404)
 
+    def test_keeger_datamined_segments_feed_and_pin(self):
+        """#36 phase 1: the datamined mission arcs ride the Nyx targets doc
+        (reference outlines + reachability), are pinnable by KGR- key, and a
+        pin answers with the contract-access explanation — no marker chord
+        passes near any arc, so a generic 'no route' would read as a bug."""
+        nyx = self.client.get("/api/halo/targets", params={"system": "Nyx"}).json()
+        segs = nyx["segments"]
+        self.assertEqual(len(segs), 30)
+        self.assertTrue(all(s["key"].startswith("KGR-") and s["kind"] == "mission"
+                            for s in segs))
+        self.assertIn("reachable", segs[0])
+        self.assertIn("reach_m", segs[0])
+        # arcs never join the AUTO/ring pocket pool
+        self.assertFalse({s["key"] for s in segs}
+                         & {p["key"] for p in nyx["pockets"]})
+        gate = next(p for p in app.nav.qt_markers
+                    if p.system == "Nyx" and "Pyro" in p.name)
+        r = self.client.post("/api/halo/plan",
+                             json={"pocket_key": segs[0]["key"],
+                                   "start_poi_id": gate.id})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("contract", r.json()["detail"])
+        self.assertIn("⛏", r.json()["detail"])
+
     def test_pyro_field_plan(self):
         # The bare dataset's two Pyro stations have no chord passing PYR1-L3,
         # so lend the system one marker beyond the field (production runs with
