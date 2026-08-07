@@ -14540,29 +14540,56 @@ async function loadHaloZones(sys) {
 // ---- ATLAS tab (#38): the org's belt atlas — zones, coverage, export ----
 // Interactive viewport for the coverage map (#38 playtest note 2): zoom + pan
 // so overlapping survey dots can be teased apart. Reset on system switch.
-let haloAtlasView = { zoom: 1, panX: 0, panY: 0 };
-let haloAtlasPanWired = false;
-let haloAtlasDidPan = false;   // swallow the click that ends a drag (vs a pin tap)
-function resetHaloAtlasView() { haloAtlasView = { zoom: 1, panX: 0, panY: 0 }; }
+// Interactive map viewport (#38 playtest note 2; extended to the DROP
+// overview for parity — the two system maps must feel like ONE instrument):
+// per-canvas zoom/pan state. Wheel zooms about the cursor, drag pans,
+// double-click resets; `didPan` swallows the click that ends a drag.
+const haloMapViews = {};
+function haloMapView(id) {
+  return haloMapViews[id] ||= { zoom: 1, panX: 0, panY: 0, didPan: false, wired: false };
+}
 
-function wireHaloAtlasPan() {
-  if (haloAtlasPanWired) return;
-  const cv = $("halo-atlas-map");
+// Datamined-arc layer toggle (#36 phase 1 follow-up): 30 outlines are useful
+// reference but real clutter — hideable, sticky across sessions. The caption
+// chip is the control (rendered by both map captions, bound by delegation so
+// each innerHTML re-render keeps working).
+let haloShowSegments = true;
+try { haloShowSegments = localStorage.getItem("haloShowSegments") !== "0"; } catch {}
+function toggleHaloSegments() {
+  haloShowSegments = !haloShowSegments;
+  try { localStorage.setItem("haloShowSegments", haloShowSegments ? "1" : "0"); } catch {}
+  renderHaloOverview();                    // DROP canvas + its caption
+  renderHaloAtlasCap();                    // ATLAS caption
+  const av = $("halo-atlas-map");
+  if (av && !$("halo-tab-atlas").hidden) drawHaloSystemMap(av, null);
+}
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest(".halo-seg-toggle") : null;
+  if (b) toggleHaloSegments();
+});
+function resetHaloAtlasView() {
+  for (const v of Object.values(haloMapViews)) { v.zoom = 1; v.panX = 0; v.panY = 0; }
+}
+
+function wireHaloMapPan(cvId) {
+  const view = haloMapView(cvId);
+  if (view.wired) return;
+  const cv = $(cvId);
   if (!cv) return;
-  haloAtlasPanWired = true;
+  view.wired = true;
   const redraw = () => drawHaloSystemMap(cv, null);
   cv.style.touchAction = "none";
   cv.addEventListener("wheel", (e) => {
     e.preventDefault();
     const cx0 = cv.clientWidth / 2, cy0 = cv.clientHeight / 2;
-    const z = haloAtlasView.zoom;
+    const z = view.zoom;
     const z2 = Math.max(1, Math.min(12, z * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
     // Keep the point under the cursor fixed while zooming (screen-space only).
     const r = z2 / z;
-    haloAtlasView.panX = (e.offsetX - cx0) - (e.offsetX - cx0 - haloAtlasView.panX) * r;
-    haloAtlasView.panY = (e.offsetY - cy0) - (e.offsetY - cy0 - haloAtlasView.panY) * r;
-    haloAtlasView.zoom = z2;
-    if (z2 === 1) { haloAtlasView.panX = 0; haloAtlasView.panY = 0; }   // snap back to fit
+    view.panX = (e.offsetX - cx0) - (e.offsetX - cx0 - view.panX) * r;
+    view.panY = (e.offsetY - cy0) - (e.offsetY - cy0 - view.panY) * r;
+    view.zoom = z2;
+    if (z2 === 1) { view.panX = 0; view.panY = 0; }   // snap back to fit
     redraw();
   }, { passive: false });
   let drag = null;
@@ -14570,7 +14597,7 @@ function wireHaloAtlasPan() {
     // Scope the guard to THIS gesture. It used to be cleared only by the click
     // that follows a drag — but a pan that ends in pointercancel (touch) never
     // fires one, leaving the flag set to eat the next real tap.
-    haloAtlasDidPan = false;
+    view.didPan = false;
     drag = { x: e.clientX, y: e.clientY, moved: false };
     cv.setPointerCapture(e.pointerId);
   });
@@ -14579,13 +14606,13 @@ function wireHaloAtlasPan() {
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
     drag.x = e.clientX; drag.y = e.clientY;
-    haloAtlasView.panX += dx; haloAtlasView.panY += dy;
+    view.panX += dx; view.panY += dy;
     cv.style.cursor = "grabbing";
     redraw();
   });
   const endDrag = (e) => {
     if (drag) {
-      if (drag.moved) haloAtlasDidPan = true;   // guard the trailing click
+      if (drag.moved) view.didPan = true;   // guard the trailing click
       try { cv.releasePointerCapture(e.pointerId); } catch {}
     }
     drag = null; cv.style.cursor = "grab";
@@ -14607,7 +14634,7 @@ function renderHaloAtlas() {
   renderHaloAtlasCap();
   requestAnimationFrame(() => {   // canvas needs layout after un-hide
     const cv = $("halo-atlas-map");
-    if (cv) { wireHaloAtlasPan(); drawHaloSystemMap(cv, null); }
+    if (cv) { wireHaloMapPan("halo-atlas-map"); drawHaloSystemMap(cv, null); }
   });
 }
 
@@ -14910,8 +14937,13 @@ function renderHaloAtlasCap() {
       + ` · ${doc.gaps.arcs.length} gap${doc.gaps.arcs.length === 1 ? "" : "s"}`
       + ` <span style="color:rgba(224,162,74,.9)">(amber arcs)</span>`);
     if ((doc.segments || []).length)
-      bits.push(`${doc.segments.length} <span style="color:rgba(159,123,211,.9)">datamined`
-        + ` mission arcs</span> (violet outlines, contract access, unverified)`);
+      bits.push(`<button type="button" class="route-chip halo-seg-toggle"`
+        + ` aria-pressed="${haloShowSegments}"`
+        + ` title="show or hide the datamined mission arc outlines">`
+        + `${haloShowSegments ? "◈ hide" : "◇ show"} ${doc.segments.length}`
+        + ` <span style="color:rgba(179,157,219,.9)">datamined arcs</span></button>`
+        + (haloShowSegments
+           ? ` <span class="muted">(violet outlines, contract access, unverified)</span>` : ""));
     const reachable = (doc.gaps.arcs || []).filter(a => a.plannable)
       .sort((a, b) => (a.probe_miss_m || 0) - (b.probe_miss_m || 0));
     if (reachable.length) {
@@ -15896,13 +15928,15 @@ function drawHaloSystemMap(cv, plan) {
   const nyxFocus = overview && ring ? haloBelt : null;
   let cx = cssW / 2, cy = cssH / 2;
   let s = (Math.min(cssW, cssH) / 2 - 12) / rFit;
-  // ATLAS map is interactive (#38 playtest note 2): apply the pan/zoom view so
-  // stacked survey dots can be spread apart. Purely a viewport transform —
-  // every screen coord (and the click hit-tests) is derived from cx/cy/s below.
-  if (cv.id === "halo-atlas-map") {
-    s *= haloAtlasView.zoom;
-    cx += haloAtlasView.panX;
-    cy += haloAtlasView.panY;
+  // Interactive maps (#38 playtest note 2; DROP overview joined for parity):
+  // apply the canvas's pan/zoom view so stacked survey dots can be spread
+  // apart. Purely a viewport transform — every screen coord (and the click
+  // hit-tests) is derived from cx/cy/s below.
+  if (cv.id === "halo-atlas-map" || cv.id === "halo-overview") {
+    const v = haloMapView(cv.id);
+    s *= v.zoom;
+    cx += v.panX;
+    cy += v.panY;
   }
   const X = (p) => cx + p[0] * s, Y = (p) => cy - p[1] * s;
   const hits = overview ? [] : null;
@@ -16013,16 +16047,18 @@ function drawHaloSystemMap(cv, plan) {
       // labels on Keeger focus. Deliberately outlined-not-filled so the org's
       // filled survey dots and zone squares stay the belt's real map; the
       // outline says "the game data claims mission rocks here", nothing more.
-      for (const sg of doc.segments || []) {
+      // Violet = the DESIGN.md `node` token (#b39ddb) at map alphas —
+      // datamined resource locations share the resource-node hue.
+      for (const sg of (haloShowSegments ? doc.segments || [] : [])) {
         const sx = cx + sg.x * s, sy = cy - sg.y * s;
         const rr = Math.max(3, sg.grid_radius_m * s);
         ctx.strokeStyle = kFocus || !overview
-          ? "rgba(159,123,211,.65)" : "rgba(159,123,211,.25)";
+          ? "rgba(179,157,219,.65)" : "rgba(179,157,219,.25)";
         ctx.setLineDash([2, 3]);
         ctx.beginPath(); ctx.arc(sx, sy, rr, 0, 2 * Math.PI); ctx.stroke();
         ctx.setLineDash([]);
         if (kFocus && overview) {
-          ctx.fillStyle = "rgba(159,123,211,.85)";
+          ctx.fillStyle = "rgba(179,157,219,.85)";
           ctx.fillText(sg.key.replace("KGR-Mission_Genrl_", "arc "), sx + rr + 4, sy + 3);
         }
         if (hits) hits.push({ x: sx, y: sy, key: sg.key, kind: "segment" });
@@ -16141,6 +16177,28 @@ function drawHaloSystemMap(cv, plan) {
   ctx.fillText((bar / 1e9) + " Gm", 12, cssH - 18);
 
   if (P) drawHaloInset(ctx, plan, P, cssW, cssH, doc);
+  // Selection feedback on the DROP overview (parity with the ATLAS ring):
+  // whatever target is PINNED for the drop gets the gold ring — click a dot
+  // or type a key and the map answers "this one". Matched over the hit list,
+  // so pockets, arcs, zones and fields all ring the same way.
+  if (hits && cv.id === "halo-overview") {
+    let pin = null;
+    if (doc.system === "Nyx") {
+      const el = $(haloBelt === "keeger" ? "halo-keeger-pocket" : "halo-pocket");
+      pin = el ? el.value.trim().toLowerCase() : null;
+    } else if (doc.system === "Pyro") {
+      const el = $("halo-field");
+      pin = el ? (el.dataset.uuid || "").toLowerCase() : null;
+    }
+    if (pin) {
+      const h = hits.find(x => String(x.key).toLowerCase() === pin);
+      if (h) {
+        ctx.strokeStyle = C.drop; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(h.x, h.y, 7.5, 0, 2 * Math.PI); ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+    }
+  }
   if (hits) haloOverviewHits = hits;
 }
 
@@ -16160,8 +16218,13 @@ function renderHaloOverview() {
       + ` · ${doc.gaps.arcs.length} gap${doc.gaps.arcs.length === 1 ? "" : "s"}`
       + ` <span style="color:rgba(224,162,74,.9)">(amber arcs)</span>`);
     if ((doc.segments || []).length)
-      bits.push(`${doc.segments.length} <span style="color:rgba(159,123,211,.9)">datamined`
-        + ` mission arcs</span> (violet outlines, contract access, unverified)`);
+      bits.push(`<button type="button" class="route-chip halo-seg-toggle"`
+        + ` aria-pressed="${haloShowSegments}"`
+        + ` title="show or hide the datamined mission arc outlines">`
+        + `${haloShowSegments ? "◈ hide" : "◇ show"} ${doc.segments.length}`
+        + ` <span style="color:rgba(179,157,219,.9)">datamined arcs</span></button>`
+        + (haloShowSegments
+           ? ` <span class="muted">(violet outlines, contract access, unverified)</span>` : ""));
   }
   bits.push("tap a pocket, zone or field to set it as the plan destination");
   cap.innerHTML = bits.join(" · ");
@@ -16217,12 +16280,29 @@ function haloOverviewPick(cv, e, fromAtlas) {
 }
 function wireHaloOverviewClicks() {
   const cv = $("halo-overview");
-  if (cv) cv.onclick = (e) => haloOverviewPick(cv, e, false);
+  if (cv) {
+    wireHaloMapPan("halo-overview");   // zoom/pan parity with the ATLAS map
+    cv.onclick = (e) => {
+      const v = haloMapView("halo-overview");
+      if (v.didPan) { v.didPan = false; return; }   // was a drag, not a pin
+      haloOverviewPick(cv, e, false);
+    };
+  }
   const av = $("halo-atlas-map");
   if (av) av.onclick = (e) => {
-    if (haloAtlasDidPan) { haloAtlasDidPan = false; return; }   // was a drag, not a pin
+    const v = haloMapView("halo-atlas-map");
+    if (v.didPan) { v.didPan = false; return; }   // was a drag, not a pin
     haloOverviewPick(av, e, true);
   };
+  // Typing a pin key rings it on the overview too — the gold ring must track
+  // the input, not just map clicks.
+  for (const id of ["halo-pocket", "halo-keeger-pocket", "halo-field"]) {
+    const el = $(id);
+    if (el && !el.dataset.mapWired) {
+      el.dataset.mapWired = "1";
+      el.addEventListener("input", renderHaloOverview);
+    }
+  }
 }
 
 // Magnified drop zone: individual band edges / pocket circles are visible
