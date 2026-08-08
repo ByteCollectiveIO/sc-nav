@@ -21,7 +21,8 @@ from sc_nav_overlay import (
     format_eta, hud_lines, trim_name, MAX_NAME, STALE,
 )
 from sc_nav_watcher import (
-    GameLogShardReader, heartbeat_due, parse_showlocation, parse_trade_txn,
+    GameLogShardReader, heartbeat_due, parse_login_handle, parse_showlocation,
+    parse_trade_txn,
 )
 
 _JOIN = ("<2026-06-20T00:30:29.237Z> [Notice] <Join PU> address[34.21.5.134] "
@@ -49,6 +50,54 @@ _TXN_SELL = (
     "resourceGUID[d5506a24-5729-4354-81fb-0959173357c4] autoLoading[1] "
     "quantity[29] transactionMode[ResourceContainer] Cargo Box Data:  "
     "[boxSize[1] | unitAmount[29]] [Team_CoreGameplayFeatures][Shops][UI]\n")
+
+
+# Verbatim login lines from the same captured log, handle unchanged (it's the
+# repo owner's). These are what make the reported handle typo-proof.
+_LOGIN = ("<2026-08-02T17:17:16.461Z> [Notice] <Legacy login response> [CIG-net] "
+          "User Login Success - Handle[Bolvangar] - Time[245413276] "
+          "[Team_GameServices][Login]\n")
+_CHARACTER = ("<2026-08-02T17:17:13.324Z> [Notice] "
+              "<AccountLoginCharacterStatus_Character> Character: createdAt "
+              "1784167598470 - updatedAt 1784167599111 - geid 204698941918 - "
+              "accountId 385725 - name Bolvangar - state STATE_CURRENT "
+              "[Team_GameServices][Login]\n")
+
+
+class ParseLoginHandleTests(unittest.TestCase):
+    """The handle read from Game.log is the game's own spelling of the account
+    you're signed in as — the fix for members typo'ing --handle and splitting
+    their capture history across two identities on the server."""
+
+    def test_legacy_login_response_line(self):
+        self.assertEqual(parse_login_handle(_LOGIN), "Bolvangar")
+
+    def test_character_status_line(self):
+        self.assertEqual(parse_login_handle(_CHARACTER), "Bolvangar")
+
+    def test_only_the_character_in_play_counts(self):
+        """The login message lists every character on the account; only one of
+        them is STATE_CURRENT, and reporting a retired one would misattribute."""
+        self.assertIsNone(parse_login_handle(
+            _CHARACTER.replace("STATE_CURRENT", "STATE_ARCHIVED")))
+
+    def test_a_stranger_on_a_nickname_line_is_never_taken(self):
+        """`nickname` rides lines about OTHER players, so it must not match —
+        this is the trap that would report a passer-by as the local member."""
+        for line in (
+            '<2026-08-02T17:18:18.400Z> Logged a start of a status effect! '
+            'nickname: Pomme03, status effect: Dehydrated\n',
+            '<2026-08-02T17:17:17.805Z> [Notice] <Channel Created> map="megamap" '
+            'nickname="Someone_Else" playerGEID=204698941918 [Team_Network]\n',
+        ):
+            self.assertIsNone(parse_login_handle(line))
+
+    def test_ordinary_lines_and_garbage_are_rejected(self):
+        self.assertIsNone(parse_login_handle(_JOIN))
+        # A reworded line that still matches the marker but parses to something
+        # that isn't a handle: keep what we have rather than report nonsense.
+        self.assertIsNone(parse_login_handle(
+            "<Legacy login response> User Login Success - Handle[not a handle!]"))
 
 
 class ParseShowLocationTests(unittest.TestCase):
@@ -158,6 +207,58 @@ class GameLogShardReaderTests(unittest.TestCase):
         self._write(_TXN_BUY)
         self.reader.poll()
         self.assertEqual(len(self.reader.pop_transactions()), 1)
+
+
+class GameLogHandleDetectionTests(unittest.TestCase):
+    """pop_handle is edge-triggered: the watcher re-binds when the signed-in
+    account changes and stays quiet otherwise (it polls every second)."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix="Game.log")
+        os.close(fd)
+        self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))
+        self.reader = GameLogShardReader(self.path)
+
+    def _write(self, text, mode="a"):
+        with open(self.path, mode, encoding="utf-8") as fh:
+            fh.write(text)
+
+    def test_handle_is_reported_once_then_stays_quiet(self):
+        self._write(_JOIN + _LOGIN)
+        self.reader.poll()
+        self.assertEqual(self.reader.pop_handle(), "Bolvangar")
+        # Same account, many polls — nothing to re-announce to the server.
+        self.reader.poll()
+        self.assertIsNone(self.reader.pop_handle())
+
+    def test_the_login_lines_agreeing_is_not_a_change(self):
+        """Both markers fire at every login with the same value; that must read
+        as one identity, not two re-binds."""
+        self._write(_CHARACTER + _LOGIN)
+        self.reader.poll()
+        self.assertEqual(self.reader.pop_handle(), "Bolvangar")
+        self.assertIsNone(self.reader.pop_handle())
+
+    def test_a_relog_as_another_account_is_picked_up(self):
+        self._write(_LOGIN)
+        self.reader.poll()
+        self.reader.pop_handle()
+        self._write(_LOGIN.replace("Bolvangar", "Someone_Else"))
+        self.reader.poll()
+        self.assertEqual(self.reader.pop_handle(), "Someone_Else")
+
+    def test_a_session_already_in_progress_is_picked_up(self):
+        """The first poll scans the whole file, so starting the watcher after
+        the game still finds the login line."""
+        self._write(_LOGIN + _JOIN + _TXN_BUY)
+        self.assertEqual(self.reader.poll(), "pub_use1b_12030094_130")
+        self.assertEqual(self.reader.pop_handle(), "Bolvangar")
+
+    def test_no_login_line_means_no_handle(self):
+        self._write(_JOIN)
+        self.reader.poll()
+        self.assertIsNone(self.reader.pop_handle())
+        self.assertIsNone(self.reader.handle)
 
 
 class TradeTxnParseTests(unittest.TestCase):

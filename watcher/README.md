@@ -7,7 +7,8 @@ only — no pip installs.
 > **Downloaded this from the web UI's Setup page?** It's already configured for
 > you — the server address is set and your access token is in
 > `watcher_config.json`. Just install Python (step 1 below) and double-click
-> `run_watcher.bat`; it'll ask once for your in-game handle. The manual steps
+> `run_watcher.bat`. Your in-game handle is read from `Game.log` when you sign
+> in to Star Citizen, so there's nothing to type. The manual steps
 > below are only for setting it up by hand from a fresh copy.
 
 ## Setup on the gaming PC
@@ -45,13 +46,15 @@ it's plain Python, no build step, no dependencies.
 | Sent to the org server | When |
 |---|---|
 | Your position (x/y/z, in meters) | Each time you run `/showlocation`, plus a re-send every 60 s while you're parked |
-| Your in-game handle | You supply it yourself (`--handle`, or the prompt on first run) |
+| Your in-game handle | Read from `Game.log` when you sign in — the account name the game itself reports, so it can't be mistyped. `--handle` supplies it manually and `--no-handle-detect` makes yours win |
 | Your shard id, e.g. `pub_use1b_…` | Read from `Game.log`, so teammates' maps can filter out other servers |
 | Commodity kiosk buys/sells: shop name, commodity, total price, unit price, SCU, auto-load flag, box size/count | **On by default** — read from `Game.log` and used to keep the org's trade prices current. `--no-trade-capture` turns it off, and the choice sticks |
 
 **Not sent, and not read at all:** the text on your clipboard (only the parsed
-coordinates leave), chat, other players' names, your RSI account name, your IP
-or the game server's, and anything outside `Game.log`. There is no keylogging,
+coordinates leave), chat, other players' names, your RSI email or password, your
+IP or the game server's, and anything outside `Game.log`. Handle detection reads
+**only** the two login lines that name your own account — the log mentions other
+players by name elsewhere, and those lines are deliberately not matched. There is no keylogging,
 no screenshots, and no reading of the game's memory.
 
 **It does not touch the game.** The overlay is an ordinary always-on-top window
@@ -79,13 +82,15 @@ in the web UI under Settings → watcher tokens and download a fresh bundle.
 | `--dry-run` | off | Print payloads instead of sending |
 | `--once` | off | Read clipboard once, send if valid, exit (connectivity test) |
 | `--verbose` | off | Log non-location clipboard changes |
-| `--handle NAME` | — | Your in-game handle, attached to captures for attribution |
+| `--handle NAME` | from `Game.log` | Your in-game handle, attached to captures for attribution. Rarely needed — it's read from the log at sign-in |
+| `--no-handle-detect` | detect on | Stop reading your handle from `Game.log` and use the typed one instead. Sticky |
 | `--overlay-mode MODE` | off | `off` · `light` (the HUD) · `heavy` (beta browser window) — see below |
 | `--overlay` / `--no-overlay` | off | Older aliases for `--overlay-mode light` / `off` |
 | `--game-log PATH` | autodetect | Path to SC's `Game.log`; tags captures with your current shard so nodes from other servers can be filtered out |
 | `--no-trade-capture` | capture on | Stop reporting your commodity kiosk buys/sells to the org's price data. Sticky — set it once and it's remembered |
 
-`--handle`, `--token`, `--game-log`, and your overlay answer are saved to
+`--handle`, `--token`, `--game-log`, `--handle-detect`, `--trade-capture` and
+your overlay answer are saved to
 `watcher_config.json` on first use and remembered after that, so you only need
 to pass each once (or set `HANDLE` / `OVERLAY` in `run_watcher.bat`).
 
