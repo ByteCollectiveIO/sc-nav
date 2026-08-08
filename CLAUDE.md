@@ -16,8 +16,12 @@ script) that reports the player's in-game position.
 - Frontend: `server/static/index.html` — ONE file: `<style>` + body + `<script>`.
 - Watcher: `watcher/` (runs on the player's Windows box; reads Game.log).
 - Version: `server/version.py` (SemVer; surfaced at `/api/health` + footer).
-- Tests: `server/test_nav_core.py` + `server/test_app.py`. Deploy = push to
-  `origin/main` (see `/deploy`).
+- Tests: `server/test_nav_core.py` + `server/test_app.py`. **Two channels:**
+  `main` = trunk — all PRs land here, and OUR server tracks it (it's a staging
+  box: a handful of org members volunteered as testers, not a live org).
+  `stable` = the release channel, tracked by the self-hosting orgs, which are
+  the only real production. `tag-release` fast-forwards `stable` on each
+  release; **nothing else may push it** (see `/deploy`).
 - Docs: `docs/README.md` = index w/ per-doc status · `docs/product-overview.md`
   = consolidated app/service/data map · `docs/feature-backlog.md` = active work.
 

@@ -370,8 +370,16 @@ Log into Portainer at the address Network Solutions gave you (usually
 2. **Name:** `sc-nav`
 3. **Build method:** choose **Repository**.
    - **Repository URL:** `https://github.com/ByteCollectiveIO/sc-nav`
-   - **Reference:** `refs/heads/main`
+   - **Reference:** `refs/heads/stable` ← **not `main`**, see the note below
    - **Compose path:** `docker-compose.yml`
+
+> **Why `stable`?** Because `main` is the development trunk — it moves several
+> times a day and any given commit on it is mid-thought. `stable` only ever
+> moves to a published release. Pointing here means your **Pull and redeploy** click always
+> lands on a version that was tagged, released, and announced, whenever you
+> happen to click it. (Pinning a specific tag like `refs/tags/v1.3.0` also works
+> and is how you'd hold a version deliberately — but a tag never moves, so
+> you'd have to hand-edit this field for every update.)
 4. Scroll to **Environment variables** → **Add an environment variable** for
    each row below. This is why we gathered everything in step 3.
 
@@ -488,7 +496,7 @@ enough to prove the file is intact). An untested backup is a hope.
 
 | Task | How often | Who | Effort |
 |---|---|---|---|
-| Update the app | when a release is announced | server owner | Portainer → Stacks → `sc-nav` → **Pull and redeploy**. ~2 min |
+| Update the app | when a release is announced | server owner | Portainer → Stacks → `sc-nav` → **Pull and redeploy**. ~2 min. Because the stack tracks `stable`, this always fetches the newest **release** — never a half-finished commit |
 | Check for a new release | whenever you're in there | org admin | ADMIN → **Server version** panel tells you if one exists. It never self-updates |
 | Game patch moved locations | per patch | org admin | ORG SETTINGS → **Refresh now**. No restart |
 | Commodity prices | automatic | — | Refreshes every 6 h on its own |
@@ -558,6 +566,22 @@ sudo cp /tmp/restore.db /var/lib/docker/volumes/sc-nav_sc-nav-data/_data/sc_nav.
 Start the stack again. (Ask the maintainer first if you're unsure — this
 overwrites current data.)
 
+**"The new release broke something — can we go back?"**
+Partly, and it matters that you read this *before* you need it. Changing the
+stack's **Reference** to the previous tag (`refs/tags/v1.2.0`) and redeploying
+puts the old **code** back in about two minutes. What it does **not** undo is
+the database: releases add columns and tables on startup and never remove them,
+so a downgraded server can find a database newer than it expects. That is
+usually harmless and occasionally not.
+
+The safe rollback is therefore **both halves**: repoint to the old tag *and*
+restore the nightly backup taken before the upgrade, using the recipe just
+above. Which is the real reason the step-9 cron job matters — the backup from
+4 AM this morning is what makes a bad release survivable. Tell the maintainer
+either way; a release that needs rolling back needs fixing upstream. When
+you're back on a good version, set the Reference to `refs/heads/stable` again
+so you resume receiving updates.
+
 ---
 
 ## 12. Never do these
@@ -566,6 +590,10 @@ overwrites current data.)
   your entire database, every survey mark and custom POI the org has ever
   recorded. Removing the *stack* in Portainer can do the same thing; use
   **Pull and redeploy** to update, and don't delete the stack.
+- **Never point the stack at `refs/heads/main`.** That's the development trunk.
+  It is not broken on purpose, but it is not a release either: it carries
+  half-finished work, and it gets the fixes for its own mistakes an hour later.
+  Your members are on `stable`.
 - **Never add `--workers` to the app.** It keeps live position and WebSocket
   state in memory in one process; a second worker would see half the picture.
 - **Never commit or paste the Discord client secret, session secret, or tunnel

@@ -16,6 +16,14 @@ name: tag-release
 # NOT from --generate-notes — /deploy is squash-only, so every commit subject on
 # main is just "Release vX.Y.Z (#N)" and generated notes would say nothing. The
 # "(#N)" suffix this file works around above is what makes the PR easy to find.
+#
+# Finally it fast-forwards the `stable` branch to the released commit. `stable` is
+# the deployment channel self-hosting orgs point Portainer at: their "Pull and
+# redeploy" click has to land on a RELEASE, not on whatever happened to be the tip
+# of main that afternoon. A tag can't do that job — Portainer accepts refs/tags/…
+# but a pinned tag never moves, so every upgrade would mean hand-editing the stack's
+# reference field. A branch that only ever advances to release commits does.
+# So: main = trunk (the dev stack polls it), stable = releases (prod pulls it).
 on:
   workflow_run:
     workflows: ["tests"]
@@ -90,3 +98,33 @@ jobs:
           fi
           gh release create "v$V" --title "v$V" --notes-file notes.md
           echo "Released v$V."
+
+      - name: Advance the stable channel
+        env:
+          V: ${{ steps.ver.outputs.version }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # Last, so `stable` never points at a commit whose GitHub Release
+          # doesn't exist yet — an org that pulls the moment it moves should find
+          # release notes waiting for it.
+          #
+          # GUARD, and it's the whole point of this step: this workflow runs on
+          # EVERY push to main, not just releases. The tag/release steps above are
+          # self-limiting (already tagged -> no-op), but an unguarded push here
+          # would drag `stable` forward on every ordinary merge and hand orgs the
+          # trunk we just went to the trouble of hiding from them. So: advance only
+          # when v$V is THIS commit, i.e. the tag step above just created it.
+          # Ordinary merge -> v$V already exists on an older commit -> skip.
+          tagged=$(git rev-parse -q --verify "refs/tags/v$V^{commit}" || true)
+          if [ "$tagged" != "$SHA" ]; then
+            echo "v$V is not this commit ($tagged) — not a release merge, leaving stable alone."
+            exit 0
+          fi
+          # Deliberately a plain push, not --force: `stable` only ever trails
+          # main, and main is linear (squash-only merges), so every release
+          # commit descends from the last one and this is always a fast-forward.
+          # If it ever isn't, main was rewritten and the right outcome is a loud
+          # red job, not a channel silently yanked backward under a live org.
+          # Re-runs are safe: pushing the same SHA again is a no-op.
+          git push origin "$SHA:refs/heads/stable"
+          echo "stable -> v$V ($SHA)"
