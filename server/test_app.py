@@ -17,6 +17,7 @@ What it pins down — the things a pure unit test can't:
 import asyncio
 import json
 import re
+import shutil
 import tempfile
 import time
 import unittest
@@ -4795,6 +4796,7 @@ class BrandingAndMotdTests(unittest.TestCase):
     def setUp(self):
         self._member["is_admin"] = True
         db.set_setting("org_name", "")
+        db.set_setting("org_tagline", "")
         db.set_setting("motd", "")
         db.set_setting("motd_updated", "0")
 
@@ -4832,6 +4834,126 @@ class BrandingAndMotdTests(unittest.TestCase):
         r = self.client.post("/api/settings", json={"org_name": "Nope"})
         self.assertEqual(r.status_code, 403)
         self.assertEqual(app.org_name(), "")
+
+    # --- splash tagline -------------------------------------------------------
+    def test_org_tagline_saves_and_surfaces_everywhere(self):
+        r = self.client.post("/api/settings", json={"org_tagline": "  Fly with us.  "})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["org_tagline"], "Fly with us.")   # trimmed
+        self.assertEqual(app.org_tagline(), "Fly with us.")
+        self.assertEqual(self.client.get("/api/settings").json()["org_tagline"], "Fly with us.")
+        self.assertEqual(self.client.get("/api/me").json()["org_tagline"], "Fly with us.")
+        # Pre-auth too: the splash reads it before there's a session.
+        self.assertEqual(self.client.get("/api/branding").json()["org_tagline"], "Fly with us.")
+
+    def test_org_tagline_blank_falls_back_to_shipped_copy(self):
+        db.set_setting("org_tagline", "Fly with us.")
+        r = self.client.post("/api/settings", json={"org_tagline": "   "})
+        self.assertEqual(r.status_code, 200)
+        # Empty is the signal for "use the built-in paragraph" — the client keeps
+        # the static copy, so the server must not invent a default here.
+        self.assertEqual(r.json()["org_tagline"], "")
+        self.assertEqual(self.client.get("/api/branding").json()["org_tagline"], "")
+
+    def test_org_tagline_admin_only_and_length_capped(self):
+        self._member["is_admin"] = False
+        r = self.client.post("/api/settings", json={"org_tagline": "Nope"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(app.org_tagline(), "")
+        self._member["is_admin"] = True
+        r = self.client.post("/api/settings", json={"org_tagline": "x" * 401})
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(app.org_tagline(), "")
+
+    # --- app-chooser artwork --------------------------------------------------
+    @staticmethod
+    def _png() -> bytes:
+        """Smallest thing that passes the magic-byte sniff (1x1 PNG)."""
+        return (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 40)
+
+    def _isolate_branding(self):
+        """Point the upload dir at a throwaway path — BRANDING_DIR is the real
+        /data volume otherwise, and these tests write and delete files in it."""
+        tmp = tempfile.mkdtemp()
+        orig = app.BRANDING_DIR
+        app.BRANDING_DIR = Path(tmp)
+        self.addCleanup(lambda: setattr(app, "BRANDING_DIR", orig))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        self.addCleanup(self._clear_app_images)
+
+    def _clear_app_images(self):
+        for key in app.APP_IMAGE_KEYS:
+            db.set_setting(f"app_image_{key}", "")
+
+    def test_app_image_upload_serve_and_reset(self):
+        self._isolate_branding()
+        r = self.client.post("/api/app-image/nav",
+                             files={"file": ("art.png", self._png(), "image/png")})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("nav", body["app_images"])
+        self.assertEqual(body["v"], body["app_images"]["nav"])
+        # The version stamp is the cache-buster members' browsers key on.
+        self.assertGreater(body["v"], 0)
+        self.assertEqual(self.client.get("/api/me").json()["app_images"]["nav"], body["v"])
+        self.assertEqual(self.client.get("/api/settings").json()["app_images"]["nav"], body["v"])
+        img = self.client.get("/api/app-image/nav")
+        self.assertEqual(img.status_code, 200)
+        self.assertEqual(img.content, self._png())
+        # Reset drops the row AND the file, so the card falls back to built-in art.
+        r = self.client.delete("/api/app-image/nav")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["app_images"], {})
+        self.assertEqual(self.client.get("/api/app-image/nav").status_code, 404)
+        self.assertFalse(list(app.BRANDING_DIR.glob("app_nav.*")))
+
+    def test_app_image_replacing_clears_the_old_extension(self):
+        self._isolate_branding()
+        jpg = b"\xff\xd8\xff" + b"\x00" * 32
+        self.client.post("/api/app-image/nav", files={"file": ("a.png", self._png(), "image/png")})
+        r = self.client.post("/api/app-image/nav", files={"file": ("a.jpg", jpg, "image/jpeg")})
+        self.assertEqual(r.status_code, 200)
+        # Exactly one file survives — a stale .png alongside the new .jpg would
+        # be an orphan on the volume forever.
+        self.assertEqual(sorted(p.name for p in app.BRANDING_DIR.glob("app_nav.*")),
+                         ["app_nav.jpg"])
+        self.assertEqual(self.client.get("/api/app-image/nav").content, jpg)
+
+    def test_app_image_key_is_a_closed_set(self):
+        # The key composes a filename, so anything off the card list — including
+        # traversal — must 404 before it reaches the volume.
+        for bad in ("bogus", "..", "%2e%2e%2fsc_nav"):
+            r = self.client.post(f"/api/app-image/{bad}",
+                                 files={"file": ("a.png", self._png(), "image/png")})
+            self.assertIn(r.status_code, (404, 405), bad)
+            self.assertIn(self.client.get(f"/api/app-image/{bad}").status_code, (404, 405), bad)
+
+    def test_app_image_rejects_non_images_and_admin_only(self):
+        self._isolate_branding()
+        # Right Content-Type, wrong bytes: the sniff is what stops a polyglot.
+        r = self.client.post("/api/app-image/nav",
+                             files={"file": ("x.png", b"<html>nope</html>", "image/png")})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/app-image/nav",
+                             files={"file": ("x.svg", b"<svg/>", "image/svg+xml")})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/app-image/nav",
+                             files={"file": ("big.png", self._png() + b"\x00" * (2 * 1024 * 1024),
+                                             "image/png")})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(app.app_image_versions(), {})
+        self._member["is_admin"] = False
+        r = self.client.post("/api/app-image/nav",
+                             files={"file": ("a.png", self._png(), "image/png")})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.client.delete("/api/app-image/nav").status_code, 403)
+
+    def test_app_image_versions_ignores_a_corrupt_row(self):
+        self._isolate_branding()
+        db.set_setting("app_image_nav", "exe:123")     # not an allowed extension
+        db.set_setting("app_image_market", "png:junk")  # unparseable stamp
+        self.assertNotIn("nav", app.app_image_versions())
+        self.assertEqual(app.app_image_versions().get("market"), 0)
 
     # --- MOTD ---------------------------------------------------------------
     def test_motd_save_stamps_update_time(self):
