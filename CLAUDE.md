@@ -91,24 +91,33 @@ library at `#/blueprints`, #29)
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`, `/api/intel/surveying` (#37 slice 5: totals + ranked members via `nav_core.derive_survey_stats` — sessions derived from mark stream, gap `SURVEY_SESSION_GAP_S` 30 min or zone change splits, NULL-`created` never sessioned — + per-belt coverage rows + freshest zones; frontend `#/intel/surveying` → `#survey-stats-view` sibling, `loadSurveyStats`/`renderSurveyStats`)
 - Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. **Guild
-  branding (org name + splash tagline + MOTD):** `/api/settings` carries
-  `org_name` (helper `org_name()`) + `org_tagline` (helper `org_tagline()`) +
+  branding (org name + copy overrides + MOTD):** `/api/settings` carries
+  `org_name` (helper `org_name()`) + the copy overrides (`org_copy_all()`) +
   `motd` (helper `motd_state()` → `{text, updated}`); saving new
   MOTD text stamps `motd_updated` epoch (no-op re-save keeps it so dismissals
   don't resurface). Public **`GET /api/branding`** (`{org_name, org_tagline,
   org_logo}`, auth-gate-exempt) feeds the pre-auth login splash; `GET /api/me`
-  carries `org_name`/`org_tagline`/`motd`/`motd_updated`. **Tagline** = the
-  blurb under "Org Navigator" on the login splash — shipped marketing copy the
-  self-hosting org owns, so an admin can replace it; empty = keep the built-in
-  paragraph, which lives in the HTML as `#login-tagline`'s initial text and is
-  snapshotted by `setLoginTagline()` on its first call (never re-served by the
-  API — the server's empty string IS "use the shipped copy").
-  Frontend: login-splash + launcher
+  carries `org_name` + all copy overrides + `motd`/`motd_updated`.
+  **Copy overrides** = shipped marketing text the self-hosting org owns, so an
+  admin can rewrite it: `ORG_COPY_MAX` maps key → cap for `org_tagline` (splash
+  blurb, 400), `launcher_head` (app-chooser heading, 80), `launcher_sub`
+  (chooser blurb, 400); `org_copy(key)` / `org_copy_all()` read them, POST
+  /api/settings loops the same map (keep `SettingsIn`'s caps in step), and
+  `org_tagline()` survives as a named accessor only because /api/branding needs
+  that one pre-auth (the launcher pair is member-only — the chooser is behind the
+  gate). **Empty is not a missing default — it MEANS "keep the shipped text",
+  which lives only in the HTML** (`#login-tagline`, `#launcher-head`,
+  `#launcher-sub`) and is snapshotted client-side by `applyCopy(id, text)` into
+  `shippedCopy` on first touch. The API never serves the default, so a fresh
+  install renders exactly as before the feature and there's no second copy to
+  keep in sync. Frontend: login-splash + launcher
   `login-org-name`/`launcher-org-name`, dismissible `#motd-banner` on the
   launcher (per-member dismissal keyed to `motd_updated` in localStorage
-  `motdDismissed`), `applyBranding`/`renderMotd`/`setLoginOrgName`/`setLoginTagline`,
-  ORG SETTINGS BRANDING name input + blurb textarea (`org-tagline-input`,
-  `saveOrgTagline`, Reset-to-default = save empty) + MESSAGE OF THE DAY panel.
+  `motdDismissed`), `applyBranding`/`renderMotd`/`setLoginOrgName`/`applyCopy`,
+  ORG SETTINGS BRANDING name input + the three copy controls (ids
+  `org-tagline`/`launcher-head`/`launcher-sub` × `-input`/`-save`/`-clear`/
+  `-status`, one shared `saveOrgCopy(base)` + `ORG_COPY_KEYS` map; Reset = save
+  empty) + MESSAGE OF THE DAY panel.
   **App-chooser artwork (per-card image swap):** `APP_IMAGE_KEYS` (the ten card
   route slugs) is a CLOSED set — `_check_app_image_key` 404s anything else, which
   is what keeps a path param out of the filesystem, since every write composes

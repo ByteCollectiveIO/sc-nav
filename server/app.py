@@ -213,12 +213,32 @@ def org_name() -> str:
     return (db.get_setting("org_name", "") or "").strip()
 
 
+# Shipped copy an admin may rewrite, and the cap on each. All of it is generic
+# product marketing ("ten tools covering…") that reads right on the project's own
+# site but belongs to whoever runs the server. Empty is not a default to fill in:
+# it means "keep the text the page ships with", which lives in the HTML and is
+# never served from here — see the client's `applyCopy`.
+ORG_COPY_MAX = {
+    "org_tagline": 400,     # login splash, under "Org Navigator"
+    "launcher_head": 80,    # app chooser heading ("Your org toolkit")
+    "launcher_sub": 400,    # app chooser blurb under that heading
+}
+
+
+def org_copy(key: str) -> str:
+    """One admin-overridable piece of shipped copy (see `ORG_COPY_MAX`)."""
+    return (db.get_setting(key, "") or "").strip()
+
+
+def org_copy_all() -> dict[str, str]:
+    """Every copy override at once, for the payloads that carry the whole set."""
+    return {key: org_copy(key) for key in ORG_COPY_MAX}
+
+
 def org_tagline() -> str:
-    """The blurb under the product name on the login splash. Ships with generic
-    marketing copy describing the ten apps; an org running its own server owns
-    that pitch, so this overrides it. DB-backed + admin-editable; empty = keep
-    the built-in copy (the client falls back to the static paragraph)."""
-    return (db.get_setting("org_tagline", "") or "").strip()
+    """The splash blurb specifically — the one copy field the PUBLIC pre-auth
+    branding endpoint needs, so it keeps a named accessor."""
+    return org_copy("org_tagline")
 
 
 def _app_image_entry(key: str) -> tuple[str, int] | None:
@@ -10688,7 +10708,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
         "org_name": org_name(),
-        "org_tagline": org_tagline(),
+        **org_copy_all(),
         "app_images": app_image_versions(),
         "motd": motd_state()["text"],
         # Per-category Discord webhooks: never echo a URL (it's a credential) —
@@ -10737,11 +10757,13 @@ class SettingsIn(BaseModel):
     discord_webhooks: dict[str, str] | None = None
     discord_reminder_lead_min: int | None = Field(default=None, ge=1, le=1440)
     # Custom guild branding: the org's display name (shown on the login splash +
-    # app chooser), the splash blurb under the product name, and a broadcast
-    # message-of-the-day. All "" clears. Plain text only — rendered via
-    # textContent on the client, never as HTML.
+    # app chooser), the three shipped-copy overrides (`ORG_COPY_MAX` — keep the
+    # caps in step), and a broadcast message-of-the-day. All "" clears. Plain
+    # text only — rendered via textContent on the client, never as HTML.
     org_name: str | None = Field(default=None, max_length=80)
     org_tagline: str | None = Field(default=None, max_length=400)
+    launcher_head: str | None = Field(default=None, max_length=80)
+    launcher_sub: str | None = Field(default=None, max_length=400)
     motd: str | None = Field(default=None, max_length=2000)
 
 
@@ -10827,8 +10849,10 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting(notify.REMINDER_LEAD_KEY, str(body.discord_reminder_lead_min))
     if body.org_name is not None:
         db.set_setting("org_name", body.org_name.strip())
-    if body.org_tagline is not None:
-        db.set_setting("org_tagline", body.org_tagline.strip())
+    for _copy_key in ORG_COPY_MAX:          # org_tagline, launcher_head, launcher_sub
+        _copy_val = getattr(body, _copy_key)
+        if _copy_val is not None:
+            db.set_setting(_copy_key, _copy_val.strip())
     if body.motd is not None:
         new_motd = body.motd.strip()
         # Only stamp a fresh update time when the text actually changes, so a
@@ -10851,7 +10875,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),
             "discord_reminder_lead_min": notify.reminder_lead_min(),
-            "org_name": org_name(), "org_tagline": org_tagline(),
+            "org_name": org_name(), **org_copy_all(),
             "motd": motd_state()["text"]}
 
 
@@ -11458,7 +11482,7 @@ async def api_me(user: dict = Depends(require_session)):
     motd = motd_state()
     return {**user, "share_presence": hub.get(user).share_presence,
             "org_logo": bool(db.get_setting("org_logo_ext")),
-            "org_name": org_name(), "org_tagline": org_tagline(),
+            "org_name": org_name(), **org_copy_all(),
             "app_images": app_image_versions(),   # app-chooser art overrides
             "motd": motd["text"], "motd_updated": motd["updated"],
             "ships": db.list_user_ships(user["id"]),
