@@ -2313,7 +2313,7 @@
     <h1>Org Navigator</h1>
     <!-- Default pitch; an admin can replace it (ORG SETTINGS → BRANDING). The
          shipped copy is the fallback, so it must stay here as the element's
-         initial text — setLoginTagline() snapshots it on first run. -->
+         initial text — applyCopy() snapshots it on first run. -->
     <p class="muted" id="login-tagline">Your org's command deck — ten tools covering live navigation, cargo
       hauling, trade routes, asteroid-belt drops, org events, group finding, pirate warnings,
       shared resources, aUEC trading, and org intel.</p>
@@ -2385,8 +2385,10 @@
       <button id="motd-dismiss" type="button" class="motd-dismiss" aria-label="Dismiss message">✕</button>
     </div>
     <div id="launcher-org-name" class="launcher-org-name" hidden></div>
-    <h2 class="launcher-head">Your org toolkit</h2>
-    <p class="launcher-sub">Ten tools, one org — grouped by what you're up to. New here? Start
+    <!-- Heading + blurb are admin-overridable (ORG SETTINGS → BRANDING); the text
+         here is the shipped default and the fallback — see applyCopy(). -->
+    <h2 class="launcher-head" id="launcher-head">Your org toolkit</h2>
+    <p class="launcher-sub" id="launcher-sub">Ten tools, one org — grouped by what you're up to. New here? Start
       with the Resource Navigator; the rest build on it.</p>
     <div class="launcher-badges">
       <a id="online-badge" class="online-badge" href="#/online" hidden></a>
@@ -3089,8 +3091,29 @@
               style="width:100%; resize:vertical;"></textarea>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
       <button id="org-tagline-save">Save blurb</button>
-      <button id="org-tagline-clear">Reset to default</button>
+      <button id="org-tagline-clear">Reset</button>
       <span class="muted" id="org-tagline-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    </div>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      The <b>heading</b> over the app chooser, and the line beneath it. Both ship
+      with generic wording about "ten tools"; name them for your org instead
+      (<i>Aurora flight deck</i>, <i>Mining division tools</i>). Blank keeps the
+      built-in wording.
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
+      <input id="launcher-head-input" type="text" maxlength="80" placeholder="e.g. Your org toolkit"
+             style="min-width:220px; flex:1;">
+      <button id="launcher-head-save">Save heading</button>
+      <button id="launcher-head-clear">Reset</button>
+      <span class="muted" id="launcher-head-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    </div>
+    <textarea id="launcher-sub-input" maxlength="400" rows="2"
+              placeholder="e.g. Everything the org runs on. New here? Start with the Resource Navigator."
+              style="width:100%; resize:vertical;"></textarea>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
+      <button id="launcher-sub-save">Save line</button>
+      <button id="launcher-sub-clear">Reset</button>
+      <span class="muted" id="launcher-sub-status" role="status" aria-live="polite" style="font-size:12px;"></span>
     </div>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
@@ -17911,8 +17934,9 @@ async function loadSettings() {
     renderAppArt();
     if (document.activeElement !== $("org-name-input"))
       $("org-name-input").value = s.org_name || "";
-    if (document.activeElement !== $("org-tagline-input"))
-      $("org-tagline-input").value = s.org_tagline || "";
+    for (const [base, key] of Object.entries(ORG_COPY_KEYS))
+      if (document.activeElement !== $(base + "-input"))
+        $(base + "-input").value = s[key] || "";
     if (document.activeElement !== $("motd-input"))
       $("motd-input").value = s.motd || "";
     applyDiscordSettings(s);
@@ -18343,10 +18367,24 @@ $("discord-lead-save").onclick = async () => {
   } catch { st.textContent = "failed to save — try again"; }
 };
 
-// ---------- org name + message of the day (custom guild branding) ----------
+// ---------- org name, copy overrides, artwork + MOTD (custom guild branding) ----------
 // The guild's display name shows on the app chooser (and the login splash, still
 // visible under the gate); the MOTD is a dismissible banner atop the app chooser.
-// Both ride the /api/me payload, so this runs once per session from renderAccount.
+// All of it rides the /api/me payload, so this runs once per session from
+// renderAccount.
+
+// Shipped copy an admin may rewrite. The page's own text IS the default and the
+// fallback: snapshot it the first time each element is touched, before any
+// override can overwrite it, so blank always restores exactly what shipped and
+// the server never has to hold a copy of it.
+const shippedCopy = {};      // element id -> the text the page loaded with
+function applyCopy(id, text) {
+  const el = $(id);
+  if (!el) return;
+  if (!(id in shippedCopy)) shippedCopy[id] = el.textContent;
+  el.textContent = (text || "").trim() || shippedCopy[id];
+}
+
 // Per-card app-chooser artwork. The built-in art is each <img>'s shipped `src`
 // and stays the fallback, so it's snapshotted (into `data-default`) before the
 // first override can overwrite it. The map is {slug: upload epoch}; the epoch
@@ -18368,7 +18406,9 @@ function applyAppImages(map) {
 
 function applyBranding(me) {
   setLoginOrgName(me && me.org_name);
-  setLoginTagline(me && me.org_tagline);
+  applyCopy("login-tagline", me && me.org_tagline);
+  applyCopy("launcher-head", me && me.launcher_head);
+  applyCopy("launcher-sub", me && me.launcher_sub);
   applyAppImages(me && me.app_images);
   const ln = $("launcher-org-name");
   if (ln) {
@@ -18538,22 +18578,34 @@ $("org-name-save").onclick = async () => {
   } catch { st.textContent = "failed to save — try again"; }
 };
 
-async function saveOrgTagline(text) {
-  const st = $("org-tagline-status");
+// The shipped-copy overrides (splash blurb + the two app-chooser lines) all save
+// the same way, so they share one path: control id `<base>-input/-save/-clear/
+// -status`, settings key from the map. Saving blank is how you reset — the server
+// stores "" and the client falls back to the page's own text (see applyCopy).
+const ORG_COPY_KEYS = {
+  "org-tagline": "org_tagline",
+  "launcher-head": "launcher_head",
+  "launcher-sub": "launcher_sub",
+};
+async function saveOrgCopy(base) {
+  const key = ORG_COPY_KEYS[base], st = $(base + "-status"), input = $(base + "-input");
   st.textContent = "saving…";
   try {
     const r = await fetch("/api/settings", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ org_tagline: text }) });
+      body: JSON.stringify({ [key]: input.value }) });
     if (!r.ok) throw new Error();
     const s = await r.json();
-    $("org-tagline-input").value = s.org_tagline || "";
-    st.textContent = s.org_tagline ? "saved" : "using the built-in copy";
-    if (currentMe) { currentMe.org_tagline = s.org_tagline || ""; applyBranding(currentMe); }
+    input.value = s[key] || "";
+    st.textContent = s[key] ? "saved" : "using the built-in copy";
+    // Reflect it on the live splash + chooser without a reload.
+    if (currentMe) { currentMe[key] = s[key] || ""; applyBranding(currentMe); }
   } catch { st.textContent = "failed to save — try again"; }
 }
-$("org-tagline-save").onclick = () => saveOrgTagline($("org-tagline-input").value);
-$("org-tagline-clear").onclick = () => { $("org-tagline-input").value = ""; saveOrgTagline(""); };
+for (const base of Object.keys(ORG_COPY_KEYS)) {
+  $(base + "-save").onclick = () => saveOrgCopy(base);
+  $(base + "-clear").onclick = () => { $(base + "-input").value = ""; saveOrgCopy(base); };
+}
 
 async function saveMotd(text) {
   const st = $("motd-status");
@@ -19287,7 +19339,7 @@ function loadLoginOrgLogo() {
   img.src = "/api/org-logo?t=" + Date.now();
   fetch("/api/branding")
     .then(r => r.ok ? r.json() : null)
-    .then(b => { setLoginOrgName(b && b.org_name); setLoginTagline(b && b.org_tagline); })
+    .then(b => { setLoginOrgName(b && b.org_name); applyCopy("login-tagline", b && b.org_tagline); })
     .catch(() => {});
 }
 function setLoginOrgName(name) {
@@ -19295,17 +19347,6 @@ function setLoginOrgName(name) {
   if (!el) return;
   if (name) { el.textContent = name; el.hidden = false; }
   else { el.textContent = ""; el.hidden = true; }
-}
-
-// The splash blurb is marketing copy about the product; an org running its own
-// server owns that pitch. Blank falls back to the copy the page shipped with,
-// snapshotted here on the first call (before anything can overwrite it).
-let loginTaglineDefault = null;
-function setLoginTagline(text) {
-  const el = $("login-tagline");
-  if (!el) return;
-  if (loginTaglineDefault === null) loginTaglineDefault = el.textContent;
-  el.textContent = (text || "").trim() || loginTaglineDefault;
 }
 boot();
 </script>

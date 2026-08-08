@@ -4796,7 +4796,8 @@ class BrandingAndMotdTests(unittest.TestCase):
     def setUp(self):
         self._member["is_admin"] = True
         db.set_setting("org_name", "")
-        db.set_setting("org_tagline", "")
+        for key in app.ORG_COPY_MAX:
+            db.set_setting(key, "")
         db.set_setting("motd", "")
         db.set_setting("motd_updated", "0")
 
@@ -4864,6 +4865,47 @@ class BrandingAndMotdTests(unittest.TestCase):
         r = self.client.post("/api/settings", json={"org_tagline": "x" * 401})
         self.assertEqual(r.status_code, 422)
         self.assertEqual(app.org_tagline(), "")
+
+    # --- app-chooser heading + blurb ------------------------------------------
+    def test_launcher_copy_saves_and_surfaces(self):
+        r = self.client.post("/api/settings", json={"launcher_head": "  Aurora flight deck  ",
+                                                    "launcher_sub": "  Everything the org runs on.  "})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["launcher_head"], "Aurora flight deck")   # trimmed
+        self.assertEqual(r.json()["launcher_sub"], "Everything the org runs on.")
+        me = self.client.get("/api/me").json()
+        self.assertEqual(me["launcher_head"], "Aurora flight deck")
+        self.assertEqual(me["launcher_sub"], "Everything the org runs on.")
+        self.assertEqual(self.client.get("/api/settings").json()["launcher_head"],
+                         "Aurora flight deck")
+
+    def test_launcher_copy_is_not_public(self):
+        # The chooser is behind the gate, so unlike the splash blurb this copy has
+        # no business on the anonymous branding endpoint.
+        db.set_setting("launcher_head", "Aurora flight deck")
+        body = self.client.get("/api/branding").json()
+        self.assertNotIn("launcher_head", body)
+        self.assertNotIn("launcher_sub", body)
+
+    def test_copy_fields_are_independent(self):
+        # One field per request must not blank the others — they share a save loop.
+        self.client.post("/api/settings", json={"org_tagline": "Fly with us."})
+        self.client.post("/api/settings", json={"launcher_head": "Flight deck"})
+        s = self.client.get("/api/settings").json()
+        self.assertEqual(s["org_tagline"], "Fly with us.")
+        self.assertEqual(s["launcher_head"], "Flight deck")
+        self.assertEqual(s["launcher_sub"], "")
+
+    def test_launcher_copy_admin_only_and_capped(self):
+        self._member["is_admin"] = False
+        self.assertEqual(
+            self.client.post("/api/settings", json={"launcher_head": "Nope"}).status_code, 403)
+        self._member["is_admin"] = True
+        for key, over in (("launcher_head", "x" * 81), ("launcher_sub", "x" * 401)):
+            self.assertEqual(self.client.post("/api/settings", json={key: over}).status_code,
+                             422, key)
+        self.assertEqual(app.org_copy_all(),
+                         {"org_tagline": "", "launcher_head": "", "launcher_sub": ""})
 
     # --- app-chooser artwork --------------------------------------------------
     @staticmethod
