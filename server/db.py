@@ -87,9 +87,13 @@ CREATE TABLE IF NOT EXISTS observation_pins (
 );
 CREATE INDEX IF NOT EXISTS observation_pins_member ON observation_pins(member_id);
 
+-- NB: the UNIQUE index on handle_key is created in init() *after*
+-- _migrate_handle_case has collapsed pre-fold duplicates — it can't live here,
+-- because on an upgrading DB this script runs before that migration.
 CREATE TABLE IF NOT EXISTS handles (
     player_id INTEGER PRIMARY KEY,
-    handle TEXT UNIQUE,
+    handle TEXT UNIQUE,      -- display casing, as last reported by the owner
+    handle_key TEXT,         -- case-folded identity (see _migrate_handle_case)
     first_seen TEXT, last_seen TEXT,
     discord_id TEXT          -- owning member; bound when a watcher posts the handle
 );
@@ -584,6 +588,15 @@ def init(db_path) -> None:
         # Migrate DBs created before a column existed (CREATE TABLE IF NOT EXISTS
         # won't add columns to an already-present table).
         _ensure_column("handles", "discord_id", "TEXT")
+        # Case-folded handle identity (2026-08). The registry keyed on the raw
+        # string, so one member's typo ("bolvangar" after "Bolvangar") split
+        # their capture history across two PlayerIDs, and a second member could
+        # claim a visually identical name. Fold first, then enforce it in the
+        # schema — the index can only go on once the duplicates are gone.
+        _ensure_column("handles", "handle_key", "TEXT")
+        _migrate_handle_case()
+        _conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS handles_key ON handles(handle_key)")
         # Who's-online prefs (#19): persisted so a refresh/reconnect doesn't wipe a
         # member's chosen status/activity or their "appear offline" privacy choice.
         _ensure_column("members", "online_status", "TEXT")
@@ -658,6 +671,107 @@ def init(db_path) -> None:
         _migrate_inventory_allocations()
         if denorm_added:                        # only on the boot that adds the columns
             _backfill_listing_denorm()
+
+
+# Marks a `handle_key` that deliberately claims nothing: the row lost a
+# case-collision to a DIFFERENT member's binding, so it keeps its PlayerID (and
+# its captures) but not the name. Prefixed rather than appended, and with a
+# LEADING SPACE: a real key is `handle.strip().casefold()`, so it can never
+# start with whitespace — the two namespaces cannot overlap whatever a member
+# types into --handle. (A NUL separator would also be unique, but SQLite's
+# string functions terminate at it, so the value can't be read back or grepped.)
+ORPHAN_KEY_PREFIX = " #dup:"
+
+
+def orphan_key(handle_key: str, player_id: int) -> str:
+    return f"{ORPHAN_KEY_PREFIX}{player_id}:{handle_key}"
+
+
+def _handle_fold(handle: str | None) -> str:
+    """Case-folded identity of an in-game handle. Mirrors app.handle_key — kept
+    here too so the migration doesn't import the app module."""
+    return (handle or "").strip().casefold()
+
+
+def _migrate_handle_case() -> None:
+    """Backfill `handle_key` and collapse handles that differ only in casing.
+
+    In-game handles are unique case-insensitively in RSI's own account system,
+    so `Bolvangar` and `bolvangar` are never two different players — but this
+    registry keyed on the raw reported string. A member who typo'd the casing
+    into their watcher got a second PlayerID, splitting their captures; a
+    different member could also register the variant and hold a visually
+    identical name. Folding the key fixes both, and this collapses the rows
+    already created before it did.
+
+    Survivor rules, in order: a bound row beats an unbound one; among rows bound
+    to the SAME member (and among all-unbound groups) the earliest-seen wins.
+    Rows bound to DIFFERENT members are never merged automatically — that would
+    silently move one person's contributions onto another's PlayerID, and it is
+    unrecoverable. The earliest binding keeps the name (the same first-come rule
+    the whole binding model uses) and the rest are parked as *orphans*: rows
+    that keep their PlayerID and every capture attributed to it, but no longer
+    claim the name. An admin resolves those explicitly via merge_handles.
+
+    Idempotent: after it runs, every row has a key and no two claim the same one."""
+    if not _conn.execute(
+            "SELECT 1 FROM handles WHERE handle_key IS NULL LIMIT 1").fetchone():
+        return
+    groups: dict[str, list[dict]] = {}
+    for r in _conn.execute("SELECT * FROM handles").fetchall():
+        groups.setdefault(_handle_fold(r["handle"]), []).append(dict(r))
+
+    def _age(row):
+        # Earliest first_seen wins; a NULL stamp (pre-registry rows) sorts last,
+        # then lowest PlayerID as a stable tiebreak.
+        return (row["first_seen"] is None, row["first_seen"] or "", row["player_id"])
+
+    merged = orphaned = 0
+    for key, rows in groups.items():
+        if len(rows) > 1:
+            bound = sorted((r for r in rows if r["discord_id"]), key=_age)
+            owners = {r["discord_id"] for r in bound}
+            winner = bound[0] if bound else sorted(rows, key=_age)[0]
+            for loser in rows:
+                if loser["player_id"] == winner["player_id"]:
+                    continue
+                if loser["discord_id"] and len(owners) > 1:
+                    # Contested by a different member — park it, don't move data.
+                    _conn.execute(
+                        "UPDATE handles SET handle_key=? WHERE player_id=?",
+                        (orphan_key(key, loser["player_id"]), loser["player_id"]))
+                    orphaned += 1
+                    print(f"[sc-nav] handle {loser['handle']!r} collides with "
+                          f"{winner['handle']!r} but is bound to a different "
+                          f"member — parked for an admin merge")
+                    continue
+                _merge_handle_rows(loser["player_id"], winner["player_id"],
+                                   winner["handle"])
+                merged += 1
+        else:
+            winner = rows[0]
+        _conn.execute("UPDATE handles SET handle_key=? WHERE player_id=?",
+                      (key, winner["player_id"]))
+    if merged or orphaned:
+        print(f"[sc-nav] handle case migration: {merged} duplicate(s) merged, "
+              f"{orphaned} parked for review")
+
+
+def _merge_handle_rows(from_player_id: int, into_player_id: int,
+                       into_handle: str | None) -> dict:
+    """Re-attribute one PlayerID's contributions onto another, then drop its row.
+
+    The PlayerID lands as `owner_id` in exactly two tables — custom_pois and
+    observations. Every other member-owned table keys on the Discord id, which a
+    merge doesn't touch. Caller holds `_lock` + the transaction."""
+    counts = {}
+    for table in ("custom_pois", "observations"):
+        counts[table] = _conn.execute(
+            f"UPDATE {table} SET owner_id=?, owner_handle=? WHERE owner_id=?",
+            (into_player_id, into_handle, from_player_id)).rowcount
+    counts["handles"] = _conn.execute(
+        "DELETE FROM handles WHERE player_id=?", (from_player_id,)).rowcount
+    return counts
 
 
 def _migrate_inventory_allocations() -> None:
@@ -1042,13 +1156,38 @@ def all_handles() -> list[dict]:
 
 
 def upsert_handle(entry: dict) -> None:
+    """Upsert by PlayerID. Deliberately NOT `INSERT OR REPLACE`: that resolves a
+    UNIQUE conflict by DELETING the incumbent, so a bug that wrote a duplicate
+    handle_key would quietly destroy the binding it collided with (and orphan
+    every capture attributed to it). Conflicting on player_id alone means a
+    duplicate name raises IntegrityError instead — callers that can legitimately
+    hit one, like the legacy JSON import, already catch it."""
     with _lock, _conn:
         _conn.execute(
-            "INSERT OR REPLACE INTO handles (player_id,handle,first_seen,last_seen,discord_id) "
-            "VALUES (?,?,?,?,?)",
-            (entry["player_id"], entry["handle"], entry.get("first_seen"),
-             entry.get("last_seen"), entry.get("discord_id")),
+            "INSERT INTO handles "
+            "(player_id,handle,handle_key,first_seen,last_seen,discord_id) "
+            "VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(player_id) DO UPDATE SET "
+            "  handle=excluded.handle, handle_key=excluded.handle_key, "
+            "  first_seen=excluded.first_seen, last_seen=excluded.last_seen, "
+            "  discord_id=excluded.discord_id",
+            (entry["player_id"], entry["handle"],
+             entry.get("handle_key") or _handle_fold(entry["handle"]),
+             entry.get("first_seen"), entry.get("last_seen"),
+             entry.get("discord_id")),
         )
+
+
+def merge_handles(from_player_id: int, into_player_id: int,
+                  into_handle: str | None) -> dict:
+    """Fold one PlayerID into another (admin surgery; see _merge_handle_rows).
+
+    Used for the two cases folding can't resolve on its own: a case collision
+    between two different members' bindings, and a genuine rename ("Bolvangar"
+    -> "Bolvangar1") where one member ended up with two PlayerIDs. Irreversible
+    — the losing row is deleted and its captures now read as the winner's."""
+    with _lock, _conn:
+        return _merge_handle_rows(from_player_id, into_player_id, into_handle)
 
 
 def set_handle_owner(player_id: int, discord_id: str | None) -> bool:

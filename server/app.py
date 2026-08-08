@@ -1036,25 +1036,63 @@ def load_trade_prices() -> list[dict]:
     return rows or []
 
 
+def handle_key(raw: str) -> str:
+    """Case-folded identity of an in-game handle.
+
+    RSI handles are unique case-insensitively, so `Bolvangar` and `bolvangar`
+    are never two different players — the fold is a fact about the domain, not a
+    naming policy we invented. Keying the registry on it does two jobs at once:
+    a member who typos the casing into their watcher lands on their OWN entry
+    instead of minting a second PlayerID that splits their capture history, and
+    a different member reporting a case variant of a taken name lands on the
+    existing entry, where the normal owned_by_other refusal stops them. Reserving
+    every casing of a claimed name therefore costs no extra machinery."""
+    return raw.strip().casefold()
+
+
 class HandleRegistry:
     """Maps in-game handles to stable assigned PlayerIDs (DB-backed, cached
-    in memory).
+    in memory), keyed by the case-folded handle (see `handle_key`).
 
     The PlayerID (not the raw handle) is the key attached to contributions, so
-    a character rename keeps a player's history intact."""
+    a character rename keeps a player's history intact.
+
+    `orphans` are entries that own captures but claim no name — a row that lost
+    a case collision to a different member's binding when the fold was
+    introduced (db._migrate_handle_case). They stay reachable by PlayerID so
+    their contributions keep their attribution, and an admin resolves them with
+    `merge`. Nothing creates new ones: post-fold, a colliding report is refused
+    at bind time instead."""
 
     def __init__(self):
-        self.by_handle = {h["handle"]: h for h in db.all_handles()}
+        self.by_key: dict[str, dict] = {}
+        self.orphans: list[dict] = []
+        for row in db.all_handles():
+            key = row.get("handle_key")
+            if key and key.startswith(db.ORPHAN_KEY_PREFIX):
+                self.orphans.append(row)
+            else:
+                self.by_key[key or handle_key(row["handle"])] = row
+
+    def _entries(self) -> list[dict]:
+        """Every known entry, claimed or orphaned. PlayerID lookups must cover
+        both — an orphan still owns every capture ever attributed to it."""
+        return [*self.by_key.values(), *self.orphans]
+
+    def get(self, handle: str) -> dict | None:
+        """The entry claiming this handle, in any casing."""
+        return self.by_key.get(handle_key(handle))
 
     def register(self, handle: str, discord_id: str | None = None) -> dict:
-        handle = handle.strip()
+        name = handle.strip()
+        key = handle_key(handle)
         now = datetime.now(timezone.utc).isoformat()
-        entry = self.by_handle.get(handle)
+        entry = self.by_key.get(key)
         if entry is None:
-            next_id = max((e["player_id"] for e in self.by_handle.values()), default=0) + 1
-            entry = {"player_id": next_id, "handle": handle, "first_seen": now,
-                     "last_seen": now, "discord_id": discord_id}
-            self.by_handle[handle] = entry
+            next_id = max((e["player_id"] for e in self._entries()), default=0) + 1
+            entry = {"player_id": next_id, "handle": name, "handle_key": key,
+                     "first_seen": now, "last_seen": now, "discord_id": discord_id}
+            self.by_key[key] = entry
             # Persist only when a genuinely new handle appears — this runs on the
             # position hot path (every /showlocation), so we don't write per
             # sample just to bump last_seen (kept in memory).
@@ -1062,21 +1100,52 @@ class HandleRegistry:
                 db.upsert_handle(entry)
             except Exception as exc:
                 print(f"[sc-nav] handle registry save failed: {exc}")
-        else:
-            entry["last_seen"] = now  # in-memory only; not worth a write per position
-            # Trust-on-first-use ownership: bind the handle the first time we learn
-            # who is posting it (the watcher's token resolves to a Discord id), but
-            # NEVER transfer a handle already bound to a *different* member. Without
-            # this guard any authenticated caller could POST /api/position with
-            # someone else's handle and steal ownership of their contributions and
-            # verified marketplace identity (a handle is client-supplied free text).
-            if discord_id and entry.get("discord_id") is None:
-                entry["discord_id"] = discord_id
-                try:
-                    db.upsert_handle(entry)
-                except Exception as exc:
-                    print(f"[sc-nav] handle owner bind failed: {exc}")
+            return entry
+
+        entry["last_seen"] = now  # in-memory only; not worth a write per position
+        dirty = False
+        # Trust-on-first-use ownership: bind the handle the first time we learn
+        # who is posting it (the watcher's token resolves to a Discord id), but
+        # NEVER transfer a handle already bound to a *different* member. Without
+        # this guard any authenticated caller could POST /api/position with
+        # someone else's handle and steal ownership of their contributions and
+        # verified marketplace identity (a handle is client-supplied free text).
+        if discord_id and entry.get("discord_id") is None:
+            entry["discord_id"] = discord_id
+            dirty = True
+        # Display-casing repair. Folding means a member's typo can no longer cost
+        # them their history — the only thing left to get wrong is which casing
+        # the org sees, and that's whatever was reported first. Let the bound
+        # owner rewrite it (fix --handle, restart the watcher, done) but nobody
+        # else, or an unbound name could be re-cased into "bOLvAnGaR" by anyone.
+        # Guarded on an actual change: this rides every position post.
+        if discord_id and name and name != entry["handle"] \
+                and entry.get("discord_id") == discord_id:
+            entry["handle"] = name
+            dirty = True
+        if dirty:
+            try:
+                db.upsert_handle(entry)
+            except Exception as exc:
+                print(f"[sc-nav] handle owner bind failed: {exc}")
         return entry
+
+    def merge(self, from_player_id: int, into_player_id: int) -> dict | None:
+        """Fold one PlayerID's contributions into another and forget its entry.
+
+        The two cases the fold can't settle by itself: a case collision between
+        two *different* members' bindings (parked as an orphan by the migration),
+        and a real rename where one member holds two distinct handles. Admin-only
+        and irreversible — see db.merge_handles. Returns None on an unknown or
+        self-referential pair."""
+        loser = self.entry_for(from_player_id)
+        winner = self.entry_for(into_player_id)
+        if loser is None or winner is None or loser is winner:
+            return None
+        counts = db.merge_handles(from_player_id, into_player_id, winner["handle"])
+        self.orphans = [e for e in self.orphans if e is not loser]
+        self.by_key = {k: e for k, e in self.by_key.items() if e is not loser}
+        return {"counts": counts, "winner": winner, "loser": loser}
 
     def set_owner(self, player_id: int, discord_id: str | None) -> dict | None:
         """Admin override of a binding — the one path that MAY move a handle off
@@ -1086,8 +1155,7 @@ class HandleRegistry:
         re-created account, or another member's watcher posting it first. Clearing
         (discord_id=None) re-arms trust-on-first-use so the rightful owner's next
         report takes it. Returns the updated entry, or None if unknown."""
-        entry = next((e for e in self.by_handle.values()
-                      if e["player_id"] == player_id), None)
+        entry = self.entry_for(player_id)
         if entry is None:
             return None
         entry["discord_id"] = discord_id
@@ -1097,35 +1165,45 @@ class HandleRegistry:
     def player_ids_for(self, discord_id: str) -> set[int]:
         """Every PlayerID owned by a Discord member (alts/renames included).
         Used to scope deletes to a member's own contributions."""
-        return {e["player_id"] for e in self.by_handle.values()
+        return {e["player_id"] for e in self._entries()
                 if e.get("discord_id") == discord_id}
 
     def handles_for(self, discord_id: str) -> list[str]:
         """The in-game handles a Discord member has had a watcher bind to them,
         most-recently-seen first. These are the *verified* handles — the picker's
         options and the set a marketplace handle is checked against."""
-        owned = [e for e in self.by_handle.values()
+        owned = [e for e in self.by_key.values()
                  if e.get("discord_id") == discord_id]
         owned.sort(key=lambda e: e.get("last_seen") or "", reverse=True)
         return [e["handle"] for e in owned]
 
     def owns_handle(self, discord_id: str, handle: str) -> bool:
         """Whether `handle` is currently bound to this Discord member (the live
-        verification check behind a listing's `handle_verified`)."""
+        verification check behind a listing's `handle_verified`). Casing-blind,
+        and deliberately reads the *claiming* entry only: an orphan's owner has
+        lost the name, and vouching for a contested handle is exactly the
+        impersonation the fold exists to prevent."""
         if not handle:
             return False
-        return any(e["handle"] == handle and e.get("discord_id") == discord_id
-                   for e in self.by_handle.values())
+        entry = self.by_key.get(handle_key(handle))
+        return bool(entry and entry.get("discord_id") == discord_id)
+
+    def entry_for(self, player_id: int) -> dict | None:
+        for e in self._entries():
+            if e["player_id"] == player_id:
+                return e
+        return None
 
     def handle_for(self, player_id: int) -> str | None:
         """Current handle for a PlayerID (latest known after any rename)."""
-        for e in self.by_handle.values():
-            if e["player_id"] == player_id:
-                return e["handle"]
-        return None
+        entry = self.entry_for(player_id)
+        return entry["handle"] if entry else None
+
+    def is_orphan(self, entry: dict) -> bool:
+        return (entry.get("handle_key") or "").startswith(db.ORPHAN_KEY_PREFIX)
 
     def list(self) -> list[dict]:
-        return sorted(self.by_handle.values(), key=lambda e: e["handle"].lower())
+        return sorted(self._entries(), key=lambda e: e["handle"].lower())
 
 
 class MemberDirectory:
@@ -3304,7 +3382,7 @@ def _bind_handle(sess: "Session", raw: str) -> dict | None:
     # Gate CREATION only (see _NEW_HANDLE_LIMIT). A handle already in the registry
     # — including one an admin just unbound — takes the normal path, so neither
     # the first-run fix nor the recovery flow is affected.
-    if raw.strip() not in handles.by_handle and not _new_handle_allowed(sess.user["id"]):
+    if handles.get(raw) is None and not _new_handle_allowed(sess.user["id"]):
         print(f"[sc-nav] {sess.user['id']} hit the new-handle rate limit "
               f"(refused {raw.strip()!r})")
         return {"handle": raw.strip(), "bound": False, "conflict": "rate_limited",
@@ -10263,7 +10341,12 @@ async def list_handle_bindings_admin(q: str | None = None,
     posting it first) is stuck forever with no way out short of SQL. Each row
     carries the live signals that identify a stuck one: `owner_known` false means
     the owning Discord id isn't a member who has ever logged in, and `blocking`
-    names the members whose watchers are being refused this handle right now."""
+    names the members whose watchers are being refused this handle right now.
+
+    `orphan` rows are the leftovers of the case fold (see handle_key): a binding
+    that collided with another member's on casing alone and was parked rather
+    than silently merged. `conflict_with` names the handle that holds the name
+    now — the merge target the admin almost certainly wants."""
     needle = (q or "").strip().lower()
     # Who is currently being refused this handle (the whole point of the panel).
     blocked: dict[str, list[str]] = {}
@@ -10279,10 +10362,18 @@ async def list_handle_bindings_admin(q: str | None = None,
         did = e.get("discord_id")
         # A binding whose owner never logged in is almost always the stale one.
         known = bool(did and members_dir.get(did))
+        orphan = handles.is_orphan(e)
+        holder = handles.get(e["handle"]) if orphan else None
         rows.append({
             "player_id": e["player_id"], "handle": e["handle"],
             "first_seen": e.get("first_seen"), "last_seen": e.get("last_seen"),
             "discord_id": did,
+            "orphan": orphan,
+            "conflict_with": {
+                "player_id": holder["player_id"], "handle": holder["handle"],
+                "owner_name": _resolve_member_name(holder.get("discord_id"), None)
+                if holder.get("discord_id") else None,
+            } if holder else None,
             # Only name a member we actually know. _resolve_member_name falls back
             # to a bound handle, which for a stale row echoes the handle itself
             # ("Taken is bound to Taken") — the raw id is the useful diagnostic.
@@ -10290,8 +10381,9 @@ async def list_handle_bindings_admin(q: str | None = None,
             "owner_known": known,
             "blocking": blocked.get(e["handle"], []),
         })
-    # Stuck bindings first: actively blocking somebody, then unknown owners.
-    rows.sort(key=lambda r: (not r["blocking"], r["owner_known"],
+    # Stuck bindings first: parked case-collisions (one click to resolve), then
+    # anything actively blocking somebody, then unknown owners.
+    rows.sort(key=lambda r: (not r["orphan"], not r["blocking"], r["owner_known"],
                              r["handle"].lower()))
     return {"handles": rows[:_ADMIN_HANDLE_ROWS],
             "total": len(rows), "shown": min(len(rows), _ADMIN_HANDLE_ROWS)}
@@ -10310,6 +10402,55 @@ async def clear_handle_binding_admin(player_id: int,
     print(f"[sc-nav] admin {admin.get('id')} cleared the binding on "
           f"{entry['handle']!r} (player_id {player_id})")
     return {"ok": True, "handle": entry["handle"], "player_id": player_id}
+
+
+class HandleMergeIn(BaseModel):
+    from_player_id: int
+    into_player_id: int
+
+
+@app.post("/api/admin/handles/merge")
+async def merge_handles_admin(body: HandleMergeIn,
+                              admin: dict = Depends(require_admin)):
+    """Fold one PlayerID's captures into another's and drop the losing handle.
+
+    Two cases need this, and neither can be settled automatically. A *case
+    collision* between two different members' bindings (the fold parks the later
+    one as an orphan rather than moving one person's contributions onto the
+    other's PlayerID unasked), and a *rename* — one member holding both
+    "Bolvangar" and "Bolvangar1" as separate PlayerIDs, which folding can't see.
+    Irreversible: the losing row is deleted and its POIs/sightings now read as
+    the winner's."""
+    if body.from_player_id == body.into_player_id:
+        raise HTTPException(status_code=400, detail="pick two different handles")
+    result = await asyncio.to_thread(handles.merge, body.from_player_id,
+                                     body.into_player_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="unknown player_id")
+    loser, winner = result["loser"], result["winner"]
+    async with hub.lock:
+        # Mirror the DB re-attribution in the live nav cache, or the merged
+        # captures keep showing the old owner until the next restart.
+        for poi in nav.pois.values():
+            if poi.owner_id == body.from_player_id:
+                poi.owner_id, poi.owner_handle = winner["player_id"], winner["handle"]
+        for obs in nav.observations.values():
+            if obs.owner_id == body.from_player_id:
+                obs.owner_id, obs.owner_handle = winner["player_id"], winner["handle"]
+        nav.touch()
+        hub.mark_dataset_dirty()
+        # A session still claiming the merged-away PlayerID would keep attributing
+        # new captures to a row that no longer exists; its next report re-binds.
+        for sess in hub.sessions.values():
+            if sess.owner and sess.owner.get("player_id") == body.from_player_id:
+                sess.owner = None
+            if sess.handle_conflict in (loser["handle"], winner["handle"]):
+                sess.handle_conflict = None
+    print(f"[sc-nav] admin {admin.get('id')} merged handle {loser['handle']!r} "
+          f"(player_id {loser['player_id']}) into {winner['handle']!r} "
+          f"(player_id {winner['player_id']}): {result['counts']}")
+    return {"ok": True, "winner": winner["handle"], "loser": loser["handle"],
+            "moved": result["counts"]}
 
 
 async def _drop_member_session(uid: str) -> None:
@@ -10772,7 +10913,7 @@ async def health(request: Request):
         "containers": len(nav.containers),
         "pois": len(nav.pois),
         "observations": len(nav.observations),
-        "handles": len(handles.by_handle),
+        "handles": len(handles.by_key),
         "raw_commodities": len(raw_commodity_names),
         "harvestables": len(harvestable_names),
         "ships": len(ships),
@@ -11413,8 +11554,10 @@ async def delete_me(request: Request, user: dict = Depends(require_session)):
             if obs.owner_id in player_ids:
                 obs.owner_id = obs.owner_handle = None
         # 2) Forget their handle bindings + watcher tokens.
-        handles.by_handle = {h: e for h, e in handles.by_handle.items()
-                             if e.get("discord_id") != uid}
+        handles.by_key = {k: e for k, e in handles.by_key.items()
+                          if e.get("discord_id") != uid}
+        handles.orphans = [e for e in handles.orphans
+                           if e.get("discord_id") != uid]
         tokens.items = [t for t in tokens.items if t["discord_id"] != uid]
         members_dir.forget(uid)
         # 3) Drop their live presence + session so teammates see them leave.

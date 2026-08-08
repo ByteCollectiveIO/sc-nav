@@ -3542,7 +3542,8 @@ class HandleOwnershipTests(unittest.TestCase):
 
     def _registry(self):
         reg = app.HandleRegistry.__new__(app.HandleRegistry)
-        reg.by_handle = {}
+        reg.by_key = {}
+        reg.orphans = []
         return reg
 
     def test_first_poster_binds_but_second_cannot_steal(self):
@@ -3561,9 +3562,10 @@ class HandleOwnershipTests(unittest.TestCase):
     def test_unbound_handle_is_claimable_once(self):
         reg = self._registry()
         # Legacy/unbound entry (e.g. seeded before ownership binding existed).
-        reg.by_handle["Wanderer"] = {"player_id": 7, "handle": "Wanderer",
-                                     "first_seen": "t", "last_seen": "t",
-                                     "discord_id": None}
+        reg.by_key["wanderer"] = {"player_id": 7, "handle": "Wanderer",
+                                  "handle_key": "wanderer",
+                                  "first_seen": "t", "last_seen": "t",
+                                  "discord_id": None}
         e = reg.register("Wanderer", "finder-discord")
         self.assertEqual(e["discord_id"], "finder-discord")
 
@@ -3757,12 +3759,12 @@ class HandleRegistrationTests(unittest.TestCase):
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
-        self._saved_handles = dict(app.handles.by_handle)
-        app.handles.by_handle.clear()
+        self._saved_handles = dict(app.handles.by_key)
+        app.handles.by_key.clear()
 
     def tearDown(self):
-        app.handles.by_handle.clear()
-        app.handles.by_handle.update(self._saved_handles)
+        app.handles.by_key.clear()
+        app.handles.by_key.update(self._saved_handles)
         for uid in ("bind-user",):
             app.hub.sessions.pop(uid, None)
             app.hub.presence.pop(uid, None)
@@ -3810,7 +3812,7 @@ class HandleRegistrationTests(unittest.TestCase):
         r = self.client.post("/api/handle", json={"handle": "   "})
         self.assertEqual(r.status_code, 400)
         # An all-whitespace name must not land in the registry as "".
-        self.assertEqual(list(app.handles.by_handle), [])
+        self.assertEqual(list(app.handles.by_key), [])
 
     def test_position_post_reports_the_same_verdict(self):
         """The watcher logs this, so a refused bind is visible in its console."""
@@ -3866,12 +3868,12 @@ class HandleRegistryExposureTests(unittest.TestCase):
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
-        self._saved = dict(app.handles.by_handle)
-        app.handles.by_handle.clear()
+        self._saved = dict(app.handles.by_key)
+        app.handles.by_key.clear()
 
     def tearDown(self):
-        app.handles.by_handle.clear()
-        app.handles.by_handle.update(self._saved)
+        app.handles.by_key.clear()
+        app.handles.by_key.update(self._saved)
 
     def test_public_registry_omits_the_discord_link(self):
         app.handles.register("Nomad_77", "410288675309219921")
@@ -3915,13 +3917,13 @@ class NewHandleRateLimitTests(unittest.TestCase):
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
-        self._saved = dict(app.handles.by_handle)
-        app.handles.by_handle.clear()
+        self._saved = dict(app.handles.by_key)
+        app.handles.by_key.clear()
         app._new_handle_claims.clear()
 
     def tearDown(self):
-        app.handles.by_handle.clear()
-        app.handles.by_handle.update(self._saved)
+        app.handles.by_key.clear()
+        app.handles.by_key.update(self._saved)
         app._new_handle_claims.clear()
         app.hub.sessions.pop("squatter", None)
 
@@ -3932,7 +3934,7 @@ class NewHandleRateLimitTests(unittest.TestCase):
                          [200] * app._NEW_HANDLE_LIMIT)
         self.assertEqual(set(codes[app._NEW_HANDLE_LIMIT:]), {429})
         # The refused names were never registered, so they stay claimable.
-        self.assertEqual(len(app.handles.by_handle), app._NEW_HANDLE_LIMIT)
+        self.assertEqual(len(app.handles.by_key), app._NEW_HANDLE_LIMIT)
 
     def test_limit_is_per_member(self):
         for i in range(app._NEW_HANDLE_LIMIT):
@@ -3948,9 +3950,9 @@ class NewHandleRateLimitTests(unittest.TestCase):
 
     def test_existing_unbound_handle_is_never_throttled(self):
         """The admin-unbind recovery path must work even at the limit."""
-        app.handles.by_handle["Freed"] = {
-            "player_id": 99, "handle": "Freed", "first_seen": "t",
-            "last_seen": "t", "discord_id": None}
+        app.handles.by_key["freed"] = {
+            "player_id": 99, "handle": "Freed", "handle_key": "freed",
+            "first_seen": "t", "last_seen": "t", "discord_id": None}
         for i in range(app._NEW_HANDLE_LIMIT):
             self.client.post("/api/handle", json={"handle": f"Mate{i}"})
         r = self.client.post("/api/handle", json={"handle": "Freed"})
@@ -3973,7 +3975,7 @@ class NewHandleRateLimitTests(unittest.TestCase):
             "x": 1.0, "y": 2.0, "z": 3.0, "handle": "BrandNew"})
         self.assertEqual(r.status_code, 200)          # position still accepted
         self.assertEqual(r.json()["handle"]["conflict"], "rate_limited")
-        self.assertNotIn("BrandNew", app.handles.by_handle)
+        self.assertIsNone(app.handles.get("BrandNew"))
 
 
 class AdminHandleBindingTests(unittest.TestCase):
@@ -4003,12 +4005,12 @@ class AdminHandleBindingTests(unittest.TestCase):
         Path(cls._tmp.name).unlink(missing_ok=True)
 
     def setUp(self):
-        self._saved = dict(app.handles.by_handle)
-        app.handles.by_handle.clear()
+        self._saved = dict(app.handles.by_key)
+        app.handles.by_key.clear()
 
     def tearDown(self):
-        app.handles.by_handle.clear()
-        app.handles.by_handle.update(self._saved)
+        app.handles.by_key.clear()
+        app.handles.by_key.update(self._saved)
         app.hub.sessions.pop("stuck-member", None)
 
     def test_lists_bindings_and_flags_an_unknown_owner(self):
@@ -4037,9 +4039,9 @@ class AdminHandleBindingTests(unittest.TestCase):
         pid = entry["player_id"]
         r = self.client.delete(f"/api/admin/handles/{pid}/owner")
         self.assertEqual(r.status_code, 200)
-        self.assertIsNone(app.handles.by_handle["Nomad_77"]["discord_id"])
+        self.assertIsNone(app.handles.by_key["nomad_77"]["discord_id"])
         # The PlayerID survives, so existing captures keep their attribution...
-        self.assertEqual(app.handles.by_handle["Nomad_77"]["player_id"], pid)
+        self.assertEqual(app.handles.by_key["nomad_77"]["player_id"], pid)
         # ...and the rightful owner's next report now claims it.
         again = app.handles.register("Nomad_77", "stuck-member")
         self.assertEqual(again["discord_id"], "stuck-member")
@@ -4060,7 +4062,7 @@ class AdminHandleBindingTests(unittest.TestCase):
         sess = app.hub.get({"id": "stuck-member", "display_name": "J"})
         app._bind_handle(sess, "Nomad_77")
         self.assertEqual(sess.handle_conflict, "Nomad_77")
-        pid = app.handles.by_handle["Nomad_77"]["player_id"]
+        pid = app.handles.by_key["nomad_77"]["player_id"]
         self.client.delete(f"/api/admin/handles/{pid}/owner")
         self.assertIsNone(sess.handle_conflict)
 
@@ -4082,6 +4084,301 @@ class AdminHandleBindingTests(unittest.TestCase):
             self.assertEqual(self.client.get("/api/admin/handles").status_code, 403)
             self.assertEqual(
                 self.client.delete("/api/admin/handles/1/owner").status_code, 403)
+        finally:
+            app.app.dependency_overrides[app.require_session] = lambda: self._admin
+            app.app.dependency_overrides[app.require_user] = lambda: self._admin
+
+
+class HandleCaseFoldTests(unittest.TestCase):
+    """Handles are matched case-insensitively (app.handle_key).
+
+    Two problems, one cause: the registry keyed on the raw reported string, so a
+    member who typo'd the casing into their watcher minted a SECOND PlayerID and
+    split their own capture history, while a different member could register the
+    variant and hold a visually identical name. RSI handles are unique
+    case-insensitively, so a case variant is never a second player — folding is a
+    fact about the domain, and it makes claiming a name reserve every casing of
+    it without any extra reservation machinery."""
+
+    @classmethod
+    def setUpClass(cls):
+        # register() persists through db.upsert_handle — throwaway file, or these
+        # fixtures land in the real handles table.
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def _registry(self):
+        reg = app.HandleRegistry.__new__(app.HandleRegistry)
+        reg.by_key = {}
+        reg.orphans = []
+        return reg
+
+    def test_a_typo_in_the_casing_is_the_same_player(self):
+        reg = self._registry()
+        first = reg.register("Bolvangar", "same-member")
+        second = reg.register("bolvangar", "same-member")
+        self.assertEqual(second["player_id"], first["player_id"])
+        self.assertEqual(len(reg.by_key), 1)
+
+    def test_claiming_a_name_reserves_every_casing(self):
+        reg = self._registry()
+        owned = reg.register("Bolvangar", "owner-discord")
+        stolen = reg.register("bOlVaNgAr", "squatter-discord")
+        # Same entry, still the first claimant's — the normal anti-hijack path.
+        self.assertEqual(stolen["player_id"], owned["player_id"])
+        self.assertEqual(stolen["discord_id"], "owner-discord")
+        self.assertEqual(reg.player_ids_for("squatter-discord"), set())
+        self.assertFalse(reg.owns_handle("squatter-discord", "bOlVaNgAr"))
+        # ...and verification is casing-blind for the real owner.
+        self.assertTrue(reg.owns_handle("owner-discord", "BOLVANGAR"))
+
+    def test_the_owner_repairs_the_display_casing(self):
+        """The fold means a typo can't cost you your history; the one thing left
+        to get wrong is which casing the org sees. Fixing --handle fixes it."""
+        reg = self._registry()
+        entry = reg.register("bolvangar", "owner-discord")
+        reg.register("Bolvangar", "owner-discord")
+        self.assertEqual(reg.handle_for(entry["player_id"]), "Bolvangar")
+        self.assertEqual(reg.handles_for("owner-discord"), ["Bolvangar"])
+
+    def test_nobody_else_can_rewrite_the_casing(self):
+        reg = self._registry()
+        entry = reg.register("Bolvangar", "owner-discord")
+        reg.register("bOLvAnGaR", "squatter-discord")
+        self.assertEqual(reg.handle_for(entry["player_id"]), "Bolvangar")
+
+    def test_an_unbound_name_is_not_re_cased_by_a_stranger(self):
+        """An unclaimed entry is still someone's name — don't let a passer-by
+        vandalise its display form before the owner's watcher gets there."""
+        reg = self._registry()
+        reg.by_key["wanderer"] = {"player_id": 7, "handle": "Wanderer",
+                                  "handle_key": "wanderer", "first_seen": "t",
+                                  "last_seen": "t", "discord_id": None}
+        reg.register("wAnDeReR", None)
+        self.assertEqual(reg.handle_for(7), "Wanderer")
+
+
+class HandleCaseMigrationTests(unittest.TestCase):
+    """db._migrate_handle_case: fold the handles registered before the fold.
+
+    The survivor rules matter more than the collapse: a bound row beats an
+    unbound one, the earliest binding wins among equals, and two DIFFERENT
+    members' bindings are NEVER merged automatically — that would move one
+    person's contributions onto another's PlayerID, unasked and unrecoverable."""
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        db.init(Path(self._tmp.name))
+
+    def tearDown(self):
+        Path(self._tmp.name).unlink(missing_ok=True)
+
+    def _legacy(self, player_id, handle, discord_id, first_seen):
+        """A handles row as it existed before handle_key: no fold recorded."""
+        with db._lock, db._conn:
+            db._conn.execute(
+                "INSERT INTO handles (player_id,handle,handle_key,first_seen,"
+                "last_seen,discord_id) VALUES (?,?,NULL,?,?,?)",
+                (player_id, handle, first_seen, first_seen, discord_id))
+
+    def _poi(self, poi_id, owner_id, owner_handle):
+        with db._lock, db._conn:
+            db._conn.execute(
+                "INSERT INTO custom_pois (id,name,system,owner_id,owner_handle) "
+                "VALUES (?,?,?,?,?)",
+                (poi_id, f"P{poi_id}", "Stanton", owner_id, owner_handle))
+
+    def _owners(self):
+        with db._lock:
+            return {r["id"]: (r["owner_id"], r["owner_handle"])
+                    for r in db._conn.execute(
+                        "SELECT id,owner_id,owner_handle FROM custom_pois")}
+
+    def _migrate(self):
+        with db._lock, db._conn:
+            db._migrate_handle_case()
+
+    def test_one_members_typo_collapses_onto_one_playerid(self):
+        self._legacy(1, "Bolvangar", "member-a", "2026-01-01")
+        self._legacy(2, "bolvangar", "member-a", "2026-02-01")
+        self._poi(10, 1, "Bolvangar")
+        self._poi(11, 2, "bolvangar")
+        self._migrate()
+        rows = db.all_handles()
+        self.assertEqual([(r["player_id"], r["handle"], r["handle_key"])
+                          for r in rows], [(1, "Bolvangar", "bolvangar")])
+        # The split history is reunited under the survivor.
+        self.assertEqual(self._owners(), {10: (1, "Bolvangar"), 11: (1, "Bolvangar")})
+
+    def test_a_different_members_binding_is_parked_not_merged(self):
+        self._legacy(1, "Bolvangar", "member-a", "2026-01-01")
+        self._legacy(2, "bolvangar", "member-b", "2026-02-01")
+        self._poi(11, 2, "bolvangar")
+        self._migrate()
+        rows = {r["player_id"]: r for r in db.all_handles()}
+        self.assertEqual(len(rows), 2)
+        # First-come keeps the name; the later binding claims nothing...
+        self.assertEqual(rows[1]["handle_key"], "bolvangar")
+        self.assertTrue(rows[2]["handle_key"].startswith(db.ORPHAN_KEY_PREFIX))
+        # ...but keeps every capture it made. Nothing moved without an admin.
+        self.assertEqual(self._owners(), {11: (2, "bolvangar")})
+
+    def test_a_bound_row_outranks_an_unbound_one_whatever_the_dates(self):
+        self._legacy(1, "bolvangar", None, "2026-01-01")       # earlier, unbound
+        self._legacy(2, "Bolvangar", "member-a", "2026-02-01")
+        self._poi(10, 1, "bolvangar")
+        self._migrate()
+        rows = db.all_handles()
+        self.assertEqual([(r["player_id"], r["handle"]) for r in rows],
+                         [(2, "Bolvangar")])
+        self.assertEqual(self._owners(), {10: (2, "Bolvangar")})
+
+    def test_all_unbound_duplicates_merge_into_the_earliest(self):
+        self._legacy(1, "bolvangar", None, "2026-02-01")
+        self._legacy(2, "Bolvangar", None, "2026-01-01")
+        self._migrate()
+        self.assertEqual([(r["player_id"], r["handle"]) for r in db.all_handles()],
+                         [(2, "Bolvangar")])
+
+    def test_is_idempotent_and_re_running_is_a_no_op(self):
+        self._legacy(1, "Bolvangar", "member-a", "2026-01-01")
+        self._legacy(2, "bolvangar", "member-b", "2026-02-01")
+        self._migrate()
+        before = db.all_handles()
+        self._migrate()
+        self.assertEqual(db.all_handles(), before)
+
+    def test_the_index_now_rejects_a_case_duplicate_outright(self):
+        """Belt and braces: the fold is enforced in the schema, not just in the
+        registry, so no future code path can re-create the split."""
+        import sqlite3
+        db.upsert_handle({"player_id": 1, "handle": "Bolvangar",
+                          "first_seen": "t", "last_seen": "t", "discord_id": "a"})
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.upsert_handle({"player_id": 2, "handle": "bolvangar",
+                              "first_seen": "t", "last_seen": "t", "discord_id": "b"})
+
+
+class AdminHandleMergeTests(unittest.TestCase):
+    """POST /api/admin/handles/merge — the resolution path for what the fold
+    deliberately refuses to settle by itself: a case collision between two
+    members' bindings, and a rename (one member, two distinct handles)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "admin-1", "username": "boss", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._admin
+        app.app.dependency_overrides[app.require_user] = lambda: cls._admin
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._admin
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._saved = dict(app.handles.by_key)
+        self._saved_orphans = list(app.handles.orphans)
+        app.handles.by_key.clear()
+        app.handles.orphans.clear()
+
+    def tearDown(self):
+        app.handles.by_key.clear()
+        app.handles.by_key.update(self._saved)
+        app.handles.orphans[:] = self._saved_orphans
+        app.hub.sessions.pop("merged-member", None)
+
+    def _poi(self, poi_id, owner_id, owner_handle):
+        with db._lock, db._conn:
+            db._conn.execute(
+                "INSERT INTO custom_pois (id,name,system,owner_id,owner_handle) "
+                "VALUES (?,?,?,?,?)",
+                (poi_id, f"P{poi_id}", "Stanton", owner_id, owner_handle))
+
+    def _owner_of(self, poi_id):
+        with db._lock:
+            r = db._conn.execute(
+                "SELECT owner_id,owner_handle FROM custom_pois WHERE id=?",
+                (poi_id,)).fetchone()
+        return (r["owner_id"], r["owner_handle"])
+
+    def test_merge_moves_the_captures_and_drops_the_handle(self):
+        loser = app.handles.register("Bolvangar1", "member-a")
+        winner = app.handles.register("Bolvangar", "member-a")
+        self._poi(20, loser["player_id"], "Bolvangar1")
+        r = self.client.post("/api/admin/handles/merge", json={
+            "from_player_id": loser["player_id"],
+            "into_player_id": winner["player_id"]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["winner"], "Bolvangar")
+        self.assertEqual(self._owner_of(20), (winner["player_id"], "Bolvangar"))
+        # The losing PlayerID is gone from the registry and the DB.
+        self.assertIsNone(app.handles.entry_for(loser["player_id"]))
+        self.assertIsNone(app.handles.get("Bolvangar1"))
+        self.assertEqual(app.handles.handles_for("member-a"), ["Bolvangar"])
+
+    def test_merging_an_orphan_hands_the_name_over(self):
+        """The migration parks a cross-member case collision; this is the click
+        that resolves it, and it must be reachable from the admin listing."""
+        winner = app.handles.register("Bolvangar", "member-a")
+        orphan = {"player_id": 99, "handle": "bolvangar",
+                  "handle_key": db.orphan_key("bolvangar", 99),
+                  "first_seen": "t", "last_seen": "t", "discord_id": "member-b"}
+        app.handles.orphans.append(orphan)
+        db.upsert_handle(orphan)
+        self._poi(21, 99, "bolvangar")
+
+        rows = self.client.get("/api/admin/handles").json()["handles"]
+        row = next(r for r in rows if r["player_id"] == 99)
+        self.assertTrue(row["orphan"])
+        self.assertEqual(row["conflict_with"]["player_id"], winner["player_id"])
+        self.assertEqual(rows[0]["player_id"], 99)      # sorted to the top
+
+        r = self.client.post("/api/admin/handles/merge", json={
+            "from_player_id": 99, "into_player_id": winner["player_id"]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self._owner_of(21), (winner["player_id"], "Bolvangar"))
+        self.assertEqual(app.handles.orphans, [])
+
+    def test_a_merged_away_session_stops_claiming_the_playerid(self):
+        loser = app.handles.register("Bolvangar1", "merged-member")
+        winner = app.handles.register("Bolvangar", "merged-member")
+        sess = app.hub.get({"id": "merged-member", "display_name": "J"})
+        app._bind_handle(sess, "Bolvangar1")
+        self.assertEqual(sess.owner["player_id"], loser["player_id"])
+        self.client.post("/api/admin/handles/merge", json={
+            "from_player_id": loser["player_id"],
+            "into_player_id": winner["player_id"]})
+        # Otherwise its next capture lands on a PlayerID that no longer exists.
+        self.assertIsNone(sess.owner)
+
+    def test_unknown_and_self_merges_are_refused(self):
+        entry = app.handles.register("Bolvangar", "member-a")
+        pid = entry["player_id"]
+        self.assertEqual(self.client.post("/api/admin/handles/merge", json={
+            "from_player_id": pid, "into_player_id": pid}).status_code, 400)
+        self.assertEqual(self.client.post("/api/admin/handles/merge", json={
+            "from_player_id": 999999, "into_player_id": pid}).status_code, 404)
+
+    def test_merge_is_admin_only(self):
+        member = {"id": "member-a", "username": "m", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: member
+        app.app.dependency_overrides[app.require_user] = lambda: member
+        try:
+            self.assertEqual(self.client.post("/api/admin/handles/merge", json={
+                "from_player_id": 1, "into_player_id": 2}).status_code, 403)
         finally:
             app.app.dependency_overrides[app.require_session] = lambda: self._admin
             app.app.dependency_overrides[app.require_user] = lambda: self._admin

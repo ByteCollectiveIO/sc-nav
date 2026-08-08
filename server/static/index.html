@@ -2717,10 +2717,11 @@
         the in-game name people should look for.</span>
     </div>
     <div class="muted" id="no-handle-note" hidden style="font-size:12px;">
-      No watcher-bound handle yet. Start the watcher with
-      <code>--handle "YourName"</code> — it registers the name on startup and it
-      appears here, verified, within a few seconds. If the watcher is already
-      running, run <b>/showlocation</b> in-game to bind it.
+      No watcher-bound handle yet. Start the watcher and sign in to Star Citizen —
+      it reads the account you're playing as out of <code>Game.log</code> and
+      registers it, so your name appears here, verified, within a few seconds of
+      logging in. (Already in-game with the watcher running? It picks the handle up
+      on its next look at the log.)
     </div>
     <div id="handle-conflict-note" hidden class="handle-warn" style="font-size:12px;">
       ⚠ Your watcher is reporting <b><span id="handle-conflict-name"></span></b>, but
@@ -3098,6 +3099,13 @@
       and the next watcher to report it claims it. Captures already recorded keep
       their attribution.
     </div>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      Handles are matched <b>ignoring capitalisation</b> — <i>Bolvangar</i> and
+      <i>bolvangar</i> are one player, and claiming a name reserves every casing of
+      it. <b>Merge</b> folds one handle's captures into another: use it for a
+      collision flagged below, or when one member ended up with two handles
+      (a rename). Merging is permanent.
+    </div>
     <input id="handle-bind-search" class="ti" placeholder="Search a handle…"
            aria-label="Search in-game handle bindings" style="width:100%; max-width:360px;">
     <div id="handle-bind-rows" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
@@ -3245,7 +3253,7 @@
         <code>Game.log</code>, and whether terminal capture is on.</p>
         <details style="margin-top:8px;">
           <summary class="muted" style="cursor:pointer; font-size:12px;">Prefer the command line?</summary>
-          <pre><code id="setup-cmd">python sc_nav_watcher.py --server SERVER --handle "YourName"</code></pre>
+          <pre><code id="setup-cmd">python sc_nav_watcher.py --server SERVER</code></pre>
           <button id="setup-cmd-copy" class="copy-btn" type="button">Copy command</button>
           <p class="muted" style="font-size:12px;">The token is read from the bundled
           <code>watcher_config.json</code>, so you don't pass it on the command line.</p>
@@ -7309,7 +7317,7 @@ function renderAccount(me) {
   // Show the real server address in the Setup guide.
   $("setup-server").textContent = location.origin;
   $("setup-cmd").textContent =
-    `python sc_nav_watcher.py --server ${location.origin} --handle "YourName"`;
+    `python sc_nav_watcher.py --server ${location.origin}`;
   applyView();
 }
 
@@ -17944,12 +17952,28 @@ function renderHandleBindings(d) {
       ? `<div style="font-size:12px; color:var(--warn);">⚠ blocking ${
            h.blocking.map(esc).join(", ")}</div>`
       : "";
+    // A parked case-collision: same name as another binding but for a different
+    // member, so the fold refused to move anyone's captures on its own.
+    const clash = h.orphan && h.conflict_with
+      ? `<div style="font-size:12px; color:var(--warn);">⚠ same name as ${
+           esc(h.conflict_with.handle)}${h.conflict_with.owner_name
+             ? " (" + esc(h.conflict_with.owner_name) + ")" : ""
+           } — only differs by capitalisation</div>`
+      : "";
     row.innerHTML = `<div style="flex:1; min-width:160px;">
-        <div style="font-weight:600;">${esc(h.handle)}</div>
+        <div style="font-weight:600;">${esc(h.handle)}${
+          h.orphan ? poiQcTag("name not claimed", "bad") : ""}</div>
         <div class="muted" style="font-size:12px;">${owner}${
           handleSeenText(h.last_seen) ? " · seen " + esc(handleSeenText(h.last_seen)) : ""}</div>
-        ${blocking}
+        ${clash}${blocking}
       </div>`;
+    // The clash already names the only sensible target, so make it one click.
+    const merge = document.createElement("button");
+    merge.textContent = h.orphan && h.conflict_with
+      ? `Merge into "${h.conflict_with.handle}"` : "Merge…";
+    merge.onclick = () => (h.orphan && h.conflict_with)
+      ? mergeHandle(h, h.conflict_with) : promptMergeHandle(h);
+    row.appendChild(merge);
     if (h.discord_id) {
       const btn = document.createElement("button");
       btn.textContent = "Unbind";
@@ -17985,6 +18009,57 @@ async function unbindHandle(h) {
     await loadHandleBindings();
   } catch (err) {
     s.textContent = (err && err.detail) || "Couldn't unbind — try again.";
+  }
+}
+
+// Merge target for the rename case (two handles, one member) — the collision
+// case names its own target and never comes through here. Resolved by an exact,
+// case-insensitive match against the search endpoint so a typo can't silently
+// point the merge at the wrong row.
+async function promptMergeHandle(h) {
+  const name = await promptDialog(
+    `Which handle should survive? "${h.handle}" and everything it captured `
+    + `will be folded into it.`,
+    { title: "Merge handle", confirmLabel: "Continue", placeholder: "Surviving handle" });
+  if (!name || !name.trim()) return;
+  const s = $("handle-bind-status");
+  s.textContent = "Looking up that handle…";
+  let target = null;
+  try {
+    const d = await fetch("/api/admin/handles?q=" + encodeURIComponent(name.trim()))
+      .then(r => r.json());
+    const want = name.trim().toLowerCase();
+    target = (d.handles || []).find(r => r.handle.toLowerCase() === want) || null;
+  } catch { /* handled below */ }
+  if (!target) { s.textContent = `No handle called "${name.trim()}" is registered.`; return; }
+  if (target.player_id === h.player_id) { s.textContent = "That's the same handle."; return; }
+  s.textContent = "";
+  await mergeHandle(h, target);
+}
+
+async function mergeHandle(loser, winner) {
+  const ok = await confirmDialog(
+    `Fold "${loser.handle}" into "${winner.handle}"? Every POI and sighting `
+    + `captured as "${loser.handle}" will be re-attributed to "${winner.handle}", `
+    + `and "${loser.handle}" stops existing. This can't be undone.`,
+    { title: "Merge handles", confirmLabel: "Merge", danger: true });
+  if (!ok) return;
+  const s = $("handle-bind-status");
+  s.textContent = "Merging…";
+  try {
+    const r = await fetch("/api/admin/handles/merge", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from_player_id: loser.player_id,
+                             into_player_id: winner.player_id }),
+    });
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    const d = await r.json();
+    const moved = (d.moved && (d.moved.custom_pois || 0) + (d.moved.observations || 0)) || 0;
+    s.textContent = `"${d.loser}" merged into "${d.winner}" — ${moved} `
+                  + `capture${moved === 1 ? "" : "s"} re-attributed.`;
+    await loadHandleBindings();
+  } catch (err) {
+    s.textContent = (err && err.detail) || "Couldn't merge — try again.";
   }
 }
 

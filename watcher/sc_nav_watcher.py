@@ -196,6 +196,45 @@ def default_game_log():
     return None
 
 
+# ---------------------------------------------------------------------------
+# Handle detection (Game.log)
+# ---------------------------------------------------------------------------
+
+# The account the player is actually signed in as. Two lines state it at login,
+# both quoted from a captured log (2026-08-02):
+#   <Legacy login response> [CIG-net] User Login Success - Handle[Bolvangar]
+#     - Time[245413276] [Team_GameServices][Login]
+#   <AccountLoginCharacterStatus_Character> Character: createdAt ... - geid
+#     204698941918 - accountId 385725 - name Bolvangar - state STATE_CURRENT
+# This is the authoritative spelling; a hand-typed --handle is not. Members
+# typo'd their own casing into it ("bolvangar" for "Bolvangar") and the server
+# used to read that as a second player, splitting their capture history.
+#
+# Anchored on those two markers ON PURPOSE. `nickname="..."` carries the same
+# value on nearby lines but is NOT specific to the local player — the log also
+# says things like `Logged a start of a status effect! nickname: Pomme03`, so
+# matching it loosely would report a passing stranger as this member's identity.
+# The character line is pinned to STATE_CURRENT for the same reason: the login
+# message lists every character on the account, and only one of them is in play.
+_HANDLE_LOGIN_RE = re.compile(r"<Legacy login response>.*?\bHandle\[([^\]]+)\]")
+_HANDLE_CHAR_RE = re.compile(
+    r"<AccountLoginCharacterStatus_Character>.*?"
+    r"-\s+name\s+(\S+)\s+-\s+state\s+STATE_CURRENT")
+# RSI handles are ASCII letters, digits, underscores and hyphens. Anything else
+# means a game patch reworded the line and we mis-parsed it — keep whatever
+# handle we already have rather than reporting garbage as someone's identity.
+_HANDLE_OK_RE = re.compile(r"^[\w-]{1,64}$", re.ASCII)
+
+
+def parse_login_handle(line):
+    """The signed-in account handle from a Game.log login line, or None."""
+    match = _HANDLE_LOGIN_RE.search(line) or _HANDLE_CHAR_RE.search(line)
+    if match is None:
+        return None
+    handle = match.group(1).strip()
+    return handle if _HANDLE_OK_RE.match(handle) else None
+
+
 # Trade transaction capture (#41, docs/trade-transaction-capture.md §2).
 # Commodity kiosks log both sides of every trade (verified in-game 2026-08-02):
 #   <ts> [Notice] <CEntityComponentCommodityUIProvider::SendCommodityBuyRequest>
@@ -296,8 +335,9 @@ class GameLogShardReader:
     already in progress is picked up. The log is truncated when the game
     relaunches; a shrink in size re-seeks to the start.
 
-    Also collects commodity transactions (#41) from the same line scan — one
-    tail, two consumers; drain them with pop_transactions().
+    Also collects commodity transactions (#41) and the signed-in account handle
+    from the same line scan — one tail, three consumers; drain them with
+    pop_transactions() / pop_handle().
     """
 
     def __init__(self, path):
@@ -305,11 +345,24 @@ class GameLogShardReader:
         self._offset = 0
         self.shard = None
         self.transactions = []
+        self.handle = None
+        self._handle_new = False
 
     def pop_transactions(self):
         """Drain the transactions collected since the last call."""
         txns, self.transactions = self.transactions, []
         return txns
+
+    def pop_handle(self):
+        """The signed-in handle, returned once per change and None otherwise.
+
+        Edge-triggered so the caller re-binds on a relog (or on a different
+        account starting the game on this PC) without re-announcing the same
+        name on every poll."""
+        if not self._handle_new:
+            return None
+        self._handle_new = False
+        return self.handle
 
     def poll(self):
         """Scan new log lines; return the current shard id (or None)."""
@@ -333,6 +386,10 @@ class GameLogShardReader:
             if match and match.group(1) != self.shard:
                 self.shard = match.group(1)
                 log(f"shard: {self.shard}")
+            found = parse_login_handle(line)
+            if found and found != self.handle:
+                self.handle = found
+                self._handle_new = True
             txn = parse_trade_txn(line)
             if txn is not None:
                 self.transactions.append(txn)
@@ -660,6 +717,18 @@ def resolve_handle(args):
     return _resolve_sticky(args.handle, "handle")
 
 
+def resolve_handle_detect(args):
+    """Take the in-game handle from Game.log rather than trusting --handle.
+
+    Default ON: the game states the account you are signed in as, so it can't be
+    typo'd, while a hand-typed handle regularly was — and on the server a new
+    name binds trust-on-first-use, so a typo stuck to the member's account.
+    Sticky; --no-handle-detect pins the typed one (useful only if a patch ever
+    rewords the login line and the parse starts reading the wrong thing)."""
+    return _resolve_sticky_flag(getattr(args, "handle_detect", None),
+                                "handle_detect", default=True)
+
+
 OVERLAY_MODES = ("off", "light", "heavy")
 
 
@@ -733,16 +802,6 @@ def run(args, sink=None, stop=None):
     clipboard = make_clipboard()
     token = resolve_token(args)
     sender = Sender(args.server, timeout=args.timeout, dry_run=args.dry_run, token=token)
-    handle = resolve_handle(args)
-    if handle:
-        log(f"reporting as handle: {handle}")
-        # Bind now rather than at the first /showlocation, so the web UI's
-        # IN-GAME IDENTITY panel fills in as soon as the watcher is up. Logs the
-        # server's verdict via _note_handle.
-        sender.register_handle(handle)
-    else:
-        log("no handle set (captures will be unattributed) — pass --handle \"YourName\"")
-
     game_log = resolve_game_log(args)
     shard_reader = GameLogShardReader(game_log) if game_log else None
     if shard_reader:
@@ -750,6 +809,35 @@ def run(args, sink=None, stop=None):
     else:
         log("no Game.log found — shard tagging off (pass --game-log to enable; "
             "nodes won't be filtered by server)")
+
+    # Read the log BEFORE binding anything. Game.log names the account actually
+    # signed in, which beats a hand-typed --handle; announcing the typed one
+    # first would publish a name the player may have mistyped, and an unclaimed
+    # name binds trust-on-first-use, so that mistake would stick to them.
+    handle_detect = resolve_handle_detect(args) and shard_reader is not None
+    if handle_detect:
+        shard_reader.poll()
+    handle = resolve_handle(args)
+    detected = shard_reader.pop_handle() if handle_detect else None
+    if detected and detected != handle:
+        if handle:
+            log(f'handle: Game.log says you play as "{detected}", not '
+                f'"{handle}" — using the game\'s spelling '
+                "(--no-handle-detect to keep yours)")
+        handle = detected
+    if handle:
+        log(f"reporting as handle: {handle}"
+            + (" (read from Game.log)" if detected else ""))
+        # Bind now rather than at the first /showlocation, so the web UI's
+        # IN-GAME IDENTITY panel fills in as soon as the watcher is up. Logs the
+        # server's verdict via _note_handle.
+        sender.register_handle(handle)
+    elif handle_detect:
+        log("no handle yet — it'll be read from Game.log when you sign in "
+            "(or pass --handle \"YourName\")")
+    else:
+        log("no handle set (captures will be unattributed) — pass --handle \"YourName\"")
+
     trade_capture = resolve_trade_capture(args) and shard_reader is not None
     if shard_reader:
         log("trade capture: on — commodity buys/sells from Game.log feed the "
@@ -782,6 +870,14 @@ def run(args, sink=None, stop=None):
 
     while stop is None or not stop.is_set():
         shard = shard_reader.poll() if shard_reader else None
+        if handle_detect:
+            found = shard_reader.pop_handle()
+            if found and found != handle:
+                # A relog, or someone else signing in on this PC. Follow it:
+                # captures should be attributed to whoever is actually playing.
+                handle = found
+                log(f'handle: now reporting as "{handle}" (read from Game.log)')
+                sender.register_handle(handle)
         if trade_capture:
             txns = shard_reader.pop_transactions()
             for t in txns:
@@ -1018,7 +1114,18 @@ def main():
     parser.add_argument(
         "--handle",
         help="Your in-game player handle, attached to captures for attribution. "
-        "Saved to watcher_config.json so it's remembered on later runs.",
+        "Saved to watcher_config.json so it's remembered on later runs. Usually "
+        "unnecessary — it's read straight from Game.log when you sign in, and "
+        "that spelling wins (see --handle-detect).",
+    )
+    parser.add_argument(
+        "--handle-detect",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Read your in-game handle from Game.log instead of trusting "
+        "--handle. The game states the account you're signed in as, so it "
+        "can't be mistyped. On by default when a Game.log is being watched; "
+        "--no-handle-detect keeps the typed handle (sticky).",
     )
     parser.add_argument(
         "--token",

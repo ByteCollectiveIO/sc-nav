@@ -2,8 +2,9 @@
 rem SC Nav Watcher launcher — set your nav server address here (the bundle
 rem downloaded from the web UI's Setup page arrives with this pre-filled):
 set SERVER=http://YOUR-SERVER:8765
-rem Your in-game handle (for attributing captured POIs/nodes). Once set, it is
-rem remembered in watcher_config.json, so you can blank this out afterward.
+rem Your in-game handle (for attributing captured POIs/nodes). Normally leave
+rem this blank: the watcher reads the account you're signed in as straight from
+rem Game.log, which can't be mistyped. Set it only to override that.
 set HANDLE=
 rem In-game overlay: L (light HUD), H (heavy beta, opens the web app in a pinned
 rem browser window), or N (none) to answer without being prompted; blank to be
@@ -31,10 +32,10 @@ if not defined PYTHON (
   exit /b 1
 )
 
-rem If no handle was set above, ask for one. Leave blank to reuse the handle
-rem saved in watcher_config.json from a previous run. (Single-line IF on
-rem purpose: the prompt text has parentheses, which would break a (...) block.)
-if "%HANDLE%"=="" set /p HANDLE=Enter your in-game handle [blank = use saved]:
+rem If no handle was set above, offer to take one. Blank is the normal answer —
+rem the handle is read from Game.log at sign-in. (Single-line IF on purpose: the
+rem prompt text has parentheses, which would break a (...) block.)
+if "%HANDLE%"=="" set /p HANDLE=In-game handle [blank = read it from Game.log]:
 
 rem Same deal for the overlay. Two flavours: LIGHT is the small always-on-top
 rem HUD (target/distance/ETA); HEAVY is the beta that opens the whole web app in
