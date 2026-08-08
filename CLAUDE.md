@@ -91,16 +91,38 @@ library at `#/blueprints`, #29)
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`, `/api/intel/surveying` (#37 slice 5: totals + ranked members via `nav_core.derive_survey_stats` — sessions derived from mark stream, gap `SURVEY_SESSION_GAP_S` 30 min or zone change splits, NULL-`created` never sessioned — + per-belt coverage rows + freshest zones; frontend `#/intel/surveying` → `#survey-stats-view` sibling, `loadSurveyStats`/`renderSurveyStats`)
 - Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. **Guild
-  branding (org name + MOTD):** `/api/settings` carries `org_name` (helper
-  `org_name()`) + `motd` (helper `motd_state()` → `{text, updated}`); saving new
+  branding (org name + splash tagline + MOTD):** `/api/settings` carries
+  `org_name` (helper `org_name()`) + `org_tagline` (helper `org_tagline()`) +
+  `motd` (helper `motd_state()` → `{text, updated}`); saving new
   MOTD text stamps `motd_updated` epoch (no-op re-save keeps it so dismissals
-  don't resurface). Public **`GET /api/branding`** (`{org_name, org_logo}`,
-  auth-gate-exempt) feeds the pre-auth login splash; `GET /api/me` carries
-  `org_name`/`motd`/`motd_updated`. Frontend: login-splash + launcher
+  don't resurface). Public **`GET /api/branding`** (`{org_name, org_tagline,
+  org_logo}`, auth-gate-exempt) feeds the pre-auth login splash; `GET /api/me`
+  carries `org_name`/`org_tagline`/`motd`/`motd_updated`. **Tagline** = the
+  blurb under "Org Navigator" on the login splash — shipped marketing copy the
+  self-hosting org owns, so an admin can replace it; empty = keep the built-in
+  paragraph, which lives in the HTML as `#login-tagline`'s initial text and is
+  snapshotted by `setLoginTagline()` on its first call (never re-served by the
+  API — the server's empty string IS "use the shipped copy").
+  Frontend: login-splash + launcher
   `login-org-name`/`launcher-org-name`, dismissible `#motd-banner` on the
   launcher (per-member dismissal keyed to `motd_updated` in localStorage
-  `motdDismissed`), `applyBranding`/`renderMotd`/`setLoginOrgName`, ORG SETTINGS
-  BRANDING name input + MESSAGE OF THE DAY panel. POI-catalog
+  `motdDismissed`), `applyBranding`/`renderMotd`/`setLoginOrgName`/`setLoginTagline`,
+  ORG SETTINGS BRANDING name input + blurb textarea (`org-tagline-input`,
+  `saveOrgTagline`, Reset-to-default = save empty) + MESSAGE OF THE DAY panel.
+  **App-chooser artwork (per-card image swap):** `APP_IMAGE_KEYS` (the ten card
+  route slugs) is a CLOSED set — `_check_app_image_key` 404s anything else, which
+  is what keeps a path param out of the filesystem, since every write composes
+  `BRANDING_DIR/app_<key>.<ext>`. `GET|POST|DELETE /api/app-image/{key}` reuse the
+  org-logo upload rules (PNG/JPG/WebP by Content-Type AND magic bytes, 2 MB,
+  /data volume); GET is member-only (the chooser is behind the gate — unlike
+  `/api/org-logo`, which must render pre-auth). One `meta` row per card,
+  `app_image_<key>` = `"<ext>:<epoch>"` → `app_image_versions()` → `{slug: epoch}`
+  on `/api/me` + `/api/settings`; the epoch is the cache-buster (stable URL
+  otherwise) and the GET is served `immutable`. Frontend: `data-app="<slug>"` on
+  each `.app-logo`, `applyAppImages` (snapshots the shipped `src` into
+  `data-default` = the fallback, and falls back again on `onerror`), admin panel
+  `#app-art-panel`/`renderAppArt`/`uploadAppArt`/`resetAppArt`/`noteAppArt` reads
+  its built-in thumbnails off the chooser markup so the two can't drift. POI-catalog
   toggles in `/api/settings`: `starmap_pois_enabled` + `wiki_pois_enabled` (#28,
   both default OFF, flip → `_rebuild_nav`). **Scheduled UEX feed refresh
   (#33):** `feed_refresh_h` org setting (default 6h, HARD 2h floor

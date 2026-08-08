@@ -51,6 +51,13 @@ STATIC_DIR = Path(__file__).parent / "static"
 BRANDING_DIR = DATA_DIR / "branding"
 _LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 _LOGO_MAX_BYTES = 2 * 1024 * 1024
+# App-chooser artwork an admin may swap per card, keyed by the card's route slug
+# (the `#/…` hash the launcher links to). Same upload path as the org logo: the
+# bytes live on the /data volume, the built-in art stays in the image and is what
+# a card falls back to. The set is CLOSED — an unknown key is a 404, so this can
+# never become an arbitrary file-write endpoint keyed by user input.
+APP_IMAGE_KEYS = ("nav", "route", "trade", "halo", "events", "lfg",
+                  "pirates", "goals", "market", "intel")
 
 
 def _sniff_image(data: bytes, ext: str) -> bool:
@@ -204,6 +211,43 @@ def org_name() -> str:
     splash and the app chooser. DB-backed + admin-editable; empty = show the
     generic product copy only."""
     return (db.get_setting("org_name", "") or "").strip()
+
+
+def org_tagline() -> str:
+    """The blurb under the product name on the login splash. Ships with generic
+    marketing copy describing the ten apps; an org running its own server owns
+    that pitch, so this overrides it. DB-backed + admin-editable; empty = keep
+    the built-in copy (the client falls back to the static paragraph)."""
+    return (db.get_setting("org_tagline", "") or "").strip()
+
+
+def _app_image_entry(key: str) -> tuple[str, int] | None:
+    """The stored `(ext, uploaded_epoch)` for one app card's custom artwork, or
+    None when it's still on the built-in art. Persisted as `"<ext>:<epoch>"` in a
+    single `meta` row per card."""
+    raw = (db.get_setting(f"app_image_{key}", "") or "").strip()
+    if not raw:
+        return None
+    ext, _, stamp = raw.partition(":")
+    if ext not in _LOGO_TYPES.values():
+        return None
+    try:
+        return ext, int(stamp or "0")
+    except ValueError:
+        return ext, 0
+
+
+def app_image_versions() -> dict[str, int]:
+    """`{slug: upload epoch}` for every card carrying custom artwork. The epoch is
+    the client's cache-buster: the image URL is stable per card, so without it a
+    replaced picture would sit in members' browser caches indefinitely. A slug
+    that's absent means "use the built-in art"."""
+    out = {}
+    for key in APP_IMAGE_KEYS:
+        entry = _app_image_entry(key)
+        if entry:
+            out[key] = entry[1]
+    return out
 
 
 def motd_state() -> dict:
@@ -10644,6 +10688,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
         "org_name": org_name(),
+        "org_tagline": org_tagline(),
+        "app_images": app_image_versions(),
         "motd": motd_state()["text"],
         # Per-category Discord webhooks: never echo a URL (it's a credential) —
         # surface only whether each category has one set + a masked tail.
@@ -10691,9 +10737,11 @@ class SettingsIn(BaseModel):
     discord_webhooks: dict[str, str] | None = None
     discord_reminder_lead_min: int | None = Field(default=None, ge=1, le=1440)
     # Custom guild branding: the org's display name (shown on the login splash +
-    # app chooser) and a broadcast message-of-the-day. Both "" clears. Plain text
-    # only — rendered via textContent on the client, never as HTML.
+    # app chooser), the splash blurb under the product name, and a broadcast
+    # message-of-the-day. All "" clears. Plain text only — rendered via
+    # textContent on the client, never as HTML.
     org_name: str | None = Field(default=None, max_length=80)
+    org_tagline: str | None = Field(default=None, max_length=400)
     motd: str | None = Field(default=None, max_length=2000)
 
 
@@ -10779,6 +10827,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting(notify.REMINDER_LEAD_KEY, str(body.discord_reminder_lead_min))
     if body.org_name is not None:
         db.set_setting("org_name", body.org_name.strip())
+    if body.org_tagline is not None:
+        db.set_setting("org_tagline", body.org_tagline.strip())
     if body.motd is not None:
         new_motd = body.motd.strip()
         # Only stamp a fresh update time when the text actually changes, so a
@@ -10801,7 +10851,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),
             "discord_reminder_lead_min": notify.reminder_lead_min(),
-            "org_name": org_name(), "motd": motd_state()["text"]}
+            "org_name": org_name(), "org_tagline": org_tagline(),
+            "motd": motd_state()["text"]}
 
 
 _test_send_at = 0.0   # last admin test-send, for a light cooldown
@@ -10839,10 +10890,12 @@ async def test_discord_webhook(body: DiscordTestIn, admin: dict = Depends(requir
 
 @app.get("/api/branding")
 async def get_branding():
-    """Public org branding for the pre-auth login splash: the guild name and
-    whether a custom logo exists. Deliberately minimal — no member data — since
-    this is reachable without a session (see the auth_gate exemption)."""
-    return {"org_name": org_name(), "org_logo": bool(db.get_setting("org_logo_ext"))}
+    """Public org branding for the pre-auth login splash: the guild name, the
+    splash blurb, and whether a custom logo exists. Deliberately minimal — no
+    member data — since this is reachable without a session (see the auth_gate
+    exemption)."""
+    return {"org_name": org_name(), "org_tagline": org_tagline(),
+            "org_logo": bool(db.get_setting("org_logo_ext"))}
 
 
 @app.get("/api/org-logo")
@@ -10893,6 +10946,69 @@ async def delete_org_logo(admin: dict = Depends(require_admin)):
         old.unlink(missing_ok=True)
     db.set_setting("org_logo_ext", "")
     return {"ok": True, "org_logo": False}
+
+
+def _check_app_image_key(key: str) -> str:
+    """Reject anything outside the closed card list. This is the guard that keeps
+    a path parameter from reaching the filesystem — every write below composes a
+    filename from `key`, so it must be one of ours before it gets there."""
+    if key not in APP_IMAGE_KEYS:
+        raise HTTPException(status_code=404, detail="unknown app card")
+    return key
+
+
+@app.get("/api/app-image/{key}")
+async def get_app_image(key: str, user: dict = Depends(require_session)):
+    """Serve one app card's custom artwork. Member-only (unlike the org logo):
+    the app chooser is behind the sign-in gate, so this never needs to render
+    pre-auth and stays off the anonymous surface."""
+    _check_app_image_key(key)
+    entry = _app_image_entry(key)
+    if entry:
+        path = BRANDING_DIR / f"app_{key}.{entry[0]}"
+        if path.is_file():
+            # Immutable: the URL carries the upload epoch, so a new picture is a
+            # new URL and this copy can be cached hard.
+            return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    raise HTTPException(status_code=404, detail="no custom image for this app")
+
+
+@app.post("/api/app-image/{key}")
+async def upload_app_image(key: str, file: UploadFile = File(...),
+                           admin: dict = Depends(require_admin)):
+    """Replace one app card's artwork (admin). Same validation as the org logo —
+    declared type must be PNG/JPG/WebP, bytes must actually match it, 2 MB cap —
+    and the same /data volume, so it survives an image rebuild."""
+    _check_app_image_key(key)
+    ext = _LOGO_TYPES.get((file.content_type or "").lower())
+    if not ext:
+        raise HTTPException(status_code=400, detail="image must be a PNG, JPG, or WebP")
+    data = await file.read(_LOGO_MAX_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="the file is empty")
+    if len(data) > _LOGO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="image too large (max 2 MB)")
+    if not _sniff_image(data, ext):
+        raise HTTPException(status_code=400,
+                            detail="file contents don't match a PNG, JPG, or WebP image")
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    for old in BRANDING_DIR.glob(f"app_{key}.*"):   # a prior upload may be a different ext
+        old.unlink(missing_ok=True)
+    (BRANDING_DIR / f"app_{key}.{ext}").write_bytes(data)
+    stamp = int(time.time())
+    db.set_setting(f"app_image_{key}", f"{ext}:{stamp}")
+    return {"ok": True, "app": key, "v": stamp, "app_images": app_image_versions()}
+
+
+@app.delete("/api/app-image/{key}")
+async def delete_app_image(key: str, admin: dict = Depends(require_admin)):
+    """Drop one card's custom artwork (admin) — the card reverts to the built-in
+    art, which is never removable."""
+    _check_app_image_key(key)
+    for old in BRANDING_DIR.glob(f"app_{key}.*"):
+        old.unlink(missing_ok=True)
+    db.set_setting(f"app_image_{key}", "")
+    return {"ok": True, "app": key, "app_images": app_image_versions()}
 
 
 @app.get("/api/health")
@@ -11342,7 +11458,8 @@ async def api_me(user: dict = Depends(require_session)):
     motd = motd_state()
     return {**user, "share_presence": hub.get(user).share_presence,
             "org_logo": bool(db.get_setting("org_logo_ext")),
-            "org_name": org_name(),
+            "org_name": org_name(), "org_tagline": org_tagline(),
+            "app_images": app_image_versions(),   # app-chooser art overrides
             "motd": motd["text"], "motd_updated": motd["updated"],
             "ships": db.list_user_ships(user["id"]),
             "playstyle_tags": member_playstyles(members_dir.get(user["id"])),

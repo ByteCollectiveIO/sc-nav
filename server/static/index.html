@@ -171,6 +171,21 @@
      (after the first) so they stop blending into one another. */
   .admin-grp h2 ~ h2 { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
 
+  /* app-chooser artwork rows (admin): thumbnail + name, controls trailing so the
+     column of previews reads as the app chooser it's editing */
+  .art-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--border); }
+  .art-row:first-child { border-top: 0; }
+  .art-thumb { width: 48px; height: 48px; object-fit: contain; flex: none;
+    border: 1px solid var(--border); border-radius: 8px; padding: 2px; background: var(--bg); }
+  .art-name { min-width: 150px; flex: 1; }
+  .art-name b { display: block; }
+  .art-src { font-size: 11px; color: var(--dim); }
+  .art-row input[type=file] { max-width: 210px; }
+  /* Reset holds its slot on every row (visibility, not display) so Upload stays
+     in one column down the list; `disabled` also drops it from the tab order. */
+  .art-reset[disabled] { visibility: hidden; }
+
   /* ---- settings layout: group panels under "Your account" vs "Org administration" ---- */
   /* Wrapper is layout-transparent so its panels stay direct grid items of <main>
      (keeping the 14px gap); the [hidden] rule beats display:contents to hide it. */
@@ -809,7 +824,11 @@
     transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s; }
   a.app-card:hover { border-color: var(--accent); transform: translateY(-2px);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
-  .app-logo { width: 160px; height: auto; border-radius: 8px; }
+  /* Square box, letterboxed: the built-in art is 1:1 (so this is a no-op for it),
+     but an org's own upload can be any shape and must not stretch or push its
+     card taller than its row-mates. */
+  .app-logo { width: 160px; height: auto; aspect-ratio: 1 / 1; object-fit: contain;
+    border-radius: 8px; }
   .app-name { font-size: 16px; letter-spacing: 1px; color: var(--accent); }
   .app-desc { font-size: 12px; color: var(--dim); line-height: 1.55; }
   .app-card.disabled { cursor: default; opacity: 0.55; filter: grayscale(0.6); }
@@ -2292,7 +2311,10 @@
     </div>
     <div id="login-org-name" class="login-org-name" hidden></div>
     <h1>Org Navigator</h1>
-    <p class="muted">Your org's command deck — ten tools covering live navigation, cargo
+    <!-- Default pitch; an admin can replace it (ORG SETTINGS → BRANDING). The
+         shipped copy is the fallback, so it must stay here as the element's
+         initial text — setLoginTagline() snapshots it on first run. -->
+    <p class="muted" id="login-tagline">Your org's command deck — ten tools covering live navigation, cargo
       hauling, trade routes, asteroid-belt drops, org events, group finding, pirate warnings,
       shared resources, aUEC trading, and org intel.</p>
     <a class="btn-discord" href="/auth/login">Sign in with Discord</a>
@@ -2381,25 +2403,25 @@
       <div class="app-grid">
         <a class="app-card" href="#/nav">
           <span class="app-badge start">Start here</span>
-          <img class="app-logo" src="/images/resource_navigator_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="nav" src="/images/resource_navigator_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Resource Navigator</div>
           <div class="app-desc">Find POIs, resources &amp; wildlife and get live turn-by-turn
             guidance with your org.</div>
         </a>
         <a class="app-card" href="#/route">
-          <img class="app-logo" src="/images/cargo_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="route" src="/images/cargo_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Cargo Planner</div>
           <div class="app-desc">Plan efficient multi-stop hauling routes under your ship's
             cargo capacity, then run them turn-by-turn.</div>
         </a>
         <a class="app-card" href="#/trade">
-          <img class="app-logo" src="/images/trade_route_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="trade" src="/images/trade_route_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Trade Route Planner</div>
           <div class="app-desc">Buy low, sell high on live UEX prices — the most profitable buy→sell
             loop your ship can carry, planned and run leg-by-leg.</div>
         </a>
         <a class="app-card" href="#/halo">
-          <img class="app-logo" src="/images/prospector_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="halo" src="/images/prospector_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Prospector</div>
           <div class="app-desc">Drop into unmarked rock space (the Aaron Halo, Glaciem pockets,
             Pyro fields), navigate and ⛏ survey it live, and build the org's belt atlas.</div>
@@ -2412,19 +2434,19 @@
         <span class="app-group-sub">Coordinate people — schedule, group up &amp; stay safe</span></h3>
       <div class="app-grid">
         <a class="app-card" href="#/events">
-          <img class="app-logo" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="events" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Event Planner</div>
           <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
             sign up your org, and track who's filling each slot.</div>
         </a>
         <a class="app-card" href="#/lfg">
-          <img class="app-logo" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="lfg" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Group Finder</div>
           <div class="app-desc">Rally a crew right now — post that you need players or want to
             join, filter by playstyle, and group up without waiting for a scheduled event.</div>
         </a>
         <a class="app-card" href="#/pirates">
-          <img class="app-logo" src="/images/danger_zone_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="pirates" src="/images/danger_zone_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Danger Board</div>
           <div class="app-desc">Warn your org about pirate snares and camped stations — post a danger
             zone, watch live threats on your trade lanes, or go hunt the pirates yourself.</div>
@@ -2437,19 +2459,19 @@
         <span class="app-group-sub">Manage assets, the internal market &amp; insight</span></h3>
       <div class="app-grid">
         <a class="app-card" href="#/goals">
-          <img class="app-logo" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="goals" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Resource Manager</div>
           <div class="app-desc">Set procurement goals, track your holdings and where they're
             stashed, and keep your craftable-blueprint library.</div>
         </a>
         <a class="app-card" href="#/market">
-          <img class="app-logo" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="market" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Org Marketplace</div>
           <div class="app-desc">Sell, auction &amp; barter items with your org — priced in aUEC only.
             Post a listing, buy or bid, then settle the handoff in-game.</div>
         </a>
         <a class="app-card" href="#/intel">
-          <img class="app-logo" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="intel" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Org Intel</div>
           <div class="app-desc">Your org's analytics deck — mapping coverage, hauling and
             marketplace activity, and the contributor leaderboards, all in one place.</div>
@@ -3057,6 +3079,20 @@
       <span class="muted" id="org-name-status" role="status" aria-live="polite" style="font-size:12px;"></span>
     </div>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
+      The blurb under <b>Org Navigator</b> on the login screen. The built-in copy
+      pitches the ten apps; you're running this server, so say what it's for
+      instead: a welcome, your recruitment line, whatever fits. One short
+      paragraph, plain text. Leave it blank to keep the built-in copy.
+    </div>
+    <textarea id="org-tagline-input" maxlength="400" rows="3"
+              placeholder="e.g. Aurora Trading Co. flight ops: routes, cargo runs and org events, all in one place."
+              style="width:100%; resize:vertical;"></textarea>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
+      <button id="org-tagline-save">Save blurb</button>
+      <button id="org-tagline-clear">Reset to default</button>
+      <span class="muted" id="org-tagline-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    </div>
+    <div class="muted" style="font-size:12px; margin-bottom:6px;">
       Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
       the header — it's added alongside, never replacing it. PNG, JPG, or WebP, up
       to 2&nbsp;MB.
@@ -3069,6 +3105,19 @@
       <button id="org-logo-remove" hidden>Remove logo</button>
       <span class="muted" id="org-logo-status" role="status" aria-live="polite"></span>
     </div>
+  </div>
+
+  <div class="panel admin-grp" id="app-art-panel">
+    <h2>APP CHOOSER ARTWORK</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      Every app on the chooser ships with its own picture. Swap any of them for
+      your org's own art and the chooser takes on your identity. Square images
+      look best (the cards render them at 160&nbsp;px). PNG, JPG, or WebP, up to
+      2&nbsp;MB each. <b>Reset</b> puts the built-in picture back; the app itself
+      is never affected either way.
+    </div>
+    <div id="app-art-rows"></div>
+    <div class="muted" id="app-art-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
   </div>
 
   <div class="panel admin-grp" id="poi-qc-panel">
@@ -17858,8 +17907,12 @@ async function loadSettings() {
     loadHandleBindings();
     loadUpdateCheck();   // cached server-side; a page load never re-polls GitHub
     applyOrgLogoAdmin(!!s.org_logo);
+    appArtVersions = s.app_images || {};
+    renderAppArt();
     if (document.activeElement !== $("org-name-input"))
       $("org-name-input").value = s.org_name || "";
+    if (document.activeElement !== $("org-tagline-input"))
+      $("org-tagline-input").value = s.org_tagline || "";
     if (document.activeElement !== $("motd-input"))
       $("motd-input").value = s.motd || "";
     applyDiscordSettings(s);
@@ -18294,8 +18347,29 @@ $("discord-lead-save").onclick = async () => {
 // The guild's display name shows on the app chooser (and the login splash, still
 // visible under the gate); the MOTD is a dismissible banner atop the app chooser.
 // Both ride the /api/me payload, so this runs once per session from renderAccount.
+// Per-card app-chooser artwork. The built-in art is each <img>'s shipped `src`
+// and stays the fallback, so it's snapshotted (into `data-default`) before the
+// first override can overwrite it. The map is {slug: upload epoch}; the epoch
+// rides the URL as the cache-buster, since the image path itself never changes.
+function applyAppImages(map) {
+  const imgs = document.querySelectorAll(".app-logo[data-app]");
+  for (const img of imgs) {
+    if (!img.dataset.default) img.dataset.default = img.getAttribute("src");
+    const v = map && map[img.dataset.app];
+    const want = v ? `/api/app-image/${img.dataset.app}?v=${v}` : img.dataset.default;
+    if (img.getAttribute("src") !== want) {
+      // A custom image that fails to load (deleted file, bad upload) falls back
+      // rather than leaving a broken-image box on the chooser.
+      img.onerror = v ? () => { img.onerror = null; img.src = img.dataset.default; } : null;
+      img.src = want;
+    }
+  }
+}
+
 function applyBranding(me) {
   setLoginOrgName(me && me.org_name);
+  setLoginTagline(me && me.org_tagline);
+  applyAppImages(me && me.app_images);
   const ln = $("launcher-org-name");
   if (ln) {
     if (me && me.org_name) { ln.textContent = me.org_name; ln.hidden = false; }
@@ -18373,6 +18447,80 @@ $("org-logo-remove").onclick = async () => {
   } catch { st.textContent = "failed — try again"; }
 };
 
+// ---------- app chooser artwork (admin) ----------
+// One row per launcher card. The built-in picture is whatever that card's <img>
+// ships with, read straight off the chooser markup — so this panel can't drift
+// out of sync with the cards it edits, and there's no second list of filenames
+// to keep updated when a card's art changes.
+let appArtVersions = {};   // {slug: upload epoch} — mirrors /api/settings
+const APP_ART_LABELS = {
+  nav: "Resource Navigator", route: "Cargo Planner", trade: "Trade Route Planner",
+  halo: "Prospector", events: "Event Planner", lfg: "Group Finder",
+  pirates: "Danger Board", goals: "Resource Manager", market: "Org Marketplace",
+  intel: "Org Intel",
+};
+function appArtDefault(slug) {
+  const img = document.querySelector(`.app-logo[data-app="${slug}"]`);
+  return (img && (img.dataset.default || img.getAttribute("src"))) || "";
+}
+function renderAppArt() {
+  const box = $("app-art-rows");
+  if (!box) return;
+  box.innerHTML = Object.keys(APP_ART_LABELS).map(slug => {
+    const v = appArtVersions[slug];
+    const src = v ? `/api/app-image/${slug}?v=${v}` : appArtDefault(slug);
+    return `<div class="art-row" data-app="${esc(slug)}">
+      <img class="art-thumb" src="${esc(src)}" alt="">
+      <div class="art-name"><b>${esc(APP_ART_LABELS[slug])}</b>
+        <span class="art-src">${v ? "your image" : "built-in artwork"}</span></div>
+      <input type="file" class="art-file" accept="image/png,image/jpeg,image/webp"
+             aria-label="New image for ${esc(APP_ART_LABELS[slug])}">
+      <button class="art-up">Upload</button>
+      <button class="art-reset"${v ? "" : ' disabled aria-hidden="true"'}>Reset</button>
+    </div>`;
+  }).join("");
+  for (const row of box.querySelectorAll(".art-row")) {
+    const slug = row.dataset.app;
+    row.querySelector(".art-up").onclick = () => uploadAppArt(slug, row.querySelector(".art-file"));
+    row.querySelector(".art-reset").onclick = () => resetAppArt(slug);
+  }
+}
+// Both writes return the whole map, so the panel and every open launcher card
+// re-render from the server's answer rather than a guess.
+function noteAppArt(map) {
+  appArtVersions = map || {};
+  if (currentMe) currentMe.app_images = appArtVersions;
+  applyAppImages(appArtVersions);
+  renderAppArt();
+}
+async function uploadAppArt(slug, input) {
+  const f = input && input.files[0], st = $("app-art-status");
+  if (!f) { st.textContent = "choose an image first"; return; }
+  st.textContent = "uploading…";
+  const fd = new FormData(); fd.append("file", f);
+  try {
+    const r = await fetch(`/api/app-image/${slug}`, { method: "POST", body: fd });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
+    const d = await r.json();
+    st.textContent = `${APP_ART_LABELS[slug]} updated`;
+    noteAppArt(d.app_images);
+  } catch (e) { st.textContent = (e && e.message) || "failed — try again"; }
+}
+async function resetAppArt(slug) {
+  if (!(await confirmDialog(
+      `${APP_ART_LABELS[slug]} goes back to the artwork that ships with Org Navigator.`,
+      { title: "Reset this app's picture?", confirmLabel: "Reset", danger: true }))) return;
+  const st = $("app-art-status");
+  st.textContent = "resetting…";
+  try {
+    const r = await fetch(`/api/app-image/${slug}`, { method: "DELETE" });
+    if (!r.ok) throw new Error("failed");
+    const d = await r.json();
+    st.textContent = `${APP_ART_LABELS[slug]} reset`;
+    noteAppArt(d.app_images);
+  } catch { st.textContent = "failed — try again"; }
+}
+
 // ---------- org name + MOTD (admin) ----------
 $("org-name-save").onclick = async () => {
   const st = $("org-name-status");
@@ -18389,6 +18537,23 @@ $("org-name-save").onclick = async () => {
     if (currentMe) { currentMe.org_name = s.org_name || ""; applyBranding(currentMe); }
   } catch { st.textContent = "failed to save — try again"; }
 };
+
+async function saveOrgTagline(text) {
+  const st = $("org-tagline-status");
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ org_tagline: text }) });
+    if (!r.ok) throw new Error();
+    const s = await r.json();
+    $("org-tagline-input").value = s.org_tagline || "";
+    st.textContent = s.org_tagline ? "saved" : "using the built-in copy";
+    if (currentMe) { currentMe.org_tagline = s.org_tagline || ""; applyBranding(currentMe); }
+  } catch { st.textContent = "failed to save — try again"; }
+}
+$("org-tagline-save").onclick = () => saveOrgTagline($("org-tagline-input").value);
+$("org-tagline-clear").onclick = () => { $("org-tagline-input").value = ""; saveOrgTagline(""); };
 
 async function saveMotd(text) {
   const st = $("motd-status");
@@ -19122,7 +19287,7 @@ function loadLoginOrgLogo() {
   img.src = "/api/org-logo?t=" + Date.now();
   fetch("/api/branding")
     .then(r => r.ok ? r.json() : null)
-    .then(b => setLoginOrgName(b && b.org_name))
+    .then(b => { setLoginOrgName(b && b.org_name); setLoginTagline(b && b.org_tagline); })
     .catch(() => {});
 }
 function setLoginOrgName(name) {
@@ -19130,6 +19295,17 @@ function setLoginOrgName(name) {
   if (!el) return;
   if (name) { el.textContent = name; el.hidden = false; }
   else { el.textContent = ""; el.hidden = true; }
+}
+
+// The splash blurb is marketing copy about the product; an org running its own
+// server owns that pitch. Blank falls back to the copy the page shipped with,
+// snapshotted here on the first call (before anything can overwrite it).
+let loginTaglineDefault = null;
+function setLoginTagline(text) {
+  const el = $("login-tagline");
+  if (!el) return;
+  if (loginTaglineDefault === null) loginTaglineDefault = el.textContent;
+  el.textContent = (text || "").trim() || loginTaglineDefault;
 }
 boot();
 </script>
