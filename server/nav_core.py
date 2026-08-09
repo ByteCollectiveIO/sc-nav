@@ -3944,6 +3944,10 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
             # Container plan (#46) — present only in hand-load mode; a held leg's
             # cargo is already boxed and aboard, so it never carries one.
             "box": None if held else row.get("box"),
+            # Set only on a held leg (the plan's own size lives in `box`): the
+            # containers already aboard, so the sell step can ask for the price
+            # in the unit the kiosk shows (#46).
+            "box_size": row.get("box_size"),
             "held": held,
             # Return on capital (#43). None on a held leg: its cargo is already
             # paid for (buy_cost 0), so there is no capital at risk for this leg
@@ -4331,6 +4335,9 @@ def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
         "distance_m": None, "eta_s": None, "cross_system": None, "via_gate": None,
         "max_scu": scu, "trade_profit": int(round(margin * scu)), "buy_cost": 0,
         "profit_per_hour": None, "held": True,
+        # No box PLAN — this cargo is bought and boxed — but the size it's boxed
+        # in is a fact worth keeping: the sell kiosk prices per container (#46).
+        "box_size": held.get("box_size"),
     }
     return row, best_poi
 

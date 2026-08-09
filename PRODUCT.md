@@ -46,6 +46,20 @@ without becoming a costume. Polish serves legibility and speed, never spectacle.
 The identity is product-led but free to evolve: the dark HUD/terminal system is
 the starting point to extend, not a museum piece to freeze.
 
+### Where org customization stops
+
+A self-hosting org owns its **presentation**: guild name, logo, app-chooser
+artwork, and the marketing-flavoured copy that pitches the product to them (the
+login-splash blurb, the app-chooser heading and its line). That text reads right
+on this project's own site but belongs to whoever runs the server.
+
+**The app tiles' names and descriptions are NOT customizable, deliberately.**
+"Resource Navigator", "Prospector", "Danger Board" and the sentence under each
+are the apps' identity — ours to name and to keep consistent across every
+deployment, the docs, and the showcase pages. Renaming them per-org would make
+every screenshot, guide, and support answer wrong somewhere. Do not "complete the
+pattern" by making them editable; the boundary is intentional, not an oversight.
+
 ## Anti-references
 
 - **Toy / gamified UI.** No cartoon badges, confetti, oversized playful
