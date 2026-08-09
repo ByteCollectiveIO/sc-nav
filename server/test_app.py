@@ -6807,7 +6807,17 @@ class TradeLoadingApiTests(unittest.TestCase):
     def test_auto_is_the_default_and_plans_the_full_hold(self):
         leg = self._plan().json()["legs"][0]
         self.assertEqual(leg["scu"], 505)
-        self.assertIsNone(leg["box"])
+        # Auto-load still plans the maximum fill — it just states the boxes it
+        # always implied (505 SCU is only reachable as 505 x 1 SCU containers).
+        self.assertEqual(leg["box"]["mode"], "fill")
+        self.assertEqual((leg["box"]["size"], leg["box"]["boxes"]), (1, 505))
+
+    def test_auto_load_can_still_ask_for_fewer_boxes(self):
+        # The hole this closed: auto-load at the pickup, hand-unload at a
+        # planetside outpost. Box count matters at the far end regardless.
+        leg = self._plan(box_mode="fewest").json()["legs"][0]
+        self.assertEqual((leg["box"]["size"], leg["box"]["boxes"]), (32, 15))
+        self.assertEqual(leg["scu"], 480)
 
     def test_hand_loading_sizes_the_fill_to_containers(self):
         leg = self._plan(loading="hand").json()["legs"][0]
@@ -6841,7 +6851,7 @@ class TradeLoadingApiTests(unittest.TestCase):
         plain = self.client.get(
             "/api/trade/trades?system=Stanton&capacity_scu=505&sort=margin").json()
         self.assertEqual(plain[0]["max_scu"], 505)
-        self.assertIsNone(plain[0]["box"])
+        self.assertEqual(plain[0]["box"]["size"], 1)      # full fill, stated
 
     def test_loading_persists_onto_the_run(self):
         r = self.client.post("/api/trade/run", json={
@@ -6904,6 +6914,12 @@ class ContainerResizeApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()["trade_run"]
 
+    def _plan(self, **kw):
+        body = {"usable_scu": 505, "start_id": self.A, "sort": "profit",
+                "system": "Stanton", "loading": "hand"}
+        body.update(kw)
+        return self.client.post("/api/trade/plan", json=body)
+
     # --- the box strategy knobs ------------------------------------------
 
     def test_box_mode_changes_the_planned_size(self):
@@ -6925,6 +6941,33 @@ class ContainerResizeApiTests(unittest.TestCase):
             "system": "Stanton", "loading": "hand",
             "box_mode": "tetris", "box_size": 7})
         self.assertEqual(r.json()["legs"][0]["box"]["size"], 24)   # falls to best
+
+    def test_hand_unload_badge_flags_a_surface_outpost_end(self):
+        # The cue that would have caught the user's case before the flight:
+        # auto-load at the pickup, hand-unload at a planetside outpost.
+        orig = app.trade_stop_kinds
+        app.trade_stop_kinds = {self.A: {"place": "station", "dock": True},
+                                self.B: {"place": "outpost", "dock": False}}
+        try:
+            leg = self._plan().json()["legs"][0]
+            self.assertEqual(leg["hand_ends"], ["sell"])
+        finally:
+            app.trade_stop_kinds = orig
+
+    def test_hand_unload_badge_stays_quiet_where_cargo_handling_exists(self):
+        # Conservative on purpose — it's an inference, not something we're told.
+        # A station, or an outpost with a dock, must not cry wolf.
+        orig = app.trade_stop_kinds
+        for kinds in ({self.A: {"place": "station", "dock": True},
+                       self.B: {"place": "city", "dock": False}},
+                      {self.A: {"place": "outpost", "dock": True},
+                       self.B: {"place": "outpost", "dock": True}},
+                      {}):
+            app.trade_stop_kinds = kinds
+            try:
+                self.assertNotIn("hand_ends", self._plan().json()["legs"][0], kinds)
+            finally:
+                app.trade_stop_kinds = orig
 
     def test_box_knobs_persist_onto_the_run(self):
         self._start_run(box_mode="fewest", box_size=32)

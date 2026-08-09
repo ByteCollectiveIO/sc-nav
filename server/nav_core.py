@@ -3193,11 +3193,16 @@ _TRADE_TRAVEL_BUDGET = 400
 # player who is hand-loading (freight elevator, no auto-load) has to move one at
 # a time. The same 505 is 21 boxes at 24 SCU for one SCU less.
 #
-# So `loading` is a plan-level preference: 'auto' keeps the maximum fill (the
-# kiosk stows it for you — box count costs nothing), 'hand' snaps the load down
-# to the box size that carries nearly as much in far fewer boxes. Under 'hand' a
-# `mode` (best/fill/fewest) or an exact pinned size says which end of the
-# trade-off the player wants; the whole lot travels as one `box_policy`.
+# So every fill gets a container `mode` (best/fill/fewest) or an exact pinned
+# size, travelling as one `box_policy`. `loading` only picks the DEFAULT mode —
+# a kiosk that stows the hold for you argues for the fullest fill, moving the
+# boxes yourself argues for the balanced pick — and never gates the choice.
+#
+# It can't gate it, because loading is a property of one END of a leg, not of a
+# run: buying where a station auto-loads says nothing about unloading at a
+# surface outpost by hand. A run that auto-loads at the pickup and hand-unloads
+# at the drop still wants few boxes, so 'auto' must not mean 'don't ask' (it
+# used to, and quietly committed those runs to 505 × 1 SCU containers).
 #
 # Availability is EVIDENCE-ONLY, never inferred. Not every commodity is offered
 # in every size and no feed we have says which (UEX carries prices and flags,
@@ -3398,20 +3403,30 @@ def box_plan(scu, mode="best", pin=None, availability=None, commodity=None) -> d
     return plan
 
 
-def box_policy(loading="auto", mode="best", pin=None, availability=None) -> dict | None:
-    """The container-sizing policy for one solve, or None for auto-load (which
-    plans the maximum fill, exactly as the planner did before containers were
-    modelled). Bundled into one object because these four travel together through
-    every solver entry point and mean nothing apart."""
-    if loading != "hand":
-        return None
-    return {"mode": mode if mode in BOX_MODES else "best",
+# What each loading method makes a sensible STARTING point — not a limit. The
+# kiosk stowing your hold argues for the fullest fill; moving the boxes yourself
+# argues for the balanced pick. Either can be overridden, because `loading` is a
+# property of ONE END of a leg: buying where a kiosk auto-loads says nothing
+# about unloading at a surface outpost by hand, and a run with a hand-unload at
+# the far end wants few boxes no matter how they got aboard (user, 2026-08-09).
+_LOADING_DEFAULT_MODE = {"auto": "fill", "hand": "best"}
+
+
+def box_policy(loading="auto", mode=None, pin=None, availability=None) -> dict:
+    """The container-sizing policy for one solve. Always returns a policy: every
+    fill is bought in boxes of *some* size, so the only question is which, and
+    'auto-load' answers 'the fullest' rather than 'don't ask'.
+
+    `mode` None takes the loading method's default (`fill` for auto, `best` for
+    hand) — which is why auto-load still plans the maximum fill it always did,
+    now with the box breakdown stated instead of implied."""
+    return {"mode": mode if mode in BOX_MODES else _LOADING_DEFAULT_MODE.get(loading, "fill"),
             "pin": pin if pin in CONTAINER_SIZES else None,
             "availability": availability or {}}
 
 
 def plan_box_load(scu, box, commodity=None) -> dict | None:
-    """Apply a `box_policy` to a target load. None (auto-load, or nothing to
+    """Apply a `box_policy` to a target load. None (no policy, or nothing to
     load) means the load stands as-is."""
     if not box or int(scu or 0) <= 0:
         return None

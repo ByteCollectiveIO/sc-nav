@@ -6135,10 +6135,21 @@ class ContainerPackingTests(unittest.TestCase):
     def test_box_plan_omits_exact_when_the_pick_is_exact(self):
         self.assertNotIn("exact", nav_core.box_plan(96))
 
-    def test_policy_only_sizes_for_hand_loading(self):
-        self.assertIsNone(nav_core.box_policy("auto"))          # auto = no sizing at all
+    def test_loading_method_only_picks_the_default_mode(self):
+        # Sizing applies under BOTH methods: every fill is bought in boxes of
+        # some size. Auto just defaults to the fullest fill — exactly what it
+        # planned before it stated the breakdown at all.
+        self.assertEqual(nav_core.box_policy("auto")["mode"], "fill")
+        self.assertEqual(nav_core.box_policy("hand")["mode"], "best")
+        self.assertEqual(nav_core.plan_box_load(505, nav_core.box_policy("auto"))["scu"], 505)
         self.assertEqual(nav_core.plan_box_load(505, nav_core.box_policy("hand"))["scu"], 504)
         self.assertIsNone(nav_core.plan_box_load(0, nav_core.box_policy("hand")))
+
+    def test_an_explicit_mode_beats_the_loading_default(self):
+        # The gap this closed: auto-load at the pickup, hand-unload at a surface
+        # outpost. Box count still matters, so auto must accept 'fewest'.
+        pol = nav_core.box_policy("auto", mode="fewest")
+        self.assertEqual(nav_core.plan_box_load(505, pol)["size"], 32)
 
 
 class ContainerModeTests(unittest.TestCase):
@@ -6229,10 +6240,10 @@ class ContainerAvailabilityTests(unittest.TestCase):
         self.assertIsNotNone(plan)
         self.assertGreater(plan["scu"], 0)
 
-    def test_policy_is_none_for_auto_load(self):
-        self.assertIsNone(nav_core.box_policy("auto", mode="fewest", pin=8))
-        pol = nav_core.box_policy("hand", mode="fewest", pin=8)
-        self.assertEqual((pol["mode"], pol["pin"]), ("fewest", 8))
+    def test_policy_carries_mode_and_pin_under_either_method(self):
+        for loading in ("auto", "hand"):
+            pol = nav_core.box_policy(loading, mode="fewest", pin=8)
+            self.assertEqual((pol["mode"], pol["pin"]), ("fewest", 8), loading)
 
     def test_policy_rejects_a_size_that_does_not_exist(self):
         self.assertIsNone(nav_core.box_policy("hand", pin=7)["pin"])

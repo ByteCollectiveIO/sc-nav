@@ -1509,6 +1509,10 @@
   .bx-size { min-width: 38px; font-variant-numeric: tabular-nums; }
   .bx-size.on { border-color: var(--accent); color: var(--accent); }
   .bx-size.gone { color: var(--dim); text-decoration: line-through; }
+  /* Hand-load heads-up (#46): a surface outpost with no cargo handling, where
+     box count stops being trivia. Warn hue like the stock lines — it's a cost
+     you're about to pay, not an error. */
+  .tl-hand { font-size: 12px; color: var(--warn); margin: 4px 0; }
   /* Stop amenities (#28c): station facility chips on a leg's buy/sell lines. */
   .tl-amen { font-size: 11px; color: var(--dim); white-space: nowrap; }
   /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
@@ -3840,7 +3844,7 @@
            only: under auto-load the kiosk stows the hold and box count is free,
            so the question doesn't arise. `Exact` pins a size for a player who
            knows this commodity ships in 8s. -->
-      <div class="route-row rule-row" id="trade-boxmode-row" hidden>
+      <div class="route-row rule-row" id="trade-boxmode-row">
         <span class="muted" style="font-size:12px;">Box size</span>
         <span class="seg" id="trade-boxmode" role="group" aria-label="How to choose the container size"
               aria-describedby="trade-boxmode-hint">
@@ -8827,10 +8831,14 @@ function setTradeLegality(mode) {
 // nearly as much in far fewer boxes, and the leg says which size to buy.
 let tradeLoading = "auto";               // auto | hand
 const TRADE_LOADING_HINT = {
-  auto: "The kiosk loads the ship — box count costs nothing, so plan the fullest hold.",
-  hand: "You move every box — legs are sized to the fewest containers, per leg.",
+  auto: "The kiosk loads the ship — defaults to the fullest hold. Still set a box size below if you'll unload by hand.",
+  hand: "You move every box — defaults to the balanced pick, nearly full in far fewer boxes.",
 };
-function setTradeLoading(mode) {
+// Loading picks the STARTING point for box size, never the limit: a run that
+// auto-loads at the pickup can still hand-unload at a planetside outpost, and
+// that end wants few boxes no matter how they got aboard.
+const LOADING_DEFAULT_BOXMODE = { auto: "fill", hand: "best" };
+function setTradeLoading(mode, quiet) {
   tradeLoading = mode === "hand" ? "hand" : "auto";
   for (const x of $("trade-loading").children) {
     const on = x.dataset.loading === tradeLoading;
@@ -8838,9 +8846,12 @@ function setTradeLoading(mode) {
   }
   const hint = $("trade-loading-hint");
   if (hint) hint.textContent = TRADE_LOADING_HINT[tradeLoading];
-  // The size question only exists when you're the one moving the boxes.
-  const row = $("trade-boxmode-row");
-  if (row) row.hidden = tradeLoading !== "hand";
+  // Sizing applies either way — loading only nudges the default, the way
+  // picking a ship nudges STOPS. A kiosk that stows the hold argues for the
+  // fullest fill; moving the boxes yourself argues for the balanced pick.
+  // Overridable, and deliberately re-applied on every flip so the pair reads
+  // consistently; pick a mode after flipping and it sticks.
+  if (!quiet) setTradeBoxMode(LOADING_DEFAULT_BOXMODE[tradeLoading]);
 }
 // Which end of the fill-vs-boxes trade-off (#46 follow-up). `best` is the
 // balanced marginal-rate pick; the other two are the extremes it interpolates
@@ -9337,8 +9348,9 @@ function applyTradeConfig(cfg) {
   setTradeStops(cfg.stops || "any");
   if (!cfg.stops) tradeStopsForShip();
   setTradeLegality(cfg.legality || "any");    // #42 — also every mode
-  setTradeLoading(cfg.loading || "auto");     // #46 — ditto; absent = today's plan
-  setTradeBoxMode(cfg.box_mode || "best");
+  // quiet: don't let the loading default overwrite the config's own box mode.
+  setTradeLoading(cfg.loading || "auto", true);   // #46 — absent = today's plan
+  setTradeBoxMode(cfg.box_mode || LOADING_DEFAULT_BOXMODE[tradeLoading]);
   $("trade-boxsize").value = cfg.box_size || "";
   syncTradeBoxHint();
   $("trade-minreturn").value = cfg.min_return_pct || "";   // #43
@@ -9651,11 +9663,11 @@ function buildTradePlanBody(msg) {
   const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid,
                  stops: tradeStops, legality: tradeLegality, loading: tradeLoading,
                  ...tradeStartPayload() };
-  if (tradeLoading === "hand") {          // #46: meaningless under auto-load
-    body.box_mode = tradeBoxMode;
-    const pin = Number($("trade-boxsize").value) || 0;
-    if (pin) body.box_size = pin;
-  }
+  // #46: sizing applies under BOTH loading methods — auto-load at the pickup
+  // says nothing about hand-unloading at the drop.
+  body.box_mode = tradeBoxMode;
+  const boxPin = Number($("trade-boxsize").value) || 0;
+  if (boxPin) body.box_size = boxPin;
   const minRet = Number($("trade-minreturn").value);
   if (minRet > 0) body.min_return_pct = minRet;      // #43 (blank/0 = no floor)
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
@@ -9866,6 +9878,24 @@ function boxDetail(box) {
     + `<table>${rows}</table>${mix}</details>`;
 }
 
+// "You'll be lifting these yourself" (#46). The server only flags a surface
+// outpost with no known dock or freight elevator, so this is a heads-up rather
+// than a claim — but it's the cue that turns box count from trivia into the
+// number that decides your evening. Names the box count precisely because 505
+// vs 15 is the whole point.
+function handEndsChip(lg) {
+  const ends = lg.hand_ends || [];
+  if (!ends.length) return "";
+  const what = ends.length === 2 ? "load and unload"
+    : ends[0] === "buy" ? "load" : "unload";
+  const where = ends.length === 2 ? "Both ends are surface outposts"
+    : ends[0] === "buy" ? "Pickup is a surface outpost"
+    : "Drop-off is a surface outpost";
+  const boxes = lg.box ? ` — that's <b>${lg.box.boxes.toLocaleString()} box`
+    + `${lg.box.boxes === 1 ? "" : "es"}</b> to shift` : "";
+  return `<div class="tl-hand">⬆ ${where} — expect to hand-${what}${boxes}.</div>`;
+}
+
 function renderTradeLeg(lg, i) {
   const move = [];
   if (lg.to_buy && lg.to_buy.distance_m != null && i > 0)
@@ -9937,7 +9967,7 @@ function renderTradeLeg(lg, i) {
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
     + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span>` : "")
     + `<span class="tl-scu">${lg.scu} SCU</span>${boxChip(lg.box)}${fresh}</div>`
-    + dngr
+    + dngr + handEndsChip(lg)
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
     + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span>${amenChips(lg.buy_amen)}</div>`
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
@@ -9977,12 +10007,10 @@ async function renderTradeSuggest() {
   if (minRet > 0) qs.set("min_return_pct", String(minRet));
   // #46: hand-loaded fills are whole containers, so the board's max SCU (and the
   // per-hour ordering built on it) must be sized the same way a plan would be.
-  if (tradeLoading === "hand") {
-    qs.set("loading", "hand");
-    qs.set("box_mode", tradeBoxMode);
-    const pin = Number($("trade-boxsize").value) || 0;
-    if (pin) qs.set("box_size", String(pin));
-  }
+  qs.set("loading", tradeLoading);
+  qs.set("box_mode", tradeBoxMode);
+  const boxPin = Number($("trade-boxsize").value) || 0;
+  if (boxPin) qs.set("box_size", String(boxPin));
   const freshOn = $("trade-fresh-on").checked;
   const freshDays = tradeStaleDays();
   if (freshOn) qs.set("max_price_age_days", String(freshDays));
@@ -10361,7 +10389,8 @@ function renderTradeRunLeg(lg, i, run) {
     + `<div class="run-stop-head"><span class="seq">${seq}</span>`
     + `<span class="stop-name">${esc(lg.commodity)} `
     + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span> ` : "")
-    + `<span class="stop-sys">${lg.scu} SCU</span>${boxChip(lg.box)}</span></div>`;
+    + `<span class="stop-sys">${lg.scu} SCU</span>${boxChip(lg.box)}</span></div>`
+    + (active ? handEndsChip(lg) : "");
   // A skipped leg was never transacted: one line says why, no phantom profit.
   if (lg.skipped) {
     h += lg.stockout
