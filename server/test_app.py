@@ -6757,6 +6757,102 @@ class TradeReturnApiTests(unittest.TestCase):
         self.assertEqual({l["commodity"] for l in run["legs"]}, {"Waste"})
 
 
+class TradeLoadingApiTests(unittest.TestCase):
+    """Container loading (#46) end to end: the plan, the board, manual legs, and
+    persistence onto the run so a mid-run re-plan keeps boxing the same way."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Hauler", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()
+        # One commodity, one lane, 505 SCU of supply and demand — the real run
+        # that prompted the feature (505 × 1 SCU containers of Waste).
+        def pt(tid, poi, buy=None, sell=None):
+            return {"commodity": "Waste", "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 505 if buy else 0,
+                    "scu_sell_stock": 505 if sell else 0, "updated_at": None}
+        self._orig_pts = app.trade_price_points
+        app.trade_price_points = [pt(1, self.A, buy=10), pt(2, self.B, sell=30)]
+
+    def tearDown(self):
+        app.trade_price_points = self._orig_pts
+
+    def _plan(self, **kw):
+        body = {"usable_scu": 505, "start_id": self.A, "sort": "profit",
+                "system": "Stanton"}
+        body.update(kw)
+        return self.client.post("/api/trade/plan", json=body)
+
+    def test_auto_is_the_default_and_plans_the_full_hold(self):
+        leg = self._plan().json()["legs"][0]
+        self.assertEqual(leg["scu"], 505)
+        self.assertIsNone(leg["box"])
+
+    def test_hand_loading_sizes_the_fill_to_containers(self):
+        leg = self._plan(loading="hand").json()["legs"][0]
+        self.assertEqual(leg["scu"], 504)
+        self.assertEqual((leg["box"]["size"], leg["box"]["boxes"]), (24, 21))
+        self.assertEqual(leg["box"]["short"], 1)
+        # The fallback sizes ride along so the kiosk can disagree about what's
+        # on offer without stranding the player.
+        self.assertEqual({o["size"] for o in leg["box"]["options"]},
+                         set(app.nav_core.CONTAINER_SIZES))
+
+    def test_unknown_loading_mode_widens_to_auto(self):
+        # Same contract as stops/legality: a filter we don't recognize must
+        # never silently shrink the plan.
+        leg = self._plan(loading="teleport").json()["legs"][0]
+        self.assertEqual(leg["scu"], 505)
+
+    def test_manual_legs_are_boxed_too(self):
+        legs = self._plan(mode="manual", loading="hand",
+                          legs=[{"commodity": "Waste", "buy_terminal_id": 1,
+                                 "sell_terminal_id": 2}]).json()["legs"]
+        self.assertEqual(legs[0]["scu"], 504)
+        self.assertEqual(legs[0]["box"]["boxes"], 21)
+
+    def test_board_rows_are_boxed(self):
+        rows = self.client.get(
+            "/api/trade/trades?system=Stanton&capacity_scu=505&sort=margin"
+            "&loading=hand").json()
+        self.assertEqual(rows[0]["max_scu"], 504)
+        self.assertEqual(rows[0]["box"]["size"], 24)
+        plain = self.client.get(
+            "/api/trade/trades?system=Stanton&capacity_scu=505&sort=margin").json()
+        self.assertEqual(plain[0]["max_scu"], 505)
+        self.assertIsNone(plain[0]["box"])
+
+    def test_loading_persists_onto_the_run(self):
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 505, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "loading": "hand"})
+        self.assertEqual(r.status_code, 200)
+        run = db.get_active_trade_run("1")
+        self.assertEqual(run["params"]["loading"], "hand")
+        self.assertEqual(run["legs"][0]["scu"], 504)
+
+
 class TradeLegalityApiTests(unittest.TestCase):
     """Commodity legality filter (#42): plan over the whole market, legal goods
     only, or contraband only — plus the ☠ badge that marks illicit legs in every

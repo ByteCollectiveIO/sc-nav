@@ -152,3 +152,12 @@ Modelling notes for whoever picks this up:
 - Then a dwell model replaces the constant, behind an auto-load toggle on the
   plan form. Because dwell feeds the solver *score*, this re-ranks routes —
   fewer, fatter stops win once loading is priced honestly.
+
+**Half of that toggle now exists (#46, 2026-08-09).** The plan form carries
+`loading` = `auto | hand`, and in hand mode the solver sizes every fill to whole
+cargo containers (`nav_core.box_plan`) — so each leg already knows its
+`box_count`, which is the model's independent variable. What is still missing is
+only the *coefficient*: the measured seconds per box. `STOP_DWELL_S` is
+untouched on purpose, because a guessed constant would silently re-rank every
+member's routes. When the fit exists, hand-load legs price
+`box_count × measured` and the two features become one feature.
