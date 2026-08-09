@@ -16,6 +16,50 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 46. Trade planner: cargo container sizing 🔨 BUILT
+
+User-found, 2026-08-09, off a real run: the planner quotes a load in loose SCU,
+but a commodity kiosk sells **boxes**. A 505 SCU fill of Waste is 505 × 1 SCU
+containers — and the member hand-loading them moves every one. The same fill is
+**21 × 24 SCU** for one SCU less.
+
+**`loading` = `auto` | `hand`** (`nav_core.LOADING_MODES`, `_norm_loading`), a
+run fact like `stops` (#34), sitting in SHIP & LOADOUT rather than Route rules.
+`auto` is byte-for-byte today's behaviour: the kiosk stows the hold, box count
+costs nothing, plan the maximum fill. `hand` snaps every fill down to whole
+containers and each leg carries a `box` plan.
+
+**The pick rule** (`nav_core.best_box_size`) walks the Pareto frontier of
+`CONTAINER_SIZES` (1/2/4/8/16/24/32) from the fullest hold toward fewer boxes,
+taking each step whose marginal *boxes saved per SCU given up* clears
+`_BOXES_PER_SCU = 1.0`. A percentage fill floor was the obvious alternative and
+**fails at both ends**: 98% rejects 3 × 32 SCU for a 100 SCU hold (96 SCU) in
+favour of 25 × 4, while 95% throws away 25 SCU of a 505 SCU load to save six
+boxes. The exchange rate gets both right. `pack_exact` (greedy, optimal for this
+denomination set by Kozen-Zaks — the test proves it against a DP) gives the
+mixed-size purchase that hits the target exactly, shown as an aside.
+
+Snapping happens **last**, after hold/supply/demand/budget, in the single
+`_set_trade_load` writer — buying 3 × 32 SCU off a shelf holding 70 is not a
+plan. Threaded through `_trade_candidates` → plan/replan/`cost_trade_legs` and
+`rank_trades`, so the solver ranks on the load a player can really buy. Held
+cargo is **never re-boxed**: it's aboard in the boxes it was bought in.
+
+**Availability is deliberately not modelled.** Not every commodity is offered in
+every size and no feed says which — UEX carries prices and 20 flags, the wiki
+only documents that the seven sizes exist. The one piece of evidence we own is
+the `box_size` the watcher captures per transaction (#41 §6), and that can
+confirm a size is sold, never prove one isn't. So every size is offered in the
+leg's `container sizes` table (also rendered at the buy step in run mode, where
+the kiosk gets to disagree) and the kiosk stays the authority.
+
+**Not wired to time.** Box count is the input to the parked loading-dwell model
+(`docs/trade-transaction-capture.md` §6, [[autoload-dwell-model]]) — but
+`STOP_DWELL_S` is untouched and route ranking is unchanged, because we still
+have no *measured* per-box handling time and a guessed constant would silently
+re-rank everyone's routes. Once the dwell model is fit, hand-load legs can price
+`box_count × measured` and the two features join up.
+
 ### 45. `HaloFinderApiTests` depends on test ordering (latent, CI-invisible) 🐞 OPEN
 Found during the 2026-08 security review. `HaloFinderApiTests.setUpClass` does
 `next(p for p in app.nav.pois.values() if "(ARC-L1)" in p.name and p.qt_marker)`,

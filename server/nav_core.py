@@ -3184,6 +3184,148 @@ def derive_quick_picks(nav: NavData, runs, limit: int = 12) -> dict:
 _TRADE_TRAVEL_BUDGET = 400
 
 
+# ---------------------------------------------------------------------------
+# Cargo container sizing (#46)
+#
+# A commodity kiosk sells in BOXES, not in loose SCU: you pick a container size
+# and a count, so the purchasable quantities are the multiples of that size.
+# Planning a flat "505 SCU" quietly assumes 1 SCU boxes — 505 of them, which a
+# player who is hand-loading (freight elevator, no auto-load) has to move one at
+# a time. The same 505 is 21 boxes at 24 SCU for one SCU less.
+#
+# So `loading` is a plan-level preference: 'auto' keeps the maximum fill (the
+# kiosk stows it for you — box count costs nothing), 'hand' snaps the load down
+# to the box size that carries nearly as much in far fewer boxes.
+#
+# Availability is deliberately NOT modelled. Not every commodity is offered in
+# every size and no feed we have says which (UEX carries prices and flags, the
+# wiki only documents that the seven sizes exist). The only evidence we own is
+# the box_size the watcher captures per transaction (#41 §6), and that can
+# confirm a size is sold, never prove one isn't. Claiming "24 isn't available
+# for Waste" off missing evidence would be a lie a trader acts on, so we offer
+# every size and let the kiosk be the authority.
+# ---------------------------------------------------------------------------
+
+CONTAINER_SIZES = (1, 2, 4, 8, 16, 24, 32)   # SCU per box, kiosk-selectable
+LOADING_MODES = ("auto", "hand")
+
+# Hand-load trade rate: how many boxes a step up in container size must save to
+# justify giving up one SCU of load. At 1.0, dropping 505 SCU to 504 to go from
+# 505 boxes to 21 is an easy yes, while dropping a further 24 SCU to save only 6
+# more boxes is a no. Deliberately a pure exchange rate, not a time value: we
+# have no measured per-box handling time yet (see docs/trade-transaction-capture.md
+# §6), and inventing one would silently re-rank routes on a guess.
+_BOXES_PER_SCU = 1.0
+
+
+def box_fit(scu, size: int) -> tuple[int, int]:
+    """(box count, SCU actually loaded) when a target load is bought in `size`
+    boxes. Rounds DOWN — the kiosk sells whole boxes and overshooting the hold
+    isn't an option."""
+    scu = int(scu or 0)
+    if size <= 0 or scu <= 0:
+        return 0, 0
+    count = scu // size
+    return count, count * size
+
+
+def pack_exact(scu) -> list[dict]:
+    """Fewest boxes that sum to EXACTLY `scu`, as [{size, count}] largest-first —
+    the mixed-size fill, bought as one purchase per size at the same kiosk.
+
+    Greedy largest-first is provably optimal for this denomination set: by
+    Kozen-Zaks the smallest counterexample of a greedy coin system, if one
+    exists, is below the sum of the two largest coins (24 + 32 = 56), and an
+    exhaustive DP check over that range finds none (test_nav_core covers it)."""
+    scu = int(scu or 0)
+    out = []
+    for size in sorted(CONTAINER_SIZES, reverse=True):
+        count, loaded = box_fit(scu, size)
+        if count:
+            out.append({"size": size, "count": count})
+            scu -= loaded
+    return out
+
+
+def box_options(scu) -> list[dict]:
+    """Every container size costed for a target load, largest box first:
+    {size, boxes, scu, short}. `short` is the SCU given up to that size."""
+    target = int(scu or 0)
+    out = []
+    for size in sorted(CONTAINER_SIZES, reverse=True):
+        count, loaded = box_fit(target, size)
+        if count:
+            out.append({"size": size, "boxes": count, "scu": loaded,
+                        "short": target - loaded})
+    return out
+
+
+def _box_frontier(options: list[dict]) -> list[dict]:
+    """The Pareto-efficient container sizes for a load — those no other size
+    beats on BOTH fill and box count — richest fill first. Sizes that carry less
+    in more boxes are strictly worse and never worth showing as the pick."""
+    ranked = sorted(options, key=lambda o: (-o["scu"], o["boxes"]))
+    front, best_boxes = [], None
+    for o in ranked:
+        if best_boxes is None or o["boxes"] < best_boxes:
+            front.append(o)
+            best_boxes = o["boxes"]
+    return front
+
+
+def best_box_size(scu) -> dict | None:
+    """The container size to actually buy a hand-loaded fill in, as one of the
+    `box_options` rows (None when there's nothing to load).
+
+    Walks the Pareto frontier from the fullest hold toward fewer boxes and takes
+    each step whose marginal boxes-saved-per-SCU-given-up clears `_BOXES_PER_SCU`.
+    A percentage fill floor was the obvious alternative and misbehaves at both
+    ends: 98% would reject 3 × 32 SCU boxes for a 100 SCU hold (96 SCU) in favour
+    of 25 × 4, while 95% would throw away 25 SCU of a 505 SCU load to save six
+    boxes. The marginal rate gets both right."""
+    front = _box_frontier(box_options(scu))
+    if not front:
+        return None
+    best = front[0]
+    for cand in front[1:]:
+        given_up = best["scu"] - cand["scu"]
+        saved = best["boxes"] - cand["boxes"]
+        if given_up <= 0 or saved / given_up >= _BOXES_PER_SCU:
+            best = cand
+    return best
+
+
+def box_plan(scu) -> dict | None:
+    """The full container picture for a load: the size to buy it in, what that
+    costs in fill, every alternative, and the mixed-size purchase that hits the
+    target exactly. None when there's nothing to load.
+
+    {size, boxes, scu, short, options: [...], exact: {boxes, mix}} — `exact` is
+    present only when the single-size pick leaves SCU on the table (otherwise
+    it IS the pick, and a second row saying so is noise)."""
+    target = int(scu or 0)
+    pick = best_box_size(target)
+    if pick is None:
+        return None
+    plan = dict(pick)
+    plan["options"] = box_options(target)
+    if plan["short"]:
+        mix = pack_exact(target)
+        plan["exact"] = {"boxes": sum(m["count"] for m in mix), "mix": mix}
+    return plan
+
+
+def snap_load_scu(scu, loading="auto") -> int:
+    """The SCU a load actually becomes under a loading preference: unchanged for
+    'auto' (the kiosk stows it, so box count is free), snapped down to a whole
+    number of the best-fit containers for 'hand'."""
+    target = int(scu or 0)
+    if loading != "hand" or target <= 0:
+        return target
+    pick = best_box_size(target)
+    return pick["scu"] if pick else target
+
+
 def _clamp_scu(capacity, supply, demand):
     """SCU actually movable on a trade: your hold, capped by what's for sale and
     what the buyer will take. Supply/demand of 0 means unknown (UEX often lacks
@@ -3215,7 +3357,8 @@ def trade_return_pct(buy_price, profit_per_scu):
     return round(100.0 * profit_per_scu / buy_price, 1)
 
 
-def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
+def _trade_row(name, src, dst, margin, capacity_scu, budget=None,
+               loading="auto") -> dict:
     """A single buy->sell trade record (no travel yet) from a buy price point
     `src` and sell price point `dst`. Travel fields (distance/eta/via_gate) and
     profit_per_hour are filled by the caller when a route/leg is costed. When
@@ -3223,7 +3366,13 @@ def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
     profit/cost totals follow. `budget` (aUEC on hand) further clamps the load so
     buy_cost never exceeds what the player can afford — trades are sequential, so
     the binding capital constraint is one hold-fill at a time. `*_updated_at` carry
-    each side's UEX scrape time (unix s) for freshness badges."""
+    each side's UEX scrape time (unix s) for freshness badges.
+
+    `loading` (#46) is the container preference. In 'hand' mode the load is
+    snapped down to a whole number of the best-fit containers and the row's
+    `box` carries the container plan; profit/cost follow the snapped figure, so
+    the solver ranks on what the player can really buy rather than on a fill
+    that only exists as 1 SCU boxes."""
     row = {
         "commodity": name,
         "buy_terminal_id": src.get("terminal_id"), "buy_terminal": src.get("terminal"),
@@ -3242,20 +3391,41 @@ def _trade_row(name, src, dst, margin, capacity_scu, budget=None) -> dict:
         "buy_src": src.get("buy_src"), "sell_src": dst.get("sell_src"),
         "distance_m": None, "eta_s": None, "cross_system": None, "via_gate": None,
         "max_scu": None, "trade_profit": None, "buy_cost": None, "profit_per_hour": None,
+        "box": None,
     }
     max_scu = _clamp_scu(capacity_scu, row["supply_scu"], row["demand_scu"])
     if max_scu and budget and row["buy_price"] > 0:
         max_scu = min(max_scu, math.floor(budget / row["buy_price"]))
     if max_scu:
-        row["max_scu"] = int(max_scu)
-        row["trade_profit"] = int(round(margin * max_scu))
-        row["buy_cost"] = int(round(row["buy_price"] * max_scu))
+        # Snap LAST: the container fit is judged against the load that survived
+        # every other cap (hold, supply, demand, budget), never against the raw
+        # hold size — buying 3 × 32 SCU when the shelf holds 70 is not a plan.
+        _set_trade_load(row, int(max_scu), margin, loading=loading)
+    return row
+
+
+def _set_trade_load(row: dict, scu: int, margin: int, *, loading="auto") -> dict:
+    """Write a load size onto a trade row, applying the container preference and
+    re-deriving everything that scales with it. The one place a row's SCU is set,
+    so a hand-loaded plan can never quote a fill its boxes can't reach."""
+    scu = int(scu or 0)
+    if scu <= 0:
+        row["max_scu"] = row["trade_profit"] = row["buy_cost"] = None
+        row["box"] = None
+        return row
+    plan = box_plan(scu) if loading == "hand" else None
+    if plan:
+        scu = plan["scu"]
+    row["max_scu"] = scu
+    row["trade_profit"] = int(round(margin * scu))
+    row["buy_cost"] = int(round(row["buy_price"] * scu))
+    row["box"] = plan
     return row
 
 
 def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
                 capacity_scu=None, min_margin=0, min_return_pct=None,
-                limit=50, sort="auto",
+                limit=50, sort="auto", loading="auto",
                 budget=None, max_age_s=None, now_ts=None, t_ref=None) -> list[dict]:
     """Best buy->sell trades over the live price feed, richest first.
 
@@ -3271,7 +3441,8 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
     answer different questions and both apply: 500 aUEC/SCU on a cheap commodity
     is a huge return on little capital, while the same spread on Quantanium is
     noise. `capacity_scu` (usable SCU) enables the
-    throughput fields (max_scu, trade_profit, buy_cost, profit_per_hour). `sort`:
+    throughput fields (max_scu, trade_profit, buy_cost, profit_per_hour), and
+    `loading='hand'` (#46) sizes those to whole cargo containers. `sort`:
       "margin"    — profit per SCU (needs no capacity or travel),
       "per_hour"  — trade_profit / leg time (needs capacity; travel-priced),
       "return"    — return on capital (#43; needs neither capacity nor travel),
@@ -3323,7 +3494,8 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
 
     out = []
     for margin, name, src, dst in window:
-        row = _trade_row(name, src, dst, margin, capacity_scu, budget=budget)
+        row = _trade_row(name, src, dst, margin, capacity_scu, budget=budget,
+                         loading=loading)
         if want_hour:
             sp, dp = nav.pois.get(src.get("poi_id")), nav.pois.get(dst.get("poi_id"))
             if sp is not None and dp is not None:
@@ -3423,13 +3595,14 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       legality="any", illicit=frozenset(), min_return_pct=None,
                       avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
                       avoid_buys=frozenset(), avoid_sells=frozenset(),
-                      exclude_poi_ids=frozenset()) -> list[dict]:
+                      exclude_poi_ids=frozenset(), loading="auto") -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
     name set) restricts to filtered mode; `legality` + `illicit` filter
     contraband in or out (#42, orthogonal to `commodities` — both apply);
     `min_return_pct` drops trades whose return on capital is below the player's
-    floor (#43); `system` keeps both ends in-system.
+    floor (#43); `loading` ('auto'|'hand', #46) sizes each fill to whole cargo
+    containers; `system` keeps both ends in-system.
     `budget` caps each load to what the player can afford; `max_age_s` drops price
     points older than that (stale-data opt-out). `avoid_poi_ids` drops any trade
     that buys or sells at a warned POI (a camped station); `avoid_pairs` (a set of
@@ -3488,7 +3661,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                     ret = trade_return_pct(int(src["buy"]), margin)
                     if ret is None or ret < min_return_pct:
                         continue
-                row = _trade_row(name, src, dst, margin, capacity_scu, budget=budget)
+                row = _trade_row(name, src, dst, margin, capacity_scu,
+                                 budget=budget, loading=loading)
                 if row["max_scu"]:            # need a movable quantity to be real
                     rows.append(row)
     rows.sort(key=lambda r: -(r["trade_profit"] or 0))
@@ -3659,6 +3833,9 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
                 "buy_updated_at", "sell_updated_at", "buy_src", "sell_src")
         } | {
             "scu": row["max_scu"], "profit": row["trade_profit"], "buy_cost": row["buy_cost"],
+            # Container plan (#46) — present only in hand-load mode; a held leg's
+            # cargo is already boxed and aboard, so it never carries one.
+            "box": None if held else row.get("box"),
             "held": held,
             # Return on capital (#43). None on a held leg: its cargo is already
             # paid for (buy_cost 0), so there is no capital at risk for this leg
@@ -3873,6 +4050,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
                      legality="any", illicit=None, min_return_pct=None,
+                     loading="auto",
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
                      avoid_buys=None, avoid_sells=None, exclude_poi_ids=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -3885,7 +4063,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     trades. `budget` caps each
     hold-fill to affordable aUEC; `deadhead_weight` > 1 trades profit for less
     empty-hold flight; `max_age_s` drops stale price points; `exclude_poi_ids`
-    (#34) drops stops the ship can't physically use. Returns {summary, legs, start}
+    (#34) drops stops the ship can't physically use; `loading='hand'` (#46) sizes
+    every fill to whole cargo containers. Returns {summary, legs, start}
     — the same shape cost_trade_legs produces for manual mode."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     optimize = sort if sort in ("profit", "return") else "per_hour"
@@ -3911,7 +4090,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
                               avoid_sells=frozenset(avoid_sells or ()),
-                              exclude_poi_ids=exclude_poi_ids)
+                              exclude_poi_ids=exclude_poi_ids, loading=loading)
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -3933,14 +4112,16 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
 
 def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
                     start_pos=None, budget=None, t_ref=None, avoid_volumes=None,
-                    fuel_req=None, max_range_m=None) -> dict:
+                    loading="auto", fuel_req=None, max_range_m=None) -> dict:
     """Manual mode: cost a player-chosen ordered list of legs (each
     {commodity, buy_terminal_id, sell_terminal_id, scu?}) into the same
     {summary, legs, start} shape the solver returns — no route selection, just live
     prices + running profit/time. A leg's `scu` optionally caps the load below the
     supply/demand/hold maximum; `budget` caps each fill to affordable aUEC. Raises
     ValueError on an unknown/unpriced leg. Manual legs are never dropped, but with
-    `avoid_volumes` they get costed detours + `blocked` badges (#24 v2)."""
+    `avoid_volumes` they get costed detours + `blocked` badges (#24 v2).
+    `loading='hand'` (#46) sizes each fill to whole containers — a hand-stated SCU
+    is a ceiling like any other cap, so it snaps too."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     idx = {(p["commodity"], p["terminal_id"]): p for p in prices}
     chosen = []
@@ -3951,13 +4132,14 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
         if src is None or dst is None or not src.get("buy") or not dst.get("sell"):
             raise ValueError(f"leg references an unknown or unpriced terminal for {name}")
         margin = int(dst["sell"]) - int(src["buy"])
-        row = _trade_row(name, src, dst, margin, usable_scu, budget=budget)
+        row = _trade_row(name, src, dst, margin, usable_scu, budget=budget,
+                         loading=loading)
         scu = lg.get("scu")
         if scu:                                   # honor an explicit per-leg cap
+            # Re-snap: the cap is applied to the pre-container load, so a hand
+            # plan re-fits boxes to what the player actually asked to carry.
             capped = min(int(scu), row["max_scu"] or int(scu))
-            row["max_scu"] = capped
-            row["trade_profit"] = int(round(margin * capped))
-            row["buy_cost"] = int(round(row["buy_price"] * capped))
+            _set_trade_load(row, capped, margin, loading=loading)
         chosen.append(row)
     start = None
     if start_id is not None:
@@ -4050,7 +4232,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, legality="any", illicit=None,
-                       min_return_pct=None, avoid_poi_ids=None, avoid_pairs=None,
+                       min_return_pct=None, loading="auto",
+                       avoid_poi_ids=None, avoid_pairs=None,
                        avoid_volumes=None, avoid_buys=None, avoid_sells=None,
                        exclude_poi_ids=None,
                        fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -4078,7 +4261,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             max_stops=max_stops, commodities=commodities, system=system, sort=sort,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
             now_ts=now_ts, t_ref=t_ref, legality=legality, illicit=illicit,
-            min_return_pct=min_return_pct, avoid_poi_ids=avoid_poi_ids,
+            min_return_pct=min_return_pct, loading=loading,
+            avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
             avoid_buys=avoid_buys, avoid_sells=avoid_sells,
             exclude_poi_ids=exclude_poi_ids,
@@ -4128,7 +4312,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                               avoid_buys=frozenset(avoid_buys or ()),
                               avoid_sells=frozenset(avoid_sells or ()),
-                              exclude_poi_ids=exclude_poi_ids)
+                              exclude_poi_ids=exclude_poi_ids, loading=loading)
     cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,

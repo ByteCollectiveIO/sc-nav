@@ -4080,6 +4080,7 @@ async def list_trade_trades(
     commodity: str | None = None, system: str | None = None,
     capacity_scu: float | None = None, min_margin: int = 0,
     min_return_pct: float | None = None,
+    loading: str = "auto",
     sort: str = "auto", limit: int = 50,
     budget: int | None = None, max_price_age_days: int | None = None,
 ):
@@ -4090,12 +4091,15 @@ async def list_trade_trades(
     `budget` caps each load to affordable aUEC; `max_price_age_days` drops stale
     price points so the board matches the planner's freshness filter.
     `min_margin` is an aUEC/SCU floor; `min_return_pct` (#43) is the percentage
-    floor on return of capital — different questions, both applied."""
+    floor on return of capital — different questions, both applied.
+    `loading='hand'` (#46) sizes each row's fill to whole cargo containers, so
+    the board's throughput matches what a hand-loading player can buy."""
     max_age_s = max_price_age_days * 86400 if max_price_age_days else None
     return nav_core.rank_trades(
         nav, trade_price_points, commodity=commodity, system=system,
         capacity_scu=capacity_scu, min_margin=max(0, min_margin),
         min_return_pct=_norm_return_pct(min_return_pct),
+        loading=_norm_loading(loading),
         sort=sort, limit=max(1, min(limit, 200)),
         budget=(budget if budget and budget > 0 else None), max_age_s=max_age_s,
     )
@@ -4151,6 +4155,13 @@ class TradePlanIn(BaseModel):
     # aUEC/SCU `min_margin` — a fat spread on a cheap commodity and a thin one
     # on Quantanium are opposite trades by this measure. 0/None = no floor.
     min_return_pct: float | None = Field(default=None, ge=0, le=10_000)
+    # How the cargo gets aboard (#46). `auto` = the kiosk stows it, so box count
+    # is free and the plan takes the maximum fill. `hand` = freight elevator or
+    # tractor beam, one container at a time, so each fill is snapped down to the
+    # container size that carries nearly as much in far fewer boxes. A physical
+    # fact about the run, not a preference the solver may override — but unlike
+    # `stops` it never drops a trade, it only resizes one.
+    loading: str = "auto"                               # auto | hand
 
 
 class TradeRunPatchIn(BaseModel):
@@ -4210,6 +4221,7 @@ class TradeReplanIn(BaseModel):
     stops: str | None = None                            # any | stations | dock (#34)
     legality: str | None = None                         # any | legal | illicit (#42)
     min_return_pct: float | None = Field(default=None, ge=0, le=10_000)   # #43
+    loading: str | None = None                          # auto | hand (#46)
 
 
 class TradeFavoriteIn(BaseModel):
@@ -4244,6 +4256,14 @@ def _norm_return_pct(pct):
     except (TypeError, ValueError):
         return None
     return v if v > 0 else None
+
+
+def _norm_loading(mode) -> str:
+    """The container-loading mode (#46), defaulting an unknown value to 'auto'.
+    Same rule as _norm_stops in shape but the reason is different: 'auto' is the
+    non-intervening answer — it plans the maximum fill, exactly as the planner
+    did before containers were modelled at all."""
+    return mode if mode in nav_core.LOADING_MODES else "auto"
 
 
 def _norm_legality(mode) -> str:
@@ -4566,6 +4586,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
                 budget=body.budget, t_ref=t_ref, avoid_volumes=solver_volumes,
+                loading=_norm_loading(body.loading),
                 fuel_req=fuel_req, max_range_m=max_range_m)
         else:
             plan = nav_core.plan_trade_route(
@@ -4574,6 +4595,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 commodities=(body.commodities if body.mode == "filtered" else None),
                 legality=_norm_legality(body.legality), illicit=illicit_commodities,
                 min_return_pct=_norm_return_pct(body.min_return_pct),
+                loading=_norm_loading(body.loading),
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -4682,6 +4704,7 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "stops": _norm_stops(body.stops),                                   # #34
             "legality": _norm_legality(body.legality),                          # #42
             "min_return_pct": _norm_return_pct(body.min_return_pct),             # #43
+            "loading": _norm_loading(body.loading),                              # #46
         },
     }
 
@@ -4999,6 +5022,11 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
                                   else p.get("legality"))
         min_ret = _norm_return_pct(body.min_return_pct if body.min_return_pct is not None
                                    else p.get("min_return_pct"))
+        # #46: how the cargo moves is a fact about this run (auto-load kiosk vs
+        # hand-loading), so it survives a re-plan — and it's overridable mid-run,
+        # because "the elevator is broken, I'm hand-loading the rest" is real.
+        loading = _norm_loading(body.loading if body.loading is not None
+                                else p.get("loading"))
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
@@ -5015,7 +5043,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         nav, trade_price_points, usable_scu, start_pos=start_pos, held=held,
         max_stops=max_stops, commodities=commodities, system=system, sort=sort,
         budget=budget, legality=legality, illicit=illicit_commodities,
-        min_return_pct=min_ret,
+        min_return_pct=min_ret, loading=loading,
         deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
         max_age_s=max_age_s, t_ref=t_ref,
         avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -5054,6 +5082,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         p["stops"] = stops                           # #34
         p["legality"] = legality                     # #42
         p["min_return_pct"] = min_ret                # #43
+        p["loading"] = loading                       # #46
         run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)

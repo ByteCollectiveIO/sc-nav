@@ -1484,6 +1484,18 @@
      shape as .tl-actual-tag, in the warning hue. */
   .tl-illicit { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--warn); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  /* Containers (#46, hand-load mode): the box size to actually buy this fill in.
+     Neutral like .tl-return — it's an instruction, not a warning — with the
+     given-up SCU dimmed beside it, since that's the cost of the choice. */
+  .tl-box { font-size: 11px; color: var(--accent); white-space: nowrap; }
+  .tl-box .tl-box-short { color: var(--dim); }
+  .tl-boxes { margin-top: 4px; font-size: 12px; }
+  .tl-boxes > summary { color: var(--dim); cursor: pointer; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .04em; }
+  .tl-boxes table { border-collapse: collapse; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .tl-boxes td { padding: 1px 10px 1px 0; color: var(--dim); }
+  .tl-boxes tr.pick td { color: var(--text); font-weight: 600; }
+  .tl-boxes .tl-box-mix { margin-top: 4px; color: var(--dim); }
   /* Stop amenities (#28c): station facility chips on a leg's buy/sell lines. */
   .tl-amen { font-size: 11px; color: var(--dim); white-space: nowrap; }
   /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
@@ -3783,6 +3795,18 @@
           <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
         </span>
         <span class="muted rule-hint" id="trade-stopkind-hint"></span>
+      </div>
+      <!-- How the cargo gets aboard (#46). A run fact like stop kind, not a taste:
+           the kiosk either stows the hold for you or you move every container
+           yourself, and 505 × 1 SCU vs 21 × 24 SCU is the whole difference. -->
+      <div class="route-row rule-row">
+        <span class="muted" style="font-size:12px;">Loading</span>
+        <span class="seg" id="trade-loading" role="group" aria-label="How the cargo is loaded"
+              aria-describedby="trade-loading-hint">
+          <button class="on" data-loading="auto" type="button" aria-pressed="true">Auto-load</button>
+          <button data-loading="hand" type="button" aria-pressed="false">Hand-load</button>
+        </span>
+        <span class="muted rule-hint" id="trade-loading-hint"></span>
       </div>
       <p class="muted route-hint">Bigger holds move more per leg — set what actually fits.
         Picking a ship also sets where it can stop; pick another option to override.</p>
@@ -8748,6 +8772,26 @@ function setTradeLegality(mode) {
   if (hint) hint.textContent = TRADE_LEGALITY_HINT[tradeLegality];
   renderTradeRuleChips();
 }
+// Container loading (#46): a commodity kiosk sells BOXES, so the buyable
+// quantities are the multiples of the container size you pick. Auto-load stows
+// the hold for you and box count costs nothing, so the plan takes the maximum
+// fill. Hand-loading (freight elevator, tractor beam) means moving every box
+// yourself — the server then snaps each fill to the container size that carries
+// nearly as much in far fewer boxes, and the leg says which size to buy.
+let tradeLoading = "auto";               // auto | hand
+const TRADE_LOADING_HINT = {
+  auto: "The kiosk loads the ship — box count costs nothing, so plan the fullest hold.",
+  hand: "You move every box — legs are sized to the fewest containers, per leg.",
+};
+function setTradeLoading(mode) {
+  tradeLoading = mode === "hand" ? "hand" : "auto";
+  for (const x of $("trade-loading").children) {
+    const on = x.dataset.loading === tradeLoading;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
+  const hint = $("trade-loading-hint");
+  if (hint) hint.textContent = TRADE_LOADING_HINT[tradeLoading];
+}
 // A ship that loads only through a station cargo dock (server sets `dock` on the
 // /api/ships row) can't use a planetary stop at all, so pick the honest default the
 // moment the ship is known. Left overridable: it's a nudge, not a lock.
@@ -9201,6 +9245,7 @@ function applyTradeConfig(cfg) {
   setTradeStops(cfg.stops || "any");
   if (!cfg.stops) tradeStopsForShip();
   setTradeLegality(cfg.legality || "any");    // #42 — also every mode
+  setTradeLoading(cfg.loading || "auto");     // #46 — ditto; absent = today's plan
   $("trade-minreturn").value = cfg.min_return_pct || "";   // #43
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
@@ -9265,6 +9310,11 @@ function wireTradePlanner() {
   for (const b of $("trade-legality").querySelectorAll("button"))
     b.onclick = () => setTradeLegality(b.dataset.legality);
   setTradeLegality(tradeLegality);
+  for (const b of $("trade-loading").querySelectorAll("button"))
+    // #46: re-rank the board too — hand-loaded fills are smaller, so the
+    // per-hour ordering the board shows must match what a plan would buy.
+    b.onclick = () => { setTradeLoading(b.dataset.loading); renderTradeSuggest(); };
+  setTradeLoading(tradeLoading);
   // Shared avoided-locations blacklist (#24 v2): re-plan on edit if a plan is showing.
   mountAvoidBlacklist($("trade-avoid-blk"), () => {
     renderTradeRuleChips(); if (tradeLastInput) planTrade(); });
@@ -9495,8 +9545,11 @@ function buildTradePlanBody(msg) {
   if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return null; }
   // `stops` (#34) rides on every mode: the solver drops unusable stops, manual legs
   // just get badged. Like avoid_mode, it's a property of the ship, not of the mode.
+  // `loading` (#46) rides on every mode too, for the same reason: how the cargo
+  // gets aboard is a fact about the run. Auto = today's behaviour exactly.
   const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid,
-                 stops: tradeStops, legality: tradeLegality, ...tradeStartPayload() };
+                 stops: tradeStops, legality: tradeLegality, loading: tradeLoading,
+                 ...tradeStartPayload() };
   const minRet = Number($("trade-minreturn").value);
   if (minRet > 0) body.min_return_pct = minRet;      // #43 (blank/0 = no floor)
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
@@ -9668,6 +9721,36 @@ function amenChips(a) {
     : "";
 }
 
+// Container plan (#46). The server sends `box` only in hand-load mode, so both
+// helpers are no-ops on an auto-loaded plan — the leg renders exactly as before.
+// boxChip is the instruction ("buy 21 × 24 SCU"); boxDetail is the reasoning,
+// folded away, because the trade it made (1 SCU of fill for 484 fewer boxes) is
+// the kind of thing a player wants to check once and then trust.
+function boxChip(box) {
+  if (!box) return "";
+  return ` <span class="tl-box" title="Buy this fill as ${box.boxes} container${box.boxes === 1 ? "" : "s"}`
+    + ` of ${box.size} SCU${box.short ? ` — ${box.short} SCU under a full hold, but far fewer boxes to move` : ""}">`
+    + `📦 ${box.boxes} × ${box.size} SCU`
+    + (box.short ? `<span class="tl-box-short"> (−${box.short})</span>` : "")
+    + `</span>`;
+}
+function boxDetail(box) {
+  if (!box || !(box.options || []).length) return "";
+  const rows = box.options.map(o =>
+    `<tr class="${o.size === box.size ? "pick" : ""}"><td>${o.size} SCU</td>`
+    + `<td>${o.boxes.toLocaleString()} box${o.boxes === 1 ? "" : "es"}</td>`
+    + `<td>${o.scu.toLocaleString()} SCU</td>`
+    + `<td>${o.short ? "−" + o.short : "full"}</td></tr>`).join("");
+  // The exact fill costs one purchase per size, so it's an aside, not the pick.
+  const mix = box.exact
+    ? `<div class="tl-box-mix">Exact ${(box.scu + box.short).toLocaleString()} SCU: `
+      + esc(box.exact.mix.map(m => `${m.count}×${m.size}`).join(" + "))
+      + ` = ${box.exact.boxes} boxes, one purchase per size.</div>`
+    : "";
+  return `<details class="tl-boxes"><summary>container sizes</summary>`
+    + `<table>${rows}</table>${mix}</details>`;
+}
+
 function renderTradeLeg(lg, i) {
   const move = [];
   if (lg.to_buy && lg.to_buy.distance_m != null && i > 0)
@@ -9738,7 +9821,7 @@ function renderTradeLeg(lg, i) {
   return `<div class="trade-leg-card${(warns.length || blk.length) ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
     + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span>` : "")
-    + `<span class="tl-scu">${lg.scu} SCU</span>${fresh}</div>`
+    + `<span class="tl-scu">${lg.scu} SCU</span>${boxChip(lg.box)}${fresh}</div>`
     + dngr
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
     + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span>${amenChips(lg.buy_amen)}</div>`
@@ -9751,6 +9834,7 @@ function renderTradeLeg(lg, i) {
           + ` title="Return on the capital this leg ties up (profit ÷ buy cost)">`
           + `${lg.return_pct}% return</span>` : "")
     + `</div>`
+    + boxDetail(lg.box)
     + (move.length ? `<div class="tl-move">${move.join(" · ")}</div>` : "")
     + `</div></div>`;
 }
@@ -9776,6 +9860,9 @@ async function renderTradeSuggest() {
   // disagree about what counts as a trade worth showing.
   const minRet = Number($("trade-minreturn").value);
   if (minRet > 0) qs.set("min_return_pct", String(minRet));
+  // #46: hand-loaded fills are whole containers, so the board's max SCU (and the
+  // per-hour ordering built on it) must be sized the same way a plan would be.
+  if (tradeLoading === "hand") qs.set("loading", "hand");
   const freshOn = $("trade-fresh-on").checked;
   const freshDays = tradeStaleDays();
   if (freshOn) qs.set("max_price_age_days", String(freshDays));
@@ -10106,7 +10193,7 @@ function renderTradeRunLeg(lg, i, run) {
     + `<div class="run-stop-head"><span class="seq">${seq}</span>`
     + `<span class="stop-name">${esc(lg.commodity)} `
     + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span> ` : "")
-    + `<span class="stop-sys">${lg.scu} SCU</span></span></div>`;
+    + `<span class="stop-sys">${lg.scu} SCU</span>${boxChip(lg.box)}</span></div>`;
   // A skipped leg was never transacted: one line says why, no phantom profit.
   if (lg.skipped) {
     h += lg.stockout
@@ -10123,7 +10210,11 @@ function renderTradeRunLeg(lg, i, run) {
     h += `<div class="trade-run-step${bought ? " done" : (active ? " now" : "")}">`
       + `▲ Buy <b>${esc(lg.commodity)}</b> at <b>${esc(lg.buy_terminal)}</b> `
       + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span>`
-      + `${active && !bought ? amenChips(lg.buy_amen) : ""}</div>`;
+      + `${active && !bought ? amenChips(lg.buy_amen) : ""}`
+      // #46: the kiosk is where the container choice is actually made, so the
+      // fallback sizes belong on the step you're standing at — the planned size
+      // may simply not be on offer for this commodity.
+      + `${active && !bought ? boxDetail(lg.box) : ""}</div>`;
   }
   // Sell side. A sold leg shows its realized profit (from actuals when entered).
   const sold = lg.state === "sold";

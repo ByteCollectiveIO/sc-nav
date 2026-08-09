@@ -6075,5 +6075,150 @@ class OrgPriceSideFieldsTests(unittest.TestCase):
         self.assertTrue(nav_core._price_fresh(p, None, now, side="sell"))
 
 
+class ContainerPackingTests(unittest.TestCase):
+    """Cargo container sizing (#46): a kiosk sells boxes, so a fill is a multiple
+    of the container size. Pure arithmetic — no fixture needed."""
+
+    def test_box_fit_rounds_down(self):
+        self.assertEqual(nav_core.box_fit(505, 32), (15, 480))
+        self.assertEqual(nav_core.box_fit(505, 24), (21, 504))
+        self.assertEqual(nav_core.box_fit(96, 32), (3, 96))
+        self.assertEqual(nav_core.box_fit(31, 32), (0, 0))    # can't buy a part box
+        self.assertEqual(nav_core.box_fit(0, 32), (0, 0))
+
+    def test_greedy_exact_pack_is_optimal(self):
+        # pack_exact leans on greedy being optimal for {1,2,4,8,16,24,32}. By
+        # Kozen-Zaks a counterexample would sit below 24+32; check well past it
+        # against a DP so a future size change can't silently break the claim.
+        sizes = nav_core.CONTAINER_SIZES
+        dp = [0] + [10**9] * 200
+        for n in range(1, 201):
+            dp[n] = min(dp[n - s] + 1 for s in sizes if s <= n)
+        for n in range(1, 201):
+            mix = nav_core.pack_exact(n)
+            self.assertEqual(sum(m["size"] * m["count"] for m in mix), n, n)
+            self.assertEqual(sum(m["count"] for m in mix), dp[n], n)
+
+    def test_pick_gives_up_one_scu_for_484_fewer_boxes(self):
+        # The run that prompted this: 505 SCU of Waste bought as 505 × 1 SCU.
+        pick = nav_core.best_box_size(505)
+        self.assertEqual((pick["size"], pick["boxes"], pick["scu"], pick["short"]),
+                         (24, 21, 504, 1))
+
+    def test_pick_does_not_throw_away_25_scu_to_save_six_boxes(self):
+        # 32 SCU boxes would cut 21 boxes to 15 but cost 25 SCU of the load —
+        # the step a percentage fill floor gets wrong in this direction.
+        self.assertNotEqual(nav_core.best_box_size(505)["size"], 32)
+
+    def test_pick_takes_a_small_short_for_a_huge_box_saving(self):
+        # ...and the opposite direction: 100 SCU is 25 × 4 for a full hold or
+        # 3 × 32 for four SCU less. Four SCU is not worth 22 boxes.
+        pick = nav_core.best_box_size(100)
+        self.assertEqual((pick["size"], pick["boxes"], pick["scu"]), (32, 3, 96))
+
+    def test_exact_multiples_never_give_anything_up(self):
+        for scu in (32, 96, 4608):        # 4608 = a Hull-C, 144 × 32
+            pick = nav_core.best_box_size(scu)
+            self.assertEqual(pick["scu"], scu, scu)
+            self.assertEqual(pick["short"], 0, scu)
+
+    def test_box_plan_shape(self):
+        plan = nav_core.box_plan(505)
+        self.assertEqual(plan["size"], 24)
+        self.assertEqual({o["size"] for o in plan["options"]},
+                         set(nav_core.CONTAINER_SIZES))
+        # The mixed purchase reaches the target exactly, in more boxes than the
+        # single-size pick but far fewer than 1 SCU boxes.
+        self.assertEqual(plan["exact"]["boxes"], 17)
+        self.assertEqual(sum(m["size"] * m["count"] for m in plan["exact"]["mix"]), 505)
+
+    def test_box_plan_omits_exact_when_the_pick_is_exact(self):
+        self.assertNotIn("exact", nav_core.box_plan(96))
+
+    def test_snap_only_applies_to_hand_loading(self):
+        self.assertEqual(nav_core.snap_load_scu(505, "auto"), 505)
+        self.assertEqual(nav_core.snap_load_scu(505, "hand"), 504)
+        self.assertEqual(nav_core.snap_load_scu(0, "hand"), 0)
+
+
+class TradeLoadingModeTests(unittest.TestCase):
+    """The loading preference (#46) threaded through the planners: hand mode
+    re-prices every fill to whole containers, auto leaves the plan untouched."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in spc)
+
+    def _prices(self, supply=505, demand=505):
+        return [
+            {"commodity": "Waste", "terminal_id": 1, "terminal": "T1",
+             "system": "Stanton", "poi_id": self.A, "buy": 10, "sell": None,
+             "scu_buy": supply, "scu_sell_stock": 0, "updated_at": None},
+            {"commodity": "Waste", "terminal_id": 2, "terminal": "T2",
+             "system": "Stanton", "poi_id": self.B, "buy": None, "sell": 30,
+             "scu_buy": 0, "scu_sell_stock": demand, "updated_at": None},
+        ]
+
+    def _leg(self, **kw):
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 505, start_id=self.A, max_stops=2, sort="profit", **kw)
+        return plan["legs"][0]
+
+    def test_auto_is_unchanged_and_carries_no_box_plan(self):
+        leg = self._leg()
+        self.assertEqual(leg["scu"], 505)
+        self.assertIsNone(leg["box"])
+
+    def test_hand_snaps_the_load_and_reprices_it(self):
+        leg = self._leg(loading="hand")
+        self.assertEqual(leg["scu"], 504)
+        self.assertEqual(leg["box"]["size"], 24)
+        self.assertEqual(leg["box"]["boxes"], 21)
+        # Everything that scales with the load follows it — a plan that quotes
+        # 504 SCU of profit on a 505 SCU fill is the bug this guards.
+        self.assertEqual(leg["profit"], 20 * 504)
+        self.assertEqual(leg["buy_cost"], 10 * 504)
+
+    def test_snap_is_judged_after_supply_and_budget_caps(self):
+        # The shelf holds 70, so the containers must fit 70 — not the 505 hold.
+        leg = self._leg(loading="hand")           # sanity: unrestricted pick
+        self.assertEqual(leg["scu"], 504)
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(supply=70), 505, start_id=self.A, max_stops=2,
+            sort="profit", loading="hand")
+        self.assertLessEqual(plan["legs"][0]["scu"], 70)
+        plan = nav_core.plan_trade_route(
+            NAV, self._prices(), 505, start_id=self.A, max_stops=2, sort="profit",
+            loading="hand", budget=1000)          # 100 SCU of capital at 10/SCU
+        self.assertLessEqual(plan["legs"][0]["buy_cost"], 1000)
+
+    def test_manual_legs_snap_too(self):
+        legs = [{"commodity": "Waste", "buy_terminal_id": 1, "sell_terminal_id": 2,
+                 "scu": 505}]
+        plan = nav_core.cost_trade_legs(NAV, self._prices(), legs, 505,
+                                        start_id=self.A, loading="hand")
+        self.assertEqual(plan["legs"][0]["scu"], 504)
+        plan = nav_core.cost_trade_legs(NAV, self._prices(), legs, 505, start_id=self.A)
+        self.assertEqual(plan["legs"][0]["scu"], 505)
+
+    def test_held_cargo_is_never_reboxed(self):
+        # Sunk cargo is already aboard in whatever boxes it was bought in;
+        # re-sizing it mid-run would invent SCU the player doesn't have.
+        held = {"commodity": "Waste", "scu": 505, "buy_price": 10}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 505, start_id=self.A, held=held, max_stops=2,
+            loading="hand")
+        self.assertTrue(plan["legs"][0]["held"])
+        self.assertEqual(plan["legs"][0]["scu"], 505)
+        self.assertIsNone(plan["legs"][0]["box"])
+
+    def test_board_rows_size_to_containers_too(self):
+        rows = nav_core.rank_trades(NAV, self._prices(), capacity_scu=505,
+                                    sort="margin", loading="hand")
+        self.assertEqual(rows[0]["max_scu"], 504)
+        self.assertEqual(rows[0]["box"]["boxes"], 21)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
