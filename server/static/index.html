@@ -1496,6 +1496,19 @@
   .tl-boxes td { padding: 1px 10px 1px 0; color: var(--dim); }
   .tl-boxes tr.pick td { color: var(--text); font-weight: 600; }
   .tl-boxes .tl-box-mix { margin-top: 4px; color: var(--dim); }
+  /* Org container knowledge: ✓ a member saw this size on the kiosk, ✗ a member
+     found it absent. Absent rows stay listed but read as unavailable — the
+     player standing there outranks a report that may predate a patch. */
+  .tl-boxes tr.gone td { color: var(--dim); text-decoration: line-through; }
+  .tl-boxes tr.gone td:last-child { text-decoration: none; color: var(--warn); }
+  .tl-boxes .bx-known { color: var(--good); }
+  /* "That size isn't on this kiosk" — the mid-run re-fit (#46). */
+  .bx-resize { margin-top: 6px; font-size: 12px; }
+  .bx-resize > summary { color: var(--warn); cursor: pointer; }
+  .bx-sizes { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 4px; }
+  .bx-size { min-width: 38px; font-variant-numeric: tabular-nums; }
+  .bx-size.on { border-color: var(--accent); color: var(--accent); }
+  .bx-size.gone { color: var(--dim); text-decoration: line-through; }
   /* Stop amenities (#28c): station facility chips on a leg's buy/sell lines. */
   .tl-amen { font-size: 11px; color: var(--dim); white-space: nowrap; }
   /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
@@ -3025,6 +3038,21 @@
       real shortage.
     </div>
     <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>CARGO CONTAINER REPORTS</h2>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      Container reports age off after
+      <input id="container-ageoff" type="number" min="0" max="3650" step="5" style="width:80px;"> days
+      <button id="container-ageoff-save">Save</button>
+      <button id="container-clear">Clear all</button>
+    </div>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Which container sizes a commodity is sold in is set by the game patch, not by the
+      hour — so this window is <b>days</b>, not minutes. A member who finds a size missing
+      at a kiosk reports it from trade run mode, and the planner stops proposing that size
+      for that commodity org-wide. <b>Clear all</b> after a patch that reshuffles cargo, so
+      last patch's observations stop shrinking everyone's loads. 0 = never age off.
+    </div>
+    <div class="muted" id="container-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
     <h2>MARKETPLACE LISTINGS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Listings look stale after
@@ -3807,6 +3835,25 @@
           <button data-loading="hand" type="button" aria-pressed="false">Hand-load</button>
         </span>
         <span class="muted rule-hint" id="trade-loading-hint"></span>
+      </div>
+      <!-- Which end of the fill-vs-boxes trade-off (#46 follow-up). Hand-load
+           only: under auto-load the kiosk stows the hold and box count is free,
+           so the question doesn't arise. `Exact` pins a size for a player who
+           knows this commodity ships in 8s. -->
+      <div class="route-row rule-row" id="trade-boxmode-row" hidden>
+        <span class="muted" style="font-size:12px;">Box size</span>
+        <span class="seg" id="trade-boxmode" role="group" aria-label="How to choose the container size"
+              aria-describedby="trade-boxmode-hint">
+          <button class="on" data-boxmode="best" type="button" aria-pressed="true">Best fit</button>
+          <button data-boxmode="fill" type="button" aria-pressed="false">Max fill</button>
+          <button data-boxmode="fewest" type="button" aria-pressed="false">Fewest boxes</button>
+        </span>
+        <label class="muted" style="font-size:12px;">exact
+          <select id="trade-boxsize" class="ti" style="width:auto;">
+            <option value="">auto</option>
+          </select>
+        </label>
+        <span class="muted rule-hint" id="trade-boxmode-hint"></span>
       </div>
       <p class="muted route-hint">Bigger holds move more per leg — set what actually fits.
         Picking a ship also sets where it can stop; pick another option to override.</p>
@@ -8791,6 +8838,51 @@ function setTradeLoading(mode) {
   }
   const hint = $("trade-loading-hint");
   if (hint) hint.textContent = TRADE_LOADING_HINT[tradeLoading];
+  // The size question only exists when you're the one moving the boxes.
+  const row = $("trade-boxmode-row");
+  if (row) row.hidden = tradeLoading !== "hand";
+}
+// Which end of the fill-vs-boxes trade-off (#46 follow-up). `best` is the
+// balanced marginal-rate pick; the other two are the extremes it interpolates
+// between. An exact size overrides the mode entirely — that's the escape hatch
+// for a player who knows what this commodity actually ships in.
+let tradeBoxMode = "best";               // best | fill | fewest
+const TRADE_BOXMODE_HINT = {
+  best: "Nearly the fullest hold, far fewer boxes — gives up a little SCU to save a lot of lifting.",
+  fill: "Most cargo aboard, whatever the box count. Usually 1 SCU containers.",
+  fewest: "Fewest boxes to move, even if the hold goes out short.",
+};
+function setTradeBoxMode(mode) {
+  tradeBoxMode = ["fill", "fewest"].includes(mode) ? mode : "best";
+  for (const x of $("trade-boxmode").children) {
+    const on = x.dataset.boxmode === tradeBoxMode;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
+  syncTradeBoxHint();
+}
+// One hint line for both controls: a pinned size makes the mode moot, so say
+// that rather than leaving a mode description that no longer applies.
+function syncTradeBoxHint() {
+  const hint = $("trade-boxmode-hint"); if (!hint) return;
+  const pin = Number($("trade-boxsize").value) || 0;
+  hint.textContent = pin
+    ? `Every leg buys ${pin} SCU containers where the load allows it.`
+    : TRADE_BOXMODE_HINT[tradeBoxMode];
+}
+// The org's container knowledge (#46 follow-up): which sizes members have seen
+// on each commodity's kiosk. Populates the exact-size picker from the server's
+// own list so the client never hardcodes the seven sizes.
+let containerSizes = [1, 2, 4, 8, 16, 24, 32];
+async function loadContainerBoard() {
+  let board;
+  try { board = await fetch("/api/trade/containers").then(r => r.json()); }
+  catch { return; }
+  if (Array.isArray(board.sizes) && board.sizes.length) containerSizes = board.sizes;
+  const sel = $("trade-boxsize"); if (!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = `<option value="">auto</option>`
+    + containerSizes.map(s => `<option value="${s}">${s} SCU</option>`).join("");
+  sel.value = keep;
 }
 // A ship that loads only through a station cargo dock (server sets `dock` on the
 // /api/ships row) can't use a planetary stop at all, so pick the honest default the
@@ -9246,6 +9338,9 @@ function applyTradeConfig(cfg) {
   if (!cfg.stops) tradeStopsForShip();
   setTradeLegality(cfg.legality || "any");    // #42 — also every mode
   setTradeLoading(cfg.loading || "auto");     // #46 — ditto; absent = today's plan
+  setTradeBoxMode(cfg.box_mode || "best");
+  $("trade-boxsize").value = cfg.box_size || "";
+  syncTradeBoxHint();
   $("trade-minreturn").value = cfg.min_return_pct || "";   // #43
   if (cfg.mode !== "manual") {
     $("trade-stops").value = cfg.max_stops || 6;
@@ -9315,6 +9410,12 @@ function wireTradePlanner() {
     // per-hour ordering the board shows must match what a plan would buy.
     b.onclick = () => { setTradeLoading(b.dataset.loading); renderTradeSuggest(); };
   setTradeLoading(tradeLoading);
+  for (const b of $("trade-boxmode").querySelectorAll("button"))
+    b.onclick = () => { setTradeBoxMode(b.dataset.boxmode); renderTradeSuggest(); };
+  setTradeBoxMode(tradeBoxMode);
+  $("trade-boxsize").addEventListener("change", () => {
+    syncTradeBoxHint(); renderTradeSuggest(); });
+  loadContainerBoard();
   // Shared avoided-locations blacklist (#24 v2): re-plan on edit if a plan is showing.
   mountAvoidBlacklist($("trade-avoid-blk"), () => {
     renderTradeRuleChips(); if (tradeLastInput) planTrade(); });
@@ -9550,6 +9651,11 @@ function buildTradePlanBody(msg) {
   const body = { mode: tradeMode, usable_scu: usable, avoid_mode: tradeAvoid,
                  stops: tradeStops, legality: tradeLegality, loading: tradeLoading,
                  ...tradeStartPayload() };
+  if (tradeLoading === "hand") {          // #46: meaningless under auto-load
+    body.box_mode = tradeBoxMode;
+    const pin = Number($("trade-boxsize").value) || 0;
+    if (pin) body.box_size = pin;
+  }
   const minRet = Number($("trade-minreturn").value);
   if (minRet > 0) body.min_return_pct = minRet;      // #43 (blank/0 = no floor)
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
@@ -9736,11 +9842,20 @@ function boxChip(box) {
 }
 function boxDetail(box) {
   if (!box || !(box.options || []).length) return "";
-  const rows = box.options.map(o =>
-    `<tr class="${o.size === box.size ? "pick" : ""}"><td>${o.size} SCU</td>`
-    + `<td>${o.boxes.toLocaleString()} box${o.boxes === 1 ? "" : "es"}</td>`
-    + `<td>${o.scu.toLocaleString()} SCU</td>`
-    + `<td>${o.short ? "−" + o.short : "full"}</td></tr>`).join("");
+  // `known` is org evidence, not a guess: true = a member saw this size on the
+  // kiosk, false = a member stood there and it wasn't offered, absent = nobody
+  // has looked. Absent sizes are still listed (see .tl-boxes tr.gone).
+  const rows = box.options.map(o => {
+    const cls = [o.size === box.size ? "pick" : "", o.known === false ? "gone" : ""]
+      .filter(Boolean).join(" ");
+    const mark = o.known === false ? `<span title="reported not offered">✗ absent</span>`
+      : o.known === true ? `<span class="bx-known" title="a member confirmed this size">✓</span>`
+      : "";
+    return `<tr class="${cls}"><td>${o.size} SCU</td>`
+      + `<td>${o.boxes.toLocaleString()} box${o.boxes === 1 ? "" : "es"}</td>`
+      + `<td>${o.scu.toLocaleString()} SCU</td>`
+      + `<td>${o.short ? "−" + o.short : "full"}</td><td>${mark}</td></tr>`;
+  }).join("");
   // The exact fill costs one purchase per size, so it's an aside, not the pick.
   const mix = box.exact
     ? `<div class="tl-box-mix">Exact ${(box.scu + box.short).toLocaleString()} SCU: `
@@ -9862,7 +9977,12 @@ async function renderTradeSuggest() {
   if (minRet > 0) qs.set("min_return_pct", String(minRet));
   // #46: hand-loaded fills are whole containers, so the board's max SCU (and the
   // per-hour ordering built on it) must be sized the same way a plan would be.
-  if (tradeLoading === "hand") qs.set("loading", "hand");
+  if (tradeLoading === "hand") {
+    qs.set("loading", "hand");
+    qs.set("box_mode", tradeBoxMode);
+    const pin = Number($("trade-boxsize").value) || 0;
+    if (pin) qs.set("box_size", String(pin));
+  }
   const freshOn = $("trade-fresh-on").checked;
   const freshDays = tradeStaleDays();
   if (freshOn) qs.set("max_price_age_days", String(freshDays));
@@ -10141,6 +10261,8 @@ function renderTradeRun(run) {
   box.querySelectorAll("[data-skip]").forEach(b => b.onclick = () => patchTradeRun({ action: "advance", leg: +b.dataset.skip }));
   box.querySelectorAll("[data-nostock]").forEach(b => b.onclick = () => reportNoStock(+b.dataset.nostock));
   box.querySelectorAll("[data-nodemand]").forEach(b => b.onclick = () => reportNoDemand(+b.dataset.nodemand));
+  box.querySelectorAll("[data-resize]").forEach(b => b.onclick =
+    () => resizeTradeLeg(+b.dataset.resize, +b.dataset.size));
   // Pre-fill the active leg's actuals from the detected transaction (#41) so
   // the pilot sees exactly what an unedited confirm will record.
   if (run.txn) {
@@ -10151,6 +10273,25 @@ function renderTradeRun(run) {
     if (p && p.value === "" && run.txn.unit_price != null) p.value = run.txn.unit_price;
     if (s && s.value === "" && run.txn.scu != null) s.value = run.txn.scu;
   }
+}
+
+// Re-fit the active leg to a container size the kiosk actually offers (#46).
+// Confirm-gated like the stock reports: the pick tells the whole org that the
+// planned size is absent for this commodity, which is exactly the claim that
+// must not come from a mis-tap. Unlike a stock-out this never moves the cursor
+// — re-planning the rest stays the separate button it already was.
+async function resizeTradeLeg(leg, size) {
+  const run = tradeCurrentRun, lg = run && (run.legs || [])[leg];
+  if (!lg || !lg.box) return;
+  const planned = lg.box.size;
+  if (size === planned) return;
+  if (!(await confirmDialog(
+      `Re-fits this leg to ${size} SCU containers and tells the org that `
+      + `${planned} SCU containers aren't offered for ${lg.commodity}. Your `
+      + `route doesn't change — only how much fits in this hold.`,
+      { title: `Buy ${size} SCU containers?`, confirmLabel: "Re-fit this leg" }))) return;
+  await patchTradeRun({ action: "resize", leg, box_size: size });
+  loadContainerBoard();      // the exact-size picker reflects the new knowledge
 }
 
 // The no-stock skip is org-visible (it steers everyone's routing for a while),
@@ -10181,6 +10322,33 @@ async function reportNoDemand(leg) {
   await patchTradeRun({ action: "demandout", leg });
   loadTradeStock();          // the new report shows in STOCK WATCH right away
   replanTradeRun();          // live position → new buyer for the held load
+}
+
+// "The size I planned isn't on this kiosk" (#46 follow-up). Only on the active,
+// un-bought buy step — the one moment a human is actually reading the menu.
+// Clicking a size re-fits the leg in place; the cursor deliberately doesn't
+// move, because the trade is still good and you're at the right terminal. The
+// pick is also the org's only evidence that a size is genuinely absent, so the
+// panel says so plainly rather than filing something the player didn't intend.
+function boxResizePanel(lg, i) {
+  if (!lg.box) return "";
+  const planned = lg.box.size;
+  const known = {};
+  for (const o of (lg.box.options || [])) if ("known" in o) known[o.size] = o.known;
+  // Known-absent sizes are still clickable: you're at the terminal and the org's
+  // report may predate a patch, so picking one overturns it rather than being
+  // blocked by it.
+  const chips = containerSizes.map(s =>
+    `<button class="bx-size${s === planned ? " on" : ""}${known[s] === false ? " gone" : ""}"`
+    + ` data-resize="${i}" data-size="${s}" type="button" aria-pressed="${s === planned}"`
+    + (known[s] === false ? ` title="reported not offered for this commodity — pick it anyway if it's there"` : "")
+    + (known[s] === true ? ` title="confirmed offered for this commodity"` : "")
+    + `>${s}</button>`).join("");
+  return `<details class="bx-resize"><summary>${planned} SCU not on this kiosk?</summary>`
+    + `<div class="bx-sizes" role="group" aria-label="Container sizes this kiosk offers">${chips}</div>`
+    + `<p class="muted">Pick the size you can actually buy. This leg re-fits and `
+    + `re-prices where you stand — and the org's planner stops proposing `
+    + `${planned} SCU for ${esc(lg.commodity)}.</p></details>`;
 }
 
 // One leg in the run checklist: a buy step then a sell step. State drives which is
@@ -10214,7 +10382,8 @@ function renderTradeRunLeg(lg, i, run) {
       // #46: the kiosk is where the container choice is actually made, so the
       // fallback sizes belong on the step you're standing at — the planned size
       // may simply not be on offer for this commodity.
-      + `${active && !bought ? boxDetail(lg.box) : ""}</div>`;
+      + `${active && !bought ? boxDetail(lg.box) : ""}`
+      + `${active && !bought ? boxResizePanel(lg, i) : ""}</div>`;
   }
   // Sell side. A sold leg shows its realized profit (from actuals when entered).
   const sold = lg.state === "sold";
@@ -18005,6 +18174,8 @@ async function loadSettings() {
       $("hazard-radius").value = s.hazard_radius_km;
     if (s.stock_ageoff_min && document.activeElement !== $("stock-ageoff"))
       $("stock-ageoff").value = s.stock_ageoff_min;
+    if (s.container_ageoff_days != null && document.activeElement !== $("container-ageoff"))
+      $("container-ageoff").value = s.container_ageoff_days;
     if (s.listing_stale_days != null && document.activeElement !== $("listing-stale"))
       $("listing-stale").value = s.listing_stale_days;
     if (s.survey_depletion_ageoff_min && document.activeElement !== $("depletion-ageoff"))
@@ -18896,6 +19067,43 @@ $("stock-ageoff-save").onclick = async () => {
   }
 };
 $("stock-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("stock-ageoff-save").click(); } });
+
+// Container-availability window (#46) — patch-scale, so days rather than minutes.
+$("container-ageoff-save").onclick = async () => {
+  const st = $("container-ageoff-status");
+  const days = parseInt($("container-ageoff").value, 10);
+  if (!(days >= 0 && days <= 3650)) { st.textContent = "enter 0 \u2013 3,650 days"; return; }
+  st.textContent = "saving\u2026";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ container_ageoff_days: days }) });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = d.container_ageoff_days
+      ? `saved \u2014 container reports steer planning for ${d.container_ageoff_days} days`
+      : "saved \u2014 container reports never age off";
+  } catch {
+    st.textContent = "failed to update \u2014 try again";
+    loadSettings();
+  }
+};
+$("container-ageoff").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("container-ageoff-save").click(); } });
+$("container-clear").onclick = async () => {
+  const st = $("container-ageoff-status");
+  if (!(await confirmDialog(
+      "Forgets every reported container size org-wide. The planner goes back to "
+      + "proposing any of the seven sizes until members report again \u2014 which is what "
+      + "you want right after a patch.",
+      { title: "Clear container reports?", confirmLabel: "Clear all", danger: true }))) return;
+  st.textContent = "clearing\u2026";
+  try {
+    const r = await fetch("/api/admin/containers/clear", { method: "POST" });
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    st.textContent = `cleared \u2014 ${d.deleted} report${d.deleted === 1 ? "" : "s"} removed`;
+  } catch { st.textContent = "failed to clear \u2014 try again"; }
+};
 
 // Marketplace staleness window (2026-08 review) — same shape as the stock window.
 $("listing-stale-save").onclick = async () => {

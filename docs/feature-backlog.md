@@ -45,20 +45,74 @@ plan. Threaded through `_trade_candidates` → plan/replan/`cost_trade_legs` and
 `rank_trades`, so the solver ranks on the load a player can really buy. Held
 cargo is **never re-boxed**: it's aboard in the boxes it was bought in.
 
-**Availability is deliberately not modelled.** Not every commodity is offered in
-every size and no feed says which — UEX carries prices and 20 flags, the wiki
-only documents that the seven sizes exist. The one piece of evidence we own is
-the `box_size` the watcher captures per transaction (#41 §6), and that can
-confirm a size is sold, never prove one isn't. So every size is offered in the
-leg's `container sizes` table (also rendered at the buy step in run mode, where
-the kiosk gets to disagree) and the kiosk stays the authority.
+**Availability was deliberately not modelled in this first pass** (the follow-up
+below changes this, and the reasoning is why it changed the way it did). Not
+every commodity is offered in every size and no feed says which — UEX carries
+prices and 20 flags, the wiki only documents that the seven sizes exist. The
+only evidence v1 owned was the `box_size` the watcher captures per transaction
+(#41 §6), which can confirm a size is sold but **never prove one isn't**. So
+every size was offered in the leg's `container sizes` table (also rendered at
+the buy step in run mode, where the kiosk gets to disagree) and the kiosk stayed
+the authority.
 
-**Not wired to time.** Box count is the input to the parked loading-dwell model
-(`docs/trade-transaction-capture.md` §6, [[autoload-dwell-model]]) — but
-`STOP_DWELL_S` is untouched and route ranking is unchanged, because we still
-have no *measured* per-box handling time and a guessed constant would silently
-re-rank everyone's routes. Once the dwell model is fit, hand-load legs can price
-`box_count × measured` and the two features join up.
+**Follow-up shipped same day (user playtest, 2026-08-09).** Two gaps the first
+pass left:
+
+1. **Box strategy is now the player's.** `box_mode` = `best` (the marginal-rate
+   pick) | `fill` (most SCU aboard — usually 1 SCU containers) | `fewest` (least
+   lifting), plus `box_size` to pin an exact size, which overrides the mode.
+   `best` stays the default, and the two new modes are exactly the extremes it
+   already interpolated between — so the rule didn't change, it just stopped
+   being the only option. Hand-load only; under auto-load the question doesn't
+   arise. Persists onto the run and survives a re-plan.
+
+2. **Mid-run re-fit** — `PATCH /api/trade/run action=resize`. The kiosk doesn't
+   offer the planned size; you pick one it does; the leg re-fits and re-prices
+   **where you stand**. The cursor deliberately does NOT move, unlike stockout:
+   there, the shelf is empty and the only fix is to leave; here the trade is
+   still good and only the boxes changed. Re-planning the remainder stays the
+   separate button it already was, so a container size can never silently fly
+   you to another terminal. Re-fits against `box.target` (the pre-container
+   load), not the already-snapped SCU — otherwise 24 → 32 would size 32s against
+   504 instead of the 505 the hold and shelf allow, losing a box for nothing.
+
+3. **...which finally makes availability knowable.** A member standing at the
+   kiosk seeing a size absent is a *direct negative observation* — the one kind
+   of evidence the first pass correctly refused to fake. `container_reports`
+   (new table) keyed **per commodity**, not per terminal: sizes look like a
+   property of the commodity, fixed per patch, so one report teaches the org
+   everywhere. `poi_id` is kept as provenance so it can be re-keyed per-terminal
+   without losing data if that turns out wrong. Age-off is `container_ageoff_days`
+   (default 60 — patch-scale, not the stock board's hours; 0 = never), plus an
+   admin **Clear all** for the patch that reshuffles cargo. Absent sizes drop out
+   of the solver's PICK pool but are never hidden from the options table or the
+   re-fit chips: the player at the terminal outranks a report that may predate a
+   patch, and picking a "gone" size overturns it. Unknown always means allowed —
+   a reporting gap must not shrink anyone's loads.
+
+**Not wired to time — and now deliberately so, not just "not yet."** `STOP_DWELL_S`
+is untouched and route ranking is unchanged. v1 held off because no *measured*
+per-box handling time exists and a guessed constant would silently re-rank
+everyone's routes. The user then settled the question outright (2026-08-09):
+
+> "not using box count to determine routes is the right logic… Since we give
+> the user the option to replan for a different box size, this is a time saving
+> issue and personal preference for them, it shouldn't really shape the math for
+> making money."
+
+The principle worth keeping: **container size is the player's choice, so pricing
+it into the route score would make the solver optimize a personal comfort
+preference as if it were revenue.** Two players hauling the same commodity on
+the same lane should get the same route; only their box counts differ. That's
+also why the mid-run re-fit doesn't move the cursor — a box size is not a reason
+to re-route.
+
+This narrows, but doesn't kill, the parked loading-dwell model
+(`docs/trade-transaction-capture.md` §6, [[autoload-dwell-model]]): what's ruled
+out is `box_count` feeding `profit_per_hour` and the solver score. A measured
+dwell could still legitimately inform *display* ("this fill is ~40 min of
+lifting") so the player can make the trade-off knowingly — which is the honest
+place for a preference to live. Don't quietly reintroduce it into the ranking.
 
 ### 45. `HaloFinderApiTests` depends on test ordering (latent, CI-invisible) 🐞 OPEN
 Found during the 2026-08 security review. `HaloFinderApiTests.setUpClass` does

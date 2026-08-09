@@ -389,6 +389,37 @@ def active_stock_reports() -> list[dict]:
     return reports
 
 
+def container_ageoff_days() -> int:
+    """Days a container-availability report (#46 follow-up) lives before it stops
+    constraining the planner. Which sizes a commodity ships in changes with a
+    game PATCH, not with the hour, so this is a much longer window than the stock
+    board's minutes — the default 60 outlives a quarterly patch cycle without
+    letting a report from two patches ago quietly shrink everyone's loads.
+    0 = never age off."""
+    try:
+        return max(0, int(db.get_setting("container_ageoff_days", "60")))
+    except (TypeError, ValueError):
+        return 60
+
+
+def active_container_reports() -> list[dict]:
+    """Live container-availability reports, freshest first (side effect: expired
+    rows are pruned). Each row gains `age_s` for the client."""
+    now = time.time()
+    days = container_ageoff_days()
+    cutoff = 0.0 if days <= 0 else now - days * 86400
+    reports = db.container_reports_since(cutoff)
+    for r in reports:
+        r["age_s"] = max(0, int(now - (r.get("created") or now)))
+    return reports
+
+
+def container_availability() -> dict:
+    """`{commodity_lower: {size: available}}` from the live reports — the pool
+    the solver may size fills from."""
+    return nav_core.container_availability(active_container_reports())
+
+
 def survey_depletion_ageoff_min() -> int:
     """Minutes a ⛏ mined-out report (#37 slice 2) suppresses a survey cluster
     in ore-first routing before it ages off. Rock spawns rotate server-side on
@@ -4080,7 +4111,7 @@ async def list_trade_trades(
     commodity: str | None = None, system: str | None = None,
     capacity_scu: float | None = None, min_margin: int = 0,
     min_return_pct: float | None = None,
-    loading: str = "auto",
+    loading: str = "auto", box_mode: str = "best", box_size: int | None = None,
     sort: str = "auto", limit: int = 50,
     budget: int | None = None, max_price_age_days: int | None = None,
 ):
@@ -4099,7 +4130,7 @@ async def list_trade_trades(
         nav, trade_price_points, commodity=commodity, system=system,
         capacity_scu=capacity_scu, min_margin=max(0, min_margin),
         min_return_pct=_norm_return_pct(min_return_pct),
-        loading=_norm_loading(loading),
+        box=_trade_box_policy(loading, box_mode, box_size),
         sort=sort, limit=max(1, min(limit, 200)),
         budget=(budget if budget and budget > 0 else None), max_age_s=max_age_s,
     )
@@ -4162,6 +4193,13 @@ class TradePlanIn(BaseModel):
     # fact about the run, not a preference the solver may override — but unlike
     # `stops` it never drops a trade, it only resizes one.
     loading: str = "auto"                               # auto | hand
+    # Which end of the fill-vs-boxes trade-off, when hand-loading. `best` is the
+    # balanced marginal-rate pick; `fill` maximizes SCU aboard (usually 1 SCU
+    # containers); `fewest` minimizes boxes to move. `box_size` pins an exact
+    # size and overrides the mode — it's what a player who KNOWS this commodity
+    # only ships in 8s reaches for. Ignored entirely under auto-load.
+    box_mode: str = "best"                              # best | fill | fewest
+    box_size: int | None = Field(default=None, ge=1, le=32)
 
 
 class TradeRunPatchIn(BaseModel):
@@ -4177,6 +4215,11 @@ class TradeRunPatchIn(BaseModel):
     # Log-detected transaction being applied to this confirm (#41): defaults
     # price/scu from the log's numbers and validates the guid/shop mappings.
     txn_id: int | None = Field(default=None, ge=1)
+    # `resize` (#46 follow-up): the container size the kiosk actually offers, and
+    # optionally the full menu it showed. `box_size` None with a `sizes` list =
+    # "here's what's on offer, pick the best of it for me".
+    box_size: int | None = Field(default=None, ge=1, le=32)
+    sizes: list[int] | None = Field(default=None, max_length=16)
 
 
 class TradeTxnIn(BaseModel):
@@ -4222,6 +4265,8 @@ class TradeReplanIn(BaseModel):
     legality: str | None = None                         # any | legal | illicit (#42)
     min_return_pct: float | None = Field(default=None, ge=0, le=10_000)   # #43
     loading: str | None = None                          # auto | hand (#46)
+    box_mode: str | None = None                         # best | fill | fewest (#46)
+    box_size: int | None = Field(default=None, ge=1, le=32)   # pin a size (#46)
 
 
 class TradeFavoriteIn(BaseModel):
@@ -4256,6 +4301,32 @@ def _norm_return_pct(pct):
     except (TypeError, ValueError):
         return None
     return v if v > 0 else None
+
+
+def _norm_box_mode(mode) -> str:
+    """Which end of the fill-vs-boxes trade-off a hand-loading player wants
+    (#46 follow-up). Unknown widens to 'best', the balanced pick."""
+    return mode if mode in nav_core.BOX_MODES else "best"
+
+
+def _norm_box_size(size):
+    """An exact pinned container size, or None for 'let the mode decide'. A size
+    outside CONTAINER_SIZES is not a smaller pool, it's a typo — drop it rather
+    than plan a fill in a box that doesn't exist."""
+    try:
+        v = int(size)
+    except (TypeError, ValueError):
+        return None
+    return v if v in nav_core.CONTAINER_SIZES else None
+
+
+def _trade_box_policy(loading, box_mode=None, box_size=None):
+    """The container policy (#46) for one solve, with the org's live
+    availability reports folded in so the solver never proposes a size a member
+    has stood at the kiosk and found missing."""
+    return nav_core.box_policy(
+        loading=_norm_loading(loading), mode=_norm_box_mode(box_mode),
+        pin=_norm_box_size(box_size), availability=container_availability())
 
 
 def _norm_loading(mode) -> str:
@@ -4586,7 +4657,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 nav, trade_price_points, [lg.model_dump() for lg in body.legs],
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
                 budget=body.budget, t_ref=t_ref, avoid_volumes=solver_volumes,
-                loading=_norm_loading(body.loading),
+                box=_trade_box_policy(body.loading, body.box_mode, body.box_size),
                 fuel_req=fuel_req, max_range_m=max_range_m)
         else:
             plan = nav_core.plan_trade_route(
@@ -4595,7 +4666,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 commodities=(body.commodities if body.mode == "filtered" else None),
                 legality=_norm_legality(body.legality), illicit=illicit_commodities,
                 min_return_pct=_norm_return_pct(body.min_return_pct),
-                loading=_norm_loading(body.loading),
+                box=_trade_box_policy(body.loading, body.box_mode, body.box_size),
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -4652,6 +4723,57 @@ def _file_stock_report(user: dict, leg: dict, kind: str, scu=None,
             "created": time.time()})
 
 
+def _file_container_reports(user: dict, commodity: str, sizes_seen, absent=(),
+                            poi_id=None, terminal=None) -> None:
+    """Record what a member saw on a commodity kiosk (#46 follow-up): every size
+    in `sizes_seen` is confirmed available, every size in `absent` confirmed
+    missing. This is the only evidence that can rule a size OUT, so it's filed
+    from the one place we know a human actually looked at the menu — the mid-run
+    resize — never inferred from a plan or a transaction."""
+    if not commodity:
+        return
+    now = time.time()
+    seen = {s for s in (sizes_seen or ()) if s in nav_core.CONTAINER_SIZES}
+    gone = {s for s in (absent or ()) if s in nav_core.CONTAINER_SIZES} - seen
+    for size, available in [(s, True) for s in sorted(seen)] + \
+                           [(s, False) for s in sorted(gone)]:
+        db.container_report_save({
+            "commodity": commodity, "size": size, "available": available,
+            "poi_id": poi_id, "terminal": terminal or "",
+            "poster": user["id"], "poster_name": user.get("display_name") or "",
+            "created": now,
+        })
+
+
+def _resize_trade_leg(leg: dict, size=None, sizes=None) -> dict:
+    """Re-fit an un-bought leg's load to a container size that's actually on the
+    kiosk, re-pricing everything that scales with it. Returns the new box plan.
+
+    Re-fits against the leg's ORIGINAL target (`box.target`), not its already
+    snapped SCU — otherwise switching 24 → 32 would size 32s against 504 instead
+    of the 505 the hold and the shelf actually allow, losing a box for nothing."""
+    box = leg.get("box") or {}
+    target = int(box.get("target") or leg.get("scu") or 0)
+    mode = box.get("mode") or "best"
+    if not size:
+        # No explicit pick: choose the best of what the kiosk showed, under the
+        # run's own mode. Falls back to the full pool if no menu was reported.
+        pool = [s for s in (sizes or ()) if s in nav_core.CONTAINER_SIZES] or None
+        pick = nav_core.best_box_size(target, mode=mode, sizes=pool)
+        size = pick["size"] if pick else None
+    plan = nav_core.box_plan(target, pin=size, mode=mode) if size else None
+    if not plan:
+        return None
+    scu = plan["scu"]
+    leg["scu"] = scu
+    margin = int(leg.get("profit_per_scu") or 0)
+    leg["profit"] = int(round(margin * scu))
+    leg["buy_cost"] = int(round(int(leg.get("buy_price") or 0) * scu))
+    leg["box"] = plan
+    leg["resized"] = True      # the plan's own figure was overridden at the kiosk
+    return plan
+
+
 def _initial_trade_states(legs: list[dict]) -> list[str]:
     """Per-leg starting state: a `held` leg (sunk cargo already aboard from a
     re-plan) begins 'bought' — heading to its sell; every other leg begins
@@ -4705,6 +4827,8 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "legality": _norm_legality(body.legality),                          # #42
             "min_return_pct": _norm_return_pct(body.min_return_pct),             # #43
             "loading": _norm_loading(body.loading),                              # #46
+            "box_mode": _norm_box_mode(body.box_mode),                           # #46
+            "box_size": _norm_box_size(body.box_size),                           # #46
         },
     }
 
@@ -4861,6 +4985,11 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
       stockout  — skip the active buy because the terminal had *nothing to buy*:
                   same cursor motion as advance, plus a shared supply-'out' report
                   that steers everyone's solver away while it's fresh (#21),
+      resize    — the planned container size isn't on this kiosk (#46): re-fits
+                  and re-prices the active leg to a size that is, WITHOUT moving
+                  the cursor (you're at the right terminal; only the boxes
+                  changed), and records what the menu showed so the org's
+                  planner stops proposing the missing size,
       demandout — the sell terminal *won't buy* the held cargo: files a shared
                   demand-'out' report but does NOT move the cursor — the player
                   still holds the load; the natural next step is re-plan-from-here,
@@ -4926,6 +5055,34 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             leg["stockout"] = True
             run["leg_states"][active] = "sold"
             _file_stock_report(user, leg, "out")   # steer the org away while fresh
+        elif body.action == "resize":
+            # The planned container size isn't on this kiosk. Re-fit the load to
+            # what IS, in place — the cursor deliberately does NOT move: you're
+            # standing at the right terminal and the trade is still good, it just
+            # boxes differently. (Contrast stockout, where there's nothing to buy
+            # and the only fix is to leave.) Re-planning the remainder is offered
+            # separately, so a box size never silently flies you somewhere else.
+            if st != "pending":
+                raise HTTPException(status_code=409,
+                                    detail="container size only changes before the buy")
+            if leg.get("held"):
+                raise HTTPException(status_code=409,
+                                    detail="carried cargo is already boxed")
+            planned = (leg.get("box") or {}).get("size")
+            plan = _resize_trade_leg(leg, size=body.box_size, sizes=body.sizes)
+            if plan is None:
+                raise HTTPException(status_code=400,
+                                    detail="no usable container size for this load")
+            # Evidence, filed from the one place a human actually read the menu.
+            # A reported menu names every absent size; a bare pick can only
+            # convict the size that was planned and turned out not to be there.
+            seen = body.sizes or [plan["size"]]
+            absent = ([s for s in nav_core.CONTAINER_SIZES if s not in seen]
+                      if body.sizes else
+                      ([planned] if planned and planned != plan["size"] else []))
+            _file_container_reports(user, leg.get("commodity"), seen, absent,
+                                    poi_id=leg.get("buy_poi_id"),
+                                    terminal=leg.get("buy_terminal"))
         elif body.action == "demandout":
             if st != "bought":
                 raise HTTPException(status_code=409,
@@ -5027,6 +5184,10 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         # because "the elevator is broken, I'm hand-loading the rest" is real.
         loading = _norm_loading(body.loading if body.loading is not None
                                 else p.get("loading"))
+        box_mode = _norm_box_mode(body.box_mode if body.box_mode is not None
+                                  else p.get("box_mode"))
+        box_pin = _norm_box_size(body.box_size if body.box_size is not None
+                                 else p.get("box_size"))
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
@@ -5043,7 +5204,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         nav, trade_price_points, usable_scu, start_pos=start_pos, held=held,
         max_stops=max_stops, commodities=commodities, system=system, sort=sort,
         budget=budget, legality=legality, illicit=illicit_commodities,
-        min_return_pct=min_ret, loading=loading,
+        min_return_pct=min_ret, box=_trade_box_policy(loading, box_mode, box_pin),
         deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
         max_age_s=max_age_s, t_ref=t_ref,
         avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -5083,6 +5244,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         p["legality"] = legality                     # #42
         p["min_return_pct"] = min_ret                # #43
         p["loading"] = loading                       # #46
+        p["box_mode"], p["box_size"] = box_mode, box_pin
         run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)
@@ -5105,6 +5267,46 @@ async def get_trade_stock(user: dict = Depends(require_session)):
     reports, freshest first, for the planner's STOCK WATCH strip. `ageoff_min`
     rides along so the client can phrase the window."""
     return {"reports": active_stock_reports(), "ageoff_min": stock_ageoff_min()}
+
+
+class ContainerReportIn(BaseModel):
+    """What a commodity kiosk's container menu actually offered (#46 follow-up).
+    `sizes` is the whole menu — every CONTAINER_SIZE not listed is recorded as
+    absent, which is the point: this is the only report that can rule a size
+    out. `poi_id` is provenance only."""
+    commodity: str = Field(min_length=1, max_length=_NAME_MAX)
+    sizes: list[int] = Field(max_length=16)
+    poi_id: int | None = None
+
+
+@app.get("/api/trade/containers")
+async def get_container_reports(user: dict = Depends(require_session)):
+    """What the org knows about which container sizes each commodity is sold in:
+    the raw reports plus the folded `availability` map the planner uses, and the
+    canonical size list so the client never hardcodes it."""
+    reports = active_container_reports()
+    return {"sizes": list(nav_core.CONTAINER_SIZES),
+            "reports": reports,
+            "availability": {c: {str(s): a for s, a in sizes.items()}
+                             for c, sizes in nav_core.container_availability(reports).items()},
+            "ageoff_days": container_ageoff_days()}
+
+
+@app.post("/api/trade/containers")
+async def post_container_report(body: ContainerReportIn,
+                                user: dict = Depends(require_session)):
+    """Report a commodity's container menu from the kiosk. Standalone twin of the
+    run's `resize` action, for a member who spots it outside a run."""
+    seen = [s for s in body.sizes if s in nav_core.CONTAINER_SIZES]
+    if not seen:
+        raise HTTPException(status_code=400,
+                            detail="name at least one container size you saw offered")
+    poi = nav.pois.get(body.poi_id) if body.poi_id is not None else None
+    await asyncio.to_thread(
+        _file_container_reports, user, body.commodity.strip(), seen,
+        [s for s in nav_core.CONTAINER_SIZES if s not in seen],
+        body.poi_id, poi.name if poi is not None else None)
+    return {"ok": True, "reports": active_container_reports()}
 
 
 @app.delete("/api/trade/run")
@@ -10287,6 +10489,15 @@ async def clear_trade_stats(admin: dict = Depends(require_admin)):
     return {"ok": True, "deleted": deleted}
 
 
+@app.post("/api/admin/containers/clear")
+async def clear_container_reports(admin: dict = Depends(require_admin)):
+    """Wipe the container-availability board (admin only) — the reset for after a
+    game patch changes which sizes a commodity ships in, so stale observations
+    stop constraining everyone's loads."""
+    deleted = await asyncio.to_thread(db.container_reports_clear)
+    return {"ok": True, "deleted": deleted}
+
+
 class PriceReportClearIn(BaseModel):
     reporter: str | None = Field(default=None, max_length=_META_MAX)
 
@@ -10729,6 +10940,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "warning_stale_min": warning_stale_min(),
         "hazard_radius_km": hazard_radius_km(),      # snare-detour base radius (#24 v2)
         "stock_ageoff_min": stock_ageoff_min(),      # stock-report lifetime (#21)
+        "container_ageoff_days": container_ageoff_days(),   # #46 container reports
         "listing_stale_days": _listing_stale_days(),  # marketplace stale badge (0 = off)
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
@@ -10767,6 +10979,7 @@ class SettingsIn(BaseModel):
     # Stock-report lifetime (minutes, #21): how long an out-of-stock report keeps
     # steering the trade solver away from that buy. Capped at a week.
     stock_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
+    container_ageoff_days: int | None = Field(default=None, ge=0, le=3650)   # 0 = never
     # Marketplace staleness (days): open listings older than this (by updated_at)
     # get an amber "stale" badge + renew nudge. 0 turns the display off.
     listing_stale_days: int | None = Field(default=None, ge=0, le=365)
@@ -10846,6 +11059,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting("hazard_radius_km", str(body.hazard_radius_km))
     if body.stock_ageoff_min is not None:
         db.set_setting("stock_ageoff_min", str(body.stock_ageoff_min))
+    if body.container_ageoff_days is not None:
+        db.set_setting("container_ageoff_days", str(body.container_ageoff_days))
     if body.listing_stale_days is not None:
         db.set_setting("listing_stale_days", str(body.listing_stale_days))
     if body.survey_depletion_ageoff_min is not None:
@@ -10897,6 +11112,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "warning_ageoff_min": warning_ageoff_min(), "warning_stale_min": warning_stale_min(),
             "hazard_radius_km": hazard_radius_km(),
             "stock_ageoff_min": stock_ageoff_min(),
+            "container_ageoff_days": container_ageoff_days(),
             "listing_stale_days": _listing_stale_days(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),

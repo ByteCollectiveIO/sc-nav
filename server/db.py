@@ -441,6 +441,29 @@ CREATE TABLE IF NOT EXISTS stock_reports (
 );
 CREATE INDEX IF NOT EXISTS stock_reports_pair ON stock_reports(poi_id, commodity);
 
+-- Container availability (#46 follow-up): which cargo container sizes a
+-- commodity is actually sold in, reported by a member standing at the kiosk.
+-- The ONE piece of evidence that can rule a size OUT — the watcher's captured
+-- box_size only ever confirms one exists. Keyed per COMMODITY, not per
+-- terminal: sizes look like a property of the commodity, fixed per game patch,
+-- so one report teaches the whole org. poi_id/terminal are kept as provenance
+-- so this can be re-keyed per-terminal without losing the observations if that
+-- assumption turns out wrong. One live row per (commodity, size); newest wins.
+-- Ages off on the org setting container_ageoff_days (patch-scale, not the
+-- stock board's hours).
+CREATE TABLE IF NOT EXISTS container_reports (
+    id          INTEGER PRIMARY KEY,
+    commodity   TEXT NOT NULL,
+    size        INTEGER NOT NULL,     -- SCU per box; one of nav_core.CONTAINER_SIZES
+    available   INTEGER NOT NULL,     -- 1 = seen on the kiosk, 0 = seen absent
+    poi_id      INTEGER,              -- where it was observed (provenance)
+    terminal    TEXT,                 -- display name, denormed for the board
+    poster      TEXT NOT NULL,        -- Discord member id of the reporter
+    poster_name TEXT,                 -- display name at post time
+    created     REAL NOT NULL         -- epoch seconds; drives age-off
+);
+CREATE INDEX IF NOT EXISTS container_reports_item ON container_reports(commodity, size);
+
 -- Survey depletion reports (#37 slice 2): "⛏ mined out" filed against a
 -- survey cluster (pocket key / zone slug). Down-ranks the cluster in
 -- ORE-FIRST ROUTING ONLY — the survey record itself is untouched (rocks
@@ -3207,6 +3230,54 @@ def stock_reports_clear() -> int:
     """Admin wipe of the stock board. Returns rows removed."""
     with _lock, _conn:
         cur = _conn.execute("DELETE FROM stock_reports")
+        return cur.rowcount
+
+
+# --- container availability reports (#46 follow-up) -------------------------
+
+
+def _container_row_to_dict(r) -> dict:
+    return {
+        "id": r["id"], "commodity": r["commodity"], "size": r["size"],
+        "available": bool(r["available"]), "poi_id": r["poi_id"],
+        "terminal": r["terminal"] or "", "poster": r["poster"],
+        "poster_name": r["poster_name"] or "", "created": r["created"],
+    }
+
+
+def container_report_save(e: dict) -> int:
+    """File one container-availability report, replacing any live row for the
+    same (commodity, size) — the newest look at the kiosk is the only one that
+    matters, and a later 'it's there after all' must be able to undo an earlier
+    'it's absent'. Returns the new row id."""
+    with _lock, _conn:
+        _conn.execute(
+            "DELETE FROM container_reports WHERE lower(commodity)=lower(?) AND size=?",
+            (e["commodity"], int(e["size"])))
+        cur = _conn.execute(
+            "INSERT INTO container_reports "
+            "(commodity,size,available,poi_id,terminal,poster,poster_name,created) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (e["commodity"], int(e["size"]), 1 if e.get("available") else 0,
+             e.get("poi_id"), e.get("terminal") or "", e["poster"],
+             e.get("poster_name") or "", e["created"]))
+        return cur.lastrowid
+
+
+def container_reports_since(cutoff: float) -> list[dict]:
+    """Live container reports: everything filed after `cutoff` (epoch seconds),
+    freshest first, pruning expired rows in the same pass."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM container_reports WHERE created < ?", (cutoff,))
+        rows = _conn.execute(
+            "SELECT * FROM container_reports ORDER BY created DESC").fetchall()
+    return [_container_row_to_dict(r) for r in rows]
+
+
+def container_reports_clear() -> int:
+    """Admin wipe of the container-availability board. Returns rows removed."""
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM container_reports")
         return cur.rowcount
 
 
