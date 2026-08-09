@@ -4997,6 +4997,11 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
                 "id": txn_id, "side": side, "shop": txn.shop, "guid": txn.guid,
                 "commodity": commodity, "poi_id": poi_id, "scu": txn.scu,
                 "unit_price": unit, "total": txn.total, "t": txn.t,
+                # The kiosk trades in containers — it asks for a box count and
+                # derives the SCU — so the log's own breakdown (#41 §6) is what
+                # the confirm form should echo back, and a box_size that isn't
+                # the planned one is how we learn the plan's size wasn't offered.
+                "box_size": txn.box_size, "box_count": txn.box_count,
                 "leg": active}
             matched = True
         if matched:
@@ -5175,8 +5180,13 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         held = None
         if active < len(legs) and states[active] == "bought":
             lg = legs[active]
+            # box_size rides along (#46): the cargo is already bought and boxed, so
+            # there's no box *plan* to carry — but the size it sits in stays true,
+            # and the sell kiosk quotes per container. Falls back to the held leg's
+            # own stamp so a second re-plan doesn't forget it.
             held = {"commodity": lg["commodity"], "scu": lg["scu"],
-                    "buy_price": lg["buy_price"]}
+                    "buy_price": lg["buy_price"],
+                    "box_size": (lg.get("box") or {}).get("size") or lg.get("box_size")}
         p = run.get("params") or {}
         max_age_days = (body.max_price_age_days if body.max_price_age_days is not None
                         else p.get("max_price_age_days"))

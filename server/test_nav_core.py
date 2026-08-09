@@ -2691,6 +2691,18 @@ class TradeReturnTests(unittest.TestCase):
         self.assertTrue(plan["legs"][0]["held"])
         self.assertIsNone(plan["legs"][0]["return_pct"])
 
+    def test_held_leg_carries_the_size_its_cargo_is_boxed_in(self):
+        # No box PLAN on a held leg (it's bought and boxed already), but the size
+        # is still true and the sell kiosk prices per container (#46) — so the
+        # sell step can ask for the number actually on the screen.
+        held = {"commodity": "Gold", "scu": 100, "buy_price": 1000, "box_size": 24}
+        plan = nav_core.replan_trade_route(
+            NAV, self._prices(), 100, start_id=self.A, held=held, max_stops=2)
+        leg = plan["legs"][0]
+        self.assertTrue(leg["held"])
+        self.assertIsNone(leg["box"])
+        self.assertEqual(leg["box_size"], 24)
+
     def test_floor_survives_into_the_replan_continuation(self):
         held = {"commodity": "Gold", "scu": 100, "buy_price": 1000}
         plan = nav_core.replan_trade_route(

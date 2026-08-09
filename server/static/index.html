@@ -1424,6 +1424,7 @@
     border-radius: 8px; background: var(--accent-wash, rgba(79,195,247,.08));
     font-size: 13px; color: var(--text); }
   .txn-nudge b { color: var(--accent); }
+  .txn-nudge .txn-boxnote { color: var(--dim); }
   /* Live "best trades right now" suggestion board (manual-mode helper). Each row
      decomposes the economics — buy/sell prices, the per-SCU spread, and (with a
      ship set) the per-run throughput — so the headline number is never ambiguous. */
@@ -1472,6 +1473,10 @@
   .trade-actual .ta-label { text-transform: uppercase; letter-spacing: .04em; }
   .trade-actual input { width: 78px; font-variant-numeric: tabular-nums; }
   .trade-actual .ta-x { color: var(--dim); }
+  /* Per-SCU echo of a kiosk (per-container) price — its own line, so the row
+     doesn't reflow as the numbers change while you type. */
+  .trade-actual .ta-conv { flex-basis: 100%; color: var(--dim);
+    font-variant-numeric: tabular-nums; }
   .tl-actual-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--accent); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
   /* Return on capital (#43). Neutral by default — it's information, not a
@@ -9839,15 +9844,40 @@ function amenChips(a) {
     : "";
 }
 
+// Kiosk pricing (#46 follow-up). A commodity terminal quotes the price of ONE
+// CONTAINER, not one SCU: at 24 SCU boxes the screen reads 25,440 where our
+// per-SCU plan reads 1,060, and the pilot was left dividing in their head. Every
+// number we store stays per-SCU — it's the only unit comparable across box sizes,
+// it's what the log reports (shopPricePerCentiSCU), and it's what the stats, the
+// org price overlay and the solver all speak — so the conversion lives here and
+// at the one input where a human types what they actually saw.
+function legBoxScu(lg) {
+  // `box` is the plan; `box_size` is what a held leg's cargo is already boxed in.
+  const s = (lg && lg.box && lg.box.size) || (lg && lg.box_size);
+  return s > 1 ? s : 1;                  // 1 SCU containers = nothing to convert
+}
+function fmtUnitPrice(v) {
+  if (v == null || !isFinite(v)) return "—";
+  return (Math.round(v * 100) / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+// Tooltip on a per-SCU price wherever the kiosk would show a different number.
+function kioskTitle(price, bs) {
+  if (!(bs > 1) || price == null) return "";
+  return ` title="The kiosk quotes ${fmtUnitPrice(price * bs)} aUEC per ${bs} SCU container"`;
+}
+
 // Container plan (#46). The server sends `box` only in hand-load mode, so both
 // helpers are no-ops on an auto-loaded plan — the leg renders exactly as before.
 // boxChip is the instruction ("buy 21 × 24 SCU"); boxDetail is the reasoning,
 // folded away, because the trade it made (1 SCU of fill for 484 fewer boxes) is
 // the kind of thing a player wants to check once and then trust.
-function boxChip(box) {
+function boxChip(box, unitPrice) {
   if (!box) return "";
   return ` <span class="tl-box" title="Buy this fill as ${box.boxes} container${box.boxes === 1 ? "" : "s"}`
-    + ` of ${box.size} SCU${box.short ? ` — ${box.short} SCU under a full hold, but far fewer boxes to move` : ""}">`
+    + ` of ${box.size} SCU${box.short ? ` — ${box.short} SCU under a full hold, but far fewer boxes to move` : ""}`
+    + (box.size > 1 && unitPrice != null
+        ? ` — ${fmtUnitPrice(unitPrice * box.size)} aUEC each on the kiosk` : "")
+    + `">`
     + `📦 ${box.boxes} × ${box.size} SCU`
     + (box.short ? `<span class="tl-box-short"> (−${box.short})</span>` : "")
     + `</span>`;
@@ -9966,12 +9996,14 @@ function renderTradeLeg(lg, i) {
   return `<div class="trade-leg-card${(warns.length || blk.length) ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
     + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span>` : "")
-    + `<span class="tl-scu">${lg.scu} SCU</span>${boxChip(lg.box)}${fresh}</div>`
+    + `<span class="tl-scu">${lg.scu} SCU</span>${boxChip(lg.box, lg.buy_price)}${fresh}</div>`
     + dngr + handEndsChip(lg)
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
-    + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span>${amenChips(lg.buy_amen)}</div>`
+    + `<span class="muted"${kioskTitle(lg.buy_price, legBoxScu(lg))}>@ ${fmtAuec(lg.buy_price)}</span>`
+    + `${amenChips(lg.buy_amen)}</div>`
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
-    + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span>${amenChips(lg.sell_amen)}</div>`
+    + `<span class="muted"${kioskTitle(lg.sell_price, legBoxScu(lg))}>@ ${fmtAuec(lg.sell_price)}</span>`
+    + `${amenChips(lg.sell_amen)}</div>`
     + `<div class="tl-econ">+${fmtAuec(lg.profit_per_scu)}/SCU · profit <b>${fmtAuec(lg.profit)}</b>`
     + ` · ${fmtAuec(lg.buy_cost)} capital`
     + (lg.return_pct != null
@@ -10118,16 +10150,47 @@ async function patchTradeRun(body) {
   } catch { runPatchMsg(box, "network error — try again"); }
 }
 
-// Confirm a buy/sell, folding in the actual aUEC/SCU price + SCU the player
-// entered at the terminal (pre-filled from the plan, so an unedited confirm just
-// records the planned figures — and the stats stay honest either way).
+// Live "what you typed means" line under the actuals row: the container figures
+// the player is reading off the kiosk, restated in the per-SCU units we store —
+// plus the grand total, which is the one number the kiosk shows back and so the
+// cheapest way to catch a mistyped box count before it's filed as truth.
+// Only rendered when the units differ (box size > 1); a 1 SCU box is unchanged.
+function syncTradeActual(stop) {
+  const out = stop && stop.querySelector(".ta-conv");
+  if (!out) return;
+  const priceEl = stop.querySelector(".ta-price");
+  const scuEl = stop.querySelector(".ta-scu");
+  const pbs = Number(priceEl && priceEl.dataset.box) || 1;   // price: per box → per SCU
+  const qbs = Number(scuEl && scuEl.dataset.box) || 1;       // qty: boxes → SCU
+  const perScu = (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0)
+    ? Number(priceEl.value) / pbs : null;
+  const scu = Number(scuEl && scuEl.value) > 0 ? Number(scuEl.value) * qbs : null;
+  const bits = [];
+  if (scu != null && qbs > 1) bits.push(`${fmtUnitPrice(scu)} SCU`);
+  if (perScu != null) bits.push(`${fmtUnitPrice(perScu)} aUEC/SCU`);
+  if (perScu != null && scu != null) bits.push(fmtAuec(perScu * scu));
+  out.textContent = bits.length ? "= " + bits.join(" · ") : "";
+}
+
+// Confirm a buy/sell, folding in the actual price + SCU the player entered at the
+// terminal (pre-filled from the plan, so an unedited confirm just records the
+// planned figures — and the stats stay honest either way). The price field speaks
+// the kiosk's per-container unit; `data-box` converts it back to the per-SCU
+// figure the run, the stats and the org price board are all denominated in.
 function submitTradeLeg(action, leg, btn) {
   const stop = btn.closest(".run-stop");
   const priceEl = stop && stop.querySelector(".ta-price");
   const scuEl = stop && stop.querySelector(".ta-scu");
   const body = { action, leg };
-  if (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0) body.price = Number(priceEl.value);
-  if (scuEl && scuEl.value !== "" && Number(scuEl.value) > 0) body.scu = Number(scuEl.value);
+  if (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0) {
+    const bs = Number(priceEl.dataset.box) || 1;
+    body.price = bs > 1 ? Math.round(Number(priceEl.value) / bs * 100) / 100
+                        : Number(priceEl.value);
+  }
+  if (scuEl && scuEl.value !== "" && Number(scuEl.value) > 0) {
+    const qbs = Number(scuEl.dataset.box) || 1;   // boxes → SCU (1 when the field is SCU)
+    body.scu = Number(scuEl.value) * qbs;
+  }
   // Log-detected transaction (#41): whichever button confirms this leg, name
   // the pending txn so the server learns the guid/shop mappings from it.
   const tx = tradeCurrentRun && tradeCurrentRun.txn;
@@ -10272,12 +10335,27 @@ function renderTradeRun(run) {
   // inputs below, and the server defaults from the txn even if cleared).
   if (run.txn) {
     const tx = run.txn;
+    // The log speaks per-SCU; the kiosk the player just used spoke per container.
+    // Name both, so the reported figure is recognisable as the one on the screen.
+    const tbs = legBoxScu((run.legs || [])[tx.leg]);
+    const lbs = Number(tx.box_size) || 0;        // the size the log says was used
+    const pbs = lbs > 1 ? lbs : tbs;
     h += `<div class="txn-nudge">⚡ Terminal reported: `
       + `<b>${tx.side === "sell" ? "SOLD" : "BOUGHT"} ${tx.scu != null ? tx.scu : "?"} SCU`
+      + (tx.box_count && lbs > 1 ? ` as ${tx.box_count} × ${lbs} SCU` : "")
       + (tx.unit_price != null ? ` @ ${fmtAuec(tx.unit_price)}/SCU` : "")
-      + `</b>${tx.total != null ? ` (${fmtAuec(tx.total)} total)` : ""}`
+      + `</b>${tx.unit_price != null && pbs > 1
+          ? ` (${fmtUnitPrice(tx.unit_price * pbs)} aUEC per ${pbs} SCU box)` : ""}`
+      + `${tx.total != null ? ` (${fmtAuec(tx.total)} total)` : ""}`
       + `${tx.commodity ? ", " + esc(tx.commodity) : ""}. `
-      + `Confirming the ${tx.side} records these numbers.</div>`;
+      + `Confirming the ${tx.side} records these numbers.`
+      // The log naming a different container size than the plan is direct
+      // evidence the planned one wasn't on the kiosk — point at the re-fit
+      // rather than leaving the leg quoting boxes that aren't there.
+      + (lbs > 1 && tbs > 1 && lbs !== tbs
+          ? ` <span class="txn-boxnote">Plan assumed ${tbs} SCU containers — `
+            + `re-fit the leg if that size isn't offered here.</span>` : "")
+      + `</div>`;
   }
   (run.legs || []).forEach((lg, i) => { h += renderTradeRunLeg(lg, i, run); });
   h += `</div>`;
@@ -10291,16 +10369,35 @@ function renderTradeRun(run) {
   box.querySelectorAll("[data-nodemand]").forEach(b => b.onclick = () => reportNoDemand(+b.dataset.nodemand));
   box.querySelectorAll("[data-resize]").forEach(b => b.onclick =
     () => resizeTradeLeg(+b.dataset.resize, +b.dataset.size));
+  // Keep the per-SCU echo under each actuals row in step with what's typed.
+  box.querySelectorAll(".run-stop .ta-price, .run-stop .ta-scu").forEach(el => {
+    el.oninput = () => syncTradeActual(el.closest(".run-stop"));
+  });
   // Pre-fill the active leg's actuals from the detected transaction (#41) so
-  // the pilot sees exactly what an unedited confirm will record.
+  // the pilot sees exactly what an unedited confirm will record. The log's
+  // unit_price is per SCU (it's derived from shopPricePerCentiSCU), so it has to
+  // be multiplied back up into the container unit the field now asks for.
   if (run.txn) {
     const btn = box.querySelector(`[data-${run.txn.side === "sell" ? "sell" : "buy"}="${run.txn.leg}"]`);
     const stop = btn && btn.closest(".run-stop");
     const p = stop && stop.querySelector(".ta-price");
     const s = stop && stop.querySelector(".ta-scu");
-    if (p && p.value === "" && run.txn.unit_price != null) p.value = run.txn.unit_price;
-    if (s && s.value === "" && run.txn.scu != null) s.value = run.txn.scu;
+    if (p && p.value === "" && run.txn.unit_price != null) {
+      const bs = Number(p.dataset.box) || 1;
+      p.value = Math.round(run.txn.unit_price * bs * 100) / 100;
+    }
+    if (s && s.value === "" && run.txn.scu != null) {
+      const qbs = Number(s.dataset.box) || 1;
+      // The log states its own box count — use it when it bought the size this
+      // field is denominated in; otherwise derive, so the SCU round-trips exactly
+      // however the boxes were actually made up.
+      const q = run.txn.scu / qbs;
+      s.value = (run.txn.box_count && Number(run.txn.box_size) === qbs)
+        ? run.txn.box_count
+        : (Math.abs(q - Math.round(q)) < 1e-6 ? Math.round(q) : Math.round(q * 100) / 100);
+    }
   }
+  box.querySelectorAll(".run-stop").forEach(syncTradeActual);
 }
 
 // Re-fit the active leg to a container size the kiosk actually offers (#46).
@@ -10389,7 +10486,7 @@ function renderTradeRunLeg(lg, i, run) {
     + `<div class="run-stop-head"><span class="seq">${seq}</span>`
     + `<span class="stop-name">${esc(lg.commodity)} `
     + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span> ` : "")
-    + `<span class="stop-sys">${lg.scu} SCU</span>${boxChip(lg.box)}</span></div>`
+    + `<span class="stop-sys">${lg.scu} SCU</span>${boxChip(lg.box, lg.buy_price)}</span></div>`
     + (active ? handEndsChip(lg) : "");
   // A skipped leg was never transacted: one line says why, no phantom profit.
   if (lg.skipped) {
@@ -10406,7 +10503,7 @@ function renderTradeRunLeg(lg, i, run) {
     const bought = lg.state === "bought" || lg.state === "sold";
     h += `<div class="trade-run-step${bought ? " done" : (active ? " now" : "")}">`
       + `▲ Buy <b>${esc(lg.commodity)}</b> at <b>${esc(lg.buy_terminal)}</b> `
-      + `<span class="muted">@ ${fmtAuec(lg.buy_price)}</span>`
+      + `<span class="muted"${kioskTitle(lg.buy_price, legBoxScu(lg))}>@ ${fmtAuec(lg.buy_price)}</span>`
       + `${active && !bought ? amenChips(lg.buy_amen) : ""}`
       // #46: the kiosk is where the container choice is actually made, so the
       // fallback sizes belong on the step you're standing at — the planned size
@@ -10421,7 +10518,8 @@ function renderTradeRunLeg(lg, i, run) {
   const actualTag = (sold && lg.realized != null && lg.realized !== lg.profit)
     ? ` <span class="tl-actual-tag">actual</span>` : "";
   h += `<div class="trade-run-step${sold ? " done" : (active && selling ? " now" : "")}">`
-    + `▼ Sell at <b>${esc(lg.sell_terminal)}</b> <span class="muted">@ ${fmtAuec(lg.sell_price)}</span>`
+    + `▼ Sell at <b>${esc(lg.sell_terminal)}</b> `
+    + `<span class="muted"${kioskTitle(lg.sell_price, legBoxScu(lg))}>@ ${fmtAuec(lg.sell_price)}</span>`
     + ` · profit <b>${fmtAuec(profitShown)}</b>${actualTag}`
     + `${active && selling ? amenChips(lg.sell_amen) : ""}</div>`;
   if (active) {
@@ -10439,15 +10537,32 @@ function renderTradeRunLeg(lg, i, run) {
       h += `<div class="tl-danger sev-${esc(b0.severity)}">☠ ${esc(b0.severity)} ${threatLabel(b0)} danger at `
         + `<b>${esc(b0.where)}</b> — no reroute exists, fly in ready.</div>`;
     }
-    // Actuals: pre-fill with the plan's price/SCU so a plain confirm records the
-    // planned figures; edit them to log what really happened at the terminal.
+    // Actuals: pre-fill with the plan's figures so a plain confirm records them;
+    // edit to log what really happened at the terminal. BOTH fields speak the
+    // kiosk's unit — the container — because that's the whole transaction there:
+    // you tell it how many boxes and it derives the SCU and the total, never the
+    // other way round. Asking for aUEC/SCU next to a screen that shows neither
+    // number made the player do two conversions to file a figure we then treat as
+    // ground truth (realized stats, and the #39 org price overlay). `data-box` on
+    // each input carries its own factor; the row converts back on submit.
     const isBuy = phase === "buy";
     const price = isBuy ? lg.buy_price : lg.sell_price;
+    const bs = legBoxScu(lg);
+    const shown = bs > 1 ? Math.round((price || 0) * bs * 100) / 100 : price;
+    // A held leg (re-plan) knows its size but has no box plan; derive its count,
+    // and fall back to plain SCU if the load isn't a whole number of boxes.
+    const boxes = bs > 1
+      ? (lg.box ? lg.box.boxes : (lg.scu % bs === 0 ? lg.scu / bs : null)) : null;
     h += `<div class="trade-actual"><span class="ta-label">${isBuy ? "paid" : "got"}</span>`
-      + `<input class="ti ta-price" type="number" min="0" step="1" value="${price}" aria-label="actual price aUEC per SCU">`
-      + `<span class="ta-x">aUEC/SCU ×</span>`
-      + `<input class="ti ta-scu" type="number" min="0" step="1" value="${lg.scu}" aria-label="actual SCU">`
-      + `<span class="ta-x">SCU</span></div>`;
+      + `<input class="ti ta-price" type="number" min="0" step="1" value="${shown}" data-box="${bs}"`
+      + ` aria-label="actual price in aUEC per ${bs > 1 ? bs + " SCU container" : "SCU"}">`
+      + `<span class="ta-x">${bs > 1 ? `aUEC per ${bs} SCU box ×` : "aUEC/SCU ×"}</span>`
+      + `<input class="ti ta-scu" type="number" min="0" step="1"`
+      + ` value="${boxes != null ? boxes : lg.scu}" data-box="${boxes != null ? bs : 1}"`
+      + ` aria-label="actual number of ${boxes != null ? bs + " SCU containers" : "SCU"}">`
+      + `<span class="ta-x">${boxes != null ? "boxes" : "SCU"}</span>`
+      + (bs > 1 ? `<span class="ta-conv" aria-live="polite"></span>` : "")
+      + `</div>`;
     if (isBuy)
       h += `<button class="trade-run-do" data-buy="${i}">✓ Bought — head to sell ▸</button>`;
     else
