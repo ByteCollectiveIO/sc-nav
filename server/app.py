@@ -4111,7 +4111,7 @@ async def list_trade_trades(
     commodity: str | None = None, system: str | None = None,
     capacity_scu: float | None = None, min_margin: int = 0,
     min_return_pct: float | None = None,
-    loading: str = "auto", box_mode: str = "best", box_size: int | None = None,
+    loading: str = "auto", box_mode: str | None = None, box_size: int | None = None,
     sort: str = "auto", limit: int = 50,
     budget: int | None = None, max_price_age_days: int | None = None,
 ):
@@ -4198,7 +4198,8 @@ class TradePlanIn(BaseModel):
     # containers); `fewest` minimizes boxes to move. `box_size` pins an exact
     # size and overrides the mode — it's what a player who KNOWS this commodity
     # only ships in 8s reaches for. Ignored entirely under auto-load.
-    box_mode: str = "best"                              # best | fill | fewest
+    # None = take the loading method's default (auto → fill, hand → best).
+    box_mode: str | None = None                         # best | fill | fewest
     box_size: int | None = Field(default=None, ge=1, le=32)
 
 
@@ -4303,10 +4304,12 @@ def _norm_return_pct(pct):
     return v if v > 0 else None
 
 
-def _norm_box_mode(mode) -> str:
-    """Which end of the fill-vs-boxes trade-off a hand-loading player wants
-    (#46 follow-up). Unknown widens to 'best', the balanced pick."""
-    return mode if mode in nav_core.BOX_MODES else "best"
+def _norm_box_mode(mode):
+    """Which end of the fill-vs-boxes trade-off the player wants (#46 follow-up),
+    or None for 'take the loading method's default'. Unknown reads as None rather
+    than as 'best' — an unrecognized value must not override the default the
+    loading method would have picked."""
+    return mode if mode in nav_core.BOX_MODES else None
 
 
 def _norm_box_size(size):
@@ -4323,7 +4326,8 @@ def _norm_box_size(size):
 def _trade_box_policy(loading, box_mode=None, box_size=None):
     """The container policy (#46) for one solve, with the org's live
     availability reports folded in so the solver never proposes a size a member
-    has stood at the kiosk and found missing."""
+    has stood at the kiosk and found missing. Applies under BOTH loading methods
+    — `loading` only picks the default mode (see nav_core.box_policy)."""
     return nav_core.box_policy(
         loading=_norm_loading(loading), mode=_norm_box_mode(box_mode),
         pin=_norm_box_size(box_size), availability=container_availability())
@@ -4436,6 +4440,35 @@ def _annotate_leg_amenities(plan: dict) -> dict:
             v = _poi_amenity_view(lg.get(id_key))
             if v:
                 lg[out_key] = v
+    return plan
+
+
+def _annotate_leg_handling(plan: dict) -> dict:
+    """Flag the ends of each leg where the player is likely moving the cargo by
+    hand (#46 follow-up) — the cue that box count is about to matter.
+
+    Deliberately conservative, because this is an inference, not a fact we're
+    told: only a **surface outpost** (#34's `place`) with no known cargo dock or
+    freight elevator qualifies. Stations and cities load indoors; an outpost that
+    the wiki says has an elevator is fine too. Anything we don't have amenity
+    data for stays unbadged rather than crying wolf.
+
+    Both ends are checked, not just the drop: buying at an outpost means hand
+    LOADING, and the user's case (auto-load at a station pickup, hand-unload at
+    a planetside outpost) proves the two ends are independent."""
+    for lg in plan.get("legs") or ():
+        ends = []
+        for id_key, amen_key, end in (("buy_poi_id", "buy_amen", "buy"),
+                                      ("sell_poi_id", "sell_amen", "sell")):
+            kind = trade_stop_kinds.get(lg.get(id_key)) or {}
+            if kind.get("place") != "outpost":
+                continue
+            cargo = (lg.get(amen_key) or {}).get("cargo") or []
+            if kind.get("dock") or cargo:
+                continue          # it has real cargo handling — not a hand job
+            ends.append(end)
+        if ends:
+            lg["hand_ends"] = ends
     return plan
 
 
@@ -4679,6 +4712,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
         raise HTTPException(status_code=400, detail=str(exc))
     _annotate_leg_stock(plan, stock_reports)
     _annotate_leg_amenities(plan)
+    _annotate_leg_handling(plan)      # #46: where you'll be lifting boxes
     _annotate_leg_stops(plan, exclude)
     _annotate_leg_legality(plan)
     _annotate_leg_return(plan, _norm_return_pct(body.min_return_pct))
@@ -5215,6 +5249,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=in_range)
     _annotate_leg_stock(new_plan, stock_reports)
     _annotate_leg_amenities(new_plan)
+    _annotate_leg_handling(new_plan)  # #46
     _annotate_leg_legality(new_plan)
     _annotate_leg_return(new_plan, min_ret)
     _annotate_trade_legs(new_plan, warnings, mode, volumes, t_ref)

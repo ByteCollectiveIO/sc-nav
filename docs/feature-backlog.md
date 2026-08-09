@@ -63,8 +63,20 @@ pass left:
    lifting), plus `box_size` to pin an exact size, which overrides the mode.
    `best` stays the default, and the two new modes are exactly the extremes it
    already interpolated between — so the rule didn't change, it just stopped
-   being the only option. Hand-load only; under auto-load the question doesn't
-   arise. Persists onto the run and survives a re-plan.
+   being the only option. Persists onto the run and survives a re-plan.
+
+   **Corrected same day, after the second playtest: sizing applies under BOTH
+   loading methods.** The first cut gated it on `loading == "hand"`, which was a
+   modelling error — loading is a property of one **end** of a leg, not of a run.
+   The user's case: auto-load at a station pickup, hand-unload at a planetside
+   outpost. Auto-load skipped sizing entirely, so the leg planned a flat 505 SCU,
+   which is only reachable as **505 × 1 SCU containers** — the exact pain the
+   feature exists to remove, silently reintroduced at the far end. Now
+   `nav_core.box_policy` always returns a policy and `loading` merely picks the
+   DEFAULT mode (`_LOADING_DEFAULT_MODE`: auto → `fill`, hand → `best`), the same
+   nudge-not-lock pattern as ship → STOPS. Auto-load plans exactly what it always
+   did; it just states the boxes it used to imply, and you can now say `fewest`
+   under it.
 
 2. **Mid-run re-fit** — `PATCH /api/trade/run action=resize`. The kiosk doesn't
    offer the planned size; you pick one it does; the leg re-fits and re-prices
@@ -89,6 +101,15 @@ pass left:
    re-fit chips: the player at the terminal outranks a report that may predate a
    patch, and picking a "gone" size overturns it. Unknown always means allowed —
    a reporting gap must not shrink anyone's loads.
+
+4. **Hand-unload heads-up** (`_annotate_leg_handling` → leg `hand_ends`). The
+   cue that would have caught (1) before the flight: a leg end that's a surface
+   outpost with **no** known cargo dock or freight elevator gets a line naming
+   the box count you're about to shift by hand. Deliberately conservative — it's
+   an inference from `terminal_stop_kinds` (#34) plus wiki amenities (#28c), not
+   something the game tells us, so stations, cities, and any outpost with real
+   cargo handling stay silent rather than cry wolf. Both ends are checked: buying
+   at an outpost is hand *loading*.
 
 **Not wired to time — and now deliberately so, not just "not yet."** `STOP_DWELL_S`
 is untouched and route ranking is unchanged. v1 held off because no *measured*
