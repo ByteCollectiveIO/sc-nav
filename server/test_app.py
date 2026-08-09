@@ -6853,6 +6853,202 @@ class TradeLoadingApiTests(unittest.TestCase):
         self.assertEqual(run["legs"][0]["scu"], 504)
 
 
+class ContainerResizeApiTests(unittest.TestCase):
+    """Mid-run container resize + org-wide availability reports (#46 follow-up):
+    the kiosk disagrees with the plan, and the org learns from it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Hauler", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()
+        db.container_reports_clear()
+
+        def pt(tid, poi, buy=None, sell=None):
+            return {"commodity": "Waste", "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 505 if buy else 0,
+                    "scu_sell_stock": 505 if sell else 0, "updated_at": None}
+        self._orig_pts = app.trade_price_points
+        app.trade_price_points = [pt(1, self.A, buy=10), pt(2, self.B, sell=30)]
+
+    def tearDown(self):
+        app.trade_price_points = self._orig_pts
+        db.container_reports_clear()
+
+    def _start_run(self, **kw):
+        body = {"usable_scu": 505, "start_id": self.A, "sort": "profit",
+                "system": "Stanton", "loading": "hand"}
+        body.update(kw)
+        r = self.client.post("/api/trade/run", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["trade_run"]
+
+    # --- the box strategy knobs ------------------------------------------
+
+    def test_box_mode_changes_the_planned_size(self):
+        def size(**kw):
+            r = self.client.post("/api/trade/plan", json={
+                "usable_scu": 505, "start_id": self.A, "sort": "profit",
+                "system": "Stanton", "loading": "hand", **kw})
+            return r.json()["legs"][0]["box"]
+
+        self.assertEqual(size()["size"], 24)                       # best
+        self.assertEqual(size(box_mode="fill")["size"], 1)
+        self.assertEqual(size(box_mode="fewest")["size"], 32)
+        self.assertEqual(size(box_size=8)["size"], 8)              # pin beats mode
+        self.assertEqual(size(box_mode="fewest", box_size=8)["size"], 8)
+
+    def test_unknown_mode_and_bogus_size_widen_rather_than_narrow(self):
+        r = self.client.post("/api/trade/plan", json={
+            "usable_scu": 505, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "loading": "hand",
+            "box_mode": "tetris", "box_size": 7})
+        self.assertEqual(r.json()["legs"][0]["box"]["size"], 24)   # falls to best
+
+    def test_box_knobs_persist_onto_the_run(self):
+        self._start_run(box_mode="fewest", box_size=32)
+        p = db.get_active_trade_run("1")["params"]
+        self.assertEqual((p["box_mode"], p["box_size"]), ("fewest", 32))
+
+    # --- mid-run resize ---------------------------------------------------
+
+    def test_resize_refits_the_leg_without_moving_the_cursor(self):
+        run = self._start_run()
+        self.assertEqual(run["legs"][0]["box"]["size"], 24)
+        r = self.client.patch("/api/trade/run", json={"action": "resize",
+                                                     "box_size": 32})
+        self.assertEqual(r.status_code, 200, r.text)
+        run = r.json()["trade_run"]
+        leg = run["legs"][0]
+        self.assertEqual((leg["box"]["size"], leg["box"]["boxes"], leg["scu"]),
+                         (32, 15, 480))
+        self.assertTrue(leg["resized"])
+        # You're standing at the right terminal — only the boxes changed.
+        self.assertEqual(run["active"], 0)
+        self.assertEqual(run["phase"], "buy")
+        self.assertFalse(leg.get("skipped"))
+
+    def test_resize_reprices_everything_that_scales_with_the_load(self):
+        self._start_run()
+        leg = self.client.patch("/api/trade/run", json={
+            "action": "resize", "box_size": 32}).json()["trade_run"]["legs"][0]
+        self.assertEqual(leg["profit"], 20 * 480)
+        self.assertEqual(leg["buy_cost"], 10 * 480)
+
+    def test_resize_refits_against_the_original_target_not_the_snapped_scu(self):
+        # Planned 504 (21 x 24). Switching to 32 must fit 32s against the 505
+        # the hold and shelf allow, i.e. 15 boxes — not against 504.
+        self._start_run()
+        leg = self.client.patch("/api/trade/run", json={
+            "action": "resize", "box_size": 32}).json()["trade_run"]["legs"][0]
+        self.assertEqual(leg["box"]["boxes"], 15)
+        self.assertEqual(leg["box"]["target"], 505)
+
+    def test_resize_can_pick_the_best_of_a_reported_menu(self):
+        self._start_run()
+        leg = self.client.patch("/api/trade/run", json={
+            "action": "resize", "sizes": [1, 2, 8, 32]}).json()["trade_run"]["legs"][0]
+        self.assertIn(leg["box"]["size"], (1, 2, 8, 32))
+
+    def test_resize_is_rejected_after_the_buy(self):
+        self._start_run()
+        self.client.patch("/api/trade/run", json={"action": "buy"})
+        r = self.client.patch("/api/trade/run", json={"action": "resize",
+                                                     "box_size": 32})
+        self.assertEqual(r.status_code, 409)
+
+    # --- the evidence it leaves behind ------------------------------------
+
+    def test_a_bare_pick_convicts_only_the_planned_size(self):
+        self._start_run()                       # plans 24
+        self.client.patch("/api/trade/run", json={"action": "resize", "box_size": 32})
+        av = app.container_availability()["waste"]
+        self.assertIs(av[24], False)            # wasn't on the menu
+        self.assertIs(av[32], True)             # was
+        self.assertEqual(set(av), {24, 32})     # nothing else is claimed
+
+    def test_a_reported_menu_convicts_every_absent_size(self):
+        self._start_run()
+        self.client.patch("/api/trade/run", json={"action": "resize",
+                                                  "sizes": [1, 2, 8, 32]})
+        av = app.container_availability()["waste"]
+        self.assertEqual({s for s, ok in av.items() if ok}, {1, 2, 8, 32})
+        self.assertEqual({s for s, ok in av.items() if not ok}, {4, 16, 24})
+
+    def test_the_report_steers_the_next_plan_org_wide(self):
+        # The whole point: one member's kiosk observation stops the planner
+        # proposing that size for everyone, everywhere.
+        self._start_run()
+        self.client.patch("/api/trade/run", json={"action": "resize", "box_size": 32})
+        self.client.delete("/api/trade/run")
+        leg = self.client.post("/api/trade/plan", json={
+            "usable_scu": 505, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "loading": "hand"}).json()["legs"][0]
+        self.assertNotEqual(leg["box"]["size"], 24)
+        by_size = {o["size"]: o for o in leg["box"]["options"]}
+        self.assertIs(by_size[24]["known"], False)     # still listed, marked absent
+
+    def test_board_endpoint_round_trips_a_manual_report(self):
+        r = self.client.post("/api/trade/containers", json={
+            "commodity": "Waste", "sizes": [1, 8], "poi_id": self.A})
+        self.assertEqual(r.status_code, 200, r.text)
+        board = self.client.get("/api/trade/containers").json()
+        self.assertEqual(board["sizes"], list(app.nav_core.CONTAINER_SIZES))
+        self.assertEqual(board["availability"]["waste"]["8"], True)
+        self.assertEqual(board["availability"]["waste"]["24"], False)
+
+    def test_empty_report_is_rejected(self):
+        # "nothing is offered" is not a thing a kiosk can show; it's a bad post.
+        r = self.client.post("/api/trade/containers",
+                             json={"commodity": "Waste", "sizes": []})
+        self.assertEqual(r.status_code, 400)
+
+    def test_admin_clear_resets_the_board(self):
+        self.client.post("/api/trade/containers",
+                         json={"commodity": "Waste", "sizes": [8]})
+        self.assertTrue(app.container_availability())
+        r = self.client.post("/api/admin/containers/clear")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(app.container_availability(), {})
+
+    def test_reports_age_off_on_the_org_setting(self):
+        db.container_report_save({
+            "commodity": "Waste", "size": 24, "available": False, "poi_id": None,
+            "terminal": "", "poster": "1", "poster_name": "H",
+            "created": time.time() - 90 * 86400})           # 90 days old
+        try:
+            # 0 = never age off: a 90-day-old report still constrains the planner.
+            db.set_setting("container_ageoff_days", "0")
+            self.assertIs(app.container_availability()["waste"][24], False)
+            # Past the window it's dropped — and the read prunes it for good, so
+            # this assertion must come second.
+            db.set_setting("container_ageoff_days", "60")
+            self.assertEqual(app.container_availability(), {})
+        finally:
+            db.set_setting("container_ageoff_days", "60")
+
+
 class TradeLegalityApiTests(unittest.TestCase):
     """Commodity legality filter (#42): plan over the whole market, legal goods
     only, or contraband only — plus the ☠ badge that marks illicit legs in every

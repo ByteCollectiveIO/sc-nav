@@ -6135,10 +6135,107 @@ class ContainerPackingTests(unittest.TestCase):
     def test_box_plan_omits_exact_when_the_pick_is_exact(self):
         self.assertNotIn("exact", nav_core.box_plan(96))
 
-    def test_snap_only_applies_to_hand_loading(self):
-        self.assertEqual(nav_core.snap_load_scu(505, "auto"), 505)
-        self.assertEqual(nav_core.snap_load_scu(505, "hand"), 504)
-        self.assertEqual(nav_core.snap_load_scu(0, "hand"), 0)
+    def test_policy_only_sizes_for_hand_loading(self):
+        self.assertIsNone(nav_core.box_policy("auto"))          # auto = no sizing at all
+        self.assertEqual(nav_core.plan_box_load(505, nav_core.box_policy("hand"))["scu"], 504)
+        self.assertIsNone(nav_core.plan_box_load(0, nav_core.box_policy("hand")))
+
+
+class ContainerModeTests(unittest.TestCase):
+    """Box strategy (#46 follow-up): the two extremes the balanced rule sits
+    between, plus an exact pinned size."""
+
+    def test_the_three_modes_are_genuinely_different(self):
+        best = nav_core.best_box_size(505)
+        fill = nav_core.best_box_size(505, mode="fill")
+        fewest = nav_core.best_box_size(505, mode="fewest")
+        self.assertEqual((best["size"], best["boxes"], best["scu"]), (24, 21, 504))
+        self.assertEqual((fill["size"], fill["boxes"], fill["scu"]), (1, 505, 505))
+        self.assertEqual((fewest["size"], fewest["boxes"], fewest["scu"]), (32, 15, 480))
+
+    def test_fill_never_gives_up_scu_and_fewest_never_adds_boxes(self):
+        for scu in (7, 100, 505, 4608):
+            fill = nav_core.best_box_size(scu, mode="fill")
+            fewest = nav_core.best_box_size(scu, mode="fewest")
+            best = nav_core.best_box_size(scu)
+            self.assertGreaterEqual(fill["scu"], best["scu"], scu)
+            self.assertLessEqual(fewest["boxes"], best["boxes"], scu)
+
+    def test_pin_overrides_the_mode(self):
+        plan = nav_core.box_plan(505, mode="fewest", pin=8)
+        self.assertEqual((plan["size"], plan["boxes"], plan["scu"]), (8, 63, 504))
+        self.assertEqual(plan["pin"], 8)
+        self.assertNotIn("pin_unfit", plan)
+
+    def test_pin_too_big_for_the_load_falls_back_and_says_so(self):
+        # Refusing to plan would be worse than planning a size that fits; the
+        # flag is what lets the UI explain the substitution.
+        plan = nav_core.box_plan(20, pin=32)
+        self.assertTrue(plan["pin_unfit"])
+        self.assertLessEqual(plan["size"], 20)
+
+    def test_plan_records_the_pre_container_target(self):
+        # A mid-run resize re-fits against this, not against the snapped SCU.
+        self.assertEqual(nav_core.box_plan(505)["target"], 505)
+
+
+class ContainerAvailabilityTests(unittest.TestCase):
+    """Reported availability (#46 follow-up) — the only evidence that can rule a
+    container size out."""
+
+    def _rep(self, commodity, size, available, created):
+        return {"commodity": commodity, "size": size,
+                "available": available, "created": created}
+
+    def test_newest_report_per_size_wins(self):
+        av = nav_core.container_availability([
+            self._rep("Waste", 24, False, 100),
+            self._rep("Waste", 24, True, 200),      # someone saw it after all
+            self._rep("Waste", 32, False, 150)])
+        self.assertEqual(av["waste"], {24: True, 32: False})
+
+    def test_unknown_sizes_stay_allowed(self):
+        # Absence of evidence is not evidence of absence: a commodity nobody has
+        # reported must keep every size, or reporting gaps shrink loads.
+        av = nav_core.container_availability([self._rep("Waste", 24, False, 1)])
+        self.assertEqual(nav_core.allowed_container_sizes(av, "Gold"),
+                         nav_core.CONTAINER_SIZES)
+        self.assertNotIn(24, nav_core.allowed_container_sizes(av, "Waste"))
+        self.assertIn(32, nav_core.allowed_container_sizes(av, "waste"))   # case-blind
+
+    def test_absent_size_drops_out_of_the_pick(self):
+        av = nav_core.container_availability([self._rep("Waste", 24, False, 1)])
+        plan = nav_core.box_plan(505, availability=av, commodity="Waste")
+        self.assertNotEqual(plan["size"], 24)
+
+    def test_absent_size_still_appears_in_the_options(self):
+        # The player standing at the terminal outranks a report that may predate
+        # a patch — so we never hide a size, we only decline to pick it.
+        av = nav_core.container_availability([
+            self._rep("Waste", 24, False, 1), self._rep("Waste", 32, True, 1)])
+        plan = nav_core.box_plan(505, availability=av, commodity="Waste")
+        by_size = {o["size"]: o for o in plan["options"]}
+        self.assertEqual(set(by_size), set(nav_core.CONTAINER_SIZES))
+        self.assertIs(by_size[24]["known"], False)
+        self.assertIs(by_size[32]["known"], True)
+        self.assertNotIn("known", by_size[16])          # nobody has looked
+
+    def test_falls_back_when_every_allowed_size_is_too_big(self):
+        # 20 SCU with only 32 believed available: the kiosk still sells 1 SCU
+        # boxes, so plan those rather than return nothing.
+        av = nav_core.container_availability(
+            [self._rep("Waste", s, False, 1) for s in (1, 2, 4, 8, 16, 24)])
+        plan = nav_core.box_plan(20, availability=av, commodity="Waste")
+        self.assertIsNotNone(plan)
+        self.assertGreater(plan["scu"], 0)
+
+    def test_policy_is_none_for_auto_load(self):
+        self.assertIsNone(nav_core.box_policy("auto", mode="fewest", pin=8))
+        pol = nav_core.box_policy("hand", mode="fewest", pin=8)
+        self.assertEqual((pol["mode"], pol["pin"]), ("fewest", 8))
+
+    def test_policy_rejects_a_size_that_does_not_exist(self):
+        self.assertIsNone(nav_core.box_policy("hand", pin=7)["pin"])
 
 
 class TradeLoadingModeTests(unittest.TestCase):
@@ -6171,7 +6268,7 @@ class TradeLoadingModeTests(unittest.TestCase):
         self.assertIsNone(leg["box"])
 
     def test_hand_snaps_the_load_and_reprices_it(self):
-        leg = self._leg(loading="hand")
+        leg = self._leg(box=nav_core.box_policy("hand"))
         self.assertEqual(leg["scu"], 504)
         self.assertEqual(leg["box"]["size"], 24)
         self.assertEqual(leg["box"]["boxes"], 21)
@@ -6182,22 +6279,22 @@ class TradeLoadingModeTests(unittest.TestCase):
 
     def test_snap_is_judged_after_supply_and_budget_caps(self):
         # The shelf holds 70, so the containers must fit 70 — not the 505 hold.
-        leg = self._leg(loading="hand")           # sanity: unrestricted pick
+        leg = self._leg(box=nav_core.box_policy("hand"))           # sanity: unrestricted pick
         self.assertEqual(leg["scu"], 504)
         plan = nav_core.plan_trade_route(
             NAV, self._prices(supply=70), 505, start_id=self.A, max_stops=2,
-            sort="profit", loading="hand")
+            sort="profit", box=nav_core.box_policy("hand"))
         self.assertLessEqual(plan["legs"][0]["scu"], 70)
         plan = nav_core.plan_trade_route(
             NAV, self._prices(), 505, start_id=self.A, max_stops=2, sort="profit",
-            loading="hand", budget=1000)          # 100 SCU of capital at 10/SCU
+            box=nav_core.box_policy("hand"), budget=1000)          # 100 SCU of capital at 10/SCU
         self.assertLessEqual(plan["legs"][0]["buy_cost"], 1000)
 
     def test_manual_legs_snap_too(self):
         legs = [{"commodity": "Waste", "buy_terminal_id": 1, "sell_terminal_id": 2,
                  "scu": 505}]
         plan = nav_core.cost_trade_legs(NAV, self._prices(), legs, 505,
-                                        start_id=self.A, loading="hand")
+                                        start_id=self.A, box=nav_core.box_policy("hand"))
         self.assertEqual(plan["legs"][0]["scu"], 504)
         plan = nav_core.cost_trade_legs(NAV, self._prices(), legs, 505, start_id=self.A)
         self.assertEqual(plan["legs"][0]["scu"], 505)
@@ -6208,14 +6305,14 @@ class TradeLoadingModeTests(unittest.TestCase):
         held = {"commodity": "Waste", "scu": 505, "buy_price": 10}
         plan = nav_core.replan_trade_route(
             NAV, self._prices(), 505, start_id=self.A, held=held, max_stops=2,
-            loading="hand")
+            box=nav_core.box_policy("hand"))
         self.assertTrue(plan["legs"][0]["held"])
         self.assertEqual(plan["legs"][0]["scu"], 505)
         self.assertIsNone(plan["legs"][0]["box"])
 
     def test_board_rows_size_to_containers_too(self):
         rows = nav_core.rank_trades(NAV, self._prices(), capacity_scu=505,
-                                    sort="margin", loading="hand")
+                                    sort="margin", box=nav_core.box_policy("hand"))
         self.assertEqual(rows[0]["max_scu"], 504)
         self.assertEqual(rows[0]["box"]["boxes"], 21)
 
