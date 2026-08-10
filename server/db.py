@@ -574,6 +574,19 @@ CREATE TABLE IF NOT EXISTS shop_pois (
     confirms  INTEGER NOT NULL DEFAULT 1,
     created   REAL
 );
+-- The real shop→POI mapping (#41 fix, 2026-08-09). `shop_pois` keys on the log's
+-- shopName, which is a PREFAB name: Pyro Gateway and Seraphim Station both report
+-- `SCShop_Admin_lt_base_g` and differ only in shopId. A name-keyed mapping
+-- therefore files one terminal's prices against another, silently, and the ≥2
+-- confirm gate can't help — both confirms are honest, they're just about a name
+-- that two places share. shopId is stable and unique, so it keys this table and
+-- the name table survives only as a fallback for watchers too old to send one.
+CREATE TABLE IF NOT EXISTS shop_ids (
+    shop_id   TEXT PRIMARY KEY,
+    poi_id    INTEGER NOT NULL,
+    confirms  INTEGER NOT NULL DEFAULT 1,
+    created   REAL
+);
 
 -- Org price observation ledger (#39 §6.1, created by #41): one row per real
 -- observed price. `uex_state` is reserved for the parked outbound half so
@@ -669,6 +682,13 @@ def init(db_path) -> None:
         _ensure_column("trade_transactions", "auto_load", "INTEGER")
         _ensure_column("trade_transactions", "box_size", "REAL")
         _ensure_column("trade_transactions", "box_count", "INTEGER")
+        _ensure_column("trade_transactions", "shop_id", "TEXT")
+        # `shop_name` turned out NOT to identify a terminal (2026-08-09: Pyro
+        # Gateway and Seraphim both log `SCShop_Admin_lt_base_g`), so the name
+        # row now records which shop id it was learned from and whether it has
+        # since been seen belonging to more than one place.
+        _ensure_column("shop_pois", "shop_id", "TEXT")
+        _ensure_column("shop_pois", "ambiguous", "INTEGER NOT NULL DEFAULT 0")
         denorm_added = _ensure_column("listings", "sort_price", "REAL")
         denorm_added |= _ensure_column("listings", "offer_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("listings", "attributes", "TEXT")
@@ -3407,11 +3427,12 @@ def trade_txn_save(e: dict) -> tuple[int, bool]:
         auto = e.get("auto_load")
         cur = _conn.execute(
             "INSERT INTO trade_transactions (member_id,t,side,resource_guid,"
-            "commodity,shop_name,poi_id,scu,unit_price,total,auto_load,"
+            "commodity,shop_name,shop_id,poi_id,scu,unit_price,total,auto_load,"
             "box_size,box_count,created) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (e["member_id"], e["t"], e["side"], e["resource_guid"],
-             e.get("commodity"), e["shop_name"], e.get("poi_id"), e.get("scu"),
+             e.get("commodity"), e["shop_name"], e.get("shop_id"),
+             e.get("poi_id"), e.get("scu"),
              e.get("unit_price"), e.get("total"),
              None if auto is None else int(auto),
              e.get("box_size"), e.get("box_count"), e["created"]))
@@ -3466,28 +3487,49 @@ def guid_mapping_confirm(guid: str, commodity: str, now: float) -> None:
                 (guid,))
 
 
-def shop_poi(shop_name: str) -> int | None:
-    """The learned POI id for a log shop string, or None."""
-    with _lock:
-        row = _conn.execute(
-            "SELECT poi_id FROM shop_pois WHERE shop_name=?",
-            (shop_name,)).fetchone()
+def shop_poi(shop_name: str, shop_id: str | None = None) -> int | None:
+    """The learned POI id for a log shop, or None. See `shop_mapping`."""
+    row = shop_mapping(shop_name, shop_id)
     return row["poi_id"] if row else None
 
 
-def shop_mapping_confirm(shop_name: str, poi_id: int, now: float) -> None:
-    """Same policy as guid_mapping_confirm, for shop→POI."""
+def shop_mapping_confirm(shop_name: str, poi_id: int, now: float,
+                         shop_id: str | None = None) -> None:
+    """Same policy as guid_mapping_confirm, for shop→POI — but keyed on the
+    kiosk's stable `shop_id` when the watcher sends one.
+
+    The name row is still maintained, for watchers too old to report an id, and
+    it now carries an `ambiguous` flag. A name is marked ambiguous the moment it
+    is confirmed at a second POI, or under a second shop id — either proves the
+    name is a prefab shared by several terminals, and a shared name must stop
+    resolving rather than keep answering with whichever place was seen first."""
     with _lock, _conn:
-        row = _conn.execute("SELECT poi_id FROM shop_pois WHERE shop_name=?",
-                            (shop_name,)).fetchone()
+        if shop_id:
+            row = _conn.execute("SELECT poi_id FROM shop_ids WHERE shop_id=?",
+                                (shop_id,)).fetchone()
+            if row is None:
+                _conn.execute(
+                    "INSERT INTO shop_ids (shop_id,poi_id,confirms,created) "
+                    "VALUES (?,?,1,?)", (shop_id, poi_id, now))
+            elif row["poi_id"] == poi_id:
+                _conn.execute(
+                    "UPDATE shop_ids SET confirms=confirms+1 WHERE shop_id=?",
+                    (shop_id,))
+        row = _conn.execute(
+            "SELECT poi_id, shop_id FROM shop_pois WHERE shop_name=?",
+            (shop_name,)).fetchone()
         if row is None:
             _conn.execute(
-                "INSERT INTO shop_pois (shop_name,poi_id,confirms,created) "
-                "VALUES (?,?,1,?)", (shop_name, poi_id, now))
-        elif row["poi_id"] == poi_id:
+                "INSERT INTO shop_pois (shop_name,poi_id,shop_id,confirms,created) "
+                "VALUES (?,?,?,1,?)", (shop_name, poi_id, shop_id, now))
+        elif row["poi_id"] != poi_id or (
+                shop_id and row["shop_id"] and row["shop_id"] != shop_id):
             _conn.execute(
-                "UPDATE shop_pois SET confirms=confirms+1 WHERE shop_name=?",
-                (shop_name,))
+                "UPDATE shop_pois SET ambiguous=1 WHERE shop_name=?", (shop_name,))
+        else:
+            _conn.execute(
+                "UPDATE shop_pois SET confirms=confirms+1, shop_id=COALESCE(shop_id,?) "
+                "WHERE shop_name=?", (shop_id, shop_name))
 
 
 def price_report_save(e: dict) -> int:
@@ -3541,11 +3583,22 @@ def guid_mapping(guid: str) -> dict | None:
     return dict(row) if row else None
 
 
-def shop_mapping(shop_name: str) -> dict | None:
-    """Full shop→POI mapping row (incl. `confirms`), or None."""
+def shop_mapping(shop_name: str, shop_id: str | None = None) -> dict | None:
+    """Full shop→POI mapping row (incl. `confirms`), or None.
+
+    Prefers the shop-id mapping — the only one that actually identifies a
+    terminal. Falls back to the name for older watchers, but NOT once that name
+    has been seen at more than one place: answering from a prefab name shared by
+    two stations is exactly how a price ends up filed against the wrong one."""
     with _lock:
-        row = _conn.execute("SELECT * FROM shop_pois WHERE shop_name=?",
-                            (shop_name,)).fetchone()
+        if shop_id:
+            row = _conn.execute("SELECT * FROM shop_ids WHERE shop_id=?",
+                                (shop_id,)).fetchone()
+            if row:
+                return dict(row)
+        row = _conn.execute(
+            "SELECT * FROM shop_pois WHERE shop_name=? AND COALESCE(ambiguous,0)=0",
+            (shop_name,)).fetchone()
     return dict(row) if row else None
 
 
