@@ -140,7 +140,9 @@ Modelling notes for whoever picks this up:
 
 - **Fit on box count, not SCU.** Cargo moves a box at a time, so 32 × 1 SCU and
   1 × 32 SCU are the same tonnage and almost certainly not the same wait. The
-  2026-08-02 capture is 29 × 1 SCU on both sides.
+  2026-08-02 capture is 29 × 1 SCU on both sides. **⚠ The first real ETAs
+  (§6.1 B) fit SCU better than box count — plausible-sounding as this bullet is,
+  don't assume it; the deciding experiment hasn't been run.**
 - **Dwell is already observable** — transaction timestamp → the ship's first
   sustained motion away from the POI, off the position stream we already have.
   It also covers hand-loading, which the log never mentions.
@@ -171,3 +173,65 @@ What survives: a measured dwell is still worth having for **display** — tellin
 player a fill is roughly forty minutes of lifting lets them choose knowingly,
 which is where a preference belongs. Everything below still applies to fitting
 that number. What must not happen is it leaking back into the ranking.
+
+### 6.1 First real measurements (2026-08-09, in-game)
+
+A member ran 39 × 32 SCU of Argon from Pyro Gateway (Stanton) to Seraphim
+Station and read the terminal at each end, plus two more quotes taken at the
+buy kiosk while waiting. First hard numbers this project has had; they change
+two assumptions above and surface a cost we didn't know existed.
+
+| Load | Boxes × size | Auto-load fee | Terminal's ETA |
+|---|---|---|---|
+| 112 SCU | 7 × 16 | 3.736k | 2:02 (122 s) |
+| 264 SCU | 11 × 24 | 7.830k | 2:51 (171 s) |
+| 1,248 SCU | 39 × 32 | 37.33k | 8:13 (493 s) |
+
+(The game renders fees as a decimal with a `k` suffix, so the large one is
+±5 aUEC. Same three values for other commodities, per the reporter — so both
+quantities look volume-driven, not value-driven.)
+
+**A. There is an auto-load FEE, and nothing here models it.** 37.33k on the buy
+*and* 37.33k on the sell — same load, different terminals, different systems, so
+it depends on the load alone, not the place or the side. On that run it was
+**28% of gross profit** (gross 266.9k, fees 74.7k, net 192.2k). ~30 aUEC/SCU
+describes the 24 and 32 SCU samples to within 0.8%; the 16 SCU sample is 12%
+above that, so either box size has a second-order effect or that reading wants
+re-taking. Do NOT ship a constant off three points of one commodity: at ~30/SCU
+a lane whose margin is under ~60 aUEC/SCU is a *loss* under auto-load, which is
+a big enough claim to demand real data before the solver acts on it.
+
+Note the shape of the decision if it ever is modelled: the fee is avoidable —
+hand-loading is presumably why `autoLoading[0|1]` exists — so charging it is
+charging the *method the player picked on the plan form* (`loading`, #46), not
+their box-size preference. That is a different question from the box-count one
+settled above, and it is money rather than comfort, but it is still the user's
+call to make.
+
+**B. Loading time fits SCU, not box count** — the opposite of the modelling note
+above. `t ≈ 85 s + 0.327 s/SCU` reproduces all three ETAs (122.0 / 171.6 /
+493.0 vs 122 / 171 / 493). A box-count fit is visibly worse on the held-out
+point (168 vs 171). **But the samples don't actually discriminate**: box size
+rises with load size across all three, so the two variables are confounded — and
+these are the terminal's *estimates*, only one of which was clocked (1,248 SCU
+quoted 8:13, took ~9 min). The experiment in §6 is still the one to run, and
+it's now sharper: **equal SCU, different box sizes** (8 × 32 vs 16 × 16 = 256
+SCU) separates them in two readings.
+
+**C. Unloading is currently instant.** The sell terminal quoted the same 8:13
+and delivered immediately — a game bug as of this build. So today's real dwell
+is asymmetric (loaded on the buy, ~0 on the sell) while the planner charges a
+symmetric `2 * STOP_DWELL_S`. Don't encode the asymmetry: it's a bug, it will be
+fixed, and a model fitted to it would silently mis-rank routes the day it is.
+
+**D. Highest-value next step: find out whether the fee is in Game.log.** The
+watcher already parses these kiosk lines (§2) and the `price[…]` field is
+quantity × unit price with no fee in it. If the fee rides another field or its
+own line, capture beats measurement outright — every member's runs become
+samples, at every terminal, re-derived per patch instead of hand-timed. Worth a
+grep of a fresh Game.log around a known auto-load before anyone fits anything.
+
+**E. The two ends quote different units** (buy per container, sell per SCU) —
+see the `#46 (d)` note in CLAUDE.md. Recorded here because it's the same
+in-game session, and because it's the sort of asymmetry a future reader will
+assume is a typo.

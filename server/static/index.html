@@ -9861,9 +9861,11 @@ function fmtUnitPrice(v) {
   return (Math.round(v * 100) / 100).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 // Tooltip on a per-SCU price wherever the kiosk would show a different number.
+// BUY ends only: the sell terminal quotes per SCU, so its price needs no
+// restating (measured in-game 2026-08-09 — see the actuals row for the detail).
 function kioskTitle(price, bs) {
   if (!(bs > 1) || price == null) return "";
-  return ` title="The kiosk quotes ${fmtUnitPrice(price * bs)} aUEC per ${bs} SCU container"`;
+  return ` title="The buy kiosk quotes ${fmtUnitPrice(price * bs)} aUEC per ${bs} SCU container"`;
 }
 
 // Container plan (#46). The server sends `box` only in hand-load mode, so both
@@ -10002,7 +10004,7 @@ function renderTradeLeg(lg, i) {
     + `<span class="muted"${kioskTitle(lg.buy_price, legBoxScu(lg))}>@ ${fmtAuec(lg.buy_price)}</span>`
     + `${amenChips(lg.buy_amen)}</div>`
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
-    + `<span class="muted"${kioskTitle(lg.sell_price, legBoxScu(lg))}>@ ${fmtAuec(lg.sell_price)}</span>`
+    + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span>`
     + `${amenChips(lg.sell_amen)}</div>`
     + `<div class="tl-econ">+${fmtAuec(lg.profit_per_scu)}/SCU · profit <b>${fmtAuec(lg.profit)}</b>`
     + ` · ${fmtAuec(lg.buy_cost)} capital`
@@ -10162,12 +10164,17 @@ function syncTradeActual(stop) {
   const scuEl = stop.querySelector(".ta-scu");
   const pbs = Number(priceEl && priceEl.dataset.box) || 1;   // price: per box → per SCU
   const qbs = Number(scuEl && scuEl.dataset.box) || 1;       // qty: boxes → SCU
+  const size = Number(out.dataset.size) || 1;               // containers aboard
   const perScu = (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0)
     ? Number(priceEl.value) / pbs : null;
   const scu = Number(scuEl && scuEl.value) > 0 ? Number(scuEl.value) * qbs : null;
   const bits = [];
+  // Buy side: the fields are in containers, so restate the SCU. Sell side: they
+  // already are SCU (that kiosk quotes per SCU), so name the boxes instead.
   if (scu != null && qbs > 1) bits.push(`${fmtUnitPrice(scu)} SCU`);
-  if (perScu != null) bits.push(`${fmtUnitPrice(perScu)} aUEC/SCU`);
+  else if (scu != null && size > 1 && scu % size === 0)
+    bits.push(`${(scu / size).toLocaleString()} × ${size} SCU box${scu / size === 1 ? "" : "es"}`);
+  if (perScu != null && pbs > 1) bits.push(`${fmtUnitPrice(perScu)} aUEC/SCU`);
   if (perScu != null && scu != null) bits.push(fmtAuec(perScu * scu));
   out.textContent = bits.length ? "= " + bits.join(" · ") : "";
 }
@@ -10335,11 +10342,14 @@ function renderTradeRun(run) {
   // inputs below, and the server defaults from the txn even if cleared).
   if (run.txn) {
     const tx = run.txn;
-    // The log speaks per-SCU; the kiosk the player just used spoke per container.
-    // Name both, so the reported figure is recognisable as the one on the screen.
+    // The log always speaks per-SCU; the BUY kiosk the player just used spoke
+    // per container. Name both there, so the reported figure is recognisable as
+    // the one that was on the screen.
     const tbs = legBoxScu((run.legs || [])[tx.leg]);
     const lbs = Number(tx.box_size) || 0;        // the size the log says was used
-    const pbs = lbs > 1 ? lbs : tbs;
+    // Per-container restatement is a BUY-side thing — the sell kiosk quotes per
+    // SCU, which is already what the log reports.
+    const pbs = tx.side === "buy" ? (lbs > 1 ? lbs : tbs) : 1;
     h += `<div class="txn-nudge">⚡ Terminal reported: `
       + `<b>${tx.side === "sell" ? "SOLD" : "BOUGHT"} ${tx.scu != null ? tx.scu : "?"} SCU`
       + (tx.box_count && lbs > 1 ? ` as ${tx.box_count} × ${lbs} SCU` : "")
@@ -10519,7 +10529,7 @@ function renderTradeRunLeg(lg, i, run) {
     ? ` <span class="tl-actual-tag">actual</span>` : "";
   h += `<div class="trade-run-step${sold ? " done" : (active && selling ? " now" : "")}">`
     + `▼ Sell at <b>${esc(lg.sell_terminal)}</b> `
-    + `<span class="muted"${kioskTitle(lg.sell_price, legBoxScu(lg))}>@ ${fmtAuec(lg.sell_price)}</span>`
+    + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span>`
     + ` · profit <b>${fmtAuec(profitShown)}</b>${actualTag}`
     + `${active && selling ? amenChips(lg.sell_amen) : ""}</div>`;
   if (active) {
@@ -10547,21 +10557,31 @@ function renderTradeRunLeg(lg, i, run) {
     // each input carries its own factor; the row converts back on submit.
     const isBuy = phase === "buy";
     const price = isBuy ? lg.buy_price : lg.sell_price;
-    const bs = legBoxScu(lg);
-    const shown = bs > 1 ? Math.round((price || 0) * bs * 100) / 100 : price;
+    const size = legBoxScu(lg);          // what this load is boxed in
+    // THE TWO ENDS DON'T MATCH, and that's the game, not a bug here (measured
+    // in-game 2026-08-09, Argon: bought 39 × 32 SCU at Pyro Gateway quoted
+    // "10,087/unit", sold the same load at Seraphim quoted "529/SCU"). The BUY
+    // kiosk transacts in containers — price per box, quantity as a box COUNT,
+    // SCU derived — while the SELL kiosk quotes per SCU. So convert on the buy
+    // only; the sell stays in the units it always was. Do not "fix" this into
+    // symmetry without re-measuring both ends.
+    const bs = isBuy ? size : 1;         // price divisor: per box on buy, per SCU on sell
     // A held leg (re-plan) knows its size but has no box plan; derive its count,
     // and fall back to plain SCU if the load isn't a whole number of boxes.
-    const boxes = bs > 1
-      ? (lg.box ? lg.box.boxes : (lg.scu % bs === 0 ? lg.scu / bs : null)) : null;
+    const boxes = (isBuy && size > 1)
+      ? (lg.box ? lg.box.boxes : (lg.scu % size === 0 ? lg.scu / size : null)) : null;
+    const shown = bs > 1 ? Math.round((price || 0) * bs * 100) / 100 : price;
     h += `<div class="trade-actual"><span class="ta-label">${isBuy ? "paid" : "got"}</span>`
       + `<input class="ti ta-price" type="number" min="0" step="1" value="${shown}" data-box="${bs}"`
       + ` aria-label="actual price in aUEC per ${bs > 1 ? bs + " SCU container" : "SCU"}">`
       + `<span class="ta-x">${bs > 1 ? `aUEC per ${bs} SCU box ×` : "aUEC/SCU ×"}</span>`
       + `<input class="ti ta-scu" type="number" min="0" step="1"`
-      + ` value="${boxes != null ? boxes : lg.scu}" data-box="${boxes != null ? bs : 1}"`
-      + ` aria-label="actual number of ${boxes != null ? bs + " SCU containers" : "SCU"}">`
+      + ` value="${boxes != null ? boxes : lg.scu}" data-box="${boxes != null ? size : 1}"`
+      + ` aria-label="actual number of ${boxes != null ? size + " SCU containers" : "SCU"}">`
       + `<span class="ta-x">${boxes != null ? "boxes" : "SCU"}</span>`
-      + (bs > 1 ? `<span class="ta-conv" aria-live="polite"></span>` : "")
+      // `data-size` is display-only: on the sell side the fields are already in
+      // our units, but naming the boxes aboard still ties the row to the hold.
+      + (size > 1 ? `<span class="ta-conv" data-size="${size}" aria-live="polite"></span>` : "")
       + `</div>`;
     if (isBuy)
       h += `<button class="trade-run-do" data-buy="${i}">✓ Bought — head to sell ▸</button>`;
