@@ -4242,10 +4242,32 @@ class TradeTxnIn(BaseModel):
     auto_load: bool | None = None
     box_size: float | None = Field(default=None, ge=0, le=100_000)
     box_count: int | None = Field(default=None, ge=0, le=100_000)
+    # The kiosk's stable id (optional — older watchers omit it). `shop` alone
+    # does NOT identify a terminal: it's a prefab name, and two stations sharing
+    # one is what made the learned mapping misfile prices. Digits only, so it
+    # can never smuggle SQL or a path into a key.
+    shop_id: str | None = Field(default=None, max_length=24, pattern=r"^\d+$")
+
+
+class TradeMenuIn(BaseModel):
+    """The container menu a kiosk published for one commodity (#46).
+
+    `commodity` arrives exactly as the game states it (`ResourceType.Iron`) —
+    the crosswalk to our own vocabulary belongs on this side, where the
+    vocabulary lives and where a rename is one deploy rather than a re-install.
+    """
+    shop: str = Field(min_length=1, max_length=120)
+    shop_id: str | None = Field(default=None, max_length=24, pattern=r"^\d+$")
+    commodity: str = Field(min_length=1, max_length=80)
+    sizes: list[int] = Field(max_length=16)
 
 
 class TradeTxnBatchIn(BaseModel):
-    txns: list[TradeTxnIn] = Field(max_length=20)
+    txns: list[TradeTxnIn] = Field(default_factory=list, max_length=20)
+    # Menus ride the transaction batch on purpose: this endpoint is already in
+    # `_WATCHER_PATHS`, and widening what a plaintext token on a member's gaming
+    # PC can reach is not worth the tidier URL.
+    menus: list[TradeMenuIn] = Field(default_factory=list, max_length=40)
 
 
 class TradeReplanIn(BaseModel):
@@ -4757,13 +4779,64 @@ def _file_stock_report(user: dict, leg: dict, kind: str, scu=None,
             "created": time.time()})
 
 
+def _log_commodity_key(name: str) -> str:
+    """Fold a commodity name to a comparison key: case, spacing and punctuation
+    all differ between Game.log's `ResourceType.X` and UEX's display names."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").strip().lower())
+
+
+_log_commodity_map: dict[str, str] = {}
+
+# Where the game's internal name can't be folded into UEX's display name.
+# Deliberately tiny and hand-verified against a real log: every entry here is a
+# claim that two names mean the same commodity, and a wrong one would file a
+# kiosk's menu against the wrong goods. An unmapped name is simply skipped, so
+# the cost of leaving one out is nil — always prefer that to a guess.
+#   RMC      — UEX spells it out as "Recycled Material Composite".
+#   Flourine — the GAME's typo; UEX (and chemistry) say "Fluorine".
+_LOG_COMMODITY_ALIASES = {"rmc": "Recycled Material Composite",
+                          "flourine": "Fluorine"}
+
+
+def _rebuild_log_commodity_map() -> None:
+    """Index our commodity vocabulary by folded key, for resolving the names
+    Game.log uses. Rebuilt whenever the feed is (names come and go per patch)."""
+    _log_commodity_map.clear()
+    for name in commodity_names:
+        key = _log_commodity_key(name)
+        if key:
+            _log_commodity_map.setdefault(key, name)
+    # Aliases only resolve to a commodity the feed actually carries — a stale
+    # alias must go quiet, never resurrect a name UEX has dropped.
+    known = {_log_commodity_key(n): n for n in commodity_names}
+    for alias, target in _LOG_COMMODITY_ALIASES.items():
+        real = known.get(_log_commodity_key(target))
+        if real:
+            _log_commodity_map[alias] = real
+
+
+def resolve_log_commodity(raw: str) -> str | None:
+    """`ResourceType.Argon` -> our own "Argon", or None when it isn't something
+    we trade. Returning None is the normal case for most of a kiosk's menu —
+    ship ammo, fuels and countermeasures are all in there — and it must stay
+    silent rather than inventing a commodity the planner has never heard of."""
+    if not _log_commodity_map:
+        _rebuild_log_commodity_map()   # first use; the feed loads long before this
+    key = _log_commodity_key((raw or "").split(".")[-1])
+    return _log_commodity_map.get(key) if key else None
+
+
 def _file_container_reports(user: dict, commodity: str, sizes_seen, absent=(),
                             poi_id=None, terminal=None) -> None:
-    """Record what a member saw on a commodity kiosk (#46 follow-up): every size
-    in `sizes_seen` is confirmed available, every size in `absent` confirmed
-    missing. This is the only evidence that can rule a size OUT, so it's filed
-    from the one place we know a human actually looked at the menu — the mid-run
-    resize — never inferred from a plan or a transaction."""
+    """Record which container sizes a commodity kiosk offers (#46 follow-up):
+    every size in `sizes_seen` is confirmed available, every size in `absent`
+    confirmed missing.
+
+    This is the only evidence that can rule a size OUT, so it comes from one of
+    exactly two places that actually read a menu: a member's mid-run resize, or
+    the kiosk's own `AddingCommodityBox` log lines relayed by the watcher. Never
+    inferred from a plan, and never from a transaction — a purchase can only
+    prove the size it used exists."""
     if not commodity:
         return
     now = time.time()
@@ -4914,7 +4987,8 @@ def _consume_trade_txn(user: dict, sess, txn: dict | None, run: dict,
     if commodity:
         db.guid_mapping_confirm(txn["guid"], commodity, now)
     if poi_id is not None:
-        db.shop_mapping_confirm(txn["shop"], poi_id, now)
+        db.shop_mapping_confirm(txn["shop"], poi_id, now,
+                                shop_id=txn.get("shop_id"))
     db.trade_txn_consume(txn["id"], user["id"], commodity=commodity,
                          poi_id=poi_id, run_id=run.get("id"), leg=leg_idx)
     if commodity and not (txn.get("commodity") and txn.get("poi_id")):
@@ -4942,6 +5016,7 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
     rate_limit("watcher", user["id"])
     now = time.time()
     stored = 0
+    menus_filed = 0
     matched = False
     frame = None
     async with hub.lock:
@@ -4951,7 +5026,7 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
             if side not in ("buy", "sell"):
                 continue
             gm = db.guid_mapping(txn.guid)
-            sm = db.shop_mapping(txn.shop)
+            sm = db.shop_mapping(txn.shop, txn.shop_id)
             commodity = gm["commodity"] if gm else None
             poi_id = sm["poi_id"] if sm else None
             unit = txn.unit_price
@@ -4960,7 +5035,8 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
             txn_id, created = db.trade_txn_save({
                 "member_id": user["id"], "t": txn.t, "side": side,
                 "resource_guid": txn.guid, "commodity": commodity,
-                "shop_name": txn.shop, "poi_id": poi_id, "scu": txn.scu,
+                "shop_name": txn.shop, "shop_id": txn.shop_id,
+                "poi_id": poi_id, "scu": txn.scu,
                 "unit_price": unit, "total": txn.total,
                 "auto_load": txn.auto_load, "box_size": txn.box_size,
                 "box_count": txn.box_count, "created": now})
@@ -4997,6 +5073,7 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
                 "id": txn_id, "side": side, "shop": txn.shop, "guid": txn.guid,
                 "commodity": commodity, "poi_id": poi_id, "scu": txn.scu,
                 "unit_price": unit, "total": txn.total, "t": txn.t,
+                "shop_id": txn.shop_id,
                 # The kiosk trades in containers — it asks for a box count and
                 # derives the SCU — so the log's own breakdown (#41 §6) is what
                 # the confirm form should echo back, and a box_size that isn't
@@ -5004,11 +5081,29 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
                 "box_size": txn.box_size, "box_count": txn.box_count,
                 "leg": active}
             matched = True
+        # Container menus (#46): the kiosk stating which box sizes it sells a
+        # commodity in. No mapping needed — `container_reports` is keyed per
+        # COMMODITY, not per terminal, so this lands with or without a resolved
+        # POI (the shop is kept as provenance). Unlike a price, a menu is not a
+        # claim a member could get wrong, so it needs no confirm gate.
+        for m in body.menus:
+            name = resolve_log_commodity(m.commodity)
+            if not name:
+                continue          # ammo, fuels, anything we don't trade
+            seen = {s for s in m.sizes if s in nav_core.CONTAINER_SIZES}
+            if not seen:
+                continue
+            menus_filed += 1
+            _file_container_reports(
+                user, name, seen,
+                absent=set(nav_core.CONTAINER_SIZES) - seen,
+                poi_id=db.shop_poi(m.shop, m.shop_id), terminal=m.shop)
         if matched:
             frame = sess.state_frame()
     if frame is not None:
         await sess.push_frame(frame)
-    return {"ok": True, "stored": stored, "matched": matched}
+    return {"ok": True, "stored": stored, "matched": matched,
+            "menus": menus_filed}
 
 
 @app.patch("/api/trade/run")
@@ -10461,6 +10556,7 @@ async def _refresh_feeds() -> None:
     global trade_terminals_raw, trade_terminal_rows, trade_prices, feeds_refreshed_at
     raw_commodity_names = await asyncio.to_thread(load_raw_commodity_names)
     commodity_names = await asyncio.to_thread(load_commodity_names)
+    _rebuild_log_commodity_map()          # names come and go per patch (#46)
     # Reads the cache the line above just rewrote — order matters (#42).
     illicit_commodities = await asyncio.to_thread(load_illicit_commodities)
     ships = await asyncio.to_thread(load_ships)

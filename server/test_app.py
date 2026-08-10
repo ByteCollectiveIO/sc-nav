@@ -7600,6 +7600,130 @@ class TradeTxnCaptureTests(unittest.TestCase):
             app.session_user = lambda request: self._member
 
 
+class ShopIdentityTests(unittest.TestCase):
+    """`shopName` is a PREFAB name, not a terminal identity (2026-08-09: Pyro
+    Gateway and Seraphim Station both log `SCShop_Admin_lt_base_g`, differing
+    only in shopId). A name-keyed mapping therefore files one terminal's prices
+    against another — and the ≥2-confirm gate cannot catch it, because both
+    confirms are honest."""
+
+    def setUp(self):
+        with db._lock, db._conn:
+            for table in ("shop_pois", "shop_ids"):
+                db._conn.execute(f"DELETE FROM {table}")
+
+    def test_shop_id_keys_the_mapping(self):
+        db.shop_mapping_confirm("SCShop_Admin_lt_base_g", 11, 1.0, shop_id="111")
+        db.shop_mapping_confirm("SCShop_Admin_lt_base_g", 22, 2.0, shop_id="222")
+        # Each terminal resolves to itself — the whole point.
+        self.assertEqual(db.shop_poi("SCShop_Admin_lt_base_g", "111"), 11)
+        self.assertEqual(db.shop_poi("SCShop_Admin_lt_base_g", "222"), 22)
+
+    def test_a_shared_name_stops_resolving(self):
+        db.shop_mapping_confirm("SCShop_Admin_lt_base_g", 11, 1.0, shop_id="111")
+        self.assertEqual(db.shop_poi("SCShop_Admin_lt_base_g"), 11)
+        db.shop_mapping_confirm("SCShop_Admin_lt_base_g", 22, 2.0, shop_id="222")
+        # An older watcher sends no id. Answering "11" for a name now known to
+        # belong to two places is exactly the silent mis-attribution; None is
+        # the honest answer, and it only costs an auto-filed price.
+        self.assertIsNone(db.shop_poi("SCShop_Admin_lt_base_g"))
+        self.assertIsNone(db.shop_mapping("SCShop_Admin_lt_base_g"))
+
+    def test_a_second_poi_alone_marks_it_ambiguous(self):
+        # Works without any shop id at all, so watchers that never update still
+        # stop mis-attributing once the collision shows itself.
+        db.shop_mapping_confirm("SCShop_Admin_lt_base_g", 11, 1.0)
+        db.shop_mapping_confirm("SCShop_Admin_lt_base_g", 22, 2.0)
+        self.assertIsNone(db.shop_poi("SCShop_Admin_lt_base_g"))
+
+    def test_an_unshared_name_still_resolves_and_counts_confirms(self):
+        db.shop_mapping_confirm("TDD_SCShop-001", 11, 1.0, shop_id="111")
+        db.shop_mapping_confirm("TDD_SCShop-001", 11, 2.0, shop_id="111")
+        row = db.shop_mapping("TDD_SCShop-001")
+        self.assertEqual(row["poi_id"], 11)
+        self.assertEqual(row["confirms"], 2)      # the ≥2 ingest gate still works
+        self.assertEqual(db.shop_mapping("TDD_SCShop-001", "111")["confirms"], 2)
+
+
+class KioskMenuIngestTests(unittest.TestCase):
+    """Container menus off `LoadShopInventoryData` (#46). The kiosk publishes
+    exactly which box sizes it sells a commodity in — the only evidence that can
+    rule a size OUT, since a purchase can only prove one exists."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        cls._orig_session_user = app.session_user
+        db.init(cls._tmp.name)
+        cls._member = {"id": "9", "display_name": "Trader", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        app.app.dependency_overrides[app.require_user] = lambda: cls._member
+        app.session_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        app.hub.sessions.pop("9", None)
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        with db._lock, db._conn:
+            db._conn.execute("DELETE FROM container_reports")
+        app._rate_hits.clear()
+
+    def _post(self, **over):
+        menu = {"shop": "SCShop_Admin_lt_base_g", "shop_id": "754643565960",
+                "commodity": "ResourceType.Iron", "sizes": [8, 16, 24, 32]}
+        menu.update(over)
+        return self.client.post("/api/trade/transactions",
+                                json={"txns": [], "menus": [menu]})
+
+    def test_menu_files_both_present_and_absent_sizes(self):
+        r = self._post()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["menus"], 1)
+        avail = app.nav_core.container_availability(app.active_container_reports())
+        # Ore really is sold this way: no 1/2/4 SCU boxes anywhere.
+        self.assertEqual({s for s, ok in avail.get("iron", {}).items() if ok},
+                         {8, 16, 24, 32})
+        self.assertEqual({s for s, ok in avail.get("iron", {}).items() if not ok},
+                         {1, 2, 4})
+
+    def test_unknown_commodity_is_skipped_silently(self):
+        # Most of a kiosk's menu is ship ammo and countermeasures. Filing those
+        # would invent commodities the planner has never heard of.
+        r = self._post(commodity="ResourceType.ShipAmmoSize3")
+        self.assertEqual(r.json()["menus"], 0)
+        self.assertEqual(app.active_container_reports(), [])
+
+    def test_the_games_own_spelling_is_crosswalked(self):
+        # The game writes "Flourine"; UEX (and chemistry) say "Fluorine".
+        self.assertEqual(app.resolve_log_commodity("ResourceType.Flourine"),
+                         "Fluorine")
+        self.assertEqual(app.resolve_log_commodity("ResourceType.RMC"),
+                         "Recycled Material Composite")
+
+    def test_a_restated_menu_replaces_the_earlier_one(self):
+        self._post()
+        self._post(sizes=[8, 16])              # a patch drops the big boxes
+        avail = app.nav_core.container_availability(app.active_container_reports())
+        self.assertEqual({s for s, ok in avail.get("iron", {}).items() if ok},
+                         {8, 16})
+        self.assertFalse(avail["iron"][32])
+
+    def test_menus_need_no_transactions(self):
+        # A member who walks up to a kiosk and buys nothing still reports what
+        # it sells — that visit is worth as much as a purchase here.
+        r = self.client.post("/api/trade/transactions", json={"menus": [
+            {"shop": "X", "commodity": "ResourceType.Argon", "sizes": [8, 32]}]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["stored"], 0)
+        self.assertEqual(r.json()["menus"], 1)
+
+
 class OrgPriceOverlayTests(unittest.TestCase):
     """#39 slice 0: org-observed prices overlay the UEX feed per (terminal,
     commodity, side), newest wins, with per-side freshness stamps and `org`

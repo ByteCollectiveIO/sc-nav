@@ -22,7 +22,7 @@ from sc_nav_overlay import (
 )
 from sc_nav_watcher import (
     GameLogShardReader, heartbeat_due, parse_login_handle, parse_showlocation,
-    parse_trade_txn,
+    parse_shop_menu, parse_trade_txn,
 )
 
 _JOIN = ("<2026-06-20T00:30:29.237Z> [Notice] <Join PU> address[34.21.5.134] "
@@ -261,6 +261,79 @@ class GameLogHandleDetectionTests(unittest.TestCase):
         self.assertIsNone(self.reader.handle)
 
 
+_MENU = (
+    "<2026-08-10T00:39:39.643Z> [Notice] "
+    "<CEntityComponentCommodityUIProvider::LoadShopInventoryData::<lambda_1>"
+    "::operator ()> AddingCommodityBox - playerId[204698941918] "
+    "shopId[754643565960] shopName[SCShop_Admin_lt_base_g] "
+    "commodityName[ResourceType.Iron] Available Box Sizes:  boxSize[8] "
+    "boxSize[16] boxSize[24] boxSize[32] [Team_CoreGameplayFeatures][Shops][UI]\n")
+
+
+class ShopMenuParseTests(unittest.TestCase):
+    """parse_shop_menu (#46) against a verbatim line from the 2026-08-09 log.
+
+    This is the only evidence that can rule a container size OUT — a purchase
+    can only ever prove one exists — so the menus are worth more per line than
+    the transactions are."""
+
+    def test_menu_line(self):
+        m = parse_shop_menu(_MENU.strip())
+        self.assertEqual(m["shop"], "SCShop_Admin_lt_base_g")
+        self.assertEqual(m["shop_id"], "754643565960")
+        # Passed through as the game states it; the server owns the crosswalk.
+        self.assertEqual(m["commodity"], "ResourceType.Iron")
+        # Real menus restrict: ore offers no 1/2/4 SCU boxes at all.
+        self.assertEqual(m["sizes"], [8, 16, 24, 32])
+
+    def test_sizes_are_sorted_and_deduped(self):
+        line = _MENU.strip().replace(
+            "boxSize[8] boxSize[16]", "boxSize[16] boxSize[8] boxSize[8]")
+        self.assertEqual(parse_shop_menu(line)["sizes"], [8, 16, 24, 32])
+
+    def test_other_lines_are_not_menus(self):
+        self.assertIsNone(parse_shop_menu(_JOIN.strip()))
+        self.assertIsNone(parse_shop_menu(_TXN_BUY.strip()))
+        self.assertIsNone(parse_shop_menu(""))
+
+    def test_a_menu_with_no_sizes_states_nothing(self):
+        # Better to report nothing than to report "this commodity has no boxes",
+        # which would rule out every size at once.
+        line = _MENU.strip().split("Available Box Sizes:")[0] + "Available Box Sizes:  "
+        self.assertIsNone(parse_shop_menu(line))
+
+
+class ShopMenuCollectionTests(unittest.TestCase):
+    """The kiosk republishes its whole menu on every UI load, so the reader
+    collapses repeats — 187 lines were 38 distinct menus in the real session."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix="Game.log")
+        os.close(fd)
+        self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))
+        self.reader = GameLogShardReader(self.path)
+
+    def _write(self, text, mode="a"):
+        with open(self.path, mode, encoding="utf-8") as fh:
+            fh.write(text)
+
+    def test_repeat_menus_are_reported_once(self):
+        self._write(_MENU * 3)
+        self.reader.poll()
+        self.assertEqual(len(self.reader.pop_menus()), 1)
+        self.assertEqual(self.reader.pop_menus(), [])
+
+    def test_a_changed_menu_is_reported_again(self):
+        self._write(_MENU)
+        self.reader.poll()
+        self.reader.pop_menus()
+        self._write(_MENU.replace(" boxSize[32]", ""))   # a patch drops a size
+        self.reader.poll()
+        menus = self.reader.pop_menus()
+        self.assertEqual(len(menus), 1)
+        self.assertEqual(menus[0]["sizes"], [8, 16, 24])
+
+
 class TradeTxnParseTests(unittest.TestCase):
     """parse_trade_txn (#41) against the captured, independently-verified
     lines: 29 SCU Medical Supplies bought at 3,408.27/SCU (98,840 total) and
@@ -275,6 +348,9 @@ class TradeTxnParseTests(unittest.TestCase):
         self.assertEqual(t["scu"], 29.0)              # 2900 cSCU
         self.assertAlmostEqual(t["unit_price"], 3408.27, places=2)
         self.assertEqual(t["t"], "2026-08-02T17:34:48.023Z")
+        # shopName does NOT identify a terminal (two stations share
+        # SCShop_Admin_lt_base_g), so the stable id has to travel too.
+        self.assertEqual(t["shop_id"], "729880064990")
         # Cargo handling: this buy went to the freight elevator, as 29 boxes
         # of 1 SCU (box count is what a load actually costs time on).
         self.assertIs(t["auto_load"], False)
@@ -288,11 +364,21 @@ class TradeTxnParseTests(unittest.TestCase):
         self.assertEqual(t["total"], 161211.0)
         self.assertEqual(t["scu"], 29.0)              # sell qty is plain SCU
         self.assertAlmostEqual(t["unit_price"], 5559.0, places=2)
+        self.assertEqual(t["shop_id"], "730441176477")
         # Sold straight off the ship — and the sell line writes its box data in
         # its own bracket style, which must parse the same as the buy's.
         self.assertIs(t["auto_load"], True)
         self.assertEqual(t["box_size"], 1.0)
         self.assertEqual(t["box_count"], 29)
+
+    def test_shop_id_is_optional(self):
+        # Same policy as the cargo fields: a line that stops naming the shop id
+        # costs us the id, not the transaction.
+        line = _TXN_BUY.strip().replace("shopId[729880064990] ", "")
+        t = parse_trade_txn(line)
+        self.assertIsNotNone(t)
+        self.assertIsNone(t.get("shop_id"))
+        self.assertEqual(t["total"], 98840.0)
 
     def test_cargo_handling_is_optional(self):
         # A patch that stops writing autoLoading / Cargo Box Data must cost us

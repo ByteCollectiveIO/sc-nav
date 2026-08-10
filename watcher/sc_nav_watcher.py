@@ -272,6 +272,33 @@ _TXN_SELL_RE = re.compile(
 _TXN_AUTOLOAD_RE = re.compile(r"autoLoading\[([01])\]")
 _TXN_BOX_SIZE_RE = re.compile(r"boxSize\[([\d.]+)\]")
 _TXN_BOX_COUNT_RE = re.compile(r"unitAmount\[([\d.]+)\]")
+# `shopName` is NOT unique — verified 2026-08-09, where Pyro Gateway and
+# Seraphim Station both logged `shopName[SCShop_Admin_lt_base_g]` (a prefab
+# name) and differed only in `shopId`. The server keys its shop→POI mapping on
+# whatever we send, so send the id: a name shared by two terminals silently
+# files one terminal's prices against the other. Optional search, same policy
+# as the cargo fields — a rename costs the field, not the transaction.
+_TXN_SHOP_ID_RE = re.compile(r"shopId\[(\d+)\]")
+
+# The kiosk publishes its full container menu per commodity when its inventory
+# loads (#46). This is the ONLY evidence that can rule a size OUT — a purchase
+# can only ever prove one exists — so it's worth more than everything the org
+# can collect by hand:
+#   <...::LoadShopInventoryData::<lambda_1>::operator ()> AddingCommodityBox -
+#     playerId[…] shopId[754643565960] shopName[X] commodityName[ResourceType.Iron]
+#     Available Box Sizes:  boxSize[8] boxSize[16] boxSize[24] boxSize[32] […]
+# Real menus are restrictive in both directions: ores offer 8/16/24/32 (no small
+# boxes at all), Hephaestanite and Scrap offer 1/2/4/8/16 (no big ones).
+_MENU_RE = re.compile(
+    r"AddingCommodityBox\b.*?shopId\[(\d+)\].*?shopName\[([^\]]+)\].*?"
+    r"commodityName\[([^\]]+)\].*?Available Box Sizes:(.*)")
+_MENU_SIZE_RE = re.compile(r"boxSize\[(\d+)")
+
+
+def _txn_shop_id(line):
+    """The kiosk's stable shop id, as a dict holding it only when present."""
+    m = _TXN_SHOP_ID_RE.search(line)
+    return {"shop_id": m.group(1)} if m else {}
 
 
 def _txn_cargo_handling(line):
@@ -290,6 +317,22 @@ def _txn_cargo_handling(line):
             except ValueError:
                 pass
     return out
+
+
+def parse_shop_menu(line):
+    """One `AddingCommodityBox` line -> the container menu the kiosk published
+    for that commodity, or None. Pure — the commodity name is passed through as
+    the game states it (`ResourceType.Iron`); the server owns the crosswalk to
+    its own commodity vocabulary, because that's where the vocabulary lives."""
+    m = _MENU_RE.search(line)
+    if not m:
+        return None
+    shop_id, shop, commodity, tail = m.groups()
+    sizes = sorted({int(s) for s in _MENU_SIZE_RE.findall(tail)})
+    if not sizes:
+        return None                    # a menu with no sizes states nothing
+    return {"shop": shop, "shop_id": shop_id, "commodity": commodity,
+            "sizes": sizes[:16]}
 
 
 def parse_trade_txn(line):
@@ -311,7 +354,8 @@ def parse_trade_txn(line):
             return None
         return {"side": "buy", "shop": shop, "guid": guid, "total": total,
                 "unit_price": round(per_centi * 100.0, 2),
-                "scu": centi / 100.0, "t": t, **_txn_cargo_handling(line)}
+                "scu": centi / 100.0, "t": t,
+                **_txn_shop_id(line), **_txn_cargo_handling(line)}
     m = _TXN_SELL_RE.search(line)
     if m:
         shop, total, guid, qty = m.groups()
@@ -323,7 +367,7 @@ def parse_trade_txn(line):
             return None
         return {"side": "sell", "shop": shop, "guid": guid, "total": total,
                 "unit_price": round(total / qty, 2), "scu": qty, "t": t,
-                **_txn_cargo_handling(line)}
+                **_txn_shop_id(line), **_txn_cargo_handling(line)}
     return None
 
 
@@ -345,6 +389,8 @@ class GameLogShardReader:
         self._offset = 0
         self.shard = None
         self.transactions = []
+        self.menus = []
+        self._menu_seen = set()
         self.handle = None
         self._handle_new = False
 
@@ -352,6 +398,11 @@ class GameLogShardReader:
         """Drain the transactions collected since the last call."""
         txns, self.transactions = self.transactions, []
         return txns
+
+    def pop_menus(self):
+        """Drain the container menus seen since the last call (#46)."""
+        menus, self.menus = self.menus, []
+        return menus
 
     def pop_handle(self):
         """The signed-in handle, returned once per change and None otherwise.
@@ -393,6 +444,17 @@ class GameLogShardReader:
             txn = parse_trade_txn(line)
             if txn is not None:
                 self.transactions.append(txn)
+            menu = parse_shop_menu(line)
+            if menu is not None:
+                # The kiosk re-publishes its whole menu every time the UI loads
+                # (187 lines for 39 distinct menus in the reference session), so
+                # collapse repeats here rather than posting the same claim all
+                # evening. Keyed on the sizes too, so a patch that changes what a
+                # terminal offers still gets reported.
+                key = (menu["shop_id"], menu["commodity"], tuple(menu["sizes"]))
+                if key not in self._menu_seen:
+                    self._menu_seen.add(key)
+                    self.menus.append(menu)
         return self.shard
 
 
@@ -447,6 +509,11 @@ class Sender:
         # Trade transactions awaiting delivery (#41). Its own queue: a jammed
         # transaction batch must never block a position post, or vice versa.
         self.txn_pending = collections.deque(maxlen=40)
+        # Container menus (#46) ride the same already-token-scoped endpoint as
+        # transactions, deliberately: the watcher's paths are a security
+        # guardrail (_WATCHER_PATHS), and one more capability on a token that
+        # sits in plaintext on a gaming PC needs a better reason than tidiness.
+        self.menu_pending = collections.deque(maxlen=80)
         # Last `nav` object the server sent back on a successful post — the
         # overlay's whole data feed (#40). The server already computes this for
         # its own WS frame, so reading it here costs no extra request.
@@ -499,14 +566,31 @@ class Sender:
         self.txn_pending.extend(txns)
         return self.flush_txns()
 
-    def flush_txns(self):
-        if not self.txn_pending or not self.txn_url:
+    def send_menus(self, menus):
+        """Queue + deliver kiosk container menus (#46). Same delivery contract
+        as transactions: the server treats a re-sent menu as a restatement of
+        the same fact, so a half-delivered batch is harmless."""
+        if self.dry_run:
+            log(f"DRY-RUN menus {json.dumps(menus)}")
             return True
-        batch = list(self.txn_pending)[:20]     # server-side batch cap
-        if self._post({"txns": batch}, url=self.txn_url):
+        self.menu_pending.extend(menus)
+        return self.flush_txns()
+
+    def flush_txns(self):
+        if not self.txn_url or (not self.txn_pending and not self.menu_pending):
+            return True
+        batch = list(self.txn_pending)[:20]     # server-side batch caps
+        menus = list(self.menu_pending)[:20]
+        body = {"txns": batch}
+        if menus:
+            body["menus"] = menus
+        if self._post(body, url=self.txn_url):
             for _ in batch:
                 self.txn_pending.popleft()
-            return not self.txn_pending or self.flush_txns()
+            for _ in menus:
+                self.menu_pending.popleft()
+            return ((not self.txn_pending and not self.menu_pending)
+                    or self.flush_txns())
         return False
 
     # A descriptive User-Agent — the default "Python-urllib/x.y" is flagged as a
@@ -885,7 +969,15 @@ def run(args, sink=None, stop=None):
                     f"{t['unit_price']:,.0f}/SCU at {t['shop']} — reporting")
             if txns:
                 sender.send_transactions(txns)
-            elif sender.txn_pending:
+            # Container menus (#46): the kiosk's own statement of which box
+            # sizes a commodity is sold in — the only evidence that can rule a
+            # size out, so it's worth reporting even on a visit that bought
+            # nothing. Same opt-out as the rest of trade capture.
+            menus = shard_reader.pop_menus()
+            if menus:
+                log(f"kiosk: {len(menus)} container menu(s) — reporting")
+                sender.send_menus(menus)
+            elif sender.txn_pending or sender.menu_pending:
                 sender.flush_txns()      # retry an earlier failed batch
         changed = args.once  # single-shot mode always reads
         seq = clipboard.sequence_number()

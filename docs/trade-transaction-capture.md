@@ -106,8 +106,10 @@ does not depend on which button the pilot presses.
   the immediate follow-up (v0.87.0)**: see the #39 doc's status header for
   what shipped (overlay, `⚡ org` badges, side-aware age filter, ≥2-confirm
   ingest gate, `is_missing` from stockouts).
-- **Kiosk-board (`AddingCommodityBox`) ingestion** for terminal commodity
-  lists / stock presence — real signal, separate decision.
+- ~~**Kiosk-board (`AddingCommodityBox`) ingestion**~~ — **built 2026-08-09**
+  for the half that turned out to matter most: the per-commodity **container
+  menu** (§6.2), which is the only evidence that can rule a box size out. The
+  terminal commodity-list / stock-presence half is still a separate decision.
 - **Mission-hauling companion** (#40.2 §9.2.3 item 4) — its own feature.
 
 ## 5. Testing
@@ -224,14 +226,74 @@ is asymmetric (loaded on the buy, ~0 on the sell) while the planner charges a
 symmetric `2 * STOP_DWELL_S`. Don't encode the asymmetry: it's a bug, it will be
 fixed, and a model fitted to it would silently mis-rank routes the day it is.
 
-**D. Highest-value next step: find out whether the fee is in Game.log.** The
-watcher already parses these kiosk lines (§2) and the `price[…]` field is
-quantity × unit price with no fee in it. If the fee rides another field or its
-own line, capture beats measurement outright — every member's runs become
-samples, at every terminal, re-derived per patch instead of hand-timed. Worth a
-grep of a fresh Game.log around a known auto-load before anyone fits anything.
+**D. The fee is NOT in Game.log — searched 2026-08-09, don't redo it.** The
+session's own log was checked end to end: no `fee` / `surcharge` / `tax` field,
+the value 37,330 appears nowhere, and the file contains **no credit, balance or
+wallet lines of any kind**. `price[393370]` is exactly `315.20 × 1248`. Capture
+can't help, so hand-measurement is the only route to a fee model — which is
+precisely why A above insists on more readings before anyone fits one. (Same log
+answered the box-size question the opposite way; see §6.2.)
 
 **E. The two ends quote different units** (buy per container, sell per SCU) —
 see the `#46 (d)` note in CLAUDE.md. Recorded here because it's the same
 in-game session, and because it's the sort of asymmetry a future reader will
 assume is a typo.
+
+### 6.2 The kiosk publishes its container menu (2026-08-09)
+
+The same log answers #46's availability question outright. Every time a
+commodity kiosk's inventory loads it writes one line per commodity:
+
+```
+<…::LoadShopInventoryData::<lambda_1>::operator ()> AddingCommodityBox -
+  playerId[…] shopId[754643565960] shopName[SCShop_Admin_lt_base_g]
+  commodityName[ResourceType.Iron] Available Box Sizes:  boxSize[8]
+  boxSize[16] boxSize[24] boxSize[32] […]
+```
+
+That is the **authoritative menu**, and it retires the assumption recorded in
+CLAUDE.md that nothing could ever rule a size out. Menus really do restrict, in
+both directions: ores (Argon, Iron, Aluminum, Copper, Ammonia, Chlorine, Helium,
+Hydrogen, Potassium, Fluorine) offer **8/16/24/32 with no small boxes at all**,
+while Hephaestanite and Scrap offer **1/2/4/8/16 and no big ones**. Before this,
+`box_plan` would happily propose 4 × 1 SCU of Argon — and `pack_exact`'s
+mixed-size aside proposes small boxes by construction.
+
+Shipped: `parse_shop_menu` in the watcher → `menus[]` on the existing
+`POST /api/trade/transactions` batch → `resolve_log_commodity` → the #46
+`container_reports` table, which is keyed per COMMODITY and so needs no terminal
+attribution at all. Details worth keeping:
+
+- **It rides the transactions endpoint on purpose.** `_WATCHER_PATHS` is a
+  security guardrail; a tidier URL is not worth widening what a plaintext token
+  on a member's gaming PC can reach.
+- **The reader collapses repeats** — the kiosk republishes everything on each UI
+  load (187 lines → 38 distinct menus in the reference session), keyed on the
+  sizes too so a patch that changes an offer is still reported.
+- **No confirm gate.** Unlike a price, a menu isn't a claim a member can get
+  wrong; it's the kiosk's own statement. A visit that buys nothing still reports.
+- **Unresolvable names are skipped silently.** Most of a menu is ship ammo,
+  countermeasures and PlasmaFuel. `_LOG_COMMODITY_ALIASES` covers the two real
+  gaps: `RMC` → "Recycled Material Composite", and `Flourine` → "Fluorine",
+  which is the *game's* misspelling. Replaying the reference session files 18 of
+  38 menus, covering 15 commodities.
+
+### 6.3 `shopName` does not identify a terminal (bug, same log)
+
+Pyro Gateway and Seraphim Station both log `shopName[SCShop_Admin_lt_base_g]`
+and differ only in `shopId` — it's a prefab name. `shop_pois` was keyed on that
+name, first-write-wins, so once two honest confirms taught it one POI, **every**
+transaction at any same-named terminal auto-filed as a price observation for the
+wrong place. The `_ORG_PRICE_MIN_CONFIRMS` gate can't catch this: both confirms
+are truthful, they're just about a name two stations share. `_overlay_price_plausible`
+can't either — a wrong-terminal price for the same commodity sits well inside
+the 5× band.
+
+Fixed by keying on the id the log already provides: `shop_id` on `TradeTxnIn`
+and the ledger, a new `shop_ids` table, and `shop_pois` kept only as a fallback
+for watchers too old to send one — with an `ambiguous` flag set the moment a
+name is confirmed at a second POI **or** under a second shop id, after which it
+stops resolving at all. That second trigger matters: it needs no watcher update,
+so an un-upgraded member stops mis-attributing as soon as the collision shows
+itself. Losing a mapping only costs an auto-filed price; keeping a wrong one
+corrupts the org's price board.
