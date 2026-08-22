@@ -5275,12 +5275,19 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         held = None
         if active < len(legs) and states[active] == "bought":
             lg = legs[active]
+            # Actuals first: a kiosk that shorted the buy (14 boxes where the
+            # plan said 21) means the PLANNED figures describe cargo that was
+            # never bought — replanning on them prices phantom SCU into the
+            # held-sell leg. The entered actuals are what's really aboard.
             # box_size rides along (#46): the cargo is already bought and boxed, so
             # there's no box *plan* to carry — but the size it sits in stays true,
             # and the sell kiosk quotes per container. Falls back to the held leg's
             # own stamp so a second re-plan doesn't forget it.
-            held = {"commodity": lg["commodity"], "scu": lg["scu"],
-                    "buy_price": lg["buy_price"],
+            held = {"commodity": lg["commodity"],
+                    "scu": (lg["scu"] if lg.get("actual_buy_scu") is None
+                            else lg["actual_buy_scu"]),
+                    "buy_price": (lg["buy_price"] if lg.get("actual_buy_price") is None
+                                  else lg["actual_buy_price"]),
                     "box_size": (lg.get("box") or {}).get("size") or lg.get("box_size")}
         p = run.get("params") or {}
         max_age_days = (body.max_price_age_days if body.max_price_age_days is not None

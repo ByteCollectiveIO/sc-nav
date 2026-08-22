@@ -7092,6 +7092,81 @@ class ContainerResizeApiTests(unittest.TestCase):
             db.set_setting("container_ageoff_days", "60")
 
 
+class TradeReplanHeldActualsTests(unittest.TestCase):
+    """A mid-run re-plan must carry what is actually aboard, not what the plan
+    said would be: a kiosk that shorted the buy (14 boxes where the plan said
+    21) followed by a re-plan used to price the phantom SCU into the held-sell
+    leg — and the entered buy price, not the scraped one, is what the realized
+    spread is really over."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Hauler", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:2]
+        cls.A, cls.B = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()
+
+        def pt(tid, poi, buy=None, sell=None):
+            return {"commodity": "Waste", "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": 505 if buy else 0,
+                    "scu_sell_stock": 505 if sell else 0, "updated_at": None}
+        self._orig_pts = app.trade_price_points
+        app.trade_price_points = [pt(1, self.A, buy=10), pt(2, self.B, sell=30)]
+
+    def tearDown(self):
+        app.trade_price_points = self._orig_pts
+
+    def _replan_after_buy(self, **actuals):
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 505, "start_id": self.A, "sort": "profit",
+            "system": "Stanton"})
+        self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.patch("/api/trade/run", json={"action": "buy", **actuals})
+        self.assertEqual(r.status_code, 200, r.text)
+        # Replan solves from the live position — park the player at the buy stop.
+        sess = app.hub.sessions["1"]
+        sess.pos = app.nav.pois[self.A].global_m
+        sess.t = time.time()
+        r = self.client.post("/api/trade/run/replan", json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["trade_run"]
+
+    def test_replan_carries_the_actual_buy_not_the_plan(self):
+        run = self._replan_after_buy(scu=336, price=12)
+        held = run["legs"][run["active"]]
+        self.assertTrue(held["held"])
+        self.assertEqual(run["summary"]["carried_scu"], 336)
+        self.assertEqual(held["scu"], 336)
+        self.assertEqual(held["buy_price"], 12)
+        # The realized spread follows: (30 - 12) x 336, not (30 - 10) x 505.
+        self.assertEqual(held["profit"], (30 - 12) * 336)
+
+    def test_replan_without_actuals_still_carries_the_plan(self):
+        run = self._replan_after_buy()
+        held = run["legs"][run["active"]]
+        self.assertEqual(run["summary"]["carried_scu"], 505)
+        self.assertEqual(held["buy_price"], 10)
+
+
 class TradeLegalityApiTests(unittest.TestCase):
     """Commodity legality filter (#42): plan over the whole market, legal goods
     only, or contraband only — plus the ☠ badge that marks illicit legs in every
