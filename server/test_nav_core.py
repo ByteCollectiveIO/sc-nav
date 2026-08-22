@@ -3357,6 +3357,173 @@ class TradeLegRealizedTests(unittest.TestCase):
         leg = self._leg(held=True, buy_price=100, actual_sell_price=280, actual_sell_scu=40)
         self.assertEqual(nav_core.trade_leg_realized(leg), 280 * 40 - 100 * 40)
 
+    def test_topup_lots_add_their_own_realized(self):
+        # Primary planned (8000) + Iron lot planned ((200-50)*100) + Copper lot
+        # with sell actuals (110*8 - 100*10). A lot's buy figures ARE actuals.
+        leg = self._leg(extras=[
+            {"commodity": "Iron", "scu": 100, "buy_price": 50, "sell_price": 200},
+            {"commodity": "Copper", "scu": 10, "buy_price": 100, "sell_price": 120,
+             "actual_sell_price": 110, "actual_sell_scu": 8}])
+        self.assertEqual(nav_core.trade_leg_realized(leg),
+                         8000 + (200 - 50) * 100 + (110 * 8 - 100 * 10))
+
+    def test_lots_ride_on_top_of_primary_actuals(self):
+        leg = self._leg(actual_sell_price=350,
+                        extras=[{"commodity": "Iron", "scu": 10,
+                                 "buy_price": 50, "sell_price": 200}])
+        self.assertEqual(nav_core.trade_leg_realized(leg),
+                         (350 * 40 - 100 * 40) + (200 - 50) * 10)
+
+
+class TopupCandidatesTests(unittest.TestCase):
+    """nav_core.topup_candidates — mid-run same-hop top-up suggestions
+    (docs/trade-topup.md): buy HERE, sell at the leg's destination, sized to
+    the FREE hold. No routing: every candidate shares the leg's travel, so
+    richest-profit order is profit-per-hour order by construction."""
+
+    A, B, C = 11, 22, 33
+
+    def _pt(self, commodity, tid, poi, buy=None, sell=None,
+            scu_buy=500, scu_sell_stock=500):
+        return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                "scu_buy": scu_buy if buy else 0,
+                "scu_sell_stock": scu_sell_stock if sell else 0,
+                "updated_at": None}
+
+    def _prices(self):
+        return [
+            self._pt("Iron", 1, self.A, buy=50),
+            self._pt("Iron", 2, self.B, sell=200),
+            self._pt("Copper", 3, self.A, buy=100),
+            self._pt("Copper", 4, self.B, sell=120),
+            # Sells only somewhere else — never a same-hop suggestion.
+            self._pt("Gold", 5, self.A, buy=100),
+            self._pt("Gold", 6, self.C, sell=400),
+            # Negative margin on this hop — dropped.
+            self._pt("Waste", 7, self.A, buy=10),
+            self._pt("Waste", 8, self.B, sell=5),
+        ]
+
+    def _rows(self, free=1000, prices=None, **kw):
+        args = dict(buy_poi_id=self.A, sell_poi_id=self.B)
+        args.update(kw)
+        return nav_core.topup_candidates(prices if prices is not None
+                                         else self._prices(), free, **args)
+
+    def test_same_hop_positive_margin_only_richest_first(self):
+        rows = self._rows()
+        self.assertEqual([r["commodity"] for r in rows], ["Iron", "Copper"])
+        self.assertEqual(rows[0]["max_scu"], 500)          # supply-capped
+        self.assertEqual(rows[0]["trade_profit"], (200 - 50) * 500)
+
+    def test_free_hold_caps_the_fill(self):
+        self.assertEqual(self._rows(free=40)[0]["max_scu"], 40)
+
+    def test_no_free_hold_no_rows(self):
+        self.assertEqual(self._rows(free=0), [])
+
+    def test_excluded_commodities_dropped(self):
+        rows = self._rows(exclude={"iron"})
+        self.assertEqual([r["commodity"] for r in rows], ["Copper"])
+
+    def test_stock_reports_steer_each_side(self):
+        rows = self._rows(avoid_buys=frozenset({(self.A, "iron")}))
+        self.assertEqual([r["commodity"] for r in rows], ["Copper"])
+        rows = self._rows(avoid_sells=frozenset({(self.B, "copper")}))
+        self.assertEqual([r["commodity"] for r in rows], ["Iron"])
+
+    def test_legality_filters(self):
+        illicit = frozenset({"iron"})
+        rows = self._rows(legality="legal", illicit=illicit)
+        self.assertEqual([r["commodity"] for r in rows], ["Copper"])
+        rows = self._rows(legality="illicit", illicit=illicit)
+        self.assertEqual([r["commodity"] for r in rows], ["Iron"])
+
+    def test_return_floor_applies(self):
+        # Iron returns 300% on capital, Copper 20% — a 50% floor drops Copper.
+        rows = self._rows(min_return_pct=50)
+        self.assertEqual([r["commodity"] for r in rows], ["Iron"])
+
+    def test_best_desk_per_side_wins(self):
+        prices = [self._pt("Iron", 1, self.A, buy=60),
+                  self._pt("Iron", 9, self.A, buy=50),        # cheaper desk here
+                  self._pt("Iron", 2, self.B, sell=180),
+                  self._pt("Iron", 10, self.B, sell=200)]     # richer desk there
+        rows = self._rows(free=100, prices=prices)
+        self.assertEqual((rows[0]["buy_price"], rows[0]["sell_price"]), (50, 200))
+
+    def test_box_policy_snaps_the_fill(self):
+        # Same #46 discipline as the planners: a hand-loaded top-up is quoted
+        # in whole containers (505 -> 21 x 24), never as loose SCU.
+        prices = [self._pt("Iron", 1, self.A, buy=50, scu_buy=505),
+                  self._pt("Iron", 2, self.B, sell=200, scu_sell_stock=505)]
+        rows = self._rows(free=505, prices=prices,
+                          box=nav_core.box_policy(loading="hand"))
+        self.assertEqual(rows[0]["max_scu"], 504)
+        self.assertEqual(rows[0]["box"]["size"], 24)
+
+
+class TradeReplanMultiHeldTests(unittest.TestCase):
+    """replan_trade_route with a LIST of held lots (top-up cargo aboard,
+    docs/trade-topup.md): every lot gets its own held sell leg, chained
+    greedily; a buyer-less lot strands BY NAME while the rest still plans."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:4]
+        cls.A, cls.B, cls.C, cls.D = (p.id for p in spc)
+        cls.posA = next(p for p in NAV.pois.values() if p.id == cls.A).global_m
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": None}
+
+    def test_every_lot_gets_a_held_sell_leg(self):
+        prices = [self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500),
+                  self._pt("Iron", 3, self.C, sell=200, scu_sell_stock=500)]
+        held = [{"commodity": "Gold", "scu": 40, "buy_price": 100, "box_size": 24},
+                {"commodity": "Iron", "scu": 60, "buy_price": 50}]
+        plan = nav_core.replan_trade_route(NAV, prices, 100, start_pos=self.posA,
+                                           held=held, sort="profit")
+        held_legs = [lg for lg in plan["legs"] if lg.get("held")]
+        self.assertEqual({lg["commodity"] for lg in held_legs}, {"Gold", "Iron"})
+        by = {lg["commodity"]: lg for lg in held_legs}
+        self.assertEqual(by["Gold"]["box_size"], 24)       # #46 stamp survives
+        self.assertEqual(by["Gold"]["buy_cost"], 0)        # sunk — no forward capital
+        self.assertEqual(plan["summary"]["carried_scu"], 100)
+        self.assertNotIn("stranded_held", plan["summary"])
+
+    def test_single_dict_still_works(self):
+        prices = [self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500)]
+        plan = nav_core.replan_trade_route(
+            NAV, prices, 100, start_pos=self.posA,
+            held={"commodity": "Gold", "scu": 40, "buy_price": 100}, sort="profit")
+        self.assertTrue(plan["legs"][0]["held"])
+        self.assertEqual(plan["summary"]["carried_commodity"], "Gold")
+
+    def test_buyerless_lot_strands_by_name_while_the_rest_plans(self):
+        prices = [self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=500)]
+        held = [{"commodity": "Gold", "scu": 40, "buy_price": 100},
+                {"commodity": "Platinum", "scu": 10, "buy_price": 500}]
+        plan = nav_core.replan_trade_route(NAV, prices, 100, start_pos=self.posA,
+                                           held=held, sort="profit")
+        self.assertEqual([lg["commodity"] for lg in plan["legs"] if lg.get("held")],
+                         ["Gold"])
+        self.assertEqual(plan["summary"]["stranded_held"], ["Platinum"])
+
+    def test_all_stranded_names_every_lot_in_the_reason(self):
+        plan = nav_core.replan_trade_route(
+            NAV, [], 100, start_pos=self.posA,
+            held=[{"commodity": "Gold", "scu": 40, "buy_price": 100},
+                  {"commodity": "Iron", "scu": 10, "buy_price": 50}])
+        self.assertFalse(plan["summary"]["feasible"])
+        self.assertIn("Gold", plan["summary"]["reason"])
+        self.assertIn("Iron", plan["summary"]["reason"])
+
 
 class TradeHistoryStatsTests(unittest.TestCase):
     """nav_core trade history/statistics derivations (#21 step 6): realized totals,

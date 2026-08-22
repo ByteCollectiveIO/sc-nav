@@ -7167,6 +7167,189 @@ class TradeReplanHeldActualsTests(unittest.TestCase):
         self.assertEqual(held["buy_price"], 10)
 
 
+class TradeTopupApiTests(unittest.TestCase):
+    """Mid-run top-up (docs/trade-topup.md): the kiosk shorted the buy, the
+    hold is mostly empty, and the pilot adds same-hop co-cargo — suggestions,
+    add-as-bought lots, per-lot sells, and re-plan re-homing unsold lots."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Hauler", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:3]
+        cls.A, cls.B, cls.C = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()
+        db.stock_reports_clear()
+        # A prior test's active run persists in the DB and would restore into
+        # the fresh session — the 404 test needs a genuinely clean slate.
+        self.client.delete("/api/trade/run")
+        app.hub.sessions.pop("1", None)
+
+        def pt(commodity, tid, poi, buy=None, sell=None, supply=500):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": supply if buy else 0,
+                    "scu_sell_stock": supply if sell else 0, "updated_at": None}
+        self._orig_pts = app.trade_price_points
+        app.trade_price_points = [
+            pt("Waste", 1, self.A, buy=10, supply=505),
+            pt("Waste", 2, self.B, sell=30, supply=505),
+            pt("Iron", 3, self.A, buy=50),
+            pt("Iron", 4, self.B, sell=200),
+            pt("Copper", 5, self.A, buy=100),
+            pt("Copper", 6, self.B, sell=120),
+            # Sells only at C — never a same-hop suggestion for the A->B leg.
+            pt("Gold", 7, self.A, buy=100),
+            pt("Gold", 8, self.C, sell=400),
+        ]
+
+    def tearDown(self):
+        app.trade_price_points = self._orig_pts
+        db.stock_reports_clear()
+
+    def _start_and_buy(self, scu=336, price=12):
+        # Filtered mode pins Waste as the primary lane; the kiosk then shorts
+        # the buy (336 of the planned 505) — the exact scenario top-up is for.
+        r = self.client.post("/api/trade/run", json={
+            "usable_scu": 505, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "mode": "filtered", "commodities": ["Waste"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "buy", "scu": scu, "price": price})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["trade_run"]
+
+    # --- suggestions --------------------------------------------------------
+
+    def test_suggestions_are_same_hop_sized_to_the_free_hold(self):
+        self._start_and_buy()
+        r = self.client.get("/api/trade/run/topup")
+        self.assertEqual(r.status_code, 200, r.text)
+        doc = r.json()
+        self.assertEqual(doc["free_scu"], 505 - 336)
+        names = [s["commodity"] for s in doc["suggestions"]]
+        self.assertEqual(names, ["Iron", "Copper"])       # richest first, no Gold
+        self.assertNotIn("Waste", names)                  # the primary is excluded
+        self.assertEqual(doc["suggestions"][0]["max_scu"], 169)
+
+    def test_topup_gated_on_the_bought_state(self):
+        self.client.post("/api/trade/run", json={
+            "usable_scu": 505, "start_id": self.A, "sort": "profit",
+            "system": "Stanton", "mode": "filtered", "commodities": ["Waste"]})
+        r = self.client.get("/api/trade/run/topup")
+        self.assertEqual(r.status_code, 409)              # still awaiting the buy
+
+    def test_topup_404s_without_a_run(self):
+        self.assertEqual(self.client.get("/api/trade/run/topup").status_code, 404)
+
+    # --- addcargo -----------------------------------------------------------
+
+    def test_addcargo_records_the_lot(self):
+        self._start_and_buy()
+        r = self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Iron", "scu": 100, "price": 55})
+        self.assertEqual(r.status_code, 200, r.text)
+        run = r.json()["trade_run"]
+        lot = run["legs"][0]["extras"][0]
+        self.assertEqual((lot["commodity"], lot["scu"], lot["buy_price"]),
+                         ("Iron", 100, 55))
+        self.assertEqual(lot["sell_price"], 200)          # live feed, server-side
+        self.assertEqual(run["onboard_scu"], 336 + 100)
+        # The lot now excludes itself from further suggestions.
+        names = [s["commodity"] for s in
+                 self.client.get("/api/trade/run/topup").json()["suggestions"]]
+        self.assertEqual(names, ["Copper"])
+
+    def test_addcargo_rejects_what_is_not_on_offer_here(self):
+        self._start_and_buy()
+        r = self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Gold", "scu": 10, "price": 100})
+        self.assertEqual(r.status_code, 409)              # no buyer at B
+        r = self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Waste", "scu": 10, "price": 10})
+        self.assertEqual(r.status_code, 400)              # already aboard (primary)
+
+    def test_addcargo_short_buy_files_a_supply_low_report(self):
+        self._start_and_buy()                             # free hold = 169
+        self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Iron", "scu": 50, "price": 55})
+        reports = self.client.get("/api/trade/stock").json()["reports"]
+        self.assertEqual([(r["commodity"], r["side"], r["kind"]) for r in reports],
+                         [("Iron", "supply", "low")])
+
+    # --- per-lot sells ------------------------------------------------------
+
+    def test_leg_completes_only_when_primary_and_lots_are_sold(self):
+        self._start_and_buy()
+        self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Iron", "scu": 100, "price": 55})
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "sell", "scu": 336, "price": 30})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertFalse(d["completed"])                  # Iron still aboard
+        run = d["trade_run"]
+        self.assertEqual(run["legs"][0]["state"], "bought")
+        self.assertTrue(run["legs"][0]["primary_sold"])
+        self.assertEqual(run["onboard_scu"], 100)         # the lot, primary gone
+        # Selling the primary twice is a stale click, not a second sale.
+        r = self.client.patch("/api/trade/run", json={"action": "sell"})
+        self.assertEqual(r.status_code, 409)
+        r = self.client.patch("/api/trade/run", json={
+            "action": "sell", "extra": 0, "scu": 100, "price": 210})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["completed"])
+
+    def test_lot_short_sell_files_a_demand_low_report(self):
+        self._start_and_buy()
+        self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Iron", "scu": 100, "price": 55})
+        self.client.patch("/api/trade/run", json={
+            "action": "sell", "extra": 0, "scu": 20, "price": 200})
+        reports = self.client.get("/api/trade/stock").json()["reports"]
+        self.assertIn(("Iron", "demand", "low"),
+                      [(r["commodity"], r["side"], r["kind"]) for r in reports])
+
+    def test_skip_is_blocked_while_lots_are_aboard(self):
+        self._start_and_buy()
+        self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Iron", "scu": 100, "price": 55})
+        r = self.client.patch("/api/trade/run", json={"action": "advance"})
+        self.assertEqual(r.status_code, 409)              # bought lots aren't discardable
+
+    # --- re-plan re-homes lots ---------------------------------------------
+
+    def test_replan_carries_unsold_lots_as_held(self):
+        self._start_and_buy()
+        self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Iron", "scu": 100, "price": 55})
+        sess = app.hub.sessions["1"]
+        sess.pos = app.nav.pois[self.A].global_m
+        sess.t = time.time()
+        r = self.client.post("/api/trade/run/replan", json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        run = r.json()["trade_run"]
+        held = [(lg["commodity"], lg["scu"]) for lg in run["legs"] if lg.get("held")]
+        self.assertEqual(sorted(held), [("Iron", 100), ("Waste", 336)])
+
+
 class TradeLegalityApiTests(unittest.TestCase):
     """Commodity legality filter (#42): plan over the whole market, legal goods
     only, or contraband only — plus the ☠ badge that marks illicit legs in every
