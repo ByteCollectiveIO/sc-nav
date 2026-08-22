@@ -2467,12 +2467,20 @@ class Session:
         n = len(legs)
         done = active >= n
         phase = None if done else ("sell" if states[active] == "bought" else "buy")
-        # Aboard = the actual SCU bought on the active leg if the player entered it,
-        # else the planned load.
+        # Aboard = the actual SCU bought if the player entered it, else the
+        # planned load — summed over every not-yet-sold bought leg (a re-plan
+        # can queue several held legs at once) plus unsold top-up lots
+        # (docs/trade-topup.md), minus lots already confirmed sold.
         onboard = 0.0
-        if not done and states[active] == "bought":
-            a = legs[active]
-            onboard = float(a.get("actual_buy_scu") or a.get("scu") or 0)
+        for j in range(active, n):
+            lg = legs[j]
+            if states[j] != "bought":
+                continue
+            if not lg.get("primary_sold"):
+                onboard += float(lg.get("actual_buy_scu") or lg.get("scu") or 0)
+            for x in (lg.get("extras") or ()):
+                if not x.get("sold"):
+                    onboard += float(x.get("scu") or 0)
         # A skipped leg (bailed / stock-out) parks in 'sold' to move the cursor
         # but was never transacted — it contributes nothing realized.
         realized = sum(nav_core.trade_leg_realized(l) or 0
@@ -4221,6 +4229,11 @@ class TradeRunPatchIn(BaseModel):
     # "here's what's on offer, pick the best of it for me".
     box_size: int | None = Field(default=None, ge=1, le=32)
     sizes: list[int] | None = Field(default=None, max_length=16)
+    # Top-up lots (docs/trade-topup.md): `addcargo` names the commodity being
+    # added; `sell` with `extra` confirms that lot's sale instead of the
+    # primary's.
+    commodity: str | None = Field(default=None, min_length=1, max_length=80)
+    extra: int | None = Field(default=None, ge=0, le=50)
 
 
 class TradeTxnIn(BaseModel):
@@ -5106,6 +5119,115 @@ async def post_trade_transactions(body: TradeTxnBatchIn,
             "menus": menus_filed}
 
 
+# Top-up lots per leg are capped well above real use — the pool of profitable
+# same-hop commodities is rarely more than a handful deep.
+_TOPUP_MAX_LOTS = 8
+
+
+def _topup_free_scu(run: dict) -> float:
+    """Empty hold on the active (bought) leg: usable minus what's aboard — the
+    primary's entered actual (else plan, 0 once sold) plus every unsold
+    top-up lot."""
+    leg = run["legs"][run["active"]]
+    aboard = 0.0
+    if not leg.get("primary_sold"):
+        aboard += float(leg.get("actual_buy_scu") or leg.get("scu") or 0)
+    for x in (leg.get("extras") or ()):
+        if not x.get("sold"):
+            aboard += float(x.get("scu") or 0)
+    return max(0.0, float(run.get("usable_scu") or 0) - aboard)
+
+
+def _topup_gate(run: dict) -> dict:
+    """The active leg, iff a top-up applies to it right now: state `bought`
+    (you're at the kiosk with the primary aboard, not yet departed) and not a
+    held leg (a re-plan's carried cargo has no buy kiosk to stand at)."""
+    active = run["active"]
+    if active >= len(run["legs"]):
+        raise HTTPException(status_code=409, detail="trade run already complete")
+    leg = run["legs"][active]
+    if run["leg_states"][active] != "bought":
+        raise HTTPException(status_code=409,
+                            detail="top-up applies after the buy, before departure")
+    if leg.get("held"):
+        raise HTTPException(status_code=409,
+                            detail="carried cargo has no buy kiosk to top up from")
+    return leg
+
+
+def _validate_topup_lot(leg: dict, body: TradeRunPatchIn) -> tuple[dict, float]:
+    """Re-validate an `addcargo` against live prices. The pilot's aUEC/SCU are
+    a human's claim about what they paid — recorded as-is — but the claim that
+    this commodity SELLS at the leg's destination must hold server-side, or
+    the sell step dead-ends at a kiosk that never bought it. Returns the lot
+    plus the buy side's advertised supply (for the low-stock evidence rule)."""
+    want = (body.commodity or "").strip().lower()
+    taken = {(leg.get("commodity") or "").strip().lower()} | {
+        (x.get("commodity") or "").strip().lower() for x in (leg.get("extras") or ())}
+    if want in taken:
+        raise HTTPException(status_code=400,
+                            detail="that commodity is already aboard this leg")
+    src = dst = None
+    for p in trade_price_points:
+        if (p.get("commodity") or "").strip().lower() != want:
+            continue
+        if p.get("poi_id") == leg.get("buy_poi_id") and p.get("buy"):
+            if src is None or int(p["buy"]) < int(src["buy"]):
+                src = p
+        if p.get("poi_id") == leg.get("sell_poi_id") and p.get("sell"):
+            if dst is None or int(p["sell"]) > int(dst["sell"]):
+                dst = p
+    if src is None or dst is None:
+        raise HTTPException(status_code=409,
+                            detail="that trade is no longer on offer here — refresh the suggestions")
+    lot = {
+        "commodity": src.get("commodity"),
+        "scu": body.scu, "buy_price": body.price,
+        "buy_terminal": src.get("terminal"), "buy_terminal_id": src.get("terminal_id"),
+        "sell_price": int(dst["sell"]),
+        "sell_terminal": dst.get("terminal"), "sell_terminal_id": dst.get("terminal_id"),
+        "box_size": body.box_size, "sold": False,
+    }
+    return lot, float(src.get("scu_buy") or 0)
+
+
+@app.get("/api/trade/run/topup")
+async def get_trade_topup(user: dict = Depends(require_session)):
+    """Top-up suggestions for the active leg (docs/trade-topup.md): commodities
+    buyable HERE that sell at the SAME destination as the cargo just bought,
+    sized to the free hold — the kiosk shorting a buy on a big ship is the
+    moment this exists for. Same hop, so nothing about the route changes and
+    richest-profit order is profit-per-hour order."""
+    rate_limit("solve", user["id"])
+    async with hub.lock:
+        sess = hub.get(user)
+        run = sess.trade_run
+        if not run:
+            raise HTTPException(status_code=404, detail="no active trade run")
+        leg = _topup_gate(run)
+        active = run["active"]
+        free = _topup_free_scu(run)
+        p = run.get("params") or {}
+        exclude = {(leg.get("commodity") or "").strip().lower()} | {
+            (x.get("commodity") or "").strip().lower()
+            for x in (leg.get("extras") or ())}
+        max_age_days = p.get("max_price_age_days")
+        box = _trade_box_policy(p.get("loading"), p.get("box_mode"), p.get("box_size"))
+        legality = _norm_legality(p.get("legality"))
+        min_ret = _norm_return_pct(p.get("min_return_pct"))
+        buy_poi, sell_poi = leg.get("buy_poi_id"), leg.get("sell_poi_id")
+    # Pure price filtering over one POI pair — cheap enough to run inline.
+    reports = active_stock_reports()
+    rows = nav_core.topup_candidates(
+        trade_price_points, int(free), buy_poi_id=buy_poi, sell_poi_id=sell_poi,
+        exclude=exclude,
+        max_age_s=(max_age_days * 86400 if max_age_days else None),
+        legality=legality, illicit=illicit_commodities, min_return_pct=min_ret,
+        avoid_buys=nav_core.stock_avoid_buys(reports),
+        avoid_sells=nav_core.stock_avoid_sells(reports), box=box)
+    return {"leg": active, "free_scu": free, "suggestions": rows}
+
+
 @app.patch("/api/trade/run")
 async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_session)):
     """Advance the active trade run. `action`:
@@ -5127,7 +5249,14 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
       demandout — the sell terminal *won't buy* the held cargo: files a shared
                   demand-'out' report but does NOT move the cursor — the player
                   still holds the load; the natural next step is re-plan-from-here,
-                  which now avoids that buyer (held-cargo sell included).
+                  which now avoids that buyer (held-cargo sell included),
+      addcargo  — top-up (docs/trade-topup.md): record a co-cargo lot bought at
+                  this stop that sells at this leg's destination. One step,
+                  add-as-bought — the suggestion was the quote, this is the
+                  human typing what the kiosk actually sold them; the app never
+                  auto-confirms a purchase. The leg then completes only when
+                  the primary AND every lot are sold (`sell` + `extra` picks a
+                  lot; order free).
     `leg` optionally pins the target index to guard a stale click. Completing the
     last leg finishes the run."""
     async with hub.lock:
@@ -5145,7 +5274,8 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
         # A confirm naming the pending detected transaction (#41): the log's
         # numbers become the defaults the pilot didn't type.
         txn = None
-        if body.txn_id is not None and body.action in ("buy", "sell"):
+        if body.txn_id is not None and body.action in ("buy", "sell") \
+                and body.extra is None:      # the nudge describes the primary lot
             pt = sess.pending_txn
             if pt and pt.get("id") == body.txn_id and pt.get("leg") == active \
                     and pt.get("side") == body.action:
@@ -5169,16 +5299,53 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
         elif body.action == "sell":
             if st != "bought":
                 raise HTTPException(status_code=409, detail="active leg is not awaiting a sell")
-            if body.price is not None:
-                leg["actual_sell_price"] = body.price
-            if body.scu is not None:
-                leg["actual_sell_scu"] = body.scu
-                planned = float(leg.get("scu") or 0)
-                if planned and body.scu < planned * _LOW_STOCK_FRACTION:
-                    _file_stock_report(user, leg, "low", scu=body.scu, side="demand")
-            run["leg_states"][active] = "sold"
-            _consume_trade_txn(user, sess, txn, run, active, leg, "sell")
+            if body.extra is not None:
+                # Confirm one top-up lot's sale (docs/trade-topup.md). Its own
+                # actuals, its own short-sell evidence; order against the
+                # primary is free — the leg completes when everything's sold.
+                extras = leg.get("extras") or []
+                if body.extra >= len(extras):
+                    raise HTTPException(status_code=400, detail="no such top-up lot")
+                lot = extras[body.extra]
+                if lot.get("sold"):
+                    raise HTTPException(status_code=409, detail="that lot is already sold")
+                if body.price is not None:
+                    lot["actual_sell_price"] = body.price
+                if body.scu is not None:
+                    lot["actual_sell_scu"] = body.scu
+                    planned = float(lot.get("scu") or 0)
+                    if planned and body.scu < planned * _LOW_STOCK_FRACTION:
+                        _file_stock_report(
+                            user, {"commodity": lot.get("commodity"),
+                                   "sell_poi_id": leg.get("sell_poi_id"),
+                                   "sell_terminal": lot.get("sell_terminal")
+                                   or leg.get("sell_terminal"),
+                                   "sell_terminal_id": lot.get("sell_terminal_id")},
+                            "low", scu=body.scu, side="demand")
+                lot["sold"] = True
+            else:
+                if leg.get("primary_sold"):
+                    raise HTTPException(status_code=409,
+                                        detail="the main lot is already sold — confirm the remaining top-up lots")
+                if body.price is not None:
+                    leg["actual_sell_price"] = body.price
+                if body.scu is not None:
+                    leg["actual_sell_scu"] = body.scu
+                    planned = float(leg.get("scu") or 0)
+                    if planned and body.scu < planned * _LOW_STOCK_FRACTION:
+                        _file_stock_report(user, leg, "low", scu=body.scu, side="demand")
+                leg["primary_sold"] = True
+                _consume_trade_txn(user, sess, txn, run, active, leg, "sell")
+            if leg.get("primary_sold") and all(x.get("sold")
+                                               for x in (leg.get("extras") or ())):
+                run["leg_states"][active] = "sold"
         elif body.action == "advance":
+            if any(not x.get("sold") for x in (leg.get("extras") or ())):
+                # A skipped leg is excluded from realized stats — silently
+                # discarding BOUGHT top-up lots would falsify them. The escape
+                # hatch for a stuck lot is re-plan (it re-homes as held cargo).
+                raise HTTPException(status_code=409,
+                                    detail="top-up cargo aboard — sell it or re-plan from here instead of skipping")
             leg["skipped"] = True                  # abandon the leg, move on —
             run["leg_states"][active] = "sold"     # never counted as realized
         elif body.action == "stockout":
@@ -5225,6 +5392,31 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             # steers this player's own re-plan (and everyone else's solver).
             leg["demand_reported"] = True
             _file_stock_report(user, leg, "out", side="demand")
+        elif body.action == "addcargo":
+            _topup_gate(run)
+            if not body.commodity or body.scu is None or body.price is None:
+                raise HTTPException(status_code=400,
+                                    detail="commodity, scu and price are required")
+            extras = leg.setdefault("extras", [])
+            if len(extras) >= _TOPUP_MAX_LOTS:
+                raise HTTPException(status_code=400,
+                                    detail="lot limit reached for this leg")
+            free_before = _topup_free_scu(run)
+            lot, supply = _validate_topup_lot(leg, body)
+            extras.append(lot)
+            # Short-fill evidence, same rule as the primary: buying well under
+            # what the shelf could have supplied (its advertised stock, capped
+            # by the free hold) files a supply-'low' report. Ambiguity accepted
+            # — a deliberate small buy files a claim a later member disproves.
+            potential = min(free_before, supply) if supply else 0.0
+            if potential > 0 and body.scu < potential * _LOW_STOCK_FRACTION:
+                _file_stock_report(
+                    user, {"commodity": lot["commodity"],
+                           "buy_poi_id": leg.get("buy_poi_id"),
+                           "buy_terminal": lot.get("buy_terminal")
+                           or leg.get("buy_terminal"),
+                           "buy_terminal_id": lot.get("buy_terminal_id")},
+                    "low", scu=body.scu)
         else:
             raise HTTPException(status_code=400, detail="bad action")
         # Any action moves or re-frames the run state, so the nudge that
@@ -5272,7 +5464,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         legs, states = run["legs"], run["leg_states"]
         leg_states_snap = list(states)             # detect an active-leg change mid-solve
         done_legs = legs[:active]                  # everything before the cursor is sold
-        held = None
+        held = []
         if active < len(legs) and states[active] == "bought":
             lg = legs[active]
             # Actuals first: a kiosk that shorted the buy (14 boxes where the
@@ -5283,12 +5475,22 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
             # there's no box *plan* to carry — but the size it sits in stays true,
             # and the sell kiosk quotes per container. Falls back to the held leg's
             # own stamp so a second re-plan doesn't forget it.
-            held = {"commodity": lg["commodity"],
+            if not lg.get("primary_sold"):
+                held.append({
+                    "commodity": lg["commodity"],
                     "scu": (lg["scu"] if lg.get("actual_buy_scu") is None
                             else lg["actual_buy_scu"]),
                     "buy_price": (lg["buy_price"] if lg.get("actual_buy_price") is None
                                   else lg["actual_buy_price"]),
-                    "box_size": (lg.get("box") or {}).get("size") or lg.get("box_size")}
+                    "box_size": (lg.get("box") or {}).get("size") or lg.get("box_size")})
+            # Top-up lots (docs/trade-topup.md) re-home like the primary; their
+            # buy figures are already actuals — that's how lots are recorded.
+            for x in (lg.get("extras") or ()):
+                if not x.get("sold"):
+                    held.append({"commodity": x.get("commodity"), "scu": x.get("scu"),
+                                 "buy_price": x.get("buy_price"),
+                                 "box_size": x.get("box_size")})
+        held = held or None
         p = run.get("params") or {}
         max_age_days = (body.max_price_age_days if body.max_price_age_days is not None
                         else p.get("max_price_age_days"))

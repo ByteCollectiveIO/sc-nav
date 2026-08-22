@@ -3777,6 +3777,67 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     return rows
 
 
+def topup_candidates(prices, free_scu, *, buy_poi_id, sell_poi_id,
+                     exclude=frozenset(), max_age_s=None, now_ts=None,
+                     legality="any", illicit=frozenset(), min_return_pct=None,
+                     avoid_buys=frozenset(), avoid_sells=frozenset(),
+                     box=None, limit=8) -> list[dict]:
+    """Mid-run top-up suggestions (docs/trade-topup.md): everything buyable at
+    the active leg's buy POI that sells at its sell POI, sized to the FREE
+    hold. Same hop as the cargo already aboard, so travel is identical for
+    every candidate and richest-profit order IS profit-per-hour order — no
+    routing needed. `exclude` (lowered commodity names) drops the primary and
+    already-added lots: the kiosk just ran dry on the primary, and more of an
+    existing lot belongs on its row. Honors the same per-lot filters as the
+    planners — freshness per side, stock-report avoid sets, legality (#42),
+    the return floor (#43), the container policy (#46). The run's budget is
+    deliberately NOT reapplied: remaining bankroll mid-run is unknowable
+    server-side, so rows carry `buy_cost` and the pilot knows their wallet."""
+    now = now_ts if now_ts is not None else time.time()
+    if not free_scu or free_scu <= 0 or buy_poi_id is None or sell_poi_id is None:
+        return []
+    srcs: dict[str, dict] = {}
+    dsts: dict[str, dict] = {}
+    for p in prices:
+        name = p.get("commodity")
+        if not name or name.strip().lower() in exclude:
+            continue
+        if not legality_allows(name, legality, illicit):
+            continue
+        key = name.strip().lower()
+        # Best desk per commodity and side at each end: cheapest fresh buy
+        # here, richest fresh sell there.
+        if (p.get("poi_id") == buy_poi_id and p.get("buy")
+                and _price_fresh(p, max_age_s, now, side="buy")
+                and not (avoid_buys and (buy_poi_id, key) in avoid_buys)):
+            cur = srcs.get(name)
+            if cur is None or int(p["buy"]) < int(cur["buy"]):
+                srcs[name] = p
+        if (p.get("poi_id") == sell_poi_id and p.get("sell")
+                and _price_fresh(p, max_age_s, now, side="sell")
+                and not (avoid_sells and (sell_poi_id, key) in avoid_sells)):
+            cur = dsts.get(name)
+            if cur is None or int(p["sell"]) > int(cur["sell"]):
+                dsts[name] = p
+    rows = []
+    for name, src in srcs.items():
+        dst = dsts.get(name)
+        if dst is None:
+            continue
+        margin = int(dst["sell"]) - int(src["buy"])
+        if margin <= 0:
+            continue
+        if min_return_pct:              # #43 — a floor the run was planned under
+            ret = trade_return_pct(int(src["buy"]), margin)
+            if ret is None or ret < min_return_pct:
+                continue
+        row = _trade_row(name, src, dst, margin, free_scu, box=box)
+        if row["max_scu"]:
+            rows.append(row)
+    rows.sort(key=lambda r: -(r["trade_profit"] or 0))
+    return rows[:limit]
+
+
 def trade_avoid_sets(warnings) -> tuple[frozenset, frozenset]:
     """Turn active anchored danger warnings (#24) into the two exclusion sets the
     trade solver understands: `avoid_poi_ids` (POIs never to buy/sell at — a camped
@@ -4353,14 +4414,18 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        exclude_poi_ids=None,
                        fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
     """Re-solve a trade route from the player's *current* position mid-run,
-    carrying forward any sunk cargo. `held` = {commodity, scu, buy_price}: a hold
-    already loaded with cargo that's been paid for but not yet sold. The new plan
-    must offload it first (best reachable buyer for that commodity — the sell leg
-    is flagged `held`, has no buy approach, and needs no forward capital), then
-    chain further trades with the freed hold. Without `held` this is just
-    plan_trade_route from the live position. Returns the {summary, legs, start}
-    shape; the summary carries `carried_commodity`/`carried_scu` when a sunk load
-    was folded in."""
+    carrying forward any sunk cargo. `held` = {commodity, scu, buy_price} or a
+    LIST of them (top-up lots ride the hold beside the primary,
+    docs/trade-topup.md): cargo that's been paid for but not yet sold. The new
+    plan must offload every lot first (best reachable buyer per commodity —
+    each sell leg is flagged `held`, has no buy approach, and needs no forward
+    capital; lots are chained greedily, best-scoring first, each next lot from
+    the previous sell stop), then chain further trades with the freed hold.
+    Without `held` this is just plan_trade_route from the live position.
+    Returns the {summary, legs, start} shape; the summary carries
+    `carried_commodity`/`carried_scu` when sunk cargo was folded in, and
+    `stranded_held` (commodity names) when SOME lots found no buyer while the
+    rest still planned."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     optimize = sort if sort in ("profit", "return") else "per_hour"
     now = now_ts if now_ts is not None else time.time()
@@ -4369,7 +4434,10 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     exclude_poi_ids = frozenset(exclude_poi_ids or ())
     memo = {}
 
-    held_scu = float(held.get("scu")) if (held and held.get("scu")) else 0.0
+    held_lots = [h for h in (held if isinstance(held, (list, tuple))
+                             else ([held] if held else []))
+                 if h and float(h.get("scu") or 0) > 0]
+    held_scu = sum(float(h["scu"]) for h in held_lots)
     if held_scu <= 0:
         return plan_trade_route(
             nav, prices, usable_scu, start_id=start_id, start_pos=start_pos,
@@ -4389,26 +4457,56 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     elif start_pos is not None:
         start = position_start(nav, start_pos)
 
-    # The held-cargo sell leg is costed with volumes too — you're already loaded,
-    # so a detour on the sell approach is exactly what a mid-run reroute is for.
-    # It also honors demand-side stock reports (`avoid_sells`): "this terminal
-    # won't buy my cargo → re-plan" is exactly the moment a fresh no-demand
-    # report must steer the replacement buyer.
-    held_row, sell_poi = _held_sell_leg(
-        nav, prices, held, start, system=system, max_age_s=max_age_s, now=now,
-        t_ref=t_ref, optimize=optimize, avoid=avoid_volumes, memo=memo,
-        avoid_sells=frozenset(avoid_sells or ()),
-        exclude_poi_ids=exclude_poi_ids)
-    if held_row is None:
+    # Each held-cargo sell leg is costed with volumes too — you're already
+    # loaded, so a detour on the sell approach is exactly what a mid-run
+    # reroute is for. It also honors demand-side stock reports (`avoid_sells`):
+    # "this terminal won't buy my cargo → re-plan" is exactly the moment a
+    # fresh no-demand report must steer the replacement buyer. Lots are sold
+    # greedily: the best-scoring lot from the live position first, the next
+    # from that sell stop, and so on — a lot with no buyer strands (named in
+    # the summary) while the sellable rest still plans.
+    avoid_sell_set = frozenset(avoid_sells or ())
+    held_rows, stranded = [], []
+    pos = start
+    remaining = list(held_lots)
+    while remaining:
+        best = None                                  # (score, idx, row, poi)
+        for i, lot in enumerate(remaining):
+            row, poi = _held_sell_leg(
+                nav, prices, lot, pos, system=system, max_age_s=max_age_s,
+                now=now, t_ref=t_ref, optimize=optimize, avoid=avoid_volumes,
+                memo=memo, avoid_sells=avoid_sell_set,
+                exclude_poi_ids=exclude_poi_ids)
+            if row is None:
+                continue
+            leg = (travel_cost(nav, pos, poi, t_ref, avoid=avoid_volumes, memo=memo)
+                   if pos is not None else None)
+            eta = (_leg_time_s(leg["distance_m"])
+                   if (leg and leg["distance_m"] is not None) else None)
+            revenue = row["sell_price"] * int(round(float(lot.get("scu") or 0)))
+            hours = ((eta or 0.0) + STOP_DWELL_S) / 3600.0
+            score = (revenue if optimize == "profit"
+                     else (revenue / hours if hours > 0 else float(revenue)))
+            if best is None or score > best[0]:
+                best = (score, i, row, poi)
+        if best is None:
+            stranded.extend(str(l.get("commodity")) for l in remaining)
+            break
+        _, i, row, poi = best
+        held_rows.append(row)
+        remaining.pop(i)
+        pos = poi if poi is not None else pos
+    carried_names = ", ".join(str(l.get("commodity")) for l in held_lots)
+    if not held_rows:
         empty = _cost_route(nav, [], start, t_ref)
         # Name the constraint that stranded the cargo: "nobody buys Titanium" and
         # "nobody your ship can dock at buys Titanium" want very different fixes.
         empty["summary"]["reason"] = (
-            f"no reachable buyer for held {held.get('commodity')} — try widening STOPS"
+            f"no reachable buyer for held {carried_names} — try widening STOPS"
             if exclude_poi_ids
-            else f"no known buyer for held {held.get('commodity')}")
+            else f"no known buyer for held {carried_names}")
         empty["summary"]["usable_scu"] = float(usable_scu)
-        empty["summary"]["carried_commodity"] = held.get("commodity")
+        empty["summary"]["carried_commodity"] = carried_names
         empty["summary"]["carried_scu"] = held_scu
         empty["start"] = _start_ref(start)
         return empty
@@ -4428,18 +4526,32 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                               avoid_buys=frozenset(avoid_buys or ()),
                               avoid_sells=frozenset(avoid_sells or ()),
                               exclude_poi_ids=exclude_poi_ids, box=box)
-    cont_legs = max(0, (max_stops - 1) // 2)      # held sell used one stop
+    cont_legs = max(0, (max_stops - len(held_rows)) // 2)   # held sells used stops
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
-    cont = _solve_route(nav, cands, sell_poi, cont_legs, optimize, t_ref,
+    cont = _solve_route(nav, cands, pos, cont_legs, optimize, t_ref,
                         deadhead_weight, avoid=avoid_volumes, memo=memo,
                         max_leg_m=max_leg_m, budget=budget) if cont_legs else []
-    best = _cost_route(nav, [held_row] + cont, start, t_ref, avoid=avoid_volumes, memo=memo,
+    best = _cost_route(nav, held_rows + cont, start, t_ref, avoid=avoid_volumes, memo=memo,
                        fuel_req=fuel_req, max_range_m=max_range_m, budget=budget)
     best["summary"]["usable_scu"] = float(usable_scu)
-    best["summary"]["carried_commodity"] = held.get("commodity")
+    best["summary"]["carried_commodity"] = carried_names
     best["summary"]["carried_scu"] = held_scu
+    if stranded:
+        best["summary"]["stranded_held"] = stranded
     best["start"] = _start_ref(start)
     return best
+
+
+def _lot_realized(lot: dict) -> int:
+    """Realized profit for one top-up lot (docs/trade-topup.md). A lot's buy
+    figures ARE actuals — it exists because the pilot typed what the kiosk
+    sold them (add-as-bought) — so only the sell side has a plan to fall
+    back to."""
+    sp, ss = lot.get("actual_sell_price"), lot.get("actual_sell_scu")
+    sell_price = sp if sp is not None else lot.get("sell_price")
+    sell_scu = ss if ss is not None else lot.get("scu")
+    return int(round((sell_price or 0) * (sell_scu or 0)
+                     - (lot.get("buy_price") or 0) * (lot.get("scu") or 0)))
 
 
 def trade_leg_realized(leg: dict) -> int | None:
@@ -4448,17 +4560,24 @@ def trade_leg_realized(leg: dict) -> int | None:
     `actual_sell_price`/`actual_sell_scu`) over the plan's — so earnings stats
     reflect what really happened, not UEX's possibly-stale scrape. Each side falls
     back to its planned value when unentered; a held leg's buy is the sunk
-    `buy_price`/`scu`. Returns the plan's `profit` when nothing was entered."""
+    `buy_price`/`scu`. Returns the plan's `profit` when nothing was entered.
+    Top-up lots riding the leg (`extras`, docs/trade-topup.md) add their own
+    realized profit on top."""
     bp, bs = leg.get("actual_buy_price"), leg.get("actual_buy_scu")
     sp, ss = leg.get("actual_sell_price"), leg.get("actual_sell_scu")
     if bp is None and bs is None and sp is None and ss is None:
-        return leg.get("profit")                       # nothing entered — planned
-    buy_price = bp if bp is not None else leg.get("buy_price")
-    buy_scu = bs if bs is not None else leg.get("scu")
-    sell_price = sp if sp is not None else leg.get("sell_price")
-    sell_scu = ss if ss is not None else leg.get("scu")
-    return int(round((sell_price or 0) * (sell_scu or 0)
-                     - (buy_price or 0) * (buy_scu or 0)))
+        base = leg.get("profit")                       # nothing entered — planned
+    else:
+        buy_price = bp if bp is not None else leg.get("buy_price")
+        buy_scu = bs if bs is not None else leg.get("scu")
+        sell_price = sp if sp is not None else leg.get("sell_price")
+        sell_scu = ss if ss is not None else leg.get("scu")
+        base = int(round((sell_price or 0) * (sell_scu or 0)
+                         - (buy_price or 0) * (buy_scu or 0)))
+    extras = leg.get("extras") or ()
+    if not extras:
+        return base
+    return int(base or 0) + sum(_lot_realized(x) for x in extras)
 
 
 # ---------------------------------------------------------------------------
@@ -4496,10 +4615,12 @@ def trade_run_realized(run: dict) -> int:
 
 def trade_run_scu(run: dict) -> float:
     """Total SCU actually moved across a run's sold legs — the entered sell SCU
-    when the player recorded it, else the planned load."""
+    when the player recorded it, else the planned load. Top-up lots count too."""
     total = 0.0
     for l in _trade_sold_legs(run):
         total += float(l.get("actual_sell_scu") or l.get("scu") or 0)
+        for x in (l.get("extras") or ()):
+            total += float(x.get("actual_sell_scu") or x.get("scu") or 0)
     return total
 
 
