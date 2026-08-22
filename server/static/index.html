@@ -1529,6 +1529,8 @@
   .topup-row:first-of-type { border-top: none; }
   .topup-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .topup-line b { color: var(--text); }
+  /* The headline economics: what buying this lot adds to the run's profit. */
+  .topup-gain { color: var(--good); font-weight: 600; white-space: nowrap; }
   .topup-add { font-size: 12px; margin-left: auto; }
   /* .trade-actual sets display:flex, which beats the UA [hidden] rule — the
      same trap as .on-invis/.rg-row. Guard every flex row that can be hidden. */
@@ -9839,7 +9841,7 @@ function renderTradePlan(res) {
   h += `</div><div class="panel"><h2>LEGS</h2>`;
   (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
   h += `<div class="route-actions"><button id="trade-start" class="active">Start this run ▸</button>`
-    + `<span class="muted" style="font-size:12px;">guides you buy-by-sell in the navigator</span></div>`;
+    + `<span class="muted" style="font-size:12px;">walks you through each buy and sell — the navigator points at the next stop</span></div>`;
   h += `</div>`;
   out.innerHTML = h; out.hidden = false;
   $("trade-start").onclick = startTradeRun;
@@ -10483,8 +10485,9 @@ function renderTopupPanel(panel, doc, leg) {
         + `<div class="topup-line"><b>${esc(r.commodity)}</b>`
         + ` <span class="muted"${kioskTitle(r.buy_price, size)}>@ ${fmtAuec(r.buy_price)} → ${fmtAuec(r.sell_price)}</span>`
         + ` <span class="muted">· ${fill} · cost ${fmtAuec(r.buy_cost)}</span>`
-        + ` · <b>+${fmtAuec(r.trade_profit)}</b>`
-        + (r.return_pct != null ? ` <span class="tl-return">${Math.round(r.return_pct)}%</span>` : "")
+        + ` · <span class="topup-gain" title="added to this run's profit if you buy this lot">+${fmtAuec(r.trade_profit)} profit</span>`
+        + (r.return_pct != null
+            ? ` <span class="tl-return" title="return on the aUEC spent: profit ÷ cost">${Math.round(r.return_pct)}% return</span>` : "")
         + `<button class="topup-add" type="button">add ▸</button></div>`
         + `<div class="trade-actual topup-form" hidden>`
         + `<span class="ta-label">paid</span>`
