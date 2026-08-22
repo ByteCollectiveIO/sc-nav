@@ -5404,6 +5404,17 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             free_before = _topup_free_scu(run)
             lot, supply = _validate_topup_lot(leg, body)
             extras.append(lot)
+            # The plan just grew: fold the lot's expected profit into the
+            # frozen summary's total, or the header's "realized X of Y planned"
+            # could show realized OVERTAKING planned by the sell step. Time and
+            # distance are genuinely unchanged (same hop), so only the profit
+            # figure moves; per-hour/return stay the plan's — they're re-derived
+            # on the next re-plan, not patched piecemeal here.
+            sm = run.get("summary") or {}
+            sm["total_profit"] = (int(sm.get("total_profit") or 0)
+                                  + int(round((lot["sell_price"] - (lot["buy_price"] or 0))
+                                              * (lot["scu"] or 0))))
+            run["summary"] = sm
             # Short-fill evidence, same rule as the primary: buying well under
             # what the shelf could have supplied (its advertised stock, capped
             # by the free hold) files a supply-'low' report. Ambiguity accepted

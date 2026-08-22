@@ -92,7 +92,12 @@ bought. The app never auto-confirms (same stance as #41). Server-side:
 - files a supply-`low` stock report when the bought SCU lands well under what
   the shelf could have supplied (same `_LOW_STOCK_FRACTION` rule as a short
   primary buy — ambiguous evidence accepted: a deliberate small buy files a
-  report a later member disproves).
+  report a later member disproves);
+- folds the lot's expected profit into the frozen `summary.total_profit` (live
+  finding, 2026-08-22): the run header reads "realized X of Y planned", and a
+  plan that grew must say so — otherwise realized overtakes "planned" by the
+  sell step. Time/distance are genuinely unchanged (same hop), so only the
+  profit figure moves; per-hour/return stay the plan's until the next re-plan.
 
 ### Sell phase: per-lot confirms
 
