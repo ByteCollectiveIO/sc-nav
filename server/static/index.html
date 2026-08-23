@@ -1375,6 +1375,56 @@
   /* `.route-row { display:flex }` outranks the UA [hidden] rule, so a hidden
      drive-row would still show; restore hiding at higher specificity (#27). */
   .route-row[hidden] { display: none; }
+  /* Trade planner console (2026-08-22 regroup): one panel, a shared label
+     column so every control aligns, thin section rules instead of stacked
+     panels, hints demoted to tooltips. Same tokens and components — the
+     change is structural: ship facts, route strategy and the rules door
+     stop rendering at one undifferentiated weight. */
+  .tf-grid { display: grid; grid-template-columns: 108px minmax(0, 1fr);
+    gap: 10px 14px; align-items: center; margin-top: 4px; }
+  .tf-row { display: contents; }
+  .tf-row[hidden] { display: none; }     /* [hidden] must beat display:contents */
+  .tf-label { font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--dim); cursor: default; }
+  .tf-ctl { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; min-width: 0; }
+  .tf-section { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+    margin-top: 8px; font-size: 10px; letter-spacing: 2px; color: var(--accent); }
+  .tf-section::after { content: ""; flex: 1; height: 1px; background: var(--border); opacity: .6; }
+  .tf-section:first-child { margin-top: 0; }
+  .tf-wide { grid-column: 1 / -1; }
+  .tf-hint { grid-column: 2; font-size: 11px; color: var(--dim); margin: -4px 0 0; }
+  .tf-hint:empty { display: none; }
+  /* The rules door, promoted from a bare summary line to a visible control —
+     the deviation chips stay the instrument, right-aligned on the door. */
+  .tf-grid .trade-rules { grid-column: 1 / -1; margin-top: 2px; }
+  .trade-rules > summary { border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel2); padding: 8px 12px; color: var(--text); }
+  .trade-rules > summary .rules-chips { display: flex; flex-wrap: wrap; gap: 5px 8px;
+    margin-left: auto; }
+  .trade-rules[open] > summary { border-radius: 8px 8px 0 0; }
+  .trade-rules[open] > .rules-grid { border: 1px solid var(--border); border-top: 0;
+    border-radius: 0 0 8px 8px; padding: 12px; margin-top: 0; }
+  /* Sticky action bar: the run's primary action never scrolls away, and the
+     config echo beside it is the one-line readout of what will be planned. */
+  .tf-actions { position: sticky; bottom: 0; z-index: 2; flex-wrap: wrap;
+    margin: 14px -14px -12px; padding: 10px 14px; background: var(--panel);
+    border-top: 1px solid var(--border); border-radius: 0 0 8px 8px; }
+  .tf-echo { margin-left: auto; font-size: 12px; color: var(--dim);
+    font-variant-numeric: tabular-nums; }
+  @media (max-width: 700px) {
+    /* Single column, but the track keeps a zero floor — a bare `1fr` can't
+       shrink below content min-width, and a four-button seg would push the
+       whole grid past the panel edge. Segs wrap instead of clipping. */
+    .tf-grid { grid-template-columns: minmax(0, 1fr); gap: 6px 0; }
+    .tf-grid .seg { flex-wrap: wrap; }
+    .tf-label { margin-top: 6px; }
+    .tf-hint { grid-column: 1; }
+    .tf-actions { margin: 14px -12px -10px; padding: 10px 12px; }
+  }
+  /* Plan screen: the metric strip in two tiers — the five readings that decide
+     whether to fly, then the context figures smaller. */
+  .route-substats.minor { margin-top: 4px; gap: 10px 18px; }
+  .route-substats.minor .metric .v { font-size: 13px; color: var(--dim); }
   .drive-row { align-items: center; gap: 12px; flex-wrap: wrap; }
   .drive-row .range-only { display: inline-flex; align-items: center; gap: 5px; }
   .drive-row .range-readout { font-size: 12px; color: var(--dim); }
@@ -3829,138 +3879,146 @@
 
     <div id="trade-favorites" class="panel" hidden></div>
 
+    <!-- Console regroup (2026-08-22): one panel, a shared label column, SHIP /
+         ROUTE section rules. Ship facts and route strategy stopped rendering at
+         one undifferentiated weight; the old per-row hint prose moved to title
+         tooltips on the labels. Every id and picker wrapper is unchanged. -->
     <div class="panel">
-      <h2>SHIP &amp; LOADOUT</h2>
-      <div class="route-row">
-        <span class="poi-pick" style="flex:2; min-width:160px;">
-          <input id="trade-ship" class="ti"
-                 placeholder="ship — type a name (e.g. C2 Hercules)" autocomplete="off">
-        </span>
-        <label class="muted" style="font-size:12px;">usable SCU
-          <input id="trade-scu" class="ti" type="number" min="0" step="1" style="width:90px;">
-        </label>
-        <span id="trade-ship-msg" class="muted" style="font-size:12px;"></span>
-      </div>
-      <div class="route-row drive-row" id="trade-drive-wrap" hidden>
-        <label class="muted" style="font-size:12px;">quantum drive
-          <select id="trade-qd" class="ti" style="width:auto; min-width:150px;"></select>
-        </label>
-        <label class="muted range-only" style="font-size:12px;"
-               title="Only plan trades where every jump fits on one tank of quantum fuel">
-          <input type="checkbox" id="trade-inrange"> in-range only
-        </label>
-        <span id="trade-range" class="range-readout"></span>
-      </div>
-      <!-- Stop kind is a SHIP fact, not a route preference: the catalog knows a Hull-C
-           has no landing gear, and tradeStopsForShip auto-sets this the moment the ship
-           is known (a nudge, not a lock — any explicit pick overrides it). -->
-      <div class="route-row rule-row">
-        <span class="muted" style="font-size:12px;">Can stop at</span>
-        <span class="seg" id="trade-stopkind" role="group" aria-label="Which stops the ship can use"
-              aria-describedby="trade-stopkind-hint">
-          <button class="on" data-stops="any" type="button" aria-pressed="true">Any</button>
-          <button data-stops="no_outposts" type="button" aria-pressed="false">Stations &amp; cities</button>
-          <button data-stops="stations" type="button" aria-pressed="false">Stations only</button>
-          <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
-        </span>
-        <span class="muted rule-hint" id="trade-stopkind-hint"></span>
-      </div>
-      <!-- How the cargo gets aboard (#46). A run fact like stop kind, not a taste:
-           the kiosk either stows the hold for you or you move every container
-           yourself, and 505 × 1 SCU vs 21 × 24 SCU is the whole difference. -->
-      <div class="route-row rule-row">
-        <span class="muted" style="font-size:12px;">Loading</span>
-        <span class="seg" id="trade-loading" role="group" aria-label="How the cargo is loaded"
-              aria-describedby="trade-loading-hint">
-          <button class="on" data-loading="auto" type="button" aria-pressed="true">Auto-load</button>
-          <button data-loading="hand" type="button" aria-pressed="false">Hand-load</button>
-        </span>
-        <span class="muted rule-hint" id="trade-loading-hint"></span>
-      </div>
-      <!-- Which end of the fill-vs-boxes trade-off (#46 follow-up). Hand-load
-           only: under auto-load the kiosk stows the hold and box count is free,
-           so the question doesn't arise. `Exact` pins a size for a player who
-           knows this commodity ships in 8s. -->
-      <div class="route-row rule-row" id="trade-boxmode-row">
-        <span class="muted" style="font-size:12px;">Box size</span>
-        <span class="seg" id="trade-boxmode" role="group" aria-label="How to choose the container size"
-              aria-describedby="trade-boxmode-hint">
-          <button class="on" data-boxmode="best" type="button" aria-pressed="true">Best fit</button>
-          <button data-boxmode="fill" type="button" aria-pressed="false">Max fill</button>
-          <button data-boxmode="fewest" type="button" aria-pressed="false">Fewest boxes</button>
-        </span>
-        <label class="muted" style="font-size:12px;">exact
-          <select id="trade-boxsize" class="ti" style="width:auto;">
-            <option value="">auto</option>
-          </select>
-        </label>
-        <span class="muted rule-hint" id="trade-boxmode-hint"></span>
-      </div>
-      <p class="muted route-hint">Bigger holds move more per leg — set what actually fits.
-        Picking a ship also sets where it can stop; pick another option to override.</p>
-    </div>
-
-    <div class="panel">
-      <h2>START FROM</h2>
-      <div class="route-row">
-        <span class="poi-pick" style="flex:2; min-width:160px;">
-          <input id="trade-start-poi" class="ti" placeholder="a station / POI you're at (optional)"
-                 autocomplete="off">
-        </span>
-        <span class="muted" style="font-size:12px;">or</span>
-        <button id="trade-here">📍 my current location</button>
-        <span id="trade-start-msg" class="muted" style="font-size:12px;"></span>
-      </div>
-      <p class="muted route-hint">Leave blank to begin wherever the richest first buy is.</p>
-    </div>
-
-    <div class="panel">
-      <h2>PLAN</h2>
-      <div class="trade-tabs" id="trade-mode-tabs" role="tablist" aria-label="How to plan the run">
-        <button class="trade-tab active" id="trade-tab-auto" data-mode="auto" role="tab" type="button" aria-selected="true" aria-controls="trade-mode-panel">Auto</button>
-        <button class="trade-tab" id="trade-tab-filtered" data-mode="filtered" role="tab" type="button" aria-selected="false" tabindex="-1" aria-controls="trade-mode-panel">Pick commodities</button>
-        <button class="trade-tab" id="trade-tab-manual" data-mode="manual" role="tab" type="button" aria-selected="false" tabindex="-1" aria-controls="trade-mode-panel">Manual legs</button>
-      </div>
-
-      <!-- One reused tabpanel for all three modes; setTradeMode relabels it (aria-labelledby)
-           to the active tab, the correct pattern when tabs reconfigure a shared region. -->
-      <div id="trade-mode-panel" role="tabpanel" aria-labelledby="trade-tab-auto">
-      <div id="trade-solver-opts">
-        <!-- The intent row (#43/#44): the sort and its floor answer the same trader
-             question from opposite ends, so they live on one row. -->
-        <div class="route-row" style="margin-top:12px; align-items:center;">
-          <span class="muted" style="font-size:12px;">Optimize for</span>
-          <span class="seg" id="trade-sort" role="group" aria-label="Optimize for">
-            <button class="on" data-sort="per_hour" type="button" aria-pressed="true">Best aUEC/hr</button>
-            <button data-sort="profit" type="button" aria-pressed="false">Most profit</button>
-            <button data-sort="return" type="button" aria-pressed="false"
-                    title="With a max spend set, ranks routes by the multiple on that bankroll (profit ÷ max spend). Without one it ranks profit per aUEC deployed, which favours cheap cargo with a big multiple on very little money.">Best return</button>
+      <h2>PLAN A TRADE RUN</h2>
+      <div class="tf-grid">
+        <div class="tf-section">SHIP</div>
+        <span class="tf-label"
+              title="Bigger holds move more per leg — set what actually fits.">Ship</span>
+        <span class="tf-ctl">
+          <span class="poi-pick" style="flex:2; min-width:160px;">
+            <input id="trade-ship" class="ti"
+                   placeholder="ship — type a name (e.g. C2 Hercules)" autocomplete="off">
           </span>
-          <label class="muted" style="font-size:12px;">min return
-            <input id="trade-minreturn" class="ti" type="number" min="0" step="5"
-                   placeholder="any" style="width:80px;"> %
+          <label class="muted" style="font-size:12px;">usable SCU
+            <input id="trade-scu" class="ti" type="number" min="0" step="1" style="width:90px;">
           </label>
-        </div>
-        <p class="muted route-hint">Min return skips trades that earn less than this % on the
-          aUEC you tie up: buy at 100, sell at 163 is a 63% return.
-          <span id="trade-sort-note" class="trade-sort-note"></span></p>
-        <div id="trade-filter-row" class="route-row" hidden style="margin-top:10px;">
-          <span class="poi-pick" style="flex:1; min-width:180px;">
-            <input id="trade-commodity-add" class="ti" list="trade-commodities"
-                   placeholder="add a commodity (e.g. Gold)" autocomplete="off">
+          <span id="trade-ship-msg" class="muted" style="font-size:12px;"></span>
+        </span>
+        <div class="tf-row drive-row" id="trade-drive-wrap" hidden>
+          <span class="tf-label">Quantum drive</span>
+          <span class="tf-ctl">
+            <select id="trade-qd" class="ti" style="width:auto; min-width:150px;"></select>
+            <label class="muted range-only" style="font-size:12px;"
+                   title="Only plan trades where every jump fits on one tank of quantum fuel">
+              <input type="checkbox" id="trade-inrange"> in-range only
+            </label>
+            <span id="trade-range" class="range-readout"></span>
           </span>
-          <button id="trade-commodity-btn" type="button">+ add</button>
-          <div id="trade-commodity-chips" class="trade-chips"></div>
         </div>
-      </div>
+        <!-- Stop kind is a SHIP fact, not a route preference: the catalog knows a Hull-C
+             has no landing gear, and tradeStopsForShip auto-sets this the moment the ship
+             is known (a nudge, not a lock — any explicit pick overrides it). -->
+        <span class="tf-label"
+              title="Picking a ship sets this automatically — a Hull-C can only moor at a cargo dock. Any explicit pick overrides.">Can stop at</span>
+        <span class="tf-ctl">
+          <span class="seg" id="trade-stopkind" role="group" aria-label="Which stops the ship can use"
+                aria-describedby="trade-stopkind-hint">
+            <button class="on" data-stops="any" type="button" aria-pressed="true">Any</button>
+            <button data-stops="no_outposts" type="button" aria-pressed="false">Stations &amp; cities</button>
+            <button data-stops="stations" type="button" aria-pressed="false">Stations only</button>
+            <button data-stops="dock" type="button" aria-pressed="false">Cargo dock</button>
+          </span>
+          <span class="muted rule-hint" id="trade-stopkind-hint"></span>
+        </span>
+        <!-- How the cargo gets aboard (#46). A run fact like stop kind, not a taste:
+             the kiosk either stows the hold for you or you move every container
+             yourself, and 505 × 1 SCU vs 21 × 24 SCU is the whole difference. -->
+        <span class="tf-label"
+              title="The kiosk either stows the hold for you (auto) or you move every container yourself (hand).">Loading</span>
+        <span class="tf-ctl">
+          <span class="seg" id="trade-loading" role="group" aria-label="How the cargo is loaded"
+                aria-describedby="trade-loading-hint">
+            <button class="on" data-loading="auto" type="button" aria-pressed="true">Auto-load</button>
+            <button data-loading="hand" type="button" aria-pressed="false">Hand-load</button>
+          </span>
+          <span class="muted rule-hint" id="trade-loading-hint"></span>
+        </span>
+        <!-- Which end of the fill-vs-boxes trade-off (#46 follow-up). `Exact`
+             pins a size for a player who knows this commodity ships in 8s. -->
+        <div class="tf-row" id="trade-boxmode-row">
+          <span class="tf-label"
+                title="Fills are bought in whole cargo containers — pick which end of the fill-vs-boxes trade-off to favor.">Box size</span>
+          <span class="tf-ctl">
+            <span class="seg" id="trade-boxmode" role="group" aria-label="How to choose the container size"
+                  aria-describedby="trade-boxmode-hint">
+              <button class="on" data-boxmode="best" type="button" aria-pressed="true">Best fit</button>
+              <button data-boxmode="fill" type="button" aria-pressed="false">Max fill</button>
+              <button data-boxmode="fewest" type="button" aria-pressed="false">Fewest boxes</button>
+            </span>
+            <label class="muted" style="font-size:12px;">exact
+              <select id="trade-boxsize" class="ti" style="width:auto;">
+                <option value="">auto</option>
+              </select>
+            </label>
+            <span class="muted rule-hint" id="trade-boxmode-hint"></span>
+          </span>
+        </div>
 
-      <div id="trade-manual" hidden style="margin-top:12px;">
-        <div id="trade-legs"></div>
-        <button id="trade-add-leg" type="button" style="margin-top:8px;">+ add leg</button>
-        <p class="muted route-hint">Pick a commodity, then a terminal to buy at and one to sell at.
-          Live prices and profit fill in as you go.</p>
-      </div>
-      </div><!-- /trade-mode-panel -->
+        <div class="tf-section">ROUTE</div>
+        <span class="tf-label"
+              title="Leave blank to begin wherever the richest first buy is.">Start from</span>
+        <span class="tf-ctl">
+          <span class="poi-pick" style="flex:2; min-width:160px;">
+            <input id="trade-start-poi" class="ti"
+                   placeholder="richest first buy (or type a place)" autocomplete="off">
+          </span>
+          <button id="trade-here">📍 my current location</button>
+          <span id="trade-start-msg" class="muted" style="font-size:12px;"></span>
+        </span>
+        <span class="tf-label">Plan</span>
+        <span class="tf-ctl">
+          <div class="trade-tabs" id="trade-mode-tabs" role="tablist" aria-label="How to plan the run">
+            <button class="trade-tab active" id="trade-tab-auto" data-mode="auto" role="tab" type="button" aria-selected="true" aria-controls="trade-mode-panel">Auto</button>
+            <button class="trade-tab" id="trade-tab-filtered" data-mode="filtered" role="tab" type="button" aria-selected="false" tabindex="-1" aria-controls="trade-mode-panel">Pick commodities</button>
+            <button class="trade-tab" id="trade-tab-manual" data-mode="manual" role="tab" type="button" aria-selected="false" tabindex="-1" aria-controls="trade-mode-panel">Manual legs</button>
+          </div>
+        </span>
+
+        <!-- One reused tabpanel for all three modes; setTradeMode relabels it (aria-labelledby)
+             to the active tab, the correct pattern when tabs reconfigure a shared region.
+             display:contents rows keep its children in the shared label grid. -->
+        <div id="trade-mode-panel" class="tf-row" role="tabpanel" aria-labelledby="trade-tab-auto">
+          <div id="trade-solver-opts" class="tf-row">
+            <!-- The intent row (#43/#44): the sort and its floor answer the same trader
+                 question from opposite ends, so they live on one row. -->
+            <span class="tf-label"
+                  title="Min return skips trades that earn less than this % on the aUEC you tie up: buy at 100, sell at 163 is a 63% return.">Optimize for</span>
+            <span class="tf-ctl">
+              <span class="seg" id="trade-sort" role="group" aria-label="Optimize for">
+                <button class="on" data-sort="per_hour" type="button" aria-pressed="true">Best aUEC/hr</button>
+                <button data-sort="profit" type="button" aria-pressed="false">Most profit</button>
+                <button data-sort="return" type="button" aria-pressed="false"
+                        title="With a max spend set, ranks routes by the multiple on that bankroll (profit ÷ max spend). Without one it ranks profit per aUEC deployed, which favours cheap cargo with a big multiple on very little money.">Best return</button>
+              </span>
+              <label class="muted" style="font-size:12px;"
+                     title="Skip trades that earn less than this % on the aUEC you tie up.">min return
+                <input id="trade-minreturn" class="ti" type="number" min="0" step="5"
+                       placeholder="any" style="width:80px;"> %
+              </label>
+            </span>
+            <span id="trade-sort-note" class="trade-sort-note tf-hint"></span>
+            <div id="trade-filter-row" class="tf-wide route-row" hidden>
+              <span class="poi-pick" style="flex:1; min-width:180px;">
+                <input id="trade-commodity-add" class="ti" list="trade-commodities"
+                       placeholder="add a commodity (e.g. Gold)" autocomplete="off">
+              </span>
+              <button id="trade-commodity-btn" type="button">+ add</button>
+              <div id="trade-commodity-chips" class="trade-chips"></div>
+            </div>
+          </div>
+
+          <div id="trade-manual" class="tf-wide" hidden>
+            <div id="trade-legs"></div>
+            <button id="trade-add-leg" type="button" style="margin-top:8px;">+ add leg</button>
+            <p class="muted route-hint">Pick a commodity, then a terminal to buy at and one to sell at.
+              Live prices and profit fill in as you go.</p>
+          </div>
+        </div><!-- /trade-mode-panel -->
 
       <!-- Route rules (#34/#42/#43 regroup): durable policy in one disclosure. The
            summary chips are the "what's non-default" instrument — dim = default,
@@ -4025,12 +4083,14 @@
         </div>
       </details>
 
+      </div><!-- /tf-grid -->
       <datalist id="trade-commodities"></datalist>
-      <div class="route-actions">
+      <div class="route-actions tf-actions">
         <button id="trade-plan" class="active">Plan trade run</button>
         <button id="trade-save" title="save this setup as a favorite to reload later">★ Save route</button>
         <button id="trade-clear" title="reset the planner">Clear</button>
         <span id="trade-plan-msg" class="muted" style="font-size:12px;"></span>
+        <span id="trade-echo" class="tf-echo"></span>
       </div>
     </div>
 
@@ -8889,6 +8949,7 @@ function setTradeLoading(mode, quiet) {
   // Overridable, and deliberately re-applied on every flip so the pair reads
   // consistently; pick a mode after flipping and it sticks.
   if (!quiet) setTradeBoxMode(LOADING_DEFAULT_BOXMODE[tradeLoading]);
+  renderTradeRuleChips();  // the action-bar echo names the loading method
 }
 // Which end of the fill-vs-boxes trade-off (#46 follow-up). `best` is the
 // balanced marginal-rate pick; the other two are the extremes it interpolates
@@ -9000,6 +9061,18 @@ function renderTradeRuleChips() {
          (stops !== 6 || sys !== tradeDefaultSystem) ? "dev" : "");
   }
   box.innerHTML = chips.join("");
+  // Config echo on the sticky action bar (console regroup): the one-line
+  // readout of what "Plan trade run" will actually plan.
+  const echo = $("trade-echo");
+  if (echo) {
+    const scu = Number($("trade-scu").value) || 0;
+    const bits = [];
+    if (scu > 0) bits.push(scu.toLocaleString() + " SCU");
+    bits.push(tradeLoading === "hand" ? "hand-load" : "auto-load");
+    const sys = $("trade-system") ? $("trade-system").value : "";
+    if (sys) bits.push(sys);
+    echo.textContent = bits.join(" · ");
+  }
 }
 let tradeFilter = [];                    // commodity names (filtered mode)
 let tradeStartHere = false;              // start from the caller's live position
@@ -9472,7 +9545,7 @@ function wireTradePlanner() {
   // Re-rank the "best trades" board whenever the ship (SCU) or system changes so
   // it reflects the same profit/hour objective the Auto planner optimizes — a bare
   // SCU edit shouldn't leave a stale margin-only board (see renderTradeSuggest).
-  $("trade-scu").addEventListener("input", renderTradeSuggest);
+  $("trade-scu").addEventListener("input", () => { renderTradeSuggest(); renderTradeRuleChips(); });
   $("trade-system").addEventListener("change", () => { renderTradeSuggest(); renderTradeRuleChips(); });
   $("trade-stops").addEventListener("input", renderTradeRuleChips);
   $("trade-budget").addEventListener("input", () => {
@@ -9546,6 +9619,7 @@ function prefillTradeScu() {
   syncDrivePicker(cat.quantum, name, "trade-qd", "trade-drive-wrap", "trade-range");   // #27
   tradeStopsForShip();    // #34: a dock-only hull can't use planetary stops — default it
   renderTradeSuggest();   // re-rank the board for the new hold size
+  renderTradeRuleChips(); // the action-bar echo tracks the new hold size
 }
 
 function setTradeMode(mode) {
@@ -9797,10 +9871,13 @@ function renderTradePlan(res) {
     + `<span class="v">${primary.v}</span><span class="l">${primary.l}</span></div>`
     + (sm.profit_per_hour ? `<div class="rh-sub"><b>${fmtAuec(sm.profit_per_hour)}</b> aUEC/hr</div>` : "")
     + `</div>`;
+  // Two tiers (console regroup): the readings that decide whether to fly
+  // (route shape, time, capital), then the context figures smaller below.
   const sub = [metric(sm.legs, "TRADES"), metric(sm.stops, "STOPS"),
                metric(fmtGm(sm.total_distance_m), "QT DISTANCE"),
                metric(fmtDur(sm.total_time_s), "EST. TIME"),
                metric(fmtAuec(sm.peak_capital), "CAPITAL NEEDED")];
+  const sub2 = [];
   // #43: profit as a share of the capital you front. Measured against PEAK
   // capital because sequential trades recycle the same aUEC (see _cost_route).
   // With a max spend set (#44 fix), the headline % is the multiple on the
@@ -9808,11 +9885,12 @@ function renderTradePlan(res) {
   // 874% on the 115 aUEC the route happened to deploy. The deployed-capital
   // figure stays available beside CAPITAL NEEDED.
   if (sm.return_on_budget_pct != null)
-    sub.push(metric(sm.return_on_budget_pct + "%", "RETURN ON SPEND"));
-  else if (sm.return_pct != null) sub.push(metric(sm.return_pct + "%", "RETURN"));
-  if (sm.loaded_pct != null) sub.push(metric(sm.loaded_pct + "%", "HOLD LOADED"));
-  if (sm.total_fuel_scu != null) sub.push(metric(fmtScu(sm.total_fuel_scu), "QT FUEL"));   // #27
-  h += `<div class="route-substats">` + sub.join("") + `</div>`;
+    sub2.push(metric(sm.return_on_budget_pct + "%", "RETURN ON SPEND"));
+  else if (sm.return_pct != null) sub2.push(metric(sm.return_pct + "%", "RETURN"));
+  if (sm.loaded_pct != null) sub2.push(metric(sm.loaded_pct + "%", "HOLD LOADED"));
+  if (sm.total_fuel_scu != null) sub2.push(metric(fmtScu(sm.total_fuel_scu), "QT FUEL"));   // #27
+  h += `<div class="route-substats">` + sub.join("") + `</div>`
+    + (sub2.length ? `<div class="route-substats minor">` + sub2.join("") + `</div>` : "");
   if (res.start) h += `<p class="route-hint muted">Starting from <b>${esc(res.start.name)}</b>.</p>`;
   // Urgent, route-safety callouts stay inline right under the headline (#24 v2):
   // rerouted-around (informational, a good outcome) split from touches-danger-
@@ -9852,8 +9930,10 @@ function renderTradePlan(res) {
     + adv.map(p => `<p>${p}</p>`).join("") + `</details>`;
   h += `</div><div class="panel"><h2>LEGS</h2>`;
   (res.legs || []).forEach((lg, i) => { h += renderTradeLeg(lg, i); });
-  h += `<div class="route-actions"><button id="trade-start" class="active">Start this run ▸</button>`
-    + `<span class="muted" style="font-size:12px;">walks you through each buy and sell — the navigator points at the next stop</span></div>`;
+  // Sticky like the planner's own action bar: on a long leg list the primary
+  // action stays reachable without scrolling past every card.
+  h += `<div class="route-actions tf-actions"><button id="trade-start" class="active">Start this run ▸</button>`
+    + `<span class="tf-echo">walks you through each buy and sell — the navigator points at the next stop</span></div>`;
   h += `</div>`;
   out.innerHTML = h; out.hidden = false;
   $("trade-start").onclick = startTradeRun;
