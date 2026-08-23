@@ -3492,6 +3492,10 @@ def _trade_row(name, src, dst, margin, capacity_scu, budget=None,
         "return_pct": trade_return_pct(int(src["buy"]), margin),   # #43
         "supply_scu": src.get("scu_buy") or 0,
         "demand_scu": dst.get("scu_sell_stock") or 0,
+        # Org stock overlay: the supply/demand figure above is a member's
+        # stated shelf maximum, not the UEX scrape (stock_supply_caps).
+        "supply_src": ("org" if src.get("supply_capped") else None),
+        "demand_src": ("org" if dst.get("demand_capped") else None),
         # Per-side stamps: an org-overlaid side (#39 slice 0) carries its own
         # observation time; otherwise both fall back to the row's scrape time.
         "buy_updated_at": src.get("buy_updated_at") or src.get("updated_at"),
@@ -3534,7 +3538,8 @@ def _set_trade_load(row: dict, scu: int, margin: int, *, box=None) -> dict:
 def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
                 capacity_scu=None, min_margin=0, min_return_pct=None,
                 limit=50, sort="auto", box=None,
-                budget=None, max_age_s=None, now_ts=None, t_ref=None) -> list[dict]:
+                budget=None, max_age_s=None, now_ts=None, t_ref=None,
+                supply_caps=None, demand_caps=None) -> list[dict]:
     """Best buy->sell trades over the live price feed, richest first.
 
     `prices` is the resolved per-terminal price list (the shape /api/trade/prices
@@ -3572,10 +3577,16 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
         # Freshness is judged per side: an org-overlaid buy price (#39 slice 0)
         # can rescue a point whose sell-side scrape has gone stale, and vice
         # versa — the sides are independent observations.
+        # Org stock overlay: the board sizes to member-observed shelf maxima
+        # too, or it and the planner would disagree about the best trade.
         if p.get("buy") and _price_fresh(p, max_age_s, now, side="buy"):
-            buyers.setdefault(name, []).append(p)
+            buyers.setdefault(name, []).append(
+                _cap_price_point(p, supply_caps, "scu_buy", "supply_capped")
+                if supply_caps else p)
         if p.get("sell") and _price_fresh(p, max_age_s, now, side="sell"):
-            sellers.setdefault(name, []).append(p)
+            sellers.setdefault(name, []).append(
+                _cap_price_point(p, demand_caps, "scu_sell_stock", "demand_capped")
+                if demand_caps else p)
 
     # positive-margin candidate pairs (cheap — no travel cost yet).
     cand = []
@@ -3712,7 +3723,8 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       legality="any", illicit=frozenset(), min_return_pct=None,
                       avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
                       avoid_buys=frozenset(), avoid_sells=frozenset(),
-                      exclude_poi_ids=frozenset(), box=None) -> list[dict]:
+                      exclude_poi_ids=frozenset(), box=None,
+                      supply_caps=None, demand_caps=None) -> list[dict]:
     """Every movable positive-margin buy->sell trade (no travel yet), richest
     total-profit first — the pool the greedy chain draws from. `commodities` (a
     name set) restricts to filtered mode; `legality` + `illicit` filter
@@ -3733,7 +3745,12 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     use at all (a Hull-C at a surface outpost it cannot land on). It reads like
     `avoid_poi_ids` here but the two are not interchangeable: danger avoidance is
     a preference the solver may override to offload sunk cargo, while an
-    unusable stop is never an option. See replan_trade_route."""
+    unusable stop is never an option. See replan_trade_route.
+
+    `supply_caps`/`demand_caps` (the org stock overlay, stock_supply_caps):
+    member-stated shelf maxima that replace the feed's supply/demand figures
+    per (poi, commodity) side — the fill sizes to what a member really found,
+    so a short shelf stops winning the ranking on phantom volume."""
     now = now_ts if now_ts is not None else time.time()
     cset = {c.strip().lower() for c in commodities} if commodities else None
     buyers: dict[str, list] = {}
@@ -3750,9 +3767,13 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
         # can rescue a point whose sell-side scrape has gone stale, and vice
         # versa — the sides are independent observations.
         if p.get("buy") and _price_fresh(p, max_age_s, now, side="buy"):
-            buyers.setdefault(name, []).append(p)
+            buyers.setdefault(name, []).append(
+                _cap_price_point(p, supply_caps, "scu_buy", "supply_capped")
+                if supply_caps else p)
         if p.get("sell") and _price_fresh(p, max_age_s, now, side="sell"):
-            sellers.setdefault(name, []).append(p)
+            sellers.setdefault(name, []).append(
+                _cap_price_point(p, demand_caps, "scu_sell_stock", "demand_capped")
+                if demand_caps else p)
     rows = []
     for name, srcs in buyers.items():
         key = name.strip().lower()
@@ -3841,6 +3862,7 @@ def _lot_view(r, scu, plan) -> dict:
         "return_pct": r.get("return_pct"),
         "supply_scu": r.get("supply_scu") or 0,
         "demand_scu": r.get("demand_scu") or 0,
+        "supply_src": r.get("supply_src"), "demand_src": r.get("demand_src"),
         "buy_terminal": r.get("buy_terminal"), "buy_terminal_id": r.get("buy_terminal_id"),
         "sell_terminal": r.get("sell_terminal"), "sell_terminal_id": r.get("sell_terminal_id"),
         "buy_updated_at": r.get("buy_updated_at"), "sell_updated_at": r.get("sell_updated_at"),
@@ -3854,7 +3876,8 @@ def _trade_bundle_candidates(prices, capacity_scu, *, system=None, commodities=N
                              legality="any", illicit=frozenset(), min_return_pct=None,
                              avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
                              avoid_buys=frozenset(), avoid_sells=frozenset(),
-                             exclude_poi_ids=frozenset(), box=None) -> list[dict]:
+                             exclude_poi_ids=frozenset(), box=None,
+                             supply_caps=None, demand_caps=None) -> list[dict]:
     """Mixed-load candidate generator (docs/trade-topup.md §PR 2): one aggregate
     row per (buy POI, sell POI) pair, its hold greedy-filled across every
     commodity that survives the per-lot filters — which is `_trade_candidates`
@@ -3885,7 +3908,8 @@ def _trade_bundle_candidates(prices, capacity_scu, *, system=None, commodities=N
         legality=legality, illicit=illicit, min_return_pct=min_return_pct,
         avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
         avoid_buys=avoid_buys, avoid_sells=avoid_sells,
-        exclude_poi_ids=exclude_poi_ids, box=box)
+        exclude_poi_ids=exclude_poi_ids, box=box,
+        supply_caps=supply_caps, demand_caps=demand_caps)
     pairs: dict[tuple, dict] = {}
     for r in singles:
         best = pairs.setdefault((r["buy_poi_id"], r["sell_poi_id"]), {})
@@ -3935,7 +3959,8 @@ def topup_candidates(prices, free_scu, *, buy_poi_id, sell_poi_id,
                      exclude=frozenset(), max_age_s=None, now_ts=None,
                      legality="any", illicit=frozenset(), min_return_pct=None,
                      avoid_buys=frozenset(), avoid_sells=frozenset(),
-                     box=None, limit=8) -> list[dict]:
+                     box=None, limit=8,
+                     supply_caps=None, demand_caps=None) -> list[dict]:
     """Mid-run top-up suggestions (docs/trade-topup.md): everything buyable at
     the active leg's buy POI that sells at its sell POI, sized to the FREE
     hold. Same hop as the cargo already aboard, so travel is identical for
@@ -3966,13 +3991,17 @@ def topup_candidates(prices, free_scu, *, buy_poi_id, sell_poi_id,
                 and not (avoid_buys and (buy_poi_id, key) in avoid_buys)):
             cur = srcs.get(name)
             if cur is None or int(p["buy"]) < int(cur["buy"]):
-                srcs[name] = p
+                srcs[name] = (_cap_price_point(p, supply_caps, "scu_buy",
+                                               "supply_capped")
+                              if supply_caps else p)
         if (p.get("poi_id") == sell_poi_id and p.get("sell")
                 and _price_fresh(p, max_age_s, now, side="sell")
                 and not (avoid_sells and (sell_poi_id, key) in avoid_sells)):
             cur = dsts.get(name)
             if cur is None or int(p["sell"]) > int(cur["sell"]):
-                dsts[name] = p
+                dsts[name] = (_cap_price_point(p, demand_caps, "scu_sell_stock",
+                                               "demand_capped")
+                              if demand_caps else p)
     rows = []
     for name, src in srcs.items():
         dst = dsts.get(name)
@@ -3990,6 +4019,55 @@ def topup_candidates(prices, free_scu, *, buy_poi_id, sell_poi_id,
             rows.append(row)
     rows.sort(key=lambda r: -(r["trade_profit"] or 0))
     return rows[:limit]
+
+
+def refit_stop_lots(prices, free_scu, *, buy_poi_id, sell_poi_id, budget=None,
+                    exclude=frozenset(), commodities=None, max_age_s=None,
+                    now_ts=None, legality="any", illicit=frozenset(),
+                    min_return_pct=None, avoid_buys=frozenset(),
+                    avoid_sells=frozenset(), box=None, supply_caps=None,
+                    demand_caps=None) -> list[dict]:
+    """Re-size a stop's planned co-loads after the primary's ACTUALS land
+    (docs/trade-topup.md §PR 2 follow-up): a kiosk that shorted the buy frees
+    hold AND capital — the plan-time lots were sized against a budget the
+    primary was expected to consume, so a 998k plan that really cost 284k
+    leaves 716k the stored lots know nothing about. Same hop, so this is a
+    pure re-fill: `topup_candidates` supplies the per-commodity pool (every
+    per-lot filter + the stock overlay applied), `_bundle_fill` packs the free
+    hold under the REMAINING budget — margin order, with the return-per-aUEC
+    refill when the wallet binds, exactly like plan time. Returns lots in
+    `_lot_view` shape, richest first, ready to replace the leg's unconfirmed
+    `lots`."""
+    if not free_scu or free_scu <= 0:
+        return []
+    pool = topup_candidates(
+        prices, int(free_scu), buy_poi_id=buy_poi_id, sell_poi_id=sell_poi_id,
+        exclude=exclude, max_age_s=max_age_s, now_ts=now_ts,
+        legality=legality, illicit=illicit, min_return_pct=min_return_pct,
+        avoid_buys=avoid_buys, avoid_sells=avoid_sells, box=box,
+        limit=_TOPUP_REFIT_POOL, supply_caps=supply_caps,
+        demand_caps=demand_caps)
+    if commodities:
+        # A filtered-mode run's plan claims to honor the commodity pick — its
+        # auto-refitted lots must too (the manual top-up panel deliberately
+        # doesn't: there the pilot IS the filter).
+        cset = {c.strip().lower() for c in commodities}
+        pool = [r for r in pool
+                if (r.get("commodity") or "").strip().lower() in cset]
+    fill = _bundle_fill(pool, free_scu, budget, box,
+                        key=lambda r: -r["profit_per_scu"])
+    if budget:
+        alt = _bundle_fill(pool, free_scu, budget, box,
+                           key=lambda r: -(r["profit_per_scu"] / r["buy_price"])
+                           if r["buy_price"] > 0 else 0.0)
+        if (sum(sc * r["profit_per_scu"] for r, sc, _ in alt)
+                > sum(sc * r["profit_per_scu"] for r, sc, _ in fill)):
+            fill = alt
+    fill.sort(key=lambda t: -(t[0]["profit_per_scu"] * t[1]))
+    return [_lot_view(r, sc, plan) for r, sc, plan in fill]
+
+
+_TOPUP_REFIT_POOL = 24   # commodities considered when re-filling a stop
 
 
 def trade_avoid_sets(warnings) -> tuple[frozenset, frozenset]:
@@ -4065,6 +4143,53 @@ def stock_avoid_sells(reports) -> frozenset:
     """Sell-side exclusion set: terminals members recently found *not buying*
     the commodity (demand-side `out` reports)."""
     return _stock_avoid_pairs(reports, "demand")
+
+
+def _stock_caps(reports, side) -> dict:
+    """The org stock overlay's cap map: {(poi_id, commodity_lower): scu} from
+    fresh `low` reports carrying a member-stated maximum on `side`. Only rows
+    with a positive figure cap — a figure-less low report stays a badge. One
+    live row per (poi, commodity, side) by construction, so no merging."""
+    caps = {}
+    for r in reports or ():
+        if r.get("kind") != "low" or _report_side(r) != side:
+            continue
+        pid, name, scu = r.get("poi_id"), r.get("commodity"), r.get("scu")
+        if pid is not None and name and scu and scu > 0:
+            caps[(pid, name.strip().lower())] = float(scu)
+    return caps
+
+
+def stock_supply_caps(reports) -> dict:
+    """Buy-side sizing caps: a member stood at the kiosk and stated 'this is
+    all it had'. The solver believes UEX's supply figure otherwise — which is
+    how a 544 SCU shelf kept planning as a 1,888 SCU money-maker: the lane won
+    the ranking BECAUSE of volume that didn't exist. Capping the fill re-prices
+    the lane at its real size, and the ranking fixes itself — no score penalty,
+    no exclusion; a short shelf can still be the best real trade in the system.
+    Age-off is the restock probe: when the report expires, one plan over-asks
+    at the UEX figure again, and that pilot's next checked buy re-caps it."""
+    return _stock_caps(reports, "supply")
+
+
+def stock_demand_caps(reports) -> dict:
+    """Sell-side twin: 'this is all they'd take'. Caps the demand clamp only —
+    a held-cargo sell leg is never capped (sunk cargo must offload somewhere,
+    and selling into a soft market beats not selling at all)."""
+    return _stock_caps(reports, "demand")
+
+
+def _cap_price_point(p, caps, field, flag):
+    """One side of a price point under the org stock overlay: when a fresh
+    member observation caps this (poi, commodity), return a copy whose supply/
+    demand figure is the observed maximum, flagged so the row can badge its
+    provenance. The observation REPLACES the feed figure rather than min()-ing
+    with it — it's newer and it's first-hand; where UEX says 0 (unknown) the
+    observation is also strictly more information."""
+    cap = caps.get((p.get("poi_id"), (p.get("commodity") or "").strip().lower()))
+    if cap is None:
+        return p
+    return {**p, field: cap, flag: True}
 
 
 def trade_leg_stock(leg: dict, reports) -> list[dict]:
@@ -4161,6 +4286,7 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
                 "commodity", "buy_terminal_id", "buy_terminal", "buy_poi_id", "buy_system",
                 "sell_terminal_id", "sell_terminal", "sell_poi_id", "sell_system",
                 "buy_price", "sell_price", "profit_per_scu", "supply_scu", "demand_scu",
+                "supply_src", "demand_src",
                 "buy_updated_at", "sell_updated_at", "buy_src", "sell_src")
         } | {
             "scu": (prim["scu"] if prim else row["max_scu"]),
@@ -4402,6 +4528,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      max_age_s=None, now_ts=None, t_ref=None,
                      legality="any", illicit=None, min_return_pct=None,
                      box=None, cargo="single",
+                     supply_caps=None, demand_caps=None,
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
                      avoid_buys=None, avoid_sells=None, exclude_poi_ids=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -4444,7 +4571,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                 avoid_buys=frozenset(avoid_buys or ()),
                 avoid_sells=frozenset(avoid_sells or ()),
-                exclude_poi_ids=exclude_poi_ids, box=box)
+                exclude_poi_ids=exclude_poi_ids, box=box,
+                supply_caps=supply_caps, demand_caps=demand_caps)
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -4466,7 +4594,8 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
 
 def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
                     start_pos=None, budget=None, t_ref=None, avoid_volumes=None,
-                    box=None, fuel_req=None, max_range_m=None) -> dict:
+                    box=None, fuel_req=None, max_range_m=None,
+                    supply_caps=None, demand_caps=None) -> dict:
     """Manual mode: cost a player-chosen ordered list of legs (each
     {commodity, buy_terminal_id, sell_terminal_id, scu?}) into the same
     {summary, legs, start} shape the solver returns — no route selection, just live
@@ -4485,6 +4614,12 @@ def cost_trade_legs(nav: NavData, prices, legs_in, usable_scu, *, start_id=None,
         dst = idx.get((name, lg["sell_terminal_id"]))
         if src is None or dst is None or not src.get("buy") or not dst.get("sell"):
             raise ValueError(f"leg references an unknown or unpriced terminal for {name}")
+        # Org stock overlay: a hand-picked leg is never dropped, but it IS
+        # sized to the shelf a member really found — same as every other cap.
+        if supply_caps:
+            src = _cap_price_point(src, supply_caps, "scu_buy", "supply_capped")
+        if demand_caps:
+            dst = _cap_price_point(dst, demand_caps, "scu_sell_stock", "demand_capped")
         margin = int(dst["sell"]) - int(src["buy"])
         row = _trade_row(name, src, dst, margin, usable_scu, budget=budget,
                          box=box)
@@ -4590,6 +4725,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, legality="any", illicit=None,
                        min_return_pct=None, box=None, cargo="single",
+                       supply_caps=None, demand_caps=None,
                        avoid_poi_ids=None, avoid_pairs=None,
                        avoid_volumes=None, avoid_buys=None, avoid_sells=None,
                        exclude_poi_ids=None,
@@ -4626,6 +4762,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
             now_ts=now_ts, t_ref=t_ref, legality=legality, illicit=illicit,
             min_return_pct=min_return_pct, box=box, cargo=cargo,
+            supply_caps=supply_caps, demand_caps=demand_caps,
             avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
             avoid_buys=avoid_buys, avoid_sells=avoid_sells,
@@ -4707,7 +4844,8 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
                 avoid_buys=frozenset(avoid_buys or ()),
                 avoid_sells=frozenset(avoid_sells or ()),
-                exclude_poi_ids=exclude_poi_ids, box=box)
+                exclude_poi_ids=exclude_poi_ids, box=box,
+                supply_caps=supply_caps, demand_caps=demand_caps)
     cont_legs = max(0, (max_stops - len(held_rows)) // 2)   # held sells used stops
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, pos, cont_legs, optimize, t_ref,

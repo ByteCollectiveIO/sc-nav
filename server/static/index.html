@@ -1589,9 +1589,14 @@
   /* Sell confirmations as a table: one row per commodity aboard (top-up lots
      stack rows) — name · aUEC/SCU · SCU · live total · confirm. Rows are
      display:contents so the grid owns the columns and every row aligns. */
-  .sell-grid { display: grid; grid-template-columns: max-content 76px 110px max-content max-content;
+  .sell-grid { display: grid; grid-template-columns: max-content 76px 110px max-content max-content max-content;
     gap: 6px 10px; align-items: center; margin: 8px 0 4px; font-size: 12px;
     color: var(--dim); overflow-x: auto; }
+  /* The explicit "max available" claim: quiet text control, warn-tinted when
+     ticked via :has so a standing org claim is visible at a glance. */
+  .ta-max { font-size: 11px; color: var(--dim); white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  .ta-max:has(:checked) { color: var(--warn); }
   /* Total-first buy form (#46d v2): size select sized to its label. */
   .buy-form .bf-size { width: auto; }
   .buy-form .bf-count { width: 64px; }
@@ -1624,6 +1629,9 @@
   /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
   .tl-stock { font-size: 12px; color: var(--warn); margin: 4px 0; }
   .tl-stock.out { font-weight: 600; }
+  /* Org stock overlay: the leg is SIZED to a member's figure — a fact in the
+     org accent, not a warning about a mismatch the plan no longer has. */
+  .tl-stock.sized { color: var(--accent); }
   .run-nostock { color: var(--warn); border-color: var(--warn); }
   .stock-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
     padding: 4px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
@@ -10170,10 +10178,19 @@ function renderTradeLeg(lg, i) {
   // on either side; manual picks are badged, not dropped). One line per side.
   for (const stk of (lg.stock || [])) {
     const demand = stk.side === "demand";
+    // Org stock overlay: when the report carries a figure, this leg is
+    // already SIZED to it — the badge states the fact instead of warning
+    // about a mismatch the plan no longer has.
+    const sized = stk.kind !== "out" && stk.scu != null
+      && (demand ? lg.demand_src : lg.supply_src) === "org";
     dngr += stk.kind === "out"
       ? `<div class="tl-stock out">⛔ reported <b>${demand ? "not buying (no demand)" : "out of stock"}</b> `
         + `${fmtAge(stk.age_s || 0)}${stk.by ? ` <span class="muted">by ${esc(stk.by)}</span>` : ""}`
         + ` — confirm before flying</div>`
+      : sized
+      ? `<div class="tl-stock sized">⚡ sized to member-reported ${demand ? "demand" : "stock"} `
+        + `<span class="muted">(~${stk.scu} SCU${stk.by ? " by " + esc(stk.by) : ""}, ${fmtAge(stk.age_s || 0)} — `
+        + `not UEX's figure)</span></div>`
       : `<div class="tl-stock">📉 ${demand ? "low demand" : "low stock"} ${fmtAge(stk.age_s || 0)}`
         + `${stk.scu != null ? ` <span class="muted">(~${stk.scu} SCU ${demand ? "taken" : "seen"}${stk.by ? " by " + esc(stk.by) : ""})</span>` : ""}</div>`;
   }
@@ -10374,6 +10391,8 @@ function buyActualForm(name, size, count, total, planPerScu) {
     + `<input class="ti bf-total" type="number" min="0" step="1" value="${total}"`
     + ` aria-label="total aUEC paid for ${esc(name)}">`
     + `<span class="ta-x">aUEC</span>`
+    + `<label class="ta-max" title="Tick if this is ALL the kiosk had — it files the org's low-stock report, and every plan then sizes this shelf to your figure until it ages off. Leave unticked if you simply chose to buy less.">`
+    + `<input type="checkbox" class="bf-maxav"> all it had</label>`
     + `<span class="ta-conv" aria-live="polite"></span>`
     + `</div>`;
 }
@@ -10390,6 +10409,8 @@ function readBuyActuals(form) {
   if (size > 1) out.box_size = size;
   if (totalEl.value !== "" && Number(totalEl.value) >= 0 && scu > 0)
     out.price = Number(totalEl.value) / scu;
+  const max = form.querySelector(".bf-maxav");
+  if (max && max.checked) out.max_available = true;   // the explicit shelf claim
   return out;
 }
 // Echo the derived reality ("= 96 SCU · 133.33 aUEC/SCU") and keep the total
@@ -10474,6 +10495,8 @@ async function submitTradeLeg(action, leg, btn) {
     if (scu > 0) body.scu = scu;
     if (totEl && totEl.value !== "" && Number(totEl.value) >= 0 && scu > 0)
       body.price = Number(totEl.value) / scu;
+    const max = row && row.querySelector(".sl-maxav");
+    if (max && max.checked) body.max_available = true;
   }
   const lg = tradeCurrentRun && (tradeCurrentRun.legs || [])[leg];
   if (lg && body.price != null && !(await confirmOddActual(
@@ -10536,7 +10559,7 @@ function tradeRunSig(run) {
   return [run.id, run.active, run.phase, run.arrived, run.onboard_scu, run.done,
     (run.legs || []).map(l => l.state + (l.primary_sold ? "P" : "")
       + ((l.extras || []).map(x => (x.sold ? "1" : "0")).join(""))
-      + ((l.lots || []).map(x => (x.added ? "a" : "p")).join(""))).join(",")].join(":");
+      + ((l.lots || []).map(x => (x.added ? "a" : "p") + (x.scu || 0)).join("~"))).join(",")].join(":");
 }
 function maybeRenderTradeRun(run) {
   if (tradeRunComplete && !run) return;   // keep the completion card up until cleared
@@ -10695,6 +10718,8 @@ function renderTradeRun(run) {
     if (scu > 0) body.scu = scu;
     if (totEl && totEl.value !== "" && Number(totEl.value) >= 0 && scu > 0)
       body.price = Number(totEl.value) / scu;
+    const max = row && row.querySelector(".sl-maxav");
+    if (max && max.checked) body.max_available = true;
     const x = (((run.legs || [])[leg] || {}).extras || [])[j];
     if (x && body.price != null && !(await confirmOddActual(
         x.commodity, body.price, x.sell_price, "sell"))) return;
@@ -11027,7 +11052,7 @@ function renderTradeRunLeg(lg, i, run) {
       const unsold = lots.map((x, j) => [x, j]).filter(([x]) => !x.sold);
       if (!lg.primary_sold || unsold.length) {
         h += `<div class="sell-grid" role="table" aria-label="Confirm each sale">`
-          + `<div class="sl-head"><span></span><span>SCU</span><span>aUEC total</span><span>/SCU</span><span></span></div>`;
+          + `<div class="sl-head"><span></span><span>SCU</span><span>aUEC total</span><span>/SCU</span><span>max?</span><span></span></div>`;
         if (!lg.primary_sold) {
           // What's aboard is the entered actual when the kiosk shorted the
           // buy — prefilling the planned load would misstate the sale. The
@@ -11045,6 +11070,8 @@ function renderTradeRunLeg(lg, i, run) {
             + ` value="${Math.round((lg.sell_price || 0) * aboard)}"`
             + ` aria-label="total aUEC received for ${esc(lg.commodity)}">`
             + `<span class="sl-total" aria-live="polite"></span>`
+            + `<label class="ta-max sl-max" title="Tick if this is ALL they would take — files the org's low-demand report; plans then size this buyer to your figure until it ages off.">`
+            + `<input type="checkbox" class="sl-maxav"></label>`
             + `<button class="trade-run-do" data-sell="${i}">✓ Sold ▸</button></div>`;
         }
         unsold.forEach(([x, j]) => {
@@ -11058,6 +11085,8 @@ function renderTradeRunLeg(lg, i, run) {
             + ` value="${Math.round((x.sell_price || 0) * (x.scu || 0))}"`
             + ` aria-label="total aUEC received for ${esc(x.commodity)}">`
             + `<span class="sl-total" aria-live="polite"></span>`
+            + `<label class="ta-max sl-max" title="Tick if this is ALL they would take — files the org's low-demand report; plans then size this buyer to your figure until it ages off.">`
+            + `<input type="checkbox" class="sl-maxav"></label>`
             + `<button class="trade-run-do topup-do" data-sellextra="${i}:${j}">✓ Sold ▸</button></div>`;
         });
         h += `</div>`;

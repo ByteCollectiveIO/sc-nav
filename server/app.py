@@ -4134,6 +4134,9 @@ async def list_trade_trades(
     `loading='hand'` (#46) sizes each row's fill to whole cargo containers, so
     the board's throughput matches what a hand-loading player can buy."""
     max_age_s = max_price_age_days * 86400 if max_price_age_days else None
+    # Org stock overlay: the board sizes to member-observed shelf maxima like
+    # the planner does, or the two would disagree about the best trade.
+    reports = active_stock_reports()
     return nav_core.rank_trades(
         nav, trade_price_points, commodity=commodity, system=system,
         capacity_scu=capacity_scu, min_margin=max(0, min_margin),
@@ -4141,6 +4144,8 @@ async def list_trade_trades(
         box=_trade_box_policy(loading, box_mode, box_size),
         sort=sort, limit=max(1, min(limit, 200)),
         budget=(budget if budget and budget > 0 else None), max_age_s=max_age_s,
+        supply_caps=nav_core.stock_supply_caps(reports),
+        demand_caps=nav_core.stock_demand_caps(reports),
     )
 
 
@@ -4239,6 +4244,11 @@ class TradeRunPatchIn(BaseModel):
     # primary's.
     commodity: str | None = Field(default=None, min_length=1, max_length=80)
     extra: int | None = Field(default=None, ge=0, le=50)
+    # "Is this the max available?" — the member's EXPLICIT claim that the
+    # entered SCU is all the kiosk had (buy) or would take (sell). This is
+    # what files the org's low-stock report + supply/demand cap; a smaller
+    # buy without it is just a smaller buy, not evidence.
+    max_available: bool = False
 
 
 class TradeTxnIn(BaseModel):
@@ -4731,6 +4741,10 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
         avoid_poi_ids = frozenset(avoid_poi_ids or ()) | set(blacklist)
     solver_volumes = volumes if mode == "avoid" else None
     stock_reports = active_stock_reports()
+    # Org stock overlay: member-stated shelf maxima size every fill (both
+    # modes — a manual leg is badged, never dropped, but it IS sized honestly).
+    supply_caps = nav_core.stock_supply_caps(stock_reports)
+    demand_caps = nav_core.stock_demand_caps(stock_reports)
     fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
     # Stops this ship can't use (#34). Unlike the danger sets this is physical, so
     # it holds in every mode — including a held-cargo re-plan.
@@ -4745,6 +4759,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 body.usable_scu, start_id=body.start_id, start_pos=start_pos,
                 budget=body.budget, t_ref=t_ref, avoid_volumes=solver_volumes,
                 box=_trade_box_policy(body.loading, body.box_mode, body.box_size),
+                supply_caps=supply_caps, demand_caps=demand_caps,
                 fuel_req=fuel_req, max_range_m=max_range_m)
         else:
             plan = nav_core.plan_trade_route(
@@ -4755,6 +4770,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 min_return_pct=_norm_return_pct(body.min_return_pct),
                 box=_trade_box_policy(body.loading, body.box_mode, body.box_size),
                 cargo=_norm_cargo(body.cargo),
+                supply_caps=supply_caps, demand_caps=demand_caps,
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -4776,7 +4792,36 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
     return _annotate_trade_legs(plan, warnings, mode, volumes, t_ref)
 
 
-_LOW_STOCK_FRACTION = 0.5   # transacted under half the planned load → auto 'low' report
+def _note_shelf_observation(user: dict, leg: dict, side: str, scu,
+                            max_available: bool) -> None:
+    """Turn one confirm's actuals into shelf evidence — the explicit-claim
+    replacement (user call, 2026-08-23) for the old 'transacted under half the
+    plan → assume shortage' heuristic, which couldn't tell an empty shelf from
+    a pilot who simply wanted less and so filed claims nobody made.
+
+    `max_available` checked = the member states 'this is all the kiosk
+    had/would take' → file (or refresh) the `low` report with the observed
+    figure, which is what the org stock overlay caps every plan to.
+    Unchecked = no claim — EXCEPT that buying/selling MORE than a live cap's
+    figure disproves that figure regardless of intent, so the report is raised
+    to the new observation. Deliberately no auto-clear: a full buy of a
+    cap-sized plan proves nothing about the shelf beyond the plan, and the
+    age-off window is the designed restock probe (one UEX-sized plan per
+    window rediscovers the real level either way)."""
+    if scu is None or scu <= 0:
+        return
+    if max_available:
+        _file_stock_report(user, leg, "low", scu=scu, side=side)
+        return
+    poi = leg.get("sell_poi_id" if side == "demand" else "buy_poi_id")
+    name = (leg.get("commodity") or "").strip().lower()
+    for r in active_stock_reports():
+        if (r.get("poi_id") == poi and r.get("kind") == "low"
+                and (r.get("side") or "supply") == side
+                and (r.get("commodity") or "").strip().lower() == name
+                and r.get("scu") and scu > r["scu"]):
+            _file_stock_report(user, leg, "low", scu=scu, side=side)
+            break
 
 
 def _file_stock_report(user: dict, leg: dict, kind: str, scu=None,
@@ -5159,6 +5204,62 @@ def _topup_free_scu(run: dict) -> float:
     return max(0.0, float(run.get("usable_scu") or 0) - aboard)
 
 
+def _refit_leg_lots(run: dict, leg: dict) -> None:
+    """Re-size the active leg's UNCONFIRMED planned co-loads to the hold and
+    capital the actuals really left free (user finding, 2026-08-23): the
+    plan-time lots were sized assuming the primary would consume its planned
+    share of the max-spend — a 998k Hydrogen buy that really cost 284k leaves
+    716k (and most of the hold) the stored lots know nothing about, forcing
+    the pilot to reassemble the stop by hand through the top-up panel. Same
+    hop, so this is a pure re-fill (nav_core.refit_stop_lots: every per-lot
+    filter + the org stock overlay applied, remaining budget = max-spend minus
+    what the stop's actuals really cost). Confirmed lots (extras) keep their
+    rows; the frozen summary tracks the swap so 'of Y planned' stays the
+    plan's honest current promise. Mixed-mode runs only — a single-commodity
+    run keeps the manual top-up panel as its opt-in path."""
+    p = run.get("params") or {}
+    if (_norm_cargo(p.get("cargo")) != "mixed" or leg.get("held")
+            or leg.get("primary_sold")):
+        return
+    free = _topup_free_scu(run)
+    spent = ((leg["actual_buy_price"] if leg.get("actual_buy_price") is not None
+              else leg.get("buy_price") or 0)
+             * (leg["actual_buy_scu"] if leg.get("actual_buy_scu") is not None
+                else leg.get("scu") or 0))
+    spent += sum((x.get("buy_price") or 0) * (x.get("scu") or 0)
+                 for x in (leg.get("extras") or ()))
+    budget = p.get("budget")
+    free_budget = max(0.0, float(budget) - spent) if budget else None
+    exclude = {(leg.get("commodity") or "").strip().lower()} | {
+        (x.get("commodity") or "").strip().lower()
+        for x in (leg.get("extras") or ())}
+    reports = active_stock_reports()
+    max_age_days = p.get("max_price_age_days")
+    lots = nav_core.refit_stop_lots(
+        trade_price_points, int(free),
+        buy_poi_id=leg.get("buy_poi_id"), sell_poi_id=leg.get("sell_poi_id"),
+        budget=free_budget, exclude=exclude,
+        commodities=(p.get("commodities") or None),
+        max_age_s=(max_age_days * 86400 if max_age_days else None),
+        legality=_norm_legality(p.get("legality")), illicit=illicit_commodities,
+        min_return_pct=_norm_return_pct(p.get("min_return_pct")),
+        avoid_buys=nav_core.stock_avoid_buys(reports),
+        avoid_sells=nav_core.stock_avoid_sells(reports),
+        box=_trade_box_policy(p.get("loading"), p.get("box_mode"),
+                              p.get("box_size")),
+        supply_caps=nav_core.stock_supply_caps(reports),
+        demand_caps=nav_core.stock_demand_caps(reports))
+    old = [x for x in (leg.get("lots") or ()) if not x.get("added")]
+    kept = [x for x in (leg.get("lots") or ()) if x.get("added")]
+    delta = (sum(int(x.get("profit") or 0) for x in lots)
+             - sum(int(x.get("profit") or 0) for x in old))
+    leg["lots"] = kept + lots
+    if delta:
+        sm = run.get("summary") or {}
+        sm["total_profit"] = int(sm.get("total_profit") or 0) + delta
+        run["summary"] = sm
+
+
 def _topup_gate(run: dict) -> dict:
     """The active leg, iff a top-up applies to it right now: state `bought`
     (you're at the kiosk with the primary aboard, not yet departed) and not a
@@ -5249,7 +5350,9 @@ async def get_trade_topup(user: dict = Depends(require_session)):
         max_age_s=(max_age_days * 86400 if max_age_days else None),
         legality=legality, illicit=illicit_commodities, min_return_pct=min_ret,
         avoid_buys=nav_core.stock_avoid_buys(reports),
-        avoid_sells=nav_core.stock_avoid_sells(reports), box=box)
+        avoid_sells=nav_core.stock_avoid_sells(reports), box=box,
+        supply_caps=nav_core.stock_supply_caps(reports),
+        demand_caps=nav_core.stock_demand_caps(reports))
     return {"leg": active, "free_scu": free, "suggestions": rows}
 
 
@@ -5316,9 +5419,21 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                 leg["actual_buy_price"] = body.price
             if body.scu is not None:
                 leg["actual_buy_scu"] = body.scu
+                _note_shelf_observation(user, leg, "supply", body.scu,
+                                        body.max_available)
+                # The plan's promise changed with the buy: a short fill means
+                # the run can no longer earn the planned figure, and leaving
+                # the header's "of Y planned" at the phantom size makes every
+                # later realized number read as failure. Mirror of the #143
+                # grow — same summary, opposite sign. SCU delta at the plan's
+                # own margin; price deltas stay realized-side.
                 planned = float(leg.get("scu") or 0)
-                if planned and body.scu < planned * _LOW_STOCK_FRACTION:
-                    _file_stock_report(user, leg, "low", scu=body.scu)
+                if planned and body.scu != planned:
+                    sm = run.get("summary") or {}
+                    sm["total_profit"] = (int(sm.get("total_profit") or 0)
+                                          + int(round((body.scu - planned)
+                                                      * (leg.get("profit_per_scu") or 0))))
+                    run["summary"] = sm
             # The container size actually bought (#46d v2): the kiosk may not
             # offer the planned size, and the pilot picking another must not be
             # locked to the plan's unit. Stored as its own fact (the plan's
@@ -5333,6 +5448,7 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                                         poi_id=leg.get("buy_poi_id"),
                                         terminal=leg.get("buy_terminal"))
             run["leg_states"][active] = "bought"
+            _refit_leg_lots(run, leg)      # freed hold + capital re-size the co-loads
             _consume_trade_txn(user, sess, txn, run, active, leg, "buy")
         elif body.action == "sell":
             if st != "bought":
@@ -5351,15 +5467,13 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                     lot["actual_sell_price"] = body.price
                 if body.scu is not None:
                     lot["actual_sell_scu"] = body.scu
-                    planned = float(lot.get("scu") or 0)
-                    if planned and body.scu < planned * _LOW_STOCK_FRACTION:
-                        _file_stock_report(
-                            user, {"commodity": lot.get("commodity"),
-                                   "sell_poi_id": leg.get("sell_poi_id"),
-                                   "sell_terminal": lot.get("sell_terminal")
-                                   or leg.get("sell_terminal"),
-                                   "sell_terminal_id": lot.get("sell_terminal_id")},
-                            "low", scu=body.scu, side="demand")
+                    _note_shelf_observation(
+                        user, {"commodity": lot.get("commodity"),
+                               "sell_poi_id": leg.get("sell_poi_id"),
+                               "sell_terminal": lot.get("sell_terminal")
+                               or leg.get("sell_terminal"),
+                               "sell_terminal_id": lot.get("sell_terminal_id")},
+                        "demand", body.scu, body.max_available)
                 lot["sold"] = True
             else:
                 if leg.get("primary_sold"):
@@ -5369,9 +5483,8 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                     leg["actual_sell_price"] = body.price
                 if body.scu is not None:
                     leg["actual_sell_scu"] = body.scu
-                    planned = float(leg.get("scu") or 0)
-                    if planned and body.scu < planned * _LOW_STOCK_FRACTION:
-                        _file_stock_report(user, leg, "low", scu=body.scu, side="demand")
+                    _note_shelf_observation(user, leg, "demand", body.scu,
+                                            body.max_available)
                 leg["primary_sold"] = True
                 _consume_trade_txn(user, sess, txn, run, active, leg, "sell")
             if leg.get("primary_sold") and all(x.get("sold")
@@ -5442,8 +5555,7 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             if len(extras) >= _TOPUP_MAX_LOTS:
                 raise HTTPException(status_code=400,
                                     detail="lot limit reached for this leg")
-            free_before = _topup_free_scu(run)
-            lot, supply = _validate_topup_lot(leg, body)
+            lot, _shelf = _validate_topup_lot(leg, body)
             extras.append(lot)
             # Same rule as the primary buy (#46d v2): the size the lot was
             # really bought in confirms that size exists for this commodity.
@@ -5466,6 +5578,15 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                            None)
             if planned is not None:
                 planned["added"] = True
+                # Converted at a different size than planned: the summary
+                # counted the planned figure — track the SCU delta at the
+                # lot's own margin, same rule as the primary's short fill.
+                if body.scu is not None and body.scu != (planned.get("scu") or 0):
+                    sm = run.get("summary") or {}
+                    sm["total_profit"] = (int(sm.get("total_profit") or 0)
+                                          + int(round((body.scu - (planned.get("scu") or 0))
+                                                      * (planned.get("profit_per_scu") or 0))))
+                    run["summary"] = sm
             else:
                 # The plan just grew: fold the lot's expected profit into the
                 # frozen summary's total, or the header's "realized X of Y planned"
@@ -5478,19 +5599,19 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                                       + int(round((lot["sell_price"] - (lot["buy_price"] or 0))
                                                   * (lot["scu"] or 0))))
                 run["summary"] = sm
-            # Short-fill evidence, same rule as the primary: buying well under
-            # what the shelf could have supplied (its advertised stock, capped
-            # by the free hold) files a supply-'low' report. Ambiguity accepted
-            # — a deliberate small buy files a claim a later member disproves.
-            potential = min(free_before, supply) if supply else 0.0
-            if potential > 0 and body.scu < potential * _LOW_STOCK_FRACTION:
-                _file_stock_report(
-                    user, {"commodity": lot["commodity"],
-                           "buy_poi_id": leg.get("buy_poi_id"),
-                           "buy_terminal": lot.get("buy_terminal")
-                           or leg.get("buy_terminal"),
-                           "buy_terminal_id": lot.get("buy_terminal_id")},
-                    "low", scu=body.scu)
+            # Shelf evidence, same explicit rule as the primary: only the
+            # member's own "max available" claim files a report (or a bigger
+            # buy disproving a live cap's figure raises it) — never a guess
+            # from a small purchase.
+            _note_shelf_observation(
+                user, {"commodity": lot["commodity"],
+                       "buy_poi_id": leg.get("buy_poi_id"),
+                       "buy_terminal": lot.get("buy_terminal")
+                       or leg.get("buy_terminal"),
+                       "buy_terminal_id": lot.get("buy_terminal_id")},
+                "supply", body.scu, body.max_available)
+            # The lot changed what's free at this stop — re-size the rest.
+            _refit_leg_lots(run, leg)
         else:
             raise HTTPException(status_code=400, detail="bad action")
         # Any action moves or re-frames the run state, so the nudge that
@@ -5623,6 +5744,8 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
+        supply_caps = nav_core.stock_supply_caps(stock_reports)
+        demand_caps = nav_core.stock_demand_caps(stock_reports)
         usable_scu = run["usable_scu"]
         max_stops = body.max_stops or p.get("max_stops") or 6
         commodities = p.get("commodities") or None
@@ -5637,7 +5760,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         max_stops=max_stops, commodities=commodities, system=system, sort=sort,
         budget=budget, legality=legality, illicit=illicit_commodities,
         min_return_pct=min_ret, box=_trade_box_policy(loading, box_mode, box_pin),
-        cargo=cargo,
+        cargo=cargo, supply_caps=supply_caps, demand_caps=demand_caps,
         deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
         max_age_s=max_age_s, t_ref=t_ref,
         avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
