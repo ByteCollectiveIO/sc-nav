@@ -5319,6 +5319,19 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                 planned = float(leg.get("scu") or 0)
                 if planned and body.scu < planned * _LOW_STOCK_FRACTION:
                     _file_stock_report(user, leg, "low", scu=body.scu)
+            # The container size actually bought (#46d v2): the kiosk may not
+            # offer the planned size, and the pilot picking another must not be
+            # locked to the plan's unit. Stored as its own fact (the plan's
+            # `box` stays the plan) — the sell step and a mid-run re-plan speak
+            # the size that's really aboard. A purchase also CONFIRMS the size
+            # exists on this commodity's menu (never absence — that evidence
+            # stays with the confirm-gated re-fit).
+            size = _norm_box_size(body.box_size)
+            if size:
+                leg["actual_box_size"] = size
+                _file_container_reports(user, leg.get("commodity"), [size], [],
+                                        poi_id=leg.get("buy_poi_id"),
+                                        terminal=leg.get("buy_terminal"))
             run["leg_states"][active] = "bought"
             _consume_trade_txn(user, sess, txn, run, active, leg, "buy")
         elif body.action == "sell":
@@ -5365,12 +5378,15 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
                                                for x in (leg.get("extras") or ())):
                 run["leg_states"][active] = "sold"
         elif body.action == "advance":
-            if any(not x.get("sold") for x in (leg.get("extras") or ())):
+            if ((st == "bought" and not leg.get("primary_sold"))
+                    or any(not x.get("sold") for x in (leg.get("extras") or ()))):
                 # A skipped leg is excluded from realized stats — silently
-                # discarding BOUGHT top-up lots would falsify them. The escape
-                # hatch for a stuck lot is re-plan (it re-homes as held cargo).
+                # discarding BOUGHT cargo would falsify them (the buy's cost
+                # would vanish while the aUEC is really spent). Same rule for
+                # the primary as for top-up lots: sell it (even short), or
+                # re-plan from here (it re-homes as held cargo).
                 raise HTTPException(status_code=409,
-                                    detail="top-up cargo aboard — sell it or re-plan from here instead of skipping")
+                                    detail="cargo aboard — sell it (even short) or re-plan from here instead of skipping")
             leg["skipped"] = True                  # abandon the leg, move on —
             run["leg_states"][active] = "sold"     # never counted as realized
         elif body.action == "stockout":
@@ -5429,6 +5445,15 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             free_before = _topup_free_scu(run)
             lot, supply = _validate_topup_lot(leg, body)
             extras.append(lot)
+            # Same rule as the primary buy (#46d v2): the size the lot was
+            # really bought in confirms that size exists for this commodity.
+            size = _norm_box_size(body.box_size)
+            if size:
+                lot["box_size"] = size
+                _file_container_reports(user, lot["commodity"], [size], [],
+                                        poi_id=leg.get("buy_poi_id"),
+                                        terminal=lot.get("buy_terminal")
+                                        or leg.get("buy_terminal"))
             # A PLANNED co-cargo lot (§PR 2, leg["lots"]) being confirmed at the
             # kiosk: mark it consumed — its expected profit is already in the
             # plan's frozen summary, so growing the total again would double-
@@ -5531,7 +5556,12 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
                             else lg["actual_buy_scu"]),
                     "buy_price": (lg["buy_price"] if lg.get("actual_buy_price") is None
                                   else lg["actual_buy_price"]),
-                    "box_size": (lg.get("box") or {}).get("size") or lg.get("box_size")})
+                    # Actuals-first here too (#46d v2): the size the pilot
+                    # really bought beats the plan's, so the sell step after a
+                    # re-plan speaks the containers genuinely aboard.
+                    "box_size": (lg.get("actual_box_size")
+                                 or (lg.get("box") or {}).get("size")
+                                 or lg.get("box_size"))})
             # Top-up lots (docs/trade-topup.md) re-home like the primary; their
             # buy figures are already actuals — that's how lots are recorded.
             for x in (lg.get("extras") or ()):
@@ -6235,6 +6265,25 @@ async def get_trade_history(user: dict = Depends(require_session)):
             "session_stats": nav_core.derive_trade_run_stats(session_runs),
             "session_start": session_start,
             "picks": nav_core.derive_trade_quick_picks(nav, runs)}
+
+
+@app.delete("/api/trade/history/{run_id}")
+async def delete_trade_history_run(run_id: int, user: dict = Depends(require_session)):
+    """Remove one completed run from trade history — owner or admin. Built for
+    the run whose kiosk actuals were entered in the wrong unit (the 2026-08-23
+    −14M incident): every realized-profit surface reads the stored blobs
+    directly, so a single bad figure skews the member's AND the guild's totals
+    until the row is removed. Hard delete on purpose — the correction IS the
+    removal; there is nothing to amend a frozen blob into that would be more
+    truthful than absence. Admin included so an org can fix its own board
+    without waiting on the member."""
+    rec = db.trade_run_record(run_id)
+    if rec is None or rec.get("status") != "completed":
+        raise HTTPException(status_code=404, detail="no such completed run")
+    if rec.get("discord_id") != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="not your run")
+    db.delete_trade_run(run_id)
+    return {"ok": True}
 
 
 @app.post("/api/trade/session/reset")
