@@ -3525,6 +3525,206 @@ class TradeReplanMultiHeldTests(unittest.TestCase):
         self.assertIn("Iron", plan["summary"]["reason"])
 
 
+class TradeMixedLoadTests(unittest.TestCase):
+    """Plan-time mixed loads (docs/trade-topup.md §PR 2): _trade_bundle_candidates
+    fills a stop's hold across several commodities per (buy, sell) POI pair, and
+    plan_trade_route(cargo='mixed') ranks lanes on the bundle. The equivalence
+    obligation — a small hold degenerates to the single-commodity plan — is
+    pinned here."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:4]
+        cls.A, cls.B, cls.C, cls.D = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0, updated_at=None):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": updated_at}
+
+    def _capped_pair(self):
+        # A->B: three supply-capped commodities on the same lane. Margins:
+        # Gold 200 (cap 100), Iron 150 (cap 150), Copper 50 (uncapped).
+        return [self._pt("Gold", 1, self.A, buy=100, scu_buy=100),
+                self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=1000),
+                self._pt("Iron", 3, self.A, buy=50, scu_buy=150),
+                self._pt("Iron", 4, self.B, sell=200, scu_sell_stock=1000),
+                self._pt("Copper", 5, self.A, buy=20),
+                self._pt("Copper", 6, self.B, sell=70)]
+
+    def test_bundle_fills_the_hold_across_commodities(self):
+        rows = nav_core._trade_bundle_candidates(self._capped_pair(), 500)
+        # Superset pool: the three single rows plus one bundle row for the pair
+        # (a route may still ping-pong the lane with single fills).
+        self.assertEqual(len(rows), 4)
+        bundles = [r for r in rows if r.get("lots")]
+        self.assertEqual(len(bundles), 1)
+        self.assertIs(rows[0], bundles[0])             # richest row, so it sorts first
+        r = bundles[0]
+        # Richest margin first: 100 Gold + 150 Iron + 250 Copper = full hold.
+        self.assertEqual(r["commodity"], "Iron")       # richest LOT is primary: 150*150
+        self.assertEqual(r["max_scu"], 500)
+        self.assertEqual(r["trade_profit"], 100 * 200 + 150 * 150 + 250 * 50)
+        self.assertEqual(r["buy_cost"], 100 * 100 + 150 * 50 + 250 * 20)
+        self.assertEqual(r["primary"], {"scu": 150, "profit": 22500, "buy_cost": 7500})
+        lots = {x["commodity"]: x for x in r["lots"]}
+        self.assertEqual(set(lots), {"Gold", "Copper"})
+        self.assertEqual(lots["Gold"]["scu"], 100)     # its own supply cap held
+        self.assertEqual(lots["Copper"]["scu"], 250)   # the remaining hold
+        self.assertEqual(lots["Gold"]["profit"], 20000)
+        # Bundle return: total profit over total capital.
+        self.assertEqual(r["return_pct"],
+                         round(100.0 * r["trade_profit"] / r["buy_cost"], 1))
+
+    def test_small_hold_degenerates_to_the_single_pool(self):
+        # Hold below every cap: every pair's fill is one full-size lot, so no
+        # bundle rows emit and the mixed pool IS the single pool — which is
+        # what makes the route-level equivalence structural.
+        singles = nav_core._trade_candidates(self._capped_pair(), 50)
+        bundles = nav_core._trade_bundle_candidates(self._capped_pair(), 50)
+        self.assertEqual(bundles, singles)
+
+    def test_small_hold_plans_identically_to_single(self):
+        # The equivalence obligation, at route level, on both objectives.
+        for sort in ("profit", "per_hour"):
+            single = nav_core.plan_trade_route(
+                NAV, self._capped_pair(), 50, start_id=self.A, sort=sort)
+            mixed = nav_core.plan_trade_route(
+                NAV, self._capped_pair(), 50, start_id=self.A, sort=sort,
+                cargo="mixed")
+            self.assertEqual(single["legs"], mixed["legs"])
+            self.assertEqual(single["summary"], mixed["summary"])
+
+    def test_bundled_lane_beats_a_single_great_commodity(self):
+        # The headline scenario: lane A->B has four mediocre supply-capped
+        # commodities; lane C->D has one great one, also capped. Single mode
+        # ranks per commodity and picks the C->D lane; mixed sees the bundle.
+        prices = [self._pt("W1", 1, self.A, buy=10, scu_buy=100),
+                  self._pt("W1", 2, self.B, sell=110, scu_sell_stock=1000),
+                  self._pt("W2", 3, self.A, buy=10, scu_buy=100),
+                  self._pt("W2", 4, self.B, sell=110, scu_sell_stock=1000),
+                  self._pt("W3", 5, self.A, buy=10, scu_buy=100),
+                  self._pt("W3", 6, self.B, sell=110, scu_sell_stock=1000),
+                  self._pt("W4", 7, self.A, buy=10, scu_buy=100),
+                  self._pt("W4", 8, self.B, sell=110, scu_sell_stock=1000),
+                  self._pt("Gem", 9, self.C, buy=100, scu_buy=120),
+                  self._pt("Gem", 10, self.D, sell=250, scu_sell_stock=1000)]
+        single = nav_core.plan_trade_route(NAV, prices, 400, start_id=self.A,
+                                           max_stops=2, sort="profit")
+        mixed = nav_core.plan_trade_route(NAV, prices, 400, start_id=self.A,
+                                          max_stops=2, sort="profit", cargo="mixed")
+        # Single: best one commodity moves 120 Gem = 18,000. Mixed: the A->B
+        # bundle moves 4 × 100 × 100 = 40,000.
+        self.assertEqual(single["legs"][0]["commodity"], "Gem")
+        self.assertEqual(single["summary"]["total_profit"], 18000)
+        self.assertEqual(mixed["summary"]["total_profit"], 40000)
+        leg = mixed["legs"][0]
+        self.assertEqual(len(leg["lots"]), 3)
+        self.assertEqual(leg["bundle"]["scu"], 400)
+        self.assertEqual(leg["bundle"]["profit"], 40000)
+        # The leg's own figures are the primary lot's, not the bundle's.
+        self.assertEqual(leg["scu"], 100)
+        self.assertEqual(leg["profit"], 10000)
+
+    def test_budget_refill_prefers_return_per_auec(self):
+        # Wallet binds, not the hold: margin order buys 100 Gold (margin 200,
+        # cost 10,000) and is broke; return order buys 500 Copper (margin 50 on
+        # cost 20) for 25,000 profit on the same 10,000 aUEC.
+        prices = [self._pt("Gold", 1, self.A, buy=100, scu_buy=1000),
+                  self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=1000),
+                  self._pt("Copper", 3, self.A, buy=20, scu_buy=1000),
+                  self._pt("Copper", 4, self.B, sell=70, scu_sell_stock=1000)]
+        rows = nav_core._trade_bundle_candidates(prices, 500, budget=10_000)
+        # Both fills degenerate to one lot here (the wallet dies on whichever
+        # commodity leads), so no bundle row emits — but the richest row the
+        # pool offers must be the return-ordered pick, not the margin one.
+        r = rows[0]
+        self.assertEqual(r["commodity"], "Copper")
+        self.assertEqual(r["max_scu"], 500)
+        self.assertEqual(r["trade_profit"], 25_000)
+        self.assertLessEqual(r["buy_cost"], 10_000)
+
+    def test_budget_refill_mixes_by_return_per_auec(self):
+        # A true budget-bound BUNDLE: Copper's supply caps at 300, so after the
+        # return-ordered fill takes all 300 (6,000 aUEC) the leftover wallet
+        # buys 40 Gold — 2 lots, 23,000 profit. Margin order instead burns the
+        # whole 10,000 on 100 Gold for 20,000.
+        prices = [self._pt("Gold", 1, self.A, buy=100, scu_buy=1000),
+                  self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=1000),
+                  self._pt("Copper", 3, self.A, buy=20, scu_buy=300),
+                  self._pt("Copper", 4, self.B, sell=70, scu_sell_stock=1000)]
+        rows = nav_core._trade_bundle_candidates(prices, 500, budget=10_000)
+        bundle = next(r for r in rows if r.get("lots"))
+        self.assertEqual(bundle["trade_profit"], 300 * 50 + 40 * 200)
+        self.assertEqual(bundle["buy_cost"], 300 * 20 + 40 * 100)
+        self.assertEqual(bundle["commodity"], "Copper")   # richest lot is primary
+        self.assertEqual(bundle["lots"][0]["commodity"], "Gold")
+        self.assertEqual(bundle["lots"][0]["scu"], 40)
+
+    def test_per_lot_filters_apply_to_lots(self):
+        # Legality (#42) and the return floor (#43) each drop a would-be lot.
+        prices = self._capped_pair()
+        rows = nav_core._trade_bundle_candidates(
+            prices, 500, legality="legal", illicit=frozenset({"copper"}))
+        names = {rows[0]["commodity"]} | {x["commodity"] for x in rows[0].get("lots") or ()}
+        self.assertNotIn("Copper", names)
+        # Copper's return is 250% — a 300% floor drops it (and Gold's 200%),
+        # leaving Iron's 300% alone as a plain single row.
+        rows = nav_core._trade_bundle_candidates(prices, 500, min_return_pct=300)
+        self.assertEqual([r["commodity"] for r in rows], ["Iron"])
+        self.assertNotIn("lots", rows[0])
+
+    def test_lots_are_box_snapped(self):
+        # Hand-load best-fit policy: each lot's fill is whole containers.
+        box = nav_core.box_policy(loading="hand")
+        rows = nav_core._trade_bundle_candidates(self._capped_pair(), 505, box=box)
+        r = next(x for x in rows if x.get("lots"))
+        for x in [dict(scu=r["primary"]["scu"], box=r.get("box"))] + list(r["lots"]):
+            plan = x.get("box") if isinstance(x, dict) else None
+            if plan:
+                self.assertEqual(plan["scu"], plan["boxes"] * plan["size"])
+
+    def test_summary_totals_and_peak_capital_are_the_bundles(self):
+        # One leg (max_stops=2): the bundle's 57,500 beats any single fill, and
+        # the summary's profit + peak capital are the whole bundle's figures.
+        plan = nav_core.plan_trade_route(NAV, self._capped_pair(), 500,
+                                         start_id=self.A, sort="profit",
+                                         max_stops=2, cargo="mixed")
+        s = plan["summary"]
+        self.assertEqual(s["legs"], 1)
+        self.assertEqual(s["total_profit"], 100 * 200 + 150 * 150 + 250 * 50)
+        self.assertEqual(s["peak_capital"], 100 * 100 + 150 * 50 + 250 * 20)
+
+    def test_route_may_still_pingpong_a_lane_with_single_fills(self):
+        # Superset-pool property: in profit mode with stops to spare, three
+        # separate hold-fills of the same lane move MORE total SCU than one
+        # bundle (67,500 vs 57,500) — mixed mode must still find that, and the
+        # used-keys must stop it from ALSO selling the bundled shelves twice.
+        plan = nav_core.plan_trade_route(NAV, self._capped_pair(), 500,
+                                         start_id=self.A, sort="profit",
+                                         max_stops=12, cargo="mixed")
+        self.assertEqual(plan["summary"]["total_profit"],
+                         100 * 200 + 150 * 150 + 500 * 50)
+        bought = [(lg["commodity"], lg["scu"]) for lg in plan["legs"]]
+        self.assertEqual(sorted(bought),
+                         [("Copper", 500), ("Gold", 100), ("Iron", 150)])
+
+    def test_replan_continuation_can_bundle(self):
+        posA = next(p for p in NAV.pois.values() if p.id == self.A).global_m
+        prices = self._capped_pair() + [
+            self._pt("Waste", 9, self.B, sell=40, scu_sell_stock=1000)]
+        plan = nav_core.replan_trade_route(
+            NAV, prices, 500, start_pos=posA, sort="profit", cargo="mixed",
+            held={"commodity": "Waste", "scu": 200, "buy_price": 10})
+        held = [lg for lg in plan["legs"] if lg.get("held")]
+        cont = [lg for lg in plan["legs"] if not lg.get("held")]
+        self.assertEqual(len(held), 1)
+        self.assertFalse(held[0].get("lots"))          # held cargo never re-bundles
+        self.assertTrue(cont and cont[0].get("lots"))  # continuation bundles
+
+
 class TradeHistoryStatsTests(unittest.TestCase):
     """nav_core trade history/statistics derivations (#21 step 6): realized totals,
     quick-picks, guild aggregates, and the top-traders board over trade_runs

@@ -3684,6 +3684,15 @@ def _price_fresh(p, max_age_s, now, side=None) -> bool:
 # already in your hold with no buyer; you finish the run you started.
 TRADE_LEGALITY = ("any", "legal", "illicit")
 
+# Plan-time mixed loads (docs/trade-topup.md §PR 2). `single` = one commodity
+# per leg, byte-for-byte the pre-mixed behavior; `mixed` = the candidate
+# generator fills the hold across several commodities per (buy, sell) POI pair.
+# At 2,200 SCU nearly every commodity is supply-capped, so ranking a lane on
+# its single best commodity is systematically wrong — a lane with four mediocre
+# commodities can beat a lane with one great one. Opt-in: a small hold gains
+# nothing (the fill degenerates to the best single commodity, test-pinned).
+CARGO_MODES = ("single", "mixed")
+
 
 def legality_allows(name, mode, illicit) -> bool:
     """Does this commodity pass the legality filter? `illicit` is a set of
@@ -3773,6 +3782,151 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                                  budget=budget, box=box)
                 if row["max_scu"]:            # need a movable quantity to be real
                     rows.append(row)
+    rows.sort(key=lambda r: -(r["trade_profit"] or 0))
+    return rows
+
+
+def _commodity_cap(row):
+    """A commodity's own movable ceiling at one pair — supply/demand only, never
+    the hold (the bundle fill owns the hold). Same rule as _clamp_scu: 0/unknown
+    doesn't clamp. None = uncapped."""
+    caps = [v for v in (row.get("supply_scu"), row.get("demand_scu")) if v and v > 0]
+    return float(min(caps)) if caps else None
+
+
+def _bundle_fill(rows, capacity_scu, budget, box, key) -> list[tuple]:
+    """One greedy fill of the hold across a pair's per-commodity best trades, in
+    `key` order. Each lot takes as much as its own supply/demand cap, the
+    remaining hold and the remaining budget allow, box-snapped (#46) like any
+    other fill. Returns [(row, scu, box_plan)]."""
+    hold = float(capacity_scu)
+    funds = float(budget) if budget else None
+    lots = []
+    for r in sorted(rows, key=key):
+        if hold < 1:
+            break
+        cap = _commodity_cap(r)
+        take = hold if cap is None else min(hold, cap)
+        if funds is not None and r["buy_price"] > 0:
+            take = min(take, math.floor(funds / r["buy_price"]))
+        take = int(take)
+        if take <= 0:
+            continue
+        plan = plan_box_load(take, box, r["commodity"])
+        if plan:
+            take = plan["scu"]
+        if take <= 0:
+            continue
+        lots.append((r, take, plan))
+        hold -= take
+        if funds is not None:
+            funds -= take * r["buy_price"]
+    return lots
+
+
+def _lot_view(r, scu, plan) -> dict:
+    """One planned co-cargo lot as it rides a bundle leg (`leg.lots`,
+    docs/trade-topup.md §PR 2). A superset of the run-mode extras fields so the
+    add-as-bought confirm can prefill straight from it, plus the plan economics
+    the leg card renders. Note the lot is a PLAN — it only becomes cargo when
+    the pilot confirms it at the kiosk (`addcargo`), which keeps PR 1's
+    lots-are-actuals invariant intact."""
+    margin = r["profit_per_scu"]
+    return {
+        "commodity": r["commodity"], "scu": scu,
+        "buy_price": r["buy_price"], "sell_price": r["sell_price"],
+        "profit_per_scu": margin,
+        "profit": int(round(margin * scu)),
+        "buy_cost": int(round(r["buy_price"] * scu)),
+        "return_pct": r.get("return_pct"),
+        "supply_scu": r.get("supply_scu") or 0,
+        "demand_scu": r.get("demand_scu") or 0,
+        "buy_terminal": r.get("buy_terminal"), "buy_terminal_id": r.get("buy_terminal_id"),
+        "sell_terminal": r.get("sell_terminal"), "sell_terminal_id": r.get("sell_terminal_id"),
+        "buy_updated_at": r.get("buy_updated_at"), "sell_updated_at": r.get("sell_updated_at"),
+        "buy_src": r.get("buy_src"), "sell_src": r.get("sell_src"),
+        "box": plan,
+    }
+
+
+def _trade_bundle_candidates(prices, capacity_scu, *, system=None, commodities=None,
+                             budget=None, max_age_s=None, now_ts=None,
+                             legality="any", illicit=frozenset(), min_return_pct=None,
+                             avoid_poi_ids=frozenset(), avoid_pairs=frozenset(),
+                             avoid_buys=frozenset(), avoid_sells=frozenset(),
+                             exclude_poi_ids=frozenset(), box=None) -> list[dict]:
+    """Mixed-load candidate generator (docs/trade-topup.md §PR 2): one aggregate
+    row per (buy POI, sell POI) pair, its hold greedy-filled across every
+    commodity that survives the per-lot filters — which is `_trade_candidates`
+    itself, so freshness, legality (#42), stock avoids, the return floor (#43)
+    and the container policy (#46) all apply per lot with zero duplicated
+    filtering. The solver core doesn't change: `_greedy_route` reads
+    trade_profit / buy_cost / endpoints, and those carry the BUNDLE totals.
+
+    Fill rule: richest margin/SCU first, each lot capped by its own
+    supply/demand and box-snapped. When a budget is set, a second fill ordered
+    by return-per-aUEC runs too and the more profitable of the two stands —
+    with the wallet binding instead of the hold, margin order can waste capital
+    on an expensive commodity a cheaper one out-earns.
+
+    The richest lot's figures are the row's top-level fields (it becomes the
+    leg primary); the rest ride as `lots`. The returned pool is a SUPERSET:
+    every single-commodity row plus one bundle row per multi-commodity pair —
+    a route may still ping-pong one lane with several single fills (more SCU
+    over more hops), and the objective decides between that and the one-hop
+    bundle. The greedy's used-set consumes every commodity a bundle buys, so
+    one shelf never sells twice. A fill that degenerates to one lot emits
+    nothing (its single row is already in the pool) — which makes the
+    small-hold equivalence obligation structural: with the hold under every
+    cap, the mixed pool IS the single pool."""
+    singles = _trade_candidates(
+        prices, capacity_scu, system=system, commodities=commodities,
+        budget=budget, max_age_s=max_age_s, now_ts=now_ts,
+        legality=legality, illicit=illicit, min_return_pct=min_return_pct,
+        avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
+        avoid_buys=avoid_buys, avoid_sells=avoid_sells,
+        exclude_poi_ids=exclude_poi_ids, box=box)
+    pairs: dict[tuple, dict] = {}
+    for r in singles:
+        best = pairs.setdefault((r["buy_poi_id"], r["sell_poi_id"]), {})
+        cur = best.get(r["commodity"])
+        if cur is None or r["profit_per_scu"] > cur["profit_per_scu"]:
+            best[r["commodity"]] = r
+    rows = list(singles)
+    for by_name in pairs.values():
+        pool = list(by_name.values())
+        fill = _bundle_fill(pool, capacity_scu, budget, box,
+                            key=lambda r: -r["profit_per_scu"])
+        if budget:
+            alt = _bundle_fill(pool, capacity_scu, budget, box,
+                               key=lambda r: -(r["profit_per_scu"] / r["buy_price"])
+                               if r["buy_price"] > 0 else 0.0)
+            if (sum(s * r["profit_per_scu"] for r, s, _ in alt)
+                    > sum(s * r["profit_per_scu"] for r, s, _ in fill)):
+                fill = alt
+        if len(fill) < 2:
+            continue          # degenerate: its single row is already in the pool
+        fill.sort(key=lambda t: -(t[0]["profit_per_scu"] * t[1]))
+        prim, prim_scu, prim_plan = fill[0]
+        total_scu = sum(s for _, s, _ in fill)
+        total_profit = sum(int(round(r["profit_per_scu"] * s)) for r, s, _ in fill)
+        total_cost = sum(int(round(r["buy_price"] * s)) for r, s, _ in fill)
+        row = dict(prim)
+        # Solver-facing figures are the bundle's: the chain builder, the return
+        # accept test and _cost_route's totals all read these three.
+        row["max_scu"] = total_scu
+        row["trade_profit"] = total_profit
+        row["buy_cost"] = total_cost
+        row["box"] = prim_plan
+        row["return_pct"] = (round(100.0 * total_profit / total_cost, 1)
+                             if total_cost > 0 else prim.get("return_pct"))
+        # The leg keeps speaking in primary terms (run mode's buy confirm, the
+        # low-stock fraction, realized stats) — _cost_route reads this split.
+        row["primary"] = {"scu": prim_scu,
+                          "profit": int(round(prim["profit_per_scu"] * prim_scu)),
+                          "buy_cost": int(round(prim["buy_price"] * prim_scu))}
+        row["lots"] = [_lot_view(r, s, p) for r, s, p in fill[1:]]
+        rows.append(row)
     rows.sort(key=lambda r: -(r["trade_profit"] or 0))
     return rows
 
@@ -3989,9 +4143,17 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
         loaded_time += haul_t                # flying the haul = loaded
         total_time += approach_t + haul_t + 2 * STOP_DWELL_S
         peak_capital = max(peak_capital, row["buy_cost"] or 0)
-        for ts in (row.get("buy_updated_at"), row.get("sell_updated_at")):
+        lot_stamps = [ts for x in (row.get("lots") or ())
+                      for ts in (x.get("buy_updated_at"), x.get("sell_updated_at"))]
+        for ts in (row.get("buy_updated_at"), row.get("sell_updated_at"), *lot_stamps):
             if ts is not None and (oldest_ts is None or ts < oldest_ts):
                 oldest_ts = ts
+        # Mixed loads (docs/trade-topup.md §PR 2): the row's solver-facing
+        # figures are bundle totals, but the LEG keeps speaking in primary
+        # terms — run mode's buy confirm, its low-stock fraction and realized
+        # stats all treat leg scu/profit as one commodity's. The co-cargo plan
+        # rides as `lots`, the stop-level totals as `bundle`.
+        prim = row.get("primary")
         legs.append({
             # .get: a row that skipped _trade_row (manual legs) lacks the
             # provenance keys — absent must read as None, not KeyError.
@@ -4001,7 +4163,12 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
                 "buy_price", "sell_price", "profit_per_scu", "supply_scu", "demand_scu",
                 "buy_updated_at", "sell_updated_at", "buy_src", "sell_src")
         } | {
-            "scu": row["max_scu"], "profit": row["trade_profit"], "buy_cost": row["buy_cost"],
+            "scu": (prim["scu"] if prim else row["max_scu"]),
+            "profit": (prim["profit"] if prim else row["trade_profit"]),
+            "buy_cost": (prim["buy_cost"] if prim else row["buy_cost"]),
+            "lots": row.get("lots") or None,
+            "bundle": ({"scu": row["max_scu"], "profit": row["trade_profit"],
+                        "buy_cost": row["buy_cost"]} if row.get("lots") else None),
             # Container plan (#46) — present only in hand-load mode; a held leg's
             # cargo is already boxed and aboard, so it never carries one.
             "box": None if held else row.get("box"),
@@ -4076,11 +4243,17 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
     # on its own can still make the ROUTE worse (see the accept test below).
     run_profit, run_peak = 0.0, 0
     key = lambda r: (r["commodity"], r["buy_poi_id"], r["sell_poi_id"])
+    # A mixed-load bundle (§PR 2) buys SEVERAL commodities at one stop, so it
+    # consumes a used-key per lot: taking the bundle and then a single fill of
+    # one of its commodities on the same lane would sell one shelf twice. On a
+    # single-commodity row this is exactly the old one-key behavior.
+    keys = lambda r: [key(r)] + [(x["commodity"], r["buy_poi_id"], r["sell_poi_id"])
+                                 for x in (r.get("lots") or ())]
     while len(chosen) < max_legs:
         pool = [first] if (first is not None and not chosen) else cands
         pick, pick_score = None, 0.0
         for r in pool:
-            if key(r) in used:
+            if any(k in used for k in keys(r)):
                 continue
             bp = nav.pois.get(r["buy_poi_id"])
             sp = nav.pois.get(r["sell_poi_id"])
@@ -4152,7 +4325,7 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
             run_profit += pick["trade_profit"] or 0
             run_peak = new_peak
         chosen.append(pick)
-        used.add(key(pick))
+        used.update(keys(pick))
         sp = nav.pois.get(pick["sell_poi_id"])
         pos = sp if sp is not None else pos
     return chosen
@@ -4195,7 +4368,12 @@ def _solve_route(nav, cands, start, max_legs, optimize, t_ref, deadhead_weight,
         return []
     routes, seen = [], set()
     def add(chain):
-        sig = tuple((r["commodity"], r["buy_poi_id"], r["sell_poi_id"]) for r in chain)
+        # The sig names lot commodities too (§PR 2): a bundle and a bare single
+        # fill of its primary on the same lane are different routes, and the
+        # dedup must not throw one of them away before scoring.
+        sig = tuple((r["commodity"], r["buy_poi_id"], r["sell_poi_id"],
+                     tuple(x["commodity"] for x in (r.get("lots") or ())))
+                    for r in chain)
         if chain and sig not in seen:
             seen.add(sig)
             routes.append(chain)
@@ -4223,7 +4401,7 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                      sort="per_hour", budget=None, deadhead_weight=1.0,
                      max_age_s=None, now_ts=None, t_ref=None,
                      legality="any", illicit=None, min_return_pct=None,
-                     box=None,
+                     box=None, cargo="single",
                      avoid_poi_ids=None, avoid_pairs=None, avoid_volumes=None,
                      avoid_buys=None, avoid_sells=None, exclude_poi_ids=None,
                      fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -4237,7 +4415,9 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     hold-fill to affordable aUEC; `deadhead_weight` > 1 trades profit for less
     empty-hold flight; `max_age_s` drops stale price points; `exclude_poi_ids`
     (#34) drops stops the ship can't physically use; a `box` policy (#46) sizes
-    every fill to whole cargo containers. Returns {summary, legs, start}
+    every fill to whole cargo containers; `cargo="mixed"` fills each stop across
+    several commodities (docs/trade-topup.md §PR 2 — only the candidate
+    generator changes). Returns {summary, legs, start}
     — the same shape cost_trade_legs produces for manual mode."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     optimize = sort if sort in ("profit", "return") else "per_hour"
@@ -4256,14 +4436,15 @@ def plan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     # solver pay the honest detour distance in each leg's score instead. Camped
     # endpoints (`avoid_poi_ids`) still drop — no geometry fixes a camped terminal.
     cand_pairs = frozenset() if avoid_volumes else avoid_pairs
-    cands = _trade_candidates(prices, usable_scu, system=system, commodities=commodities,
-                              budget=budget, max_age_s=max_age_s, now_ts=now_ts,
-                              legality=legality, illicit=frozenset(illicit or ()),
-                              min_return_pct=min_return_pct,
-                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
-                              avoid_buys=frozenset(avoid_buys or ()),
-                              avoid_sells=frozenset(avoid_sells or ()),
-                              exclude_poi_ids=exclude_poi_ids, box=box)
+    gen = _trade_bundle_candidates if cargo == "mixed" else _trade_candidates
+    cands = gen(prices, usable_scu, system=system, commodities=commodities,
+                budget=budget, max_age_s=max_age_s, now_ts=now_ts,
+                legality=legality, illicit=frozenset(illicit or ()),
+                min_return_pct=min_return_pct,
+                avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
+                avoid_buys=frozenset(avoid_buys or ()),
+                avoid_sells=frozenset(avoid_sells or ()),
+                exclude_poi_ids=exclude_poi_ids, box=box)
     max_legs = max(1, max_stops // 2)
     if not cands:
         empty = _cost_route(nav, [], start, t_ref)
@@ -4408,7 +4589,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                        system=None, sort="per_hour", budget=None,
                        deadhead_weight=1.0, max_age_s=None, now_ts=None,
                        t_ref=None, legality="any", illicit=None,
-                       min_return_pct=None, box=None,
+                       min_return_pct=None, box=None, cargo="single",
                        avoid_poi_ids=None, avoid_pairs=None,
                        avoid_volumes=None, avoid_buys=None, avoid_sells=None,
                        exclude_poi_ids=None,
@@ -4444,7 +4625,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
             max_stops=max_stops, commodities=commodities, system=system, sort=sort,
             budget=budget, deadhead_weight=deadhead_weight, max_age_s=max_age_s,
             now_ts=now_ts, t_ref=t_ref, legality=legality, illicit=illicit,
-            min_return_pct=min_return_pct, box=box,
+            min_return_pct=min_return_pct, box=box, cargo=cargo,
             avoid_poi_ids=avoid_poi_ids,
             avoid_pairs=avoid_pairs, avoid_volumes=avoid_volumes,
             avoid_buys=avoid_buys, avoid_sells=avoid_sells,
@@ -4517,15 +4698,16 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
     # (#42) must not strand contraband already aboard — but the continuation
     # honors both preferences.
     cand_pairs = frozenset() if avoid_volumes else avoid_pairs
-    cands = _trade_candidates(prices, usable_scu, system=system,
-                              commodities=commodities, budget=budget,
-                              max_age_s=max_age_s, now_ts=now,
-                              legality=legality, illicit=frozenset(illicit or ()),
-                              min_return_pct=min_return_pct,
-                              avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
-                              avoid_buys=frozenset(avoid_buys or ()),
-                              avoid_sells=frozenset(avoid_sells or ()),
-                              exclude_poi_ids=exclude_poi_ids, box=box)
+    gen = _trade_bundle_candidates if cargo == "mixed" else _trade_candidates
+    cands = gen(prices, usable_scu, system=system,
+                commodities=commodities, budget=budget,
+                max_age_s=max_age_s, now_ts=now,
+                legality=legality, illicit=frozenset(illicit or ()),
+                min_return_pct=min_return_pct,
+                avoid_poi_ids=avoid_poi_ids, avoid_pairs=cand_pairs,
+                avoid_buys=frozenset(avoid_buys or ()),
+                avoid_sells=frozenset(avoid_sells or ()),
+                exclude_poi_ids=exclude_poi_ids, box=box)
     cont_legs = max(0, (max_stops - len(held_rows)) // 2)   # held sells used stops
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
     cont = _solve_route(nav, cands, pos, cont_legs, optimize, t_ref,

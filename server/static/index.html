@@ -1600,6 +1600,16 @@
   .topup-lot b { color: var(--text); }
   .topup-lot.done { text-decoration: line-through; }
   .topup-do { margin-top: 4px; }
+  /* Mixed loads (docs/trade-topup.md §PR 2): planned co-cargo on a plan leg
+     (.tl-lot / .tl-mixed / .tl-bundle) + the run card's planned-lot rows.
+     A planned lot is dimmer than a bought one — it's an intention, not cargo;
+     a sold leg's never-bought lot strikes through like a skipped step. */
+  .tl-lot { font-size: 13px; }
+  .tl-lot b { color: var(--text); }
+  .tl-mixed { font-size: 11px; color: var(--accent); white-space: nowrap; }
+  .tl-bundle { font-weight: 600; }
+  .topup-lot.planned { color: var(--dim); }
+  .topup-planned { margin: 6px 0 2px; font-size: 13px; }
   /* Stop amenities (#28c): station facility chips on a leg's buy/sell lines. */
   .tl-amen { font-size: 11px; color: var(--dim); white-space: nowrap; }
   /* Stock reports (#21): buy-side badges on plan legs + the STOCK WATCH strip. */
@@ -4002,6 +4012,19 @@
               </label>
             </span>
             <span id="trade-sort-note" class="trade-sort-note tf-hint"></span>
+            <!-- Mixed loads (docs/trade-topup.md §PR 2): fill each stop across
+                 several commodities. The big-ship answer to supply caps — at
+                 2,200 SCU one commodity rarely fills the hold. -->
+            <span class="tf-label"
+                  title="Single = one commodity per leg. Mixed = fill each stop's hold across several commodities — the big-ship answer to supply caps.">Cargo</span>
+            <span class="tf-ctl">
+              <span class="seg" id="trade-cargo" role="group" aria-label="How each stop's hold is filled"
+                    aria-describedby="trade-cargo-hint">
+                <button class="on" data-cargo="single" type="button" aria-pressed="true">Single commodity</button>
+                <button data-cargo="mixed" type="button" aria-pressed="false">Mixed loads</button>
+              </span>
+              <span class="muted rule-hint" id="trade-cargo-hint"></span>
+            </span>
             <div id="trade-filter-row" class="tf-wide route-row" hidden>
               <span class="poi-pick" style="flex:1; min-width:180px;">
                 <input id="trade-commodity-add" class="ti" list="trade-commodities"
@@ -8920,6 +8943,24 @@ function setTradeLegality(mode) {
   if (hint) hint.textContent = TRADE_LEGALITY_HINT[tradeLegality];
   renderTradeRuleChips();
 }
+// Mixed loads (docs/trade-topup.md §PR 2): fill each stop's hold across several
+// commodities. Opt-in — on a small hold the fill degenerates to the best single
+// commodity and plans are identical, so single stays the default.
+let tradeCargo = "single";               // single | mixed
+const TRADE_CARGO_HINT = {
+  single: "One commodity per leg — the classic run.",
+  mixed: "Fill each stop across several commodities. Big holds beat supply caps this way; each co-load is confirmed at the kiosk.",
+};
+function setTradeCargo(mode) {
+  tradeCargo = mode === "mixed" ? "mixed" : "single";
+  for (const x of $("trade-cargo").children) {
+    const on = x.dataset.cargo === tradeCargo;
+    x.classList.toggle("on", on); x.setAttribute("aria-pressed", on);
+  }
+  const hint = $("trade-cargo-hint");
+  if (hint) hint.textContent = TRADE_CARGO_HINT[tradeCargo];
+  renderTradeRuleChips();
+}
 // Container loading (#46): a commodity kiosk sells BOXES, so the buyable
 // quantities are the multiples of the container size you pick. Auto-load stows
 // the hold for you and box count costs nothing, so the plan takes the maximum
@@ -9051,6 +9092,7 @@ function renderTradeRuleChips() {
   const avoided = avoidPoiIds().length;
   if (avoided) chip(avoided + " avoided place" + (avoided === 1 ? "" : "s"), "dev");
   if (tradeMode !== "manual") {
+    if (tradeCargo === "mixed") chip("mixed loads", "dev");   // §PR 2
     if ($("trade-fresh-on").checked) {
       const d = tradeStaleDays();
       chip("prices ≤ " + d + "d", d === 2 ? "" : "dev");
@@ -9458,6 +9500,7 @@ function applyTradeConfig(cfg) {
   setTradeStops(cfg.stops || "any");
   if (!cfg.stops) tradeStopsForShip();
   setTradeLegality(cfg.legality || "any");    // #42 — also every mode
+  setTradeCargo(cfg.cargo || "single");       // §PR 2 — absent = classic single
   // quiet: don't let the loading default overwrite the config's own box mode.
   setTradeLoading(cfg.loading || "auto", true);   // #46 — absent = today's plan
   setTradeBoxMode(cfg.box_mode || LOADING_DEFAULT_BOXMODE[tradeLoading]);
@@ -9527,6 +9570,9 @@ function wireTradePlanner() {
   for (const b of $("trade-legality").querySelectorAll("button"))
     b.onclick = () => setTradeLegality(b.dataset.legality);
   setTradeLegality(tradeLegality);
+  for (const b of $("trade-cargo").querySelectorAll("button"))
+    b.onclick = () => setTradeCargo(b.dataset.cargo);        // §PR 2
+  setTradeCargo(tradeCargo);
   for (const b of $("trade-loading").querySelectorAll("button"))
     // #46: re-rank the board too — hand-loaded fills are smaller, so the
     // per-hour ordering the board shows must match what a plan would buy.
@@ -9806,6 +9852,7 @@ function buildTradePlanBody(msg) {
     body.max_stops = Number($("trade-stops").value) || 6;
     body.system = $("trade-system").value || null;
     body.sort = tradeSort;
+    body.cargo = tradeCargo;                          // §PR 2 (solver modes only)
     if ($("trade-deadhead").checked) body.minimize_deadhead = true;
     if ($("trade-fresh-on").checked)
       body.max_price_age_days = Math.max(1, Number($("trade-fresh-days").value) || 2);
@@ -10107,14 +10154,26 @@ function renderTradeLeg(lg, i) {
       : `<div class="tl-stock">📉 ${demand ? "low demand" : "low stock"} ${fmtAge(stk.age_s || 0)}`
         + `${stk.scu != null ? ` <span class="muted">(~${stk.scu} SCU ${demand ? "taken" : "seen"}${stk.by ? " by " + esc(stk.by) : ""})</span>` : ""}</div>`;
   }
+  // Mixed loads (docs/trade-topup.md §PR 2): planned co-cargo on the same hop.
+  // The leg's headline figures stay the primary's; each lot states its own
+  // economics and the bundle line totals the stop.
+  const lots = lg.lots || [];
+  const lotLines = lots.map(x =>
+    `<div class="tl-lot">⊕ also <b>${x.scu} SCU ${esc(x.commodity)}</b>`
+    + (x.illicit ? ` <span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠</span>` : "")
+    + ` <span class="muted"${kioskTitle(x.buy_price, (x.box && x.box.size) || 1)}>@ ${fmtAuec(x.buy_price)} → ${fmtAuec(x.sell_price)}</span>`
+    + ` · +${fmtAuec(x.profit)}${boxChip(x.box, x.buy_price)}</div>`).join("");
   return `<div class="trade-leg-card${(warns.length || blk.length) ? " danger" : ""}"><span class="seq">${i + 1}</span><div class="body">`
     + `<div class="tl-flow"><span class="tl-commodity">${esc(lg.commodity)}</span>`
     + (lg.illicit ? `<span class="tl-illicit" title="Contraband — expect scans and a CrimeStat">☠ illicit</span>` : "")
-    + `<span class="tl-scu">${lg.scu} SCU</span>${boxChip(lg.box, lg.buy_price)}${fresh}</div>`
+    + `<span class="tl-scu">${lg.scu} SCU</span>${boxChip(lg.box, lg.buy_price)}`
+    + (lg.bundle ? `<span class="tl-mixed" title="Mixed load — ${1 + lots.length} commodities fill this stop">⊕ mixed ×${1 + lots.length}</span>` : "")
+    + `${fresh}</div>`
     + dngr + handEndsChip(lg)
     + `<div class="tl-side tl-buy">Buy at <b>${esc(lg.buy_terminal)}</b> `
     + `<span class="muted"${kioskTitle(lg.buy_price, legBoxScu(lg))}>@ ${fmtAuec(lg.buy_price)}</span>`
     + `${amenChips(lg.buy_amen)}</div>`
+    + lotLines
     + `<div class="tl-side tl-sell">Sell at <b>${esc(lg.sell_terminal)}</b> `
     + `<span class="muted">@ ${fmtAuec(lg.sell_price)}</span>`
     + `${amenChips(lg.sell_amen)}</div>`
@@ -10122,9 +10181,13 @@ function renderTradeLeg(lg, i) {
     + ` · ${fmtAuec(lg.buy_cost)} capital`
     + (lg.return_pct != null
         ? ` · <span class="tl-return${lg.low_return ? " low" : ""}"`
-          + ` title="Return on the capital this leg ties up (profit ÷ buy cost)">`
+          + ` title="Return on the capital this leg ties up (profit ÷ buy cost)${lg.bundle ? " — the whole mixed load's" : ""}">`
           + `${lg.return_pct}% return</span>` : "")
     + `</div>`
+    + (lg.bundle
+        ? `<div class="tl-econ tl-bundle">stop total <b>${lg.bundle.scu} SCU</b>`
+          + ` · profit <b>${fmtAuec(lg.bundle.profit)}</b>`
+          + ` · ${fmtAuec(lg.bundle.buy_cost)} capital</div>` : "")
     + boxDetail(lg.box)
     + (move.length ? `<div class="tl-move">${move.join(" · ")}</div>` : "")
     + `</div></div>`;
@@ -10378,7 +10441,8 @@ function tradeRunSig(run) {
   if (!run) return "none";
   return [run.id, run.active, run.phase, run.arrived, run.onboard_scu, run.done,
     (run.legs || []).map(l => l.state + (l.primary_sold ? "P" : "")
-      + ((l.extras || []).map(x => (x.sold ? "1" : "0")).join(""))).join(",")].join(":");
+      + ((l.extras || []).map(x => (x.sold ? "1" : "0")).join(""))
+      + ((l.lots || []).map(x => (x.added ? "a" : "p")).join(""))).join(",")].join(":");
 }
 function maybeRenderTradeRun(run) {
   if (tradeRunComplete && !run) return;   // keep the completion card up until cleared
@@ -10507,6 +10571,22 @@ function renderTradeRun(run) {
   // Top-up (docs/trade-topup.md): open the same-hop suggestion panel, and
   // confirm each lot's sale from its own row (per-SCU — the sell kiosk's unit).
   box.querySelectorAll("[data-topup]").forEach(b => b.onclick = () => loadTradeTopup(+b.dataset.topup, b));
+  // Planned co-load confirms (§PR 2): the same add-as-bought as a spontaneous
+  // top-up — fields speak the kiosk's container unit, converted on submit.
+  box.querySelectorAll("[data-addlot]").forEach(b => b.onclick = () => {
+    const [leg, j] = b.dataset.addlot.split(":").map(Number);
+    const lg = (run.legs || [])[leg];
+    const x = ((lg && lg.lots) || [])[j]; if (!x) return;
+    const form = b.closest(".topup-form");
+    const pEl = form.querySelector(".tp-price"), sEl = form.querySelector(".tp-scu");
+    const pbs = Number(pEl.dataset.box) || 1, qbs = Number(sEl.dataset.box) || 1;
+    const body = { action: "addcargo", leg, commodity: x.commodity };
+    if (pEl.value !== "" && Number(pEl.value) >= 0)
+      body.price = pbs > 1 ? Math.round(Number(pEl.value) / pbs * 100) / 100 : Number(pEl.value);
+    if (sEl.value !== "" && Number(sEl.value) > 0) body.scu = Number(sEl.value) * qbs;
+    if (x.box && x.box.size) body.box_size = x.box.size;
+    patchTradeRun(body);
+  });
   box.querySelectorAll("[data-sellextra]").forEach(b => b.onclick = () => {
     const [leg, j] = b.dataset.sellextra.split(":").map(Number);
     const row = b.closest(".topup-sell");
@@ -10750,6 +10830,22 @@ function renderTradeRunLeg(lg, i, run) {
       + `<span class="muted">@ ${fmtAuec(x.buy_price)} → ${fmtAuec(x.sell_price)}</span>`
       + (x.sold ? ` · sold` : ``) + `</div>`;
   });
+  // Planned co-loads (docs/trade-topup.md §PR 2): the plan says buy these here
+  // too. A lot is a PLAN until the pilot confirms it at the kiosk — the confirm
+  // rows (below, once the primary is bought) file the same add-as-bought as a
+  // spontaneous top-up, so everything aboard stays actuals. `added` lots have
+  // become the extras rows above; the leg card is where the rest surface.
+  const lotConfirms = active && lg.state === "bought" && !lg.held && !run.arrived;
+  if (!lotConfirms) (lg.lots || []).forEach(x => {
+    if (x.added) return;
+    const note = lg.state === "sold" ? `✗ not bought`
+      : lg.state === "bought" ? `planned — confirm at the kiosk`
+      : `planned co-load — confirm after the main buy`;
+    h += `<div class="trade-run-step topup-lot planned${lg.state === "sold" ? " done" : ""}">⊕ `
+      + `<b>${x.scu} SCU ${esc(x.commodity)}</b> `
+      + `<span class="muted">@ ${fmtAuec(x.buy_price)} → ${fmtAuec(x.sell_price)}</span>`
+      + ` · <span class="muted">${note}</span></div>`;
+  });
   // Sell side. A sold leg shows its realized profit (from actuals when entered).
   const sold = lg.state === "sold";
   const selling = lg.state === "bought";
@@ -10872,6 +10968,38 @@ function renderTradeRunLeg(lg, i, run) {
         + `<b>↻ re-plan from here</b> to route to a new buyer, or sell what you can.</div>`;
     else
       h += `<button class="run-skip run-nostock" data-nodemand="${i}">⛔ won't buy here — report &amp; re-plan ▸</button>`;
+    // Planned co-loads (§PR 2), primary bought, still at the kiosk: one
+    // prefilled add-as-bought row per unconfirmed lot. Confirming files the
+    // same addcargo a spontaneous top-up would — the lot's buy figures become
+    // actuals, and the plan's summary already counts its expected profit. A
+    // lot the kiosk doesn't have is simply never confirmed: nothing tracks it
+    // as aboard, and the leg can still advance without it.
+    const plannedLots = (lg.lots || []).map((x, j) => [x, j]).filter(([x]) => !x.added);
+    if (!isBuy && !lg.held && !run.arrived && plannedLots.length) {
+      h += `<div class="topup-planned"><div class="topup-head muted">planned co-loads — confirm what the kiosk sold you:</div>`;
+      plannedLots.forEach(([x, j]) => {
+        const size = (x.box && x.box.size) || 1;
+        const fill = size > 1 ? `${x.box.boxes} × ${size} SCU` : `${x.scu} SCU`;
+        h += `<div class="topup-row">`
+          + `<div class="topup-line"><b>${esc(x.commodity)}</b>`
+          + ` <span class="muted"${kioskTitle(x.buy_price, size)}>@ ${fmtAuec(x.buy_price)} → ${fmtAuec(x.sell_price)}</span>`
+          + ` <span class="muted">· ${fill} · cost ${fmtAuec(x.buy_cost)}</span>`
+          + ` · <span class="topup-gain" title="already counted in this run's planned profit">+${fmtAuec(x.profit)} profit</span></div>`
+          + `<div class="trade-actual topup-form">`
+          + `<span class="ta-label">paid</span>`
+          + `<input class="ti tp-price" type="number" min="0" step="1" data-box="${size > 1 ? size : 1}"`
+          + ` value="${size > 1 ? Math.round(x.buy_price * size * 100) / 100 : x.buy_price}"`
+          + ` aria-label="actual price in aUEC per ${size > 1 ? size + " SCU container" : "SCU"} for ${esc(x.commodity)}">`
+          + `<span class="ta-x">${size > 1 ? `aUEC per ${size} SCU box ×` : "aUEC/SCU ×"}</span>`
+          + `<input class="ti tp-scu" type="number" min="0" step="1" data-box="${size > 1 ? size : 1}"`
+          + ` value="${size > 1 ? x.box.boxes : x.scu}"`
+          + ` aria-label="actual number of ${size > 1 ? size + " SCU containers" : "SCU"} for ${esc(x.commodity)}">`
+          + `<span class="ta-x">${size > 1 ? "boxes" : "SCU"}</span>`
+          + `<button class="trade-run-do topup-do" data-addlot="${i}:${j}" type="button">✓ Bought — add to leg ▸</button>`
+          + `</div></div>`;
+      });
+      h += `</div>`;
+    }
     // Top-up (docs/trade-topup.md): bought, not yet departed (arrival at the
     // sell stop hides it), with usable space left — offer same-hop co-cargo.
     // A held leg has no buy kiosk to stand at, so it never offers one.
