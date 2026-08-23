@@ -1,6 +1,6 @@
 # Trade planner: mid-run top-up + mixed loads
 
-Status: **PR 0 (#140) + PR 1 built 2026-08-22, awaiting live test · PR 2 designed, not built**
+Status: **PR 0 (#140) + PR 1 built 2026-08-22 · PR 2 built 2026-08-23 — awaiting live test**
 
 ## The problem (a real run)
 
@@ -30,7 +30,8 @@ score. It has no concept of a short fill; it was never going to help here.
 - **PR 1** — the **leg-lots model** + the run-time **"⊕ top up from here"**
   button (this doc, below).
 - **PR 2** — plan-time **mixed loads**: an opt-in `cargo: mixed` knob that
-  makes the solver rank lanes on multi-commodity bundles (§PR 2 below).
+  makes the solver rank lanes on multi-commodity bundles (§PR 2 below —
+  built 2026-08-23).
 
 ## The model: extras on the leg, never new legs
 
@@ -148,35 +149,73 @@ stats) reads through it and needs no change.
   echo — the two kiosk ends genuinely differ, see CLAUDE.md #46d).
 - `tradeRunSig` includes per-lot sold flags so WS re-renders fire.
 
-## PR 2 — plan-time mixed loads (design)
+## PR 2 — plan-time mixed loads — AS BUILT (2026-08-23)
 
 Opt-in knob `cargo: single|mixed` on `TradePlanIn`/`TradeReplanIn` (default
-`single` = today's behavior byte-for-byte), persisted in run params +
-favorites.
+`single` = the old behavior byte-for-byte; `_norm_cargo` widens unknowns to
+single), persisted in run params + favorites; frontend `#trade-cargo` seg in
+the ROUTE section (solver modes only — manual legs are the player's picks) +
+`setTradeCargo`/`TRADE_CARGO_HINT` + a `mixed loads` rule chip.
 
-Key structural fact: `_greedy_route` consumes candidates through
-`trade_profit`, `buy_cost`, `buy_poi_id`, `sell_poi_id` only — so mixed loads
-change the **candidate generator**, not the solver:
+Key structural fact, held as designed: `_greedy_route` consumes candidates
+through `trade_profit`, `buy_cost`, `buy_poi_id`, `sell_poi_id` — so mixed
+loads changed the **candidate generator**, not the solver core:
 
-- `_trade_bundle_candidates`: group price points by (buy POI, sell POI); per
-  pair, greedy-fill the hold across every commodity that survives the per-lot
-  filters (legality, stock avoids, `min_return_pct`), by margin/SCU with
-  per-commodity supply caps + per-lot box snapping; when the *budget* binds
-  instead of the hold, refill by return-per-aUEC and keep the better fill.
-  Emit one aggregate row per pair with `lots[]` — the richest lot is the leg
-  primary, the rest are `extras`, so **PR 1's entire run-mode machinery works
-  unchanged**.
-- Candidate pool shrinks (one row per pair vs one per commodity×pair) — the
-  chain loop gets cheaper, not slower.
-- Equivalence obligation: with a small hold, `mixed` must produce identical
-  routes to `single` (the fill degenerates to the best single commodity) —
-  test-pinned.
+- `nav_core._trade_bundle_candidates`: runs `_trade_candidates` (so freshness,
+  legality, stock avoids, `min_return_pct`, avoid/exclude sets and the #46 box
+  policy all apply per lot with zero duplicated filtering), groups the
+  survivors by (buy POI, sell POI), and greedy-fills the hold per pair by
+  margin/SCU with per-commodity supply/demand caps + per-lot box snapping
+  (`_bundle_fill`/`_commodity_cap`). When a *budget* is set, a second fill
+  ordered by return-per-aUEC runs and the more profitable fill stands.
+- The aggregate row's solver-facing figures (`trade_profit`/`buy_cost`/
+  `max_scu`) are BUNDLE totals; the richest lot's fields are the row's
+  top-level fields and a `primary` split + `lots[]` ride along. `_cost_route`
+  emits the leg with **primary** scu/profit/buy_cost plus `lots` (each lot's
+  own economics, `_lot_view`) and `bundle` (stop totals) — so realized stats,
+  the low-stock fraction and the buy confirm keep speaking about one
+  commodity, while summary totals and peak capital are the whole stop's.
+
+**Two deviations from the original sketch, both deliberate:**
+
+1. **The pool is a SUPERSET, not one-row-per-pair.** Single mode can ping-pong
+   one lane with several single-commodity hold-fills (more SCU over more
+   hops); a one-row-per-pair pool took that option away and made mixed WORSE
+   on capped lanes (caught by the equivalence test). So the pool is every
+   single row + one bundle row per multi-commodity pair, and the objective
+   decides. `_greedy_route`'s used-set consumes a key per lot a bundle buys
+   (`keys()`), so one shelf never sells twice in a route; `_solve_route`'s
+   dedup sig names lot commodities so bundle-vs-single chains both survive to
+   scoring. A fill that degenerates to one lot emits nothing — with a small
+   hold the mixed pool IS the single pool, which makes the equivalence
+   obligation structural (test-pinned at candidate and route level).
+2. **Planned lots ride the leg as `leg.lots`, NOT as `extras`.** PR 1's hard
+   invariant is that `extras` buy figures are ACTUALS created by `addcargo` at
+   the kiosk (`_lot_realized` has no plan fallback on the buy side, and the
+   run-start summary + addcargo's summary-grow would double-count a
+   pre-seeded lot). So a planned lot is a *plan* until the pilot confirms it:
+   the run card renders each unconfirmed lot as a prefilled add-as-bought row
+   (sell phase, still at the buy kiosk) that files the **existing `addcargo`**
+   — which detects the matching planned lot, marks it `added`, and skips the
+   summary grow (the plan already counts it). A lot the kiosk doesn't have is
+   simply never confirmed: nothing tracks it as aboard, `advance` isn't
+   blocked, and a re-plan carries only what was really bought. PR 1's run
+   machinery is genuinely unchanged.
+
+Wiring: `plan_trade_route`/`replan_trade_route` take `cargo=`; run params
+persist it; replan resolves body-override-else-params like every other knob.
+The topup suggestions endpoint excludes planned lots (they have their own
+rows); `_annotate_leg_legality` badges contraband lots individually. Plan leg
+card: `⊕ mixed ×N` chip, `⊕ also …` lot lines, a `stop total` econ line.
+The board (`/api/trade/trades`) stays single-commodity by nature.
 
 Why it matters for big ships: at 2,200 SCU nearly every commodity is
 supply-capped, so ranking lanes on their single best commodity is
 systematically wrong — a lane with four mediocre commodities can beat a lane
-with one great one. (A cheaper "post-pass" that fills residual hold after the
-route is chosen was considered and rejected: it can't fix lane *choice*.)
+with one great one (test-pinned: 4 × capped-100 mediocre lots at 40,000 beat
+the single best commodity's 18,000). (A cheaper "post-pass" that fills
+residual hold after the route is chosen was considered and rejected: it can't
+fix lane *choice*.)
 
 ## Deliberately out of scope
 

@@ -4209,6 +4209,11 @@ class TradePlanIn(BaseModel):
     # None = take the loading method's default (auto → fill, hand → best).
     box_mode: str | None = None                         # best | fill | fewest
     box_size: int | None = Field(default=None, ge=1, le=32)
+    # Mixed loads (docs/trade-topup.md §PR 2): `single` = one commodity per leg
+    # (today's behavior, byte-for-byte); `mixed` = fill each stop's hold across
+    # several commodities — the big-ship answer to supply caps. Auto/filtered
+    # only; manual legs are the player's own picks.
+    cargo: str = "single"                               # single | mixed
 
 
 class TradeRunPatchIn(BaseModel):
@@ -4303,6 +4308,7 @@ class TradeReplanIn(BaseModel):
     loading: str | None = None                          # auto | hand (#46)
     box_mode: str | None = None                         # best | fill | fewest (#46)
     box_size: int | None = Field(default=None, ge=1, le=32)   # pin a size (#46)
+    cargo: str | None = None                            # single | mixed (§PR 2)
 
 
 class TradeFavoriteIn(BaseModel):
@@ -4374,6 +4380,13 @@ def _norm_loading(mode) -> str:
     non-intervening answer — it plans the maximum fill, exactly as the planner
     did before containers were modelled at all."""
     return mode if mode in nav_core.LOADING_MODES else "auto"
+
+
+def _norm_cargo(mode) -> str:
+    """The mixed-loads knob (docs/trade-topup.md §PR 2), defaulting an unknown
+    value to 'single' — the non-intervening answer: one commodity per leg,
+    exactly as the planner behaved before bundles existed."""
+    return mode if mode in nav_core.CARGO_MODES else "single"
 
 
 def _norm_legality(mode) -> str:
@@ -4570,6 +4583,12 @@ def _annotate_leg_legality(plan: dict) -> dict:
         if not nav_core.legality_allows(lg.get("commodity"), "legal",
                                         illicit_commodities):
             lg["illicit"] = True
+        # Mixed-load co-cargo (§PR 2) gets the same per-commodity badge — a
+        # contraband lot draws the scan whether or not the primary would.
+        for lot in lg.get("lots") or ():
+            if not nav_core.legality_allows(lot.get("commodity"), "legal",
+                                            illicit_commodities):
+                lot["illicit"] = True
     return plan
 
 
@@ -4735,6 +4754,7 @@ def _solve_trade_plan(body: TradePlanIn, sess: "Session | None",
                 legality=_norm_legality(body.legality), illicit=illicit_commodities,
                 min_return_pct=_norm_return_pct(body.min_return_pct),
                 box=_trade_box_policy(body.loading, body.box_mode, body.box_size),
+                cargo=_norm_cargo(body.cargo),
                 system=body.system, sort=body.sort, budget=body.budget,
                 deadhead_weight=dh_weight, max_age_s=max_age_s, t_ref=t_ref,
                 avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -4949,6 +4969,7 @@ def _new_trade_run(user: dict, body: TradePlanIn, plan: dict) -> dict:
             "loading": _norm_loading(body.loading),                              # #46
             "box_mode": _norm_box_mode(body.box_mode),                           # #46
             "box_size": _norm_box_size(body.box_size),                           # #46
+            "cargo": _norm_cargo(body.cargo),                                    # §PR 2
         },
     }
 
@@ -5210,7 +5231,11 @@ async def get_trade_topup(user: dict = Depends(require_session)):
         p = run.get("params") or {}
         exclude = {(leg.get("commodity") or "").strip().lower()} | {
             (x.get("commodity") or "").strip().lower()
-            for x in (leg.get("extras") or ())}
+            for x in (leg.get("extras") or ())} | {
+            # Planned co-cargo lots (§PR 2) have their own prefilled confirm
+            # rows on the leg card — repeating them here would double-list.
+            (x.get("commodity") or "").strip().lower()
+            for x in (leg.get("lots") or ())}
         max_age_days = p.get("max_price_age_days")
         box = _trade_box_policy(p.get("loading"), p.get("box_mode"), p.get("box_size"))
         legality = _norm_legality(p.get("legality"))
@@ -5404,17 +5429,30 @@ async def patch_trade_run(body: TradeRunPatchIn, user: dict = Depends(require_se
             free_before = _topup_free_scu(run)
             lot, supply = _validate_topup_lot(leg, body)
             extras.append(lot)
-            # The plan just grew: fold the lot's expected profit into the
-            # frozen summary's total, or the header's "realized X of Y planned"
-            # could show realized OVERTAKING planned by the sell step. Time and
-            # distance are genuinely unchanged (same hop), so only the profit
-            # figure moves; per-hour/return stay the plan's — they're re-derived
-            # on the next re-plan, not patched piecemeal here.
-            sm = run.get("summary") or {}
-            sm["total_profit"] = (int(sm.get("total_profit") or 0)
-                                  + int(round((lot["sell_price"] - (lot["buy_price"] or 0))
-                                              * (lot["scu"] or 0))))
-            run["summary"] = sm
+            # A PLANNED co-cargo lot (§PR 2, leg["lots"]) being confirmed at the
+            # kiosk: mark it consumed — its expected profit is already in the
+            # plan's frozen summary, so growing the total again would double-
+            # count it. Matching by commodity is enough: a leg never plans (or
+            # carries) the same commodity twice.
+            key = (lot["commodity"] or "").strip().lower()
+            planned = next((pl for pl in (leg.get("lots") or ())
+                            if not pl.get("added")
+                            and (pl.get("commodity") or "").strip().lower() == key),
+                           None)
+            if planned is not None:
+                planned["added"] = True
+            else:
+                # The plan just grew: fold the lot's expected profit into the
+                # frozen summary's total, or the header's "realized X of Y planned"
+                # could show realized OVERTAKING planned by the sell step. Time and
+                # distance are genuinely unchanged (same hop), so only the profit
+                # figure moves; per-hour/return stay the plan's — they're re-derived
+                # on the next re-plan, not patched piecemeal here.
+                sm = run.get("summary") or {}
+                sm["total_profit"] = (int(sm.get("total_profit") or 0)
+                                      + int(round((lot["sell_price"] - (lot["buy_price"] or 0))
+                                                  * (lot["scu"] or 0))))
+                run["summary"] = sm
             # Short-fill evidence, same rule as the primary: buying well under
             # what the shelf could have supplied (its advertised stock, capped
             # by the free hold) files a supply-'low' report. Ambiguity accepted
@@ -5547,6 +5585,11 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
                                   else p.get("box_mode"))
         box_pin = _norm_box_size(body.box_size if body.box_size is not None
                                  else p.get("box_size"))
+        # §PR 2: mixed loads survive a re-plan (and can be flipped mid-run) —
+        # only the continuation's candidate generator changes; cargo already
+        # aboard re-homes through the held-lot path either way.
+        cargo = _norm_cargo(body.cargo if body.cargo is not None
+                            else p.get("cargo"))
         # Fresh stock reports (#21) steer the re-plan too — a mid-run stock-out
         # skip followed by "re-plan from here" must not route back to the empty shelf.
         stock_reports = active_stock_reports()
@@ -5564,6 +5607,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         max_stops=max_stops, commodities=commodities, system=system, sort=sort,
         budget=budget, legality=legality, illicit=illicit_commodities,
         min_return_pct=min_ret, box=_trade_box_policy(loading, box_mode, box_pin),
+        cargo=cargo,
         deadhead_weight=(_DEADHEAD_WEIGHT if minimize else 1.0),
         max_age_s=max_age_s, t_ref=t_ref,
         avoid_poi_ids=avoid_poi_ids, avoid_pairs=avoid_pairs,
@@ -5605,6 +5649,7 @@ async def replan_trade_run(body: TradeReplanIn, user: dict = Depends(require_ses
         p["min_return_pct"] = min_ret                # #43
         p["loading"] = loading                       # #46
         p["box_mode"], p["box_size"] = box_mode, box_pin
+        p["cargo"] = cargo                           # §PR 2
         run["params"] = p
         run["legs"] = done_legs + new_legs
         run["leg_states"] = (["sold"] * len(done_legs)) + _initial_trade_states(new_legs)

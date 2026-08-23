@@ -7355,6 +7355,179 @@ class TradeTopupApiTests(unittest.TestCase):
         self.assertEqual(sorted(held), [("Iron", 100), ("Waste", 336)])
 
 
+class TradeMixedLoadApiTests(unittest.TestCase):
+    """Plan-time mixed loads (docs/trade-topup.md §PR 2): cargo='mixed' plans
+    bundle legs whose co-cargo rides as planned `lots`; at the kiosk each lot
+    converts into a real extras lot through the existing addcargo confirm —
+    which must NOT grow the frozen summary again (the plan already counts it)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Bulk Hauler", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        pois = [p for p in app.nav.pois.values()
+                if p.system == "Stanton" and p.global_m][:2]
+        cls.A, cls.B = (p.id for p in pois)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app.hub.sessions.pop("1", None)
+        app._rate_hits.clear()
+        db.stock_reports_clear()
+        self.client.delete("/api/trade/run")
+        app.hub.sessions.pop("1", None)
+
+        def pt(commodity, tid, poi, buy=None, sell=None, supply=0):
+            return {"commodity": commodity, "terminal_id": tid, "terminal": f"T{tid}",
+                    "system": "Stanton", "poi_id": poi, "buy": buy, "sell": sell,
+                    "scu_buy": supply, "scu_sell_stock": 5000 if sell else 0,
+                    "updated_at": None}
+        # One lane A->B, hold 505. Iron caps at 200, Waste at 400: the mixed
+        # bundle is 200 Iron (primary) + 305 Waste (lot) = 36,100 planned.
+        # Copper's margin is too thin to make the fill — the unplanned lot.
+        self._orig_pts = app.trade_price_points
+        app.trade_price_points = [
+            pt("Iron", 1, self.A, buy=50, supply=200),
+            pt("Iron", 2, self.B, sell=200),
+            pt("Waste", 3, self.A, buy=10, supply=400),
+            pt("Waste", 4, self.B, sell=30),
+            pt("Copper", 5, self.A, buy=100, supply=5000),
+            pt("Copper", 6, self.B, sell=115),
+        ]
+
+    def tearDown(self):
+        app.trade_price_points = self._orig_pts
+        db.stock_reports_clear()
+
+    def _plan_body(self, **kw):
+        body = {"usable_scu": 505, "start_id": self.A, "sort": "profit",
+                "system": "Stanton", "max_stops": 2, "cargo": "mixed"}
+        body.update(kw)
+        return body
+
+    def test_mixed_plan_carries_lots_and_bundle(self):
+        r = self.client.post("/api/trade/plan", json=self._plan_body())
+        self.assertEqual(r.status_code, 200, r.text)
+        plan = r.json()
+        self.assertEqual(plan["summary"]["total_profit"], 200 * 150 + 305 * 20)
+        leg = plan["legs"][0]
+        self.assertEqual((leg["commodity"], leg["scu"], leg["profit"]),
+                         ("Iron", 200, 30000))            # primary figures
+        self.assertEqual(leg["bundle"], {"scu": 505, "profit": 36100,
+                                         "buy_cost": 200 * 50 + 305 * 10})
+        self.assertEqual([(x["commodity"], x["scu"]) for x in leg["lots"]],
+                         [("Waste", 305)])
+
+    def test_single_default_is_unchanged(self):
+        r = self.client.post("/api/trade/plan",
+                             json=self._plan_body(cargo="single"))
+        leg = r.json()["legs"][0]
+        self.assertEqual(leg["commodity"], "Iron")
+        self.assertIsNone(leg["lots"])
+        self.assertIsNone(leg["bundle"])
+
+    def test_contraband_lot_gets_its_own_badge(self):
+        orig = app.illicit_commodities
+        app.illicit_commodities = frozenset({"waste"})
+        try:
+            r = self.client.post("/api/trade/plan", json=self._plan_body())
+            leg = r.json()["legs"][0]
+            self.assertNotIn("illicit", leg)              # the primary is legal
+            self.assertTrue(leg["lots"][0]["illicit"])    # the lot isn't
+        finally:
+            app.illicit_commodities = orig
+
+    def _start_mixed(self):
+        r = self.client.post("/api/trade/run", json=self._plan_body())
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["trade_run"]
+
+    def test_run_persists_cargo_and_planned_lots(self):
+        self._start_mixed()
+        run = app.hub.sessions["1"].trade_run
+        self.assertEqual(run["params"]["cargo"], "mixed")
+        self.assertEqual(run["legs"][0]["lots"][0]["commodity"], "Waste")
+
+    def test_planned_lots_are_not_aboard_until_confirmed(self):
+        self._start_mixed()
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "buy", "scu": 200, "price": 50})
+        run = r.json()["trade_run"]
+        self.assertEqual(run["onboard_scu"], 200)         # primary only
+        # …and they don't block advancing: a lot the kiosk didn't have was
+        # never bought, so skipping the leg stays possible.
+        r = self.client.patch("/api/trade/run", json={"action": "advance"})
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def test_confirming_a_planned_lot_does_not_double_count(self):
+        self._start_mixed()
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "scu": 200, "price": 50})
+        r = self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Waste", "scu": 305, "price": 10})
+        self.assertEqual(r.status_code, 200, r.text)
+        run = r.json()["trade_run"]
+        leg = run["legs"][0]
+        self.assertEqual(run["summary"]["total_profit"], 36100)   # NOT grown
+        self.assertTrue(leg["lots"][0]["added"])
+        self.assertEqual(leg["extras"][0]["commodity"], "Waste")
+        self.assertEqual(run["onboard_scu"], 505)
+        # Sell both; realized equals the plan when actuals match it.
+        self.client.patch("/api/trade/run",
+                          json={"action": "sell", "scu": 200, "price": 200})
+        r = self.client.patch("/api/trade/run", json={
+            "action": "sell", "extra": 0, "scu": 305, "price": 30})
+        self.assertTrue(r.json()["completed"])
+
+    def test_unplanned_addcargo_still_grows_the_summary(self):
+        self._start_mixed()
+        # Kiosk shorted the primary: 100 of 200 — room for an unplanned lot.
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "scu": 100, "price": 50})
+        r = self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Copper", "scu": 50, "price": 100})
+        self.assertEqual(r.status_code, 200, r.text)
+        run = r.json()["trade_run"]
+        self.assertEqual(run["summary"]["total_profit"],
+                         36100 + (115 - 100) * 50)
+        self.assertFalse(run["legs"][0]["lots"][0].get("added"))   # Waste untouched
+
+    def test_topup_suggestions_exclude_planned_lots(self):
+        self._start_mixed()
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "scu": 100, "price": 50})
+        names = [s["commodity"] for s in
+                 self.client.get("/api/trade/run/topup").json()["suggestions"]]
+        self.assertEqual(names, ["Copper"])               # Waste has its own row
+
+    def test_replan_keeps_the_cargo_mode(self):
+        self._start_mixed()
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "scu": 200, "price": 50})
+        sess = app.hub.sessions["1"]
+        sess.pos = app.nav.pois[self.A].global_m
+        sess.t = time.time()
+        r = self.client.post("/api/trade/run/replan", json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        run = app.hub.sessions["1"].trade_run
+        self.assertEqual(run["params"]["cargo"], "mixed")
+        held = [lg for lg in run["legs"] if lg.get("held")]
+        self.assertEqual([(lg["commodity"], lg["scu"]) for lg in held],
+                         [("Iron", 200)])                 # planned lot never bought
+
+
 class TradeLegalityApiTests(unittest.TestCase):
     """Commodity legality filter (#42): plan over the whole market, legal goods
     only, or contraband only — plus the ☠ badge that marks illicit legs in every
