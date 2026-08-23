@@ -7262,7 +7262,8 @@ class TradeTopupApiTests(unittest.TestCase):
     # --- addcargo -----------------------------------------------------------
 
     def test_addcargo_records_the_lot(self):
-        self._start_and_buy()
+        run = self._start_and_buy()
+        planned = run["summary"]["total_profit"]
         r = self.client.patch("/api/trade/run", json={
             "action": "addcargo", "commodity": "Iron", "scu": 100, "price": 55})
         self.assertEqual(r.status_code, 200, r.text)
@@ -7272,6 +7273,10 @@ class TradeTopupApiTests(unittest.TestCase):
                          ("Iron", 100, 55))
         self.assertEqual(lot["sell_price"], 200)          # live feed, server-side
         self.assertEqual(run["onboard_scu"], 336 + 100)
+        # The header's "planned" figure grew with the plan: the lot's expected
+        # profit folds into the frozen summary, so realized can't overtake it.
+        self.assertEqual(run["summary"]["total_profit"],
+                         planned + (200 - 55) * 100)
         # The lot now excludes itself from further suggestions.
         names = [s["commodity"] for s in
                  self.client.get("/api/trade/run/topup").json()["suggestions"]]
