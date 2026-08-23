@@ -7466,10 +7466,27 @@ class TradeMixedLoadApiTests(unittest.TestCase):
                               json={"action": "buy", "scu": 200, "price": 50})
         run = r.json()["trade_run"]
         self.assertEqual(run["onboard_scu"], 200)         # primary only
-        # …and they don't block advancing: a lot the kiosk didn't have was
-        # never bought, so skipping the leg stays possible.
+        # …and they never hold the leg open: selling the primary completes it
+        # even though the planned lot was never confirmed at the kiosk.
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "sell", "scu": 200, "price": 200})
+        self.assertTrue(r.json()["completed"])
+
+    def test_skip_before_the_buy_is_free_despite_planned_lots(self):
+        # Nothing bought yet — a plan (primary or lots) never blocks bailing.
+        self._start_mixed()
         r = self.client.patch("/api/trade/run", json={"action": "advance"})
         self.assertEqual(r.status_code, 200, r.text)
+
+    def test_skip_with_a_bought_primary_is_blocked(self):
+        # The buy is PAID — skipping would drop its cost from realized stats
+        # (the falsification the lots guard already blocked; same rule now
+        # covers the primary). Sell short or re-plan instead.
+        self._start_mixed()
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "scu": 200, "price": 50})
+        r = self.client.patch("/api/trade/run", json={"action": "advance"})
+        self.assertEqual(r.status_code, 409)
 
     def test_confirming_a_planned_lot_does_not_double_count(self):
         self._start_mixed()
@@ -7512,6 +7529,49 @@ class TradeMixedLoadApiTests(unittest.TestCase):
                  self.client.get("/api/trade/run/topup").json()["suggestions"]]
         self.assertEqual(names, ["Copper"])               # Waste has its own row
 
+    def test_buy_records_the_actual_box_size_and_confirms_it(self):
+        # #46d v2: the kiosk had no 32s, the pilot bought 24s — the size really
+        # used is stored beside the plan's, and the purchase CONFIRMS the size
+        # exists for the commodity (never absence — that's the re-fit's claim).
+        self._start_mixed()
+        db.container_reports_clear()
+        r = self.client.patch("/api/trade/run", json={
+            "action": "buy", "scu": 192, "price": 50, "box_size": 24})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["trade_run"]["legs"][0]["actual_box_size"], 24)
+        board = self.client.get("/api/trade/containers").json()
+        self.assertEqual(board["availability"].get("iron", {}).get("24"), True)
+        self.assertNotIn("32", board["availability"].get("iron", {}))
+        db.container_reports_clear()
+
+    def test_addcargo_box_size_confirms_availability_too(self):
+        self._start_mixed()
+        db.container_reports_clear()
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "scu": 100, "price": 50})
+        r = self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Waste", "scu": 96, "price": 10,
+            "box_size": 8})
+        self.assertEqual(r.status_code, 200, r.text)
+        run = r.json()["trade_run"]
+        self.assertEqual(run["legs"][0]["extras"][0]["box_size"], 8)
+        board = self.client.get("/api/trade/containers").json()
+        self.assertEqual(board["availability"].get("waste", {}).get("8"), True)
+        db.container_reports_clear()
+
+    def test_replan_carries_the_actual_box_size(self):
+        self._start_mixed()
+        self.client.patch("/api/trade/run", json={
+            "action": "buy", "scu": 192, "price": 50, "box_size": 24})
+        sess = app.hub.sessions["1"]
+        sess.pos = app.nav.pois[self.A].global_m
+        sess.t = time.time()
+        r = self.client.post("/api/trade/run/replan", json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        held = [lg for lg in app.hub.sessions["1"].trade_run["legs"]
+                if lg.get("held")]
+        self.assertEqual(held[0]["box_size"], 24)   # what's aboard, not the plan
+
     def test_replan_keeps_the_cargo_mode(self):
         self._start_mixed()
         self.client.patch("/api/trade/run",
@@ -7526,6 +7586,69 @@ class TradeMixedLoadApiTests(unittest.TestCase):
         held = [lg for lg in run["legs"] if lg.get("held")]
         self.assertEqual([(lg["commodity"], lg["scu"]) for lg in held],
                          [("Iron", 200)])                 # planned lot never bought
+
+
+class TradeHistoryDeleteTests(unittest.TestCase):
+    """DELETE /api/trade/history/{run_id} (2026-08-23 incident): one run whose
+    kiosk actuals were entered in the wrong unit poisons the realized-profit
+    stats — personal and guild — until the row is removed. Owner or admin;
+    completed runs only (an active run is abandoned, never deleted)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Owner", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._user["id"], self._user["is_admin"] = "1", False
+
+    def _completed_run(self, owner="1", profit=1000):
+        run = {"ship": "Cutter", "usable_scu": 100,
+               "legs": [{"commodity": "Gold", "scu": 10, "buy_price": 100,
+                         "sell_price": 100 + profit // 10, "profit": profit,
+                         "buy_terminal_id": 1, "sell_terminal_id": 2}],
+               "leg_states": ["sold"], "active": 1,
+               "summary": {"total_time_s": 600, "total_distance_m": 1.0}}
+        rid = db.start_trade_run(owner, "Cutter", "2026-08-23T00:00:00+00:00", run)
+        db.complete_trade_run(owner, rid, "2026-08-23T01:00:00+00:00", run)
+        return rid
+
+    def test_owner_delete_removes_the_run_and_heals_the_stats(self):
+        good = self._completed_run(profit=1000)
+        bad = self._completed_run(profit=-14_337_582)     # the poisoned run
+        stats = self.client.get("/api/trade/history").json()["stats"]
+        self.assertEqual(stats["total_profit"], 1000 - 14_337_582)
+        r = self.client.delete(f"/api/trade/history/{bad}")
+        self.assertEqual(r.status_code, 200, r.text)
+        doc = self.client.get("/api/trade/history").json()
+        self.assertEqual(doc["stats"]["total_profit"], 1000)
+        self.assertEqual([x["id"] for x in doc["runs"]], [good])
+        db.delete_trade_run(good)
+
+    def test_not_your_run_and_not_admin_403s(self):
+        rid = self._completed_run(owner="2")
+        self.assertEqual(self.client.delete(f"/api/trade/history/{rid}").status_code, 403)
+        # …but an admin can fix the org's board without waiting on the member.
+        self._user["is_admin"] = True
+        self.assertEqual(self.client.delete(f"/api/trade/history/{rid}").status_code, 200)
+
+    def test_active_and_unknown_runs_404(self):
+        run = {"legs": [], "leg_states": [], "active": 0, "summary": {}}
+        rid = db.start_trade_run("1", "Cutter", "2026-08-23T00:00:00+00:00", run)
+        self.assertEqual(self.client.delete(f"/api/trade/history/{rid}").status_code, 404)
+        self.assertEqual(self.client.delete("/api/trade/history/999999").status_code, 404)
 
 
 class TradeLegalityApiTests(unittest.TestCase):

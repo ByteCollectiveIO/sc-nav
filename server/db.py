@@ -1597,6 +1597,27 @@ def complete_trade_run(discord_id: str, run_id: int, completed_at: str, run: dic
         )
 
 
+def trade_run_record(run_id: int) -> dict | None:
+    """One trade-run row's ownership + status — the delete permission check."""
+    with _lock:
+        r = _conn.execute(
+            "SELECT id, discord_id, status FROM trade_runs WHERE id=?",
+            (run_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def delete_trade_run(run_id: int) -> bool:
+    """Hard-delete one COMPLETED trade run. Exists because the realized-profit
+    stats read every stored run's actuals forever — a single run whose figures
+    were entered in the wrong unit (a −14M phantom loss, 2026-08-23 incident)
+    skews personal AND guild totals until the row is gone. Completed-only: an
+    active run is abandoned, never deleted."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM trade_runs WHERE id=? AND status='completed'", (run_id,))
+    return cur.rowcount > 0
+
+
 def abandon_trade_run(discord_id: str) -> bool:
     """Drop the member's active trade run (they bailed). Returns whether one
     existed."""

@@ -107,9 +107,11 @@ bought. The app never auto-confirms (same stance as #41). Server-side:
 - The leg's state stays `bought` until the primary **and** every extra are
   sold (`primary_sold` flag on the leg, `sold` per lot; order free). Then the
   existing advance machinery runs untouched.
-- `advance` (skip) is refused while top-up cargo is aboard (409) — a skipped
-  leg is excluded from realized stats, and silently discarding *bought* lots
-  would falsify them. The escape hatch is re-plan (lots become held cargo).
+- `advance` (skip) is refused while ANY bought cargo is unsold — top-up lots
+  *and*, since the 2026-08-23 profit-calc review, the bought primary (the same
+  falsification: a skipped leg is excluded from realized stats, so a paid buy
+  would silently vanish from them). Skip is offered in the buy phase only; the
+  escape hatches are sell-short or re-plan (cargo re-homes as held legs).
 - `demandout` stays primary-anchored; a stuck extra is handled by re-plan.
 - The #41 txn nudge stays primary-only in v1 (`txn_id` ignored on `extra`
   confirms).
@@ -141,9 +143,9 @@ stats) reads through it and needs no change.
   <buy terminal>` button; free > 25% of hold → amber "N SCU still empty"
   nudge line beside it.
 - Suggestion panel: commodity · @buy → @sell · boxes × size chip · est.
-  profit · return %. ADD expands an inline actuals row — **buy-side fields
-  speak the kiosk's container unit** (`data-box` divisor, same #46d machinery
-  as the primary) — confirm posts `addcargo`.
+  profit · return %. ADD expands an inline actuals row — the shared
+  **total-first buy form** (size × count + total aUEC, see Actuals entry v2
+  below) — confirm posts `addcargo`.
 - Extras render as lines under the leg's buy step; the sell step grows one
   actuals row + confirm per unsold lot (sell side stays per-SCU with the box
   echo — the two kiosk ends genuinely differ, see CLAUDE.md #46d).
@@ -216,6 +218,31 @@ with one great one (test-pinned: 4 × capped-100 mediocre lots at 40,000 beat
 the single best commodity's 18,000). (A cheaper "post-pass" that fills
 residual hold after the route is chosen was considered and rejected: it can't
 fix lane *choice*.)
+
+## Actuals entry v2 — total-first (2026-08-23, after a live run went −14M)
+
+A pilot's first mixed run surfaced two entry gaps that had let a per-container
+price land in a per-SCU field (a 24×/32× phantom loss in realized stats):
+
+1. **The box size was only correctable on the primary's re-fit panel** — lots
+   (planned co-loads, top-ups) were locked to the planned size, so a kiosk
+   without it forced head-math across units.
+2. **Per-unit × count entry fights the kiosk's own rounding** — the TOTAL is
+   what the wallet really moved.
+
+So every actuals form is now total-first: buy = *size select × count + total
+aUEC* (shared `buyActualForm`; SCU and per-SCU derived, per-SCU unrounded so
+price × scu reconstructs the true total), sell grid = *SCU + total* with a
+derived /SCU column. `buy`/`addcargo` accept `box_size`: the size really used
+is stored (`actual_box_size` / lot `box_size`, preferred by the replan's held
+list) and files a container SEEN-report — a purchase can confirm a size
+exists, never rule one out. Guard rails from the same incident: `advance`
+refuses while any bought cargo is unsold (primary now, not just lots),
+`confirmOddActual` gates any derived per-SCU ≥8× off the plan's own quote, a
+re-plan's `stranded_held` renders as a run-card callout, and
+`DELETE /api/trade/history/{run_id}` (owner or admin) removes a poisoned run
+outright — stats read every stored blob forever, so the correction for a
+wrong-unit run IS the removal.
 
 ## Deliberately out of scope
 

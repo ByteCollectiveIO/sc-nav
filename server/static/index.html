@@ -1112,6 +1112,11 @@
   .route-recent .rr-title { display: flex; align-items: baseline; flex-wrap: wrap;
     gap: 6px 10px; }
   .route-recent .rr-ship { font-size: 14px; font-weight: 600; color: var(--text); }
+  /* Delete-run: quiet until hovered — a destructive control that exists for
+     the rare wrong-figures run, not a routine action to advertise. */
+  .route-recent .rr-del { padding: 2px 8px; font-size: 12px; color: var(--dim);
+    background: none; border: 1px solid transparent; }
+  .route-recent .rr-del:hover { color: var(--bad); border-color: var(--bad); }
   .route-recent .rr-pay { font-size: 13px; color: var(--good); }
   .route-recent .rr-pay .hr { color: var(--dim); }
   .route-recent .rr-sub { font-size: 11px; color: var(--dim); }
@@ -1584,9 +1589,13 @@
   /* Sell confirmations as a table: one row per commodity aboard (top-up lots
      stack rows) — name · aUEC/SCU · SCU · live total · confirm. Rows are
      display:contents so the grid owns the columns and every row aligns. */
-  .sell-grid { display: grid; grid-template-columns: max-content 88px 72px max-content max-content;
+  .sell-grid { display: grid; grid-template-columns: max-content 76px 110px max-content max-content;
     gap: 6px 10px; align-items: center; margin: 8px 0 4px; font-size: 12px;
     color: var(--dim); overflow-x: auto; }
+  /* Total-first buy form (#46d v2): size select sized to its label. */
+  .buy-form .bf-size { width: auto; }
+  .buy-form .bf-count { width: 64px; }
+  .buy-form .bf-total { width: 110px; }
   .sell-grid .sl-head, .sell-grid .sl-row { display: contents; }
   .sell-grid .sl-head span { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .sell-grid .sl-name { color: var(--text); font-weight: 600; white-space: nowrap; }
@@ -7890,7 +7899,7 @@ function renderRouteHistory() {
       + runs.slice(0, 6).map((r, i) => {
         const when = r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "";
         const pay = r.reward
-          ? `<span class="rr-pay">💰 ${fmtAuec(r.reward)} aUEC`
+          ? `<span class="rr-pay">💰 ${fmtAuec(r.reward)}`
             + (r.auec_per_hour ? ` <span class="hr">· ${fmtAuec(r.auec_per_hour)}/hr</span>` : "")
             + `</span>`
           : "";
@@ -8417,13 +8426,6 @@ function routeQuantum() {
 function tradeQuantum() {
   const cat = tradeShipsByName && tradeShipsByName[$("trade-ship").value.trim().toLowerCase()];
   return cat && cat.quantum || null;
-}
-// aUEC with thousands separators; compact (k/M) for big headline numbers.
-function fmtAuec(n) {
-  if (n == null) return "—";
-  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 1 : 2).replace(/\.0+$/, "") + "M";
-  if (n >= 10000) return Math.round(n / 1000) + "k";
-  return Math.round(n).toLocaleString();
 }
 
 // A horizontal stops-on-a-line diagram. `active` is the current stop index
@@ -9293,7 +9295,7 @@ function renderTradeHistory() {
       + runs.slice(0, 6).map((r, i) => {
         const when = r.completed_at ? new Date(r.completed_at).toLocaleDateString() : "";
         const pay = r.profit
-          ? `<span class="rr-pay">💰 ${fmtAuec(r.profit)} aUEC`
+          ? `<span class="rr-pay">💰 ${fmtAuec(r.profit)}`
             + (r.auec_per_hour ? ` <span class="hr">· ${fmtAuec(r.auec_per_hour)}/hr</span>` : "")
             + `</span>`
           : "";
@@ -9303,7 +9305,10 @@ function renderTradeHistory() {
         return `<div class="route-recent"><div class="rr-main">`
           + `<div class="rr-title"><span class="rr-ship">${esc(r.ship || "Unknown ship")}</span>${pay}</div>`
           + `<div class="rr-sub">${meta.join(" · ")}</div>`
-          + `</div><button class="route-chip" data-again="${i}">run again</button></div>`;
+          + `</div><button class="route-chip" data-again="${i}">run again</button>`
+          + `<button class="rr-del" data-del="${i}" type="button"`
+          + ` title="Delete this run from history and stats — for a run whose entered figures were wrong"`
+          + ` aria-label="delete this run">✕</button></div>`;
       }).join("");
   }
   el.innerHTML = h;
@@ -9317,6 +9322,24 @@ function renderTradeHistory() {
     b.onclick = () => loadTradeLane(picks.lanes[+b.dataset.lane]));
   el.querySelectorAll("[data-again]").forEach(b =>
     b.onclick = () => runTradeAgain(runs[+b.dataset.again]));
+  // Delete one run from history + stats (owner/admin). Exists for the run
+  // whose kiosk figures were entered in the wrong unit: realized-profit stats
+  // read every stored run forever, so a single −14M phantom loss skews the
+  // personal AND guild boards until the row is gone. Confirm-gated — it's a
+  // hard delete, and it touches the org's numbers, not just this member's.
+  el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    const r = runs[+b.dataset.del];
+    if (!r || r.id == null) return;
+    if (!(await confirmDialog(
+        `Permanently removes this ${esc(r.ship || "")} run `
+        + `(${fmtAuec(r.profit || 0)} realized) from your trade history and from `
+        + `the org's trading stats. Use it when the figures entered at the kiosk `
+        + `were wrong — stats read every stored run, so one bad number skews `
+        + `them until it's removed.`,
+        { title: "Delete this run?", confirmLabel: "Delete run" }))) return;
+    const resp = await fetch(`/api/trade/history/${r.id}`, { method: "DELETE" });
+    if (resp.ok) loadTradeHistory();
+  });
 }
 
 // A quick-pick lane → a fresh manual leg (switch to Manual, prefill commodity +
@@ -10327,64 +10350,135 @@ async function patchTradeRun(body) {
   } catch { runPatchMsg(box, "network error — try again"); }
 }
 
-// Live "what you typed means" line under the actuals row: the container figures
-// the player is reading off the kiosk, restated in the per-SCU units we store —
-// plus the grand total, which is the one number the kiosk shows back and so the
-// cheapest way to catch a mistyped box count before it's filed as truth.
-// Only rendered when the units differ (box size > 1); a 1 SCU box is unchanged.
-function syncTradeActual(stop) {
-  const out = stop && stop.querySelector(".ta-conv");
-  if (!out) return;
-  const priceEl = stop.querySelector(".ta-price");
-  const scuEl = stop.querySelector(".ta-scu");
-  const pbs = Number(priceEl && priceEl.dataset.box) || 1;   // price: per box → per SCU
-  const qbs = Number(scuEl && scuEl.dataset.box) || 1;       // qty: boxes → SCU
-  const size = Number(out.dataset.size) || 1;               // containers aboard
-  const perScu = (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0)
-    ? Number(priceEl.value) / pbs : null;
-  const scu = Number(scuEl && scuEl.value) > 0 ? Number(scuEl.value) * qbs : null;
+// Buy actuals, the kiosk's own grammar (#46d v2, redesigned 2026-08-23 after a
+// per-container price landed in a per-SCU field and poisoned realized stats
+// with a −14M phantom loss): you pick a CONTAINER SIZE, tell the kiosk how
+// many, and the screen answers with a TOTAL — so those are the three inputs,
+// and the per-SCU price we store is DERIVED (total ÷ SCU). Exact where
+// "per-unit × count" drifts on the kiosk's own rounding, and immune to the
+// unit trap by construction: there is no per-price field to mistype into.
+// The size select is the per-lot answer to "the planned size isn't on this
+// kiosk" — the plan-level re-fit stays the org-evidence path for a size being
+// ABSENT (a purchase can only confirm one exists; the server files that).
+function buyActualForm(name, size, count, total, planPerScu) {
+  const opts = [...new Set([1, ...containerSizes, size])].sort((a, b) => a - b)
+    .map(s => `<option value="${s}"${s === size ? " selected" : ""}>`
+      + `${s === 1 ? "loose SCU" : `${s} SCU box`}</option>`).join("");
+  return `<div class="trade-actual buy-form" data-plan="${planPerScu || 0}">`
+    + `<span class="ta-label">bought</span>`
+    + `<select class="ti bf-size" aria-label="container size bought for ${esc(name)}">${opts}</select>`
+    + `<span class="ta-x">×</span>`
+    + `<input class="ti bf-count" type="number" min="0" step="1" value="${count}"`
+    + ` aria-label="how many bought for ${esc(name)}">`
+    + `<span class="ta-x">for</span>`
+    + `<input class="ti bf-total" type="number" min="0" step="1" value="${total}"`
+    + ` aria-label="total aUEC paid for ${esc(name)}">`
+    + `<span class="ta-x">aUEC</span>`
+    + `<span class="ta-conv" aria-live="polite"></span>`
+    + `</div>`;
+}
+// What one buy form means for the API: SCU = size × count, per-SCU price =
+// total ÷ SCU (unrounded — price × scu must reconstruct the real total in
+// stats), box_size = the size really used (issue 1: no longer the plan's).
+function readBuyActuals(form) {
+  const size = Number(form.querySelector(".bf-size").value) || 1;
+  const count = Number(form.querySelector(".bf-count").value) || 0;
+  const totalEl = form.querySelector(".bf-total");
+  const scu = size * count;
+  const out = {};
+  if (scu > 0) out.scu = scu;
+  if (size > 1) out.box_size = size;
+  if (totalEl.value !== "" && Number(totalEl.value) >= 0 && scu > 0)
+    out.price = Number(totalEl.value) / scu;
+  return out;
+}
+// Echo the derived reality ("= 96 SCU · 133.33 aUEC/SCU") and keep the total
+// tracking the plan's own quote until the pilot edits it — switching 32 → 24
+// boxes must not leave a stale 32-box total behind as ground truth.
+function syncBuyForm(form) {
+  const size = Number(form.querySelector(".bf-size").value) || 1;
+  const count = Number(form.querySelector(".bf-count").value) || 0;
+  const totalEl = form.querySelector(".bf-total");
+  const plan = Number(form.dataset.plan) || 0;
+  const scu = size * count;
+  if (!form.dataset.touched && plan && scu > 0)
+    totalEl.value = Math.round(plan * scu);
+  const out = form.querySelector(".ta-conv");
   const bits = [];
-  // Buy side: the fields are in containers, so restate the SCU. Sell side: they
-  // already are SCU (that kiosk quotes per SCU), so name the boxes instead.
-  if (scu != null && qbs > 1) bits.push(`${fmtUnitPrice(scu)} SCU`);
-  else if (scu != null && size > 1 && scu % size === 0)
-    bits.push(`${(scu / size).toLocaleString()} × ${size} SCU box${scu / size === 1 ? "" : "es"}`);
-  if (perScu != null && pbs > 1) bits.push(`${fmtUnitPrice(perScu)} aUEC/SCU`);
-  if (perScu != null && scu != null) bits.push(fmtAuec(perScu * scu));
-  out.textContent = bits.length ? "= " + bits.join(" · ") : "";
+  if (scu > 0) bits.push(`${fmtUnitPrice(scu)} SCU`);
+  if (scu > 0 && totalEl.value !== "" && Number(totalEl.value) >= 0)
+    bits.push(`${fmtUnitPrice(Number(totalEl.value) / scu)} aUEC/SCU`);
+  if (out) out.textContent = bits.length ? "= " + bits.join(" · ") : "";
+}
+function wireBuyForm(form) {
+  form.querySelector(".bf-total").addEventListener("input",
+    () => { form.dataset.touched = "1"; syncBuyForm(form); });
+  form.querySelector(".bf-size").addEventListener("input", () => syncBuyForm(form));
+  form.querySelector(".bf-count").addEventListener("input", () => syncBuyForm(form));
+  syncBuyForm(form);
 }
 
-// Live total for one sell-grid row (price × SCU): the one figure the sell
-// kiosk shows back, so a mistyped quantity is caught before it's filed.
+// One sell-grid row: SCU + the TOTAL the kiosk showed; per-SCU derived
+// (total ÷ SCU) into the echo column — same total-first grammar as the buy.
+// The total tracks the plan quote until the pilot edits it.
 function syncSellRow(row) {
   const out = row.querySelector(".sl-total");
   if (!out) return;
-  const p = row.querySelector(".ta-price, .tx-price");
-  const s = row.querySelector(".ta-scu, .tx-scu");
-  const price = (p && p.value !== "" && Number(p.value) >= 0) ? Number(p.value) : null;
-  const scu = (s && Number(s.value) > 0) ? Number(s.value) : null;
-  out.textContent = (price != null && scu != null) ? "= " + fmtAuec(price * scu) : "";
+  const scuEl = row.querySelector(".sl-scu");
+  const totEl = row.querySelector(".sl-auec");
+  const plan = Number(row.dataset.plan) || 0;
+  const scu = Number(scuEl && scuEl.value) || 0;
+  if (!row.dataset.touched && plan && scu > 0)
+    totEl.value = Math.round(plan * scu);
+  const t = Number(totEl && totEl.value);
+  out.textContent = (scu > 0 && totEl && totEl.value !== "" && t >= 0)
+    ? fmtUnitPrice(t / scu) + " /SCU" : "";
 }
 
-// Confirm a buy/sell, folding in the actual price + SCU the player entered at the
+// Confirm a buy/sell, folding in the actuals the player entered at the
 // terminal (pre-filled from the plan, so an unedited confirm just records the
-// planned figures — and the stats stay honest either way). The price field speaks
-// the kiosk's per-container unit; `data-box` converts it back to the per-SCU
-// figure the run, the stats and the org price board are all denominated in.
-function submitTradeLeg(action, leg, btn) {
+// planned figures — and the stats stay honest either way). Both phases are
+// total-first: the per-SCU figure the run, the stats and the org price board
+// are denominated in is DERIVED (total ÷ SCU), never typed.
+// A typed actual wildly off the plan's own quote is almost always the kiosk's
+// per-CONTAINER figure landing in a per-SCU field — the 24×/32× unit trap
+// (#46d). One such buy poisons realized stats with a multi-million phantom
+// loss that the tally then carries forever, so gate it behind a confirm that
+// names the suspicion. A gate, not a block: prices do move, the pilot can
+// insist — but an 8× move on the plan's own terminal quote is not a market.
+async function confirmOddActual(name, perScu, planPerScu, side) {
+  if (!(perScu > 0) || !(planPerScu > 0)) return true;
+  const ratio = perScu / planPerScu;
+  if (ratio < 8 && ratio > 1 / 8) return true;
+  return confirmDialog(
+    `You entered ${fmtUnitPrice(perScu)} aUEC/SCU for ${name} — the plan quotes `
+    + `${fmtUnitPrice(planPerScu)} at this terminal. `
+    + (side === "buy"
+        ? `Buy kiosks show the price per CONTAINER, not per SCU — a per-box figure `
+          + `recorded as per-SCU misstates your realized profit by that same factor. `
+        : `A mistyped unit here misstates your realized profit by the same factor. `)
+    + `Record ${fmtUnitPrice(perScu)}/SCU anyway?`,
+    { title: "Price looks off — record it?", confirmLabel: "Record as typed" });
+}
+
+async function submitTradeLeg(action, leg, btn) {
   const stop = btn.closest(".run-stop");
-  const priceEl = stop && stop.querySelector(".ta-price");
-  const scuEl = stop && stop.querySelector(".ta-scu");
   const body = { action, leg };
-  if (priceEl && priceEl.value !== "" && Number(priceEl.value) >= 0) {
-    const bs = Number(priceEl.dataset.box) || 1;
-    body.price = bs > 1 ? Math.round(Number(priceEl.value) / bs * 100) / 100
-                        : Number(priceEl.value);
+  if (action === "buy") {
+    const form = stop && stop.querySelector(".buy-form");
+    if (form) Object.assign(body, readBuyActuals(form));
+  } else {
+    const row = btn.closest(".sl-row");
+    const scu = row && Number(row.querySelector(".sl-scu").value);
+    const totEl = row && row.querySelector(".sl-auec");
+    if (scu > 0) body.scu = scu;
+    if (totEl && totEl.value !== "" && Number(totEl.value) >= 0 && scu > 0)
+      body.price = Number(totEl.value) / scu;
   }
-  if (scuEl && scuEl.value !== "" && Number(scuEl.value) > 0) {
-    const qbs = Number(scuEl.dataset.box) || 1;   // boxes → SCU (1 when the field is SCU)
-    body.scu = Number(scuEl.value) * qbs;
-  }
+  const lg = tradeCurrentRun && (tradeCurrentRun.legs || [])[leg];
+  if (lg && body.price != null && !(await confirmOddActual(
+      lg.commodity, body.price,
+      action === "buy" ? lg.buy_price : lg.sell_price, action))) return;
   // Log-detected transaction (#41): whichever button confirms this leg, name
   // the pending txn so the server learns the guid/shop mappings from it.
   const tx = tradeCurrentRun && tradeCurrentRun.txn;
@@ -10516,6 +10610,15 @@ function renderTradeRun(run) {
     + `<span><b>${run.onboard_scu}</b> / ${cap} SCU aboard</span></div>`;
   h += `<div class="trade-run-tally"><span>realized <b>${fmtAuec(run.realized_profit || 0)}</b></span>`
     + (planned ? `<span class="muted">of ${fmtAuec(planned)} planned</span>` : "") + `</div>`;
+  // A re-plan can strand held cargo (no reachable buyer under the current
+  // stock reports / stop filter). The cargo is still IN THE HOLD but no leg
+  // tracks it any more — say so loudly, or its sunk cost silently vanishes
+  // from realized stats and the run header quietly overstates the earnings.
+  const stranded = (run.summary && run.summary.stranded_held) || [];
+  if (stranded.length)
+    h += `<div class="tl-stock out">⚠ Still aboard with <b>no known buyer</b>: `
+      + `${stranded.map(esc).join(", ")} — this plan no longer tracks that cargo, and its cost `
+      + `won't count in realized stats. Widen STOPS or wait out the stock reports, then re-plan.</div>`;
   if (run.done) {
     h += `<p class="route-feasible">✓ Trade run complete. Fly safe.</p></div>`;
     box.innerHTML = h;
@@ -10573,66 +10676,83 @@ function renderTradeRun(run) {
   box.querySelectorAll("[data-topup]").forEach(b => b.onclick = () => loadTradeTopup(+b.dataset.topup, b));
   // Planned co-load confirms (§PR 2): the same add-as-bought as a spontaneous
   // top-up — fields speak the kiosk's container unit, converted on submit.
-  box.querySelectorAll("[data-addlot]").forEach(b => b.onclick = () => {
+  box.querySelectorAll("[data-addlot]").forEach(b => b.onclick = async () => {
     const [leg, j] = b.dataset.addlot.split(":").map(Number);
     const lg = (run.legs || [])[leg];
     const x = ((lg && lg.lots) || [])[j]; if (!x) return;
-    const form = b.closest(".topup-form");
-    const pEl = form.querySelector(".tp-price"), sEl = form.querySelector(".tp-scu");
-    const pbs = Number(pEl.dataset.box) || 1, qbs = Number(sEl.dataset.box) || 1;
-    const body = { action: "addcargo", leg, commodity: x.commodity };
-    if (pEl.value !== "" && Number(pEl.value) >= 0)
-      body.price = pbs > 1 ? Math.round(Number(pEl.value) / pbs * 100) / 100 : Number(pEl.value);
-    if (sEl.value !== "" && Number(sEl.value) > 0) body.scu = Number(sEl.value) * qbs;
-    if (x.box && x.box.size) body.box_size = x.box.size;
+    const body = { action: "addcargo", leg, commodity: x.commodity,
+                   ...readBuyActuals(b.closest(".topup-form").querySelector(".buy-form")) };
+    if (body.price != null && !(await confirmOddActual(
+        x.commodity, body.price, x.buy_price, "buy"))) return;
     patchTradeRun(body);
   });
-  box.querySelectorAll("[data-sellextra]").forEach(b => b.onclick = () => {
+  box.querySelectorAll("[data-sellextra]").forEach(b => b.onclick = async () => {
     const [leg, j] = b.dataset.sellextra.split(":").map(Number);
     const row = b.closest(".topup-sell");
     const body = { action: "sell", leg, extra: j };
-    const p = row && row.querySelector(".tx-price");
-    const s = row && row.querySelector(".tx-scu");
-    if (p && p.value !== "" && Number(p.value) >= 0) body.price = Number(p.value);
-    if (s && s.value !== "" && Number(s.value) > 0) body.scu = Number(s.value);
+    const scu = row && Number(row.querySelector(".sl-scu").value);
+    const totEl = row && row.querySelector(".sl-auec");
+    if (scu > 0) body.scu = scu;
+    if (totEl && totEl.value !== "" && Number(totEl.value) >= 0 && scu > 0)
+      body.price = Number(totEl.value) / scu;
+    const x = (((run.legs || [])[leg] || {}).extras || [])[j];
+    if (x && body.price != null && !(await confirmOddActual(
+        x.commodity, body.price, x.sell_price, "sell"))) return;
     patchTradeRun(body);
   });
-  // Keep the per-SCU echo under each BUY actuals row in step with what's
-  // typed (the sell step is a grid now — its rows carry their own totals).
-  box.querySelectorAll(".run-stop .trade-actual .ta-price, .run-stop .trade-actual .ta-scu").forEach(el => {
-    el.oninput = () => syncTradeActual(el.closest(".run-stop"));
-  });
+  // Wire the total-first actuals (#46d v2): buy forms (primary + planned
+  // lots) and sell rows keep their derived per-SCU echoes live, and their
+  // totals tracking the plan until the pilot types one.
+  box.querySelectorAll(".buy-form").forEach(wireBuyForm);
   box.querySelectorAll(".sell-grid .sl-row").forEach(row => {
-    row.querySelectorAll("input").forEach(el => { el.oninput = () => syncSellRow(row); });
+    const totEl = row.querySelector(".sl-auec");
+    if (totEl) totEl.addEventListener("input",
+      () => { row.dataset.touched = "1"; syncSellRow(row); });
+    const scuEl = row.querySelector(".sl-scu");
+    if (scuEl) scuEl.addEventListener("input", () => syncSellRow(row));
     syncSellRow(row);
   });
-  // Pre-fill the active leg's actuals from the detected transaction (#41) so
-  // the pilot sees exactly what an unedited confirm will record. The log's
-  // unit_price is per SCU (it's derived from shopPricePerCentiSCU), so it has to
-  // be multiplied back up into the container unit the field now asks for.
+  // Pre-fill the active leg's actuals from the detected transaction (#41): the
+  // log is ground truth for what the kiosk really did, so its figures replace
+  // the plan prefill outright — total (the exact aUEC moved), and on a buy the
+  // box size + count when the log names a size the select knows.
   if (run.txn) {
-    const btn = box.querySelector(`[data-${run.txn.side === "sell" ? "sell" : "buy"}="${run.txn.leg}"]`);
-    const stop = btn && btn.closest(".run-stop");
-    const p = stop && stop.querySelector(".ta-price");
-    const s = stop && stop.querySelector(".ta-scu");
-    if (p && p.value === "" && run.txn.unit_price != null) {
-      const bs = Number(p.dataset.box) || 1;
-      p.value = Math.round(run.txn.unit_price * bs * 100) / 100;
-    }
-    if (s && s.value === "" && run.txn.scu != null) {
-      const qbs = Number(s.dataset.box) || 1;
-      // The log states its own box count — use it when it bought the size this
-      // field is denominated in; otherwise derive, so the SCU round-trips exactly
-      // however the boxes were actually made up.
-      const q = run.txn.scu / qbs;
-      s.value = (run.txn.box_count && Number(run.txn.box_size) === qbs)
-        ? run.txn.box_count
-        : (Math.abs(q - Math.round(q)) < 1e-6 ? Math.round(q) : Math.round(q * 100) / 100);
+    const tx = run.txn;
+    const btn = box.querySelector(`[data-${tx.side === "sell" ? "sell" : "buy"}="${tx.leg}"]`);
+    if (tx.side === "buy") {
+      const form = btn && btn.closest(".run-stop").querySelector(".buy-form");
+      if (form) {
+        const sizeSel = form.querySelector(".bf-size");
+        const cnt = form.querySelector(".bf-count");
+        const lbs = Number(tx.box_size) || 0;
+        if (lbs && [...sizeSel.options].some(o => Number(o.value) === lbs)) {
+          sizeSel.value = String(lbs);
+          if (tx.box_count) cnt.value = tx.box_count;
+          else if (tx.scu != null && tx.scu % lbs === 0) cnt.value = tx.scu / lbs;
+        } else if (tx.scu != null) {
+          sizeSel.value = "1";              // odd makeup — record it as loose SCU
+          cnt.value = tx.scu;
+        }
+        if (tx.total != null) {
+          form.querySelector(".bf-total").value = Math.round(tx.total * 100) / 100;
+          form.dataset.touched = "1";       // the log's total must not be re-derived
+        }
+        syncBuyForm(form);
+      }
+    } else {
+      const row = btn && btn.closest(".sl-row");
+      if (row) {
+        if (tx.scu != null) row.querySelector(".sl-scu").value = tx.scu;
+        const t = tx.total != null ? tx.total
+          : (tx.unit_price != null && tx.scu ? tx.unit_price * tx.scu : null);
+        if (t != null) {
+          row.querySelector(".sl-auec").value = Math.round(t * 100) / 100;
+          row.dataset.touched = "1";
+        }
+        syncSellRow(row);
+      }
     }
   }
-  box.querySelectorAll(".run-stop").forEach(syncTradeActual);
-  // The txn prefill above writes values without input events — refresh totals.
-  box.querySelectorAll(".sell-grid .sl-row").forEach(syncSellRow);
 }
 
 // Mid-run top-up (docs/trade-topup.md): fetch same-hop suggestions — buyable
@@ -10680,31 +10800,22 @@ function renderTopupPanel(panel, doc, leg) {
         + (r.return_pct != null
             ? ` <span class="tl-return" title="return on the aUEC spent: profit ÷ cost">${Math.round(r.return_pct)}% return</span>` : "")
         + `<button class="topup-add" type="button">add ▸</button></div>`
-        + `<div class="trade-actual topup-form" hidden>`
-        + `<span class="ta-label">paid</span>`
-        + `<input class="ti tf-price" type="number" min="0" step="1" data-box="${size > 1 ? size : 1}"`
-        + ` value="${size > 1 ? Math.round(r.buy_price * size * 100) / 100 : r.buy_price}"`
-        + ` aria-label="actual price in aUEC per ${size > 1 ? size + " SCU container" : "SCU"}">`
-        + `<span class="ta-x">${size > 1 ? `aUEC per ${size} SCU box ×` : "aUEC/SCU ×"}</span>`
-        + `<input class="ti tf-scu" type="number" min="0" step="1" data-box="${size > 1 ? size : 1}"`
-        + ` value="${size > 1 ? r.box.boxes : r.max_scu}"`
-        + ` aria-label="actual number of ${size > 1 ? size + " SCU containers" : "SCU"}">`
-        + `<span class="ta-x">${size > 1 ? "boxes" : "SCU"}</span>`
+        + `<div class="topup-form" hidden>`
+        + buyActualForm(r.commodity, size,
+                        size > 1 ? r.box.boxes : r.max_scu, r.buy_cost, r.buy_price)
         + `<button class="trade-run-do topup-do" type="button">✓ Bought — add to leg ▸</button>`
         + `</div></div>`;
     }).join("");
   panel.querySelectorAll(".topup-row").forEach((rowEl, k) => {
     const r = rows[k];
     const form = rowEl.querySelector(".topup-form");
+    wireBuyForm(form.querySelector(".buy-form"));
     rowEl.querySelector(".topup-add").onclick = () => { form.hidden = !form.hidden; };
-    rowEl.querySelector(".topup-do").onclick = () => {
-      const pEl = form.querySelector(".tf-price"), sEl = form.querySelector(".tf-scu");
-      const pbs = Number(pEl.dataset.box) || 1, qbs = Number(sEl.dataset.box) || 1;
-      const body = { action: "addcargo", leg, commodity: r.commodity };
-      if (pEl.value !== "" && Number(pEl.value) >= 0)
-        body.price = pbs > 1 ? Math.round(Number(pEl.value) / pbs * 100) / 100 : Number(pEl.value);
-      if (sEl.value !== "" && Number(sEl.value) > 0) body.scu = Number(sEl.value) * qbs;
-      if (r.box && r.box.size) body.box_size = r.box.size;
+    rowEl.querySelector(".topup-do").onclick = async () => {
+      const body = { action: "addcargo", leg, commodity: r.commodity,
+                     ...readBuyActuals(form.querySelector(".buy-form")) };
+      if (body.price != null && !(await confirmOddActual(
+          r.commodity, body.price, r.buy_price, "buy"))) return;
       patchTradeRun(body);
     };
   });
@@ -10882,7 +10993,6 @@ function renderTradeRunLeg(lg, i, run) {
     // each input carries its own factor; the row converts back on submit.
     const isBuy = phase === "buy";
     const lots = lg.extras || [];
-    const lotsAboard = lots.some(x => !x.sold);
     const size = legBoxScu(lg);          // what this load is boxed in
     // THE TWO ENDS DON'T MATCH, and that's the game, not a bug here (measured
     // in-game 2026-08-09, Argon: bought 39 × 32 SCU at Pyro Gateway quoted
@@ -10892,70 +11002,72 @@ function renderTradeRunLeg(lg, i, run) {
     // the container-unit fields; the sell step is a per-SCU grid. Do not "fix"
     // this into symmetry without re-measuring both ends.
     if (isBuy) {
-      // A held leg (re-plan) knows its size but has no box plan; derive its
-      // count, and fall back to plain SCU if the load isn't whole boxes.
-      const boxes = size > 1
-        ? (lg.box ? lg.box.boxes : (lg.scu % size === 0 ? lg.scu / size : null)) : null;
-      const shown = size > 1 ? Math.round((lg.buy_price || 0) * size * 100) / 100 : lg.buy_price;
-      h += `<div class="trade-actual"><span class="ta-label">paid</span>`
-        + `<input class="ti ta-price" type="number" min="0" step="1" value="${shown}" data-box="${size > 1 ? size : 1}"`
-        + ` aria-label="actual price in aUEC per ${size > 1 ? size + " SCU container" : "SCU"}">`
-        + `<span class="ta-x">${size > 1 ? `aUEC per ${size} SCU box ×` : "aUEC/SCU ×"}</span>`
-        + `<input class="ti ta-scu" type="number" min="0" step="1"`
-        + ` value="${boxes != null ? boxes : lg.scu}" data-box="${boxes != null ? size : 1}"`
-        + ` aria-label="actual number of ${boxes != null ? size + " SCU containers" : "SCU"}">`
-        + `<span class="ta-x">${boxes != null ? "boxes" : "SCU"}</span>`
-        + (size > 1 ? `<span class="ta-conv" data-size="${size}" aria-live="polite"></span>` : "")
-        + `</div>`;
+      // Buy actuals, total-first (#46d v2): size × count + the kiosk's TOTAL.
+      // Prefilled from the plan; a size the kiosk doesn't offer is one select
+      // away (issue 1) — the SCU and per-SCU price are derived, never typed.
+      let fSize = size, fCount;
+      if (size > 1 && lg.box) fCount = lg.box.boxes;
+      else if (size > 1 && lg.scu % size === 0) fCount = lg.scu / size;
+      else { fSize = 1; fCount = lg.scu; }
+      h += buyActualForm(lg.commodity, fSize, fCount,
+                         lg.buy_cost != null ? lg.buy_cost
+                           : Math.round((lg.buy_price || 0) * (lg.scu || 0)),
+                         lg.buy_price);
       h += `<button class="trade-run-do" data-buy="${i}">✓ Bought — head to sell ▸</button>`;
     } else {
       // Sell confirmations as a table (docs/trade-topup.md): one row per
-      // commodity still aboard — name · aUEC/SCU · SCU · live total · confirm —
-      // because top-up lots stack rows, and three loose lines per commodity
-      // stopped scanning. Per-SCU throughout (the sell kiosk's unit, #46d);
-      // the total column replaces the old "=" echo line: it's the one figure
-      // the kiosk shows back. The box makeup rides as a tooltip on the SCU
-      // cell instead of a suffix, keeping the columns aligned.
+      // commodity still aboard — name · SCU · aUEC total · derived /SCU ·
+      // confirm — because top-up lots stack rows, and three loose lines per
+      // commodity stopped scanning. Total-first (#46d v2): the total is the
+      // figure the kiosk shows back AND the one the wallet actually moved, so
+      // the per-SCU price the stats store is derived from it, never typed.
+      // The box makeup rides as a tooltip on the SCU cell.
       if (lg.primary_sold)
         h += `<div class="trade-run-step done">✓ ${esc(lg.commodity)} sold — confirm the remaining lots</div>`;
       const unsold = lots.map((x, j) => [x, j]).filter(([x]) => !x.sold);
       if (!lg.primary_sold || unsold.length) {
         h += `<div class="sell-grid" role="table" aria-label="Confirm each sale">`
-          + `<div class="sl-head"><span></span><span>aUEC/SCU</span><span>SCU</span><span>total</span><span></span></div>`;
+          + `<div class="sl-head"><span></span><span>SCU</span><span>aUEC total</span><span>/SCU</span><span></span></div>`;
         if (!lg.primary_sold) {
           // What's aboard is the entered actual when the kiosk shorted the
-          // buy — prefilling the planned load would misstate the sale.
+          // buy — prefilling the planned load would misstate the sale. The
+          // size really bought (actual_box_size) beats the plan's for the
+          // boxes-aboard tooltip.
           const aboard = lg.actual_buy_scu || lg.scu;
-          const pb = (size > 1 && aboard % size === 0)
-            ? ` title="${aboard / size} × ${size} SCU boxes aboard"` : "";
-          h += `<div class="sl-row">`
+          const asize = lg.actual_box_size || size;
+          const pb = (asize > 1 && aboard % asize === 0)
+            ? ` title="${aboard / asize} × ${asize} SCU boxes aboard"` : "";
+          h += `<div class="sl-row" data-plan="${lg.sell_price || 0}">`
             + `<span class="sl-name">${esc(lg.commodity)}</span>`
-            + `<input class="ti ta-price" type="number" min="0" step="1" value="${lg.sell_price}" data-box="1"`
-            + ` aria-label="actual price in aUEC per SCU for ${esc(lg.commodity)}">`
-            + `<input class="ti ta-scu" type="number" min="0" step="1" value="${aboard}" data-box="1"${pb}`
+            + `<input class="ti sl-scu" type="number" min="0" step="1" value="${aboard}"${pb}`
             + ` aria-label="actual SCU sold of ${esc(lg.commodity)}">`
+            + `<input class="ti sl-auec" type="number" min="0" step="1"`
+            + ` value="${Math.round((lg.sell_price || 0) * aboard)}"`
+            + ` aria-label="total aUEC received for ${esc(lg.commodity)}">`
             + `<span class="sl-total" aria-live="polite"></span>`
             + `<button class="trade-run-do" data-sell="${i}">✓ Sold ▸</button></div>`;
         }
         unsold.forEach(([x, j]) => {
           const xb = (x.box_size > 1 && x.scu % x.box_size === 0)
             ? ` title="${x.scu / x.box_size} × ${x.box_size} SCU boxes aboard"` : "";
-          h += `<div class="sl-row topup-sell" data-lot="${j}">`
+          h += `<div class="sl-row topup-sell" data-lot="${j}" data-plan="${x.sell_price || 0}">`
             + `<span class="sl-name">${esc(x.commodity)}</span>`
-            + `<input class="ti tx-price" type="number" min="0" step="1" value="${x.sell_price}"`
-            + ` aria-label="actual price in aUEC per SCU for ${esc(x.commodity)}">`
-            + `<input class="ti tx-scu" type="number" min="0" step="1" value="${x.scu}"${xb}`
+            + `<input class="ti sl-scu" type="number" min="0" step="1" value="${x.scu}"${xb}`
             + ` aria-label="actual SCU sold of ${esc(x.commodity)}">`
+            + `<input class="ti sl-auec" type="number" min="0" step="1"`
+            + ` value="${Math.round((x.sell_price || 0) * (x.scu || 0))}"`
+            + ` aria-label="total aUEC received for ${esc(x.commodity)}">`
             + `<span class="sl-total" aria-live="polite"></span>`
             + `<button class="trade-run-do topup-do" data-sellextra="${i}:${j}">✓ Sold ▸</button></div>`;
         });
         h += `</div>`;
       }
     }
-    // Skipping discards the leg from realized stats — with BOUGHT top-up lots
-    // aboard the server refuses it (re-plan is the escape hatch), so don't
-    // offer a dead button.
-    if (!lotsAboard)
+    // Skipping discards the leg from realized stats, so it's only offered
+    // BEFORE the buy — once anything is paid for (primary or lots) the server
+    // refuses it (dropping bought cargo's cost would falsify realized stats;
+    // sell short or re-plan instead), so don't offer a dead button.
+    if (isBuy)
       h += `<button class="run-skip" data-skip="${i}">skip this leg ▸</button>`;
     // Distinct from a plain skip: the terminal's market failed on this side.
     // Buy phase = nothing to buy (skips + reports); sell phase = terminal won't
@@ -10985,16 +11097,9 @@ function renderTradeRunLeg(lg, i, run) {
           + ` <span class="muted"${kioskTitle(x.buy_price, size)}>@ ${fmtAuec(x.buy_price)} → ${fmtAuec(x.sell_price)}</span>`
           + ` <span class="muted">· ${fill} · cost ${fmtAuec(x.buy_cost)}</span>`
           + ` · <span class="topup-gain" title="already counted in this run's planned profit">+${fmtAuec(x.profit)} profit</span></div>`
-          + `<div class="trade-actual topup-form">`
-          + `<span class="ta-label">paid</span>`
-          + `<input class="ti tp-price" type="number" min="0" step="1" data-box="${size > 1 ? size : 1}"`
-          + ` value="${size > 1 ? Math.round(x.buy_price * size * 100) / 100 : x.buy_price}"`
-          + ` aria-label="actual price in aUEC per ${size > 1 ? size + " SCU container" : "SCU"} for ${esc(x.commodity)}">`
-          + `<span class="ta-x">${size > 1 ? `aUEC per ${size} SCU box ×` : "aUEC/SCU ×"}</span>`
-          + `<input class="ti tp-scu" type="number" min="0" step="1" data-box="${size > 1 ? size : 1}"`
-          + ` value="${size > 1 ? x.box.boxes : x.scu}"`
-          + ` aria-label="actual number of ${size > 1 ? size + " SCU containers" : "SCU"} for ${esc(x.commodity)}">`
-          + `<span class="ta-x">${size > 1 ? "boxes" : "SCU"}</span>`
+          + `<div class="topup-form">`
+          + buyActualForm(x.commodity, size,
+                          size > 1 ? x.box.boxes : x.scu, x.buy_cost, x.buy_price)
           + `<button class="trade-run-do topup-do" data-addlot="${i}:${j}" type="button">✓ Bought — add to leg ▸</button>`
           + `</div></div>`;
       });
