@@ -3725,6 +3725,137 @@ class TradeMixedLoadTests(unittest.TestCase):
         self.assertTrue(cont and cont[0].get("lots"))  # continuation bundles
 
 
+class TradeStockOverlayTests(unittest.TestCase):
+    """The org stock overlay (2026-08-23): member-stated shelf maxima
+    (`stock_supply_caps`/`stock_demand_caps` off `low` reports) replace the
+    feed's supply/demand figures in every fill — the Baijini Hydrogen fix,
+    where a 544 SCU shelf kept planning as a 1,888 SCU money-maker and won
+    the ranking on volume that didn't exist."""
+
+    @classmethod
+    def setUpClass(cls):
+        spc = [p for p in NAV.pois.values() if p.system == "Stanton" and p.global_m][:4]
+        cls.A, cls.B, cls.C, cls.D = (p.id for p in spc)
+
+    def _pt(self, commodity, terminal_id, poi_id, buy=None, sell=None,
+            scu_buy=0, scu_sell_stock=0):
+        return {"commodity": commodity, "terminal_id": terminal_id,
+                "terminal": f"T{terminal_id}", "system": "Stanton", "poi_id": poi_id,
+                "buy": buy, "sell": sell, "scu_buy": scu_buy,
+                "scu_sell_stock": scu_sell_stock, "updated_at": None}
+
+    def _report(self, poi, commodity, side="supply", kind="low", scu=544):
+        return {"poi_id": poi, "commodity": commodity, "side": side,
+                "kind": kind, "scu": scu, "created": time.time()}
+
+    def _baijini(self):
+        # Hydrogen A->B: UEX claims 1,888 supply; a member found 544. The
+        # honest alternative Quartz C->D moves 800 at margin 30 = 24,000.
+        return [self._pt("Hydrogen", 1, self.A, buy=100, scu_buy=1888),
+                self._pt("Hydrogen", 2, self.B, sell=125),
+                self._pt("Quartz", 3, self.C, buy=50, scu_buy=800),
+                self._pt("Quartz", 4, self.D, sell=80)]
+
+    def test_caps_come_only_from_low_reports_with_figures(self):
+        reports = [self._report(self.A, "Hydrogen", scu=544),
+                   self._report(self.B, "Waste", kind="out", scu=None),
+                   self._report(self.C, "Gold", scu=None),
+                   self._report(self.D, "Iron", side="demand", scu=90)]
+        self.assertEqual(nav_core.stock_supply_caps(reports),
+                         {(self.A, "hydrogen"): 544.0})
+        self.assertEqual(nav_core.stock_demand_caps(reports),
+                         {(self.D, "iron"): 90.0})
+
+    def test_capped_shelf_sizes_and_reranks_the_plan(self):
+        prices = self._baijini()
+        caps = nav_core.stock_supply_caps([self._report(self.A, "Hydrogen")])
+        # Uncapped: the phantom 1,888 SCU of Hydrogen wins (47,200 > 24,000).
+        plan = nav_core.plan_trade_route(NAV, prices, 2200, start_id=self.A,
+                                         max_stops=2, sort="profit")
+        self.assertEqual(plan["legs"][0]["commodity"], "Hydrogen")
+        self.assertEqual(plan["legs"][0]["scu"], 1888)
+        # Capped: Hydrogen re-prices at its real 544 (13,600) and Quartz's
+        # honest 24,000 wins the ranking on its own — no penalty, no avoid.
+        plan = nav_core.plan_trade_route(NAV, prices, 2200, start_id=self.A,
+                                         max_stops=2, sort="profit",
+                                         supply_caps=caps)
+        self.assertEqual(plan["legs"][0]["commodity"], "Quartz")
+        # …and when Hydrogen still wins (profit mode, more stops), it plans
+        # at the observed size with the org provenance flagged.
+        plan = nav_core.plan_trade_route(NAV, prices, 2200, start_id=self.A,
+                                         max_stops=6, sort="profit",
+                                         supply_caps=caps)
+        hy = next(lg for lg in plan["legs"] if lg["commodity"] == "Hydrogen")
+        self.assertEqual((hy["scu"], hy["supply_scu"], hy["supply_src"]),
+                         (544, 544.0, "org"))
+
+    def test_demand_cap_sizes_the_sell_end(self):
+        prices = [self._pt("Gold", 1, self.A, buy=100, scu_buy=1000),
+                  self._pt("Gold", 2, self.B, sell=300)]
+        caps = nav_core.stock_demand_caps(
+            [self._report(self.B, "Gold", side="demand", scu=120)])
+        plan = nav_core.plan_trade_route(NAV, prices, 500, start_id=self.A,
+                                         sort="profit", demand_caps=caps)
+        self.assertEqual(plan["legs"][0]["scu"], 120)
+        self.assertEqual(plan["legs"][0]["demand_src"], "org")
+
+    def test_board_and_manual_mode_agree_with_the_planner(self):
+        prices = self._baijini()
+        caps = nav_core.stock_supply_caps([self._report(self.A, "Hydrogen")])
+        rows = nav_core.rank_trades(NAV, prices, capacity_scu=2200,
+                                    sort="per_hour", supply_caps=caps)
+        hy = next(r for r in rows if r["commodity"] == "Hydrogen")
+        self.assertEqual((hy["max_scu"], hy["supply_src"]), (544, "org"))
+        manual = nav_core.cost_trade_legs(
+            NAV, prices, [{"commodity": "Hydrogen", "buy_terminal_id": 1,
+                           "sell_terminal_id": 2}], 2200, start_id=self.A,
+            supply_caps=caps)
+        self.assertEqual(manual["legs"][0]["scu"], 544)   # sized, never dropped
+
+    def test_held_sell_leg_is_never_capped(self):
+        # Sunk cargo must offload; a soft market takes what it takes.
+        posA = next(p for p in NAV.pois.values() if p.id == self.A).global_m
+        prices = [self._pt("Gold", 2, self.B, sell=300, scu_sell_stock=1000)]
+        caps = nav_core.stock_demand_caps(
+            [self._report(self.B, "Gold", side="demand", scu=50)])
+        plan = nav_core.replan_trade_route(
+            NAV, prices, 500, start_pos=posA, sort="profit", demand_caps=caps,
+            held={"commodity": "Gold", "scu": 400, "buy_price": 100})
+        self.assertEqual(plan["legs"][0]["scu"], 400)     # the whole load plans
+
+    def test_refit_stop_lots_spends_the_freed_capital(self):
+        # The 1M-budget scenario: at plan time the primary was expected to eat
+        # ~998k, so the co-loads were sized to crumbs. The primary really cost
+        # a fraction — the re-fill packs the freed budget, wallet-sequenced
+        # (richest margin first, remaining funds capping each lot).
+        prices = [self._pt("Waste", 3, self.A, buy=10, scu_buy=400),
+                  self._pt("Waste", 4, self.B, sell=30),
+                  self._pt("Copper", 5, self.A, buy=100, scu_buy=5000),
+                  self._pt("Copper", 6, self.B, sell=115)]
+        tight = nav_core.refit_stop_lots(
+            prices, 2000, buy_poi_id=self.A, sell_poi_id=self.B,
+            budget=2_000, exclude={"hydrogen"})
+        self.assertEqual([(x["commodity"], x["scu"]) for x in tight],
+                         [("Waste", 200)])                 # 2k buys 200 Waste
+        freed = nav_core.refit_stop_lots(
+            prices, 2000, buy_poi_id=self.A, sell_poi_id=self.B,
+            budget=716_000, exclude={"hydrogen"})
+        by = {x["commodity"]: x for x in freed}
+        self.assertEqual(by["Waste"]["scu"], 400)          # its supply cap
+        self.assertEqual(by["Copper"]["scu"], 1600)        # the rest of the hold
+        self.assertLessEqual(sum(x["buy_cost"] for x in freed), 716_000)
+
+    def test_refit_honors_a_filtered_runs_commodity_pick(self):
+        prices = [self._pt("Waste", 3, self.A, buy=10, scu_buy=400),
+                  self._pt("Waste", 4, self.B, sell=30),
+                  self._pt("Copper", 5, self.A, buy=100, scu_buy=5000),
+                  self._pt("Copper", 6, self.B, sell=115)]
+        lots = nav_core.refit_stop_lots(
+            prices, 2000, buy_poi_id=self.A, sell_poi_id=self.B,
+            commodities=["Waste"], exclude=frozenset())
+        self.assertEqual([x["commodity"] for x in lots], ["Waste"])
+
+
 class TradeHistoryStatsTests(unittest.TestCase):
     """nav_core trade history/statistics derivations (#21 step 6): realized totals,
     quick-picks, guild aggregates, and the top-traders board over trade_runs

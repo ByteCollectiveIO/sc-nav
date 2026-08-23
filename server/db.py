@@ -3256,6 +3256,18 @@ def stock_report_save(e: dict) -> int:
         return cur.lastrowid
 
 
+def stock_report_delete(poi_id: int, commodity: str, side: str) -> bool:
+    """Clear the live report for one (poi, commodity, side) — the evidence-based
+    retraction: a member just observed the shelf back at (or beyond) the feed's
+    figure, so the cap must not outlive the shortage it described."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "DELETE FROM stock_reports "
+            "WHERE poi_id=? AND lower(commodity)=lower(?) AND side=?",
+            (poi_id, commodity, side))
+    return cur.rowcount > 0
+
+
 def stock_reports_since(cutoff: float) -> list[dict]:
     """The live stock board: every report filed after `cutoff` (epoch seconds),
     freshest first. Expired rows are pruned in the same pass so the table never

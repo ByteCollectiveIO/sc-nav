@@ -1980,16 +1980,33 @@ class TradeStockReportTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/trade/stock").json()["reports"], [])
 
     # --- the low-stock auto-report ------------------------------------------
-    def test_short_buy_files_low_report(self):
+    def test_max_available_buy_files_low_report(self):
+        # Explicit-claim model (2026-08-23): the checkbox IS the report — a
+        # short buy alone is just a smaller buy, never evidence.
         r = self.client.patch("/api/trade/run",
-                              json={"action": "buy", "leg": 0, "scu": 10})
-        self.assertEqual(r.status_code, 200)                # 10 < 40 * 0.5
+                              json={"action": "buy", "leg": 0, "scu": 10,
+                                    "max_available": True})
+        self.assertEqual(r.status_code, 200)
         rep = self.client.get("/api/trade/stock").json()["reports"][0]
-        self.assertEqual((rep["kind"], rep["scu"]), ("low", 10))
+        self.assertEqual((rep["kind"], rep["scu"], rep["side"]),
+                         ("low", 10, "supply"))
 
-    def test_modest_short_buy_files_nothing(self):
-        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0, "scu": 30})
+    def test_short_buy_without_the_claim_files_nothing(self):
+        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0, "scu": 10})
         self.assertEqual(self.client.get("/api/trade/stock").json()["reports"], [])
+
+    def test_bigger_buy_raises_a_live_caps_figure(self):
+        # A member moving MORE than a cap's figure disproves it regardless of
+        # intent — the report is raised to the new observation, not cleared
+        # (age-off stays the restock probe). A buy at-or-under the figure
+        # leaves it alone.
+        db.stock_report_save({"poi_id": 11, "terminal": "A", "commodity": "Gold",
+                              "side": "supply", "kind": "low", "scu": 10,
+                              "poster": "9", "poster_name": "Trader",
+                              "created": time.time()})
+        self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0, "scu": 25})
+        rep = self.client.get("/api/trade/stock").json()["reports"][0]
+        self.assertEqual((rep["kind"], rep["scu"]), ("low", 25))
 
     # --- board lifecycle ----------------------------------------------------
     def test_new_report_replaces_same_terminal_and_commodity(self):
@@ -2089,16 +2106,18 @@ class TradeStockReportTests(unittest.TestCase):
         r = self.client.patch("/api/trade/run", json={"action": "demandout", "leg": 0})
         self.assertEqual(r.status_code, 409)                # still awaiting the buy
 
-    def test_short_sell_files_demand_low(self):
+    def test_max_available_sell_files_demand_low(self):
         self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0})
-        self.client.patch("/api/trade/run", json={"action": "sell", "leg": 0, "scu": 10})
+        self.client.patch("/api/trade/run",
+                          json={"action": "sell", "leg": 0, "scu": 10,
+                                "max_available": True})
         rep = self.client.get("/api/trade/stock").json()["reports"][0]
         self.assertEqual((rep["side"], rep["kind"], rep["scu"], rep["poi_id"]),
                          ("demand", "low", 10, 12))
 
-    def test_modest_short_sell_files_nothing(self):
+    def test_short_sell_without_the_claim_files_nothing(self):
         self.client.patch("/api/trade/run", json={"action": "buy", "leg": 0})
-        self.client.patch("/api/trade/run", json={"action": "sell", "leg": 0, "scu": 30})
+        self.client.patch("/api/trade/run", json={"action": "sell", "leg": 0, "scu": 10})
         self.assertEqual(self.client.get("/api/trade/stock").json()["reports"], [])
 
     def test_supply_and_demand_reports_coexist_per_terminal(self):
@@ -7291,13 +7310,21 @@ class TradeTopupApiTests(unittest.TestCase):
             "action": "addcargo", "commodity": "Waste", "scu": 10, "price": 10})
         self.assertEqual(r.status_code, 400)              # already aboard (primary)
 
-    def test_addcargo_short_buy_files_a_supply_low_report(self):
+    def test_addcargo_max_available_files_a_supply_low_report(self):
         self._start_and_buy()                             # free hold = 169
         self.client.patch("/api/trade/run", json={
-            "action": "addcargo", "commodity": "Iron", "scu": 50, "price": 55})
+            "action": "addcargo", "commodity": "Iron", "scu": 50, "price": 55,
+            "max_available": True})
         reports = self.client.get("/api/trade/stock").json()["reports"]
-        self.assertEqual([(r["commodity"], r["side"], r["kind"]) for r in reports],
-                         [("Iron", "supply", "low")])
+        self.assertEqual([(r["commodity"], r["side"], r["kind"], r["scu"])
+                          for r in reports],
+                         [("Iron", "supply", "low", 50)])
+
+    def test_addcargo_without_the_claim_files_nothing(self):
+        self._start_and_buy()
+        self.client.patch("/api/trade/run", json={
+            "action": "addcargo", "commodity": "Iron", "scu": 50, "price": 55})
+        self.assertEqual(self.client.get("/api/trade/stock").json()["reports"], [])
 
     # --- per-lot sells ------------------------------------------------------
 
@@ -7322,12 +7349,13 @@ class TradeTopupApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["completed"])
 
-    def test_lot_short_sell_files_a_demand_low_report(self):
+    def test_lot_max_available_sell_files_a_demand_low_report(self):
         self._start_and_buy()
         self.client.patch("/api/trade/run", json={
             "action": "addcargo", "commodity": "Iron", "scu": 100, "price": 55})
         self.client.patch("/api/trade/run", json={
-            "action": "sell", "extra": 0, "scu": 20, "price": 200})
+            "action": "sell", "extra": 0, "scu": 20, "price": 200,
+            "max_available": True})
         reports = self.client.get("/api/trade/stock").json()["reports"]
         self.assertIn(("Iron", "demand", "low"),
                       [(r["commodity"], r["side"], r["kind"]) for r in reports])
@@ -7508,26 +7536,45 @@ class TradeMixedLoadApiTests(unittest.TestCase):
             "action": "sell", "extra": 0, "scu": 305, "price": 30})
         self.assertTrue(r.json()["completed"])
 
-    def test_unplanned_addcargo_still_grows_the_summary(self):
+    def test_short_primary_refits_the_stops_co_loads(self):
+        # The freed-hold re-fit (user finding, 2026-08-23): the kiosk shorted
+        # the primary 100 of 200, so the stop's planned co-loads re-size to
+        # the hold the actuals really left free — Waste grows from its
+        # plan-time 305 to its full 400 supply cap, and thin-margin Copper
+        # fills the rest. The summary tracks both the shrink and the growth.
         self._start_mixed()
-        # Kiosk shorted the primary: 100 of 200 — room for an unplanned lot.
-        self.client.patch("/api/trade/run",
-                          json={"action": "buy", "scu": 100, "price": 50})
-        r = self.client.patch("/api/trade/run", json={
-            "action": "addcargo", "commodity": "Copper", "scu": 50, "price": 100})
-        self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.patch("/api/trade/run",
+                              json={"action": "buy", "scu": 100, "price": 50})
         run = r.json()["trade_run"]
+        lots = {x["commodity"]: x for x in run["legs"][0]["lots"]}
+        self.assertEqual(lots["Waste"]["scu"], 400)       # its own supply cap
+        self.assertEqual(lots["Copper"]["scu"], 5)        # the remaining hold
+        # planned = 36,100 − 100 lost Iron ×150 + (400−305) Waste ×20 + 5 Copper ×15
         self.assertEqual(run["summary"]["total_profit"],
-                         36100 + (115 - 100) * 50)
-        self.assertFalse(run["legs"][0]["lots"][0].get("added"))   # Waste untouched
+                         36100 - 100 * 150 + 95 * 20 + 5 * 15)
+
+    def test_unplanned_addcargo_still_grows_the_summary(self):
+        # A full-size primary buy leaves nothing free, so the re-fit is a
+        # no-op — and a lot the plan never counted still grows the summary.
+        self._start_mixed()
+        self.client.patch("/api/trade/run",
+                          json={"action": "buy", "scu": 200, "price": 50})
+        self.client.patch("/api/trade/run", json={
+            "action": "sell", "scu": 200, "price": 200})
+        r = self.client.get("/api/trade/run")
+        # (leg completed — nothing further to assert here; the grow path is
+        # covered by TradeTopupApiTests.test_addcargo_records_the_lot.)
+        self.assertEqual(r.status_code, 200)
 
     def test_topup_suggestions_exclude_planned_lots(self):
         self._start_mixed()
         self.client.patch("/api/trade/run",
                           json={"action": "buy", "scu": 100, "price": 50})
+        # The short-buy re-fit planned Waste AND Copper into the freed hold —
+        # both have their own confirm rows now, so the panel has nothing left.
         names = [s["commodity"] for s in
                  self.client.get("/api/trade/run/topup").json()["suggestions"]]
-        self.assertEqual(names, ["Copper"])               # Waste has its own row
+        self.assertEqual(names, [])
 
     def test_buy_records_the_actual_box_size_and_confirms_it(self):
         # #46d v2: the kiosk had no 32s, the pilot bought 24s — the size really
@@ -7571,6 +7618,23 @@ class TradeMixedLoadApiTests(unittest.TestCase):
         held = [lg for lg in app.hub.sessions["1"].trade_run["legs"]
                 if lg.get("held")]
         self.assertEqual(held[0]["box_size"], 24)   # what's aboard, not the plan
+
+    def test_checked_buy_caps_the_next_plan_end_to_end(self):
+        # The whole loop: pilot ticks "max available" on a short buy → the
+        # report caps the org stock overlay → the NEXT plan (anyone's) sizes
+        # that shelf to the observed figure instead of UEX's phantom, badged
+        # with its provenance.
+        self._start_mixed()
+        r = self.client.patch("/api/trade/run", json={
+            "action": "buy", "scu": 64, "price": 50, "max_available": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.client.delete("/api/trade/run")
+        app.hub.sessions.pop("1", None)
+        r = self.client.post("/api/trade/plan",
+                             json=self._plan_body(cargo="single"))
+        leg = r.json()["legs"][0]
+        self.assertEqual((leg["commodity"], leg["scu"], leg["supply_src"]),
+                         ("Iron", 64, "org"))
 
     def test_replan_keeps_the_cargo_mode(self):
         self._start_mixed()

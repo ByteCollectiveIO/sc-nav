@@ -111,6 +111,31 @@ dropped by `_amenity_view` and is now kept, rendering an `⚓ docking` stop chip
 
 ### Stock & demand reports — AS BUILT
 
+> **v2 (2026-08-23) — explicit evidence + the org stock overlay + stop
+> re-fit.** Three changes from live use (a 544 SCU Hydrogen shelf at Baijini
+> kept planning as 59 × 32 because `low` reports were display-only):
+>
+> 1. **Explicit claims replace the <50%-of-plan auto-file.** The run card's
+>    "all it had" / "all they'd take" checkbox (`max_available`) is what files
+>    a `low` report with the observed SCU — a smaller transaction alone is
+>    just a smaller transaction (`_note_shelf_observation`). A transaction
+>    LARGER than a live figure raises the report; nothing auto-clears — the
+>    age-off window is the deliberate restock probe (one UEX-sized plan per
+>    window rediscovers the shelf either way).
+> 2. **`low` figures now cap planning** (`stock_supply_caps` /
+>    `stock_demand_caps` → every fill: plan, re-plan, mixed bundles, manual
+>    sizing, the board, top-ups; held-sell legs never). The lane re-prices at
+>    its real size and the ranking corrects itself — no penalty, no avoid.
+>    Legs sized this way carry `supply_src`/`demand_src` = "org" and the
+>    ⚡ *sized to member-reported stock* badge.
+> 3. **A short primary re-fits the stop** (`_refit_leg_lots`, mixed runs): the
+>    unconfirmed planned co-loads re-size to the hold AND capital the actuals
+>    really freed (remaining budget = max-spend − the stop's actual costs), so
+>    a 998k-planned buy that cost 284k stops stranding 716k of bankroll in
+>    crumbs-sized secondaries. The frozen summary delta-tracks both the
+>    primary's shortfall and the co-load growth.
+
+
 The UEX scrape says a terminal *should* have supply and demand; the player at
 the kiosk knows whether it actually does. Run mode captures that ground truth
 on **both sides of a trade** and shares it org-wide for a configurable window.
