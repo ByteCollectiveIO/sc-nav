@@ -1531,6 +1531,18 @@
   .topup-line b { color: var(--text); }
   /* The headline economics: what buying this lot adds to the run's profit. */
   .topup-gain { color: var(--good); font-weight: 600; white-space: nowrap; }
+  /* Sell confirmations as a table: one row per commodity aboard (top-up lots
+     stack rows) — name · aUEC/SCU · SCU · live total · confirm. Rows are
+     display:contents so the grid owns the columns and every row aligns. */
+  .sell-grid { display: grid; grid-template-columns: max-content 88px 72px max-content max-content;
+    gap: 6px 10px; align-items: center; margin: 8px 0 4px; font-size: 12px;
+    color: var(--dim); overflow-x: auto; }
+  .sell-grid .sl-head, .sell-grid .sl-row { display: contents; }
+  .sell-grid .sl-head span { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .sell-grid .sl-name { color: var(--text); font-weight: 600; white-space: nowrap; }
+  .sell-grid input { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+  .sell-grid .sl-total { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 90px; }
+  .sell-grid .trade-run-do { margin-top: 0; }
   .topup-add { font-size: 12px; margin-left: auto; }
   /* .trade-actual sets display:flex, which beats the UA [hidden] rule — the
      same trap as .on-invis/.rg-row. Guard every flex row that can be hidden. */
@@ -10199,6 +10211,18 @@ function syncTradeActual(stop) {
   out.textContent = bits.length ? "= " + bits.join(" · ") : "";
 }
 
+// Live total for one sell-grid row (price × SCU): the one figure the sell
+// kiosk shows back, so a mistyped quantity is caught before it's filed.
+function syncSellRow(row) {
+  const out = row.querySelector(".sl-total");
+  if (!out) return;
+  const p = row.querySelector(".ta-price, .tx-price");
+  const s = row.querySelector(".ta-scu, .tx-scu");
+  const price = (p && p.value !== "" && Number(p.value) >= 0) ? Number(p.value) : null;
+  const scu = (s && Number(s.value) > 0) ? Number(s.value) : null;
+  out.textContent = (price != null && scu != null) ? "= " + fmtAuec(price * scu) : "";
+}
+
 // Confirm a buy/sell, folding in the actual price + SCU the player entered at the
 // terminal (pre-filled from the plan, so an unedited confirm just records the
 // planned figures — and the stats stay honest either way). The price field speaks
@@ -10413,9 +10437,14 @@ function renderTradeRun(run) {
     if (s && s.value !== "" && Number(s.value) > 0) body.scu = Number(s.value);
     patchTradeRun(body);
   });
-  // Keep the per-SCU echo under each actuals row in step with what's typed.
-  box.querySelectorAll(".run-stop .ta-price, .run-stop .ta-scu").forEach(el => {
+  // Keep the per-SCU echo under each BUY actuals row in step with what's
+  // typed (the sell step is a grid now — its rows carry their own totals).
+  box.querySelectorAll(".run-stop .trade-actual .ta-price, .run-stop .trade-actual .ta-scu").forEach(el => {
     el.oninput = () => syncTradeActual(el.closest(".run-stop"));
+  });
+  box.querySelectorAll(".sell-grid .sl-row").forEach(row => {
+    row.querySelectorAll("input").forEach(el => { el.oninput = () => syncSellRow(row); });
+    syncSellRow(row);
   });
   // Pre-fill the active leg's actuals from the detected transaction (#41) so
   // the pilot sees exactly what an unedited confirm will record. The log's
@@ -10442,6 +10471,8 @@ function renderTradeRun(run) {
     }
   }
   box.querySelectorAll(".run-stop").forEach(syncTradeActual);
+  // The txn prefill above writes values without input events — refresh totals.
+  box.querySelectorAll(".sell-grid .sl-row").forEach(syncSellRow);
 }
 
 // Mid-run top-up (docs/trade-topup.md): fetch same-hop suggestions — buyable
@@ -10676,59 +10707,75 @@ function renderTradeRunLeg(lg, i, run) {
     const isBuy = phase === "buy";
     const lots = lg.extras || [];
     const lotsAboard = lots.some(x => !x.sold);
-    const price = isBuy ? lg.buy_price : lg.sell_price;
     const size = legBoxScu(lg);          // what this load is boxed in
     // THE TWO ENDS DON'T MATCH, and that's the game, not a bug here (measured
     // in-game 2026-08-09, Argon: bought 39 × 32 SCU at Pyro Gateway quoted
     // "10,087/unit", sold the same load at Seraphim quoted "529/SCU"). The BUY
     // kiosk transacts in containers — price per box, quantity as a box COUNT,
-    // SCU derived — while the SELL kiosk quotes per SCU. So convert on the buy
-    // only; the sell stays in the units it always was. Do not "fix" this into
-    // symmetry without re-measuring both ends.
-    const bs = isBuy ? size : 1;         // price divisor: per box on buy, per SCU on sell
-    // A held leg (re-plan) knows its size but has no box plan; derive its count,
-    // and fall back to plain SCU if the load isn't a whole number of boxes.
-    const boxes = (isBuy && size > 1)
-      ? (lg.box ? lg.box.boxes : (lg.scu % size === 0 ? lg.scu / size : null)) : null;
-    const shown = bs > 1 ? Math.round((price || 0) * bs * 100) / 100 : price;
-    if (isBuy || !lg.primary_sold) {
-      h += `<div class="trade-actual"><span class="ta-label">${isBuy ? "paid" : "got"}</span>`
-        + `<input class="ti ta-price" type="number" min="0" step="1" value="${shown}" data-box="${bs}"`
-        + ` aria-label="actual price in aUEC per ${bs > 1 ? bs + " SCU container" : "SCU"}">`
-        + `<span class="ta-x">${bs > 1 ? `aUEC per ${bs} SCU box ×` : "aUEC/SCU ×"}</span>`
+    // SCU derived — while the SELL kiosk quotes per SCU. So the buy step keeps
+    // the container-unit fields; the sell step is a per-SCU grid. Do not "fix"
+    // this into symmetry without re-measuring both ends.
+    if (isBuy) {
+      // A held leg (re-plan) knows its size but has no box plan; derive its
+      // count, and fall back to plain SCU if the load isn't whole boxes.
+      const boxes = size > 1
+        ? (lg.box ? lg.box.boxes : (lg.scu % size === 0 ? lg.scu / size : null)) : null;
+      const shown = size > 1 ? Math.round((lg.buy_price || 0) * size * 100) / 100 : lg.buy_price;
+      h += `<div class="trade-actual"><span class="ta-label">paid</span>`
+        + `<input class="ti ta-price" type="number" min="0" step="1" value="${shown}" data-box="${size > 1 ? size : 1}"`
+        + ` aria-label="actual price in aUEC per ${size > 1 ? size + " SCU container" : "SCU"}">`
+        + `<span class="ta-x">${size > 1 ? `aUEC per ${size} SCU box ×` : "aUEC/SCU ×"}</span>`
         + `<input class="ti ta-scu" type="number" min="0" step="1"`
         + ` value="${boxes != null ? boxes : lg.scu}" data-box="${boxes != null ? size : 1}"`
         + ` aria-label="actual number of ${boxes != null ? size + " SCU containers" : "SCU"}">`
         + `<span class="ta-x">${boxes != null ? "boxes" : "SCU"}</span>`
-        // `data-size` is display-only: on the sell side the fields are already in
-        // our units, but naming the boxes aboard still ties the row to the hold.
         + (size > 1 ? `<span class="ta-conv" data-size="${size}" aria-live="polite"></span>` : "")
         + `</div>`;
-      if (isBuy)
-        h += `<button class="trade-run-do" data-buy="${i}">✓ Bought — head to sell ▸</button>`;
-      else
-        h += `<button class="trade-run-do" data-sell="${i}">✓ Sold${lotsAboard ? ` ${esc(lg.commodity)}` : " — next leg"} ▸</button>`;
+      h += `<button class="trade-run-do" data-buy="${i}">✓ Bought — head to sell ▸</button>`;
     } else {
-      // Primary gone, top-up lots still aboard: the leg closes lot by lot.
-      h += `<div class="trade-run-step done">✓ ${esc(lg.commodity)} sold — confirm the remaining lots</div>`;
+      // Sell confirmations as a table (docs/trade-topup.md): one row per
+      // commodity still aboard — name · aUEC/SCU · SCU · live total · confirm —
+      // because top-up lots stack rows, and three loose lines per commodity
+      // stopped scanning. Per-SCU throughout (the sell kiosk's unit, #46d);
+      // the total column replaces the old "=" echo line: it's the one figure
+      // the kiosk shows back. The box makeup rides as a tooltip on the SCU
+      // cell instead of a suffix, keeping the columns aligned.
+      if (lg.primary_sold)
+        h += `<div class="trade-run-step done">✓ ${esc(lg.commodity)} sold — confirm the remaining lots</div>`;
+      const unsold = lots.map((x, j) => [x, j]).filter(([x]) => !x.sold);
+      if (!lg.primary_sold || unsold.length) {
+        h += `<div class="sell-grid" role="table" aria-label="Confirm each sale">`
+          + `<div class="sl-head"><span></span><span>aUEC/SCU</span><span>SCU</span><span>total</span><span></span></div>`;
+        if (!lg.primary_sold) {
+          // What's aboard is the entered actual when the kiosk shorted the
+          // buy — prefilling the planned load would misstate the sale.
+          const aboard = lg.actual_buy_scu || lg.scu;
+          const pb = (size > 1 && aboard % size === 0)
+            ? ` title="${aboard / size} × ${size} SCU boxes aboard"` : "";
+          h += `<div class="sl-row">`
+            + `<span class="sl-name">${esc(lg.commodity)}</span>`
+            + `<input class="ti ta-price" type="number" min="0" step="1" value="${lg.sell_price}" data-box="1"`
+            + ` aria-label="actual price in aUEC per SCU for ${esc(lg.commodity)}">`
+            + `<input class="ti ta-scu" type="number" min="0" step="1" value="${aboard}" data-box="1"${pb}`
+            + ` aria-label="actual SCU sold of ${esc(lg.commodity)}">`
+            + `<span class="sl-total" aria-live="polite"></span>`
+            + `<button class="trade-run-do" data-sell="${i}">✓ Sold ▸</button></div>`;
+        }
+        unsold.forEach(([x, j]) => {
+          const xb = (x.box_size > 1 && x.scu % x.box_size === 0)
+            ? ` title="${x.scu / x.box_size} × ${x.box_size} SCU boxes aboard"` : "";
+          h += `<div class="sl-row topup-sell" data-lot="${j}">`
+            + `<span class="sl-name">${esc(x.commodity)}</span>`
+            + `<input class="ti tx-price" type="number" min="0" step="1" value="${x.sell_price}"`
+            + ` aria-label="actual price in aUEC per SCU for ${esc(x.commodity)}">`
+            + `<input class="ti tx-scu" type="number" min="0" step="1" value="${x.scu}"${xb}`
+            + ` aria-label="actual SCU sold of ${esc(x.commodity)}">`
+            + `<span class="sl-total" aria-live="polite"></span>`
+            + `<button class="trade-run-do topup-do" data-sellextra="${i}:${j}">✓ Sold ▸</button></div>`;
+        });
+        h += `</div>`;
+      }
     }
-    // Per-lot sell confirms (docs/trade-topup.md). The sell kiosk quotes per
-    // SCU (#46d), so no unit conversion on this side — just a box-count echo
-    // tying the row to what's stacked in the hold.
-    if (!isBuy) lots.forEach((x, j) => {
-      if (x.sold) return;
-      const xb = (x.box_size > 1 && x.scu % x.box_size === 0) ? x.scu / x.box_size : null;
-      h += `<div class="trade-actual topup-sell" data-lot="${j}">`
-        + `<span class="ta-label">got</span>`
-        + `<input class="ti tx-price" type="number" min="0" step="1" value="${x.sell_price}"`
-        + ` aria-label="actual price in aUEC per SCU for ${esc(x.commodity)}">`
-        + `<span class="ta-x">aUEC/SCU ×</span>`
-        + `<input class="ti tx-scu" type="number" min="0" step="1" value="${x.scu}"`
-        + ` aria-label="actual SCU sold of ${esc(x.commodity)}">`
-        + `<span class="ta-x">SCU${xb ? ` (${xb} × ${x.box_size} SCU boxes)` : ""}</span>`
-        + `<button class="trade-run-do topup-do" data-sellextra="${i}:${j}">✓ Sold ${esc(x.commodity)} ▸</button>`
-        + `</div>`;
-    });
     // Skipping discards the leg from realized stats — with BOUGHT top-up lots
     // aboard the server refuses it (re-plan is the escape hatch), so don't
     // offer a dead button.
