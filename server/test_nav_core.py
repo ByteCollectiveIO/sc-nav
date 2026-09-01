@@ -1223,6 +1223,92 @@ class PlanRouteTests(unittest.TestCase):
         self.assertTrue(res["stops"][1]["leg"]["cross_system"])
 
 
+class RoundTripPlanTests(unittest.TestCase):
+    """A↔B contract sets (cargo both ways between the same stops) — the
+    one-visit-per-location model makes their precedence circular, so the
+    planner splits the both-role locations and revisits. Before this the
+    min-capacity search came back inf, which 500'd the whole /api/route/plan
+    response at JSON serialization (2026-08-30 report)."""
+
+    def _coords(self):
+        return [(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)]
+
+    def test_two_way_pair_plans_with_revisit(self):
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 1},
+                {"id": "B", "commodity": "y", "scu": 10, "from_id": 1, "to_id": 0}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertEqual([s["stop_id"] for s in res["stops"]], [0, 1, 0])
+        self.assertEqual([s["onboard_scu"] for s in res["stops"]], [10.0, 10.0, 0.0])
+        # 0 -> 1 -> 0: the return leg counts in the totals
+        self.assertAlmostEqual(res["summary"]["total_distance_m"], 20.0)
+
+    def test_pickup_precedes_dropoff_across_revisits(self):
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 2},
+                {"id": "B", "commodity": "y", "scu": 10, "from_id": 2, "to_id": 0}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertTrue(res["summary"]["feasible"])
+        for p in pkgs:
+            picked = False
+            for s in res["stops"]:
+                if any(v["id"] == p["id"] for v in s["pickups"]):
+                    picked = True
+                if any(v["id"] == p["id"] for v in s["dropoffs"]):
+                    self.assertTrue(picked, f"package {p['id']} dropped before pickup")
+                    break
+
+    def test_inbound_drop_lands_on_first_visit_not_the_return(self):
+        # The 2026-08-30 report's shape: a feeder package into the hub plus a
+        # round trip through it. The hub's inbound cargo must be dropped on the
+        # first pass, not displayed as carried along the loop and back.
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "alum", "scu": 91, "from_id": 1, "to_id": 2},
+                {"id": "B", "commodity": "sili", "scu": 101, "from_id": 2, "to_id": 1},
+                {"id": "C", "commodity": "tung", "scu": 91, "from_id": 1, "to_id": 2},
+                {"id": "D", "commodity": "waste", "scu": 5, "from_id": 0, "to_id": 1},
+                {"id": "E", "commodity": "scrap", "scu": 5, "from_id": 0, "to_id": 1}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=384, start_id=0)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertEqual([s["stop_id"] for s in res["stops"]], [0, 1, 2, 1])
+        first_hub = res["stops"][1]
+        self.assertEqual({p["id"] for p in first_hub["dropoffs"]}, {"D", "E"})
+        self.assertEqual([s["onboard_scu"] for s in res["stops"]],
+                         [10.0, 182.0, 101.0, 0.0])
+        self.assertEqual(res["summary"]["peak_load_scu"], 182.0)
+        self.assertEqual(res["summary"]["num_stops"], 4)
+
+    def test_cyclic_bundle_summary_is_json_serializable(self):
+        # Whatever the verdict, the summary must never carry inf/NaN — the
+        # response layer rejects them and the client sees a bare "plan failed".
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 300, "from_id": 0, "to_id": 1},
+                {"id": "B", "commodity": "y", "scu": 300, "from_id": 1, "to_id": 0}]
+        for cap in (10, 1000):        # infeasible and feasible verdicts
+            res = nav_core.plan_route(nav, pkgs, usable_scu=cap, start_id=0)
+            json.dumps(res["summary"], allow_nan=False)
+
+    def test_cyclic_over_capacity_still_reports_min_capacity(self):
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 80, "from_id": 0, "to_id": 1},
+                {"id": "B", "commodity": "y", "scu": 80, "from_id": 1, "to_id": 0}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=50, start_id=0)
+        self.assertFalse(res["summary"]["feasible"])
+        self.assertEqual(res["summary"]["min_capacity_scu"], 80.0)
+        self.assertEqual(res["stops"], [])
+
+    def test_acyclic_bundles_untouched_by_the_split(self):
+        # No cycle -> the classic model, byte-identical stops (regression guard
+        # for the split machinery sitting on the common path).
+        nav = _line_nav(self._coords())
+        pkgs = [{"id": "A", "commodity": "x", "scu": 10, "from_id": 0, "to_id": 2},
+                {"id": "B", "commodity": "y", "scu": 10, "from_id": 2, "to_id": 3}]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=100, start_id=0)
+        self.assertEqual([s["stop_id"] for s in res["stops"]], [0, 2, 3])
+        self.assertEqual(res["summary"]["num_stops"], 3)
+
+
 class MultiPickupGroupTests(unittest.TestCase):
     """Multi-pickup deliveries: one commodity total spread over several pickup
     locations with an unknown per-location split. Rows share a `group` id and

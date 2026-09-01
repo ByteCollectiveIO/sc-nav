@@ -8503,10 +8503,13 @@ function renderPlan(res) {
     if (sm.range_infeasible)   // #27: a jump exceeds the drive, not a capacity problem
       h += `<p class="route-infeasible">⚠ No route where every jump fits this drive's range.
         Uncheck <b>in-range only</b> to allow mid-route refueling, or pick a longer-range drive.</p></div>`;
-    else
+    else if (sm.min_capacity_scu != null)
       h += `<p class="route-infeasible">⚠ This won't fit your ship. It needs at least
         <b>${sm.min_capacity_scu} SCU</b> of usable capacity (you have ${sm.usable_scu}).
         Drop a contract or split it into two trips.</p></div>`;
+    else   // no visiting order exists at any capacity (unroutable bundle)
+      h += `<p class="route-infeasible">⚠ No visiting order can satisfy these
+        packages' pickups and dropoffs. Drop a contract and re-plan.</p></div>`;
     out.innerHTML = h; out.hidden = false; return;
   }
   const peakClass = sm.peak_load_scu > sm.usable_scu ? "route-warn" : "route-feasible";
