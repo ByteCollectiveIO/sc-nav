@@ -2736,6 +2736,20 @@ def _stop_delta(stops, gpick, gdrop, gtot, j, seen):
     return d, newly
 
 
+def _preds_cyclic(preds) -> bool:
+    """True when the precedence sets admit no complete visiting order (a cycle:
+    e.g. A->B and B->A packages under one visit per location). Kahn-style
+    peeling; O(n^2) on the handful of stops a cargo bundle has."""
+    done = set()
+    while len(done) < len(preds):
+        free = [j for j in range(len(preds))
+                if j not in done and preds[j] <= done]
+        if not free:
+            return True
+        done.update(free)
+    return False
+
+
 def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None,
                t_ref=None, *, avoid_volumes=None,
                fuel_req=None, max_range_m=None, in_range_only=False) -> dict:
@@ -2746,7 +2760,14 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     (distance, time), and counts. `stops` is the ordered visit list, each with
     its pickups/dropoffs, the arrival leg detail, and running onboard SCU.
     An over-capacity or unconnected bundle returns feasible=False with an empty
-    stop list and the min_capacity_scu needed to make it work."""
+    stop list and the min_capacity_scu needed to make it work.
+
+    Round-trip contract sets (A->B and B->A in one bundle) are planned by
+    letting the run pass a location twice: the one-visit-per-location model
+    makes such precedence circular (each stop would have to precede the other),
+    so on detecting a cycle every both-role location is split into a drop node
+    + a pickup node — all precedence then runs pickup->drop (bipartite, always
+    orderable) and the same location may appear as two stops in the result."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     usable_scu = float(usable_scu)
 
@@ -2772,38 +2793,69 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
                             "min_capacity_scu": 0.0, "total_distance_m": 0.0,
                             "total_time_s": 0.0, "start_id": None}, "stops": []}
 
-    # --- merge packages sharing a location into stops ---
+    # --- merge packages sharing a location into visit nodes ---
     loc_ids = []
     for p in pkgs:
         for lid in (p["from_id"], p["to_id"]):
             if lid not in loc_ids:
                 loc_ids.append(lid)
-    idx = {lid: k for k, lid in enumerate(loc_ids)}
-    n = len(loc_ids)
-    stops = [{"id": lid, "poi": nav.pois[lid], "loads": [], "drops": [],
-              "load_scu": 0.0, "drop_scu": 0.0} for lid in loc_ids]
-    preds = [set() for _ in range(n)]
-    # Multi-pickup groups carry their total once (group_scu), accounted dynamically
-    # during ordering — full total held from the group's first pickup to its drop —
-    # so they're kept out of the static per-stop load/drop sums here. Their
-    # precedence (every pickup before the drop) still rides on `preds`.
-    groups = {}   # gid -> {"total": float, "picks": set(stop idx), "drop": stop idx}
-    for pi, p in enumerate(pkgs):
-        a, b = idx[p["from_id"]], idx[p["to_id"]]
-        stops[a]["loads"].append(pi)
-        stops[b]["drops"].append(pi)
-        g = p.get("group")
-        if g is None:
-            stops[a]["load_scu"] += p["scu"]
-            stops[b]["drop_scu"] += p["scu"]
-        else:
-            info = groups.setdefault(g, {"total": 0.0, "picks": set(), "drop": b})
-            if p.get("group_scu") is not None:
-                info["total"] = float(p["group_scu"])
-            info["picks"].add(a)
-            info["drop"] = b
-        if a != b:
-            preds[b].add(a)
+
+    def _build_nodes(split_ids):
+        """Visit nodes for the ordering search: normally one per location; a
+        location in `split_ids` becomes two — its dropoffs on one node, its
+        pickups on another — so the run may pass it twice. The drop node is
+        built first so tie-breaking (DFS scans ascending) prefers unloading
+        before loading at a shared pad. Multi-pickup groups carry their total
+        once (group_scu), accounted dynamically during ordering — full total
+        held from the group's first pickup to its drop — so they're kept out
+        of the static per-node load/drop sums. Their precedence (every pickup
+        before the drop) still rides on `preds`."""
+        nodes, pick_at, drop_at = [], {}, {}
+        for lid in loc_ids:
+            if lid in split_ids:
+                drop_at[lid] = len(nodes)
+                nodes.append({"id": lid, "poi": nav.pois[lid], "loads": [],
+                              "drops": [], "load_scu": 0.0, "drop_scu": 0.0})
+                pick_at[lid] = len(nodes)
+            else:
+                pick_at[lid] = drop_at[lid] = len(nodes)
+            nodes.append({"id": lid, "poi": nav.pois[lid], "loads": [],
+                          "drops": [], "load_scu": 0.0, "drop_scu": 0.0})
+        preds = [set() for _ in nodes]
+        groups = {}   # gid -> {"total": float, "picks": set(node idx), "drop": node idx}
+        pkg_nodes = []  # per package: (pickup node idx, drop node idx)
+        for pi, p in enumerate(pkgs):
+            a, b = pick_at[p["from_id"]], drop_at[p["to_id"]]
+            pkg_nodes.append((a, b))
+            nodes[a]["loads"].append(pi)
+            nodes[b]["drops"].append(pi)
+            g = p.get("group")
+            if g is None:
+                nodes[a]["load_scu"] += p["scu"]
+                nodes[b]["drop_scu"] += p["scu"]
+            else:
+                info = groups.setdefault(g, {"total": 0.0, "picks": set(), "drop": b})
+                if p.get("group_scu") is not None:
+                    info["total"] = float(p["group_scu"])
+                info["picks"].add(a)
+                info["drop"] = b
+            if a != b:
+                preds[b].add(a)
+        return nodes, preds, groups, pkg_nodes
+
+    stops, preds, groups, pkg_nodes = _build_nodes(frozenset())
+    # Round-trip contracts (A->B + B->A) make one-visit-per-location precedence
+    # circular — no order can satisfy it (and min-capacity comes back inf, which
+    # would break JSON serialization downstream). Split every location that both
+    # loads and drops cargo: precedence edges then only ever run from a pickup
+    # node to a drop node, so the graph is bipartite — always orderable — at the
+    # price of the route possibly passing a location twice (which is exactly the
+    # physical fix a hauler flies).
+    if _preds_cyclic(preds):
+        froms = {p["from_id"] for p in pkgs}
+        tos = {p["to_id"] for p in pkgs}
+        stops, preds, groups, pkg_nodes = _build_nodes(froms & tos)
+    n = len(stops)
 
     # Per-stop group views for the dynamic onboard accounting (see _stop_delta).
     gpick = [[] for _ in range(n)]   # groups with a pickup at this stop
@@ -2825,8 +2877,15 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
         for b in range(n):
             if a == b:
                 continue
-            leg = travel_cost(nav, stops[a]["poi"], stops[b]["poi"], t_ref,
-                              avoid=avoid_volumes, memo=memo)
+            if stops[a]["id"] == stops[b]["id"]:
+                # split-node pair: same pad, no travel — synthesized (not costed)
+                # so hazard volumes can never wedge the two halves of one
+                # physical stop apart.
+                leg = {"distance_m": 0.0, "qt_marker": None, "via": None,
+                       "cross_system": False, "via_gate": None, "partial": False}
+            else:
+                leg = travel_cost(nav, stops[a]["poi"], stops[b]["poi"], t_ref,
+                                  avoid=avoid_volumes, memo=memo)
             legs[a][b] = leg
             if leg["distance_m"] is not None:
                 dmat[a][b] = leg["distance_m"]
@@ -2880,39 +2939,80 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
             else:
                 alt, _ = _greedy_order(stops, preds, step_cost, usable_scu, n, gctx)
             range_infeasible = alt is not None
-        return {"summary": {"feasible": False, "num_stops": n,
+        # min_cap is finite whenever an order exists at *some* capacity; guard
+        # anyway — a non-finite float in the summary is unserializable (the
+        # response layer rejects NaN/inf) and 500s the whole plan request.
+        return {"summary": {"feasible": False, "num_stops": len(loc_ids),
                             "num_packages": len(pkgs), "usable_scu": usable_scu,
-                            "peak_load_scu": None, "min_capacity_scu": round(min_cap, 2),
+                            "peak_load_scu": None,
+                            "min_capacity_scu": (round(min_cap, 2)
+                                                 if math.isfinite(min_cap) else None),
                             "total_distance_m": None, "total_time_s": None,
                             "range_infeasible": range_infeasible,
                             "start_id": start_poi.id if (start_poi and start_poi.id >= 0) else None,
                             "start": start_poi.name if start_poi else None}, "stops": []}
 
     # --- build output ---
+    # Fold consecutive same-location visit nodes back into one physical stop:
+    # a split-node pair the order didn't actually separate is one landing, and
+    # in the common (unsplit) case this is a 1:1 pass-through.
     out_stops = []
-    onboard = total_dist = 0.0
-    seen = set()
+    node_stop = {}                # node idx -> out_stops idx
+    stop_nodes = []               # out_stops idx -> [node idx, ...] in visit order
+    total_dist = 0.0
     for k, si in enumerate(order):
         s = stops[si]; poi = s["poi"]
-        delta, newly = _stop_delta(stops, gpick, gdrop, gtot, si, seen)
-        onboard += delta
-        seen.update(newly)
+        if out_stops and out_stops[-1]["stop_id"] == s["id"]:
+            node_stop[si] = len(out_stops) - 1
+            stop_nodes[-1].append(si)
+            continue                       # merged: the inter-node leg is 0 m
         leg = start_legs[si] if k == 0 else legs[order[k - 1]][si]
         if leg and leg["distance_m"] is not None:
             total_dist += leg["distance_m"]
+        node_stop[si] = len(out_stops)
+        stop_nodes.append([si])
         out_stops.append({
             "stop_id": s["id"], "name": poi.name, "system": poi.system,
-            "type": poi.type,
-            "pickups": [_pkg_view(pkgs[pi]) for pi in s["loads"]],
-            "dropoffs": [_pkg_view(pkgs[pi]) for pi in s["drops"]],
+            "type": poi.type, "pickups": [], "dropoffs": [],
             "leg": _leg_view(leg, fuel_req=fuel_req, max_range_m=max_range_m),
-            "onboard_scu": round(onboard, 2),
         })
+    # Place packages: pickups at their visit; each plain dropoff hoisted to the
+    # EARLIEST visit of its destination at/after the pickup. The solver keeps a
+    # split location's drops on one node (conservative for capacity — cargo is
+    # held longer there), but a revisit plan must not *display* inbound cargo
+    # as carried past its stop and delivered on the way back. Group drops stay
+    # on the solver's node: their conservative accounting is anchored there.
+    loads = [0.0] * len(out_stops)
+    drops = [0.0] * len(out_stops)
+    for pi, p in enumerate(pkgs):
+        kp = node_stop[pkg_nodes[pi][0]]
+        kd = node_stop[pkg_nodes[pi][1]]
+        if p.get("group") is None:
+            kd = min((k2 for k2 in range(kp, kd)
+                      if out_stops[k2]["stop_id"] == p["to_id"]), default=kd)
+            loads[kp] += p["scu"]
+            drops[kd] += p["scu"]
+        out_stops[kp]["pickups"].append(_pkg_view(p))
+        out_stops[kd]["dropoffs"].append(_pkg_view(p))
+    # Running onboard from the hoisted placement (groups keep the solver's
+    # node-level conservative accounting; only the static part is re-placed).
+    onboard = peak_out = 0.0
+    seen = set()
+    for k2, out in enumerate(out_stops):
+        delta = loads[k2] - drops[k2]
+        for si in stop_nodes[k2]:
+            gdelta, newly = _stop_delta(stops, gpick, gdrop, gtot, si, seen)
+            delta += gdelta - (stops[si]["load_scu"] - stops[si]["drop_scu"])
+            seen.update(newly)
+        onboard += delta
+        peak_out = max(peak_out, onboard)
+        out["onboard_scu"] = round(onboard, 2)
     total_time = sum((_leg_time_s(s["leg"]["distance_m"]) or 0.0)
-                     for s in out_stops if s["leg"]) + STOP_DWELL_S * n
+                     for s in out_stops if s["leg"]) + STOP_DWELL_S * len(out_stops)
 
-    summary = {"feasible": True, "num_stops": n, "num_packages": len(pkgs),
-               "usable_scu": usable_scu, "peak_load_scu": round(peak, 2),
+    summary = {"feasible": True, "num_stops": len(out_stops),
+               "num_packages": len(pkgs),
+               "usable_scu": usable_scu, "peak_load_scu": round(peak_out, 2),
                "min_capacity_scu": round(min_cap, 2),
                "total_distance_m": total_dist, "total_time_s": total_time,
                "start_id": start_poi.id if (start_poi and start_poi.id >= 0) else None,
