@@ -1360,6 +1360,13 @@ class MemberDirectory:
         db.set_member_active_survey_zone(did, zone_id)
         self.by_id.setdefault(did, {"discord_id": did})["active_survey_zone"] = zone_id
 
+    def clear_active_survey_zone(self, zone_ids) -> None:
+        """A deleted zone must stop being anyone's active zone (DB + mirror)."""
+        for did in db.clear_active_survey_zone(zone_ids):
+            m = self.by_id.get(str(did))
+            if m is not None:
+                m["active_survey_zone"] = None
+
     def active_survey_zone(self, discord_id: str) -> int | None:
         m = self.by_id.get(str(discord_id))
         z = (m or {}).get("active_survey_zone")
@@ -7020,6 +7027,8 @@ async def clear_survey_marks(body: SurveyClearIn,
             hub.mark_dataset_dirty()
     # Zones are keyed to the marks; heal them together (#36.1).
     zones = await asyncio.to_thread(db.clear_survey_zones, body.system)
+    if zones:
+        await asyncio.to_thread(members_dir.clear_active_survey_zone, zones)
     return {"ok": True, "deleted": len(ids), "zones_cleared": len(zones)}
 
 
@@ -7085,6 +7094,14 @@ def list_survey_zones(system: str = "Nyx", user: dict = Depends(require_session)
     `announce_available` gates the create dialog's Discord opt-in to when a
     survey webhook is configured (#37 §5.2, mirrors the LFG composer)."""
     _, zones_valued, _pool = _survey_valued(system)
+    # `can_edit` = the caller may rename/close/delete (creator or admin). The
+    # creator's discord_id itself stays server-side: the row already carries
+    # owner_handle, and exposing both would publish the Discord↔handle link the
+    # directory opt-out exists to hide.
+    creators = {z["id"]: z.get("created_by") for z in db.list_survey_zones(system)}
+    uid, is_admin = str(user["id"]), bool(user.get("is_admin"))
+    zones_valued = [{**z, "can_edit": is_admin or creators.get(z["zone_id"]) == uid}
+                    for z in zones_valued]
     return {"system": system, "zones": zones_valued,
             "announce_available": notify.is_configured("survey")}
 
@@ -7121,8 +7138,10 @@ async def create_survey_zone(body: ZoneIn, user: dict = Depends(require_session)
 @app.patch("/api/halo/survey/zones/{zone_id}")
 async def patch_survey_zone(zone_id: int, body: ZonePatchIn,
                             user: dict = Depends(require_session)):
-    """Rename / close / reopen a zone. Owner or admin only (renaming re-slugs;
-    a slug collision 409s)."""
+    """Rename / archive ("close") / reactivate a zone. Owner or admin only
+    (renaming re-slugs; a slug collision 409s). Archiving also un-sets every
+    member's active-zone pref that names it — an archived zone is off the
+    picker, so it must not keep collecting marks from whoever was filing."""
     zone = db.get_survey_zone(zone_id)
     if zone is None:
         raise HTTPException(status_code=404, detail="unknown zone")
@@ -7134,6 +7153,8 @@ async def patch_survey_zone(zone_id: int, body: ZonePatchIn,
                                 slug, body.closed)
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="that name collides with another zone")
+    if body.closed:
+        await asyncio.to_thread(members_dir.clear_active_survey_zone, [zone_id])
     return {"ok": True, "zone": db.get_survey_zone(zone_id)}
 
 
@@ -7163,6 +7184,9 @@ async def remove_survey_zone(zone_id: int, user: dict = Depends(require_session)
         for d in touched:
             db.add_custom_poi(d)
         db.delete_survey_zone(zone_id)
+        # Whoever was filing into it (often the creator — a zone is active the
+        # moment it's created) must not keep a dangling active_survey_zone.
+        members_dir.clear_active_survey_zone([zone_id])
     await asyncio.to_thread(_persist)
     return {"ok": True}
 

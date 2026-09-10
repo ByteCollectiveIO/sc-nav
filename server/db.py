@@ -1421,6 +1421,27 @@ def set_member_active_survey_zone(discord_id: str, zone_id: int | None) -> None:
             (did, zone_id))
 
 
+def clear_active_survey_zone(zone_ids) -> list[str]:
+    """Un-set the active-zone pref of every member currently feeding one of
+    `zone_ids` — called when a zone is deleted so /api/me stops naming a zone
+    that no longer exists. Returns the affected discord_ids so the in-memory
+    member mirror can be healed to match."""
+    ids = [int(z) for z in zone_ids]
+    if not ids:
+        return []
+    q = ",".join("?" * len(ids))
+    with _lock, _conn:
+        rows = _conn.execute(
+            f"SELECT discord_id FROM members WHERE active_survey_zone IN ({q})",
+            ids).fetchall()
+        dids = [r["discord_id"] for r in rows]
+        if dids:
+            _conn.execute(
+                f"UPDATE members SET active_survey_zone=NULL "
+                f"WHERE active_survey_zone IN ({q})", ids)
+    return dids
+
+
 # --- watcher tokens --------------------------------------------------------
 
 
