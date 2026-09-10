@@ -1,9 +1,10 @@
 # Deploying SC Nav for your org
 
-**Status:** ✅ current · written 2026-08-04 · DNS migration expanded 2026-08-06
+**Status:** ✅ current · written 2026-08-04 · DNS migration expanded 2026-08-06 · re-verified against v1.11.0 and the live `fenriroperationsgroup.com` DNS on 2026-09-09
 
 A step-by-step guide for an org that wants to run its own SC Nav instance on a
-cheap VPS. Written for **volunteers, not sysadmins**: everything after the
+cheap VPS, written around the Fenrir Operations Group deployment at
+`https://nav.fenriroperationsgroup.com/`. Written for **volunteers, not sysadmins**: everything after the
 initial install happens in a web browser, and there is no ongoing command-line
 work except one nightly backup job you set up once.
 
@@ -38,7 +39,9 @@ Buy it through the **[Docker/DevOps page](https://www.networksolutions.com/hosti
 not the plain VPS page. They're the same product and the same price, but the
 Docker page's checkout lets you preselect **Docker + Portainer**, which saves
 you an install and gives you a web dashboard to manage everything. Choose
-**Ubuntu** as the OS.
+**Ubuntu 24.04 LTS** as the OS — an *LTS* release specifically. The Fenrir box
+arrived on Ubuntu 25.10, an interim release that was already end-of-life,
+which is why Docker refused to install on it (step 7 covers the recovery).
 
 Why this tier, for an org of ~180 members with ~90 online at peak:
 
@@ -68,15 +71,22 @@ connection), or any DDoS/firewall add-on (Cloudflare covers it).
 Collect all of this first — the install goes smoothly if you're not hunting for
 IDs halfway through.
 
-- [ ] **A domain you control**, so the app can live at e.g. `nav.yourorg.com`.
-      The domain's **DNS** has to be moved to Cloudflare (free) in step 5 — you
-      keep the domain at its current registrar, only the DNS answering moves.
+- [ ] **A domain you control**, so the app can live at `nav.fenriroperationsgroup.com`.
+      The domain's **DNS** has to be on Cloudflare (free) — for
+      `fenriroperationsgroup.com` **it already is** (checked 2026-09-09; see the
+      box at the top of step 5), so step 5 is mostly a verification pass.
 - [ ] **The registrar login** for that domain (Network Solutions, GoDaddy,
       Namecheap — whoever the org bought it from). Not the web-hosting login;
       the *registrar* account. Chasing this down later is the #1 stall.
 - [ ] **An answer to: does org email run on this domain?** If anyone receives
-      mail at `@yourorg.com`, read step 5 in full before touching anything.
-- [ ] **A Cloudflare account** (free tier is fine, email-verified).
+      mail at `@fenriroperationsgroup.com`, read step 5 in full before touching anything.
+      (As of 2026-09-09 the domain publishes **no MX records**, so the answer is
+      currently "no" — nothing in this guide can break org mail.)
+- [ ] **The Cloudflare account that already holds `fenriroperationsgroup.com`.**
+      Not a new one — the tunnel in step 6 has to be created in the account that
+      owns the zone. Find out who set it up and get added as a member of that
+      account (Cloudflare → Manage Account → Members) rather than creating a
+      second account.
 - [ ] **Discord Developer Mode on**: Discord → Settings → Advanced → Developer Mode.
 - [ ] **Your Discord server ID**: right-click the server → Copy Server ID.
 - [ ] **Admin user IDs**: right-click each admin's name → Copy User ID. Collect 2–4.
@@ -94,14 +104,16 @@ The app has **no Discord bot** — it only verifies that whoever logs in is a
 member of your server.
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
-   → **New Application**. Name it after your org.
+    → **New Application**. Name it after your org.
+
 2. Left sidebar → **OAuth2**.
 3. Under **Redirects**, click **Add Redirect** and enter exactly:
-   `https://nav.yourorg.com/auth/callback`
-   (substitute your real subdomain). **Save Changes.**
+    `https://nav.fenriroperationsgroup.com/auth/callback`
+    (substitute your real subdomain). **Save Changes.**
+
 4. Copy the **Client ID** — you'll need it shortly.
 5. Click **Reset Secret**, copy the **Client Secret**, and paste it somewhere
-   safe. Discord shows it only once. **Treat it like a password.**
+    safe. Discord shows it only once. **Treat it like a password.**
 
 > The redirect URL must match your real public URL **character for character**,
 > including `https://` and the `/auth/callback` path. A mismatch here is the
@@ -115,9 +127,37 @@ This is the only step that touches something the org already depends on, so it
 gets the most words. Everything else in this guide is additive; this one
 changes an existing system. Read the whole section before you click anything.
 
+> ✅ **Already done for `fenriroperationsgroup.com` — checked 2026-09-09.**
+> The public DNS shows the domain is *already* on Cloudflare:
+>
+> - Nameservers are `norman.ns.cloudflare.com` / `riya.ns.cloudflare.com`
+>   (Cloudflare's, assigned to this zone).
+> - No DS record → DNSSEC is off. Nothing to disable.
+> - No MX records → no org email rides on this domain.
+> - Registrar is Register.com (a Network Solutions brand — same account family
+>   as the screens described below, should you ever need them).
+>
+> So **skip 5.1 through 5.7 and 5.9** — there is nothing to inventory, lower,
+> disable, or move, and no rollback to prepare because nothing changes. Do two
+> things instead:
+>
+> 1. **Get access to the Cloudflare account that owns the zone** (step 3).
+> 2. **Delete the existing `nav` record.** The zone already has a proxied record
+>    at `nav.fenriroperationsgroup.com` — it currently answers with a Cloudflare
+>    **error 525** (the record points at an origin that isn't serving TLS). In
+>    Cloudflare → **DNS → Records**, find the row named `nav` and delete it.
+>    Step 6 creates its own `nav` route, and Cloudflare refuses to save that
+>    route while a record with the same name exists. If the row turns out to be
+>    a `CNAME` to `<something>.cfargotunnel.com`, someone already tried a tunnel:
+>    delete both that record and the old tunnel (Zero Trust → Networks →
+>    Tunnels) so there's exactly one.
+>
+> Keep reading only if you're deploying for a domain that *isn't* on Cloudflare
+> yet — the rest of this section is the general procedure.
+
 ### 5.0 What this actually is (and isn't)
 
-**Is:** changing which servers answer the question "what is `yourorg.com`?"
+**Is:** changing which servers answer the question "what is `fenriroperationsgroup.com`?"
 from Network Solutions' nameservers to Cloudflare's.
 
 **Is not:**
@@ -130,7 +170,7 @@ from Network Solutions' nameservers to Cloudflare's.
   host. You're copying its DNS records to a new place that hands out the same
   answers.
 - **Not optional, unfortunately.** The Cloudflare Tunnel in step 6 creates its
-  own `nav.yourorg.com` record automatically, and it can only do that if
+  own `nav.fenriroperationsgroup.com` record automatically, and it can only do that if
   Cloudflare is authoritative for the domain. Cloudflare's "partial" setup —
   where you keep DNS elsewhere and point one CNAME at them — is a **Business
   plan feature**, so on the free tier the whole domain comes over.
@@ -139,7 +179,7 @@ from Network Solutions' nameservers to Cloudflare's.
 > nobody feels good about moving it: **register a separate domain for the app**
 > (~$10–15/yr) and run the whole of step 5 against that one instead. A fresh
 > domain has no records to break. `scnav-yourorg.com` is not as pretty as
-> `nav.yourorg.com`, and it is a completely legitimate choice — moving a live
+> `nav.fenriroperationsgroup.com`, and it is a completely legitimate choice — moving a live
 > org's email is the one thing in this guide that can actually hurt.
 
 ### 5.1 Inventory the existing DNS records — do not skip this
@@ -153,11 +193,12 @@ So write down what's actually there, first:
 
 1. Log in at <https://www.networksolutions.com/my-account/login>.
 2. Left sidebar → **Domains** → click your domain (a single-domain account goes
-   straight to the overview).
+    straight to the overview).
+
 3. **Advanced Tools** → **DNS** (or **Advanced DNS**) → **Manage**.
 4. Copy **every** record into a text file: type, name/host, value, TTL, and
-   priority for MX. Screenshot each page too — screenshots capture what you
-   forget to transcribe.
+    priority for MX. Screenshot each page too — screenshots capture what you
+    forget to transcribe.
 
 Records that matter and are easy to miss:
 
@@ -204,14 +245,15 @@ slower undo.
 Check whether it's on. From any Mac or Linux terminal:
 
 ```bash
-dig DS yourorg.com +short
+dig DS fenriroperationsgroup.com +short
 ```
 
 Empty output = DNSSEC is off, nothing to do, move to 5.4. Any output (a line of
 numbers and a hash) = it's on, and you must turn it off:
 
 1. NS account → your domain → **Advanced Tools** → **DNSSEC** → disable / remove
-   the DS records.
+    the DS records.
+
 2. **Wait about an hour**, then re-run the `dig` above and confirm it's empty.
 3. Only then continue.
 
@@ -220,25 +262,31 @@ You can turn DNSSEC back on later, from Cloudflare, in 5.8.
 ### 5.4 Add the domain to Cloudflare
 
 1. <https://dash.cloudflare.com> → **Add a domain** (newer accounts label it
-   **Onboard a domain**).
-2. Enter the **apex** domain — `yourorg.com`. **Not** `nav.yourorg.com`.
-   Cloudflare works one whole domain at a time; the subdomain comes later, by
-   itself, in step 6.
+    **Onboard a domain**).
+
+2. Enter the **apex** domain — `fenriroperationsgroup.com`. **Not** `nav.fenriroperationsgroup.com`.
+    Cloudflare works one whole domain at a time; the subdomain comes later, by
+    itself, in step 6.
+
 3. Choose the **Free** plan.
 4. Let it scan, then **check its work against your 5.1 file, line by line.**
-   Add anything it missed by hand (**Add record**). This is the single highest
-   value five minutes in this guide.
+    Add anything it missed by hand (**Add record**). This is the single highest
+    value five minutes in this guide.
+
 5. **Set proxy status deliberately:**
-   - **MX records must be ⚪ DNS-only.** Cloudflare grays them out for you.
-   - **So must any hostname mail uses** — `mail`, `smtp`, `imap`, `webmail`.
-     Cloudflare does **not** always do this for you, and a proxied `mail` record
-     hands out Cloudflare's IP to mail servers, which silently breaks delivery.
-   - **The org's existing website records:** if you're unsure, set them **⚪
-     DNS-only** as well. That makes this move a pure like-for-like swap — same
-     answers, new nameservers. You can switch them to 🟠 proxied later, on
-     purpose, when you have time to test.
+    - **MX records must be ⚪ DNS-only.** Cloudflare grays them out for you.
+    - **So must any hostname mail uses** — `mail`, `smtp`, `imap`, `webmail`.
+      Cloudflare does **not** always do this for you, and a proxied `mail` record
+      hands out Cloudflare's IP to mail servers, which silently breaks delivery.
+    - **The org's existing website records:** if you're unsure, set them **⚪
+      DNS-only** as well. That makes this move a pure like-for-like swap — same
+      answers, new nameservers. You can switch them to 🟠 proxied later, on
+      purpose, when you have time to test.
+
 6. **Do not create a `nav` record.** Step 6 creates it automatically, and a
-   hand-made one will conflict with it.
+    hand-made one will conflict with it. (If one already exists — as it does on
+    `fenriroperationsgroup.com` today — delete it first; see the box at the top
+    of this step.)
 
 ### 5.5 Copy your two Cloudflare nameservers
 
@@ -259,7 +307,8 @@ from another org's setup will not activate your domain.
 2. Scroll to **Advanced Tools** → find **Nameservers (DNS)** → click **Manage**.
 3. Click **Continue** on the confirmation pop-up.
 4. **Replace all existing nameservers** with the two from 5.5. Delete NS's own
-   entries (typically `ns1.worldnic.com` / `ns2.worldnic.com`) completely.
+    entries (typically `ns1.worldnic.com` / `ns2.worldnic.com`) completely.
+
 5. **Save.**
 
 > ⚠️ **Do not click "Custom Nameservers"** in that same Advanced Tools section.
@@ -290,7 +339,7 @@ who asks, then expect much better.
 Check it yourself instead of refreshing the dashboard:
 
 ```bash
-dig NS yourorg.com +short          # should list your two Cloudflare nameservers
+dig NS fenriroperationsgroup.com +short          # should list your two Cloudflare nameservers
 ```
 
 or use <https://www.whatsmydns.net> (pick record type **NS**) to see it landing
@@ -304,7 +353,7 @@ Portainer deploy, all of it. The site just won't load until this flips Active.
 Do these the same day, while you still remember what you changed:
 
 - [ ] **Load the org's existing website.** It should look identical.
-- [ ] **Send a test email to an `@yourorg.com` address from outside**
+- [ ] **Send a test email to an `@fenriroperationsgroup.com` address from outside**
       (a personal Gmail), and send one *from* the org address. Both directions.
 - [ ] **Re-enable DNSSEC**, if you turned it off in 5.3 — now from Cloudflare:
       **DNS → Settings → DNSSEC → Enable DNSSEC**. Cloudflare gives you a DS
@@ -339,25 +388,32 @@ This is the step that removes the most long-term maintenance. A tunnel makes an
 **Steps:**
 
 1. Go to **Cloudflare Zero Trust** → **Networks** → **Tunnels** →
-   **Create a tunnel** → choose **Cloudflared**. Name it `sc-nav`.
-2. On the install screen, **ignore the install commands** — you don't need
-   them. Just copy the long **token** string. That's your
-   `CLOUDFLARE_TUNNEL_TOKEN`. Treat it like a password: it is the credential
-   that lets a machine publish traffic on your domain.
-3. Under **Public Hostnames**, add:
-   - **Subdomain:** `nav` · **Domain:** `yourorg.com` (picked from a dropdown of
-     your Cloudflare domains — if yours isn't listed, step 5 hasn't gone Active
-     yet)
-   - **Service type:** `HTTP` · **URL:** `sc-nav:8765`
+    **Create a tunnel** → choose **Cloudflared**. Name it `sc-nav`.
 
-   That `sc-nav:8765` is the app's name inside Docker — not a typo, and not
-   an IP address. It stays `HTTP`, not `HTTPS`: the leg from Cloudflare to your
-   server is already encrypted by the tunnel itself.
-4. Save. Saving here **creates the `nav.yourorg.com` DNS record for you** — you
-   won't find it in the DNS tab as a normal record, it shows as a tunnel route.
-   That's expected.
+2. On the install screen, **ignore the install commands** — you don't need
+    them. Just copy the long **token** string. That's your
+    `CLOUDFLARE_TUNNEL_TOKEN`. Treat it like a password: it is the credential
+    that lets a machine publish traffic on your domain.
+
+3. Under **Public Hostnames**, add:
+    - **Subdomain:** `nav` · **Domain:** `fenriroperationsgroup.com` (picked from a dropdown of
+      your Cloudflare domains — if yours isn't listed, step 5 hasn't gone Active
+      yet)
+    - **Service type:** `HTTP` · **URL:** `sc-nav:8765`
+
+    That `sc-nav:8765` is the app's name inside Docker — not a typo, and not
+    an IP address. It stays `HTTP`, not `HTTPS`: the leg from Cloudflare to your
+    server is already encrypted by the tunnel itself.
+
+4. Save. Saving here **creates the `nav.fenriroperationsgroup.com` DNS record for you** — you
+    won't find it in the DNS tab as a normal record, it shows as a tunnel route.
+    That's expected. If Cloudflare instead says a record with that name
+    **already exists**, a hand-made `nav` record is in the way — delete it in
+    **DNS → Records** and save the hostname again (the step-5 box explains why
+    this zone has one).
+
 5. The tunnel will show **inactive** until you finish step 7. That's expected
-   too — nothing is running on the server end yet.
+    too — nothing is running on the server end yet.
 
 ---
 
@@ -365,33 +421,71 @@ This is the step that removes the most long-term maintenance. A tunnel makes an
 
 Log into Portainer at the address Network Solutions gave you (usually
 `https://your-server-ip:9443`) and set your admin password on first visit.
+Current Portainer versions also ask for a **setup token** on that first
+screen; it's printed in the container's log — SSH in and run
+`sudo docker logs portainer 2>&1 | grep -i token`, then paste it in. You have
+about five minutes from container start; if the page says it timed out,
+`sudo docker restart portainer` and load it again straight away.
+
+> ⚠️ **If `https://your-server-ip:9443` shows nothing, or `docker` says
+> "command not found" when you SSH in**, the Docker/Portainer preselect
+> didn't take — this happened on the Fenrir install (2026-09). Fix it once,
+> by hand, over SSH:
+>
+> 1. Check the OS: `cat /etc/os-release | head -2`. If it's **not** an LTS
+>    release (`24.04` or `26.04`), Docker's installer will refuse it. Reimage
+>    to 24.04 LTS from the provider panel if you can; if you can't, upgrade in
+>    place with `sudo apt update && sudo apt upgrade -y && sudo do-release-upgrade`
+>    (confirm it names 26.04 before saying yes; it reboots at the end).
+> 2. Install Docker: `curl -fsSL https://get.docker.com | sudo sh`, then
+>    `sudo systemctl enable --now docker`. If the script calls the release
+>    unsupported, `sudo apt install -y docker.io docker-compose-v2` works on
+>    any LTS.
+> 3. Install Portainer with the three commands below, then open
+>    `https://your-server-ip:9443` within five minutes, accept the
+>    self-signed certificate warning, and paste the setup token from
+>    `sudo docker logs portainer`. If the page won't load at all, the
+>    provider firewall is blocking 9443 — open it in their panel, or from your
+>    laptop run `ssh -L 9443:127.0.0.1:9443 root@your-server-ip` and browse to
+>    `https://localhost:9443`.
+
+The Portainer install commands from item 3 of that box:
+
+```bash
+sudo docker volume create portainer_data
+sudo docker run -d -p 9443:9443 --name portainer --restart=always \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v portainer_data:/data portainer/portainer-ce:latest
+```
 
 1. Left sidebar → **Stacks** → **Add stack**.
 2. **Name:** `sc-nav`
 3. **Build method:** choose **Repository**.
-   - **Repository URL:** `https://github.com/ByteCollectiveIO/sc-nav`
-   - **Reference:** `refs/heads/stable` ← **not `main`**, see the note below
-   - **Compose path:** `docker-compose.yml`
+    - **Repository URL:** `https://github.com/ByteCollectiveIO/sc-nav`
+    - **Reference:** `refs/heads/stable` ← **not `main`**, see the note below
+    - **Compose path:** `docker-compose.yml`
 
 > **Why `stable`?** Because `main` is the development trunk — it moves several
 > times a day and any given commit on it is mid-thought. `stable` only ever
 > moves to a published release. Pointing here means your **Pull and redeploy** click always
 > lands on a version that was tagged, released, and announced, whenever you
-> happen to click it. (Pinning a specific tag like `refs/tags/v1.3.0` also works
+> happen to click it. (Pinning a specific tag like `refs/tags/v1.11.0` — the current release as of
+> this writing — also works
 > and is how you'd hold a version deliberately — but a tag never moves, so
 > you'd have to hand-edit this field for every update.)
+
 4. Scroll to **Environment variables** → **Add an environment variable** for
-   each row below. This is why we gathered everything in step 3.
+    each row below. This is why we gathered everything in step 3.
 
 | Name | Value |
 |---|---|
 | `DISCORD_CLIENT_ID` | from step 4 |
 | `DISCORD_CLIENT_SECRET` | from step 4 — keep private |
-| `OAUTH_REDIRECT_URI` | `https://nav.yourorg.com/auth/callback` |
+| `OAUTH_REDIRECT_URI` | `https://nav.fenriroperationsgroup.com/auth/callback` |
 | `ORG_GUILD_ID` | your Discord server ID |
 | `ADMIN_IDS` | admin user IDs, comma-separated, no spaces |
 | `SESSION_SECRET` | your random hex string |
-| `SC_NAV_PUBLIC_URL` | `https://nav.yourorg.com` |
+| `SC_NAV_PUBLIC_URL` | `https://nav.fenriroperationsgroup.com` |
 | `COOKIE_SECURE` | `true` |
 | `ORG_MEMBER_ROLE_ID` | a role ID, or leave blank |
 | `CLOUDFLARE_TUNNEL_TOKEN` | the token from step 6 |
@@ -409,9 +503,10 @@ Log into Portainer at the address Network Solutions gave you (usually
 > outbound call to GitHub at all).
 
 5. Click **Deploy the stack**. The first deploy builds the app from source and
-   takes **3–6 minutes** on this tier. Later ones are faster.
+    takes **3–6 minutes** on this tier. Later ones are faster.
+
 6. Back in Cloudflare, the tunnel should flip to **Healthy** within a minute.
-7. Visit `https://nav.yourorg.com`. You should see the login splash.
+7. Visit `https://nav.fenriroperationsgroup.com`. You should see the login splash.
 
 ---
 
@@ -424,7 +519,7 @@ panel.
 
 > 🚨 **Turn on the POI catalogs.** Go to **ORG SETTINGS** and enable both
 > **starmap POIs** and **wiki POIs**. They ship **off** by default, and with
-> them off the app knows about only **29 locations instead of 2,154**. New
+> them off the app knows about only **27 locations instead of ~2,150**. New
 > deployments regularly mistake this for a broken install. The wiki catalog is
 > also *required* for the trade planner's ILLICIT cargo filter to work at all.
 
@@ -446,8 +541,10 @@ Then, while you're in ORG SETTINGS:
 
 Finally, **generate a watcher token** (Settings page) and walk one member
 through the Setup page: they download a pre-configured watcher, run
-`run_watcher.bat`, and type `/showlocation` in game. When their position shows
-up on your map, the install is confirmed end to end.
+`run_watcher.bat`, and type `/showlocation` in game. They don't need to type
+their handle anywhere — the watcher reads it from the game's own log once
+they're signed in. When their position shows up on your map, the install is
+confirmed end to end.
 
 ---
 
@@ -536,7 +633,7 @@ nameserver is still listed alongside Cloudflare's at the registrar — it must b
 *only* Cloudflare's two; (2) the nameservers were typed rather than copied, or
 copied from another domain — they're assigned per-domain; (3) DNSSEC is still
 enabled at the registrar. Check what the world actually sees with
-`dig NS yourorg.com +short`, then compare against the pair on Cloudflare's
+`dig NS fenriroperationsgroup.com +short`, then compare against the pair on Cloudflare's
 Overview page. Cloudflare re-checks on its own; there's nothing to click.
 
 **"The domain went completely dark — website and email both, `SERVFAIL`."**
@@ -568,7 +665,8 @@ overwrites current data.)
 
 **"The new release broke something — can we go back?"**
 Partly, and it matters that you read this *before* you need it. Changing the
-stack's **Reference** to the previous tag (`refs/tags/v1.2.0`) and redeploying
+stack's **Reference** to the previous tag (e.g. `refs/tags/v1.10.0` if you're
+on v1.11.0 — the ADMIN **Server version** panel names what's running) and redeploying
 puts the old **code** back in about two minutes. What it does **not** undo is
 the database: releases add columns and tables on startup and never remove them,
 so a downgraded server can find a database newer than it expects. That is
