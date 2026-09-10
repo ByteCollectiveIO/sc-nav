@@ -5230,6 +5230,73 @@ class HaloFinderApiTests(unittest.TestCase):
         tagged = [m for m in marks if m["zone_id"] == zid]
         self.assertEqual(tagged, [])          # untagged, not deleted
 
+    def test_survey_zone_delete_creator_or_admin(self):
+        # Org feature request: a member made a "test zone" and nobody could
+        # remove it. Creator (non-admin) and admins may delete; anyone else
+        # 403s. `can_edit` on the list tells the SPA whether to offer it, and a
+        # delete un-sets the dangling active-zone pref.
+        self._live_at((0.0, 15.0e9, 0.0))
+        orig = dict(self._user)
+        def restore():
+            self._user.clear(); self._user.update(orig)
+            app.members_dir.set_active_survey_zone("1", None)
+            app.members_dir.set_active_survey_zone("2", None)
+        self.addCleanup(restore)
+
+        def zone_row(zid):
+            return next((z for z in self.client.get("/api/halo/survey/zones?system=Nyx")
+                         .json()["zones"] if z["zone_id"] == zid), None)
+
+        r = self.client.post("/api/halo/survey/zones", json={"name": "test zone", "system": "Nyx"})
+        self.assertEqual(r.status_code, 200)
+        zid = r.json()["zone"]["id"]
+        self.addCleanup(lambda: app.db.delete_survey_zone(zid))
+        self.assertEqual(self.client.get("/api/me").json()["active_survey_zone"], zid)
+        self.assertTrue(zone_row(zid)["can_edit"])                 # creator
+        self.assertNotIn("created_by", zone_row(zid))              # discord id never published
+
+        # another plain member: no edit flag, 403 on patch + delete
+        self._user.update({"id": "2", "is_admin": False})
+        self.assertFalse(zone_row(zid)["can_edit"])
+        self.assertEqual(self.client.patch(f"/api/halo/survey/zones/{zid}",
+                         json={"closed": True}).status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid}").status_code, 403)
+        self.assertIsNotNone(app.db.get_survey_zone(zid))
+
+        # an admin who didn't create it may rename (naming-convention cleanup)…
+        self._user.update({"id": "2", "is_admin": True})
+        self.assertTrue(zone_row(zid)["can_edit"])
+        r = self.client.patch(f"/api/halo/survey/zones/{zid}", json={"name": "NYX-GLC-07 Iron"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["zone"]["slug"], "nyx-glc-07-iron")
+        self.assertEqual(zone_row(zid)["name"], "NYX-GLC-07 Iron")
+        # …and delete
+        self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid}").status_code, 200)
+        self.assertIsNone(app.db.get_survey_zone(zid))
+        self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid}").status_code, 404)
+        # …and the creator's active-zone pref no longer names the dead zone
+        self.assertIsNone(app.members_dir.active_survey_zone("1"))
+        self._user.update({"id": "1", "is_admin": False})
+        self.assertIsNone(self.client.get("/api/me").json()["active_survey_zone"])
+
+        # the creator (non-admin) can archive ("closed" on the wire) their own:
+        # the zone stays but their active-zone pref is cleared, so an archived
+        # zone can't keep silently collecting marks; reactivate is the undo
+        r = self.client.post("/api/halo/survey/zones", json={"name": "test zone 2", "system": "Nyx"})
+        zid2 = r.json()["zone"]["id"]
+        self.addCleanup(lambda: app.db.delete_survey_zone(zid2))
+        self.assertEqual(self.client.get("/api/me").json()["active_survey_zone"], zid2)
+        r = self.client.patch(f"/api/halo/survey/zones/{zid2}", json={"closed": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(zone_row(zid2)["closed"])
+        self.assertIsNone(self.client.get("/api/me").json()["active_survey_zone"])
+        r = self.client.patch(f"/api/halo/survey/zones/{zid2}", json={"closed": False})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(zone_row(zid2)["closed"])
+        # …and delete
+        self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid2}").status_code, 200)
+        self.assertIsNone(self.client.get("/api/me").json()["active_survey_zone"])
+
     def test_survey_zone_duplicate_name_conflicts(self):
         self._live_at((0.0, 15.0e9, 0.0))
         self.addCleanup(lambda: app.members_dir.set_active_survey_zone("1", None))

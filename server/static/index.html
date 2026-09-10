@@ -4623,8 +4623,8 @@
             </select>
             <label class="trade-pref" title="only zones you've dropped a mark in">
               <input id="halo-zone-mine" type="checkbox"> my surveys</label>
-            <label class="trade-pref" title="hide closed zones">
-              <input id="halo-zone-open" type="checkbox" checked> open only</label>
+            <label class="trade-pref" title="hide archived zones">
+              <input id="halo-zone-open" type="checkbox" checked> hide archived</label>
           </div>
           <div id="halo-atlas-zones" class="table-scroll table-x" style="margin-top:8px;"></div>
         </div>
@@ -15836,8 +15836,15 @@ function renderHaloAtlasZones() {
     const acts = (z.marks ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
       + (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
       + (!z.closed ? `<button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
-          + `${active ? "filing" : "Set active"}</button>` : "")
-      + (z.closed ? `<span class="halo-chip">closed</span>` : "");
+          + `${active ? "filing" : "Set active"}</button> ` : "")
+      + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
+      // Creator or admin only (server-judged `can_edit`): a zone made by
+      // mistake — "test zone" — must be removable without an SQL session.
+      // "Archive" is the UI word for the server's `closed` flag: the zone
+      // keeps its marks but leaves the picker/maps/suggestions; reversible.
+      + (z.can_edit ? `<button type="button" class="route-chip" data-zrename="${z.zone_id}" title="rename this zone (admins: enforce the org's naming convention)">✎</button> ` : "")
+      + (z.can_edit ? `<button type="button" class="route-chip" data-zarchive="${z.zone_id}" title="${z.closed ? "put this zone back on the picker and maps" : "archive this zone — marks are kept, but it leaves the picker, maps and drop suggestions"}">${z.closed ? "Reactivate" : "Archive"}</button> ` : "")
+      + (z.can_edit ? `<button type="button" class="route-chip" data-zdelete="${z.zone_id}" title="delete this zone — its ⛏ marks are kept and revert to proximity clustering">✕</button>` : "");
     const cls = [active ? "selected" : "", z.zone_id === haloAtlasSelZone ? "zone-sel" : ""]
       .filter(Boolean).join(" ");
     return `<tr data-zrow="${z.zone_id}"${cls ? ` class="${cls}"` : ""}`
@@ -15864,6 +15871,12 @@ function renderHaloAtlasZones() {
     b.onclick = () => { const z = byId(b.dataset.zplan); if (z) planHaloZone(z); };
   for (const b of el.querySelectorAll("[data-zactive]"))
     b.onclick = () => setActiveSurveyZone(Number(b.dataset.zactive));
+  for (const b of el.querySelectorAll("[data-zrename]"))
+    b.onclick = () => { const z = byId(b.dataset.zrename); if (z) renameSurveyZone(z); };
+  for (const b of el.querySelectorAll("[data-zarchive]"))
+    b.onclick = () => { const z = byId(b.dataset.zarchive); if (z) archiveSurveyZone(z, !z.closed); };
+  for (const b of el.querySelectorAll("[data-zdelete]"))
+    b.onclick = () => { const z = byId(b.dataset.zdelete); if (z) deleteSurveyZone(z); };
   // Row → map: the other half of the link. Buttons handle themselves, so the
   // row only claims clicks that missed one.
   for (const tr of el.querySelectorAll("tr[data-zrow]"))
@@ -16056,7 +16069,7 @@ function renderHaloZoneSelect() {
   if (cur != null && !haloZones.some(z => z.zone_id === cur && !z.closed)) {
     const z = haloZones.find(x => x.zone_id === cur);   // keep a closed active zone visible
     const o = document.createElement("option");
-    o.value = String(cur); o.textContent = (z ? z.name + " (closed)" : "active zone");
+    o.value = String(cur); o.textContent = (z ? z.name + " (archived)" : "active zone");
     sel.appendChild(o);
   }
   sel.value = cur == null ? "" : String(cur);
@@ -16078,8 +16091,17 @@ function renderHaloZoneBanner() {
     + ` <button type="button" class="route-chip" id="halo-zone-clear">Clear active</button>`
     + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-plan">Plan a drop here</button>` : "")
     + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-details" title="mark timeline, contributors, ore breakdown — and attach scan detail to any mark">▸ details</button>` : "")
+    + (z.can_edit ? ` <button type="button" class="route-chip" id="halo-zone-rename" title="rename this zone">✎ Rename</button>` : "")
+    + (z.can_edit ? ` <button type="button" class="route-chip" id="halo-zone-archive" title="${z.closed ? "put this zone back on the picker and maps" : "archive this zone — marks are kept, but it leaves the picker, maps and drop suggestions"}">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
+    + (z.can_edit ? ` <button type="button" class="route-chip" id="halo-zone-delete" title="delete this zone — its ⛏ marks are kept and revert to proximity clustering">✕ Delete zone</button>` : "")
     + `</div>`;
   $("halo-zone-clear").onclick = () => setActiveSurveyZone(null);
+  const rb = $("halo-zone-rename");
+  if (rb) rb.onclick = () => renameSurveyZone(z);
+  const ab = $("halo-zone-archive");
+  if (ab) ab.onclick = () => archiveSurveyZone(z, !z.closed);
+  const xb = $("halo-zone-delete");
+  if (xb) xb.onclick = () => deleteSurveyZone(z);
   const pb = $("halo-zone-plan");
   if (pb) pb.onclick = () => planHaloZone(z);
   const dbtn = $("halo-zone-details");
@@ -16348,12 +16370,13 @@ function renderHaloSurveyCard(el, z, marks) {
     + (z.marks ? `<button type="button" class="route-chip" id="svy-plan">Plan a drop here</button>` : "")
     + (!z.closed ? `<button type="button" class="route-chip" id="svy-active"${z.zone_id === activeSurveyZone ? " disabled" : ""}>`
         + `${z.zone_id === activeSurveyZone ? "⛏ filing here" : "Set active"}</button>` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" id="svy-archive" title="${z.closed ? "put this zone back on the picker and maps" : "archive this zone — marks are kept, but it leaves the picker, maps and drop suggestions"}">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
     + `<a class="muted" id="svy-export" target="_blank" rel="noopener" style="font-size:12px; margin-left:auto;"`
     + ` title="download this system's survey as JSON">⇩ export survey</a>`
     + `</div>`
     + `<p class="svy-eyebrow">${esc(z.system || haloSystem)} · Survey Summary</p>`
     + `<h2 class="svy-title">${esc(z.name)}<span class="svy-sub">`
-    + `${surveyors.length} surveyor${surveyors.length === 1 ? "" : "s"} · ${marks.length} mark${marks.length === 1 ? "" : "s"}${z.closed ? " · closed" : ""}</span></h2>`
+    + `${surveyors.length} surveyor${surveyors.length === 1 ? "" : "s"} · ${marks.length} mark${marks.length === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</span></h2>`
     + verdict
     + stats
     + `<div class="svy-panels">${surveyOreChart(z)}${surveyRsCard(z)}</div>`
@@ -16365,6 +16388,7 @@ function renderHaloSurveyCard(el, z, marks) {
   const back = $("svy-back"); if (back) back.onclick = closeHaloSurveyCard;
   const plan = $("svy-plan"); if (plan) plan.onclick = () => planHaloZone(z);
   const act = $("svy-active"); if (act) act.onclick = () => { setActiveSurveyZone(z.zone_id); openHaloSurveyCard(z); };
+  const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
   const ex = $("svy-export"); if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(z.system || haloSystem);
   for (const b of el.querySelectorAll("[data-scanmark]"))
     b.onclick = () => {
@@ -16415,6 +16439,78 @@ async function newSurveyZone() {
     activeSurveyZone = d.active_survey_zone;
     await loadHaloZones();
   } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } }
+}
+
+// Rename a zone (creator or admin; the server re-checks and re-slugs — a name
+// that collides with another zone in the system 409s). Marks keep their tag:
+// membership is by zone id, so the name is free to change.
+async function renameSurveyZone(z) {
+  const name = await promptDialog(
+    "New name for this zone. Marks stay attached — only the label changes.",
+    { title: "Rename survey zone", confirmLabel: "Rename", value: z.name || "",
+      placeholder: "e.g. NYX-GLC-07 Iron" });
+  if (!name || !name.trim() || name.trim() === z.name) return;
+  const st = $("halo-zone-status");
+  try {
+    const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, { method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || "couldn't rename zone"); } return; }
+  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } return; }
+  if (st) { st.className = "muted"; st.textContent = `renamed to "${name.trim()}"`; }
+  await loadHaloZones();
+  // Keep an open details card in step with the new name.
+  if (haloZoneDetailFor === z.zone_id) {
+    const nz = haloZones.find(x => x.zone_id === z.zone_id);
+    if (nz) openHaloSurveyCard(nz);
+  }
+}
+
+// Archive / reactivate a zone (creator or admin). "Archive" = the server's
+// `closed` flag: marks stay tagged and the details card still opens, but the
+// zone leaves the FIELD picker, both maps and the DROP suggestions, and the
+// server un-sets anyone's active-zone pref that named it. Reversible, so no
+// confirm gate — Reactivate is the undo.
+async function archiveSurveyZone(z, archive) {
+  const st = $("halo-zone-status");
+  try {
+    const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, { method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ closed: !!archive }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || `couldn't ${archive ? "archive" : "reactivate"} zone`); } return; }
+  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } return; }
+  if (archive && activeSurveyZone === z.zone_id) activeSurveyZone = null;   // server cleared the pref
+  if (st) { st.className = "muted"; st.textContent = `"${z.name}" ${archive ? "archived" : "reactivated"}`; }
+  await loadHaloZones();
+  if (haloZoneDetailFor === z.zone_id) {
+    const nz = haloZones.find(x => x.zone_id === z.zone_id);
+    if (nz) openHaloSurveyCard(nz);
+  }
+}
+
+// Delete a zone (creator or admin; the server re-checks). Marks survive — the
+// zone is a membership tag, so deleting it untags them and they fall back to
+// proximity clustering. Confirm-gated: this is the one irreversible zone action.
+async function deleteSurveyZone(z) {
+  const n = z.marks || 0;
+  const ok = await confirmDialog(
+    n ? `Delete "${z.name}"? Its ${n} ⛏ mark${n === 1 ? "" : "s"} are kept and revert to proximity clustering.`
+      : `Delete "${z.name}"? It has no marks yet.`,
+    { title: "Delete survey zone", confirmLabel: "Delete", danger: true });
+  if (!ok) return;
+  const st = $("halo-zone-status");
+  try {
+    const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, { method: "DELETE" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || "couldn't delete zone"); } return; }
+  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } return; }
+  if (activeSurveyZone === z.zone_id) activeSurveyZone = null;   // server cleared the pref too
+  if (haloZoneDetailFor === z.zone_id) closeHaloSurveyCard();
+  if (haloAtlasSelZone === z.zone_id) haloAtlasSelZone = null;
+  if (st) { st.className = "muted"; st.textContent = `zone "${z.name}" deleted`; }
+  await loadHaloZones();
 }
 
 // A synthetic pocket for the live radar when your active zone isn't a datamined
@@ -18633,7 +18729,7 @@ function renderSurveyStats(d) {
     else if (z.status && z.status !== "empty") bits.push(`${esc(z.status)} rocks`);
     bits.push(surveyAgo(z.latest));
     return `<div class="hbar"><span class="hbar-label" title="${esc(z.name)}">` +
-      `${esc(z.name)}${z.closed ? " (closed)" : ""}</span>` +
+      `${esc(z.name)}${z.closed ? " (archived)" : ""}</span>` +
       `<span style="font-size:12px;">${surveyValueChip(z.value)} ` +
       `<span class="muted">${esc(z.system)}</span> · ${bits.join(" · ")}</span></div>`;
   }).join("") : `<div class="stat-empty">No named zones yet — ＋ New zone in Prospector's ATLAS tab starts one.</div>`;
