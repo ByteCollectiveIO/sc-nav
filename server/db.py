@@ -223,7 +223,8 @@ CREATE TABLE IF NOT EXISTS catalog_items (
 -- it; `goal_id NULL` is a general (allocatable) holding. `item_name`/`unit` are
 -- denormalized off the catalog at write time (like events.roles stores names) so
 -- a later feed change can't strand a row. One row per (owner, item, location,
--- goal) — re-logging sets the quantity rather than stacking duplicates.
+-- goal, quality) — logging more of a lot ADDS to it (the form is "I picked up
+-- 4 more"); the inline editor SETS the absolute amount.
 CREATE TABLE IF NOT EXISTS inventory (
     id INTEGER PRIMARY KEY,
     owner_id TEXT NOT NULL,             -- Discord member id
@@ -2230,14 +2231,19 @@ def _inventory_row_to_dict(r: sqlite3.Row) -> dict:
 def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | None,
                      qty: float, location: str | None, note: str | None,
                      goal_id: int | None, updated_at: str,
-                     quality: int | None = None) -> dict:
-    """Log a member's holding. One row per (owner, item, location, quality): an
-    existing match has its quantity/note SET (not summed) to the new value, so
-    re-logging "I hold 80 SCU here" is idempotent rather than stacking. A
-    different quality is a different LOT (#151) — the game stacks per value and
-    never blends, so neither do we. Returns the resulting row. (SQLite treats
-    NULLs as distinct in a UNIQUE, so the match is done explicitly here with
-    COALESCE rather than via an upsert conflict.)"""
+                     quality: int | None = None, add: bool = False) -> dict:
+    """Log a member's holding. One row per (owner, item, location, quality). An
+    existing match has its quantity SET to the new value by default; with
+    `add=True` the quantity is ADDED to it — the log form's semantics, since
+    "4 more Iron at Baijini" typed twice means 8, not 4 (2026-09-12 user
+    report: the second log silently overwrote the first). The absolute edit
+    lives on the inline editor (`update_inventory`). A note only replaces the
+    stored one when given, so a top-up doesn't blank it. A different quality
+    is a different LOT (#151) — the game stacks per value and never blends, so
+    neither do we. Returns the row plus `added` (the delta applied) and
+    `merged` (True when an existing lot took it). (SQLite treats NULLs as
+    distinct in a UNIQUE, so the match is done explicitly here with COALESCE
+    rather than via an upsert conflict.)"""
     with _lock, _conn:
         existing = _conn.execute(
             "SELECT id FROM inventory WHERE owner_id=? AND item_id=? "
@@ -2248,8 +2254,8 @@ def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | No
         ).fetchone()
         if existing:
             _conn.execute(
-                "UPDATE inventory SET qty=?, item_name=?, unit=?, note=?, updated_at=? "
-                "WHERE id=?",
+                f"UPDATE inventory SET qty={'qty+?' if add else '?'}, item_name=?, unit=?, "
+                "note=COALESCE(?, note), updated_at=? WHERE id=?",
                 (qty, item_name, unit, note, updated_at, existing["id"]),
             )
             rid = existing["id"]
@@ -2263,7 +2269,7 @@ def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | No
             )
             rid = cur.lastrowid
         row = _conn.execute("SELECT * FROM inventory WHERE id=?", (rid,)).fetchone()
-    return _inventory_row_to_dict(row)
+    return {**_inventory_row_to_dict(row), "added": qty, "merged": existing is not None}
 
 
 def list_inventory(owner_id: str | None = None, goal_id: int | None = None) -> list[dict]:

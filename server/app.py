@@ -9067,10 +9067,13 @@ async def get_inventory(owner: str | None = None, goal: int | None = None,
 
 @app.post("/api/inventory")
 async def log_inventory(body: InventoryIn, user: dict = Depends(require_session)):
-    """Log/adjust the caller's holding of an item. One row per (owner, item,
-    location) — re-logging SETS the quantity. A holding is a general pledge;
-    earmarking part of it to a goal is a separate allocation (see the contribute
-    endpoint), so what's logged here is never double-counted as a contribution."""
+    """Log more of an item. One row per (owner, item, location, quality); a
+    matching lot has the amount ADDED to it ("4 more Iron at Baijini" twice is
+    8 — the second log used to overwrite the first). Setting an absolute amount
+    is the inline editor's job (PATCH). A holding is a general pledge; earmarking
+    part of it to a goal is a separate allocation (see the contribute endpoint),
+    so what's logged here is never double-counted as a contribution. The
+    response carries `added` + `merged` so the form can say what happened."""
     item = _resolve_or_400(body.item_id)
     _check_quality_kind(item, body.quality)
     unit = catalog.valid_unit(body.unit) or item["unit"]
@@ -9078,7 +9081,7 @@ async def log_inventory(body: InventoryIn, user: dict = Depends(require_session)
     row = db.upsert_inventory(
         user["id"], item["item_id"], item["name"], unit, body.qty,
         body.location.strip() or None, (body.note or "").strip() or None,
-        None, now, quality=body.quality)
+        None, now, quality=body.quality, add=True)
     return _holding_view(row)
 
 
