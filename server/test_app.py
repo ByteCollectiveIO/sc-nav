@@ -3805,7 +3805,7 @@ class UnlockGoalTests(unittest.TestCase):
     def _goal(self, **kw):
         body = {"title": "Priority One — Battaglia", "kind": "unlock",
                 "unlock": {"blueprints": ["BP_X", "BP_Y"], "target_mode": "pct", "target_value": 100,
-                           "playstyle": "mining"}, **kw}
+                           "playstyles": ["mining"]}, **kw}
         r = self.client.post("/api/goals", json=body)
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
@@ -3815,8 +3815,17 @@ class UnlockGoalTests(unittest.TestCase):
                                                  "unlock": {"blueprints": ["NOPE"]}})
         self.assertEqual(r.status_code, 400)
         r = self.client.post("/api/goals", json={"title": "x", "kind": "unlock",
-                                                 "unlock": {"blueprints": ["BP_X"], "playstyle": "knitting"}})
+                                                 "unlock": {"blueprints": ["BP_X"], "playstyles": ["knitting"]}})
         self.assertEqual(r.status_code, 400)
+        # Legacy single-tag shape still accepted and normalised to the list.
+        r = self.client.post("/api/goals", json={"title": "legacy", "kind": "unlock",
+                                                 "unlock": {"blueprints": ["BP_X"], "playstyle": "mining"}})
+        self.assertEqual(r.json()["unlock"]["spec"]["playstyles"], ["mining"])
+        self.assertEqual(r.json()["unlock"]["playstyles"], ["mining"])
+        # Multi-tag scope = members carrying ANY tag: mining (a, b) ∪ PvP (c) = 3.
+        r = self.client.post("/api/goals", json={"title": "industrial", "kind": "unlock",
+                                                 "unlock": {"blueprints": ["BP_X"], "playstyles": ["mining", "PvP"]}})
+        self.assertEqual(r.json()["unlock"]["scope_size"], 3)
         g = self._goal()
         self.assertEqual(g["kind"], "unlock")
         self.assertEqual(g["unlock"]["spec"]["blueprints"], ["BP_X", "BP_Y"])
@@ -3890,7 +3899,7 @@ class UnlockGoalTests(unittest.TestCase):
         g = self._goal()
         r = self.client.patch(f"/api/goals/{g['id']}", json={
             "title": "Battaglia, phase 1", "kind": "unlock",
-            "unlock": {"blueprints": ["BP_X"], "target_mode": "count", "target_value": 1, "playstyle": None}})
+            "unlock": {"blueprints": ["BP_X"], "target_mode": "count", "target_value": 1, "playstyles": []}})
         self.assertEqual(r.status_code, 200, r.text)
         v = r.json()
         self.assertEqual(v["unlock"]["spec"]["blueprints"], ["BP_X"])
@@ -3947,6 +3956,19 @@ class GoalAnnounceTests(unittest.TestCase):
         self.assertIn("Hull-C fund", text); self.assertIn("Agricium (≥Q700) — 0/40 SCU", text)
         self.assertIn("0% filled", text); self.assertIn("Fill the hold.", text)
         self.assertEqual(msgs[0]["mentions"] or [], [])       # reach, not pings
+        # A long description is cut at 280 chars by default, posted whole with announce_full.
+        long = "ORG GOAL: " + ("push Battaglia rep. " * 40)
+        app._goal_announce_at.clear()
+        self.client.post("/api/goals", json={"title": "long summary", "description": long, "announce": True,
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1}]})
+        app._goal_announce_at.clear()
+        self.client.post("/api/goals", json={"title": "long full", "description": long, "announce": True,
+            "announce_full": True, "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1}]})
+        time.sleep(0.2)
+        cut = next(m["text"] for m in self.sent if "long summary" in m["text"])
+        whole = next(m["text"] for m in self.sent if "long full" in m["text"])
+        self.assertIn("…", cut); self.assertNotIn(long, cut)
+        self.assertIn(long.strip(), whole)
         # Cooldown: a second announced create within the window is created but not posted.
         r = self.client.post("/api/goals", json={"title": "again", "announce": True,
             "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1}]})
@@ -3974,6 +3996,14 @@ class GoalAnnounceTests(unittest.TestCase):
         # Cooldown on a second re-post
         r = self.client.post(f"/api/goals/{gid}/announce")
         self.assertFalse(r.json()["announced"]); self.assertIn("minutes ago", r.json()["reason"])
+        # Re-post with the full description flag
+        app._goal_announce_at.clear()
+        long = "D " * 300
+        gid2 = self.client.post("/api/goals", json={"title": "Long one", "description": long,
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1}]}).json()["id"]
+        self.assertTrue(self.client.post(f"/api/goals/{gid2}/announce", json={"full": True}).json()["announced"])
+        time.sleep(0.2)
+        self.assertIn(long.strip(), next(m["text"] for m in self.sent if "Long one" in m["text"]))
         # A stranger can't re-post someone else's goal.
         app._goal_announce_at.clear()
         app.app.dependency_overrides[app.require_session] = lambda: {"id": "777", "username": "zed", "is_admin": False}

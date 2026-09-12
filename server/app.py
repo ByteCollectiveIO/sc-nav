@@ -8352,7 +8352,7 @@ async def _notify_quotes_lost(listing: dict, loser_ids: list[str]) -> None:
 
 
 async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
-                              refresh: bool = False) -> None:
+                              refresh: bool = False, full: bool = False) -> None:
     """Post a goal to the goals channel — on creation (opt-in `announce`) or as
     a manual re-post so an older goal surfaces again with its CURRENT fill.
     An embed: the lines with have/needed (materials) or held/needed members
@@ -8378,15 +8378,17 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
     if unlock:
         spec = goal.get("unlock_spec") or {}
         scope = f"{progress.get('scope_size', 0)} member{'s' if progress.get('scope_size', 0) != 1 else ''}"
-        if spec.get("playstyle"):
-            scope += f" tagged {spec['playstyle']}"
+        scope += _unlock_scope_label(spec)
         head += f" · target {progress.get('needed', 0)} of {scope} per recipe"
     if goal.get("deadline"):
         head += f" · due {_discord_ts(goal['deadline'], 'D')}"
     desc = head + "\n" + "\n".join(rows)
     if goal.get("description"):
+        # `full` posts the whole description (the org wrote it as the channel
+        # notice — a 2,000-char org directive shouldn't need retyping); the
+        # default keeps the card short. Embed descriptions cap at 4,096.
         d = goal["description"].strip()
-        desc += "\n\n" + (d[:280] + "…" if len(d) > 280 else d)
+        desc += "\n\n" + (d if full or len(d) <= 280 else d[:280] + "…")
     desc += f"\n\n{'Re-posted' if refresh else 'Posted'} by {who}. " + \
         ("Add the recipes you unlock to your library." if unlock else "Log what you're holding to contribute.")
     icon = "🔓" if unlock else "🎯"
@@ -9025,13 +9027,18 @@ class GoalIn(BaseModel):
     # Opt-in Discord shout on create (org goals only; personal goals never
     # broadcast). The response's `announced` says whether it actually went out.
     announce: bool = False
+    announce_full: bool = False     # post the whole description, not a 280-char cut
 
 
 class UnlockSpecIn(BaseModel):
     blueprints: list[str] = Field(min_length=1, max_length=20)
     target_mode: str = Field(default="count", max_length=8)      # count | pct
     target_value: float = Field(default=1, ge=1, le=1000)
-    playstyle: str | None = Field(default=None, max_length=32)    # PLAYSTYLE_TAGS or None = everyone
+    # Scope = members carrying ANY of these PLAYSTYLE_TAGS (an org's
+    # "Industrial" is hauling + mining + salvage + trading); empty = everyone.
+    # `playstyle` (single) is the pre-multi shape, still accepted.
+    playstyles: list[str] = Field(default_factory=list, max_length=16)
+    playstyle: str | None = Field(default=None, max_length=32)
 
 
 GoalIn.model_rebuild()
@@ -9333,13 +9340,14 @@ def _validate_goal(body: GoalIn) -> dict:
             raise HTTPException(status_code=400, detail=f"unknown blueprint(s): {', '.join(bad) or '—'}")
         mode = u.target_mode if u.target_mode in ("count", "pct") else "count"
         val = max(1.0, min(100.0, float(u.target_value))) if mode == "pct" else max(1.0, float(u.target_value))
-        tag = (u.playstyle or "").strip() or None
-        if tag is not None and tag not in PLAYSTYLE_TAGS:
-            raise HTTPException(status_code=400, detail=f"unknown playstyle tag: {tag}")
+        tags = list(dict.fromkeys(t.strip() for t in ([u.playstyle] if u.playstyle else []) + list(u.playstyles) if t and t.strip()))
+        bad_tags = [t for t in tags if t not in PLAYSTYLE_TAGS]
+        if bad_tags:
+            raise HTTPException(status_code=400, detail=f"unknown playstyle tag(s): {', '.join(bad_tags)}")
         deadline = _normalize_event_start(body.deadline) if body.deadline else None
         return {"kind": "unlock",
                 "unlock_spec": {"blueprints": keys, "target": {"mode": mode, "value": val},
-                                "playstyle": tag},
+                                "playstyles": tags},
                 "title": title, "description": (body.description or "").strip(),
                 "priority": body.priority, "deadline": deadline, "line_items": [],
                 "visibility": visibility, "seed_unmapped": []}
@@ -9479,12 +9487,27 @@ def _pledged_craft_preview(bp: dict, asked: dict, contributions) -> dict | None:
             "stat_preview": nav_core.blueprint_stat_preview(bp, qualities)}
 
 
-def _unlock_scope_ids(playstyle: str | None) -> list[str]:
-    """Members an unlock goal is measured over: those carrying the playstyle
-    tag, or every member when no tag is set."""
+def _unlock_tags(spec: dict) -> list[str]:
+    """The scope tags of an unlock spec — the multi-tag shape, or the single
+    `playstyle` older goals stored."""
+    tags = spec.get("playstyles")
+    if tags is None:
+        tags = [spec["playstyle"]] if spec.get("playstyle") else []
+    return [t for t in tags if t]
+
+
+def _unlock_scope_label(spec: dict) -> str:
+    tags = _unlock_tags(spec)
+    return f" tagged {'/'.join(tags)}" if tags else ""
+
+
+def _unlock_scope_ids(tags) -> list[str]:
+    """Members an unlock goal is measured over: those carrying ANY of the
+    playstyle tags, or every member when no tag is set."""
+    tags = set(tags or [])
     out = []
     for m in db.all_members():
-        if playstyle is None or playstyle in member_playstyles(m):
+        if not tags or tags & set(member_playstyles(m)):
             out.append(str(m["discord_id"]))
     return out
 
@@ -9494,7 +9517,7 @@ def _unlock_progress(goal: dict) -> dict:
     keys = spec.get("blueprints") or []
     names = {k: (blueprints_feed.get(k) or {}).get("name") or k for k in keys}
     return nav_core.derive_unlock_progress(
-        spec, db.blueprint_holders(keys), _unlock_scope_ids(spec.get("playstyle")), names)
+        spec, db.blueprint_holders(keys), _unlock_scope_ids(_unlock_tags(spec)), names)
 
 
 def _unlock_block(goal: dict, progress: dict, user: dict, detail: bool = False) -> dict:
@@ -9502,7 +9525,8 @@ def _unlock_block(goal: dict, progress: dict, user: dict, detail: bool = False) 
     recipe's unlock path + whether the viewer holds it."""
     spec = goal.get("unlock_spec") or {}
     block = {"spec": spec, "scope_size": progress.get("scope_size", 0),
-             "needed": progress.get("needed"), "playstyle": spec.get("playstyle")}
+             "needed": progress.get("needed"), "playstyles": _unlock_tags(spec),
+             "playstyle": (_unlock_tags(spec) or [None])[0]}
     if detail:
         mine = {r["blueprint_key"] for r in db.list_member_blueprints(user["id"])}
         block["recipes"] = []
@@ -9521,8 +9545,7 @@ async def _notify_unlock_goal_met(goal: dict, progress: dict) -> None:
     mentions, ping = _mentions(goal["creator_id"])
     spec = goal.get("unlock_spec") or {}
     scope = f"{progress.get('scope_size', 0)} member{'s' if progress.get('scope_size', 0) != 1 else ''}"
-    if spec.get("playstyle"):
-        scope += f" tagged {spec['playstyle']}"
+    scope += _unlock_scope_label(spec)
     await notify.send(
         "goals",
         f"🔓 **Blueprints ready: {goal['title']}**\nEvery recipe is held by the target "
@@ -9636,14 +9659,19 @@ async def create_goal(body: GoalIn, user: dict = Depends(require_session)):
     announced = False
     if body.announce and view["visibility"] != "personal" and notify.is_configured("goals") \
             and _goal_announce_ok(user["id"]):
-        _notify_bg(_notify_goal_posted(goal, view["progress"], user["id"]))
+        _notify_bg(_notify_goal_posted(goal, view["progress"], user["id"], full=body.announce_full))
         announced = True
     view["announced"] = announced
     return view
 
 
+class GoalAnnounceIn(BaseModel):
+    full: bool = False              # include the entire description
+
+
 @app.post("/api/goals/{goal_id}/announce")
-async def announce_goal(goal_id: int, user: dict = Depends(require_session)):
+async def announce_goal(goal_id: int, body: GoalAnnounceIn | None = None,
+                        user: dict = Depends(require_session)):
     """Re-post an existing goal to the goals channel with its current fill —
     the "refresh" an organiser wants when a goal has scrolled out of view.
     Creator or admin; org goals only; one post per member per cooldown so a
@@ -9660,7 +9688,8 @@ async def announce_goal(goal_id: int, user: dict = Depends(require_session)):
         return {"announced": False,
                 "reason": f"you posted a goal less than {int(GOAL_ANNOUNCE_COOLDOWN_S // 60)} minutes ago — give it a moment"}
     view = _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user)
-    _notify_bg(_notify_goal_posted(goal, view["progress"], user["id"], refresh=True))
+    _notify_bg(_notify_goal_posted(goal, view["progress"], user["id"], refresh=True,
+                                   full=bool(body and body.full)))
     return {"announced": True}
 
 

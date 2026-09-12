@@ -74,7 +74,9 @@ library at `#/blueprints`, #29)
 - Resource manager: `/api/catalog`, `/api/inventory*`, `/api/goals*`. **Goal
   announce (2026-09-12):** `GoalIn.announce` opt-in on create + `POST
   /api/goals/{id}/announce` (creator/admin re-post = "refresh" with CURRENT
-  fill) → `_notify_goal_posted(goal, progress, poster, refresh=)` embed
+  fill) → `_notify_goal_posted(goal, progress, poster, refresh=, full=)` embed
+  (`full` = whole description, else a 280-char cut; `GoalIn.announce_full`,
+  `GoalAnnounceIn.full` on the re-post)
   (lines w/ have/needed or held/needed members, %, due, deep link; pings
   nobody — only goal-met pings); `_goal_announce_ok` per-member
   `GOAL_ANNOUNCE_COOLDOWN_S` 120s; personal goals never post; `GET
@@ -180,10 +182,12 @@ library at `#/blueprints`, #29)
   `db.blueprint_holders`), `factions[]` + `min_standing` off the structured
   `unlocks`, UEX spec by name; + `members_total`/`tag_sizes`. **Unlock goals:**
   `goals.kind` ('materials'|'unlock') + `goals.unlock_spec` JSON
-  `{blueprints, target:{mode count|pct, value}, playstyle}` (`GoalIn.kind`/
-  `UnlockSpecIn`, validated in `_validate_goal`); progress =
-  `nav_core.derive_unlock_progress(spec, holders_by_key, scope_ids, names)` —
-  scope = `_unlock_scope_ids` (members w/ the tag, or all), needed = count or
+  `{blueprints, target:{mode count|pct, value}, playstyles:[tags]}` (`GoalIn.kind`/
+  `UnlockSpecIn` — `playstyles` list; legacy single `playstyle` accepted +
+  normalised; `_unlock_tags(spec)` reads either; validated in `_validate_goal`);
+  progress = `nav_core.derive_unlock_progress(spec, holders_by_key, scope_ids, names)` —
+  scope = `_unlock_scope_ids(tags)` (members carrying ANY tag — "Industrial" =
+  hauling+mining+salvage+trading — or all when empty), needed = count or
   ⌈pct×scope⌉, lines keep the materials shape (`unit:"members"`, +`holders`/
   `missing`); `_goal_view` branches (`_unlock_block` → spec/scope/recipes w/
   unlock paths + `i_hold`, no contributions); `POST /api/me/blueprints`
