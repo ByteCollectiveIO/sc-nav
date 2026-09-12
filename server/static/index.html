@@ -12464,6 +12464,7 @@ async function renderGoalBoard() {
     $("goals-retry").onclick = renderGoalBoard;
     return;
   }
+  goalsAnnounceAvail = !!data.announce_available;
   let goals = data.goals || [];
   if (goalScopeFilter === "mine") goals = goals.filter(g => g.is_mine);
   else if (goalScopeFilter === "craft") goals = goals.filter(g => g.craft);
@@ -12482,6 +12483,26 @@ let goalSeedWarn = null;
 // Deep-link handoff: "🎯 Gather" in My Blueprints → the new-goal form pre-seeds
 // this recipe (a personal craft goal by default).
 let goalSeedFromLibrary = null;
+// One-shot notice after a create with the Discord opt-in (sent / cooldown).
+let goalPostNotice = null;
+// Re-post an org goal to the goals channel with its current fill (creator/admin).
+function goalAnnounceButton(g) {
+  if (!g.can_edit || g.visibility === "personal" || !goalsAnnounceAvail) return "";
+  return `<button class="ev-btn" id="goal-announce" title="post this goal and its current progress to the org's Discord goals channel">📣 Post to Discord</button>`;
+}
+function wireGoalAnnounce(g) {
+  const b = $("goal-announce"); if (!b) return;
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = "Posting…";
+    try {
+      const r = await fetch(`/api/goals/${g.id}/announce`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw d;
+      b.textContent = d.announced ? "📣 Posted ✓" : `📣 ${d.reason || "not posted"}`;
+      if (!d.announced) b.disabled = false;
+    } catch (err) { b.disabled = false; b.textContent = "📣 " + ((err && err.detail) || "couldn't post"); }
+  };
+}
 async function consumeFinderPrefill() {
   if (!rmFinderPrefill) return;
   const name = rmFinderPrefill; rmFinderPrefill = null;
@@ -12533,6 +12554,7 @@ async function renderGoalDetail(id) {
     const r = await fetch(`/api/goals/${id}`);
     if (!r.ok) { $("goal-detail-body").innerHTML = `<p class="stat-empty">Goal not found.</p>`; return; }
     g = await r.json();
+    if (g.announce_available !== undefined) goalsAnnounceAvail = !!g.announce_available;
   } catch {
     // Network failure ≠ missing goal — say which it was, and offer a way back.
     $("goal-detail-body").innerHTML = `<p class="stat-empty">Couldn't load this goal. ` +
@@ -12738,8 +12760,9 @@ function wireGoalContribActions(g) {
 // unlock path per recipe, and the viewer's own status with a one-click add.
 function renderUnlockGoalDetail(g) {
   const pr = g.progress, met = pr.is_met || g.status === "met", u = g.unlock || {};
-  const editBtns = g.can_edit
-    ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "";
+  const editBtns = (g.can_edit
+    ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "") + goalAnnounceButton(g);
+  const notice = goalPostNotice ? `<div class="mk-post-note">${esc(goalPostNotice)}</div>` : ""; goalPostNotice = null;
   const recipes = (u.recipes || []);
   const lines = pr.lines.map(l => {
     const r = recipes.find(x => x.key === l.key) || {};
@@ -12767,13 +12790,14 @@ function renderUnlockGoalDetail(g) {
   $("goal-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(g.title)}</h2>${goalPersonalChip(g)}${goalUnlockChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div>` +
     `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b> · target: ${goalUnlockScope(g)}</div>` +
-    (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
+    notice + (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
     `<div class="rm-headline"><span class="rm-headline-v ${met ? "met" : ""}">${Math.round(pr.overall_pct)}%</span>` +
     `<span class="rm-headline-l">ready${met ? " · met ✓" : ""}</span></div>` +
     `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
     `<div class="ev-section-h">Recipes</div>${lines}` +
     `<div class="ev-section-h">Holders in scope</div><div class="ev-roster-names">${contribList}</div>` +
     `<div class="ev-form-actions">${editBtns}</div>`;
+  wireGoalAnnounce(g);
   document.querySelectorAll(".goal-unlock-add").forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Adding…";
     try {
@@ -12805,8 +12829,9 @@ function renderGoalDetailBody(g) {
         (c.promised > 0 ? ` <span class="rm-pledge" title="of that, still to gather">` +
           `⏳ ${fmtQty(c.promised)}</span>` : "") + `</span>`).join("")
     : `<span class="muted">No contributions logged yet.</span>`;
-  const editBtns = g.can_edit
-    ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "";
+  const editBtns = (g.can_edit
+    ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "") + goalAnnounceButton(g);
+  const notice = goalPostNotice ? `<div class="mk-post-note">${esc(goalPostNotice)}</div>` : ""; goalPostNotice = null;
   const seedWarn = (goalSeedWarn && goalSeedWarn.id === g.id)
     ? `<div class="rm-seed-warn">⚠ These recipe materials aren't in the catalog and were skipped: ` +
       `${esc(goalSeedWarn.names.join(", "))}. Add them by hand if you track them.</div>` : "";
@@ -12814,7 +12839,7 @@ function renderGoalDetailBody(g) {
   $("goal-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(g.title)}</h2>${goalPersonalChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div>` +
     `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b></div>` +
-    goalCraftHead(g) + seedWarn +
+    goalCraftHead(g) + seedWarn + notice +
     (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
     goalSpecBox(g) +
     `<div class="rm-headline"><span class="rm-headline-v ${met ? "met" : ""}">${Math.round(pr.overall_pct)}%</span>` +
@@ -12891,6 +12916,7 @@ function renderGoalDetailBody(g) {
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
   };
   wireGoalContribActions(g);
+  wireGoalAnnounce(g);
   if (g.can_edit) {
     $("goal-edit").onclick = () => renderGoalEditForm(g);
     $("goal-del").onclick = async () => {
@@ -13002,6 +13028,8 @@ function goalFormHtml(g) {
       `<div class="ev-roster" id="goal-f-lines">${lines}</div>` +
       `<button class="ev-btn" id="goal-f-addline" style="align-self:flex-start;margin-top:4px;">+ add item</button></div>` +
     `</div>` +
+    (g ? "" : `<label class="on-invis" id="goal-f-announce-row" hidden><input id="goal-f-announce" type="checkbox"> 📣 Announce to the org's Discord ` +
+      `<span class="muted">(posts the goal and its lines to the goals channel — pings nobody)</span></label>`) +
     `<div class="ev-form-actions"><button id="goal-f-save" class="ev-btn primary">${g ? "Save changes" : "Create goal"}</button>` +
       `<button class="ev-btn" id="goal-f-cancel">Cancel</button>` +
       `<span id="goal-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
@@ -13021,6 +13049,18 @@ const goalSpec = bpSpecCtl({
   qty: () => Math.max(1, parseInt(($("goal-f-bp-qty") || {}).value, 10) || 1),
 });
 
+// Discord opt-in on the create form: shown only when a goals webhook exists
+// (the board snapshot says; a direct #/goals/new load probes once) and the
+// goal is org-shared — personal goals never broadcast.
+let goalsAnnounceAvail = null;
+function goalAnnounceChecked() { const c = $("goal-f-announce"); return !!(c && !c.closest("label").hidden && c.checked); }
+async function syncGoalAnnounceRow() {
+  const row = $("goal-f-announce-row"); if (!row) return;
+  if (goalsAnnounceAvail === null) {
+    try { goalsAnnounceAvail = !!(await fetch("/api/goals").then(r => r.json())).announce_available; } catch { goalsAnnounceAvail = false; }
+  }
+  row.hidden = !(goalsAnnounceAvail && goalScopeValue() === "org");
+}
 // Unlock-goal form state: the picked recipes (key → name), the target mode.
 let goalUnlockRecipes = new Map();
 function goalKindValue() {
@@ -13046,7 +13086,7 @@ function collectGoalForm() {
     const deadline = dlDate ? `${dlDate}T${dlTime || "23:59"}` : null;
     const payload = { title, description: $("goal-f-desc").value.trim(),
       priority: parseInt($("goal-f-prio").value, 10) || 5, deadline, line_items: [],
-      visibility: goalScopeValue(), kind: "unlock",
+      visibility: goalScopeValue(), kind: "unlock", announce: goalAnnounceChecked(),
       unlock: { blueprints: [...goalUnlockRecipes.keys()], target_mode: modeBtn ? modeBtn.dataset.mode : "count",
                 target_value: tv, playstyle: $("goal-f-playstyle").value || null } };
     const statusEl = $("goal-f-status");
@@ -13082,7 +13122,7 @@ function collectGoalForm() {
   if (dlDate) deadline = new Date(`${dlDate}T${dlTime || "23:59"}`).toISOString();
   const payload = { title, description: $("goal-f-desc").value.trim(),
     priority: parseInt($("goal-f-prio").value, 10) || 5, deadline, line_items,
-    visibility: goalScopeValue() };
+    visibility: goalScopeValue(), announce: goalAnnounceChecked() };
   if (bpKey && !line_items.length) {
     payload.blueprint_key = bpKey;
     payload.blueprint_qty = Math.max(1, parseInt($("goal-f-bp-qty").value, 10) || 1);
@@ -13188,6 +13228,9 @@ function bindGoalForm(editId, onCancel) {
       // from the seed — surface it once on the detail page rather than silently.
       goalSeedWarn = (saved.seed_unmapped && saved.seed_unmapped.length)
         ? { id: saved.id, names: saved.seed_unmapped } : null;
+      if (!editId && payload.announce) goalPostNotice = saved.announced
+        ? "📣 Posted to the org's Discord."
+        : "📣 Not announced — you posted a goal moments ago. Use “Post to Discord” below in a minute.";
       if (editId && goalsSubRoute().id === saved.id) renderGoalDetail(saved.id);  // hash unchanged
       else location.hash = `#/goals/${saved.id}`;
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
@@ -13200,6 +13243,8 @@ async function renderGoalForm() {
     `<h2 class="ev-screen-h">NEW GOAL</h2>${goalFormHtml(null)}</div>`;
   bindGoalForm(null, () => { location.hash = "#/goals"; });
   bindGoalUnlockForm(null);
+  syncGoalAnnounceRow();
+  document.querySelectorAll("#goal-f-scope button").forEach(b => b.addEventListener("click", () => setTimeout(syncGoalAnnounceRow, 0)));
   // Arriving from Org readiness with recipes selected: an unlock goal, org-wide.
   if (unlockGoalSeed && unlockGoalSeed.length) {
     const keys = unlockGoalSeed; unlockGoalSeed = null;
