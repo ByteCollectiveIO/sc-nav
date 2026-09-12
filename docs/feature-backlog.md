@@ -16,6 +16,21 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### Org blueprint readiness + unlock goals 📐 PROPOSED (2026-09-12)
+
+An org's real goal ("Priority One — Recco Battaglia blueprint initiative":
+5 mining recipes, all Industry members push Battaglia rep until a majority
+holds them, then Phase Two mass production) needs three things the app
+half-has: (1) an **org-wide blueprint view** — every recipe in the feed with
+how many members hold it (`member_blueprints` already answers this; the
+commission board's "N can craft" is the same query) and its unlock path
+(now in the feed per faction, with the reputation standing gate);
+(2) a **goal kind that counts members, not materials** — target = N or a
+majority of members (optionally of a playstyle/role) holding each of a set
+of recipes, progress derived from the library table, so "PHASE TWO when the
+majority is ready" becomes a real bar; (3) the existing gather goal for the
+crafting phase (List / Gather already seed it). Design pending user call.
+
 ### Blueprint library table 🔨 BUILT (unreleased)
 
 User request 2026-09-12: `#/blueprints` was an unordered list (name · category

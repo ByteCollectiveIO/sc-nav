@@ -4743,6 +4743,19 @@ class BlueprintCommissionTests(unittest.TestCase):
         self.assertEqual(c["quality"], 640)           # weakest input rule
         self.assertTrue(any(s["value"] is not None for s in c["stat_preview"]))
 
+    def test_craftable_respects_slot_quality_floor(self):
+        # Clearcut-shaped: the slot demands Q800; a Q520 lot doesn't count,
+        # an unrated one does (flagged), a Q900 one does.
+        bp = {"aspects": [{"slot": "Case", "kind": "resource", "input": "Iron", "scu": 0.2, "min_q": 800}]}
+        resolve = lambda name: {"item_id": "commodity:iron"}
+        c = nav_core.craftable_from_holdings(bp, [{"item_id": "commodity:iron", "available": 2, "quality": 520}], resolve)
+        self.assertFalse(c["ok"]); self.assertEqual(c["slots"][0]["have"], 0); self.assertEqual(c["slots"][0]["min_q"], 800)
+        c = nav_core.craftable_from_holdings(bp, [{"item_id": "commodity:iron", "available": 2, "quality": None}], resolve)
+        self.assertTrue(c["ok"]); self.assertTrue(c["slots"][0]["assumed"])
+        c = nav_core.craftable_from_holdings(bp, [{"item_id": "commodity:iron", "available": 1, "quality": 900},
+                                                  {"item_id": "commodity:iron", "available": 5, "quality": 100}], resolve)
+        self.assertTrue(c["ok"]); self.assertEqual((c["crafts"], c["quality"]), (5, 900))
+
     def test_pledged_slot_qualities_weight_rated_lots_by_qty(self):
         # #151 step 3: a slot's fed quality = qty-weighted average of the RATED
         # pledges of its input; unrated qty rides along; a slot with no rated

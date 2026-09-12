@@ -172,7 +172,10 @@ source question.
   inputs" (neither sample uses it; handle `option_count > 1` gracefully).
 - **Blueprint acquisition**: `is_available_by_default` +
   `unlocking_missions[]` (mission title, chance, grouped "Guaranteed"/chance
-  buckets) — i.e. *how a crafter gets this blueprint*. Gold for the
+  buckets) — i.e. *how a crafter gets this blueprint*. **2026-09-12:** the
+  committed `unlocks` are now structured (giver / faction / reputation gate /
+  payout / where — from `/api/missions/<uuid>`), see
+  docs/blueprint-library.md "Unlock paths". Gold for the
   commission detail view and the v1.1 member-blueprint library.
 - **Dismantle data**: `dismantle` (time, efficiency 0.5) + per-resource
   `dismantle_returns`.
