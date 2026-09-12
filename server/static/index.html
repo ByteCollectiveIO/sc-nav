@@ -2267,6 +2267,12 @@
     background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; font-size: 13px; }
   .bp-sel-bar[hidden] { display: none; }
   .goal-recipes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; min-height: 24px; }
+  .goal-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .goal-tag-chip { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel2); color: var(--dim); font: inherit; font-size: 12px; cursor: pointer; }
+  .goal-tag-chip:hover { border-color: var(--accent); color: var(--text); }
+  .goal-tag-chip.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .goal-announce-full { font-size: 12px; color: var(--dim); margin-left: 6px; }
+  .ev-form-actions .goal-announce-full { display: inline-flex; }
   .goal-recipe-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; background: var(--panel2); }
   .goal-recipe-x { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 11px; padding: 0; }
   .goal-recipe-x:hover { color: var(--bad); }
@@ -12423,7 +12429,8 @@ function goalUnlockChip(g) { return g.kind === "unlock" ? `<span class="rm-craft
 function goalUnlockScope(g) {
   const u = g.unlock || {}, s = u.spec || {}, t = s.target || {};
   const n = u.scope_size || 0, need = u.needed || 0;
-  const who = (k) => s.playstyle ? `${esc(s.playstyle)} member${k === 1 ? "" : "s"}` : `member${k === 1 ? "" : "s"}`;
+  const tags = s.playstyles || (s.playstyle ? [s.playstyle] : []);
+  const who = (k) => tags.length ? `${tags.map(esc).join("/")} member${k === 1 ? "" : "s"}` : `member${k === 1 ? "" : "s"}`;
   return t.mode === "pct" ? `${Number(t.value)}% of ${n} ${who(n)} = ${need}` : `${Number(t.value)} ${who(Number(t.value))}`;
 }
 function goalCard(g) {
@@ -12488,14 +12495,17 @@ let goalPostNotice = null;
 // Re-post an org goal to the goals channel with its current fill (creator/admin).
 function goalAnnounceButton(g) {
   if (!g.can_edit || g.visibility === "personal" || !goalsAnnounceAvail) return "";
-  return `<button class="ev-btn" id="goal-announce" title="post this goal and its current progress to the org's Discord goals channel">📣 Post to Discord</button>`;
+  return `<button class="ev-btn" id="goal-announce" title="post this goal and its current progress to the org's Discord goals channel">📣 Post to Discord</button>` +
+    `<label class="on-invis goal-announce-full" title="post the whole description, not a 280-character cut"><input id="goal-announce-full" type="checkbox"> full description</label>`;
 }
 function wireGoalAnnounce(g) {
   const b = $("goal-announce"); if (!b) return;
   b.onclick = async () => {
     b.disabled = true; b.textContent = "Posting…";
     try {
-      const r = await fetch(`/api/goals/${g.id}/announce`, { method: "POST" });
+      const full = $("goal-announce-full");
+      const r = await fetch(`/api/goals/${g.id}/announce`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ full: !!(full && full.checked) }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw d;
       b.textContent = d.announced ? "📣 Posted ✓" : `📣 ${d.reason || "not posted"}`;
@@ -13003,8 +13013,8 @@ function goalFormHtml(g) {
             `<button type="button" data-mode="count" class="${tgt.mode !== "pct" ? "on" : ""}">members</button>` +
             `<button type="button" data-mode="pct" class="${tgt.mode === "pct" ? "on" : ""}">% of scope</button></div>` +
         `</div><span class="ev-hint">Met when EVERY recipe is held by that many members of the scope.</span></div>` +
-        `<div class="ev-field"><label>Scope</label><select id="goal-f-playstyle" class="sel"><option value="">Any member</option></select>` +
-        `<span class="ev-hint">Members carrying this playstyle tag (Settings › Profile). "Industry" ≈ mining.</span></div>` +
+        `<div class="ev-field"><label>Scope</label><div class="goal-tags" id="goal-f-playstyles"></div>` +
+        `<span class="ev-hint" id="goal-f-scope-hint">Members carrying ANY selected playstyle tag (Settings › Profile) — pick several to cover a division, e.g. Industrial = hauling + mining + salvage + trading. None = every member.</span></div>` +
       `</div></div>`;
   return `<div class="ev-form">` +
     `<div class="ev-field"><label>Title</label><input id="goal-f-title" class="ti" maxlength="120" ` +
@@ -13030,7 +13040,9 @@ function goalFormHtml(g) {
       `<button class="ev-btn" id="goal-f-addline" style="align-self:flex-start;margin-top:4px;">+ add item</button></div>` +
     `</div>` +
     (g ? "" : `<label class="on-invis" id="goal-f-announce-row" hidden><input id="goal-f-announce" type="checkbox"> 📣 Announce to the org's Discord ` +
-      `<span class="muted">(posts the goal and its lines to the goals channel — pings nobody)</span></label>`) +
+      `<span class="muted">(posts the goal and its lines to the goals channel — pings nobody)</span></label>` +
+      `<label class="on-invis goal-announce-full" id="goal-f-announce-full-row" hidden><input id="goal-f-announce-full" type="checkbox"> Include the full description ` +
+      `<span class="muted">(otherwise the first 280 characters)</span></label>`) +
     `<div class="ev-form-actions"><button id="goal-f-save" class="ev-btn primary">${g ? "Save changes" : "Create goal"}</button>` +
       `<button class="ev-btn" id="goal-f-cancel">Cancel</button>` +
       `<span id="goal-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
@@ -13055,12 +13067,15 @@ const goalSpec = bpSpecCtl({
 // goal is org-shared — personal goals never broadcast.
 let goalsAnnounceAvail = null;
 function goalAnnounceChecked() { const c = $("goal-f-announce"); return !!(c && !c.closest("label").hidden && c.checked); }
+function goalAnnounceFull() { const c = $("goal-f-announce-full"); return !!(c && goalAnnounceChecked() && c.checked); }
 async function syncGoalAnnounceRow() {
   const row = $("goal-f-announce-row"); if (!row) return;
   if (goalsAnnounceAvail === null) {
     try { goalsAnnounceAvail = !!(await fetch("/api/goals").then(r => r.json())).announce_available; } catch { goalsAnnounceAvail = false; }
   }
   row.hidden = !(goalsAnnounceAvail && goalScopeValue() === "org");
+  const full = $("goal-f-announce-full-row"), cb = $("goal-f-announce");
+  if (full && cb) { full.hidden = row.hidden || !cb.checked; cb.onchange = () => { full.hidden = !cb.checked; }; }
 }
 // Unlock-goal form state: the picked recipes (key → name), the target mode.
 let goalUnlockRecipes = new Map();
@@ -13087,9 +13102,9 @@ function collectGoalForm() {
     const deadline = dlDate ? `${dlDate}T${dlTime || "23:59"}` : null;
     const payload = { title, description: $("goal-f-desc").value.trim(),
       priority: parseInt($("goal-f-prio").value, 10) || 5, deadline, line_items: [],
-      visibility: goalScopeValue(), kind: "unlock", announce: goalAnnounceChecked(),
+      visibility: goalScopeValue(), kind: "unlock", announce: goalAnnounceChecked(), announce_full: goalAnnounceFull(),
       unlock: { blueprints: [...goalUnlockRecipes.keys()], target_mode: modeBtn ? modeBtn.dataset.mode : "count",
-                target_value: tv, playstyle: $("goal-f-playstyle").value || null } };
+                target_value: tv, playstyles: goalScopeTags() } };
     const statusEl = $("goal-f-status");
     if (statusEl) payload.status = statusEl.value;
     return { payload };
@@ -13123,7 +13138,7 @@ function collectGoalForm() {
   if (dlDate) deadline = new Date(`${dlDate}T${dlTime || "23:59"}`).toISOString();
   const payload = { title, description: $("goal-f-desc").value.trim(),
     priority: parseInt($("goal-f-prio").value, 10) || 5, deadline, line_items,
-    visibility: goalScopeValue(), announce: goalAnnounceChecked() };
+    visibility: goalScopeValue(), announce: goalAnnounceChecked(), announce_full: goalAnnounceFull() };
   if (bpKey && !line_items.length) {
     payload.blueprint_key = bpKey;
     payload.blueprint_qty = Math.max(1, parseInt($("goal-f-bp-qty").value, 10) || 1);
@@ -13155,13 +13170,20 @@ async function bindGoalUnlockForm(g) {
     addEl.value = ""; delete addEl.dataset.bpKey; addEl.parentElement.classList.remove("picked");
   });
   renderGoalRecipes();
-  const sel = $("goal-f-playstyle");
-  if (sel) {
-    let tags = [];
-    try { tags = (await fetch("/api/playstyles").then(r => r.json())).tags || []; } catch {}
-    const cur = (g && g.unlock && g.unlock.spec && g.unlock.spec.playstyle) || "";
-    sel.innerHTML = `<option value="">Any member</option>` + tags.map(t => `<option value="${esc(t)}"${t === cur ? " selected" : ""}>${esc(t)}</option>`).join("");
+  const box = $("goal-f-playstyles");
+  if (box) {
+    await ensurePlaystyleTags();
+    const spec = (g && g.unlock && g.unlock.spec) || {};
+    const cur = new Set(spec.playstyles || (spec.playstyle ? [spec.playstyle] : []));
+    box.innerHTML = playstyleTags.map(t =>
+      `<button type="button" class="goal-tag-chip ${cur.has(t) ? "on" : ""}" data-tag="${esc(t)}" aria-pressed="${cur.has(t)}">${esc(t)}</button>`).join("");
+    box.querySelectorAll(".goal-tag-chip").forEach(b => b.onclick = () => {
+      b.classList.toggle("on"); b.setAttribute("aria-pressed", b.classList.contains("on"));
+    });
   }
+}
+function goalScopeTags() {
+  return [...document.querySelectorAll("#goal-f-playstyles .goal-tag-chip.on")].map(b => b.dataset.tag);
 }
 function bindGoalForm(editId, onCancel) {
   const wirePickers = () => document.querySelectorAll("#goal-f-lines .poi-pick").forEach(w => {
