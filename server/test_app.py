@@ -3440,11 +3440,17 @@ class InventoryQualityTests(unittest.TestCase):
         self.assertNotEqual(z["id"], u["id"])
         self.assertIsNone(u["quality"])
 
-    def test_quality_rejected_on_equipment(self):
+    def test_quality_rejected_on_a_ship_but_allowed_on_equipment(self):
+        # Dev-test 2026-09-12: a CRAFTED rifle is the same catalog item as a
+        # bought one, so equipment must accept a quality; only a ship has none.
         r = self.client.post("/api/inventory", json={
-            "item_id": "item:turbodrive", "qty": 1, "quality": 700})
-        self.assertEqual(r.status_code, 400)
+            "item_id": "ship:drake-cutlass-black", "qty": 1, "quality": 700})
+        self.assertEqual(r.status_code, 400, r.text)
         self.assertIn("quality applies to", r.json()["detail"])
+        r = self.client.post("/api/inventory", json={
+            "item_id": "item:turbodrive", "qty": 1, "quality": 650})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["quality"], 650)
         r = self.client.post("/api/inventory", json={
             "item_id": "commodity:agricium", "qty": 1, "quality": 1001})
         self.assertEqual(r.status_code, 422)
@@ -3658,8 +3664,8 @@ class GoalQualityGatingTests(unittest.TestCase):
             self.assertEqual(r.status_code, 403)
         finally:
             app.app.dependency_overrides[app.require_session] = lambda: self._a
-        gear = self.client.post("/api/inventory", json={"item_id": "item:turbodrive", "qty": 2}).json()
-        r = self.client.post(f"/api/inventory/{gear['id']}/split", json={"qty": 1, "quality": 900})
+        ship = self.client.post("/api/inventory", json={"item_id": "ship:drake-cutlass-black", "qty": 2}).json()
+        r = self.client.post(f"/api/inventory/{ship['id']}/split", json={"qty": 1, "quality": 900})
         self.assertEqual(r.status_code, 400)
 
 

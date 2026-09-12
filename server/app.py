@@ -8856,11 +8856,12 @@ class CatalogItemIn(BaseModel):
 # unrated (the member didn't look / pre-migration row); 0 = station-bought, a
 # real value that means "not craftable", so the form never defaults to it.
 _QUALITY_MAX = 1000
-# Kinds a lot quality is meaningful on: mined/refined commodities (and the gems
-# the feed files under commodity) + crafted items. Ships/equipment carry a
-# type-level grade/class instead (`_item_spec`), never a per-lot quality. A
-# member-defined `custom:` item is whatever they say it is, so it's allowed too.
-_QUALITY_KINDS = ("commodity", "blueprint")
+# Kinds a quality is meaningful on: mined/refined commodities (and the gems the
+# feed files under commodity), crafted items, AND equipment/components/gear —
+# a crafted P4-AR is the same catalog item as a bought one, only with a quality
+# (2026-09-12 dev-test: equipment had no way to log it). Ships are the one
+# class that carries none. A member-defined `custom:` item is whatever they say.
+_QUALITY_KINDS = ("commodity", "blueprint", "item", "component", "gear")
 
 
 class InventoryIn(BaseModel):
@@ -8878,7 +8879,7 @@ def _check_quality_kind(item: dict, quality: int | None) -> None:
             and not str(item.get("item_id") or "").startswith("custom:")):
         raise HTTPException(
             status_code=400,
-            detail=f"quality applies to commodities and crafted items, not {item.get('kind')}")
+            detail=f"quality applies to materials and items, not a {item.get('kind')}")
 
 
 class GoalLineIn(BaseModel):
