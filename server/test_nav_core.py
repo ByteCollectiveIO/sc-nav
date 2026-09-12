@@ -2051,6 +2051,25 @@ class InventoryRollupTests(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(nav_core.derive_inventory_rollup([]), [])
 
+    def test_by_quality_keeps_lots_separate_best_first_unrated_last(self):
+        # #151: the game stacks each quality value separately and never blends,
+        # so the org rollup shows the lots it has, not one averaged number.
+        rows = [
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 10, "owner_id": "A", "location": "Area18", "quality": 300},
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 5, "owner_id": "A", "location": "Area18", "quality": 900},
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 7, "owner_id": "B", "location": "Orison", "quality": None},
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 2, "owner_id": "B", "location": "Orison", "quality": 900},
+        ]
+        roll = nav_core.derive_inventory_rollup(rows)
+        self.assertEqual(roll[0]["total"], 24)
+        self.assertEqual(roll[0]["by_quality"], [
+            {"quality": 900, "qty": 7}, {"quality": 300, "qty": 10},
+            {"quality": None, "qty": 7}])
+
     def test_zero_qty_holdings_stay_out_of_the_rollup(self):
         # The shell row an un-gathered goal pledge hangs off isn't org stock.
         rows = [

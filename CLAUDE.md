@@ -83,6 +83,26 @@ library at `#/blueprints`, #29)
   (server-side ON PURPOSE — the race is two members on a stale board). Withdraw =
   `PATCH|DELETE /api/goals/{id}/contribute/{alloc_id}` (contributor-or-admin; empty
   shell holdings swept). `PATCH /api/inventory/{id}` no longer blocks qty < committed.
+  **Lot quality (#151 step 1, 2026-09-12, docs/inventory-quality.md):** SC 4.10
+  keeps Q0–1000 on every commodity and stacks per value, so `inventory.quality`
+  (INTEGER, NULL = unrated, 0 = station-bought) joins the holding key →
+  `(owner, item, location, quality)` = `db._INV_LOT_KEY_SQL`, enforced by the
+  `inventory_lot` UNIQUE index that `_migrate_inventory_lot_key` creates ONLY
+  when a duplicate scan is clean (collisions are printed w/ ids and left for an
+  admin — summing unseen is the irreversible move). `upsert_inventory(quality=)`
+  / `get_holding(…, quality)` match on it; `InventoryIn`/`InventoryEditIn`/
+  `ContributeIn.quality` (`_QUALITY_MAX`; `_check_quality_kind` 400s it on
+  ship/item/component/gear — `_QUALITY_KINDS` commodity|blueprint + `custom:`).
+  PATCH: quality edits in place ONLY while `db.allocation_count`==0 (409 →
+  split/withdraw first: a re-rate under a goal moves its progress with no
+  contribution event), and any edit landing on another lot's key 409s via
+  `db.lot_key_clash` (location moves silently minted duplicates before).
+  `list_goal_contributions`/`get_allocation_full`/`_my_holdings_for_goal` carry
+  `quality`; `derive_inventory_rollup` adds `by_quality` (best first, unrated
+  last). Goal progress does NOT gate on it yet (step 2). Frontend:
+  `#inv-quality` (shown per `invQualityApplies`, blank = null never 0),
+  `invQualityChip` Q column + `≈B` facet (`INV_FACETS[].vals` accessor),
+  `invOrgQualityHtml` rollup lots, `#goal-c-quality` on have/pledge sources.
   Frontend: goal detail source picker + MY CONTRIBUTIONS (grouped by location,
   `goalMyContribs`/`postContribution`/`withdrawContribution`), hatched pledge bar
   segment, `⏳ gathering` annotations on lines/chips/inventory rows + `.rm-alloc-x`

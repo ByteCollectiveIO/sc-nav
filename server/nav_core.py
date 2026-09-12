@@ -5634,10 +5634,14 @@ def derive_inventory_rollup(rows) -> list[dict]:
     owner_id, location, ...}]). Returns one entry per item, biggest total first:
 
       {item_id, name, unit, total, holders (distinct owners),
-       by_owner: [{owner_id, qty}], by_location: [{location, qty}]}
+       by_owner: [{owner_id, qty}], by_location: [{location, qty}],
+       by_quality: [{quality, qty}]}
 
     Pure derivation so the endpoint can fan it out without an N+1; the per-owner /
-    per-location breakdowns power the expandable rows in the #/inventory view."""
+    per-location / per-quality breakdowns power the expandable rows in the
+    #/inventory view. `by_quality` keys on the exact lot quality (#151; None =
+    unrated), best first — the game stacks per value, so the org sees the lots
+    it actually has rather than one blended number."""
     items: dict[str, dict] = {}
     for r in rows or []:
         iid = r.get("item_id")
@@ -5656,12 +5660,16 @@ def derive_inventory_rollup(rows) -> list[dict]:
                 "total": 0.0,
                 "by_owner": {},
                 "by_location": {},
+                "by_quality": {},
             }
         it["total"] += qty
         owner = r.get("owner_id")
         it["by_owner"][owner] = it["by_owner"].get(owner, 0.0) + qty
         loc = (r.get("location") or "").strip() or "—"
         it["by_location"][loc] = it["by_location"].get(loc, 0.0) + qty
+        q = r.get("quality")
+        q = int(q) if isinstance(q, (int, float)) else None
+        it["by_quality"][q] = it["by_quality"].get(q, 0.0) + qty
 
     out = []
     for it in items.values():
@@ -5669,10 +5677,14 @@ def derive_inventory_rollup(rows) -> list[dict]:
                           key=lambda x: x["qty"], reverse=True)
         by_location = sorted(({"location": l, "qty": q} for l, q in it["by_location"].items()),
                              key=lambda x: x["qty"], reverse=True)
+        # Best quality first, unrated last.
+        by_quality = sorted(({"quality": q, "qty": n} for q, n in it["by_quality"].items()),
+                            key=lambda x: (x["quality"] is None, -(x["quality"] or 0)))
         out.append({
             "item_id": it["item_id"], "name": it["name"], "unit": it["unit"],
             "total": it["total"], "holders": len(it["by_owner"]),
             "by_owner": by_owner, "by_location": by_location,
+            "by_quality": by_quality,
         })
     out.sort(key=lambda x: x["total"], reverse=True)
     return out

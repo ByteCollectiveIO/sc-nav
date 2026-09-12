@@ -233,7 +233,8 @@ CREATE TABLE IF NOT EXISTS inventory (
     location TEXT,                      -- free text (e.g. "Area18 hangar")
     note TEXT,
     goal_id INTEGER,                   -- earmarked goal, or NULL = general pool
-    updated_at TEXT
+    updated_at TEXT,
+    quality INTEGER                     -- #151: SC lot quality 0–1000; NULL = unrated
 );
 CREATE INDEX IF NOT EXISTS inventory_owner ON inventory(owner_id);
 CREATE INDEX IF NOT EXISTS inventory_goal ON inventory(goal_id);
@@ -712,6 +713,12 @@ def init(db_path) -> None:
         # note in SCHEMA — it can't be created inside the schema script on upgrade).
         _conn.execute("CREATE INDEX IF NOT EXISTS listings_sort_price ON listings(sort_price)")
         _migrate_inventory_allocations()
+        # Lot quality (#151): the game keeps Q1–1000 on every commodity and stacks
+        # each value separately, so quality joins the holding key. Existing rows
+        # stay NULL (= unrated). The key was only ever code-enforced; the UNIQUE
+        # index goes on only once a scan proves no duplicates already exist.
+        _ensure_column("inventory", "quality", "INTEGER")
+        _migrate_inventory_lot_key()
         if denorm_added:                        # only on the boot that adds the columns
             _backfill_listing_denorm()
 
@@ -834,6 +841,33 @@ def _migrate_inventory_allocations() -> None:
             "(inventory_id, goal_id, qty, created_at, updated_at) VALUES (?,?,?,?,?)",
             (r["id"], r["goal_id"], r["qty"], r["updated_at"], r["updated_at"]))
         _conn.execute("UPDATE inventory SET goal_id=NULL WHERE id=?", (r["id"],))
+
+
+# The holding key (#151). `goal_id` is always NULL post-v1.1 so it's not part of
+# it; NULLs are folded to sentinels because SQLite treats them as distinct in a
+# UNIQUE index, which would let two unrated lots at the same place coexist.
+_INV_LOT_KEY_SQL = "owner_id, item_id, COALESCE(location,''), COALESCE(quality,-1)"
+
+
+def _migrate_inventory_lot_key() -> None:
+    """Enforce one row per (owner, item, location, quality) with a UNIQUE index.
+
+    The key was code-enforced only, so a silent duplicate may already exist on
+    an old DB. Summing two rows without a person looking is the one
+    irreversible move here, so collisions are LOGGED with their ids and left
+    for an admin; the index is created only when the scan is clean (and the
+    boot after the clean-up picks it up — idempotent)."""
+    dupes = _conn.execute(
+        f"SELECT {_INV_LOT_KEY_SQL}, GROUP_CONCAT(id) AS ids FROM inventory "
+        f"GROUP BY {_INV_LOT_KEY_SQL} HAVING COUNT(*) > 1").fetchall()
+    if dupes:
+        for d in dupes:
+            print(f"[sc-nav] inventory lot key collision: owner {d[0]} item {d[1]!r} "
+                  f"location {d[2]!r} quality {d[3]} -> rows {d['ids']} "
+                  "(merge or delete by hand; unique index deferred)")
+        return
+    _conn.execute(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS inventory_lot ON inventory({_INV_LOT_KEY_SQL})")
 
 
 def _ensure_column(table: str, column: str, decl: str) -> bool:
@@ -2195,18 +2229,22 @@ def _inventory_row_to_dict(r: sqlite3.Row) -> dict:
 
 def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | None,
                      qty: float, location: str | None, note: str | None,
-                     goal_id: int | None, updated_at: str) -> dict:
-    """Log a member's holding. One row per (owner, item, location, goal): an
+                     goal_id: int | None, updated_at: str,
+                     quality: int | None = None) -> dict:
+    """Log a member's holding. One row per (owner, item, location, quality): an
     existing match has its quantity/note SET (not summed) to the new value, so
-    re-logging "I hold 80 SCU here" is idempotent rather than stacking. Returns
-    the resulting row. (SQLite treats NULLs as distinct in a UNIQUE, so the match
-    is done explicitly here with COALESCE rather than via an upsert conflict.)"""
+    re-logging "I hold 80 SCU here" is idempotent rather than stacking. A
+    different quality is a different LOT (#151) — the game stacks per value and
+    never blends, so neither do we. Returns the resulting row. (SQLite treats
+    NULLs as distinct in a UNIQUE, so the match is done explicitly here with
+    COALESCE rather than via an upsert conflict.)"""
     with _lock, _conn:
         existing = _conn.execute(
             "SELECT id FROM inventory WHERE owner_id=? AND item_id=? "
             "AND COALESCE(location,'')=COALESCE(?,'') "
-            "AND COALESCE(goal_id,0)=COALESCE(?,0)",
-            (str(owner_id), item_id, location, goal_id),
+            "AND COALESCE(goal_id,0)=COALESCE(?,0) "
+            "AND COALESCE(quality,-1)=COALESCE(?,-1)",
+            (str(owner_id), item_id, location, goal_id, quality),
         ).fetchone()
         if existing:
             _conn.execute(
@@ -2218,9 +2256,10 @@ def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | No
         else:
             cur = _conn.execute(
                 "INSERT INTO inventory (owner_id, item_id, item_name, unit, qty, "
-                "location, note, goal_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                "location, note, goal_id, updated_at, quality) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (str(owner_id), item_id, item_name, unit, qty, location, note,
-                 goal_id, updated_at),
+                 goal_id, updated_at, quality),
             )
             rid = cur.lastrowid
         row = _conn.execute("SELECT * FROM inventory WHERE id=?", (rid,)).fetchone()
@@ -2252,18 +2291,44 @@ def get_inventory(inv_id: int) -> dict | None:
     return _inventory_row_to_dict(row) if row else None
 
 
-def get_holding(owner_id: str, item_id: str, location: str | None) -> dict | None:
-    """A member's general (goal-less) holding of an item at a location, if any —
-    the parent a goal contribution draws from. Mirrors the upsert match key."""
+def get_holding(owner_id: str, item_id: str, location: str | None,
+                quality: int | None = None) -> dict | None:
+    """A member's general (goal-less) lot of an item at a location + quality, if
+    any — the parent a goal contribution draws from. Mirrors the upsert match key."""
     with _lock:
         row = _conn.execute(
             "SELECT * FROM inventory WHERE owner_id=? AND item_id=? "
-            "AND COALESCE(location,'')=COALESCE(?,'') AND goal_id IS NULL",
-            (str(owner_id), item_id, location)).fetchone()
+            "AND COALESCE(location,'')=COALESCE(?,'') AND goal_id IS NULL "
+            "AND COALESCE(quality,-1)=COALESCE(?,-1)",
+            (str(owner_id), item_id, location, quality)).fetchone()
     return _inventory_row_to_dict(row) if row else None
 
 
-_INV_EDITABLE = ("qty", "location", "note", "unit")
+def lot_key_clash(inv_id: int, owner_id: str, item_id: str, location: str | None,
+                  quality: int | None) -> dict | None:
+    """The OTHER holding (not `inv_id`) already sitting on this lot key, if any —
+    what an edit that moves a row's location/quality would collide with. The
+    caller 409s instead of letting the UNIQUE index raise (or, on a DB whose
+    index is deferred, silently minting the duplicate)."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM inventory WHERE owner_id=? AND item_id=? "
+            "AND COALESCE(location,'')=COALESCE(?,'') AND goal_id IS NULL "
+            "AND COALESCE(quality,-1)=COALESCE(?,-1) AND id<>?",
+            (str(owner_id), item_id, location, quality, inv_id)).fetchone()
+    return _inventory_row_to_dict(row) if row else None
+
+
+def allocation_count(inv_id: int) -> int:
+    """How many goal commitments draw from a holding (0 = nothing depends on it)."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT COUNT(*) AS n FROM inventory_allocations WHERE inventory_id=?",
+            (inv_id,)).fetchone()
+    return int(row["n"] or 0)
+
+
+_INV_EDITABLE = ("qty", "location", "note", "unit", "quality")
 
 
 def update_inventory(inv_id: int, fields: dict, updated_at: str) -> bool:
@@ -2364,7 +2429,8 @@ def list_goal_contributions(goal_id: int | None = None) -> list[dict]:
     `goal_id` None returns every goal's contributions (board grouping)."""
     q = ("SELECT a.id AS allocation_id, a.goal_id, a.qty AS qty, "
          "a.inventory_id AS holding_id, i.owner_id, i.item_id, i.item_name, "
-         f"i.unit, i.location, i.qty AS holding_qty, {_ALLOC_SHORT_SQL} AS short "
+         "i.unit, i.location, i.quality, i.qty AS holding_qty, "
+         f"{_ALLOC_SHORT_SQL} AS short "
          "FROM inventory_allocations a "
          "JOIN inventory i ON i.id = a.inventory_id")
     params: list = []
@@ -2396,7 +2462,7 @@ def get_allocation_full(alloc_id: int) -> dict | None:
     with _lock:
         row = _conn.execute(
             "SELECT a.id, a.inventory_id, a.goal_id, a.qty, i.owner_id, i.item_id, "
-            "i.item_name, i.unit, i.location, i.qty AS holding_qty "
+            "i.item_name, i.unit, i.location, i.quality, i.qty AS holding_qty "
             "FROM inventory_allocations a JOIN inventory i ON i.id = a.inventory_id "
             "WHERE a.id=?", (alloc_id,)).fetchone()
     return dict(row) if row else None

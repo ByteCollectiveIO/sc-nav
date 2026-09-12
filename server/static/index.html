@@ -2019,6 +2019,9 @@
     padding: 2px 8px; border-radius: 999px; background: var(--panel2); color: var(--dim);
     border: 1px solid var(--border); }
   .rm-minq { font-size: 10px; color: var(--craft); margin-left: 6px; white-space: nowrap; }
+  /* Lot quality chip (#151): the game's Q0–1000 + our ≈band. */
+  .inv-q { font-size: 11px; color: var(--craft); white-space: nowrap; }
+  .inv-q .muted { font-size: 10px; margin-left: 3px; }
   /* align-self: a flex-column parent (.ev-field) would otherwise stretch the seg full-width */
   .rm-scope-seg { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; align-self: flex-start; }
@@ -12533,8 +12536,9 @@ function goalSourceOptionsHtml(g, itemId) {
   const best = holds.find(h => h.available > 0) || holds[0];
   return holds.map(h =>
       `<option value="hold:${h.id}"${h === best ? " selected" : ""}>` +
-      `📍 ${esc(h.location || "no location")} — ${fmtQty(h.available)} free ` +
-      `of ${fmtQty(h.qty)} ${esc(h.unit || "")}</option>`).join("") +
+      `📍 ${esc(h.location || "no location")}` +
+      `${h.quality === null || h.quality === undefined ? "" : ` · Q${Number(h.quality)}`}` +
+      ` — ${fmtQty(h.available)} free of ${fmtQty(h.qty)} ${esc(h.unit || "")}</option>`).join("") +
     `<option value="have">I have these — not logged yet</option>` +
     `<option value="pledge"${best ? "" : " selected"}>I'll gather these — pledge</option>`;
 }
@@ -12627,6 +12631,8 @@ function renderGoalDetailBody(g) {
         `<input id="goal-c-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
         `<select id="goal-c-src" class="sel" style="flex:1;min-width:210px" aria-label="Where this comes from"></select>` +
         `<span class="poi-pick" id="goal-c-loc-wrap" style="flex:1;min-width:140px"><input id="goal-c-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
+        `<input id="goal-c-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
+          `title="Lot quality 0–1000 as the game shows it; blank = unrated" style="display:none">` +
         `<button class="ev-btn primary" id="goal-c-save">Contribute</button>` +
       `</div><span class="ev-hint" id="goal-c-hint"></span>` +
       `<span id="goal-c-msg" class="muted"></span></div>` +
@@ -12655,6 +12661,8 @@ function renderGoalDetailBody(g) {
     const kind = src.startsWith("hold:") ? "hold" : src;
     // display, not [hidden]: .poi-pick sets its own display and would win.
     $("goal-c-loc-wrap").style.display = kind === "hold" ? "none" : "";
+    // A new lot may state its quality (#151); an existing holding already has one.
+    $("goal-c-quality").style.display = kind === "hold" ? "none" : "";
     $("goal-c-hint").textContent = GOAL_SRC_HINTS[kind] || "";
   };
   const syncItem = () => {
@@ -12676,6 +12684,7 @@ function renderGoalDetailBody(g) {
     else {
       body.location = $("goal-c-loc").value.trim();
       body.on_hand = src === "have";
+      body.quality = invQualityValue($("goal-c-quality"));
     }
     msg.textContent = "Saving…";
     try {
@@ -12956,6 +12965,8 @@ async function renderInventory() {
       `<span class="poi-pick"><input id="inv-item" class="ti" placeholder="item" autocomplete="off"></span>` +
       `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
       unitSelect("inv-unit", "") +
+      `<input id="inv-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
+        `title="Lot quality as the game shows it, 0–1000. Leave blank if unrated; station-bought is 0." style="display:none">` +
       `<span class="poi-pick" style="flex:1;min-width:140px"><input id="inv-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
       `<button class="ev-btn primary" id="inv-save">Log holding</button>` +
     `</div><span id="inv-msg" class="muted"></span></div>` +
@@ -12964,8 +12975,14 @@ async function renderInventory() {
       `<button class="rm-tab ${rmInvScope === "org" ? "on" : ""}" id="inv-scope-org">Org rollup</button>` +
     `</div></div><div id="inv-body"><p class="stat-empty">Loading…</p></div></div>`;
 
-  // Picking an item prefills the unit from the catalog (overridable).
-  attachCatalogPicker($("inv-item").parentElement, it => { if (it && it.unit) document.querySelector(".inv-unit").value = it.unit; });
+  // Picking an item prefills the unit from the catalog (overridable) and shows
+  // the quality field only for item classes that carry one (#151).
+  attachCatalogPicker($("inv-item").parentElement, it => {
+    if (it && it.unit) document.querySelector(".inv-unit").value = it.unit;
+    const q = $("inv-quality"), ok = it && invQualityApplies(it);
+    q.style.display = ok ? "" : "none";
+    if (!ok) q.value = "";
+  });
   attachPoiPicker($("inv-loc").parentElement);   // location autocompletes from POIs (free text ok)
   $("inv-save").onclick = logHolding;
   const setScope = (s) => { rmInvScope = s; try { localStorage.setItem("rmInvScope", s); } catch {} renderInventory(); };
@@ -12983,13 +13000,34 @@ async function logHolding() {
   try {
     const r = await fetch("/api/inventory", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id, qty, unit: document.querySelector(".inv-unit").value, location: $("inv-loc").value.trim() }) });
+      body: JSON.stringify({ item_id, qty, unit: document.querySelector(".inv-unit").value,
+        location: $("inv-loc").value.trim(), quality: invQualityValue($("inv-quality")) }) });
     if (!r.ok) throw await r.json().catch(() => ({}));
     input.value = ""; delete input.dataset.itemId; $("inv-qty").value = ""; $("inv-loc").value = "";
+    $("inv-quality").value = ""; $("inv-quality").style.display = "none";
     msg.textContent = "Logged ✓";
     rmInvScope === "mine" ? renderInvMine() : renderInvOrg();
   } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
 }
+
+// --- lot quality (#151) ---
+// Which item classes carry a per-lot quality: mined/refined commodities (gems
+// included) and crafted items; a member-defined custom item is whatever they say.
+// Ships/equipment have a type-level grade instead — never a lot quality.
+function invQualityApplies(it) {
+  return it.kind === "commodity" || it.kind === "blueprint" || String(it.item_id || "").startsWith("custom:");
+}
+// Blank = unrated (null), never 0: 0 is a real value (station-bought, not craftable).
+function invQualityValue(input) {
+  const v = input.value.trim();
+  return v === "" ? null : Math.max(0, Math.min(1000, Math.round(Number(v))));
+}
+function invQualityChip(q) {
+  if (q === null || q === undefined) return "";
+  return `<span class="inv-q" title="lot quality ${Number(q)} (${bandTag(q)})">Q${Number(q)}<span class="muted">≈B${qualityBand(q)}</span></span>`;
+}
+// Facet value for a lot: the approximate band, or "unrated".
+function invQualityFacet(q) { return (q === null || q === undefined) ? "unrated" : "≈B" + qualityBand(q); }
 
 let rmOrgItems = [];
 async function renderInvOrg() {
@@ -13020,10 +13058,21 @@ function invOrgTableHtml(rows) {
       it.by_owner.map(o => `<span>${esc(o.display_name)}: ${fmtQty(o.qty)}</span>`).join("") +
     `</div><div class="rm-breakdown" style="margin-top:6px;opacity:.8">` +
       it.by_location.map(l => `<span>📍 ${esc(l.location)}: ${fmtQty(l.qty)}</span>`).join("") +
-    `</div></td></tr>`).join("");
+    `</div>` + invOrgQualityHtml(it) + `</td></tr>`).join("");
   return `<table class="inv-table"><thead><tr>` +
     `<th>Item</th><th>Category</th><th>Size</th><th>Class</th><th>Grade</th><th>Maker</th>` +
     `<th class="num">Total</th><th class="num">Holders</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// Per-quality lots of a rollup item (#151) — shown only when some lot is rated,
+// so a rollup of unrated rows looks exactly as it did before.
+function invOrgQualityHtml(it) {
+  const lots = it.by_quality || [];
+  if (!lots.some(l => l.quality !== null && l.quality !== undefined)) return "";
+  return `<div class="rm-breakdown" style="margin-top:6px">` +
+    lots.map(l => `<span>${l.quality === null || l.quality === undefined
+      ? `<span class="muted">unrated</span>` : invQualityChip(l.quality)}: ${fmtQty(l.qty)}</span>`).join("") +
+    `</div>`;
 }
 
 function wireInvOrg() {
@@ -13043,7 +13092,7 @@ let rmMineRows = [];
 // Facet filters shared by BOTH inventory tabs, keyed on each item's characteristics
 // (server-joined `spec`) plus a location facet. Persist across re-renders and tab
 // switches within the session; `q` is a free-text name search.
-let rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "", location: "" };
+let rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "", location: "", quality: "" };
 // Which facets become dropdowns, in display order. category/maker apply to any
 // item; size/class/grade only to ship components; location comes off each row (a
 // single stash for a holding, the whole spread for a rollup item — see `loc`).
@@ -13054,7 +13103,18 @@ const INV_FACETS = [
   { key: "grade", label: "Grade", fmt: v => "Grade " + v },
   { key: "size", label: "Size", fmt: v => "S" + v },
   { key: "location", label: "Location", fmt: v => v, loc: true },
+  // Lot quality (#151) by approximate band; a rollup item spreads across its lots.
+  { key: "quality", label: "Quality", fmt: v => v,
+    vals: r => r.by_quality ? r.by_quality.map(l => invQualityFacet(l.quality)) : [invQualityFacet(r.quality)] },
 ];
+// The values a row exposes for a facet: a custom accessor, the location spread,
+// or the item's spec characteristic.
+function invFacetVals(f, r) {
+  if (f.vals) return f.vals(r);
+  if (f.loc) return invRowLocations(r);
+  const v = r.spec && r.spec[f.key];
+  return v ? [String(v)] : [];
+}
 
 // The dataset the filter bar currently operates on — mine holdings or org rollup.
 function invActiveRows() { return rmInvScope === "org" ? rmOrgItems : rmMineRows; }
@@ -13084,10 +13144,7 @@ async function renderInvMine() {
 // sets stay stable regardless of the current filters).
 function invDistinct(f) {
   const vals = new Set();
-  for (const r of invActiveRows()) {
-    if (f.loc) invRowLocations(r).forEach(v => { if (v) vals.add(v); });
-    else { const v = r.spec && r.spec[f.key]; if (v) vals.add(String(v)); }
-  }
+  for (const r of invActiveRows()) invFacetVals(f, r).forEach(v => { if (v) vals.add(v); });
   return [...vals].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
@@ -13097,8 +13154,7 @@ function invMatchesFilters(r) {
   for (const f of INV_FACETS) {
     const want = rmInvFilters[f.key];
     if (!want) continue;
-    if (f.loc) { if (!invRowLocations(r).includes(want)) return false; }
-    else if (String((r.spec && r.spec[f.key]) || "") !== want) return false;
+    if (!invFacetVals(f, r).includes(want)) return false;
   }
   return true;
 }
@@ -13155,7 +13211,7 @@ function wireInvFilters() {
   });
   const clr = $("inv-filter-clear");
   if (clr) clr.onclick = () => {
-    rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "", location: "" };
+    rmInvFilters = { q: "", category: "", manufacturer: "", class: "", grade: "", size: "", location: "", quality: "" };
     renderInvList();
   };
 }
@@ -13177,7 +13233,7 @@ function invSpecCells(spec) {
 function invMineTableHtml(rows) {
   const body = rows.map(invMineRowHtml).join("");
   return `<table class="inv-table"><thead><tr>` +
-    `<th>Item</th><th>Category</th><th>Size</th><th>Class</th><th>Grade</th><th>Maker</th>` +
+    `<th>Item</th><th>Quality</th><th>Category</th><th>Size</th><th>Class</th><th>Grade</th><th>Maker</th>` +
     `<th class="num">Qty</th><th>Location</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
@@ -13203,6 +13259,7 @@ function invMineRowHtml(r) {
     `title="withdraw this contribution">✕ withdraw</button></div>`).join("");
   return `<tr class="rm-mine-row" data-id="${r.id}">` +
     `<td><b>${esc(r.item_name)}</b>${note}${allocs}</td>` +
+    `<td>${invQualityChip(r.quality)}</td>` +
     invSpecCells(r.spec) +
     `<td class="num">${fmtQty(r.qty)} ${unit}${free}${gathering}</td>` +
     `<td class="inv-loc">${r.location ? `📍 ${esc(r.location)}` : ""}</td>` +
@@ -13237,16 +13294,24 @@ function wireInvMine() {
 // Inline edit of a holding (item is fixed — delete + re-add to change it). The
 // row collapses to a single edit form spanning the columns. Qty may go below what's
 // committed to goals: spending stock you promised doesn't cancel the promise, it
-// turns the uncovered part into a ⏳ pledge to re-gather.
+// turns the uncovered part into a ⏳ pledge to re-gather. Quality (#151) is part
+// of the lot's identity: it edits in place only while nothing is pledged from
+// the lot — the server 409s otherwise, and the field says so up front.
 function openInvEdit(id) {
   const r = rmMineRows.find(x => String(x.id) === String(id));
   const rowEl = $("inv-body").querySelector(`.rm-mine-row[data-id="${id}"]`);
   if (!r || !rowEl) return;
+  const pledged = (r.allocations || []).length > 0;
+  const qualityField = invQualityApplies({ kind: r.kind, item_id: r.item_id })
+    ? `<input class="ti rm-qty rm-e-quality" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
+      `value="${r.quality === null || r.quality === undefined ? "" : Number(r.quality)}"` +
+      (pledged ? ` disabled title="This lot backs goal contributions — withdraw them before changing its quality."` : ` title="Lot quality 0–1000; blank = unrated"`) + `>`
+    : "";
   rowEl.innerHTML =
-    `<td colspan="9"><div class="rm-row" style="flex-wrap:wrap">` +
+    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap">` +
       `<span class="rm-edit-item"><b>${esc(r.item_name)}</b></span>` +
       `<input class="ti rm-qty rm-e-qty" type="number" min="0" step="any" value="${fmtQty(r.qty)}">` +
-      unitSelect("rm-e-unit", r.unit) +
+      unitSelect("rm-e-unit", r.unit) + qualityField +
       `<span class="poi-pick" style="flex:1;min-width:120px"><input class="ti rm-e-loc" maxlength="120" placeholder="location" autocomplete="off" value="${esc(r.location || "")}"></span>` +
       `<input class="ti rm-e-note" maxlength="500" placeholder="note (optional)" value="${esc(r.note || "")}" style="flex:1;min-width:120px">` +
       `<button class="ev-btn primary rm-e-save">Save</button>` +
@@ -13265,7 +13330,10 @@ function openInvEdit(id) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ qty, unit: rowEl.querySelector(".rm-e-unit").value,
           location: rowEl.querySelector(".rm-e-loc").value.trim(),
-          note: rowEl.querySelector(".rm-e-note").value.trim() }) });
+          note: rowEl.querySelector(".rm-e-note").value.trim(),
+          quality: rowEl.querySelector(".rm-e-quality")
+            ? invQualityValue(rowEl.querySelector(".rm-e-quality"))
+            : (r.quality === undefined ? null : r.quality) }) });
       if (!res.ok) throw await res.json().catch(() => ({}));
       renderInvMine();
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }

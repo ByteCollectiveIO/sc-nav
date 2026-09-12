@@ -8852,12 +8852,33 @@ class CatalogItemIn(BaseModel):
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
 
 
+# Lot quality (#151): the game's own 0–1000 scalar on a commodity lot. None =
+# unrated (the member didn't look / pre-migration row); 0 = station-bought, a
+# real value that means "not craftable", so the form never defaults to it.
+_QUALITY_MAX = 1000
+# Kinds a lot quality is meaningful on: mined/refined commodities (and the gems
+# the feed files under commodity) + crafted items. Ships/equipment carry a
+# type-level grade/class instead (`_item_spec`), never a per-lot quality. A
+# member-defined `custom:` item is whatever they say it is, so it's allowed too.
+_QUALITY_KINDS = ("commodity", "blueprint")
+
+
 class InventoryIn(BaseModel):
     item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
     qty: float = Field(ge=0, le=_MAX_QTY)
     location: str = Field(default="", max_length=_LOCATION_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
+    quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
+
+
+def _check_quality_kind(item: dict, quality: int | None) -> None:
+    """400 a quality on an item class that has none (a ship at Q700 is a typo)."""
+    if (quality is not None and item.get("kind") not in _QUALITY_KINDS
+            and not str(item.get("item_id") or "").startswith("custom:")):
+        raise HTTPException(
+            status_code=400,
+            detail=f"quality applies to commodities and crafted items, not {item.get('kind')}")
 
 
 class GoalLineIn(BaseModel):
@@ -9017,6 +9038,9 @@ async def get_inventory(owner: str | None = None, goal: int | None = None,
                         "available": round(max(0.0, qty - committed), 6),
                         "short": round(max(0.0, committed - qty), 6),
                         "spec": _item_spec(r.get("item_id")),
+                        # Item class, so the row editor knows whether a lot
+                        # quality applies (#151) — type-level, joined at read time.
+                        "kind": (resolve_catalog_item(r.get("item_id")) or {}).get("kind"),
                         # `id` rides along so a commitment can be withdrawn straight
                         # from the inventory screen; `short` flags the part of it the
                         # member hasn't actually logged as stock yet.
@@ -9045,12 +9069,13 @@ async def log_inventory(body: InventoryIn, user: dict = Depends(require_session)
     earmarking part of it to a goal is a separate allocation (see the contribute
     endpoint), so what's logged here is never double-counted as a contribution."""
     item = _resolve_or_400(body.item_id)
+    _check_quality_kind(item, body.quality)
     unit = catalog.valid_unit(body.unit) or item["unit"]
     now = datetime.now(timezone.utc).isoformat()
     row = db.upsert_inventory(
         user["id"], item["item_id"], item["name"], unit, body.qty,
         body.location.strip() or None, (body.note or "").strip() or None,
-        None, now)
+        None, now, quality=body.quality)
     return _holding_view(row)
 
 
@@ -9059,25 +9084,49 @@ class InventoryEditIn(BaseModel):
     location: str = Field(default="", max_length=_LOCATION_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
+    quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
 
 
 @app.patch("/api/inventory/{inv_id}")
 async def edit_inventory(inv_id: int, body: InventoryEditIn,
                          user: dict = Depends(require_session)):
-    """Edit a holding's qty / location / note / unit (owner-or-admin). The item
-    can't be changed here (delete + re-add for that). Quantity MAY drop below what's
-    committed to goals — spending or losing stock you've promised doesn't cancel the
-    promise; the uncovered part becomes a pledge to re-gather (`short`), which the
-    goal board shows rather than pretending the materials are in hand."""
+    """Edit a holding's qty / location / note / unit / quality (owner-or-admin).
+    The item can't be changed here (delete + re-add for that). Quantity MAY drop
+    below what's committed to goals — spending or losing stock you've promised
+    doesn't cancel the promise; the uncovered part becomes a pledge to re-gather
+    (`short`), which the goal board shows rather than pretending the materials
+    are in hand.
+
+    Quality is part of the lot's identity (#151), so it changes in place ONLY
+    while nothing is pledged from the lot: under a goal, a quality edit would
+    move that goal's progress with no contribution event. A pledged lot is
+    split or withdrawn first (409 says so). Any edit that lands on another lot's
+    key (same item + location + quality) 409s rather than minting a duplicate."""
     row = db.get_inventory(inv_id)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown inventory row")
     if row["owner_id"] != user["id"] and not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="you can only edit your own holdings")
+    item = resolve_catalog_item(row["item_id"]) or {"kind": "commodity"}
+    _check_quality_kind(item, body.quality)
+    loc = body.location.strip() or None
+    if body.quality != row.get("quality") and db.allocation_count(inv_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This lot backs goal contributions — withdraw them (or log the "
+                   "re-rated part as a new holding) before changing its quality.")
+    clash = db.lot_key_clash(inv_id, row["owner_id"], row["item_id"], loc, body.quality)
+    if clash:
+        q = "unrated" if clash.get("quality") is None else f"Q{clash['quality']}"
+        raise HTTPException(
+            status_code=409,
+            detail=f"You already hold {row['item_name']} ({q}) at "
+                   f"{loc or 'no location'} — edit that row instead of merging into it.")
     fields = {"qty": body.qty,
-              "location": body.location.strip() or None,
+              "location": loc,
               "note": (body.note or "").strip() or None,
-              "unit": catalog.valid_unit(body.unit) or row.get("unit")}
+              "unit": catalog.valid_unit(body.unit) or row.get("unit"),
+              "quality": body.quality}
     db.update_inventory(inv_id, fields, datetime.now(timezone.utc).isoformat())
     return _holding_view(db.get_inventory(inv_id))
 
@@ -9256,6 +9305,7 @@ def _my_holdings_for_goal(goal: dict, user: dict) -> list[dict]:
         qty, c = float(r.get("qty") or 0), committed.get(r["id"], 0.0)
         out.append({"id": r["id"], "item_id": r["item_id"], "item_name": r["item_name"],
                     "unit": r.get("unit"), "qty": qty, "location": r.get("location"),
+                    "quality": r.get("quality"),
                     "committed": c, "available": round(max(0.0, qty - c), 6)})
     return out
 
@@ -9338,6 +9388,9 @@ class ContributeIn(BaseModel):
     # so an un-gathered pledge never invents inventory the member doesn't have.
     holding_id: int | None = None
     on_hand: bool = False
+    # Lot quality for a holding this call declares (#151) — ignored when
+    # `holding_id` names an existing lot, which already has one.
+    quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
     # The member has seen and accepted that this pushes the line past its need.
     allow_over: bool = False
 
@@ -9393,14 +9446,16 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
                 or holding["item_id"] != item["item_id"]):
             raise HTTPException(status_code=400, detail="unknown holding for this item")
     else:
-        holding = db.get_holding(user["id"], item["item_id"], loc)
+        _check_quality_kind(item, body.quality)
+        holding = db.get_holding(user["id"], item["item_id"], loc, body.quality)
     if holding is None:
         # No matching holding yet: the contribution declares one — with stock only
         # if the member says it's on hand, else an empty shell the pledge hangs off
         # (so it still shows in their inventory as something they owe).
         holding = db.upsert_inventory(
             user["id"], item["item_id"], item["name"], item["unit"],
-            body.qty if body.on_hand else 0, loc, None, None, now)
+            body.qty if body.on_hand else 0, loc, None, None, now,
+            quality=body.quality)
     existing = db.find_allocation(holding["id"], goal_id)
     if body.on_hand:
         # Declaring it's in hand: bump the holding so the commitment is covered.
