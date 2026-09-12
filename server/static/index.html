@@ -13012,7 +13012,7 @@ function goalFormHtml(g) {
     `<div class="ev-field"><label>Description</label><textarea id="goal-f-desc" maxlength="2000" ` +
       `placeholder="What's this campaign for?">${g ? esc(g.description || "") : ""}</textarea></div>` +
     kindSeg + scopeSeg + unlockBlock +
-    `<div id="goal-f-materials"${kind === "unlock" ? " hidden" : ""}>` + seedBlock +
+    `<div class="goal-f-mat"${kind === "unlock" ? " hidden" : ""}>` + seedBlock + `</div>` +
     `<div class="ev-form-grid">` +
       `<div class="ev-field"><label>Priority</label><select id="goal-f-prio">` +
         PRIO_TIERS.map(([t, lbl, val]) =>
@@ -13024,6 +13024,7 @@ function goalFormHtml(g) {
         `value="${g && g.deadline ? toLocalTime(g.deadline) : ""}"><span class="ev-hint">Blank ⇒ end of day.</span></div>` +
       statusSel +
     `</div>` +
+    `<div class="goal-f-mat"${kind === "unlock" ? " hidden" : ""}>` +
     `<div class="ev-field"><label>Line items — what to gather &amp; how much</label>` +
       `<div class="ev-roster" id="goal-f-lines">${lines}</div>` +
       `<button class="ev-btn" id="goal-f-addline" style="align-self:flex-start;margin-top:4px;">+ add item</button></div>` +
@@ -13141,7 +13142,8 @@ async function bindGoalUnlockForm(g) {
   document.querySelectorAll("#goal-f-kind button").forEach(b => b.onclick = () => {
     document.querySelectorAll("#goal-f-kind button").forEach(x => x.classList.remove("on")); b.classList.add("on");
     const unlock = b.dataset.kind === "unlock";
-    $("goal-f-unlock").hidden = !unlock; $("goal-f-materials").hidden = unlock;
+    $("goal-f-unlock").hidden = !unlock;
+    document.querySelectorAll(".goal-f-mat").forEach(el => { el.hidden = unlock; });
   });
   document.querySelectorAll("#goal-f-tmode button").forEach(b => b.onclick = () => {
     document.querySelectorAll("#goal-f-tmode button").forEach(x => x.classList.remove("on")); b.classList.add("on");
