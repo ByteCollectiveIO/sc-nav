@@ -138,6 +138,13 @@ library at `#/blueprints`, #29)
   for lots vs `⚒` crafted; **Sell** on a holding (`.rm-inv-sell` →
   `mktFormSeed` → `renderMarketForm` prefill). Rollup `by_band`
   `[{band, qty, lots}]` → `invOrgQualityHtml` band chips w/ exact lots.
+  **Listing form is inventory-aware (dev-test asks, same day):** picking an
+  item renders `#mk-mylots` = the member's free lots of it (`mkShowMyLots`,
+  best Q first) — click fills qty(free)/quality/pickup; the market-value +
+  org-history "use" buttons multiply the PER-UNIT figure by the quantity
+  (`mkUseMarketPrice`/`mkPriceField`/`mkRepriceForQty`, `mkPriceUnit`) —
+  a listing's `price_auec` is the TOTAL for the whole qty; the auto price
+  tracks qty edits until the member types a price (`dataset.auto`).
   Frontend: goal detail source picker + MY CONTRIBUTIONS (grouped by location,
   `goalMyContribs`/`postContribution`/`withdrawContribution`), hatched pledge bar
   segment, `⏳ gathering` annotations on lines/chips/inventory rows + `.rm-alloc-x`

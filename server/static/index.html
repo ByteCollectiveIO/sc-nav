@@ -2217,6 +2217,10 @@
   .mk-mv-use { cursor: pointer; margin-left: 6px; font-size: 11px; padding: 1px 8px; border-radius: 6px;
     border: 1px solid var(--border); background: transparent; color: var(--accent); }
   .mk-mv-use:hover { border-color: var(--accent); }
+  .mk-lot-btn { cursor: pointer; margin: 2px 6px 2px 0; font-size: 11px; padding: 2px 8px; border-radius: 6px;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  .mk-lot-btn:hover { border-color: var(--accent); }
+  .mk-lot-btn.on { border-color: var(--accent); color: var(--accent); }
   /* board search / sort / filter row */
   .mk-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
   .mk-search input, .mk-search select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
@@ -13377,7 +13381,7 @@ function wireInvMine() {
     b.onclick = () => {
       const r = rmMineRows.find(x => String(x.id) === b.dataset.id);
       if (!r) return;
-      mktFormSeed = { item_id: r.item_id, item_name: r.item_name, unit: r.unit,
+      mktFormSeed = { id: r.id, item_id: r.item_id, item_name: r.item_name, unit: r.unit,
         qty: Number(r.available) || 0, quality: r.quality == null ? null : r.quality, location: r.location || "" };
       location.hash = "#/market/new";
     };
@@ -14663,7 +14667,8 @@ function marketFormHtml(l) {
       `placeholder="search the catalog…" autocomplete="off"${picked} value="${l && l.mode !== "commission" ? esc(l.item_name || "") : ""}"></span>` +
       `<span class="ev-hint">Pick from the suggestions so it resolves to a catalog item.</span>` +
       `<div id="mk-mv" class="mk-mv" hidden></div>` +
-      `<div id="mk-orghist" class="mk-mv" hidden></div></div>` +
+      `<div id="mk-orghist" class="mk-mv" hidden></div>` +
+      `<div id="mk-mylots" class="mk-mv" hidden></div></div>` +
     `<div class="ev-form-grid">` +
       `<div class="ev-field"><label>Quantity</label><input id="mk-f-qty" class="ti" type="number" min="0" step="any" ` +
         `value="${l ? fmtQty(l.qty) : "1"}"></div>` +
@@ -14968,12 +14973,53 @@ function mkShowMarketValue(it) {
     const parts = [];
     if (p.buy) parts.push(`<b>${Number(p.buy).toLocaleString()}</b> buy`);
     if (p.sell) parts.push(`<b>${Number(p.sell).toLocaleString()}</b> sell`);
-    mv.innerHTML = `<span class="mk-mv-lbl">Market value:</span> ${parts.join(" · ")} aUEC` +
-      `<button type="button" class="mk-mv-use" id="mk-mv-use">use</button>`;
+    mv.innerHTML = `<span class="mk-mv-lbl">Market value:</span> ${parts.join(" · ")} aUEC <span class="muted">/unit</span>` +
+      `<button type="button" class="mk-mv-use" id="mk-mv-use" title="unit value × quantity → price">use</button>`;
     mv.hidden = false;
     $("mk-mv-use").onclick = () => mkUseMarketPrice(p.buy || p.sell);
   }
   mkShowOrgHistory(it && it.item_id);
+  mkShowMyLots(it && it.item_id);
+}
+
+// The member's own lots of the picked item (#151 follow-up): pick one and the
+// form takes its free quantity, quality and location — the same seed the
+// inventory screen's Sell button sends, reached from this side instead.
+let mkMyLotsCache = null, mkMyLotsSeq = 0;
+async function mkShowMyLots(itemId, selectId) {
+  const el = $("mk-mylots");
+  if (!el) return;
+  el.hidden = true; el.innerHTML = "";
+  if (!itemId || $("mk-f-mode").value === "commission") return;
+  const mine = ++mkMyLotsSeq;
+  if (!mkMyLotsCache) {
+    try { mkMyLotsCache = (await fetch("/api/inventory?owner=me").then(r => r.json())).rows || []; }
+    catch { mkMyLotsCache = []; }
+  }
+  if (mine !== mkMyLotsSeq) return;
+  const lots = mkMyLotsCache.filter(r => r.item_id === itemId && Number(r.available) > 0)
+    .sort((a, b) => ((a.quality == null) - (b.quality == null)) || ((b.quality || 0) - (a.quality || 0)));  // best first, unrated last
+  if (!lots.length) return;
+  el.innerHTML = `<span class="mk-mv-lbl">From your inventory:</span> ` +
+    lots.map(r => `<button type="button" class="mk-lot-btn${String(r.id) === String(selectId) ? " on" : ""}" data-id="${r.id}" ` +
+      `title="fill quantity, quality and pickup location from this lot">` +
+      `${r.quality == null ? "unrated" : `Q${Number(r.quality)}`}${r.location ? ` · ${esc(r.location)}` : ""} — ` +
+      `${fmtQty(r.available)} ${esc(r.unit || "")} free</button>`).join("");
+  el.hidden = false;
+  el.querySelectorAll(".mk-lot-btn").forEach(b => b.onclick = () => {
+    const r = lots.find(x => String(x.id) === b.dataset.id);
+    if (!r) return;
+    el.querySelectorAll(".mk-lot-btn").forEach(x => x.classList.toggle("on", x === b));
+    $("mk-f-qty").value = fmtQty(r.available);
+    const q = $("mk-f-q");
+    if (q) {
+      q.value = r.quality == null ? "" : Number(r.quality); delete q.dataset.auto; mkSyncBandRo();
+      const f = document.querySelector(".mk-craft-form"); if (f) f.open = r.quality != null;
+    }
+    const pk = $("mk-f-pickup"); if (pk && r.location) pk.value = r.location;
+    mkSyncQualityLabels();
+    mkRepriceForQty();
+  });
 }
 
 // Org price memory (B7): what this item actually settled for between orgmates —
@@ -15000,11 +15046,32 @@ async function mkShowOrgHistory(itemId) {
   $("mk-orghist-use").onclick = () => mkUseMarketPrice(op.median || op.last);
 }
 
+// A listing's price is for the WHOLE quantity; the market value and org
+// history are per unit — so "use" multiplies by the quantity field (2026-09-12
+// dev-test report: 5 × Iron at 1,000 pasted 1,000). The unit figure is
+// remembered so editing the quantity keeps the price in step until the member
+// types a price of their own.
+let mkPriceUnit = null;
+function mkPriceField() {
+  const mode = $("mk-f-mode").value;
+  return mode === "sale" ? $("mk-f-price") : mode === "auction" ? $("mk-f-start")
+    : mode === "wtb" ? $("mk-f-paying") : null;
+}
+function mkRepriceForQty() {
+  const el = mkPriceField();
+  if (!el || el.disabled || mkPriceUnit == null || el.dataset.auto !== el.value) return;
+  const qty = Number($("mk-f-qty").value) || 1;
+  el.value = String(Math.round(mkPriceUnit * qty));
+  el.dataset.auto = el.value;
+}
 function mkUseMarketPrice(v) {
   if (!v) return;
-  const mode = $("mk-f-mode").value;
-  const el = mode === "sale" ? $("mk-f-price") : mode === "auction" ? $("mk-f-start") : null;
-  if (el && !el.disabled) el.value = v;
+  const el = mkPriceField();
+  if (!el || el.disabled) return;
+  mkPriceUnit = Number(v);
+  const qty = Number($("mk-f-qty").value) || 1;
+  el.value = String(Math.round(mkPriceUnit * qty));
+  el.dataset.auto = el.value;
 }
 
 // -- blueprint autocomplete + spec builder (craft commissions, #25) --
@@ -15230,6 +15297,13 @@ function bindMarketForm(editId, onCancel) {
   const qField = $("mk-f-q");
   if (qField) qField.addEventListener("input", mkSyncBandRo);
   mkSyncQualityLabels();
+  mkMyLotsCache = null; mkPriceUnit = null;
+  const qtyF = $("mk-f-qty");
+  if (qtyF) qtyF.addEventListener("input", mkRepriceForQty);
+  ["mk-f-price", "mk-f-start", "mk-f-paying"].forEach(fid => {
+    const f = $(fid);
+    if (f) f.addEventListener("input", () => { delete f.dataset.auto; });
+  });
   // Retyping a new search (without re-picking) drops the stale value hint.
   itemEl.addEventListener("input", () => { if (!itemEl.dataset.itemId) mkShowMarketValue(null); });
   mkFillStatNames();   // global stat vocabulary; a blueprint pick narrows it
@@ -15311,6 +15385,12 @@ function renderMarketForm() {
     }
     const pk = $("mk-f-pickup"); if (pk && seed.location && !pk.value) pk.value = seed.location;
     mkSyncQualityLabels();
+    mkShowMyLots(seed.item_id, seed.id);
+    // The picker wasn't used, so fetch the catalog row for the value hint.
+    fetch(`/api/catalog?q=${encodeURIComponent(seed.item_name)}`).then(r => r.json()).then(d => {
+      const it = ((d || {}).items || []).find(x => x.item_id === seed.item_id);
+      if (it) { mkShowMarketValue(it); mkShowMyLots(seed.item_id, seed.id); }
+    }).catch(() => {});
   }
   if (mktFormDirect) {
     $("mk-f-mode").value = "commission";
