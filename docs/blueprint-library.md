@@ -57,9 +57,13 @@ filters (same facet bar pattern as inventory). Materials in the row are
 **green** when the member's free stock covers them, red when short. Clicking
 a row opens the **recipe card** (a modal, `bpDetailModal`): identity line,
 time / est. cost / quality floor, the craftable verdict, materials vs free
-stock per slot, expected stats, and **Unlocked by** grouped per faction as an
-ordered list (lowest reputation gate first). Actions: Gather (existing) ·
-List (new) · Remove.
+stock per slot (one row per MATERIAL: slot · needed/craft · held (free,
+aggregate) · quality), expected stats, and **Unlocked by** — an "Easiest
+path" line (lowest reputation gate, then best chance, then highest payout)
+above one quiet table grouped per faction, lowest gate first; a location
+every mission shares is hoisted into the faction header and empty cells stay
+empty (impeccable critique 2026-09-12, 27/40 → fixes in
+`.impeccable/critique/`). Actions: Gather (existing) · List (new) · Remove.
 
 ## Unlock paths (feed change, 2026-09-12)
 
