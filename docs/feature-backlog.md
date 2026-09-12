@@ -16,6 +16,17 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### 151. Inventory item quality 📐 DESIGNED · decisions settled
+
+User request, 2026-09-12. A holding is `(owner, item, location)`, so a second
+quality lot of the same ore **overwrites** the first (`upsert_inventory` SETs
+qty on a key match). 4.10 keeps Q1–1000 on the commodity and stacks each value
+separately; contracts now state minimums (Wikelo: Ouratite ≥ Q800). Craft
+goals already stamp `min_q` per line but progress never reads it. Design:
+[inventory-quality.md](inventory-quality.md) — `quality` on commodity lots,
+the marketplace crafted blob on crafted holdings, derived subkind + band, then
+goals gate on it, craft preview reads pledged lots, listings/rollups follow.
+
 ### 46. Trade planner: cargo container sizing 🔨 BUILT
 
 User-found, 2026-08-09, off a real run: the planner quotes a load in loose SCU,
