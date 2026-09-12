@@ -6174,6 +6174,72 @@ def pledged_slot_qualities(bp: dict, rows, resolve) -> dict:
     return out
 
 
+def craftable_from_holdings(bp: dict, holdings, resolve) -> dict:
+    """What a member could craft RIGHT NOW from their free stock (blueprint
+    library page). `holdings` = their inventory rows (`item_id`, `available`
+    — pledged qty is not free — and `quality`); `resolve(input name)` → catalog
+    item or None. Per slot the need is filled from the member's lots BEST
+    QUALITY FIRST, the way a crafter loads the fabricator, and the quality of
+    that fill is reported (qty-weighted over its rated part; unrated lots are
+    drawn once rated ones run out and can't inform a stat). Returns
+    {ok, crafts, quality, slots:[{slot, input, need, have, ok, q, unrated,
+    assumed}], stat_preview} — `quality` is the LOWEST slot quality (the
+    marketplace's "overall = weakest input" rule), None when nothing is
+    rated; a slot with no rated lot is `assumed` (base 500) for the preview."""
+    lots_by_item: dict[str, list] = {}
+    for r in holdings or []:
+        iid = r.get("item_id")
+        free = _qty(r.get("available", r.get("qty")))
+        if not iid or free <= 0:
+            continue
+        q = r.get("quality")
+        try:
+            q = int(q) if q is not None else None
+        except (TypeError, ValueError):
+            q = None
+        lots_by_item.setdefault(iid, []).append((q, free))
+    slots, qualities, crafts, ok_all = [], {}, None, True
+    for a in bp.get("aspects") or []:
+        slot, name = a.get("slot"), a.get("input")
+        if not slot or not name:
+            continue
+        need = float(a.get("qty") if a.get("kind") == "item" else (a.get("scu") or 0.0)) or 0.0
+        item = resolve(name)
+        lots = sorted(lots_by_item.get((item or {}).get("item_id"), []),
+                      key=lambda l: (l[0] is None, -(l[0] or 0)))   # best first, unrated last
+        have = sum(f for _, f in lots)
+        ok = need <= 0 or have + 1e-9 >= need
+        # Fill the need best-first; weight the rated part.
+        left, w, rated, unrated = need, 0.0, 0.0, 0.0
+        for q, free in lots:
+            if left <= 1e-9:
+                break
+            take = min(free, left)
+            left -= take
+            if q is None:
+                unrated += take
+            else:
+                w += q * take
+                rated += take
+        q_fill = int(round(w / rated)) if rated > 0 else None
+        row = {"slot": slot, "input": name, "need": need, "have": have, "ok": ok,
+               "q": q_fill, "unrated": unrated, "assumed": q_fill is None}
+        slots.append(row)
+        qualities[slot] = q_fill if q_fill is not None else 500
+        if need > 0:
+            n = int(have // need) if have >= need else 0
+            crafts = n if crafts is None else min(crafts, n)
+        ok_all = ok_all and ok
+    rated_qs = [r["q"] for r in slots if r["q"] is not None]
+    return {
+        "ok": bool(slots) and ok_all,
+        "crafts": crafts or 0,
+        "quality": min(rated_qs) if rated_qs else None,
+        "slots": slots,
+        "stat_preview": blueprint_stat_preview(bp, qualities) if slots else [],
+    }
+
+
 def commission_board_state(listing: dict, offers) -> dict:
     """Live quote state of a craft-request listing for its board card / detail
     view (mirrors derive_auction_state's role, much simpler: no tie-breaks or

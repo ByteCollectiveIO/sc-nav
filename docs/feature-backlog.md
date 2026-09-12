@@ -16,6 +16,14 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
+### Blueprint library table 🔨 BUILT (unreleased)
+
+User request 2026-09-12: `#/blueprints` was an unordered list (name · category
+· Gather · Remove). Now a grouped, sortable, filterable table with the UEX
+spec join, a craftable-now column off free stock (best-quality-first fill,
+weakest-input headline quality) and a **List** action that seeds a
+marketplace sale at that quality. Design: [blueprint-library.md](blueprint-library.md).
+
 ### 151. Inventory item quality ✅ all 5 steps BUILT · dev-server test pending, unreleased
 
 User request, 2026-09-12. A holding is `(owner, item, location)`, so a second

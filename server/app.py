@@ -12759,24 +12759,69 @@ class MemberBlueprintIn(BaseModel):
     blueprint_key: str = Field(min_length=1, max_length=_META_MAX)
 
 
-def _member_blueprint_view(rows) -> list[dict]:
-    """Enrich saved blueprint keys with feed name/category for display. A key whose
-    recipe left the feed on a re-sync still lists (name falls back to the key)."""
+def _bp_resolve(name: str):
+    return resolve_catalog_item(f"commodity:{catalog.slug(name)}")
+
+
+def _member_blueprint_view(rows, holdings=None) -> list[dict]:
+    """Enrich saved blueprint keys for the library table (docs/blueprint-
+    library.md): feed name/category/time/unlocks, the UEX item spec joined by
+    NAME (maker/size/class/grade — the holdings table's own four columns), the
+    materials bill + est. cost, and — when the member's `holdings` are passed —
+    what they could craft right now from free stock (`craft`). A key whose
+    recipe left the feed on a re-sync still lists (name falls back to the key).
+    All read-time derivation; nothing new is stored."""
     out = []
     for r in rows:
         key = r["blueprint_key"]
         bp = blueprints_feed.get(key)
-        out.append({"blueprint_key": key, "added_at": r.get("added_at"),
-                    "name": (bp or {}).get("name") or key,
-                    "cat": (bp or {}).get("cat"), "available": bp is not None})
+        row = {"blueprint_key": key, "added_at": r.get("added_at"),
+               "name": (bp or {}).get("name") or key,
+               "cat": (bp or {}).get("cat"), "available": bp is not None}
+        if bp is None:
+            out.append(row)
+            continue
+        spec = item_specs.get(bp.get("name")) or {}
+        man = nav_core.blueprint_manifest(bp, 1)
+        row.update({
+            "manufacturer": spec.get("manufacturer"), "size": spec.get("size"),
+            "cls": spec.get("class"), "grade": spec.get("grade"),
+            "time_s": bp.get("time_s"), "default": bp.get("default", False),
+            "unlocks": bp.get("unlocks") or [],
+            "has_mods": any(a.get("mods") for a in bp.get("aspects") or []),
+            "inputs": ([{"input": x["input"], "kind": "resource", "need": x["scu"], "unit": "SCU"}
+                        for x in man["resources"]] +
+                       [{"input": x["input"], "kind": "item", "need": x["qty"], "unit": "each"}
+                        for x in man["items"]]),
+            "max_min_q": man["max_min_q"],
+            "est_cost": _blueprint_est_cost(bp),
+        })
+        if holdings is not None:
+            row["craft"] = nav_core.craftable_from_holdings(bp, holdings, _bp_resolve)
+        out.append(row)
+    return out
+
+
+def _my_free_holdings(user_id: str) -> list[dict]:
+    """The member's holdings with `available` (qty − pledged) — the stock a
+    craft can actually draw on."""
+    committed: dict[int, float] = {}
+    for a in db.allocations_for_owner(user_id):
+        committed[a["inventory_id"]] = committed.get(a["inventory_id"], 0.0) + float(a["qty"] or 0)
+    out = []
+    for r in db.list_inventory(owner_id=user_id):
+        qty = float(r.get("qty") or 0)
+        out.append({**r, "available": max(0.0, qty - committed.get(r["id"], 0.0))})
     return out
 
 
 @app.get("/api/me/blueprints")
 async def my_blueprints(user: dict = Depends(require_session)):
     """The caller's blueprint library — recipes they own / can craft (#25.1). Powers
-    the 'requests I can craft' board filter and the 'seed a craft goal' quick-pick."""
-    return {"blueprints": _member_blueprint_view(db.list_member_blueprints(user["id"]))}
+    the 'requests I can craft' board filter and the 'seed a craft goal' quick-pick,
+    and (with `craft` per row) the library table's craftable-now column."""
+    return {"blueprints": _member_blueprint_view(
+        db.list_member_blueprints(user["id"]), holdings=_my_free_holdings(user["id"]))}
 
 
 @app.post("/api/me/blueprints")
