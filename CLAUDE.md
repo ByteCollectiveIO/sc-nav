@@ -103,6 +103,11 @@ library at `#/blueprints`, #29)
   `#inv-quality` (shown per `invQualityApplies`, blank = null never 0),
   `invQualityChip` Q column + `≈B` facet (`INV_FACETS[].vals` accessor),
   `invOrgQualityHtml` rollup lots, `#goal-c-quality` on have/pledge sources.
+  **Log form ADDS (2026-09-12 dev-test report):** `POST /api/inventory` →
+  `upsert_inventory(add=True)` sums into a matching lot (note replaced only
+  when given) and returns `added`/`merged` for the form's "now N" message;
+  PATCH is the absolute set. The pre-#151 SET-on-relog made a second "4 Iron
+  Q800 at Baijini" silently overwrite the first.
   **Step 2 (same day): goals GATE on it** — `nav_core.lot_qualifies(q, min_q)`
   (no floor / unrated → True; Q0 fails any floor) inside `derive_goal_progress`:
   line `have` = qualifying qty only, `have_low` = under-floor (reported, never

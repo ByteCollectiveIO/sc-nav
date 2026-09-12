@@ -3417,11 +3417,21 @@ class InventoryQualityTests(unittest.TestCase):
         by_q = {r["quality"]: r["qty"] for r in self._mine()}
         self.assertEqual(by_q, {300: 10, 900: 5, None: 2})
 
-    def test_relogging_the_same_lot_sets_not_stacks(self):
-        a = self._log(quality=300)
-        b = self._log(quality=300, qty=12)
+    def test_logging_the_same_lot_again_adds_to_it(self):
+        # 2026-09-12 user report: "4 Iron Q800 at Baijini" logged twice left 4,
+        # not 8 — the form is "I picked up more", the editor is "I have exactly".
+        a = self._log(quality=300, qty=4)
+        self.assertFalse(a["merged"])
+        b = self._log(quality=300, qty=4, note="second haul")
         self.assertEqual(a["id"], b["id"])
-        self.assertEqual(b["qty"], 12)
+        self.assertEqual((b["qty"], b["added"], b["merged"]), (8, 4, True))
+        self.assertEqual(b["note"], "second haul")
+        c = self._log(quality=300, qty=2)                  # no note → keeps the old one
+        self.assertEqual((c["qty"], c["note"]), (10, "second haul"))
+        # The editor still SETS the absolute amount.
+        r = self.client.patch(f"/api/inventory/{a['id']}", json={
+            "qty": 3, "location": "Area18", "quality": 300})
+        self.assertEqual(r.json()["qty"], 3)
 
     def test_zero_is_station_bought_not_unrated(self):
         z = self._log(quality=0)

@@ -192,7 +192,7 @@ ones still in the ground.
 | `GET` | `/api/catalog?q=` | item search; feed items + custom. Shared with marketplace. |
 | `POST` | `/api/catalog` | add a custom item (admin or any member — TBD, default member). |
 | `GET` | `/api/inventory` | org rollup; `?owner=me` for mine (holdings + nested allocations), `?goal=<id>` for a goal's contributions. |
-| `POST` | `/api/inventory` | log/adjust my **holding** `{item_id, qty, unit?, location?, note?}` (no goal — see contribute). |
+| `POST` | `/api/inventory` | log more of an item `{item_id, qty, unit?, location?, note?, quality?}` — **ADDS to a matching lot** (same item/place/quality; response `added`/`merged`); set an exact amount with PATCH (no goal — see contribute). |
 | `PATCH` | `/api/inventory/{id}` | edit qty/location/note/unit (owner-or-admin); qty MAY drop below committed — the uncovered part becomes a pledge (v1.2). |
 | `DELETE` | `/api/inventory/{id}` | owner-or-admin; withdraws any allocations drawn from it. |
 | `POST` | `/api/goals/{id}/contribute` | commit `{item_id, qty, location?, holding_id?, on_hand?, allow_over?}` as an allocation drawn from my holding (v1.1/v1.2). 409 = over-need confirm. |

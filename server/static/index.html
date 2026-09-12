@@ -13035,7 +13035,8 @@ async function renderInventory() {
     `the goal.</p>` +
     `<div class="rm-row" style="margin-top:10px">` +
       `<span class="poi-pick"><input id="inv-item" class="ti" placeholder="item" autocomplete="off"></span>` +
-      `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
+      `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount" ` +
+        `title="Adds to a matching lot (same item, place and quality). To set an exact amount, edit the row.">` +
       unitSelect("inv-unit", "") +
       `<input id="inv-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
         `title="Lot quality as the game shows it, 0–1000. Leave blank if unrated; station-bought is 0." style="display:none">` +
@@ -13075,9 +13076,15 @@ async function logHolding() {
       body: JSON.stringify({ item_id, qty, unit: document.querySelector(".inv-unit").value,
         location: $("inv-loc").value.trim(), quality: invQualityValue($("inv-quality")) }) });
     if (!r.ok) throw await r.json().catch(() => ({}));
+    const h = await r.json();
     input.value = ""; delete input.dataset.itemId; $("inv-qty").value = ""; $("inv-loc").value = "";
     $("inv-quality").value = ""; $("inv-quality").style.display = "none";
-    msg.textContent = "Logged ✓";
+    // Say what happened: a matching lot took the amount (so the member sees
+    // the running total, not a silent overwrite) vs a fresh row.
+    const lot = `${h.item_name}${h.quality == null ? "" : ` Q${h.quality}`}${h.location ? ` at ${h.location}` : ""}`;
+    msg.textContent = h.merged
+      ? `Added ${fmtQty(h.added)} ${h.unit || ""} to ${lot} — now ${fmtQty(h.qty)} ${h.unit || ""} ✓`
+      : `Logged ${fmtQty(h.qty)} ${h.unit || ""} of ${lot} ✓`;
     rmInvScope === "mine" ? renderInvMine() : renderInvOrg();
   } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
 }
