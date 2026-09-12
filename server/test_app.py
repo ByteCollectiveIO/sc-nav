@@ -3898,6 +3898,92 @@ class UnlockGoalTests(unittest.TestCase):
         self.assertEqual(v["progress"]["lines"][0]["needed"], 1)
 
 
+class GoalAnnounceTests(unittest.TestCase):
+    """Goals reach the goals channel two ways: an opt-in shout on create and a
+    creator/admin re-post that refreshes an older goal with its current fill.
+    Both are channel reach (no pings), cooldown-gated per member, org goals only."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("goals"), _GOOD_WEBHOOK)
+        cls._u = {"id": "111", "username": "ana", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._u
+        app.app.dependency_overrides[app.require_user] = lambda: cls._u
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._u
+        cls._orig_send = notify.send
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category, "text": _msg_text(text, kw.get("embed")),
+                              "mentions": mentions, "dedup_key": dedup_key})
+            return True
+        notify.send = _capture
+
+    def test_create_with_announce_posts_the_goal_lines(self):
+        app._goal_announce_at.clear()
+        r = self.client.post("/api/goals", json={
+            "title": "Hull-C fund", "description": "Fill the hold.", "announce": True,
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 40, "min_q": 700}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["announced"])
+        time.sleep(0.2)
+        msgs = [m for m in self.sent if m["category"] == "goals" and "New org goal" in m["text"]]
+        self.assertEqual(len(msgs), 1, self.sent)
+        text = msgs[0]["text"]
+        self.assertIn("Hull-C fund", text); self.assertIn("Agricium (≥Q700) — 0/40 SCU", text)
+        self.assertIn("0% filled", text); self.assertIn("Fill the hold.", text)
+        self.assertEqual(msgs[0]["mentions"] or [], [])       # reach, not pings
+        # Cooldown: a second announced create within the window is created but not posted.
+        r = self.client.post("/api/goals", json={"title": "again", "announce": True,
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1}]})
+        self.assertFalse(r.json()["announced"])
+        # Personal goals never broadcast, cooldown or not.
+        app._goal_announce_at.clear()
+        r = self.client.post("/api/goals", json={"title": "mine", "announce": True, "visibility": "personal",
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1}]})
+        self.assertFalse(r.json()["announced"])
+        self.assertIn("announce_available", self.client.get("/api/goals").json())
+
+    def test_repost_refreshes_with_current_fill_and_is_gated(self):
+        app._goal_announce_at.clear()
+        gid = self.client.post("/api/goals", json={"title": "Refresh me",
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 10}]}).json()["id"]
+        h = self.client.post("/api/inventory", json={"item_id": "commodity:agricium", "qty": 4, "location": "Area18"}).json()
+        self.client.post(f"/api/goals/{gid}/contribute", json={"item_id": "commodity:agricium", "qty": 4, "holding_id": h["id"]})
+        r = self.client.post(f"/api/goals/{gid}/announce")
+        self.assertEqual(r.status_code, 200, r.text); self.assertTrue(r.json()["announced"])
+        time.sleep(0.2)
+        m = next(x for x in self.sent if x["category"] == "goals" and "Goal update" in x["text"])
+        text = m["text"]
+        self.assertIn("Refresh me", text); self.assertIn("4/10 SCU", text); self.assertIn("40% filled", text)
+        self.assertIn("Re-posted by", text)
+        # Cooldown on a second re-post
+        r = self.client.post(f"/api/goals/{gid}/announce")
+        self.assertFalse(r.json()["announced"]); self.assertIn("minutes ago", r.json()["reason"])
+        # A stranger can't re-post someone else's goal.
+        app._goal_announce_at.clear()
+        app.app.dependency_overrides[app.require_session] = lambda: {"id": "777", "username": "zed", "is_admin": False}
+        try:
+            self.assertEqual(self.client.post(f"/api/goals/{gid}/announce").status_code, 403)
+        finally:
+            app.app.dependency_overrides[app.require_session] = lambda: self._u
+
+
+
 class InventoryLotKeyMigrationTests(unittest.TestCase):
     """The lot key was code-enforced only, so an old DB may already hold a
     duplicate; summing rows unseen is the one irreversible move, so the boot

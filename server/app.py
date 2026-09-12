@@ -2270,6 +2270,11 @@ _warning_announce_at: dict[str, float] = {}   # poster id -> last announce (mono
 # the member explicitly asked for. Short fuse = double-click/flood guard only.
 COMMISSION_ANNOUNCE_COOLDOWN_S = 600.0
 LISTING_ANNOUNCE_COOLDOWN_S = 60.0
+# Goals: one shout per member per window — a new goal, or a re-post of an
+# older one to "refresh" it in the channel. Channel-reach only (pings nobody
+# but the goal-met celebration), so the short flood guard is enough.
+GOAL_ANNOUNCE_COOLDOWN_S = 120.0
+_goal_announce_at: dict[str, float] = {}
 _listing_announce_at: dict[str, float] = {}   # poster id -> last announce (monotonic)
 
 # Survey-zone announce shouts (#37 §5.2) share the same per-member cooldown
@@ -7885,6 +7890,18 @@ async def _notify_survey_zone_created(zone: dict) -> None:
                       dedup_key=f"survey-zone-created:{zone['id']}")
 
 
+def _goal_announce_ok(member_id: str) -> bool:
+    """Anti-spam gate for posting a goal to the goals channel (create opt-in or
+    a manual re-post): one per member per GOAL_ANNOUNCE_COOLDOWN_S. Returns
+    True (and arms the cooldown) only when allowed."""
+    now = time.monotonic()
+    last = _goal_announce_at.get(str(member_id))
+    if last is not None and now - last < GOAL_ANNOUNCE_COOLDOWN_S:
+        return False
+    _goal_announce_at[str(member_id)] = now
+    return True
+
+
 def _survey_announce_ok(creator_id: str) -> bool:
     """Anti-spam gate for announcing a new survey zone: one announced zone per
     member per cooldown. Returns True (and arms the cooldown) only when
@@ -8332,6 +8349,61 @@ async def _notify_quotes_lost(listing: dict, loser_ids: list[str]) -> None:
                      "Thanks for quoting — keep an eye on the board for the next one.",
                      color=_EMBED_MUTE),
         mentions=mentions, dedup_key=f"market-quotes-lost:{listing['id']}")
+
+
+async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
+                              refresh: bool = False) -> None:
+    """Post a goal to the goals channel — on creation (opt-in `announce`) or as
+    a manual re-post so an older goal surfaces again with its CURRENT fill.
+    An embed: the lines with have/needed (materials) or held/needed members
+    (unlock), overall %, due date, and a deep link. Pings nobody: reach, not
+    interruption — the goal-met celebration is the one that @-mentions."""
+    if not notify.is_configured("goals"):
+        return
+    who = _resolve_member_name(poster_id, None)
+    unlock = goal.get("kind") == "unlock"
+    lines = progress.get("lines") or []
+    rows = []
+    for ln in lines[:8]:
+        if unlock:
+            rows.append(f"{'✅' if ln['have'] >= ln['needed'] else '▫️'} {ln['name']} — {ln['have']}/{ln['needed']} members")
+        else:
+            unit = f" {ln['unit']}" if ln.get("unit") else ""
+            flo = f" (≥Q{ln['min_q']})" if ln.get("min_q") else ""
+            rows.append(f"{'✅' if ln['needed'] and ln['have'] >= ln['needed'] else '▫️'} {ln['name']}{flo} — {_qty_text(ln['have'])}/{_qty_text(ln['needed'])}{unit}")
+    if len(lines) > 8:
+        rows.append(f"… and {len(lines) - 8} more")
+    pct = round(progress.get("overall_pct") or 0)
+    head = f"{pct}% {'ready' if unlock else 'filled'}"
+    if unlock:
+        spec = goal.get("unlock_spec") or {}
+        scope = f"{progress.get('scope_size', 0)} member{'s' if progress.get('scope_size', 0) != 1 else ''}"
+        if spec.get("playstyle"):
+            scope += f" tagged {spec['playstyle']}"
+        head += f" · target {progress.get('needed', 0)} of {scope} per recipe"
+    if goal.get("deadline"):
+        head += f" · due {_discord_ts(goal['deadline'], 'D')}"
+    desc = head + "\n" + "\n".join(rows)
+    if goal.get("description"):
+        d = goal["description"].strip()
+        desc += "\n\n" + (d[:280] + "…" if len(d) > 280 else d)
+    desc += f"\n\n{'Re-posted' if refresh else 'Posted'} by {who}. " + \
+        ("Add the recipes you unlock to your library." if unlock else "Log what you're holding to contribute.")
+    icon = "🔓" if unlock else "🎯"
+    title = f"{icon} {'Goal update' if refresh else 'New org goal'}: {goal['title']}"
+    await notify.send(
+        "goals", "",
+        embed=_embed(title, desc, url=_app_url(f"#/goals/{goal['id']}"),
+                     color=_EMBED_GOOD if progress.get("is_met") else _EMBED_INFO),
+        dedup_key=f"goal-{'refresh' if refresh else 'posted'}:{goal['id']}:{int(time.time())}")
+
+
+def _qty_text(v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(f)) if f == int(f) else f"{f:g}"
 
 
 async def _notify_goal_met(goal: dict, contributions) -> None:
@@ -8950,6 +9022,9 @@ class GoalIn(BaseModel):
     # spec; line_items stay empty and progress counts members, not materials.
     kind: str = Field(default="materials", max_length=16)
     unlock: "UnlockSpecIn | None" = None
+    # Opt-in Discord shout on create (org goals only; personal goals never
+    # broadcast). The response's `announced` says whether it actually went out.
+    announce: bool = False
 
 
 class UnlockSpecIn(BaseModel):
@@ -9539,7 +9614,10 @@ async def list_goals(status: str | None = None, user: dict = Depends(require_ses
     contributions: dict[int, list] = {}
     for row in db.list_goal_contributions():
         contributions.setdefault(row["goal_id"], []).append(row)
-    return {"goals": [_goal_view(g, contributions.get(g["id"], []), user) for g in goals]}
+    return {"goals": [_goal_view(g, contributions.get(g["id"], []), user) for g in goals],
+            # Gates the create form's Discord opt-in + the detail's re-post
+            # button (same pattern as the LFG / marketplace boards).
+            "announce_available": notify.is_configured("goals")}
 
 
 @app.post("/api/goals")
@@ -9555,7 +9633,35 @@ async def create_goal(body: GoalIn, user: dict = Depends(require_session)):
     view = _goal_view(goal, db.list_goal_contributions(goal_id=gid), user, detail=True)
     if fields.get("seed_unmapped"):
         view["seed_unmapped"] = fields["seed_unmapped"]   # materials with no catalog match
+    announced = False
+    if body.announce and view["visibility"] != "personal" and notify.is_configured("goals") \
+            and _goal_announce_ok(user["id"]):
+        _notify_bg(_notify_goal_posted(goal, view["progress"], user["id"]))
+        announced = True
+    view["announced"] = announced
     return view
+
+
+@app.post("/api/goals/{goal_id}/announce")
+async def announce_goal(goal_id: int, user: dict = Depends(require_session)):
+    """Re-post an existing goal to the goals channel with its current fill —
+    the "refresh" an organiser wants when a goal has scrolled out of view.
+    Creator or admin; org goals only; one post per member per cooldown so a
+    stuck button can't flood the channel. Returns `announced` + `reason`."""
+    goal = db.get_goal(goal_id)
+    if goal is None or not _can_view_goal(goal, user):
+        raise HTTPException(status_code=404, detail="unknown goal")
+    _require_goal_owner(goal, user)
+    if goal.get("visibility") == "personal":
+        raise HTTPException(status_code=400, detail="personal goals don't post to Discord")
+    if not notify.is_configured("goals"):
+        return {"announced": False, "reason": "no goals webhook is configured"}
+    if not _goal_announce_ok(user["id"]):
+        return {"announced": False,
+                "reason": f"you posted a goal less than {int(GOAL_ANNOUNCE_COOLDOWN_S // 60)} minutes ago — give it a moment"}
+    view = _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user)
+    _notify_bg(_notify_goal_posted(goal, view["progress"], user["id"], refresh=True))
+    return {"announced": True}
 
 
 @app.get("/api/goals/{goal_id}")
@@ -9564,7 +9670,9 @@ async def get_goal(goal_id: int, user: dict = Depends(require_session)):
     goal = db.get_goal(goal_id)
     if goal is None or not _can_view_goal(goal, user):
         raise HTTPException(status_code=404, detail="unknown goal")
-    return _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user, detail=True)
+    view = _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user, detail=True)
+    view["announce_available"] = notify.is_configured("goals")   # gates the re-post button
+    return view
 
 
 @app.patch("/api/goals/{goal_id}")
