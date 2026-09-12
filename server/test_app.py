@@ -3475,6 +3475,152 @@ class InventoryQualityTests(unittest.TestCase):
         self.assertEqual({r["quality"] for r in self._mine()}, {777, 120})
         g = self.client.get(f"/api/goals/{gid}").json()
         self.assertEqual({h["quality"] for h in g["my_holdings"]}, {777, 120})
+        # …and each of my pledge rows names the lot it draws from.
+        self.assertEqual({c["quality"] for c in g["my_contributions"]}, {777, 120})
+
+
+class GoalQualityGatingTests(unittest.TestCase):
+    """#151 step 2: goals gate on quality. A hand-set min_q on any line, strict
+    counting with the under-floor bucket + allow_low override, and the split
+    action that re-rates the free part of a pledged lot without touching it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._a = {"id": "111", "username": "ana", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._a
+        app.app.dependency_overrides[app.require_user] = lambda: cls._a
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._a
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        for r in self.client.get("/api/inventory?owner=me").json()["rows"]:
+            self.client.delete(f"/api/inventory/{r['id']}")
+
+    def _goal(self, min_q=700, needed=10):
+        r = self.client.post("/api/goals", json={
+            "title": "wikelo run", "line_items": [
+                {"item_id": "commodity:agricium", "qty_needed": needed, "min_q": min_q}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def _lot(self, quality, qty=10, location="Area18"):
+        return self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": qty, "location": location,
+            "quality": quality}).json()
+
+    def _line(self, gid):
+        g = self.client.get(f"/api/goals/{gid}").json()
+        return g["progress"]["lines"][0]
+
+    def test_manual_min_q_on_a_hand_line(self):
+        gid = self._goal(min_q=800)
+        self.assertEqual(self._line(gid)["min_q"], 800)
+        # 0 / omitted = no floor
+        r = self.client.post("/api/goals", json={
+            "title": "any", "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1, "min_q": 0}]})
+        self.assertNotIn("min_q", r.json()["progress"]["lines"][0])
+
+    def test_under_floor_lot_is_refused_then_logged_as_low_with_override(self):
+        gid = self._goal(min_q=700)
+        low = self._lot(300)
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "holding_id": low["id"]})
+        self.assertEqual(r.status_code, 409)
+        d = r.json()["detail"]
+        self.assertEqual(d["reason"], "low_quality")
+        self.assertIn("Q300", d["message"])
+        self.assertEqual(self._line(gid)["have"], 0)          # nothing recorded
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "holding_id": low["id"], "allow_low": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        line = self._line(gid)
+        self.assertEqual((line["have"], line["have_low"]), (0, 4))
+        # allow_over must not double as allow_low.
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 1, "holding_id": low["id"], "allow_over": True})
+        self.assertEqual(r.status_code, 409)
+
+    def test_qualifying_and_unrated_lots_count(self):
+        gid = self._goal(min_q=700, needed=10)
+        good, unrated, zero = self._lot(850), self._lot(None, location="Orison"), self._lot(0, location="Lorville")
+        for h, q in ((good, 5), (unrated, 3)):
+            r = self.client.post(f"/api/goals/{gid}/contribute", json={
+                "item_id": "commodity:agricium", "qty": q, "holding_id": h["id"]})
+            self.assertEqual(r.status_code, 200, r.text)
+        line = self._line(gid)
+        self.assertEqual((line["have"], line["unrated"], line["have_low"]), (8, 3, 0))
+        # Station-bought (Q0) fails the floor like any under-floor lot.
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 2, "holding_id": zero["id"]})
+        self.assertEqual(r.status_code, 409)
+        # A declared-on-hand lot states its quality and is gated the same way.
+        r = self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 2, "location": "Daymar",
+            "on_hand": True, "quality": 100})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(len(self.client.get("/api/inventory?owner=me").json()["rows"]), 3)  # nothing minted
+
+    def test_goal_is_met_only_by_qualifying_stock(self):
+        gid = self._goal(min_q=700, needed=5)
+        low = self._lot(100)
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 5, "holding_id": low["id"], "allow_low": True})
+        g = self.client.get(f"/api/goals/{gid}").json()
+        self.assertFalse(g["progress"]["is_met"])
+        self.assertEqual(g["status"], "active")
+        good = self._lot(900, location="Orison")
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 5, "holding_id": good["id"]})
+        g = self.client.get(f"/api/goals/{gid}").json()
+        self.assertTrue(g["progress"]["is_met"])
+
+    def test_split_moves_free_stock_and_leaves_pledges_alone(self):
+        gid = self._goal(min_q=700, needed=10)
+        lot = self._lot(None, qty=10)                         # unrated 10
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 6, "holding_id": lot["id"]})
+        # Only 4 are free; asking for 5 is refused.
+        r = self.client.post(f"/api/inventory/{lot['id']}/split", json={"qty": 5, "quality": 900})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("free to move", r.json()["detail"])
+        r = self.client.post(f"/api/inventory/{lot['id']}/split", json={"qty": 4, "quality": 900})
+        self.assertEqual(r.status_code, 200, r.text)
+        src, tgt = r.json()["source"], r.json()["target"]
+        self.assertEqual((src["qty"], src["committed"], src["quality"]), (6, 6, None))
+        self.assertEqual((tgt["qty"], tgt["location"], tgt["quality"]), (4, "Area18", 900))
+        self.assertEqual(self._line(gid)["have"], 6)          # pledge untouched
+        # Same key as the source is a no-op → 400.
+        r = self.client.post(f"/api/inventory/{lot['id']}/split", json={"qty": 1})
+        self.assertEqual(r.status_code, 400)
+        # Splitting onto an EXISTING lot sums into it.
+        other = self._lot(900, qty=3, location="Orison")
+        r = self.client.post(f"/api/inventory/{tgt['id']}/split", json={"qty": 1, "quality": 900, "location": "Orison"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["target"]["id"], other["id"])
+        self.assertEqual(r.json()["target"]["qty"], 4)
+        self.assertEqual(r.json()["source"]["qty"], 3)
+
+    def test_split_rejects_strangers_and_equipment_quality(self):
+        lot = self._lot(500)
+        app.app.dependency_overrides[app.require_session] = lambda: {"id": "222", "username": "bo", "is_admin": False}
+        try:
+            r = self.client.post(f"/api/inventory/{lot['id']}/split", json={"qty": 1, "quality": 900})
+            self.assertEqual(r.status_code, 403)
+        finally:
+            app.app.dependency_overrides[app.require_session] = lambda: self._a
+        gear = self.client.post("/api/inventory", json={"item_id": "item:turbodrive", "qty": 2}).json()
+        r = self.client.post(f"/api/inventory/{gear['id']}/split", json={"qty": 1, "quality": 900})
+        self.assertEqual(r.status_code, 400)
 
 
 class InventoryLotKeyMigrationTests(unittest.TestCase):

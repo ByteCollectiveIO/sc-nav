@@ -8885,6 +8885,9 @@ class GoalLineIn(BaseModel):
     item_id: str = Field(min_length=1, max_length=_ITEM_ID_MAX)
     qty_needed: float = Field(ge=0, le=_MAX_QTY)
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
+    # Quality floor on a hand-entered line (#151 step 2) — contract hand-ins
+    # state minimums ("Ouratite ≥ Q800"). 0/None = no floor.
+    min_q: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
 
 
 class SpecInputIn(BaseModel):
@@ -9144,6 +9147,47 @@ async def delete_inventory(inv_id: int, user: dict = Depends(require_session)):
     return {"ok": True}
 
 
+class InventorySplitIn(BaseModel):
+    qty: float = Field(gt=0, le=_MAX_QTY)
+    quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
+    # Omitted/blank = the source lot's own location.
+    location: str | None = Field(default=None, max_length=_LOCATION_MAX)
+
+
+@app.post("/api/inventory/{inv_id}/split")
+async def split_inventory(inv_id: int, body: InventorySplitIn,
+                          user: dict = Depends(require_session)):
+    """Move part of a holding into a lot of a different quality (and/or place)
+    — the correction "of my 100 SCU, 40 turned out to be Q900", and the ONLY way
+    to re-rate stock that backs goal contributions (#151 decision 2): the source
+    row and its pledges stay exactly as they are, so no goal's progress moves
+    without a contribution event. Only unallocated stock can move (400 past
+    `available`); a target lot that already exists is summed into (the moved
+    part carries no allocations, so summing is safe); the same key as the
+    source is a no-op and 400s."""
+    row = db.get_inventory(inv_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown inventory row")
+    if row["owner_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="you can only split your own holdings")
+    item = resolve_catalog_item(row["item_id"]) or {"kind": "commodity"}
+    _check_quality_kind(item, body.quality)
+    loc = (body.location.strip() if body.location is not None else "") or row.get("location")
+    if (body.quality == row.get("quality")
+            and (loc or "") == (row.get("location") or "")):
+        raise HTTPException(status_code=400,
+                            detail="that's the same lot — change the quality or location")
+    available = float(row.get("qty") or 0) - db.committed_for_holding(inv_id)
+    if body.qty > available + 1e-9:
+        raise HTTPException(
+            status_code=400,
+            detail=f"only {max(0.0, available):g} {row.get('unit') or ''} of this lot is "
+                   "free to move — the rest backs goal contributions (withdraw them first)")
+    src, tgt = db.split_inventory(inv_id, body.qty, body.quality, loc,
+                                  datetime.now(timezone.utc).isoformat())
+    return {"source": _holding_view(src), "target": _holding_view(tgt)}
+
+
 def _validate_goal(body: GoalIn) -> dict:
     """Validate a goal against the catalog and normalize into db column fields.
     Each line item's id must resolve; its name/unit are stamped from the catalog
@@ -9183,7 +9227,8 @@ def _validate_goal(body: GoalIn) -> dict:
             seen.add(item["item_id"])
             unit = catalog.valid_unit(li.unit) or item["unit"]
             lines.append({"item_id": item["item_id"], "item_name": item["name"],
-                          "unit": unit, "qty_needed": li.qty_needed})
+                          "unit": unit, "qty_needed": li.qty_needed,
+                          **({"min_q": int(li.min_q)} if li.min_q else {})})
     if not lines:
         raise HTTPException(status_code=400, detail="add at least one line item")
     deadline = None
@@ -9282,7 +9327,7 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
         # a craft goal wants, without a second list of the same numbers.
         mine = [{k: c.get(k) for k in
                  ("allocation_id", "holding_id", "item_id", "item_name",
-                  "unit", "qty", "location", "short")}
+                  "unit", "qty", "location", "short", "quality")}
                 for c in contributions if c.get("owner_id") == user["id"]]
         view["my_contributions"] = sorted(mine, key=lambda c: c["allocation_id"])
         view["my_holdings"] = _my_holdings_for_goal(goal, user)
@@ -9393,6 +9438,24 @@ class ContributeIn(BaseModel):
     quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
     # The member has seen and accepted that this pushes the line past its need.
     allow_over: bool = False
+    # …and that the lot is below the line's quality floor: it's recorded, but
+    # counts as `have_low`, never toward the fill.
+    allow_low: bool = False
+
+
+def _low_quality_detail(line: dict, quality: int) -> dict:
+    """The 409 body for an under-floor lot. A dict (not a string) so the client
+    can tell it from the over-need prompt and re-send with the RIGHT override —
+    one confirm must never quietly grant the other."""
+    return {"reason": "low_quality",
+            "message": (f"{line['name']} needs quality {line['min_q']} or better "
+                        f"({_band_tag(line['min_q'])}); this lot is Q{quality}. It will be "
+                        "logged against the goal but won't count toward the line.")}
+
+
+def _band_tag(q: int) -> str:
+    """'≈B6' — the frontend's approximate band annotation, mirrored for messages."""
+    return f"≈B{min(8, max(1, -(-int(q) // 125)))}"
 
 
 def _over_need_message(line: dict, qty: float) -> str:
@@ -9445,9 +9508,19 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
         if (holding is None or holding["owner_id"] != user["id"]
                 or holding["item_id"] != item["item_id"]):
             raise HTTPException(status_code=400, detail="unknown holding for this item")
+        lot_quality = holding.get("quality")
     else:
         _check_quality_kind(item, body.quality)
         holding = db.get_holding(user["id"], item["item_id"], loc, body.quality)
+        lot_quality = body.quality
+    # Quality floor (#151 step 2): an under-floor lot is accepted only with the
+    # member's explicit say-so, and even then it lands in `have_low`, not the
+    # fill. Unrated lots pass (reported as `unrated` on the line).
+    line = next((l for l in progress["lines"] if l["item_id"] == item["item_id"]), None)
+    if (line and line.get("min_q") and not body.allow_low
+            and not nav_core.lot_qualifies(lot_quality, line["min_q"])):
+        raise HTTPException(status_code=409,
+                            detail=_low_quality_detail(line, int(lot_quality)))
     if holding is None:
         # No matching holding yet: the contribution declares one — with stock only
         # if the member says it's on hand, else an empty shell the pledge hangs off

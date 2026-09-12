@@ -5690,6 +5690,23 @@ def derive_inventory_rollup(rows) -> list[dict]:
     return out
 
 
+def lot_qualifies(quality, min_q) -> bool:
+    """Does a lot of `quality` (None = unrated) satisfy a line's `min_q` floor?
+    No floor → always. Unrated → yes (the org can't verify; blocking would punish
+    every pre-#151 row — the caller reports the qty as `unrated` instead). Q0 is
+    station-bought, a real value, and fails any floor ≥ 1."""
+    try:
+        floor = int(min_q or 0)
+    except (TypeError, ValueError):
+        floor = 0
+    if floor <= 0 or quality is None:
+        return True
+    try:
+        return int(quality) >= floor
+    except (TypeError, ValueError):
+        return True
+
+
 def derive_goal_progress(goal: dict, inventory_rows) -> dict:
     """Fill of a procurement goal against its line items (design:
     docs/org-inventory-goals.md).
@@ -5710,21 +5727,41 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
     (also capped) — so a goal one line over and one line short doesn't read as
     "done" off the average. `have` per line sums only contributions of that item,
     so a stray contribution of an off-list item doesn't inflate any line.
-    `is_met` is true when every line is fully covered."""
+    `is_met` is true when every line is fully covered.
+
+    Quality gating (#151 step 2): a line with `min_q` counts only lots whose
+    `quality` meets it — `have` is the qualifying qty, `have_low` the under-floor
+    qty (reported, never counted; it's real material the org holds, just not
+    for THIS line). An unrated lot (quality None) qualifies but its qty rides
+    along as `unrated` so the board says how much of the fill is unverified;
+    Q0 (station-bought) is a real value and does NOT qualify against a floor.
+    A line without `min_q` is unchanged: everything counts."""
+    minq_by_item = {li.get("item_id"): int(li.get("min_q") or 0)
+                    for li in (goal.get("line_items") or [])}
     # Sum contributed quantity per item, and total contributed per member — each
     # with the still-being-gathered part tracked alongside it.
     have_by_item: dict[str, float] = {}
+    low_by_item: dict[str, float] = {}
+    unrated_by_item: dict[str, float] = {}
     promised_by_item: dict[str, float] = {}
     by_contributor: dict[str, float] = {}
+    low_by_contributor: dict[str, float] = {}
     promised_by_contributor: dict[str, float] = {}
     for r in inventory_rows or []:
         iid = r.get("item_id")
         qty = _qty(r.get("qty"))
         promised = min(_qty(r.get("short")), qty)
+        owner = r.get("owner_id")
+        if not lot_qualifies(r.get("quality"), minq_by_item.get(iid, 0)):
+            low_by_item[iid] = low_by_item.get(iid, 0.0) + qty
+            low_by_contributor[owner] = low_by_contributor.get(owner, 0.0) + qty
+            by_contributor.setdefault(owner, 0.0)
+            continue
         if iid:
             have_by_item[iid] = have_by_item.get(iid, 0.0) + qty
             promised_by_item[iid] = promised_by_item.get(iid, 0.0) + promised
-        owner = r.get("owner_id")
+            if minq_by_item.get(iid) and r.get("quality") is None:
+                unrated_by_item[iid] = unrated_by_item.get(iid, 0.0) + qty
         by_contributor[owner] = by_contributor.get(owner, 0.0) + qty
         promised_by_contributor[owner] = promised_by_contributor.get(owner, 0.0) + promised
 
@@ -5754,16 +5791,20 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
             "promised": promised,
             "on_hand": have - promised,
         }
-        # Craft goals stamp a target quality per material (recipe minimum max'd
-        # with the member's slider asks) — advisory, rides through to the UI badge.
+        # A quality floor (craft goals: recipe minimum max'd with the member's
+        # slider asks; any goal: a hand-set floor for contract hand-ins) gates
+        # the count — under-floor and unrated qty are reported beside it.
         if li.get("min_q"):
             line["min_q"] = int(li["min_q"])
+            line["have_low"] = low_by_item.get(iid, 0.0)
+            line["unrated"] = unrated_by_item.get(iid, 0.0)
         lines.append(line)
 
     overall = 100.0 if total_need <= 0 else min(100.0, total_have / total_need * 100.0)
     per_contributor = sorted(
         ({"owner_id": o, "qty": q,
-          "promised": min(promised_by_contributor.get(o, 0.0), q)}
+          "promised": min(promised_by_contributor.get(o, 0.0), q),
+          **({"low": low_by_contributor[o]} if low_by_contributor.get(o) else {})}
          for o, q in by_contributor.items()),
         key=lambda x: x["qty"], reverse=True)
     return {
