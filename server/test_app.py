@@ -3121,6 +3121,31 @@ class CraftGoalTests(unittest.TestCase):
         self.assertEqual(len(self.client.get("/api/me/blueprints").json()["blueprints"]), 1)
         self.assertEqual(self.client.post(
             "/api/me/blueprints", json={"blueprint_key": "NOPE"}).status_code, 404)
+        # Library rows carry the table's data + craftable-now off FREE stock.
+        row = self.client.get("/api/me/blueprints").json()["blueprints"][0]
+        self.assertEqual(row["time_s"], 300)
+        self.assertEqual({i["input"]: i["need"] for i in row["inputs"]},
+                         {"Agricium": 0.5, "Hadanite": 4, "Nonexistanium": 1.0})
+        self.assertEqual(row["max_min_q"], 500)
+        self.assertIn("est_cost", row)
+        c = row["craft"]
+        self.assertFalse(c["ok"])                      # nothing held yet
+        lot = self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 2, "location": "Area18", "quality": 800}).json()
+        self.client.post("/api/inventory", json={"item_id": "commodity:hadanite", "qty": 8, "quality": 600})
+        c = self.client.get("/api/me/blueprints").json()["blueprints"][0]["craft"]
+        by = {sl["input"]: sl for sl in c["slots"]}
+        self.assertTrue(by["Agricium"]["ok"]); self.assertEqual(by["Agricium"]["q"], 800)
+        self.assertTrue(by["Hadanite"]["ok"]); self.assertEqual(by["Hadanite"]["q"], 600)
+        self.assertFalse(by["Nonexistanium"]["ok"])    # unmapped input → can't craft
+        self.assertFalse(c["ok"]); self.assertEqual(c["quality"], 600)
+        # Pledged stock is not free: commit the agricium and the slot goes short.
+        gid = self.client.post("/api/goals", json={"title": "g", "line_items": [
+            {"item_id": "commodity:agricium", "qty_needed": 2}]}).json()["id"]
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 1.8, "holding_id": lot["id"]})
+        c = self.client.get("/api/me/blueprints").json()["blueprints"][0]["craft"]
+        self.assertFalse({sl["input"]: sl for sl in c["slots"]}["Agricium"]["ok"])
         d = self.client.request("DELETE", "/api/me/blueprints", params={"key": "TEST_BP"})
         self.assertEqual(d.status_code, 200)
         self.assertEqual(self.client.get("/api/me/blueprints").json()["blueprints"], [])

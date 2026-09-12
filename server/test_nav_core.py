@@ -4710,6 +4710,39 @@ class BlueprintCommissionTests(unittest.TestCase):
         self.assertEqual(nav_core.blueprint_quality_effect(mod, 400), 2)
         self.assertEqual(nav_core.blueprint_quality_effect(mod, 950), 3)
 
+    def test_craftable_from_holdings_fills_best_first_and_counts_crafts(self):
+        # Library page: free stock per input, filled best quality first; the
+        # fill's weighted quality per slot; crafts = the scarcest input.
+        resolve = lambda name: {"item_id": f"commodity:{name.lower()}"}
+        w = self.WEAPON
+        frame, gem1, gem2 = (a for a in w["aspects"])
+        need_scu, need_gem = frame["scu"], gem1["qty"]
+        rows = [
+            {"item_id": f"commodity:{frame['input'].lower()}", "available": need_scu * 0.6, "quality": 800},
+            {"item_id": f"commodity:{frame['input'].lower()}", "available": need_scu * 2, "quality": 400},
+            {"item_id": f"commodity:{frame['input'].lower()}", "available": 5, "quality": None},
+            {"item_id": f"commodity:{gem1['input'].lower()}", "available": need_gem * 3, "quality": None},
+            # gem2: nothing held
+        ]
+        c = nav_core.craftable_from_holdings(w, rows, resolve)
+        by = {sl["slot"]: sl for sl in c["slots"]}
+        f = by[frame["slot"]]
+        self.assertTrue(f["ok"])
+        self.assertEqual(f["q"], 640)                 # 0.6×800 + 0.4×400, best first
+        self.assertEqual(f["unrated"], 0)
+        g1 = by[gem1["slot"]]
+        self.assertTrue(g1["ok"]); self.assertTrue(g1["assumed"]); self.assertEqual(g1["unrated"], need_gem)
+        g2 = by[gem2["slot"]]
+        self.assertFalse(g2["ok"]); self.assertEqual(g2["have"], 0)
+        self.assertFalse(c["ok"]); self.assertEqual(c["crafts"], 0)
+        self.assertEqual(c["quality"], 640)           # the only rated slot
+        # Stock the missing gem → craftable; the scarcest input (gem1 ×3) caps it.
+        rows.append({"item_id": f"commodity:{gem2['input'].lower()}", "available": need_gem * 10, "quality": 900})
+        c = nav_core.craftable_from_holdings(w, rows, resolve)
+        self.assertTrue(c["ok"]); self.assertEqual(c["crafts"], 3)
+        self.assertEqual(c["quality"], 640)           # weakest input rule
+        self.assertTrue(any(s["value"] is not None for s in c["stat_preview"]))
+
     def test_pledged_slot_qualities_weight_rated_lots_by_qty(self):
         # #151 step 3: a slot's fed quality = qty-weighted average of the RATED
         # pledges of its input; unrated qty rides along; a slot with no rated

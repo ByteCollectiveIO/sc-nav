@@ -2226,6 +2226,18 @@
     background: var(--panel2); color: var(--text); border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
   .mk-lot-btn:hover { border-color: var(--accent); }
   .mk-lot-btn.on { border-color: var(--accent); color: var(--accent); }
+  /* Blueprint library table (docs/blueprint-library.md) */
+  .bp-table th.bp-sort { cursor: pointer; user-select: none; }
+  .bp-table th.bp-sort:hover { color: var(--accent); }
+  .bp-group-h td { background: var(--panel2); font-weight: 600; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--dim); cursor: pointer; }
+  .bp-group-h.collapsed .rm-caret { transform: none; }
+  .bp-group-h:not(.collapsed) .rm-caret { transform: rotate(90deg); color: var(--accent); }
+  .bp-mats { font-size: 12px; }
+  .bp-mat { white-space: nowrap; margin-right: 8px; }
+  .bp-mat.short { color: var(--bad); }
+  .bp-ok { color: var(--good); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bp-detail { padding: 6px 4px 8px 22px; }
+  .bp-f-craft { font-size: 12px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   /* board search / sort / filter row */
   .mk-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
   .mk-search input, .mk-search select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
@@ -15371,7 +15383,11 @@ function renderMarketForm() {
       `<a href="javascript:void 0" id="mk-undirect">Send to the whole board instead</a></p>`
     : "";
   const seed = mktFormSeed; mktFormSeed = null;
-  const seedNote = seed
+  const seedNote = seed && seed.crafted
+    ? `<p class="rm-intro">⚒ Listing a crafted <b>${esc(seed.item_name)}</b> at the quality your free stock can make` +
+      `${seed.quality == null ? " (no rated stock — set the quality yourself)" : ` (Q${Number(seed.quality)} from the weakest input)`}. ` +
+      `Adjust anything before posting; nothing is crafted or consumed by listing it.</p>`
+    : seed
     ? `<p class="rm-intro">◆ Listing from your inventory: <b>${esc(seed.item_name)}</b>` +
       `${seed.quality == null ? "" : ` Q${Number(seed.quality)}`}${seed.location ? ` at ${esc(seed.location)}` : ""} — ` +
       `${fmtQty(seed.qty)} ${esc(seed.unit || "")} free. Adjust anything before posting; the holding itself isn't changed.</p>`
@@ -15389,10 +15405,16 @@ function renderMarketForm() {
       const f = document.querySelector(".mk-craft-form"); if (f) f.open = true;
     }
     const pk = $("mk-f-pickup"); if (pk && seed.location && !pk.value) pk.value = seed.location;
+    if (seed.stats && seed.stats.length) {
+      const box = $("mk-f-stats");
+      if (box) box.innerHTML = seed.stats.map(s => mkStatRow(s.name, s.value)).join("");
+      const f = document.querySelector(".mk-craft-form"); if (f) f.open = true;
+    }
+    if (seed.note) { const n = $("mk-f-note"); if (n && !n.value) n.value = seed.note; }
     mkSyncQualityLabels();
     mkShowMyLots(seed.item_id, seed.id);
     // The picker wasn't used, so fetch the catalog row for the value hint.
-    fetch(`/api/catalog?q=${encodeURIComponent(seed.item_name)}`).then(r => r.json()).then(d => {
+    fetch(`/api/catalog?q=${encodeURIComponent(seed.item_name)}${seed.item_id.startsWith("blueprint:") ? "&bp=1" : ""}`).then(r => r.json()).then(d => {
       const it = ((d || {}).items || []).find(x => x.item_id === seed.item_id);
       if (it) { mkShowMarketValue(it); mkShowMyLots(seed.item_id, seed.id); }
     }).catch(() => {});
@@ -20548,31 +20570,172 @@ async function loadMyBlueprints() {
   renderMyBlueprints(list);
 }
 
+// --- library table (docs/blueprint-library.md) ---
+// Grouped by category, sortable, filterable; each row expands to the
+// materials bill with have/need per slot off the member's free stock and the
+// expected stats at the qualities that stock would feed.
+let bpLib = [];
+let bpLibState = { q: "", cat: "", mat: "", craftable: false, sort: "name", dir: 1, open: {}, collapsed: {} };
+const BP_LIB_COLS = [
+  { key: "name", label: "Recipe", val: r => (r.name || "").toLowerCase() },
+  { key: "manufacturer", label: "Maker", val: r => (r.manufacturer || "").toLowerCase() },
+  { key: "size", label: "Size / Grade", val: r => Number(r.size) || 0 },
+  { key: "inputs", label: "Materials", val: r => (r.inputs || []).map(i => i.input).join(",").toLowerCase() },
+  { key: "cost", label: "Est. cost", num: true, val: r => (r.est_cost && r.est_cost.total) || 0 },
+  { key: "time", label: "Time", num: true, val: r => r.time_s || 0 },
+  { key: "craft", label: "Craftable", num: true, val: r => r.craft ? (r.craft.ok ? 1e6 + r.craft.crafts : (r.craft.slots || []).filter(s => s.ok).length) : -1 },
+];
+function bpLibMaterials() {
+  const m = new Set();
+  bpLib.forEach(r => (r.inputs || []).forEach(i => m.add(i.input)));
+  return [...m].sort();
+}
+function bpLibMatches(r) {
+  const st = bpLibState, q = st.q.trim().toLowerCase();
+  if (q && !(r.name || "").toLowerCase().includes(q) && !(r.manufacturer || "").toLowerCase().includes(q)) return false;
+  if (st.cat && r.cat !== st.cat) return false;
+  if (st.mat && !(r.inputs || []).some(i => i.input === st.mat)) return false;
+  if (st.craftable && !(r.craft && r.craft.ok)) return false;
+  return true;
+}
+function bpCraftChip(c) {
+  if (!c) return `<span class="muted">—</span>`;
+  if (c.ok) {
+    const q = c.quality == null ? `<span class="muted">unrated</span>` : invQualityChip(c.quality);
+    return `<span class="bp-ok" title="every material covered by your free stock">✓ ×${c.crafts}</span> ${q}`;
+  }
+  const have = (c.slots || []).filter(s => s.ok).length, n = (c.slots || []).length;
+  return `<span class="muted" title="materials you're short of: ${esc((c.slots || []).filter(s => !s.ok).map(s => s.input).join(", "))}">${have}/${n} materials</span>`;
+}
+function bpLibRowHtml(r) {
+  const c = r.craft;
+  const mats = (r.inputs || []).map(i => {
+    const sl = c && (c.slots || []).find(s => s.input === i.input);
+    const short = sl && !sl.ok;
+    return `<span class="bp-mat ${short ? "short" : ""}" title="${short ? `have ${fmtQty(sl.have)} of ${fmtQty(sl.need)} ${esc(i.unit)}` : esc(i.unit)}">` +
+      `${esc(i.input)} <span class="muted">${fmtQty(i.need)}</span></span>`;
+  }).join(" ");
+  const sg = [r.size ? "S" + esc(String(r.size)) : "", r.grade ? esc(String(r.grade)) : "", r.cls ? esc(String(r.cls)) : ""].filter(Boolean).join(" · ");
+  const cost = r.est_cost && r.est_cost.total ? `${Number(r.est_cost.total).toLocaleString()}` +
+    ((r.est_cost.unpriced || []).length ? `<span class="muted" title="unpriced: ${esc(r.est_cost.unpriced.join(", "))}">+</span>` : "") : "—";
+  const minq = r.max_min_q > 1 ? ` <span class="rm-minq" title="needs materials at quality ${r.max_min_q} or better">≥Q${r.max_min_q}</span>` : "";
+  const open = !!bpLibState.open[r.blueprint_key];
+  return `<tr class="rm-inv-row bp-row ${open ? "open" : ""}" data-key="${esc(r.blueprint_key)}" aria-expanded="${open}">` +
+    `<td><span class="rm-caret" aria-hidden="true">▸</span><b>${esc(r.name)}</b>${minq}` +
+      `${r.available ? "" : ` <span class="muted">· recipe unavailable</span>`}` +
+      `${r.default ? ` <span class="muted" title="everyone has this recipe">default</span>` : ""}</td>` +
+    `<td>${r.manufacturer ? esc(r.manufacturer) : ""}</td>` +
+    `<td class="inv-dim">${sg}</td>` +
+    `<td class="bp-mats">${mats}</td>` +
+    `<td class="num">${cost}</td>` +
+    `<td class="num">${bpFmtTime(r.time_s)}</td>` +
+    `<td>${bpCraftChip(c)}</td>` +
+    `<td class="inv-actions">` +
+      `<a class="ev-btn" href="#/goals/new" data-bpseed="${esc(r.blueprint_key)}" title="gather this recipe's materials">🎯 Gather</a>` +
+      (c && c.ok ? `<button class="ev-btn primary" data-bplist="${esc(r.blueprint_key)}" title="post a crafted ${esc(r.name)} on the marketplace at the quality you can make">List</button>` : "") +
+      `<button class="ev-btn danger" data-bpdel="${esc(r.blueprint_key)}">Remove</button></td></tr>` +
+    `<tr class="rm-inv-detail" data-d="${esc(r.blueprint_key)}"${open ? "" : " hidden"}><td colspan="8">${bpLibDetailHtml(r)}</td></tr>`;
+}
+function bpLibDetailHtml(r) {
+  const c = r.craft;
+  const slots = c ? c.slots.map(sl =>
+    `<tr><td>${esc(sl.slot)} <span class="muted">(${esc(sl.input)})</span></td>` +
+    `<td class="${sl.ok ? "" : "rm-low"}">${fmtQty(sl.have)} / ${fmtQty(sl.need)}${sl.ok ? " ✓" : " short"}</td>` +
+    `<td>${sl.assumed ? `<span class="muted">${sl.ok ? "unrated stock — assuming base Q500" : "—"}</span>`
+      : `${invQualityChip(sl.q)}${sl.unrated > 0 ? ` <span class="muted">+ ${fmtQty(sl.unrated)} unrated</span>` : ""}`}</td></tr>`).join("") : "";
+  const stats = c && (c.stat_preview || []).length ? c.stat_preview.map(s =>
+    `<tr><td>${esc(s.prop)}</td><td>${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td></tr>`).join("") : "";
+  const unlocks = (r.unlocks || []).length ? `<div class="muted" style="margin-top:6px">Unlocked by: ${r.unlocks.map(esc).join(" · ")}</div>` : "";
+  return `<div class="bp-detail">` +
+    (slots ? `<div class="mk-craft-h">Your free stock vs. one craft</div><table class="mk-craft-tbl">${slots}</table>` : "") +
+    (stats ? `<div class="mk-craft-h" style="margin-top:8px">Expected stats with that stock — estimates</div><table class="mk-craft-tbl">${stats}</table>` : "") +
+    unlocks + `</div>`;
+}
 function renderMyBlueprints(list) {
   const el = $("mybp-list");
   if (list === null || list === undefined) {
     el.innerHTML = `<span class="muted" style="font-size:12px;">Couldn't load your library.</span>`;
     return;
   }
+  bpLib = list;
   if (!list.length) {
     el.innerHTML = `<span class="muted" style="font-size:12px;">No recipes saved yet.</span>`;
     return;
   }
-  el.innerHTML = list.map(bp =>
-    `<div class="rm-mine-row"><div class="rm-mine-main">${esc(bp.name)}` +
-      `${bp.cat ? ` <span class="muted">· ${esc(bp.cat)}</span>` : ""}` +
-      `${bp.available ? "" : ` <span class="muted">· recipe unavailable</span>`}</div>` +
-    `<div class="rm-mine-actions">` +
-      `<a class="ev-btn" href="#/goals/new" data-bpseed="${esc(bp.blueprint_key)}" title="gather this recipe's materials">🎯 Gather</a>` +
-      `<button class="ev-btn danger" data-bpdel="${esc(bp.blueprint_key)}">Remove</button></div></div>`).join("");
-  el.querySelectorAll("[data-bpdel]").forEach(b => {
-    b.onclick = async () => {
+  const st = bpLibState;
+  const cats = [...new Set(list.map(r => r.cat).filter(Boolean))].sort();
+  const opt = (v, l, cur) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(l)}</option>`;
+  const bar = `<div class="inv-filter-bar">` +
+    `<input class="ti" id="bp-f-q" placeholder="Filter recipes…" value="${esc(st.q)}" style="min-width:150px">` +
+    `<select class="ti inv-facet" id="bp-f-cat"><option value="">Category: all</option>${cats.map(c => opt(c, c, st.cat)).join("")}</select>` +
+    `<select class="ti inv-facet" id="bp-f-mat"><option value="">Material: all</option>${bpLibMaterials().map(m => opt(m, m, st.mat)).join("")}</select>` +
+    `<label class="bp-f-craft"><input type="checkbox" id="bp-f-craft"${st.craftable ? " checked" : ""}> craftable now</label>` +
+    `<span class="inv-filter-count" id="bp-f-count"></span></div>`;
+  el.innerHTML = bar + `<div class="table-scroll" id="bp-lib-table"></div>`;
+  $("bp-f-q").oninput = () => { st.q = $("bp-f-q").value; renderBpLibTable(); };
+  $("bp-f-cat").onchange = () => { st.cat = $("bp-f-cat").value; renderBpLibTable(); };
+  $("bp-f-mat").onchange = () => { st.mat = $("bp-f-mat").value; renderBpLibTable(); };
+  $("bp-f-craft").onchange = () => { st.craftable = $("bp-f-craft").checked; renderBpLibTable(); };
+  renderBpLibTable();
+}
+function renderBpLibTable() {
+  const st = bpLibState, col = BP_LIB_COLS.find(c => c.key === st.sort) || BP_LIB_COLS[0];
+  const shown = bpLib.filter(bpLibMatches).sort((a, b) => {
+    const x = col.val(a), y = col.val(b);
+    return (x < y ? -1 : x > y ? 1 : 0) * st.dir || String(a.name).localeCompare(String(b.name));
+  });
+  const groups = new Map();
+  shown.forEach(r => { const k = r.cat || "Other"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const head = `<thead><tr>` + BP_LIB_COLS.map(c =>
+    `<th class="bp-sort ${c.num ? "num" : ""}" data-sort="${c.key}">${esc(c.label)}${st.sort === c.key ? (st.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") +
+    `<th></th></tr></thead>`;
+  const body = [...groups].map(([cat, rows]) => {
+    const col = !!st.collapsed[cat];
+    return `<tbody class="bp-group"><tr class="bp-group-h ${col ? "collapsed" : ""}" data-cat="${esc(cat)}"><td colspan="8">` +
+      `<span class="rm-caret" aria-hidden="true">▸</span>${esc(cat)} <span class="muted">· ${rows.length}</span></td></tr>` +
+      (col ? "" : rows.map(bpLibRowHtml).join("")) + `</tbody>`;
+  }).join("");
+  $("bp-lib-table").innerHTML = `<table class="inv-table bp-table">${head}${body}</table>`;
+  const c = $("bp-f-count"); if (c) c.textContent = `${shown.length} of ${bpLib.length}`;
+  const t = $("bp-lib-table");
+  t.querySelectorAll(".bp-sort").forEach(th => th.onclick = () => {
+    if (st.sort === th.dataset.sort) st.dir = -st.dir; else { st.sort = th.dataset.sort; st.dir = 1; }
+    renderBpLibTable();
+  });
+  t.querySelectorAll(".bp-group-h").forEach(tr => clickable(tr, () => {
+    st.collapsed[tr.dataset.cat] = !st.collapsed[tr.dataset.cat]; renderBpLibTable();
+  }, "button"));
+  t.querySelectorAll(".bp-row").forEach(tr => clickable(tr, (e) => {
+    if (e && e.target && e.target.closest(".inv-actions")) return;
+    st.open[tr.dataset.key] = !st.open[tr.dataset.key]; renderBpLibTable();
+  }, "button"));
+  t.querySelectorAll("[data-bpdel]").forEach(b => {
+    b.onclick = async (e) => {
+      e.stopPropagation();
       await fetch(`/api/me/blueprints?key=${encodeURIComponent(b.dataset.bpdel)}`, { method: "DELETE" });
       loadMyBlueprints();
     };
   });
-  el.querySelectorAll("[data-bpseed]").forEach(a => {
-    a.onclick = () => { goalSeedFromLibrary = a.dataset.bpseed; };   // consumed by the new-goal form
+  t.querySelectorAll("[data-bpseed]").forEach(a => {
+    a.onclick = (e) => { e.stopPropagation(); goalSeedFromLibrary = a.dataset.bpseed; };   // consumed by the new-goal form
+  });
+  // List: seed the marketplace with what the member can ACTUALLY make — the
+  // recipe as the item, the craft count as qty, the weakest-input quality as
+  // the crafted quality, and the expected stats as stat rows.
+  t.querySelectorAll("[data-bplist]").forEach(b => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const r = bpLib.find(x => x.blueprint_key === b.dataset.bplist);
+      if (!r || !r.craft) return;
+      const c = r.craft;
+      const flagged = c.slots.filter(s => s.assumed || s.unrated > 0).map(s => s.input);
+      mktFormSeed = { item_id: "blueprint:" + r.blueprint_key, item_name: r.name, unit: "each",
+        qty: Math.max(1, c.crafts || 1), quality: c.quality,
+        stats: (c.stat_preview || []).filter(s => s.value != null).map(s => ({ name: s.prop, value: `≈ ${bpFmtEffect(s.mode, s.value)}` })),
+        location: "", crafted: true,
+        note: flagged.length ? `Quality estimate assumes base Q500 for unrated stock (${flagged.join(", ")}).` : "" };
+      location.hash = "#/market/new";
+    };
   });
 }
 
