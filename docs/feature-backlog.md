@@ -16,7 +16,7 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### 151. Inventory item quality 📐 DESIGNED · decisions settled
+### 151. Inventory item quality 🔨 step 1 BUILT · steps 2–5 designed
 
 User request, 2026-09-12. A holding is `(owner, item, location)`, so a second
 quality lot of the same ore **overwrites** the first (`upsert_inventory` SETs

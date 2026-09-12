@@ -15,6 +15,8 @@ What it pins down — the things a pure unit test can't:
 """
 
 import asyncio
+import contextlib
+import io
 import json
 import re
 import shutil
@@ -3338,6 +3340,170 @@ class ContributionTests(unittest.TestCase):
         self.assertIn(("commodity:agricium", "Orison"), offered)
         self.assertNotIn(("commodity:hadanite", "Orison"), offered)
         self.assertEqual(offered[("commodity:agricium", "Orison")]["available"], 7)
+
+
+class InventoryQualityTests(unittest.TestCase):
+    """Lot quality (#151): SC 4.10 keeps Q0–1000 on every commodity and stacks
+    each value separately, so quality is part of a holding's identity. Two lots
+    never overwrite each other, a pledged lot can't be re-rated under a goal, and
+    an edit can't land on another lot's key."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._a = {"id": "111", "username": "ana", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._a
+        app.app.dependency_overrides[app.require_user] = lambda: cls._a
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._a
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        for r in self.client.get("/api/inventory?owner=me").json()["rows"]:
+            self.client.delete(f"/api/inventory/{r['id']}")
+
+    def _log(self, **kw):
+        body = {"item_id": "commodity:agricium", "qty": 10, "location": "Area18", **kw}
+        r = self.client.post("/api/inventory", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _mine(self):
+        return self.client.get("/api/inventory?owner=me").json()["rows"]
+
+    def test_different_qualities_are_different_lots(self):
+        a = self._log(quality=300)
+        b = self._log(quality=900, qty=5)
+        u = self._log(qty=2)                       # unrated = its own lot too
+        self.assertEqual(len({a["id"], b["id"], u["id"]}), 3)
+        by_q = {r["quality"]: r["qty"] for r in self._mine()}
+        self.assertEqual(by_q, {300: 10, 900: 5, None: 2})
+
+    def test_relogging_the_same_lot_sets_not_stacks(self):
+        a = self._log(quality=300)
+        b = self._log(quality=300, qty=12)
+        self.assertEqual(a["id"], b["id"])
+        self.assertEqual(b["qty"], 12)
+
+    def test_zero_is_station_bought_not_unrated(self):
+        z = self._log(quality=0)
+        self.assertEqual(z["quality"], 0)
+        u = self._log()
+        self.assertNotEqual(z["id"], u["id"])
+        self.assertIsNone(u["quality"])
+
+    def test_quality_rejected_on_equipment(self):
+        r = self.client.post("/api/inventory", json={
+            "item_id": "item:turbodrive", "qty": 1, "quality": 700})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("quality applies to", r.json()["detail"])
+        r = self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 1, "quality": 1001})
+        self.assertEqual(r.status_code, 422)
+
+    def test_org_rollup_breaks_out_lots_by_quality(self):
+        self._log(quality=300)
+        self._log(quality=900, qty=5)
+        item = next(i for i in self.client.get("/api/inventory").json()["items"]
+                    if i["item_id"] == "commodity:agricium")
+        self.assertEqual(item["total"], 15)
+        self.assertEqual([l["quality"] for l in item["by_quality"]], [900, 300])
+
+    def test_unallocated_lot_quality_edits_in_place(self):
+        a = self._log(quality=300)
+        r = self.client.patch(f"/api/inventory/{a['id']}", json={
+            "qty": 10, "location": "Area18", "quality": 530})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["quality"], 530)
+        # …and can be cleared back to unrated.
+        r = self.client.patch(f"/api/inventory/{a['id']}", json={
+            "qty": 10, "location": "Area18"})
+        self.assertIsNone(r.json()["quality"])
+
+    def test_pledged_lot_cannot_be_rerated(self):
+        a = self._log(quality=850)
+        gid = self.client.post("/api/goals", json={
+            "title": "armor run", "line_items": [
+                {"item_id": "commodity:agricium", "qty_needed": 10}]}).json()["id"]
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "holding_id": a["id"]})
+        r = self.client.patch(f"/api/inventory/{a['id']}", json={
+            "qty": 10, "location": "Area18", "quality": 400})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("goal contributions", r.json()["detail"])
+        # Same quality → qty/location edits still fine under a pledge.
+        r = self.client.patch(f"/api/inventory/{a['id']}", json={
+            "qty": 6, "location": "Area18", "quality": 850})
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def test_edit_onto_another_lots_key_is_refused(self):
+        a = self._log(quality=300)
+        self._log(quality=900, qty=5)
+        r = self.client.patch(f"/api/inventory/{a['id']}", json={
+            "qty": 10, "location": "Area18", "quality": 900})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("Q900", r.json()["detail"])
+        # A location move that lands on an existing lot is the same refusal —
+        # this silently minted duplicates before #151.
+        self._log(quality=300, qty=3, location="Orison")
+        r = self.client.patch(f"/api/inventory/{a['id']}", json={
+            "qty": 10, "location": "Orison", "quality": 300})
+        self.assertEqual(r.status_code, 409)
+
+    def test_contributions_carry_the_lots_quality(self):
+        a = self._log(quality=777)
+        gid = self.client.post("/api/goals", json={
+            "title": "q run", "line_items": [
+                {"item_id": "commodity:agricium", "qty_needed": 10}]}).json()["id"]
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 4, "holding_id": a["id"]})
+        # A declared-on-hand contribution states its own lot quality and binds to
+        # THAT lot, not to whichever same-location lot came first.
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 2, "location": "Area18",
+            "on_hand": True, "quality": 120})
+        rows = db.list_goal_contributions(goal_id=gid)
+        self.assertEqual(sorted((r["quality"], r["qty"]) for r in rows), [(120, 2), (777, 4)])
+        self.assertEqual({r["quality"] for r in self._mine()}, {777, 120})
+        g = self.client.get(f"/api/goals/{gid}").json()
+        self.assertEqual({h["quality"] for h in g["my_holdings"]}, {777, 120})
+
+
+class InventoryLotKeyMigrationTests(unittest.TestCase):
+    """The lot key was code-enforced only, so an old DB may already hold a
+    duplicate; summing rows unseen is the one irreversible move, so the boot
+    logs the collision and defers the UNIQUE index instead."""
+
+    def test_duplicates_defer_the_index_and_a_clean_db_gets_it(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        try:
+            db.init(Path(tmp.name))
+            has_index = lambda: bool(db._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='inventory_lot'").fetchone())
+            self.assertTrue(has_index())            # clean DB: index on
+            db._conn.execute("DROP INDEX inventory_lot")
+            for _ in range(2):                      # the pre-#151 silent duplicate
+                db._conn.execute(
+                    "INSERT INTO inventory (owner_id, item_id, qty, location) "
+                    "VALUES ('1','commodity:agricium',5,'Area18')")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                db._migrate_inventory_lot_key()
+            self.assertFalse(has_index())
+            self.assertIn("lot key collision", out.getvalue())
+            db._conn.execute("DELETE FROM inventory")
+            db._migrate_inventory_lot_key()
+            self.assertTrue(has_index())
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
 
 
 class ReferenceDataBundlingTests(unittest.TestCase):

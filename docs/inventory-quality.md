@@ -1,6 +1,6 @@
 # Inventory item quality (#151)
 
-Status: **📐 design, decisions settled 2026-09-12, not built** — researched against SC Alpha 4.10.
+Status: **🔨 step 1 (holding identity) built 2026-09-12 · steps 2–5 designed** — researched against SC Alpha 4.10.
 
 ## The problem
 
@@ -76,7 +76,14 @@ inventory row already means the catalog's type-level characteristics blob, and
 
 ## Interconnections, in build order
 
-### 1. Holding identity gains quality (the fix for the actual bug)
+### 1. Holding identity gains quality (the fix for the actual bug) — BUILT
+
+As-built notes (2026-09-12): `db._INV_LOT_KEY_SQL` + `inventory_lot` UNIQUE
+index (expression index over the COALESCEd key); `_check_quality_kind` also
+admits `custom:` items; `/api/inventory?owner=me` rows carry `kind` so the row
+editor knows whether the field applies; the location-move duplicate (an edit
+landing on an existing lot's key) is refused too — it was a latent bug before
+quality joined the key.
 
 Key becomes `(owner, item, location, quality)` with null treated as its own
 value. Touch points:
