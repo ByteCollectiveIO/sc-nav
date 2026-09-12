@@ -2031,6 +2031,11 @@
   .inv-q { font-size: 11px; color: var(--craft); white-space: nowrap; }
   .inv-q .muted { font-size: 10px; margin-left: 3px; }
   .mk-f-bandro { color: var(--craft); font-variant-numeric: tabular-nums; }
+  /* Inline edit / split rows span the table, so their inputs would otherwise
+     borrow whatever header happens to sit above them — each carries its own. */
+  .rm-e-f { display: flex; flex-direction: column; gap: 2px; }
+  .rm-e-f > span:first-child { font-size: 10px; color: var(--dim); letter-spacing: .5px; text-transform: uppercase; }
+  .rm-e-f.grow { flex: 1; min-width: 120px; }
   /* align-self: a flex-column parent (.ev-field) would otherwise stretch the seg full-width */
   .rm-scope-seg { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; align-self: flex-start; }
@@ -13408,17 +13413,17 @@ function openInvEdit(id) {
   if (!r || !rowEl) return;
   const pledged = (r.allocations || []).length > 0;
   const qualityField = invQualityApplies({ kind: r.kind, item_id: r.item_id })
-    ? `<input class="ti rm-qty rm-e-quality" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
+    ? `<label class="rm-e-f"><span>Quality</span><input class="ti rm-qty rm-e-quality" type="number" min="0" max="1000" step="1" placeholder="unrated" ` +
       `value="${r.quality === null || r.quality === undefined ? "" : Number(r.quality)}"` +
-      (pledged ? ` disabled title="This lot backs goal contributions — use Split to re-rate the free part, or withdraw them first."` : ` title="Lot quality 0–1000; blank = unrated"`) + `>`
+      (pledged ? ` disabled title="This lot backs goal contributions — use Split to re-rate the free part, or withdraw them first."` : ` title="Quality 0–1000; blank = unrated"`) + `></label>`
     : "";
   rowEl.innerHTML =
-    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap">` +
+    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap;align-items:flex-end">` +
       `<span class="rm-edit-item"><b>${esc(r.item_name)}</b></span>` +
-      `<input class="ti rm-qty rm-e-qty" type="number" min="0" step="any" value="${fmtQty(r.qty)}">` +
-      unitSelect("rm-e-unit", r.unit) + qualityField +
-      `<span class="poi-pick" style="flex:1;min-width:120px"><input class="ti rm-e-loc" maxlength="120" placeholder="location" autocomplete="off" value="${esc(r.location || "")}"></span>` +
-      `<input class="ti rm-e-note" maxlength="500" placeholder="note (optional)" value="${esc(r.note || "")}" style="flex:1;min-width:120px">` +
+      `<label class="rm-e-f"><span>Qty</span><input class="ti rm-qty rm-e-qty" type="number" min="0" step="any" value="${fmtQty(r.qty)}"></label>` +
+      `<label class="rm-e-f"><span>Unit</span>${unitSelect("rm-e-unit", r.unit)}</label>` + qualityField +
+      `<label class="rm-e-f grow"><span>Location</span><span class="poi-pick"><input class="ti rm-e-loc" maxlength="120" placeholder="location" autocomplete="off" value="${esc(r.location || "")}"></span></label>` +
+      `<label class="rm-e-f grow"><span>Note</span><input class="ti rm-e-note" maxlength="500" placeholder="optional" value="${esc(r.note || "")}"></label>` +
       `<button class="ev-btn primary rm-e-save">Save</button>` +
       `<button class="ev-btn rm-e-cancel">Cancel</button>` +
       `<span class="rm-e-msg muted"></span>` +
@@ -13454,14 +13459,14 @@ function openInvSplit(id) {
   if (!r || !rowEl) return;
   const free = Number(r.available) || 0;
   rowEl.innerHTML =
-    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap">` +
+    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap;align-items:flex-end">` +
       `<span class="rm-edit-item"><b>${esc(r.item_name)}</b> <span class="muted">split off</span></span>` +
-      `<input class="ti rm-qty rm-s-qty" type="number" min="0" max="${free}" step="any" placeholder="amount" ` +
-        `title="up to ${fmtQty(free)} ${esc(r.unit || "")} free (pledged stock stays put)">` +
+      `<label class="rm-e-f"><span>Qty to move</span><input class="ti rm-qty rm-s-qty" type="number" min="0" max="${free}" step="any" placeholder="amount" ` +
+        `title="up to ${fmtQty(free)} ${esc(r.unit || "")} free (pledged stock stays put)"></label>` +
       `<span class="muted">of ${fmtQty(free)} free ${esc(r.unit || "")} → </span>` +
-      `<input class="ti rm-qty rm-s-quality" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
-        `title="Quality of the split-off part, 0–1000; blank = unrated">` +
-      `<span class="poi-pick" style="flex:1;min-width:120px"><input class="ti rm-s-loc" maxlength="120" placeholder="location (same if blank)" autocomplete="off"></span>` +
+      `<label class="rm-e-f"><span>New quality</span><input class="ti rm-qty rm-s-quality" type="number" min="0" max="1000" step="1" placeholder="unrated" ` +
+        `title="Quality of the split-off part, 0–1000; blank = unrated"></label>` +
+      `<label class="rm-e-f grow"><span>Location</span><span class="poi-pick"><input class="ti rm-s-loc" maxlength="120" placeholder="same if blank" autocomplete="off"></span></label>` +
       `<button class="ev-btn primary rm-s-save">Split</button>` +
       `<button class="ev-btn rm-s-cancel">Cancel</button>` +
       `<span class="rm-s-msg muted"></span>` +
