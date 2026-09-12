@@ -12500,14 +12500,34 @@ function goalSpecBox(g) {
   const rows = c.inputs.map(i =>
     `<tr><td>${esc(i.slot)} <span class="muted">(${esc(i.input)})</span></td>` +
     `<td>≥ Q${esc(String(i.min_q))} <span class="muted">${bandTag(i.min_q)}</span></td></tr>`).join("");
-  const stats = (c.stat_preview || []).map(s =>
-    `<tr><td>${esc(s.prop)}</td><td>${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td></tr>`).join("");
+  // With what's pledged (#151 step 3): a second column of the same stats at the
+  // qualities the goal's rated pledges would really feed each slot, and the
+  // slot dragging the result down. Absent until a rated lot is pledged.
+  const pl = c.pledged;
+  const plBy = pl ? Object.fromEntries((pl.stat_preview || []).map(s => [s.prop, s])) : null;
+  const stats = (c.stat_preview || []).map(s => {
+    const p = plBy && plBy[s.prop];
+    const worse = p && p.value != null && s.value != null &&
+      (s.dir === "lower" ? p.value > s.value : p.value < s.value);
+    return `<tr><td>${esc(s.prop)}</td><td>${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td>` +
+      (pl ? `<td class="${worse ? "rm-low" : ""}">${!p || p.value == null ? "—" : `≈ ${bpFmtEffect(p.mode, p.value)}`}</td>` : "") + `</tr>`;
+  }).join("");
+  const plRows = pl ? pl.slots.map(sl =>
+    `<tr><td>${esc(sl.slot)} <span class="muted">(${esc(sl.input)})</span></td>` +
+    `<td>${sl.assumed
+      ? `<span class="muted">nothing rated pledged — assuming ${sl.asked == null ? "base Q500" : `the Q${Number(sl.asked)} ask`}</span>`
+      : `${invQualityChip(sl.q)} <span class="muted">from ${Number(sl.lots)} lot${sl.lots === 1 ? "" : "s"}, ${fmtQty(sl.qty)} rated` +
+        `${sl.unrated_qty > 0 ? ` + ${fmtQty(sl.unrated_qty)} unrated` : ""}</span>` +
+        (sl.asked != null && sl.q < sl.asked ? ` <span class="rm-low">${sl.slot === pl.weakest ? "⚠ weakest — " : ""}below the Q${Number(sl.asked)} ask</span>` : "")}</td></tr>`).join("") : "";
   return `<div class="mk-craftbox"><div class="mk-craft-h">⚒ Target material quality</div>` +
     `<table class="mk-craft-tbl">${rows}</table>` +
-    (stats ? `<div class="mk-craft-h" style="margin-top:10px">Expected stats at these qualities — estimates</div>` +
-      `<table class="mk-craft-tbl">${stats}</table>` : "") +
+    (plRows ? `<div class="mk-craft-h" style="margin-top:10px">What's pledged would feed</div>` +
+      `<table class="mk-craft-tbl">${plRows}</table>` : "") +
+    (stats ? `<div class="mk-craft-h" style="margin-top:10px">Expected stats — estimates</div>` +
+      `<table class="mk-craft-tbl">${pl ? `<tr class="muted"><td></td><td>at the asked quality</td><td>with what's pledged</td></tr>` : ""}${stats}</table>` : "") +
     `<p class="mk-craft-foot">Quality is the game's 1–1000 material scale (Q500 ≈ base); ` +
-    `Band ≈ quality ÷ 125 (B8 top). Gather targets, not hard requirements.</p></div>`;
+    `Band ≈ quality ÷ 125 (B8 top). Gather targets, not hard requirements.` +
+    `${pl ? " Pledged qualities are qty-weighted across rated lots; unrated lots can't inform a stat." : ""}</p></div>`;
 }
 
 // My commitments to this goal, grouped by where the materials are staged — the

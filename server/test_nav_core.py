@@ -4687,6 +4687,23 @@ class BlueprintCommissionTests(unittest.TestCase):
         self.assertEqual(nav_core.blueprint_quality_effect(mod, 400), 2)
         self.assertEqual(nav_core.blueprint_quality_effect(mod, 950), 3)
 
+    def test_pledged_slot_qualities_weight_rated_lots_by_qty(self):
+        # #151 step 3: a slot's fed quality = qty-weighted average of the RATED
+        # pledges of its input; unrated qty rides along; a slot with no rated
+        # pledge is absent so the caller falls back to the ask.
+        resolve = lambda name: {"item_id": f"commodity:{name.lower()}"}
+        rows = [
+            {"item_id": "commodity:agricium", "qty": 30, "quality": 900},
+            {"item_id": "commodity:agricium", "qty": 10, "quality": 500},
+            {"item_id": "commodity:agricium", "qty": 7, "quality": None},
+            {"item_id": "commodity:dolivine", "qty": 3, "quality": None},
+            {"item_id": "commodity:agricium", "qty": 0, "quality": 1},     # empty shell ignored
+        ]
+        out = nav_core.pledged_slot_qualities(self.WEAPON, rows, resolve)
+        frame = out[self.WEAPON["aspects"][0]["slot"]]
+        self.assertEqual((frame["q"], frame["qty"], frame["lots"], frame["unrated_qty"]), (800, 40, 2, 7))
+        self.assertEqual(len(out), 1)                     # gem slots: nothing rated
+
     def test_stat_preview_defaults_to_base_and_combines(self):
         base = {s["prop"]: s["value"] for s in nav_core.blueprint_stat_preview(self.WEAPON)}
         self.assertAlmostEqual(base["Integrity"], 1.0)
