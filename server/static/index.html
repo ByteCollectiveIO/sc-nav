@@ -2247,6 +2247,20 @@
   .bp-unlock-list li { margin: 3px 0; }
   .bp-rep { color: var(--warn); font-size: 12px; }
   .bp-f-craft { font-size: 12px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  /* Org readiness + unlock goals (docs/blueprint-readiness.md) */
+  .bpr-selcol { width: 28px; }
+  .bpr-row.sel td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .bp-sel-bar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center; padding: 10px 12px; margin-top: 8px;
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; font-size: 13px; }
+  .bp-sel-bar[hidden] { display: none; }
+  .goal-recipes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; min-height: 24px; }
+  .goal-recipe-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; background: var(--panel2); }
+  .goal-recipe-x { background: none; border: 0; color: var(--dim); cursor: pointer; font-size: 11px; padding: 0; }
+  .goal-recipe-x:hover { color: var(--bad); }
+  .goal-unlock-line { margin-bottom: 10px; }
+  .goal-unlock-sub { font-size: 12px; margin: 2px 0 0 4px; display: flex; flex-direction: column; gap: 3px; }
+  .goal-unlock-path summary { cursor: pointer; color: var(--dim); }
+  .goal-unlock-line.done .rm-line-bar > span { background: var(--good); }
   /* board search / sort / filter row */
   .mk-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
   .mk-search input, .mk-search select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
@@ -12392,14 +12406,21 @@ function goalCraftChip(g) {
   return `<span class="rm-craft-chip">⚒ ${esc(name)}</span>`;
 }
 
+function goalUnlockChip(g) { return g.kind === "unlock" ? `<span class="rm-craft-chip">🔓 Unlock</span>` : ""; }
+function goalUnlockScope(g) {
+  const u = g.unlock || {}, s = u.spec || {}, t = s.target || {};
+  const who = s.playstyle ? `${esc(s.playstyle)} members` : "members";
+  return t.mode === "pct" ? `${Number(t.value)}% of ${u.scope_size || 0} ${who} (${u.needed || 0})` : `${Number(t.value)} ${who}`;
+}
 function goalCard(g) {
   const pr = g.progress, met = pr.is_met || g.status === "met";
   const n = pr.lines.length;
+  const what = g.kind === "unlock" ? `${n} recipe${n === 1 ? "" : "s"} · ${goalUnlockScope(g)}` : `${n} item${n === 1 ? "" : "s"}`;
   return `<a class="ev-card" href="#/goals/${g.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(g.title)}</div>` +
-    `<div class="ev-chips">${goalPersonalChip(g)}${goalCraftChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div></div>` +
-    `<div class="ev-meta">${rmDue(g.deadline)} · ${n} item${n === 1 ? "" : "s"} · by ${esc(g.creator_name)}</div>` +
-    `<div class="rm-pct">${Math.round(pr.overall_pct)}% filled</div>` +
+    `<div class="ev-chips">${goalPersonalChip(g)}${goalUnlockChip(g)}${goalCraftChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div></div>` +
+    `<div class="ev-meta">${rmDue(g.deadline)} · ${what} · by ${esc(g.creator_name)}</div>` +
+    `<div class="rm-pct">${Math.round(pr.overall_pct)}% ${g.kind === "unlock" ? "ready" : "filled"}</div>` +
     `<div class="rm-bar ${met ? "met" : ""}"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div></a>`;
 }
 
@@ -12416,7 +12437,7 @@ async function renderGoalBoard() {
     `members log contributions; <b>personal</b> goals stay private (seed one from a blueprint to gather ` +
     `everything a craft needs). Every item links into the <a href="#/nav">resource finder</a>.</p>` +
     `<div class="rm-scope-seg" id="goals-scope" style="margin-top:4px">` +
-      seg("all", "All") + seg("mine", "Mine") + seg("craft", "⚒ Craft") + `</div></div>` +
+      seg("all", "All") + seg("mine", "Mine") + seg("craft", "⚒ Craft") + seg("unlock", "🔓 Unlock") + `</div></div>` +
     `<div id="goals-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   document.querySelectorAll("#goals-scope button").forEach(b => {
     b.onclick = () => { goalScopeFilter = b.dataset.scope; renderGoalBoard(); };
@@ -12432,6 +12453,7 @@ async function renderGoalBoard() {
   let goals = data.goals || [];
   if (goalScopeFilter === "mine") goals = goals.filter(g => g.is_mine);
   else if (goalScopeFilter === "craft") goals = goals.filter(g => g.craft);
+  else if (goalScopeFilter === "unlock") goals = goals.filter(g => g.kind === "unlock");
   const empty = goalScopeFilter === "mine" ? "You have no goals yet."
     : goalScopeFilter === "craft" ? "No craft goals yet — seed one from a blueprint."
     : `No goals yet. <a href="#/goals/new">Create the first one →</a>`;
@@ -12696,7 +12718,66 @@ function wireGoalContribActions(g) {
   });
 }
 
+// Unlock goal detail: per-recipe member bars, who holds / still needs it, the
+// unlock path per recipe, and the viewer's own status with a one-click add.
+function renderUnlockGoalDetail(g) {
+  const pr = g.progress, met = pr.is_met || g.status === "met", u = g.unlock || {};
+  const editBtns = g.can_edit
+    ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "";
+  const recipes = (u.recipes || []);
+  const lines = pr.lines.map(l => {
+    const r = recipes.find(x => x.key === l.key) || {};
+    const pct = l.needed ? Math.min(100, Math.round(100 * l.have / l.needed)) : 100;
+    const done = l.have >= l.needed;
+    const holders = (l.holder_names || []).length ? l.holder_names.map(esc).join(", ") : `<span class="muted">nobody yet</span>`;
+    const missing = (l.missing_names || []);
+    return `<div class="goal-unlock-line ${done ? "done" : ""}">` +
+      `<div class="rm-line"><span class="rm-line-n" title="${esc(r.cat || "")}"><b>${esc(l.name)}</b></span>` +
+        `<span class="rm-line-bar"><span style="width:${pct}%"></span></span>` +
+        `<span class="rm-line-ct">${l.have}/${l.needed} members${done ? " ✓" : ""}</span></div>` +
+      `<div class="goal-unlock-sub">` +
+        `<div><span class="muted">Held by:</span> ${holders}</div>` +
+        (missing.length ? `<div><span class="muted">Still needed from:</span> ${missing.slice(0, 12).map(esc).join(", ")}${missing.length > 12 ? ` <span class="muted">+${missing.length - 12} more</span>` : ""}</div>` : "") +
+        `<div class="goal-unlock-me">${r.i_hold ? `<span class="bp-ok">✓ you hold this recipe</span>`
+          : `<button class="ev-btn sm goal-unlock-add" data-key="${esc(l.key)}">+ I've unlocked it — add to my library</button>`}</div>` +
+        `<details class="goal-unlock-path"><summary>How it's unlocked</summary>${bpUnlocksHtml(r.unlocks, r.default)}</details>` +
+      `</div></div>`;
+  }).join("");
+  const contributors = pr.per_contributor || [];
+  const contribList = contributors.length
+    ? contributors.map(c => `<span class="ev-name">${esc(c.display_name)} · ${c.qty}/${pr.lines.length}</span>`).join("")
+    : `<span class="muted">No one in scope holds any of these yet.</span>`;
+  $("goal-detail-body").innerHTML =
+    `<div class="ev-detail-title"><h2>${esc(g.title)}</h2>${goalPersonalChip(g)}${goalUnlockChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div>` +
+    `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b> · target: ${goalUnlockScope(g)}</div>` +
+    (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
+    `<div class="rm-headline"><span class="rm-headline-v ${met ? "met" : ""}">${Math.round(pr.overall_pct)}%</span>` +
+    `<span class="rm-headline-l">ready${met ? " · met ✓" : ""}</span></div>` +
+    `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
+    `<div class="ev-section-h">Recipes</div>${lines}` +
+    `<div class="ev-section-h">Holders in scope</div><div class="ev-roster-names">${contribList}</div>` +
+    `<div class="ev-form-actions">${editBtns}</div>`;
+  document.querySelectorAll(".goal-unlock-add").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Adding…";
+    try {
+      const r = await fetch("/api/me/blueprints", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ blueprint_key: b.dataset.key }) });
+      if (!r.ok) throw 0;
+      renderGoalDetail(g.id);
+    } catch { b.disabled = false; b.textContent = "couldn't add"; }
+  });
+  if (g.can_edit) {
+    $("goal-edit").onclick = () => renderGoalEditForm(g);
+    $("goal-del").onclick = async () => {
+      if (!(await confirmDialog("Members keep their libraries; only the goal goes.",
+          { title: `Delete the goal "${g.title}"?`, confirmLabel: "Delete goal", danger: true }))) return;
+      const r = await fetch(`/api/goals/${g.id}`, { method: "DELETE" });
+      if (r.ok) location.hash = "#/goals";
+    };
+  }
+}
 function renderGoalDetailBody(g) {
+  if (g.kind === "unlock") return renderUnlockGoalDetail(g);
   const pr = g.progress, met = pr.is_met || g.status === "met";
   const minqMap = g.craft && g.craft.min_q;
   const lineSel = pr.lines.map(l =>
@@ -12856,12 +12937,39 @@ function goalFormHtml(g) {
       `<span class="ev-hint" id="goal-f-reseed-hint" hidden style="color:var(--craft)">Recipe settings changed — ` +
         `saving re-derives the line items from the recipe at these qualities (replacing the rows below).</span>` +
       `<div id="goal-f-bp-spec"></div></div>`;
+  const kind = (g && g.kind) || "materials";
+  const kindSeg = g ? "" :
+    `<div class="ev-field"><label>Goal kind</label>` +
+      `<div class="rm-scope-seg" id="goal-f-kind">` +
+        `<button type="button" data-kind="materials" class="${kind === "materials" ? "on" : ""}">Gather materials</button>` +
+        `<button type="button" data-kind="unlock" class="${kind === "unlock" ? "on" : ""}">🔓 Blueprint unlock</button>` +
+      `</div><span class="ev-hint">An unlock goal counts <b>members who hold the recipes</b> — the org's ` +
+      `reputation push as a progress bar.</span></div>`;
+  const us = (g && g.unlock && g.unlock.spec) || {};
+  const tgt = us.target || { mode: "count", value: 1 };
+  const unlockBlock =
+    `<div id="goal-f-unlock"${kind === "unlock" ? "" : " hidden"}>` +
+      `<div class="ev-field"><label>Recipes to unlock</label>` +
+        `<div id="goal-f-recipes" class="goal-recipes"></div>` +
+        `<div class="rm-row"><span class="poi-pick" style="flex:1;min-width:220px"><input id="goal-f-recipe-add" class="ti" ` +
+          `placeholder="add a recipe…" autocomplete="off"></span></div></div>` +
+      `<div class="ev-form-grid">` +
+        `<div class="ev-field"><label>Target</label><div class="rm-row">` +
+          `<input id="goal-f-tval" class="ti rm-qty" type="number" min="1" step="1" value="${Number(tgt.value) || 1}">` +
+          `<div class="rm-scope-seg" id="goal-f-tmode">` +
+            `<button type="button" data-mode="count" class="${tgt.mode !== "pct" ? "on" : ""}">members</button>` +
+            `<button type="button" data-mode="pct" class="${tgt.mode === "pct" ? "on" : ""}">% of scope</button></div>` +
+        `</div><span class="ev-hint">Met when EVERY recipe is held by that many members of the scope.</span></div>` +
+        `<div class="ev-field"><label>Scope</label><select id="goal-f-playstyle" class="sel"><option value="">Any member</option></select>` +
+        `<span class="ev-hint">Members carrying this playstyle tag (Settings › Profile). "Industry" ≈ mining.</span></div>` +
+      `</div></div>`;
   return `<div class="ev-form">` +
     `<div class="ev-field"><label>Title</label><input id="goal-f-title" class="ti" maxlength="120" ` +
       `value="${g ? esc(g.title) : ""}" placeholder="e.g. Fund the org Hull-C"></div>` +
     `<div class="ev-field"><label>Description</label><textarea id="goal-f-desc" maxlength="2000" ` +
       `placeholder="What's this campaign for?">${g ? esc(g.description || "") : ""}</textarea></div>` +
-    scopeSeg + seedBlock +
+    kindSeg + scopeSeg + unlockBlock +
+    `<div id="goal-f-materials"${kind === "unlock" ? " hidden" : ""}>` + seedBlock +
     `<div class="ev-form-grid">` +
       `<div class="ev-field"><label>Priority</label><select id="goal-f-prio">` +
         PRIO_TIERS.map(([t, lbl, val]) =>
@@ -12876,6 +12984,7 @@ function goalFormHtml(g) {
     `<div class="ev-field"><label>Line items — what to gather &amp; how much</label>` +
       `<div class="ev-roster" id="goal-f-lines">${lines}</div>` +
       `<button class="ev-btn" id="goal-f-addline" style="align-self:flex-start;margin-top:4px;">+ add item</button></div>` +
+    `</div>` +
     `<div class="ev-form-actions"><button id="goal-f-save" class="ev-btn primary">${g ? "Save changes" : "Create goal"}</button>` +
       `<button class="ev-btn" id="goal-f-cancel">Cancel</button>` +
       `<span id="goal-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
@@ -12895,9 +13004,38 @@ const goalSpec = bpSpecCtl({
   qty: () => Math.max(1, parseInt(($("goal-f-bp-qty") || {}).value, 10) || 1),
 });
 
+// Unlock-goal form state: the picked recipes (key → name), the target mode.
+let goalUnlockRecipes = new Map();
+function goalKindValue() {
+  const on = document.querySelector("#goal-f-kind button.on");
+  return on ? on.dataset.kind : (document.querySelector("#goal-f-unlock") && !$("goal-f-unlock").hidden ? "unlock" : "materials");
+}
+function renderGoalRecipes() {
+  const el = $("goal-f-recipes"); if (!el) return;
+  el.innerHTML = goalUnlockRecipes.size ? [...goalUnlockRecipes].map(([k, n]) =>
+    `<span class="goal-recipe-chip">${esc(n)}<button type="button" class="goal-recipe-x" data-key="${esc(k)}" title="remove">✕</button></span>`).join("")
+    : `<span class="muted" style="font-size:12px">No recipes yet — add from the picker, or select rows in Org readiness.</span>`;
+  el.querySelectorAll(".goal-recipe-x").forEach(b => b.onclick = () => { goalUnlockRecipes.delete(b.dataset.key); renderGoalRecipes(); });
+}
 function collectGoalForm() {
   const title = $("goal-f-title").value.trim();
   if (!title) return { error: "Give the goal a title." };
+  if (goalKindValue() === "unlock") {
+    if (!goalUnlockRecipes.size) return { error: "Add at least one recipe to unlock." };
+    const modeBtn = document.querySelector("#goal-f-tmode button.on");
+    const tv = Number($("goal-f-tval").value);
+    if (!(tv >= 1)) return { error: "Set a target of at least 1." };
+    const dlDate = $("goal-f-dl-date").value, dlTime = $("goal-f-dl-time").value;
+    const deadline = dlDate ? `${dlDate}T${dlTime || "23:59"}` : null;
+    const payload = { title, description: $("goal-f-desc").value.trim(),
+      priority: parseInt($("goal-f-prio").value, 10) || 5, deadline, line_items: [],
+      visibility: goalScopeValue(), kind: "unlock",
+      unlock: { blueprints: [...goalUnlockRecipes.keys()], target_mode: modeBtn ? modeBtn.dataset.mode : "count",
+                target_value: tv, playstyle: $("goal-f-playstyle").value || null } };
+    const statusEl = $("goal-f-status");
+    if (statusEl) payload.status = statusEl.value;
+    return { payload };
+  }
   const bpEl = $("goal-f-bp");
   const bpKey = bpEl ? bpEl.dataset.bpKey : "";
   // Editing a craft goal with changed recipe settings (quality sliders / craft
@@ -12939,6 +13077,33 @@ function collectGoalForm() {
   return { payload };
 }
 
+async function bindGoalUnlockForm(g) {
+  goalUnlockRecipes = new Map();
+  if (g && g.unlock && g.unlock.recipes) g.unlock.recipes.forEach(r => goalUnlockRecipes.set(r.key, r.name));
+  else if (g && g.unlock && g.unlock.spec) (g.unlock.spec.blueprints || []).forEach(k => goalUnlockRecipes.set(k, k));
+  document.querySelectorAll("#goal-f-kind button").forEach(b => b.onclick = () => {
+    document.querySelectorAll("#goal-f-kind button").forEach(x => x.classList.remove("on")); b.classList.add("on");
+    const unlock = b.dataset.kind === "unlock";
+    $("goal-f-unlock").hidden = !unlock; $("goal-f-materials").hidden = unlock;
+  });
+  document.querySelectorAll("#goal-f-tmode button").forEach(b => b.onclick = () => {
+    document.querySelectorAll("#goal-f-tmode button").forEach(x => x.classList.remove("on")); b.classList.add("on");
+    const v = $("goal-f-tval"); if (b.dataset.mode === "pct" && Number(v.value) > 100) v.value = 100;
+  });
+  const addEl = $("goal-f-recipe-add");
+  if (addEl) attachBlueprintPicker(addEl.parentElement, bp => {
+    goalUnlockRecipes.set(bp.key, bp.name); renderGoalRecipes();
+    addEl.value = ""; delete addEl.dataset.bpKey; addEl.parentElement.classList.remove("picked");
+  });
+  renderGoalRecipes();
+  const sel = $("goal-f-playstyle");
+  if (sel) {
+    let tags = [];
+    try { tags = (await fetch("/api/playstyles").then(r => r.json())).tags || []; } catch {}
+    const cur = (g && g.unlock && g.unlock.spec && g.unlock.spec.playstyle) || "";
+    sel.innerHTML = `<option value="">Any member</option>` + tags.map(t => `<option value="${esc(t)}"${t === cur ? " selected" : ""}>${esc(t)}</option>`).join("");
+  }
+}
 function bindGoalForm(editId, onCancel) {
   const wirePickers = () => document.querySelectorAll("#goal-f-lines .poi-pick").forEach(w => {
     if (!w.dataset.wired) {
@@ -13017,6 +13182,21 @@ async function renderGoalForm() {
   $("goals-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/goals">← All goals</a>` +
     `<h2 class="ev-screen-h">NEW GOAL</h2>${goalFormHtml(null)}</div>`;
   bindGoalForm(null, () => { location.hash = "#/goals"; });
+  bindGoalUnlockForm(null);
+  // Arriving from Org readiness with recipes selected: an unlock goal, org-wide.
+  if (unlockGoalSeed && unlockGoalSeed.length) {
+    const keys = unlockGoalSeed; unlockGoalSeed = null;
+    const kb = document.querySelector('#goal-f-kind button[data-kind="unlock"]'); if (kb) kb.click();
+    const rows = (bpReady && bpReady.rows) || [];
+    keys.forEach(k => { const r = rows.find(x => x.key === k); goalUnlockRecipes.set(k, r ? r.name : k); });
+    renderGoalRecipes();
+    // Names for keys the readiness list didn't supply (direct load): resolve each.
+    keys.filter(k => goalUnlockRecipes.get(k) === k).forEach(k =>
+      fetch(`/api/blueprints/${encodeURIComponent(k)}`).then(r => r.ok ? r.json() : null)
+        .then(d => { if (d && d.name && goalUnlockRecipes.has(k)) { goalUnlockRecipes.set(k, d.name); renderGoalRecipes(); } }).catch(() => {}));
+    if (!$("goal-f-title").value) $("goal-f-title").value = keys.length === 1
+      ? `Unlock: ${goalUnlockRecipes.get(keys[0])}` : `Unlock ${keys.length} blueprints`;
+  }
   // Arriving from My Blueprints' "🎯 Gather": pre-seed the recipe + default to a
   // personal goal, since gathering to craft is usually a solo effort.
   if (goalSeedFromLibrary) {
@@ -13035,6 +13215,13 @@ async function renderGoalForm() {
 }
 
 function renderGoalEditForm(g) {
+  if (g.kind === "unlock") {
+    $("goals-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/goals/${g.id}">← Back to goal</a>` +
+      `<h2 class="ev-screen-h">EDIT GOAL</h2>${goalFormHtml(g)}</div>`;
+    bindGoalForm(g.id, () => renderGoalDetail(g.id));
+    bindGoalUnlockForm(g);
+    return;
+  }
   // A craft goal's saved per-slot quality asks seed the sliders (so a save
   // round-trips them instead of resetting to base) — mirrors the market edit form.
   goalSpec.initQ = null;
@@ -20551,10 +20738,13 @@ $("delete-account").onclick = async () => {
 // Third Resource Manager tab (#/blueprints): the personal library of craftable
 // recipes. Powers the commission board's "N can craft" (server-side) + the
 // "requests I can craft" filter, and seeds gather-goals via 🎯.
+let bpScope = "mine";   // mine | org
+try { bpScope = localStorage.getItem("bpScope") || "mine"; } catch {}
 function loadBlueprintsScreen() {
+  if (bpScope === "org") return loadBlueprintReadiness();
   const root = $("blueprints-root");
   root.innerHTML = rmMast("blueprints") +
-    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">MY BLUEPRINTS</h2></div>` +
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">MY BLUEPRINTS</h2>${bpScopeSeg()}</div>` +
     `<p class="rm-intro">Crafting recipes you own. Commission requests on the marketplace show ` +
     `<b>“N can craft”</b> to requesters, you can filter that board to requests you can craft, ` +
     `and 🎯 seeds a personal goal to gather a recipe's materials.</p>` +
@@ -20568,6 +20758,7 @@ function loadBlueprintsScreen() {
       `<a href="#/market" id="mybp-commissions">See open commissions you can craft →</a></div></div>`;
   attachBlueprintPicker($("mybp-add").parentElement);
   $("mybp-add-btn").onclick = addMyBlueprint;
+  wireBpScope();
   // Land on the commission board pre-narrowed to craftable requests.
   $("mybp-commissions").onclick = () => { mktFilter.mode = "commission"; mktFilter.canCraft = true; };
   loadMyBlueprints();
@@ -20606,6 +20797,141 @@ function bpUnlocksHtml(unlocks, dflt) {
         (u.systems && u.systems.length ? ` <span class="muted">· ${u.systems.map(esc).join(", ")}${u.places && u.places.length ? ` (${u.places.slice(0, 3).map(esc).join(", ")})` : ""}</span>` : "") +
         `</li>`).join("") + `</ol></div>`;
   }).join("");
+}
+
+function bpScopeSeg() {
+  return `<div class="rm-tabs" id="bp-scope">` +
+    `<button class="rm-tab ${bpScope === "mine" ? "on" : ""}" data-scope="mine">My library</button>` +
+    `<button class="rm-tab ${bpScope === "org" ? "on" : ""}" data-scope="org">Org readiness</button></div>`;
+}
+function wireBpScope() {
+  document.querySelectorAll("#bp-scope button").forEach(b => b.onclick = () => {
+    bpScope = b.dataset.scope; try { localStorage.setItem("bpScope", bpScope); } catch {}
+    loadBlueprintsScreen();
+  });
+}
+
+// --- org readiness (docs/blueprint-readiness.md) ---
+// Every recipe in the feed: who holds it, how it unlocks. Pick recipes and
+// create an unlock goal — the org's "push Battaglia rep until the majority
+// hold these" directive as a real progress bar.
+let bpReady = null, bpReadySel = new Set();
+let bpReadyState = { q: "", cat: "", faction: "", held: "", sort: "name", dir: 1, collapsed: {} };
+let unlockGoalSeed = null;   // [keys] — consumed by the new-goal form
+async function loadBlueprintReadiness() {
+  const root = $("blueprints-root");
+  root.innerHTML = rmMast("blueprints") +
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">ORG BLUEPRINT READINESS</h2>${bpScopeSeg()}</div>` +
+    `<p class="rm-intro">Every craftable recipe, who in the org holds it, and how it's unlocked (giver, ` +
+    `reputation standing). Select the recipes a reputation push is about and create an <b>unlock goal</b> — ` +
+    `progress counts members who hold them, scoped to a playstyle.</p>` +
+    `<div id="bp-ready-body"><p class="stat-empty">Loading…</p></div></div>`;
+  wireBpScope();
+  try { bpReady = await fetch("/api/blueprints/readiness").then(r => r.json()); }
+  catch { $("bp-ready-body").innerHTML = `<p class="stat-empty">Couldn't load the recipe list.</p>`; return; }
+  renderBpReadiness();
+}
+function renderBpReadiness() {
+  const el = $("bp-ready-body"), st = bpReadyState, rows = bpReady.rows || [];
+  const cats = [...new Set(rows.map(r => r.cat).filter(Boolean))].sort();
+  const facs = [...new Set(rows.flatMap(r => r.factions || []))].sort();
+  const opt = (v, l, cur) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(l)}</option>`;
+  el.innerHTML = `<div class="inv-filter-bar">` +
+    `<input class="ti" id="bpr-q" placeholder="Filter recipes…" value="${esc(st.q)}" style="min-width:150px">` +
+    `<select class="ti inv-facet" id="bpr-cat"><option value="">Category: all</option>${cats.map(c => opt(c, c, st.cat)).join("")}</select>` +
+    `<select class="ti inv-facet" id="bpr-fac"><option value="">Unlocked by: all</option>${facs.map(f => opt(f, f, st.faction)).join("")}</select>` +
+    `<select class="ti inv-facet" id="bpr-held"><option value="">Held: any</option>${opt("none", "nobody holds it", st.held)}${opt("some", "held by someone", st.held)}</select>` +
+    `<span class="inv-filter-count" id="bpr-count"></span></div>` +
+    `<div class="table-scroll" id="bpr-table"></div>` +
+    `<div class="bp-sel-bar" id="bpr-selbar" hidden><span id="bpr-selcount"></span>` +
+      `<button class="ev-btn primary" id="bpr-goal">🔓 Create unlock goal</button>` +
+      `<button class="ev-btn" id="bpr-clear">Clear</button></div>`;
+  $("bpr-q").oninput = () => { st.q = $("bpr-q").value; renderBpReadyTable(); };
+  $("bpr-cat").onchange = () => { st.cat = $("bpr-cat").value; renderBpReadyTable(); };
+  $("bpr-fac").onchange = () => { st.faction = $("bpr-fac").value; renderBpReadyTable(); };
+  $("bpr-held").onchange = () => { st.held = $("bpr-held").value; renderBpReadyTable(); };
+  $("bpr-clear").onclick = () => { bpReadySel.clear(); renderBpReadyTable(); };
+  $("bpr-goal").onclick = () => { unlockGoalSeed = [...bpReadySel]; location.hash = "#/goals/new"; };
+  renderBpReadyTable();
+}
+const BPR_COLS = [
+  { key: "name", label: "Recipe", val: r => (r.name || "").toLowerCase() },
+  { key: "manufacturer", label: "Maker", val: r => (r.manufacturer || "").toLowerCase() },
+  { key: "unlock", label: "Unlocked by", val: r => ((r.factions || [])[0] || "~").toLowerCase() },
+  { key: "standing", label: "Standing", num: true, val: r => r.min_standing ? (r.min_standing.pts || 0) : -1 },
+  { key: "holders", label: "Holders", num: true, val: r => r.holders || 0 },
+];
+function bpReadyMatches(r) {
+  const st = bpReadyState, q = st.q.trim().toLowerCase();
+  if (q && !(r.name || "").toLowerCase().includes(q) && !(r.manufacturer || "").toLowerCase().includes(q)) return false;
+  if (st.cat && r.cat !== st.cat) return false;
+  if (st.faction && !(r.factions || []).includes(st.faction)) return false;
+  if (st.held === "none" && r.holders > 0) return false;
+  if (st.held === "some" && !(r.holders > 0)) return false;
+  return true;
+}
+function renderBpReadyTable() {
+  const st = bpReadyState, rows = (bpReady.rows || []).filter(bpReadyMatches);
+  const col = BPR_COLS.find(c => c.key === st.sort) || BPR_COLS[0];
+  rows.sort((a, b) => { const x = col.val(a), y = col.val(b); return (x < y ? -1 : x > y ? 1 : 0) * st.dir || String(a.name).localeCompare(String(b.name)); });
+  const groups = new Map();
+  rows.forEach(r => { const k = r.cat || "Other"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const head = `<thead><tr><th class="bpr-selcol"></th>` + BPR_COLS.map(c =>
+    `<th class="bp-sort ${c.num ? "num" : ""}" data-sort="${c.key}">${esc(c.label)}${st.sort === c.key ? (st.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("") + `</tr></thead>`;
+  const total = bpReady.members_total || 0;
+  const row = (r) => {
+    const gate = r.min_standing ? (r.min_standing.pts ? `${esc(r.min_standing.name)} <span class="muted">(${Number(r.min_standing.pts).toLocaleString()})</span>` : `<span class="muted">none</span>`) : (r.default ? `<span class="muted">default</span>` : `<span class="muted">—</span>`);
+    return `<tr class="rm-inv-row bpr-row ${bpReadySel.has(r.key) ? "sel" : ""}" data-key="${esc(r.key)}" title="open the recipe card">` +
+      `<td class="bpr-selcol"><input type="checkbox" class="bpr-chk" data-key="${esc(r.key)}"${bpReadySel.has(r.key) ? " checked" : ""} aria-label="select ${esc(r.name)}"></td>` +
+      `<td><b>${esc(r.name)}</b>${r.size || r.grade ? ` <span class="inv-dim">${[r.size ? "S" + r.size : "", r.grade].filter(Boolean).map(esc).join(" · ")}</span>` : ""}</td>` +
+      `<td>${r.manufacturer ? esc(r.manufacturer) : ""}</td>` +
+      `<td>${(r.factions || []).length ? r.factions.map(esc).join(", ") : (r.default ? `<span class="muted">everyone</span>` : `<span class="muted">unknown</span>`)}</td>` +
+      `<td class="num">${gate}</td>` +
+      `<td class="num" title="${esc((r.holder_names || []).join(", "))}">${r.holders ? `<span class="bp-ok">${r.holders}</span>` : `<span class="muted">0</span>`}<span class="muted"> / ${total}</span></td></tr>`;
+  };
+  const body = [...groups].map(([cat, rs]) => {
+    const c = !!st.collapsed[cat];
+    return `<tbody class="bp-group"><tr class="bp-group-h ${c ? "collapsed" : ""}" data-cat="${esc(cat)}"><td colspan="6">` +
+      `<span class="rm-caret" aria-hidden="true">▸</span>${esc(cat)} <span class="muted">· ${rs.length}</span></td></tr>` +
+      (c ? "" : rs.map(row).join("")) + `</tbody>`;
+  }).join("");
+  $("bpr-table").innerHTML = `<table class="inv-table bp-table">${head}${body}</table>`;
+  $("bpr-count").textContent = `${rows.length} of ${(bpReady.rows || []).length}`;
+  const t = $("bpr-table");
+  t.querySelectorAll(".bp-sort").forEach(th => th.onclick = () => {
+    if (st.sort === th.dataset.sort) st.dir = -st.dir; else { st.sort = th.dataset.sort; st.dir = 1; }
+    renderBpReadyTable();
+  });
+  t.querySelectorAll(".bp-group-h").forEach(tr => clickable(tr, () => { st.collapsed[tr.dataset.cat] = !st.collapsed[tr.dataset.cat]; renderBpReadyTable(); }, "button"));
+  t.querySelectorAll(".bpr-chk").forEach(cb => cb.onclick = (e) => {
+    e.stopPropagation();
+    if (cb.checked) bpReadySel.add(cb.dataset.key); else bpReadySel.delete(cb.dataset.key);
+    cb.closest("tr").classList.toggle("sel", cb.checked); syncBpSelBar();
+  });
+  t.querySelectorAll(".bpr-row").forEach(tr => clickable(tr, (e) => {
+    if (e && e.target && e.target.closest(".bpr-selcol")) return;
+    openReadinessCard(tr.dataset.key);
+  }, "button"));
+  syncBpSelBar();
+}
+function syncBpSelBar() {
+  const bar = $("bpr-selbar"); if (!bar) return;
+  bar.hidden = bpReadySel.size === 0;
+  $("bpr-selcount").textContent = `${bpReadySel.size} recipe${bpReadySel.size === 1 ? "" : "s"} selected`;
+}
+// The recipe card from the org view: the readiness row + the recipe detail
+// (materials, cost, unlock paths) — no craftable verdict, since that's per member.
+async function openReadinessCard(key) {
+  const r = (bpReady.rows || []).find(x => x.key === key);
+  if (!r) return;
+  let d = null;
+  try { d = await fetch(`/api/blueprints/${encodeURIComponent(key)}`).then(x => x.ok ? x.json() : null); } catch {}
+  const man = (d && d.manifest) || {};
+  bpDetailModal({ ...r, blueprint_key: key, time_s: d && d.time_s, est_cost: d && d.est_cost,
+    max_min_q: man.max_min_q || 0, unlocks: (d && d.unlocks) || [],
+    inputs: [...(man.resources || []).map(x => ({ input: x.input, need: x.scu, unit: "SCU" })),
+             ...(man.items || []).map(x => ({ input: x.input, need: x.qty, unit: "each" }))],
+    holders_line: r.holders ? `Held by ${r.holders} of ${bpReady.members_total} members${(r.holder_names || []).length ? `: ${r.holder_names.join(", ")}${r.holders > r.holder_names.length ? "…" : ""}` : ""}` : "Nobody in the org holds this recipe yet." });
 }
 
 // --- library table (docs/blueprint-library.md) ---
@@ -20699,6 +21025,7 @@ function bpDetailModal(r) {
       (r.max_min_q > 1 ? `<span class="rm-minq" style="margin:0">≥Q${r.max_min_q} materials</span>` : "") +
       (r.default ? `<span class="muted">default recipe</span>` : "") + `</div>` +
     (verdict ? `<div style="margin:6px 0 10px">${verdict}</div>` : "") +
+    (r.holders_line ? `<div class="muted" style="margin:4px 0 10px">👥 ${esc(r.holders_line)}</div>` : "") +
     bpLibDetailHtml(r) +
     `<div class="mk-craft-h" style="margin-top:10px">Unlocked by</div>` + bpUnlocksHtml(r.unlocks, r.default);
   dlg.setAttribute("aria-label", r.name || "Recipe");

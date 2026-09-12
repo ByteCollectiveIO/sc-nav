@@ -677,6 +677,10 @@ def init(db_path) -> None:
         # restore the spec-builder sliders and the detail page can show targets.
         _ensure_column("goals", "blueprint_qty", "REAL")
         _ensure_column("goals", "blueprint_inputs", "TEXT")
+        # Unlock goals (docs/blueprint-readiness.md): lines are recipes, progress
+        # counts members holding them, scoped to a playstyle.
+        _ensure_column("goals", "kind", "TEXT NOT NULL DEFAULT 'materials'")
+        _ensure_column("goals", "unlock_spec", "TEXT")
         # Demand-side stock reports: v0.38.0 created the table without `side`.
         _ensure_column("stock_reports", "side", "TEXT NOT NULL DEFAULT 'supply'")
         # Cargo-handling fields on the transaction ledger (#41 follow-up): the
@@ -2528,6 +2532,8 @@ def _goal_row_to_dict(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["line_items"] = _u(d.get("line_items")) or []
     d["blueprint_inputs"] = _u(d.get("blueprint_inputs")) or []
+    d["unlock_spec"] = _u(d.get("unlock_spec")) or None
+    d["kind"] = d.get("kind") or "materials"
     return d
 
 
@@ -2537,14 +2543,16 @@ def create_goal(d: dict) -> int:
         cur = _conn.execute(
             "INSERT INTO goals (creator_id, title, description, priority, deadline, "
             "status, line_items, visibility, blueprint_key, blueprint_qty, "
-            "blueprint_inputs, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "blueprint_inputs, created_at, updated_at, kind, unlock_spec) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["creator_id"]), d.get("title"), d.get("description"),
              d.get("priority", 5), d.get("deadline"), d.get("status", "active"),
              _j(d.get("line_items") or []), d.get("visibility") or "org",
              d.get("blueprint_key"), d.get("blueprint_qty"),
              _j(d.get("blueprint_inputs") or []),
-             d.get("created_at"), d.get("updated_at")),
+             d.get("created_at"), d.get("updated_at"),
+             d.get("kind") or "materials",
+             _j(d["unlock_spec"]) if d.get("unlock_spec") else None),
         )
     return cur.lastrowid
 
@@ -2580,8 +2588,8 @@ def list_goals(status: str | None = None, viewer_id: str | None = None) -> list[
 
 _GOAL_EDITABLE = ("title", "description", "priority", "deadline", "status",
                   "line_items", "visibility", "blueprint_key", "blueprint_qty",
-                  "blueprint_inputs")
-_GOAL_JSON = ("line_items", "blueprint_inputs")
+                  "blueprint_inputs", "kind", "unlock_spec")
+_GOAL_JSON = ("line_items", "blueprint_inputs", "unlock_spec")
 
 
 def update_goal(goal_id: int, fields: dict, updated_at: str) -> bool:
@@ -2591,7 +2599,8 @@ def update_goal(goal_id: int, fields: dict, updated_at: str) -> bool:
     if not cols:
         return False
     sets = ", ".join(f"{c}=?" for c in cols)
-    vals = [_j(fields.get(c) or []) if c in _GOAL_JSON else fields.get(c) for c in cols]
+    vals = [(_j(fields.get(c)) if fields.get(c) is not None else None) if c == "unlock_spec"
+            else _j(fields.get(c) or []) if c in _GOAL_JSON else fields.get(c) for c in cols]
     with _lock, _conn:
         cur = _conn.execute(
             f"UPDATE goals SET {sets}, updated_at=? WHERE id=?",
@@ -2667,6 +2676,36 @@ def blueprint_crafters(blueprint_key: str) -> list[str]:
             "WHERE blueprint_key=? ORDER BY member_id",
             (blueprint_key,)).fetchall()
     return [r["member_id"] for r in rows]
+
+
+def blueprint_holders(keys=None) -> dict[str, list[str]]:
+    """{blueprint_key: [member_id…]} — who holds each recipe. `keys` narrows;
+    None = every recipe anyone holds. One query (the readiness table and
+    unlock-goal progress both read it)."""
+    q = "SELECT blueprint_key, member_id FROM member_blueprints"
+    params: list = []
+    keys = list(keys) if keys is not None else None
+    if keys is not None:
+        if not keys:
+            return {}
+        q += " WHERE blueprint_key IN (%s)" % ",".join("?" * len(keys))
+        params = keys
+    with _lock:
+        rows = _conn.execute(q, params).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["blueprint_key"], []).append(r["member_id"])
+    return out
+
+
+def unlock_goals_naming(blueprint_key: str) -> list[dict]:
+    """Active unlock goals whose spec names this recipe — the library add
+    re-derives these to catch a first crossing."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM goals WHERE kind='unlock' AND status='active' "
+            "AND unlock_spec LIKE ?", (f'%"{blueprint_key}"%',)).fetchall()
+    return [_goal_row_to_dict(r) for r in rows]
 
 
 def blueprint_crafter_counts(keys=None) -> dict[str, int]:
