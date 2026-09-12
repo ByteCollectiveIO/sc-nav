@@ -9678,7 +9678,10 @@ class CraftedIn(BaseModel):
     a few finished-stat rows. Stored as a free-form JSON blob — no fixed schema, so
     it survives whatever the in-game model turns out to expose. `inputs` carries a
     craft request's per-slot material minimums (commission spec builder)."""
-    quality: int | None = Field(default=None, ge=1, le=1000)
+    # 0 is legal (#151 step 4): a station-bought commodity lot is Q0 in-game.
+    quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
+    # Accepted for old clients, NEVER stored (#151 decision 3): band is derived
+    # from quality (⌈q ÷ 125⌉) everywhere it renders, so the two can't disagree.
     band: int | None = Field(default=None, ge=1, le=8)
     stats: list[CraftStatIn] = Field(default_factory=list, max_length=12)
     inputs: list[SpecInputIn] = Field(default_factory=list, max_length=12)
@@ -9747,17 +9750,19 @@ _LISTING_CARD = ("id", "seller_id", "seller_handle", "item_id", "item_name", "un
 
 
 def _clean_crafted(crafted: "CraftedIn | None") -> dict | None:
-    """Normalize a crafted-quality annotation into the stored JSON blob, or None if
-    it carries nothing. Drops blank stat rows; keeps quality/band only when set.
-    `inputs` (per-slot material minimums from the commission spec builder) ride
-    along so the crafter can see which material qualities to source."""
+    """Normalize a quality annotation into the stored JSON blob, or None if it
+    carries nothing. Serves a crafted item's as-built quality AND a commodity
+    lot's Q0–1000 (#151 step 4) — same field, same filters. Drops blank stat
+    rows; keeps quality only when set. `band` is NOT stored (derived from
+    quality on read; a band-only blob from before #151 is still honoured by the
+    readers). `inputs` (per-slot material minimums from the commission spec
+    builder) ride along so the crafter can see which material qualities to
+    source."""
     if crafted is None:
         return None
     out: dict = {}
     if crafted.quality is not None:
         out["quality"] = int(crafted.quality)
-    if crafted.band is not None:
-        out["band"] = int(crafted.band)
     stats = [{"name": s.name.strip(), "value": s.value.strip()}
              for s in (crafted.stats or []) if s.name.strip() and s.value.strip()]
     if stats:

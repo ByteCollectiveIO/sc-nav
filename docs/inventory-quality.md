@@ -1,6 +1,6 @@
 # Inventory item quality (#151)
 
-Status: **🔨 steps 1–3 (holding identity · goal gating + split · pledged stat preview) built 2026-09-12 · steps 4–5 designed** — researched against SC Alpha 4.10.
+Status: **✅ all five steps built 2026-09-12 (holding identity · goal gating + split · pledged stat preview · marketplace lot quality + list-from-inventory · band-grouped rollup) — awaiting dev-server test, not yet released** — researched against SC Alpha 4.10.
 
 ## The problem
 
@@ -157,7 +157,22 @@ values in `.rm-low`).
 the *pledged* ones: "expected stats with what we have," and name the slot
 dragging the result. Pure derivation, no new storage.
 
-### 4. Marketplace: commodity quality + inventory bridge
+### 4. Marketplace: commodity quality + inventory bridge — BUILT
+
+As-built notes (2026-09-12): the existing `crafted` field IS the door —
+`CraftedIn.quality` now `ge=0` (station-bought lots) and `_clean_crafted` no
+longer stores `band` (decision 3: derived ⌈q÷125⌉ on read; a pre-#151
+band-only blob is still honoured by the chips and by the board's `band`
+filter, which is now `COALESCE(derived-from-quality, stored band)` in
+`db._listing_filter_sql`). Frontend: `mkIsLotItem` (commodity: prefix) flips
+the editor copy to "Lot quality" and hides the finished-stats rows; the band
+input is a read-only derived box (`#mk-f-bandro`); board band options show
+their Q range; `mkCraftBadge` reads `◆ Q734 ≈B6` for lots, `⚒` for crafted.
+**List from inventory:** `Sell` on any holding with free stock →
+`mktFormSeed` → `renderMarketForm` prefills item/qty(free)/quality/pickup
+location. NOT built: decrementing the lot when the deal completes (the
+holding is the member's ledger; a sale is theirs to log) and the
+"requester supplies materials" commission bridge — both stay parked.
 
 - `attributes.quality` is legal on commodity listings too (today `crafted` is
   the only door in). `min_quality`/`max_quality` board filters already exist.
@@ -168,7 +183,13 @@ dragging the result. Pure derivation, no new storage.
   (`blueprint-craft-commissions.md` §12) becomes buildable: earmark lots
   against the job with the goal-allocation pattern, quality-checked.
 
-### 5. Rollups group by band
+### 5. Rollups group by band — BUILT
+
+As-built notes (2026-09-12): `nav_core.quality_band` (⌈q÷125⌉, floor 1, None
+for unrated) + `derive_inventory_rollup.by_band` = `[{band, qty, lots:[{quality,
+qty}]}]` best band first, unrated last (`by_quality` kept for the facet).
+Frontend `invOrgQualityHtml` renders one chip per band with its exact lots in
+parentheses / tooltip.
 
 Org-wide `derive_inventory_rollup` keeps `item_id` as the group and adds a
 `by_band` breakdown (B1–B8 via the derived band, plus "unrated"), mirroring

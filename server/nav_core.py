@@ -5635,7 +5635,7 @@ def derive_inventory_rollup(rows) -> list[dict]:
 
       {item_id, name, unit, total, holders (distinct owners),
        by_owner: [{owner_id, qty}], by_location: [{location, qty}],
-       by_quality: [{quality, qty}]}
+       by_quality: [{quality, qty}], by_band: [{band, qty, lots: [{quality, qty}]}]}
 
     Pure derivation so the endpoint can fan it out without an N+1; the per-owner /
     per-location / per-quality breakdowns power the expandable rows in the
@@ -5680,14 +5680,38 @@ def derive_inventory_rollup(rows) -> list[dict]:
         # Best quality first, unrated last.
         by_quality = sorted(({"quality": q, "qty": n} for q, n in it["by_quality"].items()),
                             key=lambda x: (x["quality"] is None, -(x["quality"] or 0)))
+        # Band-grouped view (#151 step 5): one row per exact Q value is
+        # unreadable at org scale, so the org sees B8…B1 + unrated (the game's
+        # planned folder view), each carrying its exact lots for the expand.
+        bands: dict = {}
+        for lot in by_quality:
+            b = quality_band(lot["quality"])
+            grp = bands.setdefault(b, {"band": b, "qty": 0.0, "lots": []})
+            grp["qty"] += lot["qty"]
+            grp["lots"].append(lot)
+        by_band = sorted(bands.values(), key=lambda g: (g["band"] is None, -(g["band"] or 0)))
         out.append({
             "item_id": it["item_id"], "name": it["name"], "unit": it["unit"],
             "total": it["total"], "holders": len(it["by_owner"]),
             "by_owner": by_owner, "by_location": by_location,
-            "by_quality": by_quality,
+            "by_quality": by_quality, "by_band": by_band,
         })
     out.sort(key=lambda x: x["total"], reverse=True)
     return out
+
+
+def quality_band(quality) -> int | None:
+    """The approximate scanner band (B1–B8) for a Q0–1000 lot quality — ⌈q ÷ 125⌉
+    with a floor of 1 (Q0 is B1). None for an unrated lot. The frontend's
+    `qualityBand` is the same rule; the in-game mapping is unverified, so every
+    surface labels it ≈."""
+    if quality is None:
+        return None
+    try:
+        q = int(quality)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(8, -(-q // 125)))
 
 
 def lot_qualifies(quality, min_q) -> bool:

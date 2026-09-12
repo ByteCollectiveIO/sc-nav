@@ -129,6 +129,15 @@ library at `#/blueprints`, #29)
   (`assumed` where nothing rated → the ask stands in), `weakest`,
   `stat_preview`}; detail-only via `_goal_craft_block(contributions=)`.
   Frontend `goalSpecBox` "What's pledged would feed" + second stats column.
+  **Steps 4–5 (same day): marketplace + rollup.** A commodity listing's LOT
+  quality rides the existing `crafted` field (`CraftedIn.quality` ge=0;
+  `_clean_crafted` no longer stores `band` — derived ⌈q÷125⌉ everywhere,
+  `nav_core.quality_band`; board `band` filter = COALESCE(derived, old stored
+  band) in `db._listing_filter_sql`). Frontend `mkIsLotItem` flips the editor
+  to "Lot quality" (no stat rows), `#mk-f-bandro` read-only band, `◆` chip
+  for lots vs `⚒` crafted; **Sell** on a holding (`.rm-inv-sell` →
+  `mktFormSeed` → `renderMarketForm` prefill). Rollup `by_band`
+  `[{band, qty, lots}]` → `invOrgQualityHtml` band chips w/ exact lots.
   Frontend: goal detail source picker + MY CONTRIBUTIONS (grouped by location,
   `goalMyContribs`/`postContribution`/`withdrawContribution`), hatched pledge bar
   segment, `⏳ gathering` annotations on lines/chips/inventory rows + `.rm-alloc-x`
