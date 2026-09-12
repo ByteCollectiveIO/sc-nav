@@ -9253,13 +9253,17 @@ def _can_view_goal(goal: dict, user: dict) -> bool:
     return goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
 
 
-def _goal_craft_block(goal: dict, detail: bool = False) -> dict | None:
+def _goal_craft_block(goal: dict, detail: bool = False,
+                      contributions=None) -> dict | None:
     """The craft-goal header for a blueprint-seeded goal: recipe name + craft time
     for the card, plus (in detail) each line's demanded min-quality so the UI can
     badge it, the saved spec (craft count + per-slot quality asks, restoring the
     edit form's sliders) and the expected finished stats at those qualities.
-    Degrades to `available: False` if the recipe left the feed on a game-patch
-    re-sync (the goal keeps working on its denormalized line items)."""
+    With `contributions` (#151 step 3) it also previews the stats at the
+    qualities the goal's pledges would REALLY feed each slot (`pledged`), and
+    names the slot dragging the result down. Degrades to `available: False` if
+    the recipe left the feed on a game-patch re-sync (the goal keeps working
+    on its denormalized line items)."""
     key = goal.get("blueprint_key")
     if not key:
         return None
@@ -9287,10 +9291,49 @@ def _goal_craft_block(goal: dict, detail: bool = False) -> dict | None:
         block["min_q"] = minq
         block["unlocks"] = bp.get("unlocks") or []
         block["est_cost"] = _blueprint_est_cost(bp)   # per craft; UI scales by qty
+        asked = {i["slot"]: i["min_q"] for i in inputs}
         if inputs:
-            block["stat_preview"] = nav_core.blueprint_stat_preview(
-                bp, {i["slot"]: i["min_q"] for i in inputs})
+            block["stat_preview"] = nav_core.blueprint_stat_preview(bp, asked)
+        if inputs and contributions:
+            pledged = _pledged_craft_preview(bp, asked, contributions)
+            if pledged:
+                block["pledged"] = pledged
     return block
+
+
+def _pledged_craft_preview(bp: dict, asked: dict, contributions) -> dict | None:
+    """Expected stats with what's actually pledged: each slot takes the
+    qty-weighted quality of its rated pledges, falling back to the ASK where
+    nothing rated is pledged (marked `assumed`, so the row is honest about being
+    a target rather than a measurement). `weakest` = the slot furthest below
+    its ask — the one to go find better ore for. None when no slot has a rated
+    pledge (nothing to say beyond the ask preview)."""
+    def resolve(name):
+        return resolve_catalog_item(f"commodity:{catalog.slug(name)}")
+    pledged = nav_core.pledged_slot_qualities(bp, contributions, resolve)
+    if not pledged:
+        return None
+    qualities, slots, weakest, worst_gap = {}, [], None, 0
+    for a in bp.get("aspects") or []:
+        slot, name = a.get("slot"), a.get("input")
+        if not slot or not name:
+            continue
+        # A slot nobody asked about assumes BASE (Q500) — the same default the
+        # asked-quality preview uses — so the two columns differ only where a
+        # pledge actually differs from an ask.
+        ask = asked.get(slot)
+        p = pledged.get(slot)
+        q = p["q"] if p else (int(ask) if ask is not None else 500)
+        qualities[slot] = q
+        row = {"slot": slot, "input": name, "asked": ask, "q": q, "assumed": p is None}
+        if p:
+            row.update({"qty": p["qty"], "lots": p["lots"], "unrated_qty": p["unrated_qty"]})
+            gap = (int(ask) - p["q"]) if ask is not None else 0
+            if gap > worst_gap:
+                weakest, worst_gap = slot, gap
+        slots.append(row)
+    return {"qualities": qualities, "slots": slots, "weakest": weakest,
+            "stat_preview": nav_core.blueprint_stat_preview(bp, qualities)}
 
 
 def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> dict:
@@ -9315,7 +9358,8 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
     view["is_mine"] = goal["creator_id"] == user["id"]
     view["can_edit"] = goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
     view["progress"] = progress
-    craft = _goal_craft_block(goal, detail=detail)
+    craft = _goal_craft_block(goal, detail=detail,
+                              contributions=contributions if detail else None)
     if craft:
         view["craft"] = craft
     if detail:

@@ -2987,6 +2987,36 @@ class CraftGoalTests(unittest.TestCase):
         prev = {s["prop"]: s["value"] for s in g["craft"]["stat_preview"]}
         self.assertAlmostEqual(prev["Integrity"], 1.06)
 
+    def test_pledged_preview_uses_real_lot_qualities(self):
+        # #151 step 3: once a rated lot is pledged, the detail carries a second
+        # preview at the qualities the pledges would really feed each slot,
+        # names the weakest slot, and assumes the ask where nothing rated exists.
+        gid = self.client.post("/api/goals", json={
+            "title": "spec cannon", "blueprint_key": "TEST_BP",
+            "blueprint_inputs": [{"slot": "Frame", "input": "Agricium", "min_q": 800}]}).json()["id"]
+        g = self.client.get(f"/api/goals/{gid}").json()
+        self.assertNotIn("pledged", g["craft"])            # nothing pledged yet
+        lot = self.client.post("/api/inventory", json={
+            "item_id": "commodity:agricium", "qty": 2, "location": "Area18", "quality": 300}).json()
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 0.5, "holding_id": lot["id"], "allow_low": True})
+        g = self.client.get(f"/api/goals/{gid}").json()
+        pl = g["craft"]["pledged"]
+        frame = next(sl for sl in pl["slots"] if sl["slot"] == "Frame")
+        self.assertEqual((frame["q"], frame["asked"], frame["assumed"], frame["lots"]), (300, 800, False, 1))
+        emitter = next(sl for sl in pl["slots"] if sl["slot"] == "Emitter")
+        self.assertTrue(emitter["assumed"])
+        self.assertIsNone(emitter["asked"])
+        self.assertEqual(emitter["q"], 500)                 # no ask → base, like the asked preview
+        self.assertEqual(pl["weakest"], "Frame")
+        asked = {s["prop"]: s["value"] for s in g["craft"]["stat_preview"]}
+        real = {s["prop"]: s["value"] for s in pl["stat_preview"]}
+        self.assertAlmostEqual(asked["Integrity"], 1.06)   # Q800
+        self.assertAlmostEqual(real["Integrity"], 0.96)    # Q300 → 0.9 + 0.2×0.3
+        # The board view (no detail) never computes it.
+        board = next(x for x in self.client.get("/api/goals").json()["goals"] if x["id"] == gid)
+        self.assertNotIn("pledged", board.get("craft") or {})
+
     def test_edit_reseed_rescales_lines_and_keeps_spec(self):
         gid = self.client.post("/api/goals", json={
             "title": "cannon", "blueprint_key": "TEST_BP",

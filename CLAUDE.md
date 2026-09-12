@@ -118,6 +118,12 @@ library at `#/blueprints`, #29)
   `goalLineMinQ`, `.low` hatched tail + `.rm-low`/`.rm-unrated` on
   `goalLineRow`, floor-aware `goalSourceOptionsHtml`, `.rm-li-minq` in the goal
   form, `.rm-inv-split` → `openInvSplit`.
+  **Step 3: craft preview from pledged lots** — `nav_core.pledged_slot_qualities`
+  (qty-weighted quality of a slot's RATED pledges; unrated → `unrated_qty`) →
+  `app._pledged_craft_preview` → craft block `pledged` {qualities, slots[]
+  (`assumed` where nothing rated → the ask stands in), `weakest`,
+  `stat_preview`}; detail-only via `_goal_craft_block(contributions=)`.
+  Frontend `goalSpecBox` "What's pledged would feed" + second stats column.
   Frontend: goal detail source picker + MY CONTRIBUTIONS (grouped by location,
   `goalMyContribs`/`postContribution`/`withdrawContribution`), hatched pledge bar
   segment, `⏳ gathering` annotations on lines/chips/inventory rows + `.rm-alloc-x`

@@ -6107,6 +6107,49 @@ def blueprint_stat_preview(bp: dict, qualities: dict | None = None) -> list[dict
     return out
 
 
+def pledged_slot_qualities(bp: dict, rows, resolve) -> dict:
+    """What the goal's pledges would actually feed each crafting slot (#151
+    step 3). For each aspect with an input material, the RATED contributions of
+    that material (`rows` = goal contributions carrying `item_id`/`qty`/
+    `quality`; `resolve(input name) -> catalog item | None`) collapse to one
+    qty-weighted average quality — the fabricator averages mixed lots by
+    volume, so that's the honest single number. Unrated lots can't inform a
+    stat, so they only ride along as `unrated_qty`. Returns
+    `{slot: {q, qty, lots, unrated_qty}}` for slots with at least one rated
+    pledge; slots with none are absent (the caller falls back to the ask)."""
+    by_item: dict[str, dict] = {}
+    for r in rows or []:
+        iid = r.get("item_id")
+        qty = _qty(r.get("qty"))
+        if not iid or qty <= 0:
+            continue
+        acc = by_item.setdefault(iid, {"w": 0.0, "qty": 0.0, "lots": 0, "unrated_qty": 0.0})
+        q = r.get("quality")
+        if q is None:
+            acc["unrated_qty"] += qty
+            continue
+        try:
+            qv = float(q)
+        except (TypeError, ValueError):
+            acc["unrated_qty"] += qty
+            continue
+        acc["w"] += qv * qty
+        acc["qty"] += qty
+        acc["lots"] += 1
+    out: dict[str, dict] = {}
+    for a in bp.get("aspects") or []:
+        slot, name = a.get("slot"), a.get("input")
+        if not slot or not name:
+            continue
+        item = resolve(name)
+        acc = by_item.get((item or {}).get("item_id")) if item else None
+        if not acc or acc["qty"] <= 0:
+            continue
+        out[slot] = {"q": int(round(acc["w"] / acc["qty"])), "qty": acc["qty"],
+                     "lots": acc["lots"], "unrated_qty": acc["unrated_qty"]}
+    return out
+
+
 def commission_board_state(listing: dict, offers) -> dict:
     """Live quote state of a craft-request listing for its board card / detail
     view (mirrors derive_auction_state's role, much simpler: no tie-breaks or

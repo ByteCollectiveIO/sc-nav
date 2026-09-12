@@ -1,6 +1,6 @@
 # Inventory item quality (#151)
 
-Status: **🔨 steps 1–2 (holding identity · goal gating + split) built 2026-09-12 · steps 3–5 designed** — researched against SC Alpha 4.10.
+Status: **🔨 steps 1–3 (holding identity · goal gating + split · pledged stat preview) built 2026-09-12 · steps 4–5 designed** — researched against SC Alpha 4.10.
 
 ## The problem
 
@@ -138,7 +138,19 @@ per hand line in the goal form, Split button + inline `openInvSplit` form.
 - **Manual `min_q` on any goal line**, not just craft-seeded ones
   (`GoalLineIn.min_q`). Contract hand-ins are the motivating case.
 
-### 3. Craft goals preview real stats
+### 3. Craft goals preview real stats — BUILT
+
+As-built notes (2026-09-12): `nav_core.pledged_slot_qualities(bp, rows,
+resolve)` → per slot the **qty-weighted** quality of its RATED pledges (the
+fabricator averages mixed lots by volume; unrated lots ride along as
+`unrated_qty` and can't inform a stat). `app._pledged_craft_preview` → craft
+block `pledged` = `{qualities, slots[{slot, input, asked, q, assumed, qty,
+lots, unrated_qty}], weakest, stat_preview}`; a slot with no rated pledge
+falls back to the ask and is marked `assumed`; `weakest` = furthest below its
+ask. Detail view only (`_goal_craft_block(contributions=)`), absent until a
+rated lot is pledged. Frontend `goalSpecBox`: "What's pledged would feed"
+table + a second "with what's pledged" column on the stats table (worse
+values in `.rm-low`).
 
 `_goal_craft_block.stat_preview` runs `blueprint_stat_preview` on the
 *requested* slot qualities. With lot qualities on pledges it can also run on
