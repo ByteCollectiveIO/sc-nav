@@ -2030,6 +2030,7 @@
   /* Lot quality chip (#151): the game's Q0–1000 + our ≈band. */
   .inv-q { font-size: 11px; color: var(--craft); white-space: nowrap; }
   .inv-q .muted { font-size: 10px; margin-left: 3px; }
+  .mk-f-bandro { color: var(--craft); font-variant-numeric: tabular-nums; }
   /* align-self: a flex-column parent (.ev-field) would otherwise stretch the seg full-width */
   .rm-scope-seg { display: inline-flex; gap: 0; border: 1px solid var(--border); border-radius: 8px;
     overflow: hidden; align-self: flex-start; }
@@ -2207,6 +2208,7 @@
   .mk-craft-form summary { cursor: pointer; font-size: 13px; color: var(--accent); padding: 6px 0; }
   .mk-craft-form[open] summary { margin-bottom: 6px; }
   .mk-stat-lbl { display: block; font-size: 13px; color: var(--dim); margin: 8px 0 4px; }
+  .mk-stat-lbl[hidden] { display: none; }   /* display:block beats the UA [hidden] rule */
   .mk-statrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 6px; }
   /* suggested market value (listing form) */
   .mk-mv { font-size: 12px; color: var(--dim); margin-top: 6px; font-variant-numeric: tabular-nums; }
@@ -13143,14 +13145,19 @@ function invOrgTableHtml(rows) {
     `<th class="num">Total</th><th class="num">Holders</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
-// Per-quality lots of a rollup item (#151) — shown only when some lot is rated,
-// so a rollup of unrated rows looks exactly as it did before.
+// Quality lots of a rollup item, grouped by band (#151 step 5 — the game's
+// planned folder view): one chip per band with its exact lots listed inside, so
+// the org reads B8…B1 + unrated at a glance without a row per Q value. Shown
+// only when some lot is rated, so a rollup of unrated rows looks as it did.
 function invOrgQualityHtml(it) {
-  const lots = it.by_quality || [];
-  if (!lots.some(l => l.quality !== null && l.quality !== undefined)) return "";
+  const bands = it.by_band || [];
+  if (!bands.some(b => b.band !== null && b.band !== undefined)) return "";
+  const lots = (b) => (b.lots || []).map(l => `Q${Number(l.quality)} ×${fmtQty(l.qty)}`).join(" · ");
   return `<div class="rm-breakdown" style="margin-top:6px">` +
-    lots.map(l => `<span>${l.quality === null || l.quality === undefined
-      ? `<span class="muted">unrated</span>` : invQualityChip(l.quality)}: ${fmtQty(l.qty)}</span>`).join("") +
+    bands.map(b => b.band === null || b.band === undefined
+      ? `<span><span class="muted">unrated</span>: ${fmtQty(b.qty)}</span>`
+      : `<span title="${esc(lots(b))}"><span class="inv-q">≈B${Number(b.band)}<span class="muted">${esc(BAND_QUALITY(Number(b.band)))}</span></span>: ${fmtQty(b.qty)}` +
+        (b.lots.length > 1 ? ` <span class="muted">(${esc(lots(b))})</span>` : ` <span class="muted">(Q${Number(b.lots[0].quality)})</span>`) + `</span>`).join("") +
     `</div>`;
 }
 
@@ -13345,6 +13352,8 @@ function invMineRowHtml(r) {
     `<td class="inv-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
     (invQualityApplies({ kind: r.kind, item_id: r.item_id }) && Number(r.available) > 0
       ? `<button class="ev-btn rm-inv-split" data-id="${r.id}" title="move part of this lot to a different quality or place">Split</button>` : "") +
+    (Number(r.available) > 0
+      ? `<button class="ev-btn rm-inv-sell" data-id="${r.id}" title="post the free part of this lot on the marketplace">Sell</button>` : "") +
     `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></td></tr>`;
 }
 
@@ -13363,6 +13372,16 @@ function wireInvMine() {
   });
   $("inv-body").querySelectorAll(".rm-inv-edit").forEach(b => { b.onclick = () => openInvEdit(b.dataset.id); });
   $("inv-body").querySelectorAll(".rm-inv-split").forEach(b => { b.onclick = () => openInvSplit(b.dataset.id); });
+  // Sell this lot: seed the marketplace create form with the free part (#151 step 4).
+  $("inv-body").querySelectorAll(".rm-inv-sell").forEach(b => {
+    b.onclick = () => {
+      const r = rmMineRows.find(x => String(x.id) === b.dataset.id);
+      if (!r) return;
+      mktFormSeed = { item_id: r.item_id, item_name: r.item_name, unit: r.unit,
+        qty: Number(r.available) || 0, quality: r.quality == null ? null : r.quality, location: r.location || "" };
+      location.hash = "#/market/new";
+    };
+  });
   // Revoke a goal commitment without leaving the inventory screen — same call the
   // goal detail makes; the freed amount lands back in this holding.
   $("inv-body").querySelectorAll(".rm-alloc-x").forEach(b => {
@@ -13569,9 +13588,14 @@ function mkCraftBadge(l) {
     return `<span class="mk-craft" title="Requested quality spec">⚒ ${esc(String(tag))}</span>`;
   }
   if (!a || (a.quality == null && a.band == null && !(a.stats || []).length)) return "";
-  const tag = a.quality != null ? `Q${a.quality}` : a.band != null ? `Band ${a.band}` : "Crafted";
-  return `<span class="mk-craft" title="Crafted item quality">⚒ ${esc(String(tag))}</span>`;
+  // Band derives from quality (#151); a pre-#151 band-only blob still shows it.
+  const lot = mkIsLotItem(l.item_id);
+  const tag = a.quality != null ? `Q${a.quality} ≈B${qualityBand(a.quality)}` : a.band != null ? `Band ${a.band}` : "Crafted";
+  return `<span class="mk-craft" title="${lot ? "Lot quality" : "Crafted item quality"}">${lot ? "◆" : "⚒"} ${esc(String(tag))}</span>`;
 }
+// A commodity (ore / refined / gem) listing advertises a LOT quality; anything
+// else with a quality is a crafted item. Same field, different label.
+function mkIsLotItem(itemId) { return String(itemId || "").startsWith("commodity:"); }
 
 function mkCraftBlock(l) {
   const a = l.attributes;
@@ -13581,8 +13605,9 @@ function mkCraftBlock(l) {
   const spec = a.spec;
   const src = spec || a;
   let rows = "";
-  if (src.quality != null) rows += `<tr><td>${spec ? "Target quality" : "Quality"}</td><td>≥ ${esc(String(src.quality))} <span class="muted">/ 1000</span></td></tr>`;
-  if (src.band != null) rows += `<tr><td>Quality band</td><td>${esc(String(src.band))} <span class="muted">/ 8</span></td></tr>`;
+  if (src.quality != null) rows += `<tr><td>${spec ? "Target quality" : mkIsLotItem(l.item_id) ? "Lot quality" : "Quality"}</td>` +
+    `<td>${spec ? "≥ " : ""}${esc(String(src.quality))} <span class="muted">/ 1000 · ${bandTag(src.quality)}</span></td></tr>`;
+  else if (src.band != null) rows += `<tr><td>Quality band</td><td>${esc(String(src.band))} <span class="muted">/ 8</span></td></tr>`;
   (src.stats || []).forEach(s => { rows += `<tr><td>${esc(s.name)}</td><td>${esc(s.value)}</td></tr>`; });
   if (spec && MK_MATS_LBL[l.materials])
     rows += `<tr><td>Materials</td><td>${MK_MATS_LBL[l.materials]}</td></tr>`;
@@ -13855,6 +13880,9 @@ async function loadMarketTrends() {
 // Crafter storefronts (competitor idea #2): members who hung out a shingle.
 // Shown on the Requests tab; "Request a craft" prefills a DIRECTED commission.
 let mktFormDirect = null;    // {id, name, bp?} — consumed by the create form
+// "Sell this" from a holding (#151 step 4): {item_id, item_name, unit, qty,
+// quality, location} — consumed once by the create form.
+let mktFormSeed = null;
 let mktCrafterBp = null;     // {key, name} — "who can build me an X?" filter
 async function loadCrafterPanel() {
   const el = $("mk-crafters");
@@ -14073,7 +14101,7 @@ async function renderMarketBoard() {
     ["item", "Equipment"], ["blueprint", "Crafted (blueprint)"], ["custom", "Custom"]],
     mktFilter.kind);
   const bandOpts = opts([["", "Any band"]].concat(
-    [1, 2, 3, 4, 5, 6, 7, 8].map(n => [String(n), `Band ${n}`])), mktFilter.band);
+    [1, 2, 3, 4, 5, 6, 7, 8].map(n => [String(n), `≈B${n} (Q${(n - 1) * 125 + 1}–${n * 125})`])), mktFilter.band);
   // Secondary filters (type, price, crafted quality) live behind one disclosure so
   // the board leads with listings, not chrome. It springs open if any are active.
   const availOpts = opts([["", "Any availability"], ["instock", "In stock now"],
@@ -14106,8 +14134,8 @@ async function renderMarketBoard() {
         `<input class="mk-pr mk-max" type="number" min="0" placeholder="max aUEC" title="max aUEC">` +
       `</div>` +
       `<div class="mk-craftrow">` +
-        `<input class="mk-pr mk-qmin" type="number" min="1" max="1000" placeholder="quality ≥" title="min quality (1–1000)">` +
-        `<input class="mk-pr mk-qmax" type="number" min="1" max="1000" placeholder="quality ≤" title="max quality (1–1000)">` +
+        `<input class="mk-pr mk-qmin" type="number" min="0" max="1000" placeholder="quality ≥" title="min quality (0–1000) — lots and crafted items alike">` +
+        `<input class="mk-pr mk-qmax" type="number" min="0" max="1000" placeholder="quality ≤" title="max quality (0–1000)">` +
         `<select class="mk-bandsel" title="Quality band">${bandOpts}</select>` +
         `<input class="mk-statf" type="search" placeholder="crafted stat name or value…" title="crafted stat" autocomplete="off">` +
       `</div></details>` +
@@ -14737,21 +14765,39 @@ function mkSyncModeFields() {
   // and the crafted-quality editor flips from as-built fact to requested spec.
   const generic = $("mk-f-item-field");
   if (generic) generic.hidden = mode === "commission";
-  const summary = $("mk-craft-summary");
-  if (summary) summary.textContent = mode === "commission"
-    ? "Requested quality spec (optional)" : "Crafted item quality (optional)";
-  const hint = $("mk-craft-hint");
-  if (hint) hint.textContent = mode === "commission"
-    ? "The minimum overall quality you're asking for. Move the blueprint's input sliders above and these fill in automatically (from the weakest input), or type your own."
-    : "For SC 4.8 crafted components — advertise the quality your materials carried into the finished item.";
-  const qLbl = $("mk-f-q-lbl"), bLbl = $("mk-f-band-lbl");
-  if (qLbl) qLbl.textContent = mode === "commission" ? "Min quality (1–1000)" : "Quality (1–1000)";
-  if (bLbl) bLbl.textContent = mode === "commission" ? "Min band (1–8)" : "Band (1–8)";
+  mkSyncQualityLabels();
   // Only a craft request @-mentions anyone — say so, so nobody expects (or fears)
   // a ping on an ordinary sale.
   const annNote = $("mk-f-announce-note");
   if (annNote) annNote.textContent = mode === "commission"
     ? "(pings members who can craft it)" : "(posts to the channel, pings nobody)";
+}
+
+// Quality editor copy follows the listing's mode AND item class (#151 step 4):
+// a commission asks for a minimum, a commodity advertises a lot's Q0–1000, and
+// anything else is a crafted item's as-built quality. One field, three readings.
+function mkSyncQualityLabels() {
+  const modeEl = $("mk-f-mode"), itemEl = $("mk-f-item");
+  if (!modeEl) return;
+  const mode = modeEl.value;
+  const lot = mode !== "commission" && itemEl && mkIsLotItem(itemEl.dataset.itemId);
+  const summary = $("mk-craft-summary"), hint = $("mk-craft-hint"), qLbl = $("mk-f-q-lbl");
+  if (summary) summary.textContent = mode === "commission" ? "Requested quality spec (optional)"
+    : lot ? "Lot quality (optional)" : "Crafted item quality (optional)";
+  if (hint) hint.textContent = mode === "commission"
+    ? "The minimum overall quality you're asking for. Move the blueprint's input sliders above and this fills in automatically (from the weakest input), or type your own."
+    : lot ? "The quality the game shows on this lot (0 = station-bought). Buyers filter on it — a Q800 shelf is a different product from a Q300 one."
+    : "For SC crafted components — advertise the quality your materials carried into the finished item.";
+  if (qLbl) qLbl.textContent = mode === "commission" ? "Min quality (0–1000)" : lot ? "Lot quality (0–1000)" : "Quality (0–1000)";
+  const statLbl = document.querySelector(".mk-stat-lbl");
+  if (statLbl) statLbl.hidden = !!lot;                 // a lot has no finished stats
+  const stats = $("mk-f-stats"), add = $("mk-f-addstat");
+  if (stats) stats.hidden = !!lot;
+  if (add) add.hidden = !!lot;
+}
+function mkSyncBandRo() {
+  const q = $("mk-f-q"), ro = $("mk-f-bandro");
+  if (q && ro) ro.textContent = q.value === "" ? "—" : bandTag(q.value);
 }
 
 // The announce opt-in only makes sense once an admin has wired the marketplace
@@ -14787,18 +14833,19 @@ function mkCraftedFields(l) {
   const a = attrs.spec || attrs;
   const has = a.quality != null || a.band != null || (a.stats || []).length > 0;
   const rows = (a.stats || []).map(s => mkStatRow(s.name, s.value)).join("");
-  // Fields with no saved value start in auto mode: on a craft request they
-  // track the spec-builder sliders until the user types their own number.
+  // A field with no saved value starts in auto mode: on a craft request it
+  // tracks the spec-builder sliders until the user types their own number.
+  // Band is no longer typed (#151): it derives from quality, shown beside it.
   const autoQ = a.quality == null ? ` data-auto="1"` : "";
-  const autoB = a.band == null ? ` data-auto="1"` : "";
+  const seedQ = a.quality != null ? a.quality : (a.band != null ? a.band * 125 : "");
   return `<details class="mk-craft-form"${has ? " open" : ""}><summary id="mk-craft-summary">Crafted item quality (optional)</summary>` +
     `<p class="ev-hint" id="mk-craft-hint">For SC 4.8 crafted components — advertise the quality your materials carried into the finished item.</p>` +
     `<div class="ev-form-grid">` +
-      `<div class="ev-field"><label id="mk-f-q-lbl">Quality (1–1000)</label><input id="mk-f-q" class="ti" type="number" min="1" max="1000" ` +
-        `value="${a.quality != null ? a.quality : ""}"${autoQ}>` +
+      `<div class="ev-field"><label id="mk-f-q-lbl">Quality (0–1000)</label><input id="mk-f-q" class="ti" type="number" min="0" max="1000" ` +
+        `value="${seedQ}"${autoQ}>` +
         `<span class="ev-hint" id="mk-f-q-auto"></span></div>` +
-      `<div class="ev-field"><label id="mk-f-band-lbl">Band (1–8)</label><input id="mk-f-band" class="ti" type="number" min="1" max="8" ` +
-        `value="${a.band != null ? a.band : ""}"${autoB}></div>` +
+      `<div class="ev-field"><label>Band</label><div class="ti mk-f-bandro" id="mk-f-bandro" aria-live="polite">${seedQ === "" ? "—" : bandTag(seedQ)}</div>` +
+        `<span class="ev-hint">derived from quality (≈ ÷ 125)</span></div>` +
     `</div>` +
     mkQualityHelp() +
     `<label class="mk-stat-lbl">Stats</label><div id="mk-f-stats">${rows}</div>` +
@@ -14824,9 +14871,8 @@ function mkQualityHelp() {
 
 function mkCollectCrafted() {
   const crafted = {};
-  const q = $("mk-f-q"), band = $("mk-f-band");
+  const q = $("mk-f-q");
   if (q && q.value !== "") crafted.quality = Number(q.value);
-  if (band && band.value !== "") crafted.band = Number(band.value);
   const stats = [];
   document.querySelectorAll("#mk-f-stats .mk-statrow").forEach(r => {
     const n = r.querySelector(".mk-stat-name").value.trim();
@@ -14854,10 +14900,8 @@ function collectMarketForm() {
   const qty = Number($("mk-f-qty").value);
   if (!(qty > 0)) return { error: "Quantity must be greater than 0." };
   const crafted = mkCollectCrafted();
-  if (crafted.quality != null && !(crafted.quality >= 1 && crafted.quality <= 1000))
-    return { error: "Crafted quality must be between 1 and 1000." };
-  if (crafted.band != null && !(crafted.band >= 1 && crafted.band <= 8))
-    return { error: "Crafted band must be between 1 and 8." };
+  if (crafted.quality != null && !(crafted.quality >= 0 && crafted.quality <= 1000))
+    return { error: "Quality must be between 0 and 1000." };
   const payload = { item_id, qty, mode, unit,
     note: $("mk-f-note").value.trim() || null, crafted,
     availability: $("mk-f-avail") ? $("mk-f-avail").value : null,
@@ -15161,13 +15205,13 @@ async function mkFillStatNames() {
 // the input listener in bindMarketForm) so a typed value is never clobbered.
 mkSpec.onSlide = function bpAutoFillSpec() {
   if (!mkSpec.touched) return;
-  const qEl = $("mk-f-q"), bandEl = $("mk-f-band");
+  const qEl = $("mk-f-q");
   if (!qEl || qEl.dataset.auto !== "1") return;
   const vals = Object.values(mkSpec.sliderQs());
   if (!vals.length) return;
   const minQ = Math.min(...vals);
   qEl.value = minQ;
-  if (bandEl && bandEl.dataset.auto === "1") bandEl.value = qualityBand(minQ);
+  mkSyncBandRo();
   const note = $("mk-f-q-auto");
   if (note) note.textContent = `auto: weakest input slider (${bandTag(minQ)}) — type to override`;
   const form = document.querySelector(".mk-craft-form");
@@ -15181,7 +15225,11 @@ function bindMarketForm(editId, onCancel) {
   attachCatalogPicker(itemEl.parentElement, it => {
     itemEl.dataset.unit = it.unit || "";
     mkShowMarketValue(it);              // surface the feed's reference price
+    mkSyncQualityLabels();              // lot vs crafted wording (#151)
   }, { blueprints: true });
+  const qField = $("mk-f-q");
+  if (qField) qField.addEventListener("input", mkSyncBandRo);
+  mkSyncQualityLabels();
   // Retyping a new search (without re-picking) drops the stale value hint.
   itemEl.addEventListener("input", () => { if (!itemEl.dataset.itemId) mkShowMarketValue(null); });
   mkFillStatNames();   // global stat vocabulary; a blueprint pick narrows it
@@ -15191,8 +15239,8 @@ function bindMarketForm(editId, onCancel) {
     if (bpEl.dataset.bpKey) mkSpec.load(bpEl.dataset.bpKey).then(mkFillStatNames);   // edit: recipe is fixed
     const qtyEl = $("mk-f-qty");
     if (qtyEl) qtyEl.addEventListener("input", () => { if (mkSpec.bp) mkSpec.render(); });
-    // Typing your own Quality/Band detaches it from the sliders for good.
-    [["mk-f-q", "mk-f-q-auto"], ["mk-f-band", null]].forEach(([fid, noteId]) => {
+    // Typing your own Quality detaches it from the sliders for good.
+    [["mk-f-q", "mk-f-q-auto"]].forEach(([fid, noteId]) => {
       const f = $(fid);
       if (f) f.addEventListener("input", () => {
         delete f.dataset.auto;
@@ -15243,9 +15291,27 @@ function renderMarketForm() {
     ? `<p class="rm-intro">🎯 Craft request directed to <b>${esc(mktFormDirect.name)}</b> — only they can quote it. ` +
       `<a href="javascript:void 0" id="mk-undirect">Send to the whole board instead</a></p>`
     : "";
+  const seed = mktFormSeed; mktFormSeed = null;
+  const seedNote = seed
+    ? `<p class="rm-intro">◆ Listing from your inventory: <b>${esc(seed.item_name)}</b>` +
+      `${seed.quality == null ? "" : ` Q${Number(seed.quality)}`}${seed.location ? ` at ${esc(seed.location)}` : ""} — ` +
+      `${fmtQty(seed.qty)} ${esc(seed.unit || "")} free. Adjust anything before posting; the holding itself isn't changed.</p>`
+    : "";
   $("market-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/market">← All listings</a>` +
-    `<h2 class="ev-screen-h">NEW LISTING</h2>${directNote}${marketFormHtml(null)}</div>`;
+    `<h2 class="ev-screen-h">NEW LISTING</h2>${directNote}${seedNote}${marketFormHtml(null)}</div>`;
   bindMarketForm(null, () => { location.hash = "#/market"; });
+  if (seed) {
+    const itemEl = $("mk-f-item");
+    itemEl.value = seed.item_name; itemEl.dataset.itemId = seed.item_id; itemEl.dataset.unit = seed.unit || "";
+    itemEl.parentElement.classList.add("picked");
+    $("mk-f-qty").value = fmtQty(seed.qty);
+    if (seed.quality != null) {
+      const q = $("mk-f-q"); q.value = Number(seed.quality); delete q.dataset.auto; mkSyncBandRo();
+      const f = document.querySelector(".mk-craft-form"); if (f) f.open = true;
+    }
+    const pk = $("mk-f-pickup"); if (pk && seed.location && !pk.value) pk.value = seed.location;
+    mkSyncQualityLabels();
+  }
   if (mktFormDirect) {
     $("mk-f-mode").value = "commission";
     mkSyncModeFields();

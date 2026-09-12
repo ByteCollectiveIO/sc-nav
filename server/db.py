@@ -2881,7 +2881,13 @@ def _listing_filter_sql(mode, item_id, seller_id, status, open_only,
         where.append("CAST(json_extract(attributes,'$.quality') AS REAL) <= ?")
         params.append(max_quality)
     if band is not None:
-        where.append("json_extract(attributes,'$.band') = ?"); params.append(band)
+        # Band is DERIVED from quality (⌈q ÷ 125⌉, floor 1 — #151 decision 3);
+        # a pre-#151 blob that stored only a typed band still matches on it.
+        # MAX(1, NULL) is NULL in SQLite, so the COALESCE falls through cleanly.
+        where.append(
+            "COALESCE(MAX(1, CAST((CAST(json_extract(attributes,'$.quality') AS REAL) + 124) "
+            "/ 125 AS INTEGER)), json_extract(attributes,'$.band')) = ?")
+        params.append(band)
     if stat:
         # Match a listing that carries a crafted stat whose name or value contains the
         # text. IFNULL(...,'[]') makes json_each a no-op on a missing/NULL stats array.

@@ -3663,6 +3663,63 @@ class GoalQualityGatingTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class ListingLotQualityTests(unittest.TestCase):
+    """#151 step 4: a commodity listing advertises its LOT quality through the
+    same `crafted` field/filters a crafted item uses; band is derived, never
+    stored; a pre-#151 band-only blob still filters."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._a = {"id": "111", "username": "ana", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._a
+        app.app.dependency_overrides[app.require_user] = lambda: cls._a
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._a
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def _post(self, quality=None, **kw):
+        body = {"item_id": "commodity:agricium", "qty": 4, "mode": "sale", "price_auec": 100, **kw}
+        if quality is not None:
+            body["crafted"] = {"quality": quality, "band": 3}   # a typed band is ignored
+        r = self.client.post("/api/market", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _ids(self, **params):
+        q = "&".join(f"{k}={v}" for k, v in params.items())
+        return {l["id"] for l in self.client.get(f"/api/market?{q}").json()["listings"]}
+
+    def test_commodity_lot_quality_stored_without_band(self):
+        l = self._post(quality=734)
+        self.assertEqual(l["attributes"], {"quality": 734})
+        z = self._post(quality=0)                            # station-bought is legal
+        self.assertEqual(z["attributes"], {"quality": 0})
+
+    def test_band_filter_derives_from_quality_and_honours_old_blobs(self):
+        a = self._post(quality=734)                          # ≈B6
+        b = self._post(quality=126)                          # ≈B2
+        z = self._post(quality=0)                            # ≈B1 (floor)
+        # A blob from before #151 that stored only a typed band.
+        old = self._post()
+        db._conn.execute("UPDATE listings SET attributes=? WHERE id=?",
+                         (json.dumps({"band": 6}), old["id"]))
+        db._conn.commit()
+        self.assertEqual(self._ids(band=6) & {a["id"], b["id"], z["id"], old["id"]}, {a["id"], old["id"]})
+        self.assertEqual(self._ids(band=2) & {a["id"], b["id"], z["id"]}, {b["id"]})
+        self.assertEqual(self._ids(band=1) & {a["id"], b["id"], z["id"]}, {z["id"]})
+        self.assertIn(a["id"], self._ids(min_quality=700))
+        self.assertNotIn(b["id"], self._ids(min_quality=700))
+
+
 class InventoryLotKeyMigrationTests(unittest.TestCase):
     """The lot key was code-enforced only, so an old DB may already hold a
     duplicate; summing rows unseen is the one irreversible move, so the boot

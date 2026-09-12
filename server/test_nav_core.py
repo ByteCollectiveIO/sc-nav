@@ -2070,6 +2070,29 @@ class InventoryRollupTests(unittest.TestCase):
             {"quality": 900, "qty": 7}, {"quality": 300, "qty": 10},
             {"quality": None, "qty": 7}])
 
+    def test_by_band_groups_lots_best_band_first(self):
+        # #151 step 5: the org sees B8…B1 + unrated, each carrying its exact lots.
+        rows = [
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 10, "owner_id": "A", "location": "Area18", "quality": 734},
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 3, "owner_id": "B", "location": "Orison", "quality": 700},
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 5, "owner_id": "B", "location": "Orison", "quality": 0},
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty": 2, "owner_id": "A", "location": "Area18", "quality": None},
+        ]
+        roll = nav_core.derive_inventory_rollup(rows)
+        self.assertEqual([(b["band"], b["qty"]) for b in roll[0]["by_band"]],
+                         [(6, 13), (1, 5), (None, 2)])
+        self.assertEqual(roll[0]["by_band"][0]["lots"],
+                         [{"quality": 734, "qty": 10}, {"quality": 700, "qty": 3}])
+
+    def test_quality_band(self):
+        self.assertIsNone(nav_core.quality_band(None))
+        self.assertEqual([nav_core.quality_band(q) for q in (0, 1, 125, 126, 734, 1000)],
+                         [1, 1, 1, 2, 6, 8])
+
     def test_zero_qty_holdings_stay_out_of_the_rollup(self):
         # The shell row an un-gathered goal pledge hangs off isn't org stock.
         rows = [
