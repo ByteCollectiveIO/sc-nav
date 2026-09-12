@@ -2253,6 +2253,12 @@
   .bp-easiest { margin: 0 0 8px; font-size: 13px; }
   .bp-tbl .bp-have-ok { color: var(--good); }
   .bp-modal .mk-craft-h { margin-top: 12px; }
+  .bp-verdict { margin: 6px 0 10px; font-size: 13px; }
+  /* Destructive at rest is noise in a list of four; red arrives on intent. */
+  .ev-btn.quiet-danger { color: var(--dim); border-color: var(--border); }
+  .ev-btn.quiet-danger:hover, .ev-btn.quiet-danger:focus-visible { color: var(--bad); border-color: var(--bad); }
+  .rm-line-ct .rm-pledge, .rm-line-ct .rm-low, .rm-line-ct .rm-unrated { margin-top: 2px; }
+  .rm-intro { max-width: 80ch; }
   .bp-f-craft { font-size: 12px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   /* Org readiness + unlock goals (docs/blueprint-readiness.md) */
   .bpr-selcol { width: 28px; }
@@ -12416,8 +12422,9 @@ function goalCraftChip(g) {
 function goalUnlockChip(g) { return g.kind === "unlock" ? `<span class="rm-craft-chip">🔓 Unlock</span>` : ""; }
 function goalUnlockScope(g) {
   const u = g.unlock || {}, s = u.spec || {}, t = s.target || {};
-  const who = s.playstyle ? `${esc(s.playstyle)} members` : "members";
-  return t.mode === "pct" ? `${Number(t.value)}% of ${u.scope_size || 0} ${who} (${u.needed || 0})` : `${Number(t.value)} ${who}`;
+  const n = u.scope_size || 0, need = u.needed || 0;
+  const who = (k) => s.playstyle ? `${esc(s.playstyle)} member${k === 1 ? "" : "s"}` : `member${k === 1 ? "" : "s"}`;
+  return t.mode === "pct" ? `${Number(t.value)}% of ${n} ${who(n)} = ${need}` : `${Number(t.value)} ${who(Number(t.value))}`;
 }
 function goalCard(g) {
   const pr = g.progress, met = pr.is_met || g.status === "met";
@@ -12738,7 +12745,8 @@ function renderUnlockGoalDetail(g) {
     const r = recipes.find(x => x.key === l.key) || {};
     const pct = l.needed ? Math.min(100, Math.round(100 * l.have / l.needed)) : 100;
     const done = l.have >= l.needed;
-    const holders = (l.holder_names || []).length ? l.holder_names.map(esc).join(", ") : `<span class="muted">nobody yet</span>`;
+    const hn = l.holder_names || [];
+    const holders = hn.length ? hn.slice(0, 12).map(esc).join(", ") + (hn.length > 12 ? ` <span class="muted">+${hn.length - 12} more</span>` : "") : `<span class="muted">nobody yet</span>`;
     const missing = (l.missing_names || []);
     return `<div class="goal-unlock-line ${done ? "done" : ""}">` +
       `<div class="rm-line"><span class="rm-line-n" title="${esc(r.cat || "")}"><b>${esc(l.name)}</b></span>` +
@@ -12820,7 +12828,7 @@ function renderGoalDetailBody(g) {
         `<input id="goal-c-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount">` +
         `<select id="goal-c-src" class="sel" style="flex:1;min-width:210px" aria-label="Where this comes from"></select>` +
         `<span class="poi-pick" id="goal-c-loc-wrap" style="flex:1;min-width:140px"><input id="goal-c-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
-        `<input id="goal-c-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
+        `<input id="goal-c-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality 0–1000" ` +
           `title="Lot quality 0–1000 as the game shows it; blank = unrated" style="display:none">` +
         `<button class="ev-btn primary" id="goal-c-save">Contribute</button>` +
       `</div><span class="ev-hint" id="goal-c-hint"></span>` +
@@ -13266,7 +13274,7 @@ async function renderInventory() {
       `<input id="inv-qty" class="ti rm-qty" type="number" min="0" step="any" placeholder="amount" ` +
         `title="Adds to a matching lot (same item, place and quality). To set an exact amount, edit the row.">` +
       unitSelect("inv-unit", "") +
-      `<input id="inv-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
+      `<input id="inv-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality 0–1000" ` +
         `title="Quality as the game shows it, 0–1000 (a mined lot's grade, or a crafted item's quality). Leave blank if unrated or shop-bought." style="display:none">` +
       `<span class="poi-pick" style="flex:1;min-width:140px"><input id="inv-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
       `<button class="ev-btn primary" id="inv-save">Log holding</button>` +
@@ -13331,6 +13339,8 @@ function invQualityValue(input) {
 }
 function invQualityChip(q) {
   if (q === null || q === undefined) return "";
+  // Q0 is the game's "station-bought" value, not a low grade — say so.
+  if (Number(q) === 0) return `<span class="inv-q" title="quality 0 — station-bought, not craftable">Q0<span class="muted">bought</span></span>`;
   return `<span class="inv-q" title="lot quality ${Number(q)} (${bandTag(q)})">Q${Number(q)}<span class="muted">≈B${qualityBand(q)}</span></span>`;
 }
 // Facet value for a lot: the approximate band, or "unrated".
@@ -13590,7 +13600,7 @@ function invMineRowHtml(r, cols) {
       ? `<button class="ev-btn rm-inv-split" data-id="${r.id}" title="move part of this lot to a different quality or place">Split</button>` : "") +
     (Number(r.available) > 0
       ? `<button class="ev-btn rm-inv-sell" data-id="${r.id}" title="post the free part of this lot on the marketplace">Sell</button>` : "") +
-    `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></td></tr>`;
+    `<button class="ev-btn quiet-danger rm-inv-del" data-id="${r.id}">Remove</button></td></tr>`;
 }
 
 function wireInvMine() {
@@ -20889,7 +20899,8 @@ function renderBpReadiness() {
     `<div class="bp-sel-bar" id="bpr-selbar" hidden><span id="bpr-selcount"></span>` +
       `<button class="ev-btn primary" id="bpr-goal">🔓 Create unlock goal</button>` +
       `<button class="ev-btn" id="bpr-clear">Clear</button></div>`;
-  $("bpr-q").oninput = () => { st.q = $("bpr-q").value; renderBpReadyTable(); };
+  let qTimer = null;
+  $("bpr-q").oninput = () => { st.q = $("bpr-q").value; clearTimeout(qTimer); qTimer = setTimeout(renderBpReadyTable, 120); };
   $("bpr-cat").onchange = () => { st.cat = $("bpr-cat").value; renderBpReadyTable(); };
   $("bpr-fac").onchange = () => { st.faction = $("bpr-fac").value; renderBpReadyTable(); };
   $("bpr-held").onchange = () => { st.held = $("bpr-held").value; renderBpReadyTable(); };
@@ -20913,8 +20924,16 @@ function bpReadyMatches(r) {
   if (st.held === "some" && !(r.holders > 0)) return false;
   return true;
 }
+let bpReadyLastChk = null;   // shift-click range anchor
 function renderBpReadyTable() {
   const st = bpReadyState, rows = (bpReady.rows || []).filter(bpReadyMatches);
+  // 1,606 rows open at once is a wall: above 200 visible rows every category
+  // starts collapsed (once, until the member opens some) — filters and
+  // search narrow the set enough to auto-expand.
+  if (!st.collapseInit && rows.length > 200) {
+    st.collapseInit = true;
+    rows.forEach(r => { st.collapsed[r.cat || "Other"] = true; });
+  }
   const col = BPR_COLS.find(c => c.key === st.sort) || BPR_COLS[0];
   rows.sort((a, b) => { const x = col.val(a), y = col.val(b); return (x < y ? -1 : x > y ? 1 : 0) * st.dir || String(a.name).localeCompare(String(b.name)); });
   const groups = new Map();
@@ -20927,7 +20946,7 @@ function renderBpReadyTable() {
     return `<tr class="bpr-row ${bpReadySel.has(r.key) ? "sel" : ""}" data-key="${esc(r.key)}">` +
       `<td class="bpr-selcol"><input type="checkbox" class="bpr-chk" data-key="${esc(r.key)}"${bpReadySel.has(r.key) ? " checked" : ""} aria-label="select ${esc(r.name)}"></td>` +
       `<td><button type="button" class="bp-name-btn bpr-open" data-key="${esc(r.key)}" title="open the recipe card">${esc(r.name)}</button>` +
-        `${r.size || r.grade ? ` <span class="inv-dim">${[r.size ? "S" + r.size : "", r.grade].filter(Boolean).map(esc).join(" · ")}</span>` : ""}</td>` +
+        `${(r.size && !new RegExp("\\bS" + r.size + "\\b").test(r.name || "")) || r.grade ? ` <span class="inv-dim">${[r.size && !new RegExp("\\bS" + r.size + "\\b").test(r.name || "") ? "S" + r.size : "", r.grade].filter(Boolean).map(esc).join(" · ")}</span>` : ""}</td>` +
       `<td>${r.manufacturer ? esc(r.manufacturer) : ""}</td>` +
       `<td>${(r.factions || []).length ? r.factions.map(esc).join(", ") : (r.default ? `<span class="muted">everyone</span>` : `<span class="muted">unknown</span>`)}</td>` +
       `<td class="num">${gate}</td>` +
@@ -20935,8 +20954,10 @@ function renderBpReadyTable() {
   };
   const body = [...groups].map(([cat, rs]) => {
     const c = !!st.collapsed[cat];
-    return `<tbody class="bp-group"><tr class="bp-group-h ${c ? "collapsed" : ""}" data-cat="${esc(cat)}" aria-expanded="${!c}"><td colspan="6">` +
-      `<span class="rm-caret" aria-hidden="true">▸</span>${esc(cat)} <span class="muted">· ${rs.length}</span></td></tr>` +
+    const all = rs.every(r => bpReadySel.has(r.key)), some = !all && rs.some(r => bpReadySel.has(r.key));
+    return `<tbody class="bp-group"><tr class="bp-group-h ${c ? "collapsed" : ""}" data-cat="${esc(cat)}" aria-expanded="${!c}">` +
+      `<td class="bpr-selcol"><input type="checkbox" class="bpr-grp-chk" data-cat="${esc(cat)}"${all ? " checked" : ""} aria-label="select every ${esc(cat)} recipe" title="select all in this category"></td>` +
+      `<td colspan="5"><span class="rm-caret" aria-hidden="true">▸</span>${esc(cat)} <span class="muted">· ${rs.length}${some ? ` · ${rs.filter(r => bpReadySel.has(r.key)).length} selected` : ""}</span></td></tr>` +
       (c ? "" : rs.map(row).join("")) + `</tbody>`;
   }).join("");
   $("bpr-table").innerHTML = `<table class="inv-table bp-table">${head}${body}</table>`;
@@ -20946,11 +20967,28 @@ function renderBpReadyTable() {
     if (st.sort === th.dataset.sort) st.dir = -st.dir; else { st.sort = th.dataset.sort; st.dir = 1; }
     renderBpReadyTable();
   });
-  t.querySelectorAll(".bp-group-h").forEach(tr => clickable(tr, () => { st.collapsed[tr.dataset.cat] = !st.collapsed[tr.dataset.cat]; renderBpReadyTable(); }, "button"));
-  t.querySelectorAll(".bpr-chk").forEach(cb => cb.onclick = (e) => {
+  t.querySelectorAll(".bp-group-h").forEach(tr => clickable(tr, (e) => {
+    if (e && e.target && e.target.closest(".bpr-selcol")) return;
+    st.collapsed[tr.dataset.cat] = !st.collapsed[tr.dataset.cat]; renderBpReadyTable();
+  }, "button"));
+  t.querySelectorAll(".bpr-grp-chk").forEach(cb => cb.onclick = (e) => {
     e.stopPropagation();
-    if (cb.checked) bpReadySel.add(cb.dataset.key); else bpReadySel.delete(cb.dataset.key);
-    cb.closest("tr").classList.toggle("sel", cb.checked); syncBpSelBar();
+    const rs = groups.get(cb.dataset.cat) || [];
+    rs.forEach(r => cb.checked ? bpReadySel.add(r.key) : bpReadySel.delete(r.key));
+    renderBpReadyTable();
+  });
+  const chks = [...t.querySelectorAll(".bpr-chk")];
+  chks.forEach((cb, idx) => cb.onclick = (e) => {
+    e.stopPropagation();
+    // Shift-click selects the range from the last clicked box (power-user path).
+    if (e.shiftKey && bpReadyLastChk != null) {
+      const [a, b] = [Math.min(bpReadyLastChk, idx), Math.max(bpReadyLastChk, idx)];
+      chks.slice(a, b + 1).forEach(x => { x.checked = cb.checked; cb.checked ? bpReadySel.add(x.dataset.key) : bpReadySel.delete(x.dataset.key); x.closest("tr").classList.toggle("sel", cb.checked); });
+    } else {
+      if (cb.checked) bpReadySel.add(cb.dataset.key); else bpReadySel.delete(cb.dataset.key);
+      cb.closest("tr").classList.toggle("sel", cb.checked);
+    }
+    bpReadyLastChk = idx; syncBpSelBar();
   });
   t.querySelectorAll(".bpr-open").forEach(b => b.onclick = () => openReadinessCard(b.dataset.key));
   syncBpSelBar();
@@ -20986,7 +21024,7 @@ const BP_LIB_COLS = [
   { key: "manufacturer", label: "Maker", val: r => (r.manufacturer || "").toLowerCase() },
   { key: "size", label: "Size / Grade", val: r => Number(r.size) || 0 },
   { key: "inputs", label: "Materials", val: r => (r.inputs || []).map(i => i.input).join(",").toLowerCase() },
-  { key: "cost", label: "Est. cost", num: true, val: r => (r.est_cost && r.est_cost.total) || 0 },
+  { key: "cost", label: "Est. cost (aUEC)", num: true, val: r => (r.est_cost && r.est_cost.total) || 0 },
   { key: "time", label: "Time", num: true, val: r => r.time_s || 0 },
   { key: "craft", label: "Craftable", num: true, val: r => r.craft ? (r.craft.ok ? 1e6 + r.craft.crafts : (r.craft.slots || []).filter(s => s.ok).length) : -1 },
 ];
@@ -21037,7 +21075,7 @@ function bpLibRowHtml(r) {
     `<td class="inv-actions">` +
       `<a class="ev-btn" href="#/goals/new" data-bpseed="${esc(r.blueprint_key)}" title="gather this recipe's materials">🎯 Gather</a>` +
       (c && c.ok ? `<button class="ev-btn primary" data-bplist="${esc(r.blueprint_key)}" title="post a crafted ${esc(r.name)} on the marketplace at the quality you can make">List</button>` : "") +
-      `<button class="ev-btn danger" data-bpdel="${esc(r.blueprint_key)}">Remove</button></td></tr>`;
+      `<button class="ev-btn quiet-danger" data-bpdel="${esc(r.blueprint_key)}">Remove</button></td></tr>`;
 }
 // The recipe card (modal): identity, materials vs your free stock, expected
 // stats, and the unlock path grouped per faction.
@@ -21065,7 +21103,7 @@ function bpDetailModal(r) {
     `<div class="bp-modal-meta"><span>⏱ ${bpFmtTime(r.time_s)}</span><span>mats ≈ ${cost}</span>` +
       (r.max_min_q > 1 ? `<span class="rm-minq" style="margin:0">≥Q${r.max_min_q} materials</span>` : "") +
       (r.default ? `<span class="muted">default recipe</span>` : "") + `</div>` +
-    (verdict ? `<div style="margin:6px 0 10px">${verdict}</div>` : "") +
+    (verdict ? `<div class="bp-verdict">${verdict}</div>` : "") +
     (r.holders_line ? `<div class="muted" style="margin:4px 0 10px">👥 ${esc(r.holders_line)}</div>` : "") +
     bpLibDetailHtml(r) +
     `<div class="mk-craft-h" style="margin-top:10px">Unlocked by</div>` + bpUnlocksHtml(r.unlocks, r.default);
