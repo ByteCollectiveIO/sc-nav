@@ -164,6 +164,27 @@ library at `#/blueprints`, #29)
   by cat, sortable, filters, expand `bpLibDetailHtml`); **List** → `mktFormSeed`
   `{item_id: blueprint:<key>, qty: crafts, quality, stats[], crafted: true}` —
   `renderMarketForm`'s seed path fills stat rows + `&bp=1` catalog lookup.
+- **Org blueprint readiness + unlock goals (docs/blueprint-readiness.md,
+  2026-09-12):** `GET /api/blueprints/readiness` (registered BEFORE
+  `/{bp_key}`) = every feed recipe w/ `holders`/`holder_names` (from
+  `db.blueprint_holders`), `factions[]` + `min_standing` off the structured
+  `unlocks`, UEX spec by name; + `members_total`/`tag_sizes`. **Unlock goals:**
+  `goals.kind` ('materials'|'unlock') + `goals.unlock_spec` JSON
+  `{blueprints, target:{mode count|pct, value}, playstyle}` (`GoalIn.kind`/
+  `UnlockSpecIn`, validated in `_validate_goal`); progress =
+  `nav_core.derive_unlock_progress(spec, holders_by_key, scope_ids, names)` —
+  scope = `_unlock_scope_ids` (members w/ the tag, or all), needed = count or
+  ⌈pct×scope⌉, lines keep the materials shape (`unit:"members"`, +`holders`/
+  `missing`); `_goal_view` branches (`_unlock_block` → spec/scope/recipes w/
+  unlock paths + `i_hold`, no contributions); `POST /api/me/blueprints`
+  re-derives `db.unlock_goals_naming(key)` and on a first crossing sets `met` +
+  `_notify_unlock_goal_met`. Frontend: Blueprints `bpScopeSeg` My library ·
+  Org readiness (`loadBlueprintReadiness`/`renderBpReadyTable`, checkbox
+  select → `unlockGoalSeed` → `#/goals/new`), goal form kind seg
+  (`goal-f-kind`, `goal-f-unlock` block, `bindGoalUnlockForm`,
+  `goalUnlockRecipes`), board 🔓 chip + "% ready", detail
+  `renderUnlockGoalDetail` (per-recipe member bars, holders/missing names,
+  unlock path, "+ add to my library").
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`, `/api/intel/surveying` (#37 slice 5: totals + ranked members via `nav_core.derive_survey_stats` — sessions derived from mark stream, gap `SURVEY_SESSION_GAP_S` 30 min or zone change splits, NULL-`created` never sessioned — + per-belt coverage rows + freshest zones; frontend `#/intel/surveying` → `#survey-stats-view` sibling, `loadSurveyStats`/`renderSurveyStats`)
 - Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. **Guild

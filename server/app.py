@@ -4073,6 +4073,35 @@ async def list_blueprints(q: str | None = None, category: str | None = None,
             "categories": cats}
 
 
+@app.get("/api/blueprints/readiness")
+async def blueprint_readiness(user: dict = Depends(require_session)):
+    """Org blueprint readiness (docs/blueprint-readiness.md): every recipe in
+    the feed with who holds it and how it unlocks — the view an org plans a
+    reputation push from. Compact rows; the recipe card fetches the detail."""
+    holders = db.blueprint_holders()
+    members = db.all_members()
+    tag_sizes: dict[str, int] = {}
+    for m in members:
+        for t in member_playstyles(m):
+            tag_sizes[t] = tag_sizes.get(t, 0) + 1
+    rows = []
+    for key, bp in blueprints_feed.items():
+        spec = item_specs.get(bp.get("name")) or {}
+        us = [u for u in (bp.get("unlocks") or []) if isinstance(u, dict)]
+        factions = list(dict.fromkeys(u.get("faction") or u.get("giver") for u in us if (u.get("faction") or u.get("giver"))))
+        gates = [u["rep_min"] for u in us if u.get("rep_min")]
+        gate = min(gates, key=lambda g: g.get("pts") or 0) if gates else (
+            {"name": "none", "pts": 0} if us else None)
+        hs = holders.get(key, [])
+        rows.append({"key": key, "name": bp.get("name") or key, "cat": bp.get("cat"),
+                     "manufacturer": spec.get("manufacturer"), "size": spec.get("size"),
+                     "grade": spec.get("grade"), "default": bp.get("default", False),
+                     "holders": len(hs),
+                     "holder_names": [_resolve_member_name(h, None) for h in hs[:8]],
+                     "factions": factions, "min_standing": gate})
+    return {"rows": rows, "members_total": len(members), "tag_sizes": tag_sizes}
+
+
 @app.get("/api/blueprints/{bp_key}")
 async def get_blueprint(bp_key: str):
     """One blueprint's full record — aspects/inputs with min qualities and stat
@@ -8917,6 +8946,20 @@ class GoalIn(BaseModel):
     blueprint_key: str | None = Field(default=None, max_length=_META_MAX)
     blueprint_qty: float = Field(default=1, ge=1, le=_MAX_QTY)
     blueprint_inputs: list[SpecInputIn] = Field(default_factory=list, max_length=12)
+    # Unlock goals (docs/blueprint-readiness.md): `kind="unlock"` + `unlock`
+    # spec; line_items stay empty and progress counts members, not materials.
+    kind: str = Field(default="materials", max_length=16)
+    unlock: "UnlockSpecIn | None" = None
+
+
+class UnlockSpecIn(BaseModel):
+    blueprints: list[str] = Field(min_length=1, max_length=20)
+    target_mode: str = Field(default="count", max_length=8)      # count | pct
+    target_value: float = Field(default=1, ge=1, le=1000)
+    playstyle: str | None = Field(default=None, max_length=32)    # PLAYSTYLE_TAGS or None = everyone
+
+
+GoalIn.model_rebuild()
 
 
 _GOAL_VISIBILITY = ("org", "personal")
@@ -9204,6 +9247,27 @@ def _validate_goal(body: GoalIn) -> dict:
     visibility = body.visibility if body.visibility in _GOAL_VISIBILITY else None
     unmapped: list[str] = []
     fields: dict = {}
+    if body.kind == "unlock":
+        # An unlock goal: recipes + a member target over a playstyle scope.
+        u = body.unlock
+        if u is None:
+            raise HTTPException(status_code=400, detail="an unlock goal needs its recipe list")
+        keys = list(dict.fromkeys(k.strip() for k in u.blueprints if k.strip()))
+        bad = [k for k in keys if k not in blueprints_feed]
+        if bad or not keys:
+            raise HTTPException(status_code=400, detail=f"unknown blueprint(s): {', '.join(bad) or '—'}")
+        mode = u.target_mode if u.target_mode in ("count", "pct") else "count"
+        val = max(1.0, min(100.0, float(u.target_value))) if mode == "pct" else max(1.0, float(u.target_value))
+        tag = (u.playstyle or "").strip() or None
+        if tag is not None and tag not in PLAYSTYLE_TAGS:
+            raise HTTPException(status_code=400, detail=f"unknown playstyle tag: {tag}")
+        deadline = _normalize_event_start(body.deadline) if body.deadline else None
+        return {"kind": "unlock",
+                "unlock_spec": {"blueprints": keys, "target": {"mode": mode, "value": val},
+                                "playstyle": tag},
+                "title": title, "description": (body.description or "").strip(),
+                "priority": body.priority, "deadline": deadline, "line_items": [],
+                "visibility": visibility, "seed_unmapped": []}
     if body.blueprint_key and not body.line_items:
         # A craft goal: the recipe (at the requested qualities) IS the line items.
         # The spec rides along so edits can restore the sliders; slots the recipe
@@ -9340,12 +9404,66 @@ def _pledged_craft_preview(bp: dict, asked: dict, contributions) -> dict | None:
             "stat_preview": nav_core.blueprint_stat_preview(bp, qualities)}
 
 
+def _unlock_scope_ids(playstyle: str | None) -> list[str]:
+    """Members an unlock goal is measured over: those carrying the playstyle
+    tag, or every member when no tag is set."""
+    out = []
+    for m in db.all_members():
+        if playstyle is None or playstyle in member_playstyles(m):
+            out.append(str(m["discord_id"]))
+    return out
+
+
+def _unlock_progress(goal: dict) -> dict:
+    spec = goal.get("unlock_spec") or {}
+    keys = spec.get("blueprints") or []
+    names = {k: (blueprints_feed.get(k) or {}).get("name") or k for k in keys}
+    return nav_core.derive_unlock_progress(
+        spec, db.blueprint_holders(keys), _unlock_scope_ids(spec.get("playstyle")), names)
+
+
+def _unlock_block(goal: dict, progress: dict, user: dict, detail: bool = False) -> dict:
+    """The unlock goal's own panel: the spec, scope size, and (detail) each
+    recipe's unlock path + whether the viewer holds it."""
+    spec = goal.get("unlock_spec") or {}
+    block = {"spec": spec, "scope_size": progress.get("scope_size", 0),
+             "needed": progress.get("needed"), "playstyle": spec.get("playstyle")}
+    if detail:
+        mine = {r["blueprint_key"] for r in db.list_member_blueprints(user["id"])}
+        block["recipes"] = []
+        for k in spec.get("blueprints") or []:
+            bp = blueprints_feed.get(k) or {}
+            block["recipes"].append({"key": k, "name": bp.get("name") or k, "cat": bp.get("cat"),
+                                     "unlocks": bp.get("unlocks") or [], "default": bp.get("default", False),
+                                     "i_hold": k in mine})
+    return block
+
+
+async def _notify_unlock_goal_met(goal: dict, progress: dict) -> None:
+    """The org's readiness bar crossed — broadcast + ping the organiser."""
+    if not notify.is_configured("goals"):
+        return
+    mentions, ping = _mentions(goal["creator_id"])
+    spec = goal.get("unlock_spec") or {}
+    scope = f"{progress.get('scope_size', 0)} member{'s' if progress.get('scope_size', 0) != 1 else ''}"
+    if spec.get("playstyle"):
+        scope += f" tagged {spec['playstyle']}"
+    await notify.send(
+        "goals",
+        f"🔓 **Blueprints ready: {goal['title']}**\nEvery recipe is held by the target "
+        f"share of {scope}.{_deep_link('#/goals')}{ping}",
+        mentions=mentions, dedup_key=f"goal-met:{goal['id']}")
+
+
 def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> dict:
     """Serialize a goal with its derived progress. `contributions` is the list of
     inventory rows earmarked to it. Auto-flips a fully-covered active goal to
     'met' (and a no-longer-met one back to active) lazily on read — display state
     follows the ledger without a background job; an admin can still archive."""
-    progress = nav_core.derive_goal_progress(goal, contributions)
+    if goal.get("kind") == "unlock":
+        progress = _unlock_progress(goal)
+    else:
+        progress = nav_core.derive_goal_progress(goal, contributions)
     status = goal.get("status")
     if status in ("active", "met"):
         target = "met" if progress["is_met"] else "active"
@@ -9357,11 +9475,20 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
              "line_items", "created_at", "updated_at")}
     view["status"] = status
     view["visibility"] = goal.get("visibility") or "org"
+    view["kind"] = goal.get("kind") or "materials"
     view["blueprint_key"] = goal.get("blueprint_key")
     view["creator_name"] = _resolve_member_name(goal["creator_id"], None)
     view["is_mine"] = goal["creator_id"] == user["id"]
     view["can_edit"] = goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
     view["progress"] = progress
+    if view["kind"] == "unlock":
+        view["unlock"] = _unlock_block(goal, progress, user, detail=detail)
+        if detail:
+            for ln in progress["lines"]:
+                ln["holder_names"] = [_resolve_member_name(m, None) for m in ln.get("holders", [])]
+                ln["missing_names"] = [_resolve_member_name(m, None) for m in ln.get("missing", [])]
+            progress["per_contributor"] = _enrich_owner_names(progress["per_contributor"])
+        return view
     craft = _goal_craft_block(goal, detail=detail,
                               contributions=contributions if detail else None)
     if craft:
@@ -12830,7 +12957,18 @@ async def add_my_blueprint(body: MemberBlueprintIn, user: dict = Depends(require
     key = body.blueprint_key.strip()
     if key not in blueprints_feed:
         raise HTTPException(status_code=404, detail="unknown blueprint")
-    db.add_member_blueprint(user["id"], key, datetime.now(timezone.utc).isoformat())
+    # Unlock goals naming this recipe: a first crossing flips them to met and
+    # pings the channel (reads still flip lazily, but nobody may be reading).
+    watched = db.unlock_goals_naming(key)
+    before = {g["id"]: _unlock_progress(g)["is_met"] for g in watched}
+    now = datetime.now(timezone.utc).isoformat()
+    db.add_member_blueprint(user["id"], key, now)
+    for g in watched:
+        prog = _unlock_progress(g)
+        if prog["is_met"] and not before.get(g["id"]):
+            db.set_goal_status(g["id"], "met", now)
+            if g.get("visibility") != "personal":
+                _notify_bg(_notify_unlock_goal_met(g, prog))
     return {"ok": True,
             "blueprints": _member_blueprint_view(db.list_member_blueprints(user["id"]))}
 

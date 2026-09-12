@@ -3751,6 +3751,153 @@ class ListingLotQualityTests(unittest.TestCase):
         self.assertNotIn(b["id"], self._ids(min_quality=700))
 
 
+class UnlockGoalTests(unittest.TestCase):
+    """Org blueprint readiness + unlock goals (docs/blueprint-readiness.md):
+    a goal whose lines are recipes and whose progress counts scope members
+    holding them; the library add is what crosses it."""
+
+    _FEED = {"BP_X": {"name": "Clearcut Module", "cat": "Mining Modifier", "time_s": 120, "default": False,
+                      "unlocks": [{"title": "Welcome to the System", "chance": 100, "faction": "Recco Battaglia",
+                                   "giver": "Recco Battaglia", "rep_gain": 800}],
+                      "aspects": [{"slot": "Case", "kind": "resource", "input": "Iron", "scu": 0.2, "min_q": 800}]},
+             "BP_Y": {"name": "Deluge Module", "cat": "Mining Modifier", "time_s": 120, "default": False,
+                      "unlocks": [{"title": "Emergency", "chance": 100, "faction": "Recco Battaglia",
+                                   "rep_min": {"name": "Associate", "pts": 2400}}],
+                      "aspects": [{"slot": "Case", "kind": "resource", "input": "Iron", "scu": 0.2}]}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._feed_orig = app.blueprints_feed
+        app.blueprints_feed = dict(cls._FEED)
+        cls._a = {"id": "111", "username": "ana", "is_admin": False}
+        cls._b = {"id": "222", "username": "bo", "is_admin": False}
+        cls._c = {"id": "333", "username": "cy", "is_admin": False}
+        for u, tags in ((cls._a, ["mining"]), (cls._b, ["mining", "hauling"]), (cls._c, ["PvP"])):
+            db.set_member_playstyles(u["id"], tags)
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._a
+        cls.client = TestClient(app.app)
+        cls._as(cls._a)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.blueprints_feed = cls._feed_orig
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    @classmethod
+    def _as(cls, u):
+        app.app.dependency_overrides[app.require_session] = lambda: u
+        app.app.dependency_overrides[app.require_user] = lambda: u
+
+    def setUp(self):
+        self._as(self._a)
+        for u in (self._a, self._b, self._c):
+            self._as(u)
+            for k in ("BP_X", "BP_Y"):
+                self.client.request("DELETE", "/api/me/blueprints", params={"key": k})
+        self._as(self._a)
+
+    def _goal(self, **kw):
+        body = {"title": "Priority One — Battaglia", "kind": "unlock",
+                "unlock": {"blueprints": ["BP_X", "BP_Y"], "target_mode": "pct", "target_value": 100,
+                           "playstyle": "mining"}, **kw}
+        r = self.client.post("/api/goals", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_create_validates_recipes_and_scope(self):
+        r = self.client.post("/api/goals", json={"title": "x", "kind": "unlock",
+                                                 "unlock": {"blueprints": ["NOPE"]}})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/goals", json={"title": "x", "kind": "unlock",
+                                                 "unlock": {"blueprints": ["BP_X"], "playstyle": "knitting"}})
+        self.assertEqual(r.status_code, 400)
+        g = self._goal()
+        self.assertEqual(g["kind"], "unlock")
+        self.assertEqual(g["unlock"]["spec"]["blueprints"], ["BP_X", "BP_Y"])
+        self.assertEqual(g["unlock"]["scope_size"], 2)          # two miners
+        self.assertEqual(g["unlock"]["needed"], 2)               # 100% of 2
+        self.assertEqual([l["name"] for l in g["progress"]["lines"]], ["Clearcut Module", "Deluge Module"])
+        self.assertEqual(g["progress"]["lines"][0]["unit"], "members")
+        self.assertFalse(g["progress"]["is_met"])
+        # detail carries each recipe's unlock path + whether I hold it
+        r0 = g["unlock"]["recipes"][0]
+        self.assertEqual(r0["unlocks"][0]["faction"], "Recco Battaglia")
+        self.assertFalse(r0["i_hold"])
+
+    def test_library_adds_drive_progress_scoped_to_the_tag(self):
+        g = self._goal()
+        gid = g["id"]
+        # A PvP member holding both recipes doesn't count toward a mining-scoped goal.
+        self._as(self._c)
+        for k in ("BP_X", "BP_Y"):
+            self.client.post("/api/me/blueprints", json={"blueprint_key": k})
+        self._as(self._a)
+        g = self.client.get(f"/api/goals/{gid}").json()
+        self.assertEqual([l["have"] for l in g["progress"]["lines"]], [0, 0])
+        # Miner A holds X → 1/2 on X; still needed from B.
+        self.client.post("/api/me/blueprints", json={"blueprint_key": "BP_X"})
+        g = self.client.get(f"/api/goals/{gid}").json()
+        x = g["progress"]["lines"][0]
+        self.assertEqual((x["have"], x["needed"]), (1, 2))
+        self.assertEqual(x["holder_names"], [app._resolve_member_name("111", None)])
+        self.assertEqual(x["missing_names"], [app._resolve_member_name("222", None)])
+        self.assertTrue(g["unlock"]["recipes"][0]["i_hold"])
+        self.assertEqual(g["progress"]["overall_pct"], 25.0)
+
+    def test_first_crossing_flips_met_and_pings(self):
+        g = self._goal()
+        gid = g["id"]
+        sent = []
+        async def fake_send(cat, text, **kw): sent.append((cat, text, kw)); return True
+        orig_send, orig_cfg = notify.send, notify.is_configured
+        notify.send, notify.is_configured = fake_send, lambda c: True
+        try:
+            for u in (self._a, self._b):
+                self._as(u)
+                for k in ("BP_X", "BP_Y"):
+                    self.client.post("/api/me/blueprints", json={"blueprint_key": k})
+            time.sleep(0.2)
+        finally:
+            notify.send, notify.is_configured = orig_send, orig_cfg
+        self._as(self._a)
+        g = self.client.get(f"/api/goals/{gid}").json()
+        self.assertTrue(g["progress"]["is_met"]); self.assertEqual(g["status"], "met")
+        goals_msgs = [s for s in sent if s[0] == "goals" and s[2].get("dedup_key") == f"goal-met:{gid}"]
+        self.assertEqual(len(goals_msgs), 1, sent)
+        self.assertIn("Blueprints ready", goals_msgs[0][1])
+
+    def test_readiness_lists_every_recipe_with_holders_and_gate(self):
+        self.client.post("/api/me/blueprints", json={"blueprint_key": "BP_Y"})
+        d = self.client.get("/api/blueprints/readiness").json()
+        rows = {r["key"]: r for r in d["rows"]}
+        self.assertEqual(set(rows), {"BP_X", "BP_Y"})
+        self.assertEqual(rows["BP_X"]["factions"], ["Recco Battaglia"])
+        self.assertEqual(rows["BP_X"]["min_standing"], {"name": "none", "pts": 0})
+        self.assertEqual(rows["BP_Y"]["min_standing"], {"name": "Associate", "pts": 2400})
+        self.assertEqual((rows["BP_Y"]["holders"], rows["BP_Y"]["holder_names"]),
+                         (1, [app._resolve_member_name("111", None)]))
+        self.assertEqual(rows["BP_X"]["holders"], 0)
+        self.assertEqual(d["tag_sizes"]["mining"], 2)
+        self.assertGreaterEqual(d["members_total"], 3)
+
+    def test_edit_replaces_the_spec(self):
+        g = self._goal()
+        r = self.client.patch(f"/api/goals/{g['id']}", json={
+            "title": "Battaglia, phase 1", "kind": "unlock",
+            "unlock": {"blueprints": ["BP_X"], "target_mode": "count", "target_value": 1, "playstyle": None}})
+        self.assertEqual(r.status_code, 200, r.text)
+        v = r.json()
+        self.assertEqual(v["unlock"]["spec"]["blueprints"], ["BP_X"])
+        self.assertEqual(v["unlock"]["scope_size"], 3)          # everyone
+        self.assertEqual(v["progress"]["lines"][0]["needed"], 1)
+
+
 class InventoryLotKeyMigrationTests(unittest.TestCase):
     """The lot key was code-enforced only, so an old DB may already hold a
     duplicate; summing rows unseen is the one irreversible move, so the boot

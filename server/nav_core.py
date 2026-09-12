@@ -6174,6 +6174,52 @@ def pledged_slot_qualities(bp: dict, rows, resolve) -> dict:
     return out
 
 
+def derive_unlock_progress(spec: dict, holders_by_key: dict, scope_ids, names: dict | None = None) -> dict:
+    """Progress of a blueprint-UNLOCK goal (docs/blueprint-readiness.md): the
+    lines are recipes, the count is MEMBERS. `spec` = {blueprints, target:
+    {mode: count|pct, value}, playstyle}; `holders_by_key` = {key: [member
+    ids]}; `scope_ids` = the members the target is measured over (those
+    carrying the playstyle tag, or everyone); `names` = {key: recipe name}.
+    Per recipe `have` = scope members holding it, `needed` = the count, or
+    ⌈pct% × scope⌉ (min 1); `is_met` when every recipe meets its target.
+    `per_contributor` is recipes-held per scope member (the shape the board
+    already renders), `missing` per recipe = scope members still without it.
+    A count target above the scope size can never be met — reported as-is so
+    the organiser sees it rather than a silently capped bar."""
+    scope = [str(m) for m in (scope_ids or [])]
+    scope_set = set(scope)
+    tgt = spec.get("target") or {}
+    mode, val = tgt.get("mode") or "count", float(tgt.get("value") or 1)
+    if mode == "pct":
+        needed = max(1, int(-(-len(scope) * min(100.0, max(0.0, val)) // 100))) if scope else 1
+    else:
+        needed = max(1, int(val))
+    lines: list = []
+    all_met, total_have, held_by = True, 0, {}
+    for key in spec.get("blueprints") or []:
+        holders = [str(h) for h in holders_by_key.get(key, []) if str(h) in scope_set]
+        have = len(holders)
+        pct = 100.0 if needed <= 0 else min(100.0, have / needed * 100.0)
+        if have < needed:
+            all_met = False
+        total_have += min(have, needed)
+        for h in holders:
+            held_by[h] = held_by.get(h, 0) + 1
+        lines.append({
+            "item_id": key, "key": key, "name": (names or {}).get(key) or key, "unit": "members",
+            "needed": needed, "have": have, "pct": round(pct, 1),
+            "short": max(0, needed - have), "promised": 0, "on_hand": have,
+            "holders": holders, "missing": [m for m in scope if m not in set(holders)],
+        })
+    n = len(lines)
+    overall = 100.0 if n == 0 else min(100.0, total_have / (needed * n) * 100.0)
+    per_contributor = sorted(({"owner_id": m, "qty": c, "promised": 0} for m, c in held_by.items()),
+                             key=lambda x: (-x["qty"], x["owner_id"]))
+    return {"lines": lines, "overall_pct": round(overall, 1), "is_met": bool(lines) and all_met,
+            "per_contributor": per_contributor, "scope_size": len(scope), "needed": needed,
+            "target": {"mode": mode, "value": val}}
+
+
 def craftable_from_holdings(bp: dict, holdings, resolve) -> dict:
     """What a member could craft RIGHT NOW from their free stock (blueprint
     library page). `holdings` = their inventory rows (`item_id`, `available`

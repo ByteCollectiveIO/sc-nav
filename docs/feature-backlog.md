@@ -16,7 +16,7 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### Org blueprint readiness + unlock goals 📐 PROPOSED (2026-09-12)
+### Org blueprint readiness + unlock goals 🔨 BUILT (2026-09-12, unreleased)
 
 An org's real goal ("Priority One — Recco Battaglia blueprint initiative":
 5 mining recipes, all Industry members push Battaglia rep until a majority
@@ -29,7 +29,8 @@ commission board's "N can craft" is the same query) and its unlock path
 majority of members (optionally of a playstyle/role) holding each of a set
 of recipes, progress derived from the library table, so "PHASE TWO when the
 majority is ready" becomes a real bar; (3) the existing gather goal for the
-crafting phase (List / Gather already seed it). Design pending user call.
+crafting phase (List / Gather already seed it). Built same day, playstyle-
+scoped target as the user chose: [blueprint-readiness.md](blueprint-readiness.md).
 
 ### Blueprint library table 🔨 BUILT (unreleased)
 

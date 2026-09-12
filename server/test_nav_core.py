@@ -4743,6 +4743,27 @@ class BlueprintCommissionTests(unittest.TestCase):
         self.assertEqual(c["quality"], 640)           # weakest input rule
         self.assertTrue(any(s["value"] is not None for s in c["stat_preview"]))
 
+    def test_derive_unlock_progress_counts_scope_members(self):
+        # Unlock goal: recipes as lines, members as the count, over a scope.
+        spec = {"blueprints": ["A", "B"], "target": {"mode": "pct", "value": 50}, "playstyle": "mining"}
+        holders = {"A": ["1", "2", "9"], "B": ["1"]}       # "9" is out of scope
+        scope = ["1", "2", "3", "4"]                          # 4 miners → 50% = 2
+        p = nav_core.derive_unlock_progress(spec, holders, scope, {"A": "Alpha", "B": "Beta"})
+        self.assertEqual(p["needed"], 2); self.assertEqual(p["scope_size"], 4)
+        a, b = p["lines"]
+        self.assertEqual((a["name"], a["have"], a["needed"], a["pct"]), ("Alpha", 2, 2, 100.0))
+        self.assertEqual(a["missing"], ["3", "4"])
+        self.assertEqual((b["have"], b["short"]), (1, 1))
+        self.assertFalse(p["is_met"]); self.assertEqual(p["overall_pct"], 75.0)
+        self.assertEqual(p["per_contributor"][0], {"owner_id": "1", "qty": 2, "promised": 0})
+        # count mode, met
+        spec2 = {"blueprints": ["A"], "target": {"mode": "count", "value": 2}, "playstyle": None}
+        p2 = nav_core.derive_unlock_progress(spec2, holders, scope, {})
+        self.assertTrue(p2["is_met"]); self.assertEqual(p2["lines"][0]["name"], "A")
+        # pct rounds UP and never below 1; empty scope → needed 1
+        self.assertEqual(nav_core.derive_unlock_progress({"blueprints": ["A"], "target": {"mode": "pct", "value": 51}}, holders, ["1", "2", "3"])["needed"], 2)
+        self.assertEqual(nav_core.derive_unlock_progress({"blueprints": ["A"], "target": {"mode": "pct", "value": 10}}, holders, [])["needed"], 1)
+
     def test_craftable_respects_slot_quality_floor(self):
         # Clearcut-shaped: the slot demands Q800; a Q520 lot doesn't count,
         # an unrated one does (flagged), a Q900 one does.
