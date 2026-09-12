@@ -91,8 +91,10 @@ library at `#/blueprints`, #29)
   when a duplicate scan is clean (collisions are printed w/ ids and left for an
   admin — summing unseen is the irreversible move). `upsert_inventory(quality=)`
   / `get_holding(…, quality)` match on it; `InventoryIn`/`InventoryEditIn`/
-  `ContributeIn.quality` (`_QUALITY_MAX`; `_check_quality_kind` 400s it on
-  ship/item/component/gear — `_QUALITY_KINDS` commodity|blueprint + `custom:`).
+  `ContributeIn.quality` (`_QUALITY_MAX`; `_check_quality_kind` 400s it on a
+  SHIP only — `_QUALITY_KINDS` = everything else incl. item/component/gear,
+  widened 2026-09-12 because a crafted rifle is the same catalog item as a
+  bought one; frontend `invQualityApplies` = kind !== "ship").
   PATCH: quality edits in place ONLY while `db.allocation_count`==0 (409 →
   split/withdraw first: a re-rate under a goal moves its progress with no
   contribution event), and any edit landing on another lot's key 409s via

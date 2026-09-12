@@ -13045,7 +13045,7 @@ async function renderInventory() {
         `title="Adds to a matching lot (same item, place and quality). To set an exact amount, edit the row.">` +
       unitSelect("inv-unit", "") +
       `<input id="inv-quality" class="ti rm-qty" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
-        `title="Lot quality as the game shows it, 0–1000. Leave blank if unrated; station-bought is 0." style="display:none">` +
+        `title="Quality as the game shows it, 0–1000 (a mined lot's grade, or a crafted item's quality). Leave blank if unrated or shop-bought." style="display:none">` +
       `<span class="poi-pick" style="flex:1;min-width:140px"><input id="inv-loc" class="ti" maxlength="120" placeholder="location (optional)" autocomplete="off"></span>` +
       `<button class="ev-btn primary" id="inv-save">Log holding</button>` +
     `</div><span id="inv-msg" class="muted"></span></div>` +
@@ -13096,11 +13096,11 @@ async function logHolding() {
 }
 
 // --- lot quality (#151) ---
-// Which item classes carry a per-lot quality: mined/refined commodities (gems
-// included) and crafted items; a member-defined custom item is whatever they say.
-// Ships/equipment have a type-level grade instead — never a lot quality.
+// Which item classes carry a quality: everything but a ship — commodities
+// (lot quality), crafted items, and equipment/components/gear (a crafted rifle
+// is the same catalog item as a bought one, only with a quality; blank = bought).
 function invQualityApplies(it) {
-  return it.kind === "commodity" || it.kind === "blueprint" || String(it.item_id || "").startsWith("custom:");
+  return !!it && it.kind !== "ship";
 }
 // Blank = unrated (null), never 0: 0 is a real value (station-bought, not craftable).
 function invQualityValue(input) {

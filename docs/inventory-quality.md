@@ -61,7 +61,8 @@ virtual `blueprint` (marketplace only, `app.resolve_catalog_item`).
 |---|---|---|
 | **Commodity** (raw ore, refined, gem) | `quality` int 0–1000, nullable | The game's own scalar. **Null = unrated** (older rows, member didn't look); **0 = station-bought**. Band is *derived*, never stored. |
 | **Crafted item** (`blueprint:<key>`, or an `item:` with a blueprint link) | `crafted` JSON = the marketplace `CraftedIn` shape minus `band`: `{quality, stats[], inputs[]}` + `blueprint_key` | Same blob the listing already stores, pointed at a holding instead. "List this from my inventory" becomes a prefill. Band is derived (decision 3). |
-| **Ship / gear / component** | none | Equipment grade/class/size is a *type-level* property already joined at read time (`_item_spec`) and rendered in the holdings table. Not quality. |
+| **Equipment / component / gear** | `quality` int 0–1000, nullable | **Widened 2026-09-12 (dev-test):** a crafted P4-AR is the same catalog item as a bought one, only with a quality — so equipment takes the same field. Blank = shop-bought/unrated. Grade/class/size stay type-level (`_item_spec`). |
+| **Ship** | none | The one class with no quality. |
 
 **Derived, not stored — `subkind` on catalog rows:** `raw | refined | gem |
 crafted`. Raw vs refined are already separate UEX commodities
