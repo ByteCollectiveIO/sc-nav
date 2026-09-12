@@ -43,7 +43,7 @@ POI = os.path.join(REPO, "poi")
 
 ATTRIBUTION = "Game data: Star Citizen Wiki (api.star-citizen.wiki)"
 
-# Seconds between detail fetches — polite throttle for ~1,559 sequential calls
+# Seconds between detail fetches — polite throttle for ~1,600 sequential calls
 # against an endpoint with no stated rate limit.
 THROTTLE_S = 0.15
 
@@ -80,6 +80,70 @@ def _paged(path: str, **filt):
             break
         page += 1
     return out
+
+
+def _mission(uuid: str, gv: str, cache_dir: str | None):
+    """One mission's full record (giver / faction / reputation gate), cached
+    like a blueprint detail. Missions are shared across many blueprints (~250
+    distinct for ~1,600 recipes), so this is cheap after the first pass."""
+    path = None
+    if cache_dir:
+        path = os.path.join(cache_dir, f"mission.{uuid}.{gv}.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+    d = _get(f"/api/missions/{uuid}")["data"]
+    if path:
+        with open(path, "w") as f:
+            json.dump(d, f)
+        time.sleep(THROTTLE_S)
+    else:
+        time.sleep(THROTTLE_S)
+    return d
+
+
+_mission_memo: dict[str, dict] = {}
+
+
+def _unlock_entry(m: dict, chance: float, gv: str, cache_dir: str | None) -> dict:
+    """One unlocking mission → the structured unlock path the app renders and
+    an org can plan around: who gives it, the reputation standing it needs,
+    what it pays in reputation, where it's offered. Falls back to title-only
+    when the mission record can't be fetched (the old shape's information)."""
+    url = m.get("web_url") or ""
+    uuid = url.rstrip("/").split("/")[-1] if url else None
+    entry = {"title": m.get("title"), "chance": round((chance or 0) * 100)}
+    if not uuid:
+        return entry
+    entry["mission"] = uuid
+    try:
+        mm = _mission_memo.get(uuid) or _mission(uuid, gv, cache_dir)
+        _mission_memo[uuid] = mm
+    except Exception as e:  # noqa: BLE001 — keep the title, note the gap
+        print(f"  mission {uuid} fetch failed: {e}", file=sys.stderr)
+        return entry
+    fac = mm.get("faction")
+    entry["giver"] = mm.get("mission_giver") or (fac.get("name") if isinstance(fac, dict) else fac)
+    entry["faction"] = fac.get("name") if isinstance(fac, dict) else fac
+    entry["faction_type"] = mm.get("faction_type")
+    entry["mission_type"] = mm.get("mission_type")
+    rp = mm.get("reputation_prerequisite") or {}
+    ms = rp.get("min_standing") or {}
+    if ms.get("name"):
+        entry["rep_min"] = {"name": ms.get("name"), "pts": ms.get("min_reputation")}
+    gain = [g for g in (mm.get("reputation_gained") or []) if isinstance(g, dict)]
+    if gain:
+        entry["rep_gain"] = sum(int(g.get("amount") or 0) for g in gain)
+    if mm.get("star_systems"):
+        entry["systems"] = list(mm["star_systems"])[:4]
+    places = []
+    for blk in mm.get("starmap_locations") or []:
+        for loc in blk.get("locations") or []:
+            if loc.get("name") and loc["name"] not in places:
+                places.append(loc["name"])
+    if places:
+        entry["places"] = places[:6]
+    return entry
 
 
 def _detail(uuid: str, gv: str, cache_dir: str | None):
@@ -129,7 +193,7 @@ def _distill_mod(m: dict) -> dict | None:
             "mode": mode, "ranges": ranges}
 
 
-def distill(detail: dict) -> dict | None:
+def distill(detail: dict, gv: str = "", cache_dir: str | None = None) -> dict | None:
     """One API detail record → the compact committed shape (see the design doc,
     docs/blueprint-craft-commissions.md §4). Returns None for records with no
     usable aspects (nothing to craft)."""
@@ -166,13 +230,15 @@ def distill(detail: dict) -> dict | None:
         "default": bool(detail.get("is_available_by_default")),
         "aspects": aspects,
     }
+    # Structured unlock path (2026-09-12): each unlocking mission with its
+    # giver / faction / reputation gate / payout / where — so the library can
+    # group "Unlocked by" per faction and an org can plan reputation pushes.
     unlocks = []
     for g in detail.get("unlocking_missions_grouped") or []:
         for m in g.get("missions") or []:
-            pct = round((g.get("chance") or 0) * 100)
-            unlocks.append(f"{m.get('title')} ({pct}%)")
+            unlocks.append(_unlock_entry(m, g.get("chance"), gv, cache_dir))
     if unlocks:
-        rec["unlocks"] = unlocks[:8]
+        rec["unlocks"] = unlocks[:20]
     dis = detail.get("dismantle") or {}
     if dis.get("efficiency"):
         rec["dismantle"] = {"time_s": dis.get("time_seconds"), "eff": dis.get("efficiency")}
@@ -215,7 +281,7 @@ def main():
         if key in records:
             dup_keys.append(key)
             continue
-        rec = distill(d)
+        rec = distill(d, gv, args.cache)
         if rec is None:
             no_aspects.append(key)
             continue

@@ -53,6 +53,22 @@ seed note; the member can still edit every field.
 
 Grouped by category (collapsible), sortable columns Name · Maker · Size/Grade
 · Materials · Est. cost · Time · Craftable; text + category + material
-filters (same facet bar pattern as inventory); row expand = manifest w/ per
-slot have/need/quality + expected stats. Actions: Gather (existing) · List
-(new) · Remove.
+filters (same facet bar pattern as inventory). Materials in the row are
+**green** when the member's free stock covers them, red when short. Clicking
+a row opens the **recipe card** (a modal, `bpDetailModal`): identity line,
+time / est. cost / quality floor, the craftable verdict, materials vs free
+stock per slot, expected stats, and **Unlocked by** grouped per faction as an
+ordered list (lowest reputation gate first). Actions: Gather (existing) ·
+List (new) · Remove.
+
+## Unlock paths (feed change, 2026-09-12)
+
+`tools/sync_blueprints.py` now fetches each unlocking mission once
+(`/api/missions/<uuid>`, cached) and stores `unlocks` as structured entries:
+`{title, chance, mission, giver, faction, faction_type, mission_type,
+rep_min {name, pts}, rep_gain, systems[], places[]}` (cap 20). The old
+`"Title (100%)"` strings are still rendered by `bpUnlockObj`. Re-synced to
+4.10.0 the same day — that brought in the Recco Battaglia mining modules
+(Clearcut / Deluge / Overrun) and the ore pods (MISC Enhanced, GOLEM MC-4),
+which are the recipes an org's reputation push is about; see the "org
+blueprint readiness" proposal in the backlog.

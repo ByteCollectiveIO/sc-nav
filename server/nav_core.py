@@ -6205,7 +6205,11 @@ def craftable_from_holdings(bp: dict, holdings, resolve) -> dict:
             continue
         need = float(a.get("qty") if a.get("kind") == "item" else (a.get("scu") or 0.0)) or 0.0
         item = resolve(name)
-        lots = sorted(lots_by_item.get((item or {}).get("item_id"), []),
+        # A slot's quality floor (e.g. Clearcut: Iron ≥ Q800) rules lots out
+        # the same way a goal line's min_q does — unrated passes, flagged.
+        floor = int(a.get("min_q") or 0)
+        lots = sorted((l for l in lots_by_item.get((item or {}).get("item_id"), [])
+                       if lot_qualifies(l[0], floor)),
                       key=lambda l: (l[0] is None, -(l[0] or 0)))   # best first, unrated last
         have = sum(f for _, f in lots)
         ok = need <= 0 or have + 1e-9 >= need
@@ -6223,11 +6227,12 @@ def craftable_from_holdings(bp: dict, holdings, resolve) -> dict:
                 rated += take
         q_fill = int(round(w / rated)) if rated > 0 else None
         row = {"slot": slot, "input": name, "need": need, "have": have, "ok": ok,
-               "q": q_fill, "unrated": unrated, "assumed": q_fill is None}
+               "q": q_fill, "unrated": unrated, "assumed": q_fill is None,
+               **({"min_q": floor} if floor > 1 else {})}
         slots.append(row)
         qualities[slot] = q_fill if q_fill is not None else 500
         if need > 0:
-            n = int(have // need) if have >= need else 0
+            n = int((have + 1e-9) // need) if have + 1e-9 >= need else 0
             crafts = n if crafts is None else min(crafts, n)
         ok_all = ok_all and ok
     rated_qs = [r["q"] for r in slots if r["q"] is not None]

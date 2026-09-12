@@ -2234,9 +2234,18 @@
   .bp-group-h:not(.collapsed) .rm-caret { transform: rotate(90deg); color: var(--accent); }
   .bp-mats { font-size: 12px; }
   .bp-mat { white-space: nowrap; margin-right: 8px; }
+  .bp-mat.have { color: var(--good); }
   .bp-mat.short { color: var(--bad); }
   .bp-ok { color: var(--good); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .bp-detail { padding: 6px 4px 8px 22px; }
+  .bp-detail { padding: 2px 0 4px; }
+  dialog.bp-modal { width: min(720px, 94vw); max-height: 88vh; overflow: auto; }
+  .bp-modal-body { padding: 18px 22px 6px; }
+  .bp-modal-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--dim); align-items: center; }
+  .bp-unlock-grp { margin: 6px 0 8px; }
+  .bp-unlock-fac { font-size: 12px; font-weight: 600; color: var(--craft); letter-spacing: .4px; }
+  .bp-unlock-list { margin: 4px 0 0; padding-left: 22px; font-size: 13px; }
+  .bp-unlock-list li { margin: 3px 0; }
+  .bp-rep { color: var(--warn); font-size: 12px; }
   .bp-f-craft { font-size: 12px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   /* board search / sort / filter row */
   .mk-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
@@ -12506,7 +12515,7 @@ function goalCraftHead(g) {
       `<span class="muted">recipe data unavailable — this goal still tracks its saved materials.</span></div>`;
   }
   const unlocks = (c.unlocks && c.unlocks.length)
-    ? ` · unlock: ${esc(c.unlocks.slice(0, 2).join(", "))}` : (c.default ? " · unlocked by default" : "");
+    ? ` · unlock: ${esc(c.unlocks.slice(0, 2).map(bpUnlockTitle).join(", "))}` : (c.default ? " · unlocked by default" : "");
   const n = Number(c.qty) || 1;
   const mats = bpMatsCost(c, n);   // server sends est_cost per craft; scale by count
   return `<div class="rm-craft-head"><span class="rm-craft-t">⚒ Craft: ${n > 1 ? `${fmtQty(n)}× ` : ""}${esc(c.name)}</span>` +
@@ -13711,7 +13720,7 @@ function bpManifestHtml(bp, qty, reqByInput) {
   const unlock = bp.default
     ? `<div class="mk-bp-unlock">Blueprint unlocked by default — any crafter can take this.</div>`
     : `<div class="mk-bp-unlock"><b>Blueprint must be unlocked</b>${(bp.unlocks || []).length
-        ? " via: " + bp.unlocks.map(esc).join(" · ") : ""}.</div>`;
+        ? " via: " + bp.unlocks.map(u => esc(bpUnlockTitle(u))).join(" · ") : ""}.</div>`;
   return `<div class="mk-bp-sect">Materials bill${n > 1 ? ` · ×${fmtQty(n)}` : ""}</div>` +
     `<table class="mk-bp-tbl">${rows}</table>` +
     `<div class="mk-bp-meta" style="margin-top:6px">Craft time: ${time}${bpMatsCost(bp, n)}</div>` + unlock;
@@ -20570,6 +20579,35 @@ async function loadMyBlueprints() {
   renderMyBlueprints(list);
 }
 
+// Unlock entries: the feed now carries {title, chance, giver, faction,
+// rep_min{name,pts}, rep_gain, systems, places}; a pre-2026-09 feed carried
+// "Title (100%)" strings — both render.
+function bpUnlockObj(u) {
+  if (u && typeof u === "object") return u;
+  const m = /^(.*?)\s*\((\d+)%\)\s*$/.exec(String(u || ""));
+  return m ? { title: m[1], chance: Number(m[2]) } : { title: String(u || "") };
+}
+function bpUnlockTitle(u) { return bpUnlockObj(u).title || ""; }
+// "Unlocked by", grouped per faction (the org's rep push is per faction), each
+// group an ordered list: lowest reputation gate first, then best chance.
+function bpUnlocksHtml(unlocks, dflt) {
+  const list = (unlocks || []).map(bpUnlockObj);
+  if (!list.length) return dflt ? `<p class="muted">Everyone has this recipe by default.</p>` : "";
+  const groups = new Map();
+  list.forEach(u => { const k = u.faction || u.giver || "Unknown giver"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(u); });
+  return [...groups].map(([fac, us]) => {
+    us.sort((a, b) => ((a.rep_min && a.rep_min.pts) || 0) - ((b.rep_min && b.rep_min.pts) || 0) || (b.chance || 0) - (a.chance || 0));
+    const ft = us[0].faction_type ? ` <span class="muted">· ${esc(us[0].faction_type)}</span>` : "";
+    return `<div class="bp-unlock-grp"><div class="bp-unlock-fac">${esc(fac)}${ft}</div><ol class="bp-unlock-list">` +
+      us.map(u => `<li><b>${esc(u.title)}</b>` +
+        (u.chance != null && u.chance < 100 ? ` <span class="muted">${Number(u.chance)}% drop</span>` : "") +
+        (u.rep_min ? ` <span class="bp-rep" title="reputation standing needed with ${esc(fac)}">needs ${esc(u.rep_min.name)}${u.rep_min.pts ? ` (${Number(u.rep_min.pts).toLocaleString()} rep)` : ""}</span>` : ` <span class="muted">no standing needed</span>`) +
+        (u.rep_gain ? ` <span class="muted">· +${Number(u.rep_gain).toLocaleString()} rep</span>` : "") +
+        (u.systems && u.systems.length ? ` <span class="muted">· ${u.systems.map(esc).join(", ")}${u.places && u.places.length ? ` (${u.places.slice(0, 3).map(esc).join(", ")})` : ""}</span>` : "") +
+        `</li>`).join("") + `</ol></div>`;
+  }).join("");
+}
+
 // --- library table (docs/blueprint-library.md) ---
 // Grouped by category, sortable, filterable; each row expands to the
 // materials bill with have/need per slot off the member's free stock and the
@@ -20611,17 +20649,16 @@ function bpLibRowHtml(r) {
   const c = r.craft;
   const mats = (r.inputs || []).map(i => {
     const sl = c && (c.slots || []).find(s => s.input === i.input);
-    const short = sl && !sl.ok;
-    return `<span class="bp-mat ${short ? "short" : ""}" title="${short ? `have ${fmtQty(sl.have)} of ${fmtQty(sl.need)} ${esc(i.unit)}` : esc(i.unit)}">` +
+    const short = sl && !sl.ok, have = sl && sl.ok;
+    return `<span class="bp-mat ${short ? "short" : have ? "have" : ""}" title="${sl ? `have ${fmtQty(sl.have)} of ${fmtQty(sl.need)} ${esc(i.unit)}` : esc(i.unit)}">` +
       `${esc(i.input)} <span class="muted">${fmtQty(i.need)}</span></span>`;
   }).join(" ");
   const sg = [r.size ? "S" + esc(String(r.size)) : "", r.grade ? esc(String(r.grade)) : "", r.cls ? esc(String(r.cls)) : ""].filter(Boolean).join(" · ");
   const cost = r.est_cost && r.est_cost.total ? `${Number(r.est_cost.total).toLocaleString()}` +
     ((r.est_cost.unpriced || []).length ? `<span class="muted" title="unpriced: ${esc(r.est_cost.unpriced.join(", "))}">+</span>` : "") : "—";
   const minq = r.max_min_q > 1 ? ` <span class="rm-minq" title="needs materials at quality ${r.max_min_q} or better">≥Q${r.max_min_q}</span>` : "";
-  const open = !!bpLibState.open[r.blueprint_key];
-  return `<tr class="rm-inv-row bp-row ${open ? "open" : ""}" data-key="${esc(r.blueprint_key)}" aria-expanded="${open}">` +
-    `<td><span class="rm-caret" aria-hidden="true">▸</span><b>${esc(r.name)}</b>${minq}` +
+  return `<tr class="rm-inv-row bp-row" data-key="${esc(r.blueprint_key)}" title="open the recipe card">` +
+    `<td><b>${esc(r.name)}</b>${minq}` +
       `${r.available ? "" : ` <span class="muted">· recipe unavailable</span>`}` +
       `${r.default ? ` <span class="muted" title="everyone has this recipe">default</span>` : ""}</td>` +
     `<td>${r.manufacturer ? esc(r.manufacturer) : ""}</td>` +
@@ -20633,23 +20670,57 @@ function bpLibRowHtml(r) {
     `<td class="inv-actions">` +
       `<a class="ev-btn" href="#/goals/new" data-bpseed="${esc(r.blueprint_key)}" title="gather this recipe's materials">🎯 Gather</a>` +
       (c && c.ok ? `<button class="ev-btn primary" data-bplist="${esc(r.blueprint_key)}" title="post a crafted ${esc(r.name)} on the marketplace at the quality you can make">List</button>` : "") +
-      `<button class="ev-btn danger" data-bpdel="${esc(r.blueprint_key)}">Remove</button></td></tr>` +
-    `<tr class="rm-inv-detail" data-d="${esc(r.blueprint_key)}"${open ? "" : " hidden"}><td colspan="8">${bpLibDetailHtml(r)}</td></tr>`;
+      `<button class="ev-btn danger" data-bpdel="${esc(r.blueprint_key)}">Remove</button></td></tr>`;
+}
+// The recipe card (modal): identity, materials vs your free stock, expected
+// stats, and the unlock path grouped per faction.
+let _bpModalEl = null;
+function bpDetailModal(r) {
+  let dlg = _bpModalEl;
+  if (!dlg) {
+    dlg = _bpModalEl = document.createElement("dialog");
+    dlg.className = "confirm bp-modal";
+    dlg.innerHTML = `<form method="dialog" class="confirm-form"><div class="confirm-body bp-modal-body"></div>` +
+      `<menu class="confirm-actions"><button value="ok" class="confirm-cancel">Close</button></menu></form>`;
+    document.body.appendChild(dlg);
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+  }
+  const sg = [r.cat, r.manufacturer, r.size ? "S" + r.size : "", r.grade ? "Grade " + r.grade : "", r.cls].filter(Boolean).map(esc).join(" · ");
+  const cost = r.est_cost && r.est_cost.total ? `${Number(r.est_cost.total).toLocaleString()} aUEC` +
+    ((r.est_cost.unpriced || []).length ? ` <span class="muted">(+ unpriced: ${esc(r.est_cost.unpriced.join(", "))})</span>` : "") : "—";
+  const c = r.craft;
+  const verdict = c ? (c.ok
+    ? `<span class="bp-ok">✓ craftable now ×${c.crafts}</span>${c.quality == null ? ` <span class="muted">· quality unrated</span>` : ` · ${invQualityChip(c.quality)} <span class="muted">weakest input</span>`}`
+    : `<span class="muted">${(c.slots || []).filter(s => s.ok).length}/${(c.slots || []).length} materials in your free stock</span>`) : "";
+  dlg.querySelector(".bp-modal-body").innerHTML =
+    `<h2 class="confirm-title">${esc(r.name)}</h2>` +
+    `<div class="muted" style="margin-bottom:8px">${sg}</div>` +
+    `<div class="bp-modal-meta"><span>⏱ ${bpFmtTime(r.time_s)}</span><span>mats ≈ ${cost}</span>` +
+      (r.max_min_q > 1 ? `<span class="rm-minq" style="margin:0">≥Q${r.max_min_q} materials</span>` : "") +
+      (r.default ? `<span class="muted">default recipe</span>` : "") + `</div>` +
+    (verdict ? `<div style="margin:6px 0 10px">${verdict}</div>` : "") +
+    bpLibDetailHtml(r) +
+    `<div class="mk-craft-h" style="margin-top:10px">Unlocked by</div>` + bpUnlocksHtml(r.unlocks, r.default);
+  dlg.setAttribute("aria-label", r.name || "Recipe");
+  dlg.showModal();
+  dlg.querySelector(".confirm-cancel").focus();
 }
 function bpLibDetailHtml(r) {
   const c = r.craft;
   const slots = c ? c.slots.map(sl =>
     `<tr><td>${esc(sl.slot)} <span class="muted">(${esc(sl.input)})</span></td>` +
-    `<td class="${sl.ok ? "" : "rm-low"}">${fmtQty(sl.have)} / ${fmtQty(sl.need)}${sl.ok ? " ✓" : " short"}</td>` +
+    `<td class="${sl.ok ? "" : "rm-low"}">${fmtQty(sl.have)} / ${fmtQty(sl.need)}${sl.ok ? " ✓" : " short"}` +
+      `${sl.min_q ? ` <span class="rm-minq" title="only lots at Q${sl.min_q} or better count">≥Q${sl.min_q}</span>` : ""}</td>` +
     `<td>${sl.assumed ? `<span class="muted">${sl.ok ? "unrated stock — assuming base Q500" : "—"}</span>`
       : `${invQualityChip(sl.q)}${sl.unrated > 0 ? ` <span class="muted">+ ${fmtQty(sl.unrated)} unrated</span>` : ""}`}</td></tr>`).join("") : "";
   const stats = c && (c.stat_preview || []).length ? c.stat_preview.map(s =>
     `<tr><td>${esc(s.prop)}</td><td>${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td></tr>`).join("") : "";
-  const unlocks = (r.unlocks || []).length ? `<div class="muted" style="margin-top:6px">Unlocked by: ${r.unlocks.map(esc).join(" · ")}</div>` : "";
-  return `<div class="bp-detail">` +
+  const mats = !c && (r.inputs || []).length ? `<div class="mk-craft-h">Materials per craft</div><table class="mk-craft-tbl">` +
+    r.inputs.map(i => `<tr><td>${esc(i.input)}</td><td>${fmtQty(i.need)} ${esc(i.unit)}</td></tr>`).join("") + `</table>` : "";
+  return `<div class="bp-detail">` + mats +
     (slots ? `<div class="mk-craft-h">Your free stock vs. one craft</div><table class="mk-craft-tbl">${slots}</table>` : "") +
     (stats ? `<div class="mk-craft-h" style="margin-top:8px">Expected stats with that stock — estimates</div><table class="mk-craft-tbl">${stats}</table>` : "") +
-    unlocks + `</div>`;
+    `</div>`;
 }
 function renderMyBlueprints(list) {
   const el = $("mybp-list");
@@ -20707,7 +20778,8 @@ function renderBpLibTable() {
   }, "button"));
   t.querySelectorAll(".bp-row").forEach(tr => clickable(tr, (e) => {
     if (e && e.target && e.target.closest(".inv-actions")) return;
-    st.open[tr.dataset.key] = !st.open[tr.dataset.key]; renderBpLibTable();
+    const r = bpLib.find(x => x.blueprint_key === tr.dataset.key);
+    if (r) bpDetailModal(r);
   }, "button"));
   t.querySelectorAll("[data-bpdel]").forEach(b => {
     b.onclick = async (e) => {
