@@ -23,8 +23,10 @@ pods; then Phase Two, mass production."* Three things make that trackable:
 
 - `goals.kind` = `materials` (default, unchanged) | `unlock`.
 - `goals.unlock_spec` JSON: `{blueprints: [key…], target: {mode: "count"|"pct",
-  value: n}, playstyle: tag|null}` (`UnlockSpecIn`; 1–20 recipes that resolve
-  in the feed; tag from `PLAYSTYLE_TAGS` or null = every member).
+  value: n}, playstyles: [tag…]}` (`UnlockSpecIn`; 1–20 recipes that resolve
+  in the feed; tags from `PLAYSTYLE_TAGS`, a member is in scope when they
+  carry ANY of them — pick several to cover a division; empty = every
+  member. The single `playstyle` older goals stored is still read).
 - Progress = `nav_core.derive_unlock_progress(spec, holders_by_key, scope)`:
   scope = members carrying the tag (or all members); per recipe `have` =
   scope members whose library holds it, `needed` = the count, or
