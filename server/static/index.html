@@ -2228,6 +2228,8 @@
   .mk-lot-btn.on { border-color: var(--accent); color: var(--accent); }
   /* Blueprint library table (docs/blueprint-library.md) */
   .bp-table th.bp-sort { cursor: pointer; user-select: none; }
+  .bp-name-btn { background: none; border: 0; padding: 0; font: inherit; font-weight: 700; color: var(--text); cursor: pointer; text-align: left; }
+  .bp-name-btn:hover, .bp-name-btn:focus-visible { color: var(--accent); outline: none; text-decoration: underline; }
   .bp-table th.bp-sort:hover { color: var(--accent); }
   .bp-group-h td { background: var(--panel2); font-weight: 600; font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--dim); cursor: pointer; }
   .bp-group-h.collapsed .rm-caret { transform: none; }
@@ -2241,11 +2243,16 @@
   dialog.bp-modal { width: min(720px, 94vw); max-height: 88vh; overflow: auto; }
   .bp-modal-body { padding: 18px 22px 6px; }
   .bp-modal-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--dim); align-items: center; }
-  .bp-unlock-grp { margin: 6px 0 8px; }
-  .bp-unlock-fac { font-size: 12px; font-weight: 600; color: var(--craft); letter-spacing: .4px; }
-  .bp-unlock-list { margin: 4px 0 0; padding-left: 22px; font-size: 13px; }
-  .bp-unlock-list li { margin: 3px 0; }
-  .bp-rep { color: var(--warn); font-size: 12px; }
+  /* Recipe-card tables: quiet headers, dim group rows, numbers right-aligned. */
+  .bp-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .bp-tbl th { text-align: left; font-size: 10.5px; font-weight: 600; color: var(--dim); letter-spacing: .5px;
+    text-transform: uppercase; padding: 4px 8px 5px 0; border-bottom: 1px solid var(--border); }
+  .bp-tbl td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top; color: var(--text); }
+  .bp-tbl th.num, .bp-tbl td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bp-tbl .bp-tbl-grp td { padding-top: 8px; font-size: 12px; font-weight: 600; letter-spacing: .3px; color: var(--craft); border-bottom: 0; }
+  .bp-easiest { margin: 0 0 8px; font-size: 13px; }
+  .bp-tbl .bp-have-ok { color: var(--good); }
+  .bp-modal .mk-craft-h { margin-top: 12px; }
   .bp-f-craft { font-size: 12px; color: var(--dim); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   /* Org readiness + unlock goals (docs/blueprint-readiness.md) */
   .bpr-selcol { width: 28px; }
@@ -12644,9 +12651,11 @@ function goalSourceOptionsHtml(g, itemId) {
   // Qualifying lots first (then by free stock), under-floor ones last + flagged.
   const holds = goalSourceHoldings(g, itemId).slice().sort((a, b) =>
     (lotQualifies(b.quality, minq) - lotQualifies(a.quality, minq)) || (b.available - a.available));
-  const best = holds.find(h => h.available > 0 && lotQualifies(h.quality, minq)) || holds[0];
+  // Default to a stash only when it can actually give something; otherwise
+  // the pledge option — a 0-free default was a guaranteed server refusal.
+  const best = holds.find(h => h.available > 0 && lotQualifies(h.quality, minq)) || holds.find(h => h.available > 0) || null;
   return holds.map(h =>
-      `<option value="hold:${h.id}"${h === best ? " selected" : ""}>` +
+      `<option value="hold:${h.id}"${h === best ? " selected" : ""}${h.available > 0 ? "" : " disabled"}>` +
       `${lotQualifies(h.quality, minq) ? "📍" : "⚠"} ${esc(h.location || "no location")}` +
       `${h.quality === null || h.quality === undefined ? (minq ? " · unrated" : "") : ` · Q${Number(h.quality)}`}` +
       `${lotQualifies(h.quality, minq) ? "" : ` (below Q${minq})`}` +
@@ -13346,19 +13355,21 @@ async function renderInvOrg() {
 // columns as My holdings); each row expands to its per-owner + per-location
 // breakdown. `i` indexes the CURRENT filtered list, matched by wireInvOrg.
 function invOrgTableHtml(rows) {
+  const cols = invSpecColsFor(rows);
+  const span = 3 + cols.length;
   const body = rows.map((it, i) =>
     `<tr class="rm-inv-row" data-i="${i}" aria-expanded="false">` +
     `<td><span class="rm-caret" aria-hidden="true">▸</span><b>${esc(it.name)}</b></td>` +
-    invSpecCells(it.spec) +
+    invSpecCells(it.spec, cols) +
     `<td class="num">${fmtQty(it.total)} ${esc(it.unit || "")}</td>` +
     `<td class="num">${it.holders}</td></tr>` +
-    `<tr class="rm-inv-detail" data-d="${i}" hidden><td colspan="8"><div class="rm-breakdown">` +
+    `<tr class="rm-inv-detail" data-d="${i}" hidden><td colspan="${span}"><div class="rm-breakdown">` +
       it.by_owner.map(o => `<span>${esc(o.display_name)}: ${fmtQty(o.qty)}</span>`).join("") +
     `</div><div class="rm-breakdown" style="margin-top:6px;opacity:.8">` +
       it.by_location.map(l => `<span>📍 ${esc(l.location)}: ${fmtQty(l.qty)}</span>`).join("") +
     `</div>` + invOrgQualityHtml(it) + `</td></tr>`).join("");
   return `<table class="inv-table"><thead><tr>` +
-    `<th>Item</th><th>Category</th><th>Size</th><th>Class</th><th>Grade</th><th>Maker</th>` +
+    `<th>Item</th>${invSpecHeads(cols)}` +
     `<th class="num">Total</th><th class="num">Holders</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
@@ -13521,26 +13532,34 @@ function wireInvFilters() {
 
 // The five characteristic columns, shared by both tables — blank cells when the
 // item has no spec (commodities/ships).
-function invSpecCells(spec) {
+// Which characteristic columns a set of rows actually populates — an ore-only
+// ledger gets no Category/Size/Class/Grade/Maker columns at all, so Qty sits
+// next to Item instead of five blanks away.
+const INV_SPEC_COLS = [["category", "Category"], ["size", "Size"], ["class", "Class"], ["grade", "Grade"], ["manufacturer", "Maker"]];
+function invSpecColsFor(rows) {
+  return INV_SPEC_COLS.filter(([k]) => rows.some(r => r.spec && r.spec[k]));
+}
+function invSpecHeads(cols) { return cols.map(([, l]) => `<th>${l}</th>`).join(""); }
+function invSpecCells(spec, cols) {
   spec = spec || {};
-  return `<td>${spec.category ? `<span class="inv-cat">${esc(spec.category)}</span>` : ""}</td>` +
-    `<td class="inv-dim">${spec.size ? "S" + esc(spec.size) : ""}</td>` +
-    `<td class="inv-dim">${spec.class ? esc(spec.class) : ""}</td>` +
-    `<td class="inv-dim">${spec.grade ? esc(spec.grade) : ""}</td>` +
-    `<td class="inv-dim">${spec.manufacturer ? esc(spec.manufacturer) : ""}</td>`;
+  return (cols || INV_SPEC_COLS).map(([k]) =>
+    k === "category" ? `<td>${spec.category ? `<span class="inv-cat">${esc(spec.category)}</span>` : ""}</td>`
+    : k === "size" ? `<td class="inv-dim">${spec.size ? "S" + esc(spec.size) : ""}</td>`
+    : `<td class="inv-dim">${spec[k] ? esc(spec[k]) : ""}</td>`).join("");
 }
 
 // My holdings as a columnar table. The item cell also carries any note + goal
 // commitments (parent→child) so a holding stays one row; qty shows the free
 // remainder when some is committed.
 function invMineTableHtml(rows) {
-  const body = rows.map(invMineRowHtml).join("");
+  const cols = invSpecColsFor(rows);
+  const body = rows.map(r => invMineRowHtml(r, cols)).join("");
   return `<table class="inv-table"><thead><tr>` +
-    `<th>Item</th><th>Quality</th><th>Category</th><th>Size</th><th>Class</th><th>Grade</th><th>Maker</th>` +
+    `<th>Item</th><th>Quality</th>${invSpecHeads(cols)}` +
     `<th class="num">Qty</th><th>Location</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
-function invMineRowHtml(r) {
+function invMineRowHtml(r, cols) {
   const unit = esc(r.unit || "");
   const committed = Number(r.committed) || 0;
   const short = Number(r.short) || 0;
@@ -13551,7 +13570,7 @@ function invMineRowHtml(r) {
       `${fmtQty(r.available)} free</span> · ${fmtQty(committed)} promised</div>` : "";
   const gathering = short > 0
     ? `<div class="rm-short" title="committed beyond what you've logged">⏳ ${fmtQty(short)} to gather</div>` : "";
-  const note = r.note ? `<div class="muted inv-note">— ${esc(r.note)}</div>` : "";
+  const note = r.note ? `<div class="muted inv-note">${esc(r.note)}</div>` : "";
   const allocs = (r.allocations || []).map(a =>
     `<div class="rm-mine-alloc">↳ ${fmtQty(a.qty)} ${unit} → ` +
     `${a.goal_title ? esc(a.goal_title) : "goal #" + a.goal_id}` +
@@ -13563,7 +13582,7 @@ function invMineRowHtml(r) {
   return `<tr class="rm-mine-row" data-id="${r.id}">` +
     `<td><b>${esc(r.item_name)}</b>${note}${allocs}</td>` +
     `<td>${invQualityChip(r.quality)}</td>` +
-    invSpecCells(r.spec) +
+    invSpecCells(r.spec, cols) +
     `<td class="num">${fmtQty(r.qty)} ${unit}${free}${gathering}</td>` +
     `<td class="inv-loc">${r.location ? `📍 ${esc(r.location)}` : ""}</td>` +
     `<td class="inv-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
@@ -13625,8 +13644,9 @@ function openInvEdit(id) {
       `value="${r.quality === null || r.quality === undefined ? "" : Number(r.quality)}"` +
       (pledged ? ` disabled title="This lot backs goal contributions — use Split to re-rate the free part, or withdraw them first."` : ` title="Quality 0–1000; blank = unrated"`) + `></label>`
     : "";
+  const span = rowEl.closest("table").querySelectorAll("thead th").length;
   rowEl.innerHTML =
-    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap;align-items:flex-end">` +
+    `<td colspan="${span}"><div class="rm-row" style="flex-wrap:wrap;align-items:flex-end">` +
       `<span class="rm-edit-item"><b>${esc(r.item_name)}</b></span>` +
       `<label class="rm-e-f"><span>Qty</span><input class="ti rm-qty rm-e-qty" type="number" min="0" step="any" value="${fmtQty(r.qty)}"></label>` +
       `<label class="rm-e-f"><span>Unit</span>${unitSelect("rm-e-unit", r.unit)}</label>` + qualityField +
@@ -13666,8 +13686,9 @@ function openInvSplit(id) {
   const rowEl = $("inv-body").querySelector(`.rm-mine-row[data-id="${id}"]`);
   if (!r || !rowEl) return;
   const free = Number(r.available) || 0;
+  const span = rowEl.closest("table").querySelectorAll("thead th").length;
   rowEl.innerHTML =
-    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap;align-items:flex-end">` +
+    `<td colspan="${span}"><div class="rm-row" style="flex-wrap:wrap;align-items:flex-end">` +
       `<span class="rm-edit-item"><b>${esc(r.item_name)}</b> <span class="muted">split off</span></span>` +
       `<label class="rm-e-f"><span>Qty to move</span><input class="ti rm-qty rm-s-qty" type="number" min="0" max="${free}" step="any" placeholder="amount" ` +
         `title="up to ${fmtQty(free)} ${esc(r.unit || "")} free (pledged stock stays put)"></label>` +
@@ -20786,17 +20807,39 @@ function bpUnlocksHtml(unlocks, dflt) {
   if (!list.length) return dflt ? `<p class="muted">Everyone has this recipe by default.</p>` : "";
   const groups = new Map();
   list.forEach(u => { const k = u.faction || u.giver || "Unknown giver"; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(u); });
-  return [...groups].map(([fac, us]) => {
-    us.sort((a, b) => ((a.rep_min && a.rep_min.pts) || 0) - ((b.rep_min && b.rep_min.pts) || 0) || (b.chance || 0) - (a.chance || 0));
+  // The answer first: the easiest path = lowest reputation gate, then best
+  // chance, then highest rep payout. Then one quiet table — a faction header
+  // row per group (carrying the location when every mission shares it),
+  // missions beneath, lowest gate first; empty cells stay empty.
+  const gate = u => (u.rep_min && u.rep_min.pts) || 0;
+  const whereOf = u => {
+    const sys = (u.systems && u.systems.length) ? u.systems.join(", ") : "";
+    const places = (u.places || []).filter(pl => !(u.systems || []).includes(pl) && !/ System$/.test(pl)).slice(0, 2);
+    return { sys, places, key: sys + "|" + places.join(",") };
+  };
+  const easiest = list.slice().sort((a, b) => gate(a) - gate(b) || (b.chance || 0) - (a.chance || 0) || (b.rep_gain || 0) - (a.rep_gain || 0))[0];
+  const ew = whereOf(easiest);
+  const lead = `<p class="bp-easiest">Easiest path: <b>${esc(easiest.title)}</b> <span class="muted">· ${esc(easiest.faction || easiest.giver || "")}` +
+    ` · ${easiest.rep_min ? `needs ${esc(easiest.rep_min.name)}` : "no standing needed"}` +
+    `${easiest.chance != null && easiest.chance < 100 ? ` · ${Number(easiest.chance)}% drop` : ""}` +
+    `${ew.sys ? ` · ${esc(ew.sys)}${ew.places.length ? ` (${ew.places.map(esc).join(", ")})` : ""}` : ""}</span></p>`;
+  if (list.length === 1) return lead;
+  const body = [...groups].map(([fac, us]) => {
+    us.sort((a, b) => gate(a) - gate(b) || (b.chance || 0) - (a.chance || 0));
     const ft = us[0].faction_type ? ` <span class="muted">· ${esc(us[0].faction_type)}</span>` : "";
-    return `<div class="bp-unlock-grp"><div class="bp-unlock-fac">${esc(fac)}${ft}</div><ol class="bp-unlock-list">` +
-      us.map(u => `<li><b>${esc(u.title)}</b>` +
-        (u.chance != null && u.chance < 100 ? ` <span class="muted">${Number(u.chance)}% drop</span>` : "") +
-        (u.rep_min ? ` <span class="bp-rep" title="reputation standing needed with ${esc(fac)}">needs ${esc(u.rep_min.name)}${u.rep_min.pts ? ` (${Number(u.rep_min.pts).toLocaleString()} rep)` : ""}</span>` : ` <span class="muted">no standing needed</span>`) +
-        (u.rep_gain ? ` <span class="muted">· +${Number(u.rep_gain).toLocaleString()} rep</span>` : "") +
-        (u.systems && u.systems.length ? ` <span class="muted">· ${u.systems.map(esc).join(", ")}${u.places && u.places.length ? ` (${u.places.slice(0, 3).map(esc).join(", ")})` : ""}</span>` : "") +
-        `</li>`).join("") + `</ol></div>`;
+    const wheres = us.map(whereOf);
+    const shared = wheres.every(w => w.key === wheres[0].key) && wheres[0].sys ? wheres[0] : null;
+    const head = `<tr class="bp-tbl-grp"><td colspan="4">${esc(fac)}${ft} <span class="muted">· ${us.length} missions` +
+      `${shared ? ` · ${esc(shared.sys)}${shared.places.length ? ` (${shared.places.map(esc).join(", ")})` : ""}` : ""}</span></td></tr>`;
+    return head + us.map((u, i) => {
+      const w = wheres[i];
+      return `<tr><td>${esc(u.title)}${u.chance != null && u.chance < 100 ? ` <span class="muted">${Number(u.chance)}%</span>` : ""}</td>` +
+        `<td>${u.rep_min ? `${esc(u.rep_min.name)}${u.rep_min.pts ? ` <span class="muted">${Number(u.rep_min.pts).toLocaleString()}</span>` : ""}` : ""}</td>` +
+        `<td class="num">${u.rep_gain ? `+${Number(u.rep_gain).toLocaleString()}` : ""}</td>` +
+        `<td>${shared ? "" : `${esc(w.sys)}${w.places.length ? ` <span class="muted">· ${w.places.map(esc).join(", ")}</span>` : ""}`}</td></tr>`;
+    }).join("");
   }).join("");
+  return lead + `<table class="bp-tbl"><thead><tr><th>Mission</th><th>Standing needed</th><th class="num">Rep</th><th>Where</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function bpScopeSeg() {
@@ -20881,9 +20924,10 @@ function renderBpReadyTable() {
   const total = bpReady.members_total || 0;
   const row = (r) => {
     const gate = r.min_standing ? (r.min_standing.pts ? `${esc(r.min_standing.name)} <span class="muted">(${Number(r.min_standing.pts).toLocaleString()})</span>` : `<span class="muted">none</span>`) : (r.default ? `<span class="muted">default</span>` : `<span class="muted">—</span>`);
-    return `<tr class="rm-inv-row bpr-row ${bpReadySel.has(r.key) ? "sel" : ""}" data-key="${esc(r.key)}" title="open the recipe card">` +
+    return `<tr class="bpr-row ${bpReadySel.has(r.key) ? "sel" : ""}" data-key="${esc(r.key)}">` +
       `<td class="bpr-selcol"><input type="checkbox" class="bpr-chk" data-key="${esc(r.key)}"${bpReadySel.has(r.key) ? " checked" : ""} aria-label="select ${esc(r.name)}"></td>` +
-      `<td><b>${esc(r.name)}</b>${r.size || r.grade ? ` <span class="inv-dim">${[r.size ? "S" + r.size : "", r.grade].filter(Boolean).map(esc).join(" · ")}</span>` : ""}</td>` +
+      `<td><button type="button" class="bp-name-btn bpr-open" data-key="${esc(r.key)}" title="open the recipe card">${esc(r.name)}</button>` +
+        `${r.size || r.grade ? ` <span class="inv-dim">${[r.size ? "S" + r.size : "", r.grade].filter(Boolean).map(esc).join(" · ")}</span>` : ""}</td>` +
       `<td>${r.manufacturer ? esc(r.manufacturer) : ""}</td>` +
       `<td>${(r.factions || []).length ? r.factions.map(esc).join(", ") : (r.default ? `<span class="muted">everyone</span>` : `<span class="muted">unknown</span>`)}</td>` +
       `<td class="num">${gate}</td>` +
@@ -20891,7 +20935,7 @@ function renderBpReadyTable() {
   };
   const body = [...groups].map(([cat, rs]) => {
     const c = !!st.collapsed[cat];
-    return `<tbody class="bp-group"><tr class="bp-group-h ${c ? "collapsed" : ""}" data-cat="${esc(cat)}"><td colspan="6">` +
+    return `<tbody class="bp-group"><tr class="bp-group-h ${c ? "collapsed" : ""}" data-cat="${esc(cat)}" aria-expanded="${!c}"><td colspan="6">` +
       `<span class="rm-caret" aria-hidden="true">▸</span>${esc(cat)} <span class="muted">· ${rs.length}</span></td></tr>` +
       (c ? "" : rs.map(row).join("")) + `</tbody>`;
   }).join("");
@@ -20908,10 +20952,7 @@ function renderBpReadyTable() {
     if (cb.checked) bpReadySel.add(cb.dataset.key); else bpReadySel.delete(cb.dataset.key);
     cb.closest("tr").classList.toggle("sel", cb.checked); syncBpSelBar();
   });
-  t.querySelectorAll(".bpr-row").forEach(tr => clickable(tr, (e) => {
-    if (e && e.target && e.target.closest(".bpr-selcol")) return;
-    openReadinessCard(tr.dataset.key);
-  }, "button"));
+  t.querySelectorAll(".bpr-open").forEach(b => b.onclick = () => openReadinessCard(b.dataset.key));
   syncBpSelBar();
 }
 function syncBpSelBar() {
@@ -21019,7 +21060,7 @@ function bpDetailModal(r) {
     ? `<span class="bp-ok">✓ craftable now ×${c.crafts}</span>${c.quality == null ? ` <span class="muted">· quality unrated</span>` : ` · ${invQualityChip(c.quality)} <span class="muted">weakest input</span>`}`
     : `<span class="muted">${(c.slots || []).filter(s => s.ok).length}/${(c.slots || []).length} materials in your free stock</span>`) : "";
   dlg.querySelector(".bp-modal-body").innerHTML =
-    `<h2 class="confirm-title">${esc(r.name)}</h2>` +
+    `<h2 class="confirm-title" id="bp-modal-title" tabindex="-1">${esc(r.name)}</h2>` +
     `<div class="muted" style="margin-bottom:8px">${sg}</div>` +
     `<div class="bp-modal-meta"><span>⏱ ${bpFmtTime(r.time_s)}</span><span>mats ≈ ${cost}</span>` +
       (r.max_min_q > 1 ? `<span class="rm-minq" style="margin:0">≥Q${r.max_min_q} materials</span>` : "") +
@@ -21028,25 +21069,43 @@ function bpDetailModal(r) {
     (r.holders_line ? `<div class="muted" style="margin:4px 0 10px">👥 ${esc(r.holders_line)}</div>` : "") +
     bpLibDetailHtml(r) +
     `<div class="mk-craft-h" style="margin-top:10px">Unlocked by</div>` + bpUnlocksHtml(r.unlocks, r.default);
-  dlg.setAttribute("aria-label", r.name || "Recipe");
+  dlg.setAttribute("aria-labelledby", "bp-modal-title");
   dlg.showModal();
-  dlg.querySelector(".confirm-cancel").focus();
+  dlg.querySelector("#bp-modal-title").focus();   // readers announce the recipe, not "Close"
 }
+// Materials, one row per MATERIAL (a material feeding two slots is one line):
+// slots it fills · needed per craft · currently held (the member's free stock
+// of it, aggregate) · the quality that stock would feed. Held/Quality columns
+// only when a craft verdict exists (the org card has none).
 function bpLibDetailHtml(r) {
   const c = r.craft;
-  const slots = c ? c.slots.map(sl =>
-    `<tr><td>${esc(sl.slot)} <span class="muted">(${esc(sl.input)})</span></td>` +
-    `<td class="${sl.ok ? "" : "rm-low"}">${fmtQty(sl.have)} / ${fmtQty(sl.need)}${sl.ok ? " ✓" : " short"}` +
-      `${sl.min_q ? ` <span class="rm-minq" title="only lots at Q${sl.min_q} or better count">≥Q${sl.min_q}</span>` : ""}</td>` +
-    `<td>${sl.assumed ? `<span class="muted">${sl.ok ? "unrated stock — assuming base Q500" : "—"}</span>`
-      : `${invQualityChip(sl.q)}${sl.unrated > 0 ? ` <span class="muted">+ ${fmtQty(sl.unrated)} unrated</span>` : ""}`}</td></tr>`).join("") : "";
-  const stats = c && (c.stat_preview || []).length ? c.stat_preview.map(s =>
-    `<tr><td>${esc(s.prop)}</td><td>${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td></tr>`).join("") : "";
-  const mats = !c && (r.inputs || []).length ? `<div class="mk-craft-h">Materials per craft</div><table class="mk-craft-tbl">` +
-    r.inputs.map(i => `<tr><td>${esc(i.input)}</td><td>${fmtQty(i.need)} ${esc(i.unit)}</td></tr>`).join("") + `</table>` : "";
-  return `<div class="bp-detail">` + mats +
-    (slots ? `<div class="mk-craft-h">Your free stock vs. one craft</div><table class="mk-craft-tbl">${slots}</table>` : "") +
-    (stats ? `<div class="mk-craft-h" style="margin-top:8px">Expected stats with that stock — estimates</div><table class="mk-craft-tbl">${stats}</table>` : "") +
+  const rows = new Map();
+  (r.inputs || []).forEach(i => rows.set(i.input, { input: i.input, unit: i.unit, need: Number(i.need) || 0, slots: [], have: null, ok: true, q: null, unrated: 0, assumed: false, min_q: 0 }));
+  (c ? c.slots : []).forEach(sl => {
+    const row = rows.get(sl.input) || rows.set(sl.input, { input: sl.input, unit: "", need: 0, slots: [], have: null, ok: true, q: null, unrated: 0, assumed: false, min_q: 0 }).get(sl.input);
+    row.slots.push(sl.slot);
+    row.have = sl.have;                       // aggregate free stock of the material
+    row.ok = row.ok && sl.ok;
+    if (sl.q != null && (row.q == null || sl.q < row.q)) row.q = sl.q;
+    row.unrated = Math.max(row.unrated, sl.unrated || 0);
+    row.assumed = row.assumed || sl.assumed;
+    row.min_q = Math.max(row.min_q, sl.min_q || 0);
+  });
+  const withStock = !!c;
+  const head = `<thead><tr><th>Material</th><th>Slot</th><th class="num">Needed / craft</th>` +
+    (withStock ? `<th class="num">Held (free)</th><th>Quality</th>` : "") + `</tr></thead>`;
+  const body = [...rows.values()].map(m =>
+    `<tr><td>${esc(m.input)}${m.min_q > 1 ? ` <span class="rm-minq" title="only lots at Q${m.min_q} or better count">≥Q${m.min_q}</span>` : ""}</td>` +
+    `<td class="muted">${m.slots.map(esc).join(", ")}</td>` +
+    `<td class="num">${fmtQty(m.need)} ${esc(m.unit)}</td>` +
+    (withStock ? `<td class="num ${m.ok ? "bp-have-ok" : "rm-low"}">${m.have == null ? "—" : fmtQty(m.have)}${m.ok ? "" : " short"}</td>` +
+      `<td>${m.assumed ? `<span class="muted">${m.ok ? "unrated" : "—"}</span>` : `${invQualityChip(m.q)}${m.unrated > 0 ? ` <span class="muted">+${fmtQty(m.unrated)} unrated</span>` : ""}`}</td>` : "") +
+    `</tr>`).join("");
+  const stats = c && (c.stat_preview || []).length ? `<table class="bp-tbl"><thead><tr><th>Expected stat</th><th class="num">With your stock</th></tr></thead><tbody>` +
+    c.stat_preview.map(s => `<tr><td>${esc(s.prop)}</td><td class="num">${s.value == null ? "—" : `≈ ${bpFmtEffect(s.mode, s.value)}`}</td></tr>`).join("") + `</tbody></table>` : "";
+  return `<div class="bp-detail">` +
+    (rows.size ? `<div class="mk-craft-h">Materials</div><table class="bp-tbl">${head}<tbody>${body}</tbody></table>` : "") +
+    (stats ? `<div class="mk-craft-h" style="margin-top:10px">Expected stats <span class="muted">— estimates</span></div>${stats}` : "") +
     `</div>`;
 }
 function renderMyBlueprints(list) {
@@ -21089,7 +21148,7 @@ function renderBpLibTable() {
     `<th></th></tr></thead>`;
   const body = [...groups].map(([cat, rows]) => {
     const col = !!st.collapsed[cat];
-    return `<tbody class="bp-group"><tr class="bp-group-h ${col ? "collapsed" : ""}" data-cat="${esc(cat)}"><td colspan="8">` +
+    return `<tbody class="bp-group"><tr class="bp-group-h ${col ? "collapsed" : ""}" data-cat="${esc(cat)}" aria-expanded="${!col}"><td colspan="8">` +
       `<span class="rm-caret" aria-hidden="true">▸</span>${esc(cat)} <span class="muted">· ${rows.length}</span></td></tr>` +
       (col ? "" : rows.map(bpLibRowHtml).join("")) + `</tbody>`;
   }).join("");
