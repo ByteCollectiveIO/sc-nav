@@ -2319,6 +2319,41 @@ def lot_key_clash(inv_id: int, owner_id: str, item_id: str, location: str | None
     return _inventory_row_to_dict(row) if row else None
 
 
+def split_inventory(inv_id: int, qty: float, quality: int | None,
+                    location: str | None, updated_at: str) -> tuple[dict, dict]:
+    """Move `qty` off a holding into the lot keyed (same owner + item, `location`,
+    `quality`) — creating it, or SUMMING into it if it exists (safe: the moved
+    portion carries no allocations by construction). The source row and every
+    allocation on it are untouched, which is the whole point (#151 decision 2):
+    a pledged lot is never re-rated under a goal, the re-rated part becomes a
+    new row. The caller has already checked qty ≤ the source's unallocated
+    stock and that the target key differs. Returns (source, target)."""
+    with _lock, _conn:
+        src = _conn.execute("SELECT * FROM inventory WHERE id=?", (inv_id,)).fetchone()
+        tgt = _conn.execute(
+            "SELECT * FROM inventory WHERE owner_id=? AND item_id=? "
+            "AND COALESCE(location,'')=COALESCE(?,'') AND goal_id IS NULL "
+            "AND COALESCE(quality,-1)=COALESCE(?,-1) AND id<>?",
+            (src["owner_id"], src["item_id"], location, quality, inv_id)).fetchone()
+        if tgt:
+            _conn.execute("UPDATE inventory SET qty=qty+?, updated_at=? WHERE id=?",
+                          (qty, updated_at, tgt["id"]))
+            tid = tgt["id"]
+        else:
+            cur = _conn.execute(
+                "INSERT INTO inventory (owner_id, item_id, item_name, unit, qty, "
+                "location, note, goal_id, updated_at, quality) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (src["owner_id"], src["item_id"], src["item_name"], src["unit"], qty,
+                 location, src["note"], None, updated_at, quality))
+            tid = cur.lastrowid
+        _conn.execute("UPDATE inventory SET qty=qty-?, updated_at=? WHERE id=?",
+                      (qty, updated_at, inv_id))
+        s = _conn.execute("SELECT * FROM inventory WHERE id=?", (inv_id,)).fetchone()
+        t = _conn.execute("SELECT * FROM inventory WHERE id=?", (tid,)).fetchone()
+    return _inventory_row_to_dict(s), _inventory_row_to_dict(t)
+
+
 def allocation_count(inv_id: int) -> int:
     """How many goal commitments draw from a holding (0 = nothing depends on it)."""
     with _lock:

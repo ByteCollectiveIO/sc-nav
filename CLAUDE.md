@@ -103,6 +103,21 @@ library at `#/blueprints`, #29)
   `#inv-quality` (shown per `invQualityApplies`, blank = null never 0),
   `invQualityChip` Q column + `≈B` facet (`INV_FACETS[].vals` accessor),
   `invOrgQualityHtml` rollup lots, `#goal-c-quality` on have/pledge sources.
+  **Step 2 (same day): goals GATE on it** — `nav_core.lot_qualifies(q, min_q)`
+  (no floor / unrated → True; Q0 fails any floor) inside `derive_goal_progress`:
+  line `have` = qualifying qty only, `have_low` = under-floor (reported, never
+  counted), `unrated` = unverified part of `have`; `per_contributor[].low`.
+  `GoalLineIn.min_q` = manual floor on ANY hand line (contract hand-ins).
+  Contribute 409s an under-floor lot w/ **dict** detail
+  `{reason:"low_quality", message}` (the over-need 409 stays a string — the
+  client keys on the shape, and `allow_low`/`allow_over` NEVER grant each
+  other). `POST /api/inventory/{id}/split` (`InventorySplitIn` qty/quality/
+  location → `db.split_inventory`): moves ≤ unallocated qty into the target
+  lot (sums into an existing one; same key 400) — the ONLY way to re-rate
+  pledged stock, source row + pledges untouched. Frontend `lotQualifies`/
+  `goalLineMinQ`, `.low` hatched tail + `.rm-low`/`.rm-unrated` on
+  `goalLineRow`, floor-aware `goalSourceOptionsHtml`, `.rm-li-minq` in the goal
+  form, `.rm-inv-split` → `openInvSplit`.
   Frontend: goal detail source picker + MY CONTRIBUTIONS (grouped by location,
   `goalMyContribs`/`postContribution`/`withdrawContribution`), hatched pledge bar
   segment, `⏳ gathering` annotations on lines/chips/inventory rows + `.rm-alloc-x`

@@ -1952,6 +1952,14 @@
   .rm-line-bar > span.pledged, .rm-line.done .rm-line-bar > span.pledged {
     background: repeating-linear-gradient(135deg, var(--warn) 0 4px, transparent 4px 8px);
     opacity: .75; }
+  /* Under-floor lots (#151): logged against the line but never counted — drawn
+     as a hatched tail in the bad color, separate from the counted fill. */
+  .rm-line-bar > span.low, .rm-line.done .rm-line-bar > span.low {
+    background: repeating-linear-gradient(135deg, var(--bad) 0 4px, transparent 4px 8px);
+    opacity: .7; }
+  .rm-low { color: var(--bad); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .rm-line-ct .rm-low, .rm-line-ct .rm-unrated { display: block; }
+  .rm-unrated { color: var(--dim); font-size: 11px; white-space: nowrap; }
   .rm-line-ct { font-variant-numeric: tabular-nums; color: var(--dim); text-align: right; }
   .rm-line.done .rm-line-ct { color: var(--good); }
   /* the "still gathering" annotation, wherever a pledge is shown */
@@ -12428,15 +12436,24 @@ function goalLineRow(l, minqMap) {
   const onHandPct = l.needed
     ? Math.min(100, Math.round(100 * Math.max(0, l.have - promised) / l.needed)) : 100;
   const minq = l.min_q || (minqMap && minqMap[l.item_id]);
+  // Under-floor lots ride beside the bar (hatched red tail) — real material the
+  // org holds, just not for this line. Unrated lots count but are called out.
+  const low = Number(l.have_low) || 0, unrated = Number(l.unrated) || 0;
+  const lowPct = l.needed ? Math.min(100 - pct, Math.round(100 * low / l.needed)) : 0;
   return `<div class="rm-line ${done ? "done" : ""}">` +
     `<span class="rm-line-n"><a class="rm-finder-link" href="#/nav" data-finder="${esc(l.name)}" ` +
     `title="find ${esc(l.name)} in the navigator">${esc(l.name)}</a>` +
     `${minq ? `<span class="rm-minq" title="gather at least quality ${minq} (${bandTag(minq)})">≥Q${minq}</span>` : ""}</span>` +
     `<span class="rm-line-bar"><span style="width:${onHandPct}%"></span>` +
-    `<span class="pledged" style="width:${Math.max(0, pct - onHandPct)}%"></span></span>` +
+    `<span class="pledged" style="width:${Math.max(0, pct - onHandPct)}%"></span>` +
+    (lowPct > 0 ? `<span class="low" style="width:${lowPct}%"></span>` : "") + `</span>` +
     `<span class="rm-line-ct">${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")}${done ? " ✓" : ""}` +
     (promised > 0 ? `<span class="rm-pledge" title="pledged, but not logged as stock yet">` +
-      `⏳ ${fmtQty(promised)} gathering</span>` : "") + `</span></div>`;
+      `⏳ ${fmtQty(promised)} gathering</span>` : "") +
+    (low > 0 ? `<span class="rm-low" title="logged against this goal, but below Q${minq} — not counted">` +
+      `⚠ ${fmtQty(low)} below Q${minq}</span>` : "") +
+    (unrated > 0 ? `<span class="rm-unrated" title="counted, but these lots have no quality logged">` +
+      `${fmtQty(unrated)} unrated</span>` : "") + `</span></div>`;
 }
 
 async function renderGoalDetail(id) {
@@ -12508,8 +12525,14 @@ function goalMyContribs(g) {
   }
   const row = (c) => {
     const short = Number(c.short) || 0;
+    // Which lot the pledge draws from, and whether it clears the line's floor.
+    const minq = goalLineMinQ(g, c.item_id);
+    const qchip = c.quality === null || c.quality === undefined
+      ? (minq ? ` <span class="rm-unrated">unrated</span>` : "")
+      : ` ${invQualityChip(c.quality)}` +
+        (lotQualifies(c.quality, minq) ? "" : ` <span class="rm-low" title="below the line's Q${minq} floor — logged, not counted">⚠ below Q${minq}</span>`);
     return `<div class="rm-mine-c">` +
-      `<span class="rm-mine-c-n"><b>${esc(c.item_name)}</b> · ${fmtQty(c.qty)} ${esc(c.unit || "")}` +
+      `<span class="rm-mine-c-n"><b>${esc(c.item_name)}</b>${qchip} · ${fmtQty(c.qty)} ${esc(c.unit || "")}` +
       (short > 0 ? ` <span class="rm-pledge" title="pledged, but not logged as stock yet">` +
         `⏳ ${fmtQty(short)} still to gather</span>` : "") + `</span>` +
       `<button class="ev-btn rm-c-edit" data-alloc="${c.allocation_id}" data-qty="${c.qty}" ` +
@@ -12531,13 +12554,28 @@ function goalSourceHoldings(g, itemId) {
   return (g.my_holdings || []).filter(h => h.item_id === itemId);
 }
 
+// Does a lot meet the line's quality floor? Unrated passes (server mirror of
+// nav_core.lot_qualifies); Q0 fails any floor.
+function lotQualifies(q, minq) {
+  if (!minq || q === null || q === undefined) return true;
+  return Number(q) >= Number(minq);
+}
+function goalLineMinQ(g, itemId) {
+  const l = ((g.progress || {}).lines || []).find(x => x.item_id === itemId);
+  return (l && l.min_q) || (g.craft && g.craft.min_q && g.craft.min_q[itemId]) || 0;
+}
+
 function goalSourceOptionsHtml(g, itemId) {
-  const holds = goalSourceHoldings(g, itemId);
-  const best = holds.find(h => h.available > 0) || holds[0];
+  const minq = goalLineMinQ(g, itemId);
+  // Qualifying lots first (then by free stock), under-floor ones last + flagged.
+  const holds = goalSourceHoldings(g, itemId).slice().sort((a, b) =>
+    (lotQualifies(b.quality, minq) - lotQualifies(a.quality, minq)) || (b.available - a.available));
+  const best = holds.find(h => h.available > 0 && lotQualifies(h.quality, minq)) || holds[0];
   return holds.map(h =>
       `<option value="hold:${h.id}"${h === best ? " selected" : ""}>` +
-      `📍 ${esc(h.location || "no location")}` +
-      `${h.quality === null || h.quality === undefined ? "" : ` · Q${Number(h.quality)}`}` +
+      `${lotQualifies(h.quality, minq) ? "📍" : "⚠"} ${esc(h.location || "no location")}` +
+      `${h.quality === null || h.quality === undefined ? (minq ? " · unrated" : "") : ` · Q${Number(h.quality)}`}` +
+      `${lotQualifies(h.quality, minq) ? "" : ` (below Q${minq})`}` +
       ` — ${fmtQty(h.available)} free of ${fmtQty(h.qty)} ${esc(h.unit || "")}</option>`).join("") +
     `<option value="have">I have these — not logged yet</option>` +
     `<option value="pledge"${best ? "" : " selected"}>I'll gather these — pledge</option>`;
@@ -12555,11 +12593,20 @@ const GOAL_SRC_HINTS = {
 async function postContribution(goalId, body) {
   const r = await fetch(`/api/goals/${goalId}/contribute`, { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (r.status === 409 && !body.allow_over) {
+  if (r.status === 409) {
     const err = await r.json().catch(() => ({}));
-    const ok = await confirmDialog(err.detail || "This goes past what the goal needs.",
-      { title: "More than the goal needs", confirmLabel: "Contribute anyway" });
-    return ok ? postContribution(goalId, { ...body, allow_over: true }) : null;
+    const d = err.detail;
+    // Two distinct confirms, two distinct overrides — never let one grant the other.
+    if (d && typeof d === "object" && d.reason === "low_quality" && !body.allow_low) {
+      const ok = await confirmDialog(d.message || "This lot is below the line's quality floor.",
+        { title: "Below the quality this line needs", confirmLabel: "Log it anyway" });
+      return ok ? postContribution(goalId, { ...body, allow_low: true }) : null;
+    }
+    if (typeof d === "string" && !body.allow_over) {
+      const ok = await confirmDialog(d || "This goes past what the goal needs.",
+        { title: "More than the goal needs", confirmLabel: "Contribute anyway" });
+      return ok ? postContribution(goalId, { ...body, allow_over: true }) : null;
+    }
   }
   if (!r.ok) throw await r.json().catch(() => ({}));
   return r.json();
@@ -12715,6 +12762,9 @@ function goalLineEditRow(li) {
     `<input class="ti rm-qty rm-li-qty" type="number" min="0" step="any" placeholder="qty needed"` +
     ` value="${li && li.qty_needed != null ? fmtQty(li.qty_needed) : ""}">` +
     unitSelect("rm-li-unit", li ? li.unit : "") +
+    `<input class="ti rm-qty rm-li-minq" type="number" min="0" max="1000" step="1" placeholder="min Q" ` +
+    `title="Quality floor (0–1000): only lots at or above it count toward this line. Blank = any." ` +
+    `value="${li && li.min_q ? Number(li.min_q) : ""}">` +
     `<span class="ev-row-del rm-li-del" title="remove item">✕</span></div>`;
 }
 
@@ -12810,8 +12860,10 @@ function collectGoalForm() {
     if (!input.value.trim() && !id) continue;        // blank row, skip
     if (!id) return { error: `Pick "${input.value.trim()}" from the suggestions so it resolves to a catalog item.` };
     if (!(qty > 0)) return { error: "Each line item needs a quantity greater than 0." };
-    const unitEl = row.querySelector(".rm-li-unit");
-    line_items.push({ item_id: id, qty_needed: qty, unit: unitEl ? unitEl.value : undefined });
+    const unitEl = row.querySelector(".rm-li-unit"), minqEl = row.querySelector(".rm-li-minq");
+    const minq = minqEl && minqEl.value.trim() !== "" ? Math.max(0, Math.min(1000, Math.round(Number(minqEl.value)))) : null;
+    line_items.push({ item_id: id, qty_needed: qty, unit: unitEl ? unitEl.value : undefined,
+      ...(minq ? { min_q: minq } : {}) });
   }
   // A blueprint seed (with no hand-entered items) expands into line items server-
   // side; otherwise at least one manual line is required.
@@ -13264,6 +13316,8 @@ function invMineRowHtml(r) {
     `<td class="num">${fmtQty(r.qty)} ${unit}${free}${gathering}</td>` +
     `<td class="inv-loc">${r.location ? `📍 ${esc(r.location)}` : ""}</td>` +
     `<td class="inv-actions"><button class="ev-btn rm-inv-edit" data-id="${r.id}">Edit</button>` +
+    (invQualityApplies({ kind: r.kind, item_id: r.item_id }) && Number(r.available) > 0
+      ? `<button class="ev-btn rm-inv-split" data-id="${r.id}" title="move part of this lot to a different quality or place">Split</button>` : "") +
     `<button class="ev-btn danger rm-inv-del" data-id="${r.id}">Remove</button></td></tr>`;
 }
 
@@ -13281,6 +13335,7 @@ function wireInvMine() {
     };
   });
   $("inv-body").querySelectorAll(".rm-inv-edit").forEach(b => { b.onclick = () => openInvEdit(b.dataset.id); });
+  $("inv-body").querySelectorAll(".rm-inv-split").forEach(b => { b.onclick = () => openInvSplit(b.dataset.id); });
   // Revoke a goal commitment without leaving the inventory screen — same call the
   // goal detail makes; the freed amount lands back in this holding.
   $("inv-body").querySelectorAll(".rm-alloc-x").forEach(b => {
@@ -13305,7 +13360,7 @@ function openInvEdit(id) {
   const qualityField = invQualityApplies({ kind: r.kind, item_id: r.item_id })
     ? `<input class="ti rm-qty rm-e-quality" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
       `value="${r.quality === null || r.quality === undefined ? "" : Number(r.quality)}"` +
-      (pledged ? ` disabled title="This lot backs goal contributions — withdraw them before changing its quality."` : ` title="Lot quality 0–1000; blank = unrated"`) + `>`
+      (pledged ? ` disabled title="This lot backs goal contributions — use Split to re-rate the free part, or withdraw them first."` : ` title="Lot quality 0–1000; blank = unrated"`) + `>`
     : "";
   rowEl.innerHTML =
     `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap">` +
@@ -13337,6 +13392,45 @@ function openInvEdit(id) {
       if (!res.ok) throw await res.json().catch(() => ({}));
       renderInvMine();
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+}
+
+// Split part of a lot into a different quality / place (#151 step 2). The
+// correction "of my 100 SCU, 40 turned out to be Q900", and the only way to
+// re-rate stock that backs goal pledges: the source row and its pledges stay put.
+function openInvSplit(id) {
+  const r = rmMineRows.find(x => String(x.id) === String(id));
+  const rowEl = $("inv-body").querySelector(`.rm-mine-row[data-id="${id}"]`);
+  if (!r || !rowEl) return;
+  const free = Number(r.available) || 0;
+  rowEl.innerHTML =
+    `<td colspan="10"><div class="rm-row" style="flex-wrap:wrap">` +
+      `<span class="rm-edit-item"><b>${esc(r.item_name)}</b> <span class="muted">split off</span></span>` +
+      `<input class="ti rm-qty rm-s-qty" type="number" min="0" max="${free}" step="any" placeholder="amount" ` +
+        `title="up to ${fmtQty(free)} ${esc(r.unit || "")} free (pledged stock stays put)">` +
+      `<span class="muted">of ${fmtQty(free)} free ${esc(r.unit || "")} → </span>` +
+      `<input class="ti rm-qty rm-s-quality" type="number" min="0" max="1000" step="1" placeholder="quality" ` +
+        `title="Quality of the split-off part, 0–1000; blank = unrated">` +
+      `<span class="poi-pick" style="flex:1;min-width:120px"><input class="ti rm-s-loc" maxlength="120" placeholder="location (same if blank)" autocomplete="off"></span>` +
+      `<button class="ev-btn primary rm-s-save">Split</button>` +
+      `<button class="ev-btn rm-s-cancel">Cancel</button>` +
+      `<span class="rm-s-msg muted"></span>` +
+    `</div></td>`;
+  attachPoiPicker(rowEl.querySelector(".rm-s-loc").parentElement);
+  rowEl.querySelector(".rm-s-cancel").onclick = () => renderInvMine();
+  rowEl.querySelector(".rm-s-save").onclick = async () => {
+    const qty = Number(rowEl.querySelector(".rm-s-qty").value);
+    const msg = rowEl.querySelector(".rm-s-msg");
+    if (!(qty > 0)) { msg.textContent = "Enter an amount to move."; return; }
+    msg.textContent = "Saving…";
+    try {
+      const res = await fetch(`/api/inventory/${id}/split`, { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ qty, quality: invQualityValue(rowEl.querySelector(".rm-s-quality")),
+          location: rowEl.querySelector(".rm-s-loc").value.trim() || null }) });
+      if (!res.ok) throw await res.json().catch(() => ({}));
+      renderInvMine();
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't split."; }
   };
 }
 

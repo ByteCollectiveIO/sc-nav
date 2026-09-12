@@ -2108,6 +2108,43 @@ class GoalProgressTests(unittest.TestCase):
         self.assertEqual(p["per_contributor"][0],
                          {"owner_id": "A", "qty": 470, "promised": 0})
 
+    def test_quality_floor_counts_only_qualifying_lots(self):
+        # #151 step 2: a line with min_q counts lots at/above it; under-floor qty
+        # is reported as have_low (never counted); unrated counts but is flagged;
+        # Q0 (station-bought) fails any floor. Lines without a floor are unchanged.
+        goal = {"line_items": [
+            {"item_id": "commodity:agricium", "item_name": "Agricium", "unit": "SCU",
+             "qty_needed": 100, "min_q": 700},
+            {"item_id": "commodity:laranite", "item_name": "Laranite", "unit": "SCU",
+             "qty_needed": 50}]}
+        rows = [
+            {"item_id": "commodity:agricium", "qty": 40, "owner_id": "A", "quality": 850},
+            {"item_id": "commodity:agricium", "qty": 30, "owner_id": "A", "quality": 300},
+            {"item_id": "commodity:agricium", "qty": 20, "owner_id": "B", "quality": None},
+            {"item_id": "commodity:agricium", "qty": 10, "owner_id": "B", "quality": 0},
+            {"item_id": "commodity:laranite", "qty": 50, "owner_id": "B", "quality": 5},
+        ]
+        p = nav_core.derive_goal_progress(goal, rows)
+        agr = next(l for l in p["lines"] if l["item_id"] == "commodity:agricium")
+        self.assertEqual((agr["have"], agr["have_low"], agr["unrated"]), (60, 40, 20))
+        self.assertEqual(agr["pct"], 60.0)
+        self.assertEqual(agr["min_q"], 700)
+        lar = next(l for l in p["lines"] if l["item_id"] == "commodity:laranite")
+        self.assertEqual(lar["have"], 50)
+        self.assertNotIn("have_low", lar)
+        self.assertFalse(p["is_met"])
+        by = {c["owner_id"]: c for c in p["per_contributor"]}
+        self.assertEqual((by["A"]["qty"], by["A"]["low"]), (40, 30))
+        self.assertEqual((by["B"]["qty"], by["B"].get("low")), (70, 10))
+
+    def test_lot_qualifies(self):
+        self.assertTrue(nav_core.lot_qualifies(None, 700))     # unrated passes
+        self.assertTrue(nav_core.lot_qualifies(5, 0))          # no floor
+        self.assertTrue(nav_core.lot_qualifies(0, None))
+        self.assertFalse(nav_core.lot_qualifies(0, 1))         # station-bought fails
+        self.assertTrue(nav_core.lot_qualifies(700, 700))
+        self.assertFalse(nav_core.lot_qualifies(699, 700))
+
     def test_oversupply_one_line_does_not_mask_shortfall(self):
         rows = [
             {"item_id": "commodity:titanium", "qty": 5000, "owner_id": "A"},  # way over

@@ -1,6 +1,6 @@
 # Inventory item quality (#151)
 
-Status: **🔨 step 1 (holding identity) built 2026-09-12 · steps 2–5 designed** — researched against SC Alpha 4.10.
+Status: **🔨 steps 1–2 (holding identity · goal gating + split) built 2026-09-12 · steps 3–5 designed** — researched against SC Alpha 4.10.
 
 ## The problem
 
@@ -107,7 +107,18 @@ value. Touch points:
   hidden for ships/gear), Q column + band chip in `invMineTableHtml`, inline
   edit in `openInvEdit`, `quality` facet.
 
-### 2. Goals gate on quality
+### 2. Goals gate on quality — BUILT
+
+As-built notes (2026-09-12): `nav_core.lot_qualifies` + `derive_goal_progress`
+(`have` = qualifying, `have_low`, `unrated`, per-contributor `low`);
+`GoalLineIn.min_q`; contribute 409s with a **dict** detail
+`{reason:"low_quality", message}` so the client can tell it from the over-need
+string and re-send the right override (`allow_low` vs `allow_over` never grant
+each other — test-pinned); `POST /api/inventory/{id}/split` → `db.split_inventory`
+(sums into an existing target lot; same key 400; qty capped at unallocated).
+Frontend: hatched red `.low` tail + `⚠ N below Qn` / `N unrated` on the line,
+floor-aware source picker (qualifying first, ⚠ on under-floor), `min Q` input
+per hand line in the goal form, Split button + inline `openInvSplit` form.
 
 `derive_goal_progress` compares each contribution's lot quality to the line's
 `min_q`:
