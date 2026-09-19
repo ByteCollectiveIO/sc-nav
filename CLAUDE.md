@@ -14,6 +14,15 @@ script) that reports the player's in-game position.
 - Backend: `server/app.py` (HTTP/WS + routes), `server/nav_core.py` (pure nav/route
   logic, fully unit-tested), `server/db.py` (SQLite schema + queries).
 - Frontend: `server/static/index.html` — ONE file: `<style>` + body + `<script>`.
+  **Authored as one file, SERVED as three** (2026-09-19, slow-origin fix):
+  `app._shell_parts` lifts the `<style>`/`<script>` bodies out to content-hashed
+  `/assets/app.<hash16>.css|js` (immutable; `shell_asset` route; stale hash =
+  current bytes + no-store) so the no-store, nonce-stamped shell is ~140 KB, not
+  1.2 MB. Keep exactly ONE `<style>` and ONE `<script>` in the file. Versioned
+  `/images/…?v=` are immutable (`security_headers`); launcher `.app-logo` art is
+  `loading="lazy"` and sized 2× display (320 px); org logo URL = `?v=org_logo_version()`
+  (file mtime ms) on `/api/branding|me|settings` → `orgLogoUrl`. `#boot-splash`
+  covers the shell until `boot()` resolves.
 - Watcher: `watcher/` (runs on the player's Windows box; reads Game.log).
 - Version: `server/version.py` (SemVer; surfaced at `/api/health` + footer).
 - Tests: `server/test_nav_core.py` + `server/test_app.py`. **Two channels:**
@@ -324,6 +333,9 @@ listing_offers.
     everything else needs a session. A new route is private unless you list it.
     It used to be "deny `/api/*`, allow the rest", which silently published
     `/openapi.json`, `/docs`, `/redoc` and anything dropped in `server/static/`.
+    The one pattern-matched exemption is `_SHELL_ASSET_RE` (the lifted-out shell
+    CSS/JS, same bytes the public shell used to carry inline) — an exact shape,
+    never a bare `/assets/` prefix.
     Interactive API docs are off (`FastAPI(docs_url=None, ...)`).
   - **Watcher tokens are scoped** to `_WATCHER_PATHS` (`/api/position`,
     `/api/handle`, `/api/trade/transactions`) — keep in sync with the watcher.

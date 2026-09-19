@@ -868,6 +868,15 @@
     gap: 22px; z-index: 50; padding: 20px; }
   /* the explicit display above overrides the [hidden] attribute, so restore it */
   .login-gate[hidden] { display: none; }
+  /* Boot splash: covers the shell from first paint until boot() has decided
+     between the sign-in gate and the app, so a slow script download reads as
+     "loading", not a blank navigator. Removed (not hidden) by boot(). */
+  .boot-splash { position: fixed; inset: 0; background: var(--bg); z-index: 60;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; padding: 20px; color: var(--dim); font-size: 13px; letter-spacing: .04em; }
+  .boot-splash img { width: 120px; height: auto; animation: boot-pulse 1.6s ease-in-out infinite; }
+  @keyframes boot-pulse { 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) { .boot-splash img { animation: none; } }
   .login-card { text-align: center; max-width: 380px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
     padding: 32px 36px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
@@ -2521,6 +2530,11 @@
 </style>
 </head>
 <body>
+<div id="boot-splash" class="boot-splash" role="status" aria-live="polite">
+  <img src="/images/sc_org_navigator_logo.png?v={{APP_VERSION}}" alt="" width="120" height="120">
+  <span>Loading Org Navigator…</span>
+  <noscript>Org Navigator needs JavaScript enabled.</noscript>
+</div>
 <div id="login-gate" class="login-gate" hidden>
   <div class="login-card">
     <div class="login-logos">
@@ -2624,25 +2638,25 @@
       <div class="app-grid">
         <a class="app-card" href="#/nav">
           <span class="app-badge start">Start here</span>
-          <img class="app-logo" data-app="nav" src="/images/resource_navigator_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="nav" loading="lazy" src="/images/resource_navigator_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Resource Navigator</div>
           <div class="app-desc">Find POIs, resources &amp; wildlife and get live turn-by-turn
             guidance with your org.</div>
         </a>
         <a class="app-card" href="#/route">
-          <img class="app-logo" data-app="route" src="/images/cargo_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="route" loading="lazy" src="/images/cargo_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Cargo Planner</div>
           <div class="app-desc">Plan efficient multi-stop hauling routes under your ship's
             cargo capacity, then run them turn-by-turn.</div>
         </a>
         <a class="app-card" href="#/trade">
-          <img class="app-logo" data-app="trade" src="/images/trade_route_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="trade" loading="lazy" src="/images/trade_route_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Trade Route Planner</div>
           <div class="app-desc">Buy low, sell high on live UEX prices — the most profitable buy→sell
             loop your ship can carry, planned and run leg-by-leg.</div>
         </a>
         <a class="app-card" href="#/halo">
-          <img class="app-logo" data-app="halo" src="/images/prospector_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="halo" loading="lazy" src="/images/prospector_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Prospector</div>
           <div class="app-desc">Drop into unmarked rock space (the Aaron Halo, Glaciem pockets,
             Pyro fields), navigate and ⛏ survey it live, and build the org's belt atlas.</div>
@@ -2655,19 +2669,19 @@
         <span class="app-group-sub">Coordinate people — schedule, group up &amp; stay safe</span></h3>
       <div class="app-grid">
         <a class="app-card" href="#/events">
-          <img class="app-logo" data-app="events" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="events" loading="lazy" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Event Planner</div>
           <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
             sign up your org, and track who's filling each slot.</div>
         </a>
         <a class="app-card" href="#/lfg">
-          <img class="app-logo" data-app="lfg" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="lfg" loading="lazy" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Group Finder</div>
           <div class="app-desc">Rally a crew right now — post that you need players or want to
             join, filter by playstyle, and group up without waiting for a scheduled event.</div>
         </a>
         <a class="app-card" href="#/pirates">
-          <img class="app-logo" data-app="pirates" src="/images/danger_zone_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="pirates" loading="lazy" src="/images/danger_zone_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Danger Board</div>
           <div class="app-desc">Warn your org about pirate snares and camped stations — post a danger
             zone, watch live threats on your trade lanes, or go hunt the pirates yourself.</div>
@@ -2680,19 +2694,19 @@
         <span class="app-group-sub">Manage assets, the internal market &amp; insight</span></h3>
       <div class="app-grid">
         <a class="app-card" href="#/goals">
-          <img class="app-logo" data-app="goals" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="goals" loading="lazy" src="/images/resource_manager_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Resource Manager</div>
           <div class="app-desc">Set procurement goals, track your holdings and where they're
             stashed, and keep your craftable-blueprint library.</div>
         </a>
         <a class="app-card" href="#/market">
-          <img class="app-logo" data-app="market" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="market" loading="lazy" src="/images/marketplace_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Org Marketplace</div>
           <div class="app-desc">Sell, auction &amp; barter items with your org — priced in aUEC only.
             Post a listing, buy or bid, then settle the handoff in-game.</div>
         </a>
         <a class="app-card" href="#/intel">
-          <img class="app-logo" data-app="intel" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="intel" loading="lazy" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Org Intel</div>
           <div class="app-desc">Your org's analytics deck — mapping coverage, hauling and
             marketplace activity, and the contributor leaderboards, all in one place.</div>
@@ -7652,8 +7666,8 @@ let currentMe = null;
 function renderAccount(me) {
   currentMe = me;
   const el = $("account");
-  if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; applyOrgLogo(false); applyView(); return; }
-  applyOrgLogo(!!me.org_logo);
+  if (!me) { el.innerHTML = `<a href="/auth/login">Sign in with Discord</a>`; applyOrgLogo(0); applyView(); return; }
+  applyOrgLogo(me.org_logo_v);
   applyBranding(me);
   const admin = me.is_admin ? ` <span class="muted">(admin)</span>` : "";
   el.innerHTML = `<span class="muted">signed in as</span> <b>${esc(me.display_name || me.username || "member")}</b>${admin} · <a id="logout">log out</a>`;
@@ -19661,7 +19675,7 @@ async function loadSettings() {
     loadPoiOverrides();
     loadHandleBindings();
     loadUpdateCheck();   // cached server-side; a page load never re-polls GitHub
-    applyOrgLogoAdmin(!!s.org_logo);
+    applyOrgLogoAdmin(s.org_logo_v);
     appArtVersions = s.app_images || {};
     renderAppArt();
     if (document.activeElement !== $("org-name-input"))
@@ -20176,16 +20190,19 @@ $("motd-dismiss").onclick = () => {
 };
 
 // ---------- org logo (custom guild branding) ----------
-// The header image (every signed-in member) and the admin panel's preview share
-// the one /api/org-logo route; bust the cache on change so a fresh upload shows.
-function applyOrgLogo(has) {
+// The header image (every signed-in member), the admin panel's preview and the
+// login splash share the one /api/org-logo route. `v` = the server's
+// org_logo_version (0 = no logo): the URL carries it, so the image is cached
+// until a new upload changes it — never re-downloaded per page load.
+function orgLogoUrl(v) { return "/api/org-logo?v=" + encodeURIComponent(v); }
+function applyOrgLogo(v) {
   const img = $("org-logo"), sep = $("org-logo-sep");
-  if (has) { img.src = "/api/org-logo?t=" + Date.now(); img.hidden = false; sep.hidden = false; }
+  if (v) { img.src = orgLogoUrl(v); img.hidden = false; sep.hidden = false; }
   else { img.removeAttribute("src"); img.hidden = true; sep.hidden = true; }
 }
-function applyOrgLogoAdmin(has) {
+function applyOrgLogoAdmin(v) {
   const prev = $("org-logo-preview"), rm = $("org-logo-remove");
-  if (has) { prev.src = "/api/org-logo?t=" + Date.now(); prev.hidden = false; rm.hidden = false; }
+  if (v) { prev.src = orgLogoUrl(v); prev.hidden = false; rm.hidden = false; }
   else { prev.removeAttribute("src"); prev.hidden = true; rm.hidden = true; }
 }
 
@@ -20196,11 +20213,13 @@ $("org-logo-upload").onclick = async () => {
   const fd = new FormData(); fd.append("file", f);
   try {
     const r = await fetch("/api/org-logo", { method: "POST", body: fd });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || "failed"); }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "failed");
     st.textContent = "saved";
     $("org-logo-file").value = "";
-    applyOrgLogoAdmin(true);
-    applyOrgLogo(true);          // update the live header straight away
+    const v = d.org_logo_v || Date.now();   // new upload = new URL
+    applyOrgLogoAdmin(v);
+    applyOrgLogo(v);             // update the live header straight away
   } catch (e) { st.textContent = (e && e.message) || "failed — try again"; }
 };
 
@@ -20214,8 +20233,8 @@ $("org-logo-remove").onclick = async () => {
     const r = await fetch("/api/org-logo", { method: "DELETE" });
     if (!r.ok) throw new Error("failed");
     st.textContent = "removed";
-    applyOrgLogoAdmin(false);
-    applyOrgLogo(false);
+    applyOrgLogoAdmin(0);
+    applyOrgLogo(0);
   } catch { st.textContent = "failed — try again"; }
 };
 
@@ -21496,7 +21515,9 @@ function init() {
 async function boot() {
   let me = null;
   try { const r = await fetch("/api/me"); if (r.ok) me = await r.json(); } catch {}
-  renderAccount(me);
+  // renderAccount → applyView picks gate vs app; the splash goes either way so
+  // a render error can't leave a member staring at "Loading…" forever.
+  try { renderAccount(me); } finally { $("boot-splash").remove(); }
   if (me) {
     myId = me.id;
     // myIdentity is set inside renderAccount(me) above (it owns the me payload).
@@ -21515,10 +21536,12 @@ function loadLoginOrgLogo() {
   const img = $("login-org-logo"), sep = $("login-org-sep"), row = img.parentElement;
   img.onload = () => { img.hidden = false; sep.hidden = false; row.classList.add("has-org"); };
   img.onerror = () => { img.hidden = true; sep.hidden = true; row.classList.remove("has-org"); };
-  img.src = "/api/org-logo?t=" + Date.now();
   fetch("/api/branding")
     .then(r => r.ok ? r.json() : null)
-    .then(b => { setLoginOrgName(b && b.org_name); applyCopy("login-tagline", b && b.org_tagline); })
+    .then(b => {
+      setLoginOrgName(b && b.org_name); applyCopy("login-tagline", b && b.org_tagline);
+      if (b && b.org_logo_v) img.src = orgLogoUrl(b.org_logo_v);   // versioned → cached
+    })
     .catch(() => {});
 }
 function setLoginOrgName(name) {
