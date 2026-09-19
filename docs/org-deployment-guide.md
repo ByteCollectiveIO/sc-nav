@@ -501,6 +501,10 @@ sudo docker run -d -p 9443:9443 --name portainer --restart=always \
 > Leave it unset to watch upstream; set it to your own fork's `owner/name` to
 > watch yours, or set it **empty** to switch the update check off entirely (no
 > outbound call to GitHub at all).
+>
+> Another optional one: `TUNNEL_PROTOCOL`. Leave it unset. It exists for one
+> problem in the runbook (section 11, "Pages take ages to load the first
+> time").
 
 5. Click **Deploy the stack**. The first deploy builds the app from source and
     takes **3–6 minutes** on this tier. Later ones are faster.
@@ -653,6 +657,25 @@ DNS is fine; the tunnel is the problem. Either the `cloudflared` container
 isn't running (Portainer → Containers → `sc-nav-tunnel`) or the public hostname
 points somewhere wrong — it must be service type `HTTP` and URL `sc-nav:8765`,
 the container name, not an IP.
+
+**"Pages take ages to load the first time, but the app is quick once it's open."**
+That's a slow link between the server and Cloudflare, not the app. Small API
+calls hide it, while the first page load (about 1 MB) exposes it. Measure it
+from your own computer:
+```bash
+curl -s -o /dev/null -w '%{speed_download} bytes/s\n' "https://nav.fenriroperationsgroup.com/images/marketplace_logo.png?v=probe$RANDOM"
+```
+Anything under a few hundred KB/s is the problem. Then, on the server:
+```bash
+curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 - --simple
+```
+- **Upload well above 1 Mbit/s** means the server is fine but the tunnel isn't.
+  Some hosts throttle the UDP traffic the tunnel uses by default. In Portainer,
+  open the stack's environment variables, add `TUNNEL_PROTOCOL` = `http2`, and
+  click **Update the stack**. Then run the first `curl` again.
+- **Upload around 1 Mbit/s or less** means the VPS itself is slow. Open a ticket
+  with Network Solutions and include the speed test result. The plan is sold as
+  unmetered bandwidth.
 
 **"We need to undo a bad data import / restore a backup."**
 Stop the stack in Portainer, then on the server:
