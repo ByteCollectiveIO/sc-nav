@@ -235,9 +235,15 @@ class ShellAssetTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.headers["cache-control"], "no-store")
         self.assertEqual(r.content, self.client.get(js_url).content)
-        # Off-shape names never reach the route anonymously (the gate 401s);
-        # a signed-in member gets the route's 404.
-        self.assertEqual(self.client.get("/assets/nope.js").status_code, 401)
+        # Past the gate (signed in — set explicitly, other classes patch this
+        # seam), an off-shape name is the route's 404. The anonymous 401 for
+        # the same path is pinned in test_assets_are_public.
+        saved = app.session_user
+        app.session_user = lambda request: {"id": "member"}
+        try:
+            self.assertEqual(self.client.get("/assets/nope.js").status_code, 404)
+        finally:
+            app.session_user = saved
 
     def test_split_tracks_file_edits(self):
         # Re-read on mtime change (no restart for a dev edit), new hash = new URL.
