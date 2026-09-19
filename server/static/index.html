@@ -1337,6 +1337,15 @@
   .trade-fav-del:hover { color: var(--bad); }
   /* Prompt dialog: text input inside the shared confirm-dialog shell. */
   .prompt-input { width: 100%; margin-top: 12px; }
+  /* Opt-in row under the input, shown only when the caller passes opts.checkbox.
+     Styled here rather than inline BECAUSE of the [hidden] trap: an inline
+     display: beats even an author [hidden] rule, so promptDialog's
+     `checkRow.hidden = !checkbox` could never hide it. The author rule below
+     is still required — a bare .prompt-check{display:flex} would beat the UA
+     [hidden] rule on its own. */
+  .prompt-check { display: flex; gap: 6px; align-items: center;
+                  margin-top: 8px; font-size: 13px; }
+  .prompt-check[hidden] { display: none; }
   /* Manual leg builder rows. */
   .trade-leg-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
     padding: 8px 0; border-top: 1px solid var(--border-soft); }
@@ -5117,7 +5126,7 @@ function promptDialog(message, opts = {}) {
           '<h2 class="confirm-title"></h2>' +
           '<p class="confirm-msg"></p>' +
           '<input class="ti prompt-input" type="text" autocomplete="off">' +
-          '<label class="prompt-check" hidden style="display:flex; gap:6px; align-items:center; margin-top:8px; font-size:13px;">' +
+          '<label class="prompt-check" hidden>' +
             '<input type="checkbox"> <span></span></label>' +
         '</div>' +
         '<menu class="confirm-actions">' +
