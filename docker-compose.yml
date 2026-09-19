@@ -46,6 +46,13 @@ services:
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+      # How the connector reaches Cloudflare: auto (default: QUIC over UDP,
+      # falling back to HTTP/2) | quic | http2. Set TUNNEL_PROTOCOL=http2 in the
+      # stack env when the host's network throttles UDP: that shows up as
+      # every download crawling at a flat, server-wide rate (a self-hosted
+      # VPS measured ~60 KB/s, 2026-09) while small API calls feel fine.
+      # cloudflared reads --protocol from TUNNEL_TRANSPORT_PROTOCOL.
+      - TUNNEL_TRANSPORT_PROTOCOL=${TUNNEL_PROTOCOL:-auto}
     restart: unless-stopped
     depends_on:
       - sc-nav
