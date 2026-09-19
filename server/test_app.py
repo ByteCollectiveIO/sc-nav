@@ -6,12 +6,14 @@ its own CI step. Importing `app` boots offline: the feed loaders fall back to th
 committed poi/ cache when the live fetch fails, so no network is required.
 
 What it pins down — the things a pure unit test can't:
-  * the per-request nonce stamped into the inline <script> matches the nonce in
+  * the per-request nonce stamped onto the shell's <script> matches the nonce in
     that response's Content-Security-Policy header (middleware-before-route
     ordering — the documented failure mode in the design),
   * script-src carries a nonce and NOT 'unsafe-inline' (the whole point: an
     injected inline script won't execute even if an esc() is ever missed),
-  * the shell is served no-store so a cached document can't pin a stale nonce.
+  * the shell is served no-store so a cached document can't pin a stale nonce,
+    while its lifted-out CSS/JS are content-hashed + immutable (so the no-store
+    document stays small — see ShellAssetTests).
 """
 
 import asyncio
@@ -47,7 +49,8 @@ import app
 import db
 import notify
 
-_NONCE_IN_SCRIPT = re.compile(r'<script nonce="([A-Za-z0-9_-]+)">')
+_NONCE_IN_SCRIPT = re.compile(
+    r'<script nonce="([A-Za-z0-9_-]+)" src="/assets/app\.[0-9a-f]{16}\.js"></script>')
 
 
 def _script_src(csp: str) -> str:
@@ -106,12 +109,14 @@ class CspNonceTests(unittest.TestCase):
         r = self.client.get(path)
         self.assertEqual(r.status_code, 200)
 
-        # Exactly one inline <script>, and it carries a nonce (guards a future
-        # dev adding an un-nonced inline script that the CSP would then block).
+        # Exactly one <script> — the lifted-out app script — and it carries a
+        # nonce (guards a future dev adding an un-nonced inline script that the
+        # CSP would then block, and index.html growing a second <script> that
+        # the shell split in _shell_parts doesn't know about).
         scripts = re.findall(r"<script\b[^>]*>", r.text)
-        self.assertEqual(len(scripts), 1, f"expected one inline <script>, got {scripts}")
+        self.assertEqual(len(scripts), 1, f"expected one <script>, got {scripts}")
         m = _NONCE_IN_SCRIPT.search(r.text)
-        self.assertIsNotNone(m, "inline <script> is missing a nonce attribute")
+        self.assertIsNotNone(m, "shell <script> is missing its nonce or asset src")
         body_nonce = m.group(1)
 
         csp = r.headers.get("content-security-policy", "")
@@ -138,6 +143,14 @@ class CspNonceTests(unittest.TestCase):
         second = self._assert_shell("/")
         self.assertNotEqual(first, second)
 
+    def test_shell_carries_no_inline_css_or_js(self):
+        # The whole point of the split: the no-store document is markup only.
+        r = self.client.get("/")
+        self.assertNotIn("<style>", r.text)
+        self.assertNotIn("async function boot()", r.text)
+        self.assertNotIn("{{APP_VERSION}}", r.text)
+        self.assertLess(len(r.content), 400_000)
+
     def test_csp_directive_shape(self):
         csp = app._csp("TESTNONCE")
         self.assertIn("script-src 'self' 'nonce-TESTNONCE'", csp)
@@ -145,6 +158,117 @@ class CspNonceTests(unittest.TestCase):
         self.assertIn("object-src 'none'", csp)
         self.assertIn("frame-ancestors 'none'", csp)
         self.assertIn("base-uri 'self'", csp)
+
+
+class ShellAssetTests(unittest.TestCase):
+    """index.html is one source file, served as a no-store shell + its <style>
+    and <script> bodies at content-hashed URLs. A self-hosting org on a ~65 KB/s
+    origin link re-downloaded the whole 1.2 MB file on every load (and again on
+    the OAuth return) — 5–20 s of blank page. These pin the split."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app.app)
+
+    def _urls(self):
+        html = self.client.get("/").text
+        css = re.search(r'<link rel="stylesheet" href="(/assets/app\.[0-9a-f]{16}\.css)">', html)
+        js = re.search(r'src="(/assets/app\.[0-9a-f]{16}\.js)"', html)
+        self.assertIsNotNone(css, "shell must link its stylesheet")
+        self.assertIsNotNone(js, "shell must load its script")
+        return css.group(1), js.group(1)
+
+    def test_assets_are_immutable_and_reassemble_the_source(self):
+        css_url, js_url = self._urls()
+        css, js = self.client.get(css_url), self.client.get(js_url)
+        for r in (css, js):
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.headers["cache-control"], "public, max-age=31536000, immutable")
+        self.assertTrue(css.headers["content-type"].startswith("text/css"))
+        self.assertTrue(js.headers["content-type"].startswith("text/javascript"))
+        # Nothing lost in the split: the served parts carry the source bodies.
+        src = app.INDEX_FILE.read_text(encoding="utf-8")
+        self.assertIn(css.text, src)
+        self.assertIn(js.text, src)
+        self.assertIn("async function boot()", js.text)
+        self.assertIn(".login-gate", css.text)
+
+    def test_assets_are_public(self):
+        # The login splash needs them before sign-in.
+        css_url, js_url = self._urls()
+        saved = app.session_user
+        app.session_user = lambda request: None
+        try:
+            self.assertEqual(self.client.get(css_url).status_code, 200)
+            self.assertEqual(self.client.get(js_url).status_code, 200)
+            # …but only that exact shape: nothing else under /assets/ is public.
+            for path in ("/assets/", "/assets/app.js", "/assets/x/app.0123456789abcdef.js",
+                         "/assets/app.0123456789abcdef.html"):
+                self.assertEqual(self.client.get(path).status_code, 401, path)
+        finally:
+            app.session_user = saved
+
+    def test_versioned_images_are_immutable(self):
+        # The shell's built-in art carries ?v=<APP_VERSION>; that URL is cached
+        # for good. A bare URL keeps the static mount's revalidation.
+        r = self.client.get(f"/images/sc_org_navigator_logo.png?v={app.APP_VERSION}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["cache-control"], "public, max-age=31536000, immutable")
+        bare = self.client.get("/images/sc_org_navigator_logo.png")
+        self.assertNotIn("immutable", bare.headers.get("cache-control", ""))
+        self.assertEqual(self.client.get("/images/nope.png?v=1").status_code, 404)
+
+    def test_launcher_art_is_lazy(self):
+        # Hidden behind the sign-in gate for anonymous visitors: lazy keeps ten
+        # launcher logos off the wire until the chooser is actually shown.
+        html = self.client.get("/").text
+        logos = re.findall(r'<img class="app-logo"[^>]*>', html)
+        self.assertEqual(len(logos), 10)
+        for tag in logos:
+            self.assertIn('loading="lazy"', tag)
+
+    def test_stale_hash_serves_current_bytes_uncached(self):
+        # A shell loaded just before a deploy asks for its old hash: it still
+        # boots, but that URL must never be pinned to today's bytes.
+        _, js_url = self._urls()
+        r = self.client.get("/assets/app.0000000000000000.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["cache-control"], "no-store")
+        self.assertEqual(r.content, self.client.get(js_url).content)
+        # Past the gate (signed in — set explicitly, other classes patch this
+        # seam), an off-shape name is the route's 404. The anonymous 401 for
+        # the same path is pinned in test_assets_are_public.
+        saved = app.session_user
+        app.session_user = lambda request: {"id": "member"}
+        try:
+            self.assertEqual(self.client.get("/assets/nope.js").status_code, 404)
+        finally:
+            app.session_user = saved
+
+    def test_split_tracks_file_edits(self):
+        # Re-read on mtime change (no restart for a dev edit), new hash = new URL.
+        orig_file, orig_cache = app.INDEX_FILE, dict(app._shell_cache)
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            f = tmp / "index.html"
+            f.write_text("<html><head><style>a{}</style></head><body>v{{APP_VERSION}}"
+                         "<script>var x = 1;</script></body></html>", encoding="utf-8")
+            app.INDEX_FILE = f
+            app._shell_cache.clear()
+            _, js1 = self._urls()
+            self.assertEqual(self.client.get(js1).text, "var x = 1;")
+            self.assertIn(f"v{app.APP_VERSION}", self.client.get("/").text)
+            f.write_text(f.read_text().replace("x = 1", "x = 2"), encoding="utf-8")
+            import os
+            os.utime(f, ns=(time.time_ns() + 10**9, time.time_ns() + 10**9))
+            _, js2 = self._urls()
+            self.assertNotEqual(js1, js2)
+            self.assertEqual(self.client.get(js2).text, "var x = 2;")
+        finally:
+            app.INDEX_FILE = orig_file
+            app._shell_cache.clear()
+            app._shell_cache.update(orig_cache)
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 _GOOD_WEBHOOK = "https://discord.com/api/webhooks/123456789012345678/AbCd-eF_gh1234"
@@ -5670,6 +5794,31 @@ class BrandingAndMotdTests(unittest.TestCase):
         self.assertEqual(r.json()["app_images"], {})
         self.assertEqual(self.client.get("/api/app-image/nav").status_code, 404)
         self.assertFalse(list(app.BRANDING_DIR.glob("app_nav.*")))
+
+    def test_org_logo_is_versioned_and_cached(self):
+        # The splash used to bust with Date.now(), re-downloading the logo on
+        # every page load (~7 s for a 455 KB PNG on a slow self-hosted link).
+        # Now the URL carries a version and that URL is cached hard.
+        self._isolate_branding()
+        self.addCleanup(db.set_setting, "org_logo_ext", "")
+        self.assertEqual(self.client.get("/api/branding").json()["org_logo_v"], 0)
+        r = self.client.post("/api/org-logo",
+                             files={"file": ("logo.png", self._png(), "image/png")})
+        self.assertEqual(r.status_code, 200)
+        v = r.json()["org_logo_v"]
+        self.assertGreater(v, 0)
+        for body in (self.client.get("/api/branding").json(),
+                     self.client.get("/api/me").json(),
+                     self.client.get("/api/settings").json()):
+            self.assertEqual(body["org_logo_v"], v)
+        img = self.client.get(f"/api/org-logo?v={v}")
+        self.assertEqual(img.content, self._png())
+        self.assertEqual(img.headers["cache-control"], "public, max-age=31536000, immutable")
+        # An unversioned request can't know it's current, so it only revalidates.
+        self.assertEqual(self.client.get("/api/org-logo").headers["cache-control"], "no-cache")
+        r = self.client.delete("/api/org-logo")
+        self.assertEqual(r.json()["org_logo_v"], 0)
+        self.assertEqual(self.client.get("/api/branding").json()["org_logo_v"], 0)
 
     def test_app_image_replacing_clears_the_old_extension(self):
         self._isolate_branding()

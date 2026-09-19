@@ -1474,6 +1474,9 @@ _PUBLIC_EXACT = {
     ("GET", "/api/branding"), ("GET", "/api/org-logo"),
 }
 _PUBLIC_PREFIXES = ("/auth/", "/images/")   # OAuth flow + the shell's own assets
+# The shell's lifted-out stylesheet + script (see `_shell_parts`). An exact
+# shape, not an "/assets/" prefix, so nothing else can ever be served under it.
+_SHELL_ASSET_RE = re.compile(r"^/assets/app\.([0-9a-f]{16})\.(css|js)$")
 
 # A watcher token is an unattended credential that lives in plaintext next to a
 # script on a member's gaming PC, so it gets exactly the three endpoints the
@@ -1515,7 +1518,8 @@ def session_user(request: Request) -> dict | None:
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
     path, method = request.url.path, request.method
-    if (method, path) in _PUBLIC_EXACT or path.startswith(_PUBLIC_PREFIXES):
+    if ((method, path) in _PUBLIC_EXACT or path.startswith(_PUBLIC_PREFIXES)
+            or (method == "GET" and _SHELL_ASSET_RE.match(path))):
         return await call_next(request)
     if session_user(request):
         return await call_next(request)
@@ -1581,6 +1585,14 @@ async def security_headers(request: Request, call_next):
     nonce = secrets.token_urlsafe(16)
     request.state.csp_nonce = nonce
     resp = await call_next(request)
+    # The shell references its built-in art as /images/<file>?v=<APP_VERSION>,
+    # so a versioned URL names exact bytes: cache it for good. Without this the
+    # static mount sent no Cache-Control and every cold visit re-pulled ~2 MB
+    # of logos through the origin link (see _shell_parts for the slow-org
+    # context). A bare /images/ URL keeps the default revalidation.
+    if (resp.status_code == 200 and request.url.path.startswith("/images/")
+            and request.query_params.get("v")):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     resp.headers.setdefault("Content-Security-Policy", _csp(nonce))
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
@@ -11995,6 +12007,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "extra_admin_ids": extra_admin_ids(),       # DB-backed, editable here
         "root_admin_ids": sorted(auth.ADMIN_IDS),   # env, read-only floor
         "org_logo": bool(db.get_setting("org_logo_ext")),
+        "org_logo_v": org_logo_version(),
         "org_name": org_name(),
         **org_copy_all(),
         "app_images": app_image_versions(),
@@ -12211,19 +12224,41 @@ async def get_branding():
     member data — since this is reachable without a session (see the auth_gate
     exemption)."""
     return {"org_name": org_name(), "org_tagline": org_tagline(),
-            "org_logo": bool(db.get_setting("org_logo_ext"))}
+            "org_logo": bool(db.get_setting("org_logo_ext")),
+            "org_logo_v": org_logo_version()}
 
 
-@app.get("/api/org-logo")
-async def get_org_logo():
-    """Serve the org's uploaded logo (shown alongside the built-in one in the
-    header and on the login splash). Public so it can render pre-auth; the
-    auth_gate middleware exempts this GET."""
+def _org_logo_path() -> Path | None:
     ext = db.get_setting("org_logo_ext")
     if ext:
         path = BRANDING_DIR / f"org_logo.{ext}"
         if path.is_file():
-            return FileResponse(path)
+            return path
+    return None
+
+
+def org_logo_version() -> int:
+    """The logo's cache-buster: its file mtime (an upload rewrites the file, so
+    a new logo is a new number), 0 when there's no logo. Taken off the file
+    rather than stored at upload so logos uploaded before this existed carry a
+    version too. The client used to bust with Date.now(), which re-downloaded
+    the whole image on every page load — a 455 KB logo cost ~7 s per visit on
+    a slow self-hosted link."""
+    path = _org_logo_path()
+    return int(path.stat().st_mtime * 1000) if path else 0
+
+
+@app.get("/api/org-logo")
+async def get_org_logo(v: str | None = None):
+    """Serve the org's uploaded logo (shown alongside the built-in one in the
+    header and on the login splash). Public so it can render pre-auth; the
+    auth_gate middleware exempts this GET. The client asks for
+    `?v=<org_logo_version>`, and that URL is cached hard — a new upload is a
+    new URL. A bare request only revalidates (no-cache)."""
+    path = _org_logo_path()
+    if path:
+        cache = "public, max-age=31536000, immutable" if v else "no-cache"
+        return FileResponse(path, headers={"Cache-Control": cache})
     raise HTTPException(status_code=404, detail="no org logo")
 
 
@@ -12252,7 +12287,7 @@ async def upload_org_logo(file: UploadFile = File(...),
         old.unlink(missing_ok=True)
     (BRANDING_DIR / f"org_logo.{ext}").write_bytes(data)
     db.set_setting("org_logo_ext", ext)
-    return {"ok": True, "org_logo": True}
+    return {"ok": True, "org_logo": True, "org_logo_v": org_logo_version()}
 
 
 @app.delete("/api/org-logo")
@@ -12261,7 +12296,7 @@ async def delete_org_logo(admin: dict = Depends(require_admin)):
     for old in BRANDING_DIR.glob("org_logo.*"):
         old.unlink(missing_ok=True)
     db.set_setting("org_logo_ext", "")
-    return {"ok": True, "org_logo": False}
+    return {"ok": True, "org_logo": False, "org_logo_v": 0}
 
 
 def _check_app_image_key(key: str) -> str:
@@ -12774,6 +12809,7 @@ async def api_me(user: dict = Depends(require_session)):
     motd = motd_state()
     return {**user, "share_presence": hub.get(user).share_presence,
             "org_logo": bool(db.get_setting("org_logo_ext")),
+            "org_logo_v": org_logo_version(),
             "org_name": org_name(), **org_copy_all(),
             "app_images": app_image_versions(),   # app-chooser art overrides
             "motd": motd["text"], "motd_updated": motd["updated"],
@@ -13205,26 +13241,88 @@ async def download_watcher(request: Request):
 
 
 # The SPA shell is served through a route (not the StaticFiles mount) so the
-# per-request CSP nonce can be stamped onto its single inline <script>. Routing
-# is hash-based, so "/" is the only path that serves the shell; "/index.html" is
-# handled too in case it's hit directly. Read per request so a dev edit shows up
-# without a restart (matching StaticFiles); the file is small and only read on a
-# full page load, not per API call. All other assets fall through to the mount.
+# per-request CSP nonce can be stamped onto its <script> tag. Routing is
+# hash-based, so "/" is the only path that serves the shell; "/index.html" is
+# handled too in case it's hit directly.
+#
+# index.html stays ONE source file (no build step), but it's SERVED as three:
+# the shell document (head + body markup, ~140 KB) plus its <style> and
+# <script> bodies (~170 KB + ~880 KB) lifted out to content-hashed
+# /assets/app.<hash>.css|js URLs. The shell has to be no-store — a cached
+# document would pin a stale nonce that no longer matches the per-request CSP
+# header — and while the CSS/JS lived inline, that meant every page load (the
+# first visit AND the return from the Discord OAuth redirect) re-downloaded the
+# whole 1.2 MB. On a slow origin link (a self-hosting org measured ~65 KB/s
+# through their tunnel, 2026-09-19) that was 5–20 s of blank page, twice per
+# sign-in. The hashed assets are immutable, so the browser (and Cloudflare's
+# edge, which caches .css/.js by extension) fetches each one once per release.
+#
+# The split is cached against the file's mtime, so a dev edit still shows up
+# on the next load without a restart (matching StaticFiles).
 INDEX_FILE = STATIC_DIR / "index.html"
+_shell_cache: dict = {}
+
+
+def _shell_parts() -> dict:
+    """Split index.html into {head, body, tail, css, js, css_hash, js_hash},
+    re-reading only when the file changes. `head` runs up to <style>, `body`
+    from </style> to <script>, `tail` after </script>. The markers are the one
+    inline <style> and the one inline <script> (test_app pins that there is
+    exactly one of each)."""
+    mtime = INDEX_FILE.stat().st_mtime_ns
+    if _shell_cache.get("mtime") == mtime:
+        return _shell_cache
+    html = INDEX_FILE.read_text(encoding="utf-8").replace("{{APP_VERSION}}", APP_VERSION)
+    s0 = html.index("<style>")
+    s1 = html.index("</style>", s0)
+    j0 = html.index("<script>", s1)
+    j1 = html.rindex("</script>")
+    css = html[s0 + len("<style>"):s1]
+    js = html[j0 + len("<script>"):j1]
+    _shell_cache.clear()
+    _shell_cache.update(
+        mtime=mtime, head=html[:s0], body=html[s1 + len("</style>"):j0],
+        tail=html[j1 + len("</script>"):],
+        css=css.encode("utf-8"), js=js.encode("utf-8"),
+        css_hash=hashlib.sha256(css.encode("utf-8")).hexdigest()[:16],
+        js_hash=hashlib.sha256(js.encode("utf-8")).hexdigest()[:16])
+    return _shell_cache
 
 
 def _index_response(request: Request) -> HTMLResponse:
     nonce = getattr(request.state, "csp_nonce", "")
+    p = _shell_parts()
     html = (
-        INDEX_FILE.read_text(encoding="utf-8")
-        .replace("<script>", f'<script nonce="{nonce}">', 1)
-        # Stamp the running version into the footer (placeholder degrades to the
-        # current version; the string is our own SemVer, so no escaping needed).
-        .replace("{{APP_VERSION}}", APP_VERSION)
+        p["head"]
+        + f'<link rel="stylesheet" href="/assets/app.{p["css_hash"]}.css">'
+        + p["body"]
+        + f'<script nonce="{nonce}" src="/assets/app.{p["js_hash"]}.js"></script>'
+        + p["tail"]
     )
     # Never cache the shell: a cached document would pin a stale nonce that no
     # longer matches the per-request CSP header, dead-scripting the app.
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/assets/{name}")
+async def shell_asset(name: str):
+    """The shell's stylesheet / script, lifted out of index.html (see above).
+    Public (the login splash needs them; they're the same bytes the public
+    shell used to carry inline) — `auth_gate` admits exactly the
+    `_SHELL_ASSET_RE` shape, nothing else under /assets/."""
+    m = _SHELL_ASSET_RE.match(f"/assets/{name}")
+    if not m:
+        raise HTTPException(status_code=404, detail="not found")
+    digest, ext = m.groups()
+    p = _shell_parts()
+    media = "text/css" if ext == "css" else "text/javascript"
+    # A hash that isn't current means a shell from before a deploy/edit is
+    # asking for its old asset. Serve today's bytes so that page still boots,
+    # but never under an immutable header: that URL must not pin these bytes.
+    cache = ("public, max-age=31536000, immutable" if digest == p[f"{ext}_hash"]
+             else "no-store")
+    return Response(p[ext], media_type=f"{media}; charset=utf-8",
+                    headers={"Cache-Control": cache})
 
 
 @app.get("/", response_class=HTMLResponse)
