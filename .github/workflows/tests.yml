@@ -45,10 +45,31 @@ jobs:
         # reaches the image (Dockerfile installs requirements.txt alone).
         run: pip install -r requirements.txt httpx2
 
+      # The uexcorp loaders fetch live with an on-disk cache fallback, and those
+      # caches are gitignored per-deployment runtime data — so a fresh checkout
+      # had none and CI fetched the live UEX API on every run. On 2026-09-19 a
+      # runner lost the network mid-run ("Connection reset by peer"), the
+      # catalogs came back empty, 8 tests failed, and since `tag-release` only
+      # fires when `tests` SUCCEEDS on main, it skipped and the v1.14.3 release
+      # silently never happened. Seeding the committed fixtures and running
+      # offline (below) removes the network from the gate entirely.
+      - name: Seed UEX feed fixtures
+        run: cp server/testdata/uex/*.json poi/
+
       - name: Run app (HTTP) tests
         working-directory: server
         # No starmap URL pin needed anymore: the container/POI catalogs are
         # vendored snapshots (tools/sync_containers.py) and the app has no
-        # runtime fetch path for them. The uexcorp feeds still fetch live here,
-        # matching production.
+        # runtime fetch path for them.
+        #
+        # SC_NAV_OFFLINE=1 makes the uexcorp loaders skip the fetch and read the
+        # seeded cache, so this step is hermetic: no network, deterministic, and
+        # it exercises the same offline path a self-hosting org runs when they
+        # set SC_NAV_OFFLINE. Regenerate the fixtures with
+        # `python3 tools/make_test_fixtures.py` (see that file's header) when a
+        # new test needs a feed row the fixture doesn't carry — the symptom is an
+        # empty-catalog failure here that doesn't reproduce on a dev box, whose
+        # poi/ cache is populated with the full live feeds.
+        env:
+          SC_NAV_OFFLINE: "1"
         run: python test_app.py

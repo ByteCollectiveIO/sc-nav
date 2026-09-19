@@ -79,8 +79,16 @@ See "Two channels" at the bottom for why prod tracks `stable` and not `main`.
    - Merge it themselves (GitHub UI or `gh pr merge`) — this skill will not.
    - On merge, the `tag-release` workflow auto-creates and pushes `v<X.Y.Z>` once
      `tests` passes on `main`, publishes the GitHub Release, and fast-forwards the
-     **`stable`** branch to that commit — no further `/deploy` run needed. Confirm
-     via `git fetch --tags` or the Actions tab.
+     **`stable`** branch to that commit — no further `/deploy` run needed.
+     **Confirm it actually ran** (`gh run list --workflow=tag-release`, or
+     `git fetch --tags`); don't infer it from the PR's green check, which is the
+     PR-BRANCH run, a different run from the post-merge one on `main`. If `tests`
+     fails on `main`, tag-release now fails loudly saying the release didn't ship
+     (it used to skip in silence — that's how v1.14.3 merged untagged). When that
+     failure is infrastructure rather than code — the app suite is hermetic since
+     PR #176, so this should be rare — verify the merged commit locally and
+     `gh run rerun <tests-run-id> --failed`; the re-run re-fires tag-release on
+     its own. Never push the tag or `stable` by hand.
    - Redeploy of **our** box is **automatic** — no manual step. It's a git-based
      Portainer stack tracking **`main`** with **5-minute polling**, so it re-pulls
      and rebuilds (it owns the checkout and the `build: .`) within ~5 min of ANY

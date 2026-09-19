@@ -24,6 +24,16 @@ name: tag-release
 # but a pinned tag never moves, so every upgrade would mean hand-editing the stack's
 # reference field. A branch that only ever advances to release commits does.
 # So: main = trunk (the dev stack polls it), stable = releases (prod pulls it).
+#
+# WHY THIS JOB RUNS EVEN WHEN `tests` FAILED (2026-09-19). It used to carry
+# `if: workflow_run.conclusion == 'success'`, so a red `tests` run on main made
+# this job SKIP — and a skipped job is not a failed one: it is green-grey, it
+# notifies nobody, and the release simply doesn't happen. That is exactly how
+# v1.14.3 merged, went untagged and unreleased, and left `stable` on v1.14.2
+# while main rolled forward. Nothing surfaced it; the PR page still showed a
+# green check, because that check is the PR-BRANCH run, a different run from the
+# post-merge one on main. The guard now lives in a step that FAILS instead, so
+# a stalled release is a red X with a message saying what didn't ship.
 on:
   workflow_run:
     workflows: ["tests"]
@@ -35,8 +45,6 @@ permissions:
 
 jobs:
   tag:
-    # Only when tests actually passed on the merged commit.
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       # v7: the runners force Node-20 actions onto Node 24 and warn; v5+ targets
@@ -57,6 +65,64 @@ jobs:
             print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', \
             pathlib.Path('server/version.py').read_text()).group(1))")
           echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # The gate that used to be `if: conclusion == 'success'` on the job. Failing
+      # here rather than skipping is the whole point: this is the only thing that
+      # tells anyone a merged release didn't ship.
+      #
+      # It distinguishes the two cases with no extra bookkeeping, because
+      # server/version.py already separates them: on a RELEASE merge it names a
+      # version whose tag does not exist yet (that's what the next step would
+      # create), while on an ordinary merge it names the version already tagged.
+      # So "tag missing + tests red" == a release just stalled; "tag present +
+      # tests red" == main is broken but nothing was due to ship.
+      #
+      # Both fail. A red main deserves a signal too, and the messages say which
+      # situation it is so the red X is never ambiguous.
+      - name: Require a green tests run
+        if: github.event.workflow_run.conclusion != 'success'
+        env:
+          V: ${{ steps.ver.outputs.version }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            echo "::error::tests on main concluded '$CONCLUSION' ($RUN_URL). Nothing was due to ship (v$V is already tagged), but main is not green."
+            {
+              echo "## main is not green"
+              echo
+              echo "\`tests\` concluded **$CONCLUSION** on \`$SHA\`."
+              echo "No release was pending — v$V is already tagged — so nothing stalled."
+              echo
+              echo "[Failed run]($RUN_URL)"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::RELEASE STALLED: v$V merged to main but was NOT tagged, NOT released, and stable was NOT advanced, because tests concluded '$CONCLUSION' ($RUN_URL)."
+            {
+              echo "## Release v$V did not ship"
+              echo
+              echo "\`tests\` concluded **$CONCLUSION** on \`$SHA\`, so this workflow"
+              echo "did not tag \`v$V\`, did not publish its GitHub Release, and left"
+              echo "\`stable\` where it was. Self-hosting orgs will not see this version."
+              echo
+              echo "[Failed run]($RUN_URL)"
+              echo
+              echo "### If the failure was infrastructure, not code"
+              echo
+              echo "Verify the merged commit locally, then re-run the failed jobs —"
+              echo "a re-run emits a fresh \`workflow_run\` event and this workflow"
+              echo "picks it up on its own:"
+              echo
+              echo '```'
+              echo "cd server && .venv/bin/python test_app.py"
+              echo "gh run rerun ${{ github.event.workflow_run.id }} --failed"
+              echo '```'
+              echo
+              echo "Do **not** push the tag or \`stable\` by hand."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 1
 
       - name: Create + push tag if missing
         env:

@@ -40,6 +40,9 @@ script) that reports the player's in-game position.
 - `poi/*.json` runtime caches (gitignored) AND the committed feeds
   (`poi.json`/`containers.json`/`container_tombstones.json`/`quantum_*`/`blueprints.json`/`locations.json`)
   — all token sinks. The schema is in code, not here.
+- `server/testdata/uex/*.json` — minified UEX feed fixtures CI seeds into `poi/`
+  so the app suite runs with `SC_NAV_OFFLINE=1` (no live fetch in the gate).
+  Regenerate with `tools/make_test_fixtures.py`; never hand-edit, never read.
 - `.impeccable/`, `.github/skills/`, `.claude/skills/` — tooling, not app code.
 
 ## Navigation conventions (how to find things fast)
