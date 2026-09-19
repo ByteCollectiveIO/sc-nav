@@ -2,8 +2,19 @@
 
 Unlike test_nav_core.py (pure stdlib), this imports `app` and drives it through
 a TestClient, so it needs the runtime deps (fastapi/starlette/httpx2). It runs as
-its own CI step. Importing `app` boots offline: the feed loaders fall back to the
-committed poi/ cache when the live fetch fails, so no network is required.
+its own CI step.
+
+**Feeds:** importing `app` runs the uexcorp loaders, which fetch live and fall
+back to the on-disk cache. Those caches are gitignored runtime data, so this
+docstring's old claim that the suite "boots offline, no network required" held
+only on a dev box that had already populated them — CI was fetching live, and 61
+tests here depend on a non-empty catalog. A runner losing the network mid-run on
+2026-09-19 took out 8 of them and (via the `tag-release` success gate) stalled a
+release. CI now seeds `server/testdata/uex/` into poi/ and sets SC_NAV_OFFLINE=1,
+so the fetch never happens; regenerate those fixtures with
+`tools/make_test_fixtures.py`. Locally the suite still runs against whatever full
+feeds your poi/ cache holds, which is the deliberate difference: CI pins a known
+fixture, a dev box notices real feed drift.
 
 What it pins down — the things a pure unit test can't:
   * the per-request nonce stamped onto the shell's <script> matches the nonce in
