@@ -487,7 +487,9 @@ milestones, radar drift nudge; **(4) lifecycle** — watcher game-build
 stamping → automatic staleness badges, cross-org import with a
 pending/review queue + dedupe, maintainer promotion tooling; **(5) scope** —
 mark kinds (salvage/ice/gas/derelict/hazard w/ Danger Board cross-file),
-surface zones (own doc #37.1 before build), value-aware mining circuit.
+surface zones (#37.1 — **design doc now written:**
+[`survey-zones-surface.md`](survey-zones-surface.md)), value-aware mining
+circuit.
 Invariants: derived-never-stored, one-tap stays one-tap, tiers-with-basis
 honesty, no gamification. Build order in doc §9; slices 1+2 need zero new
 inputs and complete the survey→mine loop on existing data.
