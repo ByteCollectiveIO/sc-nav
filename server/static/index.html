@@ -17736,7 +17736,6 @@ function renderHaloAtlasZones() {
     const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
       : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
     const ores = zoneWhatsHere(z);
-    const size = z.grid_radius_m ? `⌀ ${fmtDist(2 * z.grid_radius_m)}` : "";
     const acts = (z.marks ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
       + (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
       + (!z.closed ? `<button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
@@ -17764,7 +17763,6 @@ function renderHaloAtlasZones() {
       + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
       + `<td data-l="Rocks">${rocks}</td>`
       + `<td data-l="Here">${ores}</td>`
-      + `<td class="muted" data-l="Size" style="white-space:nowrap;">${size}</td>`
       + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
       + `</tr>`;
   };
@@ -17776,7 +17774,11 @@ function renderHaloAtlasZones() {
     + `<th>HEALTH</th><th>VALUE</th><th>ROCKS / BAND</th>`
     // Not "ORES" any more: a ground area rolls up ore, harvestables and fauna
     // on one circle, and two of those three are not ores.
-    + `<th>WHAT'S HERE</th><th>SIZE</th><th></th></tr></thead><tbody>`
+    // No SIZE column. Adding HEALTH pushed this table into a horizontal
+    // scrollbar, and size is the one column here that never decides anything:
+    // it is a property of the circle somebody drew, not of what is in it.
+    // Both detail cards already carry the diameter ("Area ⌀" / "Field ⌀").
+    + `<th>WHAT'S HERE</th><th></th></tr></thead><tbody>`
     + rows.map(cell).join("") + `</tbody></table>`;
   const byId = (id) => haloZones.find(x => x.zone_id === Number(id));
   for (const b of el.querySelectorAll("[data-zdetails]"))
@@ -19525,7 +19527,6 @@ function surfaceZoneRow(z) {
     + `<td data-l="Value">${valCell}</td>`
     + `<td data-l="Band">${band}</td>`
     + `<td data-l="Here">${ores}</td>`
-    + `<td class="muted" data-l="Size" style="white-space:nowrap;">${z.radius_m ? "⌀ " + fmtDist(2 * z.radius_m) : ""}</td>`
     + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
     + `</tr>`;
 }
