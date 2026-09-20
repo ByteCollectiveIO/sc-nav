@@ -7241,12 +7241,14 @@ def list_survey_zones(system: str = "Nyx", kind: str = "deep", body: str | None 
     # They are NOT run through _survey_valued: its tiers are terciles across one
     # per-system pool where "$$$" means "best in this belt", and scoring a moon
     # patch against a belt pocket would silently redefine that. Surface zones
-    # need their own scoring basis and their own pool — a feature, not a
-    # parameter, and deliberately not in this slice. Until it exists a surface
-    # row simply carries no `value` key.
+    # score on their own basis (band x Wilson-discounted composition x price)
+    # and tier in their own per-system pool, so "$$$" means "the best surface
+    # area we know in Stanton" — a different and honest claim.
     if kind in ("surface", "all") or body:
         rows = db.list_survey_zones(system, kind="surface", body=body)
         surface = nav_core.surface_zones_state(nav, system, rows)
+        surface = nav_core.annotate_surface_values(
+            surface, (resource_values or {}).get("resource") or {})
         creators_s = {z["id"]: z.get("created_by") for z in rows}
         surface = [{**z, "can_edit": is_admin or creators_s.get(z["zone_id"]) == uid}
                    for z in surface]
@@ -13120,6 +13122,42 @@ def intel_surveying(user: dict = Depends(require_session)):
         zone_rows += zones_valued
     stats = nav_core.derive_survey_stats(all_marks)
     activity = stats["zones"]
+
+    # Surface mining (#37.1), kept as its OWN block rather than pooled into the
+    # belt totals: surveying a belt and mining a moon are different activities,
+    # and one "survey sessions" number meaning both answers neither. Same shape
+    # so one renderer serves both.
+    surface_rows: list[dict] = []
+    for system in {z["system"] for z in db.list_survey_zones(kind="surface")}:
+        rows = db.list_survey_zones(system, kind="surface")
+        st = nav_core.surface_zones_state(nav, system, rows)
+        surface_rows += nav_core.annotate_surface_values(
+            st, (resource_values or {}).get("resource") or {})
+    surface_stats = nav_core.derive_surface_survey_stats(
+        nav, db.list_survey_zones(kind="surface"))
+    surface_act = surface_stats["zones"]
+    surface_zones = sorted(
+        ({"zone_id": z.get("zone_id"), "name": z.get("name"),
+          "system": z.get("system"), "body": z.get("body"),
+          "closed": bool(z.get("closed")), "owner_handle": z.get("owner_handle"),
+          "status": z.get("status"), "sightings": z.get("sightings", 0),
+          "value": z.get("value"),
+          "latest": (surface_act.get(z.get("zone_id")) or {}).get("latest"),
+          "surveyors": (surface_act.get(z.get("zone_id")) or {}).get("surveyors", 0)}
+         for z in surface_rows),
+        key=lambda z: (z["latest"] is None, -(z["latest"] or 0),
+                       (z["name"] or "").lower()))
+    # Per-body coverage as absolute mapped area — never a percentage of the
+    # body: a maximum 50 km zone is 0.72% of Daymar, so a share reads as a
+    # rounding error forever.
+    bodies = []
+    for (sys_name, body_name) in sorted({(z["system"], z["body"])
+                                         for z in db.list_survey_zones(kind="surface")}):
+        container = nav.resolve_container(sys_name, body_name)
+        cover = nav_core.body_coverage(
+            db.list_survey_zones(sys_name, kind="surface", body=body_name),
+            float(getattr(container, "body_radius", 0.0) or 0.0))
+        bodies.append({"system": sys_name, "body": body_name, **cover})
     zones = []
     for z in zone_rows:
         act = activity.get(z.get("zone_id")) or {}
@@ -13134,6 +13172,10 @@ def intel_surveying(user: dict = Depends(require_session)):
                               (z["name"] or "").lower()))
     return {"totals": stats["totals"], "members": stats["members"],
             "belts": belts, "zones": zones,
+            # Surface mining rides beside the belt numbers, never inside them.
+            "surface": {"totals": surface_stats["totals"],
+                        "members": surface_stats["members"],
+                        "zones": surface_zones, "bodies": bodies},
             "session_gap_min": int(nav_core.SURVEY_SESSION_GAP_S // 60)}
 
 

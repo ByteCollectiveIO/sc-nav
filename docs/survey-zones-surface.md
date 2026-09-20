@@ -12,10 +12,28 @@
 > `surface_cap_area_m2`, rasterized `body_coverage`, create/PATCH/GET with the
 > body-prefixed slug that survives a rename, and the drop-planner reject that
 > names the category instead of blaming the evidence. 38 tests.
-> **Not built:** the value basis (§4), the stats adapter (§8), every UI
-> surface (§5, §6, §11.1), and the `kind="survey"` goal (§11.2, release two).
-> `GET /api/halo/survey/zones` still defaults to `kind="deep"` so a deployed
-> SPA sees exactly what it saw before; the UI slice flips that default. **Reviewed in four passes.** §12 and §13 are review output (gaps,
+>
+> **Slice 2 — the two features, also built.** The **value basis** is a fifth
+> basis `"surface"`: band weight (linear, pivot 4) x expected ore price,
+> where each ore's weight is its **Wilson lower bound**, not its raw share —
+> so sample size is discounted in the same step and by the same statistic
+> `resource_hotspots` ranks the anonymous grid with (3/3 Quantanium scores
+> 438 where 20/20 scores 839). Unpriced ores fall back to the category
+> median and say so via `priced: false`. Terciles are cut across a
+> **surface-only per-system pool**, so `$$$` means "best surface area we know
+> in Stanton" and the belt pool is provably untouched. The **stats adapter**
+> emits two streams — per-(zone, observation) pairs for the per-zone rollups,
+> de-duplicated by observation id for member ranks, org totals and sessions —
+> and `derive_surface_survey_stats` keeps surface activity in its own block
+> beside the belt totals rather than pooled into them (user's call). Unique
+> rows carry `zone_id: None` on purpose: crossing an invisible circle is not
+> the start of a new mining session. `/api/intel/surveying` gains a
+> `surface` block with per-body **absolute mapped area**. 17 more tests.
+>
+> **Not built:** every UI surface (§5, §6, §11.1) and the `kind="survey"`
+> goal (§11.2, release two). `GET /api/halo/survey/zones` still defaults to
+> `kind="deep"` so a deployed SPA sees exactly what it saw before; the UI
+> slice flips that default. **Reviewed in four passes.** §12 and §13 are review output (gaps,
 cross-tool hooks). §14 is the **audit trail** of an adversarial pass that
 checked every claim against the code: each correction it found has since been
 folded into the section it affects, and a fourth pass re-verified §14 itself and

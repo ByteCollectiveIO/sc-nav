@@ -7304,5 +7304,159 @@ class SurfaceSurveyZoneTests(unittest.TestCase):
         self.assertEqual(nav_core.surface_zones_state(nav, "Stanton", [deep]), [])
 
 
+
+class SurfaceValueAndStatsTests(unittest.TestCase):
+    """#37.1 — the two things that look like they carry over from the belt side
+    and don't: the value basis and the Org Intel activity adapter."""
+
+    R = 295_000.0
+    PRICES = {"Quantanium": {"sell": 1000.0, "tier": "high"},
+              "Taranite": {"sell": 200.0, "tier": "medium"},
+              "Iron": {"sell": 10.0, "tier": "low"}}
+
+    def _fit(self, counts, n=None, avg_band=4.0):
+        n = n if n is not None else sum(counts.values())
+        return {"sightings": n, "avg_band": avg_band,
+                "ore_likely": {k: round(nav_core._wilson_lower_bound(v, n), 4)
+                               for k, v in counts.items()}}
+
+    def _idx(self):
+        return nav_core._ore_price_index(self.PRICES)
+
+    # -- the basis ----------------------------------------------------------
+    def test_an_empty_zone_scores_nothing_rather_than_zero(self):
+        idx, median = self._idx()
+        self.assertIsNone(nav_core.surface_value({"sightings": 0}, idx, median))
+
+    def test_sample_size_discounts_a_lucky_streak(self):
+        # Raw composition calls 3/3 and 20/20 both "100% Quantanium". The
+        # Wilson lower bound is what stops the first outranking the second.
+        idx, median = self._idx()
+        few = nav_core.surface_value(self._fit({"Quantanium": 3}), idx, median)
+        many = nav_core.surface_value(self._fit({"Quantanium": 20}), idx, median)
+        self.assertLess(few["score"], many["score"])
+        self.assertEqual(few["basis"], "surface")
+        self.assertTrue(few["priced"])
+
+    def test_band_weights_the_score(self):
+        idx, median = self._idx()
+        lo = nav_core.surface_value(self._fit({"Quantanium": 20}, avg_band=2.0), idx, median)
+        hi = nav_core.surface_value(self._fit({"Quantanium": 20}, avg_band=8.0), idx, median)
+        # Linear in band, pivot 4 — compared as a ratio because each score is
+        # rounded independently, so 4x a rounded value isn't the rounded 4x.
+        self.assertAlmostEqual(hi["score"] / lo["score"], 4.0, places=2)
+
+    def test_a_richer_ore_outscores_a_poorer_one(self):
+        idx, median = self._idx()
+        q = nav_core.surface_value(self._fit({"Quantanium": 20}), idx, median)
+        fe = nav_core.surface_value(self._fit({"Iron": 20}), idx, median)
+        self.assertGreater(q["score"], fe["score"])
+
+    def test_an_unpriced_ore_falls_back_to_the_median_and_says_so(self):
+        idx, median = self._idx()
+        v = nav_core.surface_value(self._fit({"Unobtainium": 10}), idx, median)
+        self.assertIsNotNone(v)
+        self.assertFalse(v["priced"])
+
+    def test_no_price_at_all_scores_nothing(self):
+        v = nav_core.surface_value(self._fit({"Unobtainium": 10}), {}, None)
+        self.assertIsNone(v)
+
+    # -- the pool -----------------------------------------------------------
+    def test_surface_zones_tier_in_their_own_pool(self):
+        zones = [
+            {"key": "a", **self._fit({"Quantanium": 20})},
+            {"key": "b", **self._fit({"Taranite": 20})},
+            {"key": "c", **self._fit({"Iron": 20})},
+        ]
+        out = nav_core.annotate_surface_values(zones, self.PRICES)
+        tiers = {z["key"]: z["value"]["tier"] for z in out}
+        # "$$$" means "the best SURFACE area we know here" — cut across surface
+        # zones only, never against belt pockets.
+        self.assertEqual(tiers["a"], "high")
+        self.assertEqual(tiers["c"], "low")
+
+    def test_an_unscoreable_zone_passes_through_without_a_badge(self):
+        out = nav_core.annotate_surface_values(
+            [{"key": "empty", "sightings": 0}], self.PRICES)
+        self.assertNotIn("value", out[0])
+
+    # -- the activity adapter ----------------------------------------------
+    def _nav_with(self, obs_specs, zones):
+        nav = nav_core.NavData()
+        nav.containers[("Stanton", "Daymar")] = nav_core.Container(
+            name="Daymar", system="Stanton", type="Moon", internal_name="",
+            pos=(0.0, 0.0, 0.0), body_radius=self.R, om_radius=0, grid_radius=0,
+            rotation_speed=0, rotation_adjustment=0)
+        for oid, lat, lon, handle, when in obs_specs:
+            nav.observations[oid] = nav_core.Observation(
+                id=oid, category="resource", system="Stanton",
+                container_name="Daymar", local_km=None, global_m=None,
+                latitude=lat, longitude=lon, height_m=0.0, biome=None, note=None,
+                owner_id=None, owner_handle=handle, observed_at=when,
+                data={"ore": "Quantanium", "band": 5})
+        return nav
+
+    def _zone(self, zid, lat=0.0, lon=0.0, radius_m=50_000.0):
+        return {"id": zid, "slug": f"z{zid}", "name": f"Zone {zid}",
+                "system": "Stanton", "body": "Daymar", "center_lat": lat,
+                "center_lon": lon, "radius_m": radius_m, "closed": 0}
+
+    def test_overlapping_zones_do_not_inflate_a_members_total(self):
+        # The sharpest edge of the overlap rule: both cards legitimately count
+        # the node, but the org's totals and that member's rank must not.
+        zones = [self._zone(1), self._zone(2, lat=0.05)]
+        nav = self._nav_with([(1, 0.0, 0.0, "ana", "2026-01-01T00:00:00+00:00")], zones)
+        per_zone, unique = nav_core.surface_stats_marks(nav, zones)
+        self.assertEqual(len(per_zone), 2)      # one row per (zone, obs) pair
+        self.assertEqual(len(unique), 1)        # one row per observation
+        stats = nav_core.derive_surface_survey_stats(nav, zones)
+        self.assertEqual(stats["totals"]["sightings"], 1)
+        self.assertEqual([m["sightings"] for m in stats["members"]], [1])
+        # ...while BOTH zones still credit it.
+        self.assertEqual(stats["zones"][1]["sightings"], 1)
+        self.assertEqual(stats["zones"][2]["sightings"], 1)
+        self.assertEqual(stats["members"][0]["zones"], 2)
+
+    def test_crossing_a_zone_boundary_does_not_start_a_new_session(self):
+        # derive_survey_stats splits a session when the zone tag changes, which
+        # is right for a belt (you deliberately switched targets) and wrong
+        # here: the circles are invisible and you were just mining.
+        zones = [self._zone(1), self._zone(2, lat=0.05)]
+        nav = self._nav_with([
+            (1, 0.0, 0.0, "ana", "2026-01-01T00:00:00+00:00"),
+            (2, 0.05, 0.0, "ana", "2026-01-01T00:05:00+00:00"),
+        ], zones)
+        stats = nav_core.derive_surface_survey_stats(nav, zones)
+        self.assertEqual(stats["members"][0]["sessions"], 1)
+
+    def test_a_long_gap_does_start_a_new_session(self):
+        zones = [self._zone(1)]
+        nav = self._nav_with([
+            (1, 0.0, 0.0, "ana", "2026-01-01T00:00:00+00:00"),
+            (2, 0.0, 0.0, "ana", "2026-01-01T09:00:00+00:00"),
+        ], zones)
+        stats = nav_core.derive_surface_survey_stats(nav, zones)
+        self.assertEqual(stats["members"][0]["sessions"], 2)
+
+    def test_a_passive_contributor_is_credited_without_any_tagging(self):
+        # The payoff claim of "mining is surveying": nobody tagged anything.
+        zones = [self._zone(1)]
+        nav = self._nav_with([
+            (1, 0.0, 0.0, "ana", "2026-01-01T00:00:00+00:00"),
+            (2, 0.01, 0.0, "bo", "2026-01-01T00:10:00+00:00"),
+        ], zones)
+        stats = nav_core.derive_surface_survey_stats(nav, zones)
+        self.assertEqual({m["handle"] for m in stats["members"]}, {"ana", "bo"})
+        self.assertEqual(stats["zones"][1]["surveyors"], 2)
+        self.assertIsNotNone(stats["zones"][1]["latest"])
+
+    def test_no_zones_is_an_empty_block_not_a_crash(self):
+        nav = self._nav_with([], [])
+        stats = nav_core.derive_surface_survey_stats(nav, [])
+        self.assertEqual(stats["totals"]["sightings"], 0)
+        self.assertEqual(stats["members"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

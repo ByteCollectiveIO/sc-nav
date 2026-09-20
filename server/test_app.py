@@ -10912,5 +10912,114 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         self.assertEqual(rows[0]["sightings"], 1)
 
 
+
+class SurfaceValueApiTests(unittest.TestCase):
+    """#37.1 — the value chip must not render blank (the whole reason the
+    surface basis exists), and it must not disturb the belt pool."""
+
+    BODY = "Daymar"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Surveyor", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._obs_ids = []
+
+    def tearDown(self):
+        for oid in self._obs_ids:
+            app.nav.observations.pop(oid, None)
+            db.delete_observation(oid)
+        for z in db.list_survey_zones(kind=None):
+            db.delete_survey_zone(z["id"])
+        app.nav.touch()
+
+    def _add_obs(self, lat, lon, ore="Quantanium", band=5, handle="ana"):
+        oid = db.next_observation_id()
+        obs = app.nav_core.Observation(
+            id=oid, category="resource", system="Stanton", container_name=self.BODY,
+            local_km=None, global_m=None, latitude=lat, longitude=lon,
+            height_m=0.0, biome=None, note=None, owner_id=None, owner_handle=handle,
+            observed_at="2026-01-01T00:00:00+00:00",
+            data=app.nav_core._normalize_resource({"ore": ore, "band": band}))
+        db.add_observation(app.nav_core.observation_to_dict(obs))
+        app.nav.observations[oid] = obs
+        app.nav.touch()
+        self._obs_ids.append(oid)
+        return obs
+
+    def _create(self, name, lat, lon, radius_m=25_000.0):
+        return self.client.post("/api/halo/survey/zones", json={
+            "name": name, "body": self.BODY, "center_lat": lat,
+            "center_lon": lon, "radius_m": radius_m})
+
+    def test_a_surface_zone_carries_a_value_not_a_blank_chip(self):
+        # The regression this basis exists for: _survey_value_from_index scores
+        # a rocks-density ladder an observation has no data for, so every
+        # surface row used to fall through unscored.
+        for i in range(6):
+            self._add_obs(0.0, 0.0, ore="Quantanium", band=7)
+        self._create("Rich Ridge", 0.0, 0.0)
+        rows = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+        self.assertEqual(len(rows), 1)
+        value = rows[0].get("value")
+        self.assertIsNotNone(value, "surface zone scored nothing")
+        self.assertEqual(value["basis"], "surface")
+        self.assertGreater(value["score"], 0)
+        self.assertIn(value["tier"], ("high", "medium", "low"))
+
+    def test_a_rich_moon_zone_does_not_disturb_the_belt_pool(self):
+        # "$$$" means "best in this belt". Tiering a moon patch against a belt
+        # pocket would silently redefine it, so the pools stay separate.
+        before = self.client.get(
+            "/api/halo/survey/zones?system=Stanton").json()["zones"]
+        for i in range(20):
+            self._add_obs(0.0, 0.0, ore="Quantanium", band=8)
+        self._create("Rich Ridge", 0.0, 0.0)
+        after = self.client.get(
+            "/api/halo/survey/zones?system=Stanton").json()["zones"]
+        self.assertEqual([z.get("value") for z in before],
+                         [z.get("value") for z in after])
+
+    def test_intel_surveying_credits_passive_mining_in_its_own_block(self):
+        self._add_obs(0.0, 0.0, handle="ana")
+        self._add_obs(0.01, 0.0, handle="bo")
+        self._create("Iron Ridge", 0.0, 0.0)
+        r = self.client.get("/api/intel/surveying")
+        self.assertEqual(r.status_code, 200, r.text)
+        surface = r.json()["surface"]
+        self.assertEqual(surface["totals"]["sightings"], 2)
+        self.assertEqual({m["handle"] for m in surface["members"]}, {"ana", "bo"})
+        self.assertEqual(surface["zones"][0]["surveyors"], 2)
+        # Separate block, never pooled into the belt totals (user's call:
+        # one "survey sessions" number meaning both answers neither).
+        self.assertNotIn("sightings", r.json()["totals"])
+
+    def test_intel_reports_mapped_area_not_a_percentage(self):
+        self._add_obs(0.0, 0.0)
+        self._create("Iron Ridge", 0.0, 0.0, radius_m=50_000.0)
+        bodies = self.client.get("/api/intel/surveying").json()["surface"]["bodies"]
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual(bodies[0]["body"], self.BODY)
+        self.assertGreater(bodies[0]["area_m2"], 0)
+        self.assertNotIn("pct", bodies[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
