@@ -2419,7 +2419,8 @@
      parks the target's first line underneath it. The occluded line on the plan
      card is the heading that names the SYSTEM — i.e. the mitigation for the
      wrong-system error was the part being hidden. */
-  #halo-result, #halo-zone-detail, #halo-intro { scroll-margin-top: 72px; }
+  #halo-result, #halo-zone-detail, #halo-intro {
+    scroll-margin-top: calc(var(--halo-mast-h, 61px) + 11px); }
   /* The RS lookup: one input answers the question the 286-cell table made you
      scan for. */
   .halo-rs-look { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
@@ -2440,10 +2441,10 @@
   #halo-view [data-zdelete]:hover, #halo-view [data-zdelete]:focus-visible {
     border-color: var(--bad); color: var(--bad); }
   /* Two captions measured ~173 chars per line against a 65-75 guideline.
-     In a 12px mono face `ch` is narrow, so 68ch rendered as ~46 characters and
-     left ragged columns beside full-width text — use a px cap tuned to the
-     actual face instead. */
-  #halo-band-info, #halo-atlas-cap { max-width: 62em; }
+     68ch is exactly 68 characters here — `ch` is one advance in a monospace
+     face, so the earlier "62em" detour was solving a problem that did not
+     exist, and shipped 103 characters per line instead. */
+  #halo-band-info, #halo-atlas-cap { max-width: 68ch; }
   /* The ONLY AA failures in the app: --dim text on the accent/selected wash
      rows composited to 4.47:1 against a 4.5 requirement. Lift the text, not
      the wash, so the selection tint is unchanged. */
@@ -2451,17 +2452,22 @@
   #halo-atlas-zones tbody tr.selected td.muted,
   #halo-atlas-zones tbody tr.selected td b,
   #halo-atlas-zones tbody tr.zone-sel td,
-  #halo-atlas-zones tbody tr.zone-sel td.muted { color: var(--text); }
+  #halo-atlas-zones tbody tr.zone-sel td.muted,
+  /* the contributors line is a nested div, which `td.muted` never reached */
+  #halo-atlas-zones tbody tr.selected td .muted,
+  #halo-atlas-zones tbody tr.zone-sel td .muted { color: var(--text); }
   #halo-atlas-zones tbody tr.selected .halo-chip,
   #halo-atlas-zones tbody tr.zone-sel .halo-chip { color: var(--text); }
   /* Selection stays legible as wash + the inset left bar; it does not need to
      recolour the text to amber to read as selected. */
-  .halo-zone-active, .halo-zone-active .muted, .halo-zone-active b { color: var(--text); }
+  .halo-zone-active .muted { color: var(--text); }
   /* Rows carry the primary gesture, so they need a focus ring of their own. */
   #halo-atlas-zones tr[data-zrow]:focus-visible { outline: 2px solid var(--accent);
     outline-offset: -2px; }
   /* The mono face draws U+22EF as three hairline dots, which vanished inside a
      44px touch target. Bullets at a larger size actually read as "more". */
+  .route-chip:disabled { opacity: .55; cursor: default; }
+  .route-chip:disabled:hover { color: inherit; border-color: var(--border); }
   .zone-more { font-weight: 700; font-size: 15px; line-height: 1;
     letter-spacing: .06em; padding-left: 10px; padding-right: 10px; }
   .zone-menu { position: fixed; z-index: 60; min-width: 190px; padding: 4px;
@@ -2489,6 +2495,9 @@
        each label glued to its value while letting them wrap as a paragraph. */
     #halo-atlas-zones td[data-l] { display: inline-block; margin-right: 14px;
       vertical-align: top; }
+    /* ::before is unconditional, so an empty cell printed a bare "SIZE" with
+       nothing after it — a label for a value that isn't there. */
+    #halo-atlas-zones td[data-l]:empty { display: none; }
     #halo-atlas-zones td[data-l]::before { content: attr(data-l) " ";
       color: var(--dim); font-size: 11px; letter-spacing: .06em;
       text-transform: uppercase; margin-right: 4px; }
@@ -2680,7 +2689,10 @@
   /* Active survey zone banner (#36.1) */
   #halo-zone-banner { margin-top: 8px; }
   .halo-zone-active { display: flex; align-items: center; flex-wrap: wrap;
-    gap: 8px; font-size: 12.5px; color: var(--dim);
+    /* --dim on --accent-wash measured 4.47:1 against a 4.5 requirement. This
+       banner names the zone every ⛏ mark is filing into, so it is not
+       secondary text. One declaration, at the component. */
+    gap: 8px; font-size: 12.5px; color: var(--text);
     background: var(--accent-wash); border: 1px solid var(--border);
     border-radius: 8px; padding: 8px 10px; }
   .halo-zone-active b { color: var(--text); }
@@ -16294,6 +16306,7 @@ function applyHaloTab(h) {
   }
   wireHaloStaleWatch();   // idempotent; the pickers exist by now
   wireHaloBandKeys();
+  wireHaloMastHeight();
   if (t === "atlas") {
     renderHaloAtlas();
     if (zr) openZoneFromRoute(zr);
@@ -17075,6 +17088,10 @@ function haloZonesFiltered() {
 }
 
 function renderHaloAtlasZones() {
+  // The menu is parented to <body>, so a table re-render (a zone refresh, a
+  // selection change) left it floating above a button that no longer exists —
+  // and Escape then focused a detached node.
+  closeZoneMenu();
   const el = $("halo-atlas-zones"), filters = $("halo-zone-filters");
   if (!el) return;
   wireHaloZoneFilters();
@@ -17441,17 +17458,15 @@ function renderHaloZoneBanner() {
     + ` <button type="button" class="route-chip" id="halo-zone-clear">Clear active</button>`
     + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-plan">Plan a drop here</button>` : "")
     + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-details" title="mark timeline, contributors, ore breakdown — and attach scan detail to any mark">▸ details</button>` : "")
-    + (z.can_edit ? ` <button type="button" class="route-chip" id="halo-zone-rename" title="rename this zone">✎ Rename</button>` : "")
-    + (z.can_edit ? ` <button type="button" class="route-chip" id="halo-zone-archive" title="${z.closed ? "put this zone back on the picker and maps" : "archive this zone — marks are kept, but it leaves the picker, maps and drop suggestions"}">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
-    + (z.can_edit ? ` <button type="button" class="route-chip" id="halo-zone-delete" title="delete this zone — its ⛏ marks are kept and revert to proximity clustering">✕ Delete zone</button>` : "")
+    // Same overflow menu as the ATLAS row. Moving the row's four management
+    // actions behind ... while this banner kept them inline left one job with
+    // two affordances — and left the hard delete bare here, at the same weight
+    // as "Clear active", on the tab a surveyor actually works from.
+    + (z.can_edit ? ` <button type="button" class="route-chip zone-more" id="halo-zone-more" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, archive or delete">•••</button>` : "")
     + `</div>`;
   $("halo-zone-clear").onclick = () => setActiveSurveyZone(null);
-  const rb = $("halo-zone-rename");
-  if (rb) rb.onclick = () => renameSurveyZone(z);
-  const ab = $("halo-zone-archive");
-  if (ab) ab.onclick = () => archiveSurveyZone(z, !z.closed);
-  const xb = $("halo-zone-delete");
-  if (xb) xb.onclick = () => deleteSurveyZone(z);
+  const mb = $("halo-zone-more");
+  if (mb) mb.onclick = (e) => { e.stopPropagation(); openZoneMenu(mb, z); };
   const pb = $("halo-zone-plan");
   if (pb) pb.onclick = () => planHaloZone(z);
   const dbtn = $("halo-zone-details");
@@ -18965,7 +18980,17 @@ function renderHaloStrip() {
     c.innerHTML = `<span class="halo-bar" style="height:${Math.round(14 + 60 * b.density)}px;`
       + `--a:${(0.18 + 0.55 * b.density).toFixed(2)};"></span>`
       + `<span class="halo-num">${b.band}</span>`;
-    c.onclick = () => { haloBandSel = b.band; renderHaloStrip(); };
+    c.onclick = () => {
+      // innerHTML="" destroys the focused button, so focus fell to <body>:
+      // a keyboard user who picked a band lost their place in the document.
+      const hadFocus = strip.contains(document.activeElement);
+      haloBandSel = b.band;
+      renderHaloStrip();
+      if (hadFocus) {
+        const back = strip.querySelector('.halo-cell[tabindex="0"]');
+        if (back) back.focus();
+      }
+    };
     strip.appendChild(c);
   }
   renderHaloBandInfo();
@@ -19356,6 +19381,22 @@ function wireHaloBandKeys() {
   });
 }
 
+// The sticky masthead is 61px on a desktop and 122px on a phone, where it
+// wraps — so every scroll-into-view target needs its offset as a live number,
+// not the desktop constant. Publishes it as --halo-mast-h.
+function wireHaloMastHeight() {
+  const mast = document.querySelector(".halo-mast");
+  if (!mast || mast.dataset.mastWired) return;
+  mast.dataset.mastWired = "1";
+  const pub = () => {
+    const h = Math.round(mast.getBoundingClientRect().height);
+    if (h > 0) document.documentElement.style.setProperty("--halo-mast-h", `${h}px`);
+  };
+  pub();
+  if (window.ResizeObserver) new ResizeObserver(pub).observe(mast);
+  else window.addEventListener("resize", pub);
+}
+
 function markHaloPlanStale() {
   if (!haloLastPlan) return;
   const el = $("halo-result");
@@ -19607,7 +19648,6 @@ function drawHaloSystemMap(cv, plan) {
   const labelBoxes = [];      // shared label occupancy — see the marks loop
   const labelClash = (box) => labelBoxes.some(b =>
     box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y);
-  const skipBodyLabel = new Set();
   const bodyZones = surfaceZonesByBody();
   for (const b of doc.surface_bodies || []) {
     const info = bodyZones[b.name];
@@ -19619,18 +19659,19 @@ function drawHaloSystemMap(cv, plan) {
     ctx.beginPath(); ctx.arc(bx, by, 8, 0, 2 * Math.PI); ctx.stroke();
     ctx.lineWidth = 1;
     ctx.fillStyle = vc || C.label;
-    // Claims its box unconditionally: it outranks everything else on the map.
+    // Sits a line HIGHER than a body name (which draws at by+3), so the two
+    // never contend — the badge used to win that fight and delete the name.
     const bl = `⛏ ${info.n}`;
-    labelBoxes.push({ x: bx + 11, y: by - 14, w: ctx.measureText(bl).width, h: 12 });
-    ctx.fillText(bl, bx + 11, by - 5);
+    labelBoxes.push({ x: bx + 11, y: by - 22, w: ctx.measureText(bl).width, h: 12 });
+    ctx.fillText(bl, bx + 11, by - 12);
     if (hits) hits.push({ kind: "body", body: b.name, x: bx, y: by, key: b.name });
   }
   for (const b of doc.bodies || []) {
     if (b.type === "Star") continue;
     const bx = cx + b.x * s, by = cy - b.y * s;
-    const box = { x: bx + 5, y: by - 6, w: ctx.measureText(b.name).width, h: 12 };
-    if (labelClash(box)) skipBodyLabel.add(b.name);   // a ⛏ badge already has it
-    else labelBoxes.push(box);
+    // Always reserved, never suppressed: a planet's name is the map's
+    // orientation and nothing here outranks it.
+    labelBoxes.push({ x: bx + 5, y: by - 6, w: ctx.measureText(b.name).width, h: 12 });
   }
   // Landmarks UNDER everything else (v0.69.1 feedback: the survey story is
   // the point of this map — POIs are context, drawn first and dim so the
@@ -19796,9 +19837,7 @@ function drawHaloSystemMap(cv, plan) {
     ctx.fillStyle = isStar ? C.star : C.body;
     ctx.beginPath();
     ctx.arc(bx, by, Math.max(isStar ? 4 : 2.2, b.r * s), 0, 2 * Math.PI); ctx.fill();
-    if (!isStar && !skipBodyLabel.has(b.name)) {
-      ctx.fillStyle = C.label; ctx.fillText(b.name, bx + 5, by + 3);
-    }
+    if (!isStar) { ctx.fillStyle = C.label; ctx.fillText(b.name, bx + 5, by + 3); }
   }
   // Named zones (#36.1) live in ANY system (v0.71.0: a zone at ARC-L2 is as
   // real as one on the Keeger ring) — value-tinted squares. Drawn LAST of the
@@ -19859,7 +19898,21 @@ function drawHaloSystemMap(cv, plan) {
     const dot = (p, fill, label, dy) => {
       ctx.fillStyle = fill;
       ctx.beginPath(); ctx.arc(X(p), Y(p), 3, 0, 2 * Math.PI); ctx.fill();
-      if (label) { ctx.fillStyle = C.text; ctx.fillText(label, X(p) + 6, Y(p) + (dy || -5)); }
+      if (!label) return;
+      const lx = X(p) + 6;
+      const lw = ctx.measureText(label).width;
+      // Route labels outrank everything (they name the plan just asked for), so
+      // they always draw — but step them clear of an occupied line first rather
+      // than sitting on a planet's name and relying on the halo alone.
+      let ly = Y(p) + (dy || -5);
+      for (let i = 0; i < 3; i++) {
+        if (!labelClash({ x: lx, y: ly - 9, w: lw, h: 12 })) break;
+        ly += 12;
+      }
+      labelBoxes.push({ x: lx, y: ly - 9, w: lw, h: 12 });
+      ctx.strokeStyle = C.bg; ctx.lineWidth = 3; ctx.lineJoin = "round";
+      ctx.strokeText(label, lx, ly); ctx.lineWidth = 1;
+      ctx.fillStyle = C.text; ctx.fillText(label, lx, ly);
     };
     dot(P.start, C.chord, plan.start.name);
     if (P.stage) dot(P.stage, C.chord, plan.legs[0].to, 10);
@@ -20216,7 +20269,7 @@ function updatePocketRadar(d) {
         + "around, so the band verdict above is your position. The radar appears "
         + "inside a mapped pocket, or once your active survey zone has a mark in it."
       : "Available inside a mapped pocket, or once your active survey zone has "
-        + "at least one \u26cf mark to plot around. Nothing to plot yet.");
+        + "at least one \u26cf mark to plot around.");
     haloRadarLast = null; haloRadar = { key: null, pts: [] };
     return;
   }
