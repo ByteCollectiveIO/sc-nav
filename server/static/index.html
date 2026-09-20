@@ -16751,6 +16751,9 @@ function resolveHaloSurveyArm(capture) {
       : landed ? "✓ mark dropped — the org's map just got better" : "";
   }
   if (landed) {
+    // Re-arm from scratch: this mark is filed, and the next one is somewhere
+    // else. Carrying the last density forward would let one tap assert it again.
+    setHaloSurveyRocks(null);
     delete haloTargets.Nyx;
     if (!$("halo-view").hidden && haloSystem === "Nyx")
       loadHaloTargets("Nyx").then(renderHaloSystemPanel);
@@ -18826,12 +18829,27 @@ function wireZoneLinkCopy(z) {
 }
 
 async function setActiveSurveyZone(zid) {
+  const st = $("halo-zone-status");
+  // A failed switch must put the picker BACK, not leave it showing a zone the
+  // server never accepted — the <select> is the only thing a surveyor checks
+  // before dropping a mark, so a stale one silently misfiles their evidence.
+  const revert = (why) => {
+    renderHaloZoneSelect();          // redraw from activeSurveyZone, not the DOM
+    renderHaloZoneBanner();
+    if (st) { st.className = "armed"; st.textContent = `⚠ ${why} — still filing into `
+      + (activeSurveyZone == null ? "no zone (auto-cluster)" : "the previous zone"); }
+  };
   try {
     const r = await fetch("/api/halo/survey/zones/active", { method: "PUT",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zone_id: zid }) });
-    if (!r.ok) return;
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      revert(d.detail || "couldn't switch zone");
+      return;
+    }
     activeSurveyZone = zid;
-  } catch { return; }
+  } catch { revert("network error"); return; }
+  if (st) { st.className = "muted"; st.textContent = ""; }
   renderHaloZoneSelect(); renderHaloZoneBanner();
   renderHaloAtlasZones();   // the ⛏ active chip lives there too (#38)
   renderHaloAtlasSel();
@@ -19560,7 +19578,16 @@ function renderHaloPlan(plan) {
         + ` <button class="route-chip halo-promote" type="button" data-i="${i}">use this</button></div>`;
     });
   }
-  h += `<p class="muted" style="font-size:11px; margin:10px 0 0;">${esc(plan.attribution)}</p></div>`;
+  // The page credit line under the tabs already carries the same string for
+  // the current system, so printing it here too put the identical attribution
+  // on screen twice, 44px apart, on the app's primary surface. Credit the feed
+  // once — suppress the copy only when the visible one already says it.
+  const pageCredit = ($("halo-credit-line") || {}).textContent || "";
+  const dupCredit = plan.attribution
+    && pageCredit.replace(/\s+/g, " ").includes(String(plan.attribution).replace(/\s+/g, " ").trim());
+  h += (plan.attribution && !dupCredit)
+    ? `<p class="muted" style="font-size:11px; margin:10px 0 0;">${esc(plan.attribution)}</p></div>`
+    : `</div>`;
   el.innerHTML = h; el.hidden = false;
   wireHaloCopy("halo-copy", plan);
   const fb = $("halo-flyit");
