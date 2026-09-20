@@ -7952,10 +7952,35 @@ SURFACE_ZONE_RADIUS_MIN_M = 500.0         # below this it's a node, not an area
 # altitude with room to spare.
 SURFACE_ZONE_MAX_HEIGHT_M = 10_000.0
 
-# Which observation categories a mining area is made of. `observations` also
-# holds `wildlife` and `harvestable`; read without this filter, a fauna
-# sighting would join a mining rollup and inflate every count on the card.
+# Which observation category a surface area's PRIMARY rollup is made of. The
+# top level of a zone row is the mining rollup and always has been, so every
+# reader that predates lanes keeps working unchanged.
 SURFACE_ZONE_CATEGORY = "resource"
+
+# …and the three kinds of ground evidence a named area rolls up, in the order
+# they are shown. ONE circle, three lanes — not three kinds of zone: a member
+# who names the ground they are standing on should not have to name it again
+# for the plants and a third time for the fauna, and the ground does not care
+# which of them you came for.
+#
+# **The lanes never pool**, which is the whole reason they are lanes. Two
+# independent reasons:
+#   * a fauna sighting in a mining rollup inflates every count on the card and
+#     every ore percentage under it;
+#   * harvestable gems out-price every ore by an order of magnitude (Hadanite
+#     ~552k/SCU against Quantainium ~146k and Iron ~1k), so one merged score
+#     would let a single gem sighting decide a zone that is otherwise a
+#     mediocre iron patch. Each lane tiers in its own pool, exactly as
+#     `annotate_surface_values` refuses to tier a moon patch against a belt
+#     pocket, so "$$$" keeps meaning "best of its kind in this system".
+SURFACE_ZONE_LANES = ("resource", "harvestable", "wildlife")
+
+# The lanes that can carry a VALUE at all. Wildlife is deliberately absent and
+# must stay absent: `build_resource_values` prices `resource` and
+# `harvestable` because both are sold by the SCU, and nothing anywhere states
+# what an animal is worth. A fauna lane is presence evidence — what lives
+# here, and how sure are we — never a profit claim.
+SURFACE_ZONE_VALUED_LANES = ("resource", "harvestable")
 
 
 def surface_zone_anchor(zone: dict):
@@ -8029,6 +8054,16 @@ def _obs_epoch(observed_at) -> float | None:
     return dt.timestamp()
 
 
+# Exactly what `surface_zone_fit` emits — used to mirror the ore rollup into
+# `lanes["resource"]` without running the fit twice, so one lane renderer can
+# read all three and the top level stays where every older reader expects it.
+_LANE_KEYS = (
+    "sightings", "surveyors", "surveyor_count", "ores", "ore_counts",
+    "ore_comp", "ore_likely", "bands", "avg_band", "worked", "freshest",
+    "oldest", "area_m2", "status",
+)
+
+
 def surface_zone_fit(members: list[Observation], body_radius_m: float,
                      radius_m: float | None = None,
                      category: str = SURFACE_ZONE_CATEGORY) -> dict:
@@ -8044,6 +8079,12 @@ def surface_zone_fit(members: list[Observation], body_radius_m: float,
     toward whatever gets re-logged most. Do NOT try to de-duplicate — nothing in
     the data distinguishes a respawn from a re-sighting — the card says it
     instead.
+
+    The `ore_*` key names are historical, not a claim about the contents: the
+    fitter reads whatever `category`'s type field is, so on the harvestable
+    lane `ores` holds plant and gem names and on the fauna lane it holds
+    species. They keep the ore spelling ON PURPOSE — one shape means one
+    renderer, and a zone's three lanes are read by the same code.
 
     `ore_comp` is emitted in PERCENT, matching what `scan_comp` already carries
     and what the frontend chart prints literally (it applies no x100).
@@ -8160,6 +8201,7 @@ def surface_zones_state(nav: NavData, system: str, zones: list[dict]) -> list[di
         container = nav.resolve_container(z.get("system") or system, body)
         body_radius_m = float(getattr(container, "body_radius", 0.0) or 0.0)
         members = surface_zone_members(nav, z, body_radius_m)
+        members_all = list(members)
         row = {
             "key": z["slug"], "kind": "surface", "zone_id": z["id"],
             "name": z["name"], "system": z.get("system") or system,
@@ -8173,6 +8215,23 @@ def surface_zones_state(nav: NavData, system: str, zones: list[dict]) -> list[di
             "contributors": sorted({o.owner_handle for o in members if o.owner_handle}),
         }
         row.update(surface_zone_fit(members, body_radius_m, radius_m))
+        # The other two lanes, on the SAME circle (#37.1 lanes). Each is the
+        # identical rollup over its own category, so one renderer serves all
+        # three and nothing about ore leaks into plants or fauna.
+        row["lanes"] = {"resource": {k: row[k] for k in _LANE_KEYS if k in row}}
+        for cat in SURFACE_ZONE_LANES:
+            if cat == SURFACE_ZONE_CATEGORY:
+                continue
+            lane_members = surface_zone_members(nav, z, body_radius_m, category=cat)
+            row["lanes"][cat] = surface_zone_fit(
+                lane_members, body_radius_m, radius_m, category=cat)
+            members_all.extend(lane_members)
+        # Contributors span every lane. Membership is geometric, so somebody
+        # who has only ever logged Hadanite inside this circle contributed to
+        # it just as much as the miners did — crediting only the ore lane made
+        # the card quietly tell them they had not.
+        row["contributors"] = sorted(
+            {o.owner_handle for o in members_all if o.owner_handle})
         # Navigable, never plannable (#37.1 §4): what a surface zone gets
         # INSTEAD of being a drop target is a route to the nearest quantum
         # marker, and the last leg flown by hand.
@@ -8768,7 +8827,61 @@ def annotate_surface_values(zones: list[dict], prices: dict) -> list[dict]:
             out.append(z)
             continue
         t = tiers.get(z["key"])
-        out.append({**z, "value": ({**v, "tier": t["tier"]} if t else dict(v))})
+        val = {**v, "tier": t["tier"]} if t else dict(v)
+        # Mirrored into the ore lane as well as the top level: the top level is
+        # where every reader that predates lanes looks, the lane is where one
+        # renderer can find all three the same way.
+        lanes = dict(z.get("lanes") or {})
+        if lanes.get(SURFACE_ZONE_CATEGORY) is not None:
+            lanes[SURFACE_ZONE_CATEGORY] = {**lanes[SURFACE_ZONE_CATEGORY],
+                                            "value": dict(val)}
+        out.append({**z, "value": val, "lanes": lanes} if lanes
+                   else {**z, "value": val})
+    return out
+
+
+def annotate_surface_lane_values(zones: list[dict], prices: dict,
+                                 category: str = "harvestable") -> list[dict]:
+    """Value + tier ONE non-ore lane across a pool of surface zones.
+
+    The sibling of `annotate_surface_values`, and separate for the same reason
+    that one is separate from `annotate_survey_values`: a `$$$` means "best in
+    this pool", so the pool has to be things that compare. Harvestable gems
+    out-price every ore by an order of magnitude, so tiering them together
+    would mean `$$$` silently changed from "a rich field" to "has a gem in it".
+    Two pools, two chips, two honest claims.
+
+    Scores through `surface_value` unchanged — a lane fit is the same shape as
+    the top-level rollup, so it needs no lane-aware scorer. `avg_band` is None
+    off the ore lane, which lands on the neutral weight: a band is a mining
+    scanner reading and says nothing about a plant.
+
+    Wildlife is never passed here (see SURFACE_ZONE_VALUED_LANES).
+    """
+    if category not in SURFACE_ZONE_VALUED_LANES:
+        raise ValueError(f"{category} carries no price, so it carries no value")
+    idx, median = _ore_price_index(prices)
+    vals: dict[str, dict] = {}
+    for z in zones:
+        lane = (z.get("lanes") or {}).get(category)
+        if not lane:
+            continue
+        v = surface_value(lane, idx, median)
+        if v is not None:
+            vals[z["key"]] = v
+    tiers = resource_value_tiers({k: v["score"] for k, v in vals.items()
+                                  if v["score"]})
+    out = []
+    for z in zones:
+        v = vals.get(z["key"])
+        if v is None:
+            out.append(z)
+            continue
+        t = tiers.get(z["key"])
+        lanes = dict(z.get("lanes") or {})
+        lanes[category] = {**lanes[category],
+                           "value": ({**v, "tier": t["tier"]} if t else dict(v))}
+        out.append({**z, "lanes": lanes})
     return out
 
 
@@ -8833,6 +8946,21 @@ def derive_surface_survey_stats(nav: NavData, zones: list[dict]) -> dict:
     five rows. That is the right answer for "how much evidence do we have" and
     a known bias for "how rich is this place"; nothing in the data can tell the
     two apart, so the card says so rather than guessing.
+
+    **ORE ONLY, and deliberately so (user's call, 2026-09-20).** A named area
+    rolls up three lanes (SURFACE_ZONE_LANES) and this counts one of them. That
+    is not an oversight to be tidied up later: in the live game harvestables
+    and fauna exist to satisfy CONTRACTS, not to be sold by the SCU, so their
+    value to a member is knowing WHERE one is — which the zone card, the
+    element finder and the map already give them. Rolling them into "how much
+    has the org surveyed" would inflate a coverage number that exists to answer
+    "how much of this system do we know pays", and a moon with forty logged
+    Maroks and no ore does not pay.
+
+    Revisit only if CIG gives either category a sale price: `build_resource_values`
+    already prices `harvestable`, so the trigger is a real market for it, not a
+    code change here. Until then `surface_stats_marks` stays on the ore lane and
+    the two are read in the zone card instead.
     """
     per_zone, unique = surface_stats_marks(nav, zones)
     # Each half comes from the run that computes it correctly: per-zone tallies

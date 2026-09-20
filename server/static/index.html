@@ -206,6 +206,35 @@
     border-radius: 4px; border: 1px solid var(--border); background: var(--panel2);
     font-size: 12px; color: var(--text); }
   .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  /* Two capture PURPOSES, banded (2026-09-20). The three panels used to sit in
+     one undifferentiated row, so marking a place to fly back to and logging
+     evidence about ground looked like the same act. The band is the structure;
+     the eyebrow is only its name. */
+  .cap-group { border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 12px 14px; margin-bottom: 14px; }
+  /* The survey band is the one that accumulates into something, so it gets the
+     accent edge — a rule the app already uses for "this is the live thing". */
+  .cap-survey { border-left: 3px solid var(--accent); }
+  .cap-group-h { font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 4px; display: flex; gap: 10px;
+    align-items: baseline; flex-wrap: wrap; }
+  .cap-group-h span { color: var(--dim); font-size: 12px; font-weight: 400;
+    letter-spacing: 0; text-transform: none; }
+  /* Says what a control is FOR. 62ch, not full width: this is prose, and the
+     panels it sits in are as wide as the window. */
+  .cap-purpose { font-size: 12px; color: var(--dim); margin: 0 0 10px;
+    max-width: 62ch; line-height: 1.55; }
+  .cap-purpose b { color: var(--text); font-weight: 600; }
+  .cap-group-purpose { margin-bottom: 12px; }
+  /* The area control, at GROUP level: it rolls up all three lanes, so it
+     cannot live inside the ore panel. */
+  .cap-area { margin-top: 12px; padding: 12px; border-radius: 8px;
+    background: var(--accent-wash); border: 1px solid var(--border); }
+  .cap-area-head { display: flex; gap: 10px; flex-wrap: wrap;
+    align-items: center; margin-bottom: 8px; }
+  .cap-area .cap-purpose { margin-bottom: 0; }
+  .cap-area-foot { margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid var(--border-soft); }
 
   #dest-card { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   #dest-name { font-size: 18px; color: var(--warn); }
@@ -2597,6 +2626,22 @@
      the reason for the ORDER, not a second thing to read. */
   .zn-pct { color: var(--dim); font-weight: 400; font-size: 11px;
             font-variant-numeric: tabular-nums; }
+  /* One circle, three lanes. The lanes are LABELLED and separated rather than
+     merged, because an ore list and a species list are answers to different
+     questions and a reader has to be able to tell which one they are looking
+     at without counting names. */
+  .zn-lane + .zn-lane { margin-top: 7px; padding-top: 6px;
+                        border-top: 1px dashed var(--border-soft); }
+  .zn-lane-h { display: flex; align-items: center; gap: 6px; font-size: 10px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
+    margin-bottom: 2px; }
+  .zn-lane-n { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+  .zn-lane-h .zn-more { font-size: 10px; }
+  /* The per-lane evidence split under the total. */
+  .zn-ev { display: flex; gap: 7px; justify-content: flex-end; flex-wrap: wrap;
+    font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+    margin-top: 2px; }
+  .zn-val { display: inline-flex; align-items: center; gap: 3px; margin-right: 8px; }
   .halo-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .halo-chip { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);
     border-radius: 999px; color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -2695,6 +2740,11 @@
                 max-width: 560px; font-size: 11px; color: var(--dim); }
   .svy-legend span { display: inline-flex; align-items: center; gap: 5px; }
   .svy-legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+  /* The non-ore lanes draw as squares on the plate, so their key has to be a
+     square: a round swatch beside a square mark is a key to nothing. */
+  .svy-legend i.svy-key-sq { border-radius: 1px; }
+  .svy-legend i.svy-key-sq.hollow { background: none;
+    box-shadow: inset 0 0 0 1px rgba(216,225,238,.75); }
   /* The timeline is the least important thing on the card and the longest, so
      it collapses: the maps above it stay reachable without scrolling past
      dozens of rows. */
@@ -3091,9 +3141,24 @@
     </div>
   </div>
 
-  <div class="capture-grid">
+  <!-- Two purposes, two groups (2026-09-20). These three panels sat in one
+       undifferentiated row, so "Add custom POI" and "Add resource node" read
+       as the same kind of act. They are not: a POI is a PLACE you will come
+       back to, a resource/fauna/harvestable sighting is EVIDENCE about ground
+       — it feeds the element finder, the team map and the org's survey.
+       Naming an area belongs to the second group and used to hang off the
+       bottom of the ore panel alone, which is also why nobody could tell what
+       it was for. -->
+  <div class="cap-group">
+    <h2 class="cap-group-h">NAVIGATION
+      <span>places you'll come back to</span></h2>
+    <div class="capture-grid">
     <div class="panel">
       <h2>ADD CUSTOM POI</h2>
+      <p class="cap-purpose">A spot worth flying back to — an outpost, a cave
+        mouth, a wreck. It lands in <b>NEARBY</b> and search, can be set as the
+        navigator's destination, and if it's an orbital marker you can flag it
+        <b>QT</b> so routes may jump to it.</p>
       <div id="poi-form" style="display:flex; gap:8px; flex-wrap:wrap;">
         <input id="poi-name" class="ti" placeholder="name" style="flex:2; min-width:120px;">
         <input id="poi-type" class="ti" list="poi-types" placeholder="type" style="flex:1; min-width:90px;">
@@ -3121,9 +3186,20 @@
       <div id="poi-result" class="muted" hidden style="padding-top:6px;"></div>
       <div class="credited" id="poi-credit"></div>
     </div>
+    </div><!-- /capture-grid -->
+  </div><!-- /NAVIGATION -->
 
+  <div class="cap-group cap-survey">
+    <h2 class="cap-group-h">SURVEY
+      <span>what's on the ground, and how well the org knows it</span></h2>
+    <p class="cap-purpose cap-group-purpose">Every sighting does three jobs at
+      once: it feeds <b>ELEMENT FINDER</b> and the forecast, it puts a marker
+      on the map your team can fly to, and it joins the org's survey — which
+      ground pays, and which nobody has walked yet. You don't have to be
+      surveying to contribute; logging what you mine <i>is</i> the survey.</p>
+    <div class="capture-grid">
     <div class="panel">
-      <h2>ADD RESOURCE NODE</h2>
+      <h2>⛏ ADD RESOURCE NODE</h2>
       <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <select id="node-ore" class="sel" style="flex:1; min-width:130px;"></select>
         <input id="node-ore-other" class="ti" placeholder="other ore" hidden style="flex:1; min-width:110px;">
@@ -3150,26 +3226,10 @@
       </div>
       <div id="node-result" class="muted" hidden style="padding-top:6px;"></div>
       <div class="credited" id="node-credit"></div>
-      <!-- Surface survey zones (#37.1). Creation lives HERE, not in Prospector,
-           because this is where you are standing when you find the ore. Hidden
-           unless the fix is on a body: there is nothing to claim in orbit. -->
-      <div id="zone-claim" hidden style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-soft);">
-        <button id="zone-claim-btn" class="route-chip" title="name the ground around you as a survey area — every node the org has ever logged inside it joins immediately">⛏ Name this area</button>
-        <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">radius
-          <select id="zone-claim-radius" class="sel" style="min-width:86px;">
-            <option value="5000">5 km</option>
-            <option value="10000">10 km</option>
-            <option value="25000" selected>25 km</option>
-            <option value="50000">50 km</option>
-          </select>
-        </label>
-        <span id="zone-claim-note" class="muted" style="font-size:12px;"></span>
-      </div>
-      <div id="zone-claim-result" class="muted" hidden style="padding-top:6px;"></div>
     </div>
 
     <div class="panel">
-      <h2>ADD FAUNA &amp; HARVESTABLES</h2>
+      <h2>⚘ 🐾 ADD FAUNA &amp; HARVESTABLES</h2>
       <div id="wild-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <input id="wild-species" class="ti" list="fauna-types" placeholder="fauna or harvestable" style="flex:1; min-width:120px;">
         <datalist id="fauna-types"></datalist>
@@ -3187,7 +3247,40 @@
       <div id="wild-result" class="muted" hidden style="padding-top:6px;"></div>
       <div class="credited" id="wild-credit"></div>
     </div>
-  </div>
+    </div><!-- /capture-grid -->
+
+    <!-- Surface survey areas (#37.1). Creation lives HERE, not in Prospector,
+         because this is where you are standing when you find the ore — but at
+         the GROUP level, not inside the ore panel: a named circle rolls up all
+         three lanes (ore, harvestables, fauna), so filing it under ore was
+         both a misplacement and the reason its purpose was unreadable. -->
+    <div id="zone-claim" class="cap-area" hidden>
+      <div class="cap-area-head">
+        <button id="zone-claim-btn" class="route-chip primary"
+          title="Name the ground around you as a survey area. The radius is re-fencable later, and deleting an area never touches a sighting.">⛏ Name this area</button>
+        <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">radius
+          <select id="zone-claim-radius" class="sel" style="min-width:86px;">
+            <option value="5000">5 km</option>
+            <option value="10000">10 km</option>
+            <option value="25000" selected>25 km</option>
+            <option value="50000">50 km</option>
+          </select>
+        </label>
+        <span id="zone-claim-note" class="muted" style="font-size:12px;"></span>
+      </div>
+      <p class="cap-purpose">Turns scattered sightings into a place the org can
+        talk about. Membership is <b>geometric and retroactive</b>: every node,
+        plant and creature anyone has <i>ever</i> logged inside the circle joins
+        the moment you name it, and it keeps collecting by itself afterwards —
+        nothing to tag, nothing to arm.</p>
+      <p class="cap-purpose cap-area-foot">The area then appears in
+        <b>Prospector → ATLAS</b> with a value tier per lane (⛏ mining,
+        ⚘ gathering), what's in it and how well it's covered — so the org can
+        see which ground pays and which is still a blank. Naming ground that
+        turns out to be empty is worth it too: that's the org finding out.</p>
+    </div>
+    <div id="zone-claim-result" class="muted" hidden style="padding-top:6px;"></div>
+  </div><!-- /SURVEY -->
 
   <div class="panel" id="nearby-panel">
     <h2><span id="nearby-title">NEARBY</span> <span class="muted" id="nearby-hint">(click to set destination)</span></h2>
@@ -6420,9 +6513,17 @@ async function claimSurfaceZone() {
   const st = doc.state || {};
   // A surface zone is born with history, so say what it inherited — otherwise
   // the number reads as a bug.
+  // Report what it inherited PER LANE: "12 sightings already inside" under a
+  // button that just claimed ore, plants and fauna in one circle understates
+  // what happened, and the split is the proof that the retroactive claim is
+  // real rather than a promise.
+  const inherited = zoneLanesOf(st);
+  const nAll = inherited.reduce((a, L) => a + L.n, 0);
   show("zone-claim-result",
     `<span style="color:var(--good)">✓ ${esc(doc.zone.name)}</span> — `
-    + `${st.sightings || 0} sighting${st.sightings === 1 ? "" : "s"} already inside`
+    + `${nAll} sighting${nAll === 1 ? "" : "s"} already inside`
+    + (inherited.length > 1
+        ? ` (${inherited.map(L => `${L.n} ${esc(L.label.toLowerCase())}`).join(" · ")})` : "")
     + ((st.contributors || []).length
         ? `, from ${st.contributors.map(esc).join(", ")}` : "")
     + ((st.ores || []).length ? ` · ${st.ores.slice(0, 3).map(esc).join(" · ")}` : ""));
@@ -17179,7 +17280,10 @@ function haloZonesFiltered() {
   if (f.mine) rows = rows.filter(haloZoneIsMine);
   if (f.q) rows = rows.filter(z =>
     (z.name || "").toLowerCase().includes(f.q)
-    || (z.ores || []).some(o => (o || "").toLowerCase().includes(f.q)));
+    // Search every lane: typing "hadanite" has to find the area that has it,
+    // and the top-level `ores` is the mining lane alone.
+    || zoneLanesOf(z).some(L => ((L.fit || {}).ores || [])
+        .some(o => (o || "").toLowerCase().includes(f.q))));
   const score = (z) => (z.value && z.value.score) || 0;
   rows.sort((a, b) =>
     f.sort === "name" ? (a.name || "").localeCompare(b.name || "")
@@ -17216,7 +17320,7 @@ function renderHaloAtlasZones() {
     const active = z.zone_id === activeSurveyZone;
     const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
       : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
-    const ores = zoneOresCell(z);
+    const ores = zoneWhatsHere(z);
     const size = z.grid_radius_m ? `⌀ ${fmtDist(2 * z.grid_radius_m)}` : "";
     const acts = (z.marks ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
       + (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
@@ -17243,14 +17347,16 @@ function renderHaloAtlasZones() {
       + `<td class="num" data-l="Evidence">${z.marks || 0}</td>`
       + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
       + `<td data-l="Rocks">${rocks}</td>`
-      + `<td data-l="Ores">${ores}</td>`
+      + `<td data-l="Here">${ores}</td>`
       + `<td class="muted" data-l="Size" style="white-space:nowrap;">${size}</td>`
       + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
       + `</tr>`;
   };
   el.innerHTML = `<table><thead><tr>`
     + `<th>ZONE</th><th>WHERE</th><th class="num">EVIDENCE</th><th>VALUE</th><th>ROCKS / BAND</th>`
-    + `<th>ORES</th><th>SIZE</th><th></th></tr></thead><tbody>`
+    // Not "ORES" any more: a ground area rolls up ore, harvestables and fauna
+    // on one circle, and two of those three are not ores.
+    + `<th>WHAT'S HERE</th><th>SIZE</th><th></th></tr></thead><tbody>`
     + rows.map(cell).join("") + `</tbody></table>`;
   const byId = (id) => haloZones.find(x => x.zone_id === Number(id));
   for (const b of el.querySelectorAll("[data-zdetails]"))
@@ -17582,21 +17688,98 @@ function renderHaloZoneSelect() {
 // Capped, and the cap SAYS SO: the surface row used to slice(0, 4) silently, so
 // a nine-ore area advertised four. The full composition is on the details card.
 const ZONE_ORES_SHOWN = 10;
+
+// The three lanes a named area rolls up, in display order — the client mirror
+// of nav_core.SURFACE_ZONE_LANES. ONE circle, three lanes: a member names the
+// ground once and the plants and the fauna come with it. They never pool (a
+// fauna sighting in a mining rollup inflates every ore percentage under it),
+// and only the two that a price feed covers can carry a value — nothing
+// anywhere states what an animal is worth, so the fauna lane is presence
+// evidence and says so.
+const ZONE_LANES = [
+  { k: "resource",    icon: "\u26cf", label: "Mining",
+    noun: "ore",         nouns: "ores",         head: "Ore composition" },
+  { k: "harvestable", icon: "\u2698", label: "Gathering",
+    noun: "harvestable", nouns: "harvestables", head: "What grows here" },
+  // "species" is already plural, which is why the first cut printed
+  // "3 distinct speciess". Both forms are declared rather than derived.
+  { k: "wildlife",    icon: "\ud83d\udc3e", label: "Fauna", valued: false,
+    noun: "species",     nouns: "species",      head: "What lives here" },
+];
+
+// The non-empty lanes of either kind of zone row, newest shape first. A
+// deep-space zone has no lanes and never will (there is no flora or fauna in
+// a belt), so it answers as a single mining lane over its own top level.
+function zoneLanesOf(z) {
+  // "mark" vs "sighting" is not decoration: a belt mark is a deliberate act of
+  // surveying, a ground sighting is a by-product of mining, and every tooltip
+  // that counts one has to name which.
+  if (z.kind !== "surface")
+    return [{ ...ZONE_LANES[0], fit: z, n: z.positive || 0, unit: "mark" }];
+  const lanes = z.lanes || {};
+  return ZONE_LANES
+    .map(L => ({ ...L, fit: lanes[L.k], n: (lanes[L.k] || {}).sightings || 0,
+                 unit: "sighting" }))
+    .filter(L => L.fit && L.n > 0);
+}
+
+// A lane's value chip, or "" for a lane that can never have one. Wildlife
+// renders nothing rather than an empty chip: absence of a price is not a low
+// price, and a grey "—" where the other lanes show money reads as "worthless".
+function zoneLaneValue(z, L) {
+  if (L.valued === false) return "";
+  const v = L.k === "resource" && z.kind === "surface"
+    ? (z.value || (L.fit || {}).value)   // top level is where older readers look
+    : (L.fit || {}).value;
+  return v ? surveyValueChip(v) : "";
+}
+
 function zoneOresCell(z) {
+  const L = zoneLanesOf(z)[0];
+  return L ? zoneLaneOres(L) : `<span class="muted">\u2014</span>`;
+}
+
+// WHAT'S HERE: every lane that has evidence, labelled, never merged. With one
+// lane it is the old single list at full depth; with more, each gets a shorter
+// slice so the row stays a row.
+function zoneWhatsHere(z) {
+  const lanes = zoneLanesOf(z);
+  if (!lanes.length) return `<span class="muted">\u2014</span>`;
+  if (lanes.length === 1) return zoneLaneOres(lanes[0]);
+  // Three lanes at full depth turned one row into a quarter of the viewport,
+  // which is the same complaint the comma-joined list started from. Each lane
+  // keeps its top few and states its overflow IN ITS HEADER — the count is
+  // what you scan for, the eleventh ore name is not.
+  const cap = Math.max(3, Math.round(ZONE_ORES_SHOWN / lanes.length));
+  return lanes.map(L => {
+    const kinds = ((L.fit || {}).ores || []).length;
+    const over = Math.max(0, kinds - cap);
+    return `<div class="zn-lane"><span class="zn-lane-h">${L.icon} ${esc(L.label)}`
+      + `<span class="zn-lane-n">${L.n}</span>${zoneLaneValue(z, L)}`
+      + (over ? `<span class="zn-lane-n zn-more">+${over}</span>` : "")
+      + `</span>`
+      + zoneLaneOres(L, cap, true) + `</div>`;
+  }).join("");
+}
+
+// One lane's ranked contents. `L` is a zoneLanesOf() entry, so it carries the
+// denominator, the unit those trials were counted in, and which price table
+// the names live in — a harvestable is priced in its own category and would
+// come back unpriced against the ore table.
+function zoneLaneOres(L, capArg, headOverflow) {
+  const z = L.fit || {}, n = L.n, cap = capArg || ZONE_ORES_SHOWN;
+  const unit = L.unit || "sighting";
+  const priceCat = L.k === "wildlife" ? null : L.k;
   const names = (z.ores || []).filter(Boolean);
   if (!names.length) return `<span class="muted">\u2014</span>`;
   const counts = z.ore_counts || {};
   const likely = z.ore_likely || {};
-  // Denominator = whatever the ore tallies were counted over: sightings for a
-  // surface area, POSITIVE marks for a belt zone (a "nothing here" mark lists
-  // no ore, so it is not a trial this fraction could have failed).
-  const n = (z.kind === "surface" ? z.sightings : z.positive) || 0;
   const rows = names.map(o => {
     const k = counts[o] || 0;
     // Fall back to the raw share only if the server sent no bound (an older
     // row); never invent one where there is no evidence at all.
     const p = typeof likely[o] === "number" ? likely[o] : (n ? k / n : 0);
-    const v = oreValueLookup(o, "resource");
+    const v = priceCat ? oreValueLookup(o, priceCat) : null;
     return { o, k, p, share: n ? k / n : null,
              sell: v && v.sell > 0 ? v.sell : null };
   });
@@ -17608,28 +17791,35 @@ function zoneOresCell(z) {
     : null;
   for (const r of rows) r.score = r.p * (r.sell != null ? r.sell : (stand || 1));
   rows.sort((a, b) => (b.score - a.score) || (b.k - a.k) || a.o.localeCompare(b.o));
-  const shown = rows.slice(0, ZONE_ORES_SHOWN);
+  const shown = rows.slice(0, cap);
   const rest = rows.length - shown.length;
-  const unit = z.kind === "surface" ? "sighting" : "mark";
   return `<span class="zn-ores">`
     + shown.map(r => {
         const pct = r.share == null ? "" : Math.round(r.share * 100) + "%";
         const tip = r.share == null ? ""
           : ` title="seen in ${r.k} of ${n} ${unit}${n === 1 ? "" : "s"}`
             + `${r.sell != null ? ` \u00b7 \u2248${r.sell.toLocaleString()} aUEC/SCU`
+                : !priceCat ? ""
                 : stand != null ? " \u00b7 no price on file \u2014 ranked at this zone's median"
                 : " \u00b7 no price on file"}"`;
-        return `<span${tip}>${esc(r.o)}${oreValueChip(r.o)}`
+        return `<span${tip}>${esc(r.o)}`
+          + (priceCat ? oreValueChip(r.o, priceCat) : "")
           + (pct ? ` <b class="zn-pct">${pct}</b>` : "") + `</span>`;
       }).join("")
-    + (rest ? `<span class="zn-more" title="${esc(rows.slice(ZONE_ORES_SHOWN).map(r => r.o).join(", "))}">`
-        + `+${rest} more</span>` : "")
+    + (rest && !headOverflow
+        ? `<span class="zn-more" title="${esc(rows.slice(cap).map(r => r.o).join(", "))}">`
+          + `+${rest} more</span>` : "")
     + `</span>`;
 }
 
 function zoneEvidence(z) {
   const surf = z && z.kind === "surface";
-  const n = (surf ? z.sightings : z && z.marks) || 0;
+  // Every LANE, not just the ore one: once a named circle rolls up plants and
+  // fauna too, "it has no sightings yet" in a delete confirm is false the
+  // moment somebody has logged a Hadanite patch inside it — and that confirm
+  // is the guardrail standing between them and its deletion.
+  const n = (surf ? zoneLanesOf(z).reduce((a, L) => a + L.n, 0)
+             : (z && z.marks)) || 0;
   const noun = surf ? "sighting" : "mark";
   return { n, noun, label: `${n} ${noun}${n === 1 ? "" : "s"}` };
 }
@@ -17964,7 +18154,19 @@ async function openHaloSurveyCard(z) {
     try {
       const doc = await fetch(`/api/halo/survey/zones/${z.zone_id}/sightings`)
         .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
-      renderSurfaceSurveyCard(el, z, doc.sightings || [], doc.total || 0);
+      // The other two lanes ride alongside, best-effort: the ore lane decides
+      // whether the card can render at all, and a missing fauna list should
+      // cost the fauna block, never the card.
+      const extra = {};
+      await Promise.all(["harvestable", "wildlife"].map(async (c) => {
+        try {
+          const d = await fetch(
+            `/api/halo/survey/zones/${z.zone_id}/sightings?category=${c}`)
+            .then(r => (r.ok ? r.json() : null));
+          if (d) extra[c] = d;
+        } catch {}
+      }));
+      renderSurfaceSurveyCard(el, z, doc.sightings || [], doc.total || 0, extra);
     } catch {
       el.innerHTML = `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
         + `<p class="muted" style="margin-top:8px;">⚠ couldn't load this area's sightings</p>`;
@@ -17999,13 +18201,20 @@ function scanSummary(scan) {
 // Ore-composition graph (#38): horizontal bars per ore. With scans, bars are
 // the mean scanned comp% (the "percentages seen" the surveyor asked for); with
 // none, they fall back to how often each ore appears across positive marks.
-function surveyOreChart(z, capOverride) {
+// `lane` (optional) retargets the chart at a non-ore lane: its heading, the
+// price table its names are looked up in, and whether it renders its own card
+// shell at all. Without it this is the ore chart it has always been.
+function surveyOreChart(z, capOverride, lane) {
+  const head = lane ? lane.head : "Ore composition";
+  const priceCat = lane ? lane.priceCat : "resource";
+  const open = lane && lane.bare ? "" : `<div class="card">`;
+  const close = lane && lane.bare ? "" : `</div>`;
   const counts = z.ore_counts || {}, comp = z.scan_comp || {};
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   if (!entries.length)
-    return `<div class="card"><h2 class="svy-h">Ore composition</h2>`
+    return open + `<h2 class="svy-h">${esc(head)}</h2>`
       + `<p class="cap">No ore reported yet${z.positive ? " — rock seen here, contents unlogged" : ""}. `
-      + `Add ore in FIELD or attach a scan.</p></div>`;
+      + `Add ore in FIELD or attach a scan.</p>` + close;
   const scanned = Object.keys(comp).length > 0;
   const maxV = scanned ? Math.max(1, ...entries.map(([o]) => comp[o] || 0))
                        : Math.max(1, ...entries.map(([, n]) => n));
@@ -18018,16 +18227,17 @@ function surveyOreChart(z, capOverride) {
     const label = scanned ? (pct != null ? `${Math.round(pct)}%` : "—") : `${n}×`;
     const sub = scanned ? `${n}×` : `${Math.round(n / (z.positive || n) * 100)}%`;
     return `<div class="fc-row">`
-      + `<span class="fc-ore"><span class="fc-ore-name">${esc(ore)}</span>${oreValueChip(ore)}</span>`
+      + `<span class="fc-ore"><span class="fc-ore-name">${esc(ore)}</span>`
+      + `${priceCat ? oreValueChip(ore, priceCat) : ""}</span>`
       + `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${w}%;background:${oreColor(ore)}"></span></span>`
       + `<span class="fc-pct">${label}</span>`
       + `<span class="fc-n">${sub}</span></div>`;
   }).join("");
-  return `<div class="card"><h2 class="svy-h">Ore composition</h2>`
+  return open + `<h2 class="svy-h">${esc(head)}</h2>`
     + `<p class="cap">${capOverride || (scanned
         ? "Mean scanned composition per ore (bar); count = marks that listed it."
         : "How often each ore was seen across the field's positive marks.")}</p>`
-    + rows + `</div>`;
+    + rows + close;
 }
 
 // RS-signature card (#38): the zone's own single-ore radar bases + multiples.
@@ -18777,9 +18987,25 @@ async function refenceSurveyZone(z) {
 
 function surfaceZoneRow(z) {
   const sel = z.zone_id === haloAtlasSelZone ? " class=\"zone-sel\"" : "";
-  const ores = zoneOresCell(z);
+  const lanes = zoneLanesOf(z);
+  const ev = zoneEvidence(z);
+  const ores = zoneWhatsHere(z);
+  // Evidence is a total with its lanes under it: the total is what you compare
+  // between areas, the split is what tells you what kind of place it is.
+  const evCell = `${ev.n}` + (lanes.length > 1
+    ? `<div class="zn-ev">${lanes.map(L =>
+        `<span title="${L.n} ${esc(L.label.toLowerCase())} ${L.unit}${L.n === 1 ? "" : "s"}">`
+        + `${L.n}\u202f${L.icon}</span>`).join("")}</div>`
+    : "");
+  // One chip per VALUED lane, each tiered in its own pool (see
+  // nav_core.SURFACE_ZONE_LANES). A single merged chip would let one Hadanite
+  // sighting decide a row that is otherwise a mediocre iron patch.
+  const valCell = lanes.map(L => {
+    const chip = zoneLaneValue(z, L);
+    return chip ? `<span class="zn-val" title="${esc(L.label)}">${L.icon} ${chip}</span>` : "";
+  }).filter(Boolean).join("") || `<span class="muted">—</span>`;
   const band = z.avg_band ? `B${z.avg_band.toFixed(1)}` : `<span class="muted">—</span>`;
-  const acts = (z.sightings ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
+  const acts = (ev.n ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
     // Navigable, never plannable — there is no quantum drop onto a surface.
     + (z.nearest_qt_id ? `<button type="button" class="route-chip" data-zdest="${z.nearest_qt_id}" title="set the navigator's destination to ${esc(z.nearest_qt || "the nearest QT marker")}, then fly the last leg">Set destination</button> ` : "")
     + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
@@ -18790,10 +19016,10 @@ function surfaceZoneRow(z) {
           ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
       + `</td>`
     + `<td data-l="Where" style="white-space:nowrap;">${esc(z.body || "—")}</td>`
-    + `<td class="num" data-l="Evidence">${z.sightings || 0}</td>`
-    + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
+    + `<td class="num" data-l="Evidence">${evCell}</td>`
+    + `<td data-l="Value">${valCell}</td>`
     + `<td data-l="Band">${band}</td>`
-    + `<td data-l="Ores">${ores}</td>`
+    + `<td data-l="Here">${ores}</td>`
     + `<td class="muted" data-l="Size" style="white-space:nowrap;">${z.radius_m ? "⌀ " + fmtDist(2 * z.radius_m) : ""}</td>`
     + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
     + `</tr>`;
@@ -18833,7 +19059,7 @@ function surfaceBandChart(z) {
 // 295 km body that is ~9.7 degrees of arc, so tangent-plane distortion is
 // ~1.5% — negligible, and worth it because this is the visual language pilots
 // already read every session.
-function drawSurfaceZonePlate(cv, z, sightings) {
+function drawSurfaceZonePlate(cv, z, sightings, others) {
   if (!cv || !cv.getContext) return;
   // Sized from the ELEMENT, not from fixed width/height attributes: the plate
   // now fills its card (capped + centred by .svy-plate) instead of sitting in a
@@ -18927,35 +19153,117 @@ function drawSurfaceZonePlate(cv, z, sightings) {
     else { ctx.fillStyle = oreColor(o.ore || ""); ctx.fill(); }
     ctx.globalAlpha = 1;
   }
+  // The other lanes, as SQUARES. A different glyph, not a different colour:
+  // colour already encodes which ore a dot is, and a plant drawn as a dot in
+  // its own colour would read as one more ore on the same map.
+  for (const o of others || []) {
+    if (o.latitude == null || o.longitude == null || !R) continue;
+    const q = projectMeters(o.latitude, o.longitude, z.center_lat, z.center_lon, R);
+    const x = cx + q.east * scale, y = cy - q.north * scale;
+    if (x < 0 || y < 0 || x > w || y > h) continue;
+    const age = o.observed_at ? Math.max(0, now - o.observed_at) : null;
+    ctx.globalAlpha = age == null ? 0.45 : Math.max(0.25, 1 - age / (14 * 86400));
+    // Fauna has no price and therefore no ore colour worth trusting, so it
+    // draws hollow in the plate ink; a harvestable keeps its own colour.
+    if (o.lane === "wildlife") {
+      ctx.strokeStyle = INK + ".75)"; ctx.lineWidth = 1;
+      ctx.strokeRect(x - 2.5, y - 2.5, 5, 5);
+    } else {
+      ctx.fillStyle = oreColor(o.ore || "");
+      ctx.fillRect(x - 2.5, y - 2.5, 5, 5);
+    }
+    ctx.globalAlpha = 1;
+  }
   ctx.fillStyle = INK + ".6)";
   ctx.font = "10px system-ui, sans-serif";
   ctx.fillText("N", cx + 3, 11);
   ctx.fillText(plainDist(z.radius_m || 0) + " radius", 4, h - 5);
 }
 
-function renderSurfaceSurveyCard(el, z, sightings, total) {
+// One non-ore lane as its own card: what is here, how sure we are, and — only
+// where a price exists — what it is worth. Deliberately NOT folded into the
+// ore chart above it: the percentages there are shares of the MINING
+// sightings, and a plant counted into that denominator would move every ore
+// bar on the card without a single new rock being found.
+function surveyLanePanel(z, L, rows, now) {
+  const fit = L.fit || {};
+  const val = zoneLaneValue(z, L);
+  const named = (fit.ores || []).length;
+  const head = `<div class="card"><h2 class="svy-h">${L.icon} ${esc(L.label)}`
+    + `${val ? ` ${val}` : ""}</h2>`
+    + `<p class="cap">${L.n} sighting${L.n === 1 ? "" : "s"} · `
+    + `${named} distinct ${esc(named === 1 ? L.noun : L.nouns)}`
+    + (L.valued === false
+        // Say why there is no money here, rather than leaving a blank where
+        // the other lanes show a tier. No feed prices an animal; a fauna lane
+        // is a record of what lives here, not a profit claim.
+        ? ` · presence evidence — nothing prices fauna, so this lane is never valued`
+        : "")
+    + `</p>`;
+  if (!L.n) return head + `<p class="muted" style="font-size:12px;">Nothing logged.</p></div>`;
+  // Same chart the ore lane gets: `oreChartShim` reads whatever the fit calls
+  // its type field, which is the point of keeping one fit shape.
+  // `bare` on purpose: this panel is already a card, and wrapping the chart in
+  // a second one drew a box inside a box with two headings.
+  const chart = surveyOreChart(oreChartShim(fit),
+    `Share of this area's ${esc(L.label.toLowerCase())} sightings, per `
+    + `${esc(L.noun)}.`,
+    { head: L.head, priceCat: L.valued === false ? null : L.k, bare: true });
+  const recent = (rows || []).slice(0, 8).map(o =>
+    `<div class="halo-alt"><b>${esc(o.observed_at ? fmtAge(Math.max(0, now - o.observed_at)) : "—")}</b>`
+    + ` · ${esc(o.owner_handle || "?")} · ${esc(o.ore || "?")}`
+    + (o.biome ? ` · ${esc(o.biome)}` : "")
+    + (o.dist_m != null ? ` · ${fmtDist(o.dist_m)} from centre` : "")
+    + `</div>`).join("");
+  return head + chart
+    + (recent ? `<details class="svy-timeline svy-timeline-d" style="margin-top:10px;">`
+        + `<summary>Recent · ${rows.length}</summary>${recent}`
+        + (rows.length > 8 ? `<p class="cap" style="margin-top:6px;">Showing the newest 8 of ${rows.length}.</p>` : "")
+        + `</details>` : "")
+    + `</div>`;
+}
+
+function renderSurfaceSurveyCard(el, z, sightings, total, extra) {
   const now = Date.now() / 1000;
   const contrib = {};
   for (const o of sightings) { const who = o.owner_handle || "unknown"; contrib[who] = (contrib[who] || 0) + 1; }
   const surveyors = Object.entries(contrib).sort((a, b) => b[1] - a[1]);
   const n = z.sightings || total || 0;
+  // The lanes (#37.1 lanes): the ore rollup is still `n` and still drives every
+  // ore-specific line, but the card's headline counts have to be about the
+  // GROUND, and a circle with no ore in it can still be somewhere worth going.
+  const laneRows = extra || {};
+  const lanes = zoneLanesOf(z);
+  const others = lanes.filter(L => L.k !== "resource");
+  const nAll = lanes.reduce((a, L) => a + L.n, 0) || n;
   const thin = n < 10;
   const top = (z.ores || [])[0];
-  const verdict = !n
+  const verdict = !nAll
     ? `<div class="svy-verdict bad"><span class="svy-dot"></span><span><b>NO EVIDENCE</b> — `
       + `nothing has been logged inside this circle yet</span></div>`
+    : !n
+    // Ground with no ore on it is not "no evidence": it is a gathering or
+    // hunting area, and calling it empty would tell the org to stop looking.
+    ? `<div class="svy-verdict"><span class="svy-dot ok"></span><span>`
+      + `${others.map(L => zoneLaneValue(z, L)).join("")} `
+      + `<b>${esc((others[0] || {}).label || "Non-mining")} ground</b> — no ore logged here, but `
+      + `${others.map(L => `${L.n} ${esc(L.label.toLowerCase())}`).join(" · ")} `
+      + `sighting${nAll === 1 ? "" : "s"} inside the circle</span></div>`
     : thin
     ? `<div class="svy-verdict warn"><span class="svy-dot warn"></span><span>${surveyValueChip(z.value) || ""} `
       + `<b>THIN</b> — ${n} sighting${n === 1 ? "" : "s"}${z.avg_band ? `, averaging band ${z.avg_band}` : ""}</span></div>`
     : `<div class="svy-verdict"><span class="svy-dot ok"></span><span>${surveyValueChip(z.value) || ""} `
-      + `<b>${esc(top || "ore")}</b> country · ${n} sighting${n === 1 ? "" : "s"} from `
+      + `<b>${esc(top || "ore")}</b> country · ${n} ore sighting${n === 1 ? "" : "s"} from `
       + `${surveyors.length || (z.contributors || []).length} surveyor${surveyors.length === 1 ? "" : "s"}`
       // Inline, not in a title= the phone-on-the-desk audience cannot open.
       + `${z.avg_band ? ` · avg band ${Number(z.avg_band).toFixed(1)}` : ""}</span></div>`;
   const tiles = [
-    { k: "Sightings", n: n },
+    // Every lane: this is the "how much do we know about this ground" number,
+    // and ore is only one of the three things we know.
+    { k: "Sightings", n: nAll },
     { k: "Surveyors", n: (z.contributors || []).length || surveyors.length },
     { k: "Distinct ores", n: (z.ores || []).length },
+    ...others.map(L => ({ k: `${L.icon} ${L.label}`, n: L.n })),
     { k: "Value", n: z.value && z.value.score ? z.value.score.toLocaleString() : "—", cls: "accent" },
     { k: "Area ⌀", n: z.radius_m ? fmtDist(2 * z.radius_m) : "—" },
     { k: "Freshest", n: z.freshest ? fmtAge(Math.max(0, now - z.freshest)) : "—" },
@@ -19005,13 +19313,20 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
     + `<h2 class="svy-title">${esc(z.name)}</h2>`
     + `<p class="svy-sub">`
     + `${(z.contributors || []).length} surveyor${(z.contributors || []).length === 1 ? "" : "s"} · `
-    + `${n} sighting${n === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</p>`
+    // Every lane, matching the Sightings tile. This read `n` (ore only) while
+    // the tile beside it read the total, so the same card stated two different
+    // sizes for the same circle.
+    + `${nAll} sighting${nAll === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</p>`
     + verdict + lead + stats
     + `<div class="svy-panels">${surveyOreChart(oreChartShim(z),
           "Share of this area's sightings, per ore. Bars are percentages; the "
           + "count is how many sightings listed that ore.")}${surfaceBandChart(z)}</div>`
+    + others.map(L => surveyLanePanel(z, L, (laneRows[L.k] || {}).sightings || [], now)).join("")
     + `<div class="card"><h2 class="svy-h">This area</h2>`
     + `<p class="cap">Sightings, ore-coloured and faded by age; hollow means already worked. `
+    + (others.length
+        ? `Squares are ${esc(others.map(L => L.label.toLowerCase()).join(" / "))} sightings. `
+        : "")
     + `Outlined diamonds are POIs inside the circle.</p>`
     + `<canvas id="svy-plate" class="svy-plate" role="img" aria-label="`
     + `${esc(z.name)}: ${n} sighting${n === 1 ? "" : "s"} across a `
@@ -19020,9 +19335,14 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
     + `"></canvas>`
     // Colour is the primary encoding on this plate; without a key it can only
     // be decoded by scrolling back to the ore chart. Critique P1.
-    + ((z.ores || []).length
-        ? `<div class="svy-legend">` + z.ores.slice(0, 8).map(o =>
-            `<span><i style="background:${oreColor(o)}"></i>${esc(o)}</span>`).join("")
+    + ((z.ores || []).length || others.length
+        ? `<div class="svy-legend">`
+          + (z.ores || []).slice(0, 8).map(o =>
+              `<span><i style="background:${oreColor(o)}"></i>${esc(o)}</span>`).join("")
+          + others.map(L => `<span><i class="svy-key-sq`
+              + `${L.k === "wildlife" ? " hollow" : ""}"`
+              + `${L.k === "wildlife" ? "" : ` style="background:${oreColor((L.fit.ores || [])[0] || "")}"`}`
+              + `></i>${L.icon} ${esc(L.label)}</span>`).join("")
           + `</div>`
         : "")
     + `</div>`
@@ -19055,11 +19375,16 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
   // The plate is sized by CSS (aspect-ratio), which may not have resolved on
   // the same tick the markup was written — draw, then draw again next frame if
   // the element had no layout yet.
-  drawSurfaceZonePlate($("svy-plate"), z, sightings);
-  requestAnimationFrame(() => drawSurfaceZonePlate($("svy-plate"), z, sightings));
+  // Flattened once, tagged with the lane it came from — the plate needs the
+  // tag to pick a glyph, and re-deriving it per redraw would be wasted work on
+  // a resize handler.
+  const otherPts = [].concat(...others.map(L =>
+    ((laneRows[L.k] || {}).sightings || []).map(o => ({ ...o, lane: L.k }))));
+  drawSurfaceZonePlate($("svy-plate"), z, sightings, otherPts);
+  requestAnimationFrame(() => drawSurfaceZonePlate($("svy-plate"), z, sightings, otherPts));
   // Nothing redrew on resize, so a 560px buffer scaled into a 325px box at
   // 0.58x and the 10px labels rendered at ~5.8px. Critique P1.
-  surfacePlateRedraw = () => drawSurfaceZonePlate($("svy-plate"), z, sightings);
+  surfacePlateRedraw = () => drawSurfaceZonePlate($("svy-plate"), z, sightings, otherPts);
   focusZoneCard(el);
 }
 

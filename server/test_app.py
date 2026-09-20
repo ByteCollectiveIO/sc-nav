@@ -10776,15 +10776,19 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         app.hub.sessions.pop("1", None)
 
     def _add_obs(self, lat, lon, ore="Quantanium", band=5, height_m=0.0,
-                 handle="ana", body=None):
+                 handle="ana", body=None, category="resource"):
         oid = db.next_observation_id()
+        norm = app.nav_core.OBSERVATION_CATEGORIES[category]["normalize"]
+        field = app.nav_core._category_field(category)
+        data = norm({field: ore, "band": band} if category == "resource"
+                    else {field: ore})
         obs = app.nav_core.Observation(
-            id=oid, category="resource", system="Stanton",
+            id=oid, category=category, system="Stanton",
             container_name=body or self.BODY, local_km=None, global_m=None,
             latitude=lat, longitude=lon, height_m=height_m, biome=None,
             note=None, owner_id=None, owner_handle=handle,
             observed_at="2026-01-01T00:00:00+00:00",
-            data=app.nav_core._normalize_resource({"ore": ore, "band": band}))
+            data=data)
         db.add_observation(app.nav_core.observation_to_dict(obs))
         app.nav.observations[oid] = obs
         app.nav.touch()
@@ -10831,6 +10835,82 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["active_survey_zone"], r.json()["zone"]["id"])
         self.assertIsNone(r.json()["zone"]["body"])
+
+    def test_a_named_area_rolls_up_all_three_lanes(self):
+        # One circle, three lanes: naming the ground claims the ore, the
+        # plants and the fauna in it, and each stays in its own rollup so a
+        # creature never inflates an ore percentage.
+        self._add_obs(0.0, 0.0, ore="Quantanium", handle="ana")
+        self._add_obs(0.01, 0.0, ore="Quantanium", handle="ana")
+        self._add_obs(0.0, 0.01, ore="Degnous Root", handle="bo",
+                      category="harvestable")
+        self._add_obs(0.0, 0.02, ore="Marok", handle="cy", category="wildlife")
+        self._add_obs(40.0, 40.0, ore="Marok", handle="dee", category="wildlife")
+        zid = self._create().json()["zone"]["id"]
+        z = next(x for x in self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+            if x["zone_id"] == zid)
+
+        # The top level is still the MINING rollup — every reader that predates
+        # lanes keeps working, and the fauna did not join its count.
+        self.assertEqual(z["sightings"], 2)
+        self.assertEqual(z["ores"], ["Quantanium"])
+
+        lanes = z["lanes"]
+        self.assertEqual(lanes["resource"]["sightings"], 2)
+        self.assertEqual(lanes["harvestable"]["sightings"], 1)
+        self.assertEqual(lanes["harvestable"]["ores"], ["Degnous Root"])
+        # The far-side Marok is outside the circle: membership is geometric on
+        # every lane, not just the ore one.
+        self.assertEqual(lanes["wildlife"]["sightings"], 1)
+        self.assertEqual(lanes["wildlife"]["ores"], ["Marok"])
+
+        # Contributors span every lane: somebody who only ever logged a plant
+        # inside this circle contributed to it.
+        self.assertEqual(z["contributors"], ["ana", "bo", "cy"])
+
+    def test_only_priced_lanes_carry_a_value(self):
+        # Harvestable gems out-price every ore, so the two valued lanes tier in
+        # separate pools; fauna has no price feed anywhere and must never get a
+        # tier at all (absence of a price is not a low price).
+        self._add_obs(0.0, 0.0, ore="Quantanium", handle="ana")
+        self._add_obs(0.0, 0.01, ore="Degnous Root", handle="bo",
+                      category="harvestable")
+        self._add_obs(0.0, 0.02, ore="Marok", handle="cy", category="wildlife")
+        zid = self._create().json()["zone"]["id"]
+        z = next(x for x in self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+            if x["zone_id"] == zid)
+        self.assertIsNotNone(z.get("value"))
+        # The ore value is mirrored into its lane so one renderer finds all
+        # three the same way, and the top level still carries it.
+        self.assertEqual(z["lanes"]["resource"]["value"]["score"],
+                         z["value"]["score"])
+        self.assertIsNotNone(z["lanes"]["harvestable"].get("value"))
+        self.assertIsNone(z["lanes"]["wildlife"].get("value"))
+        # …and the library refuses to be asked for one.
+        with self.assertRaises(ValueError):
+            app.nav_core.annotate_surface_lane_values([], {}, category="wildlife")
+
+    def test_the_timeline_can_be_asked_for_one_lane(self):
+        self._add_obs(0.0, 0.0, ore="Quantanium", handle="ana")
+        self._add_obs(0.0, 0.01, ore="Degnous Root", handle="bo",
+                      category="harvestable")
+        zid = self._create().json()["zone"]["id"]
+        doc = self.client.get(
+            f"/api/halo/survey/zones/{zid}/sightings?category=harvestable").json()
+        self.assertEqual(doc["category"], "harvestable")
+        self.assertEqual(doc["total"], 1)
+        # `ore` carries whatever the lane's type field is — one shape, three
+        # lanes, so one renderer serves them all.
+        self.assertEqual(doc["sightings"][0]["ore"], "Degnous Root")
+        # Default is unchanged, and a lane nobody has is an error, not a
+        # silent fallback to ore.
+        self.assertEqual(
+            self.client.get(f"/api/halo/survey/zones/{zid}/sightings")
+            .json()["category"], "resource")
+        self.assertEqual(self.client.get(
+            f"/api/halo/survey/zones/{zid}/sightings?category=ships").status_code, 400)
 
     def test_a_surface_zone_needs_a_centre(self):
         r = self.client.post("/api/halo/survey/zones",
