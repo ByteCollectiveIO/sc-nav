@@ -2591,6 +2591,7 @@
   .route-chip.primary, #halo-survey-mark { background: var(--accent);
     color: var(--ink-on-accent); border-color: var(--accent); font-weight: 600; }
   .route-chip.primary:hover, #halo-survey-mark:hover { filter: brightness(1.08); }
+  #halo-survey-mark:disabled { opacity: .5; filter: none; cursor: default; }
   .svy-eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
     color: var(--accent); margin: 0 0 8px; }
   /* Scoped to .svy-card to OUT-SPECIFY `.panel h2` (0,1,1), which these cards
@@ -2638,6 +2639,13 @@
      which is NOT inside one — rendered as full-brightness body text and fought
      the table for attention. Same rule, both homes. */
   .svy-card .cap, #halo-rs-ref .cap { color: var(--dim); font-size: 12px; margin: 0 0 12px; max-width: 46ch; }
+  /* The RS panel is full-width, so 46ch left a ragged half-width column beside
+     it — the only caption in the app under the 65-75ch floor. The survey-card
+     captions keep 46ch: they sit in a narrow column where it reads correctly.
+     Declared here, after the shared rule: an equal-specificity override placed
+     EARLIER in the file silently loses, which is how the last two of these
+     went out claiming to be fixed. */
+  #halo-rs-ref .cap { max-width: 68ch; }
   .svy-rs-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0;
     font-size: 12px; font-variant-numeric: tabular-nums; }
   .svy-rs-row .fc-ore { min-width: 118px; }
@@ -4895,7 +4903,7 @@
           <span class="seg" id="halo-survey-rocks" role="group" aria-label="Rock density here">
             <button data-rocks="none" type="button" aria-pressed="false">⛔ none</button>
             <button data-rocks="sparse" type="button" aria-pressed="false">sparse</button>
-            <button class="on" data-rocks="medium" type="button" aria-pressed="true">medium</button>
+            <button data-rocks="medium" type="button" aria-pressed="false">medium</button>
             <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
           </span>
           <input id="halo-survey-ores" class="ti" autocomplete="off" list="halo-survey-ore-list"
@@ -4903,7 +4911,9 @@
                  title="Ores you can see here. These pre-fill the scan detail's ore rows after the mark lands — no need to type them again.">
           <datalist id="halo-survey-ore-list"></datalist>
           <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
-          <button id="halo-survey-mark" type="button">⛏ Mark survey point</button>
+          <button id="halo-survey-mark" type="button" disabled
+                  title="pick what's around you first — the density is the mark">⛏ Mark survey point</button>
+          <span id="halo-survey-arm-hint" class="muted" style="font-size:12px;">← how many rocks are around you?</span>
           <span id="halo-survey-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
         <div id="halo-scan-blk" hidden style="margin-top:8px;">
@@ -16255,7 +16265,7 @@ let haloTargets = {};                 // system -> targets doc (lazy)
 let haloShips = null, haloShipsByName = {};
 let haloWired = false, haloSystem = "Stanton", haloSysAuto = true;
 let haloGoal = "band", haloBandSel = 5, haloAim = "band";
-let haloBelt = "glaciem", haloSurveyRocks = "medium";   // #36
+let haloBelt = "glaciem", haloSurveyRocks = null;   // #36 — null until picked
 let haloLastPlan = null;
 const HALO_SYSTEMS = ["Stanton", "Nyx", "Pyro"];
 
@@ -16704,6 +16714,17 @@ function setHaloSurveyRocks(r) {
     const on = x.dataset.rocks === r;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
   }
+  syncHaloMarkArm();
+}
+
+// The density IS the mark — a mark carrying a density nobody chose is worse
+// than no mark, because the belt model reads it as evidence. So the button
+// stays disabled until the surveyor says what's around them, and the hint
+// beside it says why rather than leaving a dead control to puzzle over.
+function syncHaloMarkArm() {
+  const b = $("halo-survey-mark"), hint = $("halo-survey-arm-hint");
+  if (b) b.disabled = !haloSurveyRocks;
+  if (hint) hint.hidden = !!haloSurveyRocks;
 }
 
 let haloSurveyArmed = false;
@@ -16750,6 +16771,10 @@ function resolveHaloSurveyArm(capture) {
 
 async function haloMarkSurvey() {
   const msg = $("halo-survey-msg");
+  if (!haloSurveyRocks) {
+    if (msg) { msg.className = "muted"; msg.textContent = "pick a rock density first"; }
+    return;
+  }
   const now = new Date();
   const ores = $("halo-survey-ores").value.split(",").map(s => s.trim()).filter(Boolean);
   haloArmedOres = ores;   // keep to pre-seed the scan form when this mark lands
@@ -16935,9 +16960,29 @@ function selectHaloAtlasZone(zid) {
 // floating UI escapes its stacking context.
 let zoneMenuEl = null, zoneMenuBtn = null;
 
+let zoneMenuRefocusId = null;
+
 function closeZoneMenu() {
+  const held = !!(zoneMenuEl && zoneMenuEl.contains(document.activeElement));
   if (zoneMenuEl) { zoneMenuEl.remove(); zoneMenuEl = null; }
-  if (zoneMenuBtn) { zoneMenuBtn.setAttribute("aria-expanded", "false"); zoneMenuBtn = null; }
+  const btn = zoneMenuBtn;
+  if (btn) { btn.setAttribute("aria-expanded", "false"); zoneMenuBtn = null; }
+  if (!held || !btn) return;
+  // Focus was inside the menu, so it is about to fall to <body>. The callers
+  // that close this are the two renderers, and they close it on their FIRST
+  // line — focusing the trigger here would just hand focus to a node the
+  // rebuild detaches a moment later. Record it and let the rebuild finish.
+  zoneMenuRefocusId = btn.id || null;
+  if (btn.isConnected && !zoneMenuRefocusId) btn.focus();
+}
+
+// Called at the END of each renderer that closes the menu.
+function restoreZoneMenuFocus() {
+  const id = zoneMenuRefocusId;
+  zoneMenuRefocusId = null;
+  if (!id) return;
+  const back = document.getElementById(id);
+  if (back) back.focus();
 }
 
 function openZoneMenu(btn, z) {
@@ -17132,7 +17177,7 @@ function renderHaloAtlasZones() {
       // ✕ Delete past the right edge of a 1280px window (measured: button at
       // 1251, container ends at 1154) and stacked into a 300px-tall column on
       // a phone. Two actions you use often stay out; the rest are one tap in.
-      + (z.can_edit ? `<button type="button" class="route-chip zone-more" data-zmenu="${z.zone_id}" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, archive or delete">•••</button>` : "");
+      + (z.can_edit ? `<button type="button" class="route-chip zone-more" id="zmenu-${z.zone_id}" data-zmenu="${z.zone_id}" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, archive or delete">•••</button>` : "");
     const cls = [active ? "selected" : "", z.zone_id === haloAtlasSelZone ? "zone-sel" : ""]
       .filter(Boolean).join(" ");
     return `<tr data-zrow="${z.zone_id}"${cls ? ` class="${cls}"` : ""}`
@@ -17208,6 +17253,7 @@ function renderHaloAtlasZones() {
       selectHaloAtlasZone(id === haloAtlasSelZone ? null : id);
     };
   }
+  restoreZoneMenuFocus();
 }
 
 // RS signature reference (#38 playtest note 5): the FIELD-tab cheat sheet a
@@ -17445,6 +17491,9 @@ function renderHaloZoneSelect() {
 function renderHaloZoneBanner() {
   const el = $("halo-zone-banner");
   if (!el) return;
+  // Same guard as renderHaloAtlasZones: this renderer also replaces the ...
+  // trigger, which would strand an open menu over a detached button.
+  closeZoneMenu();
   const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
   if (!z) { el.hidden = true; return; }
   el.hidden = false;
@@ -17472,6 +17521,7 @@ function renderHaloZoneBanner() {
   const dbtn = $("halo-zone-details");
   // Survey summary card lives in ATLAS (#38): the banner's "▸ details" hops there.
   if (dbtn) dbtn.onclick = () => { haloGoTab("atlas"); openHaloSurveyCard(z); };
+  restoreZoneMenuFocus();
 }
 
 // ---------- scan detail (#37 slice 3) ----------
@@ -18363,7 +18413,7 @@ function surfaceZoneRow(z) {
     // Navigable, never plannable — there is no quantum drop onto a surface.
     + (z.nearest_qt_id ? `<button type="button" class="route-chip" data-zdest="${z.nearest_qt_id}" title="set the navigator's destination to ${esc(z.nearest_qt || "the nearest QT marker")}, then fly the last leg">Set destination</button> ` : "")
     + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
-    + (z.can_edit ? `<button type="button" class="route-chip zone-more" data-zmenu="${z.zone_id}" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, re-fence, archive or delete">•••</button>` : "");
+    + (z.can_edit ? `<button type="button" class="route-chip zone-more" id="zmenu-${z.zone_id}" data-zmenu="${z.zone_id}" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, re-fence, archive or delete">•••</button>` : "");
   return `<tr data-zrow="${z.zone_id}"${sel} title="click to point the coverage map at this area">`
     + `<td><b>${esc(z.name)}</b> <span class="halo-chip">⛏ surface</span>`
       + (z.contributors && z.contributors.length
@@ -19125,6 +19175,7 @@ function wireHaloFinder() {
   for (const x of $("halo-survey-rocks").querySelectorAll("button"))
     x.onclick = () => setHaloSurveyRocks(x.dataset.rocks);
   $("halo-survey-mark").onclick = haloMarkSurvey;
+  syncHaloMarkArm();
   $("halo-zone-new").onclick = newSurveyZone;
   $("halo-zone-select").onchange = (e) =>
     setActiveSurveyZone(e.target.value ? Number(e.target.value) : null);
@@ -19139,8 +19190,16 @@ function wireHaloFinder() {
   $("halo-plan").onclick = async () => {
   const b = $("halo-plan");
   if (b.disabled) return;          // in-flight: the fetch is already running
+  const label = b.textContent;
   b.disabled = true;
-  try { await planHalo(); } finally { b.disabled = false; }
+  b.setAttribute("aria-busy", "true");
+  b.textContent = "Planning…";     // the solver can take seconds on a slow link
+  try { await planHalo(); }
+  finally {
+    b.disabled = false;
+    b.removeAttribute("aria-busy");
+    b.textContent = label;
+  }
 };
   $("halo-intro-dismiss").onclick = () => {
     try { localStorage.setItem("halo_intro_dismissed", "1"); } catch {} renderHaloIntro(); };
