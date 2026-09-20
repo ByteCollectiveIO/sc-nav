@@ -6609,6 +6609,22 @@ class OreRoutingTests(unittest.TestCase):
         self.assertEqual(fit["ore_counts"],
                          {"Gold (Raw)": 2, "Quartz (Raw)": 1})
         self.assertNotIn("scans", fit)          # nothing scanned → field absent
+        # …and the sample-size-honest form of the same fraction, so a belt
+        # zone's ores can be ranked with the statistic a surface area's are
+        # (ATLAS orders its ORES column by this × price). Both are Wilson
+        # LOWER bounds, so both sit below their raw share — 2/2 is not 100%.
+        likely = fit["ore_likely"]
+        self.assertEqual(set(likely), {"Gold (Raw)", "Quartz (Raw)"})
+        self.assertGreater(likely["Gold (Raw)"], likely["Quartz (Raw)"])
+        self.assertLess(likely["Gold (Raw)"], 1.0)
+        self.assertEqual(
+            likely["Gold (Raw)"], round(nav_core._wilson_lower_bound(2, 2), 4))
+        # A wholly-negative cluster has no positives to divide by: no ores, so
+        # no bounds, and nothing that could divide by zero.
+        barren = nav_core.survey_cluster_fit(
+            [{"xyz": (self.KR, 0, 0), "positive": False, "rocks": "none",
+              "ores": [], "salvage": False}], [])
+        self.assertEqual(barren["ore_likely"], {})
 
     # --- scan detail (#37 slice 3) --------------------------------------------
 

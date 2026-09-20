@@ -6160,6 +6160,70 @@ class HaloFinderApiTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid2}").status_code, 200)
         self.assertIsNone(self.client.get("/api/me").json()["active_survey_zone"])
 
+    def test_survey_zone_delete_is_undoable(self):
+        # #184 follow-up: the confirm gate was the delete's only safety net,
+        # and a gate is something you have already decided to pass. The server
+        # keeps the row for a window, so the undo has to put back all three
+        # things the delete scattered: the row (under its ORIGINAL id, which
+        # the marks and the member prefs both name), the marks' zone tag, and
+        # whoever was filing into it.
+        self._live_at((0.0, 15.0e9, 0.0))
+        self.addCleanup(lambda: app.members_dir.set_active_survey_zone("1", None))
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Undo Zone", "system": "Nyx"}
+                               ).json()["zone"]["id"]
+        self.addCleanup(lambda: app.db.delete_survey_zone(zid))
+        mark = self._inject_survey((0.0, 15.0e9, 0.0), "medium",
+                                   ores=["Iron"], zone_id=zid)
+        self.assertEqual(app.members_dir.active_survey_zone("1"), zid)
+
+        r = self.client.delete(f"/api/halo/survey/zones/{zid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertGreater(r.json()["undo_until"], time.time())
+        self.assertIsNone(app.db.get_survey_zone(zid))
+        self.assertNotIn("zone_id", app.nav.pois[mark.id].survey)
+        self.assertIsNone(app.members_dir.active_survey_zone("1"))
+
+        r = self.client.post(f"/api/halo/survey/zones/{zid}/restore")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["marks_restored"], 1)
+        self.assertEqual(r.json()["zone"]["id"], zid)          # the original id
+        self.assertEqual(r.json()["zone"]["name"], "Undo Zone")
+        self.assertEqual(app.nav.pois[mark.id].survey["zone_id"], zid)
+        self.assertEqual(app.members_dir.active_survey_zone("1"), zid)
+        # One-shot: the buffer is consumed, so a second undo has nothing to do.
+        self.assertEqual(
+            self.client.post(f"/api/halo/survey/zones/{zid}/restore").status_code, 404)
+
+    def test_survey_zone_undo_is_scoped_and_expires(self):
+        self._live_at((0.0, 15.0e9, 0.0))
+        self.addCleanup(lambda: app.members_dir.set_active_survey_zone("1", None))
+        orig = dict(self._user)
+        self.addCleanup(lambda: (self._user.clear(), self._user.update(orig)))
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Scoped Undo", "system": "Nyx"}
+                               ).json()["zone"]["id"]
+        self.addCleanup(lambda: app.db.delete_survey_zone(zid))
+        self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid}").status_code, 200)
+
+        # A plain member who did not delete it cannot undo it — otherwise the
+        # undo is a way to resurrect someone else's decision.
+        self._user.update({"id": "2", "is_admin": False})
+        self.assertEqual(
+            self.client.post(f"/api/halo/survey/zones/{zid}/restore").status_code, 403)
+        # An admin may, same rule the delete itself uses.
+        self._user.update({"id": "2", "is_admin": True})
+        self.assertEqual(
+            self.client.post(f"/api/halo/survey/zones/{zid}/restore").status_code, 200)
+
+        # …and once the window has passed, the answer is "too late", not a 500.
+        self._user.clear(); self._user.update(orig)
+        self.assertEqual(self.client.delete(f"/api/halo/survey/zones/{zid}").status_code, 200)
+        app._ZONE_UNDO[zid]["at"] -= app._ZONE_UNDO_TTL_S + 1
+        r = self.client.post(f"/api/halo/survey/zones/{zid}/restore")
+        self.assertEqual(r.status_code, 404)
+        self.assertIn("re-create", r.json()["detail"])
+
     def test_survey_zone_duplicate_name_conflicts(self):
         self._live_at((0.0, 15.0e9, 0.0))
         self.addCleanup(lambda: app.members_dir.set_active_survey_zone("1", None))
