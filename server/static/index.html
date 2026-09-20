@@ -17518,7 +17518,12 @@ const COMPASS_8 = ["North", "Northeast", "East", "Southeast",
 // out loud: "Kudre Ore", "Shubin Mining Facility SCD-1", "Bountiful Harvest
 // Hydroponics".
 //
-// Two rules do the work, and the second is the robust one:
+// Three rules, and the FIRST is the one that can't be argued with:
+//   * skip anything that isn't on the ground. A body-anchored POI still has a
+//     ground track when it is in orbit — Daymar carries an orbital station
+//     288 km up, a comm array at 165 km and two laser platforms at ~12.6 km —
+//     so a type-based guess silently names a patch of dirt after a relay
+//     hanging over it. Reuse the same ceiling zone membership uses;
 //   * skip types that are terrain or scenery rather than places;
 //   * skip MASS-PRODUCED names — anything ending "#<number>" is one instance
 //     of a stamped-out set ("Derelict Outpost #004"), never a place people
@@ -17531,6 +17536,9 @@ const MASS_PRODUCED_RE = /#\s*\d+\s*(\[[^\]]*\])?\s*$/;
 
 function isZoneLandmark(r) {
   if (r.kind !== "poi") return false;
+  // Unknown height counts as ground: it is auto-captured for org POIs, and the
+  // wiki catalog carries no coordinates at all (so those never get here).
+  if (r.height_m != null && r.height_m > SURFACE_ZONE_MAX_HEIGHT_M) return false;
   if (ZONE_LANDMARK_SKIP_TYPES.has(r.type)) return false;
   if (MASS_PRODUCED_RE.test(r.name || "")) return false;
   return true;

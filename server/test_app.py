@@ -10841,6 +10841,18 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         self.assertEqual(a.json()["zone"]["slug"], "daymar-iron-ridge")
         self.assertEqual(b.json()["zone"]["slug"], "yela-iron-ridge")
 
+    def test_poi_rows_expose_altitude(self):
+        # A body-anchored POI is not necessarily ON that body: Daymar carries
+        # an orbital station 288 km up, a comm array at 165 km and two laser
+        # platforms at ~12.6 km, all with a valid ground track. Anything that
+        # picks "somewhere near here" off a lat/lon needs the altitude to tell
+        # those apart, and the row used to omit it.
+        r = self.client.get("/api/pois?limit=5")
+        self.assertEqual(r.status_code, 200, r.text)
+        rows = r.json()
+        self.assertTrue(rows)
+        self.assertIn("height_m", rows[0])
+
     def test_landmark_length_names_survive_the_slug(self):
         # Real landmark names are long ("Shubin Mining Facility SCD-1 North"),
         # and a surface slug already spends characters on the body. At the old

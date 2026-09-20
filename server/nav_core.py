@@ -849,6 +849,12 @@ def _poi_base(poi) -> dict:
         "custom": poi.custom,
         "latitude": poi.latitude,
         "longitude": poi.longitude,
+        # Altitude above the surface. A body-anchored POI is NOT necessarily on
+        # the ground: Daymar alone carries an orbital station 288 km up, a comm
+        # array at 165 km and two laser platforms at ~12.6 km, all with a
+        # perfectly good ground track. Anything picking "somewhere near here"
+        # off a lat/lon has to be able to tell those apart (#37.1).
+        "height_m": poi.height_m,
         "owner_id": poi.owner_id,
         "owner_handle": poi.owner_handle,
         "private": getattr(poi, "private", False),
