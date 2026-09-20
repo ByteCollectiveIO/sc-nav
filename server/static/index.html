@@ -2592,6 +2592,11 @@
   .zn-ores { display: flex; flex-direction: column; gap: 1px; }
   .zn-ores > span { white-space: nowrap; }
   .zn-ores > span.zn-more { color: var(--dim); font-size: 11px; }
+  /* The share of the evidence that reported this ore. Dim and tabular so the
+     column reads as a ladder rather than competing with the ore names — it is
+     the reason for the ORDER, not a second thing to read. */
+  .zn-pct { color: var(--dim); font-weight: 400; font-size: 11px;
+            font-variant-numeric: tabular-nums; }
   .halo-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .halo-chip { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);
     border-radius: 999px; color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -17211,7 +17216,7 @@ function renderHaloAtlasZones() {
     const active = z.zone_id === activeSurveyZone;
     const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
       : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
-    const ores = zoneOresCell(z.ores);
+    const ores = zoneOresCell(z);
     const size = z.grid_radius_m ? `⌀ ${fmtDist(2 * z.grid_radius_m)}` : "";
     const acts = (z.marks ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
       + (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
@@ -17545,22 +17550,79 @@ function renderHaloZoneSelect() {
 // survived, including the destructive confirm.
 // The ORES cell for either kind of zone row. Comma-joining put a two-ore zone
 // on one tidy line and a six-ore zone in a wrapped block of text, so the column
-// had no shape to scan down. One ore per line, sorted alphabetically (the table
-// already sorts by value and by marks — inside a cell, "where is Quantanium?"
-// is the only question, and alphabetical answers it at a glance).
+// had no shape to scan down. One ore per line — and the ORDER is the point.
+//
+// Ranked by each ore’s own term in the score that earned this row its $ chip.
+// `nav_core.surface_value` sums (Wilson lower bound of the ore’s hit rate) x
+// (its sell price) across the zone’s ores, so ordering the cell by that
+// product is not a blended number invented for a table — it is the zone’s
+// value, decomposed and sorted. That is the one order in which "what will I
+// scoop here" and "what pays" cannot disagree: an ore leads because it is
+// both. Sorting this cell alphabetically (the first cut) threw away an
+// ordering the SERVER had already computed — `surface_zone_fit` emits `ores`
+// by descending count.
+//
+// The Wilson bound is what makes it survey-size-honest, which is why the
+// server ranks with it: three lucky Quantanium hits read as ~0.44 of a
+// Quantanium zone, twenty as ~0.84, where a raw share calls both 100%. The
+// share prints beside each name so that discount is legible rather than
+// implied, and the EVIDENCE column next door carries the n it is out of.
+//
+// An UNPRICED ore (one the feed carries no sell for) is scored at the median
+// price of this cell’s priced ores — `surface_value`’s own device when it
+// cannot price a zone, borrowed here per ore. Dropping them to the bottom
+// instead was the first cut and it read plainly wrong: an ore reported by
+// EVERY mark in a zone is the single most useful thing about it, and it sat
+// last behind trace ores because a price feed had never heard of it. The
+// median stands it where an ordinary-value ore of that prevalence would
+// stand — neither promoted nor buried — and the tooltip says the price is
+// unknown. With nothing priced at all, every score collapses to the share and
+// the cell is plain prevalence order.
 //
 // Capped, and the cap SAYS SO: the surface row used to slice(0, 4) silently, so
 // a nine-ore area advertised four. The full composition is on the details card.
-const ZONE_ORES_SHOWN = 5;
-function zoneOresCell(ores) {
-  const list = (ores || []).filter(Boolean)
-    .slice().sort((a, b) => String(a).localeCompare(String(b)));
-  if (!list.length) return `<span class="muted">\u2014</span>`;
-  const shown = list.slice(0, ZONE_ORES_SHOWN);
-  const rest = list.length - shown.length;
+const ZONE_ORES_SHOWN = 10;
+function zoneOresCell(z) {
+  const names = (z.ores || []).filter(Boolean);
+  if (!names.length) return `<span class="muted">\u2014</span>`;
+  const counts = z.ore_counts || {};
+  const likely = z.ore_likely || {};
+  // Denominator = whatever the ore tallies were counted over: sightings for a
+  // surface area, POSITIVE marks for a belt zone (a "nothing here" mark lists
+  // no ore, so it is not a trial this fraction could have failed).
+  const n = (z.kind === "surface" ? z.sightings : z.positive) || 0;
+  const rows = names.map(o => {
+    const k = counts[o] || 0;
+    // Fall back to the raw share only if the server sent no bound (an older
+    // row); never invent one where there is no evidence at all.
+    const p = typeof likely[o] === "number" ? likely[o] : (n ? k / n : 0);
+    const v = oreValueLookup(o, "resource");
+    return { o, k, p, share: n ? k / n : null,
+             sell: v && v.sell > 0 ? v.sell : null };
+  });
+  const priced = rows.map(r => r.sell).filter(x => x != null).sort((a, b) => a - b);
+  // Median of what IS priced here; undefined when nothing is.
+  const stand = priced.length
+    ? (priced.length % 2 ? priced[(priced.length - 1) / 2]
+       : (priced[priced.length / 2 - 1] + priced[priced.length / 2]) / 2)
+    : null;
+  for (const r of rows) r.score = r.p * (r.sell != null ? r.sell : (stand || 1));
+  rows.sort((a, b) => (b.score - a.score) || (b.k - a.k) || a.o.localeCompare(b.o));
+  const shown = rows.slice(0, ZONE_ORES_SHOWN);
+  const rest = rows.length - shown.length;
+  const unit = z.kind === "surface" ? "sighting" : "mark";
   return `<span class="zn-ores">`
-    + shown.map(o => `<span>${esc(o)}${oreValueChip(o)}</span>`).join("")
-    + (rest ? `<span class="zn-more" title="${esc(list.slice(ZONE_ORES_SHOWN).join(", "))}">`
+    + shown.map(r => {
+        const pct = r.share == null ? "" : Math.round(r.share * 100) + "%";
+        const tip = r.share == null ? ""
+          : ` title="seen in ${r.k} of ${n} ${unit}${n === 1 ? "" : "s"}`
+            + `${r.sell != null ? ` \u00b7 \u2248${r.sell.toLocaleString()} aUEC/SCU`
+                : stand != null ? " \u00b7 no price on file \u2014 ranked at this zone's median"
+                : " \u00b7 no price on file"}"`;
+        return `<span${tip}>${esc(r.o)}${oreValueChip(r.o)}`
+          + (pct ? ` <b class="zn-pct">${pct}</b>` : "") + `</span>`;
+      }).join("")
+    + (rest ? `<span class="zn-more" title="${esc(rows.slice(ZONE_ORES_SHOWN).map(r => r.o).join(", "))}">`
         + `+${rest} more</span>` : "")
     + `</span>`;
 }
@@ -18715,7 +18777,7 @@ async function refenceSurveyZone(z) {
 
 function surfaceZoneRow(z) {
   const sel = z.zone_id === haloAtlasSelZone ? " class=\"zone-sel\"" : "";
-  const ores = zoneOresCell(z.ores);
+  const ores = zoneOresCell(z);
   const band = z.avg_band ? `B${z.avg_band.toFixed(1)}` : `<span class="muted">—</span>`;
   const acts = (z.sightings ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
     // Navigable, never plannable — there is no quantum drop onto a surface.

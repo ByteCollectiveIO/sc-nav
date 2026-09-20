@@ -7642,6 +7642,7 @@ def survey_cluster_fit(members: list[dict], negatives: list[dict]) -> dict:
         radius = max(500e3, min(radius, 0.8 * near_neg))
     status = (max((m["rocks"] for m in positives), key=lambda r: SURVEY_ROCKS.index(r))
               if positives else "barren")
+    ore_counts = _survey_ore_counts(positives)
     return {
         "xyz": centroid,
         "grid_radius_m": radius,
@@ -7652,7 +7653,14 @@ def survey_cluster_fit(members: list[dict], negatives: list[dict]) -> dict:
         "ores": sorted({o for m in positives for o in m["ores"]}),
         # Per-ore positive-mark tally (#37 slice 2): how many positive marks
         # LIST each ore — the k of the ore-routing likelihood fraction.
-        "ore_counts": _survey_ore_counts(positives),
+        "ore_counts": ore_counts,
+        # …and that fraction's sample-size-honest form, the same Wilson lower
+        # bound `surface_zone_fit` emits for a moon patch. Both kinds of zone
+        # now carry it, so one reader can rank a belt pocket's ores and a
+        # planetside area's ores with the same statistic (ATLAS's ORES column
+        # orders by this x price, which is `surface_value`'s own score term).
+        "ore_likely": {o: round(_wilson_lower_bound(k, len(positives)), 4)
+                       for o, k in ore_counts.items()},
         # Scanner rollup (#37 slice 3): scans count + mean comp% per ore.
         **_survey_scan_stats(positives),
         "salvage": any(m["salvage"] for m in members),
