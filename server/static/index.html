@@ -239,6 +239,13 @@
     background: var(--panel2); color: var(--text); }
   .ore-likely .ol-btn:hover { border-color: var(--accent); }
   .ore-likely .ol-btn .ol-p { color: var(--dim); font-variant-numeric: tabular-nums; }
+  /* Group headings inside the shared .poi-drop. Not options — they carry no
+     role and no _pick, so attachPickerKeys' arrow nav walks straight past them. */
+  .ore-drop-h { padding: 6px 10px 2px; font-size: 10px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--dim); position: sticky; top: 0;
+    background: var(--panel2); }
+  .ore-pick { position: relative; display: flex; }
+  .ore-pick > .ti { width: 100%; }
   /* Two capture PURPOSES, banded (2026-09-20; reworked after the 2026-09-20
      critique). The three panels used to sit in one undifferentiated row, so
      marking a place to fly back to and logging evidence about ground looked
@@ -1176,6 +1183,8 @@
        one-off: a text field in a capture form takes its own line, and the
        short selects keep a floor wide enough to read their own value. */
     .cap-group input.ti { flex: 1 1 100% !important; min-width: 9rem !important; }
+    /* the ore input is wrapped by its picker, so the wrapper is the flex item */
+    .cap-group .ore-pick { flex: 1 1 100% !important; min-width: 9rem !important; }
     .cap-group select.sel { min-width: 6.5rem !important; }
     .filter-bar input.ti { flex: 1 1 100% !important; min-width: 9rem !important; }
 
@@ -3238,16 +3247,24 @@
     <div class="panel">
       <h2>⛏ ADD RESOURCE NODE</h2>
       <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <!-- An input + datalist, not a <select> (2026-09-20 play feedback).
-             Two reasons: the raw-ore vocabulary is ~100 entries, so picking
-             one meant scrolling a dropdown mid-session when typing three
-             letters is faster; and free text now IS the "Other" case, so the
-             separate other-ore field this used to need is gone. The same
-             pattern the FIELD survey box already uses for the same vocabulary. -->
-        <input id="node-ore" class="ti" list="node-ore-list" autocomplete="off"
-               aria-label="Ore" placeholder="ore — type to filter"
-               style="flex:1; min-width:130px;">
-        <datalist id="node-ore-list"></datalist>
+        <!-- A real combobox (.poi-drop/.poi-opt + attachPickerKeys), NOT a
+             <datalist>. The datalist version annotated the likely ores with the
+             option `label` attribute, and Chrome renders a labelled datalist
+             option AS ITS LABEL — so the dropdown read "likely here · 21%" with
+             no ore name on it, and typing "Laranite" matched nothing, because
+             the only Laranite option in the list was the annotated one.
+             Reported from the game: the annotation had eaten the very ores it
+             was meant to promote.
+
+             There is no way to annotate a datalist option without replacing its
+             text, so the annotation and the native control cannot both survive.
+             The app already owns a picker that does both, and it is the one the
+             POI and catalog fields use. Free text is still accepted — an ore
+             the feed has never heard of is the "other ore" case. -->
+        <span class="ore-pick poi-pick" style="flex:1; min-width:130px;">
+          <input id="node-ore" class="ti" autocomplete="off" aria-label="Ore"
+                 placeholder="ore — type to filter">
+        </span>
         <span id="node-ore-value" hidden></span>
         <label class="muted" style="font-size:12px;"
                title="Scan quality band 1–8 (higher = richer deposit); Unk if you didn't read it off the scanner.">band
@@ -8460,7 +8477,7 @@ function updateNodeOreValue() {
   el.innerHTML = html;
   el.hidden = !html;
 }
-$("node-ore").addEventListener("input", updateNodeOreValue);
+wireOrePicker();
 
 // ---- ore picker: what's likely under your feet, first ----------------------
 // The full raw-ore vocabulary, and the forecast's current ranking over it.
@@ -8468,27 +8485,88 @@ let oreVocab = [];
 let oreLikely = [];          // [{ore, p}] — from the live resource forecast
 let oreLikelyKey = null;     // rebuild guard: this runs on every state frame
 
-// Datalist options render in document order, so putting the likely ores first
-// is the whole "section at the top of the list" — a datalist cannot carry
-// optgroups, but it can carry a `label`, which Chrome shows beside the value.
-// Typing still filters the entire vocabulary, which is the other half of it.
-function rebuildOreList() {
-  const dl = $("node-ore-list");
-  if (!dl) return;
-  const seen = new Set();
-  const opt = (o, label) => {
-    const el = document.createElement("option");
-    el.value = o;
-    if (label) el.label = label;
-    dl.appendChild(el);
+// The picker's dropdown, rebuilt from the vocabulary on every keystroke.
+// Matching is on the ORE NAME and nothing else, which is the bug this replaced:
+// the annotation must never be part of what you are searching.
+//
+// Substring, not prefix — the feed's names carry a suffix ("Laranite (Raw)",
+// "Agricium (Ore)"), so a prefix match would make "raw" and "ore" unsearchable
+// and, worse, would rank "Aslarite (Raw)" and "Laranite (Raw)" identically for
+// someone typing the part they actually remember.
+const ORE_DROP_CAP = 40;
+function oreMatches(q) {
+  const needle = q.trim().toLowerCase();
+  const likely = new Map(oreLikely.map(r => [r.ore, r.p]));
+  const hit = (o) => !needle || o.toLowerCase().includes(needle);
+  // Likely ores keep their place at the top of whatever the filter leaves.
+  const top = [...likely.keys()].filter(hit);
+  const rest = oreVocab.filter(o => !likely.has(o) && hit(o));
+  return { top, rest, likely };
+}
+
+function renderOreDrop(q) {
+  const drop = $("node-ore-drop");
+  if (!drop) return;
+  const { top, rest, likely } = oreMatches(q);
+  const row = (o, p) => {
+    const it = document.createElement("div");
+    it.className = "poi-opt";
+    it.innerHTML = `${esc(o)}${oreValueChip(o)}`
+      + (p != null ? ` <span class="muted">likely here · ${Math.round(p * 100)}%</span>` : "");
+    it._pick = () => {
+      $("node-ore").value = o;
+      updateNodeOreValue();
+      drop.hidden = true;
+      $("node-ore").focus();
+    };
+    // mousedown, not click: the pick has to land before the input's blur hides
+    // the drop (same reason attachPoiPicker does it).
+    it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
+    return it;
   };
-  dl.innerHTML = "";
-  for (const r of oreLikely) {
-    if (seen.has(r.ore)) continue;
-    seen.add(r.ore);
-    opt(r.ore, `likely here · ${Math.round(r.p * 100)}%`);
+  drop.innerHTML = "";
+  if (top.length) {
+    const h = document.createElement("div");
+    h.className = "ore-drop-h";
+    h.textContent = "likely here";
+    drop.appendChild(h);
+    for (const o of top) drop.appendChild(row(o, likely.get(o)));
+    if (rest.length) {
+      const h2 = document.createElement("div");
+      h2.className = "ore-drop-h";
+      h2.textContent = "everything else";
+      drop.appendChild(h2);
+    }
   }
-  for (const o of oreVocab) { if (!seen.has(o)) opt(o); }
+  for (const o of rest.slice(0, ORE_DROP_CAP)) drop.appendChild(row(o, null));
+  const shown = top.length + Math.min(rest.length, ORE_DROP_CAP);
+  if (rest.length > ORE_DROP_CAP) {
+    const more = document.createElement("div");
+    more.className = "ore-drop-h";
+    more.textContent = `+${rest.length - ORE_DROP_CAP} more — keep typing`;
+    drop.appendChild(more);
+  }
+  drop.hidden = shown === 0;
+}
+
+function rebuildOreList() {
+  const drop = $("node-ore-drop");
+  if (drop && !drop.hidden) renderOreDrop($("node-ore").value);
+}
+
+function wireOrePicker() {
+  const input = $("node-ore");
+  const wrap = input && input.parentElement;
+  if (!wrap || wrap.querySelector(".poi-drop")) return;
+  const drop = document.createElement("div");
+  drop.className = "poi-drop";
+  drop.id = "node-ore-drop";
+  drop.hidden = true;
+  wrap.appendChild(drop);
+  input.addEventListener("input", () => { updateNodeOreValue(); renderOreDrop(input.value); });
+  input.addEventListener("focus", () => renderOreDrop(input.value));
+  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+  attachPickerKeys(input, drop);
 }
 
 // The chip row: the same ranking, one tap. Capped at five — past that it stops
