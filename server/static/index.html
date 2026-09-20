@@ -6086,8 +6086,12 @@ function surfaceZoneChip(state) {
   const full = `${z.name} — ${z.sightings || 0} sighting${z.sightings === 1 ? "" : "s"}`
     + (inside.length > 1 ? `, and ${inside.length - 1} more area${inside.length > 2 ? "s" : ""} overlap here` : "")
     + `. Your sightings count toward it automatically — no tagging, nothing to arm.`;
-  return ` <span class="halo-chip" style="display:inline-block; white-space:nowrap; margin-top:4px;"`
-    + ` title="${esc(full)}">📍 ${esc(z.name)} · ${z.sightings || 0}${more}</span>`;
+  // Play-test ask: make it a way IN, not just a notice. One tap goes to this
+  // area's card in the ATLAS, which is where every other action on it lives.
+  return ` <button type="button" class="halo-chip" data-zonejump="${z.zone_id}"`
+    + ` style="display:inline-block; white-space:nowrap; margin-top:4px; cursor:pointer;"`
+    + ` title="${esc(full)} Opens its card in Prospector's ATLAS.">`
+    + `📍 ${esc(z.name)} · ${z.sightings || 0}${more}</button>`;
 }
 
 function renderZoneClaim(state) {
@@ -6153,6 +6157,21 @@ function applyWhereChips(state) {
   if (w) w.innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}${surf}` : `deep space${halo}`;
   if (rc) rc.innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>${surf}`
     : `deep space${halo}`;
+  // Re-wired on every frame because the chip is re-rendered on every frame.
+  for (const el of document.querySelectorAll("[data-zonejump]"))
+    el.onclick = () => openZoneInAtlas(Number(el.dataset.zonejump));
+}
+
+// Navigator → ATLAS. The zone list is per system, so point it at the one the
+// area is in before opening the card, or the card opens against an empty list.
+async function openZoneInAtlas(zoneId) {
+  const z = (surfaceZonesHere.zones || []).find(x => x.zone_id === zoneId);
+  if (z && z.system) haloSystem = z.system;
+  location.hash = "#/halo/atlas";
+  haloGoTab("atlas");
+  await loadHaloZones(z && z.system);
+  const fresh = haloZones.find(x => x.zone_id === zoneId);
+  if (fresh) openHaloSurveyCard(fresh);
 }
 
 // ---------- destination ----------
@@ -17234,6 +17253,11 @@ function plainDist(m) {
 let haloBodyPlate = null;            // body name, or null for the system map
 let haloBodyCells = { key: null, cells: [] };
 let haloBodyHits = [];
+// Pan/zoom, per body. Play-testing: "does not move or zoom … nothing was
+// selectable" — the plate was a static picture with a click handler nobody
+// could aim. Default view auto-frames the body's areas instead of showing a
+// whole moon on which a 25 km circle is a speck.
+let haloBodyView = { key: null, zoom: 1, panX: 0, panY: 0 };
 
 function surfaceZonesByBody() {
   const out = {};
@@ -17250,6 +17274,7 @@ function surfaceZonesByBody() {
 }
 
 async function openBodyPlate(body) {
+  if (haloBodyPlate !== body) haloBodyView = { key: null, zoom: 1, panX: 0, panY: 0 };
   haloBodyPlate = body;
   const wrap = $("halo-atlas-map-wrap"), plate = $("halo-body-plate");
   if (wrap) wrap.hidden = true;
@@ -17281,15 +17306,47 @@ function wireBodyPlate() {
   const cv = $("halo-body-map");
   if (cv && !cv.dataset.wired) {
     cv.dataset.wired = "1";
-    cv.onclick = (e) => {
+    let drag = null;
+    cv.style.cursor = "grab";
+    cv.onpointerdown = (e) => {
+      drag = { x: e.clientX, y: e.clientY, moved: false };
+      cv.setPointerCapture(e.pointerId);
+      cv.style.cursor = "grabbing";
+    };
+    cv.onpointermove = (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      haloBodyView.panX += dx; haloBodyView.panY += dy;
+      drag.x = e.clientX; drag.y = e.clientY;
+      drawBodyPlate();
+    };
+    cv.onpointerup = (e) => {
+      const wasDrag = drag && drag.moved;
+      drag = null;
+      cv.style.cursor = "grab";
+      if (wasDrag) return;                    // a pan is not a selection
       const r = cv.getBoundingClientRect();
       const px = e.clientX - r.left, py = e.clientY - r.top;
-      let best = null, bd = 14;
+      let best = null, bd = 16;
       for (const h of haloBodyHits) {
         const d = Math.hypot(h.x - px, h.y - py);
         if (d < bd) { best = h; bd = d; }
       }
       selectHaloAtlasZone(best ? best.zone_id : null);
+      drawBodyPlate();
+    };
+    cv.onwheel = (e) => {
+      e.preventDefault();
+      const r = cv.getBoundingClientRect();
+      const px = e.clientX - r.left, py = e.clientY - r.top;
+      const f = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+      const z = Math.max(1, Math.min(60, haloBodyView.zoom * f));
+      const k = z / haloBodyView.zoom;
+      // Zoom about the cursor, so the thing under the pointer stays put.
+      haloBodyView.panX = px - (px - haloBodyView.panX) * k;
+      haloBodyView.panY = py - (py - haloBodyView.panY) * k;
+      haloBodyView.zoom = z;
       drawBodyPlate();
     };
   }
@@ -17304,10 +17361,66 @@ function closeBodyPlate() {
   if (cv) drawHaloSystemMap(cv, null);
 }
 
-// Lambert cylindrical equal-area. Kept as one helper so the cells, the zone
-// boundaries and the live position can never disagree about where a lat/lon is.
+// Lambert cylindrical equal-area, with a STANDARD PARALLEL.
+//
+// The first cut pinned the standard parallel to the equator, which is only
+// shape-true there: a 25 km area drew as a circle at the equator, a 2:1 oval at
+// 45 deg and an 8.6:1 streak at 70 deg. Play-testing found exactly that — "the
+// circle for the radius was a flattened oval". The distortion is inherent to
+// the projection family, not a bug in the drawing, and zooming cannot fix it
+// because the anisotropy is scale-free.
+//
+// Setting the standard parallel to the latitude where the body's areas actually
+// ARE makes them shape-true, and costs nothing that §6.2 was buying:
+//   * still equal-area, so coverage stays honest;
+//   * still CYLINDRICAL — x stays proportional to lon and y to sin(lat) — so
+//     nav_core.grid_cell's bins are still rectangles and the ore heat layer
+//     still tiles the plate with no resampling.
+// Only the plate's aspect changes: W/H = pi * cos^2(phi0).
 function lambertXY(lat, lon, w, h) {
+  // phi0 does NOT appear here, and that is the whole trick: the projection
+  // scales lon by cos(phi0) and sin(lat) by 1/cos(phi0), but normalising both
+  // axes onto a canvas divides those back out. The standard parallel survives
+  // purely as the canvas ASPECT (see plateAspect) — so choosing it is free.
   return [((lon + 180) % 360) / 360 * w, (1 - (Math.sin(lat * DEG) + 1) / 2) * h];
+}
+
+// The aspect the plate must be drawn at for shapes to be true at phi0.
+function plateAspect(phi0) {
+  const c0 = Math.cos((phi0 || 0) * DEG);
+  // Clamped: at |phi0| > ~75 deg a true-aspect plate becomes a sliver, and a
+  // body nobody has surveyed near the equator is still better served by a
+  // usable canvas than a mathematically perfect one.
+  return Math.max(0.35, Math.min(4.0, Math.PI * c0 * c0));
+}
+
+// Mean latitude of a body's areas — the parallel worth being shape-true at.
+function plateStandardParallel(zones) {
+  const lats = zones.map(z => z.center_lat).filter(v => v != null);
+  if (!lats.length) return 0;
+  return lats.reduce((a, b) => a + b, 0) / lats.length;
+}
+
+// Frame the view on the body's areas, with room around them. A whole moon with
+// one 25 km speck on it is technically correct and useless.
+function fitBodyView(zones, phi0, cssW, cssH) {
+  const pts = [];
+  for (const z of zones) {
+    if (z.center_lat == null) continue;
+    const [x, y] = lambertXY(z.center_lat, z.center_lon, cssW, cssH);
+    const R = z.body_radius_m || 0;
+    const pad = R ? (z.radius_m || 0) / R : 0;
+    pts.push([x, y, pad]);
+  }
+  if (!pts.length) return { zoom: 1, panX: 0, panY: 0 };
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const spanX = Math.max(...xs) - Math.min(...xs) + cssW * 0.08;
+  const spanY = Math.max(...ys) - Math.min(...ys) + cssH * 0.08;
+  const zoom = Math.max(1, Math.min(24,
+    0.7 * Math.min(cssW / Math.max(1, spanX), cssH / Math.max(1, spanY))));
+  const midX = (Math.max(...xs) + Math.min(...xs)) / 2;
+  const midY = (Math.max(...ys) + Math.min(...ys)) / 2;
+  return { zoom, panX: (cssW / 2 - midX) * zoom, panY: (cssH / 2 - midY) * zoom };
 }
 
 function drawBodyPlate() {
@@ -17315,13 +17428,9 @@ function drawBodyPlate() {
   if (!cv || !haloBodyPlate) return;
   const cssW = cv.parentElement.clientWidth;
   if (!(cssW > 0)) return;
-  // The plate spans 2*pi*R of longitude by 2R of sin(lat), so its true aspect
-  // is pi:1 — NOT 2:1. At 2:1 the vertical scale is stretched by pi/2 and an
-  // equatorial zone draws as a 1.57x-tall ellipse, which makes an EQUAL-AREA
-  // projection look like it is lying. At pi:1 a circle at the equator is a
-  // circle, and the flattening toward the poles is the real distortion rather
-  // than an artefact of the canvas.
-  const cssH = Math.round(cssW / Math.PI);
+  const zonesForFit = haloZones.filter(z => z.kind === "surface" && z.body === haloBodyPlate);
+  const phi0 = plateStandardParallel(zonesForFit);
+  const cssH = Math.round(cssW / plateAspect(phi0));
   const dpr = window.devicePixelRatio || 1;
   cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
   cv.style.height = cssH + "px";
@@ -17330,18 +17439,29 @@ function drawBodyPlate() {
   const C = HALO_MAP_C;
   ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, cssH);
   ctx.font = "10px monospace";
-  const zones = haloZones.filter(z => z.kind === "surface" && z.body === haloBodyPlate);
+  const zones = zonesForFit;
   const R = (zones[0] && zones[0].body_radius_m) || 0;
+  if (haloBodyView.key !== haloBodyPlate) {
+    haloBodyView = { key: haloBodyPlate, ...fitBodyView(zones, phi0, cssW, cssH) };
+  }
+  const V = haloBodyView;
+  // One transform for every layer, so cells, boundaries, labels, the live fix
+  // and the CLICK TEST can never disagree about where a lat/lon lands.
+  const PT = (lat, lon) => {
+    const [bx, by] = lambertXY(lat, lon, cssW, cssH);
+    return [(bx - cssW / 2) * V.zoom + cssW / 2 + V.panX,
+            (by - cssH / 2) * V.zoom + cssH / 2 + V.panY];
+  };
 
   // graticule — every 30 deg of longitude, and the equator/tropic lines at
   // equal-area-correct spacing
   ctx.strokeStyle = C.orbit; ctx.lineWidth = 1;
   for (let lon = -180; lon <= 180; lon += 30) {
-    const [x] = lambertXY(0, lon, cssW, cssH);
+    const [x] = PT(0, lon);
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cssH); ctx.stroke();
   }
-  for (const lat of [-60, -30, 0, 30, 60]) {
-    const [, y] = lambertXY(lat, 0, cssW, cssH);
+  for (const lat of [-75, -60, -45, -30, -15, 0, 15, 30, 45, 60, 75]) {
+    const [, y] = PT(lat, 0);
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cssW, y); ctx.stroke();
   }
 
@@ -17352,11 +17472,13 @@ function drawBodyPlate() {
   const cellDeg = cells.length && R
     ? { lon: 360 / Math.max(1, Math.round(2 * Math.PI * R / 5000)), } : null;
   for (const c of cells) {
-    const [x, y] = lambertXY(c.lat, c.lon, cssW, cssH);
+    const [x, y] = PT(c.lat, c.lon);
+    if (x < -20 || y < -20 || x > cssW + 20 || y > cssH + 20) continue;
     const a = 0.18 + 0.55 * Math.min(1, (c.n || 0) / maxN);
     ctx.globalAlpha = a;
     ctx.fillStyle = oreColor(c.top || "");
-    const w = Math.max(2, cssW / 180), hh = Math.max(2, cssH / 90);
+    // Cells stay RECTANGLES under this projection — that is why it was chosen.
+    const w = Math.max(2, cssW / 180 * V.zoom), hh = Math.max(2, cssH / 90 * V.zoom);
     ctx.fillRect(x - w / 2, y - hh / 2, w, hh);
     ctx.globalAlpha = 1;
   }
@@ -17375,7 +17497,7 @@ function drawBodyPlate() {
     ctx.beginPath();
     let prevX = null;
     for (const [plat, plon] of pts) {
-      const [x, y] = lambertXY(plat, plon, cssW, cssH);
+      const [x, y] = PT(plat, plon);
       // A boundary crossing the antimeridian wraps in x; lifting the pen there
       // keeps it from drawing a band across the whole plate.
       if (prevX != null && Math.abs(x - prevX) > cssW / 2) ctx.moveTo(x, y);
@@ -17392,11 +17514,11 @@ function drawBodyPlate() {
     ctx.fillStyle = vc; ctx.fill();
     ctx.globalAlpha = 1;
     ctx.lineWidth = 1;
-    const [lx, ly] = lambertXY(z.center_lat, z.center_lon, cssW, cssH);
+    const [lx, ly] = PT(z.center_lat, z.center_lon);
     // Anchor the label OUTSIDE the circle and stagger it. Zones on one moon
     // cluster (that is the whole point of naming ground), so centre-anchored
     // labels sat on top of each other and were unreadable.
-    const rPx = Math.max(6, (z.radius_m / R) * (cssH / 2));
+    const rPx = Math.max(6, (z.radius_m / R) * (cssH / 2) * V.zoom);
     const ty = ly + (labelSlot++ - (drawOrder.length - 1) / 2) * 13;
     ctx.strokeStyle = C.bg; ctx.lineWidth = 3;
     ctx.strokeText(z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name, lx + rPx + 6, ty);
@@ -17410,7 +17532,7 @@ function drawBodyPlate() {
   // layer 3: you
   const st = typeof lastState !== "undefined" ? lastState : null;
   if (st && st.container && st.container.name === haloBodyPlate && st.latitude != null) {
-    const [x, y] = lambertXY(st.latitude, st.longitude, cssW, cssH);
+    const [x, y] = PT(st.latitude, st.longitude);
     ctx.strokeStyle = C.drop; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y);
@@ -17426,7 +17548,9 @@ function drawBodyPlate() {
     cap.textContent = `${zones.length} area${zones.length === 1 ? "" : "s"} · `
       + `${zones.reduce((a, z) => a + (z.sightings || 0), 0)} sightings · `
       + `≈${Math.round(area / 1e6).toLocaleString()} km² named`
-      + (cells.length ? ` · ${cells.length} mapped cells` : "");
+      + (cells.length ? ` · ${cells.length} mapped cells` : "")
+      + ` · equal-area, true shape at ${Math.abs(phi0).toFixed(0)}°`
+      + `${phi0 < 0 ? "S" : "N"} · drag to pan, scroll to zoom`;
   }
 }
 
@@ -17700,6 +17824,37 @@ function drawSurfaceZonePlate(cv, z, sightings) {
   ctx.strokeStyle = getComputedStyle(document.documentElement)
     .getPropertyValue("--sel").trim() || "#6cf";
   ctx.lineWidth = 1.5; ctx.stroke();
+  // Play-test ask: show the POIs that fall INSIDE the circle, for reference —
+  // "the one I created was near 3 caves and ArcCorp Mining Area 056". Note the
+  // deliberate difference from the naming suggestion: a cave is a poor thing to
+  // NAME an area after, and a perfectly good thing to see ON it. So the type /
+  // mass-produced filters do NOT apply here — only the altitude gate, because
+  // a relay 165 km overhead is not a reference you can drive to.
+  if (R && allRows) {
+    ctx.font = "10px monospace";
+    for (const p of allRows) {
+      if (p.kind !== "poi" || p.container !== z.body || p.system !== z.system) continue;
+      if (p.latitude == null || p.longitude == null) continue;
+      if (p.height_m != null && p.height_m > SURFACE_ZONE_MAX_HEIGHT_M) continue;
+      if (greatCircle(p.latitude, p.longitude, z.center_lat, z.center_lon, R).dist
+          > (z.radius_m || 0)) continue;
+      const q = projectMeters(p.latitude, p.longitude, z.center_lat, z.center_lon, R);
+      const px = cx + q.east * scale, py = cy - q.north * scale;
+      ctx.strokeStyle = "rgba(216,225,238,.55)";
+      ctx.beginPath();
+      ctx.moveTo(px, py - 3.5); ctx.lineTo(px + 3.5, py);
+      ctx.lineTo(px, py + 3.5); ctx.lineTo(px - 3.5, py);
+      ctx.closePath(); ctx.stroke();
+      const nm = (p.name || "").length > 24 ? p.name.slice(0, 23) + "…" : (p.name || "");
+      // Dark halo: these labels sit over the sighting dots, and a POI you can
+      // half-read is worse than one you can't see.
+      ctx.strokeStyle = "rgba(11,14,19,.85)"; ctx.lineWidth = 3;
+      ctx.strokeText(nm, px + 6, py + 3);
+      ctx.lineWidth = 1;
+      ctx.fillStyle = "rgba(216,225,238,.75)";
+      ctx.fillText(nm, px + 6, py + 3);
+    }
+  }
   const now = Date.now() / 1000;
   for (const o of sightings || []) {
     if (o.latitude == null || o.longitude == null || !R) continue;
@@ -17789,7 +17944,8 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
           "Share of this area's sightings, per ore. Bars are percentages; the "
           + "count is how many sightings listed that ore.")}${surfaceBandChart(z)}</div>`
     + `<div class="card"><h2 class="svy-h">This area</h2>`
-    + `<p class="cap">Sightings, ore-coloured and faded by age; hollow means already worked.</p>`
+    + `<p class="cap">Sightings, ore-coloured and faded by age; hollow means already worked. `
+    + `Outlined diamonds are POIs inside the circle.</p>`
     + `<canvas id="svy-plate" width="420" height="420" style="width:100%; max-width:420px; height:auto;"></canvas></div>`
     + timeline
     + `<p class="svy-foot">Built from <b>${n}</b> sighting${n === 1 ? "" : "s"}`
