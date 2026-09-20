@@ -10903,6 +10903,27 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         self.assertIsNotNone(db.get_survey_zone(surface))
 
     # -- altitude -----------------------------------------------------------
+    def test_the_targets_doc_names_bodies_that_carry_areas(self):
+        # The system map's `bodies` list is the star plus true PLANETS, because
+        # moons are sub-pixel at that scale — and almost every surface zone is
+        # on a moon, so the §6.1 badge had nothing to attach to. surface_bodies
+        # carries each such body with its own position.
+        before = self.client.get("/api/halo/targets?system=Stanton").json()
+        self.assertNotIn(self.BODY, [b["name"] for b in before["bodies"]])
+        self.assertEqual(before["surface_bodies"], [])
+        self._create()
+        doc = self.client.get("/api/halo/targets?system=Stanton").json()
+        row = next(b for b in doc["surface_bodies"] if b["name"] == self.BODY)
+        self.assertTrue(row["r"] > 0)
+        self.assertIn("x", row)
+        self.assertIn("y", row)
+
+    def test_an_archived_area_drops_off_the_system_map(self):
+        zid = self._create().json()["zone"]["id"]
+        self.client.patch(f"/api/halo/survey/zones/{zid}", json={"closed": True})
+        doc = self.client.get("/api/halo/targets?system=Stanton").json()
+        self.assertEqual(doc["surface_bodies"], [])
+
     def test_a_node_logged_from_orbit_is_not_in_the_zone(self):
         self._add_obs(0.0, 0.0, height_m=0.0)
         self._add_obs(0.0, 0.0, height_m=200_000.0)     # well up the QT approach

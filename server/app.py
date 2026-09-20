@@ -6611,6 +6611,23 @@ def _halo_bodies(system: str) -> list[dict]:
             for c in star + planets]
 
 
+def _surface_bodies(system: str) -> list[dict]:
+    """Every body in `system` that has at least one open surface zone, with the
+    position the system map draws it at. Counts/value tiers deliberately stay
+    client-side, joined from the zone rows, so the value basis lives in exactly
+    one place."""
+    out = []
+    names = {z["body"] for z in db.list_survey_zones(system, kind="surface")
+             if z.get("body") and not z.get("closed")}
+    for name in sorted(names):
+        c = nav.resolve_container(system, name)
+        if c is None:
+            continue
+        out.append({"name": c.name, "type": c.type,
+                    "x": c.pos[0], "y": c.pos[1], "r": c.body_radius})
+    return out
+
+
 @app.get("/api/halo/bands")
 def get_halo_bands(user: dict = Depends(require_session)):
     """The Aaron Halo band model for the picker strip + map bodies. Static —
@@ -6637,6 +6654,13 @@ def get_halo_targets(system: str = "Stanton",
            "bodies": _halo_bodies(system),
            # Overview-map landmarks (#37 slice 4): stations + gateways.
            "markers": _halo_markers(system),
+           # Bodies carrying named surface areas (#37.1 §6.1). A SEPARATE list
+           # from `bodies` on purpose: that one is the star plus true planets,
+           # because moons are sub-pixel at system scale — and almost every
+           # surface zone is on a moon, so the badge would have nothing to
+           # attach to. This carries each such body's own position so the badge
+           # lands where the ground actually is.
+           "surface_bodies": _surface_bodies(system),
            "attribution": belt["attribution"]}
     if belt["kind"] == "bands":
         doc["bands"] = [{**b, "width_m": b["outer_m"] - b["inner_m"]}

@@ -4748,7 +4748,19 @@
       <div class="panel">
         <h2>COVERAGE <span class="muted" style="font-weight:400; font-size:12px;">what the org
           has mapped, and where to survey next</span></h2>
-        <div class="halo-map-wrap"><canvas id="halo-atlas-map"
+        <!-- Level 2 (#37.1 §6.2): one body, equal-area. Surface zones are
+             sub-pixel at system scale, so they get their own plate rather than
+             a zoom of a map that can never show them. -->
+        <div id="halo-body-plate" hidden>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+            <button type="button" class="route-chip" id="halo-body-back">← Back to system</button>
+            <b id="halo-body-name"></b>
+            <span class="muted" id="halo-body-cap" style="font-size:12px;"></span>
+          </div>
+          <div class="halo-map-wrap"><canvas id="halo-body-map"
+            aria-label="equal-area map of one body: ore heat cells, named survey areas and your position"></canvas></div>
+        </div>
+        <div class="halo-map-wrap" id="halo-atlas-map-wrap"><canvas id="halo-atlas-map"
           aria-label="system overview: belts, surveyed pockets tinted by value, unmapped gap arcs, stations and gateways"></canvas></div>
         <!-- Tapping a zone square selects it: this bar names what you hit and
              carries the same actions as its table row, so the map is a real
@@ -16443,6 +16455,7 @@ async function loadHaloZones(sys) {
   renderHaloOverview();     // zone squares live on the overview map (#37)
   renderHaloAtlasZones();   // and on the ATLAS zone list (#38)
   renderHaloAtlas();        // no-op unless the ATLAS tab is showing
+  if (haloBodyPlate) drawBodyPlate();   // level 2 follows the same data
 }
 
 // ---- ATLAS tab (#38): the org's belt atlas — zones, coverage, export ----
@@ -17191,6 +17204,270 @@ function oreChartShim(z) {
 // would draw literally — "25.0<small> km</small>".
 function plainDist(m) {
   return String(fmtDist(m)).replace(/<[^>]*>/g, "");
+}
+
+// --- level 2: the body plate (#37.1 §6.2) -----------------------------------
+// A full-body map in **Lambert cylindrical equal-area** (x proportional to lon,
+// y to sin(lat)). Three reasons, and they are the whole argument:
+//
+//   1. nav_core.grid_cell ALREADY bins observations in exactly this projection,
+//      so the org's ore heat cells tile the plate as rectangles with no
+//      resampling — the plate ships with a data layer on day one, before
+//      anyone draws a single zone.
+//   2. Area measurement stays honest. Plate carrée would stretch the poles and
+//      inflate anything measured off the picture.
+//   3. One formula, no dependency, no build step.
+//
+// The honest cost: a 50 km circle is a slightly flattened ellipse near the
+// poles. So a zone is drawn as its SAMPLED GREAT-CIRCLE BOUNDARY, never as a
+// stroked circle — which is also what makes a zone crossing the antimeridian
+// come out right instead of smearing across the whole plate.
+
+let haloBodyPlate = null;            // body name, or null for the system map
+let haloBodyCells = { key: null, cells: [] };
+let haloBodyHits = [];
+
+function surfaceZonesByBody() {
+  const out = {};
+  const rank = { high: 3, medium: 2, low: 1 };
+  for (const z of haloZones) {
+    if (z.kind !== "surface" || !z.body || z.closed) continue;
+    const e = out[z.body] || (out[z.body] = { n: 0, tier: null, sightings: 0 });
+    e.n += 1;
+    e.sightings += z.sightings || 0;
+    const t = z.value && z.value.tier;
+    if (t && (!e.tier || rank[t] > rank[e.tier])) e.tier = t;
+  }
+  return out;
+}
+
+async function openBodyPlate(body) {
+  haloBodyPlate = body;
+  const wrap = $("halo-atlas-map-wrap"), plate = $("halo-body-plate");
+  if (wrap) wrap.hidden = true;
+  if (plate) plate.hidden = false;
+  const nm = $("halo-body-name"); if (nm) nm.textContent = body;
+  wireBodyPlate();
+  // Heat cells are per body and slow-moving; fetch once per body.
+  const key = `${haloSystem}/${body}`;
+  if (haloBodyCells.key !== key) {
+    haloBodyCells = { key, cells: [] };
+    try {
+      const r = await fetch(`/api/resource_cells?system=${encodeURIComponent(haloSystem)}`
+        + `&body=${encodeURIComponent(body)}`);
+      if (r.ok) {
+        const doc = await r.json();
+        if (haloBodyCells.key === key) haloBodyCells.cells = doc.cells || [];
+      }
+    } catch {}
+  }
+  drawBodyPlate();
+}
+
+function wireBodyPlate() {
+  const back = $("halo-body-back");
+  if (back && !back.dataset.wired) {
+    back.dataset.wired = "1";
+    back.onclick = closeBodyPlate;
+  }
+  const cv = $("halo-body-map");
+  if (cv && !cv.dataset.wired) {
+    cv.dataset.wired = "1";
+    cv.onclick = (e) => {
+      const r = cv.getBoundingClientRect();
+      const px = e.clientX - r.left, py = e.clientY - r.top;
+      let best = null, bd = 14;
+      for (const h of haloBodyHits) {
+        const d = Math.hypot(h.x - px, h.y - py);
+        if (d < bd) { best = h; bd = d; }
+      }
+      selectHaloAtlasZone(best ? best.zone_id : null);
+      drawBodyPlate();
+    };
+  }
+}
+
+function closeBodyPlate() {
+  haloBodyPlate = null;
+  const wrap = $("halo-atlas-map-wrap"), plate = $("halo-body-plate");
+  if (wrap) wrap.hidden = false;
+  if (plate) plate.hidden = true;
+  const cv = $("halo-atlas-map");
+  if (cv) drawHaloSystemMap(cv, null);
+}
+
+// Lambert cylindrical equal-area. Kept as one helper so the cells, the zone
+// boundaries and the live position can never disagree about where a lat/lon is.
+function lambertXY(lat, lon, w, h) {
+  return [((lon + 180) % 360) / 360 * w, (1 - (Math.sin(lat * DEG) + 1) / 2) * h];
+}
+
+function drawBodyPlate() {
+  const cv = $("halo-body-map");
+  if (!cv || !haloBodyPlate) return;
+  const cssW = cv.parentElement.clientWidth;
+  if (!(cssW > 0)) return;
+  // The plate spans 2*pi*R of longitude by 2R of sin(lat), so its true aspect
+  // is pi:1 — NOT 2:1. At 2:1 the vertical scale is stretched by pi/2 and an
+  // equatorial zone draws as a 1.57x-tall ellipse, which makes an EQUAL-AREA
+  // projection look like it is lying. At pi:1 a circle at the equator is a
+  // circle, and the flattening toward the poles is the real distortion rather
+  // than an artefact of the canvas.
+  const cssH = Math.round(cssW / Math.PI);
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + "px";
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const C = HALO_MAP_C;
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, cssH);
+  ctx.font = "10px monospace";
+  const zones = haloZones.filter(z => z.kind === "surface" && z.body === haloBodyPlate);
+  const R = (zones[0] && zones[0].body_radius_m) || 0;
+
+  // graticule — every 30 deg of longitude, and the equator/tropic lines at
+  // equal-area-correct spacing
+  ctx.strokeStyle = C.orbit; ctx.lineWidth = 1;
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const [x] = lambertXY(0, lon, cssW, cssH);
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cssH); ctx.stroke();
+  }
+  for (const lat of [-60, -30, 0, 30, 60]) {
+    const [, y] = lambertXY(lat, 0, cssW, cssH);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cssW, y); ctx.stroke();
+  }
+
+  // layer 1: the org's ore heat cells — free, because grid_cell already bins
+  // in this exact projection, so a cell is a rectangle with no resampling.
+  const cells = haloBodyCells.cells || [];
+  const maxN = Math.max(1, ...cells.map(c => c.n || 0));
+  const cellDeg = cells.length && R
+    ? { lon: 360 / Math.max(1, Math.round(2 * Math.PI * R / 5000)), } : null;
+  for (const c of cells) {
+    const [x, y] = lambertXY(c.lat, c.lon, cssW, cssH);
+    const a = 0.18 + 0.55 * Math.min(1, (c.n || 0) / maxN);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = oreColor(c.top || "");
+    const w = Math.max(2, cssW / 180), hh = Math.max(2, cssH / 90);
+    ctx.fillRect(x - w / 2, y - hh / 2, w, hh);
+    ctx.globalAlpha = 1;
+  }
+
+  // layer 2: the zones themselves, as sampled great-circle polygons
+  haloBodyHits = [];
+  // Biggest first, so a tight zone inside a broad one draws on top of it
+  // rather than under — the legitimate case §12.3 refuses to block.
+  const drawOrder = zones.slice().sort((a, b) => (b.radius_m || 0) - (a.radius_m || 0));
+  let labelSlot = 0;
+  for (const z of drawOrder) {
+    if (z.center_lat == null || !z.radius_m || !R) continue;
+    const vc = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.label;
+    const sel = z.zone_id === haloAtlasSelZone;
+    const pts = greatCirclePolygon(z.center_lat, z.center_lon, z.radius_m, R, 48);
+    ctx.beginPath();
+    let prevX = null;
+    for (const [plat, plon] of pts) {
+      const [x, y] = lambertXY(plat, plon, cssW, cssH);
+      // A boundary crossing the antimeridian wraps in x; lifting the pen there
+      // keeps it from drawing a band across the whole plate.
+      if (prevX != null && Math.abs(x - prevX) > cssW / 2) ctx.moveTo(x, y);
+      else if (prevX == null) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+      prevX = x;
+    }
+    ctx.strokeStyle = z.closed ? C.label : vc;
+    ctx.lineWidth = sel ? 2.5 : 1.5;
+    ctx.stroke();
+    // A faint fill so a zone reads as an AREA, not a hairline, at body scale —
+    // and so overlap is visible as the thing it is.
+    ctx.globalAlpha = sel ? 0.16 : 0.08;
+    ctx.fillStyle = vc; ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+    const [lx, ly] = lambertXY(z.center_lat, z.center_lon, cssW, cssH);
+    // Anchor the label OUTSIDE the circle and stagger it. Zones on one moon
+    // cluster (that is the whole point of naming ground), so centre-anchored
+    // labels sat on top of each other and were unreadable.
+    const rPx = Math.max(6, (z.radius_m / R) * (cssH / 2));
+    const ty = ly + (labelSlot++ - (drawOrder.length - 1) / 2) * 13;
+    ctx.strokeStyle = C.bg; ctx.lineWidth = 3;
+    ctx.strokeText(z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name, lx + rPx + 6, ty);
+    ctx.lineWidth = 1;
+    ctx.fillStyle = sel ? C.drop : vc;
+    ctx.fillText(`${z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name} · ${z.sightings || 0}`,
+                 lx + rPx + 6, ty);
+    haloBodyHits.push({ zone_id: z.zone_id, x: lx, y: ly });
+  }
+
+  // layer 3: you
+  const st = typeof lastState !== "undefined" ? lastState : null;
+  if (st && st.container && st.container.name === haloBodyPlate && st.latitude != null) {
+    const [x, y] = lambertXY(st.latitude, st.longitude, cssW, cssH);
+    ctx.strokeStyle = C.drop; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y);
+    ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
+  const cap = $("halo-body-cap");
+  if (cap) {
+    // Absolute mapped area, never a share of the body: a maximum 50 km zone is
+    // 0.72% of Daymar, so a percentage reads as a rounding error forever.
+    const area = unionAreaM2(zones, R);
+    cap.textContent = `${zones.length} area${zones.length === 1 ? "" : "s"} · `
+      + `${zones.reduce((a, z) => a + (z.sightings || 0), 0)} sightings · `
+      + `≈${Math.round(area / 1e6).toLocaleString()} km² named`
+      + (cells.length ? ` · ${cells.length} mapped cells` : "");
+  }
+}
+
+// Points along the circle of constant great-circle distance from a centre —
+// the honest boundary of a zone on a sphere.
+function greatCirclePolygon(lat0, lon0, radius_m, R, n) {
+  const d = radius_m / R, p0 = lat0 * DEG, l0 = lon0 * DEG;
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const brg = i / n * 2 * Math.PI;
+    const lat = Math.asin(Math.sin(p0) * Math.cos(d)
+      + Math.cos(p0) * Math.sin(d) * Math.cos(brg));
+    const lon = l0 + Math.atan2(Math.sin(brg) * Math.sin(d) * Math.cos(p0),
+      Math.cos(d) - Math.sin(p0) * Math.sin(lat));
+    out.push([lat / DEG, ((lon / DEG + 540) % 360) - 180]);
+  }
+  return out;
+}
+
+// Zones overlap by design, so coverage must UNION, never sum — three zones on
+// the same ground cover that ground once. The analytic union of N spherical
+// caps needs inclusion-exclusion, so sample instead: in THIS projection every
+// (lon, sin lat) cell is equal-area, which is the same property that makes the
+// plate honest, so counting covered samples is counting area.
+function unionAreaM2(zones, R) {
+  if (!R) return 0;
+  const NX = 360, NY = 180;
+  const cellA = 4 * Math.PI * R * R / (NX * NY);
+  let hit = 0;
+  for (let j = 0; j < NY; j++) {
+    const lat = Math.asin(2 * (j + 0.5) / NY - 1) / DEG;
+    for (let i = 0; i < NX; i++) {
+      const lon = (i + 0.5) / NX * 360 - 180;
+      for (const z of zones) {
+        if (z.center_lat == null || !z.radius_m) continue;
+        if (greatCircle(lat, lon, z.center_lat, z.center_lon, R).dist <= z.radius_m) {
+          hit++; break;
+        }
+      }
+    }
+  }
+  return hit * cellA;
+}
+
+// Spherical-cap area — the JS twin of nav_core.surface_cap_area_m2.
+function capAreaM2(radius_m, R) {
+  if (!(radius_m > 0) || !(R > 0)) return 0;
+  const theta = Math.min(Math.PI, radius_m / R);
+  return 2 * Math.PI * R * R * (1 - Math.cos(theta));
 }
 
 function surfaceZoneRow(z) {
@@ -18191,6 +18468,26 @@ function drawHaloSystemMap(cv, plan) {
     if (b.type === "Star") continue;
     ctx.beginPath(); ctx.arc(cx, cy, Math.hypot(b.x, b.y) * s, 0, 2 * Math.PI); ctx.stroke();
   }
+  // Level 1 of the surface display (#37.1 §6.1): a BODY badge, never the zones
+  // themselves. A 50 km circle is sub-pixel at system scale, so a dozen of them
+  // would collapse into one dot on the planet — and zooming can't rescue it,
+  // because the moon is still sub-pixel long before the zone is legible. The
+  // badge keeps the property the user actually wanted from this map: at a
+  // glance, where has the org surveyed. Clicking it drills to level 2.
+  const bodyZones = surfaceZonesByBody();
+  for (const b of doc.surface_bodies || []) {
+    const info = bodyZones[b.name];
+    if (!info) continue;
+    const bx = cx + b.x * s, by = cy - b.y * s;
+    const vc = info.tier && SURVEY_VAL_MAP_C[info.tier];
+    ctx.strokeStyle = vc || C.label;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(bx, by, 8, 0, 2 * Math.PI); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.fillStyle = vc || C.label;
+    ctx.fillText(`⛏ ${info.n}`, bx + 11, by - 5);
+    if (hits) hits.push({ kind: "body", body: b.name, x: bx, y: by, key: b.name });
+  }
   // Landmarks UNDER everything else (v0.69.1 feedback: the survey story is
   // the point of this map — POIs are context, drawn first and dim so the
   // survey dots overprint them, never the other way around).
@@ -18493,6 +18790,9 @@ function haloOverviewPick(cv, e, fromAtlas) {
   let best = fromAtlas ? nearest(haloOverviewHits.filter(h => h.kind === "zone")) : null;
   if (!best) best = nearest(haloOverviewHits);
   if (!best) { if (fromAtlas) selectHaloAtlasZone(null); return; }
+  // A body badge is a drill-down, not a target: it has no pocket key and can
+  // never be planned.
+  if (best.kind === "body") { openBodyPlate(best.body); return; }
   if (fromAtlas && best.kind === "zone") {
     // ATLAS is the browse surface: tapping a zone SELECTS it (ring on the map,
     // its row highlighted, actions in the bar below) rather than silently
