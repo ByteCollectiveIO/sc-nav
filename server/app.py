@@ -7285,6 +7285,12 @@ def list_survey_zones(system: str = "Nyx", kind: str = "deep", body: str | None 
         surface = nav_core.surface_zones_state(nav, system, rows)
         surface = nav_core.annotate_surface_values(
             surface, (resource_values or {}).get("resource") or {})
+        # The gathering lane tiers in its OWN pool (nav_core.SURFACE_ZONE_LANES):
+        # a Hadanite patch and an iron patch are both worth naming, and
+        # comparing them on one scale answers neither question.
+        surface = nav_core.annotate_surface_lane_values(
+            surface, (resource_values or {}).get("harvestable") or {},
+            category="harvestable")
         creators_s = {z["id"]: z.get("created_by") for z in rows}
         surface = [{**z, "can_edit": is_admin or creators_s.get(z["zone_id"]) == uid}
                    for z in surface]
@@ -7356,22 +7362,30 @@ async def create_survey_zone(body: ZoneIn, user: dict = Depends(require_session)
 
 
 @app.get("/api/halo/survey/zones/{zone_id}/sightings")
-def get_zone_sightings(zone_id: int, limit: int = 200,
+def get_zone_sightings(zone_id: int, limit: int = 200, category: str = "resource",
                        user: dict = Depends(require_session)):
     """The sightings inside one surface zone, newest first — the detail card's
-    timeline (#37.1 §5).
+    timeline (#37.1 §5), for ONE of the zone's lanes.
+
+    `category` picks the lane (nav_core.SURFACE_ZONE_LANES). Anything else 400s
+    rather than silently returning the ore lane: a timeline that quietly
+    answers a different question than the tab above it is worse than an error.
 
     Its OWN endpoint rather than a filter on /api/halo/survey, because that one
     returns deep-space *marks*; the card would otherwise pull a whole system's
     mark list to render one moon. Capped, because a worked area accumulates
     without bound and the card only ever shows a timeline.
     """
+    if category not in nav_core.SURFACE_ZONE_LANES:
+        raise HTTPException(status_code=400, detail="unknown survey lane")
     zone = db.get_survey_zone(zone_id)
     if zone is None or not zone.get("body"):
         raise HTTPException(status_code=404, detail="unknown surface zone")
     container = nav.resolve_container(zone["system"], zone["body"])
     body_radius_m = float(getattr(container, "body_radius", 0.0) or 0.0)
-    members = nav_core.surface_zone_members(nav, zone, body_radius_m)
+    members = nav_core.surface_zone_members(nav, zone, body_radius_m,
+                                            category=category)
+    field = nav_core._category_field(category)
     rows = []
     for o in members:
         dist_m, _bearing = nav_core.great_circle(
@@ -7379,7 +7393,10 @@ def get_zone_sightings(zone_id: int, limit: int = 200,
             body_radius_m) if body_radius_m else (None, None)
         rows.append({
             "id": o.id, "observed_at": nav_core._obs_epoch(o.observed_at),
-            "owner_handle": o.owner_handle, "ore": o.data.get("ore"),
+            # `ore` carries the lane's TYPE, whatever the lane is — the same
+            # one-shape-three-lanes rule surface_zone_fit follows, so the card
+            # renders a plant row and a species row with the ore renderer.
+            "owner_handle": o.owner_handle, "ore": o.data.get(field),
             "band": o.data.get("band"), "quality": o.data.get("quality"),
             "biome": o.biome, "mined_at": o.data.get("mined_at"),
             "latitude": o.latitude, "longitude": o.longitude,
@@ -7387,6 +7404,7 @@ def get_zone_sightings(zone_id: int, limit: int = 200,
         })
     rows.sort(key=lambda r: (r["observed_at"] is None, -(r["observed_at"] or 0)))
     return {"zone_id": zone_id, "name": zone["name"], "body": zone["body"],
+            "category": category,
             "total": len(rows), "sightings": rows[:max(1, min(1000, limit))]}
 
 
@@ -13297,8 +13315,11 @@ def intel_surveying(user: dict = Depends(require_session)):
     for system in {z["system"] for z in db.list_survey_zones(kind="surface")}:
         rows = db.list_survey_zones(system, kind="surface")
         st = nav_core.surface_zones_state(nav, system, rows)
-        surface_rows += nav_core.annotate_surface_values(
-            st, (resource_values or {}).get("resource") or {})
+        surface_rows += nav_core.annotate_surface_lane_values(
+            nav_core.annotate_surface_values(
+                st, (resource_values or {}).get("resource") or {}),
+            (resource_values or {}).get("harvestable") or {},
+            category="harvestable")
     surface_stats = nav_core.derive_surface_survey_stats(
         nav, db.list_survey_zones(kind="surface"))
     surface_act = surface_stats["zones"]
