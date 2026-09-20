@@ -660,6 +660,20 @@ def init(db_path) -> None:
         # readers must treat unknown age as "old" (ALL-window only).
         _ensure_column("custom_pois", "created", "REAL")
         _ensure_column("observations", "shard_id", "TEXT")
+        # Game build the evidence was gathered in (#37.1 §12.1). Reserved NOW,
+        # ahead of the staleness work that will read it: a patch reshuffles
+        # planetary ore, so "is this area still worth landing in" is a question
+        # only the build can answer, and retrofitting the column later leaves a
+        # permanent blind era in the data. NULL on every pre-existing row.
+        _ensure_column("observations", "game_build", "TEXT")
+        # Surface survey zones (#37.1): the DECLARED anchor of a named mining
+        # area on a body. NULL body == the #36.1 deep-space zone, whose boundary
+        # is derived from its marks instead. `kind` is derived from this, never
+        # stored — see _zone_kind_sql.
+        _ensure_column("survey_zones", "body", "TEXT")
+        _ensure_column("survey_zones", "center_lat", "REAL")
+        _ensure_column("survey_zones", "center_lon", "REAL")
+        _ensure_column("survey_zones", "radius_m", "REAL")
         _ensure_column("events", "event_location", "TEXT")
         _ensure_column("events", "signup_deadline", "TEXT")
         # Scheduled Discord reminders: stamped when the T-minus ping fires so a
@@ -984,16 +998,46 @@ def list_custom_pois() -> list[dict]:
 # --- named survey zones (#36.1) --------------------------------------------
 
 
-def list_survey_zones(system: str | None = None) -> list[dict]:
-    """Every survey zone (org-shared), optionally scoped to one system."""
+ZONE_KINDS = ("deep", "surface")
+
+
+def _zone_kind_sql(kind: str | None) -> str:
+    """The WHERE fragment selecting one zone kind, or "" for both.
+
+    A zone's kind is DERIVED from `body`, never stored (#37.1 §2.4): NULL is a
+    deep-space belt zone (#36.1), a container name is a surface zone. One less
+    column that can disagree with itself.
+    """
+    if kind == "deep":
+        return " AND body IS NULL"
+    if kind == "surface":
+        return " AND body IS NOT NULL"
+    return ""
+
+
+def list_survey_zones(system: str | None = None, kind: str | None = None,
+                      body: str | None = None) -> list[dict]:
+    """Every survey zone (org-shared), optionally scoped to one system, kind
+    and/or body.
+
+    **`kind` is not optional for belt callers** (#37.1 §7). Every reader that
+    predates surface zones expects deep-space rows and hands what it gets to
+    `survey_zones_state`, which emits `{kind:"zone", marks:0, status:"empty"}`
+    for anything with no tagged marks — so an unfiltered read renders a phantom
+    "Iron Ridge — empty, 0 marks" beside the real surface row in ATLAS, the
+    export and Intel. Belt callers pass kind="deep".
+    """
+    sql = "SELECT * FROM survey_zones WHERE 1=1"
+    args: list = []
+    if system is not None:
+        sql += " AND system=?"
+        args.append(system)
+    if body is not None:
+        sql += " AND body=?"
+        args.append(body)
+    sql += _zone_kind_sql(kind) + " ORDER BY id"
     with _lock:
-        if system is None:
-            rows = _conn.execute(
-                "SELECT * FROM survey_zones ORDER BY id").fetchall()
-        else:
-            rows = _conn.execute(
-                "SELECT * FROM survey_zones WHERE system=? ORDER BY id",
-                (system,)).fetchall()
+        rows = _conn.execute(sql, args).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -1005,20 +1049,28 @@ def get_survey_zone(zone_id: int) -> dict | None:
 
 
 def create_survey_zone(slug: str, name: str, system: str, created_by, owner_handle,
-                       created: float) -> int:
+                       created: float, body: str | None = None,
+                       center_lat: float | None = None, center_lon: float | None = None,
+                       radius_m: float | None = None) -> int:
     """Create a zone; raises sqlite3.IntegrityError on a duplicate (system, slug)
-    so the caller can 409."""
+    so the caller can 409.
+
+    Passing `body` makes it a surface zone (#37.1): the anchor is declared, and
+    everything inside it stays derived. Omitting it is the #36.1 deep-space
+    zone, unchanged.
+    """
     with _lock, _conn:
         cur = _conn.execute(
-            "INSERT INTO survey_zones (slug, name, system, created_by, owner_handle, created) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO survey_zones (slug, name, system, created_by, owner_handle, "
+            "created, body, center_lat, center_lon, radius_m) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (slug, name, system, str(created_by) if created_by is not None else None,
-             owner_handle, created))
+             owner_handle, created, body, center_lat, center_lon, radius_m))
     return cur.lastrowid
 
 
 def update_survey_zone(zone_id: int, name: str | None = None, slug: str | None = None,
-                       closed: bool | None = None) -> bool:
+                       closed: bool | None = None, radius_m: float | None = None) -> bool:
     sets, args = [], []
     if name is not None:
         sets.append("name=?"); args.append(name)
@@ -1026,6 +1078,8 @@ def update_survey_zone(zone_id: int, name: str | None = None, slug: str | None =
         sets.append("slug=?"); args.append(slug)
     if closed is not None:
         sets.append("closed=?"); args.append(1 if closed else 0)
+    if radius_m is not None:
+        sets.append("radius_m=?"); args.append(float(radius_m))
     if not sets:
         return False
     args.append(zone_id)
@@ -1041,15 +1095,24 @@ def delete_survey_zone(zone_id: int) -> bool:
     return cur.rowcount > 0
 
 
-def clear_survey_zones(system: str) -> list[int]:
-    """Delete every zone in a system (admin patch-reset alongside the marks).
-    Returns the deleted ids so the caller can untag any live marks + prefs."""
+def clear_survey_zones(system: str, kind: str | None = "deep") -> list[int]:
+    """Delete a system's zones of one kind (admin patch-reset alongside the
+    marks). Returns the deleted ids so the caller can untag any live marks + prefs.
+
+    **Defaults to deep-space only, and that default is load-bearing** (#37.1 §9).
+    The admin reset exists to clear a *belt* after a game patch, and it is gated
+    on `nav.belts`. Before surface zones it deleted every row in the system,
+    which would now take every named moon zone with it — unrelated work, by a
+    different set of people, with no warning. Pass kind=None only to wipe both
+    deliberately.
+    """
+    where = "system=?" + _zone_kind_sql(kind)
     with _lock, _conn:
         rows = _conn.execute(
-            "SELECT id FROM survey_zones WHERE system=?", (system,)).fetchall()
+            f"SELECT id FROM survey_zones WHERE {where}", (system,)).fetchall()
         ids = [r["id"] for r in rows]
         if ids:
-            _conn.execute("DELETE FROM survey_zones WHERE system=?", (system,))
+            _conn.execute(f"DELETE FROM survey_zones WHERE {where}", (system,))
     return ids
 
 

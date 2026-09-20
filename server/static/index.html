@@ -2911,6 +2911,22 @@
       </div>
       <div id="node-result" class="muted" hidden style="padding-top:6px;"></div>
       <div class="credited" id="node-credit"></div>
+      <!-- Surface survey zones (#37.1). Creation lives HERE, not in Prospector,
+           because this is where you are standing when you find the ore. Hidden
+           unless the fix is on a body: there is nothing to claim in orbit. -->
+      <div id="zone-claim" hidden style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-soft);">
+        <button id="zone-claim-btn" class="route-chip" title="name the ground around you as a survey area — every node the org has ever logged inside it joins immediately">⛏ Name this area</button>
+        <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">radius
+          <select id="zone-claim-radius" class="sel" style="min-width:86px;">
+            <option value="5000">5 km</option>
+            <option value="10000">10 km</option>
+            <option value="25000" selected>25 km</option>
+            <option value="50000">50 km</option>
+          </select>
+        </label>
+        <span id="zone-claim-note" class="muted" style="font-size:12px;"></span>
+      </div>
+      <div id="zone-claim-result" class="muted" hidden style="padding-top:6px;"></div>
     </div>
 
     <div class="panel">
@@ -4732,7 +4748,19 @@
       <div class="panel">
         <h2>COVERAGE <span class="muted" style="font-weight:400; font-size:12px;">what the org
           has mapped, and where to survey next</span></h2>
-        <div class="halo-map-wrap"><canvas id="halo-atlas-map"
+        <!-- Level 2 (#37.1 §6.2): one body, equal-area. Surface zones are
+             sub-pixel at system scale, so they get their own plate rather than
+             a zoom of a map that can never show them. -->
+        <div id="halo-body-plate" hidden>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+            <button type="button" class="route-chip" id="halo-body-back">← Back to system</button>
+            <b id="halo-body-name"></b>
+            <span class="muted" id="halo-body-cap" style="font-size:12px;"></span>
+          </div>
+          <div class="halo-map-wrap"><canvas id="halo-body-map"
+            aria-label="equal-area map of one body: ore heat cells, named survey areas and your position"></canvas></div>
+        </div>
+        <div class="halo-map-wrap" id="halo-atlas-map-wrap"><canvas id="halo-atlas-map"
           aria-label="system overview: belts, surveyed pockets tinted by value, unmapped gap arcs, stations and gateways"></canvas></div>
         <!-- Tapping a zone square selects it: this bar names what you hit and
              carries the same actions as its table row, so the map is a real
@@ -5554,9 +5582,9 @@ function render(state) {
   $("map-panel").hidden = false;
 
   const c = state.container;
-  const haloChip = haloWhereChip(state);   // "☄ Halo band N" when the fix is in the belt (#31)
-  $("where").innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}` : `deep space${haloChip}`;
-  $("r-cont").innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>` : `deep space${haloChip}`;
+  applyWhereChips(state);                  // "☄ Halo band N" (#31) / "📍 Iron Ridge" (#37.1)
+  ensureSurfaceZones(state);               // refetches only when the body changes
+  renderZoneClaim(state);
   updateBiomes(state.system, c && c.name);
 
   const d = state.destination;
@@ -5979,6 +6007,9 @@ $("node-arm").onclick = async () => {
   if (r.ok) { resetSelect("node-ore"); updateNodeOreValue(); resetSelect("node-biome"); $("node-note").value = ""; } else armFailed("node-result", r);
 };
 $("node-cancel").onclick = () => postJson("/api/capture/cancel", {});
+// Surface survey zones (#37.1): claiming an area is a plain POST off the live
+// fix — no capture to arm, because membership is geometric.
+$("zone-claim-btn").onclick = claimSurfaceZone;
 
 $("wild-arm").onclick = async () => {
   const name = $("wild-species").value.trim();
@@ -5993,6 +6024,130 @@ $("wild-arm").onclick = async () => {
   if (r.ok) { $("wild-species").value = ""; resetSelect("wild-biome"); $("wild-note").value = ""; } else armFailed("wild-result", r);
 };
 $("wild-cancel").onclick = () => postJson("/api/capture/cancel", {});
+
+// ---------- surface survey zones: claim + "you're in one" chip (#37.1) ------
+// The membership predicate has to exist on BOTH sides. Server-side it is
+// nav_core.surface_zone_contains; here it is the same test in JS, because the
+// alternative — a `surface_zone` field on the nav-state push — would run it
+// server-side on every position sample for every online member, which is the
+// caching question at its sharpest. Cheaper to ship this body's zones once and
+// test locally against the greatCircle() this file already has (the design doc
+// claimed there was no JS great-circle — there is, at renderNearby's helper).
+//
+// KEEP IN SYNC with nav_core.SURFACE_ZONE_MAX_HEIGHT_M. _frame_at stamps a
+// lat/lon whenever body_radius > 0 — it checks neither is_body nor altitude —
+// so without a ceiling a fix hundreds of km up carries a valid ground track and
+// would read as "you're in Iron Ridge" from orbit.
+const SURFACE_ZONE_MAX_HEIGHT_M = 10000;
+
+let surfaceZonesHere = { key: null, zones: [] };
+
+function surfaceZonesAt(state) {
+  const c = state && state.container;
+  if (!c || state.latitude == null || state.longitude == null) return [];
+  if (state.altitude_m != null && state.altitude_m > SURFACE_ZONE_MAX_HEIGHT_M) return [];
+  const R = c.body_radius_m || 0;
+  if (!R) return [];
+  return (surfaceZonesHere.zones || []).filter(z =>
+    !z.closed && z.center_lat != null && z.radius_m &&
+    greatCircle(state.latitude, state.longitude, z.center_lat, z.center_lon, R).dist <= z.radius_m);
+}
+
+// Refreshed on a body change, not per sample — the zones of one moon are a
+// small, slow-moving list.
+async function ensureSurfaceZones(state) {
+  const c = state && state.container;
+  const key = c ? `${state.system}/${c.name}` : null;
+  if (key === surfaceZonesHere.key) return;
+  surfaceZonesHere = { key, zones: [] };
+  if (!key || !c.body_radius_m) { renderZoneClaim(state); return; }
+  try {
+    const r = await fetch(`/api/halo/survey/zones?system=${encodeURIComponent(state.system)}`
+      + `&body=${encodeURIComponent(c.name)}`);
+    if (!r.ok) return;
+    const doc = await r.json();
+    if (surfaceZonesHere.key !== key) return;      // a later body won the race
+    surfaceZonesHere.zones = doc.zones || [];
+  } catch {}
+  renderZoneClaim(state);
+  if (lastState) applyWhereChips(lastState);
+}
+
+// The whole awareness mechanism (#37.1 §11.1): deliberately not a prompt, not
+// a modal, not an opt-in — passive contribution has to cost the miner nothing.
+function surfaceZoneChip(state) {
+  const inside = surfaceZonesAt(state);
+  if (!inside.length) return "";
+  const z = inside.sort((a, b) => (b.sightings || 0) - (a.sightings || 0))[0];
+  const more = inside.length > 1 ? ` +${inside.length - 1}` : "";
+  // Compact on purpose: this rides inside the narrow CURRENT CONTAINER tile,
+  // where the full sentence wrapped out of its own pill. nowrap keeps the chip
+  // whole and lets it drop to its own line instead of breaking mid-badge.
+  const full = `${z.name} — ${z.sightings || 0} sighting${z.sightings === 1 ? "" : "s"}`
+    + (inside.length > 1 ? `, and ${inside.length - 1} more area${inside.length > 2 ? "s" : ""} overlap here` : "")
+    + `. Your sightings count toward it automatically — no tagging, nothing to arm.`;
+  return ` <span class="halo-chip" style="display:inline-block; white-space:nowrap; margin-top:4px;"`
+    + ` title="${esc(full)}">📍 ${esc(z.name)} · ${z.sightings || 0}${more}</span>`;
+}
+
+function renderZoneClaim(state) {
+  const row = $("zone-claim"), note = $("zone-claim-note");
+  if (!row) return;
+  const c = state && state.container;
+  const canClaim = !!(c && c.body_radius_m && c.is_body && state.latitude != null
+    && (state.altitude_m == null || state.altitude_m <= SURFACE_ZONE_MAX_HEIGHT_M));
+  row.hidden = !canClaim;
+  if (!canClaim || !note) return;
+  const inside = surfaceZonesAt(state);
+  note.textContent = inside.length
+    ? `you're already in ${inside.map(z => z.name).join(", ")}`
+    : `nothing named here yet`;
+}
+
+async function claimSurfaceZone() {
+  const state = lastState, c = state && state.container;
+  if (!c) return;
+  const name = await promptDialog(
+    `Name the ground around you on ${c.name}. Every node the org has ever logged `
+    + `inside the circle joins immediately — there is nothing to tag and nothing to arm.`,
+    { title: "Name this area", confirmLabel: "Create", placeholder: "e.g. Iron Ridge" });
+  if (!name) return;
+  const radius_m = Number($("zone-claim-radius").value) || 25000;
+  const r = await postJson("/api/halo/survey/zones", {
+    name, body: c.name, center_lat: state.latitude, center_lon: state.longitude,
+    radius_m });
+  if (!r.ok) {
+    let detail = "could not create the area";
+    try { detail = (await r.json()).detail || detail; } catch {}
+    show("zone-claim-result", `<span style="color:var(--warn)">⚠ ${esc(detail)}</span>`);
+    return;
+  }
+  const doc = await r.json();
+  const st = doc.state || {};
+  // A surface zone is born with history, so say what it inherited — otherwise
+  // the number reads as a bug.
+  show("zone-claim-result",
+    `<span style="color:var(--good)">✓ ${esc(doc.zone.name)}</span> — `
+    + `${st.sightings || 0} sighting${st.sightings === 1 ? "" : "s"} already inside`
+    + ((st.contributors || []).length
+        ? `, from ${st.contributors.map(esc).join(", ")}` : "")
+    + ((st.ores || []).length ? ` · ${st.ores.slice(0, 3).map(esc).join(" · ")}` : ""));
+  surfaceZonesHere.key = null;                 // force a refetch
+  await ensureSurfaceZones(lastState);
+  renderZoneClaim(lastState);
+  if (lastState) applyWhereChips(lastState);
+}
+
+// Both readouts show the same "where am I" line, so they get the same chips.
+function applyWhereChips(state) {
+  const c = state.container;
+  const halo = haloWhereChip(state);
+  const surf = c ? surfaceZoneChip(state) : "";
+  const w = $("where"), rc = $("r-cont");
+  if (w) w.innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}${surf}` : `deep space${halo}`;
+  if (rc) rc.innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>${surf}`
+    : `deep space${halo}`;
+}
 
 // ---------- destination ----------
 async function setDestination(id) {
@@ -16285,7 +16440,10 @@ let activeSurveyZone = null;      // zone_id | null
 async function loadHaloZones(sys) {
   sys = sys || haloSystem || "Nyx";
   try {
-    const r = await fetch("/api/halo/survey/zones?system=" + encodeURIComponent(sys));
+    // kind=all: deep-space belt zones AND surface mining areas (#37.1) in one
+    // list, which is the whole point of them sharing a table. The server
+    // defaults to "deep" so a client that predates surface zones is unaffected.
+    const r = await fetch("/api/halo/survey/zones?kind=all&system=" + encodeURIComponent(sys));
     if (!r.ok) return;
     const doc = await r.json();
     haloZones = doc.zones || [];
@@ -16297,6 +16455,7 @@ async function loadHaloZones(sys) {
   renderHaloOverview();     // zone squares live on the overview map (#37)
   renderHaloAtlasZones();   // and on the ATLAS zone list (#38)
   renderHaloAtlas();        // no-op unless the ATLAS tab is showing
+  if (haloBodyPlate) drawBodyPlate();   // level 2 follows the same data
 }
 
 // ---- ATLAS tab (#38): the org's belt atlas — zones, coverage, export ----
@@ -16507,6 +16666,7 @@ function renderHaloAtlasZones() {
     return;
   }
   const cell = (z) => {
+    if (z.kind === "surface") return surfaceZoneRow(z);
     const active = z.zone_id === activeSurveyZone;
     const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
       : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
@@ -16533,6 +16693,7 @@ function renderHaloAtlasZones() {
       + `<td><b>${esc(z.name)}</b>${active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : ""}`
         + (z.contributors && z.contributors.length ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
         + `</td>`
+      + `<td class="muted" style="white-space:nowrap;">deep space</td>`
       + `<td class="num">${z.marks || 0}</td>`
       + `<td>${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
       + `<td>${rocks}</td>`
@@ -16542,7 +16703,7 @@ function renderHaloAtlasZones() {
       + `</tr>`;
   };
   el.innerHTML = `<table><thead><tr>`
-    + `<th>ZONE</th><th class="num">MARKS</th><th>VALUE</th><th>ROCKS</th>`
+    + `<th>ZONE</th><th>WHERE</th><th class="num">EVIDENCE</th><th>VALUE</th><th>ROCKS / BAND</th>`
     + `<th>ORES</th><th>SIZE</th><th></th></tr></thead><tbody>`
     + rows.map(cell).join("") + `</tbody></table>`;
   const byId = (id) => haloZones.find(x => x.zone_id === Number(id));
@@ -16558,6 +16719,10 @@ function renderHaloAtlasZones() {
     b.onclick = () => { const z = byId(b.dataset.zarchive); if (z) archiveSurveyZone(z, !z.closed); };
   for (const b of el.querySelectorAll("[data-zdelete]"))
     b.onclick = () => { const z = byId(b.dataset.zdelete); if (z) deleteSurveyZone(z); };
+  // Surface zones are navigable, never plannable: no drop, no "set active" —
+  // just point the navigator at the nearest QT marker and fly the last leg.
+  for (const b of el.querySelectorAll("[data-zdest]"))
+    b.onclick = () => setDestination(Number(b.dataset.zdest));
   // Row → map: the other half of the link. Buttons handle themselves, so the
   // row only claims clicks that missed one.
   for (const tr of el.querySelectorAll("tr[data-zrow]"))
@@ -16909,6 +17074,21 @@ async function openHaloSurveyCard(z) {
   el.innerHTML = `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
     + `<p class="muted" style="font-size:12px; margin-top:8px;">loading survey summary…</p>`;
   const bb = $("svy-back"); if (bb) bb.onclick = closeHaloSurveyCard;
+  if (z.kind === "surface") {
+    // Its own endpoint, not a filter on /api/halo/survey: that one returns
+    // deep-space marks, and the card would pull a whole system's mark list to
+    // render one moon.
+    try {
+      const doc = await fetch(`/api/halo/survey/zones/${z.zone_id}/sightings`)
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+      renderSurfaceSurveyCard(el, z, doc.sightings || [], doc.total || 0);
+    } catch {
+      el.innerHTML = `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+        + `<p class="muted" style="margin-top:8px;">⚠ couldn't load this area's sightings</p>`;
+      const b = $("svy-back"); if (b) b.onclick = closeHaloSurveyCard;
+    }
+    return;
+  }
   let doc;
   try {
     doc = await fetch(`/api/halo/survey?system=${encodeURIComponent(z.system || haloSystem)}`)
@@ -16936,7 +17116,7 @@ function scanSummary(scan) {
 // Ore-composition graph (#38): horizontal bars per ore. With scans, bars are
 // the mean scanned comp% (the "percentages seen" the surveyor asked for); with
 // none, they fall back to how often each ore appears across positive marks.
-function surveyOreChart(z) {
+function surveyOreChart(z, capOverride) {
   const counts = z.ore_counts || {}, comp = z.scan_comp || {};
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   if (!entries.length)
@@ -16959,9 +17139,9 @@ function surveyOreChart(z) {
       + `<span class="fc-n">${sub}</span></div>`;
   }).join("");
   return `<div class="card"><h2 class="svy-h">Ore composition</h2>`
-    + `<p class="cap">${scanned
+    + `<p class="cap">${capOverride || (scanned
         ? "Mean scanned composition per ore (bar); count = marks that listed it."
-        : "How often each ore was seen across the field's positive marks."}</p>`
+        : "How often each ore was seen across the field's positive marks.")}</p>`
     + rows + `</div>`;
 }
 
@@ -17005,6 +17185,475 @@ function surveyRsCard(z) {
   return `<div class="card"><h2 class="svy-h">RS signatures</h2>`
     + `<p class="cap">Match your scanner readout at ~25 km — every contact reads an integer multiple of the base.</p>`
     + (rows || "") + foot + `</div>`;
+}
+
+// --- surface zones (#37.1) --------------------------------------------------
+// A named mining area on a planet or moon. It shares the zone table and the
+// detail card with the deep-space belt zone, but answers a different question:
+// not "how big is this field and how dense", which needs negative evidence a
+// surface sighting can never carry, but "is this area worth landing in again".
+
+// surveyOreChart is built for belt marks. Map a surface row onto the shape it
+// reads: `scan_comp` is its percent channel (ore_comp already IS percent) and
+// `positive` is its denominator for the count column.
+function oreChartShim(z) {
+  return { ...z, scan_comp: z.ore_comp || {}, positive: z.sightings || 0 };
+}
+
+// fmtDist returns HTML (it wraps the unit in <small>), which canvas fillText
+// would draw literally — "25.0<small> km</small>".
+function plainDist(m) {
+  return String(fmtDist(m)).replace(/<[^>]*>/g, "");
+}
+
+// --- level 2: the body plate (#37.1 §6.2) -----------------------------------
+// A full-body map in **Lambert cylindrical equal-area** (x proportional to lon,
+// y to sin(lat)). Three reasons, and they are the whole argument:
+//
+//   1. nav_core.grid_cell ALREADY bins observations in exactly this projection,
+//      so the org's ore heat cells tile the plate as rectangles with no
+//      resampling — the plate ships with a data layer on day one, before
+//      anyone draws a single zone.
+//   2. Area measurement stays honest. Plate carrée would stretch the poles and
+//      inflate anything measured off the picture.
+//   3. One formula, no dependency, no build step.
+//
+// The honest cost: a 50 km circle is a slightly flattened ellipse near the
+// poles. So a zone is drawn as its SAMPLED GREAT-CIRCLE BOUNDARY, never as a
+// stroked circle — which is also what makes a zone crossing the antimeridian
+// come out right instead of smearing across the whole plate.
+
+let haloBodyPlate = null;            // body name, or null for the system map
+let haloBodyCells = { key: null, cells: [] };
+let haloBodyHits = [];
+
+function surfaceZonesByBody() {
+  const out = {};
+  const rank = { high: 3, medium: 2, low: 1 };
+  for (const z of haloZones) {
+    if (z.kind !== "surface" || !z.body || z.closed) continue;
+    const e = out[z.body] || (out[z.body] = { n: 0, tier: null, sightings: 0 });
+    e.n += 1;
+    e.sightings += z.sightings || 0;
+    const t = z.value && z.value.tier;
+    if (t && (!e.tier || rank[t] > rank[e.tier])) e.tier = t;
+  }
+  return out;
+}
+
+async function openBodyPlate(body) {
+  haloBodyPlate = body;
+  const wrap = $("halo-atlas-map-wrap"), plate = $("halo-body-plate");
+  if (wrap) wrap.hidden = true;
+  if (plate) plate.hidden = false;
+  const nm = $("halo-body-name"); if (nm) nm.textContent = body;
+  wireBodyPlate();
+  // Heat cells are per body and slow-moving; fetch once per body.
+  const key = `${haloSystem}/${body}`;
+  if (haloBodyCells.key !== key) {
+    haloBodyCells = { key, cells: [] };
+    try {
+      const r = await fetch(`/api/resource_cells?system=${encodeURIComponent(haloSystem)}`
+        + `&body=${encodeURIComponent(body)}`);
+      if (r.ok) {
+        const doc = await r.json();
+        if (haloBodyCells.key === key) haloBodyCells.cells = doc.cells || [];
+      }
+    } catch {}
+  }
+  drawBodyPlate();
+}
+
+function wireBodyPlate() {
+  const back = $("halo-body-back");
+  if (back && !back.dataset.wired) {
+    back.dataset.wired = "1";
+    back.onclick = closeBodyPlate;
+  }
+  const cv = $("halo-body-map");
+  if (cv && !cv.dataset.wired) {
+    cv.dataset.wired = "1";
+    cv.onclick = (e) => {
+      const r = cv.getBoundingClientRect();
+      const px = e.clientX - r.left, py = e.clientY - r.top;
+      let best = null, bd = 14;
+      for (const h of haloBodyHits) {
+        const d = Math.hypot(h.x - px, h.y - py);
+        if (d < bd) { best = h; bd = d; }
+      }
+      selectHaloAtlasZone(best ? best.zone_id : null);
+      drawBodyPlate();
+    };
+  }
+}
+
+function closeBodyPlate() {
+  haloBodyPlate = null;
+  const wrap = $("halo-atlas-map-wrap"), plate = $("halo-body-plate");
+  if (wrap) wrap.hidden = false;
+  if (plate) plate.hidden = true;
+  const cv = $("halo-atlas-map");
+  if (cv) drawHaloSystemMap(cv, null);
+}
+
+// Lambert cylindrical equal-area. Kept as one helper so the cells, the zone
+// boundaries and the live position can never disagree about where a lat/lon is.
+function lambertXY(lat, lon, w, h) {
+  return [((lon + 180) % 360) / 360 * w, (1 - (Math.sin(lat * DEG) + 1) / 2) * h];
+}
+
+function drawBodyPlate() {
+  const cv = $("halo-body-map");
+  if (!cv || !haloBodyPlate) return;
+  const cssW = cv.parentElement.clientWidth;
+  if (!(cssW > 0)) return;
+  // The plate spans 2*pi*R of longitude by 2R of sin(lat), so its true aspect
+  // is pi:1 — NOT 2:1. At 2:1 the vertical scale is stretched by pi/2 and an
+  // equatorial zone draws as a 1.57x-tall ellipse, which makes an EQUAL-AREA
+  // projection look like it is lying. At pi:1 a circle at the equator is a
+  // circle, and the flattening toward the poles is the real distortion rather
+  // than an artefact of the canvas.
+  const cssH = Math.round(cssW / Math.PI);
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + "px";
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const C = HALO_MAP_C;
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, cssH);
+  ctx.font = "10px monospace";
+  const zones = haloZones.filter(z => z.kind === "surface" && z.body === haloBodyPlate);
+  const R = (zones[0] && zones[0].body_radius_m) || 0;
+
+  // graticule — every 30 deg of longitude, and the equator/tropic lines at
+  // equal-area-correct spacing
+  ctx.strokeStyle = C.orbit; ctx.lineWidth = 1;
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const [x] = lambertXY(0, lon, cssW, cssH);
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cssH); ctx.stroke();
+  }
+  for (const lat of [-60, -30, 0, 30, 60]) {
+    const [, y] = lambertXY(lat, 0, cssW, cssH);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cssW, y); ctx.stroke();
+  }
+
+  // layer 1: the org's ore heat cells — free, because grid_cell already bins
+  // in this exact projection, so a cell is a rectangle with no resampling.
+  const cells = haloBodyCells.cells || [];
+  const maxN = Math.max(1, ...cells.map(c => c.n || 0));
+  const cellDeg = cells.length && R
+    ? { lon: 360 / Math.max(1, Math.round(2 * Math.PI * R / 5000)), } : null;
+  for (const c of cells) {
+    const [x, y] = lambertXY(c.lat, c.lon, cssW, cssH);
+    const a = 0.18 + 0.55 * Math.min(1, (c.n || 0) / maxN);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = oreColor(c.top || "");
+    const w = Math.max(2, cssW / 180), hh = Math.max(2, cssH / 90);
+    ctx.fillRect(x - w / 2, y - hh / 2, w, hh);
+    ctx.globalAlpha = 1;
+  }
+
+  // layer 2: the zones themselves, as sampled great-circle polygons
+  haloBodyHits = [];
+  // Biggest first, so a tight zone inside a broad one draws on top of it
+  // rather than under — the legitimate case §12.3 refuses to block.
+  const drawOrder = zones.slice().sort((a, b) => (b.radius_m || 0) - (a.radius_m || 0));
+  let labelSlot = 0;
+  for (const z of drawOrder) {
+    if (z.center_lat == null || !z.radius_m || !R) continue;
+    const vc = (z.value && SURVEY_VAL_MAP_C[z.value.tier]) || C.label;
+    const sel = z.zone_id === haloAtlasSelZone;
+    const pts = greatCirclePolygon(z.center_lat, z.center_lon, z.radius_m, R, 48);
+    ctx.beginPath();
+    let prevX = null;
+    for (const [plat, plon] of pts) {
+      const [x, y] = lambertXY(plat, plon, cssW, cssH);
+      // A boundary crossing the antimeridian wraps in x; lifting the pen there
+      // keeps it from drawing a band across the whole plate.
+      if (prevX != null && Math.abs(x - prevX) > cssW / 2) ctx.moveTo(x, y);
+      else if (prevX == null) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+      prevX = x;
+    }
+    ctx.strokeStyle = z.closed ? C.label : vc;
+    ctx.lineWidth = sel ? 2.5 : 1.5;
+    ctx.stroke();
+    // A faint fill so a zone reads as an AREA, not a hairline, at body scale —
+    // and so overlap is visible as the thing it is.
+    ctx.globalAlpha = sel ? 0.16 : 0.08;
+    ctx.fillStyle = vc; ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+    const [lx, ly] = lambertXY(z.center_lat, z.center_lon, cssW, cssH);
+    // Anchor the label OUTSIDE the circle and stagger it. Zones on one moon
+    // cluster (that is the whole point of naming ground), so centre-anchored
+    // labels sat on top of each other and were unreadable.
+    const rPx = Math.max(6, (z.radius_m / R) * (cssH / 2));
+    const ty = ly + (labelSlot++ - (drawOrder.length - 1) / 2) * 13;
+    ctx.strokeStyle = C.bg; ctx.lineWidth = 3;
+    ctx.strokeText(z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name, lx + rPx + 6, ty);
+    ctx.lineWidth = 1;
+    ctx.fillStyle = sel ? C.drop : vc;
+    ctx.fillText(`${z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name} · ${z.sightings || 0}`,
+                 lx + rPx + 6, ty);
+    haloBodyHits.push({ zone_id: z.zone_id, x: lx, y: ly });
+  }
+
+  // layer 3: you
+  const st = typeof lastState !== "undefined" ? lastState : null;
+  if (st && st.container && st.container.name === haloBodyPlate && st.latitude != null) {
+    const [x, y] = lambertXY(st.latitude, st.longitude, cssW, cssH);
+    ctx.strokeStyle = C.drop; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 7, y); ctx.lineTo(x + 7, y);
+    ctx.moveTo(x, y - 7); ctx.lineTo(x, y + 7); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
+  const cap = $("halo-body-cap");
+  if (cap) {
+    // Absolute mapped area, never a share of the body: a maximum 50 km zone is
+    // 0.72% of Daymar, so a percentage reads as a rounding error forever.
+    const area = unionAreaM2(zones, R);
+    cap.textContent = `${zones.length} area${zones.length === 1 ? "" : "s"} · `
+      + `${zones.reduce((a, z) => a + (z.sightings || 0), 0)} sightings · `
+      + `≈${Math.round(area / 1e6).toLocaleString()} km² named`
+      + (cells.length ? ` · ${cells.length} mapped cells` : "");
+  }
+}
+
+// Points along the circle of constant great-circle distance from a centre —
+// the honest boundary of a zone on a sphere.
+function greatCirclePolygon(lat0, lon0, radius_m, R, n) {
+  const d = radius_m / R, p0 = lat0 * DEG, l0 = lon0 * DEG;
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const brg = i / n * 2 * Math.PI;
+    const lat = Math.asin(Math.sin(p0) * Math.cos(d)
+      + Math.cos(p0) * Math.sin(d) * Math.cos(brg));
+    const lon = l0 + Math.atan2(Math.sin(brg) * Math.sin(d) * Math.cos(p0),
+      Math.cos(d) - Math.sin(p0) * Math.sin(lat));
+    out.push([lat / DEG, ((lon / DEG + 540) % 360) - 180]);
+  }
+  return out;
+}
+
+// Zones overlap by design, so coverage must UNION, never sum — three zones on
+// the same ground cover that ground once. The analytic union of N spherical
+// caps needs inclusion-exclusion, so sample instead: in THIS projection every
+// (lon, sin lat) cell is equal-area, which is the same property that makes the
+// plate honest, so counting covered samples is counting area.
+function unionAreaM2(zones, R) {
+  if (!R) return 0;
+  const NX = 360, NY = 180;
+  const cellA = 4 * Math.PI * R * R / (NX * NY);
+  let hit = 0;
+  for (let j = 0; j < NY; j++) {
+    const lat = Math.asin(2 * (j + 0.5) / NY - 1) / DEG;
+    for (let i = 0; i < NX; i++) {
+      const lon = (i + 0.5) / NX * 360 - 180;
+      for (const z of zones) {
+        if (z.center_lat == null || !z.radius_m) continue;
+        if (greatCircle(lat, lon, z.center_lat, z.center_lon, R).dist <= z.radius_m) {
+          hit++; break;
+        }
+      }
+    }
+  }
+  return hit * cellA;
+}
+
+// Spherical-cap area — the JS twin of nav_core.surface_cap_area_m2.
+function capAreaM2(radius_m, R) {
+  if (!(radius_m > 0) || !(R > 0)) return 0;
+  const theta = Math.min(Math.PI, radius_m / R);
+  return 2 * Math.PI * R * R * (1 - Math.cos(theta));
+}
+
+function surfaceZoneRow(z) {
+  const sel = z.zone_id === haloAtlasSelZone ? " class=\"zone-sel\"" : "";
+  const ores = (z.ores || []).length
+    ? z.ores.slice(0, 4).map(o => `${esc(o)}${oreValueChip(o)}`).join(", ")
+    : `<span class="muted">—</span>`;
+  const band = z.avg_band ? `B${z.avg_band.toFixed(1)}` : `<span class="muted">—</span>`;
+  const acts = (z.sightings ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
+    // Navigable, never plannable — there is no quantum drop onto a surface.
+    + (z.nearest_qt_id ? `<button type="button" class="route-chip" data-zdest="${z.nearest_qt_id}" title="set the navigator's destination to ${esc(z.nearest_qt || "the nearest QT marker")}, then fly the last leg">Set destination</button> ` : "")
+    + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" data-zrename="${z.zone_id}" title="rename this area">✎</button> ` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" data-zarchive="${z.zone_id}" title="${z.closed ? "put this area back on the maps" : "archive this area — its sightings are kept"}">${z.closed ? "Reactivate" : "Archive"}</button> ` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" data-zdelete="${z.zone_id}" title="delete this area — the sightings inside it are untouched, because membership is geometric">✕</button>` : "");
+  return `<tr data-zrow="${z.zone_id}"${sel} title="click to point the coverage map at this area">`
+    + `<td><b>${esc(z.name)}</b> <span class="halo-chip">⛏ surface</span>`
+      + (z.contributors && z.contributors.length
+          ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
+      + `</td>`
+    + `<td style="white-space:nowrap;">${esc(z.body || "—")}</td>`
+    + `<td class="num">${z.sightings || 0}</td>`
+    + `<td>${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
+    + `<td>${band}</td>`
+    + `<td>${ores}</td>`
+    + `<td class="muted" style="white-space:nowrap;">${z.radius_m ? "⌀ " + fmtDist(2 * z.radius_m) : ""}</td>`
+    + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
+    + `</tr>`;
+}
+
+// Band histogram — the planetary analogue of the belt's density read, and the
+// number that actually decides whether to land: band 7-8 hits mean the trip
+// pays. Counts, not percentages: how often each band was seen here.
+function surfaceBandChart(z) {
+  const bands = z.bands || {};
+  const total = Object.values(bands).reduce((a, b) => a + b, 0);
+  if (!total)
+    return `<div class="card"><h2 class="svy-h">Scan bands</h2>`
+      + `<p class="cap">No bands logged yet — band rides along with each ore sighting.</p></div>`;
+  const max = Math.max(...Object.values(bands));
+  const rows = [1, 2, 3, 4, 5, 6, 7, 8].map(b => {
+    const n = bands[String(b)] || 0;
+    const w = Math.max(n ? 3 : 0, Math.round(n / max * 100));
+    return `<div class="fc-row">`
+      + `<span class="fc-ore"><span class="fc-ore-name">B${b}</span></span>`
+      + `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${w}%;`
+      + `background:${b >= 7 ? "var(--good)" : b >= 4 ? "var(--accent)" : "var(--dim)"}"></span></span>`
+      + `<span class="fc-pct">${n ? n + "×" : ""}</span>`
+      + `<span class="fc-n">${n ? Math.round(n / total * 100) + "%" : ""}</span></div>`;
+  }).join("");
+  return `<div class="card"><h2 class="svy-h">Scan bands</h2>`
+    + `<p class="cap">How rich the rocks read here. Band 7-8 is what makes the trip pay.</p>`
+    + rows + `</div>`;
+}
+
+// Level 3 of the display (#37.1 §6.3): a local, north-up plate of one area,
+// drawn with the SAME projectMeters the navigator map uses. At 50 km on a
+// 295 km body that is ~9.7 degrees of arc, so tangent-plane distortion is
+// ~1.5% — negligible, and worth it because this is the visual language pilots
+// already read every session.
+function drawSurfaceZonePlate(cv, z, sightings) {
+  if (!cv || !cv.getContext) return;
+  const ctx = cv.getContext("2d");
+  const w = cv.width, h = cv.height, cx = w / 2, cy = h / 2;
+  ctx.clearRect(0, 0, w, h);
+  const R = z.body_radius_m || 0;
+  const span = (z.radius_m || 1000) * 1.25;          // a little air around the edge
+  const scale = Math.min(w, h) / 2 / span;
+  ctx.strokeStyle = "rgba(255,255,255,.14)";
+  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+  // The boundary is a sampled great-circle polygon, never a stroked circle:
+  // that is also what makes a zone near a pole or across the antimeridian come
+  // out right.
+  ctx.beginPath();
+  for (let i = 0; i <= 48; i++) {
+    const a = i / 48 * Math.PI * 2;
+    const x = cx + Math.cos(a) * (z.radius_m || 0) * scale;
+    const y = cy - Math.sin(a) * (z.radius_m || 0) * scale;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = getComputedStyle(document.documentElement)
+    .getPropertyValue("--sel").trim() || "#6cf";
+  ctx.lineWidth = 1.5; ctx.stroke();
+  const now = Date.now() / 1000;
+  for (const o of sightings || []) {
+    if (o.latitude == null || o.longitude == null || !R) continue;
+    const p = projectMeters(o.latitude, o.longitude, z.center_lat, z.center_lon, R);
+    const x = cx + p.east * scale, y = cy - p.north * scale;
+    if (x < 0 || y < 0 || x > w || y > h) continue;
+    // Faded by age, hollow once worked — the same reading the NEARBY list gives.
+    const age = o.observed_at ? Math.max(0, now - o.observed_at) : null;
+    const fade = age == null ? 0.45 : Math.max(0.25, 1 - age / (14 * 86400));
+    ctx.globalAlpha = fade;
+    ctx.beginPath(); ctx.arc(x, y, o.mined_at ? 2.5 : 3.5, 0, Math.PI * 2);
+    if (o.mined_at) { ctx.strokeStyle = oreColor(o.ore || ""); ctx.lineWidth = 1; ctx.stroke(); }
+    else { ctx.fillStyle = oreColor(o.ore || ""); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = "rgba(255,255,255,.55)";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.fillText("N", cx + 3, 11);
+  ctx.fillText(plainDist(z.radius_m || 0) + " radius", 4, h - 5);
+}
+
+function renderSurfaceSurveyCard(el, z, sightings, total) {
+  const now = Date.now() / 1000;
+  const contrib = {};
+  for (const o of sightings) { const who = o.owner_handle || "unknown"; contrib[who] = (contrib[who] || 0) + 1; }
+  const surveyors = Object.entries(contrib).sort((a, b) => b[1] - a[1]);
+  const n = z.sightings || total || 0;
+  const thin = n < 10;
+  const top = (z.ores || [])[0];
+  const verdict = !n
+    ? `<div class="svy-verdict bad"><span class="svy-dot"></span><span><b>NO EVIDENCE</b> — `
+      + `nothing has been logged inside this circle yet</span></div>`
+    : thin
+    ? `<div class="svy-verdict warn"><span class="svy-dot warn"></span><span>${surveyValueChip(z.value) || ""} `
+      + `<b>THIN</b> — ${n} sighting${n === 1 ? "" : "s"}${z.avg_band ? `, averaging band ${z.avg_band}` : ""}</span></div>`
+    : `<div class="svy-verdict"><span class="svy-dot ok"></span><span>${surveyValueChip(z.value) || ""} `
+      + `<b>${esc(top || "ore")}</b> country · ${n} sighting${n === 1 ? "" : "s"} from `
+      + `${surveyors.length || (z.contributors || []).length} surveyor${surveyors.length === 1 ? "" : "s"}</span></div>`;
+  const tiles = [
+    { k: "Sightings", n: n },
+    { k: "Surveyors", n: (z.contributors || []).length || surveyors.length },
+    { k: "Distinct ores", n: (z.ores || []).length },
+    { k: "Value", n: z.value && z.value.score ? z.value.score.toLocaleString() : "—", cls: "accent" },
+    { k: "Area ⌀", n: z.radius_m ? fmtDist(2 * z.radius_m) : "—" },
+    { k: "Freshest", n: z.freshest ? fmtAge(Math.max(0, now - z.freshest)) : "—" },
+  ];
+  const stats = `<div class="intel-glance svy-stats">` + tiles.map(t =>
+    `<div class="intel-stat"><span class="k">${t.k}</span><span class="n ${t.cls || ""}">${t.n}</span></div>`).join("") + `</div>`;
+  // "Where do I point the ship" — the question the rollup doesn't answer.
+  const unworked = (sightings || []).filter(o => !o.mined_at);
+  const rich = unworked.filter(o => (o.band || 0) >= 6);
+  const best = (rich.length ? rich : unworked)
+    .sort((a, b) => (b.observed_at || 0) - (a.observed_at || 0))[0];
+  const lead = best
+    ? `<p class="cap" style="margin:6px 0 0;">Freshest unworked${rich.length ? " (B6+)" : ""}: <b>${esc(best.ore || "?")}</b>`
+      + `${best.band ? ` B${best.band}` : ""} · ${best.observed_at ? fmtAge(Math.max(0, now - best.observed_at)) : "—"}`
+      + ` <button type="button" class="route-chip" data-flyto="${best.id}" title="set the navigator's destination to this sighting">Fly to it</button></p>`
+    : "";
+  const timeline = `<div class="card svy-timeline"><h2 class="svy-h">Sighting timeline</h2>`
+    + `<p class="cap">Every node logged inside this circle, newest first.</p>`
+    + (sightings.length ? sightings.slice(0, 40).map(o => {
+        const age = o.observed_at ? fmtAge(Math.max(0, now - o.observed_at)) : "—";
+        return `<div class="halo-alt">`
+          + `<b>${esc(age)}</b> · ${esc(o.owner_handle || "?")} · ${esc(o.ore || "?")}`
+          + (o.band ? ` B${o.band}` : "") + (o.biome ? ` · ${esc(o.biome)}` : "")
+          + (o.dist_m != null ? ` · ${fmtDist(o.dist_m)} from centre` : "")
+          + (o.mined_at ? ` <span class="halo-chip warn">worked</span>` : "")
+          + `</div>`;
+      }).join("") : `<p class="muted" style="font-size:12px;">No sightings.</p>`)
+    + (total > 40 ? `<p class="cap" style="margin-top:6px;">Showing the newest 40 of ${total}.</p>` : "")
+    + `</div>`;
+  el.innerHTML = `<div class="svy-card">`
+    + `<div class="svy-head">`
+    + `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+    // No "Plan a drop here" and no "Set active": there is no quantum drop onto
+    // a body, and surface membership is geometric so there is nothing to arm.
+    + (z.nearest_qt_id ? `<button type="button" class="route-chip" id="svy-dest">Set destination · ${esc(z.nearest_qt || "nearest QT")}</button>` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" id="svy-archive">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
+    + `</div>`
+    + `<p class="svy-eyebrow">${esc(z.system || haloSystem)} · ${esc(z.body || "")} · Surface area</p>`
+    + `<h2 class="svy-title">${esc(z.name)}<span class="svy-sub">`
+    + `${(z.contributors || []).length} surveyor${(z.contributors || []).length === 1 ? "" : "s"} · `
+    + `${n} sighting${n === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</span></h2>`
+    + verdict + lead + stats
+    + `<div class="svy-panels">${surveyOreChart(oreChartShim(z),
+          "Share of this area's sightings, per ore. Bars are percentages; the "
+          + "count is how many sightings listed that ore.")}${surfaceBandChart(z)}</div>`
+    + `<div class="card"><h2 class="svy-h">This area</h2>`
+    + `<p class="cap">Sightings, ore-coloured and faded by age; hollow means already worked.</p>`
+    + `<canvas id="svy-plate" width="420" height="420" style="width:100%; max-width:420px; height:auto;"></canvas></div>`
+    + timeline
+    + `<p class="svy-foot">Built from <b>${n}</b> sighting${n === 1 ? "" : "s"}`
+    + ((z.contributors || []).length ? ` by <b>${z.contributors.length}</b> surveyor${z.contributors.length === 1 ? "" : "s"} (${z.contributors.map(esc).join(", ")})` : "")
+    + `. Nodes respawn: this is where the org has found ore before, not where ore is now. `
+    + `Counts are sightings, not distinct rocks — working the same outcrop across several trips files several.</p>`
+    + `</div>`;
+  const back = $("svy-back"); if (back) back.onclick = closeHaloSurveyCard;
+  const dest = $("svy-dest"); if (dest) dest.onclick = () => setDestination(z.nearest_qt_id);
+  const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
+  for (const b of el.querySelectorAll("[data-flyto]"))
+    b.onclick = () => setDestination(Number(b.dataset.flyto));
+  drawSurfaceZonePlate($("svy-plate"), z, sightings);
 }
 
 function renderHaloSurveyCard(el, z, marks) {
@@ -17819,6 +18468,26 @@ function drawHaloSystemMap(cv, plan) {
     if (b.type === "Star") continue;
     ctx.beginPath(); ctx.arc(cx, cy, Math.hypot(b.x, b.y) * s, 0, 2 * Math.PI); ctx.stroke();
   }
+  // Level 1 of the surface display (#37.1 §6.1): a BODY badge, never the zones
+  // themselves. A 50 km circle is sub-pixel at system scale, so a dozen of them
+  // would collapse into one dot on the planet — and zooming can't rescue it,
+  // because the moon is still sub-pixel long before the zone is legible. The
+  // badge keeps the property the user actually wanted from this map: at a
+  // glance, where has the org surveyed. Clicking it drills to level 2.
+  const bodyZones = surfaceZonesByBody();
+  for (const b of doc.surface_bodies || []) {
+    const info = bodyZones[b.name];
+    if (!info) continue;
+    const bx = cx + b.x * s, by = cy - b.y * s;
+    const vc = info.tier && SURVEY_VAL_MAP_C[info.tier];
+    ctx.strokeStyle = vc || C.label;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(bx, by, 8, 0, 2 * Math.PI); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.fillStyle = vc || C.label;
+    ctx.fillText(`⛏ ${info.n}`, bx + 11, by - 5);
+    if (hits) hits.push({ kind: "body", body: b.name, x: bx, y: by, key: b.name });
+  }
   // Landmarks UNDER everything else (v0.69.1 feedback: the survey story is
   // the point of this map — POIs are context, drawn first and dim so the
   // survey dots overprint them, never the other way around).
@@ -18121,6 +18790,9 @@ function haloOverviewPick(cv, e, fromAtlas) {
   let best = fromAtlas ? nearest(haloOverviewHits.filter(h => h.kind === "zone")) : null;
   if (!best) best = nearest(haloOverviewHits);
   if (!best) { if (fromAtlas) selectHaloAtlasZone(null); return; }
+  // A body badge is a drill-down, not a target: it has no pocket key and can
+  // never be planned.
+  if (best.kind === "body") { openBodyPlate(best.body); return; }
   if (fromAtlas && best.kind === "zone") {
     // ATLAS is the browse surface: tapping a zone SELECTS it (ring on the map,
     // its row highlighted, actions in the bar below) rather than silently

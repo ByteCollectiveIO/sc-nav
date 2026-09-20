@@ -10667,5 +10667,412 @@ class NotifyPacingTests(unittest.TestCase):
         asyncio.run(run())
 
 
+
+class SurfaceSurveyZoneApiTests(unittest.TestCase):
+    """#37.1 slice 1 — named mining areas on a body, over the HTTP surface.
+
+    The load-bearing properties here are the ones that protect the EXISTING
+    belt feature: a surface zone must never appear as a phantom empty
+    deep-space zone, must never be plannable as a drop target, and must survive
+    an admin belt reset.
+    """
+
+    BODY = "Daymar"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Surveyor", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+        cls.body_radius = app.nav.resolve_container("Stanton", cls.BODY).body_radius
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._obs_ids = []
+
+    def tearDown(self):
+        for oid in self._obs_ids:
+            app.nav.observations.pop(oid, None)
+            db.delete_observation(oid)
+        for z in db.list_survey_zones(kind=None):
+            db.delete_survey_zone(z["id"])
+        app.nav.touch()
+        app.hub.sessions.pop("1", None)
+
+    def _add_obs(self, lat, lon, ore="Quantanium", band=5, height_m=0.0,
+                 handle="ana", body=None):
+        oid = db.next_observation_id()
+        obs = app.nav_core.Observation(
+            id=oid, category="resource", system="Stanton",
+            container_name=body or self.BODY, local_km=None, global_m=None,
+            latitude=lat, longitude=lon, height_m=height_m, biome=None,
+            note=None, owner_id=None, owner_handle=handle,
+            observed_at="2026-01-01T00:00:00+00:00",
+            data=app.nav_core._normalize_resource({"ore": ore, "band": band}))
+        db.add_observation(app.nav_core.observation_to_dict(obs))
+        app.nav.observations[oid] = obs
+        app.nav.touch()
+        self._obs_ids.append(oid)
+        return obs
+
+    def _create(self, name="Iron Ridge", lat=0.0, lon=0.0, radius_m=25_000.0,
+                body=None):
+        return self.client.post("/api/halo/survey/zones", json={
+            "name": name, "body": self.BODY if body is None else body,
+            "center_lat": lat, "center_lon": lon, "radius_m": radius_m})
+
+    # -- creation -----------------------------------------------------------
+    def test_a_new_zone_is_born_with_the_history_inside_it(self):
+        # The whole point of geometric membership: no tag, no backfill, and the
+        # card is populated the moment the circle exists.
+        self._add_obs(0.0, 0.0, ore="Quantanium", handle="ana")
+        self._add_obs(0.02, 0.02, ore="Taranite", handle="bo")
+        self._add_obs(40.0, 40.0, ore="Iron", handle="cy")      # far side
+        r = self._create()
+        self.assertEqual(r.status_code, 200, r.text)
+        state = r.json()["state"]
+        self.assertEqual(state["sightings"], 2)
+        self.assertEqual(state["contributors"], ["ana", "bo"])
+        self.assertEqual(state["body"], self.BODY)
+
+    def test_the_body_decides_the_system_not_the_payload(self):
+        r = self.client.post("/api/halo/survey/zones", json={
+            "name": "Ridge", "body": self.BODY, "system": "Pyro",
+            "center_lat": 0.0, "center_lon": 0.0})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["zone"]["system"], "Stanton")
+
+    def test_creating_a_surface_zone_does_not_arm_capture(self):
+        # Deep-space zones become the caller's ACTIVE zone so marks auto-tag.
+        # Surface membership is geometric, so there is nothing to arm — and
+        # nothing to forget to switch off.
+        r = self._create()
+        self.assertIsNone(r.json()["active_survey_zone"])
+
+    def test_a_deep_space_zone_still_arms_capture(self):
+        r = self.client.post("/api/halo/survey/zones",
+                             json={"name": "Belt Pocket", "system": "Nyx"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["active_survey_zone"], r.json()["zone"]["id"])
+        self.assertIsNone(r.json()["zone"]["body"])
+
+    def test_a_surface_zone_needs_a_centre(self):
+        r = self.client.post("/api/halo/survey/zones",
+                             json={"name": "Nowhere", "body": self.BODY})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("center_lat", r.json()["detail"])
+
+    def test_radius_is_capped_at_the_api_not_just_the_ui(self):
+        r = self._create(radius_m=50_001.0)
+        self.assertEqual(r.status_code, 422)
+        r = self._create(radius_m=10.0)
+        self.assertEqual(r.status_code, 422)
+
+    # -- the body guard -----------------------------------------------------
+    def test_you_cannot_claim_a_circle_on_a_station(self):
+        r = self._create(body="Port Olisar")
+        self.assertEqual(r.status_code, 400, r.text)
+
+    def test_you_cannot_claim_a_circle_on_a_star(self):
+        # is_body is `body_radius > 0 and type in (Star, Planet, Moon)`, so a
+        # bare is_body check would hand someone a 50 km zone on a 696,000 km star.
+        star = next((c for c in app.nav.containers.values() if c.type == "Star"), None)
+        if star is None:
+            self.skipTest("no Star container in the shipped data")
+        r = self._create(body=star.name)
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("survey", r.json()["detail"])
+
+    def test_an_unknown_body_is_named_in_the_error(self):
+        r = self._create(body="Ceti Alpha V")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Ceti Alpha V", r.json()["detail"])
+
+    # -- the phantom-zone regression ----------------------------------------
+    def test_a_surface_zone_never_appears_as_an_empty_belt_zone(self):
+        # Before the body filter, ANY zone row reached survey_zones_state,
+        # which emits {kind:"zone", marks:0, status:"empty"} for anything with
+        # no tagged marks — so a named moon zone rendered as a phantom "empty,
+        # 0 marks" row in ATLAS, the export and Intel.
+        self._create()
+        deep = self.client.get("/api/halo/survey/zones?system=Stanton").json()["zones"]
+        self.assertEqual([z for z in deep if z.get("kind") != "surface"], deep)
+        self.assertNotIn("Iron Ridge", [z["name"] for z in deep])
+        export = self.client.get("/api/halo/survey?system=Stanton").json()
+        self.assertNotIn("Iron Ridge", [z["name"] for z in export.get("zones", [])])
+
+    def test_surface_zones_are_returned_when_asked_for(self):
+        self._add_obs(0.0, 0.0)
+        self._create()
+        rows = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+        self.assertEqual([z["name"] for z in rows], ["Iron Ridge"])
+        self.assertEqual(rows[0]["kind"], "surface")
+        self.assertEqual(rows[0]["sightings"], 1)
+        self.assertTrue(rows[0]["can_edit"])
+
+    def test_body_filter_narrows_to_one_moon(self):
+        self._create(name="Iron Ridge")
+        rows = self.client.get(
+            f"/api/halo/survey/zones?system=Stanton&body={self.BODY}").json()["zones"]
+        self.assertEqual(len(rows), 1)
+        rows = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&body=Yela").json()["zones"]
+        self.assertEqual(rows, [])
+
+    # -- slugs --------------------------------------------------------------
+    def test_the_same_name_on_two_bodies_does_not_collide(self):
+        a = self._create(name="Iron Ridge")
+        b = self._create(name="Iron Ridge", body="Yela")
+        self.assertEqual(a.status_code, 200, a.text)
+        self.assertEqual(b.status_code, 200, b.text)
+        self.assertEqual(a.json()["zone"]["slug"], "daymar-iron-ridge")
+        self.assertEqual(b.json()["zone"]["slug"], "yela-iron-ridge")
+
+    def test_renaming_keeps_the_body_prefix(self):
+        # The rename path used to re-slug from the request payload alone, which
+        # dropped the prefix, re-opened the collision and silently changed the
+        # zone's pin key.
+        zid = self._create(name="Iron Ridge").json()["zone"]["id"]
+        r = self.client.patch(f"/api/halo/survey/zones/{zid}",
+                              json={"name": "Iron Ridge North"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["zone"]["slug"], "daymar-iron-ridge-north")
+
+    # -- re-fencing ---------------------------------------------------------
+    def test_refencing_changes_membership_retroactively(self):
+        self._add_obs(0.0, 0.0)
+        self._add_obs(0.5, 0.0)          # ~2.6 km out on Daymar
+        zid = self._create(radius_m=1_000.0).json()["zone"]["id"]
+        rows = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+        self.assertEqual(rows[0]["sightings"], 1)
+        r = self.client.patch(f"/api/halo/survey/zones/{zid}",
+                              json={"radius_m": 50_000.0})
+        self.assertEqual(r.status_code, 200, r.text)
+        rows = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+        self.assertEqual(rows[0]["sightings"], 2)
+
+    def test_only_a_surface_zone_has_a_radius(self):
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Belt Pocket",
+                                     "system": "Nyx"}).json()["zone"]["id"]
+        r = self.client.patch(f"/api/halo/survey/zones/{zid}",
+                              json={"radius_m": 10_000.0})
+        self.assertEqual(r.status_code, 400)
+
+    # -- never plannable ----------------------------------------------------
+    def test_the_drop_planner_says_why_rather_than_blaming_the_evidence(self):
+        # Without the branch the surface slug simply fails to match, the plan
+        # defaults to Nyx and dies with "that zone has no survey marks yet",
+        # which misdiagnoses it: the zone isn't unfinished, it's a moon.
+        self._create()
+        r = self.client.post("/api/halo/plan",
+                             json={"pocket_key": "daymar-iron-ridge"})
+        self.assertEqual(r.status_code, 400, r.text)
+        detail = r.json()["detail"]
+        self.assertIn("surface zone", detail)
+        self.assertIn(self.BODY, detail)
+        self.assertNotIn("no survey marks", detail)
+
+    # -- the admin reset ----------------------------------------------------
+    def test_a_belt_reset_leaves_named_moon_zones_alone(self):
+        # clear_survey_zones used to delete every row in the system, so an
+        # admin resetting the BELT after a patch destroyed unrelated surface
+        # work by other people, with no warning.
+        surface = self._create().json()["zone"]["id"]
+        deep = self.client.post("/api/halo/survey/zones",
+                                json={"name": "Belt Pocket",
+                                      "system": "Stanton"}).json()["zone"]["id"]
+        r = self.client.post("/api/admin/survey/clear", json={"system": "Stanton"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(db.get_survey_zone(deep))
+        self.assertIsNotNone(db.get_survey_zone(surface))
+
+    # -- altitude -----------------------------------------------------------
+    def test_the_targets_doc_names_bodies_that_carry_areas(self):
+        # The system map's `bodies` list is the star plus true PLANETS, because
+        # moons are sub-pixel at that scale — and almost every surface zone is
+        # on a moon, so the §6.1 badge had nothing to attach to. surface_bodies
+        # carries each such body with its own position.
+        before = self.client.get("/api/halo/targets?system=Stanton").json()
+        self.assertNotIn(self.BODY, [b["name"] for b in before["bodies"]])
+        self.assertEqual(before["surface_bodies"], [])
+        self._create()
+        doc = self.client.get("/api/halo/targets?system=Stanton").json()
+        row = next(b for b in doc["surface_bodies"] if b["name"] == self.BODY)
+        self.assertTrue(row["r"] > 0)
+        self.assertIn("x", row)
+        self.assertIn("y", row)
+
+    def test_an_archived_area_drops_off_the_system_map(self):
+        zid = self._create().json()["zone"]["id"]
+        self.client.patch(f"/api/halo/survey/zones/{zid}", json={"closed": True})
+        doc = self.client.get("/api/halo/targets?system=Stanton").json()
+        self.assertEqual(doc["surface_bodies"], [])
+
+    def test_a_node_logged_from_orbit_is_not_in_the_zone(self):
+        self._add_obs(0.0, 0.0, height_m=0.0)
+        self._add_obs(0.0, 0.0, height_m=200_000.0)     # well up the QT approach
+        self._create()
+        rows = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+        self.assertEqual(rows[0]["sightings"], 1)
+
+
+
+class SurfaceValueApiTests(unittest.TestCase):
+    """#37.1 — the value chip must not render blank (the whole reason the
+    surface basis exists), and it must not disturb the belt pool."""
+
+    BODY = "Daymar"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "display_name": "Surveyor", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._obs_ids = []
+
+    def tearDown(self):
+        for oid in self._obs_ids:
+            app.nav.observations.pop(oid, None)
+            db.delete_observation(oid)
+        for z in db.list_survey_zones(kind=None):
+            db.delete_survey_zone(z["id"])
+        app.nav.touch()
+
+    def _add_obs(self, lat, lon, ore="Quantanium", band=5, handle="ana"):
+        oid = db.next_observation_id()
+        obs = app.nav_core.Observation(
+            id=oid, category="resource", system="Stanton", container_name=self.BODY,
+            local_km=None, global_m=None, latitude=lat, longitude=lon,
+            height_m=0.0, biome=None, note=None, owner_id=None, owner_handle=handle,
+            observed_at="2026-01-01T00:00:00+00:00",
+            data=app.nav_core._normalize_resource({"ore": ore, "band": band}))
+        db.add_observation(app.nav_core.observation_to_dict(obs))
+        app.nav.observations[oid] = obs
+        app.nav.touch()
+        self._obs_ids.append(oid)
+        return obs
+
+    def _create(self, name, lat, lon, radius_m=25_000.0):
+        return self.client.post("/api/halo/survey/zones", json={
+            "name": name, "body": self.BODY, "center_lat": lat,
+            "center_lon": lon, "radius_m": radius_m})
+
+    def test_a_surface_zone_carries_a_value_not_a_blank_chip(self):
+        # The regression this basis exists for: _survey_value_from_index scores
+        # a rocks-density ladder an observation has no data for, so every
+        # surface row used to fall through unscored.
+        for i in range(6):
+            self._add_obs(0.0, 0.0, ore="Quantanium", band=7)
+        self._create("Rich Ridge", 0.0, 0.0)
+        rows = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"]
+        self.assertEqual(len(rows), 1)
+        value = rows[0].get("value")
+        self.assertIsNotNone(value, "surface zone scored nothing")
+        self.assertEqual(value["basis"], "surface")
+        self.assertGreater(value["score"], 0)
+        self.assertIn(value["tier"], ("high", "medium", "low"))
+
+    def test_a_rich_moon_zone_does_not_disturb_the_belt_pool(self):
+        # "$$$" means "best in this belt". Tiering a moon patch against a belt
+        # pocket would silently redefine it, so the pools stay separate.
+        before = self.client.get(
+            "/api/halo/survey/zones?system=Stanton").json()["zones"]
+        for i in range(20):
+            self._add_obs(0.0, 0.0, ore="Quantanium", band=8)
+        self._create("Rich Ridge", 0.0, 0.0)
+        after = self.client.get(
+            "/api/halo/survey/zones?system=Stanton").json()["zones"]
+        self.assertEqual([z.get("value") for z in before],
+                         [z.get("value") for z in after])
+
+    def test_intel_surveying_credits_passive_mining_in_its_own_block(self):
+        self._add_obs(0.0, 0.0, handle="ana")
+        self._add_obs(0.01, 0.0, handle="bo")
+        self._create("Iron Ridge", 0.0, 0.0)
+        r = self.client.get("/api/intel/surveying")
+        self.assertEqual(r.status_code, 200, r.text)
+        surface = r.json()["surface"]
+        self.assertEqual(surface["totals"]["sightings"], 2)
+        self.assertEqual({m["handle"] for m in surface["members"]}, {"ana", "bo"})
+        self.assertEqual(surface["zones"][0]["surveyors"], 2)
+        # Separate block, never pooled into the belt totals (user's call:
+        # one "survey sessions" number meaning both answers neither).
+        self.assertNotIn("sightings", r.json()["totals"])
+
+    def test_the_sightings_endpoint_feeds_the_cards_timeline(self):
+        self._add_obs(0.0, 0.0, ore="Quantanium", band=7, handle="ana")
+        self._add_obs(0.01, 0.0, ore="Taranite", band=3, handle="bo")
+        zid = self._create("Iron Ridge", 0.0, 0.0).json()["zone"]["id"]
+        r = self.client.get(f"/api/halo/survey/zones/{zid}/sightings")
+        self.assertEqual(r.status_code, 200, r.text)
+        doc = r.json()
+        self.assertEqual(doc["total"], 2)
+        self.assertEqual(doc["body"], self.BODY)
+        row = doc["sightings"][0]
+        # Epoch, not the ISO string: the card renders ages.
+        self.assertIsInstance(row["observed_at"], float)
+        self.assertIn("dist_m", row)
+        self.assertIsNotNone(row["ore"])
+
+    def test_the_sightings_endpoint_refuses_a_deep_space_zone(self):
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Belt Pocket",
+                                     "system": "Nyx"}).json()["zone"]["id"]
+        r = self.client.get(f"/api/halo/survey/zones/{zid}/sightings")
+        self.assertEqual(r.status_code, 404)
+
+    def test_a_surface_zone_carries_a_route_to_its_nearest_marker(self):
+        # Navigable, never plannable: this is what it gets INSTEAD of a drop.
+        self._add_obs(0.0, 0.0)
+        self._create("Iron Ridge", 0.0, 0.0)
+        row = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"][0]
+        self.assertIn("nearest_qt", row)
+        self.assertIn("nearest_qt_id", row)
+        self.assertIn("nearest_qt_dist_m", row)
+
+    def test_intel_reports_mapped_area_not_a_percentage(self):
+        self._add_obs(0.0, 0.0)
+        self._create("Iron Ridge", 0.0, 0.0, radius_m=50_000.0)
+        bodies = self.client.get("/api/intel/surveying").json()["surface"]["bodies"]
+        self.assertEqual(len(bodies), 1)
+        self.assertEqual(bodies[0]["body"], self.BODY)
+        self.assertGreater(bodies[0]["area_m2"], 0)
+        self.assertNotIn("pct", bodies[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

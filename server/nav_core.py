@@ -7910,6 +7910,284 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
     return out
 
 
+# --- surface survey zones (#37.1) -------------------------------------------
+# Named mining areas on a planet or moon. The deep-space zone (#36.1) derives
+# its boundary from the marks tagged to it; a surface zone DECLARES its circle,
+# because there is no negative evidence to bound it with — a body with no
+# sighting at a spot proves nothing. Everything inside stays derived.
+#
+# Membership is GEOMETRIC and RETROACTIVE: a circle drawn today owns every
+# resource observation the org ever logged inside it. No tag, no backfill, no
+# capture-flow change — and no way to forget to press start, which is the
+# failure mode the belt side had to design an "active zone" around. It is also
+# what makes passive contribution free: a member who has never heard of the
+# zone still fills it in by mining normally.
+
+SURFACE_ZONE_RADIUS_MAX_M = 50_000.0      # one landing's RANGE (user's call)
+SURFACE_ZONE_RADIUS_DEFAULT_M = 25_000.0  # "claim here" without thinking
+SURFACE_ZONE_RADIUS_MIN_M = 500.0         # below this it's a node, not an area
+
+# How far above the surface still counts as being IN the zone.
+#
+# This ceiling is NOT decoration. `_frame_at` stamps a latitude/longitude
+# whenever `container.body_radius > 0` — it checks neither `is_body` nor
+# altitude — and `detection_radius()` is `body_radius * 1.5`, so a fix up to
+# half a body-radius up (~442 km over Daymar, i.e. most of the QT approach)
+# carries a perfectly valid ground track and would otherwise join a zone it
+# merely flew over. 10 km covers a ROC or ship prospecting run at working
+# altitude with room to spare.
+SURFACE_ZONE_MAX_HEIGHT_M = 10_000.0
+
+# Which observation categories a mining area is made of. `observations` also
+# holds `wildlife` and `harvestable`; read without this filter, a fauna
+# sighting would join a mining rollup and inflate every count on the card.
+SURFACE_ZONE_CATEGORY = "resource"
+
+
+def surface_zone_anchor(zone: dict):
+    """(body, lat, lon, radius_m) for a surface zone, or None for a deep-space
+    one. The single place that decides a zone's kind: `body` present and the
+    circle fully specified. `kind` is never stored (see db._zone_kind_sql)."""
+    body = zone.get("body")
+    lat, lon, radius = zone.get("center_lat"), zone.get("center_lon"), zone.get("radius_m")
+    if not body or lat is None or lon is None or not radius:
+        return None
+    return str(body), float(lat), float(lon), float(radius)
+
+
+def surface_zone_contains(zone: dict, lat, lon, body_radius_m: float,
+                          height_m=None) -> bool:
+    """Is (lat, lon[, height]) inside this zone's circle?
+
+    A pure per-zone predicate with no tie-breaking, so overlapping zones BOTH
+    own a point (#37.1 §2.2). Assigning each point to exactly one zone would
+    need an arbitrary rule, and that rule would silently rewrite history the
+    moment anyone edited a radius.
+
+    An unknown `height_m` counts as ground: it is auto-captured, so None means
+    a legacy row rather than an orbital one, and the repo's standing rule is
+    that unknown means allowed.
+    """
+    anchor = surface_zone_anchor(zone)
+    if anchor is None or lat is None or lon is None or body_radius_m <= 0:
+        return False
+    _body, z_lat, z_lon, radius_m = anchor
+    if height_m is not None and height_m > SURFACE_ZONE_MAX_HEIGHT_M:
+        return False
+    dist_m, _bearing = great_circle(lat, lon, z_lat, z_lon, body_radius_m)
+    return dist_m <= radius_m
+
+
+def surface_zone_members(nav: NavData, zone: dict, body_radius_m: float,
+                         category: str = SURFACE_ZONE_CATEGORY) -> list[Observation]:
+    """Every observation geometrically inside `zone`.
+
+    `_obs_on_body` already does the O(1) scope_index bucket lookup and guards
+    both coordinates, so this is a filter over one body's sightings, never a
+    dataset scan.
+    """
+    anchor = surface_zone_anchor(zone)
+    if anchor is None:
+        return []
+    body, _lat, _lon, _r = anchor
+    system = zone.get("system") or ""
+    return [
+        o for o in _obs_on_body(nav, system, body, category)
+        if surface_zone_contains(zone, o.latitude, o.longitude, body_radius_m, o.height_m)
+    ]
+
+
+def _obs_epoch(observed_at) -> float | None:
+    """An observation's ISO `observed_at` as epoch seconds, or None.
+
+    Observations carry an ISO string where marks carry a numeric `created`;
+    every consumer written for marks needs this conversion (see
+    survey_stats_marks).
+    """
+    if not observed_at:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def surface_zone_fit(members: list[Observation], body_radius_m: float,
+                     radius_m: float | None = None,
+                     category: str = SURFACE_ZONE_CATEGORY) -> dict:
+    """The derived rollup for one surface zone.
+
+    Shares NO code with `survey_cluster_fit` on purpose: different evidence,
+    different scale, and forcing one function to serve both is how the belt
+    fitter's 5,196 km floor would sneak back in.
+
+    What it counts are SIGHTINGS, not distinct rocks. Nodes respawn, so working
+    the same outcrop on five trips files five rows. For "how much evidence do we
+    have" that is exactly right; for "how rich is this place" it is a mild bias
+    toward whatever gets re-logged most. Do NOT try to de-duplicate — nothing in
+    the data distinguishes a respawn from a re-sighting — the card says it
+    instead.
+
+    `ore_comp` is emitted in PERCENT, matching what `scan_comp` already carries
+    and what the frontend chart prints literally (it applies no x100).
+    `ore_likely` is the Wilson lower bound of each ore's hit rate, the same
+    statistic `resource_hotspots` ranks the anonymous grid with, so a named zone
+    and an unnamed cell covering the same ground can never disagree.
+    """
+    field = _category_field(category)
+    n = len(members)
+    counts: dict[str, int] = {}
+    bands: dict[int, int] = {}
+    surveyors, stamps = set(), []
+    worked = 0
+    for o in members:
+        counts[_type_of(o, field)] = counts.get(_type_of(o, field), 0) + 1
+        band = o.data.get("band")
+        if isinstance(band, (int, float)):
+            b = max(1, min(8, int(band)))
+            bands[b] = bands.get(b, 0) + 1
+        if o.owner_handle:
+            surveyors.add(o.owner_handle)
+        ts = _obs_epoch(o.observed_at)
+        if ts is not None:
+            stamps.append(ts)
+        if obs_mined(o):
+            worked += 1
+    ores = sorted(counts, key=lambda k: (-counts[k], k))
+    return {
+        "sightings": n,
+        "surveyors": sorted(surveyors),
+        "surveyor_count": len(surveyors),
+        "ores": ores,
+        "ore_counts": dict(counts),
+        # Percent units — see the docstring.
+        "ore_comp": {k: round(100.0 * v / n, 2) for k, v in counts.items()} if n else {},
+        "ore_likely": {k: round(_wilson_lower_bound(v, n), 4) for k, v in counts.items()},
+        "bands": {str(b): bands[b] for b in sorted(bands)},
+        "avg_band": (round(sum(b * c for b, c in bands.items()) / sum(bands.values()), 2)
+                     if bands else None),
+        "worked": worked,
+        "freshest": max(stamps) if stamps else None,
+        "oldest": min(stamps) if stamps else None,
+        "area_m2": (surface_cap_area_m2(radius_m, body_radius_m)
+                    if radius_m else None),
+        "status": "empty" if n == 0 else ("thin" if n < 10 else "surveyed"),
+    }
+
+
+def surface_cap_area_m2(radius_m: float, body_radius_m: float) -> float:
+    """Area of the spherical cap a zone covers.
+
+    Reported as an absolute area, never as a share of the body: a maximum 50 km
+    zone is ~7,840 km2 against Daymar's ~1,093,600 km2, i.e. 0.72%, so a
+    percentage reads as a rounding error forever.
+    """
+    if radius_m <= 0 or body_radius_m <= 0:
+        return 0.0
+    # Cap height for a great-circle surface radius r on a sphere R.
+    theta = min(math.pi, float(radius_m) / float(body_radius_m))
+    return 2.0 * math.pi * body_radius_m * body_radius_m * (1.0 - math.cos(theta))
+
+
+def body_coverage(zones: list[dict], body_radius_m: float,
+                  cell_m: float = RESOURCE_CELL_M) -> dict:
+    """How much of a body the org has named, as absolute area.
+
+    Union, never sum (zones may overlap by design). The union of N overlapping
+    spherical caps needs inclusion-exclusion, so rasterize onto the SAME
+    equal-area lattice the ore heatmap already bins into and count distinct
+    cells — exact enough for a caption, and it reuses the projection the body
+    plate is drawn in.
+    """
+    anchors = [a for a in (surface_zone_anchor(z) for z in zones) if a]
+    if not anchors or body_radius_m <= 0:
+        return {"zones": 0, "area_m2": 0.0, "cells": 0}
+    n_lon, n_lat = grid_dims(body_radius_m, cell_m)
+    cell_area = (4.0 * math.pi * body_radius_m * body_radius_m) / float(n_lon * n_lat)
+    cells: set[tuple[int, int]] = set()
+    for _body, lat, lon, radius_m in anchors:
+        # Walk the cells of the anchor's bounding band and keep those whose
+        # centre falls inside the cap. At RESOURCE_CELL_M a 50 km zone is a
+        # handful of cells, so this stays cheap.
+        dlat = math.degrees(radius_m / body_radius_m)
+        lat_lo, lat_hi = max(-90.0, lat - dlat), min(90.0, lat + dlat)
+        i_lat_lo = grid_cell(lat_lo, lon, body_radius_m, cell_m)[1]
+        i_lat_hi = grid_cell(lat_hi, lon, body_radius_m, cell_m)[1]
+        for i_lat in range(min(i_lat_lo, i_lat_hi), max(i_lat_lo, i_lat_hi) + 1):
+            for i_lon in range(n_lon):
+                c_lat, c_lon = grid_cell_center(i_lon, i_lat, body_radius_m, cell_m)
+                if great_circle(c_lat, c_lon, lat, lon, body_radius_m)[0] <= radius_m:
+                    cells.add((i_lon, i_lat))
+    return {"zones": len(anchors), "cells": len(cells),
+            "area_m2": len(cells) * cell_area}
+
+
+def surface_zones_state(nav: NavData, system: str, zones: list[dict]) -> list[dict]:
+    """Derived state for every SURFACE zone in `system`.
+
+    The sibling of `survey_zones_state`, and deliberately NOT the same function:
+    these rows must never reach `plan_halo_drop`. There is no quantum drop onto
+    a moon's surface, so a surface zone is navigable (via its nearest QT marker)
+    but never plannable — the row carries no `xyz`/`grid_radius_m` pocket
+    geometry at all, so it cannot be mistaken for a #35 pocket dict.
+    """
+    out = []
+    for z in zones:
+        anchor = surface_zone_anchor(z)
+        if anchor is None:
+            continue
+        body, lat, lon, radius_m = anchor
+        # containers are keyed (system, name), and stored rows reference the
+        # name current at capture time — resolve_container folds the upstream
+        # naming drift that would otherwise orphan a zone's body.
+        container = nav.resolve_container(z.get("system") or system, body)
+        body_radius_m = float(getattr(container, "body_radius", 0.0) or 0.0)
+        members = surface_zone_members(nav, z, body_radius_m)
+        row = {
+            "key": z["slug"], "kind": "surface", "zone_id": z["id"],
+            "name": z["name"], "system": z.get("system") or system,
+            "body": body, "center_lat": lat, "center_lon": lon,
+            "radius_m": radius_m, "body_radius_m": body_radius_m or None,
+            "closed": bool(z.get("closed")),
+            "owner_handle": z.get("owner_handle"),
+            # Everyone whose sightings land inside the circle — which, because
+            # membership is geometric, includes members who never opened
+            # Prospector. That is the point of passive contribution.
+            "contributors": sorted({o.owner_handle for o in members if o.owner_handle}),
+        }
+        row.update(surface_zone_fit(members, body_radius_m, radius_m))
+        # Navigable, never plannable (#37.1 §4): what a surface zone gets
+        # INSTEAD of being a drop target is a route to the nearest quantum
+        # marker, and the last leg flown by hand.
+        #
+        # There is no one helper for this. `nearest_qt_marker` wants an ENTITY
+        # with .system/.container_name/.local_km and yields only a name and a
+        # distance; the id comes from a separate name+system scan. So follow
+        # resource_hotspots' recipe exactly: synthesize a throwaway Poi at the
+        # centre, resolve, then scan. (That scan is ambiguous if two markers in
+        # a system share a name — inherited, not introduced here.)
+        if container is not None and body_radius_m > 0:
+            target = Poi(
+                id=-1, name="", system=row["system"], container_name=body, type="",
+                local_km=local_km_from_latlon(lat, lon, body_radius_m),
+                global_m=None, latitude=lat, longitude=lon, height_m=None,
+                qt_marker=False,
+            )
+            row["nearest_qt"], row["nearest_qt_dist_m"] = nearest_qt_marker(
+                nav, target, ROTATION_EPOCH)
+            row["nearest_qt_id"] = next(
+                (p.id for p in nav.qt_markers
+                 if p.name == row["nearest_qt"] and p.system == row["system"]),
+                None)
+        else:
+            row["nearest_qt"] = row["nearest_qt_id"] = row["nearest_qt_dist_m"] = None
+        out.append(row)
+    return out
+
+
 # --- survey value layer (#37 slice 1) ---------------------------------------
 # "Is this field worth mining?" — a relative-value score per surveyed
 # pocket/zone from the org's own marks × the #32 price feed. Bases, honest and
@@ -8390,6 +8668,175 @@ def derive_survey_stats(marks: list[dict]) -> dict:
         "members": out_members,
         "zones": out_zones,
     }
+
+
+
+# --- surface value basis + activity adapter (#37.1) -------------------------
+# Two things that LOOK like they carry over from the belt side and do not.
+#
+# 1. VALUE. `_survey_value_from_index` scores `SURVEY_DENSITY_W[density] x
+#    price` and bails when `positives <= 0` — it is built on the rocks-density
+#    ladder a survey MARK carries. An observation has ore, band and quality:
+#    no positives, no rocks, no density, and not even the salvage escape
+#    hatch. Every surface row would fall through unscored and every value chip
+#    would render blank. So surface zones get a fifth basis of their own.
+#
+# 2. ACTIVITY. `derive_survey_stats` buckets on a `zone_id` tag that geometric
+#    membership never sets, and sessionizes on a numeric `created` where an
+#    observation carries an ISO string. Without an adapter every surface zone
+#    reports `surveyors: 0, latest: None`, and "mining is surveying" quietly
+#    isn't true.
+
+# Band is the signal-strength read of a deposit, 1..8. Weighting is linear and
+# normalized at band 4, so an average-band-4 zone scores its raw expected
+# price and the ladder neither inflates nor flattens the range.
+SURFACE_BAND_PIVOT = 4.0
+
+
+def surface_value(fit: dict, idx: dict, median_sell: float | None) -> dict | None:
+    """Score one surface zone: band weight x expected ore price, discounted
+    for sample size. None when there is nothing honest to say.
+
+    The composition weight is the **Wilson lower bound** of each ore's hit
+    rate, not its raw share — the same statistic `resource_hotspots` ranks the
+    anonymous grid with, so a named zone and an unnamed cell over the same
+    ground can never disagree. It also does the sample-size work for free:
+    three lucky Quantanium hits score as ~0.44 of a Quantanium zone, twenty as
+    ~0.84, where raw composition would call both of them 100%.
+    """
+    n = int(fit.get("sightings") or 0)
+    if n <= 0:
+        return None                      # empty zone: the status line says it
+    likely = fit.get("ore_likely") or {}
+    expect, priced = 0.0, False
+    for ore, p in likely.items():
+        sell = idx.get(ore.strip().lower())
+        if sell is None:
+            sell = idx.get(_ORE_SUFFIX_RE.sub("", ore).strip().lower())
+        if sell is not None and isinstance(p, (int, float)):
+            expect += float(p) * sell
+            priced = True
+    if not priced:
+        # Ores seen but none of them priced (an unlisted or newly-added ore).
+        # The category median stands in, exactly as the belt "density" basis
+        # does — the zone is still evidence, just not price-resolvable.
+        if not median_sell:
+            return None
+        expect = median_sell * _wilson_lower_bound(n, n)
+    avg_band = fit.get("avg_band")
+    w = (float(avg_band) / SURFACE_BAND_PIVOT) if avg_band else 1.0
+    return {"score": round(w * expect), "tier": None, "basis": "surface",
+            "priced": priced, "sightings": n, "avg_band": avg_band,
+            "salvage": False}
+
+
+def annotate_surface_values(zones: list[dict], prices: dict) -> list[dict]:
+    """Value + tier every surface zone of ONE pool. Returns copies.
+
+    **Its own pool, deliberately.** A `$$$` chip means "best in this pool", so
+    tiering a moon patch against a belt pocket would silently redefine what the
+    badge says. Cut the terciles across surface zones only and `$$$` means
+    "the best surface area we know in this system" — a different and honest
+    claim. Call once per system, like annotate_survey_values.
+    """
+    idx, median = _ore_price_index(prices)
+    vals: dict[str, dict] = {}
+    for z in zones:
+        v = surface_value(z, idx, median)
+        if v is not None:
+            vals[z["key"]] = v
+    tiers = resource_value_tiers({k: v["score"] for k, v in vals.items()
+                                  if v["score"]})
+    out = []
+    for z in zones:
+        v = vals.get(z["key"])
+        if v is None:
+            out.append(z)
+            continue
+        t = tiers.get(z["key"])
+        out.append({**z, "value": ({**v, "tier": t["tier"]} if t else dict(v))})
+    return out
+
+
+def surface_stats_marks(nav: NavData, zones: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Adapt a system's surface-zone members into the mark-shaped dicts
+    `derive_survey_stats` consumes. Returns (per_zone, unique).
+
+    Two streams, because overlapping zones are a feature and double-counting is
+    not (#37.1 section 2.2):
+
+      * **per_zone** emits one row per (zone, observation) pair, which is what
+        the per-zone rollups want — both cards legitimately count a node inside
+        both circles.
+      * **unique** emits one row per observation id, which is what org totals,
+        member ranks and sessions want. Without it a member who happens to mine
+        on overlapping ground outranks one who doesn't, for no work.
+
+    `unique` rows deliberately carry `zone_id: None`. derive_survey_stats
+    splits a session when the zone tag changes, and crossing an invisible
+    circle is not the start of a new mining session — for surface evidence the
+    30-minute gap is the whole story.
+    """
+    per_zone: list[dict] = []
+    unique: dict[int, dict] = {}
+    for z in zones:
+        anchor = surface_zone_anchor(z)
+        if anchor is None:
+            continue
+        body, _lat, _lon, _r = anchor
+        system = z.get("system") or ""
+        container = nav.resolve_container(system, body)
+        body_radius_m = float(getattr(container, "body_radius", 0.0) or 0.0)
+        for o in surface_zone_members(nav, z, body_radius_m):
+            row = {
+                "owner_handle": o.owner_handle,
+                # Every resource observation IS a positive sighting: something
+                # was seen. There is no negative evidence on the surface —
+                # which is exactly why a zone's circle is declared, not fitted.
+                "positive": True,
+                "scan": o.data.get("band") is not None,
+                "created": _obs_epoch(o.observed_at),
+                "system": system,
+                "body": body,
+                "obs_id": o.id,
+                "zone_id": z["id"],
+            }
+            per_zone.append(row)
+            unique.setdefault(o.id, {**row, "zone_id": None})
+    return per_zone, list(unique.values())
+
+
+def derive_surface_survey_stats(nav: NavData, zones: list[dict]) -> dict:
+    """Org surface-mining activity, in derive_survey_stats' shape.
+
+    Kept SEPARATE from the belt totals rather than pooled into them (user's
+    call): surveying a belt and mining a moon are different activities, and one
+    "survey sessions" number that means both answers neither. Same shape so one
+    renderer serves both; different block so the numbers stay honest.
+
+    Counts are `sightings`, not `marks` — and a sighting is not a distinct
+    rock. Nodes respawn, so working the same outcrop across five trips files
+    five rows. That is the right answer for "how much evidence do we have" and
+    a known bias for "how rich is this place"; nothing in the data can tell the
+    two apart, so the card says so rather than guessing.
+    """
+    per_zone, unique = surface_stats_marks(nav, zones)
+    # Each half comes from the run that computes it correctly: per-zone tallies
+    # from the paired stream, everything member-or-org-wide from the de-duped
+    # one.
+    paired = derive_survey_stats(per_zone)
+    deduped = derive_survey_stats(unique)
+    zone_counts = {r["handle"]: r["zones"] for r in paired["members"]}
+    members = [{**{k: v for k, v in row.items() if k != "marks"},
+                "sightings": row["marks"],
+                "zones": zone_counts.get(row["handle"], 0)}
+               for row in deduped["members"]]
+    totals = {k: v for k, v in deduped["totals"].items() if k != "marks"}
+    totals["sightings"] = deduped["totals"]["marks"]
+    totals["zones"] = len(paired["zones"])
+    return {"totals": totals, "members": members,
+            "zones": {zid: {**z, "sightings": z.pop("marks")}
+                      for zid, z in paired["zones"].items()}}
 
 
 def _segment_at(pos, segments) -> dict | None:

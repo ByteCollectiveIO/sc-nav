@@ -6611,6 +6611,23 @@ def _halo_bodies(system: str) -> list[dict]:
             for c in star + planets]
 
 
+def _surface_bodies(system: str) -> list[dict]:
+    """Every body in `system` that has at least one open surface zone, with the
+    position the system map draws it at. Counts/value tiers deliberately stay
+    client-side, joined from the zone rows, so the value basis lives in exactly
+    one place."""
+    out = []
+    names = {z["body"] for z in db.list_survey_zones(system, kind="surface")
+             if z.get("body") and not z.get("closed")}
+    for name in sorted(names):
+        c = nav.resolve_container(system, name)
+        if c is None:
+            continue
+        out.append({"name": c.name, "type": c.type,
+                    "x": c.pos[0], "y": c.pos[1], "r": c.body_radius})
+    return out
+
+
 @app.get("/api/halo/bands")
 def get_halo_bands(user: dict = Depends(require_session)):
     """The Aaron Halo band model for the picker strip + map bodies. Static —
@@ -6637,6 +6654,13 @@ def get_halo_targets(system: str = "Stanton",
            "bodies": _halo_bodies(system),
            # Overview-map landmarks (#37 slice 4): stations + gateways.
            "markers": _halo_markers(system),
+           # Bodies carrying named surface areas (#37.1 §6.1). A SEPARATE list
+           # from `bodies` on purpose: that one is the star plus true planets,
+           # because moons are sub-pixel at system scale — and almost every
+           # surface zone is on a moon, so the badge would have nothing to
+           # attach to. This carries each such body's own position so the badge
+           # lands where the ground actually is.
+           "surface_bodies": _surface_bodies(system),
            "attribution": belt["attribution"]}
     if belt["kind"] == "bands":
         doc["bands"] = [{**b, "width_m": b["outer_m"] - b["inner_m"]}
@@ -6754,7 +6778,21 @@ def _halo_goal_system(body: HaloPlanIn) -> str | None:
         # PER system (UNIQUE(system, slug)), so a bare pin matching zones in
         # two systems is ambiguous — 400 rather than silently planning the
         # lowest-id twin.
-        matches = {z["system"] for z in db.list_survey_zones()
+        # A SURFACE zone is navigable but never plannable (#37.1 §4): there is
+        # no quantum drop onto a moon's surface. Catch it here and say so.
+        # Without this the surface slug simply fails to match, the request
+        # defaults to Nyx and dies further down with "that zone has no survey
+        # marks yet — drop one with ⛏ first", which misdiagnoses it: the zone
+        # isn't unfinished, it's the wrong kind of thing to aim a drop at.
+        surface = [z for z in db.list_survey_zones(kind="surface")
+                   if z["slug"].lower() == body.pocket_key.lower()]
+        if surface:
+            raise HTTPException(
+                status_code=400,
+                detail=f"\u201c{surface[0]['name']}\u201d is a surface zone on "
+                       f"{surface[0]['body']} — there's no quantum drop onto a "
+                       f"body. Set it as a destination instead and fly the last leg.")
+        matches = {z["system"] for z in db.list_survey_zones(kind="deep")
                    if z["slug"].lower() == body.pocket_key.lower()}
         if len(matches) > 1:
             raise HTTPException(
@@ -7081,17 +7119,68 @@ async def clear_survey_marks(body: SurveyClearIn,
 # --- named survey zones (#36.1) --------------------------------------------
 
 
-def _zone_slug(name: str) -> str:
+_ZONE_SLUG_MAX = 40
+
+
+def _zone_slug(name: str, body_name: str | None = None) -> str:
     """A stable, pin-friendly key from a zone name: lowercased, non-alnum → '-'.
-    Falls back to 'zone' so an all-symbol name still yields a usable slug."""
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug[:40] or "zone"
+    Falls back to 'zone' so an all-symbol name still yields a usable slug.
+
+    A SURFACE zone's slug carries its body (`daymar-iron-ridge`) because the
+    table's constraint is UNIQUE (system, slug), so "Iron Ridge" on Daymar would
+    otherwise block "Iron Ridge" on Yela — and SQLite can't alter a constraint
+    without rebuilding the table. The prefix is the migration-free fix.
+
+    **Callers must pass the body from the STORED row, not from a request
+    payload.** The rename path used to re-slug from the payload alone, which
+    dropped the prefix on the first rename and silently changed the zone's pin
+    key (#37.1 §2.4).
+    """
+    parts = [p for p in (body_name, name) if p]
+    slug = re.sub(r"[^a-z0-9]+", "-", " ".join(parts).lower()).strip("-")
+    return slug[:_ZONE_SLUG_MAX] or "zone"
+
+
+def _resolve_zone_body(body_name: str):
+    """The container a surface zone may be anchored to, or a 400 explaining why
+    not.
+
+    Two guards, both load-bearing:
+      * `is_body` alone admits **stars** — it is `body_radius > 0 and type in
+        ("Star", "Planet", "Moon")` — so a bare check would let someone claim a
+        50 km circle on Stanton Star. Require Planet/Moon.
+      * Three `AsteroidBase` containers carry a `BodyRadius` and so mint
+        lat/lon observations while failing `is_body`; they are correctly
+        refused here.
+
+    Note every moon in the shipped data is typed "Planet" — there is no "Moon"
+    type — so say "bodies", not "planets and moons", in anything user-facing.
+    """
+    # The body decides the system, so this searches across systems rather than
+    # taking one. `resolve_container` is what folds upstream naming drift
+    # ('ARC-L1' -> 'ARC L1'), so try it per system before giving up.
+    container = None
+    if body_name:
+        for system in {sys_name for (sys_name, _name) in nav.containers}:
+            hit = nav.resolve_container(system, body_name)
+            if hit is not None:
+                container = hit
+                break
+    if container is None:
+        raise HTTPException(status_code=400, detail=f"unknown body: {body_name}")
+    if not getattr(container, "is_body", False) or container.type == "Star":
+        raise HTTPException(
+            status_code=400,
+            detail=f"{container.name} is not a body you can survey on foot")
+    if not container.body_radius or container.body_radius <= 0:
+        raise HTTPException(status_code=400, detail=f"{container.name} has no surface")
+    return container
 
 
 def _survey_zones_view(system: str) -> list[dict]:
     """Derived state for every zone in `system` (geometry recomputed live from
     the marks tagged to it), newest-plannable order preserved by id."""
-    zones = db.list_survey_zones(system)
+    zones = db.list_survey_zones(system, kind="deep")
     return nav_core.survey_zones_state(nav, system, zones)
 
 
@@ -7121,11 +7210,30 @@ class ZoneIn(BaseModel):
     name: str = Field(min_length=1, max_length=48)
     system: str | None = Field(default=None, max_length=24)
     announce: bool = False   # opt-in Discord shout (#37 §5.2, LFG-style)
+    # Surface zones (#37.1). Supplying `body` makes this a named mining area on
+    # a planet/moon instead of a deep-space belt zone; the other three are then
+    # required. NOTE the collision hazard: FastAPI handlers in this file bind
+    # the request payload to a parameter also called `body`, so inside a handler
+    # `body.body` is the celestial one. New code should read it once into a
+    # local named `body_name`.
+    body: str | None = Field(default=None, max_length=64)
+    center_lat: float | None = Field(default=None, ge=-90.0, le=90.0)
+    center_lon: float | None = Field(default=None, ge=-180.0, le=180.0)
+    radius_m: float | None = Field(
+        default=None,
+        ge=nav_core.SURFACE_ZONE_RADIUS_MIN_M,
+        le=nav_core.SURFACE_ZONE_RADIUS_MAX_M)
 
 
 class ZonePatchIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=48)
     closed: bool | None = None
+    # Re-fencing an area you mis-sized is the common edit; moving the centre is
+    # a new zone. The cap lives here, not just in the UI.
+    radius_m: float | None = Field(
+        default=None,
+        ge=nav_core.SURFACE_ZONE_RADIUS_MIN_M,
+        le=nav_core.SURFACE_ZONE_RADIUS_MAX_M)
 
 
 class ActiveZoneIn(BaseModel):
@@ -7133,7 +7241,8 @@ class ActiveZoneIn(BaseModel):
 
 
 @app.get("/api/halo/survey/zones")
-def list_survey_zones(system: str = "Nyx", user: dict = Depends(require_session)):
+def list_survey_zones(system: str = "Nyx", kind: str = "deep", body: str | None = None,
+                      user: dict = Depends(require_session)):
     """Every named survey zone in a system, with geometry derived live from its
     marks (#36.1). Feeds the zone picker + the active-zone banner + the planner
     pin list. Zones carry their org-survey value tier (#37 slice 1).
@@ -7144,10 +7253,33 @@ def list_survey_zones(system: str = "Nyx", user: dict = Depends(require_session)
     # creator's discord_id itself stays server-side: the row already carries
     # owner_handle, and exposing both would publish the Discord↔handle link the
     # directory opt-out exists to hide.
-    creators = {z["id"]: z.get("created_by") for z in db.list_survey_zones(system)}
+    creators = {z["id"]: z.get("created_by") for z in db.list_survey_zones(system, kind="deep")}
     uid, is_admin = str(user["id"]), bool(user.get("is_admin"))
     zones_valued = [{**z, "can_edit": is_admin or creators.get(z["zone_id"]) == uid}
                     for z in zones_valued]
+
+    # Surface zones (#37.1) ride the same endpoint and the same list, but the
+    # default stays "deep" so a deployed SPA that predates them sees exactly
+    # what it saw before. The UI slice flips the default to "all".
+    #
+    # They are NOT run through _survey_valued: its tiers are terciles across one
+    # per-system pool where "$$$" means "best in this belt", and scoring a moon
+    # patch against a belt pocket would silently redefine that. Surface zones
+    # score on their own basis (band x Wilson-discounted composition x price)
+    # and tier in their own per-system pool, so "$$$" means "the best surface
+    # area we know in Stanton" — a different and honest claim.
+    if kind in ("surface", "all") or body:
+        rows = db.list_survey_zones(system, kind="surface", body=body)
+        surface = nav_core.surface_zones_state(nav, system, rows)
+        surface = nav_core.annotate_surface_values(
+            surface, (resource_values or {}).get("resource") or {})
+        creators_s = {z["id"]: z.get("created_by") for z in rows}
+        surface = [{**z, "can_edit": is_admin or creators_s.get(z["zone_id"]) == uid}
+                   for z in surface]
+        if kind == "surface" or body:
+            zones_valued = surface
+        else:
+            zones_valued = zones_valued + surface
     return {"system": system, "zones": zones_valued,
             "announce_available": notify.is_configured("survey")}
 
@@ -7163,22 +7295,87 @@ async def create_survey_zone(body: ZoneIn, user: dict = Depends(require_session)
             sess = hub.sessions.get(user["id"])
             if sess and sess.pos is not None:
                 system = _halo_fix_system(sess.pos, sess)
+    # A surface zone's body decides its system — the container knows where it
+    # lives, and trusting the payload would let a Daymar zone be filed in Pyro.
+    # The `nav.belts` gate below is NOT widened for bodies: build_belt_registry
+    # returns exactly {Stanton, Nyx, Pyro} and every body in the shipped data
+    # lives in one of them, so widening it would be a no-op (#37.1 §7).
+    body_name = body.body
+    container = None
+    if body_name:
+        container = _resolve_zone_body(body_name)
+        body_name = container.name
+        system = container.system
+        if body.center_lat is None or body.center_lon is None:
+            raise HTTPException(
+                status_code=400,
+                detail="a surface zone needs center_lat and center_lon")
     system = system or "Nyx"
     if system not in nav.belts:
         raise HTTPException(status_code=400, detail="unknown system")
+    radius_m = (float(body.radius_m) if body.radius_m is not None
+                else nav_core.SURFACE_ZONE_RADIUS_DEFAULT_M) if body_name else None
     owner = (hub.get(user).owner or {}) if user else {}
     try:
         zid = await asyncio.to_thread(
-            db.create_survey_zone, _zone_slug(body.name), body.name.strip(),
-            system, user["id"], owner.get("handle"), time.time())
+            db.create_survey_zone, _zone_slug(body.name, body_name), body.name.strip(),
+            system, user["id"], owner.get("handle"), time.time(),
+            body_name, body.center_lat, body.center_lon, radius_m)
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409,
                             detail="a zone with that name already exists in this system")
-    members_dir.set_active_survey_zone(user["id"], zid)
+    # Only a DEEP-SPACE zone becomes the caller's active zone. Surface
+    # membership is geometric, so there is no capture-time tagging to feed —
+    # and nothing to forget to switch off.
+    if not body_name:
+        members_dir.set_active_survey_zone(user["id"], zid)
     zone = db.get_survey_zone(zid)
     if body.announce and _survey_announce_ok(str(user["id"])):
         _notify_bg(_notify_survey_zone_created(zone))
-    return {"ok": True, "zone": zone, "active_survey_zone": zid}
+    out = {"ok": True, "zone": zone,
+           "active_survey_zone": None if body_name else zid}
+    if body_name:
+        # A surface zone is born with history: every observation the org ever
+        # logged inside the circle is already a member. Report the inherited
+        # count so nobody reads it as a bug (#37.1 §3, step 3).
+        state = nav_core.surface_zones_state(nav, system, [zone])
+        out["state"] = state[0] if state else None
+    return out
+
+
+@app.get("/api/halo/survey/zones/{zone_id}/sightings")
+def get_zone_sightings(zone_id: int, limit: int = 200,
+                       user: dict = Depends(require_session)):
+    """The sightings inside one surface zone, newest first — the detail card's
+    timeline (#37.1 §5).
+
+    Its OWN endpoint rather than a filter on /api/halo/survey, because that one
+    returns deep-space *marks*; the card would otherwise pull a whole system's
+    mark list to render one moon. Capped, because a worked area accumulates
+    without bound and the card only ever shows a timeline.
+    """
+    zone = db.get_survey_zone(zone_id)
+    if zone is None or not zone.get("body"):
+        raise HTTPException(status_code=404, detail="unknown surface zone")
+    container = nav.resolve_container(zone["system"], zone["body"])
+    body_radius_m = float(getattr(container, "body_radius", 0.0) or 0.0)
+    members = nav_core.surface_zone_members(nav, zone, body_radius_m)
+    rows = []
+    for o in members:
+        dist_m, _bearing = nav_core.great_circle(
+            o.latitude, o.longitude, zone["center_lat"], zone["center_lon"],
+            body_radius_m) if body_radius_m else (None, None)
+        rows.append({
+            "id": o.id, "observed_at": nav_core._obs_epoch(o.observed_at),
+            "owner_handle": o.owner_handle, "ore": o.data.get("ore"),
+            "band": o.data.get("band"), "quality": o.data.get("quality"),
+            "biome": o.biome, "mined_at": o.data.get("mined_at"),
+            "latitude": o.latitude, "longitude": o.longitude,
+            "height_m": o.height_m, "dist_m": dist_m,
+        })
+    rows.sort(key=lambda r: (r["observed_at"] is None, -(r["observed_at"] or 0)))
+    return {"zone_id": zone_id, "name": zone["name"], "body": zone["body"],
+            "total": len(rows), "sightings": rows[:max(1, min(1000, limit))]}
 
 
 @app.patch("/api/halo/survey/zones/{zone_id}")
@@ -7192,11 +7389,17 @@ async def patch_survey_zone(zone_id: int, body: ZonePatchIn,
     if zone is None:
         raise HTTPException(status_code=404, detail="unknown zone")
     _require_zone_owner(zone, user)
-    slug = _zone_slug(body.name) if body.name is not None else None
+    # Re-slug from the STORED row's body, never from the payload: a surface
+    # zone's slug carries its body, and re-slugging from the payload alone
+    # dropped that prefix on the first rename (#37.1 §2.4).
+    slug = _zone_slug(body.name, zone.get("body")) if body.name is not None else None
+    if body.radius_m is not None and not zone.get("body"):
+        raise HTTPException(status_code=400,
+                            detail="only a surface zone has a radius")
     try:
         await asyncio.to_thread(db.update_survey_zone, zone_id,
                                 body.name.strip() if body.name is not None else None,
-                                slug, body.closed)
+                                slug, body.closed, body.radius_m)
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="that name collides with another zone")
     if body.closed:
@@ -7387,7 +7590,7 @@ def _survey_find_systems() -> list[str]:
     """Every system that can hold survey clusters: the belt systems plus any
     system an org zone lives in (zones are allowed anywhere)."""
     out = list(nav.belts or {})
-    for z in db.list_survey_zones():
+    for z in db.list_survey_zones(kind="deep"):
         if z.get("system") and z["system"] not in out:
             out.append(z["system"])
     return out
@@ -12978,6 +13181,42 @@ def intel_surveying(user: dict = Depends(require_session)):
         zone_rows += zones_valued
     stats = nav_core.derive_survey_stats(all_marks)
     activity = stats["zones"]
+
+    # Surface mining (#37.1), kept as its OWN block rather than pooled into the
+    # belt totals: surveying a belt and mining a moon are different activities,
+    # and one "survey sessions" number meaning both answers neither. Same shape
+    # so one renderer serves both.
+    surface_rows: list[dict] = []
+    for system in {z["system"] for z in db.list_survey_zones(kind="surface")}:
+        rows = db.list_survey_zones(system, kind="surface")
+        st = nav_core.surface_zones_state(nav, system, rows)
+        surface_rows += nav_core.annotate_surface_values(
+            st, (resource_values or {}).get("resource") or {})
+    surface_stats = nav_core.derive_surface_survey_stats(
+        nav, db.list_survey_zones(kind="surface"))
+    surface_act = surface_stats["zones"]
+    surface_zones = sorted(
+        ({"zone_id": z.get("zone_id"), "name": z.get("name"),
+          "system": z.get("system"), "body": z.get("body"),
+          "closed": bool(z.get("closed")), "owner_handle": z.get("owner_handle"),
+          "status": z.get("status"), "sightings": z.get("sightings", 0),
+          "value": z.get("value"),
+          "latest": (surface_act.get(z.get("zone_id")) or {}).get("latest"),
+          "surveyors": (surface_act.get(z.get("zone_id")) or {}).get("surveyors", 0)}
+         for z in surface_rows),
+        key=lambda z: (z["latest"] is None, -(z["latest"] or 0),
+                       (z["name"] or "").lower()))
+    # Per-body coverage as absolute mapped area — never a percentage of the
+    # body: a maximum 50 km zone is 0.72% of Daymar, so a share reads as a
+    # rounding error forever.
+    bodies = []
+    for (sys_name, body_name) in sorted({(z["system"], z["body"])
+                                         for z in db.list_survey_zones(kind="surface")}):
+        container = nav.resolve_container(sys_name, body_name)
+        cover = nav_core.body_coverage(
+            db.list_survey_zones(sys_name, kind="surface", body=body_name),
+            float(getattr(container, "body_radius", 0.0) or 0.0))
+        bodies.append({"system": sys_name, "body": body_name, **cover})
     zones = []
     for z in zone_rows:
         act = activity.get(z.get("zone_id")) or {}
@@ -12992,6 +13231,10 @@ def intel_surveying(user: dict = Depends(require_session)):
                               (z["name"] or "").lower()))
     return {"totals": stats["totals"], "members": stats["members"],
             "belts": belts, "zones": zones,
+            # Surface mining rides beside the belt numbers, never inside them.
+            "surface": {"totals": surface_stats["totals"],
+                        "members": surface_stats["members"],
+                        "zones": surface_zones, "bodies": bodies},
             "session_gap_min": int(nav_core.SURVEY_SESSION_GAP_S // 60)}
 
 

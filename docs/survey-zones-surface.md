@@ -1,9 +1,79 @@
 # Surface survey zones — named mining areas on planets and moons (#37.1) — design plan
 
-**Status: DESIGN (not built).** The doc `survey-platform.md` §7.2 promised before
-build. **Reviewed in three passes; §12, §13 and §14 are the review output —
-§14 corrects verified-wrong claims in §1–§13 and is the first thing to read
-before building.** Companions:
+**Status: SLICE 1 BUILT (backend), rest DESIGN.** The doc `survey-platform.md`
+§7.2 promised this before build.
+
+> **Built so far — backend foundation, nothing user-visible.** Storage
+> (`body`/`center_lat`/`center_lon`/`radius_m` + the reserved
+> `observations.game_build`), the `list_survey_zones` kind filter and the
+> scoped admin clear (both §7/§9 regressions, fixed before a surface row can
+> exist), the membership predicate with its 10 km altitude ceiling and
+> `resource`-only filter, `surface_zone_fit`, `surface_zones_state`,
+> `surface_cap_area_m2`, rasterized `body_coverage`, create/PATCH/GET with the
+> body-prefixed slug that survives a rename, and the drop-planner reject that
+> names the category instead of blaming the evidence. 38 tests.
+>
+> **Slice 2 — the two features, also built.** The **value basis** is a fifth
+> basis `"surface"`: band weight (linear, pivot 4) x expected ore price,
+> where each ore's weight is its **Wilson lower bound**, not its raw share —
+> so sample size is discounted in the same step and by the same statistic
+> `resource_hotspots` ranks the anonymous grid with (3/3 Quantanium scores
+> 438 where 20/20 scores 839). Unpriced ores fall back to the category
+> median and say so via `priced: false`. Terciles are cut across a
+> **surface-only per-system pool**, so `$$$` means "best surface area we know
+> in Stanton" and the belt pool is provably untouched. The **stats adapter**
+> emits two streams — per-(zone, observation) pairs for the per-zone rollups,
+> de-duplicated by observation id for member ranks, org totals and sessions —
+> and `derive_surface_survey_stats` keeps surface activity in its own block
+> beside the belt totals rather than pooled into them (user's call). Unique
+> rows carry `zone_id: None` on purpose: crossing an invisible circle is not
+> the start of a new mining session. `/api/intel/surveying` gains a
+> `surface` block with per-body **absolute mapped area**. 17 more tests.
+>
+>
+> **Slice 3 — UI, built in two parts.** ATLAS carries surface rows in the same
+> table (new WHERE column; Details + Set destination, deliberately no Plan and
+> no Set active), a detail card with the §14.7 suppressions, a band histogram
+> and the §6.3 local plate, plus `GET …/zones/{id}/sightings` for its timeline
+> and `nearest_qt*` stamped on every surface row. Creation lives in the
+> NAVIGATOR (⛏ Name this area + radius, on-body only), and the §11.1 chip is
+> computed **client-side** — the nav-state-push alternative would run the
+> predicate for every online member on every sample.
+>
+> **Verified in a browser, not source-reviewed**, which caught seven things:
+> every ore read "100%" (the chart divides by `z.positive`, which a surface row
+> lacks); the band bars were invisible (`--ok`/`--muted` aren't tokens here —
+> they're `--good`/`--accent`/`--dim`); the plate drew a literal
+> `25.0<small> km</small>` (fmtDist returns HTML); "freshest unworked" was
+> sorted by band; the shared ROCKS header didn't name band; the chip wrapped out
+> of its own pill; and **`state.container` exposes `body_radius_m`/`is_body`,
+> not `body_radius`** — my first cut would have hidden the chip for everyone.
+> §14.9 was also wrong that there is no JS great-circle: `greatCircle()` exists.
+>
+>
+> **Slice 4 — both remaining map levels, built.** §6.1's body badge (ring +
+> count, value-tinted, drills down) and §6.2's Lambert equal-area body plate
+> (heat cells + zone polygons + live position). Three corrections the build
+> forced: the targets doc's `bodies` list is star + true PLANETS, so the badge
+> had **nothing to attach to** — new `surface_bodies` field; the plate's canvas
+> must be **π:1**, not 2:1, or every equatorial zone draws as a 1.57×-tall
+> ellipse and an equal-area map visibly looks like it is lying; and the
+> coverage caption **summed** overlapping zones (7,433 km² where the union is
+> 4,979 — a 33% overstatement), now sampled on the plate's own equal-area
+> lattice.
+>
+> **§6.2's wording is wrong** where it says a zone becomes "a slightly
+> flattened ellipse near the poles": the distortion is everywhere, and at the
+> equator it runs the other way. Only the π:1 frame makes the equator honest.
+>
+> **Not built:** the `kind="survey"` goal (§11.2, release two) and §11.5's
+> milestone hook (deferred by §14.13). **Reviewed in four passes.** §12 and §13 are review output (gaps,
+cross-tool hooks). §14 is the **audit trail** of an adversarial pass that
+checked every claim against the code: each correction it found has since been
+folded into the section it affects, and a fourth pass re-verified §14 itself and
+fixed three of its own imprecisions. **So §1–§13 now read correctly
+top-to-bottom; §14 is kept to stop the mistakes being re-introduced, not as a
+required pre-read.** Companions:
 [survey-zones.md](survey-zones.md) (#36.1 — the deep-space zone this extends),
 [belt-survey.md](belt-survey.md) (#36),
 [survey-platform.md](survey-platform.md) (#37 — this is slice 5's first half).
@@ -61,8 +131,8 @@ generalizes perfectly. Three things underneath it do not:
 Everything else — identity-only rows, derived-never-stored, org-shared
 ownership, `closed`, slugs, the ATLAS table shell, the detail card shell —
 carries over. **Two things that look like they carry over do NOT, and they are
-the two biggest items of real work in this build: the value tier and the
-activity stats. See §14.1 and §14.2.**
+the two biggest items of real work in this build: the value tier (§4) and the
+activity stats (§8). Neither is a parameter change; budget both as features.**
 
 ## 2. Model: a zone is an identity plus a circle on a body
 
@@ -75,8 +145,15 @@ freshness.
 
 - **Anchor** = `(system, body, center_lat, center_lon, radius_m)`.
 - **Membership** = `great_circle(o.lat, o.lon, z.lat, z.lon, body_radius) <=
-  z.radius_m`, guarded on `o.latitude is not None`. Pure function of the
-  observation row — no column on `observations`, no backfill, no capture change.
+  z.radius_m`, over the body's **`resource`** observations only, plus an
+  altitude ceiling (§9 — orbital fixes carry a valid ground track). Pure
+  function of the observation row: no column on `observations`, no backfill, no
+  capture change. `observations` also holds `wildlife` and `harvestable`, so the
+  category filter is load-bearing, not tidiness — without it a fauna sighting
+  joins a mining rollup. `nav_core._obs_on_body(nav, system, body, category)`
+  (`nav_core.py:1798`) already does exactly this bucket lookup, defaults to
+  `category="resource"`, and guards both `latitude` and `longitude`; use it
+  rather than writing a new one.
 - **Shape is a circle, not a box.** A box needs lat/lon bounds that wrap badly
   at the antimeridian and distort into a non-box on a sphere; `great_circle`
   (`nav_core.py:773`) is one primitive the codebase already has and the only
@@ -174,6 +251,28 @@ SQLite cannot alter a constraint without rebuilding the table, so instead
 `daymar-iron-ridge`. No migration, no rebuild, and the slug still reads as a
 human key in the export.
 
+**Two traps the prefix walks into, both must be fixed with it:**
+
+1. **PATCH drops the prefix.** `patch_survey_zone` re-slugs from the request
+   payload alone — `slug = _zone_slug(body.name)` (`app.py:7194`) — and never
+   reads the stored row's body (`ZonePatchIn`, `app.py:7126`, carries only
+   `name` and `closed`). So renaming "Iron Ridge" → "Iron Ridge North" rewrites
+   the slug to `iron-ridge-north`, losing the prefix, re-opening the collision
+   and silently changing the zone's pin key. **Re-slug from the stored row, not
+   the payload.**
+2. **The prefix eats the truncation budget.** `_zone_slug` truncates at 40
+   chars (`app.py:7088`) while `ZoneIn.name` allows 48 (`app.py:7121`). A
+   `microtech-` prefix spends 10 of those 40, so two long names on one body
+   truncate into each other and 409 with a message blaming the *name*. Either
+   lengthen the truncation or validate the composed slug and say so plainly.
+
+**Naming collision to avoid in the code itself:** these handlers already bind
+the FastAPI request payload to a parameter named `body` (`app.py:7194` is
+`body.name`). The celestial `body` this doc adds is a different thing with the
+same spelling, in the same functions. Name the new one `body_name` or
+`container` in the handler signatures; a mix-up here is the kind that type
+checks and still ships.
+
 ## 3. The workflow (what the pilot does)
 
 1. You're on Daymar, logging nodes as you always have. Nothing about the
@@ -200,18 +299,43 @@ A surface zone must stay out of two pools it would otherwise fall into, because
 `survey_zones_state` deliberately emits `#35`-shaped pocket dicts so
 `plan_halo_drop` consumes them untouched (`nav_core.py:7877`):
 
-- **The drop planner.** There is no quantum drop onto a moon's surface.
-  `_halo_goal_system` / `pocket_key` resolution must reject a surface slug with
-  a tailored 400 ("surface zone — set it as a destination instead"), the same
-  way a KGR arc pin explains itself (#36 phase 1).
+- **The drop planner — the reject already exists and says the wrong thing.**
+  There is no quantum drop onto a moon's surface, but this is not a new guard
+  to add: `_halo_goal_system` matches `pocket_key` against a bare
+  `db.list_survey_zones()` — **every system, no body filter**
+  (`app.py:6757-6758`) — and happily returns the surface zone's system. The
+  request then dies further along at `app.py:6851-6852` with *"that zone has no
+  survey marks yet — drop one with ⛏ first"*, which is both confusing and
+  wrong: the zone isn't unfinished, it's the wrong kind. Two existing sites need
+  a surface branch, and the cross-system ambiguity 400 (`app.py:6759-6763`) now
+  also fires on a surface/deep-space slug twin. Aim for the KGR arc pin's
+  tone (#36 phase 1) — explain the category, don't report a shortfall.
 - **The value tercile pool** (`_survey_valued`, `app.py:7098`). A `$$$` chip
-  means "best in this belt". Tiering a moon patch against a belt pocket would
-  silently redefine it. Surface zones tier in their **own per-system surface
-  pool**, so `$$$` means "best surface area we know in Stanton".
+  means "best in this belt", so tiering a moon patch against a belt pocket
+  would silently redefine it — surface zones need their **own per-system
+  surface pool**. **But splitting the pool is the easy half, and on its own it
+  ships blank chips.** There is no score to tier: `_survey_value_from_index`
+  (`nav_core.py:7950`) computes `SURVEY_DENSITY_W[density] × price` across three
+  bases in priority order — `scanned` (mean composition × ore sell price,
+  `nav_core.py:7963`), `ores` (mean sell of the listed ores, `:7979`) and
+  `density` (weight × median sell, `:7989`) — and bails at `:7953` with
+  `if positives <= 0:`, returning `None` unless the mark carried *salvage*, the
+  one escape hatch (`{"basis": "salvage"}`). An observation has ore, band and
+  quality: no `positives`, no `rocks`, no `density`, no salvage. Every row
+  falls through unscored, so **every value chip in §5, §6.1 and §13.1 renders
+  blank.** What surface zones need is a **fifth basis** — band-weighted ×
+  composition × price — with its own score definition, its own terciles and its
+  own honesty label. Budget it as a feature, not a parameter.
 
 What they gain instead: **`nearest_qt` / `nearest_qt_id` / `nearest_qt_dist_m`**
-on the zone row, computed from the zone center by the same helper that already
-stamps them on hotspot rows (§8.1). ATLAS renders a **Set destination** button
+on the zone row, computed from the zone center by the **two-step recipe**
+`resource_hotspots` uses — there is no single helper that takes a lat/lon.
+`nearest_qt_marker` (`nav_core.py:1542`) wants an *entity* with
+`.system`/`.container_name`/`.local_km`, and it yields only a name and a
+distance; the **id** comes from a separate name+system linear scan over
+`nav.qt_markers`. So: synthesize a throwaway `Poi` at the zone center via
+`local_km_from_latlon`, call `nearest_qt_marker`, then scan (§8.1). ATLAS
+renders a **Set destination** button
 → `setDestination(z.nearest_qt_id)` (`index.html:6548`) → the navigator takes
 over with live bearing/distance/ETA. This is the existing element-finder
 `JUMP TO (QT)` affordance, applied to an area instead of a node.
@@ -251,10 +375,22 @@ Reuse `renderHaloSurveyCard` (`index.html:17001`) with a surface branch:
   value chip, or `THIN — 3 sightings, nothing above band 2`.
 - **Stat tiles** — Sightings · Surveyors · Distinct ores · Value · Area ⌀ ·
   Freshest (age). (Belt tiles Rock hits / Scans / Field ⌀ are swapped out.)
-- **Ore composition chart** — reuse `surveyOreChart`, fed from the same
-  Dirichlet-shrunk composition the forecast already computes
-  (`_shrunk_composition`, `nav_core.py:1824`) rather than raw counts, so three
-  lucky Quantainium hits don't render as "80% Quantainium".
+- **Ore composition chart** — reuse `surveyOreChart`, but mind its contract, or
+  it renders nothing or nonsense:
+  - It **gates on an empty `z.ore_counts`** (`index.html:16940-16945`) and falls
+    back to "No ore reported yet". A composition dict alone is not enough — the
+    surface row must carry a parallel `ore_counts`.
+  - It prints composition values **literally**, with no ×100
+    (`index.html:16952`). That is correct and matches the server, which already
+    treats `scan_comp` as being in **percent** units (`nav_core.py:7971` divides
+    by 100 on the way in). So the conversion belongs on the producing side:
+    emit percent, not the 0..1 probabilities `_shrunk_composition` returns.
+    Feeding it 0..1 ships bars labeled "0.42%".
+  - **Which statistic**: use the Wilson lower bound for the zone's *likelihood*
+    numbers, per §8.1 — one statistical model shared with the hotspot grid, and
+    it already solves "three lucky Quantainium hits read as 80%".
+    `_shrunk_composition` (`nav_core.py:1824`) stays where it was written for,
+    the forecast's own-cell-plus-ring smoothing. One composition, one model.
 - **Band distribution** — a small histogram of scan bands 1–8. This is the
   planetary analogue of the belt's density read, and it is the number that
   actually decides whether to land: band 7–8 hits mean the area is worth the trip.
@@ -262,7 +398,21 @@ Reuse `renderHaloSurveyCard` (`index.html:17001`) with a surface branch:
   biome, newest first, honouring the `mined_at` depletion flag.
 - **Honesty footer** — the sibling of the belt card's "strong evidence, not
   proof": *"Nodes respawn. This is where the org has found ore before, not
-  where ore is now."*
+  where ore is now."* Carry §2.1's sightings-not-rocks caveat here too.
+
+**What the shared card must suppress.** `renderHaloSurveyCard` is built for belt
+zones and will otherwise ship dead or wrong controls on a surface card:
+
+- `surveyRsCard(z)` is rendered **unconditionally** (`index.html:17063`). RS
+  signatures are a mark-scan concept with no observation analogue — suppress it
+  or the surface card carries a permanently empty panel.
+- **Set active** renders for any non-closed zone (`index.html:17054-17055`).
+  There is no capture-time tagging to feed on the surface side (§7), so the
+  button is meaningless here and must be suppressed explicitly.
+- **Plan a drop here** is already gated on `z.marks` (`index.html:17053`), so it
+  self-suppresses *provided the surface row never populates `marks`*. Keep
+  sightings in their own field and this one is free — but it is free by
+  accident, so pin it with a test rather than trusting it.
 
 ## 6. Display: three levels, each honest at its own scale
 
@@ -300,10 +450,14 @@ Three reasons, and they're the whole argument:
    this plate a cell is a rectangle with no resampling, so the #37 ore heatmap
    renders underneath the zones **for free** — the body plate ships with a data
    layer on day one, before anyone draws a single zone.
-2. **Coverage % stays honest.** "We've surveyed 12% of Daymar" must not be
-   inflated by polar stretch. Plate carrée would lie here, and coverage is
-   precisely the ATLAS caption's job (it already prints Keeger arc coverage %).
-   Union overlapping zones before measuring.
+2. **Area measurement stays honest.** Any coverage figure must not be inflated
+   by polar stretch, and plate carrée would lie here. But report **absolute
+   area, not a percentage of the body** — see §8's `body_coverage`: a maximum
+   50 km zone is ~7,840 km² against Daymar's ~1,093,600 km², i.e. **0.72%**, so
+   a percentage reads as a rounding error forever and invites the innumerate
+   "12% of Daymar" the first draft of this doc contained. (§2.3's "5.4% of the
+   plate" is a *circumference* fraction about on-screen legibility — a different
+   quantity that must never be read as an area share.)
 3. It is one formula, no dependency, no build step.
 
 The honest cost: a 50 km circle is a slightly flattened ellipse near the poles.
@@ -335,21 +489,41 @@ work; levels 1 and 3 are layers on maps that already exist.
 - `POST /api/halo/survey/zones` — `ZoneIn` gains `body`, `center_lat`,
   `center_lon`, `radius_m` (validated to §2.3, `body` resolved against
   `nav.containers` with an `is_body` guard). Supplying `body` makes it a surface
-  zone; omitting it is today's behaviour byte-for-byte. **The `nav.belts` gate
-  (`app.py:7167`) widens** to "belt system OR a resolvable body" — it currently
-  400s any system without a belt registry, which is the wrong test for a moon.
-  Creating a surface zone does **not** set it active (there is no capture-time
-  tagging to feed).
+  zone; omitting it leaves the **write** path byte-for-byte unchanged — but not
+  the read paths, see the bullet below. Creating a surface zone does **not** set
+  it active (there is no capture-time tagging to feed).
+  **Do not widen the `nav.belts` gate.** An earlier draft called for widening it
+  to "belt system OR resolvable body"; that is a no-op. `build_belt_registry`
+  returns exactly `{Stanton, Nyx, Pyro}` (`nav_core.py:7372-7385`) and every
+  body in `poi/containers.json` lives in one of the three, so the gate never
+  rejects a body this feature can reach. Keep the `is_body` guard (§9); drop
+  the widen and the test that was written for it.
+- **`db.list_survey_zones` needs a `body IS NULL` filter — before anything
+  else lands.** It is `SELECT * FROM survey_zones WHERE system=?` with no body
+  filter (`db.py:995`), and `_survey_zones_view` (`app.py:7091`) hands every row
+  to `survey_zones_state`, which emits `{kind:"zone", marks:0, status:"empty"}`
+  for anything with no tagged marks. So the moment one `body`-bearing row
+  exists, the ATLAS table, `_survey_valued`'s pool, `/api/halo/survey`,
+  `/export` and `/api/intel/surveying` all start rendering a phantom
+  *"Iron Ridge — empty, 0 marks"* next to the real surface row. This is the
+  first commit of the build, not a follow-up.
 - `GET /api/halo/survey/zones?system=&body=` — rows gain `kind`, `body`,
   `center_lat/lon`, `radius_m`, `nearest_qt*`, and for surface zones the §5
   rollup (`sightings`, `surveyors`, `ores`, `ore_comp`, `bands`, `freshest`,
   `value`). `?body=` filters; omitted returns both kinds.
 - `PATCH /api/halo/survey/zones/{id}` — gains `radius_m` (re-fencing an area
-  you mis-sized is the common edit; moving the center is a new zone).
+  you mis-sized is the common edit; moving the center is a new zone). Must also
+  re-slug from the **stored row** rather than the payload, or the body prefix is
+  lost on the first rename (§2.4). Note that re-fencing **rewrites membership
+  retroactively**, which is fine for the card and not fine for a survey goal's
+  denominator — §9 reconciles the two.
 - `DELETE` — unchanged, and for a surface zone it's genuinely free: membership
   is geometric, so nothing is tagged and nothing needs untagging.
-- `GET /api/halo/survey` + `/export` — surface zones join the `zones` array;
-  `_meta.document` version bumps.
+- `GET /api/halo/survey` + `/export` — surface zones join the `zones` array.
+  `_meta.document` is a **fixed string**, `"sc-nav belt survey export"`
+  (`app.py:7042`), with no schema version to bump — and it becomes a lie once
+  surface zones join. Rename it; the only real version field there is
+  `app_version` (`app.py:7043`).
 - `GET /api/intel/surveying` — **must stop iterating `nav.belts` only**
   (`app.py:12956`); a surface section keyed by body joins the belt sections.
 - `GET /api/halo/survey/zones/{id}/sightings` — the card's timeline. A separate
@@ -359,9 +533,11 @@ work; levels 1 and 3 are layers on maps that already exist.
 
 ## 8. nav_core
 
-- `surface_zone_members(nav, zone) -> list[Observation]` — `scope_index`
-  (`nav_core.py:941`) gives O(1) `(system, body)` → observations, so this is a
-  filter over a small bucket, never a dataset scan.
+- `surface_zone_members(nav, zone) -> list[Observation]` — a thin filter over
+  **`_obs_on_body(nav, system, body, "resource")`** (`nav_core.py:1798`), which
+  already does the O(1) `scope_index` bucket lookup and the lat/lon guard. Add
+  only the great-circle test and the §9 altitude ceiling. Don't reimplement the
+  lookup, and don't drop the category filter (§2).
 - `surface_zone_fit(members, body_radius) -> dict` — the surface sibling of
   `survey_cluster_fit`: counts, `_shrunk_composition` ore mix, band histogram,
   distinct surveyors, freshest/oldest stamps, `mined_at` awareness. **Shares no
@@ -371,13 +547,29 @@ work; levels 1 and 3 are layers on maps that already exist.
 - `surface_zones_state(nav, system, zones)` — the `survey_zones_state` sibling;
   emits rows with `kind:"surface"` that the ATLAS table and card consume
   uniformly, and that `plan_halo_drop` is taught to reject (§4).
-- `body_coverage(zones, body_radius)` — union of zone caps ÷ body area, for the
-  ATLAS caption. Union, not sum (§2).
-- `derive_survey_stats` — **does NOT work unchanged** (§14.2). It reads
-  `m["zone_id"]`, `m["positive"]`, `m["scan"]` and a numeric `m["created"]`
-  (`nav_core.py:8337-8360`) — an observation has none of those, and its
-  `observed_at` is an ISO string. Needs an adapter, or §11's "credit is free"
-  is false.
+- `body_coverage(zones, body_radius)` — **absolute mapped area, not a share of
+  the body** (§6.2): `3 zones · 24 km²`. Union, never sum (§2.2) — but don't
+  derive the union analytically, because N overlapping spherical caps need
+  inclusion–exclusion. Rasterize onto the existing `grid_cell` lattice and count
+  distinct cells; that reuses the projection §6.2 already commits to and is
+  exact enough for a caption.
+- `derive_survey_stats` — **does NOT work unchanged, and this is the second of
+  the build's two big items** (§1). It buckets on `m["zone_id"]` — a tag
+  surface membership never sets — and sessionizes on a **numeric**
+  `m["created"]`, while an observation carries an ISO-string `observed_at`; it
+  also reads `m["positive"]` and `m["scan"]` (`nav_core.py:8337-8360`). The
+  consumer then does `activity.get(z["zone_id"])` (`app.py:12979`), so without
+  an adapter every surface zone renders `surveyors: 0, latest: None` and §11's
+  credit claim is simply false.
+  Cheapest honest fix: an adapter yielding mark-shaped dicts from a zone's
+  members (`created` = `observed_at` parsed to epoch, `zone_id` = the zone,
+  `positive` = True). **It must de-duplicate by observation id before tallying
+  org totals**, because overlapping zones emit the same node more than once
+  (§2.2) — per-zone rollups double-count by design, org totals must not.
+  **Open decision this doc must make before building:** do observation sessions
+  pool with mark sessions in `totals`? They measure different activities
+  (surveying a belt vs mining a moon), and pooling makes the org's "survey
+  sessions" number mean two things at once.
 
 ### 8.1 A named zone is a hotspot with a name — reuse the statistics
 
@@ -407,15 +599,25 @@ verbatim. Two reasons this is not just laziness:
 
 ### 8.2 Caching
 
-`survey_state` is `nav.version`-cached, but #36.1 zones are deliberately
-**not** (they need a SQLite read per request, `app.py:7090`). A surface zone is
-heavier: membership scans its body's observation bucket per zone per read, and
-the body plate fetches zones + heat cells together. `scope_index`
-(`nav_core.py:941`) makes each scan O(bucket) rather than O(dataset), but the
-rollup should still be memoized on `(nav.version, zone row mtime)` — same
-discipline as `survey_state`, keyed to include the zones' own table state.
-No new rate-limit bucket: creation is a cheap write, and the reads are GETs
-already covered by the existing gate.
+**Memoization is required here, not a nicety.** `survey_state` is
+`nav.version`-cached, but #36.1 zones deliberately are **not** (they need a
+SQLite read per request, `app.py:7090`). A surface zone is heavier: membership
+scans its body's observation bucket per zone per read, and the body plate
+fetches zones + heat cells together.
+
+`scope_index` makes each scan O(bucket) rather than O(dataset), but its cache
+key is `(nav.version, len(nav.pois), len(nav.observations))` (`nav_core.py:947`)
+— and **every capture bumps `nav.version`**, so during exactly the activity this
+feature is designed for, the index rebuilds between reads. Meanwhile
+`_survey_valued` has **nine call sites** (`app.py:6653`, `:6831`, `:6846`,
+`:6902`, `:7004`, `:7142`, `:7423`, `:7457`, `:12977`), and the
+`/api/intel/surveying` one executes once per belt system — three times per
+request today. Add §11.1's per-fix chip and this lands squarely on the hot path.
+
+So: version-keyed memoization in the `survey_state` style, extended to include
+the zones' own table state, plus §2's category filter to keep each member set
+small. No new rate-limit bucket: creation is a cheap write and the reads are
+GETs already covered by the existing gate.
 
 ## 9. Edge cases & decisions
 
@@ -453,7 +655,7 @@ already covered by the existing gate.
   the API, not just the UI.
 - **Retroactive membership is a feature, and also a surprise.** A new zone is
   born with history. The create confirmation states the count it inherited
-  (§3.3) so nobody thinks the number is a bug.
+  (§3, step 3) so nobody thinks the number is a bug.
 - **No private observations.** Unlike custom POIs (which carry `private`, and
   which `survey_marks` filters on), observations have no private flag — they are
   already the org's shared dataset. So passive membership (§11) exposes nothing
@@ -467,22 +669,59 @@ already covered by the existing gate.
   fact, "ore is here right now" never was. Per-**area**: the `survey_depletion`
   board is already keyed on zone slug and self-expires — see §13.2, which the
   first draft of this doc missed.
-- **Admin reset.** `POST /api/admin/survey/clear` wipes marks + zones per
-  system; surface zones join, and since membership is geometric, clearing
-  observations separately simply empties the cards without orphaning anything.
+- **Admin reset is a REGRESSION to prevent, not a behaviour to inherit.**
+  `POST /api/admin/survey/clear` is gated on `nav.belts` (`app.py:7061`) and
+  calls `db.clear_survey_zones(system)`, which is
+  `DELETE FROM survey_zones WHERE system=?` (`db.py:1052`) — **every zone in the
+  system, no kind filter**. So an admin resetting the *belt* after a patch
+  silently destroys every named moon zone in Stanton, which is unrelated work by
+  a different set of people. The endpoint must scope to deep-space zones, or
+  take an explicit kind, before surface zones exist. (Clearing *observations*
+  separately remains harmless: membership is geometric, so the cards just empty
+  and nothing is orphaned.)
+- **Re-fencing vs a survey goal's denominator.** PATCHing `radius_m` rewrites
+  membership retroactively — correct for the card, and quietly corrosive for a
+  §11.2 survey goal, whose progress denominator then moves mid-flight. Pick one
+  and state it: either the goal snapshots the zone's geometry at creation, or
+  goal progress is explicitly defined as "against the zone as it is now". Do not
+  leave it to whichever reader gets there first.
+- **Archived (`closed`) zones still contain observations geometrically.** State
+  the answers rather than discovering them: does the §11.1 chip fire inside one?
+  Does capture say "counted toward"? Does it count in coverage? Recommendation:
+  archived means *historical* — it keeps its card and its history, stops firing
+  the chip and the capture line, and drops out of coverage.
+- **Shard.** Rollups pool across shards while the navigator has a `shardOnly`
+  toggle. That is deliberate — a zone is about place, not instance — and it is
+  exactly the kind of deliberate asymmetry that reads as a bug unless the card
+  says so.
+- **`DELETE /api/me` de-identifies observations**, so a zone's surveyor count
+  drops without anything having been deleted. Consistent with the belt side;
+  worth stating so it isn't chased as data loss.
+- **Two zones with the same center** get no dedup and no warning — §12.3 warns
+  on *overlap*, and identical centers are the degenerate case it doesn't
+  special-case.
 
 ## 10. Test plan
 
 - **nav_core**: membership at the boundary (inside/outside/exactly r), NULL-lat
-  guard, antimeridian and near-pole zones, overlap double-counting, coverage
-  union ≠ sum, shrunk composition vs raw counts, band histogram, empty zone.
+  guard, the altitude ceiling (an orbital fix with a valid ground track is NOT a
+  member, §9), the `resource`-only category filter (a `wildlife` row on the same
+  body is not a member, §2), antimeridian and near-pole zones, overlap
+  double-counting, coverage as absolute area with union ≠ sum, band histogram,
+  empty zone.
 - **app**: create on a body → inherits existing observations with no backfill;
-  create without `body` → unchanged deep-space path; the belt gate widens
-  without letting a station through; slug prefixing prevents the Daymar/Yela
-  collision; a surface slug is rejected by the drop planner with the tailored
-  400; surface zones tier in their own pool (a belt `$$$` is unaffected by
-  adding a rich moon zone); `nearest_qt_id` resolves and `Set destination`
-  round-trips; Intel Surveying includes a body with no belt.
+  create without `body` → unchanged deep-space path; **a surface zone never
+  appears as a phantom "empty, 0 marks" row** in the ATLAS list, `/api/halo/survey`,
+  `/export` or Intel Surveying (the `list_survey_zones` filter, §7); the
+  `is_body` guard rejects a station *and* a star; slug prefixing prevents the
+  Daymar/Yela collision **and survives a rename** (§2.4); a surface slug is
+  rejected by the drop planner with a category-appropriate 400, not "no survey
+  marks yet"; surface zones score on their own basis and tier in their own pool
+  (a belt `$$$` is unaffected by adding a rich moon zone, and a surface zone's
+  chip is **not blank**); `nearest_qt_id` resolves and `Set destination`
+  round-trips; the stats adapter credits a passive contributor **once**, not
+  once per overlapping zone; `POST /api/admin/survey/clear` on a belt system
+  leaves surface zones intact; Intel Surveying includes a body with no belt.
 - **browser** (headless preview harness): the three map levels, the drill-down
   and the way back, a zone polygon near a pole, the detail card's band
   histogram, promote-a-hotspot.
@@ -502,12 +741,20 @@ start" failure mode the belt side lives with (#36.1 §3 had to design the active
 zone *specifically* so marks couldn't be dropped untagged; surface zones can't
 have that bug because there is nothing to forget).
 
-**Credit is free too.** `contributors` derives from the members' `owner_handle`
-on the observations, exactly as the belt card derives it from mark owners, so a
-passive contributor is named on the zone card and ranked in Org Intel Surveying
-(`derive_survey_stats`) without ever opening Prospector.
+**Credit on the zone card is free.** `contributors` derives from the members'
+`owner_handle` on the observations, exactly as the belt card derives it from
+mark owners, so a passive contributor is named on the card without ever opening
+Prospector.
 
-Three things are *not* free, and they are what the scenario actually asks for.
+**Credit in Org Intel Surveying is NOT free** — this was the first draft's
+worst claim, because it reads as a payoff and is actually a build item.
+`derive_survey_stats` buckets on a `zone_id` tag that geometric membership never
+sets and sessionizes on a numeric `created` that an observation doesn't have, so
+surface zones render `surveyors: 0, latest: None` until the §8 adapter exists.
+The adapter is cheap; assuming it isn't needed is what costs.
+
+So four things are *not* free, and they are what the scenario actually asks
+for: the adapter above, plus the three below.
 
 ### 11.1 Feedback — otherwise the loop is invisible
 
@@ -515,8 +762,17 @@ Passive contribution works silently, which also means nobody knows it happened.
 Two small surfaces fix that, both siblings of things that exist:
 
 - **Navigator chip**: `📍 Iron Ridge · 48 sightings` when your fix is inside a
-  zone — the surface twin of the belt `haloWhereChip`, read off the same
-  membership predicate.
+  zone — the surface twin of the belt `haloWhereChip`. **Not a client-side
+  reuse, though**: `haloWhereChip` returns `""` as soon as `state.container` is
+  set (`index.html:15935`), i.e. it is deep-space-only by construction, and it
+  can live in JS at all only because belt geometry is a small static doc
+  preloaded client-side. The surface predicate is server-side Python, and there
+  is no JS great-circle (`projectMeters`, `index.html:6205`, is a
+  player-relative tangent projection, not a distance primitive). Two options,
+  pick one and budget it: ship a zones-for-this-body payload plus a JS
+  haversine, or add a `surface_zone` field to the nav-state push — the latter
+  runs the predicate **server-side on every position sample for every online
+  member**, which is the §8.2 performance question in its sharpest form.
 - **Capture result line**: `counted toward Iron Ridge` on the node-capture
   confirmation, next to the existing ore value chip.
 
@@ -524,6 +780,12 @@ That is the whole awareness mechanism. Deliberately not a prompt, not a modal,
 not an opt-in — the point is that it costs the miner nothing.
 
 ### 11.2 Priority zones belong in Goals, not on the zone row
+
+> **Sequencing: this is release two, not slice one.** A new goal kind plus a
+> spec column, a progress deriver, announce and board placement is a release of
+> its own, and it is worth building only once real zones exist to point it at.
+> The capability stays a locked requirement — it is the user's scenario — it
+> just isn't the first commit.
 
 "An org leader declares a priority" is, in this codebase, **a goal**. The Goals
 app already owns priority, deadline, Discord announce + re-post, progress bars,
@@ -575,6 +837,10 @@ right framing (*"where the org has found ore before, not where ore is now"*);
 passive contribution makes it more important, not less.
 
 ### 11.5 Milestones
+
+> **Defer this one.** It runs the membership predicate on the capture hot path,
+> its dedup is in-process only so it double-fires across workers, and its
+> natural gate is a §11.2 survey goal's target — which is release two anyway.
 
 `_survey_capture_milestones` (`app.py:3735`) fires from `_capture_poi` (`app.py:3681`) — the
 POI path. Surface nodes arrive via `_capture_observation` (`app.py:3771`), so
@@ -655,7 +921,7 @@ the row.
 ### 12.5 Hotspot cells inside a named zone should say so
 
 `resource_hotspots` feeds both the element finder and the promote-a-hotspot
-path (§3.6). A cell already inside a named zone should render as
+path (§3, step 6). A cell already inside a named zone should render as
 *"in Iron Ridge"* rather than offering to name it again — otherwise the promote
 affordance manufactures the §12.3 clutter it's meant to avoid.
 
@@ -742,8 +1008,9 @@ automatically.**
 `/api/stats` already builds `by_body`/`top_bodies` = "most-mapped by us"
 (`app.py:11293`). §8's `body_coverage` shipped into that table turns *"where
 have we been"* into *"where should we survey next"*:
-`Daymar · 412 records · 3 zones · 12% covered`. One dict merge on an
-aggregation that already scans every observation. (Org Intel Surveying answers
+`Daymar · 412 records · 3 zones · 24 km² mapped` — absolute area, for the
+reason §6.2 gives (a percentage of a body is a rounding error at this scale).
+One dict merge on an aggregation that already scans every observation. (Org Intel Surveying answers
 *who* surveyed; this answers *what is* surveyed.)
 
 ### 13.6 Danger board ↔ zone — the valuable direction is inbound
@@ -767,7 +1034,7 @@ exactly-on-the-gate is necessary but not sufficient — pass a `dedup_key` too
 
 - **Surface zones as `hazard_volumes` / snare-detour input.** Those volumes are
   built in the **non-rotating** global frame at a `t_ref` — the identical
-  objection §1.3 raises against the belt fitter, and fatal for the same reason.
+  objection §1 (item 3) raises against the belt fitter, and fatal for the same reason.
   Independently, a 50 km cap on a crust intersects no quantum leg;
   `body_volumes`/`chord_obstructed` already model the body as the obstacle.
 - **Zone as a marketplace `pickup_poi` or inventory `location`.** Both are free
@@ -796,193 +1063,142 @@ exactly-on-the-gate is necessary but not sufficient — pass a `dedup_key` too
   number that looks like §5's composition and answers a different question.
   One composition chart, not two.
 
-## 14. Review pass 3 — verified corrections (read this before building)
+## 14. Audit trail — what the adversarial passes found
 
-An adversarial pass checked every claim in §1–§13 against the code. The
-membership predicate, the Lambert-plate/heat-cell claim, the belt-fitter
-critique in §1 and the §2.3 body-radius table all hold. These do not.
+**Everything below is already folded into §1–§13.** This section is kept so the
+mistakes can't be re-introduced by someone who reasons their way back to the
+original, more convenient claim — each entry says what was wrong, where the
+correction now lives, and what the code actually does. It is not a pre-read.
 
-### 14.1 The value tier does not exist for surface zones — it must be designed
+**Pass 3** checked every claim in the first draft against the code. **Pass 4**
+re-checked pass 3 and found three of *its* findings imprecise — marked
+⚠ **pass-3 error** below, because a wrong correction is worse than the original
+mistake: it carries the authority of a review.
 
-§4 says surface zones "tier in their own per-system surface pool" as though
-splitting the pool were the work. It isn't.
-`_survey_value_from_index` (`nav_core.py:7950`) **returns `None` when
-`positive <= 0`**, and scores `SURVEY_DENSITY_W[density] × price` where
-`density` comes from `survey_cluster_fit`'s rocks ladder. An observation has
-ore, band and quality — no `positive`, no `rocks`, no `density`. Unscoreable
-rows pass through with no `value` key, so **every value chip in §5, §6.1 and
-§13.1 renders blank.**
+| # | The first draft claimed | Verdict | Now corrected in |
+|---|---|---|---|
+| 14.1 | surface zones just need their own tercile pool | there is no score to tier at all | §4 |
+| 14.2 | "credit is free" in Org Intel Surveying | needs an adapter | §8, §11 |
+| 14.3 | omitting `body` is byte-for-byte unchanged | true of writes, false of every read | §7 |
+| 14.4 | a body prefix fixes slug collisions | PATCH drops it; truncation eats it | §2.4 |
+| 14.5 | add a tailored 400 to the drop planner | the reject exists and misdiagnoses | §4 |
+| 14.6 | one helper stamps `nearest_qt_id` | it's a two-step recipe | §4, §8.1 |
+| 14.7 | reuse the belt card | it needs explicit suppression | §5 |
+| 14.8 | "12% of Daymar" | 0.72% is the ceiling; report km² | §6.2, §8, §13.5 |
+| 14.9 | reuse `haloWhereChip`'s predicate | it's deep-space-only, and server-side here | §11.1 |
+| 14.10 | membership is just a great-circle test | needs a category filter; helper exists | §2, §8 |
+| 14.11 | caching "should" be added | required; `nav.version` churns under mining | §8.2 |
+| 14.12 | §9 covered the edge cases | six missing, one a live regression | §9 |
+| 14.13 | (sequencing not considered) | four cuts and two deferrals | §7, §11.2, §11.5 |
 
-The real work is a **new scoring basis**: band-weighted × composition × price,
-with its own definition of a score, its own terciles, and its own honesty label
-(the existing bases are `ores` / `density` / `scanned` / `salvage`; this is a
-fifth). Splitting the pool then matters for the reason §4 already gives. Budget
-this as a first-class item, not a parameter.
+### 14.1 The value tier — the detail that makes it a feature, not a flag
 
-### 14.2 "Credit is free" is false as written — `derive_survey_stats` needs an adapter
+`_survey_value_from_index` (`nav_core.py:7950`) computes
+`SURVEY_DENSITY_W[density] × price` over three bases in priority order —
+`scanned` (`:7963`), `ores` (`:7979`), `density` (`:7989`) — and bails at
+`:7953` on `if positives <= 0:`.
 
-§11's payoff claim ("a passive contributor is ranked in Org Intel Surveying
-without ever opening Prospector") does not happen. `derive_survey_stats`
-(`nav_core.py:8324`) buckets by `m["zone_id"]` — a tag surface membership never
-sets — and sessionizes on a **numeric** `m["created"]`, while an observation
-carries an ISO-string `observed_at`. The consumer then does
-`activity.get(z["zone_id"])` (`app.py:12979`), so every surface zone renders
-`surveyors: 0, latest: None`.
+⚠ **pass-3 error:** pass 3 wrote that it "returns `None` when `positive <= 0`".
+The local is `positives`, and the bail is **not** unconditional: a *salvage*
+signal still returns a dict (`{"basis": "salvage", "salvage": True}`). The
+conclusion survives intact — an observation has no `positives`, no `rocks`, no
+`density` **and no salvage**, so it can't even take the escape hatch — but the
+precise shape matters to whoever writes the fifth basis.
 
-Cheapest honest fix: an adapter that yields mark-shaped dicts from a zone's
-members (`created` = `observed_at` parsed to epoch, `zone_id` = the zone,
-`positive` = True). Open decision the doc must make: **do observation sessions
-pool with mark sessions in `totals`?** They measure different activities
-(surveying a belt vs mining a moon); pooling them makes the org's "survey
-sessions" number mean two things.
+### 14.2 The stats adapter
 
-### 14.3 Surface zones will appear as phantom empty deep-space zones
+Detail in §8. The de-dup requirement is the non-obvious half: overlapping zones
+emit the same observation more than once (§2.2), so per-zone rollups
+double-count by design and org totals must not.
 
-`_survey_zones_view` (`app.py:7091`) calls `db.list_survey_zones(system)` —
-`SELECT * FROM survey_zones WHERE system=?`, **no body filter** (`db.py:987`) —
-and hands every row to `survey_zones_state`, which emits
-`{kind:"zone", marks:0, status:"empty"}` for anything with no tagged marks.
+### 14.3 Phantom empty zones
 
-So the moment a `body`-bearing row exists, the ATLAS table, `_survey_valued`'s
-pool, `/api/halo/survey`, `/export` and `/api/intel/surveying` all start showing
-*"Iron Ridge — empty, 0 marks"* beside the real surface row. §2.4's "omitting
-`body` is today's behaviour byte-for-byte" is true of the **write** path and
-false of every **read** path. `list_survey_zones` needs a `body IS NULL` filter
-(or a `kind` argument) before anything else lands.
+`db.list_survey_zones` is `SELECT * FROM survey_zones WHERE system=?` with no
+body filter (`db.py:995`). Note the table has **no `body` column at all** today
+(`db.py:522-532`) — §2.4 adds it — so this filter and that column are one
+commit, and it must be the first.
 
-### 14.4 The slug prefix dies on the first rename
+### 14.4 The slug prefix
 
-`PATCH` re-slugs with `_zone_slug(body.name)` (`app.py:7195`) and never reads
-the zone's `body`; `ZonePatchIn` doesn't carry one. So renaming "Iron Ridge" →
-"Iron Ridge North" rewrites the slug to `iron-ridge-north`, **dropping the
-prefix** — the collision the prefix prevents returns, and the zone's pin key
-silently changes. Fix: re-slug from the stored row, not from the payload.
+Both traps in §2.4. Pass 4 adds a third, cosmetic but real: these handlers
+already bind the request payload to a parameter named `body` (`app.py:7194` is
+`body.name`), which is about to collide with the celestial `body`. Named in
+§2.4.
 
-Also `_zone_slug` truncates at 40 chars (`app.py:7088`) while `ZoneIn.name`
-allows 48; a `microtech-` prefix eats 10 of those 40, so long names on one body
-truncate into each other and 409 with a message that blames the *name*.
+### 14.5 The drop-planner reject
 
-### 14.5 The drop-planner reject already exists and says the wrong thing
+⚠ **pass-3 error:** pass 3 put the "no survey marks yet" message in
+`_halo_goal_system` at `app.py:6845`. It is in `_halo_goal`, at
+`app.py:6851-6852`, guarded by `if not zone.get("xyz"):`. The all-systems
+no-body match is real and is at `app.py:6757-6758`; the ambiguity 400 is at
+`app.py:6759-6763`. Corrected in §4.
 
-§4 asks for a "tailored 400" as if it were a new guard. In fact
-`_halo_goal_system` (`app.py:6751`) matches `pocket_key` against
-`db.list_survey_zones()` across **all systems with no body filter** and happily
-returns the surface zone's system; the request then dies at `app.py:6845` with
-*"that zone has no survey marks yet — drop one with ⛏ first."* Two existing
-sites need the surface branch, and the cross-system ambiguity 400 at
-`app.py:6758` now also fires on surface/deep-space slug twins.
+### 14.6 `nearest_qt_id`
 
-### 14.6 `nearest_qt_id` is not one helper
+Recipe in §4 and §8.1. One caveat §8.1 should not oversell: `resource_hotspots`
+passes `ROTATION_EPOCH` at `nav_core.py:2592` even though a resolved `t_ref` is
+in scope at `:2582`. Copy the recipe, but don't cite that line as evidence the
+rotating frame is handled carefully — and consider whether the surface path
+wants the resolved `t_ref` instead.
 
-§4's "the same helper that already stamps them" is wrong: `Observation` carries
-only `nearest_qt` (a name) and `nearest_qt_dist_m`; `nearest_qt_marker`
-(`nav_core.py:1542`) takes an **object** with `.system/.container_name/
-.local_km`, not a lat/lon. `resource_hotspots` is the only producer of
-`nearest_qt_id` and it takes two steps — synthesize a `Poi` via
-`local_km_from_latlon`, then a **name+system linear scan** over
-`nav.qt_markers` (`nav_core.py:2586-2596`). Follow that recipe (§8.1), and note
-the scan is ambiguous when two markers in a system share a name.
+### 14.7 Card suppression
 
-### 14.7 The detail card needs more suppression than §5 admits
+⚠ **pass-3 error, two of them.** Pass 3 said the chart "needs ×100". It does
+not: it prints composition literally (`index.html:16952`) and the **server
+already stores `scan_comp` in percent units** (`nav_core.py:7971` divides by
+100 on the way in), so the two agree. The conversion belongs on the producing
+side, because `_shrunk_composition` returns 0..1 — feed percent. Pass 3 also
+said **Plan a drop here** and **Set active** are unconditional; they aren't.
+The drop button is gated on `z.marks` (`index.html:17053`) and self-suppresses
+if the surface row never populates `marks`; **Set active** is gated only on
+`!z.closed` (`:17054`) and genuinely does need suppressing. `surveyRsCard` is
+unconditional as stated (`:17063`). All corrected in §5.
 
-- `surveyOreChart` **gates on `z.ore_counts`** and prints `comp` values as
-  literal percents (`index.html:16930-16943`), while `_shrunk_composition`
-  returns probabilities in 0..1. Feed it a comp dict alone → "No ore reported
-  yet"; feed it raw → bars labeled "0.42%". Needs ×100 **and** a parallel
-  `ore_counts`.
-- `renderHaloSurveyCard` calls `surveyRsCard(z)` unconditionally
-  (`index.html:17054`). RS signatures are a mark-scan concept with no
-  observation analogue — suppress it or the surface card ships a dead panel.
-- The same function renders **Plan a drop here** and **Set active**, both
-  meaningless here. Suppress explicitly.
+### 14.8 Coverage
 
-### 14.8 Coverage: report area, not a percentage of the body
+§6.2, §8 and §13.5. A maximum 50 km zone is a spherical cap of ~7,840 km²
+against Daymar's ~1,093,600 km² — **0.72%**; "12%" would need ~17
+non-overlapping maximum zones.
 
-§6.2's "We've surveyed 12% of Daymar" is unreachable. A maximum 50 km zone is a
-spherical cap of ~7,840 km² against Daymar's ~1,093,600 km² — **0.72%**. Twelve
-percent would need ~17 non-overlapping maximum zones. (§2.3's "5.4% of the
-plate" is a *circumference* fraction describing on-screen legibility; it is not
-an area fraction and the two must not be read together.)
+### 14.9 The navigator chip
 
-So drop the percentage. Report **absolute mapped area** — `3 zones · 24 km²` —
-which is honest at any scale, and sidesteps §6.2's other trap: the analytic
-union of N overlapping spherical caps needs inclusion–exclusion. If a union is
-ever wanted, rasterize onto the existing `grid_cell` lattice and count distinct
-cells; don't derive it.
+§11.1. `haloWhereChip` returns `""` on `state.container` **or** a missing
+position (`index.html:15935`), with four further early exits below it — it is
+comprehensively deep-space-only, not incidentally so.
 
-### 14.9 §11.1's chip cannot be computed client-side
+### 14.10 Scoping the member set
 
-`haloWhereChip` (`index.html:15925`) **returns `""` as soon as
-`state.container` is set** — it is a deep-space-only chip, and it works in JS
-only because belt geometry is a small static doc preloaded client-side. The
-surface predicate is server-side Python; there is no JS great-circle
-(`projectMeters`, `index.html:6205`, is a player-relative tangent projection,
-not a distance primitive).
+§2 and §8. `_obs_on_body` (`nav_core.py:1798`) already defaults to
+`category="resource"` and guards both coordinates, so the correction mostly
+consists of *not* writing new code.
 
-Pick one and budget it: ship a zones-for-this-body payload plus a JS haversine,
-or add a `surface_zone` field to the nav-state push — the latter meaning the
-predicate runs **server-side on every position sample for every online
-member**, which is the §14.11 performance question.
+### 14.11 Caching
 
-### 14.10 Two scoping questions §2 never answers
+§8.2. Pass 4 sharpens two numbers: `scope_index`'s key is the composite
+`(nav.version, len(nav.pois), len(nav.observations))` (`nav_core.py:947`), not
+`nav.version` alone — the churn argument is unaffected, since every capture
+moves all three. And `_survey_valued` has **nine call sites**, of which
+`/api/intel/surveying` is one, executed once per belt system (three times per
+request today); pass 3 read those three executions as three call sites.
 
-- **Which categories count?** `observations` also holds `wildlife` and
-  `harvestable`. Read literally, §2 sweeps fauna into a mining-area rollup.
-  Filter to `resource` (and decide `harvestable` deliberately).
-- **`_obs_on_body(nav, system, body, category)`** (`nav_core.py:1798`) already
-  does the bucket lookup §8's `surface_zone_members` invents, lat/lon guard
-  included. Use it.
+### 14.12 Edge cases
 
-### 14.11 Caching is required, not optional
-
-§8.2 understates this. `scope_index` is keyed on `nav.version`, which **every
-capture bumps**, so during active mining the index rebuilds between reads.
-`_survey_valued` is called from `/api/halo/survey/zones`, `/api/halo/survey`,
-`/export`, `plan_halo_drop`, and **three times** in `/api/intel/surveying`. Add
-§11.1's per-fix chip and this is squarely on the hot path. Version-keyed
-memoization like `survey_state`, plus §14.10's category filter to keep the
-member set small.
-
-### 14.12 Edge cases still missing from §9
-
-1. **`POST /api/admin/survey/clear` would silently wipe every named moon zone.**
-   It's gated on `nav.belts` and calls `db.clear_survey_zones(system)`
-   (`db.py:1044`), which deletes **all** zones in the system. An admin resetting
-   the *belt* after a patch destroys unrelated surface work. This is a
-   regression the build must prevent, not merely note.
-2. **PATCHing `radius_m` rewrites membership retroactively** — and therefore
-   rewrites a §11.3 survey goal's denominator mid-flight. §9 blesses re-fencing;
-   §11.3 assumes a stable member set. Unreconciled.
-3. **Archived zones**: a `closed` zone still geometrically contains
-   observations. Does the chip fire? Does capture say "counted toward"? Does it
-   count in coverage? Unstated.
-4. **Shard**: rollups pool across shards silently, while the navigator has a
-   `shardOnly` toggle. Deliberate (a zone is about place, not instance) — say so.
-5. **`DELETE /api/me` de-identifies observations**, so a zone's surveyor count
-   silently drops. Consistent with the belt side; worth stating.
-6. **Two zones with the same center** get no dedup and no warning (§12.3 warns
-   on overlap; identical centers are the degenerate case).
+All six are now bullets in §9. The first is the one that matters: `POST
+/api/admin/survey/clear` → `db.clear_survey_zones` is
+`DELETE FROM survey_zones WHERE system=?` (`db.py:1052`), gated on `nav.belts`
+(`app.py:7061`) — a belt reset would take every named moon zone in the system
+with it. That is a regression to prevent, not a note.
 
 ### 14.13 Cuts and sequencing
 
-- **`_meta.document` has no version to bump** (§7): it's a fixed string,
-  `"sc-nav belt survey export"` (`app.py:7041`) — which also becomes a lie once
-  surface zones join. Rename it; the only real version field is `app_version`.
-- **The §7 belt-gate widening is a no-op — cut it.** `build_belt_registry`
-  returns exactly `{Stanton, Nyx, Pyro}`, and every body in
-  `poi/containers.json` lives in one of those three. Keep the body guard
-  (§9), drop the widen and its test.
-- **§11.5's milestone hook: defer.** It runs the predicate on the capture hot
-  path, its dedup is in-process only so it double-fires across workers, and it
-  depends on §11.2's target anyway.
-- **Sequence §11.2's `kind="survey"` goal as a second release.** A new goal
-  kind + spec column + progress deriver + announce + board placement is a
-  release of its own, and it is worth building only once real zones exist. The
-  capability stays a locked requirement; it just isn't slice one.
-- **Keep §6.1's body badge**, against the reviewer's recommendation to cut it.
-  Its job isn't "a way to reach level 2" (the ATLAS row does that) — it is the
-  user's explicit ask that the system map keep showing, at a glance, where the
-  org has surveyed. It's a ring and a count.
+Folded into the sections they cut: the belt-gate widen (§7 — `build_belt_registry`
+returns exactly `{Stanton, Nyx, Pyro}`, `nav_core.py:7372-7385`, and every body
+lives in one of them, so the widen is a no-op), `_meta.document` (§7), the
+milestone hook (§11.5, deferred), and the `kind="survey"` goal (§11.2, release
+two). **Kept against the reviewer's advice:** §6.1's body badge. Its job isn't
+"a way to reach level 2" — the ATLAS row does that — it is the user's explicit
+ask that the system map keep showing, at a glance, where the org has surveyed.
+It's a ring and a count.
 
 ## 15. Not in scope (fast-follows)
 
@@ -990,7 +1206,7 @@ member set small.
   the area you want isn't a circle, make a second zone rather than adding
   shapes. (A *shape* limit, not a visit limit — see §2.1.) Revisit only if real
   use proves otherwise.
-- **Auto-suggesting a zone** from a dense cell cluster (the promote path in §3.6
+- **Auto-suggesting a zone** from a dense cell cluster (the promote path in §3, step 6
   is the manual version; automatic naming can wait for evidence it's wanted).
 - **Value-aware mining circuits** on the surface (that's #37 §7.3, and it needs
   this data to exist first).
