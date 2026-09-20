@@ -17511,14 +17511,40 @@ const ZONE_NAME_HINT =
 const COMPASS_8 = ["North", "Northeast", "East", "Southeast",
                    "South", "Southwest", "West", "Northwest"];
 
+// Not every POI is a landmark. With the starmap catalog on, Daymar alone
+// carries 129 POIs of which 54 are "Sand Cave #001"…"#054" — so a plain
+// nearest-POI rule cheerfully suggests "Sand Cave #023 North", which is worse
+// than suggesting nothing. A landmark has to be somewhere a pilot would say
+// out loud: "Kudre Ore", "Shubin Mining Facility SCD-1", "Bountiful Harvest
+// Hydroponics".
+//
+// Two rules do the work, and the second is the robust one:
+//   * skip types that are terrain or scenery rather than places;
+//   * skip MASS-PRODUCED names — anything ending "#<number>" is one instance
+//     of a stamped-out set ("Derelict Outpost #004"), never a place people
+//     navigate by. That rule needs no per-type curation and survives a feed
+//     that adds new kinds of clutter.
+const ZONE_LANDMARK_SKIP_TYPES = new Set([
+  "Cave", "Wreck", "Animal Area", "Event", "Druglab", "Racetrack",
+]);
+const MASS_PRODUCED_RE = /#\s*\d+\s*(\[[^\]]*\])?\s*$/;
+
+function isZoneLandmark(r) {
+  if (r.kind !== "poi") return false;
+  if (ZONE_LANDMARK_SKIP_TYPES.has(r.type)) return false;
+  if (MASS_PRODUCED_RE.test(r.name || "")) return false;
+  return true;
+}
+
 // Nearest landmark on THIS body, within reach of the area being named.
 // allRows is already loaded for the NEARBY panel, so this costs no request.
 function nearestBodyLandmark(system, body, lat, lon, R, maxM) {
   if (!allRows || !R) return null;
   let best = null;
   for (const r of allRows) {
-    if (r.kind !== "poi" || r.container !== body || r.system !== system) continue;
+    if (r.container !== body || r.system !== system) continue;
     if (r.latitude == null || r.longitude == null) continue;
+    if (!isZoneLandmark(r)) continue;
     const gc = greatCircle(lat, lon, r.latitude, r.longitude, R);
     if (gc.dist <= maxM && (!best || gc.dist < best.dist)) {
       best = { name: r.name, dist: gc.dist, bearing: gc.bearing };

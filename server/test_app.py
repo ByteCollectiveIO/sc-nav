@@ -10841,6 +10841,19 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         self.assertEqual(a.json()["zone"]["slug"], "daymar-iron-ridge")
         self.assertEqual(b.json()["zone"]["slug"], "yela-iron-ridge")
 
+    def test_landmark_length_names_survive_the_slug(self):
+        # Real landmark names are long ("Shubin Mining Facility SCD-1 North"),
+        # and a surface slug already spends characters on the body. At the old
+        # 40-char cap the composed slug truncated, so two long names on one
+        # body collided and the 409 blamed the NAME.
+        a = self._create(name="Shubin Mining Facility SCD-1 North")
+        b = self._create(name="Shubin Mining Facility SCD-1 South")
+        self.assertEqual(a.status_code, 200, a.text)
+        self.assertEqual(b.status_code, 200, b.text)
+        self.assertEqual(a.json()["zone"]["slug"],
+                         "daymar-shubin-mining-facility-scd-1-north")
+        self.assertNotEqual(a.json()["zone"]["slug"], b.json()["zone"]["slug"])
+
     def test_renaming_keeps_the_body_prefix(self):
         # The rename path used to re-slug from the request payload alone, which
         # dropped the prefix, re-opened the collision and silently changed the

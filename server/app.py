@@ -7119,7 +7119,12 @@ async def clear_survey_marks(body: SurveyClearIn,
 # --- named survey zones (#36.1) --------------------------------------------
 
 
-_ZONE_SLUG_MAX = 40
+# 64, not 40. A SURFACE zone's slug carries its body ("microtech-" alone is
+# ten characters), and real landmark names are long — "Shubin Mining Facility
+# SCD-1 North" is a name a pilot would actually pick. At 40 the composed slug
+# truncated, two long names on one body collided, and the 409 blamed the NAME.
+# The column is TEXT and the slug is only a pin key, so the cap costs nothing.
+_ZONE_SLUG_MAX = 64
 
 
 def _zone_slug(name: str, body_name: str | None = None) -> str:
