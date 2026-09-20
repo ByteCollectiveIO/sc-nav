@@ -2591,7 +2591,8 @@
   .route-chip.primary, #halo-survey-mark { background: var(--accent);
     color: var(--ink-on-accent); border-color: var(--accent); font-weight: 600; }
   .route-chip.primary:hover, #halo-survey-mark:hover { filter: brightness(1.08); }
-  #halo-survey-mark:disabled { opacity: .5; filter: none; cursor: default; }
+  #halo-survey-mark[aria-disabled="true"] { opacity: .5; filter: none; cursor: default; }
+  #halo-survey-mark[aria-disabled="true"]:hover { filter: none; }
   .svy-eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
     color: var(--accent); margin: 0 0 8px; }
   /* Scoped to .svy-card to OUT-SPECIFY `.panel h2` (0,1,1), which these cards
@@ -4911,7 +4912,8 @@
                  title="Ores you can see here. These pre-fill the scan detail's ore rows after the mark lands — no need to type them again.">
           <datalist id="halo-survey-ore-list"></datalist>
           <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
-          <button id="halo-survey-mark" type="button" disabled
+          <button id="halo-survey-mark" type="button" aria-disabled="true"
+                  aria-describedby="halo-survey-arm-hint"
                   title="pick what's around you first — the density is the mark">⛏ Mark survey point</button>
           <span id="halo-survey-arm-hint" class="muted" style="font-size:12px;">← how many rocks are around you?</span>
           <span id="halo-survey-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
@@ -16723,7 +16725,10 @@ function setHaloSurveyRocks(r) {
 // beside it says why rather than leaving a dead control to puzzle over.
 function syncHaloMarkArm() {
   const b = $("halo-survey-mark"), hint = $("halo-survey-arm-hint");
-  if (b) b.disabled = !haloSurveyRocks;
+  // aria-disabled, NOT the native attribute: a native disabled button drops out
+  // of the tab order and swallows the click, so the one explanation the user
+  // might go looking for never fires and the guard below is unreachable.
+  if (b) b.setAttribute("aria-disabled", haloSurveyRocks ? "false" : "true");
   if (hint) hint.hidden = !!haloSurveyRocks;
 }
 
@@ -16962,23 +16967,25 @@ let zoneMenuEl = null, zoneMenuBtn = null;
 
 let zoneMenuRefocusId = null;
 
-function closeZoneMenu() {
+// `defer` is for the two RENDERERS only: they close the menu on their first
+// line and then rebuild the trigger, so focusing it here would hand focus to a
+// node the rebuild detaches a moment later. Every other closer resolves focus
+// immediately and leaves NOTHING armed — an intent that outlives its own close
+// is a landmine that fires into whatever the user does next.
+function closeZoneMenu(defer) {
   const held = !!(zoneMenuEl && zoneMenuEl.contains(document.activeElement));
   if (zoneMenuEl) { zoneMenuEl.remove(); zoneMenuEl = null; }
   const btn = zoneMenuBtn;
   if (btn) { btn.setAttribute("aria-expanded", "false"); zoneMenuBtn = null; }
-  if (!held || !btn) return;
-  // Focus was inside the menu, so it is about to fall to <body>. The callers
-  // that close this are the two renderers, and they close it on their FIRST
-  // line — focusing the trigger here would just hand focus to a node the
-  // rebuild detaches a moment later. Record it and let the rebuild finish.
-  zoneMenuRefocusId = btn.id || null;
-  if (btn.isConnected && !zoneMenuRefocusId) btn.focus();
+  zoneMenuRefocusId = null;
+  if (!held || !btn) return;      // focus already moved where the user put it
+  if (defer) { zoneMenuRefocusId = btn.id || null; return; }
+  if (btn.isConnected) btn.focus();
 }
 
 // Called at the END of each renderer that closes the menu.
 function restoreZoneMenuFocus() {
-  const id = zoneMenuRefocusId;
+  const id = zoneMenuRefocusId;   // one-shot: consumed here or discarded
   zoneMenuRefocusId = null;
   if (!id) return;
   const back = document.getElementById(id);
@@ -16988,7 +16995,8 @@ function restoreZoneMenuFocus() {
 function openZoneMenu(btn, z) {
   const reopen = zoneMenuBtn === btn;
   closeZoneMenu();
-  if (reopen) return;                 // the ⋯ button toggles
+  zoneMenuRefocusId = null;           // never carry intent across menus
+  if (reopen) return;                 // the ••• button toggles
   const items = [["✎ Rename", "rename this zone", () => renameSurveyZone(z)]];
   if (z.kind === "surface")
     items.push(["⌀ Re-fence", "change the radius; membership re-counts immediately",
@@ -17034,7 +17042,7 @@ function openZoneMenu(btn, z) {
   m.addEventListener("keydown", (e) => {
     const all = [...m.querySelectorAll("button")];
     const i = all.indexOf(document.activeElement);
-    if (e.key === "Escape") { e.preventDefault(); const b = zoneMenuBtn; closeZoneMenu(); if (b) b.focus(); }
+    if (e.key === "Escape") { e.preventDefault(); closeZoneMenu(); }
     else if (e.key === "ArrowDown") { e.preventDefault(); all[(i + 1) % all.length].focus(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); all[(i - 1 + all.length) % all.length].focus(); }
   });
@@ -17048,8 +17056,11 @@ if (!window.__zoneMenuWired) {
   document.addEventListener("click", (e) => {
     if (zoneMenuEl && !zoneMenuEl.contains(e.target) && e.target !== zoneMenuBtn) closeZoneMenu();
   });
-  window.addEventListener("resize", closeZoneMenu);
-  document.addEventListener("scroll", closeZoneMenu, true);
+  // Wrapped, NOT passed directly: a listener is called with the Event as its
+  // first argument, which would land in `defer` as a truthy value and arm the
+  // deferred-refocus intent that nothing here will ever consume.
+  window.addEventListener("resize", () => closeZoneMenu());
+  document.addEventListener("scroll", () => closeZoneMenu(), true);
 }
 
 function renderHaloAtlasSel() {
@@ -17136,7 +17147,7 @@ function renderHaloAtlasZones() {
   // The menu is parented to <body>, so a table re-render (a zone refresh, a
   // selection change) left it floating above a button that no longer exists —
   // and Escape then focused a detached node.
-  closeZoneMenu();
+  closeZoneMenu(true);        // defer: this renderer rebuilds the trigger
   const el = $("halo-atlas-zones"), filters = $("halo-zone-filters");
   if (!el) return;
   wireHaloZoneFilters();
@@ -17491,9 +17502,9 @@ function renderHaloZoneSelect() {
 function renderHaloZoneBanner() {
   const el = $("halo-zone-banner");
   if (!el) return;
-  // Same guard as renderHaloAtlasZones: this renderer also replaces the ...
+  // Same guard as renderHaloAtlasZones: this renderer also replaces the •••
   // trigger, which would strand an open menu over a detached button.
-  closeZoneMenu();
+  closeZoneMenu(true);        // defer: this renderer rebuilds the trigger
   const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
   if (!z) { el.hidden = true; return; }
   el.hidden = false;
