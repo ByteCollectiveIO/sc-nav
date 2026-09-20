@@ -16095,8 +16095,33 @@ const HALO_SYSTEMS = ["Stanton", "Nyx", "Pyro"];
 // Prospector tabs (#38): DROP (plan) · FIELD (live cockpit) · ATLAS (org data).
 // One view, three sub-hashes; the router calls applyHaloTab on every #/halo*.
 let haloTabCur = "drop";
+// A zone's deep link: #/halo/atlas/<system>/<slug-or-id>
+//
+// The org coordinates in Discord, and "look at Iron Ridge" was previously five
+// navigation steps to describe. The slug is the same stable key the drop
+// planner already pins on, so the link reads as the place it points at —
+// #/halo/atlas/Stanton/daymar-iron-ridge — which is the whole point of pasting
+// it into a chat window.
+//
+// Resolution accepts the numeric id too. A rename RE-SLUGS the zone (that is
+// deliberate: the slug carries the body and admins rename to enforce a naming
+// convention), so a slug link can go stale; an id link never does. Copy Link
+// emits the readable form, and anything that needs permanence can use the id.
+function haloZoneRoute(h) {
+  const m = /^#\/halo\/atlas\/([^/]+)\/([^/]+)$/.exec(h || "");
+  if (!m) return null;
+  return { system: decodeURIComponent(m[1]), key: decodeURIComponent(m[2]) };
+}
+
+function haloZoneHash(z) {
+  return `#/halo/atlas/${encodeURIComponent(z.system || haloSystem)}/`
+    + encodeURIComponent(z.key || z.slug || String(z.zone_id));
+}
+
 function applyHaloTab(h) {
-  const t = h === "#/halo/field" ? "field" : h === "#/halo/atlas" ? "atlas" : "drop";
+  const zr = haloZoneRoute(h);
+  const t = h === "#/halo/field" ? "field"
+    : (h === "#/halo/atlas" || zr) ? "atlas" : "drop";
   haloTabCur = t;
   $("halo-tab-drop").hidden = t !== "drop";
   $("halo-tab-field").hidden = t !== "field";
@@ -16112,7 +16137,13 @@ function applyHaloTab(h) {
     refreshHaloAfter();          // redraw verdict + radar now the canvas has layout
     renderHaloRsRef();           // RS cheat sheet under the radar (#38)
   }
-  if (t === "atlas") renderHaloAtlas();
+  if (t === "atlas") {
+    renderHaloAtlas();
+    if (zr) openZoneFromRoute(zr);
+    // Leaving the zone route (Back, or a pasted #/halo/atlas) must close a card
+    // the hash no longer describes.
+    else if (haloZoneDetailFor != null) closeHaloSurveyCard(true);
+  }
   if (t === "drop") requestAnimationFrame(() => {
     renderHaloOverview();        // canvases were 0-size while the tab was hidden
     if (haloLastPlan) drawHaloMap(haloLastPlan);
@@ -17194,13 +17225,46 @@ function closeHaloSurveyCardCoverageSync() {
   syncCoverageToZone(z || null);
 }
 
-function closeHaloSurveyCard() {
+function closeHaloSurveyCard(fromRoute) {
+  // fromRoute = the router is already on #/halo/atlas and called us; setting the
+  // hash again would bounce us straight back through applyView.
+  if (!fromRoute && haloZoneRoute(location.hash)) { location.hash = "#/halo/atlas"; return; }
   const el = $("halo-zone-detail"), browse = $("halo-zones-browse");
   if (el) { el.hidden = true; el.innerHTML = ""; }
   if (browse) browse.hidden = false;
   haloZoneDetailFor = null;
   surfacePlateRedraw = null;
   closeHaloSurveyCardCoverageSync();
+}
+
+// Open the card the hash names. Idempotent: the card itself sets the hash, so
+// this runs again on the resulting hashchange and must not re-fetch or loop.
+async function openZoneFromRoute(zr) {
+  const match = () => haloZones.find(z =>
+    String(z.key || z.slug || "").toLowerCase() === zr.key.toLowerCase()
+    || String(z.zone_id) === zr.key);
+  let z = match();
+  if (z && haloZoneDetailFor === z.zone_id) return;     // already showing it
+  if (!z) {
+    if (haloSystem !== zr.system) haloSystem = zr.system;
+    await loadHaloZones(zr.system);
+    z = match();
+  }
+  if (z) { openHaloSurveyCard(z); return; }
+  // Honest miss: a deleted zone, or a slug that changed under a rename. Saying
+  // so beats silently showing the list, which reads as "the link worked".
+  const el = $("halo-zone-detail"), browse = $("halo-zones-browse");
+  if (!el) return;
+  if (browse) browse.hidden = true;
+  el.hidden = false;
+  el.innerHTML = `<div class="svy-card"><div class="svy-head">`
+    + `<button type="button" class="route-chip" id="svy-back">← Back to zones</button></div>`
+    + `<p class="svy-eyebrow">${esc(zr.system)} · Survey area</p>`
+    + `<h2 class="svy-title">Not found</h2>`
+    + `<p class="svy-sub">No area here answers to “${esc(zr.key)}”.</p>`
+    + `<p class="cap" style="margin-top:12px;">It may have been deleted, or renamed — `
+    + `renaming an area changes the link. Ask whoever sent it for a fresh one.</p></div>`;
+  const b = $("svy-back"); if (b) b.onclick = closeHaloSurveyCard;
 }
 
 async function openHaloSurveyCard(z) {
@@ -17213,6 +17277,10 @@ async function openHaloSurveyCard(z) {
   el.setAttribute("tabindex", "-1");
   el.setAttribute("role", "region");
   el.setAttribute("aria-label", `${z.name} — survey detail`);
+  // Make the card linkable the moment it opens — nobody should have to press a
+  // button to get a URL that already exists.
+  const want = haloZoneHash(z);
+  if (location.hash !== want) location.hash = want;
   // The COVERAGE panel sits under the card and is NOT part of it, so it used
   // to keep whatever it was last showing: open a planetside area, go back, open
   // a belt zone, and the panel still showed the previous moon's plate with a
@@ -18143,6 +18211,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
     + (z.can_edit ? `<button type="button" class="route-chip" id="svy-archive">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
     // Export is a system-level endpoint — it worked identically from either
     // card and was offered on only one of them.
+    + `<button type="button" class="route-chip" id="svy-link" title="copy a link straight to this area — paste it in Discord">🔗 Copy link</button>`
     + `<a class="route-chip" id="svy-export" target="_blank" rel="noopener" style="margin-left:auto;"`
     + ` title="download this system's survey as JSON">⇩ Export</a>`
     + `</div>`
@@ -18191,6 +18260,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
   const dest = $("svy-dest"); if (dest) dest.onclick = () => setDestination(z.nearest_qt_id);
   const ref = $("svy-refence"); if (ref) ref.onclick = () => refenceSurveyZone(z);
   const rn = $("svy-rename"); if (rn) rn.onclick = () => renameSurveyZone(z);
+  wireZoneLinkCopy(z);
   const ex2 = $("svy-export"); if (ex2) ex2.href = "/api/halo/survey/export?system="
     + encodeURIComponent(z.system || haloSystem);
   const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
@@ -18273,6 +18343,7 @@ function renderHaloSurveyCard(el, z, marks) {
     + (!z.closed ? `<button type="button" class="route-chip" id="svy-active"${z.zone_id === activeSurveyZone ? " disabled" : ""}>`
         + `${z.zone_id === activeSurveyZone ? "⛏ filing here" : "Set active"}</button>` : "")
     + (z.can_edit ? `<button type="button" class="route-chip" id="svy-archive" title="${z.closed ? "put this zone back on the picker and maps" : "archive this zone — marks are kept, but it leaves the picker, maps and drop suggestions"}">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
+    + `<button type="button" class="route-chip" id="svy-link" title="copy a link straight to this zone — paste it in Discord">🔗 Copy link</button>`
     + `<a class="route-chip" id="svy-export" target="_blank" rel="noopener" style="margin-left:auto;"`
     + ` title="download this system's survey as JSON">⇩ Export</a>`
     + `</div>`
@@ -18295,6 +18366,7 @@ function renderHaloSurveyCard(el, z, marks) {
   const act = $("svy-active"); if (act) act.onclick = () => { setActiveSurveyZone(z.zone_id); openHaloSurveyCard(z); };
   const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
   const ex = $("svy-export"); if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(z.system || haloSystem);
+  wireZoneLinkCopy(z);
   el.focus({ preventScroll: false });   // same focus move as the surface card
   for (const b of el.querySelectorAll("[data-scanmark]"))
     b.onclick = () => {
@@ -18307,6 +18379,23 @@ function renderHaloSurveyCard(el, z, marks) {
       wireScanForm(slot, () => loadHaloZones().then(() =>
         openHaloSurveyCard(haloZones.find(x => x.zone_id === z.zone_id) || z)));
     };
+}
+
+// Absolute URL, not location.href: the card may have been opened before the
+// hash settled, and a teammate needs the whole thing.
+function wireZoneLinkCopy(z) {
+  const btn = $("svy-link");
+  if (!btn) return;
+  btn.onclick = async () => {
+    const url = location.origin + location.pathname + location.search + haloZoneHash(z);
+    try {
+      await copyText(url);
+      btn.textContent = "✓ Link copied";
+    } catch {
+      btn.textContent = "⚠ copy failed";
+    }
+    setTimeout(() => { btn.textContent = "🔗 Copy link"; }, 1800);
+  };
 }
 
 async function setActiveSurveyZone(zid) {
