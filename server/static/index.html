@@ -8483,6 +8483,10 @@ wireOrePicker();
 // The full raw-ore vocabulary, and the forecast's current ranking over it.
 let oreVocab = [];
 let oreLikely = [];          // [{ore, p}] — from the live resource forecast
+// How many of the forecast's ores count as "likely here". ONE number, read by
+// both the chip row and the dropdown's group, so the two can never disagree
+// about what is on the shortlist.
+const ORE_LIKELY_SHOWN = 8;
 let oreLikelyKey = null;     // rebuild guard: this runs on every state frame
 
 // The picker's dropdown, rebuilt from the vocabulary on every keystroke.
@@ -8569,12 +8573,15 @@ function wireOrePicker() {
   attachPickerKeys(input, drop);
 }
 
-// The chip row: the same ranking, one tap. Capped at five — past that it stops
-// being a shortlist and becomes the dropdown it exists to save you from.
+// The chip row: the same ranking, one tap. Capped at the SAME number the
+// dropdown's LIKELY HERE group shows, because they are one list wearing two
+// faces — when the chips stopped at five and the group went to eight, an ore
+// at 4% was promoted in one and absent from the other, which reads as the
+// shortlist having quietly dropped it.
 function renderOreLikely() {
   const el = $("node-ore-likely");
   if (!el) return;
-  const rows = oreLikely.slice(0, 5);
+  const rows = oreLikely.slice(0, ORE_LIKELY_SHOWN);
   if (!rows.length) { el.hidden = true; el.innerHTML = ""; return; }
   el.innerHTML = `<span>likely here:</span>` + rows.map(r =>
     `<button type="button" class="ol-btn" data-ore="${esc(r.ore)}"`
@@ -8589,7 +8596,8 @@ function renderOreLikely() {
 // because this is called on every position frame and rebuilding a ~100-option
 // datalist per frame is pure waste.
 function noteOreForecast(rf) {
-  const ranked = (rf && rf.ranked ? rf.ranked : []).filter(r => r.p >= 0.02).slice(0, 8);
+  const ranked = (rf && rf.ranked ? rf.ranked : []).filter(r => r.p >= 0.02)
+    .slice(0, ORE_LIKELY_SHOWN);
   const key = ranked.map(r => r.ore + ":" + Math.round(r.p * 100)).join("|");
   if (key === oreLikelyKey) return;
   oreLikelyKey = key;
