@@ -5324,8 +5324,8 @@
                and never crowds the coverage map below it off-screen. -->
           <div id="halo-zone-filters" class="route-row" style="align-items:center; margin-top:8px; gap:8px;" hidden>
             <input id="halo-zone-search" class="ti" type="search" autocomplete="off"
-                   placeholder="🔍 zone name or ore" style="min-width:180px; flex:1;"
-                   aria-label="Filter zones by name or ore">
+                   placeholder="🔍 zone, place or ore" style="min-width:180px; flex:1;"
+                   aria-label="Filter zones by name, place (a body name, or &quot;space&quot;) or ore">
             <label class="fld-label" for="halo-zone-sort" style="margin:0;">SORT</label>
             <select id="halo-zone-sort" class="sel" aria-label="Sort zones">
               <option value="value">Profitability</option>
@@ -17713,6 +17713,10 @@ function haloZonesFiltered() {
   if (f.mine) rows = rows.filter(haloZoneIsMine);
   if (f.q) rows = rows.filter(z =>
     (z.name || "").toLowerCase().includes(f.q)
+    // WHERE too: "wala" narrows to one moon, "space" to the belt zones. Zones
+    // are named for where they are, but not always — and a member who wants
+    // "everything on Wala" should not have to know that.
+    || zoneWhereSearch(z).includes(f.q)
     // Search every lane: typing "hadanite" has to find the area that has it,
     // and the top-level `ores` is the mining lane alone.
     || zoneLanesOf(z).some(L => ((L.fit || {}).ores || [])
@@ -17779,7 +17783,7 @@ function renderHaloAtlasZones() {
       + `<td><b>${esc(z.name)}</b>${active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : ""}`
         + (z.contributors && z.contributors.length ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
         + `</td>`
-      + `<td class="muted" data-l="Where" style="white-space:nowrap;">deep space</td>`
+      + `<td class="muted" data-l="Where" style="white-space:nowrap;">${esc(zoneWhere(z))}</td>`
       + `<td class="num" data-l="Evidence">${z.marks || 0}</td>`
       + `<td data-l="Health">${healthCell(z)}</td>`
       + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
@@ -18338,6 +18342,21 @@ function healthCell(z) {
     + ` title="${esc(healthNext(h))}">`
     + `<span class="zn-hbar"><i style="width:${Math.max(pct, 2)}%"></i></span>`
     + `<span class="zn-hpct">${pct}%</span></span>`;
+}
+
+// WHERE, as ONE function. The cell rendered this string in two places and the
+// filter matched neither — so a search that reads "zone, place or ore" has to
+// read the same text the column prints, or it will silently disagree with what
+// is on screen the first time either side is edited.
+function zoneWhere(z) {
+  return z.kind === "surface" ? (z.body || "\u2014") : "deep space";
+}
+
+// …plus the words the ROW shows that WHERE does not: a surface row carries a
+// "\u26cf surface" chip, so typing "surface" matching it is not a hidden rule, it
+// is the visible one. Nothing here matches text the reader cannot see.
+function zoneWhereSearch(z) {
+  return (zoneWhere(z) + (z.kind === "surface" ? " surface" : " belt")).toLowerCase();
 }
 
 function zoneEvidence(z) {
@@ -19543,7 +19562,7 @@ function surfaceZoneRow(z) {
       + (z.contributors && z.contributors.length
           ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
       + `</td>`
-    + `<td data-l="Where" style="white-space:nowrap;">${esc(z.body || "—")}</td>`
+    + `<td data-l="Where" style="white-space:nowrap;">${esc(zoneWhere(z))}</td>`
     + `<td class="num" data-l="Evidence">${evCell}</td>`
     + `<td data-l="Health">${healthCell(z)}</td>`
     + `<td data-l="Value">${valCell}</td>`
