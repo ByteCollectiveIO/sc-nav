@@ -50,8 +50,24 @@
 > not `body_radius`** — my first cut would have hidden the chip for everyone.
 > §14.9 was also wrong that there is no JS great-circle: `greatCircle()` exists.
 >
-> **Not built:** §6.1's system-map body badge and §6.2's equal-area body plate
-> (the only new canvas), and the `kind="survey"` goal (§11.2, release two). **Reviewed in four passes.** §12 and §13 are review output (gaps,
+>
+> **Slice 4 — both remaining map levels, built.** §6.1's body badge (ring +
+> count, value-tinted, drills down) and §6.2's Lambert equal-area body plate
+> (heat cells + zone polygons + live position). Three corrections the build
+> forced: the targets doc's `bodies` list is star + true PLANETS, so the badge
+> had **nothing to attach to** — new `surface_bodies` field; the plate's canvas
+> must be **π:1**, not 2:1, or every equatorial zone draws as a 1.57×-tall
+> ellipse and an equal-area map visibly looks like it is lying; and the
+> coverage caption **summed** overlapping zones (7,433 km² where the union is
+> 4,979 — a 33% overstatement), now sampled on the plate's own equal-area
+> lattice.
+>
+> **§6.2's wording is wrong** where it says a zone becomes "a slightly
+> flattened ellipse near the poles": the distortion is everywhere, and at the
+> equator it runs the other way. Only the π:1 frame makes the equator honest.
+>
+> **Not built:** the `kind="survey"` goal (§11.2, release two) and §11.5's
+> milestone hook (deferred by §14.13). **Reviewed in four passes.** §12 and §13 are review output (gaps,
 cross-tool hooks). §14 is the **audit trail** of an adversarial pass that
 checked every claim against the code: each correction it found has since been
 folded into the section it affects, and a fourth pass re-verified §14 itself and
