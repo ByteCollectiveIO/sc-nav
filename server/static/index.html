@@ -1051,6 +1051,10 @@
     /* desktop min-widths on inputs/selects shouldn't force horizontal overflow;
        let flex shrink them (overrides inline min-width on the wide ID fields) */
     input.ti, select.sel { min-width: 0 !important; }
+    /* ...but that blanket rule also crushed the zone search to 70px, where the
+       placeholder rendered as "z(". Let the filter row wrap instead. */
+    #halo-zone-filters { flex-wrap: wrap; }
+    #halo-zone-search { min-width: 12rem !important; flex: 1 1 100% !important; }
 
     /* fewer columns so a forecast row fits a narrow viewport */
     .fc-row { grid-template-columns: 92px 1fr 40px; }
@@ -2411,6 +2415,11 @@
   /* The tab bar is the only way between the three surfaces — it must survive a
      long scroll and a narrow screen. */
   .halo-mast { justify-content: flex-start; position: sticky; top: 0; z-index: 5; }
+  /* The masthead is sticky and 61px tall, so scrollIntoView({block:"start"})
+     parks the target's first line underneath it. The occluded line on the plan
+     card is the heading that names the SYSTEM — i.e. the mitigation for the
+     wrong-system error was the part being hidden. */
+  #halo-result, #halo-zone-detail, #halo-intro { scroll-margin-top: 72px; }
   /* The RS lookup: one input answers the question the 286-cell table made you
      scan for. */
   .halo-rs-look { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
@@ -2438,12 +2447,56 @@
   /* The ONLY AA failures in the app: --dim text on the accent/selected wash
      rows composited to 4.47:1 against a 4.5 requirement. Lift the text, not
      the wash, so the selection tint is unchanged. */
-  tr.selected .muted, tr.zone-sel .muted, .halo-zone-active .muted,
-  tr.selected td.muted, tr.zone-sel td.muted { color: var(--text); }
-  tr.selected .halo-chip, tr.zone-sel .halo-chip { color: var(--text); }
+  #halo-atlas-zones tbody tr.selected td,
+  #halo-atlas-zones tbody tr.selected td.muted,
+  #halo-atlas-zones tbody tr.selected td b,
+  #halo-atlas-zones tbody tr.zone-sel td,
+  #halo-atlas-zones tbody tr.zone-sel td.muted { color: var(--text); }
+  #halo-atlas-zones tbody tr.selected .halo-chip,
+  #halo-atlas-zones tbody tr.zone-sel .halo-chip { color: var(--text); }
+  /* Selection stays legible as wash + the inset left bar; it does not need to
+     recolour the text to amber to read as selected. */
+  .halo-zone-active, .halo-zone-active .muted, .halo-zone-active b { color: var(--text); }
   /* Rows carry the primary gesture, so they need a focus ring of their own. */
   #halo-atlas-zones tr[data-zrow]:focus-visible { outline: 2px solid var(--accent);
     outline-offset: -2px; }
+  /* The mono face draws U+22EF as three hairline dots, which vanished inside a
+     44px touch target. Bullets at a larger size actually read as "more". */
+  .zone-more { font-weight: 700; font-size: 15px; line-height: 1;
+    letter-spacing: .06em; padding-left: 10px; padding-right: 10px; }
+  .zone-menu { position: fixed; z-index: 60; min-width: 190px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.35); display: flex; flex-direction: column; }
+  .zone-menu button { text-align: left; background: none; border: 0; color: var(--text);
+    font: inherit; font-size: 13px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+  .zone-menu button:hover, .zone-menu button:focus-visible { background: var(--panel2); }
+  .zone-menu button.bad:hover, .zone-menu button.bad:focus-visible { color: var(--bad); }
+  /* Below 640px the eight-column table was 662px wide inside a 374px window —
+     56% of every row hidden behind a scroll with no affordance, the action cell
+     stacked six deep, and the ORES column sliced mid-word. A row is a card. */
+  @media (max-width: 640px) {
+    #halo-atlas-zones.table-scroll, #halo-atlas-zones.table-x {
+      overflow: visible; max-height: none; }
+    #halo-atlas-zones table, #halo-atlas-zones tbody,
+    #halo-atlas-zones tr, #halo-atlas-zones td { display: block; width: auto; }
+    #halo-atlas-zones thead { display: none; }
+    #halo-atlas-zones tbody tr[data-zrow] { border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+    #halo-atlas-zones td { border: 0; padding: 2px 0; text-align: left !important;
+      white-space: normal !important; }
+    /* The six data columns FLOW rather than stacking one per line: eight stacked
+       lines made a 245px card, which is a scroll per zone. Inline-block keeps
+       each label glued to its value while letting them wrap as a paragraph. */
+    #halo-atlas-zones td[data-l] { display: inline-block; margin-right: 14px;
+      vertical-align: top; }
+    #halo-atlas-zones td[data-l]::before { content: attr(data-l) " ";
+      color: var(--dim); font-size: 11px; letter-spacing: .06em;
+      text-transform: uppercase; margin-right: 4px; }
+    #halo-atlas-zones td:first-child { font-size: 15px; margin-bottom: 2px; }
+    #halo-atlas-zones td:last-child { margin-top: 8px; display: flex;
+      flex-wrap: wrap; gap: 6px; }
+    #halo-atlas-zones td:last-child .route-chip { margin: 0; }
+  }
   /* The coarse-pointer block lifts inputs and buttons but not checkboxes or
      bare text links, so these stayed 13x13 and 14px tall on a phone. */
   @media (pointer: coarse) {
@@ -2523,9 +2576,12 @@
   @media (max-width: 640px) { .svy-card .route-chip { min-height: 44px; } }
   /* The ONE control that does what the card exists for was styled exactly like
      Archive. Give it the accent fill the app uses for a committed action. */
-  .svy-card .route-chip.primary { background: var(--accent); color: var(--ink-on-accent);
-    border-color: var(--accent); font-weight: 600; }
-  .svy-card .route-chip.primary:hover { filter: brightness(1.08); }
+  /* Unscoped on purpose: this was `.svy-card .route-chip.primary`, so FIELD's
+     ⛏ Mark survey point — the one-tap cockpit's whole reason to exist — got
+     none of it and sat at the same weight as the salvage checkbox beside it. */
+  .route-chip.primary, #halo-survey-mark { background: var(--accent);
+    color: var(--ink-on-accent); border-color: var(--accent); font-weight: 600; }
+  .route-chip.primary:hover, #halo-survey-mark:hover { filter: brightness(1.08); }
   .svy-eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
     color: var(--accent); margin: 0 0 8px; }
   /* Scoped to .svy-card to OUT-SPECIFY `.panel h2` (0,1,1), which these cards
@@ -16426,9 +16482,14 @@ function renderHaloIntro() {
     help.dataset.wired = "1";
     help.onclick = () => {
       try { localStorage.removeItem("halo_intro_dismissed"); } catch {}
+      haloGoTab("drop");        // the intro lives inside #halo-tab-drop
       renderHaloIntro();
       const box = $("halo-intro");
-      if (box) { box.hidden = false; box.scrollIntoView({ behavior: scrollBehavior(), block: "start" }); }
+      if (!box) return;
+      box.hidden = false;
+      // After the tab switch, so the target is laid out and the scroll lands.
+      requestAnimationFrame(() =>
+        box.scrollIntoView({ behavior: scrollBehavior(), block: "start" }));
     };
   }
   if (help) help.hidden = !lsGet("halo_intro_dismissed");
@@ -16853,6 +16914,86 @@ function selectHaloAtlasZone(zid) {
 
 // Selected-zone bar: names what the tap hit and repeats its row's actions, so
 // the map answers "which survey is this?" without a trip back to the table.
+// Zone management actions, one tap behind ⋯.
+//
+// Rendered `position: fixed` on <body>, NOT absolute inside the row: the zone
+// table is an overflow:auto scroll container, which clips an absolutely
+// positioned child at its padding edge. Same reason the project's other
+// floating UI escapes its stacking context.
+let zoneMenuEl = null, zoneMenuBtn = null;
+
+function closeZoneMenu() {
+  if (zoneMenuEl) { zoneMenuEl.remove(); zoneMenuEl = null; }
+  if (zoneMenuBtn) { zoneMenuBtn.setAttribute("aria-expanded", "false"); zoneMenuBtn = null; }
+}
+
+function openZoneMenu(btn, z) {
+  const reopen = zoneMenuBtn === btn;
+  closeZoneMenu();
+  if (reopen) return;                 // the ⋯ button toggles
+  const items = [["✎ Rename", "rename this zone", () => renameSurveyZone(z)]];
+  if (z.kind === "surface")
+    items.push(["⌀ Re-fence", "change the radius; membership re-counts immediately",
+                () => refenceSurveyZone(z)]);
+  items.push([z.closed ? "↻ Reactivate" : "⊟ Archive",
+              z.closed ? "put it back on the picker and maps"
+                       : "keep the evidence, but take it off the picker, maps and suggestions",
+              () => archiveSurveyZone(z, !z.closed)]);
+  items.push(["✕ Delete",
+              z.kind === "surface"
+                ? "the sightings inside are untouched — membership is geometric"
+                : "its ⛏ marks are kept and revert to proximity clustering",
+              () => deleteSurveyZone(z), "bad"]);
+
+  const m = document.createElement("div");
+  m.className = "zone-menu";
+  m.setAttribute("role", "menu");
+  m.setAttribute("aria-label", `Actions for ${z.name}`);
+  for (const [label, hint, fn, kind] of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    if (kind) b.className = kind;
+    b.title = hint;
+    b.textContent = label;
+    b.onclick = () => { closeZoneMenu(); fn(); };
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+  zoneMenuEl = m; zoneMenuBtn = btn;
+  btn.setAttribute("aria-expanded", "true");
+
+  const r = btn.getBoundingClientRect(), mr = m.getBoundingClientRect();
+  // Right-align to the button, and flip above it when the viewport runs out.
+  const left = Math.max(8, Math.min(r.right - mr.width, window.innerWidth - mr.width - 8));
+  const below = r.bottom + 4;
+  m.style.left = `${Math.round(left)}px`;
+  m.style.top = `${Math.round(below + mr.height > window.innerHeight - 8
+    ? Math.max(8, r.top - mr.height - 4) : below)}px`;
+  const first = m.querySelector("button");
+  if (first) first.focus();
+
+  m.addEventListener("keydown", (e) => {
+    const all = [...m.querySelectorAll("button")];
+    const i = all.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); const b = zoneMenuBtn; closeZoneMenu(); if (b) b.focus(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); all[(i + 1) % all.length].focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); all[(i - 1 + all.length) % all.length].focus(); }
+  });
+}
+
+// One set of global dismissers, wired once. Scroll closes rather than tracks:
+// the menu is fixed and the table scrolls under it, so following the button
+// would mean re-measuring on every frame for a menu that is open for a second.
+if (!window.__zoneMenuWired) {
+  window.__zoneMenuWired = true;
+  document.addEventListener("click", (e) => {
+    if (zoneMenuEl && !zoneMenuEl.contains(e.target) && e.target !== zoneMenuBtn) closeZoneMenu();
+  });
+  window.addEventListener("resize", closeZoneMenu);
+  document.addEventListener("scroll", closeZoneMenu, true);
+}
+
 function renderHaloAtlasSel() {
   const el = $("halo-atlas-sel");
   if (!el) return;
@@ -16860,9 +17001,17 @@ function renderHaloAtlasSel() {
     : haloZones.find(x => x.zone_id === haloAtlasSelZone);
   if (!z) { el.hidden = true; el.innerHTML = ""; haloAtlasSelZone = null; return; }
   el.hidden = false;
-  const bits = [`<b>${z.marks || 0}</b> mark${z.marks === 1 ? "" : "s"}`];
+  // A surface area counts `sightings` and fences itself with `radius_m`; the
+  // belt zone counts `marks` inside a derived `grid_radius_m`. Reading only the
+  // belt's fields printed "0 marks" on a 54-sighting area — the one number in
+  // the app a user could see was false — and hid Details behind the same test.
+  const surf = z.kind === "surface";
+  const n = surf ? (z.sightings || 0) : (z.marks || 0);
+  const word = surf ? "sighting" : "mark";
+  const rad = surf ? z.radius_m : z.grid_radius_m;
+  const bits = [`<b>${n}</b> ${word}${n === 1 ? "" : "s"}`];
   if (z.value) bits.push(surveyValueChip(z.value));
-  if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
+  if (rad) bits.push(`⌀ ~${fmtDist(2 * rad)}`);
   if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
   else if (z.status && z.status !== "empty") bits.push(`<b>${esc(z.status)}</b> rocks`);
   if ((z.ores || []).length) bits.push(z.ores.map(o => `${esc(o)}${oreValueChip(o)}`).join(", "));
@@ -16870,12 +17019,17 @@ function renderHaloAtlasSel() {
   el.innerHTML = `<div class="halo-zone-active">📍 <b>${esc(z.name)}</b>`
     + (active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : "")
     + ` — ${bits.join(" · ")}`
-    + (z.marks ? ` <button type="button" class="route-chip" id="halo-sel-details">▸ Details</button>` : "")
-    + (z.marks ? ` <button type="button" class="route-chip" id="halo-sel-plan">Plan a drop here</button>` : "")
-    + (active ? "" : ` <button type="button" class="route-chip" id="halo-sel-active">Set active</button>`)
+    + (n ? ` <button type="button" class="route-chip" id="halo-sel-details">▸ Details</button>` : "")
+    // Surface areas are navigable, never plannable — there is no quantum drop
+    // onto a planet — so they get the table's own verb, not the belt's. This
+    // bar was offering "Set active" on exactly what the table refuses.
+    + (!surf && n ? ` <button type="button" class="route-chip" id="halo-sel-plan">Plan a drop here</button>` : "")
+    + (surf && z.nearest_qt_id ? ` <button type="button" class="route-chip" id="halo-sel-dest">Set destination</button>` : "")
+    + (!surf && !active ? ` <button type="button" class="route-chip" id="halo-sel-active">Set active</button>` : "")
     + ` <button type="button" class="route-chip" id="halo-sel-clear">Clear</button></div>`;
   const d = $("halo-sel-details"); if (d) d.onclick = () => openHaloSurveyCard(z);
   const p = $("halo-sel-plan"); if (p) p.onclick = () => planHaloZone(z);
+  const dst = $("halo-sel-dest"); if (dst) dst.onclick = () => setDestination(Number(z.nearest_qt_id));
   const a = $("halo-sel-active"); if (a) a.onclick = () => setActiveSurveyZone(z.zone_id);
   $("halo-sel-clear").onclick = () => selectHaloAtlasZone(null);
 }
@@ -16957,9 +17111,11 @@ function renderHaloAtlasZones() {
       // mistake — "test zone" — must be removable without an SQL session.
       // "Archive" is the UI word for the server's `closed` flag: the zone
       // keeps its marks but leaves the picker/maps/suggestions; reversible.
-      + (z.can_edit ? `<button type="button" class="route-chip" data-zrename="${z.zone_id}" title="rename this zone (admins: enforce the org's naming convention)">✎ Rename</button> ` : "")
-      + (z.can_edit ? `<button type="button" class="route-chip" data-zarchive="${z.zone_id}" title="${z.closed ? "put this zone back on the picker and maps" : "archive this zone — marks are kept, but it leaves the picker, maps and drop suggestions"}">${z.closed ? "↻ Reactivate" : "⊟ Archive"}</button> ` : "")
-      + (z.can_edit ? `<button type="button" class="route-chip" data-zdelete="${z.zone_id}" title="delete this zone — its ⛏ marks are kept and revert to proximity clustering">✕ Delete</button>` : "");
+      // Rename / Archive / Delete live behind ⋯. Six inline buttons pushed
+      // ✕ Delete past the right edge of a 1280px window (measured: button at
+      // 1251, container ends at 1154) and stacked into a 300px-tall column on
+      // a phone. Two actions you use often stay out; the rest are one tap in.
+      + (z.can_edit ? `<button type="button" class="route-chip zone-more" data-zmenu="${z.zone_id}" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, archive or delete">•••</button>` : "");
     const cls = [active ? "selected" : "", z.zone_id === haloAtlasSelZone ? "zone-sel" : ""]
       .filter(Boolean).join(" ");
     return `<tr data-zrow="${z.zone_id}"${cls ? ` class="${cls}"` : ""}`
@@ -16967,12 +17123,12 @@ function renderHaloAtlasZones() {
       + `<td><b>${esc(z.name)}</b>${active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : ""}`
         + (z.contributors && z.contributors.length ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
         + `</td>`
-      + `<td class="muted" style="white-space:nowrap;">deep space</td>`
-      + `<td class="num">${z.marks || 0}</td>`
-      + `<td>${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
-      + `<td>${rocks}</td>`
-      + `<td>${ores}</td>`
-      + `<td class="muted" style="white-space:nowrap;">${size}</td>`
+      + `<td class="muted" data-l="Where" style="white-space:nowrap;">deep space</td>`
+      + `<td class="num" data-l="Evidence">${z.marks || 0}</td>`
+      + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
+      + `<td data-l="Rocks">${rocks}</td>`
+      + `<td data-l="Ores">${ores}</td>`
+      + `<td class="muted" data-l="Size" style="white-space:nowrap;">${size}</td>`
       + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
       + `</tr>`;
   };
@@ -16999,6 +17155,8 @@ function renderHaloAtlasZones() {
     b.onclick = () => setDestination(Number(b.dataset.zdest));
   for (const b of el.querySelectorAll("[data-zradius]"))
     b.onclick = () => { const z = byId(b.dataset.zradius); if (z) refenceSurveyZone(z); };
+  for (const b of el.querySelectorAll("[data-zmenu]"))
+    b.onclick = (e) => { e.stopPropagation(); const z = byId(b.dataset.zmenu); if (z) openZoneMenu(b, z); };
   // Row → map: the other half of the link. Buttons handle themselves, so the
   // row only claims clicks that missed one.
   for (const tr of el.querySelectorAll("tr[data-zrow]")) {
@@ -18190,21 +18348,18 @@ function surfaceZoneRow(z) {
     // Navigable, never plannable — there is no quantum drop onto a surface.
     + (z.nearest_qt_id ? `<button type="button" class="route-chip" data-zdest="${z.nearest_qt_id}" title="set the navigator's destination to ${esc(z.nearest_qt || "the nearest QT marker")}, then fly the last leg">Set destination</button> ` : "")
     + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
-    + (z.can_edit ? `<button type="button" class="route-chip" data-zrename="${z.zone_id}" title="rename this area">✎ Rename</button> ` : "")
-    + (z.can_edit ? `<button type="button" class="route-chip" data-zradius="${z.zone_id}" title="re-fence this area — change its radius; membership re-counts immediately">⌀ Re-fence</button> ` : "")
-    + (z.can_edit ? `<button type="button" class="route-chip" data-zarchive="${z.zone_id}" title="${z.closed ? "put this area back on the maps" : "archive this area — its sightings are kept"}">${z.closed ? "↻ Reactivate" : "⊟ Archive"}</button> ` : "")
-    + (z.can_edit ? `<button type="button" class="route-chip" data-zdelete="${z.zone_id}" title="delete this area — the sightings inside it are untouched, because membership is geometric">✕ Delete</button>` : "");
+    + (z.can_edit ? `<button type="button" class="route-chip zone-more" data-zmenu="${z.zone_id}" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, re-fence, archive or delete">•••</button>` : "");
   return `<tr data-zrow="${z.zone_id}"${sel} title="click to point the coverage map at this area">`
     + `<td><b>${esc(z.name)}</b> <span class="halo-chip">⛏ surface</span>`
       + (z.contributors && z.contributors.length
           ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
       + `</td>`
-    + `<td style="white-space:nowrap;">${esc(z.body || "—")}</td>`
-    + `<td class="num">${z.sightings || 0}</td>`
-    + `<td>${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
-    + `<td>${band}</td>`
-    + `<td>${ores}</td>`
-    + `<td class="muted" style="white-space:nowrap;">${z.radius_m ? "⌀ " + fmtDist(2 * z.radius_m) : ""}</td>`
+    + `<td data-l="Where" style="white-space:nowrap;">${esc(z.body || "—")}</td>`
+    + `<td class="num" data-l="Evidence">${z.sightings || 0}</td>`
+    + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
+    + `<td data-l="Band">${band}</td>`
+    + `<td data-l="Ores">${ores}</td>`
+    + `<td class="muted" data-l="Size" style="white-space:nowrap;">${z.radius_m ? "⌀ " + fmtDist(2 * z.radius_m) : ""}</td>`
     + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
     + `</tr>`;
 }
@@ -18806,6 +18961,7 @@ function renderHaloStrip() {
     c.title = `Band ${b.band}: ${(b.inner_m / 1e9).toFixed(3)} to ${(b.outer_m / 1e9).toFixed(3)} Gm`;
     c.setAttribute("aria-pressed", String(b.band === haloBandSel));
     c.setAttribute("aria-label", `band ${b.band}`);
+    c.tabIndex = (b.band === haloBandSel) ? 0 : -1;   // roving: one Tab stop, not ten
     c.innerHTML = `<span class="halo-bar" style="height:${Math.round(14 + 60 * b.density)}px;`
       + `--a:${(0.18 + 0.55 * b.density).toFixed(2)};"></span>`
       + `<span class="halo-num">${b.band}</span>`;
@@ -19181,13 +19337,8 @@ function wireHaloBandKeys() {
   if (!host || host.dataset.keysWired) return;
   host.dataset.keysWired = "1";
   const cells = () => [...host.querySelectorAll(".halo-cell")];
-  const rove = () => {
-    const all = cells();
-    all.forEach(c => { c.tabIndex = c.classList.contains("on") ? 0 : -1; });
-    if (all.length && !all.some(c => c.tabIndex === 0)) all[0].tabIndex = 0;
-  };
-  rove();
-  host.addEventListener("click", rove);
+  // No rove() listener here: renderHaloStrip sets tabIndex on the selected cell
+  // as it builds, which covers every render path rather than just clicks.
   host.addEventListener("keydown", (e) => {
     const all = cells();
     const i = all.indexOf(document.activeElement);
@@ -19230,8 +19381,8 @@ function markHaloPlanStale() {
 // that silently no-op are exactly how that ships unnoticed; a container
 // listener cannot drift out of step with the markup it watches.
 function wireHaloStaleWatch() {
-  const host = $("halo-tab-drop");
-  if (!host || host.dataset.staleWired) return;
+  const host = $("halo-view");     // NOT #halo-tab-drop — the system seg and
+  if (!host || host.dataset.staleWired) return;   // the tabs are siblings
   host.dataset.staleWired = "1";
   const TARGETY = ".halo-cell, #halo-system button, #halo-goal button, #halo-aim button,"
     + " #halo-nyx-belt button, #halo-ore, #halo-target-poi, #halo-start-poi,"
@@ -19453,6 +19604,10 @@ function drawHaloSystemMap(cv, plan) {
   // because the moon is still sub-pixel long before the zone is legible. The
   // badge keeps the property the user actually wanted from this map: at a
   // glance, where has the org surveyed. Clicking it drills to level 2.
+  const labelBoxes = [];      // shared label occupancy — see the marks loop
+  const labelClash = (box) => labelBoxes.some(b =>
+    box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y);
+  const skipBodyLabel = new Set();
   const bodyZones = surfaceZonesByBody();
   for (const b of doc.surface_bodies || []) {
     const info = bodyZones[b.name];
@@ -19464,14 +19619,23 @@ function drawHaloSystemMap(cv, plan) {
     ctx.beginPath(); ctx.arc(bx, by, 8, 0, 2 * Math.PI); ctx.stroke();
     ctx.lineWidth = 1;
     ctx.fillStyle = vc || C.label;
-    ctx.fillText(`⛏ ${info.n}`, bx + 11, by - 5);
+    // Claims its box unconditionally: it outranks everything else on the map.
+    const bl = `⛏ ${info.n}`;
+    labelBoxes.push({ x: bx + 11, y: by - 14, w: ctx.measureText(bl).width, h: 12 });
+    ctx.fillText(bl, bx + 11, by - 5);
     if (hits) hits.push({ kind: "body", body: b.name, x: bx, y: by, key: b.name });
+  }
+  for (const b of doc.bodies || []) {
+    if (b.type === "Star") continue;
+    const bx = cx + b.x * s, by = cy - b.y * s;
+    const box = { x: bx + 5, y: by - 6, w: ctx.measureText(b.name).width, h: 12 };
+    if (labelClash(box)) skipBodyLabel.add(b.name);   // a ⛏ badge already has it
+    else labelBoxes.push(box);
   }
   // Landmarks UNDER everything else (v0.69.1 feedback: the survey story is
   // the point of this map — POIs are context, drawn first and dim so the
   // survey dots overprint them, never the other way around).
   const marks = doc.markers || [];
-  const labelBoxes = [];        // occupancy for the collision test below
   ctx.strokeStyle = C.label; ctx.lineWidth = 1;
   for (const m of marks) {
     const mx2 = cx + m.x * s, my2 = cy - m.y * s;
@@ -19483,13 +19647,18 @@ function drawHaloSystemMap(cv, plan) {
     // an ellipsis, so the map read as noise. Claim a box per label and skip
     // any that would overlap one already drawn: the map keeps the names it
     // can actually render, and the rest stay as ◇ marks. Critique 2026-09-20.
-    if (marks.length <= 14) {
-      const nm = m.name.length > 22 ? m.name.slice(0, 21) + "…" : m.name;
+    // Under ~560px there is no width for a station name that isn't mostly
+    // ellipsis, and the marks are still readable as ◇ — so drop the text
+    // entirely rather than ship twelve truncated stubs on a phone.
+    if (marks.length <= 14 && cssW >= 560) {
+      // "Endless Odyssey Station (MIC-L3)" -> "Endless Odyssey": the ◇ glyph
+      // already says station, and the suffix was what forced the ellipsis on
+      // 7 of 12 labels. Trim the redundancy, then truncate only if still long.
+      const short = m.name.replace(/\s*\([^)]*\)\s*$/, "").replace(/\s+Station$/i, "");
+      const nm = short.length > 22 ? short.slice(0, 21) + "…" : short;
       const tw = ctx.measureText(nm).width;
       const box = { x: mx2 + 6, y: my2 - 6, w: tw, h: 12 };
-      const clash = labelBoxes.some(b =>
-        box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y);
-      if (!clash && box.x + box.w < cssW - 2) {
+      if (!labelClash(box) && box.x + box.w < cssW - 2) {
         labelBoxes.push(box);
         ctx.fillStyle = C.label;
         ctx.fillText(nm, box.x, my2 + 3);
@@ -19627,7 +19796,9 @@ function drawHaloSystemMap(cv, plan) {
     ctx.fillStyle = isStar ? C.star : C.body;
     ctx.beginPath();
     ctx.arc(bx, by, Math.max(isStar ? 4 : 2.2, b.r * s), 0, 2 * Math.PI); ctx.fill();
-    if (!isStar) { ctx.fillStyle = C.label; ctx.fillText(b.name, bx + 5, by + 3); }
+    if (!isStar && !skipBodyLabel.has(b.name)) {
+      ctx.fillStyle = C.label; ctx.fillText(b.name, bx + 5, by + 3);
+    }
   }
   // Named zones (#36.1) live in ANY system (v0.71.0: a zone at ARC-L2 is as
   // real as one on the Keeger ring) — value-tinted squares. Drawn LAST of the
@@ -20043,9 +20214,9 @@ function updatePocketRadar(d) {
     radarEmptyState(d && d.band
       ? "Aaron Halo bands are rings, not pockets — there is no centre to plot "
         + "around, so the band verdict above is your position. The radar appears "
-        + "inside a mapped pocket, or once you set an active survey zone."
-      : "Available inside a mapped pocket, or once you set an active survey "
-        + "zone in ATLAS. Nothing to plot around yet.");
+        + "inside a mapped pocket, or once your active survey zone has a mark in it."
+      : "Available inside a mapped pocket, or once your active survey zone has "
+        + "at least one \u26cf mark to plot around. Nothing to plot yet.");
     haloRadarLast = null; haloRadar = { key: null, pts: [] };
     return;
   }
