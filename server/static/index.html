@@ -109,6 +109,19 @@
   #where b { color: var(--text); }
 
   main { padding: 14px; max-width: 1100px; margin: 0 auto; display: grid; gap: 14px; }
+  /* A grid item's default `min-width: auto` resolves to its MIN-CONTENT width,
+     so one wide table sets the column width for every sibling in the column.
+     Measured on a 375px phone viewport: #nearby-panel's 9-column table has a
+     650px min-content width, which pushed the whole page to 660px and made
+     every panel on it — including the capture bands — scroll sideways for a
+     table three panels away. The panels' own .table-scroll / .table-x wrappers
+     already scroll; this just lets them do their job.
+
+     Two levels, because the view containers below are `display: contents` —
+     the real grid items are the PANELS inside them, not the views. `min-width:
+     auto` only has the min-content meaning for a flex/grid item, so setting it
+     to 0 on the rest of this subtree is a no-op. */
+  main > *, main > * > * { min-width: 0; }
   /* The two views are layout-transparent so their panels remain direct grid
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
@@ -158,6 +171,11 @@
   .login-card .legal-links { margin-top: 12px; font-size: 12px; }
   .login-card .legal-links a { color: var(--accent); margin: 0 6px; }
 
+  /* `[hidden]` is a UA rule at the lowest specificity, so ANY `display:` on the
+     same element beats it — this strip painted while marked hidden. The repo
+     has hit this class of bug repeatedly (.on-invis, .rg-row, .mk-crafter-bps);
+     the fix is always to restate the attribute at the component. */
+  .readouts[hidden] { display: none; }
   .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .readout { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
   .readout .label { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
@@ -206,35 +224,88 @@
     border-radius: 4px; border: 1px solid var(--border); background: var(--panel2);
     font-size: 12px; color: var(--text); }
   .capture-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
-  /* Two capture PURPOSES, banded (2026-09-20). The three panels used to sit in
-     one undifferentiated row, so marking a place to fly back to and logging
-     evidence about ground looked like the same act. The band is the structure;
-     the eyebrow is only its name. */
-  .cap-group { border: 1px solid var(--border); border-radius: 10px;
-    padding: 12px 12px 14px; margin-bottom: 14px; }
-  /* The survey band is the one that accumulates into something, so it gets the
-     accent edge — a rule the app already uses for "this is the live thing". */
-  .cap-survey { border-left: 3px solid var(--accent); }
+  /* A colour-emoji glyph in a panel heading is 20px tall where a monochrome
+     one is 16px, which threw the fauna panel's whole form 2-4px out of register
+     with the resource panel it is paired with. Pin the line box so no glyph can
+     move a heading again. */
+  .capture-grid .panel > h2 { line-height: 16px; }
+  /* Two capture PURPOSES, banded (2026-09-20; reworked after the 2026-09-20
+     critique). The three panels used to sit in one undifferentiated row, so
+     marking a place to fly back to and logging evidence about ground looked
+     like the same act.
+
+     A RULE, NOT A BOX. The first cut made each band a bordered, radiused,
+     padded container — i.e. a card wrapping cards, which DESIGN.md forbids by
+     name, and which also inset its panels 13-15px from the shared left column
+     that every other panel on this page sits on (measured: 96.5 / 109.5 /
+     111.5px, three different left edges). DESIGN.md §5 already prescribes the
+     right form: stacked sections inside one surface rule off with a top
+     border. One rule per band removes the nesting, the inset, the off-scale
+     10px radius and the accent side-stripe together. */
+  .cap-group { border-top: 1px solid var(--border); padding-top: 12px;
+    margin-bottom: 20px; }
+  /* NO accent edge on the survey band. A >1px coloured border as an accent is
+     the docs-callout idiom, and it cost this page its shared left column. The
+     bands are peers; their labels tell them apart. */
   .cap-group-h { font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
-    color: var(--accent); margin: 0 0 4px; display: flex; gap: 10px;
+    /* --text, not --accent: with the stripe and the wash gone, the ONE cyan
+       thing left in the band is the button that does something. That scarcity
+       is the whole mechanism (DESIGN.md, the One Voice Rule) — a band label is
+       structure, not a live control. Brightness carries the band-over-panel
+       hierarchy instead, which is this instrument's own language: the band
+       reads at --text, its panels' own h2s at --dim. */
+    color: var(--text); margin: 0 0 6px; display: flex; gap: 10px;
     align-items: baseline; flex-wrap: wrap; }
   .cap-group-h span { color: var(--dim); font-size: 12px; font-weight: 400;
     letter-spacing: 0; text-transform: none; }
-  /* Says what a control is FOR. 62ch, not full width: this is prose, and the
-     panels it sits in are as wide as the window. */
+  /* Says what a control is FOR — ONE line of it. The first cut ran to 223
+     words across four blocks, 44% of the capture region's height and 1.5 phone
+     screens; on a surface whose first principle is "glance, don't read", the
+     explanation had become the thing you had to read past to do the task. What
+     survives here is the single sentence that earns its place; the rest is
+     behind .cap-more. */
   .cap-purpose { font-size: 12px; color: var(--dim); margin: 0 0 10px;
     max-width: 62ch; line-height: 1.55; }
   .cap-purpose b { color: var(--text); font-weight: 600; }
   .cap-group-purpose { margin-bottom: 12px; }
   /* The area control, at GROUP level: it rolls up all three lanes, so it
-     cannot live inside the ore panel. */
-  .cap-area { margin-top: 12px; padding: 12px; border-radius: 8px;
-    background: var(--accent-wash); border: 1px solid var(--border); }
+     cannot live inside the ore panel.
+
+     NO accent-wash fill. That token means "this is the live/selected one"
+     (its own comment reads `active tab/pill fill`; .lfg-card.match uses it
+     that way), and it was tinting a static placard 58% of whose width was
+     empty. It also cost contrast: the wash darkened the light-theme panel
+     while --dim stayed put, dropping this block's prose to 4.496:1 against a
+     4.5 requirement. A 1px border is all the grouping this needs. */
+  .cap-area { margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--border); }
   .cap-area-head { display: flex; gap: 10px; flex-wrap: wrap;
-    align-items: center; margin-bottom: 8px; }
-  .cap-area .cap-purpose { margin-bottom: 0; }
-  .cap-area-foot { margin-top: 8px; padding-top: 8px;
-    border-top: 1px solid var(--border-soft); }
+    align-items: center; }
+  .cap-area .cap-purpose { margin: 8px 0 0; }
+  /* The "tell me more" disclosure. The page already ships this exact pattern
+     for the map's Layers & settings and is scored well for it; the open state
+     persists so a surveyor who wants the explanation keeps it and one who
+     doesn't never sees it again. */
+  .cap-more { margin-top: 8px; }
+  .cap-more > summary { cursor: pointer; font-size: 12px; color: var(--dim);
+    list-style: none; width: fit-content; border-radius: 4px; }
+  .cap-more > summary::-webkit-details-marker { display: none; }
+  /* A trailing space inside `content` collapses, so the marker needs real
+     spacing rather than a space character. */
+  .cap-more > summary::before { content: "\25b8"; margin-right: 6px; }
+  .cap-more[open] > summary::before { content: "\25be"; margin-right: 6px; }
+  .cap-more > summary:hover { color: var(--text); }
+  .cap-more > summary:focus-visible { outline: 2px solid var(--accent);
+    outline-offset: 2px; }
+  .cap-more[open] > summary { margin-bottom: 2px; }
+  .cap-more .cap-purpose + .cap-purpose { margin-top: 8px; }
+  /* A capture that just landed is a READING, not a placard. It used to render
+     in --dim, the same colour as the explanation above it, the placeholders
+     beside it and the credit line below it — so the one thing on the panel
+     that had just changed was the hardest thing on it to find. */
+  .cap-result { font-size: 12px; }
+  .cap-result.ok { color: var(--good); }
+  .cap-result.err { color: var(--warn); }
 
   #dest-card { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   #dest-name { font-size: 18px; color: var(--warn); }
@@ -1084,6 +1155,19 @@
        placeholder rendered as "z(". Let the filter row wrap instead. */
     #halo-zone-filters { flex-wrap: wrap; }
     #halo-zone-search { min-width: 12rem !important; flex: 1 1 100% !important; }
+    /* Same trap, third time (2026-09-20 critique). The blanket rule is what
+       lets a panel fit a 375px viewport, but a flex ROW of three text fields
+       then shares one line three ways — measured: name 39px, type 31px, note
+       39px, i.e. "nam" / "" / "not". It only became visible once the page
+       actually fit the viewport; before that #nearby-panel's 650px table held
+       every panel open at 660px and the crush never rendered.
+
+       Fix it the way the zone search was fixed rather than with another
+       one-off: a text field in a capture form takes its own line, and the
+       short selects keep a floor wide enough to read their own value. */
+    .cap-group input.ti { flex: 1 1 100% !important; min-width: 9rem !important; }
+    .cap-group select.sel { min-width: 6.5rem !important; }
+    .filter-bar input.ti { flex: 1 1 100% !important; min-width: 9rem !important; }
 
     /* fewer columns so a forecast row fits a narrow viewport */
     .fc-row { grid-template-columns: 92px 1fr 40px; }
@@ -2662,6 +2746,12 @@
   /* Unscoped on purpose: this was `.svy-card .route-chip.primary`, so FIELD's
      ⛏ Mark survey point — the one-tap cockpit's whole reason to exist — got
      none of it and sat at the same weight as the salvage checkbox beside it. */
+  /* Every button in the app's chip vocabulary gets the same visible focus
+     ring. Measured in the 2026-09-20 critique: no :focus-visible rule matched
+     `button` or `.route-chip` anywhere, so keyboard users got whatever the UA
+     drew over a dark panel. */
+  button:focus-visible, .route-chip:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   .route-chip.primary, #halo-survey-mark { background: var(--accent);
     color: var(--ink-on-accent); border-color: var(--accent); font-weight: 600; }
   .route-chip.primary:hover, #halo-survey-mark:hover { filter: brightness(1.08); }
@@ -2816,6 +2906,13 @@
     .ev-field input, .ev-field select, .rm-row input, .rm-row select {
       min-height: 44px;
     }
+    /* Checkboxes were 13x13 on touch: the coarse-pointer block's only
+       checkbox rule was scoped to #halo-view, so every other one on the app
+       — including #poi-qt and #poi-private — stayed at the UA size. Grow the
+       LABEL's hit area rather than the box itself, so the glyph keeps its
+       shape and the text stays part of the target. */
+    label.trade-pref, #main-view label:has(input[type="checkbox"]) {
+      min-height: 44px; display: inline-flex; align-items: center; }
     /* chips & icon-only affordances: grow the hit area, keep the glyph centred */
     .ev-cat-chip, .route-chip,
     .del, .edit, .ev-row-del, .pkg-del, .pick-del {
@@ -3149,26 +3246,33 @@
        Naming an area belongs to the second group and used to hang off the
        bottom of the ore panel alone, which is also why nobody could tell what
        it was for. -->
-  <div class="cap-group">
-    <h2 class="cap-group-h">NAVIGATION
-      <span>places you'll come back to</span></h2>
+  <!-- <section aria-labelledby>, not a bare div with an <h2> inside it. The
+       first cut gave each band an <h2> at the SAME level as the panel <h2>s it
+       contained, so the outline was flat (h1 -> twelve h2s) and expressed no
+       containment, and the divs carried no role and no label — which meant the
+       whole point of the change, "these two panels are one kind of thing and
+       that one is another", reached assistive tech not at all. The band label
+       is a <p>, so the panels' own <h2>s stay the only headings here and the
+       outline is honest. -->
+  <section class="cap-group" aria-labelledby="cap-nav-h">
+    <p class="cap-group-h" id="cap-nav-h">NAVIGATION
+      <span>places you'll come back to</span></p>
     <div class="capture-grid">
     <div class="panel">
       <h2>ADD CUSTOM POI</h2>
-      <p class="cap-purpose">A spot worth flying back to — an outpost, a cave
-        mouth, a wreck. It lands in <b>NEARBY</b> and search, can be set as the
-        navigator's destination, and if it's an orbital marker you can flag it
-        <b>QT</b> so routes may jump to it.</p>
+      <p class="cap-purpose">A place worth flying back to. Lands in
+        <a href="#/nav">NEARBY</a> and search, can be set as the destination, or
+        flagged <b>QT</b> so routes may jump to it.</p>
       <div id="poi-form" style="display:flex; gap:8px; flex-wrap:wrap;">
-        <input id="poi-name" class="ti" placeholder="name" style="flex:2; min-width:120px;">
-        <input id="poi-type" class="ti" list="poi-types" placeholder="type" style="flex:1; min-width:90px;">
+        <input id="poi-name" class="ti" aria-label="POI name" placeholder="name" style="flex:2; min-width:120px;">
+        <input id="poi-type" class="ti" aria-label="POI type" list="poi-types" placeholder="type" style="flex:1; min-width:90px;">
         <datalist id="poi-types">
           <option>Outpost</option><option>Cave</option><option>Derelict</option>
           <option>Wreck</option><option>Bunker</option><option>Stash</option>
           <option>Scrapyard</option><option>Landmark</option><option>Custom</option>
           <option>Orbital Marker</option>
         </datalist>
-        <input id="poi-note" class="ti" placeholder="note (optional)" style="flex:2; min-width:120px;">
+        <input id="poi-note" class="ti" aria-label="POI note" placeholder="note (optional)" style="flex:2; min-width:120px;">
         <label class="muted" style="font-size:12px; display:inline-flex; align-items:center; gap:5px;"
                title="record as a jumpable quantum-travel marker (e.g. an Orbital Marker)">
           <input id="poi-qt" type="checkbox"> QT marker
@@ -3179,24 +3283,23 @@
         </label>
         <button id="poi-arm">capture /showlocation</button>
       </div>
-      <div id="poi-armed" class="armed" hidden>
+      <div id="poi-armed" class="armed" role="status" aria-live="polite" hidden>
         <span id="poi-armed-label">ARMED</span> — run <b>/showlocation</b>
         <button id="poi-cancel" style="margin-left:8px;">cancel</button>
       </div>
-      <div id="poi-result" class="muted" hidden style="padding-top:6px;"></div>
+      <div id="poi-result" class="cap-result" role="status" aria-live="polite"
+           hidden style="padding-top:6px;"></div>
       <div class="credited" id="poi-credit"></div>
     </div>
     </div><!-- /capture-grid -->
-  </div><!-- /NAVIGATION -->
+  </section><!-- /NAVIGATION -->
 
-  <div class="cap-group cap-survey">
-    <h2 class="cap-group-h">SURVEY
-      <span>what's on the ground, and how well the org knows it</span></h2>
-    <p class="cap-purpose cap-group-purpose">Every sighting does three jobs at
-      once: it feeds <b>ELEMENT FINDER</b> and the forecast, it puts a marker
-      on the map your team can fly to, and it joins the org's survey — which
-      ground pays, and which nobody has walked yet. You don't have to be
-      surveying to contribute; logging what you mine <i>is</i> the survey.</p>
+  <section class="cap-group cap-survey" aria-labelledby="cap-survey-h">
+    <p class="cap-group-h" id="cap-survey-h">SURVEY
+      <span>what's on the ground, and how well the org knows it</span></p>
+    <p class="cap-purpose cap-group-purpose">Feeds
+      <a href="#/nav">ELEMENT FINDER</a>, marks the map for your team, and joins
+      the org's survey — logging what you mine <i>is</i> the survey.</p>
     <div class="capture-grid">
     <div class="panel">
       <h2>⛏ ADD RESOURCE NODE</h2>
@@ -3217,34 +3320,40 @@
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
         <select id="node-biome" class="sel" style="flex:1; min-width:120px;"></select>
         <input id="node-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
-        <input id="node-note" class="ti" placeholder="note (optional)" style="flex:2; min-width:110px;">
+        <input id="node-note" class="ti" aria-label="Resource node note" placeholder="note (optional)" style="flex:2; min-width:110px;">
         <button id="node-arm">capture /showlocation</button>
       </div>
-      <div id="node-armed" class="armed" hidden>
+      <div id="node-armed" class="armed" role="status" aria-live="polite" hidden>
         <span id="node-armed-label">ARMED</span> — run <b>/showlocation</b>
         <button id="node-cancel" style="margin-left:8px;">cancel</button>
       </div>
-      <div id="node-result" class="muted" hidden style="padding-top:6px;"></div>
+      <div id="node-result" class="cap-result" role="status" aria-live="polite"
+           hidden style="padding-top:6px;"></div>
       <div class="credited" id="node-credit"></div>
     </div>
 
     <div class="panel">
-      <h2>⚘ 🐾 ADD FAUNA &amp; HARVESTABLES</h2>
+      <!-- One glyph register per heading: the paw was a colour emoji beside
+           two monochrome ones, and it made this h2 20px tall where its twin is
+           16px — which put this whole form 2-4px out of line with the panel it
+           is explicitly paired with. -->
+      <h2>⚘ ADD FAUNA &amp; HARVESTABLES</h2>
       <div id="wild-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="wild-species" class="ti" list="fauna-types" placeholder="fauna or harvestable" style="flex:1; min-width:120px;">
+        <input id="wild-species" class="ti" aria-label="Fauna or harvestable name" list="fauna-types" placeholder="fauna or harvestable" style="flex:1; min-width:120px;">
         <datalist id="fauna-types"></datalist>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
         <select id="wild-biome" class="sel" style="flex:1; min-width:120px;"></select>
         <input id="wild-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
-        <input id="wild-note" class="ti" placeholder="note (optional)" style="flex:2; min-width:110px;">
+        <input id="wild-note" class="ti" aria-label="Fauna or harvestable note" placeholder="note (optional)" style="flex:2; min-width:110px;">
         <button id="wild-arm">capture /showlocation</button>
       </div>
-      <div id="wild-armed" class="armed" hidden>
+      <div id="wild-armed" class="armed" role="status" aria-live="polite" hidden>
         <span id="wild-armed-label">ARMED</span> — run <b>/showlocation</b>
         <button id="wild-cancel" style="margin-left:8px;">cancel</button>
       </div>
-      <div id="wild-result" class="muted" hidden style="padding-top:6px;"></div>
+      <div id="wild-result" class="cap-result" role="status" aria-live="polite"
+           hidden style="padding-top:6px;"></div>
       <div class="credited" id="wild-credit"></div>
     </div>
     </div><!-- /capture-grid -->
@@ -3256,8 +3365,7 @@
          both a misplacement and the reason its purpose was unreadable. -->
     <div id="zone-claim" class="cap-area" hidden>
       <div class="cap-area-head">
-        <button id="zone-claim-btn" class="route-chip primary"
-          title="Name the ground around you as a survey area. The radius is re-fencable later, and deleting an area never touches a sighting.">⛏ Name this area</button>
+        <button id="zone-claim-btn" class="route-chip primary">⛏ Name this area</button>
         <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">radius
           <select id="zone-claim-radius" class="sel" style="min-width:86px;">
             <option value="5000">5 km</option>
@@ -3266,21 +3374,36 @@
             <option value="50000">50 km</option>
           </select>
         </label>
-        <span id="zone-claim-note" class="muted" style="font-size:12px;"></span>
+        <!-- A live state, so it reads at --text. It used to be --dim, i.e. the
+             same colour as the four paragraphs it was surrounded by. -->
+        <span id="zone-claim-note" role="status" aria-live="polite"
+              style="font-size:12px; color:var(--text);"></span>
       </div>
-      <p class="cap-purpose">Turns scattered sightings into a place the org can
-        talk about. Membership is <b>geometric and retroactive</b>: every node,
-        plant and creature anyone has <i>ever</i> logged inside the circle joins
-        the moment you name it, and it keeps collecting by itself afterwards —
-        nothing to tag, nothing to arm.</p>
-      <p class="cap-purpose cap-area-foot">The area then appears in
-        <b>Prospector → ATLAS</b> with a value tier per lane (⛏ mining,
-        ⚘ gathering), what's in it and how well it's covered — so the org can
-        see which ground pays and which is still a blank. Naming ground that
-        turns out to be empty is worth it too: that's the org finding out.</p>
+      <!-- The one sentence that earns a permanent place: it is what the button
+           DOES. The reassurance used to live in the button's title= attribute,
+           which does not exist on touch — on the control whose whole audience is
+           a player holding a phone. -->
+      <p class="cap-purpose">Claims every sighting inside the circle, past and
+        future. Re-fencable later; deleting an area never touches a sighting.</p>
+      <details class="cap-more" id="zone-claim-more">
+        <summary>what naming an area does</summary>
+        <p class="cap-purpose">Turns scattered sightings into a place the org can
+          talk about. Membership is <b>geometric and retroactive</b>: every node,
+          plant and creature anyone has <i>ever</i> logged inside the circle joins
+          the moment you name it, and it keeps collecting by itself afterwards —
+          nothing to tag, nothing to arm.</p>
+        <p class="cap-purpose">The area then appears in
+          <a href="#/halo/atlas">Prospector → ATLAS</a> with a value tier per lane
+          (⛏ mining, ⚘ gathering), what's in it and how well it's covered — so the
+          org can see which ground pays and which is still a blank. Naming ground
+          that turns out to be empty is worth it too: that's the org finding out.</p>
+      </details>
+      <!-- Inside the block it belongs to. It used to be a SIBLING of
+           #zone-claim, so the confirmation rendered below the whole card. -->
+      <div id="zone-claim-result" class="cap-result" role="status" aria-live="polite"
+           hidden style="padding-top:8px;"></div>
     </div>
-    <div id="zone-claim-result" class="muted" hidden style="padding-top:6px;"></div>
-  </div><!-- /SURVEY -->
+  </section><!-- /SURVEY -->
 
   <div class="panel" id="nearby-panel">
     <h2><span id="nearby-title">NEARBY</span> <span class="muted" id="nearby-hint">(click to set destination)</span></h2>
@@ -3294,7 +3417,8 @@
       </span>
       <select id="f-container" class="sel"><option value="">all containers</option></select>
       <select id="f-owner" class="sel"><option value="">all contributors</option></select>
-      <input id="f-text" class="ti" placeholder="filter name / type / ore / species" style="flex:1; min-width:140px;">
+      <input id="f-text" class="ti" aria-label="Filter the rows shown below"
+             placeholder="filter the rows below" style="flex:1; min-width:140px;">
     </div>
     <div class="table-scroll">
       <table>
@@ -3308,8 +3432,14 @@
   </div>
 
   <div class="panel">
-    <h2>SEARCH (whole dataset)</h2>
-    <input id="search" class="ti" placeholder="search POIs, resources, wildlife…" autocomplete="off">
+    <h2>SEARCH <span class="muted" style="font-weight:400; font-size:12px;">everything
+      the org has recorded — the filter above only narrows the rows on screen</span></h2>
+    <!-- Two search boxes on one page need their relationship STATED: this one
+         queries everything the org has ever recorded, the filter bar above
+         narrows the rows already on screen. -->
+    <input id="search" class="ti" aria-label="Search every POI, resource and sighting the org has recorded"
+           placeholder="search every POI, resource and sighting the org has recorded"
+           autocomplete="off">
     <div class="table-x">
     <table id="search-results" hidden>
       <thead><tr><th>NAME</th><th>KIND</th><th>DETAIL</th><th>CONTAINER</th><th>JUMP TO (QT)</th><th>BY</th><th></th></tr></thead>
@@ -6331,19 +6461,29 @@ function renderCapture(cap) {
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
     const ll = L.latitude == null ? "" : ` @ ${L.latitude.toFixed(3)}°, ${L.longitude.toFixed(3)}°`;
     if (L.kind === "resource") show("node-result",
-      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b>${oreValueChip(L.ore)} B${L.band == null ? "?" : Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`);
+      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b>${oreValueChip(L.ore)} B${L.band == null ? "?" : Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`, "ok");
     else if (L.kind === "wildlife") show("wild-result",
-      `added <span class="fauna-dot">❀</span> <b>${esc(L.species)}</b> on ${esc(L.container)}${ll}${by}`);
+      `added <span class="fauna-dot">❀</span> <b>${esc(L.species)}</b> on ${esc(L.container)}${ll}${by}`, "ok");
     else if (L.kind === "harvestable") show("wild-result",
-      `added <span class="harvest-dot">■</span> <b>${esc(L.name)}</b>${oreValueChip(L.name, "harvestable")} on ${esc(L.container)}${ll}${by}`);
+      `added <span class="harvest-dot">■</span> <b>${esc(L.name)}</b>${oreValueChip(L.name, "harvestable")} on ${esc(L.container)}${ll}${by}`, "ok");
     else show("poi-result",
       `added <span class="custom-star">★</span> <b>${esc(L.name)}</b> (${esc(L.type)})` +
       (L.qt_marker ? ` <span class="qt-self">⚡ QT marker</span>` : "") +
       (L.private ? ` <span class="poi-private">🔒 private</span>` : "") +
-      ` on ${esc(L.container)}${ll}${by}`);
+      ` on ${esc(L.container)}${ll}${by}`, "ok");
   }
 }
-function show(id, html) { $(id).innerHTML = html; $(id).hidden = false; }
+// `tone`: "ok" | "err" | undefined. A capture result is a READING, and a
+// reading must not share a colour with the explanation above it, the
+// placeholders beside it and the credit line below it — which is exactly what
+// `class="muted"` on all four of them produced (2026-09-20 critique, P1).
+function show(id, html, tone) {
+  const el = $(id);
+  el.innerHTML = html;
+  el.classList.toggle("ok", tone === "ok");
+  el.classList.toggle("err", tone === "err");
+  el.hidden = false;
+}
 
 async function postJson(url, body) {
   return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -6354,7 +6494,7 @@ async function postJson(url, body) {
 async function armFailed(resultId, r) {
   let detail = "could not arm capture";
   try { detail = (await r.json()).detail || detail; } catch {}
-  show(resultId, `<span style="color:var(--warn)">⚠ ${esc(detail)}</span>`);
+  show(resultId, `⚠ ${esc(detail)}`, "err");
 }
 
 // A QT marker is shared navigation infrastructure, so the two are exclusive:
@@ -6506,7 +6646,7 @@ async function claimSurfaceZone() {
   if (!r.ok) {
     let detail = "could not create the area";
     try { detail = (await r.json()).detail || detail; } catch {}
-    show("zone-claim-result", `<span style="color:var(--warn)">⚠ ${esc(detail)}</span>`);
+    show("zone-claim-result", `⚠ ${esc(detail)}`, "err");
     return;
   }
   const doc = await r.json();
@@ -6520,18 +6660,30 @@ async function claimSurfaceZone() {
   const inherited = zoneLanesOf(st);
   const nAll = inherited.reduce((a, L) => a + L.n, 0);
   show("zone-claim-result",
-    `<span style="color:var(--good)">✓ ${esc(doc.zone.name)}</span> — `
+    `✓ <b>${esc(doc.zone.name)}</b> — `
     + `${nAll} sighting${nAll === 1 ? "" : "s"} already inside`
     + (inherited.length > 1
         ? ` (${inherited.map(L => `${L.n} ${esc(L.label.toLowerCase())}`).join(" · ")})` : "")
     + ((st.contributors || []).length
         ? `, from ${st.contributors.map(esc).join(", ")}` : "")
-    + ((st.ores || []).length ? ` · ${st.ores.slice(0, 3).map(esc).join(" · ")}` : ""));
+    + ((st.ores || []).length ? ` · ${st.ores.slice(0, 3).map(esc).join(" · ")}` : ""), "ok");
   surfaceZonesHere.key = null;                 // force a refetch
   await ensureSurfaceZones(lastState);
   renderZoneClaim(lastState);
   if (lastState) applyWhereChips(lastState);
 }
+
+// The area explanation is a disclosure, and its open state persists: a
+// surveyor who wants it keeps it across every visit, and one who does not
+// never pays for it again. Same contract the map's Layers & settings uses.
+(() => {
+  const d = $("zone-claim-more");
+  if (!d) return;
+  try { d.open = lsGet("capAreaMore") === "1"; } catch {}
+  d.addEventListener("toggle", () => {
+    try { localStorage.setItem("capAreaMore", d.open ? "1" : "0"); } catch {}
+  });
+})();
 
 // Both readouts show the same "where am I" line, so they get the same chips.
 function applyWhereChips(state) {
