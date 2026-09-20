@@ -30,10 +30,28 @@
 > the start of a new mining session. `/api/intel/surveying` gains a
 > `surface` block with per-body **absolute mapped area**. 17 more tests.
 >
-> **Not built:** every UI surface (§5, §6, §11.1) and the `kind="survey"`
-> goal (§11.2, release two). `GET /api/halo/survey/zones` still defaults to
-> `kind="deep"` so a deployed SPA sees exactly what it saw before; the UI
-> slice flips that default. **Reviewed in four passes.** §12 and §13 are review output (gaps,
+>
+> **Slice 3 — UI, built in two parts.** ATLAS carries surface rows in the same
+> table (new WHERE column; Details + Set destination, deliberately no Plan and
+> no Set active), a detail card with the §14.7 suppressions, a band histogram
+> and the §6.3 local plate, plus `GET …/zones/{id}/sightings` for its timeline
+> and `nearest_qt*` stamped on every surface row. Creation lives in the
+> NAVIGATOR (⛏ Name this area + radius, on-body only), and the §11.1 chip is
+> computed **client-side** — the nav-state-push alternative would run the
+> predicate for every online member on every sample.
+>
+> **Verified in a browser, not source-reviewed**, which caught seven things:
+> every ore read "100%" (the chart divides by `z.positive`, which a surface row
+> lacks); the band bars were invisible (`--ok`/`--muted` aren't tokens here —
+> they're `--good`/`--accent`/`--dim`); the plate drew a literal
+> `25.0<small> km</small>` (fmtDist returns HTML); "freshest unworked" was
+> sorted by band; the shared ROCKS header didn't name band; the chip wrapped out
+> of its own pill; and **`state.container` exposes `body_radius_m`/`is_body`,
+> not `body_radius`** — my first cut would have hidden the chip for everyone.
+> §14.9 was also wrong that there is no JS great-circle: `greatCircle()` exists.
+>
+> **Not built:** §6.1's system-map body badge and §6.2's equal-area body plate
+> (the only new canvas), and the `kind="survey"` goal (§11.2, release two). **Reviewed in four passes.** §12 and §13 are review output (gaps,
 cross-tool hooks). §14 is the **audit trail** of an adversarial pass that
 checked every claim against the code: each correction it found has since been
 folded into the section it affects, and a fourth pass re-verified §14 itself and
