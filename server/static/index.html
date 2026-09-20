@@ -17141,8 +17141,8 @@ function haloZonesFiltered() {
   const score = (z) => (z.value && z.value.score) || 0;
   rows.sort((a, b) =>
     f.sort === "name" ? (a.name || "").localeCompare(b.name || "")
-    : f.sort === "marks" ? (b.marks || 0) - (a.marks || 0) || (a.name || "").localeCompare(b.name || "")
-    : (score(b) - score(a)) || (b.marks || 0) - (a.marks || 0)); // value (default)
+    : f.sort === "marks" ? zoneEvidence(b).n - zoneEvidence(a).n || (a.name || "").localeCompare(b.name || "")
+    : (score(b) - score(a)) || zoneEvidence(b).n - zoneEvidence(a).n); // value (default)
   return rows;
 }
 
@@ -17491,7 +17491,7 @@ function renderHaloZoneSelect() {
   const cur = activeSurveyZone;
   sel.innerHTML = '<option value="">— none (auto-cluster) —</option>'
     + haloZones.filter(z => !z.closed).map(z =>
-        `<option value="${z.zone_id}">${esc(z.name)}${z.marks ? ` · ${z.marks} mark${z.marks === 1 ? "" : "s"}` : ""}${surveyValueText(z.value)}</option>`
+        `<option value="${z.zone_id}">${esc(z.name)}${zoneEvidence(z).n ? ` · ${zoneEvidence(z).label}` : ""}${surveyValueText(z.value)}</option>`
       ).join("");
   if (cur != null && !haloZones.some(z => z.zone_id === cur && !z.closed)) {
     const z = haloZones.find(x => x.zone_id === cur);   // keep a closed active zone visible
@@ -17500,6 +17500,39 @@ function renderHaloZoneSelect() {
     sel.appendChild(o);
   }
   sel.value = cur == null ? "" : String(cur);
+}
+
+// The evidence count for EITHER kind of zone. A zone list holds both: a belt
+// zone counts `marks`, a surface area counts `sightings`. Every caller that
+// shows a count, gates a button on one, or asks "is this empty?" goes through
+// here — reading `z.marks` on a surface area silently answers 0. Two earlier
+// passes fixed the two readers a critique named and swept nothing, so four
+// survived, including the destructive confirm.
+function zoneEvidence(z) {
+  const surf = z && z.kind === "surface";
+  const n = (surf ? z.sightings : z && z.marks) || 0;
+  const noun = surf ? "sighting" : "mark";
+  return { n, noun, label: `${n} ${noun}${n === 1 ? "" : "s"}` };
+}
+
+// Zone-management messages have to land on the tab the surveyor is looking at.
+// #halo-zone-status lives inside #halo-tab-atlas, so every failure raised from
+// FIELD — the picker, the ••• menu — was written to a hidden element and the
+// surveyor saw the control snap back with no explanation. Returns a write-only
+// shim so the existing `st.className = …` / `st.textContent = …` call sites
+// need no change.
+function zoneStatusTarget() {
+  const atlas = $("halo-zone-status"), field = $("halo-survey-msg");
+  const tabA = $("halo-tab-atlas"), tabF = $("halo-tab-field");
+  const live = [];
+  if (atlas && tabA && !tabA.hidden) live.push(atlas);
+  if (field && tabF && !tabF.hidden) live.push(field);
+  if (!live.length && atlas) live.push(atlas);   // off-tab: keep it for the return
+  return {
+    set className(v) { for (const el of live) el.className = v; },
+    set textContent(v) { for (const el of live) el.textContent = v; },
+    set innerHTML(v) { for (const el of live) el.innerHTML = v; },
+  };
 }
 
 function renderHaloZoneBanner() {
@@ -17511,7 +17544,8 @@ function renderHaloZoneBanner() {
   const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
   if (!z) { el.hidden = true; return; }
   el.hidden = false;
-  const bits = [`<b>${z.marks || 0}</b> mark${z.marks === 1 ? "" : "s"}`];
+  const ev = zoneEvidence(z);
+  const bits = [`<b>${ev.n}</b> ${ev.noun}${ev.n === 1 ? "" : "s"}`];
   if (z.value) bits.push(surveyValueChip(z.value));   // org value tier (#37)
   if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
   if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
@@ -17519,8 +17553,8 @@ function renderHaloZoneBanner() {
   if ((z.ores || []).length) bits.push(z.ores.map(esc).join(", "));
   el.innerHTML = `<div class="halo-zone-active">⛏ Surveying <b>${esc(z.name)}</b> — ${bits.join(" · ")}`
     + ` <button type="button" class="route-chip" id="halo-zone-clear">Clear active</button>`
-    + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-plan">Plan a drop here</button>` : "")
-    + (z.marks ? ` <button type="button" class="route-chip" id="halo-zone-details" title="mark timeline, contributors, ore breakdown — and attach scan detail to any mark">▸ details</button>` : "")
+    + (ev.n && z.kind !== "surface" ? ` <button type="button" class="route-chip" id="halo-zone-plan">Plan a drop here</button>` : "")
+    + (ev.n ? ` <button type="button" class="route-chip" id="halo-zone-details" title="mark timeline, contributors, ore breakdown — and attach scan detail to any mark">▸ details</button>` : "")
     // Same overflow menu as the ATLAS row. Moving the row's four management
     // actions behind ... while this banner kept them inline left one job with
     // two affordances — and left the hard delete bare here, at the same weight
@@ -18391,7 +18425,7 @@ async function refenceSurveyZone(z) {
     { title: "Re-fence this area", confirmLabel: "Save",
       value: String(Math.round(cur * 10) / 10), placeholder: "25" });
   if (answer == null) return;
-  const st = $("halo-zone-status");
+  const st = zoneStatusTarget();
   const say = (msg) => { if (st) { st.className = "muted"; st.innerHTML = msg; } };
   const km = Number(String(answer).replace(/[^0-9.]/g, ""));
   if (!(km >= 0.5 && km <= 50)) {
@@ -18829,7 +18863,7 @@ function wireZoneLinkCopy(z) {
 }
 
 async function setActiveSurveyZone(zid) {
-  const st = $("halo-zone-status");
+  const st = zoneStatusTarget();
   // A failed switch must put the picker BACK, not leave it showing a zone the
   // server never accepted — the <select> is the only thing a surveyor checks
   // before dropping a mark, so a stale one silently misfiles their evidence.
@@ -18868,7 +18902,7 @@ async function newSurveyZone() {
         ? { label: "📣 Announce it on Discord (calls surveyors to the field)" } : null });
   const name = haloZoneAnnounceOk ? res && res.value : res;
   if (!name || !name.trim()) return;
-  const st = $("halo-zone-status");
+  const st = zoneStatusTarget();
   try {
     const r = await fetch("/api/halo/survey/zones", { method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -18895,7 +18929,7 @@ async function renameSurveyZone(z) {
       confirmLabel: "Rename", value: z.name || "",
       placeholder: surface ? "e.g. Shubin SCD-1 North" : "e.g. NYX-GLC-07 Iron" });
   if (!name || !name.trim() || name.trim() === z.name) return;
-  const st = $("halo-zone-status");
+  const st = zoneStatusTarget();
   try {
     const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, { method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -18918,7 +18952,7 @@ async function renameSurveyZone(z) {
 // server un-sets anyone's active-zone pref that named it. Reversible, so no
 // confirm gate — Reactivate is the undo.
 async function archiveSurveyZone(z, archive) {
-  const st = $("halo-zone-status");
+  const st = zoneStatusTarget();
   try {
     const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, { method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -18939,13 +18973,18 @@ async function archiveSurveyZone(z, archive) {
 // zone is a membership tag, so deleting it untags them and they fall back to
 // proximity clustering. Confirm-gated: this is the one irreversible zone action.
 async function deleteSurveyZone(z) {
-  const n = z.marks || 0;
+  // This read `z.marks`, so over a surface area it said "It has no marks yet."
+  // about 54 sightings from four members — a guardrail telling you it is safe
+  // to delete other people's evidence.
+  const ev = zoneEvidence(z);
+  const kept = z.kind === "surface"
+    ? `Its ${ev.label} are untouched — membership is geometric, so they stop belonging to a named area.`
+    : `Its ${ev.label} are kept and revert to proximity clustering.`;
   const ok = await confirmDialog(
-    n ? `Delete "${z.name}"? Its ${n} ⛏ mark${n === 1 ? "" : "s"} are kept and revert to proximity clustering.`
-      : `Delete "${z.name}"? It has no marks yet.`,
+    ev.n ? `Delete "${z.name}"? ${kept}` : `Delete "${z.name}"? It has no ${ev.noun}s yet.`,
     { title: "Delete survey zone", confirmLabel: "Delete", danger: true });
   if (!ok) return;
-  const st = $("halo-zone-status");
+  const st = zoneStatusTarget();
   try {
     const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, { method: "DELETE" });
     const d = await r.json().catch(() => ({}));
