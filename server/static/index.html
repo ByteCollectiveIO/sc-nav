@@ -3110,8 +3110,12 @@
         <a class="app-card" href="#/halo">
           <img class="app-logo" data-app="halo" loading="lazy" src="/images/prospector_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Prospector</div>
-          <div class="app-desc">Drop into unmarked rock space (the Aaron Halo, Glaciem pockets,
-            Pyro fields), navigate and ⛏ survey it live, and build the org's belt atlas.</div>
+          <!-- Survey first, drop second. PRODUCT.md keeps the app tiles' names
+               and descriptions out of the org-customizable copy set precisely
+               so this sentence stays ours to get right — and it had the
+               priority backwards. -->
+          <div class="app-desc">The org's survey atlas: named areas on moons and in the
+            belts, ranked by what's there and how well we know it — plus drop planning.</div>
         </a>
       </div>
     </section>
@@ -5027,12 +5031,25 @@
         <button data-sys="Pyro" type="button" aria-pressed="false">PYRO</button>
       </span>
       <nav class="rm-tabs" id="halo-tabs" aria-label="Prospector sections">
-        <a class="rm-tab on" href="#/halo" data-tab="drop">☄ DROP</a>
+        <!-- ATLAS first (2026-09-20). The app was built to drop you into the
+             Aaron Halo and has become a survey tool that also plans drops:
+             surface areas have NO drop at all — there is no quantum drop onto a
+             moon — so leading with DROP mis-stated what a growing share of
+             sessions are even for. ATLAS is also the only one of the three that
+             is a READOUT rather than a form: DROP produces nothing until you
+             have supplied a system, a target, a start and a ship, which is the
+             worst possible greeting on a "glance, don't read" surface.
+
+             FIELD second, not DROP: a belt run is chronologically
+             atlas -> drop -> field, but FIELD serves belt AND planetary work
+             while DROP serves only belts. Tabs are ordered by how many sessions
+             touch them, not by one workflow's sequence. -->
+        <a class="rm-tab on" href="#/halo" data-tab="atlas">🗺 ATLAS</a>
         <a class="rm-tab" href="#/halo/field" data-tab="field">⛏ FIELD<span
           class="halo-tab-dot" id="halo-field-dot" hidden title="a fresh live fix arrived"></span></a>
-        <a class="rm-tab" href="#/halo/atlas" data-tab="atlas">🗺 ATLAS</a>
+        <a class="rm-tab" href="#/halo/drop" data-tab="drop">☄ DROP</a>
         <button type="button" id="halo-help" class="route-chip" style="margin-left:8px;"
-          title="show the 3-step intro again">? Intro</button>
+          title="show the 3-step drop intro again (opens ☄ DROP)">? Intro</button>
       </nav>
     </div>
 
@@ -7461,7 +7478,7 @@ function renderFinderSpace(d) {
   for (const b of body.querySelectorAll("[data-plandrop]"))
     b.onclick = () => {
       haloOreSeed = { key: b.dataset.plandrop, system: b.dataset.sys };
-      location.hash = "#/halo";
+      location.hash = "#/halo/drop";
       applyHaloOreSeed();   // same-view hash changes don't re-fire the router
     };
   for (const b of body.querySelectorAll("[data-minedout]"))
@@ -16849,8 +16866,13 @@ function haloZoneHash(z) {
 
 function applyHaloTab(h) {
   const zr = haloZoneRoute(h);
+  // `#/halo` now means ATLAS. `#/halo/atlas` stays valid (every zone deep link
+  // shared in Discord is built on it), and DROP gets its own `#/halo/drop` — so
+  // an old pasted `#/halo` still opens the app, it just lands on the atlas
+  // instead of an empty plan form. Nothing 404s.
   const t = h === "#/halo/field" ? "field"
-    : (h === "#/halo/atlas" || zr) ? "atlas" : "drop";
+    : h === "#/halo/drop" ? "drop"
+    : "atlas";
   haloTabCur = t;
   $("halo-tab-drop").hidden = t !== "drop";
   $("halo-tab-field").hidden = t !== "field";
@@ -16882,8 +16904,8 @@ function applyHaloTab(h) {
   });
 }
 function haloGoTab(t) {          // programmatic jumps (FLY IT, plan-from-ATLAS…)
-  applyHaloTab(t === "field" ? "#/halo/field" : t === "atlas" ? "#/halo/atlas" : "#/halo");
-  const want = t === "drop" ? "#/halo" : "#/halo/" + t;
+  applyHaloTab(t === "field" ? "#/halo/field" : t === "drop" ? "#/halo/drop" : "#/halo");
+  const want = t === "atlas" ? "#/halo" : "#/halo/" + t;
   if (location.hash !== want) location.hash = want;   // router re-run is idempotent
 }
 // FIELD-tab nudge: a NEW fix (position changed) arrived while another tab was
@@ -20828,7 +20850,7 @@ function renderHaloFly(plan) {
   let h = `<div class="panel"><h2>ARMED PLAN · ${haloPlanHead(plan)} <span class="muted"`
     + ` style="font-weight:400; font-size:12px;">from ${esc(plan.start.name)}`
     + `${plan.staged ? " · via a staging hop" : ""} · `
-    + `<a href="#/halo">change it in ☄ DROP</a></span></h2>`;
+    + `<a href="#/halo/drop">change it in ☄ DROP</a></span></h2>`;
   for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
   h += haloDropHtml(plan, "halo-fly-copy", { collapseRef: true });
   h += `</div>`;

@@ -1,6 +1,6 @@
 # Prospector
 
-> Drop into unmarked rock space, navigate and survey it live, and build the org's shared belt atlas. **Route:** `#/halo` (tabs `#/halo/field` · `#/halo/atlas`) · **Launcher group:** Out in the 'Verse
+> The org's shared survey atlas — named areas on moons and in the belts, ranked by what's in them and how well they're known — plus drop planning into unmarked rock space. **Route:** `#/halo` (tabs `#/halo/field` · `#/halo/drop`) · **Launcher group:** Out in the 'Verse
 
 <div align="center">
   <img src="../../images/readme_images/prospector_drop_screenshot.png" alt="Prospector DROP tab: the STANTON | NYX | PYRO system segment, a density-band strip, a true-scale top-down system map, and the plan form" width="820">
@@ -12,7 +12,9 @@ The best mining and salvage space in the 'verse has no quantum markers. The Aaro
 
 The community solved this for one belt with hand-drawn charts (CaptSheppard's Cornerstone survey of the Aaron Halo). Prospector generalises it. Because the tool already knows every quantum marker's true 3D position — and your live position the instant you run `/showlocation` — it can pick the best marker to aim at from *wherever you are*, compute the exact "distance to destination" readout to exit at, route around the star and planets, and then verify where you actually landed after the drop.
 
-Prospector is three jobs in one app, split across three masthead tabs. **DROP** plans the jump. **FIELD** is the live cockpit surface after you arrive — it tells you exactly where you are and lets you ⛏ mark what you find. **ATLAS** is the org's shared belt map, built from everyone's marks: named survey zones ranked by profitability, a coverage map of what's mapped and what isn't, and an export. Formerly "Halo Finder," the app was renamed Prospector because ~90% of what the org ends up mapping is ore.
+Prospector is three jobs in one app, split across three masthead tabs, in the order a session actually uses them. **ATLAS** is the org's shared survey — named areas on moons and in the belts, each carrying what is in it, how much it is worth and how far its numbers can be trusted; it is the landing tab and the one that answers *where is worth going*. **FIELD** is the live cockpit surface once you are there — it tells you exactly where you are and lets you ⛏ mark what you find, on a moon or in a belt. **DROP** plans the jump into unmarked rock space, which is a belt problem only: there is no quantum drop onto a moon, so a growing share of surveying never touches it.
+
+Formerly "Halo Finder," the app was renamed Prospector because ~90% of what the org ends up mapping is ore — and it has since grown from a drop planner that recorded what you found into a survey tool that also plans drops.
 
 Across all three tabs, a **STANTON | NYX | PYRO** system segment in the masthead scopes everything you see.
 
@@ -22,7 +24,7 @@ Open **Prospector** from the launcher (or the `#/halo` hash). Pick your system i
 
 ### ☄ DROP — plan the jump
 
-This is the default tab (`#/halo`). It answers one question: *set destination X, jump, and exit quantum when your "distance to destination" readout hits D.*
+Its own tab (`#/halo/drop`). It answers one question: *set destination X, jump, and exit quantum when your "distance to destination" readout hits D.*
 
 1. **Pick a target** with the `☄ Density band` / `📍 My POI` / `⛏ Ore` segment:
    - **Density band** (Stanton) — tap a bar on the density strip to choose one of the 10 Aaron Halo bands. Band 5 is the visibly dominant jackpot (~3× the peak density of any other band). Then set the aim segment: `Anywhere in band` (a forgiving, wide drop window) or `Densest point` (a tighter window that puts you on the bullseye — best flown with a slow drive or a shallow crossing). On Nyx you pick a Glaciem Ring pocket; on Pyro you pick a named field.
