@@ -13311,6 +13311,11 @@ def intel_surveying(user: dict = Depends(require_session)):
     # belt totals: surveying a belt and mining a moon are different activities,
     # and one "survey sessions" number meaning both answers neither. Same shape
     # so one renderer serves both.
+    #
+    # Ore lane only — see derive_surface_survey_stats for why that is a
+    # decision rather than an omission. Harvestables and fauna are contract
+    # material today, so the org wants to know where they are (the zone card
+    # and the element finder answer that), not how much of a system they cover.
     surface_rows: list[dict] = []
     for system in {z["system"] for z in db.list_survey_zones(kind="surface")}:
         rows = db.list_survey_zones(system, kind="surface")

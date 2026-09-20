@@ -8946,6 +8946,21 @@ def derive_surface_survey_stats(nav: NavData, zones: list[dict]) -> dict:
     five rows. That is the right answer for "how much evidence do we have" and
     a known bias for "how rich is this place"; nothing in the data can tell the
     two apart, so the card says so rather than guessing.
+
+    **ORE ONLY, and deliberately so (user's call, 2026-09-20).** A named area
+    rolls up three lanes (SURFACE_ZONE_LANES) and this counts one of them. That
+    is not an oversight to be tidied up later: in the live game harvestables
+    and fauna exist to satisfy CONTRACTS, not to be sold by the SCU, so their
+    value to a member is knowing WHERE one is — which the zone card, the
+    element finder and the map already give them. Rolling them into "how much
+    has the org surveyed" would inflate a coverage number that exists to answer
+    "how much of this system do we know pays", and a moon with forty logged
+    Maroks and no ore does not pay.
+
+    Revisit only if CIG gives either category a sale price: `build_resource_values`
+    already prices `harvestable`, so the trigger is a real market for it, not a
+    code change here. Until then `surface_stats_marks` stays on the ore lane and
+    the two are read in the zone card instead.
     """
     per_zone, unique = surface_stats_marks(nav, zones)
     # Each half comes from the run that computes it correctly: per-zone tallies
