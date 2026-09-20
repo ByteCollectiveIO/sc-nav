@@ -2911,6 +2911,22 @@
       </div>
       <div id="node-result" class="muted" hidden style="padding-top:6px;"></div>
       <div class="credited" id="node-credit"></div>
+      <!-- Surface survey zones (#37.1). Creation lives HERE, not in Prospector,
+           because this is where you are standing when you find the ore. Hidden
+           unless the fix is on a body: there is nothing to claim in orbit. -->
+      <div id="zone-claim" hidden style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-soft);">
+        <button id="zone-claim-btn" class="route-chip" title="name the ground around you as a survey area — every node the org has ever logged inside it joins immediately">⛏ Name this area</button>
+        <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">radius
+          <select id="zone-claim-radius" class="sel" style="min-width:86px;">
+            <option value="5000">5 km</option>
+            <option value="10000">10 km</option>
+            <option value="25000" selected>25 km</option>
+            <option value="50000">50 km</option>
+          </select>
+        </label>
+        <span id="zone-claim-note" class="muted" style="font-size:12px;"></span>
+      </div>
+      <div id="zone-claim-result" class="muted" hidden style="padding-top:6px;"></div>
     </div>
 
     <div class="panel">
@@ -5554,9 +5570,9 @@ function render(state) {
   $("map-panel").hidden = false;
 
   const c = state.container;
-  const haloChip = haloWhereChip(state);   // "☄ Halo band N" when the fix is in the belt (#31)
-  $("where").innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}` : `deep space${haloChip}`;
-  $("r-cont").innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>` : `deep space${haloChip}`;
+  applyWhereChips(state);                  // "☄ Halo band N" (#31) / "📍 Iron Ridge" (#37.1)
+  ensureSurfaceZones(state);               // refetches only when the body changes
+  renderZoneClaim(state);
   updateBiomes(state.system, c && c.name);
 
   const d = state.destination;
@@ -5979,6 +5995,9 @@ $("node-arm").onclick = async () => {
   if (r.ok) { resetSelect("node-ore"); updateNodeOreValue(); resetSelect("node-biome"); $("node-note").value = ""; } else armFailed("node-result", r);
 };
 $("node-cancel").onclick = () => postJson("/api/capture/cancel", {});
+// Surface survey zones (#37.1): claiming an area is a plain POST off the live
+// fix — no capture to arm, because membership is geometric.
+$("zone-claim-btn").onclick = claimSurfaceZone;
 
 $("wild-arm").onclick = async () => {
   const name = $("wild-species").value.trim();
@@ -5993,6 +6012,130 @@ $("wild-arm").onclick = async () => {
   if (r.ok) { $("wild-species").value = ""; resetSelect("wild-biome"); $("wild-note").value = ""; } else armFailed("wild-result", r);
 };
 $("wild-cancel").onclick = () => postJson("/api/capture/cancel", {});
+
+// ---------- surface survey zones: claim + "you're in one" chip (#37.1) ------
+// The membership predicate has to exist on BOTH sides. Server-side it is
+// nav_core.surface_zone_contains; here it is the same test in JS, because the
+// alternative — a `surface_zone` field on the nav-state push — would run it
+// server-side on every position sample for every online member, which is the
+// caching question at its sharpest. Cheaper to ship this body's zones once and
+// test locally against the greatCircle() this file already has (the design doc
+// claimed there was no JS great-circle — there is, at renderNearby's helper).
+//
+// KEEP IN SYNC with nav_core.SURFACE_ZONE_MAX_HEIGHT_M. _frame_at stamps a
+// lat/lon whenever body_radius > 0 — it checks neither is_body nor altitude —
+// so without a ceiling a fix hundreds of km up carries a valid ground track and
+// would read as "you're in Iron Ridge" from orbit.
+const SURFACE_ZONE_MAX_HEIGHT_M = 10000;
+
+let surfaceZonesHere = { key: null, zones: [] };
+
+function surfaceZonesAt(state) {
+  const c = state && state.container;
+  if (!c || state.latitude == null || state.longitude == null) return [];
+  if (state.altitude_m != null && state.altitude_m > SURFACE_ZONE_MAX_HEIGHT_M) return [];
+  const R = c.body_radius_m || 0;
+  if (!R) return [];
+  return (surfaceZonesHere.zones || []).filter(z =>
+    !z.closed && z.center_lat != null && z.radius_m &&
+    greatCircle(state.latitude, state.longitude, z.center_lat, z.center_lon, R).dist <= z.radius_m);
+}
+
+// Refreshed on a body change, not per sample — the zones of one moon are a
+// small, slow-moving list.
+async function ensureSurfaceZones(state) {
+  const c = state && state.container;
+  const key = c ? `${state.system}/${c.name}` : null;
+  if (key === surfaceZonesHere.key) return;
+  surfaceZonesHere = { key, zones: [] };
+  if (!key || !c.body_radius_m) { renderZoneClaim(state); return; }
+  try {
+    const r = await fetch(`/api/halo/survey/zones?system=${encodeURIComponent(state.system)}`
+      + `&body=${encodeURIComponent(c.name)}`);
+    if (!r.ok) return;
+    const doc = await r.json();
+    if (surfaceZonesHere.key !== key) return;      // a later body won the race
+    surfaceZonesHere.zones = doc.zones || [];
+  } catch {}
+  renderZoneClaim(state);
+  if (lastState) applyWhereChips(lastState);
+}
+
+// The whole awareness mechanism (#37.1 §11.1): deliberately not a prompt, not
+// a modal, not an opt-in — passive contribution has to cost the miner nothing.
+function surfaceZoneChip(state) {
+  const inside = surfaceZonesAt(state);
+  if (!inside.length) return "";
+  const z = inside.sort((a, b) => (b.sightings || 0) - (a.sightings || 0))[0];
+  const more = inside.length > 1 ? ` +${inside.length - 1}` : "";
+  // Compact on purpose: this rides inside the narrow CURRENT CONTAINER tile,
+  // where the full sentence wrapped out of its own pill. nowrap keeps the chip
+  // whole and lets it drop to its own line instead of breaking mid-badge.
+  const full = `${z.name} — ${z.sightings || 0} sighting${z.sightings === 1 ? "" : "s"}`
+    + (inside.length > 1 ? `, and ${inside.length - 1} more area${inside.length > 2 ? "s" : ""} overlap here` : "")
+    + `. Your sightings count toward it automatically — no tagging, nothing to arm.`;
+  return ` <span class="halo-chip" style="display:inline-block; white-space:nowrap; margin-top:4px;"`
+    + ` title="${esc(full)}">📍 ${esc(z.name)} · ${z.sightings || 0}${more}</span>`;
+}
+
+function renderZoneClaim(state) {
+  const row = $("zone-claim"), note = $("zone-claim-note");
+  if (!row) return;
+  const c = state && state.container;
+  const canClaim = !!(c && c.body_radius_m && c.is_body && state.latitude != null
+    && (state.altitude_m == null || state.altitude_m <= SURFACE_ZONE_MAX_HEIGHT_M));
+  row.hidden = !canClaim;
+  if (!canClaim || !note) return;
+  const inside = surfaceZonesAt(state);
+  note.textContent = inside.length
+    ? `you're already in ${inside.map(z => z.name).join(", ")}`
+    : `nothing named here yet`;
+}
+
+async function claimSurfaceZone() {
+  const state = lastState, c = state && state.container;
+  if (!c) return;
+  const name = await promptDialog(
+    `Name the ground around you on ${c.name}. Every node the org has ever logged `
+    + `inside the circle joins immediately — there is nothing to tag and nothing to arm.`,
+    { title: "Name this area", confirmLabel: "Create", placeholder: "e.g. Iron Ridge" });
+  if (!name) return;
+  const radius_m = Number($("zone-claim-radius").value) || 25000;
+  const r = await postJson("/api/halo/survey/zones", {
+    name, body: c.name, center_lat: state.latitude, center_lon: state.longitude,
+    radius_m });
+  if (!r.ok) {
+    let detail = "could not create the area";
+    try { detail = (await r.json()).detail || detail; } catch {}
+    show("zone-claim-result", `<span style="color:var(--warn)">⚠ ${esc(detail)}</span>`);
+    return;
+  }
+  const doc = await r.json();
+  const st = doc.state || {};
+  // A surface zone is born with history, so say what it inherited — otherwise
+  // the number reads as a bug.
+  show("zone-claim-result",
+    `<span style="color:var(--good)">✓ ${esc(doc.zone.name)}</span> — `
+    + `${st.sightings || 0} sighting${st.sightings === 1 ? "" : "s"} already inside`
+    + ((st.contributors || []).length
+        ? `, from ${st.contributors.map(esc).join(", ")}` : "")
+    + ((st.ores || []).length ? ` · ${st.ores.slice(0, 3).map(esc).join(" · ")}` : ""));
+  surfaceZonesHere.key = null;                 // force a refetch
+  await ensureSurfaceZones(lastState);
+  renderZoneClaim(lastState);
+  if (lastState) applyWhereChips(lastState);
+}
+
+// Both readouts show the same "where am I" line, so they get the same chips.
+function applyWhereChips(state) {
+  const c = state.container;
+  const halo = haloWhereChip(state);
+  const surf = c ? surfaceZoneChip(state) : "";
+  const w = $("where"), rc = $("r-cont");
+  if (w) w.innerHTML = c ? `<b>${esc(c.name)}</b> · ${esc(state.system)}${surf}` : `deep space${halo}`;
+  if (rc) rc.innerHTML = c ? `${esc(c.name)} <small>${esc(c.type)} · ${esc(state.system)}</small>${surf}`
+    : `deep space${halo}`;
+}
 
 // ---------- destination ----------
 async function setDestination(id) {
