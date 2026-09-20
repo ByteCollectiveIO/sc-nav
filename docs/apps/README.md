@@ -21,7 +21,7 @@ to use it step by step, and how they fit together.
 | [**Resource Navigator**](navigator.md) | `#/nav` | Live position → bearing/distance/ETA to any POI, resource node, or wildlife; observation capture; forecast, element finder, heatmaps; live teammate presence. The core the rest is built on. |
 | [**Cargo Planner**](cargo-planner.md) | `#/route` | Pickup-and-delivery route solver for hauling contracts under your ship's capacity; run mode with arrival detection; rewards, history, guild hauling boards. |
 | [**Trade Route Planner**](trade-planner.md) | `#/trade` | Buy-low/sell-high multi-leg planner on live UEX prices; run mode with live-position replan; realized-profit stats; saved routes; stock reports; hazard-aware routing. |
-| [**Prospector**](prospector.md) | `#/halo` | Drop into unmarked rock space (Aaron Halo, Glaciem pockets, Pyro fields), verify and ⛏ survey it live, and build the org's shared belt atlas. DROP · FIELD · ATLAS. |
+| [**Prospector**](prospector.md) | `#/halo` | The org's shared survey atlas — named areas on moons and in the belts, ranked by what's in them and how well they're known — plus drop planning into unmarked rock space. ATLAS · FIELD · DROP. |
 
 ## Rally the Org — coordination
 
