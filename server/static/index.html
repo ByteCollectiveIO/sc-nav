@@ -1086,6 +1086,22 @@
   .route-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .route-hint { font-size: 12px; margin: 6px 0 0; line-height: 1.5; }
   .route-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+  /* A plan belongs to the target it was planned for. Changing the target used
+     to leave the old number on screen — and the only thing naming ITS system
+     was a 12px dim caption while the number itself is 22px cyan. Flying a drop
+     number from the wrong star system is the one error this app cannot afford,
+     so a superseded plan says so instead of quietly sitting there. */
+  #halo-result.stale .halo-drop-code { opacity: .45; }
+  #halo-result.stale { position: relative; }
+  .halo-stale-note { display: flex; gap: 8px; align-items: center; margin-bottom: 10px;
+    padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px;
+    background: var(--warn-wash); color: var(--warn); font-size: 12px; }
+  /* The primary action was 26px — the SMALLEST control on the tab — and sat
+     inside the panel headed "SHIP — optional", which told the user the main
+     action belonged to an optional step. */
+  .halo-go { margin-top: 0; }
+  .halo-go #halo-plan { min-height: 40px; font-size: 13px; padding: 0 18px; }
+  @media (max-width: 720px) { .halo-go #halo-plan { min-height: 44px; width: 100%; } }
   .route-pkg { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
     padding: 8px 0; border-top: 1px solid var(--border); }
   .route-pkg:first-child { border-top: none; }
@@ -2382,7 +2398,54 @@
   /* ---- halo finder / Prospector (#/halo, #31; tabs #38) ---- */
   /* Prospector masthead (#38): app name + shared system seg + the DROP /
      FIELD / ATLAS tabs, reusing the RM masthead components (#29). */
-  .halo-mast { justify-content: flex-start; }
+  /* P0 (critique 2026-09-20): at 420px ATLAS measured 1003px wide and FIELD
+     768px, which pushed the DROP/FIELD/ATLAS tab bar to right:990 — off-screen
+     and unreachable, so the tab you were on was the only tab you could use.
+     A grid item defaults to min-width:auto and refuses to shrink below its
+     min-content width, so the .table-x wrappers inside never became scroll
+     containers — they grew to the table instead. DROP was already fine, which
+     is what proved the layout could do this. */
+  #halo-view, #halo-view > .panel, #halo-tab-drop, #halo-tab-field,
+  #halo-tab-atlas, #halo-zones-browse { min-width: 0; }
+  #halo-view .table-scroll { max-width: 100%; }
+  /* The tab bar is the only way between the three surfaces — it must survive a
+     long scroll and a narrow screen. */
+  .halo-mast { justify-content: flex-start; position: sticky; top: 0; z-index: 5; }
+  /* The RS lookup: one input answers the question the 286-cell table made you
+     scan for. */
+  .halo-rs-look { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
+  .halo-rs-out { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+  .halo-rs-all > summary { cursor: pointer; font-size: 12px; color: var(--dim); padding: 4px 0; }
+  .halo-rs-all > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .halo-rs-all[open] > summary { color: var(--text); }
+  .halo-radar-empty { margin: 8px 0 0; }
+  /* Plan failures rendered in the same 12px dim grey as the hint beside them,
+     so a refusal read as advice. */
+  .halo-plan-err { color: var(--warn); font-size: 12px; }
+  /* Two captions measured ~173 chars per line against a 65-75 guideline. */
+  #halo-band-info, #halo-atlas-cap { max-width: 68ch; }
+  /* The ONLY AA failures in the app: --dim text on the accent/selected wash
+     rows composited to 4.47:1 against a 4.5 requirement. Lift the text, not
+     the wash, so the selection tint is unchanged. */
+  tr.selected .muted, tr.zone-sel .muted, .halo-zone-active .muted,
+  tr.selected td.muted, tr.zone-sel td.muted { color: var(--text); }
+  tr.selected .halo-chip, tr.zone-sel .halo-chip { color: var(--text); }
+  /* Rows carry the primary gesture, so they need a focus ring of their own. */
+  #halo-atlas-zones tr[data-zrow]:focus-visible { outline: 2px solid var(--accent);
+    outline-offset: -2px; }
+  /* The coarse-pointer block lifts inputs and buttons but not checkboxes or
+     bare text links, so these stayed 13x13 and 14px tall on a phone. */
+  @media (pointer: coarse) {
+    #halo-view input[type="checkbox"] { width: 22px; height: 22px; }
+    #halo-view a.muted { display: inline-block; min-height: 44px; line-height: 44px; }
+    #halo-view .halo-cell { min-width: 44px; }
+  }
+  @media (max-width: 640px) {
+    /* The actions cell was `white-space: nowrap` and 421px wide on its own,
+       which set the table's min-content and therefore the page width. */
+    #halo-atlas-zones td:last-child { white-space: normal !important; }
+    #halo-atlas-zones .route-chip { margin-bottom: 4px; }
+  }
   .halo-mast .rm-tabs { margin-left: auto; }
   /* FIELD-tab nudge: a fresh live fix arrived while another tab was open. */
   .halo-tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
@@ -2486,7 +2549,7 @@
      same colour as the card and no bar has an extent reference. */
   .svy-card .fc-bar-outer { background: var(--track); }
   .svy-card .card { background: var(--panel2); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px; }
+    border-radius: 8px; padding: 14px 16px; }
   .svy-card .svy-h, .svy-h { font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
     color: var(--text); margin: 0 0 4px; font-weight: 600; }
   /* `.cap` was scoped to .svy-card, so the same class on the FIELD RS card —
@@ -2511,7 +2574,7 @@
   .svy-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 10px auto 0;
                 max-width: 560px; font-size: 11px; color: var(--dim); }
   .svy-legend span { display: inline-flex; align-items: center; gap: 5px; }
-  .svy-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  .svy-legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
   /* The timeline is the least important thing on the card and the longest, so
      it collapses: the maps above it stay reachable without scrolling past
      dozens of rows. */
@@ -4634,7 +4697,7 @@
           in <b><span id="halo-ore-system">the belt</span></b> — likelihood from the ⛏ survey marks,
           fresh “mined out” reports skipped. Alternates offer the runner-up clusters.</p>
       </div>
-      <div class="halo-map-wrap" style="margin-top:12px;"><canvas id="halo-overview"
+      <div class="halo-map-wrap" style="margin-top:12px;"><canvas id="halo-overview" role="img"
         aria-label="system overview: belts, surveyed pockets tinted by value, unmapped gap arcs, stations and gateways"></canvas></div>
       <p class="muted route-hint" id="halo-overview-cap" style="margin-top:4px;"></p>
     </div>
@@ -4675,9 +4738,15 @@
           <input id="halo-staging" type="checkbox" checked> allow a staging hop</label>
       </div>
       <div class="avoid-blk" id="halo-avoid-blk"></div>
+    </div>
+
+    <!-- Its own bar, not the last child of "SHIP — optional": this is the
+         commitment moment, and it was both the smallest control on the tab and
+         filed under a step the copy calls optional. -->
+    <div class="panel halo-go">
       <div class="route-actions">
         <button id="halo-plan" class="active">Plan my drop</button>
-        <span id="halo-plan-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
+        <span id="halo-plan-msg" role="status" aria-live="polite" style="font-size:12px;"></span>
       </div>
     </div>
 
@@ -4709,7 +4778,7 @@
             <button data-win="24h" type="button" aria-pressed="false">24H</button>
           </span>
         </div>
-        <div class="halo-radar-plot"><canvas id="halo-radar"
+        <div class="halo-radar-plot"><canvas id="halo-radar" role="img"
           aria-label="live top-down radar of your position inside the asteroid pocket"></canvas></div>
         <p class="muted halo-radar-tip" id="halo-radar-legend" hidden></p>
         <p class="muted halo-radar-tip" id="halo-radar-nudge" hidden></p>
@@ -4815,10 +4884,10 @@
             </label>
             <span class="muted" id="halo-body-cap" style="font-size:12px;"></span>
           </div>
-          <div class="halo-map-wrap"><canvas id="halo-body-map"
+          <div class="halo-map-wrap"><canvas id="halo-body-map" role="img"
             aria-label="equal-area map of one body: ore heat cells, named survey areas and your position"></canvas></div>
         </div>
-        <div class="halo-map-wrap" id="halo-atlas-map-wrap"><canvas id="halo-atlas-map"
+        <div class="halo-map-wrap" id="halo-atlas-map-wrap"><canvas id="halo-atlas-map" role="img"
           aria-label="system overview: belts, surveyed pockets tinted by value, unmapped gap arcs, stations and gateways"></canvas></div>
         <!-- Tapping a zone square selects it: this bar names what you hit and
              carries the same actions as its table row, so the map is a real
@@ -8748,14 +8817,14 @@ async function planRoute() {
                     ...(hasDrive && $("route-qd").value ? { qd: $("route-qd").value } : {}),
                     ...(hasDrive && $("route-inrange").checked ? { in_range_only: true } : {}),
                     ...routeStartPayload() };
-  msg.textContent = "planning…";
+  haloPlanSay("planning…", "status");
   let res;
   try {
     const r = await fetch("/api/route/plan", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(lastPlanInput) });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
+    if (!r.ok) { const d = await r.json().catch(() => ({})); haloPlanSay("⚠ " + (d.detail || "plan failed"), "error"); return; }
     res = await r.json();
-  } catch { msg.textContent = "⚠ network error"; return; }
+  } catch { haloPlanSay("⚠ network error", "error"); return; }
   msg.textContent = skipped ? `${skipped} incomplete row skipped` : "";
   renderPlan(res);
 }
@@ -10294,7 +10363,7 @@ async function planTrade() {
     if (!r.ok) { const d = await r.json().catch(() => ({})); msg.textContent = "⚠ " + (d.detail || "plan failed"); return; }
     res = await r.json();
   } catch { msg.textContent = "⚠ network error"; return; }
-  msg.textContent = "";
+  haloPlanSay("", "status");
   renderTradePlan(res);
 }
 
@@ -16137,6 +16206,7 @@ function applyHaloTab(h) {
     refreshHaloAfter();          // redraw verdict + radar now the canvas has layout
     renderHaloRsRef();           // RS cheat sheet under the radar (#38)
   }
+  wireHaloStaleWatch();   // idempotent; the pickers exist by now
   if (t === "atlas") {
     renderHaloAtlas();
     if (zr) openZoneFromRoute(zr);
@@ -16887,12 +16957,25 @@ function renderHaloAtlasZones() {
     b.onclick = () => { const z = byId(b.dataset.zradius); if (z) refenceSurveyZone(z); };
   // Row → map: the other half of the link. Buttons handle themselves, so the
   // row only claims clicks that missed one.
-  for (const tr of el.querySelectorAll("tr[data-zrow]"))
+  for (const tr of el.querySelectorAll("tr[data-zrow]")) {
+    // The row carries the primary "look at this zone" gesture but had no
+    // keyboard path at all — only the ▸ Details button inside it did.
+    tr.tabIndex = 0;
+    tr.setAttribute("role", "button");
+    tr.setAttribute("aria-label", `Select ${tr.querySelector("b") ? tr.querySelector("b").textContent : "zone"}`);
+    tr.onkeydown = (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (e.target.closest("button, a")) return;
+      e.preventDefault();
+      const id = Number(tr.dataset.zrow);
+      selectHaloAtlasZone(id === haloAtlasSelZone ? null : id);
+    };
     tr.onclick = (e) => {
       if (e.target.closest("button, a")) return;
       const id = Number(tr.dataset.zrow);
       selectHaloAtlasZone(id === haloAtlasSelZone ? null : id);
     };
+  }
 }
 
 // RS signature reference (#38 playtest note 5): the FIELD-tab cheat sheet a
@@ -16975,6 +17058,38 @@ const RS_SRC = {
   clash: `<span class="rs-src warn" title="the org's scans derive a base that is not a multiple of the reference — check the sample, or re-sync the feed after a patch">!</span>`,
 };
 
+// Look up ONE signature. In game you read a number off the scanner and need
+// the name — you do not read a 286-cell table. The table stays, behind a
+// disclosure, for the times you want to browse it.
+function rsLookup(raw, ores) {
+  const v = Number(String(raw).replace(/[^0-9.]/g, ""));
+  if (!(v > 0)) return null;
+  const hits = [];
+  for (const o of ores) {
+    if (!(o.base > 0)) continue;
+    const mult = v / o.base;
+    if (Math.abs(mult - Math.round(mult)) < 1e-6 && Math.round(mult) >= 1)
+      hits.push({ name: o.ore, mult: Math.round(mult), base: o.base });
+  }
+  hits.sort((a, b) => a.mult - b.mult);
+  return { value: v, hits };
+}
+
+function renderRsLookupResult(ores) {
+  const out = $("halo-rs-out"), inp = $("halo-rs-q");
+  if (!out || !inp) return;
+  const r = rsLookup(inp.value, ores);
+  if (!r) { out.innerHTML = ""; return; }
+  if (!r.hits.length) {
+    out.innerHTML = `<span class="muted">${r.value.toLocaleString()} matches no known base — `
+      + `log it in a scan and it becomes one.</span>`;
+    return;
+  }
+  out.innerHTML = r.hits.map(h =>
+    `<span class="halo-chip"><b>${esc(h.name)}</b> ×${h.mult}`
+    + `<span class="muted"> · base ${h.base.toLocaleString()}</span></span>`).join(" ");
+}
+
 function renderHaloRsRef() {
   const el = $("halo-rs-ref");
   if (!el) return;
@@ -17019,12 +17134,24 @@ function renderHaloRsRef() {
       + `so it can't tell them apart.</p>` : "";
   const credit = nFeed && oreSigCredit
     ? `<p class="cap" style="margin:6px 0 0;">${esc(oreSigCredit)}</p>` : "";
-  el.innerHTML = `<span class="fld-label">⌖ RS SIGNATURE REFERENCE <span class="muted" style="font-weight:400; text-transform:none;">${basis}</span></span>`
+  // The table was ~47% of FIELD's height, permanently expanded, and it pushed
+  // ⛏ Mark survey point — this tab's primary action — below the fold. It was
+  // also the wrong interaction: in game you read ONE number off the scanner
+  // and want the name, so the lookup leads and the table browses.
+  el.innerHTML = `<span class="fld-label">⌖ RS SIGNATURE <span class="muted" style="font-weight:400; text-transform:none;">${basis}</span></span>`
+    + `<div class="halo-rs-look">`
+    + `<label class="muted" style="font-size:12px;">scanner reads`
+    + ` <input id="halo-rs-q" class="ti" inputmode="numeric" autocomplete="off"`
+    + ` style="width:120px;" placeholder="e.g. 15850"></label>`
+    + `<span id="halo-rs-out" class="halo-rs-out"></span></div>`
+    + `<details class="halo-rs-all"><summary>Show all ${ores.length} ores</summary>`
     + `<div class="table-x" style="margin-top:6px;"><table><thead><tr><th scope="col">ORE</th>`
     + `<th scope="col" class="num">RS BASE</th>`
     + RS_MULTIPLES.map(k => `<th scope="col" class="num">×${k}</th>`).join("")
     + `</tr></thead><tbody>`
-    + rows + `</tbody></table></div>` + legend + foot + credit;
+    + rows + `</tbody></table></div>` + legend + `</details>` + foot + credit;
+  const q = $("halo-rs-q");
+  if (q) q.oninput = () => renderRsLookupResult(ores);
 }
 
 // Coverage caption: the Keeger arc numbers + the next-gap chip (Nyx), and a
@@ -17239,6 +17366,18 @@ function closeHaloSurveyCard(fromRoute) {
 
 // Open the card the hash names. Idempotent: the card itself sets the hash, so
 // this runs again on the resulting hashchange and must not re-fetch or loop.
+// Focus the card AFTER the hash-driven re-render settles. openHaloSurveyCard
+// sets the hash, which fires hashchange -> applyView -> applyHaloTab ->
+// renderHaloAtlas(); that repaint lands after a synchronous focus() call and
+// leaves activeElement on <body>, which is exactly the bug the tabindex was
+// added to fix. Measured by the 2026-09-20 critique.
+function focusZoneCard(el) {
+  if (!el) return;
+  const go = () => { if (el.isConnected && !el.hidden) el.focus({ preventScroll: true }); };
+  go();
+  requestAnimationFrame(() => requestAnimationFrame(go));
+}
+
 async function openZoneFromRoute(zr) {
   const match = () => haloZones.find(z =>
     String(z.key || z.slug || "").toLowerCase() === zr.key.toLowerCase()
@@ -18274,7 +18413,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
   // Nothing redrew on resize, so a 560px buffer scaled into a 325px box at
   // 0.58x and the 10px labels rendered at ~5.8px. Critique P1.
   surfacePlateRedraw = () => drawSurfaceZonePlate($("svy-plate"), z, sightings);
-  el.focus({ preventScroll: false });
+  focusZoneCard(el);
 }
 
 function renderHaloSurveyCard(el, z, marks) {
@@ -18367,7 +18506,7 @@ function renderHaloSurveyCard(el, z, marks) {
   const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
   const ex = $("svy-export"); if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(z.system || haloSystem);
   wireZoneLinkCopy(z);
-  el.focus({ preventScroll: false });   // same focus move as the surface card
+  focusZoneCard(el);
   for (const b of el.querySelectorAll("[data-scanmark]"))
     b.onclick = () => {
       const id = Number(b.dataset.scanmark);
@@ -18537,7 +18676,7 @@ function activeZonePocket() {
 // POI, ship, staging) is a DROP control.
 function haloPlanFailed(text) {
   const msg = $("halo-plan-msg");
-  if (msg) msg.textContent = text;
+  haloPlanSay(text, "error");
   haloGoTab("drop");
   if (msg) msg.scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
 }
@@ -18552,13 +18691,13 @@ async function planHaloZone(z) {
   const ship = $("halo-ship").value.trim();
   if (ship) { body.ship = ship; if (!$("halo-drive-wrap").hidden && $("halo-qd").value) body.qd = $("halo-qd").value; }
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
-  $("halo-plan-msg").textContent = "planning…";
+  haloPlanSay("planning…", "status");
   try {
     const r = await fetch("/api/halo/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { haloPlanFailed("⚠ " + (d.detail || "plan failed")); return; }
-    $("halo-plan-msg").textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    haloPlanSay("", "status"); haloLastPlan = d; renderHaloPlan(d);
     haloGoTab("drop");   // callable from ATLAS/FIELD — the result lives in DROP (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
   } catch { haloPlanFailed("⚠ network error"); }
@@ -18574,13 +18713,13 @@ async function planHaloGap() {
   const ship = $("halo-ship").value.trim();
   if (ship) { body.ship = ship; if (!$("halo-drive-wrap").hidden && $("halo-qd").value) body.qd = $("halo-qd").value; }
   if (avoidPoiIds().length) body.avoid_poi_ids = avoidPoiIds();
-  $("halo-plan-msg").textContent = "planning…";
+  haloPlanSay("planning…", "status");
   try {
     const r = await fetch("/api/halo/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { haloPlanFailed("⚠ " + (d.detail || "plan failed")); return; }
-    $("halo-plan-msg").textContent = ""; haloLastPlan = d; renderHaloPlan(d);
+    haloPlanSay("", "status"); haloLastPlan = d; renderHaloPlan(d);
     haloGoTab("drop");   // reachable from the ATLAS coverage card too (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
   } catch { haloPlanFailed("⚠ network error"); }
@@ -18759,7 +18898,12 @@ function wireHaloFinder() {
   updateHaloStartUI();
   attachHaloShipPicker();
   mountAvoidBlacklist($("halo-avoid-blk"), () => { if (haloLastPlan) planHalo(); });
-  $("halo-plan").onclick = planHalo;
+  $("halo-plan").onclick = async () => {
+  const b = $("halo-plan");
+  if (b.disabled) return;          // in-flight: the fetch is already running
+  b.disabled = true;
+  try { await planHalo(); } finally { b.disabled = false; }
+};
   $("halo-intro-dismiss").onclick = () => {
     try { localStorage.setItem("halo_intro_dismissed", "1"); } catch {} renderHaloIntro(); };
   wireHaloOverviewClicks();
@@ -18778,20 +18922,31 @@ function wireHaloFinder() {
   });
 }
 
+// Validation and network failures used to render in the same 12px dim grey as
+// the hint beside them, so "pick a field first" read as advice rather than a
+// refusal. role=alert + a warn colour make the refusal legible.
+function haloPlanSay(text, kind) {
+  const msg = $("halo-plan-msg");
+  if (!msg) return;
+  msg.textContent = text;
+  msg.className = kind === "error" ? "halo-plan-err" : "muted";
+  msg.setAttribute("role", kind === "error" ? "alert" : "status");
+}
+
 async function planHalo() {
   const msg = $("halo-plan-msg");
   if (haloStartArmed) {   // armed but no fix yet — wait for /showlocation
-    msg.className = "muted"; msg.textContent = "run /showlocation to set your start first";
+    haloPlanSay("run /showlocation to set your start first", "error");
     return;
   }
   const body = { allow_staging: $("halo-staging").checked, system: haloSystem };
   if (haloGoal === "ore") {                        // "⛏ Ore" (#37 slice 2)
     const ore = $("halo-ore").value.trim();
-    if (!ore) { msg.textContent = "pick an ore first"; return; }
+    if (!ore) { haloPlanSay("pick an ore first", "error"); return; }
     body.ore = ore;
   } else if (haloGoal !== "band") {                // "📍 My POI", any system
     const id = $("halo-target-poi").dataset.poiId;
-    if (!id) { msg.textContent = "pick one of your POIs first"; return; }
+    if (!id) { haloPlanSay("pick one of your POIs first", "error"); return; }
     body.target_poi_id = Number(id);
   } else if (haloSystem === "Stanton") {
     body.band = haloBandSel; body.aim = haloAim;
@@ -18809,7 +18964,7 @@ async function planHalo() {
     }
   } else {                                         // Pyro: a field is required
     const uuid = $("halo-field").dataset.uuid;
-    if (!uuid) { msg.textContent = "pick a field first"; return; }
+    if (!uuid) { haloPlanSay("pick a field first", "error"); return; }
     body.field_uuid = uuid;
   }
   const sid = $("halo-start-poi").dataset.poiId;
@@ -18925,6 +19080,10 @@ function haloDropHtml(plan, copyId) {
 }
 
 function haloPlanHead(plan) {   // shared by the DROP result + the FIELD pin (#38)
+  // The system leads. The number on this card is only valid in one star
+  // system, and the only thing that used to name it was a 12px dim caption
+  // sitting under a 22px cyan readout.
+  const sys = plan.system ? `${esc(String(plan.system)).toUpperCase()} · ` : "";
   let head = plan.band
     ? `BAND ${plan.band.band} DROP` + (plan.aim === "peak" ? " · DENSEST POINT" : "")
     : plan.mode === "pocket"
@@ -18936,7 +19095,49 @@ function haloPlanHead(plan) {   // shared by the DROP result + the FIELD pin (#3
         + ((plan.drop.pocket.survey || {}).status === "barren" ? " · ⚠ SURVEYED BARREN" : "")
       : `FLY-BY: ${esc(plan.target.name).toUpperCase()}`;
   if (plan.ore) head = `⛏ ${esc(plan.ore).toUpperCase()} → ${head}`;   // ore goal (#37)
-  return head;
+  return sys + head;
+}
+
+// A plan belongs to the target it was planned for. Any input that changes the
+// target supersedes it — so say so on the card rather than leaving a number
+// from a different system sitting under a fresh error message.
+function markHaloPlanStale() {
+  if (!haloLastPlan) return;
+  const el = $("halo-result");
+  if (!el || el.hidden || el.classList.contains("stale")) return;
+  el.classList.add("stale");
+  const card = el.querySelector(".panel");
+  if (card && !card.querySelector(".halo-stale-note")) {
+    const note = document.createElement("div");
+    note.className = "halo-stale-note";
+    note.setAttribute("role", "status");
+    note.textContent = "↻ target changed — this number is from the previous plan. "
+      + "Plan again to refresh it.";
+    card.insertBefore(note, card.firstChild);
+  }
+}
+
+// Every control that changes what would be planned. Wired once, after the
+// pickers exist.
+function wireHaloStaleWatch() {
+  const ids = ["halo-system", "halo-goal", "halo-belt", "halo-ore", "halo-target-poi",
+               "halo-start-poi", "halo-field", "halo-pocket", "halo-keeger-pocket",
+               "halo-staging", "halo-ship", "halo-qd"];
+  for (const id of ids) {
+    const el = $(id);
+    if (!el || el.dataset.staleWired) continue;
+    el.dataset.staleWired = "1";
+    el.addEventListener("change", markHaloPlanStale);
+    el.addEventListener("input", markHaloPlanStale);
+  }
+  // Segs and the band strip are buttons, not inputs — catch them by delegation
+  // so new cells are covered without re-wiring.
+  for (const sel of ["#halo-bands", "#halo-system", "#halo-goal-seg", "#halo-belt-seg"]) {
+    const host = document.querySelector(sel);
+    if (!host || host.dataset.staleDelegated) continue;
+    host.dataset.staleDelegated = "1";
+    host.addEventListener("click", (e) => { if (e.target.closest("button")) markHaloPlanStale(); });
+  }
 }
 
 function wireHaloCopy(id, plan) {
@@ -18967,6 +19168,7 @@ function renderHaloFly(plan) {
 
 function renderHaloPlan(plan) {
   const el = $("halo-result");
+  el.classList.remove("stale");
   const head = haloPlanHead(plan);
   let h = `<div class="panel"><h2>${head} <span class="muted" style="font-weight:400; font-size:12px;">`
     + `from ${esc(plan.start.name)}${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
@@ -19674,6 +19876,34 @@ let haloRadar = { key: null, pts: [] };   // rolling path buffer: {dx,dy,dz}
 let haloRadarLast = null;                 // last pocket drawn (for resize)
 let radarMarkAt = null;   // radar offset when my last ⛏ mark landed (§5.3 nudge)
 
+// The radar is FIELD's headline instrument and the DROP intro promises it by
+// name. For every Stanton band drop — which is what DROP's own default
+// produces — there is no pocket centre, so it used to vanish with no
+// explanation. Absent-with-a-reason beats absent.
+function radarEmptyState(reason) {
+  const wrap = $("halo-radar-wrap");
+  if (!wrap) return;
+  wrap.hidden = false;
+  const plot = wrap.querySelector(".halo-radar-plot");
+  if (plot) plot.hidden = true;
+  let note = wrap.querySelector(".halo-radar-empty");
+  if (!note) {
+    note = document.createElement("p");
+    note.className = "cap halo-radar-empty";
+    wrap.appendChild(note);
+  }
+  note.textContent = reason;
+}
+
+function clearRadarEmptyState() {
+  const wrap = $("halo-radar-wrap");
+  if (!wrap) return;
+  const plot = wrap.querySelector(".halo-radar-plot");
+  if (plot) plot.hidden = false;
+  const note = wrap.querySelector(".halo-radar-empty");
+  if (note) note.remove();
+}
+
 function updatePocketRadar(d) {
   const wrap = $("halo-radar-wrap");
   if (!wrap) return;
@@ -19683,7 +19913,19 @@ function updatePocketRadar(d) {
   // A datamined/surveyed pocket at the fix wins; else fall back to the active
   // survey zone (#36.1) so the radar works in open space / the ring dead-zone.
   const p = live ? dp : activeZonePocket();
-  if (!p || !p.center_xyz) { wrap.hidden = true; haloRadarLast = null; haloRadar = { key: null, pts: [] }; return; }
+  if (!p || !p.center_xyz) {
+    // Say why. A band is a ring, not a pocket, so there is no centre to plot
+    // around — the band verdict above IS the position readout in that case.
+    radarEmptyState(d && d.band
+      ? "Aaron Halo bands are rings, not pockets — there is no centre to plot "
+        + "around, so the band verdict above is your position. The radar appears "
+        + "inside a mapped pocket, or once you set an active survey zone."
+      : "Available inside a mapped pocket, or once you set an active survey "
+        + "zone in ATLAS. Nothing to plot around yet.");
+    haloRadarLast = null; haloRadar = { key: null, pts: [] };
+    return;
+  }
+  clearRadarEmptyState();
   if (live) p.system = d.system;   // zone-fallback pockets carry their own
   if (haloRadar.key !== p.key) haloRadar = { key: p.key, pts: [] };
   const last = haloRadar.pts[haloRadar.pts.length - 1];
