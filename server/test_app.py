@@ -11011,6 +11011,38 @@ class SurfaceValueApiTests(unittest.TestCase):
         # one "survey sessions" number meaning both answers neither).
         self.assertNotIn("sightings", r.json()["totals"])
 
+    def test_the_sightings_endpoint_feeds_the_cards_timeline(self):
+        self._add_obs(0.0, 0.0, ore="Quantanium", band=7, handle="ana")
+        self._add_obs(0.01, 0.0, ore="Taranite", band=3, handle="bo")
+        zid = self._create("Iron Ridge", 0.0, 0.0).json()["zone"]["id"]
+        r = self.client.get(f"/api/halo/survey/zones/{zid}/sightings")
+        self.assertEqual(r.status_code, 200, r.text)
+        doc = r.json()
+        self.assertEqual(doc["total"], 2)
+        self.assertEqual(doc["body"], self.BODY)
+        row = doc["sightings"][0]
+        # Epoch, not the ISO string: the card renders ages.
+        self.assertIsInstance(row["observed_at"], float)
+        self.assertIn("dist_m", row)
+        self.assertIsNotNone(row["ore"])
+
+    def test_the_sightings_endpoint_refuses_a_deep_space_zone(self):
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Belt Pocket",
+                                     "system": "Nyx"}).json()["zone"]["id"]
+        r = self.client.get(f"/api/halo/survey/zones/{zid}/sightings")
+        self.assertEqual(r.status_code, 404)
+
+    def test_a_surface_zone_carries_a_route_to_its_nearest_marker(self):
+        # Navigable, never plannable: this is what it gets INSTEAD of a drop.
+        self._add_obs(0.0, 0.0)
+        self._create("Iron Ridge", 0.0, 0.0)
+        row = self.client.get(
+            "/api/halo/survey/zones?system=Stanton&kind=surface").json()["zones"][0]
+        self.assertIn("nearest_qt", row)
+        self.assertIn("nearest_qt_id", row)
+        self.assertIn("nearest_qt_dist_m", row)
+
     def test_intel_reports_mapped_area_not_a_percentage(self):
         self._add_obs(0.0, 0.0)
         self._create("Iron Ridge", 0.0, 0.0, radius_m=50_000.0)

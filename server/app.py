@@ -7319,6 +7319,41 @@ async def create_survey_zone(body: ZoneIn, user: dict = Depends(require_session)
     return out
 
 
+@app.get("/api/halo/survey/zones/{zone_id}/sightings")
+def get_zone_sightings(zone_id: int, limit: int = 200,
+                       user: dict = Depends(require_session)):
+    """The sightings inside one surface zone, newest first — the detail card's
+    timeline (#37.1 §5).
+
+    Its OWN endpoint rather than a filter on /api/halo/survey, because that one
+    returns deep-space *marks*; the card would otherwise pull a whole system's
+    mark list to render one moon. Capped, because a worked area accumulates
+    without bound and the card only ever shows a timeline.
+    """
+    zone = db.get_survey_zone(zone_id)
+    if zone is None or not zone.get("body"):
+        raise HTTPException(status_code=404, detail="unknown surface zone")
+    container = nav.resolve_container(zone["system"], zone["body"])
+    body_radius_m = float(getattr(container, "body_radius", 0.0) or 0.0)
+    members = nav_core.surface_zone_members(nav, zone, body_radius_m)
+    rows = []
+    for o in members:
+        dist_m, _bearing = nav_core.great_circle(
+            o.latitude, o.longitude, zone["center_lat"], zone["center_lon"],
+            body_radius_m) if body_radius_m else (None, None)
+        rows.append({
+            "id": o.id, "observed_at": nav_core._obs_epoch(o.observed_at),
+            "owner_handle": o.owner_handle, "ore": o.data.get("ore"),
+            "band": o.data.get("band"), "quality": o.data.get("quality"),
+            "biome": o.biome, "mined_at": o.data.get("mined_at"),
+            "latitude": o.latitude, "longitude": o.longitude,
+            "height_m": o.height_m, "dist_m": dist_m,
+        })
+    rows.sort(key=lambda r: (r["observed_at"] is None, -(r["observed_at"] or 0)))
+    return {"zone_id": zone_id, "name": zone["name"], "body": zone["body"],
+            "total": len(rows), "sightings": rows[:max(1, min(1000, limit))]}
+
+
 @app.patch("/api/halo/survey/zones/{zone_id}")
 async def patch_survey_zone(zone_id: int, body: ZonePatchIn,
                             user: dict = Depends(require_session)):

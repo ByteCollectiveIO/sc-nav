@@ -8159,6 +8159,31 @@ def surface_zones_state(nav: NavData, system: str, zones: list[dict]) -> list[di
             "contributors": sorted({o.owner_handle for o in members if o.owner_handle}),
         }
         row.update(surface_zone_fit(members, body_radius_m, radius_m))
+        # Navigable, never plannable (#37.1 §4): what a surface zone gets
+        # INSTEAD of being a drop target is a route to the nearest quantum
+        # marker, and the last leg flown by hand.
+        #
+        # There is no one helper for this. `nearest_qt_marker` wants an ENTITY
+        # with .system/.container_name/.local_km and yields only a name and a
+        # distance; the id comes from a separate name+system scan. So follow
+        # resource_hotspots' recipe exactly: synthesize a throwaway Poi at the
+        # centre, resolve, then scan. (That scan is ambiguous if two markers in
+        # a system share a name — inherited, not introduced here.)
+        if container is not None and body_radius_m > 0:
+            target = Poi(
+                id=-1, name="", system=row["system"], container_name=body, type="",
+                local_km=local_km_from_latlon(lat, lon, body_radius_m),
+                global_m=None, latitude=lat, longitude=lon, height_m=None,
+                qt_marker=False,
+            )
+            row["nearest_qt"], row["nearest_qt_dist_m"] = nearest_qt_marker(
+                nav, target, ROTATION_EPOCH)
+            row["nearest_qt_id"] = next(
+                (p.id for p in nav.qt_markers
+                 if p.name == row["nearest_qt"] and p.system == row["system"]),
+                None)
+        else:
+            row["nearest_qt"] = row["nearest_qt_id"] = row["nearest_qt_dist_m"] = None
         out.append(row)
     return out
 

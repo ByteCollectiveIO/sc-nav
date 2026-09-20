@@ -16285,7 +16285,10 @@ let activeSurveyZone = null;      // zone_id | null
 async function loadHaloZones(sys) {
   sys = sys || haloSystem || "Nyx";
   try {
-    const r = await fetch("/api/halo/survey/zones?system=" + encodeURIComponent(sys));
+    // kind=all: deep-space belt zones AND surface mining areas (#37.1) in one
+    // list, which is the whole point of them sharing a table. The server
+    // defaults to "deep" so a client that predates surface zones is unaffected.
+    const r = await fetch("/api/halo/survey/zones?kind=all&system=" + encodeURIComponent(sys));
     if (!r.ok) return;
     const doc = await r.json();
     haloZones = doc.zones || [];
@@ -16507,6 +16510,7 @@ function renderHaloAtlasZones() {
     return;
   }
   const cell = (z) => {
+    if (z.kind === "surface") return surfaceZoneRow(z);
     const active = z.zone_id === activeSurveyZone;
     const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
       : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
@@ -16533,6 +16537,7 @@ function renderHaloAtlasZones() {
       + `<td><b>${esc(z.name)}</b>${active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : ""}`
         + (z.contributors && z.contributors.length ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
         + `</td>`
+      + `<td class="muted" style="white-space:nowrap;">deep space</td>`
       + `<td class="num">${z.marks || 0}</td>`
       + `<td>${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
       + `<td>${rocks}</td>`
@@ -16542,7 +16547,7 @@ function renderHaloAtlasZones() {
       + `</tr>`;
   };
   el.innerHTML = `<table><thead><tr>`
-    + `<th>ZONE</th><th class="num">MARKS</th><th>VALUE</th><th>ROCKS</th>`
+    + `<th>ZONE</th><th>WHERE</th><th class="num">EVIDENCE</th><th>VALUE</th><th>ROCKS / BAND</th>`
     + `<th>ORES</th><th>SIZE</th><th></th></tr></thead><tbody>`
     + rows.map(cell).join("") + `</tbody></table>`;
   const byId = (id) => haloZones.find(x => x.zone_id === Number(id));
@@ -16558,6 +16563,10 @@ function renderHaloAtlasZones() {
     b.onclick = () => { const z = byId(b.dataset.zarchive); if (z) archiveSurveyZone(z, !z.closed); };
   for (const b of el.querySelectorAll("[data-zdelete]"))
     b.onclick = () => { const z = byId(b.dataset.zdelete); if (z) deleteSurveyZone(z); };
+  // Surface zones are navigable, never plannable: no drop, no "set active" —
+  // just point the navigator at the nearest QT marker and fly the last leg.
+  for (const b of el.querySelectorAll("[data-zdest]"))
+    b.onclick = () => setDestination(Number(b.dataset.zdest));
   // Row → map: the other half of the link. Buttons handle themselves, so the
   // row only claims clicks that missed one.
   for (const tr of el.querySelectorAll("tr[data-zrow]"))
@@ -16909,6 +16918,21 @@ async function openHaloSurveyCard(z) {
   el.innerHTML = `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
     + `<p class="muted" style="font-size:12px; margin-top:8px;">loading survey summary…</p>`;
   const bb = $("svy-back"); if (bb) bb.onclick = closeHaloSurveyCard;
+  if (z.kind === "surface") {
+    // Its own endpoint, not a filter on /api/halo/survey: that one returns
+    // deep-space marks, and the card would pull a whole system's mark list to
+    // render one moon.
+    try {
+      const doc = await fetch(`/api/halo/survey/zones/${z.zone_id}/sightings`)
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+      renderSurfaceSurveyCard(el, z, doc.sightings || [], doc.total || 0);
+    } catch {
+      el.innerHTML = `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+        + `<p class="muted" style="margin-top:8px;">⚠ couldn't load this area's sightings</p>`;
+      const b = $("svy-back"); if (b) b.onclick = closeHaloSurveyCard;
+    }
+    return;
+  }
   let doc;
   try {
     doc = await fetch(`/api/halo/survey?system=${encodeURIComponent(z.system || haloSystem)}`)
@@ -16936,7 +16960,7 @@ function scanSummary(scan) {
 // Ore-composition graph (#38): horizontal bars per ore. With scans, bars are
 // the mean scanned comp% (the "percentages seen" the surveyor asked for); with
 // none, they fall back to how often each ore appears across positive marks.
-function surveyOreChart(z) {
+function surveyOreChart(z, capOverride) {
   const counts = z.ore_counts || {}, comp = z.scan_comp || {};
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   if (!entries.length)
@@ -16959,9 +16983,9 @@ function surveyOreChart(z) {
       + `<span class="fc-n">${sub}</span></div>`;
   }).join("");
   return `<div class="card"><h2 class="svy-h">Ore composition</h2>`
-    + `<p class="cap">${scanned
+    + `<p class="cap">${capOverride || (scanned
         ? "Mean scanned composition per ore (bar); count = marks that listed it."
-        : "How often each ore was seen across the field's positive marks."}</p>`
+        : "How often each ore was seen across the field's positive marks.")}</p>`
     + rows + `</div>`;
 }
 
@@ -17005,6 +17029,211 @@ function surveyRsCard(z) {
   return `<div class="card"><h2 class="svy-h">RS signatures</h2>`
     + `<p class="cap">Match your scanner readout at ~25 km — every contact reads an integer multiple of the base.</p>`
     + (rows || "") + foot + `</div>`;
+}
+
+// --- surface zones (#37.1) --------------------------------------------------
+// A named mining area on a planet or moon. It shares the zone table and the
+// detail card with the deep-space belt zone, but answers a different question:
+// not "how big is this field and how dense", which needs negative evidence a
+// surface sighting can never carry, but "is this area worth landing in again".
+
+// surveyOreChart is built for belt marks. Map a surface row onto the shape it
+// reads: `scan_comp` is its percent channel (ore_comp already IS percent) and
+// `positive` is its denominator for the count column.
+function oreChartShim(z) {
+  return { ...z, scan_comp: z.ore_comp || {}, positive: z.sightings || 0 };
+}
+
+// fmtDist returns HTML (it wraps the unit in <small>), which canvas fillText
+// would draw literally — "25.0<small> km</small>".
+function plainDist(m) {
+  return String(fmtDist(m)).replace(/<[^>]*>/g, "");
+}
+
+function surfaceZoneRow(z) {
+  const sel = z.zone_id === haloAtlasSelZone ? " class=\"zone-sel\"" : "";
+  const ores = (z.ores || []).length
+    ? z.ores.slice(0, 4).map(o => `${esc(o)}${oreValueChip(o)}`).join(", ")
+    : `<span class="muted">—</span>`;
+  const band = z.avg_band ? `B${z.avg_band.toFixed(1)}` : `<span class="muted">—</span>`;
+  const acts = (z.sightings ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
+    // Navigable, never plannable — there is no quantum drop onto a surface.
+    + (z.nearest_qt_id ? `<button type="button" class="route-chip" data-zdest="${z.nearest_qt_id}" title="set the navigator's destination to ${esc(z.nearest_qt || "the nearest QT marker")}, then fly the last leg">Set destination</button> ` : "")
+    + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" data-zrename="${z.zone_id}" title="rename this area">✎</button> ` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" data-zarchive="${z.zone_id}" title="${z.closed ? "put this area back on the maps" : "archive this area — its sightings are kept"}">${z.closed ? "Reactivate" : "Archive"}</button> ` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" data-zdelete="${z.zone_id}" title="delete this area — the sightings inside it are untouched, because membership is geometric">✕</button>` : "");
+  return `<tr data-zrow="${z.zone_id}"${sel} title="click to point the coverage map at this area">`
+    + `<td><b>${esc(z.name)}</b> <span class="halo-chip">⛏ surface</span>`
+      + (z.contributors && z.contributors.length
+          ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
+      + `</td>`
+    + `<td style="white-space:nowrap;">${esc(z.body || "—")}</td>`
+    + `<td class="num">${z.sightings || 0}</td>`
+    + `<td>${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
+    + `<td>${band}</td>`
+    + `<td>${ores}</td>`
+    + `<td class="muted" style="white-space:nowrap;">${z.radius_m ? "⌀ " + fmtDist(2 * z.radius_m) : ""}</td>`
+    + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
+    + `</tr>`;
+}
+
+// Band histogram — the planetary analogue of the belt's density read, and the
+// number that actually decides whether to land: band 7-8 hits mean the trip
+// pays. Counts, not percentages: how often each band was seen here.
+function surfaceBandChart(z) {
+  const bands = z.bands || {};
+  const total = Object.values(bands).reduce((a, b) => a + b, 0);
+  if (!total)
+    return `<div class="card"><h2 class="svy-h">Scan bands</h2>`
+      + `<p class="cap">No bands logged yet — band rides along with each ore sighting.</p></div>`;
+  const max = Math.max(...Object.values(bands));
+  const rows = [1, 2, 3, 4, 5, 6, 7, 8].map(b => {
+    const n = bands[String(b)] || 0;
+    const w = Math.max(n ? 3 : 0, Math.round(n / max * 100));
+    return `<div class="fc-row">`
+      + `<span class="fc-ore"><span class="fc-ore-name">B${b}</span></span>`
+      + `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${w}%;`
+      + `background:${b >= 7 ? "var(--good)" : b >= 4 ? "var(--accent)" : "var(--dim)"}"></span></span>`
+      + `<span class="fc-pct">${n ? n + "×" : ""}</span>`
+      + `<span class="fc-n">${n ? Math.round(n / total * 100) + "%" : ""}</span></div>`;
+  }).join("");
+  return `<div class="card"><h2 class="svy-h">Scan bands</h2>`
+    + `<p class="cap">How rich the rocks read here. Band 7-8 is what makes the trip pay.</p>`
+    + rows + `</div>`;
+}
+
+// Level 3 of the display (#37.1 §6.3): a local, north-up plate of one area,
+// drawn with the SAME projectMeters the navigator map uses. At 50 km on a
+// 295 km body that is ~9.7 degrees of arc, so tangent-plane distortion is
+// ~1.5% — negligible, and worth it because this is the visual language pilots
+// already read every session.
+function drawSurfaceZonePlate(cv, z, sightings) {
+  if (!cv || !cv.getContext) return;
+  const ctx = cv.getContext("2d");
+  const w = cv.width, h = cv.height, cx = w / 2, cy = h / 2;
+  ctx.clearRect(0, 0, w, h);
+  const R = z.body_radius_m || 0;
+  const span = (z.radius_m || 1000) * 1.25;          // a little air around the edge
+  const scale = Math.min(w, h) / 2 / span;
+  ctx.strokeStyle = "rgba(255,255,255,.14)";
+  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+  // The boundary is a sampled great-circle polygon, never a stroked circle:
+  // that is also what makes a zone near a pole or across the antimeridian come
+  // out right.
+  ctx.beginPath();
+  for (let i = 0; i <= 48; i++) {
+    const a = i / 48 * Math.PI * 2;
+    const x = cx + Math.cos(a) * (z.radius_m || 0) * scale;
+    const y = cy - Math.sin(a) * (z.radius_m || 0) * scale;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = getComputedStyle(document.documentElement)
+    .getPropertyValue("--sel").trim() || "#6cf";
+  ctx.lineWidth = 1.5; ctx.stroke();
+  const now = Date.now() / 1000;
+  for (const o of sightings || []) {
+    if (o.latitude == null || o.longitude == null || !R) continue;
+    const p = projectMeters(o.latitude, o.longitude, z.center_lat, z.center_lon, R);
+    const x = cx + p.east * scale, y = cy - p.north * scale;
+    if (x < 0 || y < 0 || x > w || y > h) continue;
+    // Faded by age, hollow once worked — the same reading the NEARBY list gives.
+    const age = o.observed_at ? Math.max(0, now - o.observed_at) : null;
+    const fade = age == null ? 0.45 : Math.max(0.25, 1 - age / (14 * 86400));
+    ctx.globalAlpha = fade;
+    ctx.beginPath(); ctx.arc(x, y, o.mined_at ? 2.5 : 3.5, 0, Math.PI * 2);
+    if (o.mined_at) { ctx.strokeStyle = oreColor(o.ore || ""); ctx.lineWidth = 1; ctx.stroke(); }
+    else { ctx.fillStyle = oreColor(o.ore || ""); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = "rgba(255,255,255,.55)";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.fillText("N", cx + 3, 11);
+  ctx.fillText(plainDist(z.radius_m || 0) + " radius", 4, h - 5);
+}
+
+function renderSurfaceSurveyCard(el, z, sightings, total) {
+  const now = Date.now() / 1000;
+  const contrib = {};
+  for (const o of sightings) { const who = o.owner_handle || "unknown"; contrib[who] = (contrib[who] || 0) + 1; }
+  const surveyors = Object.entries(contrib).sort((a, b) => b[1] - a[1]);
+  const n = z.sightings || total || 0;
+  const thin = n < 10;
+  const top = (z.ores || [])[0];
+  const verdict = !n
+    ? `<div class="svy-verdict bad"><span class="svy-dot"></span><span><b>NO EVIDENCE</b> — `
+      + `nothing has been logged inside this circle yet</span></div>`
+    : thin
+    ? `<div class="svy-verdict warn"><span class="svy-dot warn"></span><span>${surveyValueChip(z.value) || ""} `
+      + `<b>THIN</b> — ${n} sighting${n === 1 ? "" : "s"}${z.avg_band ? `, averaging band ${z.avg_band}` : ""}</span></div>`
+    : `<div class="svy-verdict"><span class="svy-dot ok"></span><span>${surveyValueChip(z.value) || ""} `
+      + `<b>${esc(top || "ore")}</b> country · ${n} sighting${n === 1 ? "" : "s"} from `
+      + `${surveyors.length || (z.contributors || []).length} surveyor${surveyors.length === 1 ? "" : "s"}</span></div>`;
+  const tiles = [
+    { k: "Sightings", n: n },
+    { k: "Surveyors", n: (z.contributors || []).length || surveyors.length },
+    { k: "Distinct ores", n: (z.ores || []).length },
+    { k: "Value", n: z.value && z.value.score ? z.value.score.toLocaleString() : "—", cls: "accent" },
+    { k: "Area ⌀", n: z.radius_m ? fmtDist(2 * z.radius_m) : "—" },
+    { k: "Freshest", n: z.freshest ? fmtAge(Math.max(0, now - z.freshest)) : "—" },
+  ];
+  const stats = `<div class="intel-glance svy-stats">` + tiles.map(t =>
+    `<div class="intel-stat"><span class="k">${t.k}</span><span class="n ${t.cls || ""}">${t.n}</span></div>`).join("") + `</div>`;
+  // "Where do I point the ship" — the question the rollup doesn't answer.
+  const unworked = (sightings || []).filter(o => !o.mined_at);
+  const rich = unworked.filter(o => (o.band || 0) >= 6);
+  const best = (rich.length ? rich : unworked)
+    .sort((a, b) => (b.observed_at || 0) - (a.observed_at || 0))[0];
+  const lead = best
+    ? `<p class="cap" style="margin:6px 0 0;">Freshest unworked${rich.length ? " (B6+)" : ""}: <b>${esc(best.ore || "?")}</b>`
+      + `${best.band ? ` B${best.band}` : ""} · ${best.observed_at ? fmtAge(Math.max(0, now - best.observed_at)) : "—"}`
+      + ` <button type="button" class="route-chip" data-flyto="${best.id}" title="set the navigator's destination to this sighting">Fly to it</button></p>`
+    : "";
+  const timeline = `<div class="card svy-timeline"><h2 class="svy-h">Sighting timeline</h2>`
+    + `<p class="cap">Every node logged inside this circle, newest first.</p>`
+    + (sightings.length ? sightings.slice(0, 40).map(o => {
+        const age = o.observed_at ? fmtAge(Math.max(0, now - o.observed_at)) : "—";
+        return `<div class="halo-alt">`
+          + `<b>${esc(age)}</b> · ${esc(o.owner_handle || "?")} · ${esc(o.ore || "?")}`
+          + (o.band ? ` B${o.band}` : "") + (o.biome ? ` · ${esc(o.biome)}` : "")
+          + (o.dist_m != null ? ` · ${fmtDist(o.dist_m)} from centre` : "")
+          + (o.mined_at ? ` <span class="halo-chip warn">worked</span>` : "")
+          + `</div>`;
+      }).join("") : `<p class="muted" style="font-size:12px;">No sightings.</p>`)
+    + (total > 40 ? `<p class="cap" style="margin-top:6px;">Showing the newest 40 of ${total}.</p>` : "")
+    + `</div>`;
+  el.innerHTML = `<div class="svy-card">`
+    + `<div class="svy-head">`
+    + `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+    // No "Plan a drop here" and no "Set active": there is no quantum drop onto
+    // a body, and surface membership is geometric so there is nothing to arm.
+    + (z.nearest_qt_id ? `<button type="button" class="route-chip" id="svy-dest">Set destination · ${esc(z.nearest_qt || "nearest QT")}</button>` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" id="svy-archive">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
+    + `</div>`
+    + `<p class="svy-eyebrow">${esc(z.system || haloSystem)} · ${esc(z.body || "")} · Surface area</p>`
+    + `<h2 class="svy-title">${esc(z.name)}<span class="svy-sub">`
+    + `${(z.contributors || []).length} surveyor${(z.contributors || []).length === 1 ? "" : "s"} · `
+    + `${n} sighting${n === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</span></h2>`
+    + verdict + lead + stats
+    + `<div class="svy-panels">${surveyOreChart(oreChartShim(z),
+          "Share of this area's sightings, per ore. Bars are percentages; the "
+          + "count is how many sightings listed that ore.")}${surfaceBandChart(z)}</div>`
+    + `<div class="card"><h2 class="svy-h">This area</h2>`
+    + `<p class="cap">Sightings, ore-coloured and faded by age; hollow means already worked.</p>`
+    + `<canvas id="svy-plate" width="420" height="420" style="width:100%; max-width:420px; height:auto;"></canvas></div>`
+    + timeline
+    + `<p class="svy-foot">Built from <b>${n}</b> sighting${n === 1 ? "" : "s"}`
+    + ((z.contributors || []).length ? ` by <b>${z.contributors.length}</b> surveyor${z.contributors.length === 1 ? "" : "s"} (${z.contributors.map(esc).join(", ")})` : "")
+    + `. Nodes respawn: this is where the org has found ore before, not where ore is now. `
+    + `Counts are sightings, not distinct rocks — working the same outcrop across several trips files several.</p>`
+    + `</div>`;
+  const back = $("svy-back"); if (back) back.onclick = closeHaloSurveyCard;
+  const dest = $("svy-dest"); if (dest) dest.onclick = () => setDestination(z.nearest_qt_id);
+  const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
+  for (const b of el.querySelectorAll("[data-flyto]"))
+    b.onclick = () => setDestination(Number(b.dataset.flyto));
+  drawSurfaceZonePlate($("svy-plate"), z, sightings);
 }
 
 function renderHaloSurveyCard(el, z, marks) {
