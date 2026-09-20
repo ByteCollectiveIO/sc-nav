@@ -229,6 +229,16 @@
      with the resource panel it is paired with. Pin the line box so no glyph can
      move a heading again. */
   .capture-grid .panel > h2 { line-height: 16px; }
+  /* "Likely here" — the forecast's top ores as one-tap chips. Not a second
+     chart: it is the SAME ranking the forecast panel above already draws, in
+     the form you can act on without leaving the field you are filling. */
+  .ore-likely { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+    margin-top: 8px; font-size: 12px; color: var(--dim); }
+  .ore-likely .ol-btn { font: inherit; cursor: pointer; padding: 2px 8px;
+    border-radius: 14px; border: 1px solid var(--border);
+    background: var(--panel2); color: var(--text); }
+  .ore-likely .ol-btn:hover { border-color: var(--accent); }
+  .ore-likely .ol-btn .ol-p { color: var(--dim); font-variant-numeric: tabular-nums; }
   /* Two capture PURPOSES, banded (2026-09-20; reworked after the 2026-09-20
      critique). The three panels used to sit in one undifferentiated row, so
      marking a place to fly back to and logging evidence about ground looked
@@ -3209,6 +3219,148 @@
     <div id="forecast-body"></div>
   </div>
 
+  <!-- Order is a GAMEPLAY fact, not a taxonomy (2026-09-20 play feedback).
+       Surveying is a back-and-forth act: you read the forecast, look at the
+       map, log what you actually found, look again. So SURVEY sits directly
+       under MAP + RESOURCE FORECAST, the two readouts it is answering.
+       Adding a POI is the opposite — a static location entered once — so
+       NAVIGATION sits next to the POI list it feeds instead. The earlier
+       order put the finder and the whole NAVIGATION band between the
+       forecast and the survey boxes, which meant scrolling up and down
+       through every ore entry. -->
+  <section class="cap-group cap-survey" aria-labelledby="cap-survey-h">
+    <p class="cap-group-h" id="cap-survey-h">SURVEY
+      <span>what's on the ground, and how well the org knows it</span></p>
+    <p class="cap-purpose cap-group-purpose">Feeds
+      <a href="#/nav">ELEMENT FINDER</a>, marks the map for your team, and joins
+      the org's survey — logging what you mine <i>is</i> the survey.</p>
+    <div class="capture-grid">
+    <div class="panel">
+      <h2>⛏ ADD RESOURCE NODE</h2>
+      <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <!-- An input + datalist, not a <select> (2026-09-20 play feedback).
+             Two reasons: the raw-ore vocabulary is ~100 entries, so picking
+             one meant scrolling a dropdown mid-session when typing three
+             letters is faster; and free text now IS the "Other" case, so the
+             separate other-ore field this used to need is gone. The same
+             pattern the FIELD survey box already uses for the same vocabulary. -->
+        <input id="node-ore" class="ti" list="node-ore-list" autocomplete="off"
+               aria-label="Ore" placeholder="ore — type to filter"
+               style="flex:1; min-width:130px;">
+        <datalist id="node-ore-list"></datalist>
+        <span id="node-ore-value" hidden></span>
+        <label class="muted" style="font-size:12px;"
+               title="Scan quality band 1–8 (higher = richer deposit); Unk if you didn't read it off the scanner.">band
+          <select id="node-band" class="sel">
+            <option value="Unk">Unk</option>
+            <option>1</option><option>2</option><option>3</option><option>4</option>
+            <option>5</option><option>6</option><option>7</option><option>8</option>
+          </select>
+        </label>
+        <span id="node-quality" class="muted" style="font-size:12px;">Unk</span>
+      </div>
+      <!-- What the forecast says is under your feet, as one tap. The forecast
+           panel already ranks these; repeating the top few HERE is the
+           difference between reading a chart and answering it. Hidden when
+           there is no local evidence, so it never occupies space to say
+           nothing. -->
+      <div id="node-ore-likely" class="ore-likely" hidden></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+        <!-- Wide enough for a real biome name, not just the placeholder: now that a
+             single-biome body fills this in for you, a clipped "Crystallin" would
+             be the first thing you see. Longest in the catalog is ~26 chars. -->
+        <select id="node-biome" class="sel" style="flex:0 1 13rem; min-width:120px;"></select>
+        <input id="node-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
+        <input id="node-note" class="ti" aria-label="Resource node note" placeholder="note (optional)" style="flex:2; min-width:110px;">
+        <button id="node-arm">capture /showlocation</button>
+      </div>
+      <div id="node-armed" class="armed" role="status" aria-live="polite" hidden>
+        <span id="node-armed-label">ARMED</span> — run <b>/showlocation</b>
+        <button id="node-cancel" style="margin-left:8px;">cancel</button>
+      </div>
+      <div id="node-result" class="cap-result" role="status" aria-live="polite"
+           hidden style="padding-top:6px;"></div>
+      <div class="credited" id="node-credit"></div>
+    </div>
+
+    <div class="panel">
+      <!-- One glyph register per heading: the paw was a colour emoji beside
+           two monochrome ones, and it made this h2 20px tall where its twin is
+           16px — which put this whole form 2-4px out of line with the panel it
+           is explicitly paired with. -->
+      <h2>⚘ ADD FAUNA &amp; HARVESTABLES</h2>
+      <div id="wild-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="wild-species" class="ti" aria-label="Fauna or harvestable name" list="fauna-types" placeholder="fauna or harvestable" style="flex:1; min-width:120px;">
+        <datalist id="fauna-types"></datalist>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+        <select id="wild-biome" class="sel" style="flex:0 1 13rem; min-width:120px;"></select>
+        <input id="wild-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
+        <input id="wild-note" class="ti" aria-label="Fauna or harvestable note" placeholder="note (optional)" style="flex:2; min-width:110px;">
+        <button id="wild-arm">capture /showlocation</button>
+      </div>
+      <div id="wild-armed" class="armed" role="status" aria-live="polite" hidden>
+        <span id="wild-armed-label">ARMED</span> — run <b>/showlocation</b>
+        <button id="wild-cancel" style="margin-left:8px;">cancel</button>
+      </div>
+      <div id="wild-result" class="cap-result" role="status" aria-live="polite"
+           hidden style="padding-top:6px;"></div>
+      <div class="credited" id="wild-credit"></div>
+    </div>
+    </div><!-- /capture-grid -->
+
+    <!-- Surface survey areas (#37.1). Creation lives HERE, not in Prospector,
+         because this is where you are standing when you find the ore — but at
+         the GROUP level, not inside the ore panel: a named circle rolls up all
+         three lanes (ore, harvestables, fauna), so filing it under ore was
+         both a misplacement and the reason its purpose was unreadable. -->
+    <div id="zone-claim" class="cap-area" hidden>
+      <div class="cap-area-head">
+        <button id="zone-claim-btn" class="route-chip primary">⛏ Name this area</button>
+        <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">radius
+          <select id="zone-claim-radius" class="sel" style="min-width:86px;">
+            <option value="5000">5 km</option>
+            <option value="10000">10 km</option>
+            <option value="25000">25 km</option>
+            <!-- 50, not 25 (2026-09-20 play feedback): a 25 km circle is small
+                 against the ground a surveyor actually covers in a session, so
+                 the common case was re-fencing every new area straight after
+                 naming it. Re-fencing is still one click for the rare tight
+                 one. -->
+            <option value="50000" selected>50 km</option>
+          </select>
+        </label>
+        <!-- A live state, so it reads at --text. It used to be --dim, i.e. the
+             same colour as the four paragraphs it was surrounded by. -->
+        <span id="zone-claim-note" role="status" aria-live="polite"
+              style="font-size:12px; color:var(--text);"></span>
+      </div>
+      <!-- The one sentence that earns a permanent place: it is what the button
+           DOES. The reassurance used to live in the button's title= attribute,
+           which does not exist on touch — on the control whose whole audience is
+           a player holding a phone. -->
+      <p class="cap-purpose">Claims every sighting inside the circle, past and
+        future. Re-fencable later; deleting an area never touches a sighting.</p>
+      <details class="cap-more" id="zone-claim-more">
+        <summary>what naming an area does</summary>
+        <p class="cap-purpose">Turns scattered sightings into a place the org can
+          talk about. Membership is <b>geometric and retroactive</b>: every node,
+          plant and creature anyone has <i>ever</i> logged inside the circle joins
+          the moment you name it, and it keeps collecting by itself afterwards —
+          nothing to tag, nothing to arm.</p>
+        <p class="cap-purpose">The area then appears in
+          <a href="#/halo/atlas">Prospector → ATLAS</a> with a value tier per lane
+          (⛏ mining, ⚘ gathering), what's in it and how well it's covered — so the
+          org can see which ground pays and which is still a blank. Naming ground
+          that turns out to be empty is worth it too: that's the org finding out.</p>
+      </details>
+      <!-- Inside the block it belongs to. It used to be a SIBLING of
+           #zone-claim, so the confirmation rendered below the whole card. -->
+      <div id="zone-claim-result" class="cap-result" role="status" aria-live="polite"
+           hidden style="padding-top:8px;"></div>
+    </div>
+  </section><!-- /SURVEY -->
+
   <div class="panel" id="finder-panel">
     <h2>ELEMENT FINDER <span class="muted">(where to find ores &amp; harvestables — ranked by likelihood)</span></h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
@@ -3293,117 +3445,6 @@
     </div>
     </div><!-- /capture-grid -->
   </section><!-- /NAVIGATION -->
-
-  <section class="cap-group cap-survey" aria-labelledby="cap-survey-h">
-    <p class="cap-group-h" id="cap-survey-h">SURVEY
-      <span>what's on the ground, and how well the org knows it</span></p>
-    <p class="cap-purpose cap-group-purpose">Feeds
-      <a href="#/nav">ELEMENT FINDER</a>, marks the map for your team, and joins
-      the org's survey — logging what you mine <i>is</i> the survey.</p>
-    <div class="capture-grid">
-    <div class="panel">
-      <h2>⛏ ADD RESOURCE NODE</h2>
-      <div id="node-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <select id="node-ore" class="sel" style="flex:1; min-width:130px;"></select>
-        <input id="node-ore-other" class="ti" placeholder="other ore" hidden style="flex:1; min-width:110px;">
-        <span id="node-ore-value" hidden></span>
-        <label class="muted" style="font-size:12px;"
-               title="Scan quality band 1–8 (higher = richer deposit); Unk if you didn't read it off the scanner.">band
-          <select id="node-band" class="sel">
-            <option value="Unk">Unk</option>
-            <option>1</option><option>2</option><option>3</option><option>4</option>
-            <option>5</option><option>6</option><option>7</option><option>8</option>
-          </select>
-        </label>
-        <span id="node-quality" class="muted" style="font-size:12px;">Unk</span>
-      </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-        <select id="node-biome" class="sel" style="flex:1; min-width:120px;"></select>
-        <input id="node-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
-        <input id="node-note" class="ti" aria-label="Resource node note" placeholder="note (optional)" style="flex:2; min-width:110px;">
-        <button id="node-arm">capture /showlocation</button>
-      </div>
-      <div id="node-armed" class="armed" role="status" aria-live="polite" hidden>
-        <span id="node-armed-label">ARMED</span> — run <b>/showlocation</b>
-        <button id="node-cancel" style="margin-left:8px;">cancel</button>
-      </div>
-      <div id="node-result" class="cap-result" role="status" aria-live="polite"
-           hidden style="padding-top:6px;"></div>
-      <div class="credited" id="node-credit"></div>
-    </div>
-
-    <div class="panel">
-      <!-- One glyph register per heading: the paw was a colour emoji beside
-           two monochrome ones, and it made this h2 20px tall where its twin is
-           16px — which put this whole form 2-4px out of line with the panel it
-           is explicitly paired with. -->
-      <h2>⚘ ADD FAUNA &amp; HARVESTABLES</h2>
-      <div id="wild-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="wild-species" class="ti" aria-label="Fauna or harvestable name" list="fauna-types" placeholder="fauna or harvestable" style="flex:1; min-width:120px;">
-        <datalist id="fauna-types"></datalist>
-      </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
-        <select id="wild-biome" class="sel" style="flex:1; min-width:120px;"></select>
-        <input id="wild-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
-        <input id="wild-note" class="ti" aria-label="Fauna or harvestable note" placeholder="note (optional)" style="flex:2; min-width:110px;">
-        <button id="wild-arm">capture /showlocation</button>
-      </div>
-      <div id="wild-armed" class="armed" role="status" aria-live="polite" hidden>
-        <span id="wild-armed-label">ARMED</span> — run <b>/showlocation</b>
-        <button id="wild-cancel" style="margin-left:8px;">cancel</button>
-      </div>
-      <div id="wild-result" class="cap-result" role="status" aria-live="polite"
-           hidden style="padding-top:6px;"></div>
-      <div class="credited" id="wild-credit"></div>
-    </div>
-    </div><!-- /capture-grid -->
-
-    <!-- Surface survey areas (#37.1). Creation lives HERE, not in Prospector,
-         because this is where you are standing when you find the ore — but at
-         the GROUP level, not inside the ore panel: a named circle rolls up all
-         three lanes (ore, harvestables, fauna), so filing it under ore was
-         both a misplacement and the reason its purpose was unreadable. -->
-    <div id="zone-claim" class="cap-area" hidden>
-      <div class="cap-area-head">
-        <button id="zone-claim-btn" class="route-chip primary">⛏ Name this area</button>
-        <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">radius
-          <select id="zone-claim-radius" class="sel" style="min-width:86px;">
-            <option value="5000">5 km</option>
-            <option value="10000">10 km</option>
-            <option value="25000" selected>25 km</option>
-            <option value="50000">50 km</option>
-          </select>
-        </label>
-        <!-- A live state, so it reads at --text. It used to be --dim, i.e. the
-             same colour as the four paragraphs it was surrounded by. -->
-        <span id="zone-claim-note" role="status" aria-live="polite"
-              style="font-size:12px; color:var(--text);"></span>
-      </div>
-      <!-- The one sentence that earns a permanent place: it is what the button
-           DOES. The reassurance used to live in the button's title= attribute,
-           which does not exist on touch — on the control whose whole audience is
-           a player holding a phone. -->
-      <p class="cap-purpose">Claims every sighting inside the circle, past and
-        future. Re-fencable later; deleting an area never touches a sighting.</p>
-      <details class="cap-more" id="zone-claim-more">
-        <summary>what naming an area does</summary>
-        <p class="cap-purpose">Turns scattered sightings into a place the org can
-          talk about. Membership is <b>geometric and retroactive</b>: every node,
-          plant and creature anyone has <i>ever</i> logged inside the circle joins
-          the moment you name it, and it keeps collecting by itself afterwards —
-          nothing to tag, nothing to arm.</p>
-        <p class="cap-purpose">The area then appears in
-          <a href="#/halo/atlas">Prospector → ATLAS</a> with a value tier per lane
-          (⛏ mining, ⚘ gathering), what's in it and how well it's covered — so the
-          org can see which ground pays and which is still a blank. Naming ground
-          that turns out to be empty is worth it too: that's the org finding out.</p>
-      </details>
-      <!-- Inside the block it belongs to. It used to be a SIBLING of
-           #zone-claim, so the confirmation rendered below the whole card. -->
-      <div id="zone-claim-result" class="cap-result" role="status" aria-live="polite"
-           hidden style="padding-top:8px;"></div>
-    </div>
-  </section><!-- /SURVEY -->
 
   <div class="panel" id="nearby-panel">
     <h2><span id="nearby-title">NEARBY</span> <span class="muted" id="nearby-hint">(click to set destination)</span></h2>
@@ -5977,6 +6018,9 @@ function forecastSection(rf, label, unit, category) {
 }
 function renderForecast(state) {
   const panel = $("forecast-panel");
+  // The ore picker's shortlist is the same ranking this panel draws — read it
+  // from here so the two can never disagree about what is likely.
+  noteOreForecast(state && state.resource_forecast);
   const blocks = [
     forecastSection(state && state.resource_forecast, "Ores", "node", "resource"),
     forecastSection(state && state.harvestable_forecast, "Harvestables", "site", "harvestable"),
@@ -6516,12 +6560,16 @@ $("poi-cancel").onclick = () => postJson("/api/capture/cancel", {});
 function nodeQualityPreview() { $("node-quality").textContent = BAND_QUALITY(parseInt($("node-band").value, 10)); }
 $("node-band").onchange = nodeQualityPreview; nodeQualityPreview();
 $("node-arm").onclick = async () => {
-  const ore = selectValue("node-ore");
+  const ore = nodeOre();
   if (!ore) return $("node-ore").focus();
   const r = await postJson("/api/capture/node", {
     ore, band: $("node-band").value,   // "Unk" or "1".."8"; server normalizes
     biome: selectValue("node-biome"), note: $("node-note").value.trim() });
-  if (r.ok) { resetSelect("node-ore"); updateNodeOreValue(); resetSelect("node-biome"); $("node-note").value = ""; } else armFailed("node-result", r);
+  if (r.ok) {
+    $("node-ore").value = ""; updateNodeOreValue();
+    resetSelect("node-biome"); autoPickBiome("node-biome");
+    $("node-note").value = "";
+  } else armFailed("node-result", r);
 };
 $("node-cancel").onclick = () => postJson("/api/capture/cancel", {});
 // Surface survey zones (#37.1): claiming an area is a plain POST off the live
@@ -6538,7 +6586,11 @@ $("wild-arm").onclick = async () => {
   const r = isHarvest
     ? await postJson("/api/capture/harvestable", { name, biome, note })
     : await postJson("/api/capture/wildlife", { species: name, biome, note });
-  if (r.ok) { $("wild-species").value = ""; resetSelect("wild-biome"); $("wild-note").value = ""; } else armFailed("wild-result", r);
+  if (r.ok) {
+    $("wild-species").value = "";
+    resetSelect("wild-biome"); autoPickBiome("wild-biome");
+    $("wild-note").value = "";
+  } else armFailed("wild-result", r);
 };
 $("wild-cancel").onclick = () => postJson("/api/capture/cancel", {});
 
@@ -6639,7 +6691,7 @@ async function claimSurfaceZone() {
       // close enough to describe it honestly.
       value: suggestZoneName(state) });
   if (!name) return;
-  const radius_m = Number($("zone-claim-radius").value) || 25000;
+  const radius_m = Number($("zone-claim-radius").value) || 50000;
   const r = await postJson("/api/halo/survey/zones", {
     name, body: c.name, center_lat: state.latitude, center_lon: state.longitude,
     radius_m });
@@ -8397,20 +8449,82 @@ function fillSelectWithOther(selId, names, placeholder) {
   toggleOther(selId);
 }
 
-// Ore datalist toggle (the list itself is fetched in init()) + live value hint
-// beside the picker — the "is this node worth mining?" answer at capture time.
+// The ore picker is free text against a datalist, so its value is just the
+// field — there is no "Other" option to resolve any more.
+function nodeOre() { return $("node-ore").value.trim(); }
+
+// Live value hint beside the picker — the "is this node worth mining?" answer
+// at capture time.
 function updateNodeOreValue() {
-  const el = $("node-ore-value"), html = oreValueChip(selectValue("node-ore"));
+  const el = $("node-ore-value"), html = oreValueChip(nodeOre());
   el.innerHTML = html;
   el.hidden = !html;
 }
-$("node-ore").onchange = () => { toggleOther("node-ore"); updateNodeOreValue(); };
-$("node-ore-other").addEventListener("input", updateNodeOreValue);
+$("node-ore").addEventListener("input", updateNodeOreValue);
+
+// ---- ore picker: what's likely under your feet, first ----------------------
+// The full raw-ore vocabulary, and the forecast's current ranking over it.
+let oreVocab = [];
+let oreLikely = [];          // [{ore, p}] — from the live resource forecast
+let oreLikelyKey = null;     // rebuild guard: this runs on every state frame
+
+// Datalist options render in document order, so putting the likely ores first
+// is the whole "section at the top of the list" — a datalist cannot carry
+// optgroups, but it can carry a `label`, which Chrome shows beside the value.
+// Typing still filters the entire vocabulary, which is the other half of it.
+function rebuildOreList() {
+  const dl = $("node-ore-list");
+  if (!dl) return;
+  const seen = new Set();
+  const opt = (o, label) => {
+    const el = document.createElement("option");
+    el.value = o;
+    if (label) el.label = label;
+    dl.appendChild(el);
+  };
+  dl.innerHTML = "";
+  for (const r of oreLikely) {
+    if (seen.has(r.ore)) continue;
+    seen.add(r.ore);
+    opt(r.ore, `likely here · ${Math.round(r.p * 100)}%`);
+  }
+  for (const o of oreVocab) { if (!seen.has(o)) opt(o); }
+}
+
+// The chip row: the same ranking, one tap. Capped at five — past that it stops
+// being a shortlist and becomes the dropdown it exists to save you from.
+function renderOreLikely() {
+  const el = $("node-ore-likely");
+  if (!el) return;
+  const rows = oreLikely.slice(0, 5);
+  if (!rows.length) { el.hidden = true; el.innerHTML = ""; return; }
+  el.innerHTML = `<span>likely here:</span>` + rows.map(r =>
+    `<button type="button" class="ol-btn" data-ore="${esc(r.ore)}"`
+    + ` title="seen in ${Math.round(r.p * 100)}% of nearby nodes">${esc(r.ore)}`
+    + `${oreValueChip(r.ore)} <span class="ol-p">${Math.round(r.p * 100)}%</span></button>`).join("");
+  el.hidden = false;
+  for (const b of el.querySelectorAll(".ol-btn"))
+    b.onclick = () => { $("node-ore").value = b.dataset.ore; updateNodeOreValue(); $("node-ore").focus(); };
+}
+
+// Fed from the live state's resource forecast. Guarded on the ranking itself
+// because this is called on every position frame and rebuilding a ~100-option
+// datalist per frame is pure waste.
+function noteOreForecast(rf) {
+  const ranked = (rf && rf.ranked ? rf.ranked : []).filter(r => r.p >= 0.02).slice(0, 8);
+  const key = ranked.map(r => r.ore + ":" + Math.round(r.p * 100)).join("|");
+  if (key === oreLikelyKey) return;
+  oreLikelyKey = key;
+  oreLikely = ranked;
+  rebuildOreList();
+  renderOreLikely();
+}
 
 // Biome dropdowns (node + fauna): options narrow to the player's current body,
 // falling back to system then all.
 const BIOME_SELECTS = ["node-biome", "wild-biome"];
 let biomeData = { by_body: {}, by_system: {}, all: [] };
+let biomeChoices = [];            // the list currently offered, for autoPickBiome
 let lastBiomeKey = null;
 function updateBiomes(system, container) {
   const s = (system || "").toLowerCase(), c = (container || "").toLowerCase();
@@ -8419,7 +8533,26 @@ function updateBiomes(system, container) {
   lastBiomeKey = key;
   const list = (biomeData.by_body[s] && biomeData.by_body[s][c])
     || biomeData.by_system[s] || biomeData.all;
+  biomeChoices = list;
   for (const id of BIOME_SELECTS) fillSelectWithOther(id, list, "— biome (optional)");
+  for (const id of BIOME_SELECTS) autoPickBiome(id);
+}
+
+// When the body you are standing on offers exactly ONE biome, there is no
+// choice to make — so make it (2026-09-20 play feedback). A surveyor logging
+// twenty nodes on the same moon was picking the same value twenty times, and
+// the field is optional, so the realistic alternative was that it stayed empty
+// and the org lost the biome on every one of them.
+//
+// Only ever fills a BLANK field, so it can never overwrite a deliberate
+// choice, and "Other…" stays in the list for the case where the catalog is
+// wrong about this patch of ground.
+function autoPickBiome(selId) {
+  const sel = $(selId);
+  if (!sel || sel.value) return;                   // never clobber a choice
+  if (!Array.isArray(biomeChoices) || biomeChoices.length !== 1) return;
+  sel.value = biomeChoices[0];
+  toggleOther(selId);
 }
 BIOME_SELECTS.forEach(id => $(id).onchange = () => toggleOther(id));
 
@@ -24492,7 +24625,8 @@ function init() {
   loadFaunaHarvestables();
   fetch("/api/raw_commodities").then(r => r.json())
     .then(n => {
-      fillSelectWithOther("node-ore", n, "— ore");
+      oreVocab = n || [];
+      rebuildOreList();
       const dl = $("halo-survey-ore-list");   // survey box autocompletes the same ore vocab
       if (dl) dl.innerHTML = (n || []).map(o => `<option value="${esc(o)}">`).join("");
     }).catch(() => {});
@@ -24500,7 +24634,11 @@ function init() {
     biomeData = d;
     lastBiomeKey = null;
     if (lastState) updateBiomes(lastState.system, lastState.container && lastState.container.name);
-    else for (const id of BIOME_SELECTS) fillSelectWithOther(id, d.all, "— biome (optional)");
+    else {
+      biomeChoices = d.all;
+      for (const id of BIOME_SELECTS) fillSelectWithOther(id, d.all, "— biome (optional)");
+      for (const id of BIOME_SELECTS) autoPickBiome(id);
+    }
   }).catch(() => {});
 }
 
