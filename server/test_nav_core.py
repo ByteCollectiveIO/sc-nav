@@ -7474,5 +7474,120 @@ class SurfaceValueAndStatsTests(unittest.TestCase):
         self.assertEqual(stats["members"], [])
 
 
+class SurveyHealthTests(unittest.TestCase):
+    """#37.2 — "can I trust these numbers yet?"
+
+    Every test here pins a property the prototype corpus found the hard way;
+    each one was a real wrong answer in an earlier cut of the model.
+    """
+
+    BODY_R = 293_000.0
+    ZONE = {"body": "Wala", "center_lat": 0.0, "center_lon": 0.0,
+            "radius_m": 25_000.0}
+
+    def _obs(self, bearing_deg, frac, ore="Iron (Ore)", band=5, age_d=1.0):
+        """One sighting at `frac` of the radius along `bearing_deg`."""
+        d = self.ZONE["radius_m"] * frac / self.BODY_R
+        p0, l0, b = 0.0, 0.0, math.radians(bearing_deg)
+        lat = math.asin(math.sin(p0) * math.cos(d) + math.cos(p0) * math.sin(d) * math.cos(b))
+        lon = l0 + math.atan2(math.sin(b) * math.sin(d) * math.cos(p0),
+                              math.cos(d) - math.sin(p0) * math.sin(lat))
+        when = datetime.fromtimestamp(time.time() - age_d * 86400, timezone.utc)
+        return nav_core.Observation(
+            id=0, category="resource", system="Stanton", container_name="Wala",
+            local_km=None, global_m=None, latitude=math.degrees(lat),
+            longitude=math.degrees(lon), height_m=0.0, biome=None, note=None,
+            owner_id=None, owner_handle="ana", observed_at=when.isoformat(),
+            data={"ore": ore, "band": band})
+
+    def _spread(self, n, wedges=12, **kw):
+        # +15 deg: land in the MIDDLE of each wedge. On the boundary the
+        # bearing rounds either way and some wedges come back empty, which is
+        # a fixture artefact, not the model noticing anything.
+        return [self._obs((i % wedges) * (360.0 / wedges) + 15.0,
+                          0.35 if (i // wedges) % 2 == 0 else 0.9, **kw)
+                for i in range(n)]
+
+    def _clumped(self, n, **kw):
+        return [self._obs(3.0, 0.5, **kw) for _ in range(n)]
+
+    def _h(self, members):
+        return nav_core.surface_zone_health(self.ZONE, members, self.BODY_R)
+
+    def test_clumping_is_what_health_notices(self):
+        """THE property. Same evidence count, same ores, same freshness — the
+        only difference is whether it represents the zone. An earlier cut
+        summed the components and scored the clump 46%, because convergence,
+        scan depth and freshness are all high for a big biased sample."""
+        clump, spread = self._h(self._clumped(80)), self._h(self._spread(80))
+        self.assertLess(clump["score"], 0.2)
+        self.assertGreater(spread["score"], 0.6)
+        self.assertGreater(spread["score"], clump["score"] * 3)
+        self.assertEqual(clump["next"], "coverage")
+
+    def test_a_hundred_percent_is_reachable(self):
+        """Scoring convergence as lower-bound-over-raw-share only reached 1.0 in
+        the low thousands of marks, so the bar asymptoted near 80% and never
+        retired. Against a stated tolerance a real survey gets there."""
+        h = self._h(self._spread(260))
+        self.assertGreater(h["score"], 0.9)
+        self.assertEqual(h["next"], "settled")
+
+    def test_a_thorough_barren_survey_is_healthy(self):
+        """No ore is not "unmeasurable" — the claim is "there is nothing here",
+        and it converges through the Wilson UPPER bound. Scored 0 before."""
+        h = self._h(self._spread(120, ore=None, band=None))
+        self.assertGreater(h["convergence"], 0.7)
+        self.assertGreater(h["score"], 0.5)
+
+    def test_modifiers_attenuate_but_never_decide(self):
+        """Scan depth and freshness describe sample QUALITY, so they trim a
+        good survey; they must not rescue a bad one or sink a good one."""
+        full = self._h(self._spread(260))
+        no_scan = self._h(self._spread(260, band=None))
+        stale = self._h(self._spread(260, age_d=400))
+        self.assertLess(no_scan["score"], full["score"])
+        self.assertGreater(no_scan["score"], full["score"] * nav_core._HEALTH_MOD_FLOOR)
+        self.assertLess(stale["score"], full["score"])
+        # …and no modifier can lift a zone nobody has covered.
+        self.assertLess(self._h(self._clumped(260))["score"], 0.25)
+
+    def test_empty_and_degenerate_zones_score_zero_not_crash(self):
+        self.assertEqual(self._h([])["score"], 0.0)
+        self.assertEqual(
+            nav_core.surface_zone_health({"body": None}, [], self.BODY_R)["score"], 0.0)
+        # a sighting outside the circle is not evidence about the circle
+        far = [self._obs(0, 4.0) for _ in range(40)]
+        self.assertEqual(self._h(far)["sectors_seen"], 0)
+
+    def test_belt_zones_use_volume_buckets_not_a_cap(self):
+        """A pocket is a 3D scatter, so spread is octants x equal-volume shells.
+        Same four components, same combining rule, different geometry."""
+        c, R = (0.0, 0.0, 0.0), 1_000_000.0
+        fit = {"xyz": c, "grid_radius_m": R, "scans": 0}
+        def mark(x, y, z, ores=("Iron (Ore)",)):
+            return {"xyz": (x, y, z), "positive": True, "ores": list(ores),
+                    "created": time.time(), "rocks": "medium"}
+        corner = [mark(R * .5, R * .5, R * .5) for _ in range(40)]
+        spread = [mark(R * .5 * sx, R * .5 * sy, R * .5 * sz)
+                  for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)
+                  for _ in range(5)]
+        hc = nav_core.belt_zone_health(fit, corner)
+        hs = nav_core.belt_zone_health(fit, spread)
+        self.assertEqual(hc["sectors"], nav_core.BELT_HEALTH_BUCKETS)
+        self.assertEqual(hc["sectors_seen"], 1)
+        self.assertEqual(hs["sectors_seen"], 8)
+        self.assertGreater(hs["score"], hc["score"] * 3)
+        self.assertEqual(nav_core.belt_zone_health({}, [])["score"], 0.0)
+
+    def test_health_is_orthogonal_to_value(self):
+        """The pairing the whole feature exists for: thoroughly surveyed and
+        worth nothing is a real, useful answer, so health must not read value
+        and value must not read health."""
+        barren = self._h(self._spread(200, ore=None, band=None))
+        rich_but_clumped = self._h(self._clumped(200, ore="Quantainium (Raw)"))
+        self.assertGreater(barren["score"], rich_but_clumped["score"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
