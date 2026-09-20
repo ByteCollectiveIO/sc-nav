@@ -1095,6 +1095,32 @@ def delete_survey_zone(zone_id: int) -> bool:
     return cur.rowcount > 0
 
 
+# The columns a restore has to put back, in the order the INSERT writes them.
+# `id` leads on purpose: the deleted zone's marks are re-tagged by that id and
+# members' active-zone prefs name it, so an undo that minted a new id would
+# restore a zone nobody was filing into.
+_ZONE_COLS = ("id", "slug", "name", "system", "created_by", "owner_handle",
+              "created", "closed", "body", "center_lat", "center_lon", "radius_m")
+
+
+def restore_survey_zone(row: dict) -> int:
+    """Re-insert a deleted zone verbatim, original id and all (the undo behind
+    `POST /api/halo/survey/zones/{id}/restore`).
+
+    Raises sqlite3.IntegrityError if the id or the (system, slug) pair has been
+    taken since the delete — SQLite hands a fresh zone `max(rowid)+1`, so the
+    deleted id is exactly the one the next zone created in this org gets. The
+    caller turns that into a 409 rather than silently landing the marks on
+    someone else's row.
+    """
+    cols = ",".join(_ZONE_COLS)
+    qs = ",".join("?" * len(_ZONE_COLS))
+    vals = [row.get(c) for c in _ZONE_COLS]
+    with _lock, _conn:
+        _conn.execute(f"INSERT INTO survey_zones ({cols}) VALUES ({qs})", vals)
+    return int(row["id"])
+
+
 def clear_survey_zones(system: str, kind: str | None = "deep") -> list[int]:
     """Delete a system's zones of one kind (admin patch-reset alongside the
     marks). Returns the deleted ids so the caller can untag any live marks + prefs.

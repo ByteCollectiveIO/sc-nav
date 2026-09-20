@@ -1360,12 +1360,19 @@ class MemberDirectory:
         db.set_member_active_survey_zone(did, zone_id)
         self.by_id.setdefault(did, {"discord_id": did})["active_survey_zone"] = zone_id
 
-    def clear_active_survey_zone(self, zone_ids) -> None:
-        """A deleted zone must stop being anyone's active zone (DB + mirror)."""
-        for did in db.clear_active_survey_zone(zone_ids):
+    def clear_active_survey_zone(self, zone_ids) -> list[str]:
+        """A deleted zone must stop being anyone's active zone (DB + mirror).
+
+        Returns the discord_ids it cleared, so a zone DELETE can hand them to
+        its undo buffer — restoring the zone without restoring who was filing
+        into it gives back a zone that silently collects nothing.
+        """
+        dids = db.clear_active_survey_zone(zone_ids)
+        for did in dids:
             m = self.by_id.get(str(did))
             if m is not None:
                 m["active_survey_zone"] = None
+        return dids
 
     def active_survey_zone(self, discord_id: str) -> int | None:
         m = self.by_id.get(str(discord_id))
@@ -7412,10 +7419,37 @@ async def patch_survey_zone(zone_id: int, body: ZonePatchIn,
     return {"ok": True, "zone": db.get_survey_zone(zone_id)}
 
 
+# Deleting a zone is the one destructive thing on ATLAS, and the confirm gate
+# was its only safety net — a gate you have already decided to pass by the time
+# you read it. This buffer makes the delete undoable for a few minutes: it
+# holds the row verbatim plus the two things the delete scattered, namely which
+# marks lost their tag and which members lost their active zone.
+#
+# Deliberately in memory. An undo buffer that survives a restart is a soft
+# delete, which is a different feature with a different contract (it would have
+# to hide rows from every reader, the export and the admin clear); this one
+# only has to outlive the "…wait, no" that follows a mis-click.
+_ZONE_UNDO: dict[int, dict] = {}
+_ZONE_UNDO_TTL_S = 15 * 60
+_ZONE_UNDO_MAX = 32
+
+
+def _zone_undo_prune(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    for zid in [k for k, v in _ZONE_UNDO.items() if now - v["at"] > _ZONE_UNDO_TTL_S]:
+        _ZONE_UNDO.pop(zid, None)
+    # Bounded, oldest first: a delete-happy admin must not grow this forever.
+    while len(_ZONE_UNDO) > _ZONE_UNDO_MAX:
+        _ZONE_UNDO.pop(min(_ZONE_UNDO, key=lambda k: _ZONE_UNDO[k]["at"]), None)
+
+
 @app.delete("/api/halo/survey/zones/{zone_id}")
 async def remove_survey_zone(zone_id: int, user: dict = Depends(require_session)):
     """Delete a zone. Its marks are NOT destroyed — they're untagged (revert to
-    proximity clustering). Owner or admin only."""
+    proximity clustering). Owner or admin only.
+
+    Reversible for `_ZONE_UNDO_TTL_S` via the restore route below; the response
+    says so (`undo_until`) rather than leaving the client to assume it."""
     zone = db.get_survey_zone(zone_id)
     if zone is None:
         raise HTTPException(status_code=404, detail="unknown zone")
@@ -7434,15 +7468,83 @@ async def remove_survey_zone(zone_id: int, user: dict = Depends(require_session)
             nav.touch()
             hub.mark_dataset_dirty()
 
+    cleared: list[str] = []
+
     def _persist():
+        nonlocal cleared
         for d in touched:
             db.add_custom_poi(d)
         db.delete_survey_zone(zone_id)
         # Whoever was filing into it (often the creator — a zone is active the
         # moment it's created) must not keep a dangling active_survey_zone.
-        members_dir.clear_active_survey_zone([zone_id])
+        cleared = members_dir.clear_active_survey_zone([zone_id])
     await asyncio.to_thread(_persist)
-    return {"ok": True}
+    now = time.time()
+    _zone_undo_prune(now)
+    _ZONE_UNDO[zone_id] = {
+        "zone": zone, "mark_ids": [d["id"] for d in touched if d.get("id") is not None],
+        "filers": [str(x) for x in cleared], "by": str(user["id"]), "at": now,
+    }
+    return {"ok": True, "undo_until": now + _ZONE_UNDO_TTL_S}
+
+
+@app.post("/api/halo/survey/zones/{zone_id}/restore")
+async def restore_survey_zone(zone_id: int, user: dict = Depends(require_session)):
+    """Undo a zone delete: put the row back under its ORIGINAL id, re-tag the
+    marks it untagged, and re-point the members who were filing into it.
+
+    Whoever deleted it may undo it (an admin may undo anyone's, same rule the
+    delete itself used). The window is short and in memory, so a 404 here means
+    "too late", which is what the message says."""
+    _zone_undo_prune()
+    entry = _ZONE_UNDO.get(zone_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail="that delete can no longer be undone — re-create the zone instead")
+    if entry["by"] != str(user["id"]) and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="only the member who deleted it can undo it")
+    if db.get_survey_zone(zone_id) is not None:
+        _ZONE_UNDO.pop(zone_id, None)
+        raise HTTPException(status_code=409, detail="that zone id has been reused — re-create the zone instead")
+    mark_ids = set(entry["mark_ids"])
+
+    def _persist():
+        db.restore_survey_zone(entry["zone"])
+        for did in entry["filers"]:
+            db.set_member_active_survey_zone(did, zone_id)
+    try:
+        await asyncio.to_thread(_persist)
+    except sqlite3.IntegrityError:
+        _ZONE_UNDO.pop(zone_id, None)
+        raise HTTPException(status_code=409,
+                            detail="a zone with that name now exists — re-create the zone instead")
+    # Re-tag under the lock, the mirror image of the delete. A mark deleted in
+    # the meantime is simply skipped: the tag is derived, the mark is the fact.
+    async with hub.lock:
+        touched = []
+        for pid in mark_ids:
+            poi = nav.pois.get(pid)
+            sv = getattr(poi, "survey", None) if poi is not None else None
+            if sv is None:
+                continue
+            sv["zone_id"] = zone_id
+            touched.append(nav_core.custom_poi_to_dict(poi))
+        if touched:
+            nav.touch()
+            hub.mark_dataset_dirty()
+
+    def _persist_marks():
+        for d in touched:
+            db.add_custom_poi(d)
+    await asyncio.to_thread(_persist_marks)
+    for did in entry["filers"]:
+        m = members_dir.by_id.get(str(did))
+        if m is not None:
+            m["active_survey_zone"] = zone_id
+    _ZONE_UNDO.pop(zone_id, None)
+    return {"ok": True, "zone": db.get_survey_zone(zone_id),
+            "marks_restored": len(touched)}
 
 
 @app.put("/api/halo/survey/zones/active")

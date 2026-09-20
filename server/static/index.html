@@ -2568,6 +2568,30 @@
   .halo-window b { color: var(--text); }
   .halo-fallback { font-size: 12px; color: var(--dim); margin-top: 8px;
     padding-top: 8px; border-top: 1px dashed var(--border); }
+  /* FIELD is a glance surface: the armed plan's two reference paragraphs (the
+     patch-proof fallback number, and "go back to DROP to change it") used to
+     sit between the drop number and the LIVE VERDICT, so the one thing the tab
+     updates by itself was pushed below two things that never change. Collapsed
+     here, expanded in DROP where reading is the point. */
+  details.halo-fallback { padding-top: 6px; }
+  details.halo-fallback > summary { cursor: pointer; list-style: none; }
+  details.halo-fallback > summary::-webkit-details-marker { display: none; }
+  details.halo-fallback > summary::before { content: "\25b8 "; }
+  details.halo-fallback[open] > summary::before { content: "\25be "; }
+  details.halo-fallback > summary:focus-visible { outline: 2px solid var(--accent);
+    outline-offset: 2px; border-radius: 4px; }
+  details.halo-fallback > div { margin-top: 6px; }
+  /* A status line that carries its own way forward (↻ Retry / ↩ Undo). The
+     chip has to stay inline with the sentence it belongs to, and clear the
+     coarse-pointer tap floor without stretching the 12px line it sits on. */
+  .msg-act { margin-left: 6px; vertical-align: baseline; }
+  /* ATLAS zone table — ORES. A comma-joined list wraps at whatever width the
+     column happens to get, so a two-ore zone reads as one tidy line and a
+     six-ore zone as a paragraph of text. One ore per line, alphabetical, is
+     scannable down the column at any width. */
+  .zn-ores { display: flex; flex-direction: column; gap: 1px; }
+  .zn-ores > span { white-space: nowrap; }
+  .zn-ores > span.zn-more { color: var(--dim); font-size: 11px; }
   .halo-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .halo-chip { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);
     border-radius: 999px; color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -4922,6 +4946,15 @@
           <button type="button" class="route-chip" id="halo-scan-toggle"
             title="transcribe the scanner readout onto the mark you just dropped — everything optional">＋ scan detail
             <span class="muted" style="text-transform:none;">(optional — scanner mass &amp; comp %)</span></button>
+          <!-- A ⛏ mark is org evidence the moment it lands: it moves a zone's
+               value tier and feeds the belt model. A mis-tapped density (or a
+               mark dropped in the wrong place) had no way back except an admin
+               with SQL. Scoped to the mark THIS tab just dropped, so it can
+               never reach someone else's. -->
+          <button type="button" class="route-chip" id="halo-mark-undo"
+            title="delete the mark that just landed">↩ Undo this mark</button>
+          <span id="halo-mark-undo-msg" class="muted" role="status" aria-live="polite"
+                style="font-size:12px;"></span>
           <div id="halo-scan-form" hidden></div>
         </div>
       </div>
@@ -16804,11 +16837,15 @@ async function haloMarkSurvey() {
       return;
     }
     haloSurveyArmed = true;
+    // The previous mark's undo affordance must not survive into the next one:
+    // it would point at a mark that is no longer "the one you just dropped".
+    const um = $("halo-mark-undo-msg");
+    if (um) um.textContent = "";
     msg.className = "armed";
     const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
     msg.innerHTML = "ARMED — run <b>/showlocation</b> at the spot to drop the mark"
       + (z ? ` into <b>${esc(z.name)}</b>` : "");
-  } catch { msg.className = "muted"; msg.textContent = "⚠ network error"; }
+  } catch { failWithRetry(msg, "network error", haloMarkSurvey); }
 }
 
 // Named survey zones (#36.1): the active zone every ⛏ mark files into. The
@@ -17174,9 +17211,7 @@ function renderHaloAtlasZones() {
     const active = z.zone_id === activeSurveyZone;
     const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
       : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
-    const ores = (z.ores || []).length
-      ? z.ores.map(o => `${esc(o)}${oreValueChip(o)}`).join(", ")
-      : `<span class="muted">—</span>`;
+    const ores = zoneOresCell(z.ores);
     const size = z.grid_radius_m ? `⌀ ${fmtDist(2 * z.grid_radius_m)}` : "";
     const acts = (z.marks ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
       + (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
@@ -17508,6 +17543,28 @@ function renderHaloZoneSelect() {
 // here — reading `z.marks` on a surface area silently answers 0. Two earlier
 // passes fixed the two readers a critique named and swept nothing, so four
 // survived, including the destructive confirm.
+// The ORES cell for either kind of zone row. Comma-joining put a two-ore zone
+// on one tidy line and a six-ore zone in a wrapped block of text, so the column
+// had no shape to scan down. One ore per line, sorted alphabetically (the table
+// already sorts by value and by marks — inside a cell, "where is Quantanium?"
+// is the only question, and alphabetical answers it at a glance).
+//
+// Capped, and the cap SAYS SO: the surface row used to slice(0, 4) silently, so
+// a nine-ore area advertised four. The full composition is on the details card.
+const ZONE_ORES_SHOWN = 5;
+function zoneOresCell(ores) {
+  const list = (ores || []).filter(Boolean)
+    .slice().sort((a, b) => String(a).localeCompare(String(b)));
+  if (!list.length) return `<span class="muted">\u2014</span>`;
+  const shown = list.slice(0, ZONE_ORES_SHOWN);
+  const rest = list.length - shown.length;
+  return `<span class="zn-ores">`
+    + shown.map(o => `<span>${esc(o)}${oreValueChip(o)}</span>`).join("")
+    + (rest ? `<span class="zn-more" title="${esc(list.slice(ZONE_ORES_SHOWN).join(", "))}">`
+        + `+${rest} more</span>` : "")
+    + `</span>`;
+}
+
 function zoneEvidence(z) {
   const surf = z && z.kind === "surface";
   const n = (surf ? z.sightings : z && z.marks) || 0;
@@ -17532,7 +17589,37 @@ function zoneStatusTarget() {
     set className(v) { for (const el of live) el.className = v; },
     set textContent(v) { for (const el of live) el.textContent = v; },
     set innerHTML(v) { for (const el of live) el.innerHTML = v; },
+    // The real elements, for the failure path: a message that carries a
+    // retry needs a node to append the button to, not just a setter.
+    get nodes() { return live; },
   };
+}
+
+// A named failure that offers nothing is still a dead end. Every "⚠ network
+// error" in Prospector told the surveyor what went wrong and then made them
+// re-walk the whole gesture — re-pick the density, re-open the ••• menu, retype
+// the radius — just to find out whether the link had come back. This writes the
+// same sentence and hangs the retry off it, so recovering is one tap and the
+// inputs the action read are still on screen.
+//
+// Takes either a bare element or a zoneStatusTarget() shim (both the ATLAS and
+// FIELD status lines get their own button when both are showing).
+function failWithRetry(target, text, retry, cls) {
+  if (!target) return;
+  const nodes = target.nodes || [target];
+  for (const el of nodes) {
+    if (!el) continue;
+    el.className = cls || "muted";
+    el.textContent = "\u26a0 " + text + " ";
+    if (!retry) continue;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "route-chip msg-act";
+    b.textContent = "\u21bb Retry";
+    b.title = "run it again";
+    b.onclick = () => { el.textContent = ""; retry(); };
+    el.appendChild(b);
+  }
 }
 
 function renderHaloZoneBanner() {
@@ -17650,9 +17737,58 @@ function wireScanForm(host, onSaved) {
       }
       st.textContent = "✓ scan saved — value tiers sharpen on the next read";
       if (onSaved) onSaved();
-    } catch { st.textContent = "⚠ network error"; }
+    } catch {
+      // The typed scan is still in the form, so a retry re-reads it — the
+      // surveyor does not have to transcribe the readout a second time.
+      failWithRetry(st, "network error", () => box.querySelector(".scan-save").click());
+    }
   });
 }
+
+// Undo the ⛏ mark that just landed (#184 follow-up). Deliberately NOT
+// confirm-gated: an undo that asks "are you sure?" is just a second delete
+// button, and this one can only ever reach the mark this tab dropped seconds
+// ago. It uses the plain custom-POI delete, so the server's own ensure_owns
+// still refuses anyone else's.
+async function undoLastSurveyMark() {
+  const id = haloLastMarkId;
+  if (id == null) return;
+  const btn = $("halo-mark-undo"), msg = $("halo-mark-undo-msg");
+  if (btn) btn.disabled = true;
+  if (msg) { msg.className = "muted"; msg.textContent = "removing…"; }
+  const fail = (why) => {
+    if (btn) btn.disabled = false;
+    failWithRetry(msg, why, undoLastSurveyMark);
+  };
+  try {
+    const r = await fetch(`/api/custom_pois/${id}`, { method: "DELETE" });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      fail(d.detail || "couldn't remove that mark");
+      return;
+    }
+  } catch { fail("network error"); return; }
+  // The mark is gone, so everything derived from it has to forget it: the
+  // scan attach point it was the target of, the drift nudge that measures
+  // from it, the heat layer that counted it, and the zone rollups.
+  haloLastMarkId = null;
+  haloLastMarkOres = [];
+  radarMarkAt = null;
+  if (btn) btn.disabled = false;
+  const blk = $("halo-scan-blk"), form = $("halo-scan-form");
+  if (blk) blk.hidden = true;
+  if (form) { form.hidden = true; form.innerHTML = ""; }
+  if (msg) msg.textContent = "";
+  const sm = $("halo-survey-msg");
+  if (sm) { sm.className = "muted"; sm.textContent = "↩ mark removed"; }
+  delete haloTargets[haloSystem];
+  loadHaloTargets(haloSystem).then(renderHaloSystemPanel);
+  loadHaloZones();
+  radarLayersInvalidate();
+  if (haloRadarLast) ensureRadarLayers(haloRadarLast);
+  loadAll();   // the dataset view holds survey marks too
+}
+$("halo-mark-undo").onclick = undoLastSurveyMark;
 
 // After-the-drop attach point: build lazily on first open, aimed at the mark
 // that just resolved.
@@ -18114,6 +18250,12 @@ function bodyAreaBounds(zones, phi0) {
 // about, and the slider makes the range visible.
 const BODY_PLATE_ZOOM_KM = [2, 5, 10, 25, 50, 100, 250, 500, 1000];
 
+// A body carries up to ~130 POIs (Daymar: 129, of which 54 are numbered sand
+// caves). Every one of them gets a diamond — they cost nothing and they ARE
+// the texture of the ground — but only this many get a name, or the plate
+// becomes a wall of type with a map somewhere underneath it.
+const PLATE_POI_LABEL_CAP = 16;
+
 function drawBodyPlate() {
   const cv = $("halo-body-map");
   if (!cv || !haloBodyPlate) return;
@@ -18193,8 +18335,55 @@ function drawBodyPlate() {
     ctx.globalAlpha = 1;
   }
 
+  // layer 1.5: the body's surface POIs — the frame of reference.
+  //
+  // Without them this map was a named circle floating on a graticule: the
+  // "ArcCorp Mining Area 056 Northeast" area drew with no ArcCorp Mining Area
+  // 056 anywhere on it, so nothing on screen said how big the circle was or
+  // what it was next to. The card's own THIS AREA plate already draws them;
+  // the plate that frames the whole body is where you need them MORE, because
+  // that is the view where you have no other scale cue.
+  //
+  // Same altitude gate as the card plate and the naming suggestion: a POI with
+  // a ground track but no ground position (Daymar carries a station 288 km up)
+  // would print a landmark on a patch of dirt it is merely passing over.
+  const poiMarks = [];
+  // The zone row is the authority on which system this body is in — the
+  // masthead's `haloSystem` can be pointing somewhere else by the time a plate
+  // opened from a deep link repaints.
+  const plateSystem = (zones[0] && zones[0].system) || haloSystem;
+  if (R && allRows) {
+    for (const p of allRows) {
+      if (p.kind !== "poi" || p.container !== haloBodyPlate || p.system !== plateSystem) continue;
+      if (p.latitude == null || p.longitude == null) continue;
+      if (p.height_m != null && p.height_m > SURFACE_ZONE_MAX_HEIGHT_M) continue;
+      const [x, y] = PT(p.latitude, p.longitude);
+      if (x < -8 || y < -8 || x > cssW + 8 || y > cssH + 8) continue;
+      poiMarks.push({ x, y, name: p.name || "",
+                      // A cave or a "#004" is worth SEEING (it is a real thing
+                      // on the ground) and a poor thing to spend a label on.
+                      // Same split the naming suggestion makes, used here to
+                      // rank the labels rather than to filter the dots.
+                      landmark: isZoneLandmark(p) });
+    }
+    ctx.strokeStyle = C.label;
+    ctx.lineWidth = 1;
+    for (const m of poiMarks) {
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y - 3); ctx.lineTo(m.x + 3, m.y);
+      ctx.lineTo(m.x, m.y + 3); ctx.lineTo(m.x - 3, m.y);
+      ctx.closePath(); ctx.stroke();
+    }
+  }
+
   // layer 2: the zones themselves, as sampled great-circle polygons
   haloBodyHits = [];
+  // Shared label occupancy. Zone names claim their boxes first (they are what
+  // this panel is about); POI labels fill the gaps that are left, so a busy
+  // moon degrades to fewer names rather than to overlapping mush.
+  const plateLabels = [];
+  const plateClash = (b) => plateLabels.some(o =>
+    b.x < o.x + o.w && b.x + b.w > o.x && b.y < o.y + o.h && b.y + b.h > o.y);
   // Biggest first, so a tight zone inside a broad one draws on top of it
   // rather than under — the legitimate case §12.3 refuses to block.
   const drawOrder = zones.slice().sort((a, b) => (b.radius_m || 0) - (a.radius_m || 0));
@@ -18234,9 +18423,76 @@ function drawBodyPlate() {
     ctx.strokeText(z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name, lx + rPx + 6, ty);
     ctx.lineWidth = 1;
     ctx.fillStyle = sel ? C.drop : vc;
-    ctx.fillText(`${z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name} · ${z.sightings || 0}`,
-                 lx + rPx + 6, ty);
+    const zLabel = `${z.name.length > 22 ? z.name.slice(0, 21) + "…" : z.name} · ${z.sightings || 0}`;
+    ctx.fillText(zLabel, lx + rPx + 6, ty);
+    plateLabels.push({ x: lx + rPx + 4, y: ty - 9, w: ctx.measureText(zLabel).width + 4, h: 13 });
     haloBodyHits.push({ zone_id: z.zone_id, x: lx, y: ly });
+  }
+
+  // layer 2.5: POI names, after the zones so they never cover one. Landmarks
+  // first, then everything else nearest-to-centre, each one dropped if its box
+  // is already taken — a name you can half-read is worse than a bare ◇.
+  let poiNamed = 0;
+  if (poiMarks.length) {
+    ctx.font = "10px monospace";
+    // The diamonds are occupancy too: a name printed across another POI's
+    // marker hides the very thing it is supposed to be pointing at.
+    for (const m of poiMarks)
+      plateLabels.push({ x: m.x - 4, y: m.y - 4, w: 8, h: 8 });
+    const order = poiMarks.slice().sort((a, b) =>
+      (b.landmark - a.landmark)
+      || (Math.hypot(a.x - cssW / 2, a.y - cssH / 2) - Math.hypot(b.x - cssW / 2, b.y - cssH / 2)));
+    for (const m of order) {
+      if (poiNamed >= PLATE_POI_LABEL_CAP) break;
+      const nm = m.name.length > 26 ? m.name.slice(0, 25) + "…" : m.name;
+      if (!nm) continue;
+      const w = ctx.measureText(nm).width;
+      // Two rules, because the two kinds of POI earn their label differently.
+      //
+      // A LANDMARK is why this layer exists — you take your bearings off it —
+      // so it gets six placements (right, left, and a line above and below
+      // each) rather than one. The first cut tried only "to the right" and
+      // gave up if that box was taken, and a zone's own name is anchored to
+      // the right of its circle: "ArcCorp Mining Area 056" lost its label to
+      // the "ArcCorp Mining Area 056 Northeast" zone label overlapping it by
+      // three pixels — exactly the landmark the zone is named after.
+      //
+      // EVERYTHING ELSE only gets a name if it has clean room around it: the
+      // fat box means a knot of five numbered caves yields one label instead
+      // of five stacked ones, while an isolated cave still gets named.
+      const grow = m.landmark ? 2 : 11;
+      const offsets = m.landmark ? [0, -12, 12] : [0];
+      let fx = null, fy = null;
+      for (const dy of offsets) {
+        for (const side of [1, -1]) {
+          const tx = side > 0 ? m.x + 6 : m.x - 6 - w;
+          if (tx < 4 || tx + w > cssW - 4) continue;
+          const ty = m.y + dy;
+          if (ty < 10 || ty > cssH - 4) continue;
+          const box = { x: tx - grow, y: ty - 6 - grow / 2,
+                        w: w + 2 * grow, h: 12 + grow };
+          if (plateClash(box)) continue;
+          plateLabels.push(box);
+          fx = tx; fy = ty;
+          break;
+        }
+        if (fx != null) break;
+      }
+      if (fx == null) continue;
+      ctx.strokeStyle = C.bg; ctx.lineWidth = 3;
+      ctx.strokeText(nm, fx, fy + 3);
+      ctx.lineWidth = 1;
+      ctx.fillStyle = m.landmark ? C.text : C.label;
+      ctx.fillText(nm, fx, fy + 3);
+      // A label pushed off its own marker needs a leader back to it.
+      if (fy !== m.y) {
+        ctx.strokeStyle = C.label;
+        ctx.beginPath();
+        ctx.moveTo(m.x, m.y); ctx.lineTo(fx < m.x ? fx + w + 2 : fx - 2, fy);
+        ctx.stroke();
+      }
+      poiNamed++;
+    }
   }
 
   // layer 3: you
@@ -18259,6 +18515,8 @@ function drawBodyPlate() {
       + `${zones.reduce((a, z) => a + (z.sightings || 0), 0)} sightings · `
       + `≈${Math.round(area / 1e6).toLocaleString()} km² named`
       + (cells.length ? ` · ${cells.length} mapped cells` : "")
+      + (poiMarks.length ? ` · ◇ ${poiMarks.length} surface POI`
+          + `${poiMarks.length === 1 ? "" : "s"}` : "")
       + ` · equal-area, true shape at ${Math.abs(phi0).toFixed(0)}°`
       + `${phi0 < 0 ? "S" : "N"} · drag to pan`;
   }
@@ -18438,7 +18696,11 @@ async function refenceSurveyZone(z) {
       body: JSON.stringify({ radius_m: Math.round(km * 1000) }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { say("⚠ " + esc(d.detail || "couldn't re-fence this area")); return; }
-  } catch { say("⚠ network error"); return; }
+  } catch {
+    // Retry re-opens the prompt with the radius already filled in.
+    failWithRetry(st, "network error", () => refenceSurveyZone(z));
+    return;
+  }
   await loadHaloZones(z.system || haloSystem);
   const fresh = haloZones.find(x => x.zone_id === z.zone_id);
   if (fresh) {
@@ -18453,9 +18715,7 @@ async function refenceSurveyZone(z) {
 
 function surfaceZoneRow(z) {
   const sel = z.zone_id === haloAtlasSelZone ? " class=\"zone-sel\"" : "";
-  const ores = (z.ores || []).length
-    ? z.ores.slice(0, 4).map(o => `${esc(o)}${oreValueChip(o)}`).join(", ")
-    : `<span class="muted">—</span>`;
+  const ores = zoneOresCell(z.ores);
   const band = z.avg_band ? `B${z.avg_band.toFixed(1)}` : `<span class="muted">—</span>`;
   const acts = (z.sightings ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
     // Navigable, never plannable — there is no quantum drop onto a surface.
@@ -18882,7 +19142,18 @@ async function setActiveSurveyZone(zid) {
       return;
     }
     activeSurveyZone = zid;
-  } catch { revert("network error"); return; }
+  } catch {
+    revert("network error");
+    // revert() has just repainted the picker and written the explanation, so
+    // the retry hangs off the end of that sentence rather than replacing it.
+    for (const el of st.nodes) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "route-chip msg-act"; b.textContent = "\u21bb Retry";
+      b.onclick = () => { el.textContent = ""; setActiveSurveyZone(zid); };
+      el.appendChild(b);
+    }
+    return;
+  }
   if (st) { st.className = "muted"; st.textContent = ""; }
   renderHaloZoneSelect(); renderHaloZoneBanner();
   renderHaloAtlasZones();   // the ⛏ active chip lives there too (#38)
@@ -18912,7 +19183,7 @@ async function newSurveyZone() {
     if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || "couldn't create zone"); } return; }
     activeSurveyZone = d.active_survey_zone;
     await loadHaloZones();
-  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } }
+  } catch { failWithRetry(st, "network error", newSurveyZone); }
 }
 
 // Rename a zone (creator or admin; the server re-checks and re-slugs — a name
@@ -18936,7 +19207,7 @@ async function renameSurveyZone(z) {
       body: JSON.stringify({ name: name.trim() }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || "couldn't rename zone"); } return; }
-  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } return; }
+  } catch { failWithRetry(st, "network error", () => renameSurveyZone(z)); return; }
   if (st) { st.className = "muted"; st.textContent = `renamed to "${name.trim()}"`; }
   await loadHaloZones();
   // Keep an open details card in step with the new name.
@@ -18959,7 +19230,7 @@ async function archiveSurveyZone(z, archive) {
       body: JSON.stringify({ closed: !!archive }) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || `couldn't ${archive ? "archive" : "reactivate"} zone`); } return; }
-  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } return; }
+  } catch { failWithRetry(st, "network error", () => archiveSurveyZone(z, archive)); return; }
   if (archive && activeSurveyZone === z.zone_id) activeSurveyZone = null;   // server cleared the pref
   if (st) { st.className = "muted"; st.textContent = `"${z.name}" ${archive ? "archived" : "reactivated"}`; }
   await loadHaloZones();
@@ -18971,8 +19242,10 @@ async function archiveSurveyZone(z, archive) {
 
 // Delete a zone (creator or admin; the server re-checks). Marks survive — the
 // zone is a membership tag, so deleting it untags them and they fall back to
-// proximity clustering. Confirm-gated: this is the one irreversible zone action.
-async function deleteSurveyZone(z) {
+// proximity clustering. Confirm-gated AND undoable for 15 minutes (the server
+// holds the row, the untagged mark ids and the members who were filing into
+// it): the gate stops the slip, the undo repairs the one that gets through.
+async function deleteSurveyZone(z, confirmed) {
   // This read `z.marks`, so over a surface area it said "It has no marks yet."
   // about 54 sightings from four members — a guardrail telling you it is safe
   // to delete other people's evidence.
@@ -18980,8 +19253,11 @@ async function deleteSurveyZone(z) {
   const kept = z.kind === "surface"
     ? `Its ${ev.label} are untouched — membership is geometric, so they stop belonging to a named area.`
     : `Its ${ev.label} are kept and revert to proximity clustering.`;
-  const ok = await confirmDialog(
-    ev.n ? `Delete "${z.name}"? ${kept}` : `Delete "${z.name}"? It has no ${ev.noun}s yet.`,
+  const ok = confirmed || await confirmDialog(
+    (ev.n ? `Delete "${z.name}"? ${kept}` : `Delete "${z.name}"? It has no ${ev.noun}s yet.`)
+      // Say the window exists. "Delete" reading as final is what makes the
+      // gate feel like the last word, and it stopped being the last word.
+      + " You can undo this for 15 minutes.",
     { title: "Delete survey zone", confirmLabel: "Delete", danger: true });
   if (!ok) return;
   const st = zoneStatusTarget();
@@ -18989,12 +19265,66 @@ async function deleteSurveyZone(z) {
     const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, { method: "DELETE" });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { if (st) { st.className = "muted"; st.textContent = "⚠ " + (d.detail || "couldn't delete zone"); } return; }
-  } catch { if (st) { st.className = "muted"; st.textContent = "⚠ network error"; } return; }
+  } catch {
+    // The confirm has already been answered; retrying must not ask again.
+    failWithRetry(st, "network error", () => deleteSurveyZone(z, true));
+    return;
+  }
   if (activeSurveyZone === z.zone_id) activeSurveyZone = null;   // server cleared the pref too
   if (haloZoneDetailFor === z.zone_id) closeHaloSurveyCard();
   if (haloAtlasSelZone === z.zone_id) haloAtlasSelZone = null;
-  if (st) { st.className = "muted"; st.textContent = `zone "${z.name}" deleted`; }
   await loadHaloZones();
+  // The confirm gate was the only safety net here, and a gate is something you
+  // have already decided to pass by the time you read it. The server keeps the
+  // row (plus which marks it untagged and who was filing into it) for a short
+  // window, so the report of the delete carries the way back.
+  sayWithUndo(st, `zone "${z.name}" deleted`,
+              () => undoZoneDelete(z.zone_id, z.name));
+}
+
+// "…wait, no" — restore a zone the server still has in its undo buffer.
+async function undoZoneDelete(zoneId, name) {
+  const st = zoneStatusTarget();
+  st.className = "muted";
+  st.textContent = "restoring\u2026";
+  try {
+    const r = await fetch(`/api/halo/survey/zones/${zoneId}/restore`, { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // A window that has closed is not a retryable failure — saying so and
+      // pointing at ＋ New zone beats a Retry button that can only fail again.
+      st.className = "muted";
+      st.textContent = "\u26a0 " + (d.detail || "couldn't restore that zone");
+      return;
+    }
+    await loadHaloZones();
+    const back = haloZones.find(x => x.zone_id === zoneId);
+    if (back && back.zone_id === activeSurveyZone) renderHaloZoneSelect();
+    st.className = "muted";
+    st.textContent = `"${(back && back.name) || name}" restored`
+      + (d.marks_restored ? ` \u00b7 ${d.marks_restored} mark`
+          + `${d.marks_restored === 1 ? "" : "s"} re-tagged` : "");
+  } catch {
+    failWithRetry(st, "network error", () => undoZoneDelete(zoneId, name));
+  }
+}
+
+// A report that carries its own reversal. Same shape as failWithRetry, for the
+// SUCCESS path: the message stays a message, the undo is a chip beside it.
+function sayWithUndo(target, text, undo) {
+  if (!target) return;
+  const nodes = target.nodes || [target];
+  for (const el of nodes) {
+    if (!el) continue;
+    el.className = "muted";
+    el.textContent = text + " ";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "route-chip msg-act";
+    b.textContent = "\u21a9 Undo";
+    b.onclick = () => { el.textContent = ""; undo(); };
+    el.appendChild(b);
+  }
 }
 
 // A synthetic pocket for the live radar when your active zone isn't a datamined
@@ -19019,9 +19349,9 @@ function activeZonePocket() {
 // hidden tab and the button read as dead. Success already hops to DROP to show
 // the plan; failure hops there too, because every fix the message names (start
 // POI, ship, staging) is a DROP control.
-function haloPlanFailed(text) {
+function haloPlanFailed(text, retry) {
   const msg = $("halo-plan-msg");
-  haloPlanSay(text, "error");
+  haloPlanSay(text, "error", retry);
   haloGoTab("drop");
   if (msg) msg.scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
 }
@@ -19045,7 +19375,7 @@ async function planHaloZone(z) {
     haloLastPlan = d; renderHaloPlan(d); revealHaloResult(d);
     haloGoTab("drop");   // callable from ATLAS/FIELD — the result lives in DROP (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
-  } catch { haloPlanFailed("⚠ network error"); }
+  } catch { haloPlanFailed("⚠ network error", () => planHaloZone(z)); }
 }
 
 // ⛏ Survey the next gap (#37 slice 4): plan the drop leg of the most
@@ -19067,7 +19397,7 @@ async function planHaloGap() {
     haloLastPlan = d; renderHaloPlan(d); revealHaloResult(d);
     haloGoTab("drop");   // reachable from the ATLAS coverage card too (#38)
     $("halo-result").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
-  } catch { haloPlanFailed("⚠ network error"); }
+  } catch { haloPlanFailed("⚠ network error", planHaloGap); }
 }
 
 function renderHaloCredit() {
@@ -19290,12 +19620,21 @@ function wireHaloFinder() {
 // Validation and network failures used to render in the same 12px dim grey as
 // the hint beside them, so "pick a field first" read as advice rather than a
 // refusal. role=alert + a warn colour make the refusal legible.
-function haloPlanSay(text, kind) {
+function haloPlanSay(text, kind, retry) {
   const msg = $("halo-plan-msg");
   if (!msg) return;
   msg.textContent = text;
   msg.className = kind === "error" ? "halo-plan-err" : "muted";
   msg.setAttribute("role", kind === "error" ? "alert" : "status");
+  // A transport failure is the one plan error the pilot can act on without
+  // changing a single input, so it is the one that gets a button.
+  if (!retry) return;
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "route-chip msg-act";
+  b.textContent = "\u21bb Retry";
+  b.onclick = () => { msg.textContent = ""; retry(); };
+  msg.append(" ", b);
 }
 
 async function planHalo() {
@@ -19347,8 +19686,8 @@ async function planHalo() {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); haloPlanSay("⚠ " + (d.detail || "plan failed"), "error"); return; }
     plan = await r.json();
-  } catch { haloPlanSay("⚠ network error", "error"); return; }
-  
+  } catch { haloPlanSay("⚠ network error", "error", planHalo); return; }
+
   haloLastPlan = plan;
   renderHaloPlan(plan); revealHaloResult(plan);
 }
@@ -19364,7 +19703,13 @@ function haloLegRow(leg, i) {
     + `</div>`;
 }
 
-function haloDropHtml(plan, copyId) {
+// `opts.collapseRef` folds the patch-proof fallback into a disclosure. FIELD
+// passes it; DROP does not. See the note on `details.halo-fallback`: FIELD's
+// job is "glance, don't read", and this paragraph is the one thing on the
+// armed plan that is pure reference — it never changes, and it sat directly
+// above the LIVE VERDICT, which is the only thing on the tab that does.
+function haloDropHtml(plan, copyId, opts) {
+  const collapseRef = !!(opts && opts.collapseRef);
   const cid = copyId || "halo-copy";   // DROP result vs FIELD pinned copy (#38)
   const d = plan.drop;
   const leg = plan.legs[plan.legs.length - 1];
@@ -19436,10 +19781,16 @@ function haloDropHtml(plan, copyId) {
   if (d.second_crossing)
     h += `<div class="halo-window">this route crosses the band again on the far side: `
       + `${fmtHud(d.second_crossing.enter_m)} → ${fmtHud(d.second_crossing.exit_m)}</div>`;
-  if (!d.arrival)      // meaningless for an arrival — the jump just completes
-    h += `<div class="halo-fallback">Patch-proof fallback: watch your <b>starmap distance to the `
+  if (!d.arrival) {    // meaningless for an arrival — the jump just completes
+    const fb = `Patch-proof fallback: watch your <b>starmap distance to the `
       + `${esc(plan.system || "Stanton")} marker</b> instead and exit at <b>${fmtHud(d.star_dist_peak_m)}</b>. `
-      + `That number works on any route that crosses this ${plan.band ? "band" : "point"}.</div>`;
+      + `That number works on any route that crosses this ${plan.band ? "band" : "point"}.`;
+    h += collapseRef
+      ? `<details class="halo-fallback"><summary>Patch-proof fallback · `
+        + `${fmtHud(d.star_dist_peak_m)} from the ${esc(plan.system || "Stanton")} marker`
+        + `</summary><div>${fb}</div></details>`
+      : `<div class="halo-fallback">${fb}</div>`;
+  }
   h += `</div>`;
   return h;
 }
@@ -19576,13 +19927,18 @@ function renderHaloFly(plan) {
   const el = $("halo-fly");
   if (!el) return;
   if (!plan) { el.hidden = true; el.innerHTML = ""; return; }
+  // Both reference lines ride the HEADER now. They were two paragraphs at the
+  // foot of this panel, i.e. between the drop number and the live verdict —
+  // the tab's only self-updating readout was pushed under two things that
+  // never change. The header is where a caption belongs, and it costs no
+  // vertical space above the verdict at all.
   let h = `<div class="panel"><h2>ARMED PLAN · ${haloPlanHead(plan)} <span class="muted"`
     + ` style="font-weight:400; font-size:12px;">from ${esc(plan.start.name)}`
-    + `${plan.staged ? " · via a staging hop" : ""}</span></h2>`;
+    + `${plan.staged ? " · via a staging hop" : ""} · `
+    + `<a href="#/halo">change it in ☄ DROP</a></span></h2>`;
   for (let i = 0; i < plan.legs.length - 1; i++) h += haloLegRow(plan.legs[i], i);
-  h += haloDropHtml(plan, "halo-fly-copy");
-  h += `<p class="muted" style="font-size:11px; margin:8px 0 0;">adjust the plan or browse `
-    + `alternates in <a href="#/halo">☄ DROP</a></p></div>`;
+  h += haloDropHtml(plan, "halo-fly-copy", { collapseRef: true });
+  h += `</div>`;
   el.innerHTML = h; el.hidden = false;
   wireHaloCopy("halo-fly-copy", plan);
 }
@@ -19652,6 +20008,10 @@ function renderHaloPlan(plan) {
 // Everything is true scale: the belt is honestly a thin ring at system scale,
 // so a magnified inset around the drop point shows the individual bands. Like
 // the navigator map, the canvas keeps fixed dark scope colors in both themes.
+// Below this canvas width the DROP ZONE inset stops being an overlay and gets
+// its own band under the map (see drawHaloSystemMap). Chosen so a phone and a
+// narrow split pane stack, while any normal desktop panel keeps the corner.
+const HALO_INSET_STACK_W = 560;
 const HALO_MAP_C = { bg: "#080b10", inset: "#0c1119", orbit: "#182236",
   belt: "rgba(79,195,247,.10)", beltEdge: "rgba(79,195,247,.28)",
   band: "rgba(79,195,247,.45)", bandFill: "rgba(79,195,247,.16)",
@@ -19716,9 +20076,18 @@ function drawHaloSystemMap(cv, plan) {
   const cssW = cv.parentElement.clientWidth;
   if (!(cssW > 0)) return;                       // hidden / mid-layout: skip
   const cssH = Math.round(Math.min(430, Math.max(280, cssW * 0.58)));
+  // The DROP ZONE inset is a corner overlay, which is right on a desktop map
+  // (the corners are empty space) and wrong on a phone: at 340 css px it
+  // covered a third of the width and two thirds of the height of the very map
+  // it magnifies, printing band arcs over the route it came from. Below this
+  // width the canvas grows instead and the inset gets its own band underneath
+  // — the same picture, nothing hidden.
+  const stackInset = !!plan && cssW < HALO_INSET_STACK_W;
+  const bandSize = stackInset ? Math.round(Math.min(cssW - 20, 320)) : 0;
+  const totalH = cssH + (stackInset ? bandSize + 12 : 0);
   const dpr = window.devicePixelRatio || 1;
-  cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
-  cv.style.height = cssH + "px";
+  cv.width = Math.round(cssW * dpr); cv.height = Math.round(totalH * dpr);
+  cv.style.height = totalH + "px";
   const ctx = cv.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const C = HALO_MAP_C, bands = doc.bands || null, ring = doc.ring || null;
@@ -19766,7 +20135,7 @@ function drawHaloSystemMap(cv, plan) {
   const X = (p) => cx + p[0] * s, Y = (p) => cy - p[1] * s;
   const hits = overview ? [] : null;
 
-  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, cssH);
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, totalH);
   ctx.font = "10px monospace";
 
   // planet orbits (true planets; moons are sub-pixel at this scale)
@@ -20065,7 +20434,9 @@ function drawHaloSystemMap(cv, plan) {
   ctx.beginPath(); ctx.moveTo(12, cssH - 12); ctx.lineTo(12 + bar * s, cssH - 12); ctx.stroke();
   ctx.fillText((bar / 1e9) + " Gm", 12, cssH - 18);
 
-  if (P) drawHaloInset(ctx, plan, P, cssW, cssH, doc);
+  if (P) drawHaloInset(ctx, plan, P, cssW, cssH, doc,
+                       stackInset ? { x0: Math.round((cssW - bandSize) / 2),
+                                      y0: cssH + 12, size: bandSize } : null);
   // Selection feedback on the DROP overview (parity with the ATLAS ring):
   // whatever target is PINNED for the drop gets the gold ring — click a dot
   // or type a key and the map answers "this one". Matched over the hit list,
@@ -20200,12 +20571,17 @@ function wireHaloOverviewClicks() {
 // Magnified drop zone: individual band edges / pocket circles are visible
 // here (they're sub-pixel on the system view), plus the chord, window ticks,
 // and the ✕.
-function drawHaloInset(ctx, plan, P, cssW, cssH, doc) {
+// `place` (optional) = {x0, y0, size}: the stacked band used at phone width,
+// where the corner overlay would print over the map it magnifies. Unset keeps
+// the desktop corner placement.
+function drawHaloInset(ctx, plan, P, cssW, cssH, doc, place) {
   const C = HALO_MAP_C, bands = doc.bands || null;
   const pocket = plan.drop && plan.drop.pocket;
-  const size = Math.round(Math.min(cssW * 0.34, cssH * 0.66));
+  const size = place ? place.size
+    : Math.round(Math.min(cssW * 0.34, cssH * 0.66));
   if (size < 90) return;                         // too small to be useful
-  const x0 = cssW - size - 10, y0 = 10;
+  const x0 = place ? place.x0 : cssW - size - 10;
+  const y0 = place ? place.y0 : 10;
   let half;                                       // world half-extent of the box
   if (plan.band && bands) {
     const b = bands[plan.band.band - 1];
