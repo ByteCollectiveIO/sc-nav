@@ -6109,8 +6109,14 @@ async function claimSurfaceZone() {
   if (!c) return;
   const name = await promptDialog(
     `Name the ground around you on ${c.name}. Every node the org has ever logged `
-    + `inside the circle joins immediately — there is nothing to tag and nothing to arm.`,
-    { title: "Name this area", confirmLabel: "Create", placeholder: "e.g. Iron Ridge" });
+    + `inside the circle joins immediately — there is nothing to tag and nothing `
+    + `to arm.\n\n${ZONE_NAME_HINT}`,
+    { title: "Name this area", confirmLabel: "Create",
+      placeholder: "e.g. Shubin SCD-1 North",
+      // A SUGGESTION, pre-filled and fully editable — anchored on the nearest
+      // landmark on this body so it says where you are. Blank when nothing is
+      // close enough to describe it honestly.
+      value: suggestZoneName(state) });
   if (!name) return;
   const radius_m = Number($("zone-claim-radius").value) || 25000;
   const r = await postJson("/api/halo/survey/zones", {
@@ -16723,6 +16729,8 @@ function renderHaloAtlasZones() {
   // just point the navigator at the nearest QT marker and fly the last leg.
   for (const b of el.querySelectorAll("[data-zdest]"))
     b.onclick = () => setDestination(Number(b.dataset.zdest));
+  for (const b of el.querySelectorAll("[data-zradius]"))
+    b.onclick = () => { const z = byId(b.dataset.zradius); if (z) refenceSurveyZone(z); };
   // Row → map: the other half of the link. Buttons handle themselves, so the
   // row only claims clicks that missed one.
   for (const tr of el.querySelectorAll("tr[data-zrow]"))
@@ -17470,6 +17478,111 @@ function capAreaM2(radius_m, R) {
   return 2 * Math.PI * R * R * (1 - Math.cos(theta));
 }
 
+// --- naming + re-fencing surface areas (#37.1) ------------------------------
+// NAMING CONVENTION — a suggestion, never a rule.
+//
+// The name deliberately does NOT repeat the system or the body. Both are
+// already on screen wherever a name appears (the ATLAS WHERE column, the card's
+// "STANTON · DAYMAR · SURFACE AREA" eyebrow, the body plate's title), and the
+// SLUG already carries the body — `daymar-iron-ridge` — so exports, pins and
+// cross-body collisions are handled without spending a single character of the
+// display name on it. "Stanton-Daymar-Iron Ridge" would render as
+// "STANTON · DAYMAR · Stanton-Daymar-Iron Ridge" and eat the 40-char slug
+// budget that the body prefix has already taken 10 of.
+//
+// What the app CANNOT derive is where on the body you are. So the convention
+// spends the name on exactly that:
+//
+//     <nearest landmark> <direction>      e.g. "Shubin SCD-1 North"
+//                                              "Kudre Ore East Flats"
+//
+// Players navigate and talk by outposts, so a landmark-anchored name is
+// instantly locatable by anyone in the org, says itself in voice comms, and
+// sorts usefully (every area near one outpost clusters together in the list).
+//
+// Deliberately NOT ore-led ("Quantanium Ridge"): the ore mix is derived and
+// moves as evidence accumulates, so a name that asserts an ore slowly becomes
+// a lie — and the card already shows the real mix.
+const ZONE_NAME_HINT =
+  "Tip: name it for where it is, not what it holds — “Shubin SCD-1 North”, "
+  + "“Kudre Ore East”. The system and body are added automatically, and the ore "
+  + "mix is on the card (it changes as people log more).";
+
+const COMPASS_8 = ["North", "Northeast", "East", "Southeast",
+                   "South", "Southwest", "West", "Northwest"];
+
+// Nearest landmark on THIS body, within reach of the area being named.
+// allRows is already loaded for the NEARBY panel, so this costs no request.
+function nearestBodyLandmark(system, body, lat, lon, R, maxM) {
+  if (!allRows || !R) return null;
+  let best = null;
+  for (const r of allRows) {
+    if (r.kind !== "poi" || r.container !== body || r.system !== system) continue;
+    if (r.latitude == null || r.longitude == null) continue;
+    const gc = greatCircle(lat, lon, r.latitude, r.longitude, R);
+    if (gc.dist <= maxM && (!best || gc.dist < best.dist)) {
+      best = { name: r.name, dist: gc.dist, bearing: gc.bearing };
+    }
+  }
+  return best;
+}
+
+function suggestZoneName(state) {
+  const c = state && state.container;
+  if (!c || state.latitude == null) return "";
+  // 40 km: past that a landmark stops describing where you are, and a name
+  // like "Shubin SCD-1 North" for somewhere 200 km away is worse than blank.
+  const near = nearestBodyLandmark(state.system, c.name, state.latitude,
+                                   state.longitude, c.body_radius_m || 0, 40000);
+  if (!near) return "";
+  // Bearing here is FROM the landmark TO you, which is the direction the name
+  // should say: you are north OF the outpost.
+  const back = (near.bearing + 180) % 360;
+  const dir = COMPASS_8[Math.round(back / 45) % 8];
+  // Right on top of it needs no direction.
+  return near.dist < 1500 ? near.name : `${near.name} ${dir}`;
+}
+
+// Re-fencing is THE common edit (mis-sizing an area is easy; moving its centre
+// is a new area), and it rewrites membership retroactively — so the prompt says
+// so, and the confirmation reports the new count rather than leaving the pilot
+// to go and check.
+async function refenceSurveyZone(z) {
+  const cur = z.radius_m ? (z.radius_m / 1000) : 25;
+  const answer = await promptDialog(
+    `Radius in km for “${z.name}” (0.5–50). Membership is geometric, so this `
+    + `re-counts every sighting inside the new circle immediately — widening `
+    + `picks up nodes already logged, narrowing drops them from this area `
+    + `(nothing is deleted).`,
+    { title: "Re-fence this area", confirmLabel: "Save",
+      value: String(Math.round(cur * 10) / 10), placeholder: "25" });
+  if (answer == null) return;
+  const st = $("halo-zone-status");
+  const say = (msg) => { if (st) { st.className = "muted"; st.innerHTML = msg; } };
+  const km = Number(String(answer).replace(/[^0-9.]/g, ""));
+  if (!(km >= 0.5 && km <= 50)) {
+    say(`⚠ radius must be between 0.5 and 50 km — ${esc(String(answer))} isn't`);
+    return;
+  }
+  try {
+    const r = await fetch(`/api/halo/survey/zones/${z.zone_id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ radius_m: Math.round(km * 1000) }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { say("⚠ " + esc(d.detail || "couldn't re-fence this area")); return; }
+  } catch { say("⚠ network error"); return; }
+  await loadHaloZones(z.system || haloSystem);
+  const fresh = haloZones.find(x => x.zone_id === z.zone_id);
+  if (fresh) {
+    // Report the NEW count: re-fencing rewrites membership, and the whole
+    // reason to do it is to change what falls inside.
+    say(`${esc(fresh.name)} — ${fmtDist(fresh.radius_m)} radius, `
+      + `${fresh.sightings || 0} sighting${fresh.sightings === 1 ? "" : "s"} inside`);
+    if (haloZoneDetailFor === z.zone_id) openHaloSurveyCard(fresh);
+  }
+  if (haloBodyPlate) drawBodyPlate();
+}
+
 function surfaceZoneRow(z) {
   const sel = z.zone_id === haloAtlasSelZone ? " class=\"zone-sel\"" : "";
   const ores = (z.ores || []).length
@@ -17481,6 +17594,7 @@ function surfaceZoneRow(z) {
     + (z.nearest_qt_id ? `<button type="button" class="route-chip" data-zdest="${z.nearest_qt_id}" title="set the navigator's destination to ${esc(z.nearest_qt || "the nearest QT marker")}, then fly the last leg">Set destination</button> ` : "")
     + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
     + (z.can_edit ? `<button type="button" class="route-chip" data-zrename="${z.zone_id}" title="rename this area">✎</button> ` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" data-zradius="${z.zone_id}" title="re-fence this area — change its radius; membership re-counts immediately">⌀</button> ` : "")
     + (z.can_edit ? `<button type="button" class="route-chip" data-zarchive="${z.zone_id}" title="${z.closed ? "put this area back on the maps" : "archive this area — its sightings are kept"}">${z.closed ? "Reactivate" : "Archive"}</button> ` : "")
     + (z.can_edit ? `<button type="button" class="route-chip" data-zdelete="${z.zone_id}" title="delete this area — the sightings inside it are untouched, because membership is geometric">✕</button>` : "");
   return `<tr data-zrow="${z.zone_id}"${sel} title="click to point the coverage map at this area">`
@@ -17629,6 +17743,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
     // No "Plan a drop here" and no "Set active": there is no quantum drop onto
     // a body, and surface membership is geometric so there is nothing to arm.
     + (z.nearest_qt_id ? `<button type="button" class="route-chip" id="svy-dest">Set destination · ${esc(z.nearest_qt || "nearest QT")}</button>` : "")
+    + (z.can_edit ? `<button type="button" class="route-chip" id="svy-refence" title="change this area's radius — membership re-counts immediately">⌀ Re-fence</button>` : "")
     + (z.can_edit ? `<button type="button" class="route-chip" id="svy-archive">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
     + `</div>`
     + `<p class="svy-eyebrow">${esc(z.system || haloSystem)} · ${esc(z.body || "")} · Surface area</p>`
@@ -17650,6 +17765,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total) {
     + `</div>`;
   const back = $("svy-back"); if (back) back.onclick = closeHaloSurveyCard;
   const dest = $("svy-dest"); if (dest) dest.onclick = () => setDestination(z.nearest_qt_id);
+  const ref = $("svy-refence"); if (ref) ref.onclick = () => refenceSurveyZone(z);
   const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
   for (const b of el.querySelectorAll("[data-flyto]"))
     b.onclick = () => setDestination(Number(b.dataset.flyto));
@@ -17775,10 +17891,15 @@ async function newSurveyZone() {
 // that collides with another zone in the system 409s). Marks keep their tag:
 // membership is by zone id, so the name is free to change.
 async function renameSurveyZone(z) {
+  const surface = z.kind === "surface";
   const name = await promptDialog(
-    "New name for this zone. Marks stay attached — only the label changes.",
-    { title: "Rename survey zone", confirmLabel: "Rename", value: z.name || "",
-      placeholder: "e.g. NYX-GLC-07 Iron" });
+    (surface
+      ? "New name for this area. Its sightings are geometric, so nothing moves — only the label changes."
+      : "New name for this zone. Marks stay attached — only the label changes.")
+    + (surface ? `\n\n${ZONE_NAME_HINT}` : ""),
+    { title: surface ? "Rename this area" : "Rename survey zone",
+      confirmLabel: "Rename", value: z.name || "",
+      placeholder: surface ? "e.g. Shubin SCD-1 North" : "e.g. NYX-GLC-07 Iron" });
   if (!name || !name.trim() || name.trim() === z.name) return;
   const st = $("halo-zone-status");
   try {
