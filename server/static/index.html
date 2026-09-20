@@ -2745,6 +2745,45 @@
     font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
     margin-top: 2px; }
   .zn-val { display: inline-flex; align-items: center; gap: 3px; margin-right: 8px; }
+  /* Survey health (#37.2): "can I trust these numbers yet", never "how much
+     work has been done". It sits beside EVIDENCE because a raw count is
+     exactly what it contextualises — 80 marks in one outcrop and 80 spread
+     across the circle are the same number and not the same knowledge.
+     Deliberately NOT tinted by value: a thorough barren survey is healthy. */
+  .zn-health { display: flex; flex-direction: column; gap: 3px; min-width: 62px; }
+  .zn-hbar { height: 5px; border-radius: 3px; background: var(--track);
+    overflow: hidden; }
+  .zn-hbar i { display: block; height: 100%; border-radius: 3px; }
+  .zn-hpct { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--dim); }
+  /* Three bands, because the number means three different things to act on:
+     unusable evidence, a real survey still moving, and settled. The band is
+     paired with the number and the row's own advice text, so hue is never the
+     only carrier (DESIGN.md category-colour rule). */
+  .zn-h-low i { background: var(--bad); }
+  .zn-h-mid i { background: var(--warn); }
+  .zn-h-ok  i { background: var(--good); }
+  .zn-h-ok .zn-hpct { color: var(--good); }
+  /* The detail card's version: same model, room to show its working. */
+  .svy-health { margin-top: 14px; }
+  .svy-health .svy-h { margin-bottom: 2px; }
+  .svy-hhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .svy-hscore { font-size: 26px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .svy-hbar { height: 10px; border-radius: 5px; background: var(--track);
+    overflow: hidden; margin: 8px 0 10px; }
+  .svy-hbar i { display: block; height: 100%; border-radius: 5px;
+    transition: width .25s ease-out; }
+  @media (prefers-reduced-motion: reduce) { .svy-hbar i { transition: none; } }
+  .svy-hparts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px 16px; }
+  .svy-hpart { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+    align-items: baseline; font-size: 12px; }
+  .svy-hpart b { color: var(--text); font-weight: 400; }
+  .svy-hpart .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .svy-hpart .sub { grid-column: 1 / -1; height: 4px; border-radius: 2px;
+    background: var(--track); overflow: hidden; }
+  .svy-hpart .sub i { display: block; height: 100%; background: var(--dim);
+    border-radius: 2px; }
+  .svy-hnext { margin-top: 12px; font-size: 12px; color: var(--text); }
   .halo-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .halo-chip { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);
     border-radius: 999px; color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -5275,6 +5314,7 @@
               <option value="value">Profitability</option>
               <option value="name">Name</option>
               <option value="marks">Most marks</option>
+              <option value="health">Needs surveying</option>
             </select>
             <label class="trade-pref" title="only zones you've dropped a mark in">
               <input id="halo-zone-mine" type="checkbox"> my surveys</label>
@@ -17658,6 +17698,10 @@ function haloZonesFiltered() {
   const score = (z) => (z.value && z.value.score) || 0;
   rows.sort((a, b) =>
     f.sort === "name" ? (a.name || "").localeCompare(b.name || "")
+    // Ascending: "needs surveying" means the LEAST trustworthy first, which is
+    // the whole reason to sort by health.
+    : f.sort === "health" ? ((a.health || {}).score || 0) - ((b.health || {}).score || 0)
+        || (a.name || "").localeCompare(b.name || "")
     : f.sort === "marks" ? zoneEvidence(b).n - zoneEvidence(a).n || (a.name || "").localeCompare(b.name || "")
     : (score(b) - score(a)) || zoneEvidence(b).n - zoneEvidence(a).n); // value (default)
   return rows;
@@ -17716,6 +17760,7 @@ function renderHaloAtlasZones() {
         + `</td>`
       + `<td class="muted" data-l="Where" style="white-space:nowrap;">deep space</td>`
       + `<td class="num" data-l="Evidence">${z.marks || 0}</td>`
+      + `<td data-l="Health">${healthCell(z)}</td>`
       + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
       + `<td data-l="Rocks">${rocks}</td>`
       + `<td data-l="Here">${ores}</td>`
@@ -17724,7 +17769,11 @@ function renderHaloAtlasZones() {
       + `</tr>`;
   };
   el.innerHTML = `<table><thead><tr>`
-    + `<th>ZONE</th><th>WHERE</th><th class="num">EVIDENCE</th><th>VALUE</th><th>ROCKS / BAND</th>`
+    + `<th>ZONE</th><th>WHERE</th><th class="num">EVIDENCE</th>`
+    // Health sits next to the raw count because that is exactly what it
+    // qualifies: 80 marks in one outcrop and 80 across the circle are the
+    // same EVIDENCE and very different knowledge.
+    + `<th>HEALTH</th><th>VALUE</th><th>ROCKS / BAND</th>`
     // Not "ORES" any more: a ground area rolls up ore, harvestables and fauna
     // on one circle, and two of those three are not ores.
     + `<th>WHAT'S HERE</th><th>SIZE</th><th></th></tr></thead><tbody>`
@@ -18181,6 +18230,90 @@ function zoneLaneOres(L, capArg, headOverflow) {
         ? `<span class="zn-more" title="${esc(rows.slice(cap).map(r => r.o).join(", "))}">`
           + `+${rest} more</span>` : "")
     + `</span>`;
+}
+
+// --- survey health (#37.2) -------------------------------------------------
+// The server computes it (nav_core.survey_health); the client owns the words,
+// because the copy has to quote a sector count and the rest of this app keeps
+// copy on this side.
+function healthBand(score) {
+  return score >= 0.75 ? "zn-h-ok" : score >= 0.4 ? "zn-h-mid" : "zn-h-low";
+}
+// The band in words. Hue is never the only carrier of meaning in this app
+// (DESIGN.md category-colour rule), and "44%" on its own does not say whether
+// that is a number to act on or to ignore.
+function healthWord(score) {
+  return score >= 0.75 ? "trustworthy"
+    : score >= 0.4 ? "usable, still moving"
+    : "early \u2014 treat these numbers as a hint";
+}
+
+// The bar has to decompose into somewhere to fly. "62%" is a scolding;
+// "14 of 24 sectors have no evidence" is a task.
+function healthNext(h) {
+  if (!h) return "";
+  const blank = (h.sectors || 0) - (h.sectors_seen || 0);
+  switch (h.next) {
+    case "coverage": return h.sectors_seen
+      ? `${blank} of ${h.sectors} sectors have no evidence`
+      : `nothing logged inside this circle yet`;
+    case "convergence": return "the mix is still moving \u2014 more marks anywhere inside";
+    case "scan": return "few scanner readings logged \u2014 add scan detail to marks";
+    case "fresh": return "the evidence is ageing \u2014 a revisit would refresh it";
+    default: return "settled \u2014 more surveying here won't change the answer";
+  }
+}
+
+// The card's version: the same score, showing its working. Four bars, because
+// the decomposition IS the instruction — a member who can see that coverage is
+// the weak term knows to drive somewhere new rather than log twenty more marks
+// where they are standing.
+const HEALTH_PARTS = [
+  { k: "coverage",    label: "Ground covered",
+    tip: "Share of the area's sectors with at least one sighting. A \u201cnothing here\u201d mark counts \u2014 it is evidence, and covering blank ground is the point." },
+  { k: "convergence", label: "Mix settled",
+    tip: "How tight the interval on the ore mix is. Reaches full when more marks would stop moving the percentages." },
+  { k: "scan",        label: "Scan depth",
+    tip: "Share of evidence carrying a scanner reading rather than bare presence." },
+  { k: "fresh",       label: "Freshness",
+    tip: "Median age of the evidence. Nodes respawn and patches move distributions, so old evidence is weaker evidence." },
+];
+
+function surveyHealthBlock(z) {
+  const h = z.health;
+  if (!h) return "";
+  const pct = Math.round(h.score * 100);
+  const band = healthBand(h.score);
+  return `<div class="card svy-health ${band}">`
+    + `<h2 class="svy-h">Survey health</h2>`
+    + `<div class="svy-hhead"><span class="svy-hscore">${pct}%</span>`
+    + `<span class="cap" style="margin:0;">${esc(healthWord(h.score))}</span></div>`
+    + `<div class="svy-hbar"><i style="width:${Math.max(pct, 2)}%"></i></div>`
+    + `<div class="svy-hparts">` + HEALTH_PARTS.map(P => {
+        const v = Math.round((h[P.k] || 0) * 100);
+        return `<div class="svy-hpart" title="${esc(P.tip)}">`
+          + `<b>${esc(P.label)}</b><span class="n">${v}%</span>`
+          + `<span class="sub"><i style="width:${v}%"></i></span></div>`;
+      }).join("") + `</div>`
+    + `<p class="svy-hnext">\u2192 ${esc(healthNext(h))}</p>`
+    // Say what the number is NOT. The instinct on seeing a bar beside a value
+    // chip is to read them as the same axis; they are opposites often enough
+    // that the card has to head it off \u2014 a thoroughly surveyed barren patch is
+    // high health and no value, and that pairing is useful information.
+    + `<p class="cap" style="margin:6px 0 0;">Health is how far the evidence can be `
+    + `trusted, not how rich the ground is. A thoroughly surveyed empty area is `
+    + `healthy and worth nothing \u2014 which is worth knowing.</p>`
+    + `</div>`;
+}
+
+function healthCell(z) {
+  const h = z.health;
+  if (!h) return `<span class="muted">\u2014</span>`;
+  const pct = Math.round(h.score * 100);
+  return `<span class="zn-health ${healthBand(h.score)}"`
+    + ` title="${esc(healthNext(h))}">`
+    + `<span class="zn-hbar"><i style="width:${Math.max(pct, 2)}%"></i></span>`
+    + `<span class="zn-hpct">${pct}%</span></span>`;
 }
 
 function zoneEvidence(z) {
@@ -19388,6 +19521,7 @@ function surfaceZoneRow(z) {
       + `</td>`
     + `<td data-l="Where" style="white-space:nowrap;">${esc(z.body || "—")}</td>`
     + `<td class="num" data-l="Evidence">${evCell}</td>`
+    + `<td data-l="Health">${healthCell(z)}</td>`
     + `<td data-l="Value">${valCell}</td>`
     + `<td data-l="Band">${band}</td>`
     + `<td data-l="Here">${ores}</td>`
@@ -19688,7 +19822,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total, extra) {
     // the tile beside it read the total, so the same card stated two different
     // sizes for the same circle.
     + `${nAll} sighting${nAll === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</p>`
-    + verdict + lead + stats
+    + verdict + lead + stats + surveyHealthBlock(z)
     + `<div class="svy-panels">${surveyOreChart(oreChartShim(z),
           "Share of this area's sightings, per ore. Bars are percentages; the "
           + "count is how many sightings listed that ore.")}${surfaceBandChart(z)}</div>`
@@ -19836,7 +19970,7 @@ function renderHaloSurveyCard(el, z, marks) {
     + `<p class="svy-sub">`
     + `${surveyors.length} surveyor${surveyors.length === 1 ? "" : "s"} · ${marks.length} mark${marks.length === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</p>`
     + verdict
-    + stats
+    + stats + surveyHealthBlock(z)
     + `<div class="svy-panels">${surveyOreChart(z)}${surveyRsCard(z)}</div>`
     + timeline
     + `<p class="svy-foot">Reconstructed from <b>${marks.length}</b> ⛏ mark${marks.length === 1 ? "" : "s"}`

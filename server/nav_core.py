@@ -1827,6 +1827,22 @@ def _wilson_lower_bound(successes: float, n: float, z: float = 1.96) -> float:
     return max(0.0, (centre - margin) / (1 + z2 / n))
 
 
+def _wilson_upper_bound(successes: float, n: float, z: float = 1.96) -> float:
+    """Upper end of the same interval `_wilson_lower_bound` gives the lower end
+    of. It exists for one case the lower bound cannot serve: evidence of
+    ABSENCE. Nought ore in sixty marks has no lower bound to converge \u2014 but its
+    upper bound says "under 6% of this ground holds anything", which is a
+    settled answer, and a thoroughly-surveyed barren zone has to be able to say
+    so (survey_health)."""
+    if n <= 0:
+        return 1.0
+    phat = successes / n
+    z2 = z * z
+    centre = phat + z2 / (2 * n)
+    margin = z * math.sqrt((phat * (1 - phat) + z2 / (4 * n)) / n)
+    return min(1.0, (centre + margin) / (1 + z2 / n))
+
+
 def _shrunk_composition(counts: dict, total: float, prior: dict, alpha: float) -> dict:
     """P(ore) for a (possibly fractional) count dict, pulled toward `prior` by
     `alpha` pseudo-counts. With no local data this returns `prior`."""
@@ -7911,12 +7927,14 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
         if members:
             fit = survey_cluster_fit(members, negatives)
             row.update(fit)
+            row["health"] = belt_zone_health(fit, members)
             # Mirror the datamined-overlay `survey` shape so the barren
             # down-rank, drop-view badge, and frontend treat a zone uniformly.
             row["survey"] = {k: fit[k] for k in
                              ("status", "marks", "positive", "ores",
                               "salvage", "closest_center_m")}
         else:
+            row["health"] = _health_score(0.0, 0.0, 0.0, 0.0, 0, BELT_HEALTH_BUCKETS)
             row.update({"xyz": None, "grid_radius_m": None, "marks": 0,
                         "positive": 0, "status": "empty", "ores": [],
                         "salvage": False})
@@ -8232,6 +8250,11 @@ def surface_zones_state(nav: NavData, system: str, zones: list[dict]) -> list[di
         # the card quietly tell them they had not.
         row["contributors"] = sorted(
             {o.owner_handle for o in members_all if o.owner_handle})
+        # Health is computed over the MINING lane, which is what the row's
+        # value, bands and ore mix are all about. Rolling plants and fauna into
+        # it would let a botanist's afternoon certify an ore picture nobody has
+        # sampled (#37.2).
+        row["health"] = surface_zone_health(z, members, body_radius_m)
         # Navigable, never plannable (#37.1 §4): what a surface zone gets
         # INSTEAD of being a drop target is a route to the nearest quantum
         # marker, and the last leg flown by hand.
@@ -8838,6 +8861,177 @@ def annotate_surface_values(zones: list[dict], prices: dict) -> list[dict]:
         out.append({**z, "value": val, "lanes": lanes} if lanes
                    else {**z, "value": val})
     return out
+
+
+# --- survey health (#37.2) -------------------------------------------------
+# "Can I trust these numbers yet?" \u2014 NOT "how much work has been done". The two
+# diverge, and picking the wrong one is how a health bar becomes a guilt bar.
+#
+# Health is ORTHOGONAL TO VALUE and must stay that way: a thoroughly-surveyed
+# barren patch is ~100% healthy and worth nothing, and that pairing is the most
+# useful thing the org can be told about a piece of ground. Never blend them.
+
+# Buckets are FIXED PER ZONE, not absolute-size cells. At the app's 2 km
+# resource grid a 50 km zone holds ~1,960 cells, so even 200 perfectly-spread
+# sightings would read 10% and the bar would be useless forever. Health is
+# about SPREAD, not resolution \u2014 and a fixed count is also what lets a 5 km
+# zone and a 50 km zone carry comparable percentages.
+SURFACE_HEALTH_WEDGES = 12
+SURFACE_HEALTH_RINGS = 2          # boundary at R/sqrt(2): equal AREA per ring
+BELT_HEALTH_SHELLS = 2            # boundary at R/cbrt(2): equal VOLUME per shell
+SURFACE_HEALTH_BUCKETS = SURFACE_HEALTH_WEDGES * SURFACE_HEALTH_RINGS
+BELT_HEALTH_BUCKETS = 8 * BELT_HEALTH_SHELLS      # octants x shells
+
+# The picture counts as SETTLED when the interval on it sits inside this band.
+# A STATED TOLERANCE is what makes 100% reachable: scoring "lower bound over
+# raw share" only reaches 1.0 in the low thousands of marks, so the bar
+# asymptotes near 80% and never retires. Measured on the prototype corpus,
+# 0.05 also gives the best gradient \u2014 a real survey climbs 68% -> 96% between
+# 120 and 250 marks, which is the range where a member can see their own
+# contribution move the number. Looser (0.07+) and 120 marks already reads 93%,
+# so there is no reason to keep going.
+SURVEY_SETTLED_TOL = 0.05
+SURVEY_HEALTH_HALFLIFE_D = 120.0
+
+# Coverage and convergence MULTIPLY. A weighted sum lets a zone buy health it
+# has not earned: measured on the prototype, 80 marks in a single wedge scored
+# 46% under a sum, nearly all of it from convergence, scan depth and freshness
+# \u2014 three measures of how good the SAMPLE is, which say nothing when the sample
+# does not represent the zone. As gates it reads 9%, which is both honest and
+# instructive to whoever is farming one outcrop.
+#
+# Scan depth and freshness are per-sample quality MODIFIERS, so they attenuate
+# rather than contribute: a zone with no scanner readings still has a real
+# presence picture, it just cannot be valued as precisely.
+_HEALTH_MOD_FLOOR = 0.70
+_HEALTH_MOD_SCAN = 0.20
+_HEALTH_MOD_FRESH = 0.10
+
+
+def _health_convergence(counts: dict, n: int) -> float:
+    """How settled the mix is: interval half-width against SURVEY_SETTLED_TOL,
+    weighted by each type's share so the dominant ores dominate the verdict.
+
+    `counts` is {type: how many pieces of evidence mentioned it} and `n` is the
+    evidence those were counted over. With NO types at all the zone is not
+    unmeasurable \u2014 the claim it makes is "there is nothing here", which
+    converges through the upper bound instead."""
+    if n <= 0:
+        return 0.0
+    if not counts:
+        hi = _wilson_upper_bound(0, n)
+        return min(1.0, SURVEY_SETTLED_TOL / hi) if hi > 0 else 1.0
+    total = sum(counts.values()) or 1
+    acc = 0.0
+    for _t, k in counts.items():
+        half = max((k / n) - _wilson_lower_bound(k, n), 1e-9)
+        acc += (k / total) * min(1.0, SURVEY_SETTLED_TOL / half)
+    return min(1.0, acc)
+
+
+def _health_freshness(ages_d: list[float]) -> float:
+    """MEDIAN age on a half-life decay, not the mean: one recent visit must not
+    refresh a year-old survey. Nodes respawn and patches move distributions, so
+    old evidence is weaker evidence even when there is a lot of it."""
+    if not ages_d:
+        return 0.0
+    ages = sorted(ages_d)
+    return 0.5 ** (ages[len(ages) // 2] / SURVEY_HEALTH_HALFLIFE_D)
+
+
+def _health_score(coverage: float, convergence: float, scan: float,
+                  fresh: float, seen: int, total: int) -> dict:
+    core = coverage * convergence
+    mod = (_HEALTH_MOD_FLOOR + _HEALTH_MOD_SCAN * scan + _HEALTH_MOD_FRESH * fresh)
+    # `next` is a KEY, not a sentence: the frontend owns copy everywhere else in
+    # this app, and it is the side that knows the sector count to quote.
+    if coverage < 0.9:
+        nxt = "coverage"
+    elif convergence < 0.8:
+        nxt = "convergence"
+    elif scan < 0.5:
+        nxt = "scan"
+    elif fresh < 0.5:
+        nxt = "fresh"
+    else:
+        nxt = "settled"
+    return {"score": round(core * mod, 4),
+            "coverage": round(coverage, 4), "convergence": round(convergence, 4),
+            "scan": round(scan, 4), "fresh": round(fresh, 4),
+            "sectors_seen": seen, "sectors": total, "next": nxt}
+
+
+def surface_zone_health(zone: dict, members: list, body_radius_m: float,
+                        now: float | None = None) -> dict:
+    """Health for a ground area: wedges x equal-area rings over its circle.
+
+    A NEGATIVE-looking sighting still covers its sector. "Nothing here" is real
+    evidence and this codebase already treats it as first-class \u2014 which is what
+    makes the gameable behaviour (drive the blank sectors and log honestly) the
+    behaviour the org wants anyway."""
+    anchor = surface_zone_anchor(zone)
+    if anchor is None or body_radius_m <= 0:
+        return _health_score(0.0, 0.0, 0.0, 0.0, 0, SURFACE_HEALTH_BUCKETS)
+    _body, z_lat, z_lon, radius_m = anchor
+    now = time.time() if now is None else now
+    seen, counts, banded, ages = set(), {}, 0, []
+    for o in members:
+        if o.latitude is None or o.longitude is None:
+            continue
+        dist_m, bearing = great_circle(o.latitude, o.longitude, z_lat, z_lon,
+                                       body_radius_m)
+        if dist_m > radius_m:
+            continue
+        wedge = int((bearing % 360.0) / (360.0 / SURFACE_HEALTH_WEDGES))
+        ring = 0 if dist_m <= radius_m / math.sqrt(2) else 1
+        seen.add((wedge, ring))
+        ore = o.data.get("ore")
+        if ore:
+            counts[ore] = counts.get(ore, 0) + 1
+        if o.data.get("band"):
+            banded += 1
+        ts = _obs_epoch(o.observed_at)
+        ages.append(max(0.0, (now - ts) / 86400.0) if ts else 3650.0)
+    n = len(ages)
+    return _health_score(
+        len(seen) / SURFACE_HEALTH_BUCKETS, _health_convergence(counts, n),
+        (banded / n) if n else 0.0, _health_freshness(ages),
+        len(seen), SURFACE_HEALTH_BUCKETS)
+
+
+def belt_zone_health(fit: dict, members: list[dict],
+                     now: float | None = None) -> dict:
+    """Health for a deep-space zone. Same four components, different geometry:
+    a pocket is a 3D scatter, not a cap, so spread is octants x equal-volume
+    shells inside the fitted envelope rather than wedges x rings.
+
+    Denominator is POSITIVE marks, matching `ore_counts`: a "nothing here" mark
+    lists no ore, so it is not a trial the ore fraction could have failed \u2014 but
+    it does still cover its octant, which is the point of logging it."""
+    centre, radius = fit.get("xyz"), fit.get("grid_radius_m") or 0.0
+    if not centre or radius <= 0 or not members:
+        return _health_score(0.0, 0.0, 0.0, 0.0, 0, BELT_HEALTH_BUCKETS)
+    now = time.time() if now is None else now
+    inner = radius / (2.0 ** (1.0 / 3.0))
+    seen, ages = set(), []
+    for m in members:
+        d = dist3(m["xyz"], centre)
+        if d > radius:
+            continue
+        octant = ((1 if m["xyz"][0] >= centre[0] else 0)
+                  | (2 if m["xyz"][1] >= centre[1] else 0)
+                  | (4 if m["xyz"][2] >= centre[2] else 0))
+        seen.add((octant, 0 if d <= inner else 1))
+        ts = m.get("created")
+        ages.append(max(0.0, (now - ts) / 86400.0) if ts else 3650.0)
+    positives = [m for m in members if m.get("positive")]
+    n_pos = len(positives)
+    scans = int(fit.get("scans") or 0)
+    return _health_score(
+        len(seen) / BELT_HEALTH_BUCKETS,
+        _health_convergence(_survey_ore_counts(positives), n_pos),
+        (scans / n_pos) if n_pos else 0.0, _health_freshness(ages),
+        len(seen), BELT_HEALTH_BUCKETS)
 
 
 def annotate_surface_lane_values(zones: list[dict], prices: dict,
