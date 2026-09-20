@@ -7087,5 +7087,222 @@ class TradeLoadingModeTests(unittest.TestCase):
         self.assertEqual(rows[0]["box"]["boxes"], 21)
 
 
+class SurfaceSurveyZoneTests(unittest.TestCase):
+    """#37.1 — named mining areas on a body. Membership is a pure geometric
+    predicate over the observations already in the log: no tag, no backfill, no
+    capture-flow change, and a circle drawn today owns every node the org ever
+    logged inside it."""
+
+    R = 295_000.0        # Daymar
+
+    def _nav(self):
+        nav = nav_core.NavData()
+        for name in ("Daymar", "Yela"):
+            nav.containers[("Stanton", name)] = nav_core.Container(
+                name=name, system="Stanton", type="Moon", internal_name="",
+                pos=(0.0, 0.0, 0.0), body_radius=self.R, om_radius=0, grid_radius=0,
+                rotation_speed=0, rotation_adjustment=0,
+            )
+        return nav
+
+    def _obs(self, nav, oid, lat, lon, ore="Quantanium", body="Daymar",
+             height_m=0.0, category="resource", handle="pilot", band=5,
+             observed_at="2026-01-01T00:00:00+00:00", data=None):
+        payload = {"ore": ore, "band": band} if data is None else data
+        nav.observations[oid] = nav_core.Observation(
+            id=oid, category=category, system="Stanton", container_name=body,
+            local_km=None, global_m=None, latitude=lat, longitude=lon,
+            height_m=height_m, biome=None, note=None, owner_id=None,
+            owner_handle=handle, observed_at=observed_at, data=payload,
+        )
+
+    def _zone(self, zid=1, lat=0.0, lon=0.0, radius_m=50_000.0, body="Daymar",
+              name="Iron Ridge", slug="daymar-iron-ridge"):
+        return {"id": zid, "slug": slug, "name": name, "system": "Stanton",
+                "body": body, "center_lat": lat, "center_lon": lon,
+                "radius_m": radius_m, "closed": 0, "owner_handle": "pilot"}
+
+    # -- the predicate ------------------------------------------------------
+    def test_membership_at_the_boundary(self):
+        z = self._zone(radius_m=50_000.0)
+        # A degree of latitude on Daymar is ~5,149 m, so ~9.71 deg is the 50 km
+        # edge. Test just inside, just outside, and (as close as float allows)
+        # exactly on it.
+        deg = math.degrees(50_000.0 / self.R)
+        self.assertTrue(nav_core.surface_zone_contains(z, deg * 0.99, 0.0, self.R, 0.0))
+        self.assertFalse(nav_core.surface_zone_contains(z, deg * 1.01, 0.0, self.R, 0.0))
+        # Right ON the edge is a float coin-toss and deliberately not asserted:
+        # great_circle's acos round-trips a nominal 50,000 m to 50,000.000000000007,
+        # so `<=` excludes it by 7 picometres. What matters is that the edge is
+        # in the right PLACE — anything else is a tolerance nobody can fly.
+        d, _bearing = nav_core.great_circle(deg, 0.0, 0.0, 0.0, self.R)
+        self.assertAlmostEqual(d, 50_000.0, delta=1.0)
+
+    def test_a_deep_space_zone_is_never_a_surface_member(self):
+        deep = {"id": 9, "slug": "svy", "name": "Belt", "system": "Nyx",
+                "body": None, "center_lat": None, "center_lon": None,
+                "radius_m": None}
+        self.assertIsNone(nav_core.surface_zone_anchor(deep))
+        self.assertFalse(nav_core.surface_zone_contains(deep, 0.0, 0.0, self.R, 0.0))
+
+    def test_null_coordinates_are_guarded(self):
+        z = self._zone()
+        self.assertFalse(nav_core.surface_zone_contains(z, None, 0.0, self.R, 0.0))
+        self.assertFalse(nav_core.surface_zone_contains(z, 0.0, None, self.R, 0.0))
+
+    def test_an_orbital_fix_with_a_valid_ground_track_is_not_a_member(self):
+        # The trap this ceiling exists for: _frame_at stamps lat/lon whenever
+        # body_radius > 0, checking neither is_body nor altitude, and
+        # detection_radius is body_radius * 1.5 — so a fix ~442 km over Daymar
+        # carries a perfectly good ground track.
+        z = self._zone()
+        self.assertTrue(nav_core.surface_zone_contains(z, 0.0, 0.0, self.R, 9_000.0))
+        self.assertFalse(nav_core.surface_zone_contains(z, 0.0, 0.0, self.R, 11_000.0))
+        self.assertFalse(nav_core.surface_zone_contains(z, 0.0, 0.0, self.R, 442_000.0))
+
+    def test_an_unknown_height_counts_as_ground(self):
+        # height_m is auto-captured, so None is a legacy row, not an orbit.
+        z = self._zone()
+        self.assertTrue(nav_core.surface_zone_contains(z, 0.0, 0.0, self.R, None))
+
+    def test_a_zone_spanning_the_antimeridian_wraps_correctly(self):
+        z = self._zone(lon=179.9)
+        # 0.2 deg of longitude at the equator is ~1.0 km — well inside.
+        self.assertTrue(nav_core.surface_zone_contains(z, 0.0, -179.9, self.R, 0.0))
+
+    def test_a_polar_zone_wraps_in_longitude(self):
+        z = self._zone(lat=89.9, radius_m=50_000.0)
+        # Opposite side of the pole in longitude, but metres away on the sphere.
+        self.assertTrue(nav_core.surface_zone_contains(z, 89.9, 180.0, self.R, 0.0))
+
+    # -- member selection ---------------------------------------------------
+    def test_members_are_retroactive_and_body_scoped(self):
+        nav = self._nav()
+        self._obs(nav, 1, 0.0, 0.0)                       # dead centre
+        self._obs(nav, 2, 0.05, 0.05)                     # a few km out
+        self._obs(nav, 3, 45.0, 45.0)                     # far side of Daymar
+        self._obs(nav, 4, 0.0, 0.0, body="Yela")          # another moon
+        members = nav_core.surface_zone_members(nav, self._zone(), self.R)
+        self.assertEqual({o.id for o in members}, {1, 2})
+
+    def test_only_resource_sightings_count(self):
+        # observations also holds wildlife/harvestable; without the category
+        # filter a fauna sighting would inflate a mining rollup.
+        nav = self._nav()
+        self._obs(nav, 1, 0.0, 0.0)
+        self._obs(nav, 2, 0.0, 0.0, category="wildlife",
+                  data={"species": "Marok"})
+        members = nav_core.surface_zone_members(nav, self._zone(), self.R)
+        self.assertEqual({o.id for o in members}, {1})
+
+    def test_overlapping_zones_both_own_the_node(self):
+        # Deliberate (#37.1 section 2.2): a per-zone predicate with no
+        # tie-break, so editing one zone's radius can never rewrite another's
+        # history. The cost is that anything summing ACROSS zones must de-dup.
+        nav = self._nav()
+        self._obs(nav, 1, 0.0, 0.0)
+        a = self._zone(zid=1, lat=0.0, lon=0.0)
+        b = self._zone(zid=2, lat=0.1, lon=0.1, slug="daymar-west")
+        self.assertEqual([o.id for o in nav_core.surface_zone_members(nav, a, self.R)], [1])
+        self.assertEqual([o.id for o in nav_core.surface_zone_members(nav, b, self.R)], [1])
+
+    # -- the rollup ---------------------------------------------------------
+    def test_fit_counts_sightings_and_reports_composition_in_percent(self):
+        nav = self._nav()
+        for i in range(3):
+            self._obs(nav, i + 1, 0.0, 0.0, ore="Quantanium", handle="ana")
+        self._obs(nav, 4, 0.0, 0.0, ore="Taranite", handle="bo")
+        members = nav_core.surface_zone_members(nav, self._zone(), self.R)
+        fit = nav_core.surface_zone_fit(members, self.R, 50_000.0)
+        self.assertEqual(fit["sightings"], 4)
+        self.assertEqual(fit["surveyor_count"], 2)
+        self.assertEqual(fit["ores"], ["Quantanium", "Taranite"])
+        # PERCENT, matching what the chart prints literally (it applies no x100).
+        self.assertEqual(fit["ore_comp"]["Quantanium"], 75.0)
+        self.assertEqual(fit["ore_counts"], {"Quantanium": 3, "Taranite": 1})
+
+    def test_wilson_keeps_a_lucky_streak_from_outranking_a_solid_one(self):
+        # The same statistic resource_hotspots ranks the anonymous grid with,
+        # so a named zone and an unnamed cell over the same ground agree.
+        lucky = nav_core.surface_zone_fit(
+            [], self.R, 50_000.0)          # empty is the degenerate case
+        self.assertEqual(lucky["ore_likely"], {})
+        nav = self._nav()
+        for i in range(3):
+            self._obs(nav, i + 1, 0.0, 0.0, ore="Quantanium")
+        few = nav_core.surface_zone_fit(
+            nav_core.surface_zone_members(nav, self._zone(), self.R), self.R, 50_000.0)
+        for i in range(20):
+            self._obs(nav, 100 + i, 0.0, 0.0, ore="Quantanium")
+        many = nav_core.surface_zone_fit(
+            nav_core.surface_zone_members(nav, self._zone(), self.R), self.R, 50_000.0)
+        self.assertLess(few["ore_likely"]["Quantanium"], many["ore_likely"]["Quantanium"])
+
+    def test_fit_reads_bands_worked_nodes_and_freshness(self):
+        nav = self._nav()
+        self._obs(nav, 1, 0.0, 0.0, band=8, observed_at="2026-01-02T00:00:00+00:00")
+        self._obs(nav, 2, 0.0, 0.0, band=2, observed_at="2026-01-01T00:00:00+00:00",
+                  data={"ore": "Iron", "band": 2, "mined_at": "2026-01-01T01:00:00Z"})
+        fit = nav_core.surface_zone_fit(
+            nav_core.surface_zone_members(nav, self._zone(), self.R), self.R, 50_000.0)
+        self.assertEqual(fit["bands"], {"2": 1, "8": 1})
+        self.assertEqual(fit["avg_band"], 5.0)
+        self.assertEqual(fit["worked"], 1)           # counted, never hidden
+        self.assertGreater(fit["freshest"], fit["oldest"])
+
+    def test_an_empty_zone_is_honest_rather_than_absent(self):
+        fit = nav_core.surface_zone_fit([], self.R, 50_000.0)
+        self.assertEqual(fit["sightings"], 0)
+        self.assertEqual(fit["status"], "empty")
+        self.assertEqual(fit["ore_comp"], {})
+        self.assertIsNone(fit["freshest"])
+
+    # -- area + coverage ----------------------------------------------------
+    def test_cap_area_matches_the_spherical_cap(self):
+        # A maximum 50 km zone on Daymar is ~7,840 km2 — 0.72% of the body,
+        # which is why coverage is reported as area and never as a percentage.
+        km2 = nav_core.surface_cap_area_m2(50_000.0, self.R) / 1e6
+        self.assertAlmostEqual(km2, 7_840.0, delta=20.0)
+        body_km2 = 4 * math.pi * self.R * self.R / 1e6
+        self.assertLess(km2 / body_km2, 0.01)
+
+    def test_coverage_unions_rather_than_sums(self):
+        one = nav_core.body_coverage([self._zone(zid=1)], self.R)
+        twin = nav_core.body_coverage(
+            [self._zone(zid=1), self._zone(zid=2, slug="twin")], self.R)
+        # Two zones on the same centre cover the same ground, not twice it.
+        self.assertEqual(one["cells"], twin["cells"])
+        self.assertEqual(twin["zones"], 2)
+        apart = nav_core.body_coverage(
+            [self._zone(zid=1, lat=0.0), self._zone(zid=2, lat=40.0, slug="far")], self.R)
+        self.assertGreater(apart["cells"], one["cells"])
+
+    def test_coverage_of_no_zones_is_zero(self):
+        self.assertEqual(nav_core.body_coverage([], self.R)["area_m2"], 0.0)
+
+    # -- the state row ------------------------------------------------------
+    def test_state_rows_carry_the_anchor_and_never_pocket_geometry(self):
+        nav = self._nav()
+        self._obs(nav, 1, 0.0, 0.0, handle="ana")
+        rows = nav_core.surface_zones_state(nav, "Stanton", [self._zone()])
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["kind"], "surface")
+        self.assertEqual(row["body"], "Daymar")
+        self.assertEqual(row["sightings"], 1)
+        self.assertEqual(row["contributors"], ["ana"])
+        # Never plannable: no #35 pocket dict keys, so plan_halo_drop cannot
+        # mistake one of these for a drop target.
+        self.assertNotIn("xyz", row)
+        self.assertNotIn("grid_radius_m", row)
+
+    def test_state_skips_a_deep_space_row_handed_to_it_by_mistake(self):
+        nav = self._nav()
+        deep = {"id": 9, "slug": "belt", "name": "Belt", "system": "Stanton",
+                "body": None, "center_lat": None, "center_lon": None,
+                "radius_m": None}
+        self.assertEqual(nav_core.surface_zones_state(nav, "Stanton", [deep]), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

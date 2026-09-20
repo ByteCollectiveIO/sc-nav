@@ -1,7 +1,21 @@
 # Surface survey zones — named mining areas on planets and moons (#37.1) — design plan
 
-**Status: DESIGN (not built).** The doc `survey-platform.md` §7.2 promised before
-build. **Reviewed in four passes.** §12 and §13 are review output (gaps,
+**Status: SLICE 1 BUILT (backend), rest DESIGN.** The doc `survey-platform.md`
+§7.2 promised this before build.
+
+> **Built so far — backend foundation, nothing user-visible.** Storage
+> (`body`/`center_lat`/`center_lon`/`radius_m` + the reserved
+> `observations.game_build`), the `list_survey_zones` kind filter and the
+> scoped admin clear (both §7/§9 regressions, fixed before a surface row can
+> exist), the membership predicate with its 10 km altitude ceiling and
+> `resource`-only filter, `surface_zone_fit`, `surface_zones_state`,
+> `surface_cap_area_m2`, rasterized `body_coverage`, create/PATCH/GET with the
+> body-prefixed slug that survives a rename, and the drop-planner reject that
+> names the category instead of blaming the evidence. 38 tests.
+> **Not built:** the value basis (§4), the stats adapter (§8), every UI
+> surface (§5, §6, §11.1), and the `kind="survey"` goal (§11.2, release two).
+> `GET /api/halo/survey/zones` still defaults to `kind="deep"` so a deployed
+> SPA sees exactly what it saw before; the UI slice flips that default. **Reviewed in four passes.** §12 and §13 are review output (gaps,
 cross-tool hooks). §14 is the **audit trail** of an adversarial pass that
 checked every claim against the code: each correction it found has since been
 folded into the section it affects, and a fourth pass re-verified §14 itself and
