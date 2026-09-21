@@ -6578,6 +6578,45 @@ class BeltSurveyApiTests(unittest.TestCase):
         self.assertIsNone(r2.json()["capture"]["pending"]["survey"])
         s.capture_pending = None
 
+    def test_node_capture_takes_a_scanned_q(self):
+        """A 4.10 rock scan states Q0-1000 per composition line and no band at
+        all, so the capture form takes the Q and the band is derived from it."""
+        s = app.Session(self._user)
+        s.pos, s.t = (self.KR, 0.0, 0.0), time.time()
+        s.system = "Nyx"
+        app.hub.sessions["1"] = s
+        r = self.client.post("/api/capture/node", json={
+            "ore": "Quantanium", "band": "Unk", "q": 344})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["capture"]["pending"]["data"]["q"], 344)
+
+        app._capture_observation(s, s.pos, s.t, s.capture_pending,
+                                 {"player_id": None, "handle": None})
+        last = s.last_capture
+        self.assertEqual((last["q"], last["band"], last["quality"]),
+                         (344, 3, "Low to Mid"))
+        stored = next(d for d in db.list_observations()
+                      if d["id"] == last["id"])
+        self.assertEqual(stored["data"]["q"], 344)          # survives the DB
+        db.delete_observation(last["id"])
+        app.nav.observations.pop(last["id"], None)
+        s.capture_pending = None
+
+    def test_node_capture_rejects_an_out_of_range_q(self):
+        s = app.Session(self._user)
+        app.hub.sessions["1"] = s
+        r = self.client.post("/api/capture/node", json={
+            "ore": "Quantanium", "band": "Unk", "q": 4000})
+        self.assertEqual(r.status_code, 422)
+        self.assertIsNone(s.capture_pending)
+        # no Q read is still a valid capture: the band picker carries it
+        r2 = self.client.post("/api/capture/node", json={
+            "ore": "Quantanium", "band": 7})
+        self.assertEqual(r2.status_code, 200)
+        data = r2.json()["capture"]["pending"]["data"]
+        self.assertEqual((data["band"], data["q"]), (7, None))
+        s.capture_pending = None
+
     def test_capture_completion_persists_and_annotates(self):
         s = app.Session(self._user)
         s.pos, s.t = (self.KR, 0.0, 0.0), time.time()
@@ -10814,6 +10853,72 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         self.assertEqual(state["sightings"], 2)
         self.assertEqual(state["contributors"], ["ana", "bo"])
         self.assertEqual(state["body"], self.BODY)
+
+    def _stand_at(self, lat, lon, alt_m=0.0):
+        """Post a real position fix on this body's surface and return the
+        resulting nav state — the same path a watcher takes."""
+        import math
+        cont = app.nav.resolve_container("Stanton", self.BODY)
+        r_km = (cont.body_radius + alt_m) / 1000.0
+        lo, la = math.radians(lon + 180.0), math.radians(lat)
+        x, y, z = app.nav_core.local_km_to_global(
+            cont, (r_km * math.cos(la) * math.cos(lo),
+                   r_km * math.cos(la) * math.sin(lo),
+                   r_km * math.sin(la)), time.time())
+        res = self.client.post("/api/position", json={"x": x, "y": y, "z": z})
+        self.assertEqual(res.status_code, 200, res.text)
+        return self.client.get("/api/state").json()["state"]
+
+    def test_the_forecast_assumes_the_area_you_are_standing_in(self):
+        """The 2026-09-20 field report: two areas a moon apart forecast the
+        same ores, because the prior was the whole body."""
+        for _ in range(5):
+            self._add_obs(45.0, 10.0, ore="Quantanium")       # far area
+        for _ in range(2):
+            self._add_obs(-45.0, -170.0, ore="Hadanite")      # area underfoot
+        self.assertEqual(self._create("Far Ridge", 45.0, 10.0).status_code, 200)
+        self.assertEqual(self._create("Home Shelf", -45.0, -170.0).status_code, 200)
+
+        st = self._stand_at(-45.0, -170.0)
+        fc = st["resource_forecast"]
+        self.assertEqual(fc["scope"], {"kind": "zone", "name": "Home Shelf", "n": 2})
+        self.assertEqual([r["ore"] for r in fc["ranked"]], ["Hadanite"])
+
+        # Off the areas entirely, the body is still the prior — unchanged.
+        bare = self._stand_at(0.0, 90.0)["resource_forecast"]
+        self.assertEqual(bare["scope"]["kind"], "body")
+        self.assertEqual(bare["ranked"][0]["ore"], "Quantanium")
+
+    def test_a_renamed_or_deleted_area_is_picked_up_at_once(self):
+        # surface_zones_for_fix reads live precisely so this holds; a cache
+        # here would keep forecasting an area that no longer exists.
+        self._add_obs(-45.0, -170.0, ore="Hadanite")
+        zid = self._create("Home Shelf", -45.0, -170.0).json()["zone"]["id"]
+        self.assertEqual(
+            self._stand_at(-45.0, -170.0)["resource_forecast"]["scope"]["name"],
+            "Home Shelf")
+        self.client.patch(f"/api/halo/survey/zones/{zid}", json={"name": "The Shelf"})
+        self.assertEqual(
+            self._stand_at(-45.0, -170.0)["resource_forecast"]["scope"]["name"],
+            "The Shelf")
+        self.client.delete(f"/api/halo/survey/zones/{zid}")
+        self.assertEqual(
+            self._stand_at(-45.0, -170.0)["resource_forecast"]["scope"]["kind"],
+            "body")
+
+    def test_every_lane_is_forecast_and_none_of_them_pool(self):
+        """The capture form's shortlists come from these three, and #37.1's
+        rule is that lanes never pool — so they ride as three rankings."""
+        self._add_obs(0.0, 0.0, ore="Quantanium")
+        self._add_obs(0.0, 0.0, ore="Aphorite", category="harvestable")
+        self._add_obs(0.0, 0.0, ore="Valakkar", category="wildlife")
+        st = self._stand_at(0.0, 0.0)
+        self.assertEqual([r["ore"] for r in st["resource_forecast"]["ranked"]],
+                         ["Quantanium"])
+        self.assertEqual([r["ore"] for r in st["harvestable_forecast"]["ranked"]],
+                         ["Aphorite"])
+        self.assertEqual([r["ore"] for r in st["wildlife_forecast"]["ranked"]],
+                         ["Valakkar"])
 
     def test_the_body_decides_the_system_not_the_payload(self):
         r = self.client.post("/api/halo/survey/zones", json={

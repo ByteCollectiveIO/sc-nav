@@ -1974,6 +1974,20 @@ def viewer_owner_ids(user: dict | None) -> frozenset[int]:
     return frozenset(handles.player_ids_for(user["id"]))
 
 
+def surface_zones_for_fix() -> list[dict]:
+    """The org's named surface areas (#37.1) — the nav-state builder asks
+    "which one am I standing in?" so the resource forecast can assume THIS
+    ground rather than the whole moon.
+
+    Read live, deliberately NOT cached. A cache here has to be invalidated by
+    five write paths plus every test that reaches past the API to db, and a
+    stale one silently forecasts a renamed or deleted area. The read is one
+    indexed SELECT over an org-scale table, against a state build that already
+    walks every sighting on the body three times — it does not register.
+    """
+    return db.list_survey_zones(kind="surface")
+
+
 # Field length caps. User-supplied free text is bounded at the schema edge so a
 # member (or a watcher token) can't persist multi-MB strings that then get
 # fanned out to every connected tab over the WebSocket. Generous vs. real use,
@@ -2080,6 +2094,10 @@ class CaptureIn(BaseModel):
 class NodeCaptureIn(BaseModel):
     ore: str = Field(max_length=_TERM_MAX)
     band: int | str | None = None   # 1-8, or "Unk"/None; str length checked in the handler
+    # The Q0-1000 the 4.10 scan prints on the rock's composition line. When it's
+    # given it WINS: _normalize_resource derives the band from it (a scan states
+    # Q, never a band, so anything else would let the two disagree).
+    q: int | None = Field(default=None, ge=0, le=nav_core.MATERIAL_Q_MAX)
 
     biome: str | None = Field(default=None, max_length=_BIOME_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
@@ -2413,6 +2431,7 @@ class Session:
             prev_pos=self.prev_pos, prev_t=self.prev_t,
             viewer_owner_ids=viewer_owner_ids(self.user),
             pinned_ids=self.pinned_ids,
+            surface_zones=surface_zones_for_fix(),
         )
         # The client's own shard rides on the state so it can flag which
         # observations / teammates share its server.
@@ -3941,9 +3960,11 @@ async def capture_node_start(body: NodeCaptureIn, user: dict = Depends(require_s
         raise HTTPException(status_code=400, detail="ore is required")
     if isinstance(body.band, str) and len(body.band) > _BAND_MAX:
         raise HTTPException(status_code=400, detail="band value too long")
-    # band passed through raw; _normalize_resource handles "Unk"/None.
+    # band + q passed through raw; _normalize_resource handles "Unk"/None and
+    # lets q override the band when both arrive.
     return await _arm_observation(
-        user, "resource", {"ore": ore, "band": body.band}, body.biome, body.note
+        user, "resource", {"ore": ore, "band": body.band, "q": body.q},
+        body.biome, body.note
     )
 
 
