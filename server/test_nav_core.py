@@ -542,6 +542,38 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(good.data["band"], 7)
         self.assertEqual(good.data["quality"], "Very High")
 
+    def test_reported_q_derives_the_band(self):
+        # A 4.10 scan states Q per composition line, never a band. Q wins and
+        # the band becomes a pure projection of it, so the two cannot disagree.
+        t = time.time()
+        for q, band, label in ((762, 7, "Very High"), (344, 3, "Low to Mid"),
+                               (547, 5, "Good / High"), (0, 1, "Lowest"),
+                               (1000, 8, "Perfect")):
+            _r, _p, obs = _obs(NAV, "Daymar", t, "resource",
+                               {"ore": "Quantanium", "band": 2, "q": q},
+                               nav_core.OBSERVATION_ID_START + 60)
+            self.assertEqual(obs.data["q"], q)
+            self.assertEqual(obs.data["band"], band, q)      # not the sent 2
+            self.assertEqual(obs.data["quality"], label, q)
+        # out of range clamps rather than rejecting; unreadable q falls back to
+        # the hand-picked band and records no q at all
+        for raw, band in ((2500, 8), (-5, 1)):
+            _r, _p, obs = _obs(NAV, "Daymar", t, "resource",
+                               {"ore": "Gold", "band": "Unk", "q": raw},
+                               nav_core.OBSERVATION_ID_START + 61)
+            self.assertEqual(obs.data["band"], band, raw)
+        for raw in (None, "", "xyz"):
+            _r, _p, obs = _obs(NAV, "Daymar", t, "resource",
+                               {"ore": "Gold", "band": 6, "q": raw},
+                               nav_core.OBSERVATION_ID_START + 62)
+            self.assertIsNone(obs.data["q"], raw)
+            self.assertEqual(obs.data["band"], 6, raw)
+        # and a record that never carried q at all still normalizes
+        _r, _p, old = _obs(NAV, "Daymar", t, "resource", {"ore": "Gold", "band": 4},
+                           nav_core.OBSERVATION_ID_START + 63)
+        self.assertIsNone(old.data["q"])
+        self.assertEqual(old.data["band"], 4)
+
     def test_wildlife_has_no_quality(self):
         t = time.time()
         _ref, _pos, obs = _obs(NAV, "Daymar", t, "wildlife", {"species": "Kopion"},
@@ -1008,6 +1040,69 @@ class ResourceStatsTests(unittest.TestCase):
         fc = nav_core.resource_forecast(nav, "Stanton", "Yela", -70.0, -120.0, self.R)
         self.assertEqual(fc["n_local"], 0)
         self.assertAlmostEqual(fc["ranked"][0]["p"], 1.0, places=6)   # only ore seen on body
+
+    def _zone(self, name, lat, lon, radius_m=50_000.0, **kw):
+        return {"id": abs(hash(name)) % 10_000, "name": name, "system": "Stanton",
+                "body": "Yela", "center_lat": lat, "center_lon": lon,
+                "radius_m": radius_m, "closed": 0, **kw}
+
+    def test_survey_area_scopes_the_forecast_prior(self):
+        """Two areas a moon apart must not forecast each other's ore.
+
+        The 2026-09-20 field report: scan area A, fly to area B on the far side,
+        and B still ranked A's ore first, because the prior was the whole body.
+        """
+        nav = self._body_nav()
+        for _ in range(5):
+            self._add(nav, 45.0, 10.0, "Quantanium")      # area A, far away
+        for _ in range(2):
+            self._add(nav, -45.0, -170.0, "Hadanite")     # area B, underfoot
+        a = self._zone("Area A", 45.0, 10.0)
+        b = self._zone("Area B", -45.0, -170.0)
+
+        # Body-wide prior (no zone) = the old behaviour: the 5 distant marks
+        # outvote the 2 under your feet.
+        bare = nav_core.resource_forecast(nav, "Stanton", "Yela", -45.0, -170.0, self.R)
+        self.assertEqual(bare["ranked"][0]["ore"], "Quantanium")
+        self.assertEqual(bare["scope"], {"kind": "body", "name": "Yela", "n": 7})
+
+        zone = nav_core.forecast_zone_at([a, b], "Stanton", "Yela", -45.0, -170.0,
+                                         self.R, 0.0)
+        self.assertEqual(zone["name"], "Area B")
+        fc = nav_core.resource_forecast(nav, "Stanton", "Yela", -45.0, -170.0,
+                                        self.R, zone=zone)
+        self.assertEqual([r["ore"] for r in fc["ranked"]], ["Hadanite"])
+        self.assertEqual(fc["scope"], {"kind": "zone", "name": "Area B", "n": 2})
+        self.assertEqual(fc["n_body"], 7)          # body count still reported
+        self.assertEqual(fc["n_local"], 2)
+
+    def test_empty_or_absent_area_keeps_the_body_prior(self):
+        nav = self._body_nav()
+        for _ in range(4):
+            self._add(nav, 45.0, 10.0, "Quantanium")
+        # A zone claimed on untouched ground has nothing to say yet, so the
+        # body still supplies the prior rather than the forecast going blank.
+        fresh = self._zone("Just Claimed", -10.0, 60.0)
+        fc = nav_core.resource_forecast(nav, "Stanton", "Yela", -10.0, 60.0,
+                                        self.R, zone=fresh)
+        self.assertEqual(fc["scope"]["kind"], "body")
+        self.assertEqual(fc["ranked"][0]["ore"], "Quantanium")
+
+    def test_forecast_zone_picks_the_smallest_and_skips_archived(self):
+        big = self._zone("Whole Ridge", 10.0, 20.0, radius_m=50_000.0)
+        small = self._zone("The Outcrop", 10.0, 20.0, radius_m=5_000.0)
+        closed = self._zone("Old Survey", 10.0, 20.0, radius_m=1_000.0, closed=1)
+        pick = nav_core.forecast_zone_at([big, small, closed], "Stanton", "Yela",
+                                         10.0, 20.0, self.R, 0.0)
+        self.assertEqual(pick["name"], "The Outcrop")   # most specific claim wins
+        # From orbit you are in no area at all (SURFACE_ZONE_MAX_HEIGHT_M).
+        self.assertIsNone(nav_core.forecast_zone_at(
+            [big, small], "Stanton", "Yela", 10.0, 20.0, self.R,
+            nav_core.SURFACE_ZONE_MAX_HEIGHT_M + 1))
+        # Another body's zone never applies, whatever the coordinates.
+        elsewhere = {**big, "body": "Daymar"}
+        self.assertIsNone(nav_core.forecast_zone_at(
+            [elsewhere], "Stanton", "Yela", 10.0, 20.0, self.R, 0.0))
 
     def test_cells_only_for_visited_areas(self):
         nav = self._body_nav()

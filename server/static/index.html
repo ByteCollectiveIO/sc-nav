@@ -422,7 +422,14 @@
   tbody tr:hover { background: var(--panel2); }
   tbody tr.selected { background: var(--sel-wash); box-shadow: inset 2px 0 0 var(--sel); }
   tbody tr.selected td, tbody tr.selected td.muted { color: var(--sel); }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* A numeric column's HEADER right-aligns with its numbers. `th` above sets
+     text-align:left for every header, so a `td.num`-only rule left each count
+     sitting under the tail of the PREVIOUS heading — on the leaderboard
+     BREAKDOWN that read as "resources aren't being counted" (2026-09-20 report)
+     when the numbers were simply a column adrift from their labels.
+     .inv-table / .bp-tbl each patched this locally; this is the same fix at
+     the base rule, which is where the other tables were missing it. */
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* scrollable table window so a long browse list doesn't stretch the page */
   .table-scroll { max-height: 480px; overflow-y: auto; overflow-x: auto; }
   .table-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
@@ -1183,6 +1190,10 @@
        one-off: a text field in a capture form takes its own line, and the
        short selects keep a floor wide enough to read their own value. */
     .cap-group input.ti { flex: 1 1 100% !important; min-width: 9rem !important; }
+    /* ...except a short number (Q0-1000), which reads like the selects beside
+       it, not like a name. Higher specificity AND later: both sides carry
+       !important, so source order alone would not have settled it. */
+    .cap-group input.ti.q-field { flex: 0 0 auto !important; min-width: 0 !important; }
     /* the ore input is wrapped by its picker, so the wrapper is the flex item */
     .cap-group .ore-pick { flex: 1 1 100% !important; min-width: 9rem !important; }
     .cap-group select.sel { min-width: 6.5rem !important; }
@@ -3309,8 +3320,21 @@
                  placeholder="ore — type to filter">
         </span>
         <span id="node-ore-value" hidden></span>
+        <!-- Q, then band. A 4.10 rock scan prints a quality on each line of the
+             composition ("74.45% QUANTANIUM (RAW) 344" = Q344) and shows the
+             coarse B1–8 grouping nowhere at all, so asking only for a band
+             asked the surveyor to do a conversion the app already knows
+             (qualityBand, the same ⌈q ÷ 125⌉ a marketplace lot uses). Band stays
+             as the only input a pre-4.10 record — or a scan nobody read the
+             numbers off — can offer. -->
         <label class="muted" style="font-size:12px;"
-               title="Scan quality band 1–8 (higher = richer deposit); Unk if you didn't read it off the scanner.">band
+               title="Quality 0–1000, read off the ore's own line in the rock scan — '74.45% QUANTANIUM (RAW) 344' is Q344. Fills in the band for you.">Q
+          <input id="node-q" class="ti q-field" type="number" min="0" max="1000"
+                 step="1" inputmode="numeric" placeholder="—"
+                 aria-label="Ore quality 0 to 1000" style="width:5.5rem;">
+        </label>
+        <label class="muted" style="font-size:12px;"
+               title="Scan quality band 1–8 (higher = richer deposit). Derived from Q when you enter one; pick it by hand for an older scan, or leave Unk.">band
           <select id="node-band" class="sel">
             <option value="Unk">Unk</option>
             <option>1</option><option>2</option><option>3</option><option>4</option>
@@ -3350,9 +3374,21 @@
            is explicitly paired with. -->
       <h2>⚘ ADD FAUNA &amp; HARVESTABLES</h2>
       <div id="wild-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="wild-species" class="ti" aria-label="Fauna or harvestable name" list="fauna-types" placeholder="fauna or harvestable" style="flex:1; min-width:120px;">
-        <datalist id="fauna-types"></datalist>
+        <!-- Same combobox the ore field uses (sightingPicker), NOT a
+             <datalist> — see the picker's own note for why a datalist cannot
+             carry the "likely here" annotation. Fauna and harvestables share
+             one input; capture routes by name via harvestableNames. -->
+        <span class="ore-pick poi-pick" style="flex:1; min-width:130px;">
+          <input id="wild-species" class="ti" autocomplete="off"
+                 aria-label="Fauna or harvestable name"
+                 placeholder="fauna or harvestable — type to filter">
+        </span>
+        <span id="wild-value" hidden></span>
       </div>
+      <!-- The forecast's top harvestables and fauna as one-tap chips, the
+           mirror of #node-ore-likely. Hidden when there's no local evidence,
+           so it never occupies space to say nothing. -->
+      <div id="wild-likely" class="ore-likely" hidden></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
         <select id="wild-biome" class="sel" style="flex:0 1 13rem; min-width:120px;"></select>
         <input id="wild-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
@@ -4265,7 +4301,7 @@
     <div class="table-x">
     <table id="lb-table">
       <thead><tr>
-        <th>#</th><th>CONTRIBUTOR</th>
+        <th class="num">#</th><th>CONTRIBUTOR</th>
         <th class="num">POIs</th><th class="num">RESOURCES</th><th class="num">FAUNA</th><th class="num">HARVEST</th><th class="num">TOTAL</th>
       </tr></thead>
       <tbody></tbody>
@@ -5833,6 +5869,20 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ESC_MAP
 const BAND_QUALITY = (b) =>
   !Number.isFinite(b) ? "Unk" :
   b <= 1 ? "Lowest" : b <= 4 ? "Low to Mid" : b <= 6 ? "Good / High" : b === 7 ? "Very High" : "Perfect";
+// Quality (1–1000) → approximate scanner band (B1–B8, ~125 quality per band).
+// The exact in-game mapping is unverified — every surface labels this ≈.
+// Declared HERE, beside BAND_QUALITY: the capture form calls it while the
+// script is still running (nodeQualityPreview's init call), so a `const` left
+// down in the blueprint section would be in its temporal dead zone.
+const qualityBand = (q) => Math.min(8, Math.max(1, Math.ceil((Number(q) || 1) / 125)));
+// "≈B7 Very High" — the compact band annotation used beside a quality number.
+const bandTag = (q) => `≈B${qualityBand(q)} ${BAND_QUALITY(qualityBand(q))}`;
+// What a resource node capture actually recorded: the Q when one was read off
+// the scan, else the hand-picked band, else neither (matching nav_core's
+// "(B?)" display name rather than printing a bare null).
+const nodeGrade = (d) => !d ? "B?"
+  : d.q != null ? `Q${Number(d.q)} ≈B${qualityBand(d.q)}`
+  : d.band != null ? `B${Number(d.band)}` : "B?";
 const DEG = Math.PI / 180;
 
 // ---------- formatting ----------
@@ -6075,9 +6125,15 @@ function oreValueText(name, category = "resource") {
 function forecastSection(rf, label, unit, category) {
   const rows = rf && rf.ranked ? rf.ranked.filter(r => r.p >= 0.02).slice(0, 6) : [];
   if (!rows.length) return "";
+  // What the ranking ASSUMED, named. Standing in a survey area the prior is
+  // that area (#37.1), so saying "on this body" there would credit the answer
+  // to ground it deliberately ignored.
+  const sc = rf.scope || { kind: "body", name: null, n: rf.n_body };
+  const where = sc.kind === "zone" ? `in ${esc(sc.name)}` : "on this body";
   const hint = rf.n_local
-    ? `${rf.n_local} ${unit}${rf.n_local === 1 ? "" : "s"} nearby · ${rf.n_body} on this body`
-    : `none logged nearby yet — body average of ${rf.n_body} ${unit}${rf.n_body === 1 ? "" : "s"}`;
+    ? `${rf.n_local} ${unit}${rf.n_local === 1 ? "" : "s"} nearby · ${sc.n} ${where}`
+    : `none logged nearby yet — ${sc.kind === "zone" ? `${esc(sc.name)} average` : "body average"}`
+      + ` of ${sc.n} ${unit}${sc.n === 1 ? "" : "s"}`;
   const rowsHtml = rows.map(r => {
     const pct = Math.round(r.p * 100);
     const low = r.n < 4 ? ` <span class="fc-low">·</span>` : "";
@@ -6094,7 +6150,7 @@ function renderForecast(state) {
   const panel = $("forecast-panel");
   // The ore picker's shortlist is the same ranking this panel draws — read it
   // from here so the two can never disagree about what is likely.
-  noteOreForecast(state && state.resource_forecast);
+  noteForecasts(state);
   const blocks = [
     forecastSection(state && state.resource_forecast, "Ores", "node", "resource"),
     forecastSection(state && state.harvestable_forecast, "Harvestables", "site", "harvestable"),
@@ -6550,7 +6606,7 @@ function renderCapture(cap) {
   $("wild-form").style.display = armedWild ? "none" : "flex";
   $("wild-armed").hidden = !armedWild;
   if (armedPoi) $("poi-armed-label").textContent = `ARMED for "${p.name}"`;
-  if (armedRes) $("node-armed-label").textContent = `ARMED for ${p.data.ore} (B${p.data.band})`;
+  if (armedRes) $("node-armed-label").textContent = `ARMED for ${p.data.ore} (${nodeGrade(p.data)})`;
   if (armedWild) $("wild-armed-label").textContent = `ARMED for ${p.category === "harvestable" ? p.data.name : p.data.species}`;
 
   noteHandleBind(cap);
@@ -6579,7 +6635,7 @@ function renderCapture(cap) {
     const by = L.owner_handle ? ` by ${esc(L.owner_handle)}` : "";
     const ll = L.latitude == null ? "" : ` @ ${L.latitude.toFixed(3)}°, ${L.longitude.toFixed(3)}°`;
     if (L.kind === "resource") show("node-result",
-      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b>${oreValueChip(L.ore)} B${L.band == null ? "?" : Number(L.band)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`, "ok");
+      `added <span class="node-dot">◆</span> <b>${esc(L.ore)}</b>${oreValueChip(L.ore)} ${nodeGrade(L)} (${esc(L.quality)}) on ${esc(L.container)}${ll}${by}`, "ok");
     else if (L.kind === "wildlife") show("wild-result",
       `added <span class="fauna-dot">❀</span> <b>${esc(L.species)}</b> on ${esc(L.container)}${ll}${by}`, "ok");
     else if (L.kind === "harvestable") show("wild-result",
@@ -6631,16 +6687,34 @@ $("poi-arm").onclick = async () => {
 };
 $("poi-cancel").onclick = () => postJson("/api/capture/cancel", {});
 
-function nodeQualityPreview() { $("node-quality").textContent = BAND_QUALITY(parseInt($("node-band").value, 10)); }
-$("node-band").onchange = nodeQualityPreview; nodeQualityPreview();
+// Q drives the picker; touching the picker clears Q. They are never both sent
+// as independent claims — a hand-picked band disagreeing with a stored Q would
+// be a reading the scan never gave (the server settles it the same way:
+// _normalize_resource derives band from q whenever q is present).
+function nodeQualityPreview() {
+  const raw = $("node-q").value.trim();
+  const q = raw === "" ? null : Number(raw);
+  const hasQ = q !== null && Number.isFinite(q) && q >= 0;
+  if (hasQ) $("node-band").value = String(qualityBand(q));
+  $("node-quality").textContent =
+    hasQ ? bandTag(q) : BAND_QUALITY(parseInt($("node-band").value, 10));
+}
+$("node-q").oninput = nodeQualityPreview;
+$("node-band").onchange = () => { $("node-q").value = ""; nodeQualityPreview(); };
+nodeQualityPreview();
 $("node-arm").onclick = async () => {
   const ore = nodeOre();
   if (!ore) return $("node-ore").focus();
+  const qRaw = $("node-q").value.trim();
   const r = await postJson("/api/capture/node", {
     ore, band: $("node-band").value,   // "Unk" or "1".."8"; server normalizes
+    q: qRaw === "" ? null : Number(qRaw),   // a read Q wins over the band
     biome: selectValue("node-biome"), note: $("node-note").value.trim() });
   if (r.ok) {
     $("node-ore").value = ""; updateNodeOreValue();
+    // Q is per-rock, so it clears; the band it derived stays as the sticky
+    // default for the next node in the same patch of ground.
+    $("node-q").value = ""; nodeQualityPreview();
     resetSelect("node-biome"); autoPickBiome("node-biome");
     $("node-note").value = "";
   } else armFailed("node-result", r);
@@ -6661,7 +6735,7 @@ $("wild-arm").onclick = async () => {
     ? await postJson("/api/capture/harvestable", { name, biome, note })
     : await postJson("/api/capture/wildlife", { species: name, biome, note });
   if (r.ok) {
-    $("wild-species").value = "";
+    $("wild-species").value = ""; updateWildValue();
     resetSelect("wild-biome"); autoPickBiome("wild-biome");
     $("wild-note").value = "";
   } else armFailed("wild-result", r);
@@ -8481,15 +8555,11 @@ function connect() {
 setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
 
 // ---------- constrained <select> with an "Other…" escape ----------
-// Used by the ore and biome fields: pick from a standardized list, or choose
+// Used by the biome fields: pick from a standardized list, or choose
 // "Other…" to reveal a free-text input for an off-list value.
 const OTHER_OPT = "__other__";
-function fillDatalist(id, names) {
-  const dl = $(id); dl.innerHTML = "";
-  for (const n of names) { const o = document.createElement("option"); o.value = n; dl.appendChild(o); }
-}
 // Fauna (curated) + harvestables (uexcorp Natural/harvestable) share one
-// datalist; the harvestable names are remembered so capture can route them to
+// picker; the harvestable names are remembered so capture can route them to
 // the harvestable category. Both lists arrive sorted; merge, dedupe, re-sort.
 function loadFaunaHarvestables() {
   Promise.all([
@@ -8499,7 +8569,7 @@ function loadFaunaHarvestables() {
     harvestableNames.clear();
     for (const n of harv) harvestableNames.add(n);
     const all = [...new Set([...fauna, ...harv])].sort((a, b) => a.localeCompare(b));
-    fillDatalist("fauna-types", all);
+    wildPicker.setVocab(all);
   });
 }
 function otherInputId(selId) { return selId + "-other"; }
@@ -8534,133 +8604,197 @@ function updateNodeOreValue() {
   el.innerHTML = html;
   el.hidden = !html;
 }
-wireOrePicker();
 
-// ---- ore picker: what's likely under your feet, first ----------------------
-// The full raw-ore vocabulary, and the forecast's current ranking over it.
-let oreVocab = [];
-let oreLikely = [];          // [{ore, p}] — from the live resource forecast
-// How many of the forecast's ores count as "likely here". ONE number, read by
-// both the chip row and the dropdown's group, so the two can never disagree
-// about what is on the shortlist.
-const ORE_LIKELY_SHOWN = 8;
-let oreLikelyKey = null;     // rebuild guard: this runs on every state frame
-
-// The picker's dropdown, rebuilt from the vocabulary on every keystroke.
-// Matching is on the ORE NAME and nothing else, which is the bug this replaced:
-// the annotation must never be part of what you are searching.
-//
-// Substring, not prefix — the feed's names carry a suffix ("Laranite (Raw)",
-// "Agricium (Ore)"), so a prefix match would make "raw" and "ore" unsearchable
-// and, worse, would rank "Aslarite (Raw)" and "Laranite (Raw)" identically for
-// someone typing the part they actually remember.
-const ORE_DROP_CAP = 40;
-function oreMatches(q) {
-  const needle = q.trim().toLowerCase();
-  const likely = new Map(oreLikely.map(r => [r.ore, r.p]));
-  const hit = (o) => !needle || o.toLowerCase().includes(needle);
-  // Likely ores keep their place at the top of whatever the filter leaves.
-  const top = [...likely.keys()].filter(hit);
-  const rest = oreVocab.filter(o => !likely.has(o) && hit(o));
-  return { top, rest, likely };
+// The same hint for the fauna/harvestable field. A harvestable is priced and a
+// fauna sighting is not, so this goes quiet on an animal rather than implying
+// a species is worthless — an absent chip means "unpriced", never "worth 0".
+function updateWildValue() {
+  const el = $("wild-value");
+  if (!el) return;
+  const html = oreValueChip($("wild-species").value.trim(), "harvestable");
+  el.innerHTML = html;
+  el.hidden = !html;
 }
 
-function renderOreDrop(q) {
-  const drop = $("node-ore-drop");
-  if (!drop) return;
-  const { top, rest, likely } = oreMatches(q);
-  const row = (o, p) => {
+// ---- sighting pickers: what's likely under your feet, first ---------------
+// ONE combobox serves BOTH capture forms. It grew on the ore field, where a
+// <datalist> could not be made to work: Chrome renders a labelled datalist
+// option AS ITS LABEL, so the "likely here · 21%" annotation ate the very ore
+// names it was meant to promote. The fauna/harvestable field kept the plain
+// datalist and so drifted into a second idiom for the same act (2026-09-20
+// report) — it now shares this one. Free text stays accepted on both: a
+// species the catalog has never heard of is the whole point of a survey.
+//
+// Rankings are NEVER pooled across categories. That is #37.1's rule ("lanes
+// never pool") applied to a picker: a plant's share and an animal's share have
+// different denominators, so one merged list would be a number that answers
+// neither question. Each category is its own labelled group with its own
+// percentages.
+const PICK_DROP_CAP = 40;
+// How many of a group's entries count as "likely here". ONE number, read by
+// both the chip row and the dropdown group, so the two can never disagree
+// about what is on the shortlist.
+const LIKELY_SHOWN = 8;
+// Below this the forecast is noise, not a suggestion.
+const LIKELY_MIN_P = 0.02;
+
+// cfg: {inputId, chipsId, valueId?, onPick?}. `groups` are the ranked
+// shortlists, in display order; `vocab` is everything else the field accepts.
+function sightingPicker(cfg) {
+  const st = { vocab: [], groups: [], key: null };
+  const input = () => $(cfg.inputId);
+
+  function pick(name) {
+    input().value = name;
+    if (cfg.onPick) cfg.onPick();
+    input().focus();
+  }
+
+  // Matching is on the NAME and nothing else — the annotation must never be
+  // part of what you are searching. Substring, not prefix: the feed's names
+  // carry suffixes ("Laranite (Raw)"), so a prefix match would make the part
+  // people actually remember unsearchable.
+  function matches(q) {
+    const needle = q.trim().toLowerCase();
+    const hit = (n) => !needle || n.toLowerCase().includes(needle);
+    const groups = st.groups
+      .map(g => ({ ...g, rows: g.rows.filter(r => hit(r.name)) }))
+      .filter(g => g.rows.length);
+    const ranked = new Set(st.groups.flatMap(g => g.rows.map(r => r.name)));
+    return { groups, rest: st.vocab.filter(n => !ranked.has(n) && hit(n)) };
+  }
+
+  function head(text) {
+    const h = document.createElement("div");
+    h.className = "ore-drop-h";
+    h.textContent = text;
+    return h;
+  }
+
+  function option(name, cat, p) {
     const it = document.createElement("div");
     it.className = "poi-opt";
-    it.innerHTML = `${esc(o)}${oreValueChip(o)}`
+    it.innerHTML = esc(name) + (cat ? oreValueChip(name, cat) : "")
       + (p != null ? ` <span class="muted">likely here · ${Math.round(p * 100)}%</span>` : "");
-    it._pick = () => {
-      $("node-ore").value = o;
-      updateNodeOreValue();
-      drop.hidden = true;
-      $("node-ore").focus();
-    };
+    it._pick = () => { pick(name); $(cfg.inputId + "-drop").hidden = true; };
     // mousedown, not click: the pick has to land before the input's blur hides
     // the drop (same reason attachPoiPicker does it).
     it.onmousedown = (e) => { e.preventDefault(); it._pick(); };
     return it;
-  };
-  drop.innerHTML = "";
-  if (top.length) {
-    const h = document.createElement("div");
-    h.className = "ore-drop-h";
-    h.textContent = "likely here";
-    drop.appendChild(h);
-    for (const o of top) drop.appendChild(row(o, likely.get(o)));
-    if (rest.length) {
-      const h2 = document.createElement("div");
-      h2.className = "ore-drop-h";
-      h2.textContent = "everything else";
-      drop.appendChild(h2);
+  }
+
+  function renderDrop(q) {
+    const drop = $(cfg.inputId + "-drop");
+    if (!drop) return;
+    const { groups, rest } = matches(q);
+    drop.innerHTML = "";
+    for (const g of groups) {
+      drop.appendChild(head(g.label));
+      for (const r of g.rows) drop.appendChild(option(r.name, g.cat, r.p));
     }
+    if (groups.length && rest.length) drop.appendChild(head("everything else"));
+    for (const n of rest.slice(0, PICK_DROP_CAP)) drop.appendChild(option(n, cfg.restCat, null));
+    if (rest.length > PICK_DROP_CAP)
+      drop.appendChild(head(`+${rest.length - PICK_DROP_CAP} more — keep typing`));
+    drop.hidden = groups.reduce((n, g) => n + g.rows.length, 0)
+      + Math.min(rest.length, PICK_DROP_CAP) === 0;
   }
-  for (const o of rest.slice(0, ORE_DROP_CAP)) drop.appendChild(row(o, null));
-  const shown = top.length + Math.min(rest.length, ORE_DROP_CAP);
-  if (rest.length > ORE_DROP_CAP) {
-    const more = document.createElement("div");
-    more.className = "ore-drop-h";
-    more.textContent = `+${rest.length - ORE_DROP_CAP} more — keep typing`;
-    drop.appendChild(more);
+
+  // The chip row: the same ranking, one tap. Capped at the SAME number the
+  // dropdown's group shows, because they are one list wearing two faces — when
+  // the chips stopped at five and the group went to eight, an entry at 4% was
+  // promoted in one and absent from the other, which reads as the shortlist
+  // having quietly dropped it.
+  function renderChips() {
+    const el = $(cfg.chipsId);
+    if (!el) return;
+    const parts = st.groups.filter(g => g.rows.length).map(g =>
+      `<span>${esc(g.chipLabel || g.label)}:</span>` + g.rows.map(r =>
+        `<button type="button" class="ol-btn" data-name="${esc(r.name)}"`
+        + ` title="seen at ${Math.round(r.p * 100)}% of nearby ${esc(g.unit || "sightings")}">`
+        + `${esc(r.name)}${g.cat ? oreValueChip(r.name, g.cat) : ""}`
+        + ` <span class="ol-p">${Math.round(r.p * 100)}%</span></button>`).join(""));
+    el.innerHTML = parts.join("");
+    el.hidden = !parts.length;
+    for (const b of el.querySelectorAll(".ol-btn"))
+      b.onclick = () => pick(b.dataset.name);
   }
-  drop.hidden = shown === 0;
+
+  function wire() {
+    const el = input();
+    const wrap = el && el.parentElement;
+    if (!wrap || wrap.querySelector(".poi-drop")) return;
+    const drop = document.createElement("div");
+    drop.className = "poi-drop";
+    drop.id = cfg.inputId + "-drop";
+    drop.hidden = true;
+    wrap.appendChild(drop);
+    el.addEventListener("input", () => { if (cfg.onPick) cfg.onPick(); renderDrop(el.value); });
+    el.addEventListener("focus", () => renderDrop(el.value));
+    el.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+    attachPickerKeys(el, drop);
+  }
+
+  return {
+    wire,
+    setVocab(names) {
+      st.vocab = names || [];
+      const drop = $(cfg.inputId + "-drop");
+      if (drop && !drop.hidden) renderDrop(input().value);
+    },
+    // `specs` = [{label, chipLabel?, cat, unit, forecast}] in display order.
+    // Guarded on the ranking itself: this runs on every position frame, and
+    // rebuilding the lists per frame is pure waste.
+    setForecasts(specs) {
+      const groups = specs.map(sp => ({
+        label: sp.label, chipLabel: sp.chipLabel, cat: sp.cat, unit: sp.unit,
+        rows: ((sp.forecast && sp.forecast.ranked) || [])
+          .filter(r => r.p >= LIKELY_MIN_P).slice(0, LIKELY_SHOWN)
+          .map(r => ({ name: r.ore, p: r.p })),
+      }));
+      const key = groups.map(g =>
+        g.label + "=" + g.rows.map(r => r.name + ":" + Math.round(r.p * 100)).join(",")).join("|");
+      if (key === st.key) return;
+      st.key = key;
+      st.groups = groups;
+      const drop = $(cfg.inputId + "-drop");
+      if (drop && !drop.hidden) renderDrop(input().value);
+      renderChips();
+    },
+  };
 }
 
-function rebuildOreList() {
-  const drop = $("node-ore-drop");
-  if (drop && !drop.hidden) renderOreDrop($("node-ore").value);
-}
+// The ore field. `restCat` tints every non-shortlisted ore with its value chip
+// too — the whole vocabulary here is one priced category.
+const orePicker = sightingPicker({
+  inputId: "node-ore", chipsId: "node-ore-likely",
+  restCat: "resource", onPick: updateNodeOreValue,
+});
+// The fauna + harvestable field. Its vocabulary is two categories sharing one
+// input (capture routes by name, harvestableNames decides), so the shortlist
+// is two groups and `restCat` is null: a fauna name has no price, and pricing
+// an animal is a claim the app deliberately never makes (#37.1).
+const wildPicker = sightingPicker({
+  inputId: "wild-species", chipsId: "wild-likely",
+  restCat: null, onPick: updateWildValue,
+});
+orePicker.wire();
+wildPicker.wire();
 
-function wireOrePicker() {
-  const input = $("node-ore");
-  const wrap = input && input.parentElement;
-  if (!wrap || wrap.querySelector(".poi-drop")) return;
-  const drop = document.createElement("div");
-  drop.className = "poi-drop";
-  drop.id = "node-ore-drop";
-  drop.hidden = true;
-  wrap.appendChild(drop);
-  input.addEventListener("input", () => { updateNodeOreValue(); renderOreDrop(input.value); });
-  input.addEventListener("focus", () => renderOreDrop(input.value));
-  input.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
-  attachPickerKeys(input, drop);
-}
-
-// The chip row: the same ranking, one tap. Capped at the SAME number the
-// dropdown's LIKELY HERE group shows, because they are one list wearing two
-// faces — when the chips stopped at five and the group went to eight, an ore
-// at 4% was promoted in one and absent from the other, which reads as the
-// shortlist having quietly dropped it.
-function renderOreLikely() {
-  const el = $("node-ore-likely");
-  if (!el) return;
-  const rows = oreLikely.slice(0, ORE_LIKELY_SHOWN);
-  if (!rows.length) { el.hidden = true; el.innerHTML = ""; return; }
-  el.innerHTML = `<span>likely here:</span>` + rows.map(r =>
-    `<button type="button" class="ol-btn" data-ore="${esc(r.ore)}"`
-    + ` title="seen in ${Math.round(r.p * 100)}% of nearby nodes">${esc(r.ore)}`
-    + `${oreValueChip(r.ore)} <span class="ol-p">${Math.round(r.p * 100)}%</span></button>`).join("");
-  el.hidden = false;
-  for (const b of el.querySelectorAll(".ol-btn"))
-    b.onclick = () => { $("node-ore").value = b.dataset.ore; updateNodeOreValue(); $("node-ore").focus(); };
-}
-
-// Fed from the live state's resource forecast. Guarded on the ranking itself
-// because this is called on every position frame and rebuilding a ~100-option
-// datalist per frame is pure waste.
-function noteOreForecast(rf) {
-  const ranked = (rf && rf.ranked ? rf.ranked : []).filter(r => r.p >= 0.02)
-    .slice(0, ORE_LIKELY_SHOWN);
-  const key = ranked.map(r => r.ore + ":" + Math.round(r.p * 100)).join("|");
-  if (key === oreLikelyKey) return;
-  oreLikelyKey = key;
-  oreLikely = ranked;
-  rebuildOreList();
-  renderOreLikely();
+// Fed from the live state. The panel above draws the same rankings, so both
+// read from here and can never disagree about what is likely.
+function noteForecasts(state) {
+  orePicker.setForecasts([
+    { label: "likely here", cat: "resource", unit: "nodes",
+      forecast: state && state.resource_forecast },
+  ]);
+  wildPicker.setForecasts([
+    { label: "likely here · harvestables", chipLabel: "harvestables",
+      cat: "harvestable", unit: "sites",
+      forecast: state && state.harvestable_forecast },
+    { label: "likely here · fauna", chipLabel: "fauna", cat: null,
+      unit: "sightings", forecast: state && state.wildlife_forecast },
+  ]);
 }
 
 // Biome dropdowns (node + fauna): options narrow to the player's current body,
@@ -15030,12 +15164,6 @@ function bpFmtTime(s) {
   const m = Math.round(s / 60);
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
-
-// Quality (1–1000) → approximate scanner band (B1–B8, ~125 quality per band).
-// The exact in-game mapping is unverified — every surface labels this ≈.
-const qualityBand = (q) => Math.min(8, Math.max(1, Math.ceil((Number(q) || 1) / 125)));
-// "≈B7 Very High" — the compact band annotation used beside a quality number.
-const bandTag = (q) => `≈B${qualityBand(q)} ${BAND_QUALITY(qualityBand(q))}`;
 
 // The materials bill scaled to qty — both ingredient kinds, min-quality flags.
 // `reqByInput` ({material name -> requested min_q}) badges the requester's own
@@ -24887,8 +25015,7 @@ function init() {
   loadFaunaHarvestables();
   fetch("/api/raw_commodities").then(r => r.json())
     .then(n => {
-      oreVocab = n || [];
-      rebuildOreList();
+      orePicker.setVocab(n || []);
       const dl = $("halo-survey-ore-list");   // survey box autocompletes the same ore vocab
       if (dl) dl.innerHTML = (n || []).map(o => `<option value="${esc(o)}">`).join("");
     }).catch(() => {});

@@ -986,11 +986,13 @@ def compute_state(
     nearest_count: int = 10,
     viewer_owner_ids=frozenset(),
     pinned_ids=frozenset(),
+    surface_zones=(),
 ) -> dict:
     """Full navigation state for one position sample. `viewer_owner_ids` are the
     PlayerIDs the viewer owns, used to hide other members' private POIs.
     `pinned_ids` are observation ids this viewer bookmarked — always surfaced in
-    their own list regardless of distance rank."""
+    their own list regardless of distance rank. `surface_zones` are the org's
+    named areas (#37.1); the one under the fix scopes the resource forecast."""
     container = detect_container(nav, pos_m)
 
     lat = lon = None
@@ -1087,13 +1089,20 @@ def compute_state(
     # harvestables are forecast separately (their compositions are never pooled).
     forecast = None
     harvestable_forecast = None
+    wildlife_forecast = None
     if container is not None and container.is_body and lat is not None:
-        forecast = resource_forecast(
-            nav, container.system, container.name, lat, lon, container.body_radius
-        )
-        harvestable_forecast = resource_forecast(
-            nav, container.system, container.name, lat, lon, container.body_radius,
-            category="harvestable",
+        # Which named area the fix is standing in, so the forecast assumes THIS
+        # ground rather than the whole moon. The client runs the same predicate
+        # for its "you're in <area>" chip and deliberately does not receive a
+        # zone field here; this is the test done once, for the pass over the
+        # body's sightings we were already paying for.
+        zone = forecast_zone_at(surface_zones, container.system, container.name,
+                                lat, lon, container.body_radius, altitude_m)
+        forecast, harvestable_forecast, wildlife_forecast = (
+            resource_forecast(
+                nav, container.system, container.name, lat, lon,
+                container.body_radius, category=cat, zone=zone)
+            for cat in ("resource", "harvestable", "wildlife")
         )
 
     destination = None
@@ -1162,6 +1171,7 @@ def compute_state(
         "nearest_observations": nearest_observations,
         "pinned_observations": pinned_observations,
         "resource_forecast": forecast,
+        "wildlife_forecast": wildlife_forecast,
         "harvestable_forecast": harvestable_forecast,
     }
 
@@ -1345,6 +1355,22 @@ OBSERVATION_ID_START = 2_000_000
 
 UNKNOWN_QUALITY = "Unk"
 
+# SC 4.10's fine-grained material scale. A scanned rock states it per
+# composition line ("74.45% QUANTANIUM (RAW) 344"), which is where a surveyor
+# reads it from; the scanner no longer shows the coarse B1-B8 grouping at all.
+MATERIAL_Q_MAX = 1000
+
+
+def clean_material_q(q) -> int | None:
+    """A reported Q0-1000 material quality, or None when it wasn't read.
+    The capture endpoint bounds its own input (NodeCaptureIn 422s out of range);
+    this clamps instead so a record arriving any other way still derives a band
+    rather than silently losing one."""
+    try:
+        return max(0, min(MATERIAL_Q_MAX, int(q)))
+    except (TypeError, ValueError):
+        return None
+
 
 def quality_for_band(band) -> str:
     # Band is unknown until a node is mined; band None/non-numeric -> "Unk".
@@ -1365,10 +1391,17 @@ def quality_for_band(band) -> str:
 
 def _normalize_resource(data: dict) -> dict:
     data = dict(data)
+    # Q is the finer reading AND the only one 4.10 actually shows, so when it's
+    # present the band is a pure projection of it (same rule as a marketplace
+    # lot) and the two can never drift apart. `band` survives as the sole input
+    # for pre-4.10 records and for a scan nobody read the numbers off.
+    q = clean_material_q(data.get("q"))
+    data["q"] = q
+    raw_band = quality_band(q) if q is not None else data.get("band")
     try:
-        band = max(1, min(8, int(data.get("band"))))
+        band = max(1, min(8, int(raw_band)))
     except (TypeError, ValueError):
-        band = None                                 # unknown until mined
+        band = None                                 # unknown until scanned
     data["band"] = band
     data["quality"] = quality_for_band(band)        # always derived from band
     data["ore"] = (data.get("ore") or "Unknown")
@@ -1878,40 +1911,94 @@ def _ranked(comp: dict, counts: dict) -> list[dict]:
     return rows
 
 
+def forecast_zone_at(zones, system: str, body: str, lat, lon,
+                     body_radius_m: float, height_m=None) -> dict | None:
+    """The named surface area (#37.1) a fix is standing in, or None.
+
+    Overlapping zones both own a point by design (surface_zone_contains takes
+    no side), but a forecast needs ONE prior, so the SMALLEST containing circle
+    wins: it is the most specific claim anyone has made about this ground.
+    Archived zones are skipped — the org stopped vouching for them."""
+    hits = [
+        z for z in zones
+        if z.get("body") == body
+        and (z.get("system") or system) == system
+        and not z.get("closed")
+        and surface_zone_contains(z, lat, lon, body_radius_m, height_m)
+    ]
+    if not hits:
+        return None
+    return min(hits, key=lambda z: float(z.get("radius_m") or 0) or math.inf)
+
+
 def resource_forecast(
     nav: NavData, system: str, body: str, lat: float, lon: float,
     radius_m: float, cell_m: float = RESOURCE_CELL_M, category: str = "resource",
+    zone: dict | None = None,
 ) -> dict | None:
     """Ranked type likelihoods (ore for resources, name for harvestables) for the
     player's neighborhood (own cell + ring-1, distance-weighted), shrunk toward
-    the body base rate. None until the body has at least one sighting of the
-    category."""
+    a base rate. None until the body has at least one sighting of the category.
+
+    **The prior is the smallest thing the org has actually named.** Standing in
+    a survey area, that area IS the prior; otherwise it is the whole body. The
+    body-wide prior is what made two areas on opposite sides of one moon read
+    the same: at RESOURCE_PRIOR_STRENGTH pseudo-marks against a handful of real
+    local ones, the far side's ore mix outvoted the ground underfoot (2026-09-20
+    report — 5 Quantanium marks 180° away ranked ABOVE the 2 Hadanite marks at
+    the player's feet). Scoping the prior also makes the forecast agree with the
+    zone's own detail card, which only ever counted its own members.
+
+    Local evidence deliberately stays UNSCOPED — a node 3 km away is relevant
+    whether or not an org-drawn circle happens to include it. The zone decides
+    what to assume, not what was seen.
+
+    One pass serves all three tallies (body / zone / local ring); it used to
+    take two, since body_base_rate walked the same list."""
     field = _category_field(category)
-    base, base_n = body_base_rate(nav, system, body, category)
-    if base_n == 0:
-        return None
     n_lon, _ = grid_dims(radius_m, cell_m)
     pi, pj = grid_cell(lat, lon, radius_m, cell_m)
+    body_counts: dict[str, int] = {}
+    zone_counts: dict[str, int] = {}
     weighted: dict[str, float] = {}
     counts: dict[str, int] = {}
     total_w = 0.0
     n_local = 0
     for o in _obs_on_body(nav, system, body, category):
+        ore = _type_of(o, field)
+        body_counts[ore] = body_counts.get(ore, 0) + 1
+        if zone is not None and surface_zone_contains(
+                zone, o.latitude, o.longitude, radius_m, o.height_m):
+            zone_counts[ore] = zone_counts.get(ore, 0) + 1
         oi, oj = grid_cell(o.latitude, o.longitude, radius_m, cell_m)
         ring = max(min((oi - pi) % n_lon, (pi - oi) % n_lon), abs(oj - pj))
         w = _FORECAST_RING_WEIGHT.get(ring)
         if w is None:
             continue
-        ore = _type_of(o, field)
         weighted[ore] = weighted.get(ore, 0.0) + w
         counts[ore] = counts.get(ore, 0) + 1
         total_w += w
         n_local += 1
+    n_body = sum(body_counts.values())
+    if n_body == 0:
+        return None
+    n_zone = sum(zone_counts.values())
+    # An EMPTY area falls back to the body: a zone claimed five minutes ago has
+    # nothing to say yet, and "no prior at all" would leave the first mark
+    # asserting 100% of the ground on its own.
+    if n_zone:
+        prior_counts, prior_n = zone_counts, n_zone
+        scope = {"kind": "zone", "name": zone.get("name") or "this area", "n": n_zone}
+    else:
+        prior_counts, prior_n = body_counts, n_body
+        scope = {"kind": "body", "name": body, "n": n_body}
+    base = {ore: c / prior_n for ore, c in prior_counts.items()}
     comp = _shrunk_composition(weighted, total_w, base, RESOURCE_PRIOR_STRENGTH)
     return {
         "ranked": _ranked(comp, counts),
         "n_local": n_local,
-        "n_body": base_n,
+        "n_body": n_body,          # unchanged meaning: sightings on this body
+        "scope": scope,            # what the prior was actually built from
         "cell_m": cell_m,
     }
 
