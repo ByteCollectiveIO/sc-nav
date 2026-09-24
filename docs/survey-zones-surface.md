@@ -77,7 +77,14 @@
 > part of §11.5's hot-path worry. Created from the Goals form or the zone
 > card's "🎯 Make it a goal"; never automatically (§13.8).
 >
-> **Not built:** §11.5's per-zone milestone hook (deferred by §14.13).
+> **§11.5 milestones BUILT 2026-09-24.** A named surface area posts to the
+> `survey` channel when its sightings (every lane, like the card tile) land
+> exactly on `SURFACE_ZONE_MILESTONES` (25 · 100 · 250 · 500), with a
+> `survey-surface-gate:<zone>:<n>` dedup key (§13.7). Hot-path cost: nothing
+> without a survey webhook; otherwise one SELECT + a circle test per area, and
+> a count only for areas the sighting landed in. Archived areas stay quiet
+> (§9). A survey goal's own target is announced by the goal (§11.2), so the
+> ladder is fixed rather than tied to goals.
 >
 > **§12.1 build stamping BUILT (2026-09-24).** The watcher reads
 > `Branch:` + `Changelist:` off the Game.log header (`sc-alpha-4.9.0/12344265`;

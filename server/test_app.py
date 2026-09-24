@@ -11027,6 +11027,39 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
             if o.data.get("ore") == "Iron" and o.container_name == self.BODY:
                 self._obs_ids.append(oid)
 
+    def test_an_area_announces_its_sighting_milestones_once(self):
+        zid = self._create().json()["zone"]["id"]
+        quiet = self._create(name="Old Workings", lat=0.0, lon=0.1).json()["zone"]["id"]
+        self.client.patch(f"/api/halo/survey/zones/{quiet}", json={"closed": True})
+        for i in range(nav_core_gate := app.nav_core.SURFACE_ZONE_MILESTONES[0] - 1):
+            self._add_obs(0.001 * i, 0.0, handle="ana" if i % 2 else "bo")
+        posts = []
+        orig_ms, orig_bg, orig_cfg = (app._notify_survey_milestone, app._notify_bg,
+                                      app.notify.is_configured)
+        app._notify_survey_milestone = lambda text, dedup, link="#/halo": (
+            posts.append((text, dedup, link)) or None)
+        app._notify_bg = lambda coro: None
+        app.notify.is_configured = lambda cat: True
+        try:
+            self.client.post("/api/capture/node", json={"ore": "Iron", "band": 3})
+            self._stand_at(0.0, 0.0)           # the 25th sighting
+            self.client.post("/api/capture/node", json={"ore": "Iron", "band": 3})
+            self._stand_at(0.0, 0.0)           # the 26th: nothing
+        finally:
+            app._notify_survey_milestone = orig_ms
+            app._notify_bg = orig_bg
+            app.notify.is_configured = orig_cfg
+            for oid, o in list(app.nav.observations.items()):
+                if o.data.get("ore") == "Iron" and o.container_name == self.BODY:
+                    self._obs_ids.append(oid)
+        # one post, for the open area; the archived one it also sits in stays quiet
+        self.assertEqual(len(posts), 1, posts)
+        text, dedup, link = posts[0]
+        self.assertIn(f"Iron Ridge hit {nav_core_gate + 1} sightings", text)
+        self.assertIn("2 surveyors", text)
+        self.assertEqual(dedup, f"survey-surface-gate:{zid}:{nav_core_gate + 1}")
+        self.assertTrue(link.startswith("#/halo/atlas/Stanton/"))
+
     # -- patch staleness (#37 §6.1) -----------------------------------------
     def _zone_row(self):
         r = self.client.get("/api/halo/survey/zones",

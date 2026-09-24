@@ -8148,6 +8148,12 @@ SURFACE_ZONE_CATEGORY = "resource"
 #     `annotate_surface_values` refuses to tier a moon patch against a belt
 #     pocket, so "$$$" keeps meaning "best of its kind in this system".
 SURFACE_ZONE_LANES = ("resource", "harvestable", "wildlife")
+# Sighting counts at which a named surface area announces itself to the
+# `survey` channel (#37.1 §11.5). Counted over every lane, like the card's
+# Sightings tile. Fired only when the count lands EXACTLY on a gate, so each
+# is one post, never one per capture. A ladder rather than one gate because a
+# busy area passes 25 in an evening and the org still wants to hear about 250.
+SURFACE_ZONE_MILESTONES = (25, 100, 250, 500)
 
 # The lanes that can carry a VALUE at all. Wildlife is deliberately absent and
 # must stay absent: `build_resource_values` prices `resource` and
