@@ -250,6 +250,11 @@ library at `#/blueprints`, #29)
   = system select + zone select), `renderSurveyGoalDetail`, board ⛏ chip +
   filter, ATLAS cards' "🎯 Make it a goal" (`svy-goal` → `surveyGoalSeed`,
   wired in `wireZoneLinkCopy`). NEVER auto-created with a zone (§13.8).
+  **Surface milestones (§11.5):** `_surface_capture_milestones(obs)` after the
+  goal check in `_capture_observation` → `survey` channel at
+  `nav_core.SURFACE_ZONE_MILESTONES` (exact-count gates over every lane),
+  dedup `survey-surface-gate:<zone>:<n>`, archived areas skipped, returns
+  before any query when no survey webhook is set.
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`, `/api/intel/surveying` (#37 slice 5: totals + ranked members via `nav_core.derive_survey_stats` — sessions derived from mark stream, gap `SURVEY_SESSION_GAP_S` 30 min or zone change splits, NULL-`created` never sessioned — + per-belt coverage rows + freshest zones; frontend `#/intel/surveying` → `#survey-stats-view` sibling, `loadSurveyStats`/`renderSurveyStats`)
 - Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. **Guild

@@ -3888,6 +3888,34 @@ def _surface_zone_holds(zone: dict, obs) -> bool:
         zone, obs.latitude, obs.longitude, radius, obs.height_m)
 
 
+def _surface_capture_milestones(obs) -> None:
+    """A named surface area reaching a sighting milestone (#37.1 §11.5).
+
+    Runs on the capture hot path, so it is built to do nothing almost always:
+    no survey webhook → return before any query; otherwise one indexed SELECT
+    of this system's surface areas, a circle test per area, and a count only
+    for the areas this sighting actually landed in. Archived areas are
+    history and stay quiet. The dedup key backs up the exact-gate rule (a
+    deleted-then-relogged sighting could land on the same count twice)."""
+    if not notify.is_configured("survey"):
+        return
+    gates = nav_core.SURFACE_ZONE_MILESTONES
+    for z in db.list_survey_zones(obs.system, kind="surface"):
+        if z.get("closed") or not _surface_zone_holds(z, obs):
+            continue
+        evidence = _survey_zone_evidence(z)
+        n = len(evidence)
+        if n not in gates:
+            continue
+        who = len({h for h, _t in evidence if h})
+        _notify_bg(_notify_survey_milestone(
+            f"⛏ **{z['name']} hit {n} sightings** on {z['body']} ({z['system']}) — "
+            f"{who} surveyor{'s' if who != 1 else ''} so far. Every node logged "
+            "inside it counts, whoever logs it.",
+            f"survey-surface-gate:{z['id']}:{n}",
+            link=f"#/halo/atlas/{z['system']}/{z.get('slug') or z['id']}"))
+
+
 def _capture_observation(sess, pos_m, now, pending, owner):
     category = pending["category"]
     # Shared id space across categories (>= OBSERVATION_ID_START); MAX(id)+1 from
@@ -3907,6 +3935,7 @@ def _capture_observation(sess, pos_m, now, pending, owner):
     nav.observations[obs.id] = obs
     nav.touch()
     _check_survey_goals(lambda z: _surface_zone_holds(z, obs))
+    _surface_capture_milestones(obs)
     sess.last_capture = {
         **nav_core._observation_base(obs),
         "latitude": obs.latitude, "longitude": obs.longitude,
@@ -8378,12 +8407,12 @@ def _survey_announce_ok(creator_id: str) -> bool:
     return True
 
 
-async def _notify_survey_milestone(text: str, dedup: str) -> None:
-    """A survey threshold crossing (#37 §5.2): a zone reaching the field-model
+async def _notify_survey_milestone(text: str, dedup: str, link: str = "#/halo") -> None:
+    """A survey threshold crossing (#37 §5.2, #37.1 §11.5): a zone reaching a
     gate, or a belt's first model fit. Crossings only — never per-mark."""
     if not notify.is_configured("survey"):
         return
-    await notify.send("survey", text + _deep_link("#/halo"), dedup_key=dedup)
+    await notify.send("survey", text + _deep_link(link), dedup_key=dedup)
 
 
 def _mentions(*discord_ids) -> tuple[list[str], str]:

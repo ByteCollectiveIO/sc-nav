@@ -1930,7 +1930,13 @@
     color: var(--dim); margin-bottom: 8px; }
   /* detail */
   .ev-detail-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  .ev-detail-title h2 { margin: 0; color: var(--text); }
+  /* A record's own name at the top of its detail page (event, goal, listing).
+     Sized HERE, not by source order: `.panel h2` (the 11-12px dim label) has
+     the same specificity and set font-size where this rule didn't, so every
+     detail title rendered as a panel label. Same role and size as the ATLAS
+     card's .svy-title, which hit the identical trap. */
+  .ev-detail-title h2 { margin: 0; color: var(--text); font-size: 24px; font-weight: 650;
+    letter-spacing: -.01em; line-height: 1.2; }
   /* detail meta: a scannable grid of glyph + value items, leading with when/where/
      crew; secondary facts (signups-close/duration/organizer) sit quieter below.
      Restrained monochrome glyphs (aria-hidden) replace the old colourful emoji. */
