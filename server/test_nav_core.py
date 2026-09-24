@@ -7684,6 +7684,43 @@ class SurveyHealthTests(unittest.TestCase):
         self.assertGreater(barren["score"], rich_but_clumped["score"])
 
 
+class SurveyGoalProgressTests(unittest.TestCase):
+    """#37.1 §11.2: a survey goal counts only evidence logged after `since`."""
+
+    ZONE = {"name": "Iron Ridge", "kind": "surface"}
+
+    def test_the_baseline_keeps_old_ground_from_starting_complete(self):
+        ev = [("ana", 50.0), ("bo", 60.0), ("ana", 150.0), ("cy", 160.0), (None, 170.0)]
+        p = nav_core.derive_survey_goal_progress(
+            {"zone_id": 3, "since": 100.0, "target": {"mode": "sightings", "value": 3}},
+            self.ZONE, ev)
+        ln = p["lines"][0]
+        self.assertEqual((ln["have"], ln["needed"], ln["unit"]), (3, 3, "sightings"))
+        self.assertEqual((p["counted"], p["before"], p["is_met"]), (3, 2, True))
+        # an anonymous sighting counts as work, but credits nobody
+        self.assertEqual([c["owner_id"] for c in p["per_contributor"]], ["ana", "cy"])
+
+    def test_surveyors_counts_distinct_people(self):
+        ev = [("ana", 150.0), ("ana", 151.0), ("bo", 152.0)]
+        p = nav_core.derive_survey_goal_progress(
+            {"since": 100.0, "target": {"mode": "surveyors", "value": 3}}, self.ZONE, ev)
+        self.assertEqual((p["lines"][0]["have"], p["lines"][0]["unit"], p["is_met"]),
+                         (2, "surveyors", False))
+
+    def test_a_belt_zone_counts_marks_and_a_deleted_zone_counts_nothing(self):
+        spec = {"since": 0.0, "target": {"mode": "sightings", "value": 1}}
+        p = nav_core.derive_survey_goal_progress(spec, {"name": "K", "kind": "deep"}, [("a", 1.0)])
+        self.assertEqual(p["lines"][0]["unit"], "marks")
+        gone = nav_core.derive_survey_goal_progress(spec, None, [("a", 1.0)])
+        self.assertEqual((gone["lines"][0]["have"], gone["is_met"]), (0, False))
+        self.assertEqual(gone["lines"][0]["name"], "(deleted area)")
+
+    def test_undated_evidence_never_counts(self):
+        p = nav_core.derive_survey_goal_progress(
+            {"since": 0.0, "target": {"value": 1}}, self.ZONE, [("a", None)])
+        self.assertEqual((p["counted"], p["before"]), (0, 1))
+
+
 class PatchStalenessTests(unittest.TestCase):
     """#37 §6.1: a zone is stale when none of its evidence is from the org's
     current patch. Derived, never stored."""

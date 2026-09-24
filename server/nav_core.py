@@ -6338,6 +6338,59 @@ def derive_unlock_progress(spec: dict, holders_by_key: dict, scope_ids, names: d
             "target": {"mode": mode, "value": val}}
 
 
+SURVEY_GOAL_MODES = ("sightings", "surveyors")
+
+
+def derive_survey_goal_progress(spec: dict, zone: dict | None, evidence) -> dict:
+    """Progress of a SURVEY goal (#37.1 §11.2): "log N sightings in this area",
+    or "get N different members surveying it".
+
+    `evidence` = (owner_handle, epoch) per piece of evidence in the zone as it
+    is NOW (a re-fence moves the count, deliberately: the goal is about the
+    place, and the place is what the zone says it is). Only evidence at or
+    after `spec.since` counts. Membership is retroactive, so without that
+    baseline a goal declared over ground the org already works would be born
+    complete, measuring nothing the leader asked for (§11.3). What came before
+    is reported as `before`, so the page can say so rather than hide it.
+
+    `zone` = {name, kind} or None when the zone has been deleted; a goal over
+    a missing zone reads 0 and can't be met. Returns the materials-goal shape
+    (one line, unit sightings|marks|surveyors) so the board renders it as-is."""
+    tgt = spec.get("target") or {}
+    mode = tgt.get("mode") if tgt.get("mode") in SURVEY_GOAL_MODES else "sightings"
+    needed = max(1, int(float(tgt.get("value") or 1)))
+    since = float(spec.get("since") or 0.0)
+    counted, before = [], 0
+    for handle, ts in (evidence if zone is not None else []):
+        if ts is not None and ts >= since:
+            counted.append(handle)
+        else:
+            before += 1
+    per: dict[str, int] = {}
+    for h in counted:
+        if h:
+            per[h] = per.get(h, 0) + 1
+    have = len(counted) if mode == "sightings" else len(per)
+    if mode == "surveyors":
+        unit = "surveyors"
+    else:
+        unit = "sightings" if (zone or {}).get("kind") == "surface" else "marks"
+    pct = min(100.0, have / needed * 100.0)
+    line = {"item_id": f"zone:{spec.get('zone_id')}", "key": spec.get("zone_id"),
+            "name": (zone or {}).get("name") or "(deleted area)", "unit": unit,
+            "needed": needed, "have": have, "pct": round(pct, 1),
+            "short": max(0, needed - have), "promised": 0, "on_hand": have}
+    per_contributor = sorted(
+        ({"owner_id": h, "display_name": h, "qty": n, "promised": 0}
+         for h, n in per.items()),
+        key=lambda x: (-x["qty"], x["owner_id"]))
+    return {"lines": [line], "overall_pct": round(pct, 1),
+            "is_met": zone is not None and have >= needed,
+            "per_contributor": per_contributor, "needed": needed,
+            "counted": len(counted), "before": before,
+            "target": {"mode": mode, "value": needed}}
+
+
 def craftable_from_holdings(bp: dict, holdings, resolve) -> dict:
     """What a member could craft RIGHT NOW from their free stock (blueprint
     library page). `holdings` = their inventory rows (`item_id`, `available`

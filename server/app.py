@@ -3823,6 +3823,8 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         nav_core.qt_marker_added(nav, poi)
     if sv is not None:
         _survey_capture_milestones(poi, zone_kept)
+        if zone_kept is not None:
+            _check_survey_goals(lambda z: z["id"] == zone_kept["id"])
     sess.last_capture = {
         "kind": "poi", "id": poi.id, "name": poi.name, "type": poi.type,
         "container": poi.container_name or "Space", "system": poi.system,
@@ -3871,6 +3873,21 @@ def _survey_capture_milestones(poi, zone: dict | None) -> None:
                 f"survey-model:{poi.system}"))
 
 
+def _surface_zone_holds(zone: dict, obs) -> bool:
+    """Is this fresh observation inside this surface zone? Same body (by
+    resolved container, so upstream naming drift can't split them) and inside
+    the circle — the zone card's own membership rule."""
+    if (not zone.get("body") or not obs.container_name
+            or obs.latitude is None or obs.longitude is None):
+        return False
+    container = nav.resolve_container(zone["system"], zone["body"])
+    if container is None or container is not nav.resolve_container(obs.system, obs.container_name):
+        return False
+    radius = float(getattr(container, "body_radius", 0.0) or 0.0)
+    return radius > 0 and nav_core.surface_zone_contains(
+        zone, obs.latitude, obs.longitude, radius, obs.height_m)
+
+
 def _capture_observation(sess, pos_m, now, pending, owner):
     category = pending["category"]
     # Shared id space across categories (>= OBSERVATION_ID_START); MAX(id)+1 from
@@ -3889,6 +3906,7 @@ def _capture_observation(sess, pos_m, now, pending, owner):
         print(f"[sc-nav] observation save failed: {exc}")
     nav.observations[obs.id] = obs
     nav.touch()
+    _check_survey_goals(lambda z: _surface_zone_holds(z, obs))
     sess.last_capture = {
         **nav_core._observation_base(obs),
         "latitude": obs.latitude, "longitude": obs.longitude,
@@ -8808,10 +8826,13 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
         return
     who = _resolve_member_name(poster_id, None)
     unlock = goal.get("kind") == "unlock"
+    survey = goal.get("kind") == "survey"
     lines = progress.get("lines") or []
     rows = []
     for ln in lines[:8]:
-        if unlock:
+        if survey:
+            rows.append(f"{'✅' if ln['have'] >= ln['needed'] else '▫️'} {ln['name']} — {ln['have']}/{ln['needed']} {ln['unit']}")
+        elif unlock:
             rows.append(f"{'✅' if ln['have'] >= ln['needed'] else '▫️'} {ln['name']} — {ln['have']}/{ln['needed']} members")
         else:
             unit = f" {ln['unit']}" if ln.get("unit") else ""
@@ -8826,6 +8847,8 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
         scope = f"{progress.get('scope_size', 0)} member{'s' if progress.get('scope_size', 0) != 1 else ''}"
         scope += _unlock_scope_label(spec)
         head += f" · target {progress.get('needed', 0)} of {scope} per recipe"
+    if survey and (goal.get("survey_spec") or {}).get("since"):
+        head += f" · counting since <t:{int(goal['survey_spec']['since'])}:D>"
     if goal.get("deadline"):
         head += f" · due {_discord_ts(goal['deadline'], 'D')}"
     desc = head + "\n" + "\n".join(rows)
@@ -8836,8 +8859,10 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
         d = goal["description"].strip()
         desc += "\n\n" + (d if full or len(d) <= 280 else d[:280] + "…")
     desc += f"\n\n{'Re-posted' if refresh else 'Posted'} by {who}. " + \
-        ("Add the recipes you unlock to your library." if unlock else "Log what you're holding to contribute.")
-    icon = "🔓" if unlock else "🎯"
+        ("Add the recipes you unlock to your library." if unlock
+         else "Log nodes inside the area — they count automatically, no sign-up." if survey
+         else "Log what you're holding to contribute.")
+    icon = "🔓" if unlock else "⛏" if survey else "🎯"
     title = f"{icon} {'Goal update' if refresh else 'New org goal'}: {goal['title']}"
     await notify.send(
         "goals", "",
@@ -9470,6 +9495,9 @@ class GoalIn(BaseModel):
     # spec; line_items stay empty and progress counts members, not materials.
     kind: str = Field(default="materials", max_length=16)
     unlock: "UnlockSpecIn | None" = None
+    # Survey goals (#37.1 §11.2): `kind="survey"` + `survey` spec. Progress is
+    # the zone's evidence logged after the goal was created; no contributions.
+    survey: "SurveyGoalSpecIn | None" = None
     # Opt-in Discord shout on create (org goals only; personal goals never
     # broadcast). The response's `announced` says whether it actually went out.
     announce: bool = False
@@ -9485,6 +9513,12 @@ class UnlockSpecIn(BaseModel):
     # `playstyle` (single) is the pre-multi shape, still accepted.
     playstyles: list[str] = Field(default_factory=list, max_length=16)
     playstyle: str | None = Field(default=None, max_length=32)
+
+
+class SurveyGoalSpecIn(BaseModel):
+    zone_id: int
+    target_mode: str = Field(default="sightings", max_length=12)  # sightings | surveyors
+    target_value: float = Field(default=50, ge=1, le=100_000)
 
 
 GoalIn.model_rebuild()
@@ -9797,6 +9831,23 @@ def _validate_goal(body: GoalIn) -> dict:
                 "title": title, "description": (body.description or "").strip(),
                 "priority": body.priority, "deadline": deadline, "line_items": [],
                 "visibility": visibility, "seed_unmapped": []}
+    if body.kind == "survey":
+        # A survey goal: a named zone + a target. `since` is stamped by the
+        # caller (create stamps now, edit keeps the original), never trusted
+        # from the client.
+        s = body.survey
+        if s is None:
+            raise HTTPException(status_code=400, detail="a survey goal needs its area")
+        if db.get_survey_zone(s.zone_id) is None:
+            raise HTTPException(status_code=400, detail="unknown survey area")
+        mode = s.target_mode if s.target_mode in nav_core.SURVEY_GOAL_MODES else "sightings"
+        deadline = _normalize_event_start(body.deadline) if body.deadline else None
+        return {"kind": "survey",
+                "survey_spec": {"zone_id": s.zone_id,
+                                "target": {"mode": mode, "value": int(s.target_value)}},
+                "title": title, "description": (body.description or "").strip(),
+                "priority": body.priority, "deadline": deadline, "line_items": [],
+                "visibility": visibility, "seed_unmapped": []}
     if body.blueprint_key and not body.line_items:
         # A craft goal: the recipe (at the requested qualities) IS the line items.
         # The spec rides along so edits can restore the sliders; slots the recipe
@@ -9999,6 +10050,82 @@ async def _notify_unlock_goal_met(goal: dict, progress: dict) -> None:
         mentions=mentions, dedup_key=f"goal-met:{goal['id']}")
 
 
+def _survey_zone_evidence(zone: dict) -> list[tuple]:
+    """(owner_handle, epoch) for every piece of evidence in a zone as it is
+    now. Surface: every LANE's sightings, matching the card's Sightings tile (a
+    leader asking for "200 sightings" is asking for the number on the card).
+    Belt: every mark tagged to it, negatives included: logging open space is
+    surveying work, and the card's Marks tile counts it too."""
+    if zone.get("body"):
+        container = nav.resolve_container(zone["system"], zone["body"])
+        radius = float(getattr(container, "body_radius", 0.0) or 0.0)
+        out = []
+        for cat in nav_core.SURFACE_ZONE_LANES:
+            out.extend((o.owner_handle, nav_core._obs_epoch(o.observed_at))
+                       for o in nav_core.surface_zone_members(nav, zone, radius, category=cat))
+        return out
+    return [(m.get("owner_handle"), m.get("created"))
+            for m in nav_core.survey_marks(nav, zone["system"])
+            if m.get("zone_id") == zone["id"]]
+
+
+def _survey_goal_progress(goal: dict, zone: dict | None = None) -> tuple[dict, dict]:
+    """(progress, the goal's `survey` panel). Derived per read from the zone
+    as it is NOW — a rename or re-fence shows up at once; a deleted zone reads
+    0 and says so (restoring it via undo reconnects the goal, same id)."""
+    spec = goal.get("survey_spec") or {}
+    if zone is None:
+        zone = db.get_survey_zone(spec.get("zone_id")) if spec.get("zone_id") else None
+    zview = None
+    if zone is not None:
+        zview = {"id": zone["id"], "name": zone["name"], "system": zone["system"],
+                 "slug": zone.get("slug"), "body": zone.get("body"),
+                 "kind": "surface" if zone.get("body") else "deep",
+                 "closed": bool(zone.get("closed"))}
+    progress = nav_core.derive_survey_goal_progress(
+        spec, zview, _survey_zone_evidence(zone) if zone is not None else [])
+    block = {"spec": spec, "zone": zview, "since": spec.get("since"),
+             "counted": progress["counted"], "before": progress["before"]}
+    return progress, block
+
+
+def _check_survey_goals(match) -> None:
+    """After a capture: re-derive every active survey goal whose zone `match`es
+    it, and celebrate a first crossing. Runs on the capture path, so it only
+    ever does real work for goals the capture actually landed in; active survey
+    goals are a handful by nature. Under hub.lock; Discord I/O goes to a task."""
+    goals = db.active_survey_goals()
+    if not goals:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    for g in goals:
+        zid = (g.get("survey_spec") or {}).get("zone_id")
+        zone = db.get_survey_zone(zid) if zid else None
+        if zone is None or not match(zone):
+            continue
+        progress, _block = _survey_goal_progress(g, zone)
+        if progress["is_met"]:
+            db.set_goal_status(g["id"], "met", now)
+            if g.get("visibility") != "personal":
+                _notify_bg(_notify_survey_goal_met(g, zone, progress))
+
+
+async def _notify_survey_goal_met(goal: dict, zone: dict, progress: dict) -> None:
+    """A survey goal crossed its target — broadcast + ping the organiser."""
+    if not notify.is_configured("goals"):
+        return
+    mentions, ping = _mentions(goal["creator_id"])
+    ln = progress["lines"][0]
+    n = len(progress.get("per_contributor") or [])
+    who = f"\n{n} surveyor{'s' if n != 1 else ''} chipped in." if n else ""
+    await notify.send(
+        "goals",
+        f"⛏ **Survey goal reached: {goal['title']}**\n{ln['have']} {ln['unit']} "
+        f"logged in {zone['name']} since it was posted.{who}"
+        f"{_deep_link('#/goals')}{ping}",
+        mentions=mentions, dedup_key=f"goal-met:{goal['id']}")
+
+
 def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> dict:
     """Serialize a goal with its derived progress. `contributions` is the list of
     inventory rows earmarked to it. Auto-flips a fully-covered active goal to
@@ -10006,6 +10133,8 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
     follows the ledger without a background job; an admin can still archive."""
     if goal.get("kind") == "unlock":
         progress = _unlock_progress(goal)
+    elif goal.get("kind") == "survey":
+        progress, survey_block = _survey_goal_progress(goal)
     else:
         progress = nav_core.derive_goal_progress(goal, contributions)
     status = goal.get("status")
@@ -10025,6 +10154,9 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
     view["is_mine"] = goal["creator_id"] == user["id"]
     view["can_edit"] = goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
     view["progress"] = progress
+    if view["kind"] == "survey":
+        view["survey"] = survey_block
+        return view
     if view["kind"] == "unlock":
         view["unlock"] = _unlock_block(goal, progress, user, detail=detail)
         if detail:
@@ -10095,6 +10227,9 @@ async def create_goal(body: GoalIn, user: dict = Depends(require_session)):
     `blueprint_key` (+ optional `blueprint_qty`) with no line items: the recipe's
     materials manifest becomes the line items. `visibility` scopes it org|personal."""
     fields = _validate_goal(body)
+    if fields.get("kind") == "survey":
+        # The baseline (§11.3): only evidence from here on counts.
+        fields["survey_spec"]["since"] = time.time()
     now = datetime.now(timezone.utc).isoformat()
     gid = db.create_goal({**fields, "creator_id": user["id"], "status": "active",
                           "created_at": now, "updated_at": now})
@@ -10160,6 +10295,12 @@ async def edit_goal(goal_id: int, body: GoalIn, user: dict = Depends(require_ses
         raise HTTPException(status_code=404, detail="unknown goal")
     _require_goal_owner(goal, user)
     fields = _validate_goal(body)
+    if fields.get("kind") == "survey":
+        # An edit never moves the baseline: re-stamping it would silently wipe
+        # the progress members already made. A goal converted INTO a survey
+        # goal starts counting now.
+        fields["survey_spec"]["since"] = (
+            (goal.get("survey_spec") or {}).get("since") or time.time())
     if fields.get("visibility") is None:
         fields.pop("visibility", None)     # unspecified → keep the goal's current scope
     if body.status in ("active", "met", "archived"):

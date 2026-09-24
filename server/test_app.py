@@ -4077,6 +4077,22 @@ class GoalAnnounceTests(unittest.TestCase):
             return True
         notify.send = _capture
 
+    def test_a_survey_goal_announces_its_area_and_baseline(self):
+        app._goal_announce_at.clear()
+        zid = db.create_survey_zone("stanton-ridge", "Ridge", "Stanton", "111",
+                                    "ana", time.time())
+        self.addCleanup(db.delete_survey_zone, zid)
+        r = self.client.post("/api/goals", json={
+            "title": "Survey Ridge", "kind": "survey", "announce": True,
+            "survey": {"zone_id": zid, "target_value": 40}})
+        self.assertEqual(r.status_code, 200, r.text)
+        time.sleep(0.2)
+        text = next(m["text"] for m in self.sent if "New org goal" in m["text"])
+        self.assertIn("⛏", text)
+        self.assertIn("Ridge — 0/40 marks", text)
+        self.assertIn("counting since <t:", text)
+        self.assertIn("count automatically", text)
+
     def test_create_with_announce_posts_the_goal_lines(self):
         app._goal_announce_at.clear()
         r = self.client.post("/api/goals", json={
@@ -7330,6 +7346,30 @@ class BeltSurveyApiTests(unittest.TestCase):
                          {"name": "Far Zone", "system": "Nyx"})
         mark = app.nav.pois[s.last_capture["id"]]
         self.assertNotIn("zone_id", mark.survey)
+
+    def test_a_mark_filed_into_a_belt_zone_can_meet_its_survey_goal(self):
+        zid = db.create_survey_zone("goal-zone", "Goal Zone", "Nyx", "1",
+                                    "Surveyor", time.time())
+        self.addCleanup(lambda: db.delete_survey_zone(zid))
+        gid = db.create_goal({
+            "creator_id": "1", "title": "Survey Goal Zone", "status": "active",
+            "kind": "survey", "line_items": [], "visibility": "personal",
+            "survey_spec": {"zone_id": zid, "since": time.time() - 1,
+                            "target": {"mode": "sightings", "value": 1}}})
+        self.addCleanup(db.delete_goal, gid)
+        s = app.Session(self._user)
+        s.system = "Nyx"
+        app.hub.sessions["1"] = s
+        pending = {"kind": "poi", "name": "goal mark", "type": "survey",
+                   "qt_marker": False, "private": False, "note": None,
+                   "survey": {"rocks": "none", "ores": [], "salvage": False,
+                              "zone_id": zid}}
+        app._capture_poi(s, (self.KR, 0.0, 0.0), time.time(), pending,
+                         {"player_id": None, "handle": "ana"})
+        self.addCleanup(lambda: db.delete_custom_poi(s.last_capture["id"]))
+        # a negative mark is still surveying work; the goal is personal, so
+        # it flips without a Discord post
+        self.assertEqual(db.get_goal(gid)["status"], "met")
 
     def test_zone_pin_ambiguous_across_systems_needs_system(self):
         # Slugs are only unique per system: a bare pin matching two systems
@@ -10907,6 +10947,85 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         return self.client.post("/api/halo/survey/zones", json={
             "name": name, "body": self.BODY if body is None else body,
             "center_lat": lat, "center_lon": lon, "radius_m": radius_m})
+
+    # -- survey goals (#37.1 §11.2) ----------------------------------------
+    def _survey_goal(self, zone_id, mode="sightings", value=2, **kw):
+        r = self.client.post("/api/goals", json={
+            "title": "Survey Iron Ridge", "kind": "survey",
+            "survey": {"zone_id": zone_id, "target_mode": mode, "target_value": value},
+            **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.addCleanup(db.delete_goal, r.json()["id"])
+        return r.json()
+
+    def test_a_survey_goal_counts_only_what_comes_after_it(self):
+        self._add_obs(0.0, 0.0, handle="ana")          # 2026-01-01: history
+        zid = self._create().json()["zone"]["id"]
+        g = self._survey_goal(zid)
+        self.assertEqual(g["kind"], "survey")
+        self.assertEqual(g["progress"]["lines"][0]["have"], 0)
+        self.assertEqual(g["survey"]["before"], 1)
+        self.assertEqual(g["survey"]["zone"]["name"], "Iron Ridge")
+        self.assertGreater(g["survey"]["since"], time.time() - 60)
+        now = datetime.now(timezone.utc).isoformat()
+        self._add_obs(0.01, 0.0, handle="bo", observed_at=now)
+        self._add_obs(0.02, 0.0, handle="bo", observed_at=now, category="harvestable",
+                      ore="Hadanite")      # every lane counts, like the card's tile
+        g2 = self.client.get(f"/api/goals/{g['id']}").json()
+        self.assertEqual(g2["progress"]["lines"][0]["have"], 2)
+        self.assertEqual(g2["status"], "met")
+        board = self.client.get("/api/goals").json()["goals"]
+        self.assertIn(g["id"], [x["id"] for x in board if x["kind"] == "survey"])
+
+    def test_editing_a_survey_goal_keeps_its_baseline(self):
+        zid = self._create().json()["zone"]["id"]
+        g = self._survey_goal(zid)
+        since = g["survey"]["since"]
+        r = self.client.patch(f"/api/goals/{g['id']}", json={
+            "title": "Survey it harder", "kind": "survey",
+            "survey": {"zone_id": zid, "target_mode": "surveyors", "target_value": 5}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["survey"]["since"], since)
+        self.assertEqual(r.json()["progress"]["lines"][0]["unit"], "surveyors")
+
+    def test_a_survey_goal_needs_a_real_area(self):
+        r = self.client.post("/api/goals", json={
+            "title": "x", "kind": "survey",
+            "survey": {"zone_id": 999999, "target_value": 5}})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/goals", json={"title": "x", "kind": "survey"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_a_deleted_area_reads_zero_and_says_so(self):
+        self._add_obs(0.0, 0.0, observed_at=datetime.now(timezone.utc).isoformat())
+        zid = self._create().json()["zone"]["id"]
+        g = self._survey_goal(zid, value=1)
+        db.delete_survey_zone(zid)
+        g2 = self.client.get(f"/api/goals/{g['id']}").json()
+        self.assertIsNone(g2["survey"]["zone"])
+        self.assertEqual(g2["progress"]["lines"][0]["have"], 0)
+        self.assertFalse(g2["progress"]["is_met"])
+
+    def test_a_capture_inside_the_area_can_meet_the_goal(self):
+        zid = self._create().json()["zone"]["id"]
+        g = self._survey_goal(zid, value=1)
+        sent = []
+        orig = app._notify_bg
+        app._notify_bg = lambda coro: (sent.append(coro), coro.close())
+        try:
+            # a capture elsewhere on the moon leaves it alone
+            self.client.post("/api/capture/node", json={"ore": "Iron", "band": 3})
+            self._stand_at(40.0, 40.0)
+            self.assertEqual(db.get_goal(g["id"])["status"], "active")
+            self.client.post("/api/capture/node", json={"ore": "Iron", "band": 3})
+            self._stand_at(0.0, 0.0)
+        finally:
+            app._notify_bg = orig
+        self.assertEqual(db.get_goal(g["id"])["status"], "met")
+        self.assertEqual(len(sent), 1)
+        for oid, o in list(app.nav.observations.items()):
+            if o.data.get("ore") == "Iron" and o.container_name == self.BODY:
+                self._obs_ids.append(oid)
 
     # -- patch staleness (#37 §6.1) -----------------------------------------
     def _zone_row(self):
