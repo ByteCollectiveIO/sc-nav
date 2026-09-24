@@ -67,7 +67,15 @@
 > equator it runs the other way. Only the π:1 frame makes the equator honest.
 >
 > **Not built:** the `kind="survey"` goal (§11.2, release two) and §11.5's
-> milestone hook (deferred by §14.13). **Reviewed in four passes.** §12 and §13 are review output (gaps,
+> milestone hook (deferred by §14.13).
+>
+> **§12.1 build stamping BUILT (2026-09-24).** The watcher reads
+> `Branch:` + `Changelist:` off the Game.log header (`sc-alpha-4.9.0/12344265`;
+> both or nothing) → `game_build` on `POST /api/position` → sticky
+> `Session.game_build` → `observations.game_build` and belt marks'
+> `survey.build`. Nothing READS it yet: the staleness derivation (newest
+> evidence's build vs the org's current majority) is still the #37 slice 4
+> design, and until it lands the freshness tile stays a date. **Reviewed in four passes.** §12 and §13 are review output (gaps,
 cross-tool hooks). §14 is the **audit trail** of an adversarial pass that
 checked every claim against the code: each correction it found has since been
 folded into the section it affects, and a fourth pass re-verified §14 itself and
@@ -869,7 +877,8 @@ ceremony). But it stamps `survey.build` on **marks** — the custom-POI path.
 
 Two consequences for this build:
 - Reserve `observations.game_build` (`_ensure_column`, nullable) now and stamp
-  it in `_capture_observation` the moment the session carries one. Cheap, and
+  it in `_capture_observation` the moment the session carries one. **Done
+  2026-09-24** — see the status block at the top. Cheap, and
   retrofitting it later means a permanent blind era in the data.
 - Until then the card's freshness tile is a **date, not a trust signal**, and
   the copy must not imply otherwise.

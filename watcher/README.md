@@ -48,6 +48,7 @@ it's plain Python, no build step, no dependencies.
 | Your position (x/y/z, in meters) | Each time you run `/showlocation`, plus a re-send every 60 s while you're parked |
 | Your in-game handle | Read from `Game.log` when you sign in — the account name the game itself reports, so it can't be mistyped. `--handle` supplies it manually and `--no-handle-detect` makes yours win |
 | Your shard id, e.g. `pub_use1b_…` | Read from `Game.log`, so teammates' maps can filter out other servers |
+| The game build, e.g. `sc-alpha-4.9.0/12344265` | Read from the `Branch:`/`Changelist:` lines at the top of `Game.log`. Stamped on what you capture, so the org can tell sightings from before a patch from ones made after it |
 | Commodity kiosk buys/sells: shop name, commodity, total price, unit price, SCU, auto-load flag, box size/count | **On by default** — read from `Game.log` and used to keep the org's trade prices current. `--no-trade-capture` turns it off, and the choice sticks |
 
 **Not sent, and not read at all:** the text on your clipboard (only the parsed

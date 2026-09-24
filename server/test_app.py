@@ -4692,6 +4692,25 @@ class HandleRegistrationTests(unittest.TestCase):
         self.assertEqual(after["handles"], ["Prospector7"])
         self.assertEqual(after["primary_handle"], "Prospector7")
 
+    def test_position_carries_a_sticky_game_build(self):
+        """The watcher reads the build off the Game.log header (#37.1 §12.1).
+        A fix without it (an older watcher, or before the header is read)
+        keeps the last known build rather than wiping it."""
+        self.client.post("/api/position", json={
+            "x": 1.0, "y": 2.0, "z": 3.0,
+            "game_build": " sc-alpha-4.9.0/12344265 "})
+        sess = app.hub.sessions["bind-user"]
+        self.assertEqual(sess.game_build, "sc-alpha-4.9.0/12344265")
+        self.client.post("/api/position", json={"x": 1.0, "y": 2.0, "z": 3.0})
+        self.assertEqual(sess.game_build, "sc-alpha-4.9.0/12344265")
+        self.client.post("/api/position", json={
+            "x": 1.0, "y": 2.0, "z": 3.0,
+            "game_build": "sc-alpha-4.10.0/12500000"})
+        self.assertEqual(sess.game_build, "sc-alpha-4.10.0/12500000")
+        r = self.client.post("/api/position", json={
+            "x": 1.0, "y": 2.0, "z": 3.0, "game_build": "x" * 200})
+        self.assertEqual(r.status_code, 422)
+
     def test_position_post_without_a_handle_omits_the_verdict(self):
         r = self.client.post("/api/position", json={"x": 1.0, "y": 2.0, "z": 3.0})
         self.assertEqual(r.status_code, 200)
@@ -6601,6 +6620,52 @@ class BeltSurveyApiTests(unittest.TestCase):
         db.delete_observation(last["id"])
         app.nav.observations.pop(last["id"], None)
         s.capture_pending = None
+
+    def test_observation_capture_stamps_the_game_build(self):
+        """A patch reshuffles surface ore, so every sighting carries the build
+        it was made in, through the DB and back (#37.1 §12.1)."""
+        s = app.Session(self._user)
+        s.pos, s.t = (self.KR, 0.0, 0.0), time.time()
+        s.system = "Nyx"
+        s.game_build = "sc-alpha-4.9.0/12344265"
+        app.hub.sessions["1"] = s
+        self.client.post("/api/capture/node", json={"ore": "Quantanium", "band": 4})
+        app._capture_observation(s, s.pos, s.t, s.capture_pending,
+                                 {"player_id": None, "handle": None})
+        oid = s.last_capture["id"]
+        self.assertEqual(app.nav.observations[oid].game_build,
+                         "sc-alpha-4.9.0/12344265")
+        stored = next(d for d in db.list_observations() if d["id"] == oid)
+        self.assertEqual(stored["game_build"], "sc-alpha-4.9.0/12344265")
+        reloaded = app.nav_core.observation_from_dict(stored)
+        self.assertEqual(reloaded.game_build, "sc-alpha-4.9.0/12344265")
+        # no build known (older watcher) -> NULL, never a guess
+        s.game_build = None
+        self.client.post("/api/capture/node", json={"ore": "Quantanium", "band": 4})
+        app._capture_observation(s, s.pos, s.t, s.capture_pending,
+                                 {"player_id": None, "handle": None})
+        oid2 = s.last_capture["id"]
+        stored2 = next(d for d in db.list_observations() if d["id"] == oid2)
+        self.assertIsNone(stored2["game_build"])
+        for i in (oid, oid2):
+            db.delete_observation(i)
+            app.nav.observations.pop(i, None)
+        s.capture_pending = None
+
+    def test_survey_mark_stamps_the_game_build(self):
+        s = app.Session(self._user)
+        s.pos, s.t = (self.KR, 0.0, 0.0), time.time()
+        s.system = "Nyx"
+        s.game_build = "sc-alpha-4.9.0/12344265"
+        app.hub.sessions["1"] = s
+        pending = {"kind": "poi", "name": "Keeger survey", "type": "survey",
+                   "qt_marker": False, "private": False, "note": None,
+                   "survey": {"rocks": "dense", "ores": [], "salvage": False}}
+        app._capture_poi(s, s.pos, s.t, pending,
+                         {"player_id": None, "handle": None})
+        mark = app.nav_core.survey_marks(app.nav, "Nyx")[0]
+        stored = next(d for d in db.list_custom_pois() if d["id"] == mark["id"])
+        self.assertEqual(stored["survey"]["build"], "sc-alpha-4.9.0/12344265")
 
     def test_node_capture_rejects_an_out_of_range_q(self):
         s = app.Session(self._user)

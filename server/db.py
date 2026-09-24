@@ -660,7 +660,8 @@ def init(db_path) -> None:
         # readers must treat unknown age as "old" (ALL-window only).
         _ensure_column("custom_pois", "created", "REAL")
         _ensure_column("observations", "shard_id", "TEXT")
-        # Game build the evidence was gathered in (#37.1 §12.1). Reserved NOW,
+        # Game build the evidence was gathered in (#37.1 §12.1), stamped by
+        # `_capture_observation` from the watcher's Game.log header. Landed
         # ahead of the staleness work that will read it: a patch reshuffles
         # planetary ore, so "is this area still worth landing in" is a question
         # only the build can answer, and retrofitting the column later leaves a
@@ -1237,6 +1238,7 @@ def _obs_row_to_dict(r: sqlite3.Row) -> dict:
         "biome": r["biome"], "note": r["note"], "owner_id": r["owner_id"],
         "owner_handle": r["owner_handle"], "observed_at": r["observed_at"],
         "shard_id": r["shard_id"],
+        "game_build": r["game_build"],
         "data": _u(r["data"]) or {},
     }
 
@@ -1246,13 +1248,13 @@ def add_observation(d: dict) -> None:
         _conn.execute(
             "INSERT OR REPLACE INTO observations "
             "(id,category,system,container,local_km,global_m,latitude,longitude,"
-            "height_m,biome,note,owner_id,owner_handle,observed_at,shard_id,data) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "height_m,biome,note,owner_id,owner_handle,observed_at,shard_id,game_build,"
+            "data) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (d["id"], d.get("category"), d.get("system"), d.get("container"),
              _j(d.get("local_km")), _j(d.get("global_m")), d.get("latitude"),
              d.get("longitude"), d.get("height_m"), d.get("biome"), d.get("note"),
              d.get("owner_id"), d.get("owner_handle"), d.get("observed_at"),
-             d.get("shard_id"), _j(d.get("data") or {})),
+             d.get("shard_id"), d.get("game_build"), _j(d.get("data") or {})),
         )
 
 
