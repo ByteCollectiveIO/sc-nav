@@ -7725,7 +7725,10 @@ def survey_marks(nav: NavData, system: str,
                     # window except ALL).
                     "created": p.created,
                     # Scanner readout, attached after the fact (#37 slice 3).
-                    "scan": s.get("scan") or None})
+                    "scan": s.get("scan") or None,
+                    # Game build the mark was dropped in (#37 §6.1); None on
+                    # marks from before stamping or an older watcher.
+                    "build": s.get("build") or None})
     out.sort(key=lambda m: m["id"])
     return out
 
@@ -8024,6 +8027,10 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
             fit = survey_cluster_fit(members, negatives)
             row.update(fit)
             row["health"] = belt_zone_health(fit, members)
+            # Positives only: a patch that moves a field is disproven by a
+            # rock found on the new build, not by open space logged there.
+            row["patches"] = patch_evidence(
+                (m.get("build"), m.get("created")) for m in members if m["positive"])
             # Mirror the datamined-overlay `survey` shape so the barren
             # down-rank, drop-view badge, and frontend treat a zone uniformly.
             row["survey"] = {k: fit[k] for k in
@@ -8351,6 +8358,11 @@ def surface_zones_state(nav: NavData, system: str, zones: list[dict]) -> list[di
         # it would let a botanist's afternoon certify an ore picture nobody has
         # sampled (#37.2).
         row["health"] = surface_zone_health(z, members, body_radius_m)
+        # Staleness evidence per lane, same rule as health: the row's top level
+        # is the MINING picture, so it is the ore sightings that must be
+        # re-checked after a patch. A lane carries its own.
+        row["patches"] = patch_evidence(
+            (o.game_build, _obs_epoch(o.observed_at)) for o in members)
         # Navigable, never plannable (#37.1 §4): what a surface zone gets
         # INSTEAD of being a drop target is a route to the nearest quantum
         # marker, and the last leg flown by hand.
@@ -9128,6 +9140,116 @@ def belt_zone_health(fit: dict, members: list[dict],
         _health_convergence(_survey_ore_counts(positives), n_pos),
         (scans / n_pos) if n_pos else 0.0, _health_freshness(ages),
         len(seen), BELT_HEALTH_BUCKETS)
+
+
+# --- patch staleness (#37 §6.1, #37.1 §12.1) ----------------------------------
+#
+# A patch reshuffles where ore spawns, so evidence gathered on an older build is
+# a claim nobody has re-checked. Captures carry the watcher's build
+# (`sc-alpha-4.9.0/12344265`); a zone is STALE when none of its evidence is from
+# the org's current patch. Nothing is stored: the verdict is derived per read,
+# and one sighting on the current patch clears it, the "still active?" confirm
+# of the danger board made automatic.
+#
+# Compared at the PATCH (the version in the branch name), not the changelist:
+# a hotfix ships a new changelist without moving a rock, and flagging every
+# zone org-wide each time one lands would teach people to ignore the badge.
+# `sc-alpha-4.8.0-hotfix` is patch 4.8.0.
+
+# How recently a member's watcher must have reported for their build to count
+# toward the org's current patch. The current patch is STICKY beyond it (see
+# `current_patch`), so a quiet week never un-knows it.
+PATCH_WINDOW_S = 72 * 3600
+_PATCH_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+
+
+def patch_of(build) -> str | None:
+    """`sc-alpha-4.9.0/12344265` -> `4.9.0`; None when it can't be read."""
+    if not build:
+        return None
+    m = _PATCH_RE.search(str(build).split("/", 1)[0])
+    if not m:
+        return None
+    return f"{m.group(1)}.{m.group(2)}.{m.group(3) or 0}"
+
+
+def _patch_order(patch: str) -> tuple:
+    try:
+        return tuple(int(x) for x in patch.split("."))
+    except (AttributeError, ValueError):
+        return ()
+
+
+def current_patch(seen: dict, now: float,
+                  window_s: float = PATCH_WINDOW_S) -> str | None:
+    """The org's current patch: what most MEMBERS' watchers reported in the
+    last `window_s`. Counted per member, not per post, so one parked
+    heartbeat can't outvote a squadron. A majority rather than the newest
+    because PTU testers run ahead of everyone else; a tie goes to the newer
+    patch. None when nobody reported inside the window."""
+    tally: dict[str, int] = {}
+    for rec in seen.values():
+        p, t = rec.get("patch"), rec.get("t") or 0.0
+        if p and now - t <= window_s:
+            tally[p] = tally.get(p, 0) + 1
+    if not tally:
+        return None
+    return max(tally, key=lambda p: (tally[p], _patch_order(p)))
+
+
+def patch_evidence(items) -> dict:
+    """Summarize (build, epoch) pairs into what a staleness verdict needs,
+    independent of what the current patch is, so a cached zone view stays
+    valid when the patch changes: {by_patch: {patch: {n, last}},
+    unstamped: {n, last}}. Unstamped = captured before build stamping or by
+    an older watcher."""
+    by_patch: dict[str, dict] = {}
+    unstamped = {"n": 0, "last": None}
+    for build, ts in items:
+        p = patch_of(build)
+        rec = by_patch.setdefault(p, {"n": 0, "last": None}) if p else unstamped
+        rec["n"] += 1
+        if ts is not None and (rec["last"] is None or ts > rec["last"]):
+            rec["last"] = ts
+    return {"by_patch": by_patch, "unstamped": unstamped}
+
+
+def zone_patch_state(evidence: dict | None, ctx: dict | None) -> dict | None:
+    """Is this zone's evidence from the org's current patch?
+
+    `ctx` = {current, since}: `since` is when the org was first seen on the
+    current patch, and is set ONLY when a change from an earlier patch was
+    actually observed. It lets unstamped evidence be placed in time: live
+    players can't stay on the old build after a patch, so anything captured
+    after `since` was captured on it, and anything before it wasn't.
+
+    Returns None when there's nothing to judge (no current patch known, or no
+    evidence), else {state: current|stale|unknown, current, ...}. `unknown` =
+    only unstamped evidence and no observed patch change to date it by; the
+    UI stays quiet about it rather than flag data it can't place."""
+    current = (ctx or {}).get("current")
+    if not current or not evidence:
+        return None
+    by_patch = evidence.get("by_patch") or {}
+    un = evidence.get("unstamped") or {}
+    if not by_patch and not un.get("n"):
+        return None
+    since = (ctx or {}).get("since")
+    if current in by_patch:
+        return {"state": "current", "current": current,
+                "n": by_patch[current]["n"]}
+    if since is not None and un.get("last") is not None and un["last"] >= since:
+        return {"state": "current", "current": current, "n": None,
+                "inferred": True}
+    if by_patch:
+        last_patch = max(by_patch, key=lambda p: (by_patch[p]["last"] or 0.0,
+                                                  _patch_order(p)))
+        return {"state": "stale", "current": current, "last_patch": last_patch,
+                "last": by_patch[last_patch]["last"]}
+    if since is not None:
+        return {"state": "stale", "current": current, "last_patch": None,
+                "last": un.get("last")}
+    return {"state": "unknown", "current": current}
 
 
 def annotate_surface_lane_values(zones: list[dict], prices: dict,

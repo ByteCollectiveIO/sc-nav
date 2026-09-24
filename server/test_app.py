@@ -4696,6 +4696,8 @@ class HandleRegistrationTests(unittest.TestCase):
         """The watcher reads the build off the Game.log header (#37.1 §12.1).
         A fix without it (an older watcher, or before the header is read)
         keeps the last known build rather than wiping it."""
+        self.addCleanup(app.patch_tracker.reset)
+        self.addCleanup(db.set_setting, app.PatchTracker.META_KEY, "{}")
         self.client.post("/api/position", json={
             "x": 1.0, "y": 2.0, "z": 3.0,
             "game_build": " sc-alpha-4.9.0/12344265 "})
@@ -10880,7 +10882,8 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         app.hub.sessions.pop("1", None)
 
     def _add_obs(self, lat, lon, ore="Quantanium", band=5, height_m=0.0,
-                 handle="ana", body=None, category="resource"):
+                 handle="ana", body=None, category="resource", game_build=None,
+                 observed_at="2026-01-01T00:00:00+00:00"):
         oid = db.next_observation_id()
         norm = app.nav_core.OBSERVATION_CATEGORIES[category]["normalize"]
         field = app.nav_core._category_field(category)
@@ -10891,7 +10894,7 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
             container_name=body or self.BODY, local_km=None, global_m=None,
             latitude=lat, longitude=lon, height_m=height_m, biome=None,
             note=None, owner_id=None, owner_handle=handle,
-            observed_at="2026-01-01T00:00:00+00:00",
+            observed_at=observed_at, game_build=game_build,
             data=data)
         db.add_observation(app.nav_core.observation_to_dict(obs))
         app.nav.observations[oid] = obs
@@ -10904,6 +10907,83 @@ class SurfaceSurveyZoneApiTests(unittest.TestCase):
         return self.client.post("/api/halo/survey/zones", json={
             "name": name, "body": self.BODY if body is None else body,
             "center_lat": lat, "center_lon": lon, "radius_m": radius_m})
+
+    # -- patch staleness (#37 §6.1) -----------------------------------------
+    def _zone_row(self):
+        r = self.client.get("/api/halo/survey/zones",
+                            params={"system": "Stanton", "kind": "surface"})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _with_patch(self, current, since=None):
+        app.patch_tracker._state = {"seen": {}, "first": {},
+                                    "current": current, "since": since}
+        self.addCleanup(app.patch_tracker.reset)
+
+    def test_an_area_surveyed_on_an_older_patch_reads_stale(self):
+        self._add_obs(0.0, 0.0, game_build="sc-alpha-4.9.0/12344265")
+        self._create()
+        self._with_patch("4.10.0")
+        doc = self._zone_row()
+        self.assertEqual(doc["game_patch"]["current"], "4.10.0")
+        patch = doc["zones"][0]["patch"]
+        self.assertEqual((patch["state"], patch["last_patch"]), ("stale", "4.9.0"))
+        # one sighting on the current patch clears it; nothing is stored
+        self._add_obs(0.01, 0.0, game_build="sc-alpha-4.10.0/12500000")
+        patch = self._zone_row()["zones"][0]["patch"]
+        self.assertEqual((patch["state"], patch["n"]), ("current", 1))
+
+    def test_a_hotfix_is_not_a_new_patch(self):
+        self._add_obs(0.0, 0.0, game_build="sc-alpha-4.9.0/12344265")
+        self._create()
+        self._with_patch("4.9.0")
+        self.assertEqual(self._zone_row()["zones"][0]["patch"]["state"], "current")
+
+    def test_undated_history_is_not_flagged_until_a_patch_change_dates_it(self):
+        self._add_obs(0.0, 0.0)                       # pre-stamping sighting
+        self._create()
+        self._with_patch("4.9.0")                     # no change observed yet
+        self.assertEqual(self._zone_row()["zones"][0]["patch"]["state"], "unknown")
+        # once the org is SEEN moving to a new patch, the undated sighting
+        # (Jan 2026) lands before it
+        self._with_patch("4.10.0", since=time.time() - 3600)
+        patch = self._zone_row()["zones"][0]["patch"]
+        self.assertEqual((patch["state"], patch["last_patch"]), ("stale", None))
+
+    def test_no_current_patch_means_no_verdict(self):
+        self._add_obs(0.0, 0.0, game_build="sc-alpha-4.9.0/12344265")
+        self._create()
+        self._with_patch(None)
+        self.assertIsNone(self._zone_row()["zones"][0]["patch"])
+
+    def test_watchers_set_the_current_patch_by_member_majority(self):
+        self._with_patch(None)
+        def post(uid, build):
+            self._user["id"] = uid
+            r = self.client.post("/api/position", json={
+                "x": 1.0, "y": 2.0, "z": 3.0, "game_build": build})
+            self.assertEqual(r.status_code, 200, r.text)
+        try:
+            post("m1", "sc-alpha-4.9.0/12344265")
+            post("m2", "sc-alpha-4.9.0/12344265")
+            ctx = app.patch_tracker.context()
+            self.assertEqual(ctx, {"current": "4.9.0", "since": None})
+            # a PTU tester alone does not move the org
+            post("m3", "sc-alpha-4.10.0/12500000")
+            self.assertEqual(app.patch_tracker.context()["current"], "4.9.0")
+            # the patch lands: the rest follow, and `since` = first sighting of it
+            first = app.patch_tracker._state["first"]["4.10.0"]
+            post("m1", "sc-alpha-4.10.0/12500001")
+            ctx = app.patch_tracker.context()
+            self.assertEqual(ctx, {"current": "4.10.0", "since": first})
+            # it survives a restart
+            app.patch_tracker.reset()
+            self.assertEqual(app.patch_tracker.context(), ctx)
+        finally:
+            self._user["id"] = "1"
+            for uid in ("m1", "m2", "m3"):
+                app.hub.sessions.pop(uid, None)
+            db.set_setting(app.PatchTracker.META_KEY, "{}")
 
     # -- creation -----------------------------------------------------------
     def test_a_new_zone_is_born_with_the_history_inside_it(self):
