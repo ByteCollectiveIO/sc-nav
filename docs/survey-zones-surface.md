@@ -66,8 +66,18 @@
 > flattened ellipse near the poles": the distortion is everywhere, and at the
 > equator it runs the other way. Only the π:1 frame makes the equator honest.
 >
-> **Not built:** the `kind="survey"` goal (§11.2, release two) and §11.5's
-> milestone hook (deferred by §14.13).
+> **Survey goals (§11.2) BUILT 2026-09-24.** `kind="survey"`, spec
+> `{zone_id, target:{mode: sightings|surveyors, value}, since}`. Decisions at
+> build: `since` stamped at create, never moved by an edit; progress is
+> against the zone **as it is now** (§9's re-fence question: a re-fence moves
+> the count, since the goal is about the place); surface goals count every
+> lane (matching the card's Sightings tile), belt goals every tagged mark
+> including negatives; a deleted zone reads 0. The goal is met from the capture
+> path, but only for goals whose zone the capture landed in, which is the cheap
+> part of §11.5's hot-path worry. Created from the Goals form or the zone
+> card's "🎯 Make it a goal"; never automatically (§13.8).
+>
+> **Not built:** §11.5's per-zone milestone hook (deferred by §14.13).
 >
 > **§12.1 build stamping BUILT (2026-09-24).** The watcher reads
 > `Branch:` + `Changelist:` off the Game.log header (`sc-alpha-4.9.0/12344265`;

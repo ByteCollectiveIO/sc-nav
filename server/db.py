@@ -696,6 +696,9 @@ def init(db_path) -> None:
         # counts members holding them, scoped to a playstyle.
         _ensure_column("goals", "kind", "TEXT NOT NULL DEFAULT 'materials'")
         _ensure_column("goals", "unlock_spec", "TEXT")
+        # Survey goals (#37.1 §11.2): {zone_id, target:{mode, value}, since}.
+        # Progress is derived from the zone's evidence captured after `since`.
+        _ensure_column("goals", "survey_spec", "TEXT")
         # Demand-side stock reports: v0.38.0 created the table without `side`.
         _ensure_column("stock_reports", "side", "TEXT NOT NULL DEFAULT 'supply'")
         # Cargo-handling fields on the transaction ledger (#41 follow-up): the
@@ -2624,6 +2627,7 @@ def _goal_row_to_dict(r: sqlite3.Row) -> dict:
     d["line_items"] = _u(d.get("line_items")) or []
     d["blueprint_inputs"] = _u(d.get("blueprint_inputs")) or []
     d["unlock_spec"] = _u(d.get("unlock_spec")) or None
+    d["survey_spec"] = _u(d.get("survey_spec")) or None
     d["kind"] = d.get("kind") or "materials"
     return d
 
@@ -2634,8 +2638,8 @@ def create_goal(d: dict) -> int:
         cur = _conn.execute(
             "INSERT INTO goals (creator_id, title, description, priority, deadline, "
             "status, line_items, visibility, blueprint_key, blueprint_qty, "
-            "blueprint_inputs, created_at, updated_at, kind, unlock_spec) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "blueprint_inputs, created_at, updated_at, kind, unlock_spec, survey_spec) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["creator_id"]), d.get("title"), d.get("description"),
              d.get("priority", 5), d.get("deadline"), d.get("status", "active"),
              _j(d.get("line_items") or []), d.get("visibility") or "org",
@@ -2643,7 +2647,8 @@ def create_goal(d: dict) -> int:
              _j(d.get("blueprint_inputs") or []),
              d.get("created_at"), d.get("updated_at"),
              d.get("kind") or "materials",
-             _j(d["unlock_spec"]) if d.get("unlock_spec") else None),
+             _j(d["unlock_spec"]) if d.get("unlock_spec") else None,
+             _j(d["survey_spec"]) if d.get("survey_spec") else None),
         )
     return cur.lastrowid
 
@@ -2679,8 +2684,9 @@ def list_goals(status: str | None = None, viewer_id: str | None = None) -> list[
 
 _GOAL_EDITABLE = ("title", "description", "priority", "deadline", "status",
                   "line_items", "visibility", "blueprint_key", "blueprint_qty",
-                  "blueprint_inputs", "kind", "unlock_spec")
-_GOAL_JSON = ("line_items", "blueprint_inputs", "unlock_spec")
+                  "blueprint_inputs", "kind", "unlock_spec", "survey_spec")
+_GOAL_JSON = ("line_items", "blueprint_inputs", "unlock_spec", "survey_spec")
+_GOAL_SPECS = ("unlock_spec", "survey_spec")     # JSON, but NULL rather than []
 
 
 def update_goal(goal_id: int, fields: dict, updated_at: str) -> bool:
@@ -2690,7 +2696,7 @@ def update_goal(goal_id: int, fields: dict, updated_at: str) -> bool:
     if not cols:
         return False
     sets = ", ".join(f"{c}=?" for c in cols)
-    vals = [(_j(fields.get(c)) if fields.get(c) is not None else None) if c == "unlock_spec"
+    vals = [(_j(fields.get(c)) if fields.get(c) is not None else None) if c in _GOAL_SPECS
             else _j(fields.get(c) or []) if c in _GOAL_JSON else fields.get(c) for c in cols]
     with _lock, _conn:
         cur = _conn.execute(
@@ -2787,6 +2793,16 @@ def blueprint_holders(keys=None) -> dict[str, list[str]]:
     for r in rows:
         out.setdefault(r["blueprint_key"], []).append(r["member_id"])
     return out
+
+
+def active_survey_goals() -> list[dict]:
+    """Active survey goals — a capture inside one of their zones re-derives
+    these to catch a first crossing (#37.1 §11.2). Few by nature: a priority
+    zone is an org leader's call, not a per-member habit."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT * FROM goals WHERE kind='survey' AND status='active'").fetchall()
+    return [_goal_row_to_dict(r) for r in rows]
 
 
 def unlock_goals_naming(blueprint_key: str) -> list[dict]:

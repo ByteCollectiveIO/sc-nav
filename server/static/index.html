@@ -2763,6 +2763,7 @@
      Deliberately NOT tinted by value: a thorough barren survey is healthy. */
   .zn-health { display: flex; flex-direction: column; gap: 3px; min-width: 62px; }
   .zn-patch { display: inline-block; margin-top: 4px; white-space: nowrap; }
+  .goal-survey-where a { color: var(--accent); }
   .zn-hbar { height: 5px; border-radius: 3px; background: var(--track);
     overflow: hidden; }
   .zn-hbar i { display: block; height: 100%; border-radius: 3px; }
@@ -13613,7 +13614,13 @@ function goalCraftChip(g) {
   return `<span class="rm-craft-chip">⚒ ${esc(name)}</span>`;
 }
 
-function goalUnlockChip(g) { return g.kind === "unlock" ? `<span class="rm-craft-chip">🔓 Unlock</span>` : ""; }
+function goalUnlockChip(g) { return g.kind === "unlock" ? `<span class="rm-craft-chip">🔓 Unlock</span>`
+  : g.kind === "survey" ? `<span class="rm-craft-chip">⛏ Survey</span>` : ""; }
+// A survey goal's target in words: "200 sightings in Iron Ridge".
+function goalSurveyTarget(g) {
+  const s = g.survey || {}, z = s.zone, ln = (g.progress.lines || [])[0] || {};
+  return `${ln.needed || 0} ${esc(ln.unit || "sightings")} in ${z ? esc(z.name) : "a deleted area"}`;
+}
 function goalUnlockScope(g) {
   const u = g.unlock || {}, s = u.spec || {}, t = s.target || {};
   const n = u.scope_size || 0, need = u.needed || 0;
@@ -13624,7 +13631,8 @@ function goalUnlockScope(g) {
 function goalCard(g) {
   const pr = g.progress, met = pr.is_met || g.status === "met";
   const n = pr.lines.length;
-  const what = g.kind === "unlock" ? `${n} recipe${n === 1 ? "" : "s"} · ${goalUnlockScope(g)}` : `${n} item${n === 1 ? "" : "s"}`;
+  const what = g.kind === "unlock" ? `${n} recipe${n === 1 ? "" : "s"} · ${goalUnlockScope(g)}`
+    : g.kind === "survey" ? goalSurveyTarget(g) : `${n} item${n === 1 ? "" : "s"}`;
   return `<a class="ev-card" href="#/goals/${g.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(g.title)}</div>` +
     `<div class="ev-chips">${goalPersonalChip(g)}${goalUnlockChip(g)}${goalCraftChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div></div>` +
@@ -13646,7 +13654,7 @@ async function renderGoalBoard() {
     `members log contributions; <b>personal</b> goals stay private (seed one from a blueprint to gather ` +
     `everything a craft needs). Every item links into the <a href="#/nav">resource finder</a>.</p>` +
     `<div class="rm-scope-seg" id="goals-scope" style="margin-top:4px">` +
-      seg("all", "All") + seg("mine", "Mine") + seg("craft", "⚒ Craft") + seg("unlock", "🔓 Unlock") + `</div></div>` +
+      seg("all", "All") + seg("mine", "Mine") + seg("craft", "⚒ Craft") + seg("unlock", "🔓 Unlock") + seg("survey", "⛏ Survey") + `</div></div>` +
     `<div id="goals-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   document.querySelectorAll("#goals-scope button").forEach(b => {
     b.onclick = () => { goalScopeFilter = b.dataset.scope; renderGoalBoard(); };
@@ -13664,6 +13672,7 @@ async function renderGoalBoard() {
   if (goalScopeFilter === "mine") goals = goals.filter(g => g.is_mine);
   else if (goalScopeFilter === "craft") goals = goals.filter(g => g.craft);
   else if (goalScopeFilter === "unlock") goals = goals.filter(g => g.kind === "unlock");
+  else if (goalScopeFilter === "survey") goals = goals.filter(g => g.kind === "survey");
   const empty = goalScopeFilter === "mine" ? "You have no goals yet."
     : goalScopeFilter === "craft" ? "No craft goals yet — seed one from a blueprint."
     : `No goals yet. <a href="#/goals/new">Create the first one →</a>`;
@@ -14015,8 +14024,57 @@ function renderUnlockGoalDetail(g) {
     };
   }
 }
+// Survey goal (#37.1 §11.2): a named area + a target, filled by anyone who logs
+// evidence inside it — there is nothing to contribute, so no contribute form.
+// The baseline is stated on the page because it is the one thing a reader
+// would otherwise get wrong: the area card shows ALL its history, the goal
+// counts only what came after it was posted.
+function renderSurveyGoalDetail(g) {
+  const pr = g.progress, met = pr.is_met || g.status === "met", s = g.survey || {}, z = s.zone;
+  const ln = pr.lines[0] || {};
+  const editBtns = (g.can_edit
+    ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "") + goalAnnounceButton(g);
+  const notice = goalPostNotice ? `<div class="mk-post-note">${esc(goalPostNotice)}</div>` : ""; goalPostNotice = null;
+  const since = s.since ? new Date(s.since * 1000).toLocaleDateString() : "—";
+  const noun = z && z.kind === "surface" ? "sightings" : "marks";
+  const where = z
+    ? `<a href="${haloZoneHash({ system: z.system, key: z.slug, zone_id: z.id })}"><b>${esc(z.name)}</b></a>`
+      + ` <span class="muted">· ${esc(z.body || "deep space")}, ${esc(z.system)}${z.closed ? " · archived" : ""}</span>`
+    : `<span class="halo-chip warn">area deleted</span> <span class="muted">— this goal can't fill until it's restored or the goal points somewhere else.</span>`;
+  const how = z && z.kind === "surface"
+    ? "Log resource nodes, harvestables or fauna from the navigator while you're inside the area. Nobody has to sign up: every sighting inside the circle counts, whoever logs it."
+    : "Drop ⛏ survey marks with this zone active (Prospector › FIELD). Every mark tagged to it counts, whoever drops it.";
+  const contributors = pr.per_contributor || [];
+  const contribList = contributors.length
+    ? contributors.map(c => `<span class="ev-name">${esc(c.display_name)} · ${c.qty}</span>`).join("")
+    : `<span class="muted">Nothing logged here since the goal was posted.</span>`;
+  $("goal-detail-body").innerHTML =
+    `<div class="ev-detail-title"><h2>${esc(g.title)}</h2>${goalPersonalChip(g)}${goalUnlockChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div>` +
+    `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b> · target: ${goalSurveyTarget(g)}</div>` +
+    notice + (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
+    `<div class="rm-headline"><span class="rm-headline-v ${met ? "met" : ""}">${Math.round(pr.overall_pct)}%</span>` +
+    `<span class="rm-headline-l">filled${met ? " · met ✓" : ""}</span></div>` +
+    `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
+    `<div class="ev-section-h">Area</div><div class="goal-survey-where">${where}</div>` +
+    `<p class="rm-intro" style="margin-top:6px">${ln.have}/${ln.needed} ${esc(ln.unit || "")} since ${esc(since)}.` +
+      (s.before ? ` The ${s.before} ${noun} logged here before the goal was posted don't count toward it, so it measures new work.` : "") +
+      ` ${how}</p>` +
+    `<div class="ev-section-h">${ln.unit === "surveyors" ? "Surveyors so far" : "Logged by"}</div><div class="ev-roster-names">${contribList}</div>` +
+    `<div class="ev-form-actions">${editBtns}</div>`;
+  wireGoalAnnounce(g);
+  if (g.can_edit) {
+    $("goal-edit").onclick = () => renderGoalEditForm(g);
+    $("goal-del").onclick = async () => {
+      if (!(await confirmDialog("The area and everything logged in it stay; only the goal goes.",
+          { title: `Delete the goal "${g.title}"?`, confirmLabel: "Delete goal", danger: true }))) return;
+      const r = await fetch(`/api/goals/${g.id}`, { method: "DELETE" });
+      if (r.ok) location.hash = "#/goals";
+    };
+  }
+}
 function renderGoalDetailBody(g) {
   if (g.kind === "unlock") return renderUnlockGoalDetail(g);
+  if (g.kind === "survey") return renderSurveyGoalDetail(g);
   const pr = g.progress, met = pr.is_met || g.status === "met";
   const minqMap = g.craft && g.craft.min_q;
   const lineSel = pr.lines.map(l =>
@@ -14184,8 +14242,29 @@ function goalFormHtml(g) {
       `<div class="rm-scope-seg" id="goal-f-kind">` +
         `<button type="button" data-kind="materials" class="${kind === "materials" ? "on" : ""}">Gather materials</button>` +
         `<button type="button" data-kind="unlock" class="${kind === "unlock" ? "on" : ""}">🔓 Blueprint unlock</button>` +
-      `</div><span class="ev-hint">An unlock goal counts <b>members who hold the recipes</b> — the org's ` +
-      `reputation push as a progress bar.</span></div>`;
+        `<button type="button" data-kind="survey" class="${kind === "survey" ? "on" : ""}">⛏ Survey an area</button>` +
+      `</div><span class="ev-hint">An unlock goal counts <b>members who hold the recipes</b>; a survey goal counts ` +
+      `<b>what gets logged inside a named area</b> from now on.</span></div>`;
+  const ss = (g && g.survey && g.survey.spec) || {}, st = ss.target || { mode: "sightings", value: 50 };
+  const sz = g && g.survey && g.survey.zone;
+  const surveyBlock =
+    `<div id="goal-f-survey"${kind === "survey" ? "" : " hidden"}>` +
+      `<div class="ev-form-grid">` +
+        `<div class="ev-field"><label>System</label><select id="goal-f-ssys">` +
+          ["Stanton", "Nyx", "Pyro"].map(x => `<option${(sz ? sz.system : "Stanton") === x ? " selected" : ""}>${x}</option>`).join("") +
+        `</select></div>` +
+        `<div class="ev-field" style="grid-column:span 2"><label>Area</label><select id="goal-f-szone"` +
+          `${sz ? ` data-want="${sz.id}"` : ""}><option value="">Loading…</option></select>` +
+          `<span class="ev-hint">Named in Prospector › ATLAS. Progress follows the area as it is now, so a re-fence moves it.</span></div>` +
+      `</div>` +
+      `<div class="ev-field"><label>Target</label><div class="rm-row">` +
+        `<input id="goal-f-sval" class="ti rm-qty" type="number" min="1" step="1" value="${Number(st.value) || 50}">` +
+        `<div class="rm-scope-seg" id="goal-f-smode">` +
+          `<button type="button" data-mode="sightings" class="${st.mode !== "surveyors" ? "on" : ""}">sightings</button>` +
+          `<button type="button" data-mode="surveyors" class="${st.mode === "surveyors" ? "on" : ""}">different surveyors</button></div>` +
+      `</div><span class="ev-hint">${g ? "Counting started when the goal was posted; editing doesn't reset it."
+        : "Counts only what's logged <b>after</b> you post this, so ground the org already works doesn't start at 100%."}</span></div>` +
+    `</div>`;
   const us = (g && g.unlock && g.unlock.spec) || {};
   const tgt = us.target || { mode: "count", value: 1 };
   const unlockBlock =
@@ -14209,8 +14288,8 @@ function goalFormHtml(g) {
       `value="${g ? esc(g.title) : ""}" placeholder="e.g. Fund the org Hull-C"></div>` +
     `<div class="ev-field"><label>Description</label><textarea id="goal-f-desc" maxlength="2000" ` +
       `placeholder="What's this campaign for?">${g ? esc(g.description || "") : ""}</textarea></div>` +
-    kindSeg + scopeSeg + unlockBlock +
-    `<div class="goal-f-mat"${kind === "unlock" ? " hidden" : ""}>` + seedBlock + `</div>` +
+    kindSeg + scopeSeg + unlockBlock + surveyBlock +
+    `<div class="goal-f-mat"${kind !== "materials" ? " hidden" : ""}>` + seedBlock + `</div>` +
     `<div class="ev-form-grid">` +
       `<div class="ev-field"><label>Priority</label><select id="goal-f-prio">` +
         PRIO_TIERS.map(([t, lbl, val]) =>
@@ -14222,7 +14301,7 @@ function goalFormHtml(g) {
         `value="${g && g.deadline ? toLocalTime(g.deadline) : ""}"><span class="ev-hint">Blank ⇒ end of day.</span></div>` +
       statusSel +
     `</div>` +
-    `<div class="goal-f-mat"${kind === "unlock" ? " hidden" : ""}>` +
+    `<div class="goal-f-mat"${kind !== "materials" ? " hidden" : ""}>` +
     `<div class="ev-field"><label>Line items — what to gather &amp; how much</label>` +
       `<div class="ev-roster" id="goal-f-lines">${lines}</div>` +
       `<button class="ev-btn" id="goal-f-addline" style="align-self:flex-start;margin-top:4px;">+ add item</button></div>` +
@@ -14269,7 +14348,10 @@ async function syncGoalAnnounceRow() {
 let goalUnlockRecipes = new Map();
 function goalKindValue() {
   const on = document.querySelector("#goal-f-kind button.on");
-  return on ? on.dataset.kind : (document.querySelector("#goal-f-unlock") && !$("goal-f-unlock").hidden ? "unlock" : "materials");
+  if (on) return on.dataset.kind;
+  if ($("goal-f-unlock") && !$("goal-f-unlock").hidden) return "unlock";
+  if ($("goal-f-survey") && !$("goal-f-survey").hidden) return "survey";
+  return "materials";
 }
 function renderGoalRecipes() {
   const el = $("goal-f-recipes"); if (!el) return;
@@ -14281,6 +14363,23 @@ function renderGoalRecipes() {
 function collectGoalForm() {
   const title = $("goal-f-title").value.trim();
   if (!title) return { error: "Give the goal a title." };
+  if (goalKindValue() === "survey") {
+    const zid = parseInt(($("goal-f-szone") || {}).value, 10);
+    if (!zid) return { error: "Pick the area to survey." };
+    const tv = Number($("goal-f-sval").value);
+    if (!(tv >= 1)) return { error: "Set a target of at least 1." };
+    const modeBtn = document.querySelector("#goal-f-smode button.on");
+    const dlDate = $("goal-f-dl-date").value, dlTime = $("goal-f-dl-time").value;
+    const payload = { title, description: $("goal-f-desc").value.trim(),
+      priority: parseInt($("goal-f-prio").value, 10) || 5,
+      deadline: dlDate ? new Date(`${dlDate}T${dlTime || "23:59"}`).toISOString() : null,
+      line_items: [], visibility: goalScopeValue(), kind: "survey",
+      announce: goalAnnounceChecked(), announce_full: goalAnnounceFull(),
+      survey: { zone_id: zid, target_mode: modeBtn ? modeBtn.dataset.mode : "sightings", target_value: tv } };
+    const statusEl = $("goal-f-status");
+    if (statusEl) payload.status = statusEl.value;
+    return { payload };
+  }
   if (goalKindValue() === "unlock") {
     if (!goalUnlockRecipes.size) return { error: "Add at least one recipe to unlock." };
     const modeBtn = document.querySelector("#goal-f-tmode button.on");
@@ -14344,9 +14443,10 @@ async function bindGoalUnlockForm(g) {
   else if (g && g.unlock && g.unlock.spec) (g.unlock.spec.blueprints || []).forEach(k => goalUnlockRecipes.set(k, k));
   document.querySelectorAll("#goal-f-kind button").forEach(b => b.onclick = () => {
     document.querySelectorAll("#goal-f-kind button").forEach(x => x.classList.remove("on")); b.classList.add("on");
-    const unlock = b.dataset.kind === "unlock";
-    $("goal-f-unlock").hidden = !unlock;
-    document.querySelectorAll(".goal-f-mat").forEach(el => { el.hidden = unlock; });
+    const k = b.dataset.kind;
+    $("goal-f-unlock").hidden = k !== "unlock";
+    $("goal-f-survey").hidden = k !== "survey";
+    document.querySelectorAll(".goal-f-mat").forEach(el => { el.hidden = k !== "materials"; });
   });
   document.querySelectorAll("#goal-f-tmode button").forEach(b => b.onclick = () => {
     document.querySelectorAll("#goal-f-tmode button").forEach(x => x.classList.remove("on")); b.classList.add("on");
@@ -14370,6 +14470,35 @@ async function bindGoalUnlockForm(g) {
     });
   }
 }
+// Survey-goal form: the area picker is a system select + that system's named
+// zones, archived ones last and labelled (a goal over archived ground is
+// legitimate, just unusual).
+function bindGoalSurveyForm() {
+  const sys = $("goal-f-ssys"), zsel = $("goal-f-szone");
+  if (!sys || !zsel) return;
+  const load = async (want) => {
+    const tok = zsel._tok = (zsel._tok || 0) + 1;   // a later load wins
+    zsel.innerHTML = `<option value="">Loading…</option>`;
+    let zones = [];
+    try {
+      const d = await fetch(`/api/halo/survey/zones?kind=all&system=${encodeURIComponent(sys.value)}`).then(r => r.json());
+      zones = (d.zones || []).slice().sort((a, b) => (a.closed - b.closed) || a.name.localeCompare(b.name));
+    } catch {}
+    if (tok !== zsel._tok) return;
+    zsel.innerHTML = zones.length
+      ? `<option value="">Pick an area…</option>` + zones.map(z =>
+          `<option value="${z.zone_id}"${String(z.zone_id) === String(want) ? " selected" : ""}>`
+          + `${esc(z.name)} · ${esc(zoneWhere(z))}${z.closed ? " (archived)" : ""}</option>`).join("")
+      : `<option value="">No named areas in ${esc(sys.value)} yet — name one in Prospector › ATLAS</option>`;
+  };
+  sys.onchange = () => load(null);
+  document.querySelectorAll("#goal-f-smode button").forEach(b => b.onclick = () => {
+    document.querySelectorAll("#goal-f-smode button").forEach(x => x.classList.remove("on")); b.classList.add("on");
+  });
+  return load(zsel.dataset.want || null);
+}
+// Hand-off from an ATLAS zone card's "🎯 Make it a goal": {zone_id, system, name}.
+let surveyGoalSeed = null;
 function goalScopeTags() {
   return [...document.querySelectorAll("#goal-f-playstyles .goal-tag-chip.on")].map(b => b.dataset.tag);
 }
@@ -14455,7 +14584,16 @@ async function renderGoalForm() {
     `<h2 class="ev-screen-h">NEW GOAL</h2>${goalFormHtml(null)}</div>`;
   bindGoalForm(null, () => { location.hash = "#/goals"; });
   bindGoalUnlockForm(null);
+  bindGoalSurveyForm();
   syncGoalAnnounceRow();
+  if (surveyGoalSeed) {
+    const sd = surveyGoalSeed; surveyGoalSeed = null;
+    const kb = document.querySelector('#goal-f-kind button[data-kind="survey"]'); if (kb) kb.click();
+    $("goal-f-ssys").value = sd.system;
+    $("goal-f-szone").dataset.want = sd.zone_id;
+    bindGoalSurveyForm();
+    if (!$("goal-f-title").value) $("goal-f-title").value = `Survey ${sd.name}`;
+  }
   document.querySelectorAll("#goal-f-scope button").forEach(b => b.addEventListener("click", () => setTimeout(syncGoalAnnounceRow, 0)));
   // Arriving from Org readiness with recipes selected: an unlock goal, org-wide.
   if (unlockGoalSeed && unlockGoalSeed.length) {
@@ -14489,11 +14627,11 @@ async function renderGoalForm() {
 }
 
 function renderGoalEditForm(g) {
-  if (g.kind === "unlock") {
+  if (g.kind === "unlock" || g.kind === "survey") {
     $("goals-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/goals/${g.id}">← Back to goal</a>` +
       `<h2 class="ev-screen-h">EDIT GOAL</h2>${goalFormHtml(g)}</div>`;
     bindGoalForm(g.id, () => renderGoalDetail(g.id));
-    bindGoalUnlockForm(g);
+    if (g.kind === "unlock") bindGoalUnlockForm(g); else bindGoalSurveyForm();
     return;
   }
   // A craft goal's saved per-slot quality asks seed the sliders (so a save
@@ -20016,6 +20154,10 @@ function renderSurfaceSurveyCard(el, z, sightings, total, extra) {
     // Export is a system-level endpoint — it worked identically from either
     // card and was offered on only one of them.
     + `<button type="button" class="route-chip" id="svy-link" title="copy a link straight to this area — paste it in Discord">🔗 Copy link</button>`
+    // A leader deciding "this is where we survey next" is looking at this card,
+    // so the goal starts here (#37.1 §11.2). Never automatic: the baseline has
+    // to be a deliberate moment, not the moment the circle was drawn.
+    + (!z.closed ? `<button type="button" class="route-chip" id="svy-goal" title="post a goal the org fills by logging evidence here — only what's logged after you post it counts">🎯 Make it a goal</button>` : "")
     + `<a class="route-chip" id="svy-export" target="_blank" rel="noopener" style="margin-left:auto;"`
     + ` title="download this system's survey as JSON">⇩ Export</a>`
     + `</div>`
@@ -20165,6 +20307,10 @@ function renderHaloSurveyCard(el, z, marks) {
         + `${z.zone_id === activeSurveyZone ? "⛏ filing here" : "Set active"}</button>` : "")
     + (z.can_edit ? `<button type="button" class="route-chip" id="svy-archive" title="${z.closed ? "put this zone back on the picker and maps" : "archive this zone — marks are kept, but it leaves the picker, maps and drop suggestions"}">${z.closed ? "Reactivate" : "⊟ Archive"}</button>` : "")
     + `<button type="button" class="route-chip" id="svy-link" title="copy a link straight to this zone — paste it in Discord">🔗 Copy link</button>`
+    // A leader deciding "this is where we survey next" is looking at this card,
+    // so the goal starts here (#37.1 §11.2). Never automatic: the baseline has
+    // to be a deliberate moment, not the moment the circle was drawn.
+    + (!z.closed ? `<button type="button" class="route-chip" id="svy-goal" title="post a goal the org fills by logging evidence here — only what's logged after you post it counts">🎯 Make it a goal</button>` : "")
     + `<a class="route-chip" id="svy-export" target="_blank" rel="noopener" style="margin-left:auto;"`
     + ` title="download this system's survey as JSON">⇩ Export</a>`
     + `</div>`
@@ -20205,6 +20351,11 @@ function renderHaloSurveyCard(el, z, marks) {
 // Absolute URL, not location.href: the card may have been opened before the
 // hash settled, and a teammate needs the whole thing.
 function wireZoneLinkCopy(z) {
+  const goal = $("svy-goal");
+  if (goal) goal.onclick = () => {
+    surveyGoalSeed = { zone_id: z.zone_id, system: z.system || haloSystem, name: z.name };
+    location.hash = "#/goals/new";
+  };
   const btn = $("svy-link");
   if (!btn) return;
   btn.onclick = async () => {

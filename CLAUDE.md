@@ -231,6 +231,25 @@ library at `#/blueprints`, #29)
   `goalUnlockRecipes`), board 🔓 chip + "% ready", detail
   `renderUnlockGoalDetail` (per-recipe member bars, holders/missing names,
   unlock path, "+ add to my library").
+- **Survey goals (#37.1 §11.2, 2026-09-24):** third goal kind `kind="survey"`
+  + `goals.survey_spec` JSON `{zone_id, target:{mode sightings|surveyors,
+  value}, since}` (`GoalIn.survey`/`SurveyGoalSpecIn`). **`since` is stamped
+  server-side at CREATE and never moved by an edit** — membership is
+  retroactive, so without it a goal over worked ground is born complete
+  (§11.3). Progress = `nav_core.derive_survey_goal_progress(spec, zone,
+  evidence)` over `app._survey_zone_evidence(zone)` = (handle, epoch) for the
+  zone AS IT IS NOW (re-fence moves it, deliberately): surface = every lane's
+  sightings (matches the card's Sightings tile), belt = every tagged mark incl.
+  negatives; `before` = the pre-goal evidence, stated on the page. Deleted zone
+  → reads 0, `survey.zone` None (undo restores the same id → reconnects).
+  Met-on-capture: `_check_survey_goals(match)` from `_capture_observation`
+  (`_surface_zone_holds`) and `_capture_poi` (tagged zone) → `met` +
+  `_notify_survey_goal_met` (org goals only); only goals whose zone the capture
+  landed in do work. Announce embed has a ⛏ branch ("counting since").
+  Frontend: kind seg "⛏ Survey an area" (`goal-f-survey`, `bindGoalSurveyForm`
+  = system select + zone select), `renderSurveyGoalDetail`, board ⛏ chip +
+  filter, ATLAS cards' "🎯 Make it a goal" (`svy-goal` → `surveyGoalSeed`,
+  wired in `wireZoneLinkCopy`). NEVER auto-created with a zone (§13.8).
 - Blueprint feed (#25/#26): `GET /api/blueprints` (search index `?q`/`?category`, cap 50) + `GET /api/blueprints/{key}` (full record + derived `manifest`/`stat_drivers`); committed `poi/blueprints.json` from `tools/sync_blueprints.py` (SC Wiki API, re-run per game patch); `blueprint:<key>` catalog namespace resolves in `resolve_catalog_item`; `/api/catalog?bp=1` appends recipe matches (marketplace picker ONLY — inventory/goals pickers stay recipe-free); `GET /api/blueprints/stat-names` (canonical ~25-stat vocabulary, registered before `/{bp_key}`; datalist autocomplete on crafted-stat rows, `mkFillStatNames`); `est_cost` = `nav_core.blueprint_material_cost` × `_blueprint_price_of` (item_prices buy-side; resources only, gems/items degrade to `unpriced`) → "mats ≈" line in `bpMatsCost`/`bpManifestHtml`; nav_core `blueprint_manifest`/`blueprint_stat_drivers`/`blueprint_quality_effect`/`blueprint_stat_preview`; frontend spec builder = shared `bpSpecCtl` controller (instances `mkSpec` market form / `goalSpec` goal form; sliders + materials bill + stat estimates) + `attachBlueprintPicker` + JS twin `bpEffectAt`; goal detail `goalSpecBox`
 - Org analytics: `/api/leaderboard`, `/api/stats`, `/api/intel/directory`, `/api/intel/surveying` (#37 slice 5: totals + ranked members via `nav_core.derive_survey_stats` — sessions derived from mark stream, gap `SURVEY_SESSION_GAP_S` 30 min or zone change splits, NULL-`created` never sessioned — + per-belt coverage rows + freshest zones; frontend `#/intel/surveying` → `#survey-stats-view` sibling, `loadSurveyStats`/`renderSurveyStats`)
 - Admin: `/api/admin/stats/*/clear`, `/api/settings`, `/api/org-logo`. **Guild
