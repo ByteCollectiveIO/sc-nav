@@ -132,6 +132,11 @@ class Observation:
     # so this is what lets a client hide nodes that aren't on its server. None
     # for legacy records and captures with no shard known.
     shard_id: str | None = None
+    # Game build the sighting was made in (`sc-alpha-4.9.0/12344265`, from the
+    # watcher's Game.log header). A patch reshuffles surface ore, so this is
+    # what patch-staleness will compare (#37.1 §12.1). None for legacy records
+    # and captures from a watcher that couldn't read the build.
+    game_build: str | None = None
     nearest_qt: str | None = None    # name of nearest QT-marker POI (computed)
     nearest_qt_dist_m: float | None = None  # distance to that marker, meters
 
@@ -1461,6 +1466,7 @@ def observation_from_position(
     observed_at: str | None = None,
     shard_id: str | None = None,
     system_hint: str | None = None,
+    game_build: str | None = None,
 ) -> Observation:
     if category not in OBSERVATION_CATEGORIES:
         raise ValueError(f"unknown observation category: {category}")
@@ -1483,6 +1489,7 @@ def observation_from_position(
         observed_at=observed_at or datetime.now(timezone.utc).isoformat(),
         data=data,
         shard_id=shard_id,
+        game_build=game_build,
     )
     obs.nearest_qt, obs.nearest_qt_dist_m = nearest_qt_marker(nav, obs, t_unix)
     return obs
@@ -1505,6 +1512,7 @@ def observation_to_dict(obs: Observation) -> dict:
         "owner_handle": obs.owner_handle,
         "observed_at": obs.observed_at,
         "shard_id": obs.shard_id,
+        "game_build": obs.game_build,
         "data": obs.data,
     }
 
@@ -1540,6 +1548,7 @@ def observation_from_dict(d: dict, category: str | None = None) -> Observation:
         owner_handle=d.get("owner_handle"),
         observed_at=d.get("observed_at") or "",
         shard_id=d.get("shard_id"),
+        game_build=d.get("game_build"),
         data=OBSERVATION_CATEGORIES[category]["normalize"](raw),
     )
 

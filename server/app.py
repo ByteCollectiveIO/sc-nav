@@ -2002,6 +2002,7 @@ _BAND_MAX = 16
 _RAW_MAX = 512
 _META_MAX = 64     # client_time / source / discord-id-ish small fields
 _SHARD_MAX = 64    # SC shard id, e.g. "pub_use1b_12030094_130"
+_BUILD_MAX = 96    # game build, e.g. "sc-alpha-4.9.0/12344265" (branch/changelist)
 _LABEL_MAX = 60
 _COMMODITY_MAX = 80
 _PKG_ID_MAX = 64
@@ -2047,6 +2048,10 @@ class PositionIn(BaseModel):
     # SC shard id from Game.log (watcher). Stamped onto captures and broadcast so
     # clients can tell which ephemeral nodes / teammates are on their own server.
     shard: str | None = Field(default=None, max_length=_SHARD_MAX)
+    # Game build from the Game.log header (`<branch>/<changelist>`). Stamped on
+    # captures so pre-patch evidence can be told from post-patch (#37.1 §12.1).
+    # Optional: older watchers don't send it and keep working.
+    game_build: str | None = Field(default=None, max_length=_BUILD_MAX)
 
 
 class DestinationIn(BaseModel):
@@ -2368,6 +2373,7 @@ class Session:
         # misleading "no handle yet".
         self.handle_conflict = None
         self.shard = None             # current SC shard id (from the watcher's Game.log)
+        self.game_build = None        # running game build (Game.log header), stamped on captures
         self.tracking = False
         self.path = []                # crumbs: {lat, lon, container}
         # Live teammate presence: on by default, one-way opt-out (hide yourself
@@ -3601,6 +3607,10 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         sess.pos, sess.t = new_pos, now
         if body.shard:
             sess.shard = body.shard.strip() or None
+        # Sticky like the shard: a fix without it (an older watcher, or the
+        # instant before the header is read) keeps the last known build.
+        if body.game_build:
+            sess.game_build = body.game_build.strip() or sess.game_build
 
         handle_status = _bind_handle(sess, body.handle) if body.handle else None
 
@@ -3722,6 +3732,10 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     zone_mismatch = None
     zone_kept = None            # the zone this mark actually filed into
     sv = poi.survey
+    # Belt marks carry the build too (#37 §6.1): the same patch-staleness
+    # question, asked of a pocket instead of a surface area.
+    if sv is not None and sess.game_build:
+        sv["build"] = sess.game_build
     if sv and sv.get("zone_id") is not None:
         zone = db.get_survey_zone(sv["zone_id"])
         if zone is None or zone["system"] != poi.system:
@@ -3804,6 +3818,7 @@ def _capture_observation(sess, pos_m, now, pending, owner):
         biome=pending.get("biome"), note=pending.get("note"),
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
         shard_id=sess.shard, system_hint=sess.system,
+        game_build=sess.game_build,
     )
     try:
         db.add_observation(nav_core.observation_to_dict(obs))

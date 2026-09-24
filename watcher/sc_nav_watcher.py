@@ -179,6 +179,28 @@ def parse_showlocation(text):
 _SHARD_UPDATE_RE = re.compile(r"New Shard Id:\s*([^\s.]+)")
 _SHARD_JOIN_RE = re.compile(r"<Join PU>.*?\bshard\[([^\]]+)\]")
 
+# The game build, stated once in the log header at launch (quoted from captured
+# logs, 2026-06 and 2026-08):
+#   <2026-08-02T17:16:58.688Z> Branch: sc-alpha-4.9.0
+#   <2026-08-02T17:16:58.688Z> Changelist: 12344265
+# A patch reshuffles planetary ore, so the server stamps this on every sighting:
+# "is this area still worth landing in" is a question only the build answers
+# (#37.1 §12.1). Branch names the patch (hotfixes read `sc-alpha-4.8.0-hotfix`),
+# the changelist the exact build. Anchored on the bare header shape so a chat or
+# notice line that happens to contain "Branch:" can't set it.
+_BUILD_BRANCH_RE = re.compile(r"^<[^>]+>\s+Branch:\s+([\w.-]{1,64})\s*$", re.ASCII)
+_BUILD_CL_RE = re.compile(r"^<[^>]+>\s+Changelist:\s+(\d{1,12})\s*$", re.ASCII)
+
+
+def compose_game_build(branch, changelist):
+    """`sc-alpha-4.9.0/12344265`, or None unless BOTH halves were read. Half a
+    build would split the org's builds into two populations that are really
+    one, so a reworded header turns stamping off rather than guessing."""
+    if not branch or not changelist:
+        return None
+    return f"{branch}/{changelist}"
+
+
 # Common install locations, checked in order when --game-log isn't given. The
 # live build is by far the most common; PTU/EPTU are there for power users.
 _DEFAULT_LOG_CANDIDATES = (
@@ -379,9 +401,9 @@ class GameLogShardReader:
     already in progress is picked up. The log is truncated when the game
     relaunches; a shrink in size re-seeks to the start.
 
-    Also collects commodity transactions (#41) and the signed-in account handle
-    from the same line scan — one tail, three consumers; drain them with
-    pop_transactions() / pop_handle().
+    Also collects commodity transactions (#41), the signed-in account handle
+    and the game build from the same line scan — one tail, several consumers;
+    drain them with pop_transactions() / pop_handle(), read `.build`.
     """
 
     def __init__(self, path):
@@ -393,6 +415,8 @@ class GameLogShardReader:
         self._menu_seen = set()
         self.handle = None
         self._handle_new = False
+        self._branch = None
+        self._changelist = None
 
     def pop_transactions(self):
         """Drain the transactions collected since the last call."""
@@ -415,6 +439,11 @@ class GameLogShardReader:
         self._handle_new = False
         return self.handle
 
+    @property
+    def build(self):
+        """The running game build (`sc-alpha-4.9.0/12344265`), or None."""
+        return compose_game_build(self._branch, self._changelist)
+
     def poll(self):
         """Scan new log lines; return the current shard id (or None)."""
         try:
@@ -423,6 +452,9 @@ class GameLogShardReader:
             return self.shard
         if size < self._offset:
             self._offset = 0          # log rotated on game relaunch
+            # A relaunch may be a new patch, and its header is about to be
+            # re-read; never pair the old branch with the new changelist.
+            self._branch = self._changelist = None
         if size == self._offset:
             return self.shard
         try:
@@ -437,6 +469,13 @@ class GameLogShardReader:
             if match and match.group(1) != self.shard:
                 self.shard = match.group(1)
                 log(f"shard: {self.shard}")
+            branch = _BUILD_BRANCH_RE.match(line)
+            if branch:
+                self._branch = branch.group(1)
+            changelist = _BUILD_CL_RE.match(line)
+            if changelist:
+                self._changelist = changelist.group(1)
+                log(f"game build: {self.build or changelist.group(1)}")
             found = parse_login_handle(line)
             if found and found != self.handle:
                 self.handle = found
@@ -705,7 +744,7 @@ def log(message):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
 
 
-def build_payload(coords, handle=None, shard=None):
+def build_payload(coords, handle=None, shard=None, game_build=None):
     # The parsed coordinates are the whole point — the surrounding clipboard text
     # is never sent. A `raw` field used to ride along here and the server has
     # never read it, so it was pure privacy surface: whatever else shared the
@@ -720,6 +759,9 @@ def build_payload(coords, handle=None, shard=None):
         "source": "sc_nav_watcher",
         "handle": handle,
         "shard": shard,
+        # Game build from the Game.log header, stamped server-side on captures
+        # so evidence from before a patch can be told apart from after it.
+        "game_build": game_build,
     }
 
 
@@ -954,6 +996,7 @@ def run(args, sink=None, stop=None):
 
     while stop is None or not stop.is_set():
         shard = shard_reader.poll() if shard_reader else None
+        game_build = shard_reader.build if shard_reader else None
         if handle_detect:
             found = shard_reader.pop_handle()
             if found and found != handle:
@@ -998,7 +1041,7 @@ def run(args, sink=None, stop=None):
                 if coords:
                     last_coords = coords
                     fix_t = time.monotonic()
-                    sender.send(build_payload(coords, handle, shard))
+                    sender.send(build_payload(coords, handle, shard, game_build))
                     sent_count += 1
                     sent_this_loop = True
                     log(
@@ -1016,7 +1059,7 @@ def run(args, sink=None, stop=None):
                     # A re-copy IS a fresh observation (the player just ran
                     # /showlocation again) even though the numbers match.
                     fix_t = time.monotonic()
-                    sender.send(build_payload(coords, handle, shard))
+                    sender.send(build_payload(coords, handle, shard, game_build))
                     sent_this_loop = True
                     if args.verbose:
                         log("re-copy of same position forwarded")
@@ -1027,7 +1070,7 @@ def run(args, sink=None, stop=None):
             reason = heartbeat_due(time.monotonic(), last_send_t, args.heartbeat,
                                    shard, last_sent_shard)
             if reason:
-                sender.send(build_payload(last_coords, handle, shard))
+                sender.send(build_payload(last_coords, handle, shard, game_build))
                 sent_this_loop = True
                 if reason == "shard":
                     log(f"heartbeat: shard changed -> {shard}")

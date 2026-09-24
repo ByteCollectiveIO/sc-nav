@@ -209,6 +209,64 @@ class GameLogShardReaderTests(unittest.TestCase):
         self.assertEqual(len(self.reader.pop_transactions()), 1)
 
 
+# The build header, verbatim from captured logs (a live 4.9 build and a 4.8
+# hotfix, 2026-08-02 / 2026-06-02).
+_HEADER = ("<2026-08-02T17:16:58.688Z> Branch: sc-alpha-4.9.0\n"
+           "<2026-08-02T17:16:58.688Z> BuildDateStamp: Wed Jul 29 2026\n"
+           "<2026-08-02T17:16:58.688Z> Changelist: 12344265\n")
+_HOTFIX = ("<2026-06-02T01:25:22.773Z> Branch: sc-alpha-4.8.0-hotfix\n"
+           "<2026-06-02T01:25:22.773Z> Changelist: 11875683\n")
+
+
+class GameLogBuildTests(unittest.TestCase):
+    """The build is read off the log header and stamped server-side on every
+    sighting, so pre-patch evidence can be told from post-patch (#37.1)."""
+
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix="Game.log")
+        os.close(fd)
+        self.addCleanup(lambda: os.path.exists(self.path) and os.remove(self.path))
+        self.reader = GameLogShardReader(self.path)
+
+    def _write(self, text, mode="a"):
+        with open(self.path, mode, encoding="utf-8") as fh:
+            fh.write(text)
+
+    def test_header_yields_branch_and_changelist(self):
+        self._write(_HEADER + _JOIN)
+        self.reader.poll()
+        self.assertEqual(self.reader.build, "sc-alpha-4.9.0/12344265")
+
+    def test_hotfix_branch_is_kept_verbatim(self):
+        self._write(_HOTFIX)
+        self.reader.poll()
+        self.assertEqual(self.reader.build, "sc-alpha-4.8.0-hotfix/11875683")
+
+    def test_half_a_header_is_no_build(self):
+        # A reworded Branch line must turn stamping off, not stamp a guess.
+        self._write("<2026-08-02T17:16:58.688Z> Changelist: 12344265\n")
+        self.reader.poll()
+        self.assertIsNone(self.reader.build)
+
+    def test_a_branch_mention_mid_line_is_not_the_header(self):
+        self._write(_HEADER + "<2026-08-02T18:00:00.000Z> [Notice] <Chat> "
+                    "Branch: sc-alpha-9.9.9 lol\n")
+        self.reader.poll()
+        self.assertEqual(self.reader.build, "sc-alpha-4.9.0/12344265")
+
+    def test_relaunch_on_a_new_patch_reads_the_new_header(self):
+        self._write(_HOTFIX + _JOIN + _JOIN)
+        self.reader.poll()
+        self._write(_HEADER, mode="w")     # relaunch truncates the log
+        self.reader.poll()
+        self.assertEqual(self.reader.build, "sc-alpha-4.9.0/12344265")
+
+    def test_no_header_means_no_build(self):
+        self._write(_JOIN)
+        self.reader.poll()
+        self.assertIsNone(self.reader.build)
+
+
 class GameLogHandleDetectionTests(unittest.TestCase):
     """pop_handle is edge-triggered: the watcher re-binds when the signed-in
     account changes and stays quiet otherwise (it polls every second)."""
@@ -418,7 +476,7 @@ class BuildPayloadTests(unittest.TestCase):
         p = sc_nav_watcher.build_payload(
             {"x": 1.5, "y": -2.0, "z": 3.0}, "Nomad_77", "pub_use1b_1_1")
         self.assertEqual(set(p), {"x", "y", "z", "client_time", "source",
-                                  "handle", "shard"})
+                                  "handle", "shard", "game_build"})
         self.assertEqual((p["x"], p["y"], p["z"]), (1.5, -2.0, 3.0))
 
     def test_clipboard_text_is_never_transmitted(self):
@@ -431,7 +489,7 @@ class BuildPayloadTests(unittest.TestCase):
         # build_payload takes no clipboard argument at all, so there is nothing
         # for a future edit to forward by accident.
         params = inspect.signature(sc_nav_watcher.build_payload).parameters
-        self.assertEqual(list(params), ["coords", "handle", "shard"])
+        self.assertEqual(list(params), ["coords", "handle", "shard", "game_build"])
 
 
 class HeartbeatDueTests(unittest.TestCase):
