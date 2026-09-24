@@ -7684,5 +7684,73 @@ class SurveyHealthTests(unittest.TestCase):
         self.assertGreater(barren["score"], rich_but_clumped["score"])
 
 
+class PatchStalenessTests(unittest.TestCase):
+    """#37 §6.1: a zone is stale when none of its evidence is from the org's
+    current patch. Derived, never stored."""
+
+    def test_patch_is_the_branch_version_not_the_changelist(self):
+        self.assertEqual(nav_core.patch_of("sc-alpha-4.9.0/12344265"), "4.9.0")
+        self.assertEqual(nav_core.patch_of("sc-alpha-4.8.0-hotfix/11875683"), "4.8.0")
+        self.assertEqual(nav_core.patch_of("sc-alpha-4.10/1"), "4.10.0")
+        self.assertIsNone(nav_core.patch_of(None))
+        self.assertIsNone(nav_core.patch_of("garbage/123"))
+
+    def test_current_patch_is_a_member_majority_inside_the_window(self):
+        now = 1_000_000.0
+        seen = {"a": {"patch": "4.9.0", "t": now}, "b": {"patch": "4.9.0", "t": now},
+                "c": {"patch": "4.10.0", "t": now}}
+        self.assertEqual(nav_core.current_patch(seen, now), "4.9.0")
+        # a tie goes to the newer patch (4.10 > 4.9 numerically, not lexically)
+        seen["d"] = {"patch": "4.10.0", "t": now}
+        self.assertEqual(nav_core.current_patch(seen, now), "4.10.0")
+        # reports outside the window don't vote
+        old = now - nav_core.PATCH_WINDOW_S - 1
+        seen = {"a": {"patch": "4.9.0", "t": old}, "b": {"patch": "4.9.0", "t": old},
+                "c": {"patch": "4.10.0", "t": now}}
+        self.assertEqual(nav_core.current_patch(seen, now), "4.10.0")
+        self.assertIsNone(nav_core.current_patch({}, now))
+
+    def test_verdicts(self):
+        ev = nav_core.patch_evidence([("sc-alpha-4.9.0/1", 100.0),
+                                      ("sc-alpha-4.9.0/2", 200.0),
+                                      (None, 50.0)])
+        self.assertEqual(ev["by_patch"]["4.9.0"], {"n": 2, "last": 200.0})
+        self.assertEqual(ev["unstamped"], {"n": 1, "last": 50.0})
+        state = nav_core.zone_patch_state
+        self.assertEqual(state(ev, {"current": "4.9.0", "since": None})["state"],
+                         "current")
+        stale = state(ev, {"current": "4.10.0", "since": 300.0})
+        self.assertEqual((stale["state"], stale["last_patch"], stale["last"]),
+                         ("stale", "4.9.0", 200.0))
+        # an older watcher's sighting AFTER the org moved was made on the new
+        # patch: live players can't stay behind
+        ev2 = nav_core.patch_evidence([("sc-alpha-4.9.0/1", 100.0), (None, 400.0)])
+        cur = state(ev2, {"current": "4.10.0", "since": 300.0})
+        self.assertEqual((cur["state"], cur.get("inferred")), ("current", True))
+        # undated evidence and no observed change: say nothing definite
+        ev3 = nav_core.patch_evidence([(None, 50.0)])
+        self.assertEqual(state(ev3, {"current": "4.9.0", "since": None})["state"],
+                         "unknown")
+        self.assertIsNone(state(ev3, {"current": None, "since": None}))
+        self.assertIsNone(state(nav_core.patch_evidence([]),
+                                {"current": "4.9.0", "since": None}))
+
+    def test_belt_zone_rows_summarize_positive_marks_only(self):
+        nav = nav_core.NavData(pois={}, containers={}, systems=[])
+        base = dict(name="m", system="Nyx", container_name=None, type="survey",
+                    local_km=None, latitude=None, longitude=None, height_m=None,
+                    qt_marker=False, custom=True)
+        xyz = (2.0e10, 0.0, 0.0)
+        nav.pois[1] = nav_core.Poi(id=1, global_m=xyz, created=100.0, **base,
+            survey={"rocks": "dense", "zone_id": 7, "build": "sc-alpha-4.9.0/1"})
+        nav.pois[2] = nav_core.Poi(id=2, global_m=(2.0e10, 1e6, 0.0), created=200.0,
+            **base, survey={"rocks": "none", "zone_id": 7, "build": "sc-alpha-4.10.0/2"})
+        rows = nav_core.survey_zones_state(
+            nav, "Nyx", [{"id": 7, "slug": "z", "name": "Z", "system": "Nyx"}],
+            t_ref=0.0)
+        self.assertEqual(rows[0]["patches"]["by_patch"],
+                         {"4.9.0": {"n": 1, "last": 100.0}})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

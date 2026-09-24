@@ -3197,6 +3197,68 @@ class SessionHub:
 hub = SessionHub()
 
 
+class PatchTracker:
+    """The org's current game patch, derived from what members' watchers
+    report (#37 §6.1): per member, the patch of their latest build and when.
+    `current` = the majority over the last PATCH_WINDOW_S and is STICKY — a
+    quiet week leaves it alone, only another majority moves it. `since` is
+    when the org was first seen on it, kept only once a change from an
+    earlier patch has actually been observed (see nav_core.zone_patch_state).
+
+    Persisted in one `meta` row so a deploy doesn't forget the patch and
+    every zone's verdict with it. Written when something changes, and at most
+    hourly per member otherwise (to keep the window honest), never per post.
+    Mutated under hub.lock (post_position)."""
+
+    META_KEY = "patch_tracker"
+    REFRESH_S = 3600
+
+    def __init__(self):
+        self._state = None
+
+    def reset(self):
+        self._state = None
+
+    def _load(self) -> dict:
+        if self._state is None:
+            try:
+                st = json.loads(db.get_setting(self.META_KEY) or "{}")
+            except (TypeError, ValueError):
+                st = {}
+            self._state = {"seen": st.get("seen") or {},
+                           "first": st.get("first") or {},
+                           "current": st.get("current"),
+                           "since": st.get("since")}
+        return self._state
+
+    def note(self, uid, build, now: float) -> None:
+        patch = nav_core.patch_of(build)
+        if not patch:
+            return
+        st = self._load()
+        uid = str(uid)
+        rec = st["seen"].get(uid)
+        dirty = (rec is None or rec.get("patch") != patch
+                 or now - (rec.get("t") or 0.0) >= self.REFRESH_S)
+        if not dirty:
+            return
+        st["seen"][uid] = {"patch": patch, "t": now}
+        st["first"].setdefault(patch, now)
+        cur = nav_core.current_patch(st["seen"], now)
+        if cur and cur != st["current"]:
+            if st["current"] is not None:
+                st["since"] = st["first"][cur]
+            st["current"] = cur
+        db.set_setting(self.META_KEY, json.dumps(st))
+
+    def context(self) -> dict:
+        st = self._load()
+        return {"current": st["current"], "since": st["since"]}
+
+
+patch_tracker = PatchTracker()
+
+
 async def presence_broadcaster():
     """~1 Hz loop: drop teammates whose last fix is stale (emit `remove`), then
     flush coalesced upserts/removes to every open tab. Coalescing means a fast
@@ -3611,6 +3673,7 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         # instant before the header is read) keeps the last known build.
         if body.game_build:
             sess.game_build = body.game_build.strip() or sess.game_build
+            patch_tracker.note(user["id"], sess.game_build, now)
 
         handle_status = _bind_handle(sess, body.handle) if body.handle else None
 
@@ -7334,8 +7397,15 @@ def list_survey_zones(system: str = "Nyx", kind: str = "deep", body: str | None 
             zones_valued = surface
         else:
             zones_valued = zones_valued + surface
+    # Patch staleness (#37 §6.1): derived per read against the org's current
+    # patch. The rows carry only build-independent evidence (`patches`), so
+    # the cached zone views never go stale when the patch changes.
+    ctx = patch_tracker.context()
+    zones_valued = [{**z, "patch": nav_core.zone_patch_state(z.get("patches"), ctx)}
+                    for z in zones_valued]
     return {"system": system, "zones": zones_valued,
-            "announce_available": notify.is_configured("survey")}
+            "announce_available": notify.is_configured("survey"),
+            "game_patch": ctx}
 
 
 @app.post("/api/halo/survey/zones")

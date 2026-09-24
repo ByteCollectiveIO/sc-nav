@@ -2762,6 +2762,7 @@
      across the circle are the same number and not the same knowledge.
      Deliberately NOT tinted by value: a thorough barren survey is healthy. */
   .zn-health { display: flex; flex-direction: column; gap: 3px; min-width: 62px; }
+  .zn-patch { display: inline-block; margin-top: 4px; white-space: nowrap; }
   .zn-hbar { height: 5px; border-radius: 3px; background: var(--track);
     overflow: hidden; }
   .zn-hbar i { display: block; height: 100%; border-radius: 3px; }
@@ -18464,12 +18465,46 @@ function surveyHealthBlock(z) {
 
 function healthCell(z) {
   const h = z.health;
-  if (!h) return `<span class="muted">\u2014</span>`;
+  if (!h) return `<span class="muted">\u2014</span>` + zonePatchChip(z);
   const pct = Math.round(h.score * 100);
   return `<span class="zn-health ${healthBand(h.score)}"`
     + ` title="${esc(healthNext(h))}">`
     + `<span class="zn-hbar"><i style="width:${Math.max(pct, 2)}%"></i></span>`
-    + `<span class="zn-hpct">${pct}%</span></span>`;
+    + `<span class="zn-hpct">${pct}%</span></span>` + zonePatchChip(z);
+}
+
+// Patch staleness (#37 §6.1). The server judges it (`z.patch`, derived per
+// read from each capture's game build vs the org's current patch); this only
+// words it. It rides the HEALTH cell because it qualifies the same question,
+// "can I trust this", and it says nothing about value. Only STALE is shown:
+// `unknown` means evidence from before builds were recorded, and flagging
+// data we cannot date would cry wolf on every zone the org already has.
+function zonePatchStale(z) {
+  return !!(z && z.patch && z.patch.state === "stale");
+}
+
+function zonePatchWhy(z) {
+  const p = z.patch;
+  return p.last_patch
+    ? `Newest evidence is from patch ${p.last_patch}; the org is on ${p.current} now.`
+    : `All of the evidence predates patch ${p.current}.`;
+}
+
+function zonePatchChip(z) {
+  if (!zonePatchStale(z)) return "";
+  const noun = z.kind === "surface" ? "sighting" : "rock-positive mark";
+  return ` <span class="halo-chip warn zn-patch" title="${esc(zonePatchWhy(z)
+    + ` A patch can move where ore spawns. One ${noun} here on ${z.patch.current} clears this.`)}">`
+    + `pre-${esc(z.patch.current)}</span>`;
+}
+
+function zonePatchNote(z) {
+  if (!zonePatchStale(z)) return "";
+  const noun = z.kind === "surface" ? "sighting" : "rock-positive mark";
+  return `<div><div class="svy-verdict warn"><span class="svy-dot"></span><span>`
+    + `<b>Unverified on ${esc(z.patch.current)}</b> · ${esc(zonePatchWhy(z))} `
+    + `A patch can move where ore spawns, so treat this picture as history until `
+    + `one ${noun} here on ${esc(z.patch.current)} clears it.</span></div></div>`;
 }
 
 // WHERE, as ONE function. The cell rendered this string in two places and the
@@ -19992,7 +20027,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total, extra) {
     // the tile beside it read the total, so the same card stated two different
     // sizes for the same circle.
     + `${nAll} sighting${nAll === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</p>`
-    + verdict + lead + stats + surveyHealthBlock(z)
+    + verdict + zonePatchNote(z) + lead + stats + surveyHealthBlock(z)
     + `<div class="svy-panels">${surveyOreChart(oreChartShim(z),
           "Share of this area's sightings, per ore. Bars are percentages; the "
           + "count is how many sightings listed that ore.")}${surfaceBandChart(z)}</div>`
@@ -20139,7 +20174,7 @@ function renderHaloSurveyCard(el, z, marks) {
     + `<h2 class="svy-title">${esc(z.name)}</h2>`
     + `<p class="svy-sub">`
     + `${surveyors.length} surveyor${surveyors.length === 1 ? "" : "s"} · ${marks.length} mark${marks.length === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</p>`
-    + verdict
+    + verdict + zonePatchNote(z)
     + stats + surveyHealthBlock(z)
     + `<div class="svy-panels">${surveyOreChart(z)}${surveyRsCard(z)}</div>`
     + timeline

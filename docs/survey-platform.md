@@ -390,6 +390,37 @@ pocket radius), per-cell mark counts, mean density weight
 - The admin nuke (`/api/admin/survey/clear`) stays for fields a patch
   visibly deleted; staleness handles the common "probably still there" case.
 
+**Built 2026-09-24 (stamping in PR #197, derivation after it).** Decisions
+made at build:
+- **Compared at the PATCH, not the build.** `nav_core.patch_of` reads the
+  version out of the branch (`sc-alpha-4.8.0-hotfix/11875683` → `4.8.0`). A
+  hotfix ships a new changelist without moving a rock; flagging every zone
+  org-wide each time one lands would teach people to ignore the badge.
+- **Current patch = member majority, sticky** (`nav_core.current_patch`,
+  `app.PatchTracker`): counted per MEMBER over the last 72 h
+  (`PATCH_WINDOW_S`) so one parked heartbeat can't outvote a squadron;
+  majority rather than newest because PTU testers run ahead; ties go to the
+  newer patch. It never reverts to "unknown" when the window empties. It is
+  persisted in one `meta` row (`patch_tracker`), written on a change and at
+  most hourly per member, so a deploy doesn't forget it.
+- **Undated evidence is placed by time, and only after a patch change has been
+  seen.** `since` = when the org was first seen on the current patch, recorded
+  only once a change from an earlier patch has been observed. Live players
+  can't stay on the old build after a patch, so an unstamped sighting after
+  `since` counts as current and one before it as stale. With no observed
+  change, unstamped-only evidence reads `unknown` and the UI says nothing:
+  flagging every pre-stamping zone the org already has would cry wolf.
+- **Evidence** = rock-positive marks (belt zones) / the mining lane's sightings
+  (surface zones, matching health). Rows carry a patch-independent summary
+  (`patches`); the verdict (`patch` {state current|stale|unknown}) is derived per
+  read in `GET /api/halo/survey/zones`, so cached zone views never go stale.
+- **UI**: a `pre-<patch>` warn chip in the ATLAS HEALTH cell (staleness qualifies
+  trust, never value) + an "Unverified on <patch>" line on both detail cards.
+  Only `stale` is shown.
+- Not yet: the drop planner's surveyed pockets / targets doc (zones only), and
+  an admin pin for the current patch (§11 Q4, not needed unless the majority
+  misbehaves with a handful of watchers).
+
 ### 6.2 Import (closing the #36 §3.6 deferral)
 
 - `POST /api/admin/survey/import` — admin-only upload of another org's
@@ -547,9 +578,9 @@ value model plus Phase 3's coverage to keep suggestions fresh.
    marks. (~~Tercile pool~~ — decided at slice-1 build: per-system.)
 3. ~~**Gap step size**~~ — MOOTED at slice-4 build: the exact interval
    union has no step (see §5.1 build decisions).
-4. **Majority-build derivation** (§5.1): is hub-side majority robust with a
-   handful of watchers, or should the admin pin the org's current build in
-   settings instead?
+4. ~~**Majority-build derivation**~~ — DECIDED at build (2026-09-24): member
+   majority over 72 h, sticky, persisted; no admin pin until it misbehaves.
+   See §6.1.
 5. **Import trust ceiling:** is batch-level approve enough, or do orgs want
    per-zone cherry-picking on import?
 6. ~~**Mined-out reports (§4.3)**~~ — DECIDED at slice-2 scoping (user):

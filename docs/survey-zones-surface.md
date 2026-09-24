@@ -73,9 +73,9 @@
 > `Branch:` + `Changelist:` off the Game.log header (`sc-alpha-4.9.0/12344265`;
 > both or nothing) → `game_build` on `POST /api/position` → sticky
 > `Session.game_build` → `observations.game_build` and belt marks'
-> `survey.build`. Nothing READS it yet: the staleness derivation (newest
-> evidence's build vs the org's current majority) is still the #37 slice 4
-> design, and until it lands the freshness tile stays a date. **Reviewed in four passes.** §12 and §13 are review output (gaps,
+> `survey.build`. **Staleness derivation built the same day** (survey-platform.md
+> §6.1): zones whose evidence predates the org's current patch get a
+> `pre-<patch>` chip in ATLAS and an "Unverified on" line on the card. **Reviewed in four passes.** §12 and §13 are review output (gaps,
 cross-tool hooks). §14 is the **audit trail** of an adversarial pass that
 checked every claim against the code: each correction it found has since been
 folded into the section it affects, and a fourth pass re-verified §14 itself and
