@@ -1381,6 +1381,53 @@ def clean_material_q(q) -> int | None:
         return None
 
 
+# A rock scan can list the node's own ore more than once, at different Q
+# ("30% GOLD 650" + "50% GOLD 325"), and a single Q field made the surveyor pick
+# which one to type — so the same rock was stored as Q650 by one member and
+# Q325 by the next. The lines are the scan as read; the headline Q is DERIVED
+# from them (share-weighted) so every record answers the same question.
+# Other ores in the rock are deliberately out of scope: a secondary line must
+# never count as a sighting of that ore, and the node's `ore` stays the unit
+# the forecasts count.
+QUALITY_LINES_MAX = 8
+
+
+def clean_quality_lines(lines) -> list[dict] | None:
+    """[{pct, q}] with a positive share and a readable Q, or None when nothing
+    usable was given. Clamps rather than raises — the capture endpoint bounds
+    its own input; this keeps a record arriving any other way derivable."""
+    if not isinstance(lines, list):
+        return None
+    out = []
+    for ln in lines[:QUALITY_LINES_MAX]:
+        if not isinstance(ln, dict):
+            continue
+        q = clean_material_q(ln.get("q"))
+        try:
+            pct = float(ln.get("pct"))
+        except (TypeError, ValueError):
+            continue
+        if q is None or not math.isfinite(pct) or pct <= 0:
+            continue
+        out.append({"pct": round(min(pct, 100.0), 2), "q": q})
+    return out or None
+
+
+def quality_lines_summary(lines: list[dict]) -> dict:
+    """The headline figures one set of lines implies: `q` = share-weighted Q
+    (what mining the rock out yields on average), `q_min`/`q_max` = the spread,
+    `share` = how much of the rock is this ore, in percent."""
+    total = sum(ln["pct"] for ln in lines)
+    return {
+        # half-up, not Python's banker's round: the form previews this in JS
+        # (Math.round), and the preview must match what gets stored
+        "q": int(math.floor(sum(ln["pct"] * ln["q"] for ln in lines) / total + 0.5)),
+        "q_min": min(ln["q"] for ln in lines),
+        "q_max": max(ln["q"] for ln in lines),
+        "share": round(min(total, 100.0), 2),
+    }
+
+
 def quality_for_band(band) -> str:
     # Band is unknown until a node is mined; band None/non-numeric -> "Unk".
     try:
@@ -1404,6 +1451,14 @@ def _normalize_resource(data: dict) -> dict:
     # present the band is a pure projection of it (same rule as a marketplace
     # lot) and the two can never drift apart. `band` survives as the sole input
     # for pre-4.10 records and for a scan nobody read the numbers off.
+    lines = clean_quality_lines(data.get("lines"))
+    for k in ("lines", "q_min", "q_max", "share"):
+        data.pop(k, None)
+    if lines:
+        # Lines win over a typed Q the same way Q wins over a band: the finer
+        # reading is the one the coarser one is derived from.
+        data["lines"] = lines
+        data.update(quality_lines_summary(lines))
     q = clean_material_q(data.get("q"))
     data["q"] = q
     raw_band = quality_band(q) if q is not None else data.get("band")

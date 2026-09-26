@@ -1196,6 +1196,8 @@
     .cap-group input.ti.q-field { flex: 0 0 auto !important; min-width: 0 !important; }
     /* the ore input is wrapped by its picker, so the wrapper is the flex item */
     .cap-group .ore-pick { flex: 1 1 100% !important; min-width: 9rem !important; }
+    /* a quality line's % reads like its Q beside it: short, not a name field */
+    .cap-group .q-line input.ti { flex: 0 0 auto !important; min-width: 0 !important; }
     .cap-group select.sel { min-width: 6.5rem !important; }
     .filter-bar input.ti { flex: 1 1 100% !important; min-width: 9rem !important; }
 
@@ -1270,6 +1272,11 @@
   .route-add-row { display: flex; gap: 8px; flex-wrap: wrap; }
   /* recent runs + quick-picks (history priors) */
   .route-picks { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  /* ---- node quality lines: the scan's own-ore lines, one row each ---- */
+  .q-lines { flex-basis: 100%; font-size: 12px; }
+  .q-line { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+  .q-line input.ti { width: 5.5rem; }
+  .q-lines-sum.err { color: var(--warn); }
   .route-chip { font-size: 12px; padding: 4px 9px; border: 1px solid var(--border);
     border-radius: 14px; cursor: pointer; background: none; color: var(--text); }
   .route-chip:hover { border-color: var(--accent); color: var(--accent); }
@@ -3350,6 +3357,22 @@
           </select>
         </label>
         <span id="node-quality" class="muted" style="font-size:12px;">Unk</span>
+        <button type="button" id="node-lines-add" class="route-chip"
+                title="The scan lists this ore more than once, at different Q? Enter every line — the Q above becomes their share-weighted average, so you never have to pick one.">+ quality lines</button>
+        <!-- Only the node's OWN ore. A secondary ore on the scan is not a
+             sighting of that ore, and the forecasts count the node's ore. The
+             lines make the headline Q a derived figure, so two members reading
+             the same rock store the same Q instead of one typing the best line
+             and the other the biggest. -->
+        <div id="node-lines" class="q-lines" hidden>
+          <span class="muted">Each line of this ore on the scan —
+            “30.00% GOLD 650” is 30% at Q650.</span>
+          <div id="node-lines-rows"></div>
+          <div class="q-line">
+            <button type="button" id="node-lines-more" class="route-chip">+ line</button>
+            <span id="node-lines-sum" class="q-lines-sum muted" role="status" aria-live="polite"></span>
+          </div>
+        </div>
       </div>
       <!-- What the forecast says is under your feet, as one tap. The forecast
            panel already ranks these; repeating the top few HERE is the
@@ -5888,8 +5911,12 @@ const bandTag = (q) => `≈B${qualityBand(q)} ${BAND_QUALITY(qualityBand(q))}`;
 // What a resource node capture actually recorded: the Q when one was read off
 // the scan, else the hand-picked band, else neither (matching nav_core's
 // "(B?)" display name rather than printing a bare null).
+// " (Q325–650 · 80%)" when the node was logged as quality lines: the spread
+// the headline Q averages over, and how much of the rock is this ore.
+const nodeSpread = (d) => d.q_max == null ? ""
+  : ` (${d.q_min !== d.q_max ? `Q${Number(d.q_min)}–${Number(d.q_max)} · ` : ""}${Number(d.share)}%)`;
 const nodeGrade = (d) => !d ? "B?"
-  : d.q != null ? `Q${Number(d.q)} ≈B${qualityBand(d.q)}`
+  : d.q != null ? `Q${Number(d.q)} ≈B${qualityBand(d.q)}${nodeSpread(d)}`
   : d.band != null ? `B${Number(d.band)}` : "B?";
 const DEG = Math.PI / 180;
 
@@ -5932,8 +5959,7 @@ function kindBadge(e) {
 }
 function entDetail(e) {
   if (e.kind === "resource") {
-    const band = e.band == null ? "?" : Number(e.band);
-    return `B${band} · ${esc(e.quality)}${oreValueChip(e.ore)}` + (e.biome ? ` · ${esc(e.biome)}` : "");
+    return `${nodeGrade(e)} · ${esc(e.quality)}${oreValueChip(e.ore)}` + (e.biome ? ` · ${esc(e.biome)}` : "");
   }
   if (e.kind === "wildlife" || e.kind === "harvestable") {
     const val = e.kind === "harvestable" ? oreValueChip(e.name, "harvestable") : "";
@@ -6280,7 +6306,7 @@ function render(state) {
   $("dest-panel").hidden = !d;
   if (d) {
     $("dest-name").innerHTML = entLabel(d);
-    const extra = d.kind === "resource" ? `${esc(d.ore)}${oreValueChip(d.ore)} · B${d.band == null ? "?" : Number(d.band)} · ${esc(d.quality)}`
+    const extra = d.kind === "resource" ? `${esc(d.ore)}${oreValueChip(d.ore)} · ${nodeGrade(d)} · ${esc(d.quality)}`
       : d.kind === "harvestable" ? esc(d.name) + oreValueChip(d.name, "harvestable")
       : d.kind === "wildlife" ? esc(d.name) : esc(d.type);
     $("dest-meta").innerHTML = `${esc(d.container)} · ${extra}` +
@@ -6699,8 +6725,69 @@ $("poi-cancel").onclick = () => postJson("/api/capture/cancel", {});
 // as independent claims — a hand-picked band disagreeing with a stored Q would
 // be a reading the scan never gave (the server settles it the same way:
 // _normalize_resource derives band from q whenever q is present).
+//
+// Quality lines sit one level above both: when any line is filled in, the Q
+// is DERIVED from them (share-weighted, nav_core.quality_lines_summary's twin)
+// and Q + band go read-only, so the three can never disagree either.
+function readNodeLines() {
+  return [...document.querySelectorAll("#node-lines-rows .q-line")].map(row => ({
+    pct: Number(row.querySelector(".q-pct").value),
+    q: Number(row.querySelector(".q-lq").value),
+    blank: row.querySelector(".q-pct").value.trim() === "" || row.querySelector(".q-lq").value.trim() === "",
+  })).filter(l => !l.blank && Number.isFinite(l.pct) && l.pct > 0
+    && Number.isFinite(l.q) && l.q >= 0 && l.q <= 1000)
+    .map(l => ({ pct: l.pct, q: Math.round(l.q) }));
+}
+function qualityLinesSummary(lines) {
+  const total = lines.reduce((a, l) => a + l.pct, 0);
+  const qs = lines.map(l => l.q);
+  return { q: Math.round(lines.reduce((a, l) => a + l.pct * l.q, 0) / total),
+           q_min: Math.min(...qs), q_max: Math.max(...qs),
+           share: Math.round(Math.min(total, 100) * 100) / 100, total };
+}
+function addNodeLine(q) {
+  const row = document.createElement("div");
+  row.className = "q-line";
+  row.innerHTML =
+    `<input class="ti q-field q-pct" type="number" min="0" max="100" step="0.01" inputmode="decimal" placeholder="%" aria-label="Share of the rock, percent">`
+    + `<span class="muted">% at Q</span>`
+    + `<input class="ti q-field q-lq" type="number" min="0" max="1000" step="1" inputmode="numeric" placeholder="Q" aria-label="Quality of this line, 0 to 1000">`
+    + `<button type="button" class="route-chip q-line-x" aria-label="Remove this line">✕</button>`;
+  if (q != null) row.querySelector(".q-lq").value = q;
+  row.querySelectorAll("input").forEach(i => { i.oninput = nodeQualityPreview; });
+  row.querySelector(".q-line-x").onclick = () => {
+    row.remove();
+    if (!document.querySelector("#node-lines-rows .q-line")) clearNodeLines();
+    nodeQualityPreview();
+  };
+  $("node-lines-rows").append(row);
+  return row;
+}
+function clearNodeLines() {
+  $("node-lines-rows").innerHTML = "";
+  $("node-lines").hidden = true;
+  $("node-lines-add").hidden = false;
+}
 function nodeQualityPreview() {
-  const raw = $("node-q").value.trim();
+  const lines = readNodeLines();
+  const qEl = $("node-q"), sum = $("node-lines-sum");
+  if (lines.length) {
+    const s = qualityLinesSummary(lines);
+    qEl.value = String(s.q); qEl.dataset.derived = "1";
+    qEl.readOnly = true; $("node-band").disabled = true;
+    const over = s.total > 100.0001;
+    sum.textContent = over
+      ? `lines add up to ${Math.round(s.total * 100) / 100}% — over 100%`
+      : `${s.share}% of the rock · headline Q${s.q}`
+        + (s.q_min !== s.q_max ? ` (Q${s.q_min}–${s.q_max})` : "");
+    sum.classList.toggle("err", over);
+  } else {
+    // Only undo a Q the lines wrote: a Q the surveyor typed stays theirs.
+    if (qEl.dataset.derived) { qEl.value = ""; delete qEl.dataset.derived; }
+    qEl.readOnly = false; $("node-band").disabled = false;
+    sum.textContent = ""; sum.classList.remove("err");
+  }
+  const raw = qEl.value.trim();
   const q = raw === "" ? null : Number(raw);
   const hasQ = q !== null && Number.isFinite(q) && q >= 0;
   if (hasQ) $("node-band").value = String(qualityBand(q));
@@ -6709,19 +6796,33 @@ function nodeQualityPreview() {
 }
 $("node-q").oninput = nodeQualityPreview;
 $("node-band").onchange = () => { $("node-q").value = ""; nodeQualityPreview(); };
+// Opening the lines carries a typed Q into the first row — it was one of them.
+$("node-lines-add").onclick = () => {
+  const raw = $("node-q").value.trim();
+  $("node-lines").hidden = false;
+  $("node-lines-add").hidden = true;
+  addNodeLine(raw === "" ? null : Number(raw)).querySelector(".q-pct").focus();
+  nodeQualityPreview();
+};
+$("node-lines-more").onclick = () => addNodeLine().querySelector(".q-pct").focus();
 nodeQualityPreview();
 $("node-arm").onclick = async () => {
   const ore = nodeOre();
   if (!ore) return $("node-ore").focus();
   const qRaw = $("node-q").value.trim();
+  const lines = readNodeLines();
+  if (lines.length && qualityLinesSummary(lines).total > 100.0001)
+    return show("node-result", "⚠ the quality lines add up to more than 100%", "err");
   const r = await postJson("/api/capture/node", {
     ore, band: $("node-band").value,   // "Unk" or "1".."8"; server normalizes
     q: qRaw === "" ? null : Number(qRaw),   // a read Q wins over the band
+    lines: lines.length ? lines : null,     // ...and lines win over the Q
     biome: selectValue("node-biome"), note: $("node-note").value.trim() });
   if (r.ok) {
     $("node-ore").value = ""; updateNodeOreValue();
     // Q is per-rock, so it clears; the band it derived stays as the sticky
     // default for the next node in the same patch of ground.
+    clearNodeLines();
     $("node-q").value = ""; nodeQualityPreview();
     resetSelect("node-biome"); autoPickBiome("node-biome");
     $("node-note").value = "";
@@ -20158,7 +20259,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total, extra) {
     .sort((a, b) => (b.observed_at || 0) - (a.observed_at || 0))[0];
   const lead = best
     ? `<p class="cap" style="margin:6px 0 0;">Freshest unworked${rich.length ? " (B6+)" : ""}: <b>${esc(best.ore || "?")}</b>`
-      + `${best.band ? ` B${best.band}` : ""} · ${best.observed_at ? fmtAge(Math.max(0, now - best.observed_at)) : "—"}`
+      + `${best.band ? ` ${nodeGrade(best)}` : ""} · ${best.observed_at ? fmtAge(Math.max(0, now - best.observed_at)) : "—"}`
       + ` <button type="button" class="route-chip primary" data-flyto="${best.id}" title="set the navigator's destination to this sighting">Fly to it</button></p>`
     : "";
   const timeline = `<details class="card svy-timeline svy-timeline-d">`
@@ -20168,7 +20269,7 @@ function renderSurfaceSurveyCard(el, z, sightings, total, extra) {
         const age = o.observed_at ? fmtAge(Math.max(0, now - o.observed_at)) : "—";
         return `<div class="halo-alt">`
           + `<b>${esc(age)}</b> · ${esc(o.owner_handle || "?")} · ${esc(o.ore || "?")}`
-          + (o.band ? ` B${o.band}` : "") + (o.biome ? ` · ${esc(o.biome)}` : "")
+          + (o.band ? ` ${nodeGrade(o)}` : "") + (o.biome ? ` · ${esc(o.biome)}` : "")
           + (o.dist_m != null ? ` · ${fmtDist(o.dist_m)} from centre` : "")
           + (o.mined_at ? ` <span class="halo-chip warn">worked</span>` : "")
           + `</div>`;

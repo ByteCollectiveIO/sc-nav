@@ -83,6 +83,14 @@ library at `#/blueprints`, #29)
   two can never disagree. Band survives as the only input a pre-4.10 record or
   an unread scan has. Frontend `#node-q` drives `#node-band`; touching the
   picker clears q. `nodeGrade` renders "Q344 ≈B3" / "B7" / "B?".
+  **Quality lines (2026-09-26):** optional `lines` [{pct, q}] (≤`QUALITY_LINES_MAX`
+  8, Σpct ≤ 100 → 400) = every line of the node's OWN ore on the scan; they win
+  over `q` (precedence lines > q > band) and `nav_core.quality_lines_summary`
+  derives `q` (share-weighted, half-up to match the JS preview) + `q_min`/`q_max`/
+  `share`. Other ores on the scan are deliberately NOT captured — a secondary
+  line must never count as a sighting. Frontend `#node-lines` rows
+  (`addNodeLine`/`readNodeLines`/`qualityLinesSummary`), Q + band go read-only
+  while lines are filled; `nodeSpread` appends "(Q325–650 · 80%)" to `nodeGrade`.
   **Forecast scope (2026-09-20):** `resource_forecast(zone=)` — the prior is the
   smallest NAMED AREA the fix is standing in (`nav_core.forecast_zone_at`,
   smallest containing circle, archived skipped), else the body. Body-wide
