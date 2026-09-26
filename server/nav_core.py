@@ -1095,6 +1095,7 @@ def compute_state(
     forecast = None
     harvestable_forecast = None
     wildlife_forecast = None
+    biome_hint = None
     if container is not None and container.is_body and lat is not None:
         # Which named area the fix is standing in, so the forecast assumes THIS
         # ground rather than the whole moon. The client runs the same predicate
@@ -1109,6 +1110,8 @@ def compute_state(
                 container.body_radius, category=cat, zone=zone)
             for cat in ("resource", "harvestable", "wildlife")
         )
+        biome_hint = zone_biomes(nav, container.system, container.name,
+                                 container.body_radius, zone)
 
     destination = None
     dest_entity = nav.pois.get(destination_id)
@@ -1178,6 +1181,7 @@ def compute_state(
         "resource_forecast": forecast,
         "wildlife_forecast": wildlife_forecast,
         "harvestable_forecast": harvestable_forecast,
+        "biome_hint": biome_hint,
     }
 
 
@@ -1938,6 +1942,36 @@ def forecast_zone_at(zones, system: str, body: str, lat, lon,
     if not hits:
         return None
     return min(hits, key=lambda z: float(z.get("radius_m") or 0) or math.inf)
+
+
+def zone_biomes(nav: NavData, system: str, body: str, radius_m: float,
+                zone: dict | None) -> dict | None:
+    """Biomes the org has logged inside the named area the fix stands in, most
+    chosen first: {"zone", "ranked": [{"biome", "n"}], "n"}. None outside an
+    area or before any sighting in it carries a biome.
+
+    Feeds the capture forms' biome dropdowns — a body can list 20+ biomes and
+    an area's surveyor keeps picking the same one or two. Unlike the forecasts
+    this pools EVERY lane: a biome is a property of the ground, not of what was
+    found on it, so a plant logged here says as much about it as an ore does.
+    Scoped to the zone only (no body fallback): a body-wide favourite is just
+    the biome most of the org happened to survey, which is no reason to assume
+    it underfoot."""
+    if zone is None:
+        return None
+    counts: dict[str, int] = {}
+    for cat in OBSERVATION_CATEGORIES:
+        for o in _obs_on_body(nav, system, body, cat):
+            b = (o.biome or "").strip()
+            if b and surface_zone_contains(zone, o.latitude, o.longitude,
+                                           radius_m, o.height_m):
+                counts[b] = counts.get(b, 0) + 1
+    if not counts:
+        return None
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+    return {"zone": zone.get("name") or "this area",
+            "ranked": [{"biome": b, "n": n} for b, n in ranked],
+            "n": sum(counts.values())}
 
 
 def resource_forecast(
