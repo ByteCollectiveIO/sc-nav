@@ -6274,7 +6274,7 @@ function render(state) {
   applyWhereChips(state);                  // "☄ Halo band N" (#31) / "📍 Iron Ridge" (#37.1)
   ensureSurfaceZones(state);               // refetches only when the body changes
   renderZoneClaim(state);
-  updateBiomes(state.system, c && c.name);
+  updateBiomes(state.system, c && c.name, state.biome_hint);
 
   const d = state.destination;
   $("dest-panel").hidden = !d;
@@ -8591,13 +8591,28 @@ function selectValue(selId) {
 function resetSelect(selId) {
   $(selId).value = ""; $(otherInputId(selId)).value = ""; toggleOther(selId);
 }
-function fillSelectWithOther(selId, names, placeholder) {
+// `top` = {label, names} to list first under its own heading (the biomes the
+// area you're standing in was logged in); those names are left out of the
+// alphabetical rest so nothing appears twice.
+function fillSelectWithOther(selId, names, placeholder, top) {
   const sel = $(selId), cur = sel.value;
+  const first = (top && top.names) || [];
   sel.innerHTML = "";
   sel.appendChild(new Option(placeholder, ""));
-  for (const n of names) sel.appendChild(new Option(n, n));
+  let rest = sel;
+  if (first.length) {
+    const g = document.createElement("optgroup");
+    g.label = top.label;
+    for (const n of first) g.appendChild(new Option(n, n));
+    sel.appendChild(g);
+    rest = document.createElement("optgroup");
+    rest.label = "all biomes";
+    sel.appendChild(rest);
+  }
+  for (const n of names) if (!first.includes(n)) rest.appendChild(new Option(n, n));
   sel.appendChild(new Option("Other…", OTHER_OPT));
-  sel.value = (cur === OTHER_OPT || names.includes(cur)) ? cur : "";  // keep if still valid
+  const valid = cur === OTHER_OPT || names.includes(cur) || first.includes(cur);
+  sel.value = valid ? cur : "";  // keep if still valid
   toggleOther(selId);
 }
 
@@ -8811,15 +8826,23 @@ const BIOME_SELECTS = ["node-biome", "wild-biome"];
 let biomeData = { by_body: {}, by_system: {}, all: [] };
 let biomeChoices = [];            // the list currently offered, for autoPickBiome
 let lastBiomeKey = null;
-function updateBiomes(system, container) {
+// The named area you're standing in: the biomes the org logged there, most
+// chosen first (state.biome_hint, server-side like the ore shortlist). A body
+// can list 20+ biomes and an area's surveyor keeps picking the same one or two,
+// so those go to the top and the most-chosen one becomes the default.
+let zoneBiomeHint = null;
+function updateBiomes(system, container, hint) {
   const s = (system || "").toLowerCase(), c = (container || "").toLowerCase();
-  const key = s + "/" + c;
+  const top = hint && hint.ranked && hint.ranked.length
+    ? { label: `logged in ${hint.zone}`, names: hint.ranked.map(r => r.biome) } : null;
+  const key = s + "/" + c + "|" + (top ? top.label + "=" + top.names.join(",") : "");
   if (key === lastBiomeKey) return;
   lastBiomeKey = key;
+  zoneBiomeHint = top;
   const list = (biomeData.by_body[s] && biomeData.by_body[s][c])
     || biomeData.by_system[s] || biomeData.all;
   biomeChoices = list;
-  for (const id of BIOME_SELECTS) fillSelectWithOther(id, list, "— biome (optional)");
+  for (const id of BIOME_SELECTS) fillSelectWithOther(id, list, "— biome (optional)", top);
   for (const id of BIOME_SELECTS) autoPickBiome(id);
 }
 
@@ -8832,11 +8855,15 @@ function updateBiomes(system, container) {
 // Only ever fills a BLANK field, so it can never overwrite a deliberate
 // choice, and "Other…" stays in the list for the case where the catalog is
 // wrong about this patch of ground.
+//
+// Inside a named area the same rule extends to its most-chosen biome: the
+// org's own record of this ground beats making the surveyor scroll for it.
 function autoPickBiome(selId) {
   const sel = $(selId);
   if (!sel || sel.value) return;                   // never clobber a choice
-  if (!Array.isArray(biomeChoices) || biomeChoices.length !== 1) return;
-  sel.value = biomeChoices[0];
+  if (zoneBiomeHint) sel.value = zoneBiomeHint.names[0];
+  else if (Array.isArray(biomeChoices) && biomeChoices.length === 1) sel.value = biomeChoices[0];
+  else return;
   toggleOther(selId);
 }
 BIOME_SELECTS.forEach(id => $(id).onchange = () => toggleOther(id));
@@ -25214,7 +25241,8 @@ function init() {
   fetch("/api/biomes").then(r => r.json()).then(d => {
     biomeData = d;
     lastBiomeKey = null;
-    if (lastState) updateBiomes(lastState.system, lastState.container && lastState.container.name);
+    if (lastState) updateBiomes(lastState.system, lastState.container && lastState.container.name,
+                                lastState.biome_hint);
     else {
       biomeChoices = d.all;
       for (const id of BIOME_SELECTS) fillSelectWithOther(id, d.all, "— biome (optional)");

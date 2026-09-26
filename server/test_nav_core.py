@@ -1088,6 +1088,33 @@ class ResourceStatsTests(unittest.TestCase):
         self.assertEqual(fc["scope"]["kind"], "body")
         self.assertEqual(fc["ranked"][0]["ore"], "Quantanium")
 
+    def test_zone_biomes_rank_the_areas_own_biomes_across_lanes(self):
+        nav = self._body_nav()
+        area = self._zone("Area B", -45.0, -170.0)
+
+        def mark(lat, lon, biome, cat="resource"):
+            self._add(nav, lat, lon, "Hadanite")
+            o = nav.observations[self._oid - 1]
+            o.biome = biome
+            if cat != "resource":
+                o.category, o.data = cat, {"species": "Kopion"}
+
+        mark(-45.0, -170.0, "Tundra")
+        mark(-45.01, -170.0, "Tundra", cat="wildlife")   # every lane counts
+        mark(-45.0, -170.01, "Ice Caves")
+        mark(-45.0, -170.02, None)                       # no biome: ignored
+        for _ in range(5):
+            mark(45.0, 10.0, "Desert")                   # outside the area
+        hint = nav_core.zone_biomes(nav, "Stanton", "Yela", self.R, area)
+        self.assertEqual(hint["zone"], "Area B")
+        self.assertEqual(hint["ranked"], [{"biome": "Tundra", "n": 2},
+                                          {"biome": "Ice Caves", "n": 1}])
+        self.assertEqual(hint["n"], 3)
+        # Outside any area there is no hint — never a body-wide favourite.
+        self.assertIsNone(nav_core.zone_biomes(nav, "Stanton", "Yela", self.R, None))
+        empty = self._zone("Just Claimed", -10.0, 60.0)
+        self.assertIsNone(nav_core.zone_biomes(nav, "Stanton", "Yela", self.R, empty))
+
     def test_forecast_zone_picks_the_smallest_and_skips_archived(self):
         big = self._zone("Whole Ridge", 10.0, 20.0, radius_m=50_000.0)
         small = self._zone("The Outcrop", 10.0, 20.0, radius_m=5_000.0)

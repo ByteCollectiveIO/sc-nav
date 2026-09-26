@@ -11645,5 +11645,33 @@ class SurfaceValueApiTests(unittest.TestCase):
         self.assertNotIn("pct", bodies[0])
 
 
+class CuratedFloraFaunaTests(unittest.TestCase):
+    """In-game names the curated fauna list / the UEX feed were missing."""
+
+    def test_fauna_list_carries_added_species(self):
+        names = app.load_fauna_names()
+        self.assertIn("Quasi Grazer", names)
+        for n in ("Valakkar (Juvenile)", "Valakkar (Apex)",
+                  "Irradiated Valakkar (Adult)", "Irradiated Kopion"):
+            self.assertIn(n, names)
+
+    def test_harvestable_supplement_merges_over_feed(self):
+        # Pingala Seeds isn't in UEX's commodities feed; the committed
+        # supplement must still surface it beside the feed's names.
+        orig = (app.OFFLINE, app._load_json_list)
+        app.OFFLINE = True
+        app._load_json_list = lambda _p: [
+            {"name": "Sunset Berries", "kind": "Natural", "is_harvestable": 1}]
+        try:
+            names = app.load_harvestable_names()
+        finally:
+            app.OFFLINE, app._load_json_list = orig
+        self.assertEqual(names, sorted(names))
+        self.assertIn("Sunset Berries", names)
+        for n in ("Pingala Seeds", "Fotia Seedpod", "Wuotan Seed", "Bluemoon Fungus"):
+            self.assertIn(n, names)
+        self.assertEqual(len(names), len(set(names)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

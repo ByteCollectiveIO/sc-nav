@@ -1046,6 +1046,13 @@ def load_harvestable_names() -> list[str]:
         and r.get("is_harvestable") in (1, "1", True)
         and r.get("name")
     }
+    # UEX doesn't list every in-game harvestable (Pingala Seeds), so a committed
+    # supplement (server/harvestables_extra.json) is merged in, like fauna.json.
+    try:
+        extra = json.loads((Path(__file__).parent / "harvestables_extra.json").read_text())
+        names.update(n for n in extra if n)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[sc-nav] harvestables supplement load failed: {exc}")
     return sorted(names)
 
 
