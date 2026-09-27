@@ -2673,6 +2673,212 @@ class OpMoneyApiTests(unittest.TestCase):
         self._mark(oid, t, "received")                          # payments can finish after close
 
 
+class OpLootApiTests(unittest.TestCase):
+    """docs/event-operations.md §7 (ops slice 4): loot items, Need/Want/Pass,
+    the three roll modes, the seed commitment/reveal, and re-rolls."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _op(self, loot=None, members=("2", "3"), guest="Dusty", live=True):
+        op = self.client.post("/api/ops", json={"name": "Loot op"}).json()
+        oid = op["id"]
+        for m in members:
+            self.client.post(f"/api/ops/{oid}/roster", json={"discord_id": m})
+        if guest:
+            self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": guest})
+        if loot:
+            self.client.put(f"/api/ops/{oid}/rules", json={"rules": {"loot": loot}})
+        if live:
+            self.client.post(f"/api/ops/{oid}/phase", json={"to": "live"})
+            self.client.post(f"/api/ops/{oid}/attendance/bulk", json={"attendance": "present"})
+        return self.client.get(f"/api/ops/{oid}").json()
+
+    def _item(self, oid, name="P4-AR rifle", **kw):
+        r = self.client.post(f"/api/ops/{oid}/loot", json={"name": name, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["loot"]["items"][-1]
+
+    def _roll(self, oid, lid, code=200):
+        r = self.client.post(f"/api/ops/{oid}/loot/{lid}/roll")
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    def _intent(self, oid, lid, intent, code=200, **kw):
+        r = self.client.put(f"/api/ops/{oid}/loot/{lid}/intent", json={"intent": intent, **kw})
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    def test_seed_committed_at_live_revealed_at_close_fresh_on_reopen(self):
+        op = self._op(live=False)
+        self.assertEqual(op["loot"]["commitments"], [])
+        oid = op["id"]
+        op = self.client.post(f"/api/ops/{oid}/phase", json={"to": "live"}).json()
+        c = op["loot"]["commitments"]
+        self.assertEqual(len(c), 1)
+        self.assertIsNone(c[0]["seed"])                       # secret while live
+        self.client.post(f"/api/ops/{oid}/attendance/bulk", json={"attendance": "present"})
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        op = self.client.post(f"/api/ops/{oid}/phase", json={"to": "closed"}).json()
+        seed = op["loot"]["commitments"][0]["seed"]
+        self.assertEqual(app.nav_core.loot_seed_hash(seed), c[0]["hash"])
+        op = self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle", "reason": "late drop"}).json()
+        c2 = op["loot"]["commitments"]
+        self.assertEqual(len(c2), 2)
+        self.assertEqual(c2[0]["seed"], seed)                 # old stays revealed
+        self.assertIsNone(c2[1]["seed"])                      # new one is secret
+
+    def test_random_roll_is_verifiable_and_ignores_need(self):
+        op = self._op()
+        oid = op["id"]
+        it = self._item(oid)
+        self.assertEqual({r["weight"] for r in it["table"]}, {1000})
+        self._as("2"); self._intent(oid, it["id"], "need"); self._as("1")
+        op = self._roll(oid, it["id"])
+        item = op["loot"]["items"][0]
+        self.assertEqual(item["status"], "rolled")
+        self.assertEqual({r["weight"] for r in item["table"]}, {1000})   # Need changes nothing
+        # Verify it the way the browser will, once the seed is revealed.
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        op = self.client.post(f"/api/ops/{oid}/phase", json={"to": "closed"}).json()
+        seed = op["loot"]["commitments"][0]["seed"]
+        roll = op["loot"]["rolls"][0]
+        h = app.nav_core.loot_hmac(seed, f"{oid}:{roll['seq']}")
+        pick = int(h[:16], 16) % roll["total"]
+        self.assertEqual(pick, roll["pick"])
+        acc, win = 0, None
+        for w in roll["weights"]:
+            acc += w["weight"]
+            if pick < acc:
+                win = w["roster_id"]; break
+        self.assertEqual(win, roll["winner_roster"])
+        self.assertIn("wins (roll #1, Random, 4 in the roll)", op["log"][-3]["text"])
+
+    def test_weighted_need_and_visible_intents(self):
+        op = self._op(loot={"mode": "weighted", "need_weight": 1.5})
+        oid = op["id"]
+        it = self._item(oid)
+        self._as("2"); self._intent(oid, it["id"], "need")
+        self._as("3"); op = self._intent(oid, it["id"], "pass")
+        self._as("1")
+        # The organizer sets the guest's intent — and it's shown as such.
+        rg = next(r["id"] for r in op["roster"] if r["name"] == "Dusty")
+        op = self._intent(oid, it["id"], "need", roster_id=rg)
+        tab = {r["name"]: r for r in op["loot"]["items"][0]["table"]}
+        self.assertEqual(tab["Dusty"]["intent"], "need")
+        self.assertEqual(tab["Dusty"]["set_by_name"], app._resolve_member_name("1", None))
+        self.assertEqual(tab["Dusty"]["weight"], 1500)
+        self.assertEqual(tab[app._resolve_member_name("3", None)]["weight"], 0)
+        me = tab[app._resolve_member_name("1", None)]
+        self.assertEqual((me["intent"], me["answered"]), ("want", False))
+        # The organizer has run earlier ops in this suite, so history counts
+        # (1 + 0.1 per op, capped ×2); the guest has none and weighs 1.0.
+        self.assertEqual(me["att_factor"], app.nav_core.loot_attendance_factor(me["ops_attended"]))
+        self.assertGreater(me["ops_attended"], 0)
+        self.assertEqual(me["weight"], int(round(me["att_factor"] * 1000)))
+        self.assertEqual(tab["Dusty"]["att_factor"], 1.0)
+        op = self._roll(oid, it["id"])
+        roll = op["loot"]["items"][0]["roll"]
+        self.assertNotEqual(roll["winner_name"], app._resolve_member_name("3", None))  # passed
+
+    def test_members_set_own_intent_only_and_must_be_eligible(self):
+        op = self._op(guest=None)
+        oid = op["id"]
+        it = self._item(oid)
+        r3 = next(r["id"] for r in op["roster"] if r["discord_id"] == "3")
+        self._as("2")
+        self._intent(oid, it["id"], "need", roster_id=r3, code=403)
+        self._as("1")
+        self.client.patch(f"/api/ops/{oid}/roster/{r3}", json={"attendance": "absent"})
+        self._as("3")
+        self._intent(oid, it["id"], "need", code=409)          # absent isn't eligible
+        self._as("5")
+        self._intent(oid, it["id"], "need", code=403)          # not on the roster
+
+    def test_everyone_passes_and_split_units(self):
+        op = self._op(members=(), guest=None)
+        oid = op["id"]
+        op = self.client.post(f"/api/ops/{oid}/loot", json={"name": "Medpen", "qty": 3, "split_units": True}).json()
+        self.assertEqual([i["qty"] for i in op["loot"]["items"]], [1, 1, 1])
+        lid = op["loot"]["items"][0]["id"]
+        self._intent(oid, lid, "pass")
+        self._roll(oid, lid, code=409)
+
+    def test_round_robin_rotation_pass_keeps_place_and_reroll_restores(self):
+        op = self._op(loot={"mode": "round_robin"}, guest=None)
+        oid = op["id"]
+        first = op["loot"]["rotation_next"][0]                 # seeded — preview == roll
+        a = self._item(oid, "A")
+        op = self._roll(oid, a["id"])
+        self.assertEqual(op["loot"]["items"][0]["roll"]["winner_name"], first)
+        after = op["loot"]["rotation_next"]
+        self.assertEqual(after[-1], first)                     # winner to the back
+        nxt = after[0]
+        b = self._item(oid, "B")
+        rid_next = next(r["id"] for r in op["roster"] if r["name"] == nxt)
+        self._intent(oid, b["id"], "pass", roster_id=rid_next)   # organizer is a manager
+        op = self._roll(oid, b["id"])
+        self.assertEqual(op["loot"]["items"][1]["roll"]["winner_name"], after[1])
+        self.assertEqual(op["loot"]["rotation_next"][0], nxt)    # passing kept their place
+        # Re-roll B: the voided winner gets their place back.
+        r = self.client.post(f"/api/ops/{oid}/loot/{b['id']}/reroll", json={"reason": "lost to a 30k"})
+        self.assertEqual(r.status_code, 200, r.text)
+        op = r.json()
+        self.assertEqual(op["loot"]["rotation_next"], after)
+        item = op["loot"]["items"][1]
+        self.assertEqual(item["status"], "open")
+        self.assertEqual(item["voided"][0]["reason"], "lost to a 30k")
+        self.assertIn("voided roll #2", op["log"][-1]["text"])
+
+    def test_named_rotation_carries_across_ops(self):
+        op1 = self._op(loot={"mode": "round_robin", "rotation": "Friday bunkers"}, guest=None)
+        it = self._item(op1["id"])
+        op1 = self._roll(op1["id"], it["id"])
+        w1 = op1["loot"]["items"][0]["roll"]["winner_name"]
+        op2 = self._op(loot={"mode": "round_robin", "rotation": "Friday bunkers"}, guest=None)
+        self.assertEqual(op2["loot"]["rotation_next"][-1], w1)   # last week's winner waits
+        self.assertIn("Friday bunkers", op2["loot"]["rotation_names"])
+
+    def test_rolled_item_and_winner_are_protected(self):
+        op = self._op(guest=None)
+        oid = op["id"]
+        it = self._item(oid)
+        op = self._roll(oid, it["id"])
+        self.assertEqual(self.client.delete(f"/api/ops/{oid}/loot/{it['id']}").status_code, 409)
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/loot/{it['id']}/roll").status_code, 409)
+        win = op["loot"]["items"][0]["roll"]["winner_roster"]
+        self.assertEqual(self.client.delete(f"/api/ops/{oid}/roster/{win}").status_code, 409)
+        self._as("2")
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/loot/{it['id']}/reroll",
+                                          json={"reason": "mine now"}).status_code, 403)
+
+    def test_loot_needs_live_or_settle(self):
+        op = self._op(live=False)
+        r = self.client.post(f"/api/ops/{op['id']}/loot", json={"name": "x"})
+        self.assertEqual(r.status_code, 409)
+
+
 class TradeRunStateTests(unittest.TestCase):
     """The trade-run leg/phase state machine (#21 step 5): guidance points at the
     active leg's buy terminal until the buy is confirmed, then its sell terminal;

@@ -547,6 +547,55 @@ CREATE TABLE IF NOT EXISTS op_transfers (
 );
 CREATE INDEX IF NOT EXISTS op_transfers_op ON op_transfers(op_id);
 
+-- Loot (§7). An item is rolled once; a re-roll VOIDS the roll (kept, struck
+-- through, with the reason) and the item is open again.
+CREATE TABLE IF NOT EXISTS op_loot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    qty INTEGER NOT NULL DEFAULT 1,
+    note TEXT,
+    found_by INTEGER,                   -- roster row, optional
+    status TEXT NOT NULL DEFAULT 'open',-- open | rolled
+    created_by TEXT, created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS op_loot_op ON op_loot(op_id);
+-- Need / Want / Pass per player per item. `set_by` ≠ the player = set on
+-- their behalf, and the record says so.
+CREATE TABLE IF NOT EXISTS op_loot_intents (
+    loot_id INTEGER NOT NULL,
+    roster_id INTEGER NOT NULL,
+    intent TEXT NOT NULL,               -- need | want | pass
+    set_by TEXT, set_at TEXT,
+    PRIMARY KEY (loot_id, roster_id)
+);
+-- Every roll, forever. `weights` is the full table AT ROLL TIME (who, their
+-- intent, factors, integer weight) — what Verify recomputes against.
+CREATE TABLE IF NOT EXISTS op_rolls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id INTEGER NOT NULL,
+    loot_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,               -- per-op roll number (HMAC message)
+    mode TEXT NOT NULL,
+    seed_idx INTEGER,                   -- which committed seed (random/weighted)
+    weights TEXT NOT NULL,              -- JSON table
+    pick INTEGER, total INTEGER,        -- random/weighted: the HMAC pick
+    winner_roster INTEGER,
+    rotation_before TEXT, rotation_after TEXT,   -- round robin (JSON roster ids)
+    named_before TEXT, named_after TEXT,         -- named rotation (JSON discord ids)
+    rules_version INTEGER,
+    rolled_by TEXT, created_at TEXT,
+    voided_at TEXT, voided_by TEXT, void_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS op_rolls_op ON op_rolls(op_id);
+-- Named rotations carried across ops ("Friday bunkers"): an order of MEMBER
+-- discord ids (guests don't persist between ops).
+CREATE TABLE IF NOT EXISTS op_rotations (
+    name TEXT PRIMARY KEY,
+    member_order TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT
+);
+
 -- Trade planner favorites (#21): a member's saved trade-route configurations.
 -- `data` is a JSON blob of the *plan config* (ship, usable SCU, start, mode,
 -- filters, budget, manual legs) — NOT the resolved legs/prices. Prices move, so a
@@ -843,6 +892,10 @@ def init(db_path) -> None:
         # before committing (docs/event-operations.md §6.1.1/§13).
         _ensure_column("events", "rules", "TEXT")
         _ensure_column("events", "contracts", "TEXT")
+        # Loot (ops slice 4): committed seeds [{seed, hash, revealed}] and the
+        # op's round-robin rotation (roster ids).
+        _ensure_column("operations", "loot_seeds", "TEXT")
+        _ensure_column("operations", "loot_rotation", "TEXT")
         # Personal vs org goals + blueprint-seeded craft goals (#14.2). A goal is
         # `org` (shared board, anyone contributes) or `personal` (only its creator
         # sees/fills it); `blueprint_key` tags a goal whose line items were seeded
@@ -2547,6 +2600,8 @@ def _op_row(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["deputies"] = _u(d.get("deputies")) or []
     d["rules"] = _u(d.get("rules")) if d.get("rules") else {}
+    d["loot_seeds"] = _u(d.get("loot_seeds")) if d.get("loot_seeds") else []
+    d["loot_rotation"] = _u(d.get("loot_rotation")) if d.get("loot_rotation") else None
     return d
 
 
@@ -2611,14 +2666,16 @@ def list_ops(scope: str, discord_id: str | None = None, limit: int = 100) -> lis
 
 
 _OP_EDITABLE = ("name", "deputies", "phase", "started_at", "ended_at", "closed_at",
-                "rules", "rules_version")
+                "rules", "rules_version", "loot_seeds", "loot_rotation")
 
 
 def update_op(op_id: int, fields: dict, at: str) -> bool:
     cols = [c for c in _OP_EDITABLE if c in fields]
     if not cols:
         return False
-    vals = [_j(fields[c]) if c in ("deputies", "rules") else fields[c] for c in cols]
+    vals = [(_j(fields[c]) if fields[c] is not None else None)
+            if c in ("deputies", "rules", "loot_seeds", "loot_rotation") else fields[c]
+            for c in cols]
     with _lock, _conn:
         cur = _conn.execute(
             f"UPDATE operations SET {', '.join(f'{c}=?' for c in cols)}, updated_at=? "
@@ -2632,7 +2689,9 @@ def delete_op(op_id: int) -> bool:
     with _lock, _conn:
         _conn.execute("DELETE FROM op_contract_ticks WHERE contract_id IN "
                       "(SELECT id FROM op_contracts WHERE op_id=?)", (op_id,))
-        for t in ("op_contracts", "op_ledger", "op_transfers"):
+        _conn.execute("DELETE FROM op_loot_intents WHERE loot_id IN "
+                      "(SELECT id FROM op_loot WHERE op_id=?)", (op_id,))
+        for t in ("op_contracts", "op_ledger", "op_transfers", "op_loot", "op_rolls"):
             _conn.execute(f"DELETE FROM {t} WHERE op_id=?", (op_id,))
         _conn.execute("DELETE FROM op_roster WHERE op_id=?", (op_id,))
         _conn.execute("DELETE FROM op_log WHERE op_id=?", (op_id,))
@@ -2869,6 +2928,148 @@ def mark_op_transfer(tid: int, action: str, by: str, at: str, note: str | None =
     with _lock, _conn:
         cur = _conn.execute(f"UPDATE op_transfers SET {sets} WHERE id=?", (*vals, tid))
     return cur.rowcount > 0
+
+
+# --- op loot (§7) ------------------------------------------------------------
+
+def list_op_loot(op_id: int) -> list[dict]:
+    with _lock:
+        items = [dict(r) for r in _conn.execute(
+            "SELECT * FROM op_loot WHERE op_id=? ORDER BY id", (op_id,)).fetchall()]
+        intents = _conn.execute(
+            "SELECT i.* FROM op_loot_intents i JOIN op_loot l ON l.id = i.loot_id "
+            "WHERE l.op_id=?", (op_id,)).fetchall()
+    by = {}
+    for i in intents:
+        by.setdefault(i["loot_id"], {})[i["roster_id"]] = dict(i)
+    for it in items:
+        it["intents"] = by.get(it["id"], {})
+    return items
+
+
+def get_op_loot(lid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM op_loot WHERE id=?", (lid,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_op_loot(op_id: int, it: dict) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO op_loot (op_id, name, qty, note, found_by, created_by, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (op_id, it["name"], int(it.get("qty") or 1), it.get("note"), it.get("found_by"),
+             str(it["created_by"]), it["created_at"]))
+    return cur.lastrowid
+
+
+def delete_op_loot(lid: int) -> bool:
+    with _lock, _conn:
+        _conn.execute("DELETE FROM op_loot_intents WHERE loot_id=?", (lid,))
+        cur = _conn.execute("DELETE FROM op_loot WHERE id=?", (lid,))
+    return cur.rowcount > 0
+
+
+def set_op_loot_status(lid: int, status: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE op_loot SET status=? WHERE id=?", (status, lid))
+
+
+def set_op_loot_intent(lid: int, roster_id: int, intent: str | None, by: str, at: str) -> None:
+    with _lock, _conn:
+        if intent is None:
+            _conn.execute("DELETE FROM op_loot_intents WHERE loot_id=? AND roster_id=?",
+                          (lid, roster_id))
+        else:
+            _conn.execute(
+                "INSERT INTO op_loot_intents (loot_id, roster_id, intent, set_by, set_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(loot_id, roster_id) DO UPDATE SET "
+                "intent=excluded.intent, set_by=excluded.set_by, set_at=excluded.set_at",
+                (lid, roster_id, intent, str(by), at))
+
+
+def op_roster_loot_refs(roster_id: int) -> int:
+    """Live rolls a roster row won — removing them would orphan the result."""
+    with _lock:
+        return _conn.execute(
+            "SELECT COUNT(*) FROM op_rolls WHERE winner_roster=? AND voided_at IS NULL",
+            (roster_id,)).fetchone()[0]
+
+
+_ROLL_JSON = ("weights", "rotation_before", "rotation_after", "named_before", "named_after")
+
+
+def list_op_rolls(op_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM op_rolls WHERE op_id=? ORDER BY seq",
+                             (op_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in _ROLL_JSON:
+            d[k] = _u(d[k]) if d.get(k) else None
+        out.append(d)
+    return out
+
+
+def next_op_roll_seq(op_id: int) -> int:
+    with _lock:
+        return _conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM op_rolls WHERE op_id=?",
+                             (op_id,)).fetchone()[0]
+
+
+def add_op_roll(r: dict) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO op_rolls (op_id, loot_id, seq, mode, seed_idx, weights, pick, total, "
+            "winner_roster, rotation_before, rotation_after, named_before, named_after, "
+            "rules_version, rolled_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (r["op_id"], r["loot_id"], r["seq"], r["mode"], r.get("seed_idx"), _j(r["weights"]),
+             r.get("pick"), r.get("total"), r.get("winner_roster"),
+             *[(_j(r[k]) if r.get(k) is not None else None) for k in
+               ("rotation_before", "rotation_after", "named_before", "named_after")],
+             r.get("rules_version"), str(r["rolled_by"]), r["created_at"]))
+    return cur.lastrowid
+
+
+def void_op_roll(roll_id: int, by: str, reason: str, at: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE op_rolls SET voided_at=?, voided_by=?, void_reason=? "
+            "WHERE id=? AND voided_at IS NULL", (at, str(by), reason, roll_id))
+    return cur.rowcount > 0
+
+
+def get_op_rotation(name: str) -> list[str]:
+    with _lock:
+        row = _conn.execute("SELECT member_order FROM op_rotations WHERE name=?",
+                            (name,)).fetchone()
+    return (_u(row["member_order"]) or []) if row else []
+
+
+def set_op_rotation(name: str, order: list[str], at: str) -> None:
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO op_rotations (name, member_order, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(name) DO UPDATE SET member_order=excluded.member_order, "
+            "updated_at=excluded.updated_at", (name, _j(order), at))
+
+
+def list_op_rotation_names() -> list[str]:
+    with _lock:
+        return [r["name"] for r in _conn.execute(
+            "SELECT name FROM op_rotations ORDER BY updated_at DESC").fetchall()]
+
+
+def member_ops_attended(discord_id: str, since_iso: str, exclude_op: int) -> int:
+    """Distinct ops (other than `exclude_op`) a member took part in since
+    `since_iso` — the weighted-loot attendance count (§7.3)."""
+    with _lock:
+        return _conn.execute(
+            "SELECT COUNT(DISTINCT r.op_id) FROM op_roster r JOIN operations o ON o.id = r.op_id "
+            "WHERE r.discord_id=? AND r.attendance IN ('present','late','left_early') "
+            "AND o.id != ? AND COALESCE(o.started_at, o.created_at) >= ?",
+            (str(discord_id), exclude_op, since_iso)).fetchone()[0]
 
 
 def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:

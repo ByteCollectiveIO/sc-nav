@@ -5815,11 +5815,23 @@ def op_attendance_counts(roster) -> dict:
 OP_SHARE_VALUES = (1.0, 0.5, 0.0)
 OP_SHARE_LABEL = {1.0: "Full", 0.5: "Half", 0.0: "None"}
 OP_BONUS_MODES = ("pool", "keep")
+# Loot (§7). Weighted mode's attendance factor is fixed policy, not a knob:
+# 1 + 0.1 per op attended in the last 90 days, capped at ×2 — the cap is what
+# keeps a veteran with Need vs a recruit with Want at 3:1, not a lock-out.
+LOOT_MODES = ("random", "weighted", "round_robin")
+LOOT_MODE_LABEL = {"random": "Random", "weighted": "Weighted", "round_robin": "Round robin"}
+LOOT_NEED_WEIGHTS = (1.0, 1.25, 1.5, 1.75, 2.0)
+LOOT_ELIGIBLE_KEYS = ("present", "late", "left_early", "excused")
+LOOT_ATTENDANCE = {"window_days": 90, "per_op": 0.1, "cap": 2.0}
+LOOT_INTENTS = ("need", "want", "pass")
+
 OP_DEFAULT_RULES = {
     "shares": {"present": 1.0, "late": 1.0, "left_early": 0.5,
                "excused": 0.0, "absent": 0.0},
     "expenses_first": True,
     "bonuses": "pool",
+    "loot": {"mode": "random", "need_weight": 1.5,
+             "eligible": ["present", "late", "left_early"], "rotation": None},
 }
 
 
@@ -5829,9 +5841,15 @@ def normalize_op_rules(raw, base: dict | None = None) -> dict:
     three the UI offers (Full / Half / None)."""
     base = base or OP_DEFAULT_RULES
     raw = raw if isinstance(raw, dict) else {}
+    bl = base.get("loot") or OP_DEFAULT_RULES["loot"]
     out = {"shares": dict(base.get("shares") or OP_DEFAULT_RULES["shares"]),
            "expenses_first": bool(base.get("expenses_first", True)),
-           "bonuses": base.get("bonuses") if base.get("bonuses") in OP_BONUS_MODES else "pool"}
+           "bonuses": base.get("bonuses") if base.get("bonuses") in OP_BONUS_MODES else "pool",
+           "loot": {"mode": bl.get("mode") if bl.get("mode") in LOOT_MODES else "random",
+                    "need_weight": bl.get("need_weight") if bl.get("need_weight") in LOOT_NEED_WEIGHTS else 1.5,
+                    "eligible": [k for k in LOOT_ELIGIBLE_KEYS if k in (bl.get("eligible") or [])]
+                                or list(OP_DEFAULT_RULES["loot"]["eligible"]),
+                    "rotation": bl.get("rotation") or None}}
     for k, v in (raw.get("shares") or {}).items():
         try:
             fv = float(v)
@@ -5843,6 +5861,22 @@ def normalize_op_rules(raw, base: dict | None = None) -> dict:
         out["expenses_first"] = raw["expenses_first"]
     if raw.get("bonuses") in OP_BONUS_MODES:
         out["bonuses"] = raw["bonuses"]
+    rl = raw.get("loot") if isinstance(raw.get("loot"), dict) else {}
+    if rl.get("mode") in LOOT_MODES:
+        out["loot"]["mode"] = rl["mode"]
+    try:
+        nw = float(rl.get("need_weight")) if rl.get("need_weight") is not None else None
+    except (TypeError, ValueError):
+        nw = None
+    if nw in LOOT_NEED_WEIGHTS:
+        out["loot"]["need_weight"] = nw
+    if isinstance(rl.get("eligible"), list):
+        el = [k for k in LOOT_ELIGIBLE_KEYS if k in rl["eligible"]]
+        if el:
+            out["loot"]["eligible"] = el
+    if "rotation" in rl:
+        name = str(rl.get("rotation") or "").strip()[:40]
+        out["loot"]["rotation"] = name or None
     return out
 
 
@@ -5866,7 +5900,98 @@ def op_rules_diff(a: dict, b: dict) -> list[dict]:
         lab = {"pool": "pooled", "keep": "kept by earner"}
         out.append({"field": "bonuses", "label": "Bonuses",
                     "from": lab[a["bonuses"]], "to": lab[b["bonuses"]]})
+    la, lb = a["loot"], b["loot"]
+    if la["mode"] != lb["mode"]:
+        out.append({"field": "loot.mode", "label": "Loot",
+                    "from": LOOT_MODE_LABEL[la["mode"]], "to": LOOT_MODE_LABEL[lb["mode"]]})
+    if la["need_weight"] != lb["need_weight"]:
+        out.append({"field": "loot.need_weight", "label": "Need weight",
+                    "from": f"×{la['need_weight']:g}", "to": f"×{lb['need_weight']:g}"})
+    if la["eligible"] != lb["eligible"]:
+        el = lambda v: ", ".join(OP_ATTENDANCE_LABEL[k] for k in v)
+        out.append({"field": "loot.eligible", "label": "Loot eligibility",
+                    "from": el(la["eligible"]), "to": el(lb["eligible"])})
+    if la["rotation"] != lb["rotation"]:
+        out.append({"field": "loot.rotation", "label": "Rotation",
+                    "from": la["rotation"] or "this op only", "to": lb["rotation"] or "this op only"})
     return out
+
+
+# --- loot rolls (§7) ------------------------------------------------------------
+# Verifiable: every random/weighted pick is HMAC-SHA256(seed, "<op>:<seq>")
+# taken modulo the total of an INTEGER weight table (thousandths), so the
+# browser's Verify recomputes the exact same winner with BigInt — no floats.
+
+def loot_seed_hash(seed_hex: str) -> str:
+    import hashlib
+    return hashlib.sha256(bytes.fromhex(seed_hex)).hexdigest()
+
+
+def loot_hmac(seed_hex: str, message: str) -> str:
+    import hashlib, hmac
+    return hmac.new(bytes.fromhex(seed_hex), message.encode(), hashlib.sha256).hexdigest()
+
+
+def loot_attendance_factor(ops_attended: int) -> float:
+    c = LOOT_ATTENDANCE
+    return min(c["cap"], round(1 + c["per_op"] * max(0, ops_attended), 4))
+
+
+def loot_weight_table(candidates: list[dict], mode: str, need_weight: float) -> list[dict]:
+    """`candidates` = eligible roster rows in roster order, each with
+    {roster_id, name, intent (need|want|pass|None), set_by_name, ops_attended}.
+    No answer counts as Want. Pass weighs 0. Returns the rows with
+    intent_factor, att_factor, weight (int, thousandths) and odds (0–1)."""
+    rows = []
+    for c in candidates:
+        intent = c.get("intent") or "want"
+        att = loot_attendance_factor(c.get("ops_attended") or 0) if mode == "weighted" else 1.0
+        inf = (need_weight if intent == "need" else 1.0) if mode == "weighted" else 1.0
+        w = 0 if intent == "pass" else int(round(att * inf * 1000))
+        rows.append({**c, "intent": intent, "answered": bool(c.get("intent")),
+                     "att_factor": att, "intent_factor": inf, "weight": w})
+    total = sum(r["weight"] for r in rows)
+    for r in rows:
+        r["odds"] = (r["weight"] / total) if total else 0.0
+    return rows
+
+
+def loot_pick(seed_hex: str, op_id: int, seq: int, table: list[dict]) -> dict | None:
+    """The weighted pick for roll `seq`. Returns {pick, total, index} or None
+    when nobody has weight (everyone passed)."""
+    total = sum(r["weight"] for r in table)
+    if total <= 0:
+        return None
+    pick = int(loot_hmac(seed_hex, f"{op_id}:{seq}")[:16], 16) % total
+    acc = 0
+    for i, r in enumerate(table):
+        acc += r["weight"]
+        if pick < acc:
+            return {"pick": pick, "total": total, "index": i}
+    return None                                   # unreachable
+
+
+def loot_rotation_init(roster_ids: list[int], seed_hex: str, op_id: int,
+                       first: list[int] | None = None) -> list[int]:
+    """The starting rotation: `first` (a named rotation carried across ops, in
+    its order) then everyone else in a SEEDED shuffle — the organizer doesn't
+    pick who goes first."""
+    first = [r for r in (first or []) if r in roster_ids]
+    rest = [r for r in roster_ids if r not in first]
+    rest.sort(key=lambda r: loot_hmac(seed_hex, f"{op_id}:rotation:{r}"))
+    return first + rest
+
+
+def loot_rotation_next(order: list[int], candidates: list[dict]) -> tuple[int | None, list[int]]:
+    """Round robin: the item goes to the first person in `order` who is a
+    candidate and didn't Pass (Pass keeps your place). Candidates not yet in
+    the rotation join at the back. The winner moves to the back."""
+    order = list(order) + [c["roster_id"] for c in candidates if c["roster_id"] not in order]
+    live = {c["roster_id"] for c in candidates if (c.get("intent") or "want") != "pass"}
+    winner = next((r for r in order if r in live), None)
+    if winner is None:
+        return None, order
+    return winner, [r for r in order if r != winner] + [winner]
 
 
 def _largest_remainder(total: int, weights: list[float]) -> list[int]:

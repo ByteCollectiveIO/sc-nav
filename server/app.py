@@ -8038,6 +8038,7 @@ class OpRulesIn(BaseModel):
     shares: dict[str, float] | None = None
     expenses_first: bool | None = None
     bonuses: str | None = Field(default=None, max_length=8)
+    loot: dict | None = None            # {mode, need_weight, eligible, rotation} — normalized
 
 
 class ContractIn(BaseModel):
@@ -10047,6 +10048,18 @@ def _op_log_text(e: dict) -> str:
                 + (f" — {p['note']}" if p.get("note") else ""))
     if k == "ledger_void":
         return f"voided {_auec(p.get('amount'))} {p.get('kind')} ({p.get('name')})"
+    if k == "loot_add":
+        n = p.get("count", 1)
+        what = f"{p.get('name')}" + (f" ×{p['qty']}" if (p.get("qty") or 1) > 1 else "")
+        return f"added loot: {what}" + (f" ({n} separate rolls)" if n > 1 else "")
+    if k == "loot_remove":
+        return f"removed loot: {p.get('name')}"
+    if k == "loot_roll":
+        mode = nav_core.LOOT_MODE_LABEL.get(p.get("mode"), p.get("mode"))
+        return (f"rolled {p.get('item')}: {p.get('winner')} wins "
+                f"(roll #{p.get('seq')}, {mode}, {p.get('eligible')} in the roll)")
+    if k == "loot_reroll":
+        return f"voided roll #{p.get('seq')} of {p.get('item')} ({p.get('winner')} had won) — item open again"
     if k in ("transfer_sent", "transfer_received", "transfer_dispute"):
         verb = {"transfer_sent": "marked sent", "transfer_received": "confirmed received",
                 "transfer_dispute": "disputed"}[k]
@@ -10112,6 +10125,7 @@ def _op_view(op: dict, user: dict) -> dict:
         r["share_override"] = src.get("share_override")
         r["share_reason"] = src.get("share_reason")
     view.update(_op_money(op, roster, user))
+    view.update(_op_loot_view(op, roster, user))
     return view
 
 
@@ -10348,6 +10362,15 @@ async def change_op_phase(op_id: int, body: OpPhaseIn, user: dict = Depends(requ
                                 detail=f"mark everyone before closing ({left} still unmarked)")
     at = _now_iso()
     fields = {"phase": body.to}
+    seeds = list(op.get("loot_seeds") or [])
+    # Loot commitment (§7.4): a secret seed is committed (hash published) when
+    # the op goes live and revealed at close. A reopened op gets a FRESH seed —
+    # anyone who read the revealed one could otherwise predict later rolls.
+    if (action == "start" and not seeds) or action == "reopen":
+        seeds.append(_new_loot_seed())
+        fields["loot_seeds"] = seeds
+    if action == "close" and any(not x.get("revealed") for x in seeds):
+        fields["loot_seeds"] = [{**x, "revealed": True} for x in seeds]
     if action == "start" and not op.get("started_at"):
         fields["started_at"] = at
     if action == "end":
@@ -10426,6 +10449,9 @@ async def remove_op_roster_row(op_id: int, rid: int, reason: str | None = None,
     row = db.get_op_roster_row(rid)
     if row is None or row["op_id"] != op_id:
         raise HTTPException(status_code=404, detail="not on this roster")
+    if db.op_roster_loot_refs(rid):
+        raise HTTPException(status_code=409,
+                            detail="they won loot on this op — mark them Absent instead")
     if db.op_roster_money_refs(rid):
         raise HTTPException(status_code=409,
                             detail="they have money on the ledger or a transfer — void those first, "
@@ -10815,6 +10841,325 @@ async def mark_op_transfer(op_id: int, body: OpTransferMarkIn,
     _op_log(op_id, user, f"transfer_{body.action}",
             {"tid": tid, "from_name": t["from_name"], "to_name": t["to_name"],
              "amount": t["amount"]}, (body.note or "").strip() or None)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+# --- op loot (docs/event-operations.md §7, ops slice 4) ---------------------
+
+_MAX_OP_LOOT = 200
+
+
+def _new_loot_seed() -> dict:
+    seed = secrets.token_hex(32)
+    return {"seed": seed, "hash": nav_core.loot_seed_hash(seed), "revealed": False,
+            "at": _now_iso()}
+
+
+class OpLootIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    qty: int = Field(default=1, ge=1, le=10_000)
+    note: str = Field(default="", max_length=200)
+    found_by: int | None = None
+    split_units: bool = False           # qty > 1: one roll per unit
+
+
+class OpIntentIn(BaseModel):
+    intent: str | None = Field(default=None, max_length=8)   # need | want | pass | None
+    roster_id: int | None = None        # managers setting someone else's
+
+
+class OpRerollIn(BaseModel):
+    reason: str = Field(min_length=_OP_REASON_MIN, max_length=_OP_REASON_MAX)
+
+
+def _op_loot_open(op: dict) -> None:
+    if op["phase"] not in ("live", "settle"):
+        raise HTTPException(status_code=409, detail=(
+            "start the mission first" if op["phase"] == "setup"
+            else "this op is closed — reopen it (with a reason) to change it"))
+
+
+def _loot_candidates(op: dict, roster: list[dict], rules: dict, item: dict,
+                     names: dict, attended: dict) -> list[dict]:
+    """Eligible roster rows for an item, in roster order, with their intent."""
+    eligible = set(rules["loot"]["eligible"])
+    out = []
+    for r in roster:
+        if r.get("attendance") not in eligible:
+            continue
+        it = (item.get("intents") or {}).get(r["id"])
+        set_by = it.get("set_by") if it else None
+        out.append({"roster_id": r["id"], "name": names[r["id"]],
+                    "guest": not r.get("discord_id"),
+                    "intent": it["intent"] if it else None,
+                    "set_by_name": (_resolve_member_name(set_by, None)
+                                    if set_by and set_by != r.get("discord_id") else None),
+                    "ops_attended": attended.get(r["id"], 0)})
+    return out
+
+
+def _loot_attendance(op: dict, roster: list[dict], rules: dict) -> dict:
+    """ops attended in the window, per MEMBER roster row (weighted mode only;
+    guests have no history yet — they weigh the baseline 1.0)."""
+    if rules["loot"]["mode"] != "weighted":
+        return {}
+    ref = datetime.fromisoformat((op.get("started_at") or op.get("created_at")).replace("Z", "+00:00"))
+    since = (ref - timedelta(days=nav_core.LOOT_ATTENDANCE["window_days"])).isoformat()
+    return {r["id"]: db.member_ops_attended(r["discord_id"], since, op["id"])
+            for r in roster if r.get("discord_id")}
+
+
+def _op_loot_view(op: dict, roster: list[dict], user: dict) -> dict:
+    rules = nav_core.normalize_op_rules(op.get("rules"), base=org_default_op_rules())
+    lr = rules["loot"]
+    names = {r["id"]: _op_row_name(r) for r in roster}
+    me = next((r for r in roster if r.get("discord_id") == user["id"]), None)
+    manage = _op_can_manage(op, user)
+    open_phase = op["phase"] in ("live", "settle")
+    items = db.list_op_loot(op["id"])
+    rolls = db.list_op_rolls(op["id"])
+    attended = _loot_attendance(op, roster, rules) if any(i["status"] == "open" for i in items) else {}
+    eligible_ids = {r["id"] for r in roster if r.get("attendance") in lr["eligible"]}
+    out_items = []
+    for it in items:
+        mine = [r for r in rolls if r["loot_id"] == it["id"]]
+        live = next((r for r in mine if not r.get("voided_at")), None)
+        if it["status"] == "open":
+            cands = _loot_candidates(op, roster, rules, it, names, attended)
+            table = nav_core.loot_weight_table(cands, lr["mode"], lr["need_weight"]) \
+                if lr["mode"] != "round_robin" else [{**c, "intent": c["intent"] or "want",
+                                                     "answered": bool(c["intent"])} for c in cands]
+        else:
+            table = live["weights"] if live else []
+        my_intent = ((it.get("intents") or {}).get(me["id"]) or {}).get("intent") if me else None
+        out_items.append({
+            "id": it["id"], "name": it["name"], "qty": it["qty"], "note": it.get("note"),
+            "found_by_name": names.get(it.get("found_by")) if it.get("found_by") else None,
+            "status": it["status"], "table": table, "my_intent": my_intent,
+            "can_set_intent": open_phase and it["status"] == "open"
+                              and me is not None and me["id"] in eligible_ids,
+            "roll": ({"id": live["id"], "seq": live["seq"], "mode": live["mode"],
+                      "winner_roster": live["winner_roster"],
+                      "winner_name": names.get(live["winner_roster"], "?"),
+                      "pick": live.get("pick"), "total": live.get("total"),
+                      "rolled_by_name": _resolve_member_name(live["rolled_by"], None),
+                      "at": live["created_at"]} if live else None),
+            "voided": [{"seq": r["seq"], "winner_name": names.get(r["winner_roster"], "?"),
+                        "reason": r.get("void_reason"),
+                        "voided_by_name": _resolve_member_name(r["voided_by"], None)}
+                       for r in mine if r.get("voided_at")],
+        })
+    rotation_next = []
+    if lr["mode"] == "round_robin":
+        order = _rr_order(op, roster, lr)
+        order = order + [r["id"] for r in roster if r["id"] not in order]
+        rotation_next = [names[r] for r in order if r in eligible_ids and r in names][:8]
+    seeds = op.get("loot_seeds") or []
+    return {"loot": {
+        "rules": lr, "mode_label": nav_core.LOOT_MODE_LABEL[lr["mode"]],
+        "items": out_items, "can_manage": manage and open_phase, "open": open_phase,
+        "eligible_count": len(eligible_ids),
+        "unmarked_count": sum(1 for r in roster if not r.get("attendance")),
+        "rotation_next": rotation_next, "rotation_name": lr.get("rotation"),
+        "commitments": [{"idx": i, "hash": x["hash"],
+                         "seed": x["seed"] if x.get("revealed") else None}
+                        for i, x in enumerate(seeds)],
+        # What the browser's Verify recomputes (random/weighted rolls only).
+        "rolls": [{"seq": r["seq"], "mode": r["mode"], "seed_idx": r.get("seed_idx"),
+                   "weights": [{"roster_id": w["roster_id"], "weight": w["weight"]}
+                               for w in (r["weights"] or [])],
+                   "pick": r.get("pick"), "total": r.get("total"),
+                   "winner_roster": r.get("winner_roster"), "voided": bool(r.get("voided_at")),
+                   "item": next((i["name"] for i in items if i["id"] == r["loot_id"]), "?")}
+                  for r in rolls if r["mode"] != "round_robin"],
+        "rotation_names": db.list_op_rotation_names() if manage else [],
+    }}
+
+
+def _rr_order(op: dict, roster: list[dict], lr: dict) -> list[int]:
+    """The op's round-robin order as it stands — or, before the first roll,
+    the order the first roll WILL start from (named rotation first, then the
+    seeded shuffle). The preview and the roll must agree on who's next."""
+    if op.get("loot_rotation") is not None:
+        return list(op["loot_rotation"])
+    seeds = op.get("loot_seeds") or []
+    if not seeds:
+        return [r["id"] for r in roster]
+    first = []
+    if lr.get("rotation"):
+        by_did = {r.get("discord_id"): r["id"] for r in roster if r.get("discord_id")}
+        first = [by_did[d] for d in db.get_op_rotation(lr["rotation"]) if d in by_did]
+    return nav_core.loot_rotation_init([r["id"] for r in roster], seeds[-1]["seed"],
+                                       op["id"], first)
+
+
+def _require_loot(op_id: int, lid: int) -> dict:
+    it = db.get_op_loot(lid)
+    if it is None or it["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="unknown loot item")
+    return it
+
+
+@app.post("/api/ops/{op_id}/loot")
+async def add_op_loot(op_id: int, body: OpLootIn, user: dict = Depends(require_session)):
+    """Log a drop to roll for. A stack can be one roll for the lot, or one
+    roll per unit (up to 20)."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_loot_open(op)
+    if body.found_by is not None:
+        _roster_row_of(op_id, body.found_by)
+    n = body.qty if body.split_units and body.qty > 1 else 1
+    if n > 20:
+        raise HTTPException(status_code=400, detail="split into at most 20 rolls — roll the rest as a lot")
+    if len(db.list_op_loot(op_id)) + n > _MAX_OP_LOOT:
+        raise HTTPException(status_code=400, detail="too many loot items on one op")
+    at = _now_iso()
+    for _ in range(n):
+        db.add_op_loot(op_id, {"name": body.name.strip(), "qty": 1 if n > 1 else body.qty,
+                               "note": (body.note or "").strip() or None,
+                               "found_by": body.found_by, "created_by": user["id"],
+                               "created_at": at})
+    _op_log(op_id, user, "loot_add", {"name": body.name.strip(), "qty": body.qty, "count": n})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.delete("/api/ops/{op_id}/loot/{lid}")
+async def remove_op_loot(op_id: int, lid: int, user: dict = Depends(require_session)):
+    """Remove an item logged by mistake. A rolled item can't be removed — void
+    its roll first, so the record keeps it."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_loot_open(op)
+    it = _require_loot(op_id, lid)
+    if any(r["loot_id"] == lid for r in db.list_op_rolls(op_id)):
+        raise HTTPException(status_code=409, detail="it's been rolled — the rolls stay on the record")
+    db.delete_op_loot(lid)
+    _op_log(op_id, user, "loot_remove", {"name": it["name"]})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.put("/api/ops/{op_id}/loot/{lid}/intent")
+async def set_op_loot_intent(op_id: int, lid: int, body: OpIntentIn,
+                             user: dict = Depends(require_session)):
+    """Need / Want / Pass. Your own, if you're eligible; managers can set
+    anyone's (a guest, someone mid-fight) and the record says who did."""
+    op = _require_op(op_id)
+    _op_loot_open(op)
+    it = _require_loot(op_id, lid)
+    if it["status"] != "open":
+        raise HTTPException(status_code=409, detail="this item has been rolled")
+    if body.intent is not None and body.intent not in nav_core.LOOT_INTENTS:
+        raise HTTPException(status_code=400, detail="intent must be need, want or pass")
+    roster = db.list_op_roster(op_id)
+    if body.roster_id is None:
+        row = next((r for r in roster if r.get("discord_id") == user["id"]), None)
+        if row is None:
+            raise HTTPException(status_code=403, detail="you're not on this op's roster")
+    else:
+        row = next((r for r in roster if r["id"] == body.roster_id), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not on this roster")
+        if row.get("discord_id") != user["id"] and not _op_can_manage(op, user):
+            raise HTTPException(status_code=403, detail="you can only set your own")
+    rules = nav_core.normalize_op_rules(op.get("rules"), base=org_default_op_rules())
+    if row.get("attendance") not in rules["loot"]["eligible"]:
+        raise HTTPException(status_code=409, detail="not eligible for loot on this op (check attendance)")
+    db.set_op_loot_intent(lid, row["id"], body.intent, user["id"], _now_iso())
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/loot/{lid}/roll")
+async def roll_op_loot(op_id: int, lid: int, user: dict = Depends(require_session)):
+    """Roll an item under the op's loot rules. Intents lock now (no answer =
+    Want). The full table — who, intent, factors, weight — is stored with the
+    roll, so the record shows the odds everyone had, and Verify can recompute
+    random/weighted picks from the committed seed."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_loot_open(op)
+    it = _require_loot(op_id, lid)
+    if it["status"] != "open":
+        raise HTTPException(status_code=409, detail="already rolled — void the roll to roll again")
+    roster = db.list_op_roster(op_id)
+    rules = nav_core.normalize_op_rules(op.get("rules"), base=org_default_op_rules())
+    lr = rules["loot"]
+    names = {r["id"]: _op_row_name(r) for r in roster}
+    item = next(i for i in db.list_op_loot(op_id) if i["id"] == lid)
+    cands = _loot_candidates(op, roster, rules, item, names, _loot_attendance(op, roster, rules))
+    if not cands:
+        raise HTTPException(status_code=409, detail="nobody is eligible yet — mark attendance first")
+    seeds = op.get("loot_seeds") or []
+    seq = db.next_op_roll_seq(op_id)
+    at = _now_iso()
+    roll = {"op_id": op_id, "loot_id": lid, "seq": seq, "mode": lr["mode"],
+            "rules_version": op.get("rules_version") or 1, "rolled_by": user["id"],
+            "created_at": at}
+    if lr["mode"] == "round_robin":
+        table = [{**c, "intent": c["intent"] or "want", "answered": bool(c["intent"])} for c in cands]
+        order = _rr_order(op, roster, lr)
+        named_before = named_after = None
+        winner, new_order = nav_core.loot_rotation_next(order, table)
+        if winner is None:
+            raise HTTPException(status_code=409, detail="everyone passed — nobody to give it to")
+        if lr.get("rotation"):
+            named_before = db.get_op_rotation(lr["rotation"])
+            members = [r.get("discord_id") for r in roster if r.get("discord_id")]
+            named_after = named_before + [d for d in members if d not in named_before]
+            wdid = next((r.get("discord_id") for r in roster if r["id"] == winner), None)
+            if wdid:
+                named_after = [d for d in named_after if d != wdid] + [wdid]
+            db.set_op_rotation(lr["rotation"], named_after, at)
+        roll.update(weights=table, winner_roster=winner, rotation_before=order,
+                    rotation_after=new_order, named_before=named_before, named_after=named_after)
+        db.update_op(op_id, {"loot_rotation": new_order}, at)
+    else:
+        table = nav_core.loot_weight_table(cands, lr["mode"], lr["need_weight"])
+        res = nav_core.loot_pick(seeds[-1]["seed"], op_id, seq, table)
+        if res is None:
+            raise HTTPException(status_code=409, detail="everyone passed — nobody to give it to")
+        winner = table[res["index"]]["roster_id"]
+        roll.update(weights=table, seed_idx=len(seeds) - 1, pick=res["pick"],
+                    total=res["total"], winner_roster=winner)
+    db.add_op_roll(roll)
+    db.set_op_loot_status(lid, "rolled")
+    _op_log(op_id, user, "loot_roll", {"item": it["name"], "seq": seq, "mode": lr["mode"],
+                                       "winner": names[winner], "eligible": len(cands)})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/loot/{lid}/reroll")
+async def reroll_op_loot(op_id: int, lid: int, body: OpRerollIn,
+                         user: dict = Depends(require_session)):
+    """Void an item's roll (lost to a crash, rolled by mistake) and open it
+    again. The voided roll stays on the record with the reason; a round-robin
+    winner gets their place back."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_loot_open(op)
+    it = _require_loot(op_id, lid)
+    live = next((r for r in db.list_op_rolls(op_id)
+                 if r["loot_id"] == lid and not r.get("voided_at")), None)
+    if live is None:
+        raise HTTPException(status_code=409, detail="nothing to re-roll")
+    at = _now_iso()
+    db.void_op_roll(live["id"], user["id"], body.reason.strip(), at)
+    if live["mode"] == "round_robin":
+        if live.get("rotation_before") is not None and op.get("loot_rotation") == live.get("rotation_after"):
+            db.update_op(op_id, {"loot_rotation": live["rotation_before"]}, at)
+        name = (op.get("rules") or {}).get("loot", {}).get("rotation")
+        if name and live.get("named_after") is not None and db.get_op_rotation(name) == live["named_after"]:
+            db.set_op_rotation(name, live["named_before"] or [], at)
+    db.set_op_loot_status(lid, "open")
+    row = db.get_op_roster_row(live["winner_roster"]) if live.get("winner_roster") else None
+    _op_log(op_id, user, "loot_reroll", {"item": it["name"], "seq": live["seq"],
+                                         "winner": _op_row_name(row) if row else "?"},
+            body.reason.strip())
     await _op_changed(op_id)
     return _op_view(db.get_op(op_id), user)
 
