@@ -10067,7 +10067,8 @@ def _op_log_text(e: dict) -> str:
     if k in ("transfer_sent", "transfer_received", "transfer_dispute"):
         verb = {"transfer_sent": "marked sent", "transfer_received": "confirmed received",
                 "transfer_dispute": "disputed"}[k]
-        return f"{verb}: {p.get('from_name')} → {p.get('to_name')} {_auec(p.get('amount'))}"
+        return (f"{verb}: {p.get('from_name')} → {p.get('to_name')} {_auec(p.get('amount'))}"
+                + (f" ({_auec(p['arrived'])} arrived)" if p.get("arrived") is not None else ""))
     return k or "changed the op"
 
 
@@ -10122,7 +10123,7 @@ def _op_record_embed(op: dict, *, updated: bool) -> dict:
             val += f" · a full share ≈ {_auec(T['per_full_share'])}"
         val += ("\nEvery payment confirmed." if not owed else
                 f"\n{len(owed)} payment{'s' if len(owed) != 1 else ''} still open "
-                f"({_auec(sum(t['amount'] for t in owed))}).")
+                f"({_auec(sum(t['owed'] for t in owed))} still owed).")
         fields.append({"name": "Money", "value": val})
     loot = _op_loot_view(op, roster, viewer)["loot"]
     if loot["items"]:
@@ -10274,14 +10275,22 @@ def _op_money(op: dict, roster: list[dict], user: dict) -> dict:
              "from_name": names.get(t["from_roster"], "?"), "to_name": names.get(t["to_roster"], "?"),
              "sent_at": t.get("sent_at"), "received_at": t.get("received_at"),
              "disputed_at": t.get("disputed_at"), "dispute_note": t.get("dispute_note"),
+             "disputed_arrived": t.get("disputed_arrived"),
              "correction": bool(t.get("correction")),
              "mine_to_send": t["from_roster"] == me, "mine_to_receive": t["to_roster"] == me}
         v["can_send"] = not v["sent_at"] and not v["received_at"] and can(t, "sent")
         v["can_receive"] = not v["received_at"] and can(t, "received")
+        # What's still owed on this payment: all of it, or — once a dispute
+        # says how much arrived — the rest. Copy/You-line/nags use this.
+        arrived = v["disputed_arrived"] if v["disputed_at"] else None
+        v["owed"] = 0 if v["received_at"] else max(0, t["amount"] - (arrived or 0))
         return v
 
     tx = [tview(t, True) for t in committed] + [tview(t, False) for t in planned]
-    todo = sum(1 for t in tx if (t["mine_to_send"] and not t["sent_at"] and not t["received_at"])
+    # Waiting on me: sending (a disputed payment is back on the sender — the
+    # rest has to be sent) or confirming what I'm owed.
+    todo = sum(1 for t in tx if (t["mine_to_send"] and not t["received_at"]
+                                 and (not t["sent_at"] or t["disputed_at"]))
                or (t["mine_to_receive"] and not t["received_at"]))
     contracts = db.list_op_contracts(op["id"])
     for c in contracts:
@@ -10838,6 +10847,7 @@ class OpTransferMarkIn(BaseModel):
     transfer's (from, to, amount), which locks the current plan in first."""
     action: str = Field(max_length=10)  # sent | received | dispute
     tid: int | None = None
+    arrived: int | None = Field(default=None, ge=0)   # dispute: how much DID arrive
     from_roster: int | None = None
     to_roster: int | None = None
     amount: int | None = None
@@ -11084,17 +11094,24 @@ async def mark_op_transfer(op_id: int, body: OpTransferMarkIn,
         raise HTTPException(status_code=403, detail=(
             "only the sender or a manager can mark this sent" if body.action == "sent"
             else "only the recipient can confirm or dispute this"))
-    if body.action == "dispute" and not (body.note or "").strip():
-        raise HTTPException(status_code=400, detail="say what's wrong with this payment")
+    if body.action == "dispute":
+        if body.arrived is None and not (body.note or "").strip():
+            raise HTTPException(status_code=400, detail="say how much arrived, or what's wrong")
+        if body.arrived is not None and body.arrived >= t["amount"]:
+            raise HTTPException(status_code=400,
+                                detail="that's the whole payment — confirm it received instead")
     at = _now_iso()
     tid = t["id"]
     if not t["stored"]:
         ids = db.commit_op_transfers(op_id, [t], at)
         tid = ids[(t["from_roster"], t["to_roster"], t["amount"])]
-    db.mark_op_transfer(tid, body.action, user["id"], at, (body.note or "").strip() or None)
+    db.mark_op_transfer(tid, body.action, user["id"], at, (body.note or "").strip() or None,
+                        body.arrived if body.action == "dispute" else None)
     _op_log(op_id, user, f"transfer_{body.action}",
             {"tid": tid, "from_name": t["from_name"], "to_name": t["to_name"],
-             "amount": t["amount"]}, (body.note or "").strip() or None)
+             "amount": t["amount"],
+             **({"arrived": body.arrived} if body.action == "dispute" and body.arrived is not None else {})},
+            (body.note or "").strip() or None)
     await _op_changed(op_id)
     return _op_view(db.get_op(op_id), user)
 

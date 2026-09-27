@@ -900,6 +900,11 @@ def init(db_path) -> None:
         # Loot roll tool): same roster/loot/log machinery, but never listed as
         # an op and never counted as attendance.
         _ensure_column("operations", "kind", "TEXT NOT NULL DEFAULT 'op'")
+        # A dispute's arrived amount (a NUMBER, beside the free-text note), so
+        # the page can say — and copy — what's still owed rather than the whole
+        # payment (critique 2026-09-27: copying the full amount invited a
+        # double send).
+        _ensure_column("op_transfers", "disputed_arrived", "INTEGER")
         # Personal vs org goals + blueprint-seeded craft goals (#14.2). A goal is
         # `org` (shared board, anyone contributes) or `personal` (only its creator
         # sees/fills it); `blueprint_key` tags a goal whose line items were seeded
@@ -2928,16 +2933,17 @@ def commit_op_transfers(op_id: int, plan: list[dict], at: str) -> dict:
     return ids
 
 
-def mark_op_transfer(tid: int, action: str, by: str, at: str, note: str | None = None) -> bool:
+def mark_op_transfer(tid: int, action: str, by: str, at: str, note: str | None = None,
+                     arrived: int | None = None) -> bool:
     col = {"sent": ("sent_at", "sent_by"), "received": ("received_at", "received_by"),
            "dispute": ("disputed_at", "disputed_by")}[action]
     sets = f"{col[0]}=?, {col[1]}=?"
     vals = [at, str(by)]
     if action == "dispute":
-        sets += ", dispute_note=?"
-        vals.append(note)
+        sets += ", dispute_note=?, disputed_arrived=?"
+        vals += [note, arrived]
     if action == "received":        # a confirmed receipt settles any earlier dispute
-        sets += ", disputed_at=NULL, disputed_by=NULL, dispute_note=NULL"
+        sets += ", disputed_at=NULL, disputed_by=NULL, dispute_note=NULL, disputed_arrived=NULL"
     with _lock, _conn:
         cur = _conn.execute(f"UPDATE op_transfers SET {sets} WHERE id=?", (*vals, tid))
     return cur.rowcount > 0
