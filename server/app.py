@@ -10002,6 +10002,8 @@ def _op_log_text(e: dict) -> str:
     the caller). Names come from the payload, stamped at write time."""
     p, k = e.get("payload") or {}, e.get("kind")
     lab = nav_core.OP_ATTENDANCE_LABEL
+    if k == "created" and p.get("roll"):
+        return f"started a loot roll with {p.get('people', 0)} people"
     if k == "created":
         return (f"opened the op from the event (roster: {p.get('seeded', 0)})"
                 if p.get("event_id") else "opened the op"
@@ -10081,7 +10083,7 @@ def _op_summary(op: dict, user: dict, roster: list[dict] | None = None) -> dict:
     ev = db.get_event(op["event_id"]) if op.get("event_id") else None
     mine = next((r for r in roster if r.get("discord_id") == user["id"]), None)
     return {"id": op["id"], "name": op["name"], "phase": op["phase"],
-            "event_id": op.get("event_id"),
+            "kind": op.get("kind") or "op", "event_id": op.get("event_id"),
             "event_title": ev.get("title") if ev else None,
             "organizer_id": op["organizer_id"],
             "organizer_name": _resolve_member_name(op["organizer_id"], None),
@@ -10246,7 +10248,7 @@ def _seed_roster_from_event(op_id: int, ev: dict, actor_id: str, at: str) -> int
 async def list_ops(scope: str = "active", user: dict = Depends(require_session)):
     """Ops for the Ops tile: `active` (setup/live/settle), `closed` (records),
     `mine` (I run it or I'm on it)."""
-    if scope not in ("active", "closed", "mine"):
+    if scope not in ("active", "closed", "mine", "rolls", "rolls_closed", "rolls_mine"):
         scope = "active"
     rows = db.list_ops(scope, user["id"], limit=100)
     return {"scope": scope, "ops": [_op_summary(o, user) for o in rows]}
@@ -10306,6 +10308,14 @@ async def start_event_op(event_id: int, user: dict = Depends(require_session)):
     return _op_view(db.get_op(op_id), user)
 
 
+@app.get("/api/ops/members")
+async def ops_member_lookup(q: str = "", user: dict = Depends(require_session)):
+    """Registered BEFORE /api/ops/{op_id} — that int path param would
+    422-swallow "members". Name search for picking people into a loot roll before it exists. Same
+    shape and opt-out rule as the per-op search (names only, never handles)."""
+    return {"members": _member_name_search(q)}
+
+
 @app.get("/api/ops/{op_id}")
 async def get_op(op_id: int, user: dict = Depends(require_session)):
     """One op with its roster and full log. Every member can read every op —
@@ -10348,7 +10358,13 @@ async def change_op_phase(op_id: int, body: OpPhaseIn, user: dict = Depends(requ
     marked, and completes the linked event."""
     op = _require_op(op_id)
     _require_op_manager(op, user)
-    action = nav_core.op_transition(op["phase"], body.to)
+    if op.get("kind") == "roll":
+        # A standalone loot roll is live from creation: Done closes it, and a
+        # reopen (with a reason) goes straight back to live.
+        action = {("live", "closed"): "close", ("closed", "live"): "reopen"}.get(
+            (op["phase"], body.to))
+    else:
+        action = nav_core.op_transition(op["phase"], body.to)
     if action is None:
         raise HTTPException(status_code=409,
                             detail=f"can't go from {op['phase']} to {body.to}")
@@ -10408,6 +10424,8 @@ async def add_op_roster_row(op_id: int, body: OpRosterAddIn,
     at = _now_iso()
     db.add_op_roster(op_id, {"discord_id": did, "guest_name": guest,
                              "guest_handle": (body.guest_handle or "").strip() or None,
+                             # everyone in a loot roll is "here" by definition
+                             "attendance": "present" if op.get("kind") == "roll" else None,
                              "added_by": user["id"], "created_at": at})
     name = _resolve_member_name(did, None) if did else guest
     _op_log(op_id, user, "roster_add", {"name": name, "discord_id": did, "guest": not did},
@@ -10430,6 +10448,7 @@ async def join_op(op_id: int, user: dict = Depends(require_session)):
     if len(roster) >= _MAX_OP_ROSTER:
         raise HTTPException(status_code=400, detail="roster is full")
     db.add_op_roster(op_id, {"discord_id": user["id"], "added_by": user["id"],
+                             "attendance": "present" if op.get("kind") == "roll" else None,
                              "created_at": _now_iso()})
     _op_log(op_id, user, "roster_add",
             {"name": _resolve_member_name(user["id"], None), "discord_id": user["id"],
@@ -10619,6 +10638,8 @@ async def set_op_rules(op_id: int, body: OpRulesPutIn, user: dict = Depends(requ
     if not diffs:
         return _op_view(op, user)
     amend = op["phase"] != "setup"
+    if op.get("kind") == "roll" and not db.list_op_rolls(op_id):
+        amend = False                   # a quick roll's mode is free until something's rolled
     reason = (body.reason or "").strip() or None
     if amend and (not reason or len(reason) < _OP_REASON_MIN):
         raise HTTPException(status_code=400,
@@ -11125,6 +11146,11 @@ async def roll_op_loot(op_id: int, lid: int, user: dict = Depends(require_sessio
         winner = table[res["index"]]["roster_id"]
         roll.update(weights=table, seed_idx=len(seeds) - 1, pick=res["pick"],
                     total=res["total"], winner_roster=winner)
+        # Reveal the seed this roll used right away and commit a fresh one for
+        # the next roll: proof is available on the spot, and a revealed seed
+        # never decides a future roll.
+        db.update_op(op_id, {"loot_seeds": [*seeds[:-1], {**seeds[-1], "revealed": True},
+                                            _new_loot_seed()]}, at)
     db.add_op_roll(roll)
     db.set_op_loot_status(lid, "rolled")
     _op_log(op_id, user, "loot_roll", {"item": it["name"], "seq": seq, "mode": lr["mode"],
@@ -11164,16 +11190,59 @@ async def reroll_op_loot(op_id: int, lid: int, body: OpRerollIn,
     return _op_view(db.get_op(op_id), user)
 
 
-@app.get("/api/ops/{op_id}/member-search")
-async def op_member_search(op_id: int, q: str = "", user: dict = Depends(require_session)):
-    """Name search for adding a member to an op's roster or deputies (op
-    managers only). Returns names, never handles, and skips members who opted
-    out of the directory — they can still add themselves with "I'm here"."""
-    op = _require_op(op_id)
-    _require_op_manager(op, user)
+class RollGuestIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_GUEST_NAME_MAX)
+    handle: str | None = Field(default=None, max_length=_GUEST_NAME_MAX)
+
+
+class RollCreateIn(BaseModel):
+    """A standalone loot roll (the Ops app's Loot roll tool): who's in, the
+    mode, and optionally the first item."""
+    name: str = Field(default="", max_length=_NAME_MAX)
+    people: list[str] = Field(default_factory=list, max_length=_MAX_OP_ROSTER)
+    guests: list[RollGuestIn] = Field(default_factory=list, max_length=50)
+    loot: dict | None = None
+    item: str | None = Field(default=None, max_length=80)
+
+
+@app.post("/api/ops/rolls")
+async def create_loot_roll(body: RollCreateIn, user: dict = Depends(require_session)):
+    """Start a loot roll on the spot, no op needed. It's live at once (seed
+    committed), everyone added is Present, and the creator runs it. Same
+    Need/Want/Pass, modes and Verify as an op's loot — but it isn't an op:
+    it's never listed as one or counted as attendance."""
+    ids = []
+    for d in [user["id"], *body.people]:
+        d = (d or "").strip()
+        if not d.isdigit():
+            raise HTTPException(status_code=400, detail="bad member id")
+        if d not in ids:
+            ids.append(d)
+    at = _now_iso()
+    rules = nav_core.normalize_op_rules({"loot": body.loot or {}}, base=org_default_op_rules())
+    item = (body.item or "").strip()
+    name = (body.name or "").strip() or (f"Roll: {item}" if item else "Loot roll")
+    op_id = db.create_op({"name": name[:_NAME_MAX], "organizer_id": user["id"], "kind": "roll",
+                          "phase": "live", "started_at": at, "rules": rules,
+                          "loot_seeds": [_new_loot_seed()], "created_at": at})
+    for d in ids:
+        db.add_op_roster(op_id, {"discord_id": d, "signed_up": "organizer" if d == user["id"] else "none",
+                                 "attendance": "present", "added_by": user["id"], "created_at": at})
+    for g in body.guests:
+        db.add_op_roster(op_id, {"guest_name": g.name.strip(),
+                                 "guest_handle": (g.handle or "").strip() or None,
+                                 "attendance": "present", "added_by": user["id"], "created_at": at})
+    _op_log(op_id, user, "created", {"roll": True, "people": len(ids) + len(body.guests)})
+    if item:
+        db.add_op_loot(op_id, {"name": item, "qty": 1, "created_by": user["id"], "created_at": at})
+        _op_log(op_id, user, "loot_add", {"name": item, "qty": 1, "count": 1})
+    return _op_view(db.get_op(op_id), user)
+
+
+def _member_name_search(q: str) -> list[dict]:
     q = q.strip().casefold()
     if len(q) < 2:
-        return {"members": []}
+        return []
     out = []
     for did, m in members_dir.by_id.items():
         if m.get("directory_opt_out"):
@@ -11184,7 +11253,17 @@ async def op_member_search(op_id: int, q: str = "", user: dict = Depends(require
                         "name": m.get("guild_nick") or m.get("display_name")
                         or m.get("username") or did})
     out.sort(key=lambda r: r["name"].casefold())
-    return {"members": out[:10]}
+    return out[:10]
+
+
+@app.get("/api/ops/{op_id}/member-search")
+async def op_member_search(op_id: int, q: str = "", user: dict = Depends(require_session)):
+    """Name search for adding a member to an op's roster or deputies (op
+    managers only). Returns names, never handles, and skips members who opted
+    out of the directory — they can still add themselves with "I'm here"."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    return {"members": _member_name_search(q)}
 
 
 # --- org inventory & goals (shared item catalog) ---------------------------

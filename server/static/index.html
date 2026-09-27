@@ -2190,6 +2190,9 @@
   .op-log time { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
   .op-reason { color: var(--dim); font-style: italic; }
   /* ---- op loot (slice 4) ---- */
+  .op-roll-row { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 6px 0;
+    border-top: 1px solid var(--border); text-decoration: none; color: var(--text); font-size: 13px; }
+  .op-roll-row:hover span:first-child { color: var(--accent); }
   .op-rules-loot { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;
     margin-top: 12px; align-items: start; }
   .op-rules-loot [hidden] { display: none; }
@@ -13870,28 +13873,39 @@ function rulesEditorHtml(prefix, rules) {
     `<div class="ev-field op-rules-bonus"><label for="${prefix}-bonus">Achievement bonus cash</label>` +
       `<select id="${prefix}-bonus"><option value="pool"${r.bonuses === "pool" ? " selected" : ""}>Pooled — split like any income</option>` +
       `<option value="keep"${r.bonuses === "keep" ? " selected" : ""}>Kept by whoever earned it</option></select></div>` +
-    `<div class="op-rules-loot"><div class="ev-field"><label for="${prefix}-lmode">Loot rolls</label>` +
+    lootEditorHtml(prefix, r.loot) + `</div>`;
+}
+
+// The loot knobs on their own — the rules editor embeds them, and a quick
+// loot roll (which has no shares or expenses) uses just these.
+function lootEditorHtml(prefix, loot) {
+  loot = { ...OP_RULES_FALLBACK.loot, ...(loot || {}) };
+  return `<div class="op-rules-loot"><div class="ev-field"><label for="${prefix}-lmode">Loot rolls</label>` +
       `<select id="${prefix}-lmode" data-lmode="${prefix}">${Object.entries(LOOT_MODE_WORD).map(([k, l]) =>
-        `<option value="${k}"${r.loot.mode === k ? " selected" : ""}>${l}${k === "random" ? " — equal chance, Need = Want" : k === "weighted" ? " — Need and attendance count" : " — take turns"}</option>`).join("")}</select></div>` +
-      `<div class="ev-field" data-lshow="${prefix}:weighted"${r.loot.mode === "weighted" ? "" : " hidden"}><label for="${prefix}-lneed">Need weighs</label>` +
-        `<select id="${prefix}-lneed">${LOOT_NEED_WEIGHTS.map(v => `<option value="${v}"${Number(r.loot.need_weight) === v ? " selected" : ""}>×${v} a Want</option>`).join("")}</select></div>` +
-      `<div class="ev-field" data-lshow="${prefix}:round_robin"${r.loot.mode === "round_robin" ? "" : " hidden"}><label for="${prefix}-lrot">Rotation</label>` +
-        `<input id="${prefix}-lrot" class="ti" maxlength="40" list="${prefix}-lrot-list" placeholder="This op only" value="${esc(r.loot.rotation || "")}">` +
+        `<option value="${k}"${loot.mode === k ? " selected" : ""}>${l}${k === "random" ? " — equal chance, Need = Want" : k === "weighted" ? " — Need and attendance count" : " — take turns"}</option>`).join("")}</select></div>` +
+      `<div class="ev-field" data-lshow="${prefix}:weighted"${loot.mode === "weighted" ? "" : " hidden"}><label for="${prefix}-lneed">Need weighs</label>` +
+        `<select id="${prefix}-lneed">${LOOT_NEED_WEIGHTS.map(v => `<option value="${v}"${Number(loot.need_weight) === v ? " selected" : ""}>×${v} a Want</option>`).join("")}</select></div>` +
+      `<div class="ev-field" data-lshow="${prefix}:round_robin"${loot.mode === "round_robin" ? "" : " hidden"}><label for="${prefix}-lrot">Rotation</label>` +
+        `<input id="${prefix}-lrot" class="ti" maxlength="40" list="${prefix}-lrot-list" placeholder="This op only" value="${esc(loot.rotation || "")}">` +
         `<datalist id="${prefix}-lrot-list"></datalist>` +
         `<span class="ev-hint">Name it (e.g. “Friday bunkers”) to carry the turn order to the next op.</span></div>` +
       `<fieldset class="op-rules-elig"><legend>Who can roll</legend>${[["present", "Present"], ["late", "Late"], ["left_early", "Left early"], ["excused", "Excused"]].map(([k, l]) =>
-        `<label><input type="checkbox" data-lelig="${prefix}" value="${k}"${r.loot.eligible.includes(k) ? " checked" : ""}> ${l}</label>`).join("")}</fieldset>` +
-    `</div></div>`;
+        `<label><input type="checkbox" data-lelig="${prefix}" value="${k}"${loot.eligible.includes(k) ? " checked" : ""}> ${l}</label>`).join("")}</fieldset>` +
+    `</div>`;
+}
+
+function readLootEditor(prefix) {
+  const eligible = [...document.querySelectorAll(`[data-lelig="${prefix}"]:checked`)].map(i => i.value);
+  return { mode: $(`${prefix}-lmode`).value, need_weight: Number($(`${prefix}-lneed`).value),
+    eligible: eligible.length ? eligible : ["present"], rotation: $(`${prefix}-lrot`).value.trim() || null };
 }
 
 function readRulesEditor(prefix) {
   if (!$(`${prefix}-rules`)) return null;
   const shares = {};
   OP_ATT_KEYS.forEach(([k]) => { shares[k] = Number($(`${prefix}-sh-${k}`).value); });
-  const eligible = [...document.querySelectorAll(`[data-lelig="${prefix}"]:checked`)].map(i => i.value);
   return { shares, expenses_first: $(`${prefix}-exp`).checked, bonuses: $(`${prefix}-bonus`).value,
-    loot: { mode: $(`${prefix}-lmode`).value, need_weight: Number($(`${prefix}-lneed`).value),
-      eligible: eligible.length ? eligible : ["present"], rotation: $(`${prefix}-lrot`).value.trim() || null } };
+    loot: readLootEditor(prefix) };
 }
 
 // Show only the loot knobs the chosen mode uses. Call after inserting an editor.
@@ -14490,7 +14504,66 @@ function opCard(o) {
     `<div class="ev-meta">${opCountsLine(o.counts)}</div></a>`;
 }
 
+// The Ops home's Loot roll tool: pick people, name the drop, go.
+function bindLootRollTool() {
+  const picked = new Map(), guests = [];
+  const draw = () => {
+    const me = currentMe ? `<span class="op-dep">you</span>` : "";
+    $("lr-people").innerHTML = me + [...picked].map(([id, n]) =>
+      `<span class="op-dep">${esc(n)} <button class="op-x" data-lr-rm="${esc(id)}" aria-label="Remove ${esc(n)}">✕</button></span>`).join("") +
+      guests.map((g, i) => `<span class="op-dep">${esc(g)} <span class="ev-tpl-badge">guest</span> <button class="op-x" data-lr-grm="${i}" aria-label="Remove ${esc(g)}">✕</button></span>`).join("");
+    $("lr-people").querySelectorAll("[data-lr-rm]").forEach(b => b.onclick = () => { picked.delete(b.dataset.lrRm); draw(); });
+    $("lr-people").querySelectorAll("[data-lr-grm]").forEach(b => b.onclick = () => { guests.splice(Number(b.dataset.lrGrm), 1); draw(); });
+  };
+  draw();
+  bindRulesEditor("lr");
+  $("lr-lmode").addEventListener("change", () => { $("lr-mode-label").textContent = LOOT_MODE_WORD[$("lr-lmode").value]; });
+  const input = $("lr-member"), hits = $("lr-hits");
+  let t = null;
+  input.oninput = () => {
+    clearTimeout(t);
+    const q = input.value.trim();
+    if (q.length < 2) { hits.hidden = true; return; }
+    t = setTimeout(async () => {
+      const d = await fetch(`/api/ops/members?q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : { members: [] }).catch(() => ({ members: [] }));
+      const list = (d.members || []).filter(m => !currentMe || m.discord_id !== currentMe.id);
+      hits.innerHTML = list.length ? list.map(m => `<button type="button" role="option" data-did="${esc(m.discord_id)}" data-name="${esc(m.name)}">${esc(m.name)}</button>`).join("")
+        : `<span class="muted">No match.</span>`;
+      hits.hidden = false;
+      hits.querySelectorAll("button[data-did]").forEach(b => b.onclick = () => {
+        picked.set(b.dataset.did, b.dataset.name); hits.hidden = true; input.value = ""; input.focus(); draw();
+      });
+    }, 200);
+  };
+  $("lr-guest-add").onclick = () => {
+    const g = $("lr-guest").value.trim();
+    if (g && !guests.includes(g)) { guests.push(g); $("lr-guest").value = ""; draw(); }
+  };
+  $("lr-go").onclick = async () => {
+    const msg = $("lr-msg");
+    if (!picked.size && !guests.length) { msg.textContent = "Add at least one other person to roll against."; return; }
+    msg.textContent = "Starting…";
+    try {
+      const r = await fetch("/api/ops/rolls", opJson("POST", { item: $("lr-item").value.trim() || null,
+        people: [...picked.keys()], guests: guests.map(name => ({ name })), loot: readLootEditor("lr") }));
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      location.hash = `#/ops/${(await r.json()).id}`;
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't start the roll."; }
+  };
+  // Running + recent rolls, compact.
+  Promise.all(["rolls", "rolls_closed"].map(sc => fetch(`/api/ops?scope=${sc}`).then(r => r.ok ? r.json() : { ops: [] }).catch(() => ({ ops: [] }))))
+    .then(([a, c]) => {
+      const el = $("ops-rolls"); if (!el) return;
+      const row = o => `<a class="op-roll-row" href="#/ops/${o.id}"><span>${esc(o.name)}</span>` +
+        `<span class="muted">${o.phase === "live" ? "open" : "done"} · ${esc(fmtEventTime(o.started_at || o.created_at))} · by ${esc(o.organizer_name)}</span></a>`;
+      const live = a.ops || [], done = (c.ops || []).slice(0, 8);
+      el.innerHTML = (live.length ? `<div class="ev-section-h" style="margin-top:12px">Open rolls</div>${live.map(row).join("")}` : "") +
+        (done.length ? `<div class="ev-section-h" style="margin-top:12px">Recent rolls</div>${done.map(row).join("")}` : "");
+    });
+}
+
 async function renderOpsHome() {
+  await loadOpDefaultRules();          // the Loot roll tool starts on the org's default mode
   const root = $("ops-root");
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">OPS</h2></div>` +
@@ -14503,11 +14576,26 @@ async function renderOpsHome() {
       `<select id="op-q-tpl" aria-label="Template"><option value="">No template</option></select>` +
       `<button class="ev-btn primary" id="op-q-go">Start quick op</button></div>` +
       `<span id="op-q-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></div>` +
+    `<div class="panel"><h2>🎲 LOOT ROLL</h2>` +
+      `<p class="ev-note">A rare drop and no op running? Roll for it on the spot. Everyone in the roll picks Need, Want or Pass on their own screen, and each roll can be checked right after. ` +
+      `Inside an op, use its Loot panel instead — it's the same tool.</p>` +
+      `<div class="op-quick-row" style="margin-top:8px;"><input id="lr-item" class="ti" maxlength="80" placeholder="What dropped? e.g. Behring S71" aria-label="Item">` +
+      `<button class="ev-btn primary" id="lr-go">Start roll</button></div>` +
+      `<div class="op-add-grid" style="margin-top:10px;">` +
+        `<div class="ev-field"><label for="lr-member">Who's in — org members</label><input id="lr-member" class="ti" autocomplete="off" placeholder="Type 2+ letters of a name">` +
+          `<div id="lr-hits" class="op-hits" role="listbox" hidden></div></div>` +
+        `<div class="ev-field"><label for="lr-guest">…and guests</label><div class="op-guest-row"><input id="lr-guest" class="ti" maxlength="40" placeholder="Name">` +
+          `<button class="ev-btn" id="lr-guest-add">Add</button></div></div></div>` +
+      `<div class="op-deps" id="lr-people" style="margin-top:8px;"></div>` +
+      `<details class="ev-form-card op-add"><summary class="ev-section-h">Mode: <span id="lr-mode-label">${esc(LOOT_MODE_WORD[(fullRules(null).loot || {}).mode] || "Random")}</span></summary>${lootEditorHtml("lr", fullRules(null).loot)}</details>` +
+      `<span id="lr-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>` +
+      `<div id="ops-rolls"></div></div>` +
     `<div class="panel"><h2>RUNNING NOW</h2><div id="ops-active"><p class="stat-empty">Loading…</p></div></div>` +
     `<div class="panel"><h2>RECORDS</h2><div class="ev-boardbar"><span class="seg" role="group">` +
       `<button id="ops-rec-all" class="on" aria-pressed="true">All</button>` +
       `<button id="ops-rec-mine" aria-pressed="false">Mine</button></span></div>` +
       `<div id="ops-closed"><p class="stat-empty">Loading…</p></div></div>`;
+  bindLootRollTool();
   loadEventTemplates().then(d => {
     const sel = $("op-q-tpl"); if (!sel) return;
     sel.insertAdjacentHTML("beforeend", (d.templates || []).map(t =>
@@ -14617,6 +14705,7 @@ function opRowHtml(op, r) {
 
 function drawOp(op) {
   opCurrent = op;
+  if (op.kind === "roll") return drawRollSession(op);
   const root = $("ops-root");
   const back = op.event_id ? `<a class="ev-back" href="#/events/${op.event_id}">← ${esc(op.event_title || "Event")}</a>`
     : `<a class="ev-back" href="#/ops">← Ops</a>`;
@@ -14669,15 +14758,20 @@ function drawOp(op) {
     `<div class="ev-meta-grid secondary">${meta.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` +
     `<p class="ev-note">${esc(hint)}</p>` +
     `<div class="ev-form-actions op-actions">${opActions(op)}${joinBtn}` +
+      // On the spot: a rare drop mid-mission is one tap from the header.
+      (op.phase === "live" && op.loot && op.loot.can_manage
+        ? `<button class="ev-btn" id="op-roll-now" title="Log a drop and roll for it now">🎲 Roll for loot</button>` : "") +
       `<span id="op-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></div>` +
     opContractsPanel(op) +
+    // While the mission is live, loot sits above the roster — that's when it drops.
+    (op.phase === "live" ? opLootPanel(op) : "") +
     `<div class="panel"><div class="op-roster-head"><h2>ROSTER</h2>` +
       `<span class="op-counts">${opCountsLine(op.counts)}</span>` +
       (canEditRoster && unmarked ? `<button class="ev-btn" id="op-bulk-absent">Mark the ${unmarked} unmarked Absent</button>` : "") + `</div>` +
       (op.roster.length ? `<div class="op-grid">${op.roster.map(r => opRowHtml(op, r)).join("")}</div>`
         : `<p class="stat-empty">No one on the roster yet.</p>`) +
       addPanel + deputyPanel + `</div>` +
-    opLootPanel(op) +
+    (op.phase !== "live" ? opLootPanel(op) : "") +
     opPayoutPanel(op) +
     `<div class="panel"><h2>LOG</h2><p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
       `<ol class="op-log">${op.log.slice().reverse().map(e =>
@@ -14687,6 +14781,68 @@ function drawOp(op) {
   bindOp(op);
   bindOpMoney(op);
   bindOpLoot(op);
+}
+
+// ---- standalone loot roll (kind "roll") ----
+// The Ops app's Loot roll tool, run outside an op: the same Need/Want/Pass,
+// modes and Verify, without the mission around it. Everyone in it is "here".
+function drawRollSession(op) {
+  const root = $("ops-root");
+  const live = op.phase === "live";
+  const manage = op.can_manage && live;
+  const L = op.loot;
+  const people = op.roster.map(r =>
+    `<span class="op-dep">${esc(r.name)}${r.kind === "guest" ? ' <span class="ev-tpl-badge">guest</span>' : ""}` +
+    (manage && r.discord_id !== op.organizer_id ? ` <button class="op-x" data-rm="${r.id}" aria-label="Remove ${esc(r.name)}">✕</button>` : "") + `</span>`).join("");
+  const add = manage
+    ? `<div class="op-add-grid" style="margin-top:10px;">` +
+        `<div class="ev-field"><label for="op-add-member">Add an org member</label>` +
+          `<input id="op-add-member" class="ti" autocomplete="off" placeholder="Type 2+ letters of a name">` +
+          `<div id="op-member-hits" class="op-hits" role="listbox" hidden></div></div>` +
+        `<div class="ev-field"><label for="op-add-guest">Add a guest</label>` +
+          `<div class="op-guest-row"><input id="op-add-guest" class="ti" maxlength="40" placeholder="Name">` +
+          `<input id="op-add-ghandle" class="ti" maxlength="40" placeholder="RSI handle (optional)">` +
+          `<button class="ev-btn" id="op-add-guest-go">Add guest</button></div></div></div>` : "";
+  const modeEd = manage
+    ? `<details class="ev-form-card op-add"><summary class="ev-section-h">Change the mode</summary>` +
+      lootEditorHtml("rl", L.rules) +
+      `<div class="ev-form-actions" style="border:none;padding-top:8px;"><button class="ev-btn primary" id="rl-save">Save</button>` +
+      `<span class="ev-note">${L.rolls.length || L.items.some(i => i.status === "rolled") ? "Something's been rolled, so this needs a reason and shows in the log." : "Free to change until the first roll."}</span></div></details>` : "";
+  const actions = op.can_manage
+    ? (live ? `<button class="ev-btn" data-op-phase="closed">Done</button>` : `<button class="ev-btn" data-op-phase="live">Reopen</button>`) : "";
+  root.innerHTML = `<div class="panel"><a class="ev-back" href="#/ops">← Ops</a>` +
+    `<div class="ev-detail-title"><h2>${esc(op.name)}</h2>` +
+      (manage ? `<button class="op-x" id="op-rename" title="Rename" aria-label="Rename">✎</button>` : "") +
+      `<div class="ev-chips"><span class="ev-chip type">Loot roll</span>${live ? opPhaseBadge("live") : `<span class="ev-phase ev-phase-ended">Done</span>`}</div></div>` +
+    `<div class="ev-meta-grid secondary"><span class="ev-m">run by <b>${esc(op.organizer_name)}</b></span>` +
+      `<span class="ev-m">started ${esc(fmtEventTime(op.started_at || op.created_at))}</span></div>` +
+    `<p class="ev-note">${live ? "Share the link so everyone can pick Need, Want or Pass on their own screen. Anyone can check each roll right after it's made." : "Finished. Every roll can be checked below."}</p>` +
+    `<div class="ev-form-actions op-actions"><button class="ev-btn" id="op-share-link">Copy link</button>` +
+      (!op.in_roster && live ? `<button class="ev-btn primary" id="op-join">I'm here — add me</button>` : "") + actions +
+      `<span id="op-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></div>` +
+    `<div class="panel"><div class="op-roster-head"><h2>IN THE ROLL</h2><span class="op-counts">${op.roster.length} ${op.roster.length === 1 ? "person" : "people"}</span></div>` +
+      `<div class="op-deps">${people}</div>${add}</div>` +
+    opLootPanel(op).replace('<div class="panel"><h2>LOOT</h2>', `<div class="panel"><h2>LOOT</h2>${modeEd}`) +
+    `<div class="panel"><details><summary class="ev-section-h" style="cursor:pointer">Log (${op.log.length})</summary>` +
+      `<ol class="op-log">${op.log.slice().reverse().map(e =>
+        `<li><time datetime="${esc(e.at)}">${esc(fmtEventTime(e.at))}</time> ` +
+        `<span><b>${esc(e.actor_name)}</b> ${esc(e.text)}` +
+        (e.reason ? ` <span class="op-reason">— “${esc(e.reason)}”</span>` : "") + `</span></li>`).join("")}</ol></details></div>`;
+  bindOp(op);
+  bindOpLoot(op);
+  bindRulesEditor("rl", L.rotation_names);
+  const save = $("rl-save");
+  if (save) save.onclick = async () => {
+    const loot = readLootEditor("rl");
+    const rolled = L.items.some(i => i.status === "rolled" || i.voided.length);
+    let reason = null;
+    if (rolled) {
+      reason = await promptDialog("Something's already been rolled, so this change is logged with a reason.",
+        { title: "Change the mode", confirmLabel: "Change", placeholder: "Reason" });
+      if (reason == null) return;
+    }
+    opCall(`/api/ops/${op.id}/rules`, opJson("PUT", { rules: { loot }, reason }));
+  };
 }
 
 // ---- op loot (docs/event-operations.md §7) ----
@@ -14733,12 +14889,13 @@ function opLootPanel(op) {
   const warn = L.unmarked_count && L.open
     ? `<p class="op-warns" style="list-style:none;padding:0">${L.unmarked_count} ${L.unmarked_count === 1 ? "person isn't" : "people aren't"} marked yet and can't roll until they are.</p>` : "";
   const next = rr && L.rotation_next.length ? `<p class="ev-note">Next up: ${L.rotation_next.map((n, i) => i === 0 ? `<b>${esc(n)}</b>` : esc(n)).join(" → ")}. Passing keeps your place.</p>` : "";
+  const nextSeed = L.commitments.filter(c => !c.seed).slice(-1)[0];
+  const checkable = L.rolls.filter(r => (L.commitments[r.seed_idx] || {}).seed).length;
   const commit = L.commitments.length
-    ? `<p class="ev-note op-commit">Rolls are drawn from a secret seed fixed when the mission started — fingerprint ` +
-      `<code title="${esc(L.commitments[L.commitments.length - 1].hash)}">${esc(L.commitments[L.commitments.length - 1].hash.slice(0, 12))}…</code>. ` +
-      (L.commitments.every(c => c.seed)
-        ? `The seed is revealed, so anyone can check no roll was redone. <button class="ev-btn sm" id="op-loot-verify">Verify every roll</button>`
-        : `It's revealed when the record closes, so anyone can check no roll was redone.`) +
+    ? `<p class="ev-note op-commit">Each roll is drawn from a secret seed that was locked in before it` +
+      (nextSeed ? ` (the next one's fingerprint: <code title="${esc(nextSeed.hash)}">${esc(nextSeed.hash.slice(0, 12))}…</code>)` : "") +
+      ` and revealed right after, so anyone can check no roll was redone.` +
+      (checkable ? ` <button class="ev-btn sm" id="op-loot-verify">Verify ${checkable === 1 ? "the roll" : `all ${checkable} rolls`}</button>` : "") +
       `</p><div id="op-verify-out"></div>` : "";
   const members = op.roster.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
   const add = L.can_manage
@@ -14779,14 +14936,16 @@ async function lootVerify(op) {
   const tohex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
   if (!(window.crypto && crypto.subtle)) { out.innerHTML = `<p class="op-warns">This browser can't run the check here (it needs a secure https page).</p>`; return; }
   const lines = [];
-  const keys = [];
+  const keys = {};
   for (const c of L.commitments) {
+    if (!c.seed) continue;                       // not revealed yet (the next roll's)
     const h = tohex(await crypto.subtle.digest("SHA-256", hex2(c.seed)));
     const ok = h === c.hash;
-    lines.push(`<li class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} Seed ${c.idx + 1} matches the fingerprint published when it was committed</li>`);
-    keys.push(await crypto.subtle.importKey("raw", hex2(c.seed), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]));
+    lines.push(`<li class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} Seed ${c.idx + 1} matches the fingerprint locked in before its roll</li>`);
+    keys[c.idx] = await crypto.subtle.importKey("raw", hex2(c.seed), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   }
   for (const r of L.rolls) {
+    if (!keys[r.seed_idx]) continue;
     const mac = tohex(await crypto.subtle.sign("HMAC", keys[r.seed_idx], new TextEncoder().encode(`${op.id}:${r.seq}`)));
     const total = r.weights.reduce((a, w) => a + BigInt(w.weight), 0n);
     const pick = BigInt("0x" + mac.slice(0, 16)) % total;
@@ -14797,8 +14956,9 @@ async function lootVerify(op) {
     lines.push(`<li class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} Roll #${r.seq} (${esc(r.item)}${r.voided ? ", voided" : ""}): ${esc(name)}</li>`);
   }
   const bad = lines.filter(l => l.includes('class="bad"')).length;
-  out.innerHTML = `<ul class="op-verify">${lines.join("")}</ul><p class="ev-note">${bad ? `<b>${bad} check${bad === 1 ? "" : "s"} failed.</b>` : "Every roll checks out."} ` +
-    `Round-robin turns aren't random, so they're not listed — their order is shown with each roll.</p>`;
+  const rrTurns = L.items.filter(i => i.status === "rolled").length > L.rolls.filter(r => !r.voided).length;
+  out.innerHTML = `<ul class="op-verify">${lines.join("")}</ul><p class="ev-note">${bad ? `<b>${bad} check${bad === 1 ? "" : "s"} failed.</b>` : "Every roll checks out."}` +
+    (rrTurns ? ` Round-robin turns aren't random, so they're not listed — their order is shown with each roll.` : "") + `</p>`;
 }
 
 function bindOpLoot(op) {
@@ -15110,7 +15270,7 @@ function bindOp(op) {
   root.querySelectorAll("[data-op-phase]").forEach(b => b.onclick = async () => {
     const to = b.dataset.opPhase;
     let reason = null;
-    if ((op.phase === "settle" && to === "live") || (op.phase === "closed" && to === "settle")) {
+    if ((op.phase === "settle" && to === "live") || (op.phase === "closed" && (to === "settle" || to === "live"))) {
       reason = await promptDialog(to === "live" ? "Why is the mission resuming? It's shown in the log." : "Why is the record being reopened? It's shown in the log.",
         { title: to === "live" ? "Resume mission" : "Reopen the record", confirmLabel: to === "live" ? "Resume" : "Reopen", placeholder: "Reason" });
       if (reason == null) return;
@@ -15120,6 +15280,9 @@ function bindOp(op) {
     } else if (to === "settle") {
       if (!(await confirmDialog("After this, attendance changes need a reason. You can still resume if you go back in.",
           { title: "End the mission?", confirmLabel: "End mission" }))) return;
+    } else if (to === "closed" && op.kind === "roll") {
+      if (!(await confirmDialog("It stays in the Ops app as a record, and every roll's seed is revealed for checking. Reopening later is logged.",
+          { title: "Done rolling?", confirmLabel: "Done" }))) return;
     } else if (to === "closed") {
       if (!(await confirmDialog("The op becomes a read-only record" + (op.event_id ? " and its event is marked completed" : "") + ". Reopening later is logged.",
           { title: "Close the record?", confirmLabel: "Close record" }))) return;
@@ -15136,6 +15299,16 @@ function bindOp(op) {
   };
   const join = $("op-join");
   if (join) join.onclick = () => opCall(`/api/ops/${op.id}/join`, { method: "POST" }, "Couldn't add you.");
+  const rollNow = $("op-roll-now");
+  if (rollNow) rollNow.onclick = () => {
+    const f = $("op-lt-name");
+    if (f) { f.scrollIntoView({ behavior: "smooth", block: "center" }); f.focus(); }
+  };
+  const share = $("op-share-link");
+  if (share) share.onclick = () => {
+    try { navigator.clipboard.writeText(location.href); opSay("Link copied — everyone in the roll can open it to pick Need, Want or Pass."); }
+    catch { opSay(location.href); }
+  };
   const ren = $("op-rename");
   if (ren) ren.onclick = async () => {
     const v = await promptDialog("", { title: "Rename op", value: op.name, confirmLabel: "Rename" });

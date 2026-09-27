@@ -314,9 +314,18 @@ won". So:
 - **Each roll:** the result comes from
   `HMAC-SHA256(seed, "<op_id>:<roll_seq>")` mapped onto the weight table.
   `roll_seq` goes up by one per roll and is logged.
-- **At Close:** the seed is revealed. The record card has a **Verify** button
-  that recomputes every roll in the browser from the seed, the logged weight
-  tables and the sequence numbers, then checks the hash.
+- **Right after each roll** (as built, slice 4): the seed that roll used is
+  revealed and a fresh one is committed for the next roll. The first design
+  revealed everything at Close. But a party rolling for a rare drop
+  mid-mission wants proof on the spot, not at the end of the night, and a
+  seed that has already been used can't decide a future roll. Close still
+  reveals anything left, and a reopen commits a new seed.
+- **Verify** (on the op or roll page) recomputes every roll whose seed is
+  revealed, in the browser, from the seed, the logged weight tables and the
+  sequence numbers, and checks each seed against its published fingerprint.
+  Weights are stored as integers (thousandths) and the pick is the first 64
+  bits of the HMAC modulo the total, so the browser (BigInt) and the server
+  agree exactly.
 
 A **re-roll** (for example, the item was lost to a crash) is allowed, since
 §2.1 says amendable, never locked. It takes a reason, uses the next
@@ -340,6 +349,32 @@ A rotation is an ordered list of people.
   Optionally, a **named rotation** ("Friday bunkers") carries across ops, so
   whoever was next when last week ended is next this week. People new to a
   named rotation join at the back.
+
+### 7.6 The Loot roll tool (standalone and in-op)
+
+Loot rolling is **one tool** in the Ops app, run either inside an op or on
+its own (a maintainer request made after slice 4 was built: "if the party
+comes across a rare weapon, they will want to do the roll for it on the
+spot").
+
+- **Inside an op**, the Loot panel moves **above the roster while the op is
+  Live**, and the header has a **🎲 Roll for loot** button that jumps to the
+  item field. Rolling was always allowed while Live; it was just buried.
+- **Standalone**: the Ops home has a **Loot roll** tool. Name the drop, pick
+  members (name search) and guests, choose the mode, then Start. It creates
+  a lightweight op with `kind = "roll"`:
+  - It is **live immediately**, with a seed committed. Everyone added is
+    **Present**, including anyone added later or anyone who taps "I'm here".
+  - It uses the same Need/Want/Pass, modes, named rotations, re-rolls, log
+    and Verify as an op's loot panel. There's no second implementation.
+  - The mode can be changed freely until the first roll. After that, a change
+    is a logged amendment.
+  - **Done** closes it; a reopen (with a reason) goes straight back to live.
+  - Its page drops everything a quick roll doesn't need (phases, attendance,
+    contracts, payout). The share link lets each person set their own intent.
+  - It is **never an op**: it's left out of the ops lists, the events board,
+    and the weighted-loot attendance count (a quick roll must not raise
+    anyone's weight). The Ops home lists open and recent rolls separately.
 
 ## 8. Live status (watcher)
 
