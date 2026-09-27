@@ -5661,6 +5661,87 @@ def derive_event_phase(event: dict, now_dt: datetime) -> dict:
     }
 
 
+# --- event templates: "how does this event differ from its template" --------
+# docs/event-operations.md §14.3. An event COPIES its template at creation
+# (events.template_snapshot); this compares the event as it stands now against
+# that copy, so signups can see "this one's run differently" before they commit.
+
+_TPL_DETAIL_LABELS = (("mission", "Mission"), ("loadout", "Loadout"),
+                      ("medical", "Medical"), ("comms", "Comms"),
+                      ("roe", "Rules of engagement"), ("prereqs", "Prerequisites"))
+
+
+def _tpl_fmt(v, kind: str = "", labels: dict | None = None) -> str:
+    """One field value as the short text a deviation chip shows."""
+    if kind == "roles":
+        return ", ".join(f"{r.get('role')} ×{r.get('needed')}" for r in (v or [])) or "none"
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v) or "none"
+    if v is None or v == "":
+        return "—"
+    if labels and v in labels:
+        return labels[v]
+    return str(v)
+
+
+def event_template_diffs(event: dict, snapshot_event: dict,
+                         roe_labels: dict | None = None) -> list[dict]:
+    """Fields where `event` (an events row: `type`/`category` lists, `roles`,
+    `details`…) departs from the template contents it was created from.
+
+    Returns [{field, label, from, to}] with display strings, in form order.
+    The crew-shape fields (types, categories, duration, player counts, roles)
+    are always compared — they're what a template exists to fix. Free-text
+    fields (places, description, mission details) are compared only where the
+    template STATED a value: every event names its own rally point, so "—" →
+    "Port Tressler" is not a deviation, but a template's "Heavy armour"
+    becoming "Light armour" is. Description reports only that it was edited.
+    """
+    t = snapshot_event or {}
+    out = []
+
+    def add(field, label, a, b, kind="", labels=None):
+        out.append({"field": field, "label": label,
+                    "from": _tpl_fmt(a, kind, labels), "to": _tpl_fmt(b, kind, labels)})
+
+    def as_set(v):
+        return sorted(v or [])
+
+    if as_set(event.get("type")) != as_set(t.get("types")):
+        add("types", "Type", t.get("types") or [], event.get("type") or [])
+    if as_set(event.get("category")) != as_set(t.get("categories")):
+        add("categories", "Category", t.get("categories") or [],
+            event.get("category") or [])
+    for field, label in (("duration_min", "Duration (min)"),
+                         ("min_players", "Min players"),
+                         ("max_players", "Max players")):
+        a, b = t.get(field), event.get(field)
+        if field == "min_players":
+            a, b = a or 0, b or 0
+        if a != b:
+            add(field, label, a, b)
+    roles_key = lambda rs: sorted((r.get("role"), int(r.get("needed") or 0))
+                                  for r in (rs or []))
+    if roles_key(event.get("roles")) != roles_key(t.get("roles")):
+        add("roles", "Roles", t.get("roles") or [], event.get("roles") or [], "roles")
+    for field, label in (("location", "Rally point"),
+                         ("event_location", "Event location")):
+        a = (t.get(field) or "").strip()
+        if a and a != (event.get(field) or "").strip():
+            add(field, label, a, event.get(field))
+    a = (t.get("description") or "").strip()
+    if a and a != (event.get("description") or "").strip():
+        out.append({"field": "description", "label": "Description",
+                    "from": None, "to": None, "edited": True})
+    td, ed = t.get("details") or {}, event.get("details") or {}
+    for key, label in _TPL_DETAIL_LABELS:
+        a = (td.get(key) or "").strip()
+        if a and a != (ed.get(key) or "").strip():
+            add(f"details.{key}", label, a, ed.get(key),
+                labels=roe_labels if key == "roe" else None)
+    return out
+
+
 # --- fleet roster / squad organizer (#20) ----------------------------------
 # The plan (groups + assignments) is a layer over the signups. These pure helpers
 # turn the three stored lists (groups, assignments, going-signups) into the board

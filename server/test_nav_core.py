@@ -2080,7 +2080,8 @@ class EventTaxonomyTests(unittest.TestCase):
     def test_taxonomy_payload_shape(self):
         import event_taxonomy
         t = event_taxonomy.taxonomy()
-        self.assertEqual(set(t), {"types", "categories", "role_groups", "roles"})
+        self.assertEqual(set(t), {"types", "categories", "role_groups", "roles",
+                                  "mission_suggestions", "roe"})
         self.assertIn("Survey Op", t["types"])
         self.assertIn("Surveyor", t["roles"])
         # "Event" and "Race" categories were added in the multi-type pass.
@@ -7862,5 +7863,51 @@ class NodeQualityLineTests(unittest.TestCase):
         self.assertEqual(len(d["lines"]), nav_core.QUALITY_LINES_MAX)
 
 
+class EventTemplateDiffTests(unittest.TestCase):
+    """docs/event-operations.md §14.3: an event vs the template copy it was
+    created from."""
+
+    TPL = {"types": ["Raid"], "categories": ["PvP"], "duration_min": 120,
+           "min_players": 0, "max_players": None, "location": "", "description": "",
+           "roles": [{"role": "Medical", "needed": 2}],
+           "details": {"loadout": "Heavy armour"}}
+
+    def _ev(self, **over):
+        ev = {"type": ["Raid"], "category": ["PvP"], "duration_min": 120,
+              "min_players": 0, "max_players": None, "location": "Port Tressler",
+              "description": "Bring snacks",
+              "roles": [{"role": "Medical", "needed": 2}],
+              "details": {"loadout": "Heavy armour", "comms": "Ops 1"}}
+        ev.update(over)
+        return ev
+
+    def test_unchanged_event_has_no_diffs(self):
+        # Its own rally point, description and extra details are NOT deviations:
+        # the template didn't state them.
+        self.assertEqual(nav_core.event_template_diffs(self._ev(), self.TPL), [])
+
+    def test_changes_reported_in_display_form(self):
+        d = nav_core.event_template_diffs(self._ev(
+            type=["Raid", "Training"], roles=[{"role": "Medical", "needed": 1}],
+            details={"loadout": ""}, max_players=8), self.TPL)
+        by = {x["field"]: x for x in d}
+        self.assertEqual(by["types"]["to"], "Raid, Training")
+        self.assertEqual(by["roles"]["from"], "Medical ×2")
+        self.assertEqual(by["max_players"]["from"], "—")
+        self.assertEqual(by["details.loadout"]["to"], "—")
+
+    def test_order_insensitive_lists(self):
+        tpl = {**self.TPL, "types": ["Raid", "Training"]}
+        self.assertEqual(nav_core.event_template_diffs(
+            self._ev(type=["Training", "Raid"]), tpl), [])
+
+    def test_stated_description_edit_is_flagged_without_text(self):
+        tpl = {**self.TPL, "description": "Standard brief"}
+        d = nav_core.event_template_diffs(self._ev(), tpl)
+        self.assertEqual(d, [{"field": "description", "label": "Description",
+                              "from": None, "to": None, "edited": True}])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
+

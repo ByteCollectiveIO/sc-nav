@@ -398,6 +398,43 @@ CREATE TABLE IF NOT EXISTS group_templates (
     created_at TEXT
 );
 
+-- Event templates (docs/event-operations.md §14): a saved preset bundling an
+-- event's setup (types, roles, crew size, mission details…), its fleet layout
+-- and — from ops slice 3 — its op rules. Org-shared. Events COPY a template
+-- (events.template_snapshot), never link to it, so editing a template can't
+-- change an event people already signed up for. Built-in presets live in code
+-- (event_taxonomy.BUILTIN_TEMPLATES); `builtin_key` marks an org copy of one.
+CREATE TABLE IF NOT EXISTS event_templates (
+    -- AUTOINCREMENT on purpose: a plain rowid hands a deleted template's id to
+    -- the next one created, which would graft the old template's history onto
+    -- it AND make events created from the deleted one point at a stranger.
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1, -- +1 on every content edit
+    official INTEGER NOT NULL DEFAULT 0,-- admin-marked org standard
+    created_by TEXT,
+    created_at TEXT, updated_at TEXT,
+    uses INTEGER NOT NULL DEFAULT 0,    -- events created from it ("most used" sort)
+    event TEXT NOT NULL,                -- JSON: the event-setup fields
+    rules TEXT,                         -- JSON op rule set; NULL until ops slice 3
+    groups TEXT NOT NULL DEFAULT '[]',  -- JSON: [{name, kind, ship, capacity}]
+    builtin_key TEXT                    -- set on a "copy to customize"
+);
+
+-- Who changed a template, when, and to what. Append-only: an Official
+-- template's contents are effectively org policy, so its history is kept.
+CREATE TABLE IF NOT EXISTS event_template_history (
+    id INTEGER PRIMARY KEY,
+    template_id INTEGER NOT NULL,
+    version INTEGER,
+    actor_id TEXT,
+    action TEXT NOT NULL,               -- create | edit | rename | official | unofficial | delete
+    snapshot TEXT,                      -- JSON: the template after the change
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS event_template_history_tpl
+    ON event_template_history(template_id);
+
 -- Trade planner favorites (#21): a member's saved trade-route configurations.
 -- `data` is a JSON blob of the *plan config* (ship, usable SCU, start, mode,
 -- filters, budget, manual legs) — NOT the resolved legs/prices. Prices move, so a
@@ -680,6 +717,16 @@ def init(db_path) -> None:
         # Scheduled Discord reminders: stamped when the T-minus ping fires so a
         # restart or a slow tick can never double-ping (see events_due_for_reminder).
         _ensure_column("events", "reminded_at", "TEXT")
+        # Mission details (FPS/PvP specifics, docs/event-operations.md §13) +
+        # template provenance (§14.3): the id/version/name it was created from
+        # and a SNAPSHOT of the template's contents at that moment, so "how
+        # does this event differ from its template" survives the template
+        # being edited or deleted.
+        _ensure_column("events", "details", "TEXT")
+        _ensure_column("events", "template_id", "TEXT")
+        _ensure_column("events", "template_version", "INTEGER")
+        _ensure_column("events", "template_name", "TEXT")
+        _ensure_column("events", "template_snapshot", "TEXT")
         # Personal vs org goals + blueprint-seeded craft goals (#14.2). A goal is
         # `org` (shared board, anyone contributes) or `personal` (only its creator
         # sees/fills it); `blueprint_key` tags a goal whose line items were seeded
@@ -1921,10 +1968,12 @@ def delete_trade_favorite(discord_id: str, fav_id: int) -> bool:
 # cancel_event); updated_at is stamped on every write.
 _EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
                    "signup_deadline", "duration_min", "location", "event_location",
-                   "min_players", "max_players", "roles")
+                   "min_players", "max_players", "roles", "details")
 
 # Columns the create/edit layer hands us as Python lists; stored as JSON text.
 _EVENT_JSON = ("roles", "category", "type")
+# JSON-object columns (a dict, not a list): parsed on read, `{}` when empty.
+_EVENT_JSON_OBJ = ("details", "template_snapshot")
 
 
 def _event_json_list(raw) -> list:
@@ -1947,6 +1996,9 @@ def _event_row_to_dict(r: sqlite3.Row) -> dict:
     d["roles"] = _u(d.get("roles")) or []
     d["category"] = _event_json_list(d.get("category"))
     d["type"] = _event_json_list(d.get("type"))
+    for k in _EVENT_JSON_OBJ:
+        v = _u(d.get(k)) if d.get(k) else None
+        d[k] = v if isinstance(v, dict) else ({} if k == "details" else None)
     return d
 
 
@@ -1963,14 +2015,19 @@ def create_event(d: dict) -> int:
         cur = _conn.execute(
             "INSERT INTO events (organizer_id, title, description, type, category, "
             "start_at, signup_deadline, duration_min, location, event_location, "
-            "min_players, max_players, roles, status, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "min_players, max_players, roles, status, created_at, updated_at, "
+            "details, template_id, template_version, template_name, "
+            "template_snapshot) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["organizer_id"]), d.get("title"), d.get("description"),
              _j(d.get("type") or []), _j(d.get("category") or []), d.get("start_at"),
              d.get("signup_deadline"), d.get("duration_min"), d.get("location"),
              d.get("event_location"), d.get("min_players"), d.get("max_players"),
              _j(d.get("roles") or []), d.get("status", "scheduled"),
-             d.get("created_at"), d.get("updated_at")),
+             d.get("created_at"), d.get("updated_at"),
+             _j(d.get("details") or {}), d.get("template_id"),
+             d.get("template_version"), d.get("template_name"),
+             _j(d["template_snapshot"]) if d.get("template_snapshot") else None),
         )
     return cur.lastrowid
 
@@ -2039,7 +2096,9 @@ def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
     """Replace the editable columns of an event (organizer/admin check is the
     caller's job). Returns whether a row matched."""
     sets = ", ".join(f"{c}=?" for c in _EVENT_EDITABLE)
-    vals = [_j(fields.get(c) or []) if c in _EVENT_JSON else fields.get(c)
+    vals = [_j(fields.get(c) or []) if c in _EVENT_JSON
+            else _j(fields.get(c) or {}) if c in _EVENT_JSON_OBJ
+            else fields.get(c)
             for c in _EVENT_EDITABLE]
     with _lock, _conn:
         cur = _conn.execute(
@@ -2242,6 +2301,120 @@ def delete_group_template(tid: int) -> bool:
     with _lock, _conn:
         cur = _conn.execute("DELETE FROM group_templates WHERE id=?", (tid,))
     return cur.rowcount > 0
+
+
+def _event_template_row(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["event"] = _u(d.get("event")) or {}
+    d["rules"] = _u(d.get("rules")) if d.get("rules") else None
+    d["groups"] = _u(d.get("groups")) or []
+    d["official"] = bool(d.get("official"))
+    return d
+
+
+def list_event_templates() -> list[dict]:
+    """All org event templates (built-ins are merged in by the caller)."""
+    with _lock:
+        rows = _conn.execute("SELECT * FROM event_templates ORDER BY id").fetchall()
+    return [_event_template_row(r) for r in rows]
+
+
+def get_event_template(tid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM event_templates WHERE id=?",
+                            (tid,)).fetchone()
+    return _event_template_row(row) if row else None
+
+
+def _log_event_template(tid: int, actor_id: str, action: str, at: str) -> None:
+    """Append one history row carrying the template as it now stands. Caller
+    holds _lock + the transaction."""
+    row = _conn.execute("SELECT * FROM event_templates WHERE id=?", (tid,)).fetchone()
+    snap = _event_template_row(row) if row else None
+    _conn.execute(
+        "INSERT INTO event_template_history (template_id, version, actor_id, "
+        "action, snapshot, created_at) VALUES (?,?,?,?,?,?)",
+        (tid, snap["version"] if snap else None, str(actor_id), action,
+         _j(snap) if snap else None, at))
+
+
+def create_event_template(name: str, event: dict, groups: list, created_by: str,
+                          at: str, builtin_key: str | None = None,
+                          rules: dict | None = None) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO event_templates (name, version, official, created_by, "
+            "created_at, updated_at, uses, event, rules, groups, builtin_key) "
+            "VALUES (?,1,0,?,?,?,0,?,?,?,?)",
+            (name, str(created_by), at, at, _j(event),
+             _j(rules) if rules is not None else None, _j(groups or []),
+             builtin_key))
+        tid = cur.lastrowid
+        _log_event_template(tid, created_by, "create", at)
+    return tid
+
+
+def update_event_template(tid: int, actor_id: str, at: str, *,
+                          name: str | None = None, event: dict | None = None,
+                          groups: list | None = None) -> bool:
+    """Edit a template. A content change (event/groups) bumps `version`; a
+    rename alone doesn't (events diff against contents, not the label)."""
+    sets, vals = [], []
+    if name is not None:
+        sets.append("name=?"); vals.append(name)
+    content = event is not None or groups is not None
+    if event is not None:
+        sets.append("event=?"); vals.append(_j(event))
+    if groups is not None:
+        sets.append("groups=?"); vals.append(_j(groups))
+    if content:
+        sets.append("version=version+1")
+    if not sets:
+        return False
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE event_templates SET {', '.join(sets)}, updated_at=? WHERE id=?",
+            (*vals, at, tid))
+        if cur.rowcount:
+            _log_event_template(tid, actor_id, "edit" if content else "rename", at)
+    return cur.rowcount > 0
+
+
+def set_event_template_official(tid: int, official: bool, actor_id: str,
+                                at: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE event_templates SET official=?, updated_at=? WHERE id=?",
+            (1 if official else 0, at, tid))
+        if cur.rowcount:
+            _log_event_template(tid, actor_id,
+                                "official" if official else "unofficial", at)
+    return cur.rowcount > 0
+
+
+def delete_event_template(tid: int, actor_id: str, at: str) -> bool:
+    """Delete a template. Events created from it keep their snapshot; the
+    history keeps a final 'delete' row naming who removed it."""
+    with _lock, _conn:
+        _log_event_template(tid, actor_id, "delete", at)
+        cur = _conn.execute("DELETE FROM event_templates WHERE id=?", (tid,))
+    return cur.rowcount > 0
+
+
+def bump_event_template_uses(tid: int) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE event_templates SET uses=uses+1 WHERE id=?", (tid,))
+
+
+def event_template_history(tid: int) -> list[dict]:
+    """A template's change history, oldest first (snapshots omitted — the
+    list is for 'who changed it when'; a snapshot is fetched on demand)."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, template_id, version, actor_id, action, created_at "
+            "FROM event_template_history WHERE template_id=? ORDER BY id",
+            (tid,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:

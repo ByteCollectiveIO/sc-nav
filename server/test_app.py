@@ -1920,6 +1920,246 @@ class FleetTemplateTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class EventTemplateTests(unittest.TestCase):
+    """docs/event-operations.md §13–§14: mission details on events, event
+    templates (org + built-in), copy-not-link provenance with deviation chips,
+    save-as-template, Official flag, and the built-ins toggle."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._admin_dep()
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def _admin_dep(cls):
+        if not cls._user.get("is_admin"):
+            raise app.HTTPException(status_code=403, detail="admin only")
+        return cls._user
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+        db.set_setting("event_builtin_templates", "1")
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _start(self):
+        return (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+
+    _TPL_EVENT = {"types": ["Raid"], "categories": ["PvP"], "duration_min": 120,
+                  "min_players": 4, "max_players": 12,
+                  "roles": [{"role": "Combat (FPS)", "needed": 6},
+                            {"role": "Medical", "needed": 2}],
+                  "details": {"loadout": "Heavy armour", "roe": "pvp_if_engaged"}}
+
+    def _mk_template(self, name="Friday raid", **over):
+        body = {"name": name, "event": {**self._TPL_EVENT, **over},
+                "groups": [{"name": "Alpha", "kind": "squad", "capacity": 4}]}
+        r = self.client.post("/api/event-templates", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _event_body(self, **over):
+        return {"title": "Raid night", "start_at": self._start(),
+                "types": ["Raid"], "categories": ["PvP"], "duration_min": 120,
+                "min_players": 4, "max_players": 12,
+                "roles": [{"role": "Combat (FPS)", "needed": 6},
+                          {"role": "Medical", "needed": 2}],
+                "details": {"loadout": "Heavy armour", "roe": "pvp_if_engaged"},
+                **over}
+
+    # --- mission details -------------------------------------------------
+    def test_event_details_round_trip_and_blanks_dropped(self):
+        r = self.client.post("/api/events", json=self._event_body(
+            details={"mission": " Bunker (PvE) ", "comms": "", "roe": "pve_only"}))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["details"],
+                         {"mission": "Bunker (PvE)", "roe": "pve_only"})
+        eid = r.json()["id"]
+        r = self.client.patch(f"/api/events/{eid}", json=self._event_body(
+            details={"medical": "2 medpens"}))
+        self.assertEqual(r.json()["details"], {"medical": "2 medpens"})
+
+    def test_unknown_roe_rejected(self):
+        r = self.client.post("/api/events", json=self._event_body(
+            details={"roe": "shoot everyone"}))
+        self.assertEqual(r.status_code, 400)
+
+    def test_taxonomy_carries_roe_and_suggestions(self):
+        tax = self.client.get("/api/events/taxonomy").json()
+        self.assertIn("pvp_hunt", [r["key"] for r in tax["roe"]])
+        self.assertTrue(tax["mission_suggestions"])
+
+    # --- built-ins -------------------------------------------------------
+    def test_builtins_use_only_taxonomy_values(self):
+        tax = app.event_taxonomy
+        for b in tax.BUILTIN_TEMPLATES:
+            ev = b["event"]
+            self.assertTrue(ev["types"] and ev["categories"], b["key"])
+            self.assertTrue(set(ev["types"]) <= set(tax.TYPES), b["key"])
+            self.assertTrue(set(ev["categories"]) <= set(tax.CATEGORIES), b["key"])
+            for r in ev["roles"]:
+                self.assertIn(r["role"], tax.ROLES, b["key"])
+            roe = ev.get("details", {}).get("roe")
+            if roe:
+                self.assertIn(roe, tax.ROE_KEYS)
+            for g in b["groups"]:
+                self.assertIn(g["kind"], app.nav_core.GROUP_KINDS)
+
+    def test_list_merges_builtins_and_toggle_hides_them(self):
+        ids = [t["id"] for t in self.client.get("/api/event-templates").json()["templates"]]
+        self.assertIn("builtin:raid", ids)
+        db.set_setting("event_builtin_templates", "0")
+        data = self.client.get("/api/event-templates").json()
+        self.assertFalse(data["builtins_enabled"])
+        self.assertNotIn("builtin:raid", [t["id"] for t in data["templates"]])
+        r = self.client.post("/api/events", json=self._event_body(template_id="builtin:raid"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_copy_to_customize_replaces_builtin_in_picker(self):
+        r = self.client.post("/api/event-templates/builtin/mining/copy",
+                             json={"name": "Our mining"})
+        self.assertEqual(r.status_code, 200, r.text)
+        copy_ = r.json()
+        self.assertEqual(copy_["builtin_key"], "mining")
+        self.assertTrue(copy_["can_edit"])
+        ids = [t["id"] for t in self.client.get("/api/event-templates").json()["templates"]]
+        self.assertNotIn("builtin:mining", ids)
+        self.assertIn(copy_["id"], ids)
+        self.client.delete(f"/api/event-templates/{copy_['id']}")
+
+    # --- create from template: copy, not link -----------------------------
+    def test_event_from_template_snapshots_and_diffs(self):
+        tpl = self._mk_template()
+        r = self.client.post("/api/events", json=self._event_body(
+            template_id=tpl["id"], template_groups=True))
+        self.assertEqual(r.status_code, 200, r.text)
+        ev = r.json()
+        self.assertEqual(ev["template"]["name"], "Friday raid")
+        self.assertEqual(ev["template"]["diffs"], [])       # used as-is
+        groups = self.client.get(f"/api/events/{ev['id']}/groups").json()["groups"]
+        self.assertEqual([g["name"] for g in groups], ["Alpha"])
+        uses = next(t for t in self.client.get("/api/event-templates").json()["templates"]
+                    if t["id"] == tpl["id"])["uses"]
+        self.assertEqual(uses, 1)
+
+        # Editing the TEMPLATE later changes neither the event nor its diff
+        # baseline — the event holds a copy.
+        r = self.client.patch(f"/api/event-templates/{tpl['id']}", json={
+            "event": {**self._TPL_EVENT, "duration_min": 60}})
+        self.assertEqual(r.json()["version"], 2)
+        ev = self.client.get(f"/api/events/{ev['id']}").json()
+        self.assertEqual(ev["duration_min"], 120)
+        self.assertEqual(ev["template"]["diffs"], [])
+        self.assertEqual(ev["template"]["version"], 1)
+        self.assertEqual(ev["template"]["current_version"], 2)
+
+        # Editing the EVENT away from its template shows up as chips.
+        r = self.client.patch(f"/api/events/{ev['id']}", json=self._event_body(
+            duration_min=90, details={"loadout": "Light armour", "roe": "pve_only"}))
+        fields = {d["field"]: d for d in r.json()["template"]["diffs"]}
+        self.assertEqual(set(fields), {"duration_min", "details.loadout", "details.roe"})
+        self.assertEqual(fields["details.roe"]["from"], "PvP if engaged")
+        self.assertEqual(fields["details.roe"]["to"], "PvE only")
+
+        # Deleting the template leaves the event's provenance readable.
+        self.client.delete(f"/api/event-templates/{tpl['id']}")
+        ev = self.client.get(f"/api/events/{ev['id']}").json()
+        self.assertTrue(ev["template"]["deleted"])
+        self.assertEqual(len(ev["template"]["diffs"]), 3)
+
+    def test_event_from_builtin(self):
+        r = self.client.post("/api/events", json={
+            "title": "Bunker run", "start_at": self._start(),
+            "types": ["Combat Patrol"], "categories": ["PvE"],
+            "template_id": "builtin:bunker"})
+        self.assertEqual(r.status_code, 200, r.text)
+        t = r.json()["template"]
+        self.assertTrue(t["builtin"])
+        self.assertIn("roles", {d["field"] for d in t["diffs"]})   # roster dropped
+
+    def test_unknown_template_404(self):
+        r = self.client.post("/api/events", json=self._event_body(template_id="99999"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_template_validation_uses_taxonomy(self):
+        r = self.client.post("/api/event-templates", json={
+            "name": "Bad", "event": {**self._TPL_EVENT, "types": ["Knitting"]}})
+        self.assertEqual(r.status_code, 400)
+
+    # --- save as template + permissions ------------------------------------
+    def test_save_event_as_template(self):
+        eid = self.client.post("/api/events", json=self._event_body()).json()["id"]
+        self.client.post(f"/api/events/{eid}/groups",
+                         json={"name": "Gold", "kind": "wing", "capacity": 2})
+        r = self.client.post(f"/api/events/{eid}/save-template",
+                             json={"name": "From raid night"})
+        self.assertEqual(r.status_code, 200, r.text)
+        t = r.json()
+        self.assertEqual(t["event"]["types"], ["Raid"])
+        self.assertEqual(t["event"]["details"]["loadout"], "Heavy armour")
+        self.assertEqual([g["name"] for g in t["groups"]], ["Gold"])
+        self._as("2")
+        r = self.client.post(f"/api/events/{eid}/save-template", json={"name": "x"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_only_creator_or_admin_edits_and_official_is_admin(self):
+        tpl = self._mk_template("Mine")
+        self._as("2")
+        self.assertEqual(self.client.patch(f"/api/event-templates/{tpl['id']}",
+                                           json={"name": "Hijack"}).status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/event-templates/{tpl['id']}").status_code, 403)
+        self.assertEqual(self.client.post(f"/api/event-templates/{tpl['id']}/official",
+                                          json={"official": True}).status_code, 403)
+        self._as("9", admin=True)
+        r = self.client.post(f"/api/event-templates/{tpl['id']}/official",
+                             json={"official": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        first = r.json()["templates"][0]
+        self.assertEqual(first["id"], tpl["id"])          # Official sorts first
+        self.assertTrue(first["official"])
+        hist = self.client.get(f"/api/event-templates/{tpl['id']}/history").json()
+        self.assertEqual([h["action"] for h in hist], ["create", "official"])
+        self.assertEqual(hist[1]["actor_id"], "9")
+        # rename doesn't bump the version; a content edit does
+        r = self.client.patch(f"/api/event-templates/{tpl['id']}", json={"name": "Std raid"})
+        self.assertEqual(r.json()["version"], 1)
+        self.client.delete(f"/api/event-templates/{tpl['id']}")
+
+    def test_deleted_template_id_is_never_reused(self):
+        a = self._mk_template("Short-lived")
+        eid = self.client.post("/api/events", json=self._event_body(
+            template_id=a["id"])).json()["id"]
+        self.client.delete(f"/api/event-templates/{a['id']}")
+        b = self._mk_template("Newcomer")
+        self.assertNotEqual(a["id"], b["id"])
+        ev = self.client.get(f"/api/events/{eid}").json()
+        self.assertTrue(ev["template"]["deleted"])
+        hist = self.client.get(f"/api/event-templates/{b['id']}/history").json()
+        self.assertEqual([h["action"] for h in hist], ["create"])
+        self.client.delete(f"/api/event-templates/{b['id']}")
+
+    def test_settings_toggle_round_trips(self):
+        self._as("9", admin=True)
+        r = self.client.post("/api/settings", json={"event_builtin_templates": False})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(self.client.get("/api/settings").json()["event_builtin_templates"])
+
+
 class TradeRunStateTests(unittest.TestCase):
     """The trade-run leg/phase state machine (#21 step 5): guidance points at the
     active leg's buy terminal until the buy is confirmed, then its sell terminal;

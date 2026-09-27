@@ -2063,6 +2063,48 @@
     padding: 0 4px; }
   .ev-seat-x:hover { opacity: 1; }
   .ev-grp-empty { font-size: 12px; color: var(--dim); font-style: italic; margin-top: 6px; }
+  /* ---- event templates (docs/event-operations.md §14) ---- */
+  .ev-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ev-tplbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1px dashed var(--border); border-radius: 8px; padding: 10px 14px; }
+  .ev-tplbar-l { font-size: 12px; color: var(--dim); letter-spacing: .5px; }
+  .ev-tplbar select { flex: 1; min-width: 200px; padding: 8px 10px; font: inherit; font-size: 13px;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .ev-tplbar select:focus { outline: none; border-color: var(--accent); }
+  .ev-tplbar-manage { font-size: 12px; color: var(--dim); }
+  .ev-tplbar-manage:hover { color: var(--accent); }
+  .ev-tplbar-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--dim); }
+  .ev-tplbar-note b { color: var(--text); }
+  .ev-tplbar-groups { flex-basis: 100%; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .ev-mission > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 8px; }
+  .ev-mission > summary .ev-hint { text-transform: none; letter-spacing: 0; }
+  .ev-mission > summary::-webkit-details-marker { display: none; }
+  .ev-mission > summary::before { content: "▸"; color: var(--dim); }
+  .ev-mission[open] > summary::before { content: "▾"; }
+  .ev-mission[open] > summary { margin-bottom: 10px; }
+  .ev-mission-view { margin: 2px 0 6px; }
+  .ev-prereqs { font-size: 12px; color: var(--dim); white-space: pre-wrap; }
+  .ev-tpl-src { font-size: 12px; color: var(--dim); margin: 4px 0 8px; display: flex;
+    flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+  .ev-tpl-src b { color: var(--text); }
+  .ev-dev { font-size: 11px; border: 1px solid var(--warn); color: var(--warn);
+    border-radius: 3px; padding: 1px 6px; }
+  .ev-dev s { color: var(--dim); }
+  .ev-note { font-size: 12px; color: var(--dim); margin: 0; }
+  .ev-tpl-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .ev-tpl-card { border: 1px solid var(--border); border-radius: 8px; background: var(--panel2);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .ev-tpl-card.official { border-color: var(--accent); }
+  .ev-tpl-card-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ev-tpl-card .ev-tpl-nm { font-weight: 600; font-size: 14px; }
+  .ev-tpl-sum { font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .ev-tpl-badge { font-size: 10px; letter-spacing: .5px; text-transform: uppercase;
+    border: 1px solid var(--border); color: var(--dim); border-radius: 3px; padding: 1px 6px; }
+  .ev-tpl-badge.official { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .ev-tpl-hist { font-size: 12px; color: var(--dim); }
+  .ev-tpl-hist[hidden] { display: none; }
+  .ev-tpl-hist ol { margin: 4px 0; padding-left: 18px; }
+  .ev-tpl-card .ev-grp-actions { margin-top: auto; padding-top: 4px; }
   .ev-tpl-list { display: flex; flex-direction: column; gap: 6px; }
   .ev-tpl-row { display: flex; align-items: center; gap: 10px; }
   .ev-tpl-row .ev-tpl-nm { font-weight: 600; }
@@ -3928,6 +3970,16 @@
       offers instead of dead ads. 0 turns the badge off. Nothing is auto-removed.
     </div>
     <div class="muted" id="listing-stale-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>EVENT TEMPLATES</h2>
+    <label style="display:flex; gap:8px; align-items:center;">
+      <input id="event-builtin-tpl" type="checkbox"> Offer the built-in starter templates
+    </label>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Six presets (Mining, Salvage, Cargo haul, Bounty / combat patrol, Bunker, Raid) that ship
+      with the app. Turn them off if your org only wants its own templates. Org templates and
+      events already created from a built-in are unaffected.
+    </div>
+    <div class="muted" id="event-builtin-tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
     <h2>⛏ MINED-OUT REPORTS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Reports age off after
@@ -12566,6 +12618,12 @@ let evBoardCat = "";             // category chip filter ("" = all)
 let evBoardMine = false;         // only events I'm signed up for / organizing
 let evCalMonth = null;        // Date at the first of the displayed month
 let evFilterDay = null;       // "YYYY-MM-DD" (local) day filter, or null
+// Event templates (docs/event-operations.md §14). `evTemplates` = the last
+// /api/event-templates payload; `evFormTpl` = the template the open CREATE
+// form was started from ({id, name, group_count}) — sent as template_id so
+// the server records provenance + a snapshot to diff against.
+let evTemplates = null;
+let evFormTpl = null;
 
 async function loadEventsTaxonomy() {
   if (!evTaxonomy) evTaxonomy = await fetch("/api/events/taxonomy").then(r => r.json());
@@ -12575,6 +12633,10 @@ async function loadEventsTaxonomy() {
 function eventsSubRoute() {
   const rest = location.hash.slice("#/events".length).replace(/^\//, "");
   if (rest === "new") return { view: "new" };
+  if (rest === "templates") return { view: "templates" };
+  if (rest === "templates/new") return { view: "tpl-edit", id: null };
+  const tm = /^templates\/(\d+)$/.exec(rest);
+  if (tm) return { view: "tpl-edit", id: tm[1] };
   if (/^\d+$/.test(rest)) return { view: "detail", id: parseInt(rest, 10) };
   return { view: "board" };
 }
@@ -12582,6 +12644,8 @@ function eventsSubRoute() {
 function loadEvents() {
   const r = eventsSubRoute();
   if (r.view === "new") return renderEventForm();
+  if (r.view === "templates") return renderTemplatesPage();
+  if (r.view === "tpl-edit") return renderTemplateForm(r.id);
   if (r.view === "detail") return renderEventDetail(r.id);
   return renderEventBoard();
 }
@@ -12722,7 +12786,8 @@ async function renderEventBoard() {
   const root = $("events-root");
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">EVENTS</h2>` +
-    `<a class="ev-btn primary" href="#/events/new">+ Create event</a></div>` +
+    `<span class="ev-head-actions"><a class="ev-btn" href="#/events/templates">Templates</a>` +
+    `<a class="ev-btn primary" href="#/events/new">+ Create event</a></span></div>` +
     `<p class="ev-intro">Rally the org around in-game ops, expeditions, and meetups. Pick a day ` +
     `to see what's scheduled, or <a href="#/events/new">create your own</a> and gather a crew.</p>` +
     `<div class="ev-boardbar"><span class="seg" role="group">` +
@@ -12862,6 +12927,7 @@ async function renderDetailBody(e) {
   const editControls = e.can_edit
     ? `<button class="ev-btn" id="ev-edit">Edit</button>` +
       `<button class="ev-btn" id="ev-clone" title="Create a new event pre-filled from this one">Clone</button>` +
+      `<button class="ev-btn" id="ev-savetpl" title="Make this event's setup a template the org can start from">Save as template</button>` +
       (cancelled || e.phase === "ended" ? ""
         : `<button class="ev-btn" id="ev-complete" title="Wrap up — moves it to the past tab as attendance history">Mark completed</button>`) +
       (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
@@ -12875,14 +12941,15 @@ async function renderDetailBody(e) {
 
   $("ev-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
-    meta +
+    meta + missionDetailsView(e, tax) + templateProvenanceHtml(e) +
     (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
     maybeRow + waitRow +
     (e.can_edit && !cancelled ? organizerAttendeePanel(e) : "") +
     `<div id="ev-fleet"></div>` +
     signupSection +
-    (editControls ? `<div class="ev-form-actions">${editControls}</div>` : "");
+    (editControls ? `<div class="ev-form-actions">${editControls}` +
+      `<span id="ev-detail-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div>` : "");
 
   if (!cancelled) bindSignup(e);
   if (!cancelled) renderFleetSection(e);
@@ -12890,6 +12957,7 @@ async function renderDetailBody(e) {
   if (e.can_edit) {
     const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
     const cl = $("ev-clone"); if (cl) cl.onclick = () => cloneEvent(e);
+    const st = $("ev-savetpl"); if (st) st.onclick = () => saveEventAsTemplate(e);
     const cp = $("ev-complete"); if (cp) cp.onclick = async () => {
       if (!(await confirmDialog(
           "Signups are kept as attendance history and the event moves to the past tab.",
@@ -12919,6 +12987,11 @@ function cloneEvent(e) {
     start_at: start.toISOString(), duration_min: e.duration_min,
     signup_deadline: null,
     min_players: e.min_players, max_players: e.max_players,
+    details: { ...(e.details || {}) },
+    // A clone keeps its lineage: it's recorded against the same template
+    // (its current version), unless that template is gone.
+    template: e.template && !e.template.deleted
+      ? { id: e.template.id, name: e.template.name, group_count: 0 } : null,
     roles: e.fill && e.fill.roster
       ? e.fill.roster.map(r => ({ role: r.role, needed: r.needed })) : (e.roles || []) };
   location.hash = "#/events/new";
@@ -13465,7 +13538,44 @@ function rosterRowHtml(tax, role, needed) {
     `<span class="ev-row-del" title="remove role">✕</span></div>`;
 }
 
-function eventFormHtml(tax, e) {
+// Mission details (docs/event-operations.md §13): the FPS/PvP specifics a
+// Type is too coarse for. A collapsed card that opens itself when it has data.
+function missionDetailsHtml(tax, d) {
+  d = d || {};
+  const has = Object.values(d).some(v => v);
+  const roe = `<option value="">— not stated —</option>` + (tax.roe || []).map(r =>
+    `<option value="${esc(r.key)}" ${d.roe === r.key ? "selected" : ""}>${esc(r.label)}</option>`).join("");
+  const fld = (id, label, key, max, ph, hint) =>
+    `<div class="ev-field"><label for="${id}">${label}</label>` +
+    `<input id="${id}" class="ti" maxlength="${max}" value="${esc(d[key] || "")}" placeholder="${esc(ph)}"` +
+    (key === "mission" ? ` list="ev-mission-list" autocomplete="off"` : "") + `>` +
+    (hint ? `<span class="ev-hint">${hint}</span>` : "") + `</div>`;
+  return `<details class="ev-form-card ev-mission"${has ? " open" : ""}>` +
+    `<summary class="ev-section-h">Mission details <span class="ev-hint">optional</span></summary>` +
+    `<div class="ev-form-grid">` +
+      fld("ev-f-mission", "Mission", "mission", 60, "e.g. Bunker (PvE)", "Pick a suggestion or type your own.") +
+      `<div class="ev-field"><label for="ev-f-roe">Rules of engagement</label><select id="ev-f-roe">${roe}</select></div>` +
+      fld("ev-f-loadout", "Loadout / armour", "loadout", 120, "e.g. Medium armour, energy rifle") +
+      fld("ev-f-medical", "Medical", "medical", 120, "e.g. Bring 2 medpens") +
+      fld("ev-f-comms", "Comms", "comms", 120, "e.g. Ops 1 voice channel") +
+    `</div>` +
+    `<div class="ev-field" style="margin-top:12px;"><label for="ev-f-prereqs">Prerequisites</label>` +
+      `<textarea id="ev-f-prereqs" maxlength="500" style="min-height:52px;" placeholder="Contracts or reputation needed to be shared in, ships to bring…">${esc(d.prereqs || "")}</textarea></div>` +
+    `<datalist id="ev-mission-list">${(tax.mission_suggestions || []).map(m => `<option value="${esc(m)}">`).join("")}</datalist>` +
+    `</details>`;
+}
+
+function readMissionDetails() {
+  const v = id => ($(id) ? $(id).value.trim() : "");
+  return { mission: v("ev-f-mission"), loadout: v("ev-f-loadout"), medical: v("ev-f-medical"),
+    comms: v("ev-f-comms"), roe: v("ev-f-roe"), prereqs: v("ev-f-prereqs") };
+}
+
+// opts.mode "template" = the template editor: no date/time/deadline (a
+// template describes a KIND of event, not a particular one), "Default title".
+// opts.picker = show the "Start from template" bar (create form only).
+function eventFormHtml(tax, e, opts = {}) {
+  const tplMode = opts.mode === "template";
   const evTypes = new Set(e ? (e.types || []) : []);
   const typeChips = tax.types.map(t =>
     `<label class="ev-cat-chip${evTypes.has(t) ? " on" : ""}">` +
@@ -13476,13 +13586,13 @@ function eventFormHtml(tax, e) {
     `<input type="checkbox" class="ev-f-cat" value="${esc(c)}" ${evCats.has(c) ? "checked" : ""}>${esc(c)}</label>`).join("");
   const rosterRows = (e && e.roles && e.roles.length ? e.roles : [{ role: "", needed: 1 }])
     .map(r => rosterRowHtml(tax, r.role, r.needed)).join("");
-  return `<div class="ev-form">` +
-    `<div class="ev-field"><label>Title</label><input id="ev-f-title" class="ti" maxlength="120" value="${e ? esc(e.title) : ""}" placeholder="e.g. Daymar survey sweep"></div>` +
-    `<div class="ev-field"><label>Type (pick one or more)</label>` +
-      `<div class="ev-cat-grid" id="ev-f-types">${typeChips}</div></div>` +
-    `<div class="ev-field"><label>Category (pick one or more)</label>` +
-      `<div class="ev-cat-grid" id="ev-f-cats">${catChips}</div></div>` +
-    `<div class="ev-form-card"><div class="ev-section-h">When</div><div class="ev-form-grid">` +
+  const durField = (hint) =>
+    `<div class="ev-field"><label>Duration</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}">` +
+    `<span class="ev-hint">${hint}</span></div>`;
+  const when = tplMode
+    ? `<div class="ev-form-card"><div class="ev-section-h">Length</div><div class="ev-form-grid">` +
+      durField("Minutes, optional. Date and time are set per event.") + `</div></div>`
+    : `<div class="ev-form-card"><div class="ev-section-h">When</div><div class="ev-form-grid">` +
       `<div class="ev-field"><label>Signup deadline date</label><input id="ev-f-dl-date" class="ti" type="date" value="${e && e.signup_deadline ? toLocalDate(e.signup_deadline) : ""}">` +
         `<span class="ev-hint">Optional — after this, signups lock.</span></div>` +
       `<div class="ev-field"><label>Signup deadline time</label><input id="ev-f-dl-time" class="ti" type="time" value="${e && e.signup_deadline ? toLocalTime(e.signup_deadline) : ""}">` +
@@ -13490,9 +13600,19 @@ function eventFormHtml(tax, e) {
       `<div class="ev-field"><label>Event Date</label><input id="ev-f-date" class="ti" type="date" value="${e && e.start_at ? toLocalDate(e.start_at) : ""}"></div>` +
       `<div class="ev-field"><label>Event Time</label><input id="ev-f-time" class="ti" type="time" value="${e && e.start_at ? toLocalTime(e.start_at) : ""}">` +
         `<span class="ev-hint">Your timezone — ${esc(localTzName())}. Everyone sees their own.</span></div>` +
-      `<div class="ev-field"><label>Duration</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}">` +
-        `<span class="ev-hint">Minutes, optional.</span></div>` +
-    `</div></div>` +
+      durField("Minutes, optional.") +
+      `</div></div>`;
+  const saveLabel = tplMode ? "Save template" : (e && e.id ? "Save changes" : "Create event");
+  return `<div class="ev-form">` +
+    (opts.picker ? `<div class="ev-tplbar" id="ev-tplbar"></div>` : "") +
+    (tplMode ? `<div class="ev-field"><label for="ev-f-tplname">Template name</label><input id="ev-f-tplname" class="ti" maxlength="120" value="${esc(opts.name || "")}" placeholder="e.g. Friday bunker run"></div>` : "") +
+    `<div class="ev-field"><label for="ev-f-title">${tplMode ? "Default event title" : "Title"}</label><input id="ev-f-title" class="ti" maxlength="120" value="${e ? esc(e.title || "") : ""}" placeholder="e.g. Daymar survey sweep">` +
+      (tplMode ? `<span class="ev-hint">Optional — pre-fills the title of events made from this template.</span>` : "") + `</div>` +
+    `<div class="ev-field"><label>Type (pick one or more)</label>` +
+      `<div class="ev-cat-grid" id="ev-f-types">${typeChips}</div></div>` +
+    `<div class="ev-field"><label>Category (pick one or more)</label>` +
+      `<div class="ev-cat-grid" id="ev-f-cats">${catChips}</div></div>` +
+    when +
     `<div class="ev-form-card"><div class="ev-section-h">Where</div><div class="ev-form-grid">` +
       `<div class="ev-field"><label>Rally point</label><span class="poi-pick"><input id="ev-f-loc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.location || "") : ""}"></span>` +
         `<span class="ev-hint">Where the org forms up.</span></div>` +
@@ -13507,17 +13627,16 @@ function eventFormHtml(tax, e) {
     `<div class="ev-field"><label>Desired roles &amp; how many of each</label>` +
       `<div class="ev-roster" id="ev-f-roster">${rosterRows}</div>` +
       `<button class="ev-btn" id="ev-f-addrole" style="align-self:flex-start;margin-top:4px;">+ add role</button></div>` +
+    missionDetailsHtml(tax, e && e.details) +
     `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea></div>` +
-    `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${e && e.id ? "Save changes" : "Create event"}</button>` +
+    (tplMode && opts.groupCount ? `<p class="ev-note">Also carries ${opts.groupCount} fleet unit${opts.groupCount === 1 ? "" : "s"}, offered when an event is started from this template.</p>` : "") +
+    `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${saveLabel}</button>` +
       `<button class="ev-btn" id="ev-f-cancel">Cancel</button>` +
-      `<span id="ev-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+      `<span id="ev-f-msg" class="muted" style="font-size:12px;" role="status" aria-live="polite"></span></div></div>`;
 }
 
-function collectEventForm() {
-  const date = $("ev-f-date").value, time = $("ev-f-time").value;
-  const title = $("ev-f-title").value.trim();
-  if (!title) return { error: "Give the event a title." };
-  if (!date || !time) return { error: "Pick a start date & time." };
+// The fields an event and a template share (everything but date/time).
+function collectEventShape() {
   const types = [...document.querySelectorAll("#ev-f-types .ev-f-type:checked")].map(i => i.value);
   if (!types.length) return { error: "Pick at least one type." };
   const categories = [...document.querySelectorAll("#ev-f-cats .ev-f-cat:checked")].map(i => i.value);
@@ -13528,6 +13647,24 @@ function collectEventForm() {
   })).filter(r => r.role);
   const seen = new Set();
   for (const r of roles) { if (seen.has(r.role)) return { error: `Role "${r.role}" is listed twice.` }; seen.add(r.role); }
+  const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
+  return { payload: {
+    title: $("ev-f-title").value.trim(), types, categories,
+    duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
+    location: $("ev-f-loc").value.trim(),
+    event_location: $("ev-f-evloc").value.trim(),
+    min_players: parseInt($("ev-f-min").value || "0", 10) || 0,
+    max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
+    roles, details: readMissionDetails(), description: $("ev-f-desc").value.trim(),
+  } };
+}
+
+function collectEventForm() {
+  const date = $("ev-f-date").value, time = $("ev-f-time").value;
+  if (!$("ev-f-title").value.trim()) return { error: "Give the event a title." };
+  if (!date || !time) return { error: "Pick a start date & time." };
+  const shape = collectEventShape();
+  if (shape.error) return shape;
   const start_at = new Date(`${date}T${time}`).toISOString();
   const dlDate = $("ev-f-dl-date").value, dlTime = $("ev-f-dl-time").value;
   let signup_deadline = null;
@@ -13536,20 +13673,11 @@ function collectEventForm() {
     signup_deadline = new Date(`${dlDate}T${dlTime}`).toISOString();
     if (signup_deadline > start_at) return { error: "Signup deadline must be at or before the event start." };
   }
-  const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
-  return { payload: {
-    title, types, categories,
-    start_at, signup_deadline,
-    duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
-    location: $("ev-f-loc").value.trim(),
-    event_location: $("ev-f-evloc").value.trim(),
-    min_players: parseInt($("ev-f-min").value || "0", 10) || 0,
-    max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
-    roles, description: $("ev-f-desc").value.trim(),
-  } };
+  return { payload: { ...shape.payload, start_at, signup_deadline } };
 }
 
-function bindEventForm(tax, editId, onCancel) {
+// Wire the shared form controls (roster rows, chips, POI pickers, cancel).
+function bindEventFormControls(tax, onCancel) {
   $("ev-f-addrole").onclick = () => {
     $("ev-f-roster").insertAdjacentHTML("beforeend", rosterRowHtml(tax, "", 1));
     bindRosterDeletes();
@@ -13563,10 +13691,20 @@ function bindEventForm(tax, editId, onCancel) {
   // Type-to-search POI suggestions on the location fields (free text still allowed).
   document.querySelectorAll(".ev-form .poi-pick").forEach(w => attachPoiPicker(w));
   $("ev-f-cancel").onclick = onCancel;
+}
+
+function bindEventForm(tax, editId, onCancel) {
+  bindEventFormControls(tax, onCancel);
   $("ev-f-save").onclick = async () => {
     const { error, payload } = collectEventForm();
     const msg = $("ev-f-msg");
     if (error) { msg.textContent = error; return; }
+    // Provenance rides the CREATE only; the server ignores it on edit.
+    if (!editId && evFormTpl) {
+      payload.template_id = evFormTpl.id;
+      const g = $("ev-f-tplgroups");
+      payload.template_groups = !!(g && g.checked);
+    }
     msg.textContent = "Saving…";
     try {
       const r = await fetch(editId ? `/api/events/${editId}` : "/api/events", {
@@ -13574,6 +13712,7 @@ function bindEventForm(tax, editId, onCancel) {
         headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!r.ok) throw await r.json().catch(() => ({}));
       const saved = await r.json();
+      if (!editId) evFormTpl = null;
       location.hash = `#/events/${saved.id}`;
       if (editId && eventsSubRoute().id === saved.id) renderEventDetail(saved.id);  // hash unchanged → re-render
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
@@ -13586,19 +13725,270 @@ function bindRosterDeletes() {
   });
 }
 
+async function loadEventTemplates(force) {
+  if (!evTemplates || force) {
+    try {
+      const r = await fetch("/api/event-templates");
+      evTemplates = r.ok ? await r.json() : { templates: [] };
+    } catch { evTemplates = { templates: [] }; }
+  }
+  return evTemplates;
+}
+
+// A template's contents as a create-form seed. Its default title only fills
+// an empty title; a date/time already typed in the form is kept.
+function templateSeed(t, keep) {
+  const ev = t.event || {};
+  return { ...ev, title: (keep && keep.title) || ev.title || "",
+    start_at: keep && keep.start_at, signup_deadline: keep && keep.signup_deadline,
+    details: { ...(ev.details || {}) }, roles: (ev.roles || []).map(r => ({ ...r })) };
+}
+
+// "Start from template" bar at the top of CREATE EVENT.
+async function renderTemplateBar(tax) {
+  const bar = $("ev-tplbar");
+  if (!bar) return;
+  const data = await loadEventTemplates();
+  if (!$("ev-tplbar")) return;           // navigated away while loading
+  const ts = data.templates || [];
+  const group = (label, list) => list.length
+    ? `<optgroup label="${esc(label)}">` + list.map(t =>
+        `<option value="${esc(t.id)}" ${evFormTpl && evFormTpl.id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("") + `</optgroup>`
+    : "";
+  const cur = evFormTpl;
+  bar.innerHTML =
+    `<label for="ev-tpl-pick" class="ev-tplbar-l">Start from template</label>` +
+    `<select id="ev-tpl-pick"><option value="">— blank event —</option>` +
+      group("Official", ts.filter(t => t.official)) +
+      group("Built-in", ts.filter(t => t.builtin)) +
+      group("Org templates", ts.filter(t => !t.official && !t.builtin)) + `</select>` +
+    `<a class="ev-tplbar-manage" href="#/events/templates">Manage templates</a>` +
+    (cur ? `<p class="ev-tplbar-note">Filled from the <b>${esc(cur.name)}</b> template. ` +
+      `Anything you change is shown on the event as a difference from the template.</p>` +
+      (cur.group_count ? `<label class="ev-tplbar-groups"><input type="checkbox" id="ev-f-tplgroups" checked> ` +
+        `Also set up its ${cur.group_count} fleet unit${cur.group_count === 1 ? "" : "s"}</label>` : "")
+      : "");
+  $("ev-tpl-pick").onchange = () => {
+    const id = $("ev-tpl-pick").value;
+    if (!id) { evFormTpl = null; renderTemplateBar(tax); return; }
+    const t = ts.find(x => x.id === id);
+    if (!t) return;
+    // Keep what the organizer already typed that a template never carries.
+    const date = $("ev-f-date").value, time = $("ev-f-time").value;
+    const dl = $("ev-f-dl-date").value, dlt = $("ev-f-dl-time").value;
+    const keep = {
+      title: $("ev-f-title").value.trim(),
+      start_at: date && time ? new Date(`${date}T${time}`).toISOString() : null,
+      signup_deadline: dl && dlt ? new Date(`${dl}T${dlt}`).toISOString() : null };
+    evFormTpl = { id: t.id, name: t.name, group_count: t.group_count };
+    mountCreateForm(tax, templateSeed(t, keep));
+  };
+}
+
+function mountCreateForm(tax, seed) {
+  $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
+    `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, seed, { picker: true })}</div>`;
+  bindEventForm(tax, null, () => { evFormTpl = null; location.hash = "#/events"; });
+  renderTemplateBar(tax);
+}
+
 async function renderEventForm() {
   const tax = await loadEventsTaxonomy();
-  const seed = eventSeed;    // a promote-from-LFG prefill, consumed once
+  const seed = eventSeed;    // a promote-from-LFG / clone / "use template" prefill, consumed once
   eventSeed = null;
-  $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
-    `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, seed)}</div>`;
-  bindEventForm(tax, null, () => { location.hash = "#/events"; });
+  evFormTpl = seed && seed.template ? seed.template : null;
+  mountCreateForm(tax, seed);
 }
 
 async function renderEditForm(e) {
   const tax = await loadEventsTaxonomy();
   $("ev-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT EVENT</h2>${eventFormHtml(tax, e)}`;
   bindEventForm(tax, e.id, () => renderDetailBody(e));
+}
+
+// ---- event templates page (#/events/templates) ----
+// docs/event-operations.md §14: org templates + built-in starters. Use one,
+// edit/rename/delete your own (admins: any), admins mark Official.
+
+function useEventTemplate(t) {
+  eventSeed = { ...templateSeed(t, null), template: { id: t.id, name: t.name, group_count: t.group_count } };
+  location.hash = "#/events/new";
+}
+
+function templateSummary(t) {
+  const ev = t.event || {};
+  const roles = (ev.roles || []).reduce((n, r) => n + (r.needed || 0), 0);
+  const chips = (ev.types || []).map(x => `<span class="ev-chip type">${esc(x)}</span>`).join("") +
+    (ev.categories || []).map(c => `<span class="ev-chip ${catClass(c)}">${esc(c)}</span>`).join("");
+  const bits = [
+    roles ? `${roles} seat${roles === 1 ? "" : "s"} across ${(ev.roles || []).length} role${(ev.roles || []).length === 1 ? "" : "s"}` : "no roles",
+    t.group_count ? `${t.group_count} fleet unit${t.group_count === 1 ? "" : "s"}` : "",
+    ev.duration_min ? `${ev.duration_min} min` : "",
+    t.builtin ? "ships with the app" : (t.created_by_name ? `by ${esc(t.created_by_name)}` : ""),
+    !t.builtin && t.uses ? `used ${t.uses}×` : "",
+  ].filter(Boolean);
+  return `<div class="ev-chips">${chips}</div><div class="ev-tpl-sum">${bits.join(" · ")}</div>`;
+}
+
+function templateRow(t, canOfficial) {
+  const badges = (t.official ? `<span class="ev-tpl-badge official">Official</span>` : "") +
+    (t.builtin ? `<span class="ev-tpl-badge">Built-in</span>` : "");
+  const acts = [`<button class="ev-btn primary" data-tpl-use="${esc(t.id)}">Use</button>`];
+  if (t.builtin) acts.push(`<button class="ev-btn" data-tpl-copy="${esc(t.builtin_key)}" title="Make an org copy you can edit. The built-in then hides from the picker.">Copy to customize</button>`);
+  if (t.can_edit) acts.push(`<a class="ev-btn" href="#/events/templates/${esc(t.id)}">Edit</a>`);
+  if (canOfficial && !t.builtin) acts.push(`<button class="ev-btn" data-tpl-official="${esc(t.id)}" data-on="${t.official ? 0 : 1}">${t.official ? "Remove Official" : "Mark Official"}</button>`);
+  if (!t.builtin) acts.push(`<button class="ev-btn" data-tpl-hist="${esc(t.id)}">History</button>`);
+  if (t.can_edit) acts.push(`<button class="ev-btn danger" data-tpl-del="${esc(t.id)}">Delete</button>`);
+  return `<div class="ev-tpl-card${t.official ? " official" : ""}">` +
+    `<div class="ev-tpl-card-h"><span class="ev-tpl-nm">${esc(t.name)}</span>${badges}</div>` +
+    templateSummary(t) +
+    `<div class="ev-tpl-hist" id="ev-tpl-hist-${esc(t.id)}" hidden></div>` +
+    `<div class="ev-grp-actions">${acts.join("")}</div></div>`;
+}
+
+async function renderTemplatesPage() {
+  const root = $("events-root");
+  root.innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
+    `<div class="ev-head"><h2 class="ev-screen-h">EVENT TEMPLATES</h2>` +
+    `<a class="ev-btn primary" href="#/events/templates/new">+ New template</a></div>` +
+    `<p class="ev-intro">A template sets up a kind of event — types, roles, crew size, mission ` +
+    `details, fleet units — so you don't rebuild it every week. An event takes a <b>copy</b> ` +
+    `when it's created: editing a template later never changes events already made from it. ` +
+    `The quickest way to make one is <b>Save as template</b> on an event you've already run.</p>` +
+    `<div id="ev-tpl-body"><p class="stat-empty">Loading…</p></div>` +
+    `<span id="ev-tpl-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div>`;
+  const data = await loadEventTemplates(true);
+  const ts = data.templates || [];
+  const body = $("ev-tpl-body");
+  if (!body) return;
+  body.innerHTML = ts.length
+    ? `<div class="ev-tpl-cards">${ts.map(t => templateRow(t, data.can_official)).join("")}</div>`
+    : `<p class="stat-empty">No templates yet. Open an event you've run and choose <b>Save as template</b>, ` +
+      `or <a href="#/events/templates/new">build one from scratch</a>.</p>`;
+  if (!data.builtins_enabled && data.can_official)
+    body.insertAdjacentHTML("beforeend", `<p class="ev-note">Built-in starter templates are turned off in Org settings.</p>`);
+  const byId = id => ts.find(t => t.id === id);
+  const msg = $("ev-tpl-msg");
+  body.querySelectorAll("[data-tpl-use]").forEach(b => b.onclick = () => useEventTemplate(byId(b.dataset.tplUse)));
+  body.querySelectorAll("[data-tpl-copy]").forEach(b => b.onclick = async () => {
+    const r = await fetch(`/api/event-templates/builtin/${encodeURIComponent(b.dataset.tplCopy)}/copy`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "null" });
+    if (r.ok) { const t = await r.json(); location.hash = `#/events/templates/${t.id}`; }
+    else msg.textContent = ((await r.json().catch(() => ({}))).detail) || "Couldn't copy.";
+  });
+  body.querySelectorAll("[data-tpl-official]").forEach(b => b.onclick = async () => {
+    const r = await fetch(`/api/event-templates/${b.dataset.tplOfficial}/official`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ official: b.dataset.on === "1" }) });
+    if (r.ok) renderTemplatesPage();
+    else msg.textContent = "Couldn't change Official.";
+  });
+  body.querySelectorAll("[data-tpl-hist]").forEach(b => b.onclick = async () => {
+    const box = $(`ev-tpl-hist-${b.dataset.tplHist}`);
+    if (!box.hidden) { box.hidden = true; return; }
+    const rows = await fetch(`/api/event-templates/${b.dataset.tplHist}/history`).then(r => r.ok ? r.json() : []).catch(() => []);
+    const verb = { create: "created", edit: "edited", rename: "renamed", official: "marked Official",
+      unofficial: "removed Official", delete: "deleted" };
+    box.innerHTML = rows.length ? `<ol>` + rows.map(h =>
+      `<li>${esc(fmtEventTime(h.created_at))} — <b>${esc(h.actor_name || "?")}</b> ${esc(verb[h.action] || h.action)}` +
+      (h.action === "edit" ? ` (v${h.version})` : "") + `</li>`).join("") + `</ol>` : `<p class="muted">No history.</p>`;
+    box.hidden = false;
+  });
+  body.querySelectorAll("[data-tpl-del]").forEach(b => b.onclick = async () => {
+    if (!(await confirmDialog("Events already created from it keep their copy and still show where they came from.",
+        { title: "Delete this template?", confirmLabel: "Delete", danger: true }))) return;
+    const r = await fetch(`/api/event-templates/${b.dataset.tplDel}`, { method: "DELETE" });
+    if (r.ok) { evTemplates = await r.json(); renderTemplatesPage(); }
+    else msg.textContent = "Couldn't delete.";
+  });
+}
+
+// Template editor: the event form minus date/time. id null = new template.
+async function renderTemplateForm(id) {
+  const tax = await loadEventsTaxonomy();
+  const root = $("events-root");
+  let t = null;
+  if (id) {
+    const data = await loadEventTemplates(true);
+    t = (data.templates || []).find(x => x.id === String(id));
+    if (!t || !t.can_edit) {
+      root.innerHTML = `<div class="panel"><a class="ev-back" href="#/events/templates">← Templates</a>` +
+        `<p class="stat-empty">${t ? "Only the template's creator or an admin can edit it." : "Template not found."}</p></div>`;
+      return;
+    }
+  }
+  root.innerHTML = `<div class="panel"><a class="ev-back" href="#/events/templates">← Templates</a>` +
+    `<h2 class="ev-screen-h">${t ? "EDIT TEMPLATE" : "NEW TEMPLATE"}</h2>` +
+    (t ? `<p class="ev-note">Saving changes makes version ${t.version + 1}. Events already created from ` +
+      `version ${t.version} or earlier keep their copy.</p>` : "") +
+    eventFormHtml(tax, t ? t.event : null, { mode: "template", name: t ? t.name : "",
+      groupCount: t ? t.group_count : 0 }) + `</div>`;
+  bindEventFormControls(tax, () => { location.hash = "#/events/templates"; });
+  $("ev-f-save").onclick = async () => {
+    const msg = $("ev-f-msg");
+    const name = $("ev-f-tplname").value.trim();
+    if (!name) { msg.textContent = "Give the template a name."; return; }
+    const { error, payload } = collectEventShape();
+    if (error) { msg.textContent = error; return; }
+    msg.textContent = "Saving…";
+    try {
+      const r = await fetch(t ? `/api/event-templates/${t.id}` : "/api/event-templates", {
+        method: t ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, event: payload }) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      evTemplates = null;
+      location.hash = "#/events/templates";
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+}
+
+// "Save as template" on an event's detail page (organizer/admin).
+async function saveEventAsTemplate(e) {
+  const res = await promptDialog("Its setup, mission details and fleet units become a template the whole org can start from. Date, time and signups stay behind.",
+    { title: "Save as template", confirmLabel: "Save template", value: e.title,
+      placeholder: "template name", checkbox: { label: "Include this event's fleet units", checked: true } });
+  if (!res || !res.value.trim()) return;
+  const r = await fetch(`/api/events/${e.id}/save-template`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: res.value.trim(), include_groups: res.checked }) });
+  const msg = $("ev-detail-msg");
+  if (r.ok) {
+    evTemplates = null;
+    if (msg) msg.innerHTML = `Saved as a template. <a href="#/events/templates">View templates →</a>`;
+  } else if (msg) {
+    msg.textContent = ((await r.json().catch(() => ({}))).detail) || "Couldn't save the template.";
+  }
+}
+
+// Where an event came from + how it departs from that template (§14.3).
+function templateProvenanceHtml(e) {
+  const t = e.template;
+  if (!t) return "";
+  const state = t.deleted ? ` <span class="muted">(template since deleted)</span>`
+    : t.current_version && t.version && t.current_version > t.version ? ` <span class="muted">(template updated since)</span>` : "";
+  const diffs = t.diffs || [];
+  const chips = diffs.map(d => d.edited
+    ? `<span class="ev-dev">${esc(d.label)} edited</span>`
+    : `<span class="ev-dev" title="${esc(d.label)}: ${esc(d.from)} → ${esc(d.to)}">${esc(d.label)}: <s>${esc(d.from)}</s> → ${esc(d.to)}</span>`).join("");
+  return `<div class="ev-tpl-src">From the <b>${esc(t.name || "?")}</b> template` +
+    (t.builtin ? ` <span class="muted">(built-in)</span>` : "") + state +
+    (diffs.length ? ` · <span class="ev-tpl-src-l">changed:</span> ${chips}` : ` · used as-is`) + `</div>`;
+}
+
+function missionDetailsView(e, tax) {
+  const d = e.details || {};
+  const roe = (tax.roe || []).find(r => r.key === d.roe);
+  const items = [
+    d.mission ? `Mission <b>${esc(d.mission)}</b>` : "",
+    roe ? `ROE <b>${esc(roe.label)}</b>` : "",
+    d.loadout ? `Loadout <b>${esc(d.loadout)}</b>` : "",
+    d.medical ? `Medical <b>${esc(d.medical)}</b>` : "",
+    d.comms ? `Comms <b>${esc(d.comms)}</b>` : "",
+  ].filter(Boolean);
+  if (!items.length && !d.prereqs) return "";
+  return `<div class="ev-mission-view">` +
+    (items.length ? `<div class="ev-meta-grid secondary">${items.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` : "") +
+    (d.prereqs ? `<div class="ev-m ev-prereqs">Prerequisites: ${esc(d.prereqs)}</div>` : "") + `</div>`;
 }
 
 // ---------- resource manager (#/goals + #/inventory + #/blueprints) ----------
@@ -23497,6 +23887,7 @@ async function loadSettings() {
       $("container-ageoff").value = s.container_ageoff_days;
     if (s.listing_stale_days != null && document.activeElement !== $("listing-stale"))
       $("listing-stale").value = s.listing_stale_days;
+    if (s.event_builtin_templates != null) $("event-builtin-tpl").checked = !!s.event_builtin_templates;
     if (s.survey_depletion_ageoff_min && document.activeElement !== $("depletion-ageoff"))
       $("depletion-ageoff").value = s.survey_depletion_ageoff_min;
     if (s.feed_refresh_h != null && document.activeElement !== $("feed-refresh"))
@@ -24430,6 +24821,18 @@ $("container-clear").onclick = async () => {
 };
 
 // Marketplace staleness window (2026-08 review) — same shape as the stock window.
+$("event-builtin-tpl").onchange = async () => {
+  const st = $("event-builtin-tpl-status"), on = $("event-builtin-tpl").checked;
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_builtin_templates: on }) });
+    if (!r.ok) throw 0;
+    evTemplates = null;
+    st.textContent = on ? "Built-in templates are offered." : "Built-in templates are hidden.";
+  } catch { st.textContent = "Couldn't save."; $("event-builtin-tpl").checked = !on; }
+};
 $("listing-stale-save").onclick = async () => {
   const st = $("listing-stale-status");
   const days = parseInt($("listing-stale").value, 10);

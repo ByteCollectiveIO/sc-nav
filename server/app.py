@@ -9,6 +9,7 @@ Data: ../poi by default, override with SC_NAV_DATA=/path/to/poi
 """
 
 import asyncio
+import copy
 import hashlib
 import io
 import json
@@ -8007,6 +8008,26 @@ class EventIn(BaseModel):
     min_players: int = Field(default=0, ge=0, le=_MAX_PLAYERS)
     max_players: int | None = Field(default=None, ge=1, le=_MAX_PLAYERS)
     roles: list[RoleTargetIn] = Field(default_factory=list, max_length=_MAX_ROSTER_ROLES)
+    details: "EventDetailsIn | None" = None
+    # Create only (ignored on edit): the template this event was started from
+    # ("<id>" or "builtin:<key>") — recorded with a snapshot of its contents —
+    # and whether to stamp that template's fleet units onto the new event.
+    template_id: str | None = Field(default=None, max_length=_TYPE_MAX)
+    template_groups: bool = False
+
+
+class EventDetailsIn(BaseModel):
+    """Mission details (docs/event-operations.md §13) — the FPS/PvP specifics a
+    Type is too coarse for. All optional free text except `roe`."""
+    mission: str = Field(default="", max_length=_TYPE_MAX)
+    loadout: str = Field(default="", max_length=_NAME_MAX)
+    medical: str = Field(default="", max_length=_NAME_MAX)
+    comms: str = Field(default="", max_length=_NAME_MAX)
+    roe: str = Field(default="", max_length=24)
+    prereqs: str = Field(default="", max_length=_NOTE_MAX)
+
+
+EventIn.model_rebuild()
 
 
 class SignupIn(BaseModel):
@@ -8017,7 +8038,7 @@ class SignupIn(BaseModel):
 
 _EVENT_PUBLIC = ("id", "organizer_id", "title", "description",
                  "start_at", "signup_deadline", "duration_min", "location", "event_location",
-                 "min_players", "max_players", "roles", "status",
+                 "min_players", "max_players", "roles", "status", "details",
                  "created_at", "updated_at")
 
 
@@ -8033,11 +8054,27 @@ def _normalize_event_start(s: str) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
-def _validate_event(body: EventIn) -> dict:
-    """Validate an event against the curated taxonomy and normalize its fields
-    into the column dict db.create_event / db.update_event expect."""
+def _clean_event_details(d: "EventDetailsIn | None") -> dict:
+    """Normalize mission details: strip, drop empties, reject an unknown ROE."""
+    if d is None:
+        return {}
+    out = {}
+    for k in event_taxonomy.DETAIL_KEYS:
+        v = (getattr(d, k) or "").strip()
+        if not v:
+            continue
+        if k == "roe" and v not in event_taxonomy.ROE_KEYS:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown rules of engagement: {v}")
+        out[k] = v
+    return out
+
+
+def _validate_event_shape(types_in, categories_in, roles_in,
+                          min_players: int, max_players: int | None) -> dict:
+    """The taxonomy + crew-size checks an event and an event template share."""
     types, type_seen = [], set()
-    for t in body.types:
+    for t in types_in:
         if t not in event_taxonomy.TYPES:
             raise HTTPException(status_code=400, detail=f"unknown event type: {t}")
         if t not in type_seen:
@@ -8046,7 +8083,7 @@ def _validate_event(body: EventIn) -> dict:
     if not types:
         raise HTTPException(status_code=400, detail="pick at least one type")
     categories, cat_seen = [], set()
-    for c in body.categories:
+    for c in categories_in:
         if c not in event_taxonomy.CATEGORIES:
             raise HTTPException(status_code=400, detail=f"unknown event category: {c}")
         if c not in cat_seen:
@@ -8055,15 +8092,23 @@ def _validate_event(body: EventIn) -> dict:
     if not categories:
         raise HTTPException(status_code=400, detail="pick at least one category")
     roster, seen = [], set()
-    for r in body.roles:
+    for r in roles_in:
         if r.role not in event_taxonomy.ROLES:
             raise HTTPException(status_code=400, detail=f"unknown role: {r.role}")
         if r.role in seen:
             raise HTTPException(status_code=400, detail=f"duplicate role: {r.role}")
         seen.add(r.role)
         roster.append({"role": r.role, "needed": r.needed})
-    if body.max_players is not None and body.max_players < max(1, body.min_players):
+    if max_players is not None and max_players < max(1, min_players):
         raise HTTPException(status_code=400, detail="max_players must be >= min_players")
+    return {"type": types, "category": categories, "roles": roster}
+
+
+def _validate_event(body: EventIn) -> dict:
+    """Validate an event against the curated taxonomy and normalize its fields
+    into the column dict db.create_event / db.update_event expect."""
+    shape = _validate_event_shape(body.types, body.categories, body.roles,
+                                  body.min_players, body.max_players)
     start_at = _normalize_event_start(body.start_at)
     signup_deadline = None
     if body.signup_deadline:
@@ -8074,14 +8119,15 @@ def _validate_event(body: EventIn) -> dict:
     return {
         "title": body.title.strip(),
         "description": (body.description or "").strip(),
-        "type": types, "category": categories,
+        "type": shape["type"], "category": shape["category"],
         "start_at": start_at,
         "signup_deadline": signup_deadline,
         "duration_min": body.duration_min,
         "location": (body.location or "").strip(),
         "event_location": (body.event_location or "").strip(),
         "min_players": body.min_players, "max_players": body.max_players,
-        "roles": roster,
+        "roles": shape["roles"],
+        "details": _clean_event_details(body.details),
     }
 
 
@@ -8123,6 +8169,8 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
     view["my_signup"] = ({"roles": mine["roles"], "status": mine["status"]}
                          if mine else None)
     view["waitlist_count"] = sum(1 for s in signups if s["status"] == "waitlist")
+    view["details"] = ev.get("details") or {}
+    view["template"] = _event_template_provenance(ev)
     if detail:
         view["attendees"] = [
             {"discord_id": s["discord_id"],
@@ -9000,9 +9048,21 @@ async def list_events(range: str = "upcoming", user: dict = Depends(require_sess
 async def create_event(body: EventIn, user: dict = Depends(require_session)):
     """Create an event. Any org member may organize."""
     fields = _validate_event(body)
+    tpl = None
+    if body.template_id:
+        tpl = _resolve_event_template(body.template_id)
+        fields.update({"template_id": tpl["id"], "template_version": tpl["version"],
+                       "template_name": tpl["name"],
+                       "template_snapshot": {"event": tpl["event"],
+                                             "groups": tpl["groups"]}})
     now = datetime.now(timezone.utc).isoformat()
     eid = db.create_event({**fields, "organizer_id": user["id"],
                            "status": "scheduled", "created_at": now, "updated_at": now})
+    if tpl is not None:
+        if not tpl["builtin"]:
+            db.bump_event_template_uses(int(tpl["id"]))
+        if body.template_groups:
+            _stamp_template_groups(eid, tpl["groups"])
     ev = db.get_event(eid)
     _notify_bg(_notify_event_created(ev))
     return _event_view(ev, user, detail=True)
@@ -9468,6 +9528,307 @@ async def apply_template(event_id: int, body: ApplyTemplateIn,
             "sort": existing + i,
         })
     return _roster_board_view(ev, user)
+
+
+# --- event templates (docs/event-operations.md §14) -------------------------
+# A saved preset bundling an event's setup + fleet layout (+ op rules from ops
+# slice 3). Built-ins live in code (event_taxonomy.BUILTIN_TEMPLATES, ids
+# "builtin:<key>"); org templates in `event_templates` (ids "<int>"). An event
+# records the template it came from and a SNAPSHOT of its contents, never a
+# live link: editing a template must not change an event people signed up for.
+
+_MAX_EVENT_TEMPLATES = 200
+_BUILTIN_PREFIX = "builtin:"
+
+
+class TemplateEventIn(BaseModel):
+    """The event-setup part of a template: an event minus its date/time and
+    people. Same caps as EventIn."""
+    title: str = Field(default="", max_length=_NAME_MAX)
+    description: str = Field(default="", max_length=_DESC_MAX)
+    types: list[str] = Field(default_factory=list, max_length=12)
+    categories: list[str] = Field(default_factory=list, max_length=12)
+    duration_min: int | None = Field(default=None, ge=0, le=100_000)
+    location: str = Field(default="", max_length=_NAME_MAX)
+    event_location: str = Field(default="", max_length=_NAME_MAX)
+    min_players: int = Field(default=0, ge=0, le=_MAX_PLAYERS)
+    max_players: int | None = Field(default=None, ge=1, le=_MAX_PLAYERS)
+    roles: list[RoleTargetIn] = Field(default_factory=list, max_length=_MAX_ROSTER_ROLES)
+    details: EventDetailsIn | None = None
+
+
+class TemplateGroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    kind: str = Field(default="squad", max_length=_TYPE_MAX)
+    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    capacity: int | None = Field(default=None, ge=0, le=_MAX_PLAYERS)
+
+
+class EventTemplateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    event: TemplateEventIn
+    groups: list[TemplateGroupIn] = Field(default_factory=list,
+                                          max_length=_MAX_EVENT_GROUPS)
+
+
+class EventTemplatePatchIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=_NAME_MAX)
+    event: TemplateEventIn | None = None
+    groups: list[TemplateGroupIn] | None = Field(default=None,
+                                                 max_length=_MAX_EVENT_GROUPS)
+
+
+class TemplateOfficialIn(BaseModel):
+    official: bool
+
+
+class TemplateNameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    include_groups: bool = True
+
+
+def event_builtin_templates_enabled() -> bool:
+    """Org setting: offer the shipped starter templates (default on)."""
+    return db.get_setting("event_builtin_templates", "1") != "0"
+
+
+def _clean_template_event(ev: TemplateEventIn) -> dict:
+    """Validate + normalize a template's event part into the stored shape
+    (the EventIn field names: `types`/`categories`, not the row's columns)."""
+    shape = _validate_event_shape(ev.types, ev.categories, ev.roles,
+                                  ev.min_players, ev.max_players)
+    return {"title": (ev.title or "").strip(),
+            "description": (ev.description or "").strip(),
+            "types": shape["type"], "categories": shape["category"],
+            "duration_min": ev.duration_min,
+            "location": (ev.location or "").strip(),
+            "event_location": (ev.event_location or "").strip(),
+            "min_players": ev.min_players, "max_players": ev.max_players,
+            "roles": shape["roles"],
+            "details": _clean_event_details(ev.details)}
+
+
+def _clean_template_groups(groups: list[TemplateGroupIn]) -> list[dict]:
+    return [{"name": g.name.strip(),
+             "kind": g.kind if g.kind in nav_core.GROUP_KINDS else "squad",
+             "ship": (g.ship or "").strip() or None, "capacity": g.capacity}
+            for g in groups]
+
+
+def _builtin_template(key: str) -> dict | None:
+    b = event_taxonomy.BUILTIN_BY_KEY.get(key)
+    if b is None:
+        return None
+    ev = {"title": "", "description": "", "location": "", "event_location": "",
+          "min_players": 0, "max_players": None, "duration_min": None,
+          "details": {}, **copy.deepcopy(b["event"])}
+    return {"id": _BUILTIN_PREFIX + key, "builtin": True, "builtin_key": key,
+            "name": b["name"], "version": b["version"], "official": False,
+            "event": ev, "groups": copy.deepcopy(b["groups"]), "rules": None,
+            "uses": 0, "created_by": None, "updated_at": None}
+
+
+def _resolve_event_template(tid: str) -> dict:
+    """A template by its public id — built-in or org — or 404."""
+    tid = (tid or "").strip()
+    if tid.startswith(_BUILTIN_PREFIX):
+        if not event_builtin_templates_enabled():
+            raise HTTPException(status_code=404, detail="built-in templates are turned off")
+        t = _builtin_template(tid[len(_BUILTIN_PREFIX):])
+    else:
+        t = db.get_event_template(int(tid)) if tid.isdigit() else None
+        if t is not None:
+            t = {**t, "id": str(t["id"]), "builtin": False}
+    if t is None:
+        raise HTTPException(status_code=404, detail="unknown template")
+    return t
+
+
+def _event_template_view(t: dict, user: dict) -> dict:
+    """Serialize a template (built-in or org) for the client."""
+    mine = bool(t.get("created_by")) and t.get("created_by") == user["id"]
+    admin = bool(user.get("is_admin"))
+    return {"id": str(t["id"]), "name": t["name"], "version": t["version"],
+            "builtin": bool(t.get("builtin")), "builtin_key": t.get("builtin_key"),
+            "official": bool(t.get("official")),
+            "event": t["event"], "groups": t["groups"],
+            "group_count": len(t["groups"] or []), "uses": t.get("uses") or 0,
+            "created_by_name": (_resolve_member_name(t["created_by"], None)
+                                if t.get("created_by") else None),
+            "updated_at": t.get("updated_at"),
+            "can_edit": not t.get("builtin") and (mine or admin)}
+
+
+def _event_templates_list(user: dict) -> dict:
+    """Every template the org can start from, in picker order: Official, then
+    the built-ins (minus any the org has customized), then the rest by use."""
+    org = db.list_event_templates()
+    copied = {t["builtin_key"] for t in org if t.get("builtin_key")}
+    builtins = ([_builtin_template(b["key"]) for b in event_taxonomy.BUILTIN_TEMPLATES
+                 if b["key"] not in copied]
+                if event_builtin_templates_enabled() else [])
+    org.sort(key=lambda t: (not t["official"], -(t.get("uses") or 0),
+                            (t["name"] or "").lower()))
+    official = [t for t in org if t["official"]]
+    rest = [t for t in org if not t["official"]]
+    return {"templates": [_event_template_view(t, user)
+                          for t in official + builtins + rest],
+            "builtins_enabled": event_builtin_templates_enabled(),
+            "can_official": bool(user.get("is_admin"))}
+
+
+def _require_template_owner(t: dict, user: dict) -> None:
+    if t.get("created_by") != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="only the template's creator or an admin can change it")
+
+
+def _stamp_template_groups(event_id: int, groups: list[dict]) -> None:
+    """Append a template's fleet units to an event's plan (same rules as the
+    group-template apply: sanitized kind, event group cap)."""
+    existing = len(db.list_event_groups(event_id))
+    if existing + len(groups) > _MAX_EVENT_GROUPS:
+        raise HTTPException(status_code=400, detail="too many groups for one event")
+    for i, g in enumerate(groups):
+        kind = g.get("kind") if g.get("kind") in nav_core.GROUP_KINDS else "squad"
+        db.create_event_group(event_id, {
+            "name": (g.get("name") or "Unit").strip()[:_NAME_MAX], "kind": kind,
+            "ship": g.get("ship") or None, "capacity": g.get("capacity"),
+            "sort": existing + i})
+
+
+def _event_template_provenance(ev: dict) -> dict | None:
+    """Where an event came from and how it differs (§14.3). The diff is taken
+    against the SNAPSHOT stored on the event, so it's stable whatever happened
+    to the template since; `current_version`/`deleted` say what did."""
+    tid = ev.get("template_id")
+    if not tid:
+        return None
+    snap = ev.get("template_snapshot") or {}
+    builtin = str(tid).startswith(_BUILTIN_PREFIX)
+    if builtin:
+        b = event_taxonomy.BUILTIN_BY_KEY.get(str(tid)[len(_BUILTIN_PREFIX):])
+        current = b["version"] if b else None
+    else:
+        live = db.get_event_template(int(tid)) if str(tid).isdigit() else None
+        current = live["version"] if live else None
+    roe_labels = {r["key"]: r["label"] for r in event_taxonomy.ROE}
+    return {"id": str(tid), "name": ev.get("template_name"),
+            "version": ev.get("template_version"), "builtin": builtin,
+            "current_version": current, "deleted": current is None,
+            "diffs": nav_core.event_template_diffs(ev, snap.get("event") or {},
+                                                   roe_labels)}
+
+
+@app.get("/api/event-templates")
+async def list_event_templates(user: dict = Depends(require_session)):
+    """All templates the org can start an event from (built-ins merged in)."""
+    return _event_templates_list(user)
+
+
+@app.post("/api/event-templates")
+async def create_event_template(body: EventTemplateIn,
+                                user: dict = Depends(require_session)):
+    """Save a new org template. Any member may; it's org-visible."""
+    if len(db.list_event_templates()) >= _MAX_EVENT_TEMPLATES:
+        raise HTTPException(status_code=400, detail="too many saved templates")
+    now = datetime.now(timezone.utc).isoformat()
+    tid = db.create_event_template(body.name.strip(), _clean_template_event(body.event),
+                                   _clean_template_groups(body.groups), user["id"], now)
+    return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
+
+
+@app.patch("/api/event-templates/{tid}")
+async def edit_event_template(tid: int, body: EventTemplatePatchIn,
+                              user: dict = Depends(require_session)):
+    """Rename and/or replace a template's contents (creator or admin). A
+    contents change bumps the version; events already created keep their copy."""
+    t = db.get_event_template(tid)
+    if t is None:
+        raise HTTPException(status_code=404, detail="unknown template")
+    _require_template_owner(t, user)
+    db.update_event_template(
+        tid, user["id"], datetime.now(timezone.utc).isoformat(),
+        name=body.name.strip() if body.name is not None else None,
+        event=_clean_template_event(body.event) if body.event is not None else None,
+        groups=_clean_template_groups(body.groups) if body.groups is not None else None)
+    return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
+
+
+@app.delete("/api/event-templates/{tid}")
+async def delete_event_template(tid: int, user: dict = Depends(require_session)):
+    """Delete a template (creator or admin). Events created from it keep their
+    snapshot and read "(template deleted)"."""
+    t = db.get_event_template(tid)
+    if t is None:
+        raise HTTPException(status_code=404, detail="unknown template")
+    _require_template_owner(t, user)
+    db.delete_event_template(tid, user["id"], datetime.now(timezone.utc).isoformat())
+    return _event_templates_list(user)
+
+
+@app.post("/api/event-templates/{tid}/official")
+async def set_event_template_official(tid: int, body: TemplateOfficialIn,
+                                      admin: dict = Depends(require_admin)):
+    """Mark or unmark a template as the org's Official standard (admin)."""
+    if db.get_event_template(tid) is None:
+        raise HTTPException(status_code=404, detail="unknown template")
+    db.set_event_template_official(tid, body.official, admin["id"],
+                                   datetime.now(timezone.utc).isoformat())
+    return _event_templates_list(admin)
+
+
+@app.get("/api/event-templates/{tid}/history")
+async def event_template_history(tid: int, user: dict = Depends(require_session)):
+    """Who changed a template and when (append-only; survives deletion)."""
+    rows = db.event_template_history(tid)
+    if not rows:
+        raise HTTPException(status_code=404, detail="unknown template")
+    return [{**r, "actor_name": _resolve_member_name(r["actor_id"], None)}
+            for r in rows]
+
+
+@app.post("/api/event-templates/builtin/{key}/copy")
+async def copy_builtin_template(key: str, body: TemplateNameIn | None = None,
+                                user: dict = Depends(require_session)):
+    """"Copy to customize": turn a built-in into an ordinary org template. The
+    built-in then drops out of the picker in favour of the org's version."""
+    b = _builtin_template(key)
+    if b is None:
+        raise HTTPException(status_code=404, detail="unknown built-in template")
+    if len(db.list_event_templates()) >= _MAX_EVENT_TEMPLATES:
+        raise HTTPException(status_code=400, detail="too many saved templates")
+    name = body.name.strip() if body else b["name"]
+    tid = db.create_event_template(name, b["event"], b["groups"], user["id"],
+                                   datetime.now(timezone.utc).isoformat(),
+                                   builtin_key=key)
+    return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
+
+
+@app.post("/api/events/{event_id}/save-template")
+async def save_event_as_template(event_id: int, body: TemplateNameIn,
+                                 user: dict = Depends(require_session)):
+    """"Save as template": snapshot an event's setup (+ its fleet units) into
+    a new org template. Organizer or admin of that event. Date, time, signups
+    and the title's specifics are left behind — the title rides as a default."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    if len(db.list_event_templates()) >= _MAX_EVENT_TEMPLATES:
+        raise HTTPException(status_code=400, detail="too many saved templates")
+    event = {"title": ev.get("title") or "", "description": ev.get("description") or "",
+             "types": ev.get("type") or [], "categories": ev.get("category") or [],
+             "duration_min": ev.get("duration_min"),
+             "location": ev.get("location") or "",
+             "event_location": ev.get("event_location") or "",
+             "min_players": ev.get("min_players") or 0,
+             "max_players": ev.get("max_players"),
+             "roles": ev.get("roles") or [], "details": ev.get("details") or {}}
+    groups = _snapshot_event_groups(event_id) if body.include_groups else []
+    tid = db.create_event_template(body.name.strip(), event, groups, user["id"],
+                                   datetime.now(timezone.utc).isoformat())
+    return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
 
 
 # --- org inventory & goals (shared item catalog) ---------------------------
@@ -12629,6 +12990,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "stock_ageoff_min": stock_ageoff_min(),      # stock-report lifetime (#21)
         "container_ageoff_days": container_ageoff_days(),   # #46 container reports
         "listing_stale_days": _listing_stale_days(),  # marketplace stale badge (0 = off)
+        "event_builtin_templates": event_builtin_templates_enabled(),  # §14.5 starters
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
         "feeds_refreshed_at": int(feeds_refreshed_at),  # epoch of the last uexcorp pull
@@ -12671,6 +13033,7 @@ class SettingsIn(BaseModel):
     # Marketplace staleness (days): open listings older than this (by updated_at)
     # get an amber "stale" badge + renew nudge. 0 turns the display off.
     listing_stale_days: int | None = Field(default=None, ge=0, le=365)
+    event_builtin_templates: bool | None = None
     # ⛏ mined-out report lifetime (minutes, #37 slice 2): how long a depletion
     # report down-ranks a survey cluster in ore-first routing. Capped at a week.
     survey_depletion_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
@@ -12751,6 +13114,9 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
         db.set_setting("container_ageoff_days", str(body.container_ageoff_days))
     if body.listing_stale_days is not None:
         db.set_setting("listing_stale_days", str(body.listing_stale_days))
+    if body.event_builtin_templates is not None:
+        db.set_setting("event_builtin_templates",
+                       "1" if body.event_builtin_templates else "0")
     if body.survey_depletion_ageoff_min is not None:
         db.set_setting("survey_depletion_ageoff_min",
                        str(body.survey_depletion_ageoff_min))
@@ -12802,6 +13168,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "stock_ageoff_min": stock_ageoff_min(),
             "container_ageoff_days": container_ageoff_days(),
             "listing_stale_days": _listing_stale_days(),
+            "event_builtin_templates": event_builtin_templates_enabled(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),
             "extra_admin_ids": extra_admin_ids(),
