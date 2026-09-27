@@ -110,6 +110,7 @@ deputy, not to the organizer.
     "excused": 0.0, "absent": 0.0
   },
   "expenses_first": true,         // reimburse expenses before splitting
+  "bonuses": "pool",              // pool | keep — achievement bonus cash (§6.1)
   "loot": {
     "mode": "random",             // random | weighted | round_robin
     "need_weight": 1.5,           // weighted only: Need = ×1.5 vs Want ×1.0
@@ -119,8 +120,7 @@ deputy, not to the organizer.
     "eligible": ["present", "late", "left_early"],
     "rotation": null              // round_robin: null = this op only, or a
                                   // named rotation carried across ops (§7.5)
-  },
-  "transfer_fee_pct": 0           // see §6.4 — pending in-game verification
+  }
 }
 ```
 
@@ -198,7 +198,17 @@ contract, and expenses come out of whoever paid them. So a split has to know
 
 Ledger entries (`op_ledger`):
 - **Income:** amount, *held by* (a roster row), a note ("Cargo sale at
-  Baijini", "Bounty payout").
+  Baijini", "Bounty payout"). Three kinds, because the game pays them
+  differently (confirmed in-game 2026-09-27, §12):
+  - **Sale / other:** lands in one wallet (whoever sold the cargo, turned in
+    the salvage, and so on). One holder.
+  - **Shared contract:** the game pays the reward **in equal cuts to every
+    party member who had the contract shared**, and to nobody else. It's
+    entered once: what each person received, and who received it (defaulting
+    to everyone who took part). That becomes one income line per recipient.
+  - **Achievement bonus:** bonus cash the game pays **only to the player who
+    earned it**. It isn't split by the game. One holder, flagged as a bonus so
+    the `bonuses` rule (§4.1) applies.
 - **Expense:** amount, *paid by* (a roster row), category (fuel, repair,
   cargo purchase, ammo, rental, other), a note.
 
@@ -206,18 +216,41 @@ Any participant can add an entry that names *themselves* as holder or payer
 (they know what they sold). The organizer and deputies can add any entry.
 Every entry shows who entered it, and edits are logged.
 
-**Shared contracts:** income that SC already split through contract sharing
-is *not* pot money and shouldn't be entered. The settle screen says so. That
-has to be verified in-game before the copy is written (§12).
+**Why shared-contract cuts still go in the ledger.** The game's split and
+the org's split are different rules. The game pays everyone who had the
+contract shared, equally. The org pays by attendance and shares. They differ
+whenever:
+- a guest wasn't in the party, or wasn't shared the contract;
+- someone joined late and never accepted it;
+- someone is on a half share;
+- or expenses come off first.
+
+Recording each cut as income that person already holds lets §6.2 compute
+only the difference. When everyone had the contract, everyone is on a full
+share and there are no expenses, every balance is zero and the screen says
+**"The game's split already matches — no transfers needed."** Nobody has to
+decide whether a contract "counts". It always goes in, and the arithmetic
+shows whether anything moves.
+
+**Bonuses** follow the rule chosen before the op:
+- `pool` (the default) puts the bonus in the pot like any income. That is the
+  leader's "same rules for everyone": the player who landed the kill shot
+  isn't paid more for it.
+- `keep` records the bonus on the ledger, so it's visible, but leaves it out
+  of the pot, so the earner keeps it.
+
+Either way it's on the record, and changing the rule mid-op is an amendment
+(§4.2).
 
 ### 6.2 The split
 
 ```
-pot        = Σ income − (expenses_first ? Σ expenses : 0)
+pot        = Σ poolable income − (expenses_first ? Σ expenses : 0)
+             // poolable = everything except bonuses under bonuses: "keep"
 weight_i   = share_override_i ?? rules.shares[attendance_i]
 share_i    = pot × weight_i / Σ weight
 owed_i     = share_i + (expenses_first ? expenses_paid_i : 0)
-balance_i  = income_held_i − owed_i       // + sends, − receives
+balance_i  = poolable_held_i − owed_i     // + sends, − receives
 ```
 
 - aUEC is an integer. Shares are rounded with the **largest-remainder**
@@ -248,9 +281,9 @@ on top instead of reshuffling payments already made, and says so.
 
 ### 6.4 Transfer fee
 
-Unknown: whether a player-to-player mobiGlas transfer takes a cut. If it does,
-`transfer_fee_pct` grosses up each transfer so the recipient nets their share,
-and the sender covers it. Default 0 until measured.
+None. A player-to-player aUEC transfer arrives in full (confirmed in-game
+2026-09-27), so a transfer's amount is exactly what the recipient nets and
+there's no fee setting.
 
 ## 7. Loot
 
@@ -465,9 +498,12 @@ roll writes. All routes are private under `auth_gate` (none go in
 
 ## 12. Needs in-game verification before copy or code
 
-1. **Transfer fee:** does a player-to-player aUEC transfer take a cut?
-2. **Contract sharing:** which income is auto-split among party members (and
-   so stays out of the pot)?
+1. ~~**Transfer fee:**~~ **Answered 2026-09-27: no fee.** §6.4.
+2. ~~**Contract sharing:**~~ **Answered 2026-09-27:** a shared contract pays
+   equal cuts to every party member who had it shared; achievement bonus cash
+   goes only to the player who earned it and isn't split by the game. §6.1.
+   Still unknown: how the game rounds an odd total. It doesn't matter,
+   because members enter the cut they actually received.
 3. **Game.log lines** for own death, incap → revive, respawn, and whether any
    *other* player's death appears. It needs one capture from an FPS op.
 4. **Mission reward lines** (for the future income nudge in §8).
