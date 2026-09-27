@@ -122,6 +122,11 @@
      auto` only has the min-content meaning for a flex/grid item, so setting it
      to 0 on the rest of this subtree is a no-op. */
   main > *, main > * > * { min-width: 0; }
+  /* …and a third level for the apps that render into a `display: contents`
+     *-root inside their `display: contents` view (#events-root, #ops-root…):
+     there the panels are three levels down, missed the rule above, and a wide
+     table (the op payout split) pushed a 360px phone page out to 433px. */
+  main > * > [id$="-root"] > * { min-width: 0; }
   /* The two views are layout-transparent so their panels remain direct grid
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
@@ -2063,7 +2068,205 @@
     padding: 0 4px; }
   .ev-seat-x:hover { opacity: 1; }
   .ev-grp-empty { font-size: 12px; color: var(--dim); font-style: italic; margin-top: 6px; }
+  /* ---- event templates (docs/event-operations.md §14) ---- */
+  .ev-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ev-tplbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border: 1px dashed var(--border); border-radius: 8px; padding: 10px 14px; }
+  .ev-tplbar-l { font-size: 12px; color: var(--dim); letter-spacing: .5px; }
+  .ev-tplbar select { flex: 1; min-width: 200px; padding: 8px 10px; font: inherit; font-size: 13px;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .ev-tplbar select:focus { outline: none; border-color: var(--accent); }
+  .ev-tplbar-manage { font-size: 12px; color: var(--dim); }
+  .ev-tplbar-manage:hover { color: var(--accent); }
+  .ev-tplbar-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--dim); }
+  .ev-tplbar-note b { color: var(--text); }
+  .ev-tplbar-groups { flex-basis: 100%; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .ev-mission > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 8px; }
+  .ev-mission > summary .ev-hint { text-transform: none; letter-spacing: 0; }
+  .ev-mission > summary::-webkit-details-marker { display: none; }
+  .ev-mission > summary::before { content: "▸"; color: var(--dim); }
+  .ev-mission[open] > summary::before { content: "▾"; }
+  .ev-mission[open] > summary { margin-bottom: 10px; }
+  .ev-mission-view { margin: 2px 0 6px; }
+  .ev-prereqs { font-size: 12px; color: var(--dim); white-space: pre-wrap; }
+  .ev-tpl-src { font-size: 12px; color: var(--dim); margin: 4px 0 8px; display: flex;
+    flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+  .ev-tpl-src b { color: var(--text); }
+  .ev-dev { font-size: 11px; border: 1px solid var(--warn); color: var(--warn);
+    border-radius: 3px; padding: 1px 6px; }
+  .ev-dev s { color: var(--dim); }
+  .ev-note { font-size: 12px; color: var(--dim); margin: 0; }
+  .ev-tpl-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .ev-tpl-card { border: 1px solid var(--border); border-radius: 8px; background: var(--panel2);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .ev-tpl-card.official { border-color: var(--accent); }
+  .ev-tpl-card-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ev-tpl-card .ev-tpl-nm { font-weight: 600; font-size: 14px; }
+  .ev-tpl-sum { font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .ev-tpl-badge { font-size: 10px; letter-spacing: .5px; text-transform: uppercase;
+    border: 1px solid var(--border); color: var(--dim); border-radius: 3px; padding: 1px 6px; }
+  .ev-tpl-badge.official { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .ev-tpl-hist { font-size: 12px; color: var(--dim); }
+  .ev-tpl-hist[hidden] { display: none; }
+  .ev-tpl-hist ol { margin: 4px 0; padding-left: 18px; }
+  .ev-tpl-card .ev-grp-actions { margin-top: auto; padding-top: 4px; }
   .ev-tpl-list { display: flex; flex-direction: column; gap: 6px; }
+  /* ---- operations (#/ops, docs/event-operations.md §3/§5) ---- */
+  #ops-view, #ops-root { display: contents; }
+  #ops-view[hidden] { display: none; }
+  .ev-mine-chip.rec { color: var(--good); border-color: var(--good); }
+  .ev-mine-chip.live { color: var(--accent); border-color: var(--accent); }
+  .ev-cal-cell.rec { border-color: var(--good); }
+  .ev-rec { position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; color: var(--good); line-height: 1; }
+  .ev-op-line { font-size: 13px; margin: 6px 0 10px; display: flex; align-items: center;
+    gap: 8px; flex-wrap: wrap; }
+  .ev-op-line a { color: var(--accent); }
+  .op-quick-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .op-quick-row .ti { flex: 2; min-width: 180px; }
+  .op-quick-row select, .op-add select { flex: 1; min-width: 150px; padding: 8px 10px; font: inherit;
+    font-size: 13px; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; }
+  .op-steps { display: flex; gap: 0; list-style: none; padding: 0; margin: 10px 0 6px;
+    font-size: 11px; letter-spacing: .5px; text-transform: uppercase; flex-wrap: wrap; }
+  .op-steps li { padding: 4px 12px; border: 1px solid var(--border); color: var(--dim);
+    margin-right: -1px; }
+  .op-steps li:first-child { border-radius: 6px 0 0 6px; }
+  .op-steps li:last-child { border-radius: 0 6px 6px 0; }
+  .op-steps li.done { color: var(--text); }
+  .op-steps li.now { color: var(--ink-on-accent); background: var(--accent); border-color: var(--accent);
+    font-weight: 700; position: relative; }
+  .op-actions { border-top: none; padding-top: 4px; }
+  .op-roster-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .op-roster-head h2 { margin: 0; }
+  .op-roster-head .ev-btn { margin-left: auto; font-size: 12px; padding: 4px 10px; }
+  .op-counts { font-size: 12px; color: var(--dim); }
+  .op-counts b { color: var(--text); }
+  .op-unmarked { color: var(--warn); }
+  .op-grid { display: flex; flex-direction: column; margin-top: 10px; }
+  .op-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--border); }
+  .op-row:first-child { border-top: none; }
+  .op-row.unmarked .op-name { color: var(--warn); }
+  .op-row.me .op-name::after { content: " (you)"; color: var(--dim); font-weight: 400; }
+  .op-who { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+  .op-name { font-weight: 600; font-size: 14px; }
+  .op-tag { font-size: 11px; color: var(--dim); border: 1px solid var(--border); border-radius: 3px;
+    padding: 0 5px; }
+  .op-times { font-size: 11px; color: var(--dim); }
+  .op-row-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .op-att button { font-size: 12px; padding: 5px 9px; background: none; color: var(--dim); cursor: pointer; }
+  .op-att button:hover { color: var(--text); }
+  .op-att-ro { font-size: 12px; font-weight: 600; }
+  .op-att-ro.unmarked { color: var(--warn); }
+  .op-att-ro.att-present, .op-att-ro.att-late, .op-att-ro.att-left_early { color: var(--good); }
+  .op-att-ro.att-excused { color: var(--dim); }
+  .op-att-ro.att-absent { color: var(--bad); }
+  .op-x { background: none; border: none; color: var(--dim); cursor: pointer; padding: 4px 6px;
+    font-size: 13px; }
+  .op-x:hover { color: var(--bad); }
+  .ev-detail-title .op-x:hover { color: var(--accent); }
+  .op-add { margin-top: 14px; }
+  .op-add > summary { cursor: pointer; }
+  .op-add[open] > summary { margin-bottom: 10px; }
+  .op-add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .op-guest-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .op-guest-row .ti { flex: 1; min-width: 120px; }
+  .op-hits { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel2); margin-top: 4px; max-height: 220px; overflow: auto; font-size: 13px; }
+  .op-hits[hidden] { display: none; }
+  .op-hits button { text-align: left; background: none; border: none; border-radius: 0;
+    border-top: 1px solid var(--border); padding: 7px 10px; color: var(--text); cursor: pointer; }
+  .op-hits button:first-child { border-top: none; }
+  .op-hits button:hover:not(:disabled) { color: var(--accent); }
+  .op-hits button:disabled { color: var(--dim); cursor: default; }
+  .op-hits .muted { padding: 7px 10px; }
+  .op-deps { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .op-dep { font-size: 12px; border: 1px solid var(--border); border-radius: 12px; padding: 2px 4px 2px 10px; }
+  .op-log { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+  .op-log li { display: grid; grid-template-columns: 170px 1fr; gap: 10px; padding: 5px 0;
+    border-top: 1px solid var(--border); }
+  .op-log li:first-child { border-top: none; }
+  .op-log time { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .op-reason { color: var(--dim); font-style: italic; }
+  /* ---- op money (slice 3) ---- */
+  .ev-contracts { display: flex; flex-direction: column; gap: 8px; }
+  .ev-contract-row { display: grid; grid-template-columns: 2fr 2fr 1fr auto; gap: 8px; align-items: center; }
+  .ev-contract-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
+  .ev-contract-view { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+  .ev-rules-view { margin: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .ev-rules-view .ev-note { flex-basis: 100%; }
+  .op-rules-shares { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .op-rules-ed select { padding: 7px 8px; font: inherit; font-size: 13px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .op-rules-chk { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 12px 0 8px; }
+  .op-rules-bonus { max-width: 360px; }
+  .op-rules { margin-bottom: 14px; }
+  .op-rules-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .op-rules-head .ev-btn.sm, .ev-btn.sm { font-size: 11px; padding: 3px 9px; }
+  .op-rules-ed { margin-top: 10px; }
+  #op-rules-box[hidden] { display: none; }
+  .op-amended { border: 1px solid var(--warn); color: var(--warn); border-radius: 6px; padding: 6px 10px;
+    font-size: 13px; margin-bottom: 8px; }
+  .op-sub { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+  .op-sub > .ev-section-h { margin: 0 0 6px; }
+  .op-contracts { display: flex; flex-direction: column; margin: 8px 0; }
+  .op-contract { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--border); }
+  .op-contract:first-child { border-top: none; }
+  .op-c-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
+  .op-c-name { font-weight: 600; }
+  .op-c-amt { font-size: 13px; font-variant-numeric: tabular-nums; }
+  .op-c-note { font-size: 12px; color: var(--dim); flex-basis: 100%; }
+  .op-c-side { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+  .op-c-have { color: var(--warn); }
+  .op-c-have.all { color: var(--good); }
+  .op-c-tick { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .op-c-add, .op-led-form { display: grid; grid-template-columns: 2fr 2fr 1fr auto; gap: 8px; margin: 8px 0; }
+  .op-led-form { grid-template-columns: 1.4fr 1fr 1.2fr 1fr 2fr auto; }
+  .op-led-form select[hidden] { display: none; }
+  .op-led-form select, .op-share { padding: 7px 8px; font: inherit; font-size: 12px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+  .op-share { max-width: 150px; }
+  .op-ov { font-size: 11px; color: var(--warn); flex-basis: 100%; }
+  .op-ledger, .op-tx { list-style: none; padding: 0; margin: 6px 0 0; font-size: 13px; }
+  .op-ledger li, .op-tx li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 6px 0; border-top: 1px solid var(--border); }
+  .op-ledger li:first-child, .op-tx li:first-child { border-top: none; }
+  .op-ledger li.void > *:not(.op-reason) { text-decoration: line-through; opacity: .55; }
+  .op-ledger li.void .op-reason { text-decoration: none; opacity: 1; }
+  .op-ledger li .op-x { margin-left: auto; }
+  .op-l-amt { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 130px; }
+  .op-l-amt.income { color: var(--good); }
+  .op-l-amt.expense { color: var(--bad); }
+  .op-pot { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; margin-bottom: 8px; }
+  .op-pot b { font-variant-numeric: tabular-nums; }
+  .op-warns { margin: 0 0 8px; padding-left: 18px; font-size: 12px; color: var(--warn); }
+  .op-split-wrap { overflow-x: auto; }
+  .op-split { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .op-split th { text-align: left; font-size: 11px; color: var(--dim); font-weight: 400; letter-spacing: .5px;
+    padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .op-split td { padding: 6px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  .op-split .num { text-align: right; white-space: nowrap; }
+  .op-split td.send { color: var(--warn); }
+  .op-split td.recv { color: var(--good); }
+  .op-tx li.mine { background: var(--accent-wash); margin: 0 -8px; padding: 6px 8px; border-radius: 6px; }
+  .op-t-what { flex: 1; min-width: 220px; }
+  .op-t-amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .op-t-st { font-size: 12px; }
+  .op-t-st.done { color: var(--good); }
+  .op-t-st.bad { color: var(--bad); }
+  .op-t-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  @media (max-width: 760px) {
+    .op-led-form, .op-c-add, .ev-contract-row { grid-template-columns: 1fr 1fr; }
+    .op-led-form .ev-btn, .op-c-add .ev-btn { grid-column: 1 / -1; }
+  }
+  @media (max-width: 560px) {
+    .op-log li { grid-template-columns: 1fr; gap: 0; }
+    .op-row-acts { width: 100%; flex-wrap: nowrap; }
+    .op-att { display: flex; flex: 1; min-width: 0; }
+    .op-att button { flex: 1; padding: 6px 2px; font-size: 11px; }
+  }
   .ev-tpl-row { display: flex; align-items: center; gap: 10px; }
   .ev-tpl-row .ev-tpl-nm { font-weight: 600; }
   .ev-tpl-row .ev-btn { font-size: 11px; padding: 3px 9px; }
@@ -3156,6 +3359,14 @@
           <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
             sign up your org, and track who's filling each slot.</div>
         </a>
+        <!-- Placeholder art (the Event Planner's) until the Ops patch is drawn;
+             an admin can already swap it per org (app-image key "ops"). -->
+        <a class="app-card" href="#/ops">
+          <img class="app-logo" data-app="ops" loading="lazy" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <div class="app-name">Ops</div>
+          <div class="app-desc">Run a mission and keep an honest record — check people in,
+            add guests, and log every change so nobody argues about who was there.</div>
+        </a>
         <a class="app-card" href="#/lfg">
           <img class="app-logo" data-app="lfg" loading="lazy" src="/images/group_finder_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Group Finder</div>
@@ -3928,6 +4139,25 @@
       offers instead of dead ads. 0 turns the badge off. Nothing is auto-removed.
     </div>
     <div class="muted" id="listing-stale-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>EVENT TEMPLATES</h2>
+    <label style="display:flex; gap:8px; align-items:center;">
+      <input id="event-builtin-tpl" type="checkbox"> Offer the built-in starter templates
+    </label>
+    <div class="muted" style="font-size:12px; margin-top:4px;">
+      Six presets (Mining, Salvage, Cargo haul, Bounty / combat patrol, Bunker, Raid) that ship
+      with the app. Turn them off if your org only wants its own templates. Org templates and
+      events already created from a built-in are unaffected.
+    </div>
+    <div class="muted" id="event-builtin-tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>OPS PAYOUT DEFAULTS</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      The payout rules every new event and quick op starts with. Organizers can change them per
+      event before it starts; any change after that is a logged amendment with a reason.
+      Contracts are never split — the game pays them.
+    </div>
+    <div id="op-default-rules-box"></div>
+    <button id="op-default-rules-save" style="margin-top:8px;">Save defaults</button>
+    <div class="muted" id="op-default-rules-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
     <h2>⛏ MINED-OUT REPORTS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Reports age off after
@@ -4896,6 +5126,13 @@
       with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
       and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
   </div><!-- /events-view -->
+
+  <div id="ops-view" hidden>
+    <div id="ops-root"></div>
+    <p class="fansite-disclaimer">This is an unofficial Star Citizen fansite, not affiliated
+      with the Cloud Imperium group of companies. Star Citizen®, Roberts Space Industries®
+      and Cloud Imperium® are registered trademarks of Cloud Imperium Rights LLC.</p>
+  </div><!-- /ops-view -->
 
   <div id="goals-view" hidden>
     <div id="goals-root"></div>
@@ -8650,6 +8887,8 @@ function connect() {
       lfgBoard = msg.entries || [];
       lfgLoadFailed = false;   // a live board supersedes any earlier seed failure
       renderLfgBoard(); renderLfgBadge();
+    } else if (msg.type === "op") {
+      onOpPing(msg.id);
     } else if (msg.type === "warnings") {
       warnBoard = msg.entries || [];
       warnLoadFailed = false;   // a live board supersedes any earlier seed failure
@@ -12561,11 +12800,18 @@ function renderTradeRunLeg(lg, i, run) {
 // is chosen from the sub-hash so each is deep-linkable and the back button works.
 let evTaxonomy = null;        // cached {types, categories, role_groups, roles}
 let evBoardEvents = [];       // last board fetch (so calendar nav doesn't refetch)
+let evBoardOps = [];          // quick ops (no event) on the same board: running / closed records
 let evBoardRange = "upcoming";   // upcoming | past (2026-08 review: past = attendance history)
 let evBoardCat = "";             // category chip filter ("" = all)
 let evBoardMine = false;         // only events I'm signed up for / organizing
 let evCalMonth = null;        // Date at the first of the displayed month
 let evFilterDay = null;       // "YYYY-MM-DD" (local) day filter, or null
+// Event templates (docs/event-operations.md §14). `evTemplates` = the last
+// /api/event-templates payload; `evFormTpl` = the template the open CREATE
+// form was started from ({id, name, group_count}) — sent as template_id so
+// the server records provenance + a snapshot to diff against.
+let evTemplates = null;
+let evFormTpl = null;
 
 async function loadEventsTaxonomy() {
   if (!evTaxonomy) evTaxonomy = await fetch("/api/events/taxonomy").then(r => r.json());
@@ -12575,6 +12821,10 @@ async function loadEventsTaxonomy() {
 function eventsSubRoute() {
   const rest = location.hash.slice("#/events".length).replace(/^\//, "");
   if (rest === "new") return { view: "new" };
+  if (rest === "templates") return { view: "templates" };
+  if (rest === "templates/new") return { view: "tpl-edit", id: null };
+  const tm = /^templates\/(\d+)$/.exec(rest);
+  if (tm) return { view: "tpl-edit", id: tm[1] };
   if (/^\d+$/.test(rest)) return { view: "detail", id: parseInt(rest, 10) };
   return { view: "board" };
 }
@@ -12582,6 +12832,8 @@ function eventsSubRoute() {
 function loadEvents() {
   const r = eventsSubRoute();
   if (r.view === "new") return renderEventForm();
+  if (r.view === "templates") return renderTemplatesPage();
+  if (r.view === "tpl-edit") return renderTemplateForm(r.id);
   if (r.view === "detail") return renderEventDetail(r.id);
   return renderEventBoard();
 }
@@ -12657,9 +12909,12 @@ function eventCard(e) {
         maybe: `<span class="ev-mine-chip maybe">? maybe</span>`,
         waitlist: `<span class="ev-mine-chip wait">⏳ waitlisted</span>` }[e.my_signup.status] || ""
     : "";
+  const opChip = !e.op ? ""
+    : e.op.phase === "closed" ? `<span class="ev-mine-chip rec">✓ record</span>`
+    : e.op.phase === "live" ? `<span class="ev-mine-chip live">● mission live</span>` : "";
   return `<a class="ev-card" href="#/events/${e.id}">` +
     `<div class="ev-card-top"><div class="ev-title">${esc(e.title)}</div>` +
-    `<div class="ev-chips">${mineBadge}${phaseBadge(e)}${eventChips(e)}</div></div>` +
+    `<div class="ev-chips">${opChip}${mineBadge}${phaseBadge(e)}${eventChips(e)}</div></div>` +
     `<div class="ev-meta">${evGlyph("◷")}${esc(fmtEventTime(e.start_at))} &nbsp;·&nbsp; ` +
     `${evGlyph("◎")}${esc(where || "—")} &nbsp;·&nbsp; by ${esc(e.organizer_name)}</div>` +
     `<div class="ev-fill"><div class="ev-players ${f.min_met ? "met" : ""}">` +
@@ -12668,9 +12923,23 @@ function eventCard(e) {
     `${bar}${needLine}</div></a>`;
 }
 
+// Events + quick ops as one dated list, so the calendar is the whole history.
+function boardItems() {
+  const ops = evBoardOps.map(o => ({ ...o, kind: "op", start_at: o.started_at || o.created_at }));
+  const all = evBoardEvents.map(e => ({ ...e, kind: "event" })).concat(ops);
+  const dir = evBoardRange === "past" ? -1 : 1;
+  return all.sort((a, b) => dir * (new Date(a.start_at) - new Date(b.start_at)));
+}
+
+function itemHasRecord(it) {
+  return it.kind === "op" ? it.phase === "closed" : !!(it.op && it.op.phase === "closed");
+}
+
 function renderCalendar() {
   const month = evCalMonth, y = month.getFullYear(), m = month.getMonth();
-  const days = new Set(evBoardEvents.map(e => localDayKey(e.start_at)));
+  const items = boardItems();
+  const days = new Set(items.map(e => localDayKey(e.start_at)));
+  const recDays = new Set(items.filter(itemHasRecord).map(e => localDayKey(e.start_at)));
   const startDow = new Date(y, m, 1).getDay();
   const numDays = new Date(y, m + 1, 0).getDate();
   const p = n => String(n).padStart(2, "0");
@@ -12678,8 +12947,10 @@ function renderCalendar() {
   for (let i = 0; i < startDow; i++) cells.push(`<div class="ev-cal-cell empty"></div>`);
   for (let d = 1; d <= numDays; d++) {
     const key = `${y}-${p(m + 1)}-${p(d)}`, has = days.has(key), sel = evFilterDay === key;
-    cells.push(`<div class="ev-cal-cell${has ? " has" : ""}${sel ? " sel" : ""}"` +
-      `${has ? ` data-day="${key}"` : ""}>${d}${has ? '<span class="ev-dot"></span>' : ""}</div>`);
+    const rec = recDays.has(key);
+    cells.push(`<div class="ev-cal-cell${has ? " has" : ""}${sel ? " sel" : ""}${rec ? " rec" : ""}"` +
+      `${has ? ` data-day="${key}"` : ""}${rec ? ' title="Has a mission record"' : ""}>${d}` +
+      `${has ? (rec ? '<span class="ev-rec" aria-hidden="true">✓</span>' : '<span class="ev-dot"></span>') : ""}</div>`);
   }
   const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     .map(x => `<div class="ev-cal-dow">${x}</div>`).join("");
@@ -12700,9 +12971,10 @@ function bindCalendar() {
 }
 
 function renderBoardList() {
-  let shown = evFilterDay ? evBoardEvents.filter(e => localDayKey(e.start_at) === evFilterDay) : evBoardEvents;
-  if (evBoardCat) shown = shown.filter(e => (e.categories || []).includes(evBoardCat));
-  if (evBoardMine) shown = shown.filter(e => e.my_signup || e.is_organizer);
+  const items = boardItems();
+  let shown = evFilterDay ? items.filter(e => localDayKey(e.start_at) === evFilterDay) : items;
+  if (evBoardCat) shown = shown.filter(e => (e.categories || []).includes(evBoardCat));   // quick ops have none
+  if (evBoardMine) shown = shown.filter(e => e.kind === "op" ? e.is_mine : (e.my_signup || e.is_organizer));
   const note = evFilterDay
     ? `<div class="ev-filter-note">Showing ${esc(evFilterDay)} · <a class="ev-back" href="javascript:void 0" id="ev-clear-filter" style="margin:0">clear</a></div>`
     : "";
@@ -12712,7 +12984,7 @@ function renderBoardList() {
       ? "You're not signed up for anything coming up."
       : `No upcoming events${evFilterDay ? " on this day" : ""}${evBoardCat ? " in this category" : ""}.`;
   $("ev-list").innerHTML = note + (shown.length
-    ? shown.map(eventCard).join("")
+    ? shown.map(e => e.kind === "op" ? opCard(e) : eventCard(e)).join("")
     : `<p class="stat-empty">${empty} <a href="#/events/new">Create one →</a></p>`);
   const clr = $("ev-clear-filter");
   if (clr) clr.onclick = () => { evFilterDay = null; bindCalendar(); renderBoardList(); };
@@ -12722,7 +12994,8 @@ async function renderEventBoard() {
   const root = $("events-root");
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">EVENTS</h2>` +
-    `<a class="ev-btn primary" href="#/events/new">+ Create event</a></div>` +
+    `<span class="ev-head-actions"><a class="ev-btn" href="#/events/templates">Templates</a>` +
+    `<a class="ev-btn primary" href="#/events/new">+ Create event</a></span></div>` +
     `<p class="ev-intro">Rally the org around in-game ops, expeditions, and meetups. Pick a day ` +
     `to see what's scheduled, or <a href="#/events/new">create your own</a> and gather a crew.</p>` +
     `<div class="ev-boardbar"><span class="seg" role="group">` +
@@ -12730,7 +13003,7 @@ async function renderEventBoard() {
       `<button id="ev-range-past" class="${evBoardRange === "past" ? "on" : ""}" aria-pressed="${evBoardRange === "past"}">Past</button></span>` +
     `<button id="ev-mine-tog" class="ev-tab${evBoardMine ? " on" : ""}" aria-pressed="${evBoardMine}">My events</button>` +
     `<span class="ev-boardchips" id="ev-catchips"></span></div></div>` +
-    (evBoardRange === "upcoming" ? `<div class="panel"><div id="ev-cal"></div></div>` : "") +
+    `<div class="panel"><div id="ev-cal"></div></div>` +
     `<div id="ev-list" class="panel"><p class="stat-empty">Loading…</p></div>`;
   $("ev-range-up").onclick = () => { if (evBoardRange !== "upcoming") { evBoardRange = "upcoming"; renderEventBoard(); } };
   $("ev-range-past").onclick = () => { if (evBoardRange !== "past") { evBoardRange = "past"; renderEventBoard(); } };
@@ -12744,6 +13017,7 @@ async function renderEventBoard() {
     return;
   }
   evBoardEvents = data.events || [];
+  evBoardOps = data.quick_ops || [];
   evFilterDay = null;
   // Category chips come from the loaded events, so the row only offers filters
   // that would actually match something.
@@ -12761,10 +13035,8 @@ async function renderEventBoard() {
       });
       renderBoardList();
     });
-  if (evBoardRange === "upcoming") {
-    evCalMonth = new Date(); evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth(), 1);
-    bindCalendar();
-  }
+  evCalMonth = new Date(); evCalMonth = new Date(evCalMonth.getFullYear(), evCalMonth.getMonth(), 1);
+  bindCalendar();
   renderBoardList();
 }
 
@@ -12862,6 +13134,8 @@ async function renderDetailBody(e) {
   const editControls = e.can_edit
     ? `<button class="ev-btn" id="ev-edit">Edit</button>` +
       `<button class="ev-btn" id="ev-clone" title="Create a new event pre-filled from this one">Clone</button>` +
+      `<button class="ev-btn" id="ev-savetpl" title="Make this event's setup a template the org can start from">Save as template</button>` +
+      (!cancelled && !e.op ? `<button class="ev-btn primary" id="ev-runop" title="Open the op: check people in, add walk-ins and guests, keep the record">Run mission</button>` : "") +
       (cancelled || e.phase === "ended" ? ""
         : `<button class="ev-btn" id="ev-complete" title="Wrap up — moves it to the past tab as attendance history">Mark completed</button>`) +
       (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
@@ -12875,14 +13149,18 @@ async function renderDetailBody(e) {
 
   $("ev-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
-    meta +
+    meta + missionDetailsView(e, tax) + templateProvenanceHtml(e) + eventMoneyView(e) +
+    (e.op ? `<div class="ev-op-line">${e.op.phase === "closed"
+        ? `✓ This event has a mission record. <a href="#/ops/${e.op.id}">View the record →</a>`
+        : `Mission ${opPhaseBadge(e.op.phase)} <a href="#/ops/${e.op.id}">Open the op →</a>`}</div>` : "") +
     (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
     maybeRow + waitRow +
     (e.can_edit && !cancelled ? organizerAttendeePanel(e) : "") +
     `<div id="ev-fleet"></div>` +
     signupSection +
-    (editControls ? `<div class="ev-form-actions">${editControls}</div>` : "");
+    (editControls ? `<div class="ev-form-actions">${editControls}` +
+      `<span id="ev-detail-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div>` : "");
 
   if (!cancelled) bindSignup(e);
   if (!cancelled) renderFleetSection(e);
@@ -12890,6 +13168,13 @@ async function renderDetailBody(e) {
   if (e.can_edit) {
     const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
     const cl = $("ev-clone"); if (cl) cl.onclick = () => cloneEvent(e);
+    const st = $("ev-savetpl"); if (st) st.onclick = () => saveEventAsTemplate(e);
+    const ro = $("ev-runop"); if (ro) ro.onclick = async () => {
+      const r = await fetch(`/api/events/${e.id}/start`, { method: "POST" });
+      const msg = $("ev-detail-msg");
+      if (r.ok) location.hash = `#/ops/${(await r.json()).id}`;
+      else if (msg) msg.textContent = ((await r.json().catch(() => ({}))).detail) || "Couldn't open the op.";
+    };
     const cp = $("ev-complete"); if (cp) cp.onclick = async () => {
       if (!(await confirmDialog(
           "Signups are kept as attendance history and the event moves to the past tab.",
@@ -12919,6 +13204,12 @@ function cloneEvent(e) {
     start_at: start.toISOString(), duration_min: e.duration_min,
     signup_deadline: null,
     min_players: e.min_players, max_players: e.max_players,
+    details: { ...(e.details || {}) },
+    rules: e.rules || null, contracts: (e.contracts || []).map(c => ({ ...c })),
+    // A clone keeps its lineage: it's recorded against the same template
+    // (its current version), unless that template is gone.
+    template: e.template && !e.template.deleted
+      ? { id: e.template.id, name: e.template.name, group_count: 0 } : null,
     roles: e.fill && e.fill.roster
       ? e.fill.roster.map(r => ({ role: r.role, needed: r.needed })) : (e.roles || []) };
   location.hash = "#/events/new";
@@ -13465,7 +13756,173 @@ function rosterRowHtml(tax, role, needed) {
     `<span class="ev-row-del" title="remove role">✕</span></div>`;
 }
 
-function eventFormHtml(tax, e) {
+// ---- payout rules + contracts (docs/event-operations.md §4.1 / §6.1.1) ----
+// One rules panel reused by the event form, the template form, ORG SETTINGS and
+// the op page. Money rules only: shares by attendance, expense payback, bonuses.
+const OP_ATT_KEYS = [["present", "Present"], ["late", "Late"], ["left_early", "Left early"],
+  ["excused", "Excused"], ["absent", "Absent"]];
+const OP_SHARE_OPTS = [[1, "Full"], [0.5, "Half"], [0, "None"]];
+const OP_SHARE_WORD = { 1: "Full", 0.5: "Half", 0: "None" };
+const OP_RULES_FALLBACK = { shares: { present: 1, late: 1, left_early: 0.5, excused: 0, absent: 0 },
+  expenses_first: true, bonuses: "pool" };
+let opDefaultRules = null;
+
+async function loadOpDefaultRules(force) {
+  if (!opDefaultRules || force) {
+    try { const s = await fetch("/api/settings").then(r => r.json()); opDefaultRules = s.op_default_rules || OP_RULES_FALLBACK; }
+    catch { opDefaultRules = OP_RULES_FALLBACK; }
+  }
+  return opDefaultRules;
+}
+
+function fullRules(r, base) {
+  base = base || opDefaultRules || OP_RULES_FALLBACK;
+  r = r || {};
+  return { shares: { ...base.shares, ...(r.shares || {}) },
+    expenses_first: r.expenses_first != null ? !!r.expenses_first : !!base.expenses_first,
+    bonuses: r.bonuses || base.bonuses || "pool" };
+}
+
+// Client twin of nav_core.op_rules_diff (display strings).
+function rulesDiff(a, b) {
+  a = fullRules(a); b = fullRules(b);
+  const out = [];
+  OP_ATT_KEYS.forEach(([k, lab]) => {
+    if (Number(a.shares[k]) !== Number(b.shares[k]))
+      out.push({ label: `${lab} share`, from: OP_SHARE_WORD[a.shares[k]], to: OP_SHARE_WORD[b.shares[k]] });
+  });
+  const yn = v => v ? "paid back first" : "not paid back";
+  if (a.expenses_first !== b.expenses_first) out.push({ label: "Expenses", from: yn(a.expenses_first), to: yn(b.expenses_first) });
+  const bl = { pool: "pooled", keep: "kept by earner" };
+  if (a.bonuses !== b.bonuses) out.push({ label: "Bonuses", from: bl[a.bonuses], to: bl[b.bonuses] });
+  return out;
+}
+
+function rulesChips(diffs, emptyText) {
+  if (!diffs.length) return `<span class="muted">${esc(emptyText || "Org default")}</span>`;
+  return diffs.map(d => `<span class="ev-dev" title="${esc(d.label)}: ${esc(d.from)} → ${esc(d.to)}">${esc(d.label)}: ${esc(d.to)}</span>`).join("");
+}
+
+// One line anyone can read: "Present Full · Late Full · Left early Half · …".
+function rulesSummary(r) {
+  r = fullRules(r);
+  const sh = OP_ATT_KEYS.map(([k, lab]) => `${lab} <b>${OP_SHARE_WORD[r.shares[k]]}</b>`).join(" · ");
+  return `Shares: ${sh}. Expenses <b>${r.expenses_first ? "paid back before splitting" : "not paid back"}</b>. ` +
+    `Bonuses <b>${r.bonuses === "keep" ? "kept by whoever earned them" : "pooled"}</b>.`;
+}
+
+function rulesEditorHtml(prefix, rules) {
+  const r = fullRules(rules);
+  const shareSel = ([k, lab]) => `<div class="ev-field"><label for="${prefix}-sh-${k}">${lab}</label>` +
+    `<select id="${prefix}-sh-${k}">${OP_SHARE_OPTS.map(([v, l]) =>
+      `<option value="${v}"${Number(r.shares[k]) === v ? " selected" : ""}>${l} share</option>`).join("")}</select></div>`;
+  return `<div class="op-rules-ed" id="${prefix}-rules">` +
+    `<div class="op-rules-shares">${OP_ATT_KEYS.map(shareSel).join("")}</div>` +
+    `<label class="op-rules-chk"><input type="checkbox" id="${prefix}-exp"${r.expenses_first ? " checked" : ""}> ` +
+      `Pay back expenses (fuel, repairs, cargo…) before splitting</label>` +
+    `<div class="ev-field op-rules-bonus"><label for="${prefix}-bonus">Achievement bonus cash</label>` +
+      `<select id="${prefix}-bonus"><option value="pool"${r.bonuses === "pool" ? " selected" : ""}>Pooled — split like any income</option>` +
+      `<option value="keep"${r.bonuses === "keep" ? " selected" : ""}>Kept by whoever earned it</option></select></div></div>`;
+}
+
+function readRulesEditor(prefix) {
+  if (!$(`${prefix}-rules`)) return null;
+  const shares = {};
+  OP_ATT_KEYS.forEach(([k]) => { shares[k] = Number($(`${prefix}-sh-${k}`).value); });
+  return { shares, expenses_first: $(`${prefix}-exp`).checked, bonuses: $(`${prefix}-bonus`).value };
+}
+
+// Payout-rules card for the event + template forms: collapsed, with the
+// deviation chips in the summary so "this one's run differently" shows shut.
+function rulesCardHtml(rules) {
+  const diffs = rulesDiff(opDefaultRules, rules);
+  return `<details class="ev-form-card ev-mission" id="ev-f-rulescard"${diffs.length ? " open" : ""}>` +
+    `<summary class="ev-section-h">Payout rules <span class="ev-hint" id="ev-f-ruleschips">${diffs.length ? diffs.length + " change" + (diffs.length === 1 ? "" : "s") + " from the org default" : "org default"}</span></summary>` +
+    `<p class="ev-note" style="margin-bottom:10px;">Decided before the op, shown to everyone who signs up. ` +
+    `Contracts aren't split here — the game pays each person who had them shared.</p>` +
+    rulesEditorHtml("ev-f", rules) + `</details>`;
+}
+
+function contractRowHtml(c) {
+  c = c || {};
+  return `<div class="ev-contract-row">` +
+    `<input class="ti ev-c-name" maxlength="80" placeholder="Contract, e.g. VHRT bounty — Yela" value="${esc(c.name || "")}" aria-label="Contract name">` +
+    `<input class="ti ev-c-note" maxlength="200" placeholder="Note (who shares it, where)" value="${esc(c.note || "")}" aria-label="Contract note">` +
+    `<input class="ti ev-c-amt" type="number" min="0" step="1000" placeholder="Pays (aUEC)" value="${c.amount != null ? c.amount : ""}" aria-label="What it pays">` +
+    `<span class="ev-row-del" title="remove contract">✕</span></div>`;
+}
+
+function contractsCardHtml(contracts) {
+  const list = (contracts || []);
+  return `<details class="ev-form-card ev-mission"${list.length ? " open" : ""}>` +
+    `<summary class="ev-section-h">Contracts to accept <span class="ev-hint">${list.length ? list.length : "optional"}</span></summary>` +
+    `<p class="ev-note" style="margin-bottom:10px;">Contracts everyone should accept or have shared before the op. ` +
+    `The game pays each one in equal cuts to everyone who had it — it's recorded here, never split.</p>` +
+    `<div class="ev-contracts" id="ev-f-contracts">${list.map(contractRowHtml).join("")}</div>` +
+    `<button class="ev-btn" id="ev-f-addcontract" style="align-self:flex-start;margin-top:6px;">+ add contract</button></details>`;
+}
+
+function readContracts() {
+  return [...document.querySelectorAll("#ev-f-contracts .ev-contract-row")].map(row => {
+    const amt = row.querySelector(".ev-c-amt").value;
+    return { name: row.querySelector(".ev-c-name").value.trim(), note: row.querySelector(".ev-c-note").value.trim(),
+      amount: amt === "" ? null : Math.max(0, parseInt(amt, 10) || 0) };
+  }).filter(c => c.name);
+}
+
+function bindContractsCard() {
+  const add = $("ev-f-addcontract");
+  if (!add) return;
+  const wireDel = () => document.querySelectorAll("#ev-f-contracts .ev-row-del").forEach(x =>
+    clickable(x, () => x.closest(".ev-contract-row").remove()));
+  add.onclick = () => { $("ev-f-contracts").insertAdjacentHTML("beforeend", contractRowHtml()); wireDel(); };
+  wireDel();
+  // Keep the rules card's summary honest as the organizer edits.
+  const card = $("ev-f-rulescard");
+  if (card) card.addEventListener("change", () => {
+    const n = rulesDiff(opDefaultRules, readRulesEditor("ev-f")).length;
+    $("ev-f-ruleschips").textContent = n ? `${n} change${n === 1 ? "" : "s"} from the org default` : "org default";
+  });
+}
+
+// Mission details (docs/event-operations.md §13): the FPS/PvP specifics a
+// Type is too coarse for. A collapsed card that opens itself when it has data.
+function missionDetailsHtml(tax, d) {
+  d = d || {};
+  const has = Object.values(d).some(v => v);
+  const roe = `<option value="">— not stated —</option>` + (tax.roe || []).map(r =>
+    `<option value="${esc(r.key)}" ${d.roe === r.key ? "selected" : ""}>${esc(r.label)}</option>`).join("");
+  const fld = (id, label, key, max, ph, hint) =>
+    `<div class="ev-field"><label for="${id}">${label}</label>` +
+    `<input id="${id}" class="ti" maxlength="${max}" value="${esc(d[key] || "")}" placeholder="${esc(ph)}"` +
+    (key === "mission" ? ` list="ev-mission-list" autocomplete="off"` : "") + `>` +
+    (hint ? `<span class="ev-hint">${hint}</span>` : "") + `</div>`;
+  return `<details class="ev-form-card ev-mission"${has ? " open" : ""}>` +
+    `<summary class="ev-section-h">Mission details <span class="ev-hint">optional</span></summary>` +
+    `<div class="ev-form-grid">` +
+      fld("ev-f-mission", "Mission", "mission", 60, "e.g. Bunker (PvE)", "Pick a suggestion or type your own.") +
+      `<div class="ev-field"><label for="ev-f-roe">Rules of engagement</label><select id="ev-f-roe">${roe}</select></div>` +
+      fld("ev-f-loadout", "Loadout / armour", "loadout", 120, "e.g. Medium armour, energy rifle") +
+      fld("ev-f-medical", "Medical", "medical", 120, "e.g. Bring 2 medpens") +
+      fld("ev-f-comms", "Comms", "comms", 120, "e.g. Ops 1 voice channel") +
+    `</div>` +
+    `<div class="ev-field" style="margin-top:12px;"><label for="ev-f-prereqs">Prerequisites</label>` +
+      `<textarea id="ev-f-prereqs" maxlength="500" style="min-height:52px;" placeholder="Contracts or reputation needed to be shared in, ships to bring…">${esc(d.prereqs || "")}</textarea></div>` +
+    `<datalist id="ev-mission-list">${(tax.mission_suggestions || []).map(m => `<option value="${esc(m)}">`).join("")}</datalist>` +
+    `</details>`;
+}
+
+function readMissionDetails() {
+  const v = id => ($(id) ? $(id).value.trim() : "");
+  return { mission: v("ev-f-mission"), loadout: v("ev-f-loadout"), medical: v("ev-f-medical"),
+    comms: v("ev-f-comms"), roe: v("ev-f-roe"), prereqs: v("ev-f-prereqs") };
+}
+
+// opts.mode "template" = the template editor: no date/time/deadline (a
+// template describes a KIND of event, not a particular one), "Default title".
+// opts.picker = show the "Start from template" bar (create form only).
+function eventFormHtml(tax, e, opts = {}) {
+  const tplMode = opts.mode === "template";
   const evTypes = new Set(e ? (e.types || []) : []);
   const typeChips = tax.types.map(t =>
     `<label class="ev-cat-chip${evTypes.has(t) ? " on" : ""}">` +
@@ -13476,13 +13933,13 @@ function eventFormHtml(tax, e) {
     `<input type="checkbox" class="ev-f-cat" value="${esc(c)}" ${evCats.has(c) ? "checked" : ""}>${esc(c)}</label>`).join("");
   const rosterRows = (e && e.roles && e.roles.length ? e.roles : [{ role: "", needed: 1 }])
     .map(r => rosterRowHtml(tax, r.role, r.needed)).join("");
-  return `<div class="ev-form">` +
-    `<div class="ev-field"><label>Title</label><input id="ev-f-title" class="ti" maxlength="120" value="${e ? esc(e.title) : ""}" placeholder="e.g. Daymar survey sweep"></div>` +
-    `<div class="ev-field"><label>Type (pick one or more)</label>` +
-      `<div class="ev-cat-grid" id="ev-f-types">${typeChips}</div></div>` +
-    `<div class="ev-field"><label>Category (pick one or more)</label>` +
-      `<div class="ev-cat-grid" id="ev-f-cats">${catChips}</div></div>` +
-    `<div class="ev-form-card"><div class="ev-section-h">When</div><div class="ev-form-grid">` +
+  const durField = (hint) =>
+    `<div class="ev-field"><label>Duration</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}">` +
+    `<span class="ev-hint">${hint}</span></div>`;
+  const when = tplMode
+    ? `<div class="ev-form-card"><div class="ev-section-h">Length</div><div class="ev-form-grid">` +
+      durField("Minutes, optional. Date and time are set per event.") + `</div></div>`
+    : `<div class="ev-form-card"><div class="ev-section-h">When</div><div class="ev-form-grid">` +
       `<div class="ev-field"><label>Signup deadline date</label><input id="ev-f-dl-date" class="ti" type="date" value="${e && e.signup_deadline ? toLocalDate(e.signup_deadline) : ""}">` +
         `<span class="ev-hint">Optional — after this, signups lock.</span></div>` +
       `<div class="ev-field"><label>Signup deadline time</label><input id="ev-f-dl-time" class="ti" type="time" value="${e && e.signup_deadline ? toLocalTime(e.signup_deadline) : ""}">` +
@@ -13490,9 +13947,19 @@ function eventFormHtml(tax, e) {
       `<div class="ev-field"><label>Event Date</label><input id="ev-f-date" class="ti" type="date" value="${e && e.start_at ? toLocalDate(e.start_at) : ""}"></div>` +
       `<div class="ev-field"><label>Event Time</label><input id="ev-f-time" class="ti" type="time" value="${e && e.start_at ? toLocalTime(e.start_at) : ""}">` +
         `<span class="ev-hint">Your timezone — ${esc(localTzName())}. Everyone sees their own.</span></div>` +
-      `<div class="ev-field"><label>Duration</label><input id="ev-f-dur" class="ti" type="number" min="0" step="5" value="${e && e.duration_min != null ? e.duration_min : ""}">` +
-        `<span class="ev-hint">Minutes, optional.</span></div>` +
-    `</div></div>` +
+      durField("Minutes, optional.") +
+      `</div></div>`;
+  const saveLabel = tplMode ? "Save template" : (e && e.id ? "Save changes" : "Create event");
+  return `<div class="ev-form">` +
+    (opts.picker ? `<div class="ev-tplbar" id="ev-tplbar"></div>` : "") +
+    (tplMode ? `<div class="ev-field"><label for="ev-f-tplname">Template name</label><input id="ev-f-tplname" class="ti" maxlength="120" value="${esc(opts.name || "")}" placeholder="e.g. Friday bunker run"></div>` : "") +
+    `<div class="ev-field"><label for="ev-f-title">${tplMode ? "Default event title" : "Title"}</label><input id="ev-f-title" class="ti" maxlength="120" value="${e ? esc(e.title || "") : ""}" placeholder="e.g. Daymar survey sweep">` +
+      (tplMode ? `<span class="ev-hint">Optional — pre-fills the title of events made from this template.</span>` : "") + `</div>` +
+    `<div class="ev-field"><label>Type (pick one or more)</label>` +
+      `<div class="ev-cat-grid" id="ev-f-types">${typeChips}</div></div>` +
+    `<div class="ev-field"><label>Category (pick one or more)</label>` +
+      `<div class="ev-cat-grid" id="ev-f-cats">${catChips}</div></div>` +
+    when +
     `<div class="ev-form-card"><div class="ev-section-h">Where</div><div class="ev-form-grid">` +
       `<div class="ev-field"><label>Rally point</label><span class="poi-pick"><input id="ev-f-loc" class="ti" maxlength="120" autocomplete="off" value="${e ? esc(e.location || "") : ""}"></span>` +
         `<span class="ev-hint">Where the org forms up.</span></div>` +
@@ -13507,17 +13974,18 @@ function eventFormHtml(tax, e) {
     `<div class="ev-field"><label>Desired roles &amp; how many of each</label>` +
       `<div class="ev-roster" id="ev-f-roster">${rosterRows}</div>` +
       `<button class="ev-btn" id="ev-f-addrole" style="align-self:flex-start;margin-top:4px;">+ add role</button></div>` +
+    missionDetailsHtml(tax, e && e.details) +
+    contractsCardHtml(e && e.contracts) +
+    rulesCardHtml(e && e.rules) +
     `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea></div>` +
-    `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${e && e.id ? "Save changes" : "Create event"}</button>` +
+    (tplMode && opts.groupCount ? `<p class="ev-note">Also carries ${opts.groupCount} fleet unit${opts.groupCount === 1 ? "" : "s"}, offered when an event is started from this template.</p>` : "") +
+    `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${saveLabel}</button>` +
       `<button class="ev-btn" id="ev-f-cancel">Cancel</button>` +
-      `<span id="ev-f-msg" class="muted" style="font-size:12px;"></span></div></div>`;
+      `<span id="ev-f-msg" class="muted" style="font-size:12px;" role="status" aria-live="polite"></span></div></div>`;
 }
 
-function collectEventForm() {
-  const date = $("ev-f-date").value, time = $("ev-f-time").value;
-  const title = $("ev-f-title").value.trim();
-  if (!title) return { error: "Give the event a title." };
-  if (!date || !time) return { error: "Pick a start date & time." };
+// The fields an event and a template share (everything but date/time).
+function collectEventShape() {
   const types = [...document.querySelectorAll("#ev-f-types .ev-f-type:checked")].map(i => i.value);
   if (!types.length) return { error: "Pick at least one type." };
   const categories = [...document.querySelectorAll("#ev-f-cats .ev-f-cat:checked")].map(i => i.value);
@@ -13528,6 +13996,25 @@ function collectEventForm() {
   })).filter(r => r.role);
   const seen = new Set();
   for (const r of roles) { if (seen.has(r.role)) return { error: `Role "${r.role}" is listed twice.` }; seen.add(r.role); }
+  const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
+  return { payload: {
+    title: $("ev-f-title").value.trim(), types, categories,
+    duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
+    location: $("ev-f-loc").value.trim(),
+    event_location: $("ev-f-evloc").value.trim(),
+    min_players: parseInt($("ev-f-min").value || "0", 10) || 0,
+    max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
+    roles, details: readMissionDetails(), description: $("ev-f-desc").value.trim(),
+    contracts: readContracts(), rules: readRulesEditor("ev-f"),
+  } };
+}
+
+function collectEventForm() {
+  const date = $("ev-f-date").value, time = $("ev-f-time").value;
+  if (!$("ev-f-title").value.trim()) return { error: "Give the event a title." };
+  if (!date || !time) return { error: "Pick a start date & time." };
+  const shape = collectEventShape();
+  if (shape.error) return shape;
   const start_at = new Date(`${date}T${time}`).toISOString();
   const dlDate = $("ev-f-dl-date").value, dlTime = $("ev-f-dl-time").value;
   let signup_deadline = null;
@@ -13536,20 +14023,11 @@ function collectEventForm() {
     signup_deadline = new Date(`${dlDate}T${dlTime}`).toISOString();
     if (signup_deadline > start_at) return { error: "Signup deadline must be at or before the event start." };
   }
-  const maxRaw = $("ev-f-max").value, durRaw = $("ev-f-dur").value;
-  return { payload: {
-    title, types, categories,
-    start_at, signup_deadline,
-    duration_min: durRaw === "" ? null : parseInt(durRaw, 10),
-    location: $("ev-f-loc").value.trim(),
-    event_location: $("ev-f-evloc").value.trim(),
-    min_players: parseInt($("ev-f-min").value || "0", 10) || 0,
-    max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
-    roles, description: $("ev-f-desc").value.trim(),
-  } };
+  return { payload: { ...shape.payload, start_at, signup_deadline } };
 }
 
-function bindEventForm(tax, editId, onCancel) {
+// Wire the shared form controls (roster rows, chips, POI pickers, cancel).
+function bindEventFormControls(tax, onCancel) {
   $("ev-f-addrole").onclick = () => {
     $("ev-f-roster").insertAdjacentHTML("beforeend", rosterRowHtml(tax, "", 1));
     bindRosterDeletes();
@@ -13562,11 +14040,22 @@ function bindEventForm(tax, editId, onCancel) {
   });
   // Type-to-search POI suggestions on the location fields (free text still allowed).
   document.querySelectorAll(".ev-form .poi-pick").forEach(w => attachPoiPicker(w));
+  bindContractsCard();
   $("ev-f-cancel").onclick = onCancel;
+}
+
+function bindEventForm(tax, editId, onCancel) {
+  bindEventFormControls(tax, onCancel);
   $("ev-f-save").onclick = async () => {
     const { error, payload } = collectEventForm();
     const msg = $("ev-f-msg");
     if (error) { msg.textContent = error; return; }
+    // Provenance rides the CREATE only; the server ignores it on edit.
+    if (!editId && evFormTpl) {
+      payload.template_id = evFormTpl.id;
+      const g = $("ev-f-tplgroups");
+      payload.template_groups = !!(g && g.checked);
+    }
     msg.textContent = "Saving…";
     try {
       const r = await fetch(editId ? `/api/events/${editId}` : "/api/events", {
@@ -13574,6 +14063,7 @@ function bindEventForm(tax, editId, onCancel) {
         headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!r.ok) throw await r.json().catch(() => ({}));
       const saved = await r.json();
+      if (!editId) evFormTpl = null;
       location.hash = `#/events/${saved.id}`;
       if (editId && eventsSubRoute().id === saved.id) renderEventDetail(saved.id);  // hash unchanged → re-render
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
@@ -13586,19 +14076,887 @@ function bindRosterDeletes() {
   });
 }
 
+async function loadEventTemplates(force) {
+  if (!evTemplates || force) {
+    try {
+      const r = await fetch("/api/event-templates");
+      evTemplates = r.ok ? await r.json() : { templates: [] };
+    } catch { evTemplates = { templates: [] }; }
+  }
+  return evTemplates;
+}
+
+// A template's contents as a create-form seed. Its default title only fills
+// an empty title; a date/time already typed in the form is kept.
+function templateSeed(t, keep) {
+  const ev = t.event || {};
+  return { ...ev, title: (keep && keep.title) || ev.title || "",
+    start_at: keep && keep.start_at, signup_deadline: keep && keep.signup_deadline,
+    details: { ...(ev.details || {}) }, roles: (ev.roles || []).map(r => ({ ...r })),
+    contracts: (ev.contracts || []).map(c => ({ ...c })), rules: t.rules || null };
+}
+
+// "Start from template" bar at the top of CREATE EVENT.
+async function renderTemplateBar(tax) {
+  const bar = $("ev-tplbar");
+  if (!bar) return;
+  const data = await loadEventTemplates();
+  if (!$("ev-tplbar")) return;           // navigated away while loading
+  const ts = data.templates || [];
+  const group = (label, list) => list.length
+    ? `<optgroup label="${esc(label)}">` + list.map(t =>
+        `<option value="${esc(t.id)}" ${evFormTpl && evFormTpl.id === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("") + `</optgroup>`
+    : "";
+  const cur = evFormTpl;
+  bar.innerHTML =
+    `<label for="ev-tpl-pick" class="ev-tplbar-l">Start from template</label>` +
+    `<select id="ev-tpl-pick"><option value="">— blank event —</option>` +
+      group("Official", ts.filter(t => t.official)) +
+      group("Built-in", ts.filter(t => t.builtin)) +
+      group("Org templates", ts.filter(t => !t.official && !t.builtin)) + `</select>` +
+    `<a class="ev-tplbar-manage" href="#/events/templates">Manage templates</a>` +
+    (cur ? `<p class="ev-tplbar-note">Filled from the <b>${esc(cur.name)}</b> template. ` +
+      `Anything you change is shown on the event as a difference from the template.</p>` +
+      (cur.group_count ? `<label class="ev-tplbar-groups"><input type="checkbox" id="ev-f-tplgroups" checked> ` +
+        `Also set up its ${cur.group_count} fleet unit${cur.group_count === 1 ? "" : "s"}</label>` : "")
+      : "");
+  $("ev-tpl-pick").onchange = () => {
+    const id = $("ev-tpl-pick").value;
+    if (!id) { evFormTpl = null; renderTemplateBar(tax); return; }
+    const t = ts.find(x => x.id === id);
+    if (!t) return;
+    // Keep what the organizer already typed that a template never carries.
+    const date = $("ev-f-date").value, time = $("ev-f-time").value;
+    const dl = $("ev-f-dl-date").value, dlt = $("ev-f-dl-time").value;
+    const keep = {
+      title: $("ev-f-title").value.trim(),
+      start_at: date && time ? new Date(`${date}T${time}`).toISOString() : null,
+      signup_deadline: dl && dlt ? new Date(`${dl}T${dlt}`).toISOString() : null };
+    evFormTpl = { id: t.id, name: t.name, group_count: t.group_count };
+    mountCreateForm(tax, templateSeed(t, keep));
+  };
+}
+
+function mountCreateForm(tax, seed) {   // caller has awaited loadOpDefaultRules()
+  $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
+    `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, seed, { picker: true })}</div>`;
+  bindEventForm(tax, null, () => { evFormTpl = null; location.hash = "#/events"; });
+  renderTemplateBar(tax);
+}
+
 async function renderEventForm() {
   const tax = await loadEventsTaxonomy();
-  const seed = eventSeed;    // a promote-from-LFG prefill, consumed once
+  await loadOpDefaultRules();
+  const seed = eventSeed;    // a promote-from-LFG / clone / "use template" prefill, consumed once
   eventSeed = null;
-  $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
-    `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, seed)}</div>`;
-  bindEventForm(tax, null, () => { location.hash = "#/events"; });
+  evFormTpl = seed && seed.template ? seed.template : null;
+  mountCreateForm(tax, seed);
 }
 
 async function renderEditForm(e) {
   const tax = await loadEventsTaxonomy();
+  await loadOpDefaultRules();
   $("ev-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT EVENT</h2>${eventFormHtml(tax, e)}`;
   bindEventForm(tax, e.id, () => renderDetailBody(e));
+}
+
+// ---- event templates page (#/events/templates) ----
+// docs/event-operations.md §14: org templates + built-in starters. Use one,
+// edit/rename/delete your own (admins: any), admins mark Official.
+
+function useEventTemplate(t) {
+  eventSeed = { ...templateSeed(t, null), template: { id: t.id, name: t.name, group_count: t.group_count } };
+  location.hash = "#/events/new";
+}
+
+function templateSummary(t) {
+  const ev = t.event || {};
+  const roles = (ev.roles || []).reduce((n, r) => n + (r.needed || 0), 0);
+  const chips = (ev.types || []).map(x => `<span class="ev-chip type">${esc(x)}</span>`).join("") +
+    (ev.categories || []).map(c => `<span class="ev-chip ${catClass(c)}">${esc(c)}</span>`).join("");
+  const bits = [
+    roles ? `${roles} seat${roles === 1 ? "" : "s"} across ${(ev.roles || []).length} role${(ev.roles || []).length === 1 ? "" : "s"}` : "no roles",
+    t.group_count ? `${t.group_count} fleet unit${t.group_count === 1 ? "" : "s"}` : "",
+    ev.duration_min ? `${ev.duration_min} min` : "",
+    t.builtin ? "ships with the app" : (t.created_by_name ? `by ${esc(t.created_by_name)}` : ""),
+    !t.builtin && t.uses ? `used ${t.uses}×` : "",
+  ].filter(Boolean);
+  return `<div class="ev-chips">${chips}</div><div class="ev-tpl-sum">${bits.join(" · ")}</div>`;
+}
+
+function templateRow(t, canOfficial) {
+  const badges = (t.official ? `<span class="ev-tpl-badge official">Official</span>` : "") +
+    (t.builtin ? `<span class="ev-tpl-badge">Built-in</span>` : "");
+  const acts = [`<button class="ev-btn primary" data-tpl-use="${esc(t.id)}">Use</button>`];
+  if (t.builtin) acts.push(`<button class="ev-btn" data-tpl-copy="${esc(t.builtin_key)}" title="Make an org copy you can edit. The built-in then hides from the picker.">Copy to customize</button>`);
+  if (t.can_edit) acts.push(`<a class="ev-btn" href="#/events/templates/${esc(t.id)}">Edit</a>`);
+  if (canOfficial && !t.builtin) acts.push(`<button class="ev-btn" data-tpl-official="${esc(t.id)}" data-on="${t.official ? 0 : 1}">${t.official ? "Remove Official" : "Mark Official"}</button>`);
+  if (!t.builtin) acts.push(`<button class="ev-btn" data-tpl-hist="${esc(t.id)}">History</button>`);
+  if (t.can_edit) acts.push(`<button class="ev-btn danger" data-tpl-del="${esc(t.id)}">Delete</button>`);
+  return `<div class="ev-tpl-card${t.official ? " official" : ""}">` +
+    `<div class="ev-tpl-card-h"><span class="ev-tpl-nm">${esc(t.name)}</span>${badges}</div>` +
+    templateSummary(t) +
+    `<div class="ev-tpl-hist" id="ev-tpl-hist-${esc(t.id)}" hidden></div>` +
+    `<div class="ev-grp-actions">${acts.join("")}</div></div>`;
+}
+
+async function renderTemplatesPage() {
+  const root = $("events-root");
+  root.innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
+    `<div class="ev-head"><h2 class="ev-screen-h">EVENT TEMPLATES</h2>` +
+    `<a class="ev-btn primary" href="#/events/templates/new">+ New template</a></div>` +
+    `<p class="ev-intro">A template sets up a kind of event — types, roles, crew size, mission ` +
+    `details, fleet units — so you don't rebuild it every week. An event takes a <b>copy</b> ` +
+    `when it's created: editing a template later never changes events already made from it. ` +
+    `The quickest way to make one is <b>Save as template</b> on an event you've already run.</p>` +
+    `<div id="ev-tpl-body"><p class="stat-empty">Loading…</p></div>` +
+    `<span id="ev-tpl-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div>`;
+  const data = await loadEventTemplates(true);
+  const ts = data.templates || [];
+  const body = $("ev-tpl-body");
+  if (!body) return;
+  body.innerHTML = ts.length
+    ? `<div class="ev-tpl-cards">${ts.map(t => templateRow(t, data.can_official)).join("")}</div>`
+    : `<p class="stat-empty">No templates yet. Open an event you've run and choose <b>Save as template</b>, ` +
+      `or <a href="#/events/templates/new">build one from scratch</a>.</p>`;
+  if (!data.builtins_enabled && data.can_official)
+    body.insertAdjacentHTML("beforeend", `<p class="ev-note">Built-in starter templates are turned off in Org settings.</p>`);
+  const byId = id => ts.find(t => t.id === id);
+  const msg = $("ev-tpl-msg");
+  body.querySelectorAll("[data-tpl-use]").forEach(b => b.onclick = () => useEventTemplate(byId(b.dataset.tplUse)));
+  body.querySelectorAll("[data-tpl-copy]").forEach(b => b.onclick = async () => {
+    const r = await fetch(`/api/event-templates/builtin/${encodeURIComponent(b.dataset.tplCopy)}/copy`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "null" });
+    if (r.ok) { const t = await r.json(); location.hash = `#/events/templates/${t.id}`; }
+    else msg.textContent = ((await r.json().catch(() => ({}))).detail) || "Couldn't copy.";
+  });
+  body.querySelectorAll("[data-tpl-official]").forEach(b => b.onclick = async () => {
+    const r = await fetch(`/api/event-templates/${b.dataset.tplOfficial}/official`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ official: b.dataset.on === "1" }) });
+    if (r.ok) renderTemplatesPage();
+    else msg.textContent = "Couldn't change Official.";
+  });
+  body.querySelectorAll("[data-tpl-hist]").forEach(b => b.onclick = async () => {
+    const box = $(`ev-tpl-hist-${b.dataset.tplHist}`);
+    if (!box.hidden) { box.hidden = true; return; }
+    const rows = await fetch(`/api/event-templates/${b.dataset.tplHist}/history`).then(r => r.ok ? r.json() : []).catch(() => []);
+    const verb = { create: "created", edit: "edited", rename: "renamed", official: "marked Official",
+      unofficial: "removed Official", delete: "deleted" };
+    box.innerHTML = rows.length ? `<ol>` + rows.map(h =>
+      `<li>${esc(fmtEventTime(h.created_at))} — <b>${esc(h.actor_name || "?")}</b> ${esc(verb[h.action] || h.action)}` +
+      (h.action === "edit" ? ` (v${h.version})` : "") + `</li>`).join("") + `</ol>` : `<p class="muted">No history.</p>`;
+    box.hidden = false;
+  });
+  body.querySelectorAll("[data-tpl-del]").forEach(b => b.onclick = async () => {
+    if (!(await confirmDialog("Events already created from it keep their copy and still show where they came from.",
+        { title: "Delete this template?", confirmLabel: "Delete", danger: true }))) return;
+    const r = await fetch(`/api/event-templates/${b.dataset.tplDel}`, { method: "DELETE" });
+    if (r.ok) { evTemplates = await r.json(); renderTemplatesPage(); }
+    else msg.textContent = "Couldn't delete.";
+  });
+}
+
+// Template editor: the event form minus date/time. id null = new template.
+async function renderTemplateForm(id) {
+  const tax = await loadEventsTaxonomy();
+  await loadOpDefaultRules();
+  const root = $("events-root");
+  let t = null;
+  if (id) {
+    const data = await loadEventTemplates(true);
+    t = (data.templates || []).find(x => x.id === String(id));
+    if (!t || !t.can_edit) {
+      root.innerHTML = `<div class="panel"><a class="ev-back" href="#/events/templates">← Templates</a>` +
+        `<p class="stat-empty">${t ? "Only the template's creator or an admin can edit it." : "Template not found."}</p></div>`;
+      return;
+    }
+  }
+  root.innerHTML = `<div class="panel"><a class="ev-back" href="#/events/templates">← Templates</a>` +
+    `<h2 class="ev-screen-h">${t ? "EDIT TEMPLATE" : "NEW TEMPLATE"}</h2>` +
+    (t ? `<p class="ev-note">Saving changes makes version ${t.version + 1}. Events already created from ` +
+      `version ${t.version} or earlier keep their copy.</p>` : "") +
+    eventFormHtml(tax, t ? { ...t.event, rules: t.rules } : null, { mode: "template", name: t ? t.name : "",
+      groupCount: t ? t.group_count : 0 }) + `</div>`;
+  bindEventFormControls(tax, () => { location.hash = "#/events/templates"; });
+  $("ev-f-save").onclick = async () => {
+    const msg = $("ev-f-msg");
+    const name = $("ev-f-tplname").value.trim();
+    if (!name) { msg.textContent = "Give the template a name."; return; }
+    const { error, payload } = collectEventShape();
+    if (error) { msg.textContent = error; return; }
+    msg.textContent = "Saving…";
+    try {
+      const r = await fetch(t ? `/api/event-templates/${t.id}` : "/api/event-templates", {
+        method: t ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify((() => { const { rules, ...event } = payload; return { name, event, rules }; })()) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      evTemplates = null;
+      location.hash = "#/events/templates";
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't save."; }
+  };
+}
+
+// "Save as template" on an event's detail page (organizer/admin).
+async function saveEventAsTemplate(e) {
+  const res = await promptDialog("Its setup, mission details and fleet units become a template the whole org can start from. Date, time and signups stay behind.",
+    { title: "Save as template", confirmLabel: "Save template", value: e.title,
+      placeholder: "template name", checkbox: { label: "Include this event's fleet units", checked: true } });
+  if (!res || !res.value.trim()) return;
+  const r = await fetch(`/api/events/${e.id}/save-template`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: res.value.trim(), include_groups: res.checked }) });
+  const msg = $("ev-detail-msg");
+  if (r.ok) {
+    evTemplates = null;
+    if (msg) msg.innerHTML = `Saved as a template. <a href="#/events/templates">View templates →</a>`;
+  } else if (msg) {
+    msg.textContent = ((await r.json().catch(() => ({}))).detail) || "Couldn't save the template.";
+  }
+}
+
+// Where an event came from + how it departs from that template (§14.3).
+function templateProvenanceHtml(e) {
+  const t = e.template;
+  if (!t) return "";
+  const state = t.deleted ? ` <span class="muted">(template since deleted)</span>`
+    : t.current_version && t.version && t.current_version > t.version ? ` <span class="muted">(template updated since)</span>` : "";
+  const diffs = t.diffs || [];
+  const chips = diffs.map(d => d.edited
+    ? `<span class="ev-dev">${esc(d.label)} edited</span>`
+    : `<span class="ev-dev" title="${esc(d.label)}: ${esc(d.from)} → ${esc(d.to)}">${esc(d.label)}: <s>${esc(d.from)}</s> → ${esc(d.to)}</span>`).join("");
+  return `<div class="ev-tpl-src">From the <b>${esc(t.name || "?")}</b> template` +
+    (t.builtin ? ` <span class="muted">(built-in)</span>` : "") + state +
+    (diffs.length ? ` · <span class="ev-tpl-src-l">changed:</span> ${chips}` : ` · used as-is`) + `</div>`;
+}
+
+// Contracts to accept + payout rules on the event page, so a signup knows the
+// deal before committing (§13: "decided before the event starts").
+function eventMoneyView(e) {
+  const cs = e.contracts || [];
+  const contracts = cs.length
+    ? `<div class="ev-section-h">Contracts to accept</div><ul class="ev-contract-view">` + cs.map(c =>
+        `<li><b>${esc(c.name)}</b>${c.amount != null ? ` <span class="muted">· pays ${esc(fmtAuec(c.amount))}</span>` : ""}` +
+        `${c.note ? ` <span class="muted">— ${esc(c.note)}</span>` : ""}</li>`).join("") +
+      `</ul><p class="ev-note">Paid by the game to everyone who has the contract shared — make sure you do.</p>` : "";
+  const rules = e.rules
+    ? `<div class="ev-rules-view"><span class="ev-section-h" style="margin:0">Payout rules</span> ` +
+      `${rulesChips(e.rules_vs_default || [], "org default")}<div class="ev-note">${rulesSummary(e.rules)}</div></div>` : "";
+  return contracts + rules;
+}
+
+function missionDetailsView(e, tax) {
+  const d = e.details || {};
+  const roe = (tax.roe || []).find(r => r.key === d.roe);
+  const items = [
+    d.mission ? `Mission <b>${esc(d.mission)}</b>` : "",
+    roe ? `ROE <b>${esc(roe.label)}</b>` : "",
+    d.loadout ? `Loadout <b>${esc(d.loadout)}</b>` : "",
+    d.medical ? `Medical <b>${esc(d.medical)}</b>` : "",
+    d.comms ? `Comms <b>${esc(d.comms)}</b>` : "",
+  ].filter(Boolean);
+  if (!items.length && !d.prereqs) return "";
+  return `<div class="ev-mission-view">` +
+    (items.length ? `<div class="ev-meta-grid secondary">${items.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` : "") +
+    (d.prereqs ? `<div class="ev-m ev-prereqs">Prerequisites: ${esc(d.prereqs)}</div>` : "") + `</div>`;
+}
+
+// ---------- operations (#/ops) ----------
+// docs/event-operations.md §3/§5 (ops slice 2). The running instance of a
+// mission: who was there, and an append-only log of who changed what. Opened
+// from an event ("Run mission") or ad hoc from the Ops tile. Screens: #/ops
+// (running + quick op + records) and #/ops/<id> (the op page / record).
+const OP_PHASE_STEPS = [
+  { key: "setup", label: "Setup" }, { key: "live", label: "Live" },
+  { key: "settle", label: "Settle" }, { key: "closed", label: "Closed" }];
+const OP_PHASE_LABEL = { setup: "Setting up", live: "Live", settle: "Settling", closed: "Record" };
+const OP_SIGNED_LABEL = { going: "signed up", waitlist: "waitlisted", maybe: "maybe",
+  organizer: "organizer", none: "walk-in" };
+let opCurrent = null;       // the op on screen (#/ops/<id>)
+let opRefetchTimer = null;
+
+function opsSubRoute() {
+  const rest = location.hash.slice("#/ops".length).replace(/^\//, "");
+  if (/^\d+$/.test(rest)) return { view: "op", id: parseInt(rest, 10) };
+  return { view: "home" };
+}
+
+function loadOps() {
+  const r = opsSubRoute();
+  if (r.view === "op") return renderOpPage(r.id);
+  opCurrent = null;
+  return renderOpsHome();
+}
+
+function opPhaseBadge(ph) {
+  const cls = ph === "live" ? "ev-phase-live" : ph === "closed" ? "ev-phase-ended"
+    : ph === "settle" ? "ev-phase-closed" : "ev-phase-open";
+  return `<span class="ev-phase ${cls}">${esc(OP_PHASE_LABEL[ph] || ph)}</span>`;
+}
+
+function opCountsLine(c) {
+  if (!c || !c.total) return "no one on the roster yet";
+  const bits = [];
+  if (c.took_part) bits.push(`<b>${c.took_part}</b> took part`);
+  if (c.excused) bits.push(`${c.excused} excused`);
+  if (c.absent) bits.push(`${c.absent} absent`);
+  if (c.unmarked) bits.push(`<span class="op-unmarked">${c.unmarked} unmarked</span>`);
+  if (c.guests) bits.push(`${c.guests} guest${c.guests === 1 ? "" : "s"}`);
+  return `${c.total} on the roster · ` + bits.join(" · ");
+}
+
+function opCard(o) {
+  const when = o.started_at || o.created_at;
+  return `<a class="ev-card" href="#/ops/${o.id}">` +
+    `<div class="ev-card-top"><div class="ev-title">${esc(o.name)}</div>` +
+    `<div class="ev-chips">${opPhaseBadge(o.phase)}` +
+    (o.event_id ? `<span class="ev-chip">event</span>` : `<span class="ev-chip">quick op</span>`) + `</div></div>` +
+    `<div class="ev-meta">${evGlyph("◷")}${esc(fmtEventTime(when))} &nbsp;·&nbsp; by ${esc(o.organizer_name)}</div>` +
+    `<div class="ev-meta">${opCountsLine(o.counts)}</div></a>`;
+}
+
+async function renderOpsHome() {
+  const root = $("ops-root");
+  root.innerHTML =
+    `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">OPS</h2></div>` +
+    `<p class="ev-intro">Run a mission and keep an honest record of it: who was there, and every ` +
+    `change anyone made. Scheduled events start theirs from the event page (<b>Run mission</b>); ` +
+    `for a spur-of-the-moment op, start one here.</p>` +
+    `<div class="ev-form-card op-quick"><div class="ev-section-h">Quick op</div>` +
+      `<div class="op-quick-row">` +
+      `<input id="op-q-name" class="ti" maxlength="120" placeholder="Name, e.g. Tuesday salvage" aria-label="Op name">` +
+      `<select id="op-q-tpl" aria-label="Template"><option value="">No template</option></select>` +
+      `<button class="ev-btn primary" id="op-q-go">Start quick op</button></div>` +
+      `<span id="op-q-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></div>` +
+    `<div class="panel"><h2>RUNNING NOW</h2><div id="ops-active"><p class="stat-empty">Loading…</p></div></div>` +
+    `<div class="panel"><h2>RECORDS</h2><div class="ev-boardbar"><span class="seg" role="group">` +
+      `<button id="ops-rec-all" class="on" aria-pressed="true">All</button>` +
+      `<button id="ops-rec-mine" aria-pressed="false">Mine</button></span></div>` +
+      `<div id="ops-closed"><p class="stat-empty">Loading…</p></div></div>`;
+  loadEventTemplates().then(d => {
+    const sel = $("op-q-tpl"); if (!sel) return;
+    sel.insertAdjacentHTML("beforeend", (d.templates || []).map(t =>
+      `<option value="${esc(t.id)}">${esc(t.name)}${t.builtin ? " (built-in)" : ""}</option>`).join(""));
+  });
+  $("op-q-go").onclick = async () => {
+    const msg = $("op-q-msg"); msg.textContent = "Starting…";
+    try {
+      const r = await fetch("/api/ops", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: $("op-q-name").value.trim(), template_id: $("op-q-tpl").value || null }) });
+      if (!r.ok) throw await r.json().catch(() => ({}));
+      location.hash = `#/ops/${(await r.json()).id}`;
+    } catch (err) { msg.textContent = (err && err.detail) || "Couldn't start the op."; }
+  };
+  const list = async (scope, el, empty) => {
+    let d;
+    try { d = await fetch(`/api/ops?scope=${scope}`).then(r => r.json()); }
+    catch { if ($(el)) $(el).innerHTML = `<p class="stat-empty">Couldn't load.</p>`; return; }
+    let ops = d.ops || [];
+    if (scope === "mine") ops = ops.filter(o => o.phase === "closed");
+    if ($(el)) $(el).innerHTML = ops.length ? ops.map(opCard).join("") : `<p class="stat-empty">${empty}</p>`;
+  };
+  list("active", "ops-active", "Nothing running. Start a quick op above, or open an event and choose Run mission.");
+  list("closed", "ops-closed", "No records yet — a closed op lands here.");
+  const seg = (mine) => {
+    $("ops-rec-all").classList.toggle("on", !mine); $("ops-rec-all").setAttribute("aria-pressed", String(!mine));
+    $("ops-rec-mine").classList.toggle("on", mine); $("ops-rec-mine").setAttribute("aria-pressed", String(mine));
+    list(mine ? "mine" : "closed", "ops-closed", mine ? "You haven't been on a closed op yet." : "No records yet — a closed op lands here.");
+  };
+  $("ops-rec-all").onclick = () => seg(false);
+  $("ops-rec-mine").onclick = () => seg(true);
+}
+
+async function renderOpPage(id) {
+  const root = $("ops-root");
+  if (!opCurrent || opCurrent.id !== id)
+    root.innerHTML = `<div class="panel"><a class="ev-back" href="#/ops">← Ops</a><p class="stat-empty">Loading…</p></div>`;
+  let op;
+  try {
+    const r = await fetch(`/api/ops/${id}`);
+    if (!r.ok) { root.innerHTML = `<div class="panel"><a class="ev-back" href="#/ops">← Ops</a><p class="stat-empty">Op not found.</p></div>`; return; }
+    op = await r.json();
+  } catch {
+    root.innerHTML = `<div class="panel"><a class="ev-back" href="#/ops">← Ops</a><p class="stat-empty">Couldn't load this op. ` +
+      `<button class="ev-btn" id="op-retry">Retry</button></p></div>`;
+    $("op-retry").onclick = () => renderOpPage(id);
+    return;
+  }
+  if (opsSubRoute().id !== id) return;   // navigated away meanwhile
+  drawOp(op);
+}
+
+function opStepper(ph) {
+  const idx = OP_PHASE_STEPS.findIndex(x => x.key === ph);
+  return `<ol class="op-steps" aria-label="Op phase">` + OP_PHASE_STEPS.map((x, i) =>
+    `<li class="${i < idx ? "done" : i === idx ? "now" : ""}"${i === idx ? ' aria-current="step"' : ""}>${esc(x.label)}</li>`).join("") + `</ol>`;
+}
+
+function opActions(op) {
+  if (!op.can_manage) return "";
+  const b = (to, label, cls, title) =>
+    `<button class="ev-btn ${cls || ""}" data-op-phase="${to}"${title ? ` title="${esc(title)}"` : ""}>${esc(label)}</button>`;
+  switch (op.phase) {
+    case "setup": return b("live", "Start mission", "primary", "Go live — attendance edits are logged from here on") +
+      `<button class="ev-btn danger" id="op-discard">Discard</button>`;
+    case "live": return b("settle", "End mission", "primary", "The op is over — finish marking attendance, then close the record");
+    case "settle": return b("closed", "Close the record", "primary", "Everyone must be marked") +
+      b("live", "Resume mission", "", "Went back in (needs a reason)");
+    case "closed": return b("settle", "Reopen", "", "Change a closed record (needs a reason)");
+  }
+  return "";
+}
+
+function opRowHtml(op, r) {
+  const opts = op.attendance_options || [];
+  const editable = op.can_manage && op.phase !== "closed";
+  const lab = (opts.find(a => a.key === r.attendance) || {}).label;
+  const att = editable
+    ? `<span class="seg op-att" role="group" aria-label="Attendance for ${esc(r.name)}">` + opts.map(a =>
+        `<button class="${r.attendance === a.key ? "on" : ""}" aria-pressed="${r.attendance === a.key}" ` +
+        `data-att="${esc(a.key)}" data-rid="${r.id}">${esc(a.label)}</button>`).join("") + `</span>`
+    : `<span class="op-att-ro ${r.attendance ? "att-" + esc(r.attendance) : "unmarked"}">${esc(lab || "Unmarked")}</span>`;
+  const times = [r.joined_at ? `arrived ${esc(toLocalTime(r.joined_at))}` : "",
+    r.left_at ? `left ${esc(toLocalTime(r.left_at))}` : ""].filter(Boolean).join(" · ");
+  const tags = [
+    r.kind === "guest" ? `<span class="ev-tpl-badge">guest</span>` : "",
+    r.kind === "member" && r.signed_up && r.signed_up !== "going" ? `<span class="op-tag">${esc(OP_SIGNED_LABEL[r.signed_up] || r.signed_up)}</span>` : "",
+    op.deputies.some(d => d.discord_id === r.discord_id) ? `<span class="op-tag">deputy</span>` : "",
+    r.group_name ? `<span class="op-tag">${esc(r.group_name)}</span>` : "",
+    r.guest_handle ? `<span class="op-tag">${esc(r.guest_handle)}</span>` : "",
+  ].join("");
+  const ov = r.share_override;
+  const ruleShare = r.attendance ? (op.rules.shares[r.attendance]) : null;
+  const shareCtl = editable
+    ? `<select class="op-share" data-share-rid="${r.id}" aria-label="Share for ${esc(r.name)}" title="${ov != null ? esc("Override: " + (r.share_reason || "")) : "Follows the payout rules"}">` +
+        `<option value=""${ov == null ? " selected" : ""}>Rule${ruleShare != null ? " · " + OP_SHARE_WORD[ruleShare] : ""}</option>` +
+        OP_SHARE_OPTS.map(([v, l]) => `<option value="${v}"${ov === v ? " selected" : ""}>${l} (override)</option>`).join("") + `</select>`
+    : "";
+  const ovNote = ov != null ? `<span class="op-ov" title="${esc(r.share_reason || "")}">${esc(OP_SHARE_WORD[ov])} share — ${esc(r.share_reason || "")}</span>` : "";
+  return `<div class="op-row${r.attendance ? "" : " unmarked"}${r.is_me ? " me" : ""}">` +
+    `<div class="op-who"><span class="op-name">${esc(r.name)}</span>${tags}` +
+      (times ? `<span class="op-times">${times}</span>` : "") + ovNote + `</div>` +
+    `<div class="op-row-acts">${shareCtl}${att}` +
+      (editable ? `<button class="op-x" data-rm="${r.id}" title="Remove from the roster" aria-label="Remove ${esc(r.name)}">✕</button>` : "") +
+    `</div></div>`;
+}
+
+function drawOp(op) {
+  opCurrent = op;
+  const root = $("ops-root");
+  const back = op.event_id ? `<a class="ev-back" href="#/events/${op.event_id}">← ${esc(op.event_title || "Event")}</a>`
+    : `<a class="ev-back" href="#/ops">← Ops</a>`;
+  const canEditRoster = op.can_manage && op.phase !== "closed";
+  const meta = [
+    `by <b>${esc(op.organizer_name)}</b>`,
+    op.deputies.length ? `deputies <b>${op.deputies.map(d => esc(d.name)).join(", ")}</b>` : "",
+    op.event_id ? `for the event <a href="#/events/${op.event_id}">${esc(op.event_title || "")}</a>` : "quick op",
+    op.template_name ? `from the <b>${esc(op.template_name)}</b> template` : "",
+    op.started_at ? `started ${esc(fmtEventTime(op.started_at))}` : "",
+    op.ended_at && op.phase !== "live" ? `ended ${esc(fmtEventTime(op.ended_at))}` : "",
+  ].filter(Boolean);
+  const hint = {
+    setup: "Build the roster, then start the mission. Nothing is recorded as attendance until you do.",
+    live: "Mark people as they arrive. Late and Left early stamp the time. Every change is logged.",
+    settle: "The mission is over. Finish marking everyone, then close the record. Changes now need a reason.",
+    closed: "This is the record. Reopening it is possible, and is itself logged with a reason.",
+  }[op.phase];
+  const joinBtn = !op.in_roster && (op.phase === "setup" || op.phase === "live")
+    ? `<button class="ev-btn primary" id="op-join" title="Put yourself on the roster; the organizer marks attendance">I'm here — add me</button>` : "";
+  const unmarked = op.counts.unmarked;
+  const addPanel = canEditRoster
+    ? `<details class="ev-form-card op-add"${op.roster.length <= 1 && op.phase === "setup" ? " open" : ""}>` +
+        `<summary class="ev-section-h">Add to the roster</summary>` +
+        `<div class="op-add-grid">` +
+          `<div class="ev-field"><label for="op-add-member">Org member</label>` +
+            `<input id="op-add-member" class="ti" autocomplete="off" placeholder="Type 2+ letters of a name">` +
+            `<div id="op-member-hits" class="op-hits" role="listbox" hidden></div>` +
+            `<span class="ev-hint">Members who hide from the directory won't show — they can tap “I'm here”.</span></div>` +
+          `<div class="ev-field"><label for="op-add-guest">Guest (not in the org / not on Discord)</label>` +
+            `<div class="op-guest-row"><input id="op-add-guest" class="ti" maxlength="40" placeholder="Name">` +
+            `<input id="op-add-ghandle" class="ti" maxlength="40" placeholder="RSI handle (optional)">` +
+            `<button class="ev-btn" id="op-add-guest-go">Add guest</button></div>` +
+            `<span class="ev-hint">Guests can share money and loot, but don't get stats until they join the org.</span></div>` +
+        `</div></details>` : "";
+  const isOrg = currentMe && (op.organizer_id === currentMe.id || currentMe.is_admin);
+  const deputyPanel = isOrg && op.phase !== "closed"
+    ? `<details class="ev-form-card op-add"><summary class="ev-section-h">Deputies</summary>` +
+        `<p class="ev-note">Co-leads who can run this op with you: mark attendance, add people, change phase.</p>` +
+        `<div class="op-deps">${op.deputies.map(d =>
+          `<span class="op-dep">${esc(d.name)} <button class="op-x" data-dep-rm="${esc(d.discord_id)}" aria-label="Remove deputy ${esc(d.name)}">✕</button></span>`).join("") ||
+          `<span class="muted" style="font-size:12px;">None yet.</span>`}</div>` +
+        `<div class="ev-field" style="margin-top:8px;"><input id="op-dep-search" class="ti" autocomplete="off" placeholder="Add a deputy — type a name" aria-label="Add a deputy">` +
+        `<div id="op-dep-hits" class="op-hits" role="listbox" hidden></div></div></details>` : "";
+  root.innerHTML = `<div class="panel">${back}` +
+    `<div class="ev-detail-title"><h2>${esc(op.name)}</h2>` +
+      (op.can_manage && op.phase !== "closed" ? `<button class="op-x" id="op-rename" title="Rename" aria-label="Rename op">✎</button>` : "") +
+      `<div class="ev-chips">${opPhaseBadge(op.phase)}</div></div>` +
+    opStepper(op.phase) +
+    `<div class="ev-meta-grid secondary">${meta.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` +
+    `<p class="ev-note">${esc(hint)}</p>` +
+    `<div class="ev-form-actions op-actions">${opActions(op)}${joinBtn}` +
+      `<span id="op-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></div>` +
+    opContractsPanel(op) +
+    `<div class="panel"><div class="op-roster-head"><h2>ROSTER</h2>` +
+      `<span class="op-counts">${opCountsLine(op.counts)}</span>` +
+      (canEditRoster && unmarked ? `<button class="ev-btn" id="op-bulk-absent">Mark the ${unmarked} unmarked Absent</button>` : "") + `</div>` +
+      (op.roster.length ? `<div class="op-grid">${op.roster.map(r => opRowHtml(op, r)).join("")}</div>`
+        : `<p class="stat-empty">No one on the roster yet.</p>`) +
+      addPanel + deputyPanel + `</div>` +
+    opPayoutPanel(op) +
+    `<div class="panel"><h2>LOG</h2><p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
+      `<ol class="op-log">${op.log.slice().reverse().map(e =>
+        `<li><time datetime="${esc(e.at)}">${esc(fmtEventTime(e.at))}</time> ` +
+        `<span><b>${esc(e.actor_name)}</b> ${esc(e.text)}` +
+        (e.reason ? ` <span class="op-reason">— “${esc(e.reason)}”</span>` : "") + `</span></li>`).join("")}</ol></div>`;
+  bindOp(op);
+  bindOpMoney(op);
+}
+
+// ---- op contracts + payout (docs/event-operations.md §4, §6) ----
+function opContractsPanel(op) {
+  const cs = op.contracts || [];
+  const manage = op.can_manage && op.phase !== "closed";
+  const onRoster = op.my_roster_id != null;
+  const members = op.roster.length;
+  if (!cs.length && !manage) return "";
+  const rows = cs.map(c => {
+    const have = c.ticks.length;
+    const missing = op.roster.filter(r => !c.ticks.includes(r.id)).map(r => r.name);
+    return `<div class="op-contract">` +
+      `<div class="op-c-main"><span class="op-c-name">${esc(c.name)}</span>` +
+        (c.amount != null ? `<span class="op-c-amt">${esc(fmtAuec(c.amount))}${c.amount_actual ? ` <span class="op-tag">actual</span>` : ` <span class="op-tag">advertised</span>`}</span>` : "") +
+        (c.note ? `<span class="op-c-note">${esc(c.note)}</span>` : "") + `</div>` +
+      `<div class="op-c-side"><span class="op-c-have${have === members ? " all" : ""}" title="${missing.length ? esc("Still needs it: " + missing.join(", ")) : "Everyone has it"}">${have}/${members} have it</span>` +
+        (onRoster && op.phase !== "closed" ? `<label class="op-c-tick"><input type="checkbox" data-tick="${c.id}"${c.i_have ? " checked" : ""}> I have it</label>` : "") +
+        (manage ? `<button class="op-x" data-c-edit="${c.id}" title="Edit" aria-label="Edit ${esc(c.name)}">✎</button>` +
+          `<button class="op-x" data-c-del="${c.id}" title="Remove" aria-label="Remove ${esc(c.name)}">✕</button>` : "") +
+      `</div></div>`;
+  }).join("");
+  const add = manage
+    ? `<div class="op-c-add"><input id="op-c-name" class="ti" maxlength="80" placeholder="Contract, e.g. VHRT bounty — Yela" aria-label="Contract name">` +
+      `<input id="op-c-note" class="ti" maxlength="200" placeholder="Note (optional)" aria-label="Contract note">` +
+      `<input id="op-c-amt" class="ti" type="number" min="0" step="1000" placeholder="Pays (aUEC)" aria-label="What it pays">` +
+      `<button class="ev-btn" id="op-c-add">Add contract</button></div>` : "";
+  return `<div class="panel"><div class="op-roster-head"><h2>CONTRACTS</h2>` +
+    `<span class="op-counts">${cs.length ? `Paid by the game, split automatically: <b>${cs.length}</b> contract${cs.length === 1 ? "" : "s"}, <b>${esc(fmtAuec(op.contracts_total))}</b>` : "None yet"}</span></div>` +
+    `<p class="ev-note">Accept or get shared every contract below before the mission starts — the game pays ` +
+    `each one in equal cuts to everyone who has it. Nothing here goes through the split.` +
+    (op.phase === "settle" ? " Now's the time to correct each amount to what it actually paid." : "") + `</p>` +
+    (rows ? `<div class="op-contracts">${rows}</div>` : "") + add + `</div>`;
+}
+
+function opWarnText(w) {
+  if (w.key === "unmarked") return `${w.n} ${w.n === 1 ? "person isn't" : "people aren't"} marked yet — they get no share until they are.`;
+  if (w.key === "no_shares") return "Nobody has a share yet, so the pot can't be divided. Mark attendance.";
+  if (w.key === "loss") return `The op lost ${fmtAuec(-w.amount)} — the loss is shared the same way a profit would be.`;
+  if (w.key === "orphan_entries") return `${w.n} ledger ${w.n === 1 ? "entry names" : "entries name"} someone no longer on the roster.`;
+  return w.key;
+}
+
+function opPayoutPanel(op) {
+  const manage = op.can_manage && op.phase !== "closed";
+  const names = Object.fromEntries(op.roster.map(r => [r.id, r.name]));
+  const sp = op.split, T = sp.totals;
+  const open = op.phase !== "closed";
+  // Rules
+  const rules = `<div class="op-rules">` +
+    (op.rules_amended ? `<div class="op-amended" role="note">⚠ Rules amended mid-op (now v${op.rules_version}) — see the log for what changed and why.</div>` : "") +
+    `<div class="op-rules-head"><span class="ev-section-h" style="margin:0">Rules</span> ${rulesChips(op.rules_vs_default, "org default")}` +
+    (manage ? ` <button class="ev-btn sm" id="op-rules-edit">${op.phase === "setup" ? "Change" : "Amend…"}</button>` : "") + `</div>` +
+    `<div class="ev-note">${rulesSummary(op.rules)}</div><div id="op-rules-box" hidden></div></div>`;
+  // Ledger entry form
+  const me = op.my_roster_id;
+  const whoOpts = op.roster.filter(r => manage || r.id === me)
+    .map(r => `<option value="${r.id}"${r.id === me ? " selected" : ""}>${esc(r.name)}</option>`).join("");
+  const canLog = open && (manage || me != null);
+  const form = canLog
+    ? `<div class="op-led-form">` +
+      `<select id="op-l-kind" aria-label="Kind" title="Income = loot or resources sold"><option value="income">Income</option><option value="bonus">Bonus</option><option value="expense">Expense</option></select>` +
+      `<input id="op-l-amt" class="ti" type="number" min="1" step="1" placeholder="aUEC" aria-label="Amount">` +
+      `<select id="op-l-who" aria-label="Who holds / paid it">${whoOpts}</select>` +
+      `<select id="op-l-cat" aria-label="Expense category" hidden>${(op.ledger_categories || []).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>` +
+      `<input id="op-l-note" class="ti" maxlength="200" placeholder="Note, e.g. Sold loot at Grim HEX" aria-label="Note">` +
+      `<button class="ev-btn primary" id="op-l-add">Log it</button></div>` : "";
+  const led = op.ledger.length ? `<ol class="op-ledger">` + op.ledger.slice().reverse().map(e =>
+    `<li class="${e.voided_at ? "void" : ""}"><span class="op-l-amt ${e.kind}">${e.kind === "expense" ? "−" : "+"}${esc(fmtAuec(e.amount))}</span>` +
+    `<span>${e.bonus ? "bonus" : e.kind === "expense" ? esc(e.category || "expense") : "income"} ` +
+    `${e.kind === "expense" ? "paid by" : "held by"} <b>${esc(e.name)}</b>${e.note ? ` — ${esc(e.note)}` : ""}` +
+    ` <span class="muted">· logged by ${esc(e.entered_by_name)}</span>` +
+    (e.voided_at ? ` <span class="op-reason">voided${e.void_reason ? ` — “${esc(e.void_reason)}”` : ""}</span>` : "") + `</span>` +
+    (e.can_void ? `<button class="op-x" data-void="${e.id}" title="Void (stays on the record)" aria-label="Void entry">✕</button>` : "") + `</li>`).join("") + `</ol>`
+    : `<p class="stat-empty">Nothing logged yet. Log loot and resources as they're sold, and expenses as they're paid.</p>`;
+  // Split table
+  const rows = sp.rows.map(x =>
+    `<tr><td>${esc(names[x.roster_id] || "?")}</td><td class="num">${esc(OP_SHARE_WORD[x.weight] || x.weight)}</td>` +
+    `<td class="num">${esc(fmtAuec(x.share))}</td><td class="num">${x.held ? esc(fmtAuec(x.held)) : "—"}</td>` +
+    `<td class="num">${x.paid ? esc(fmtAuec(x.paid)) : "—"}</td>` +
+    `<td class="num ${x.balance > 0 ? "send" : x.balance < 0 ? "recv" : ""}">${x.balance > 0 ? "sends " + esc(fmtAuec(x.balance)) : x.balance < 0 ? "gets " + esc(fmtAuec(-x.balance)) : "even"}</td></tr>`).join("");
+  const table = `<div class="op-split-wrap"><table class="op-split"><thead><tr><th>Who</th><th class="num">Share</th><th class="num">Their cut</th>` +
+    `<th class="num">Holding</th><th class="num">Paid out</th><th class="num" title="Before any payments below">Balance (before payments)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const totals = `<div class="op-pot"><span>Pot <b>${esc(fmtAuec(T.pot))}</b></span>` +
+    `<span>income ${esc(fmtAuec(T.poolable))}</span>` +
+    (T.expenses ? `<span>expenses ${esc(fmtAuec(T.expenses))}${T.reimburse ? " (paid back first)" : " (not paid back)"}</span>` : "") +
+    (T.bonus_kept ? `<span>bonuses kept by earners ${esc(fmtAuec(T.bonus_kept))}</span>` : "") +
+    (T.weight_total ? `<span>a full share ≈ <b>${esc(fmtAuec(T.per_full_share))}</b></span>` : "") +
+    (op.contracts_total ? `<span class="muted">+ contracts paid by the game ${esc(fmtAuec(op.contracts_total))}</span>` : "") + `</div>`;
+  const warns = sp.warnings.length ? `<ul class="op-warns">${sp.warnings.map(w => `<li>${esc(opWarnText(w))}</li>`).join("")}</ul>` : "";
+  // Transfers
+  const tx = op.transfers;
+  const txRow = t => {
+    const st = t.received_at ? `<span class="op-t-st done">✓ received</span>`
+      : t.disputed_at ? `<span class="op-t-st bad" title="${esc(t.dispute_note || "")}">disputed — ${esc(t.dispute_note || "")}</span>`
+      : t.sent_at ? `<span class="op-t-st">sent, awaiting confirmation</span>`
+      : `<span class="op-t-st muted">to send</span>`;
+    const key = t.stored ? `data-tid="${t.id}"` : `data-from="${t.from_roster}" data-to="${t.to_roster}" data-amt="${t.amount}"`;
+    const acts = (t.can_send ? `<button class="ev-btn sm" data-tx="sent" ${key}>Mark sent</button>` : "") +
+      (t.can_receive ? `<button class="ev-btn sm primary" data-tx="received" ${key}>Confirm received</button>` +
+        (!t.disputed_at ? `<button class="ev-btn sm" data-tx="dispute" ${key}>Dispute</button>` : "") : "");
+    return `<li class="${t.mine_to_send || t.mine_to_receive ? "mine" : ""}"><span class="op-t-what"><b>${esc(t.from_name)}</b> → <b>${esc(t.to_name)}</b> ` +
+      `<span class="op-t-amt">${esc(fmtAuec(t.amount))}</span> <button class="op-x" data-copy="${t.amount}" title="Copy amount" aria-label="Copy amount">⧉</button>` +
+      (t.correction ? ` <span class="op-tag" title="Handing back an overpayment — the pot or their share changed after they were paid">correction</span>` : "") + `</span>${st}<span class="op-t-acts">${acts}</span></li>`;
+  };
+  const planned = tx.filter(t => !t.stored), stored = tx.filter(t => t.stored);
+  const txHtml = !tx.length
+    ? `<p class="stat-empty">${op.ledger.some(e => !e.voided_at) ? "Everyone's even — no payments needed." : "Payments appear once money is logged."}</p>`
+    : `<ol class="op-tx">${stored.map(txRow).join("")}${planned.map(txRow).join("")}</ol>` +
+      `<p class="ev-note">The fewest payments that settle everyone. A payment someone has marked stays put; ` +
+      `the rest update if the ledger or shares change.</p>`;
+  return `<div class="panel"><h2>PAYOUT</h2>` + rules +
+    `<div class="op-sub"><div class="ev-section-h">Ledger</div><p class="ev-note">Money the game left in one wallet — loot and resources sold, bonuses — and expenses someone paid. ` +
+    `Anyone on the roster can log their own. Mistakes are voided, never erased.</p>${form}${led}</div>` +
+    `<div class="op-sub"><div class="ev-section-h">Split</div>${totals}${warns}${sp.rows.length ? table : ""}</div>` +
+    `<div class="op-sub"><div class="ev-section-h">Payments</div>${txHtml}</div></div>`;
+}
+
+function bindOpMoney(op) {
+  const root = $("ops-root");
+  // contracts
+  const cAdd = $("op-c-add");
+  if (cAdd) cAdd.onclick = () => {
+    const name = $("op-c-name").value.trim();
+    if (!name) { opSay("Give the contract a name."); return; }
+    const a = $("op-c-amt").value;
+    opCall(`/api/ops/${op.id}/contracts`, opJson("POST", { name, note: $("op-c-note").value.trim(),
+      amount: a === "" ? null : parseInt(a, 10) }));
+  };
+  root.querySelectorAll("[data-tick]").forEach(b => b.onchange = () =>
+    opCall(`/api/ops/${op.id}/contracts/${b.dataset.tick}/tick`, opJson("POST", { have: b.checked })));
+  root.querySelectorAll("[data-c-del]").forEach(b => b.onclick = async () => {
+    if (!(await confirmDialog("The log keeps a line saying you removed it.", { title: "Remove this contract?", confirmLabel: "Remove", danger: true }))) return;
+    opCall(`/api/ops/${op.id}/contracts/${b.dataset.cDel}`, { method: "DELETE" });
+  });
+  root.querySelectorAll("[data-c-edit]").forEach(b => b.onclick = async () => {
+    const c = op.contracts.find(x => x.id === Number(b.dataset.cEdit));
+    const v = await promptDialog(op.phase === "settle" ? "What did it actually pay (aUEC)? Leave blank to clear." : "What does it pay (aUEC)? Leave blank to clear.",
+      { title: c.name, value: c.amount != null ? String(c.amount) : "", confirmLabel: "Save" });
+    if (v == null) return;
+    const t = v.replace(/[^0-9]/g, "");
+    opCall(`/api/ops/${op.id}/contracts/${c.id}`, opJson("PATCH", t === "" ? { clear_amount: true } : { amount: parseInt(t, 10) }));
+  });
+  // rules
+  const re = $("op-rules-edit");
+  if (re) re.onclick = () => {
+    const box = $("op-rules-box");
+    if (!box.hidden) { box.hidden = true; return; }
+    box.innerHTML = rulesEditorHtml("op-r", op.rules) +
+      `<div class="ev-form-actions" style="border:none;padding-top:8px;"><button class="ev-btn primary" id="op-r-save">${op.phase === "setup" ? "Save rules" : "Amend rules…"}</button></div>`;
+    box.hidden = false;
+    $("op-r-save").onclick = async () => {
+      const rules = readRulesEditor("op-r");
+      let reason = null;
+      if (op.phase !== "setup") {
+        reason = await promptDialog("The op has started, so this is an amendment. Everyone sees a banner, and the log records what changed and why.",
+          { title: "Amend the rules", confirmLabel: "Amend", placeholder: "Reason" });
+        if (reason == null) return;
+      }
+      opCall(`/api/ops/${op.id}/rules`, opJson("PUT", { rules, reason }));
+    };
+  };
+  // shares
+  root.querySelectorAll("[data-share-rid]").forEach(sel => sel.onchange = async () => {
+    const rid = Number(sel.dataset.shareRid), row = op.roster.find(r => r.id === rid);
+    const share = sel.value === "" ? null : Number(sel.value);
+    let reason = null;
+    if (share != null || op.reason_required) {
+      reason = await promptDialog(share != null
+        ? `Why does ${row.name} get a ${OP_SHARE_WORD[share]} share instead of what the rules give? It's shown on the roster and in the log.`
+        : "The mission has ended, so this change needs a reason. It's shown in the log.",
+        { title: share != null ? "Override share" : "Back to the rule", confirmLabel: "Save", placeholder: "Reason" });
+      if (reason == null) { drawOp(op); return; }
+    }
+    opCall(`/api/ops/${op.id}/roster/${rid}/share`, opJson("PUT", { share, reason }));
+  });
+  // ledger
+  const kind = $("op-l-kind");
+  if (kind) kind.onchange = () => { $("op-l-cat").hidden = kind.value !== "expense"; };
+  const lAdd = $("op-l-add");
+  if (lAdd) lAdd.onclick = () => {
+    const amt = parseInt($("op-l-amt").value, 10);
+    if (!(amt > 0)) { opSay("Enter an amount in aUEC."); return; }
+    const k = kind.value;
+    opCall(`/api/ops/${op.id}/ledger`, opJson("POST", { kind: k === "expense" ? "expense" : "income",
+      bonus: k === "bonus", amount: amt, roster_id: Number($("op-l-who").value),
+      category: k === "expense" ? $("op-l-cat").value : null, note: $("op-l-note").value.trim() }));
+  };
+  root.querySelectorAll("[data-void]").forEach(b => b.onclick = async () => {
+    const reason = await promptDialog("It stays on the record, struck through. Re-enter it correctly if it was a typo." +
+      (op.reason_required ? " A reason is needed now the mission has ended." : " A reason is optional."),
+      { title: "Void this entry?", confirmLabel: "Void", placeholder: "Reason" });
+    if (reason == null) return;
+    opCall(`/api/ops/${op.id}/ledger/${b.dataset.void}/void`, opJson("POST", { reason: reason.trim() || null }));
+  });
+  // transfers
+  root.querySelectorAll("[data-tx]").forEach(b => b.onclick = async () => {
+    const body = { action: b.dataset.tx };
+    if (b.dataset.tid) body.tid = Number(b.dataset.tid);
+    else Object.assign(body, { from_roster: Number(b.dataset.from), to_roster: Number(b.dataset.to), amount: Number(b.dataset.amt) });
+    if (body.action === "dispute") {
+      const note = await promptDialog("What's wrong — nothing arrived, wrong amount? The payer and organizer see this.",
+        { title: "Dispute this payment", confirmLabel: "Dispute", placeholder: "What happened" });
+      if (note == null || !note.trim()) return;
+      body.note = note.trim();
+    }
+    opCall(`/api/ops/${op.id}/transfers/mark`, opJson("POST", body));
+  });
+  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
+    try { navigator.clipboard.writeText(b.dataset.copy); opSay(`Copied ${Number(b.dataset.copy).toLocaleString()}.`); } catch {}
+  });
+}
+
+// Settle-phase edits need a reason; ask for it only then.
+async function opReason(op, what) {
+  if (!op.reason_required) return { ok: true, reason: null };
+  const v = await promptDialog(`The mission has ended, so this change needs a reason. It's shown in the log.`,
+    { title: what, confirmLabel: "Save change", placeholder: "Reason" });
+  if (v == null) return { ok: false };
+  if (v.trim().length < 3) { opSay("A reason needs at least 3 characters."); return { ok: false }; }
+  return { ok: true, reason: v.trim() };
+}
+
+function opSay(t) { const m = $("op-msg"); if (m) m.textContent = t; }
+
+async function opCall(url, opts, failMsg) {
+  try {
+    const r = await fetch(url, opts);
+    if (!r.ok) throw await r.json().catch(() => ({}));
+    const data = await r.json();
+    if (data && data.id && data.roster) drawOp(data);
+    return data;
+  } catch (err) { opSay((err && err.detail) || failMsg || "Couldn't save."); return null; }
+}
+const opJson = (method, body) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+// Type-ahead member search for the add + deputy fields (op managers only).
+function bindOpMemberSearch(op, inputId, hitsId, onPick) {
+  const input = $(inputId), hits = $(hitsId);
+  if (!input) return;
+  let t = null;
+  input.oninput = () => {
+    clearTimeout(t);
+    const q = input.value.trim();
+    if (q.length < 2) { hits.hidden = true; return; }
+    t = setTimeout(async () => {
+      const d = await fetch(`/api/ops/${op.id}/member-search?q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : { members: [] }).catch(() => ({ members: [] }));
+      const have = new Set(op.roster.map(r => r.discord_id).filter(Boolean));
+      hits.innerHTML = (d.members || []).length ? d.members.map(m =>
+        `<button type="button" role="option" data-did="${esc(m.discord_id)}"${have.has(m.discord_id) && inputId === "op-add-member" ? " disabled" : ""}>` +
+        `${esc(m.name)}${have.has(m.discord_id) && inputId === "op-add-member" ? " — on the roster" : ""}</button>`).join("")
+        : `<span class="muted">No match.</span>`;
+      hits.hidden = false;
+      hits.querySelectorAll("button[data-did]").forEach(b => b.onclick = () => {
+        hits.hidden = true; input.value = ""; onPick(b.dataset.did);
+      });
+    }, 200);
+  };
+}
+
+function bindOp(op) {
+  const root = $("ops-root");
+  root.querySelectorAll("[data-op-phase]").forEach(b => b.onclick = async () => {
+    const to = b.dataset.opPhase;
+    let reason = null;
+    if ((op.phase === "settle" && to === "live") || (op.phase === "closed" && to === "settle")) {
+      reason = await promptDialog(to === "live" ? "Why is the mission resuming? It's shown in the log." : "Why is the record being reopened? It's shown in the log.",
+        { title: to === "live" ? "Resume mission" : "Reopen the record", confirmLabel: to === "live" ? "Resume" : "Reopen", placeholder: "Reason" });
+      if (reason == null) return;
+    } else if (to === "live" && op.phase === "setup") {
+      if (!(await confirmDialog("From now on every roster and attendance change is logged with who made it.",
+          { title: "Start the mission?", confirmLabel: "Start mission" }))) return;
+    } else if (to === "settle") {
+      if (!(await confirmDialog("After this, attendance changes need a reason. You can still resume if you go back in.",
+          { title: "End the mission?", confirmLabel: "End mission" }))) return;
+    } else if (to === "closed") {
+      if (!(await confirmDialog("The op becomes a read-only record" + (op.event_id ? " and its event is marked completed" : "") + ". Reopening later is logged.",
+          { title: "Close the record?", confirmLabel: "Close record" }))) return;
+    }
+    opCall(`/api/ops/${op.id}/phase`, opJson("POST", { to, reason }));
+  });
+  const disc = $("op-discard");
+  if (disc) disc.onclick = async () => {
+    if (!(await confirmDialog("It never started, so nothing is lost. The event can run its mission again later.",
+        { title: "Discard this op?", confirmLabel: "Discard", danger: true }))) return;
+    const r = await fetch(`/api/ops/${op.id}`, { method: "DELETE" });
+    if (r.ok) { opCurrent = null; location.hash = op.event_id ? `#/events/${op.event_id}` : "#/ops"; }
+    else opSay("Couldn't discard.");
+  };
+  const join = $("op-join");
+  if (join) join.onclick = () => opCall(`/api/ops/${op.id}/join`, { method: "POST" }, "Couldn't add you.");
+  const ren = $("op-rename");
+  if (ren) ren.onclick = async () => {
+    const v = await promptDialog("", { title: "Rename op", value: op.name, confirmLabel: "Rename" });
+    if (v && v.trim()) opCall(`/api/ops/${op.id}`, opJson("PATCH", { name: v.trim() }));
+  };
+  root.querySelectorAll("[data-att]").forEach(b => b.onclick = async () => {
+    const row = op.roster.find(r => r.id === Number(b.dataset.rid));
+    const to = row && row.attendance === b.dataset.att ? null : b.dataset.att;   // tap the lit one to clear
+    const rs = await opReason(op, `Mark ${row ? row.name : ""}`);
+    if (!rs.ok) return;
+    opCall(`/api/ops/${op.id}/roster/${b.dataset.rid}`, opJson("PATCH", { attendance: to, reason: rs.reason }));
+  });
+  root.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => {
+    const row = op.roster.find(r => r.id === Number(b.dataset.rm));
+    const extra = op.phase === "setup" ? "" : " If they were expected but didn't come, marking them Absent is the honest record.";
+    if (!(await confirmDialog(`Take ${row ? row.name : "them"} off the roster? The log keeps a line saying you did.${extra}`,
+        { title: "Remove from roster?", confirmLabel: "Remove", danger: true }))) return;
+    const rs = await opReason(op, "Remove from roster");
+    if (!rs.ok) return;
+    opCall(`/api/ops/${op.id}/roster/${b.dataset.rm}${rs.reason ? `?reason=${encodeURIComponent(rs.reason)}` : ""}`, { method: "DELETE" });
+  });
+  const bulk = $("op-bulk-absent");
+  if (bulk) bulk.onclick = async () => {
+    if (!(await confirmDialog("Everyone not marked yet becomes Absent. Marks already made aren't touched.",
+        { title: "Mark the rest Absent?", confirmLabel: "Mark Absent" }))) return;
+    const rs = await opReason(op, "Mark the rest Absent");
+    if (!rs.ok) return;
+    opCall(`/api/ops/${op.id}/attendance/bulk`, opJson("POST", { attendance: "absent", reason: rs.reason }));
+  };
+  bindOpMemberSearch(op, "op-add-member", "op-member-hits", async did => {
+    const rs = await opReason(op, "Add to roster");
+    if (rs.ok) opCall(`/api/ops/${op.id}/roster`, opJson("POST", { discord_id: did, reason: rs.reason }));
+  });
+  const gGo = $("op-add-guest-go");
+  if (gGo) gGo.onclick = async () => {
+    const name = $("op-add-guest").value.trim();
+    if (!name) { opSay("Give the guest a name."); return; }
+    const rs = await opReason(op, "Add a guest");
+    if (!rs.ok) return;
+    opCall(`/api/ops/${op.id}/roster`, opJson("POST", { guest_name: name,
+      guest_handle: $("op-add-ghandle").value.trim() || null, reason: rs.reason }));
+  };
+  const deps = op.deputies.map(d => d.discord_id);
+  bindOpMemberSearch(op, "op-dep-search", "op-dep-hits", did => {
+    if (!deps.includes(did)) opCall(`/api/ops/${op.id}/deputies`, opJson("PUT", { discord_ids: [...deps, did] }));
+  });
+  root.querySelectorAll("[data-dep-rm]").forEach(b => b.onclick = () =>
+    opCall(`/api/ops/${op.id}/deputies`, opJson("PUT", { discord_ids: deps.filter(d => d !== b.dataset.depRm) })));
+}
+
+// WS ping: someone changed an op. Refetch it if it's on screen (debounced —
+// a bulk mark fires one ping, but several managers can be tapping at once).
+function onOpPing(id) {
+  if (!opCurrent || opCurrent.id !== id || $("ops-view").hidden) return;
+  clearTimeout(opRefetchTimer);
+  opRefetchTimer = setTimeout(() => { if (opsSubRoute().id === id) renderOpPage(id); }, 300);
 }
 
 // ---------- resource manager (#/goals + #/inventory + #/blueprints) ----------
@@ -22602,14 +23960,14 @@ function haloVerdictHtml(d) {
 // Empty/unknown hash → home.
 const APP_LABEL = { "#/nav": "Navigator", "#/route": "Cargo Planner",
   "#/trade": "Trade Route Planner", "#/halo": "Prospector", "#/events": "Events",
-  "#/goals": "Resource Manager",
+  "#/ops": "Ops", "#/goals": "Resource Manager",
   "#/market": "Marketplace", "#/online": "Who's Online", "#/lfg": "Group Finder",
   "#/pirates": "Danger Board", "#/intel": "Org Intel", "#/": "Home" };
 // Full display names for the header's current-app indicator. Add a row here when
 // a new app ships and it'll show automatically while that app is active.
 const APP_TITLE = { "#/nav": "Resource Navigator", "#/route": "Cargo Planner",
   "#/trade": "Trade Route Planner", "#/halo": "Prospector",
-  "#/events": "Event Planner", "#/goals": "Resource Manager",
+  "#/events": "Event Planner", "#/ops": "Ops", "#/goals": "Resource Manager",
   "#/inventory": "Resource Manager", "#/blueprints": "Resource Manager",
   "#/market": "Org Marketplace",
   "#/online": "Who's Online", "#/lfg": "Group Finder", "#/pirates": "Danger Board",
@@ -22655,6 +24013,7 @@ function applyView() {
   // The event planner owns a small sub-route family (board / new / detail), so
   // any hash under #/events counts as being in the app.
   const events = (h === "#/events" || h.startsWith("#/events/")) && authed;
+  const ops = (h === "#/ops" || h.startsWith("#/ops/")) && authed;   // Ops (#/ops, #/ops/<id>)
   // Resource Manager: the Goals screen owns a sub-route family (board/new/detail);
   // Inventory + Blueprints are peer screens. All three are the one "Resource Manager" app.
   const goals = (h === "#/goals" || h.startsWith("#/goals/")) && authed;
@@ -22681,11 +24040,11 @@ function applyView() {
   const privacy = h === "#/privacy";
   const legal = terms || privacy;
   // Home/launcher = signed in with no (recognized) sub-route selected.
-  const launcher = authed && !nav && !route && !trade && !halo && !events && !resourceMgr && !market && !online
+  const launcher = authed && !nav && !route && !trade && !halo && !events && !ops && !resourceMgr && !market && !online
     && !lfg && !pirates && !settings && !setup && !intel && !legal;
   // Normalize sub-routes (#/events/123, #/goals/new, #/inventory, #/intel/market) to
   // their app root for the header indicator and the "remember last app" jump.
-  const appHash = events ? "#/events" : resourceMgr ? "#/goals" : market ? "#/market"
+  const appHash = events ? "#/events" : ops ? "#/ops" : resourceMgr ? "#/goals" : market ? "#/market"
     : intel ? "#/intel" : halo ? "#/halo" : h;
 
   // The sign-in gate covers everything for anonymous users, except a legal page.
@@ -22701,6 +24060,7 @@ function applyView() {
   $("halo-view").hidden = !halo;
   if (halo) { applyHaloTab(h); loadHaloFinder(); }   // tab first (canvases need layout), then seed; WS keeps it live
   $("events-view").hidden = !events;
+  $("ops-view").hidden = !ops;
   $("goals-view").hidden = !goals;
   $("inventory-view").hidden = !inventory;
   $("blueprints-view").hidden = !blueprints;
@@ -22727,7 +24087,7 @@ function applyView() {
 
   // Remember which app you're in, so the sub-pages (Settings/Setup) can offer a
   // "← back to that app" link.
-  if (nav || route || trade || halo || events || resourceMgr || market || intel || lfg || pirates) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
+  if (nav || route || trade || halo || events || ops || resourceMgr || market || intel || lfg || pirates) { lastApp = appHash; try { sessionStorage.setItem("scLastApp", appHash); localStorage.setItem("scLastAppPersist", appHash); } catch {} }
 
   // Header chrome. The logo/title (a.home-link) is the universal Home; the back
   // link returns to the app you came from. ⚙ Settings + 📖 Setup are global. Org
@@ -22737,8 +24097,8 @@ function applyView() {
   const appTitle = authed ? APP_TITLE[appHash] : null;
   $("app-title").hidden = !appTitle;
   $("app-title").textContent = appTitle || "";
-  $("where").hidden = launcher || route || trade || halo || events || resourceMgr || market || online || lfg || pirates || intel || legal;   // location readout is the navigator's
-  $("back-toggle").hidden = !authed || launcher || nav || route || trade || halo || events || resourceMgr || market || lfg || pirates || intel || legal;
+  $("where").hidden = launcher || route || trade || halo || events || ops || resourceMgr || market || online || lfg || pirates || intel || legal;   // location readout is the navigator's
+  $("back-toggle").hidden = !authed || launcher || nav || route || trade || halo || events || ops || resourceMgr || market || lfg || pirates || intel || legal;
   $("back-toggle").setAttribute("href", lastApp);
   $("back-toggle").textContent = "← " + (APP_LABEL[lastApp] || "Home");
   // Settings + Setup are global utilities — available whenever signed in, including
@@ -22763,6 +24123,8 @@ function applyView() {
     loadTradePlanner();
   } else if (events) {
     loadEvents();
+  } else if (ops) {
+    loadOps();
   } else if (goals) {
     loadGoals();
   } else if (inventory) {
@@ -23497,6 +24859,11 @@ async function loadSettings() {
       $("container-ageoff").value = s.container_ageoff_days;
     if (s.listing_stale_days != null && document.activeElement !== $("listing-stale"))
       $("listing-stale").value = s.listing_stale_days;
+    if (s.event_builtin_templates != null) $("event-builtin-tpl").checked = !!s.event_builtin_templates;
+    if (s.op_default_rules && !$("op-default-rules-box").contains(document.activeElement)) {
+      opDefaultRules = s.op_default_rules;
+      $("op-default-rules-box").innerHTML = rulesEditorHtml("op-def", s.op_default_rules);
+    }
     if (s.survey_depletion_ageoff_min && document.activeElement !== $("depletion-ageoff"))
       $("depletion-ageoff").value = s.survey_depletion_ageoff_min;
     if (s.feed_refresh_h != null && document.activeElement !== $("feed-refresh"))
@@ -24430,6 +25797,31 @@ $("container-clear").onclick = async () => {
 };
 
 // Marketplace staleness window (2026-08 review) — same shape as the stock window.
+$("op-default-rules-save").onclick = async () => {
+  const st = $("op-default-rules-status"), rules = readRulesEditor("op-def");
+  if (!rules) return;
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op_default_rules: rules }) });
+    if (!r.ok) throw 0;
+    const d = await r.json();
+    opDefaultRules = d.op_default_rules || rules;
+    st.textContent = "Saved. New events and quick ops start with these.";
+  } catch { st.textContent = "Couldn't save."; }
+};
+$("event-builtin-tpl").onchange = async () => {
+  const st = $("event-builtin-tpl-status"), on = $("event-builtin-tpl").checked;
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_builtin_templates: on }) });
+    if (!r.ok) throw 0;
+    evTemplates = null;
+    st.textContent = on ? "Built-in templates are offered." : "Built-in templates are hidden.";
+  } catch { st.textContent = "Couldn't save."; $("event-builtin-tpl").checked = !on; }
+};
 $("listing-stale-save").onclick = async () => {
   const st = $("listing-stale-status");
   const days = parseInt($("listing-stale").value, 10);

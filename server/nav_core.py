@@ -5661,6 +5661,339 @@ def derive_event_phase(event: dict, now_dt: datetime) -> dict:
     }
 
 
+# --- event templates: "how does this event differ from its template" --------
+# docs/event-operations.md §14.3. An event COPIES its template at creation
+# (events.template_snapshot); this compares the event as it stands now against
+# that copy, so signups can see "this one's run differently" before they commit.
+
+_TPL_DETAIL_LABELS = (("mission", "Mission"), ("loadout", "Loadout"),
+                      ("medical", "Medical"), ("comms", "Comms"),
+                      ("roe", "Rules of engagement"), ("prereqs", "Prerequisites"))
+
+
+def _tpl_fmt(v, kind: str = "", labels: dict | None = None) -> str:
+    """One field value as the short text a deviation chip shows."""
+    if kind == "roles":
+        return ", ".join(f"{r.get('role')} ×{r.get('needed')}" for r in (v or [])) or "none"
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v) or "none"
+    if v is None or v == "":
+        return "—"
+    if labels and v in labels:
+        return labels[v]
+    return str(v)
+
+
+def event_template_diffs(event: dict, snapshot_event: dict,
+                         roe_labels: dict | None = None,
+                         snapshot_rules: dict | None = None) -> list[dict]:
+    """Fields where `event` (an events row: `type`/`category` lists, `roles`,
+    `details`…) departs from the template contents it was created from.
+
+    Returns [{field, label, from, to}] with display strings, in form order.
+    The crew-shape fields (types, categories, duration, player counts, roles)
+    are always compared — they're what a template exists to fix. Free-text
+    fields (places, description, mission details) are compared only where the
+    template STATED a value: every event names its own rally point, so "—" →
+    "Port Tressler" is not a deviation, but a template's "Heavy armour"
+    becoming "Light armour" is. Description reports only that it was edited.
+    """
+    t = snapshot_event or {}
+    out = []
+
+    def add(field, label, a, b, kind="", labels=None):
+        out.append({"field": field, "label": label,
+                    "from": _tpl_fmt(a, kind, labels), "to": _tpl_fmt(b, kind, labels)})
+
+    def as_set(v):
+        return sorted(v or [])
+
+    if as_set(event.get("type")) != as_set(t.get("types")):
+        add("types", "Type", t.get("types") or [], event.get("type") or [])
+    if as_set(event.get("category")) != as_set(t.get("categories")):
+        add("categories", "Category", t.get("categories") or [],
+            event.get("category") or [])
+    for field, label in (("duration_min", "Duration (min)"),
+                         ("min_players", "Min players"),
+                         ("max_players", "Max players")):
+        a, b = t.get(field), event.get(field)
+        if field == "min_players":
+            a, b = a or 0, b or 0
+        if a != b:
+            add(field, label, a, b)
+    roles_key = lambda rs: sorted((r.get("role"), int(r.get("needed") or 0))
+                                  for r in (rs or []))
+    if roles_key(event.get("roles")) != roles_key(t.get("roles")):
+        add("roles", "Roles", t.get("roles") or [], event.get("roles") or [], "roles")
+    for field, label in (("location", "Rally point"),
+                         ("event_location", "Event location")):
+        a = (t.get(field) or "").strip()
+        if a and a != (event.get(field) or "").strip():
+            add(field, label, a, event.get(field))
+    a = (t.get("description") or "").strip()
+    if a and a != (event.get("description") or "").strip():
+        out.append({"field": "description", "label": "Description",
+                    "from": None, "to": None, "edited": True})
+    td, ed = t.get("details") or {}, event.get("details") or {}
+    for key, label in _TPL_DETAIL_LABELS:
+        a = (td.get(key) or "").strip()
+        if a and a != (ed.get(key) or "").strip():
+            add(f"details.{key}", label, a, ed.get(key),
+                labels=roe_labels if key == "roe" else None)
+    names = lambda cs: [(c.get("name") or "").strip() for c in (cs or [])]
+    if t.get("contracts") and names(t.get("contracts")) != names(event.get("contracts")):
+        out.append({"field": "contracts", "label": "Contracts",
+                    "from": None, "to": None, "edited": True})
+    # Payout rules: compared only when the template stated some (a template
+    # saved before rules existed has none, and "org default" isn't a change).
+    if snapshot_rules is not None and event.get("rules") is not None:
+        out.extend(op_rules_diff(snapshot_rules, event.get("rules")))
+    return out
+
+
+# --- operations (docs/event-operations.md §3/§5) ----------------------------
+# The running instance of a mission. Pure rules only; storage + permissions
+# live in app.py.
+
+OP_PHASES = ("setup", "live", "settle", "closed")
+
+# (from, to) → the action's name. Forward-only, except the two reversals that
+# the SC-is-buggy call (§2.1) needs — and those two require a logged reason.
+OP_TRANSITIONS = {
+    ("setup", "live"): "start",
+    ("live", "settle"): "end",
+    ("settle", "closed"): "close",
+    ("settle", "live"): "resume",
+    ("closed", "settle"): "reopen",
+}
+OP_REASON_ACTIONS = ("resume", "reopen")
+
+# Attendance, in check-in order. `counts` = whether the status means the person
+# took part (drives the default share in slice 3 and stats in slice 5).
+OP_ATTENDANCE = (
+    {"key": "present", "label": "Present", "took_part": True},
+    {"key": "late", "label": "Late", "took_part": True},
+    {"key": "left_early", "label": "Left early", "took_part": True},
+    {"key": "excused", "label": "Excused", "took_part": False},
+    {"key": "absent", "label": "Absent", "took_part": False},
+)
+OP_ATTENDANCE_KEYS = tuple(a["key"] for a in OP_ATTENDANCE)
+OP_ATTENDANCE_LABEL = {a["key"]: a["label"] for a in OP_ATTENDANCE}
+
+
+def op_transition(frm: str, to: str) -> str | None:
+    """The action a phase change is, or None when it isn't allowed."""
+    return OP_TRANSITIONS.get((frm, to))
+
+
+def op_attendance_counts(roster) -> dict:
+    """Per-status tallies over an op roster, plus `unmarked`, `took_part`,
+    `guests` and `total`."""
+    out = {k: 0 for k in OP_ATTENDANCE_KEYS}
+    out.update(unmarked=0, took_part=0, guests=0, total=0)
+    took = {a["key"] for a in OP_ATTENDANCE if a["took_part"]}
+    for r in roster or []:
+        out["total"] += 1
+        if not r.get("discord_id"):
+            out["guests"] += 1
+        a = r.get("attendance")
+        if a in out:
+            out[a] += 1
+            if a in took:
+                out["took_part"] += 1
+        else:
+            out["unmarked"] += 1
+    return out
+
+
+# --- op money: rules, split, transfers (docs/event-operations.md §4/§6) ----
+# Contracts are NOT here on purpose: a shared contract is paid out by the game
+# in equal cuts to everyone who had it shared, so the tool records it and never
+# moves that money (§6.1.1). The split only divides what the game left in one
+# wallet: loot and resources sold (+ bonuses under the `bonuses` rule).
+
+OP_SHARE_VALUES = (1.0, 0.5, 0.0)
+OP_SHARE_LABEL = {1.0: "Full", 0.5: "Half", 0.0: "None"}
+OP_BONUS_MODES = ("pool", "keep")
+OP_DEFAULT_RULES = {
+    "shares": {"present": 1.0, "late": 1.0, "left_early": 0.5,
+               "excused": 0.0, "absent": 0.0},
+    "expenses_first": True,
+    "bonuses": "pool",
+}
+
+
+def normalize_op_rules(raw, base: dict | None = None) -> dict:
+    """A full, valid rule set: `raw` over `base` (default: OP_DEFAULT_RULES).
+    Unknown keys are dropped; a bad value keeps the base's. Shares snap to the
+    three the UI offers (Full / Half / None)."""
+    base = base or OP_DEFAULT_RULES
+    raw = raw if isinstance(raw, dict) else {}
+    out = {"shares": dict(base.get("shares") or OP_DEFAULT_RULES["shares"]),
+           "expenses_first": bool(base.get("expenses_first", True)),
+           "bonuses": base.get("bonuses") if base.get("bonuses") in OP_BONUS_MODES else "pool"}
+    for k, v in (raw.get("shares") or {}).items():
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if k in OP_ATTENDANCE_KEYS and fv in OP_SHARE_VALUES:
+            out["shares"][k] = fv
+    if isinstance(raw.get("expenses_first"), bool):
+        out["expenses_first"] = raw["expenses_first"]
+    if raw.get("bonuses") in OP_BONUS_MODES:
+        out["bonuses"] = raw["bonuses"]
+    return out
+
+
+def op_rules_diff(a: dict, b: dict) -> list[dict]:
+    """Field-level differences from rule set `a` to `b`, as display strings:
+    [{field, label, from, to}]. Used for org-default chips, amendments and
+    template deviation chips."""
+    a, b = normalize_op_rules(a), normalize_op_rules(b)
+    out = []
+    for key in OP_ATTENDANCE_KEYS:
+        x, y = a["shares"][key], b["shares"][key]
+        if x != y:
+            out.append({"field": f"shares.{key}",
+                        "label": f"{OP_ATTENDANCE_LABEL[key]} share",
+                        "from": OP_SHARE_LABEL[x], "to": OP_SHARE_LABEL[y]})
+    if a["expenses_first"] != b["expenses_first"]:
+        yn = lambda v: "paid back first" if v else "not paid back"
+        out.append({"field": "expenses_first", "label": "Expenses",
+                    "from": yn(a["expenses_first"]), "to": yn(b["expenses_first"])})
+    if a["bonuses"] != b["bonuses"]:
+        lab = {"pool": "pooled", "keep": "kept by earner"}
+        out.append({"field": "bonuses", "label": "Bonuses",
+                    "from": lab[a["bonuses"]], "to": lab[b["bonuses"]]})
+    return out
+
+
+def _largest_remainder(total: int, weights: list[float]) -> list[int]:
+    """Split integer `total` in proportion to `weights` so the parts sum to
+    exactly `total`. Leftover units go to the largest fractional remainders,
+    ties to the earlier index (deterministic). Negative totals split by
+    magnitude and carry the sign."""
+    wsum = sum(weights)
+    if wsum <= 0 or total == 0:
+        return [0] * len(weights)
+    sign = -1 if total < 0 else 1
+    mag = abs(total)
+    exact = [mag * w / wsum for w in weights]
+    parts = [int(e) for e in exact]
+    left = mag - sum(parts)
+    order = sorted(range(len(weights)), key=lambda i: (-(exact[i] - parts[i]), i))
+    for i in order[:left]:
+        parts[i] += 1
+    return [sign * p for p in parts]
+
+
+def derive_op_split(roster: list[dict], ledger: list[dict], rules: dict) -> dict:
+    """The money view of an op (§6.2). `roster` rows carry id, attendance,
+    share_override; `ledger` rows carry kind income|expense, amount,
+    roster_id, bonus, voided_at. Voided entries are ignored.
+
+    Returns {rows: [{roster_id, weight, share, held, bonus_kept, paid, owed,
+    balance}], totals: {...}, warnings: [...]}. balance > 0 = this person
+    sends money, < 0 = receives it."""
+    rules = normalize_op_rules(rules)
+    live = [e for e in ledger or [] if not e.get("voided_at")]
+    held, kept, paid = {}, {}, {}
+    income = poolable = bonus_kept = expenses = 0
+    for e in live:
+        amt, rid = int(e.get("amount") or 0), e.get("roster_id")
+        if e.get("kind") == "expense":
+            expenses += amt
+            paid[rid] = paid.get(rid, 0) + amt
+            continue
+        income += amt
+        if e.get("bonus") and rules["bonuses"] == "keep":
+            bonus_kept += amt
+            kept[rid] = kept.get(rid, 0) + amt
+        else:
+            poolable += amt
+            held[rid] = held.get(rid, 0) + amt
+    reimburse = rules["expenses_first"]
+    # Without payback, an expense is simply the payer's own cost; the pot is
+    # the gross and nobody owes them for it.
+    pot = poolable - (expenses if reimburse else 0)
+    weights = []
+    unmarked = 0
+    for r in roster or []:
+        ov = r.get("share_override")
+        if ov is not None:
+            w = float(ov)
+        elif r.get("attendance"):
+            w = rules["shares"].get(r["attendance"], 0.0)
+        else:
+            w, unmarked = 0.0, unmarked + 1
+        weights.append(w)
+    shares = _largest_remainder(pot, weights)
+    rows = []
+    for r, w, sh in zip(roster or [], weights, shares):
+        rid = r["id"]
+        p_ = paid.get(rid, 0) if reimburse else 0
+        owed = sh + p_
+        rows.append({"roster_id": rid, "weight": w, "share": sh,
+                     "held": held.get(rid, 0), "bonus_kept": kept.get(rid, 0),
+                     "paid": paid.get(rid, 0), "owed": owed,
+                     "balance": held.get(rid, 0) - owed})
+    wsum = sum(weights)
+    warnings = []
+    if unmarked:
+        warnings.append({"key": "unmarked", "n": unmarked})
+    if wsum <= 0 and (poolable or expenses):
+        warnings.append({"key": "no_shares"})
+    if pot < 0:
+        warnings.append({"key": "loss", "amount": pot})
+    # Money that can't be placed (no one holds a share) must stay visible.
+    orphan = [e["roster_id"] for e in live if e.get("roster_id") not in
+              {r["id"] for r in roster or []}]
+    if orphan:
+        warnings.append({"key": "orphan_entries", "n": len(orphan)})
+    return {"rows": rows, "warnings": warnings,
+            "totals": {"income": income, "poolable": poolable, "bonus_kept": bonus_kept,
+                       "expenses": expenses, "pot": pot, "weight_total": wsum,
+                       "per_full_share": int(pot / wsum) if wsum > 0 else 0,
+                       "reimburse": reimburse}}
+
+
+def op_residual_balances(balances: dict, committed: list[dict]) -> dict:
+    """What each person still has to send (+) / receive (−) once transfers
+    already committed to are counted. A committed transfer from A to B of x
+    lowers A's remaining send by x and B's remaining receive by x."""
+    out = dict(balances)
+    for t in committed or []:
+        out[t["from_roster"]] = out.get(t["from_roster"], 0) - int(t["amount"])
+        out[t["to_roster"]] = out.get(t["to_roster"], 0) + int(t["amount"])
+    return out
+
+
+def plan_op_transfers(balances: dict, order: list | None = None) -> list[dict]:
+    """Settle `balances` ({roster_id: + sends / − receives}) with few
+    transfers: repeatedly match the largest sender with the largest receiver
+    (at most n−1 transfers). Ties break on `order` (roster order), so the
+    same inputs always give the same plan. Returns [{from_roster, to_roster,
+    amount}]."""
+    pos = {rid: i for i, rid in enumerate(order or sorted(balances, key=str))}
+    rank = lambda rid: pos.get(rid, len(pos))
+    senders = {k: v for k, v in balances.items() if v > 0}
+    receivers = {k: -v for k, v in balances.items() if v < 0}
+    out = []
+    while senders and receivers:
+        s_ = max(senders, key=lambda k: (senders[k], -rank(k)))
+        r_ = max(receivers, key=lambda k: (receivers[k], -rank(k)))
+        amt = min(senders[s_], receivers[r_])
+        out.append({"from_roster": s_, "to_roster": r_, "amount": amt})
+        senders[s_] -= amt
+        receivers[r_] -= amt
+        if not senders[s_]:
+            del senders[s_]
+        if not receivers[r_]:
+            del receivers[r_]
+    return out
+
+
 # --- fleet roster / squad organizer (#20) ----------------------------------
 # The plan (groups + assignments) is a layer over the signups. These pure helpers
 # turn the three stored lists (groups, assignments, going-signups) into the board

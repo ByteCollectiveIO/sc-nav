@@ -230,11 +230,14 @@ class ShellAssetTests(unittest.TestCase):
         self.assertEqual(self.client.get("/images/nope.png?v=1").status_code, 404)
 
     def test_launcher_art_is_lazy(self):
-        # Hidden behind the sign-in gate for anonymous visitors: lazy keeps ten
-        # launcher logos off the wire until the chooser is actually shown.
+        # Hidden behind the sign-in gate for anonymous visitors: lazy keeps the
+        # launcher logos off the wire until the chooser is actually shown. One
+        # tile per swappable-art key, so a new app can't ship without its key.
         html = self.client.get("/").text
         logos = re.findall(r'<img class="app-logo"[^>]*>', html)
-        self.assertEqual(len(logos), 10)
+        self.assertEqual(len(logos), len(app.APP_IMAGE_KEYS))
+        self.assertEqual(sorted(re.findall(r'data-app="([a-z]+)"', " ".join(logos))),
+                         sorted(app.APP_IMAGE_KEYS))
         for tag in logos:
             self.assertIn('loading="lazy"', tag)
 
@@ -1918,6 +1921,756 @@ class FleetTemplateTests(unittest.TestCase):
         r = self.client.post("/api/group-templates",
                              json={"name": "Nope", "event_id": empty})
         self.assertEqual(r.status_code, 400)
+
+
+class EventTemplateTests(unittest.TestCase):
+    """docs/event-operations.md §13–§14: mission details on events, event
+    templates (org + built-in), copy-not-link provenance with deviation chips,
+    save-as-template, Official flag, and the built-ins toggle."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._admin_dep()
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def _admin_dep(cls):
+        if not cls._user.get("is_admin"):
+            raise app.HTTPException(status_code=403, detail="admin only")
+        return cls._user
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+        db.set_setting("event_builtin_templates", "1")
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _start(self):
+        return (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+
+    _TPL_EVENT = {"types": ["Raid"], "categories": ["PvP"], "duration_min": 120,
+                  "min_players": 4, "max_players": 12,
+                  "roles": [{"role": "Combat (FPS)", "needed": 6},
+                            {"role": "Medical", "needed": 2}],
+                  "details": {"loadout": "Heavy armour", "roe": "pvp_if_engaged"}}
+
+    def _mk_template(self, name="Friday raid", **over):
+        body = {"name": name, "event": {**self._TPL_EVENT, **over},
+                "groups": [{"name": "Alpha", "kind": "squad", "capacity": 4}]}
+        r = self.client.post("/api/event-templates", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _event_body(self, **over):
+        return {"title": "Raid night", "start_at": self._start(),
+                "types": ["Raid"], "categories": ["PvP"], "duration_min": 120,
+                "min_players": 4, "max_players": 12,
+                "roles": [{"role": "Combat (FPS)", "needed": 6},
+                          {"role": "Medical", "needed": 2}],
+                "details": {"loadout": "Heavy armour", "roe": "pvp_if_engaged"},
+                **over}
+
+    # --- mission details -------------------------------------------------
+    def test_event_details_round_trip_and_blanks_dropped(self):
+        r = self.client.post("/api/events", json=self._event_body(
+            details={"mission": " Bunker (PvE) ", "comms": "", "roe": "pve_only"}))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["details"],
+                         {"mission": "Bunker (PvE)", "roe": "pve_only"})
+        eid = r.json()["id"]
+        r = self.client.patch(f"/api/events/{eid}", json=self._event_body(
+            details={"medical": "2 medpens"}))
+        self.assertEqual(r.json()["details"], {"medical": "2 medpens"})
+
+    def test_unknown_roe_rejected(self):
+        r = self.client.post("/api/events", json=self._event_body(
+            details={"roe": "shoot everyone"}))
+        self.assertEqual(r.status_code, 400)
+
+    def test_taxonomy_carries_roe_and_suggestions(self):
+        tax = self.client.get("/api/events/taxonomy").json()
+        self.assertIn("pvp_hunt", [r["key"] for r in tax["roe"]])
+        self.assertTrue(tax["mission_suggestions"])
+
+    # --- built-ins -------------------------------------------------------
+    def test_builtins_use_only_taxonomy_values(self):
+        tax = app.event_taxonomy
+        for b in tax.BUILTIN_TEMPLATES:
+            ev = b["event"]
+            self.assertTrue(ev["types"] and ev["categories"], b["key"])
+            self.assertTrue(set(ev["types"]) <= set(tax.TYPES), b["key"])
+            self.assertTrue(set(ev["categories"]) <= set(tax.CATEGORIES), b["key"])
+            for r in ev["roles"]:
+                self.assertIn(r["role"], tax.ROLES, b["key"])
+            roe = ev.get("details", {}).get("roe")
+            if roe:
+                self.assertIn(roe, tax.ROE_KEYS)
+            for g in b["groups"]:
+                self.assertIn(g["kind"], app.nav_core.GROUP_KINDS)
+
+    def test_list_merges_builtins_and_toggle_hides_them(self):
+        ids = [t["id"] for t in self.client.get("/api/event-templates").json()["templates"]]
+        self.assertIn("builtin:raid", ids)
+        db.set_setting("event_builtin_templates", "0")
+        data = self.client.get("/api/event-templates").json()
+        self.assertFalse(data["builtins_enabled"])
+        self.assertNotIn("builtin:raid", [t["id"] for t in data["templates"]])
+        r = self.client.post("/api/events", json=self._event_body(template_id="builtin:raid"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_copy_to_customize_replaces_builtin_in_picker(self):
+        r = self.client.post("/api/event-templates/builtin/mining/copy",
+                             json={"name": "Our mining"})
+        self.assertEqual(r.status_code, 200, r.text)
+        copy_ = r.json()
+        self.assertEqual(copy_["builtin_key"], "mining")
+        self.assertTrue(copy_["can_edit"])
+        ids = [t["id"] for t in self.client.get("/api/event-templates").json()["templates"]]
+        self.assertNotIn("builtin:mining", ids)
+        self.assertIn(copy_["id"], ids)
+        self.client.delete(f"/api/event-templates/{copy_['id']}")
+
+    # --- create from template: copy, not link -----------------------------
+    def test_event_from_template_snapshots_and_diffs(self):
+        tpl = self._mk_template()
+        r = self.client.post("/api/events", json=self._event_body(
+            template_id=tpl["id"], template_groups=True))
+        self.assertEqual(r.status_code, 200, r.text)
+        ev = r.json()
+        self.assertEqual(ev["template"]["name"], "Friday raid")
+        self.assertEqual(ev["template"]["diffs"], [])       # used as-is
+        groups = self.client.get(f"/api/events/{ev['id']}/groups").json()["groups"]
+        self.assertEqual([g["name"] for g in groups], ["Alpha"])
+        uses = next(t for t in self.client.get("/api/event-templates").json()["templates"]
+                    if t["id"] == tpl["id"])["uses"]
+        self.assertEqual(uses, 1)
+
+        # Editing the TEMPLATE later changes neither the event nor its diff
+        # baseline — the event holds a copy.
+        r = self.client.patch(f"/api/event-templates/{tpl['id']}", json={
+            "event": {**self._TPL_EVENT, "duration_min": 60}})
+        self.assertEqual(r.json()["version"], 2)
+        ev = self.client.get(f"/api/events/{ev['id']}").json()
+        self.assertEqual(ev["duration_min"], 120)
+        self.assertEqual(ev["template"]["diffs"], [])
+        self.assertEqual(ev["template"]["version"], 1)
+        self.assertEqual(ev["template"]["current_version"], 2)
+
+        # Editing the EVENT away from its template shows up as chips.
+        r = self.client.patch(f"/api/events/{ev['id']}", json=self._event_body(
+            duration_min=90, details={"loadout": "Light armour", "roe": "pve_only"}))
+        fields = {d["field"]: d for d in r.json()["template"]["diffs"]}
+        self.assertEqual(set(fields), {"duration_min", "details.loadout", "details.roe"})
+        self.assertEqual(fields["details.roe"]["from"], "PvP if engaged")
+        self.assertEqual(fields["details.roe"]["to"], "PvE only")
+
+        # Deleting the template leaves the event's provenance readable.
+        self.client.delete(f"/api/event-templates/{tpl['id']}")
+        ev = self.client.get(f"/api/events/{ev['id']}").json()
+        self.assertTrue(ev["template"]["deleted"])
+        self.assertEqual(len(ev["template"]["diffs"]), 3)
+
+    def test_event_from_builtin(self):
+        r = self.client.post("/api/events", json={
+            "title": "Bunker run", "start_at": self._start(),
+            "types": ["Combat Patrol"], "categories": ["PvE"],
+            "template_id": "builtin:bunker"})
+        self.assertEqual(r.status_code, 200, r.text)
+        t = r.json()["template"]
+        self.assertTrue(t["builtin"])
+        self.assertIn("roles", {d["field"] for d in t["diffs"]})   # roster dropped
+
+    def test_unknown_template_404(self):
+        r = self.client.post("/api/events", json=self._event_body(template_id="99999"))
+        self.assertEqual(r.status_code, 404)
+
+    def test_template_validation_uses_taxonomy(self):
+        r = self.client.post("/api/event-templates", json={
+            "name": "Bad", "event": {**self._TPL_EVENT, "types": ["Knitting"]}})
+        self.assertEqual(r.status_code, 400)
+
+    # --- save as template + permissions ------------------------------------
+    def test_save_event_as_template(self):
+        eid = self.client.post("/api/events", json=self._event_body()).json()["id"]
+        self.client.post(f"/api/events/{eid}/groups",
+                         json={"name": "Gold", "kind": "wing", "capacity": 2})
+        r = self.client.post(f"/api/events/{eid}/save-template",
+                             json={"name": "From raid night"})
+        self.assertEqual(r.status_code, 200, r.text)
+        t = r.json()
+        self.assertEqual(t["event"]["types"], ["Raid"])
+        self.assertEqual(t["event"]["details"]["loadout"], "Heavy armour")
+        self.assertEqual([g["name"] for g in t["groups"]], ["Gold"])
+        self._as("2")
+        r = self.client.post(f"/api/events/{eid}/save-template", json={"name": "x"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_only_creator_or_admin_edits_and_official_is_admin(self):
+        tpl = self._mk_template("Mine")
+        self._as("2")
+        self.assertEqual(self.client.patch(f"/api/event-templates/{tpl['id']}",
+                                           json={"name": "Hijack"}).status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/event-templates/{tpl['id']}").status_code, 403)
+        self.assertEqual(self.client.post(f"/api/event-templates/{tpl['id']}/official",
+                                          json={"official": True}).status_code, 403)
+        self._as("9", admin=True)
+        r = self.client.post(f"/api/event-templates/{tpl['id']}/official",
+                             json={"official": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        first = r.json()["templates"][0]
+        self.assertEqual(first["id"], tpl["id"])          # Official sorts first
+        self.assertTrue(first["official"])
+        hist = self.client.get(f"/api/event-templates/{tpl['id']}/history").json()
+        self.assertEqual([h["action"] for h in hist], ["create", "official"])
+        self.assertEqual(hist[1]["actor_id"], "9")
+        # rename doesn't bump the version; a content edit does
+        r = self.client.patch(f"/api/event-templates/{tpl['id']}", json={"name": "Std raid"})
+        self.assertEqual(r.json()["version"], 1)
+        self.client.delete(f"/api/event-templates/{tpl['id']}")
+
+    def test_deleted_template_id_is_never_reused(self):
+        a = self._mk_template("Short-lived")
+        eid = self.client.post("/api/events", json=self._event_body(
+            template_id=a["id"])).json()["id"]
+        self.client.delete(f"/api/event-templates/{a['id']}")
+        b = self._mk_template("Newcomer")
+        self.assertNotEqual(a["id"], b["id"])
+        ev = self.client.get(f"/api/events/{eid}").json()
+        self.assertTrue(ev["template"]["deleted"])
+        hist = self.client.get(f"/api/event-templates/{b['id']}/history").json()
+        self.assertEqual([h["action"] for h in hist], ["create"])
+        self.client.delete(f"/api/event-templates/{b['id']}")
+
+    def test_settings_toggle_round_trips(self):
+        self._as("9", admin=True)
+        r = self.client.post("/api/settings", json={"event_builtin_templates": False})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(self.client.get("/api/settings").json()["event_builtin_templates"])
+
+
+class OperationTests(unittest.TestCase):
+    """docs/event-operations.md §3/§5 (ops slice 2): running an op — event-
+    linked or quick — through setup → live → settle → closed, the roster
+    (members, guests, walk-ins), attendance, and the append-only log."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _event(self):
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        r = self.client.post("/api/events", json={
+            "title": "Bunker night", "start_at": start,
+            "types": ["Combat Patrol"], "categories": ["PvE"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def _signup(self, eid, uid, status="going"):
+        self._as(uid)
+        r = self.client.post(f"/api/events/{eid}/signup", json={"roles": [], "status": status})
+        self.assertEqual(r.status_code, 200, r.text)
+        self._as("1")
+
+    def _quick(self, name="Salvage run"):
+        r = self.client.post("/api/ops", json={"name": name})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _phase(self, op_id, to, reason=None, code=200):
+        r = self.client.post(f"/api/ops/{op_id}/phase", json={"to": to, "reason": reason})
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    def _row(self, op, name):
+        return next(r for r in op["roster"] if r["name"] == name)
+
+    # --- creation -----------------------------------------------------------
+    def test_run_mission_seeds_roster_from_signups(self):
+        eid = self._event()
+        self._signup(eid, "2", "going")
+        self._signup(eid, "3", "maybe")
+        self._signup(eid, "4", "going")
+        self._as("4"); self.client.delete(f"/api/events/{eid}/signup"); self._as("1")
+        g = self.client.post(f"/api/events/{eid}/groups",
+                             json={"name": "Alpha", "kind": "squad"}).json()
+        gid = g["groups"][0]["id"]
+        self.client.put(f"/api/events/{eid}/assignments",
+                        json={"discord_id": "2", "group_id": gid})
+        r = self.client.post(f"/api/events/{eid}/start")
+        self.assertEqual(r.status_code, 200, r.text)
+        op = r.json()
+        self.assertEqual(op["phase"], "setup")
+        self.assertEqual(op["event_id"], eid)
+        by = {x["discord_id"]: x for x in op["roster"]}
+        self.assertEqual(set(by), {"1", "2", "3"})           # withdrawn 4 left out
+        self.assertEqual(by["1"]["signed_up"], "organizer")
+        self.assertEqual(by["3"]["signed_up"], "maybe")
+        self.assertEqual(by["2"]["group_name"], "Alpha")
+        # Idempotent: one op per event, and the event advertises it.
+        again = self.client.post(f"/api/events/{eid}/start").json()
+        self.assertEqual(again["id"], op["id"])
+        ev = self.client.get(f"/api/events/{eid}").json()
+        self.assertEqual(ev["op"], {"id": op["id"], "phase": "setup"})
+
+    def test_only_event_owner_runs_mission(self):
+        eid = self._event()
+        self._as("2")
+        self.assertEqual(self.client.post(f"/api/events/{eid}/start").status_code, 403)
+
+    def test_quick_op_from_template_names_itself(self):
+        r = self.client.post("/api/ops", json={"template_id": "builtin:mining"})
+        self.assertEqual(r.status_code, 200, r.text)
+        op = r.json()
+        self.assertEqual(op["name"], "Mining")
+        self.assertEqual(op["template_name"], "Mining")
+        self.assertEqual([x["discord_id"] for x in op["roster"]], ["1"])
+        self.assertIn("Mining template", op["log"][0]["text"])
+
+    # --- lifecycle ------------------------------------------------------------
+    def test_full_lifecycle_and_close_completes_event(self):
+        eid = self._event()
+        self._signup(eid, "2")
+        op = self.client.post(f"/api/events/{eid}/start").json()
+        oid = op["id"]
+        self._phase(oid, "closed", code=409)                   # can't skip ahead
+        op = self._phase(oid, "live")
+        self.assertTrue(op["started_at"])
+        for r in op["roster"]:
+            self.client.patch(f"/api/ops/{oid}/roster/{r['id']}", json={"attendance": "present"})
+        self._phase(oid, "settle")
+        op = self._phase(oid, "closed")
+        self.assertEqual(op["phase"], "closed")
+        self.assertEqual(op["counts"]["present"], 2)
+        ev = self.client.get(f"/api/events/{eid}").json()
+        self.assertEqual(ev["status"], "completed")
+        self.assertEqual(ev["op"]["phase"], "closed")
+        # Reopen needs a reason, and it's in the log.
+        self._phase(oid, "settle", code=400)
+        op = self._phase(oid, "settle", reason="Bob's share was wrong")
+        last = op["log"][-1]
+        self.assertEqual(last["text"], "reopened the record")
+        self.assertEqual(last["reason"], "Bob's share was wrong")
+
+    def test_close_requires_everyone_marked(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live")
+        self._phase(oid, "settle")
+        r = self.client.post(f"/api/ops/{oid}/phase", json={"to": "closed"})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("unmarked", r.json()["detail"])
+
+    def test_resume_needs_reason(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live"); self._phase(oid, "settle")
+        self._phase(oid, "live", code=400)
+        self._phase(oid, "live", reason="server crashed, going back in")
+
+    def test_discard_only_in_setup(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live")
+        self.assertEqual(self.client.delete(f"/api/ops/{oid}").status_code, 409)
+        oid2 = self._quick()["id"]
+        self.assertEqual(self.client.delete(f"/api/ops/{oid2}").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/ops/{oid2}").status_code, 404)
+
+    # --- roster + attendance ---------------------------------------------------
+    def test_guests_walkins_and_attendance_log(self):
+        oid = self._quick()["id"]
+        r = self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": "Rando", "guest_handle": "rando_sc"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/roster",
+                                          json={"discord_id": "1"}).status_code, 409)
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/roster", json={}).status_code, 400)
+        self._phase(oid, "live")
+        self._as("5")                                         # walk-in adds self
+        op = self.client.post(f"/api/ops/{oid}/join").json()
+        self.assertTrue(op["in_roster"])
+        self.assertFalse(op["can_manage"])
+        rid = self._row(op, "Rando")["id"]
+        self.assertEqual(self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                                           json={"attendance": "present"}).status_code, 403)
+        self._as("1")
+        op = self.client.patch(f"/api/ops/{oid}/roster/{rid}", json={"attendance": "late"}).json()
+        self.assertTrue(self._row(op, "Rando")["joined_at"])   # stamped while live
+        op = self.client.patch(f"/api/ops/{oid}/roster/{rid}", json={"attendance": "present"}).json()
+        self.assertEqual(op["log"][-1]["text"], "marked Rando Present (was Late)")
+        op = self.client.post(f"/api/ops/{oid}/attendance/bulk", json={"attendance": "absent"}).json()
+        self.assertEqual(op["counts"]["absent"], 2)            # organizer + walk-in
+        self.assertEqual(op["counts"]["present"], 1)           # bulk never overwrote
+        self.assertEqual(op["counts"]["guests"], 1)
+        self.assertIn("marked 2 unmarked people Absent", op["log"][-1]["text"])
+        self.assertEqual(self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                                           json={"attendance": "heroic"}).status_code, 400)
+
+    def test_settle_edits_need_reason_and_closed_refuses(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live")
+        op = self._phase(oid, "settle")
+        rid = op["roster"][0]["id"]
+        r = self.client.patch(f"/api/ops/{oid}/roster/{rid}", json={"attendance": "present"})
+        self.assertEqual(r.status_code, 400)
+        op = self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                               json={"attendance": "present", "reason": "was there all along"}).json()
+        self.assertIsNone(op["roster"][0]["joined_at"])        # no stamp outside Live
+        self.assertEqual(op["log"][-1]["reason"], "was there all along")
+        self._phase(oid, "closed")
+        r = self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                              json={"attendance": "late", "reason": "nope"})
+        self.assertEqual(r.status_code, 409)
+
+    def test_removed_guest_stays_named_in_log(self):
+        oid = self._quick()["id"]
+        op = self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": "Typo Name"}).json()
+        rid = self._row(op, "Typo Name")["id"]
+        op = self.client.delete(f"/api/ops/{oid}/roster/{rid}").json()
+        self.assertNotIn("Typo Name", [r["name"] for r in op["roster"]])
+        self.assertEqual(op["log"][-1]["text"], "removed Typo Name (guest)")
+
+    def test_deputies_can_manage_but_not_appoint(self):
+        oid = self._quick()["id"]
+        op = self.client.put(f"/api/ops/{oid}/deputies", json={"discord_ids": ["7", "1", "7"]}).json()
+        self.assertEqual([d["discord_id"] for d in op["deputies"]], ["7"])   # organizer + dupes dropped
+        self._as("7")
+        self.assertTrue(self.client.get(f"/api/ops/{oid}").json()["can_manage"])
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/roster",
+                                          json={"guest_name": "Pal"}).status_code, 200)
+        self.assertEqual(self.client.put(f"/api/ops/{oid}/deputies",
+                                         json={"discord_ids": ["8"]}).status_code, 403)
+        log = self.client.get(f"/api/ops/{oid}").json()["log"]
+        self.assertEqual(log[-1]["actor_name"], app._resolve_member_name("7", None))
+
+    def test_member_search_skips_opted_out_and_needs_manager(self):
+        app.members_dir.by_id["900"] = {"discord_id": "900", "guild_nick": "Zed Pilot"}
+        app.members_dir.by_id["901"] = {"discord_id": "901", "guild_nick": "Zed Hidden",
+                                        "directory_opt_out": 1}
+        oid = self._quick()["id"]
+        res = self.client.get(f"/api/ops/{oid}/member-search?q=zed").json()["members"]
+        self.assertEqual([m["discord_id"] for m in res], ["900"])
+        self._as("2")
+        self.assertEqual(self.client.get(f"/api/ops/{oid}/member-search?q=zed").status_code, 403)
+        del app.members_dir.by_id["900"], app.members_dir.by_id["901"]
+
+    def test_changes_ping_open_tabs(self):
+        sent = []
+
+        async def _capture(msg):
+            sent.append(msg)
+        orig = app.hub.send_to_all_clients
+        app.hub.send_to_all_clients = _capture
+        try:
+            oid = self._quick()["id"]
+            self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": "Pinger"})
+            self._phase(oid, "live")
+        finally:
+            app.hub.send_to_all_clients = orig
+        self.assertEqual(sent, [{"type": "op", "id": oid}] * 2)
+
+    def test_lists_and_board(self):
+        a = self._quick("Board quick")["id"]
+        ids = [o["id"] for o in self.client.get("/api/ops?scope=active").json()["ops"]]
+        self.assertIn(a, ids)
+        board = self.client.get("/api/events?range=upcoming").json()
+        self.assertIn(a, [o["id"] for o in board["quick_ops"]])
+        self._phase(a, "live"); self.client.post(f"/api/ops/{a}/attendance/bulk", json={"attendance": "present"})
+        self._phase(a, "settle"); self._phase(a, "closed")
+        past = self.client.get("/api/events?range=past").json()
+        self.assertIn(a, [o["id"] for o in past["quick_ops"]])
+        self._as("2")
+        mine = [o["id"] for o in self.client.get("/api/ops?scope=mine").json()["ops"]]
+        self.assertNotIn(a, mine)
+        self.assertEqual(self.client.get(f"/api/ops/{a}").status_code, 200)   # everyone reads
+
+
+class OpMoneyApiTests(unittest.TestCase):
+    """docs/event-operations.md §4/§6 (ops slice 3): rules + amendments,
+    contracts (paid by the game — never split), the ledger, share overrides,
+    and transfers (lock on first mark, corrections after, recipient confirms)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+        db.set_setting("op_default_rules", "")
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _op(self, members=("2", "3"), guest=None):
+        """A live quick op run by 1 with `members` (+ a guest), all Present."""
+        op = self.client.post("/api/ops", json={"name": "Money op"}).json()
+        oid = op["id"]
+        for m in members:
+            self.client.post(f"/api/ops/{oid}/roster", json={"discord_id": m})
+        if guest:
+            self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": guest})
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "live"})
+        op = self.client.post(f"/api/ops/{oid}/attendance/bulk", json={"attendance": "present"}).json()
+        return op
+
+    def _rid(self, op, did=None, name=None):
+        return next(r["id"] for r in op["roster"]
+                    if (did and r["discord_id"] == did) or (name and r["name"] == name))
+
+    def _led(self, oid, rid, amount, kind="income", code=200, **kw):
+        r = self.client.post(f"/api/ops/{oid}/ledger",
+                             json={"kind": kind, "amount": amount, "roster_id": rid, **kw})
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    def _mark(self, oid, t, action, code=200, **kw):
+        body = {"action": action, **kw}
+        if t.get("stored"):
+            body["tid"] = t["id"]
+        else:
+            body.update(from_roster=t["from_roster"], to_roster=t["to_roster"], amount=t["amount"])
+        r = self.client.post(f"/api/ops/{oid}/transfers/mark", json=body)
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    # --- rules ---------------------------------------------------------------
+    def test_org_default_rules_seed_ops_and_setup_edits_are_free(self):
+        self._as("9", admin=True)
+        r = self.client.post("/api/settings", json={"op_default_rules": {"bonuses": "keep"}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self._as("1")
+        op = self.client.post("/api/ops", json={"name": "Defaults"}).json()
+        self.assertEqual(op["rules"]["bonuses"], "keep")
+        self.assertEqual(op["rules_vs_default"], [])
+        op = self.client.put(f"/api/ops/{op['id']}/rules",
+                             json={"rules": {"shares": {"left_early": 1.0}}}).json()
+        self.assertEqual(op["rules_version"], 1)              # setup: not an amendment
+        self.assertFalse(op["rules_amended"])
+        self.assertEqual([d["field"] for d in op["rules_vs_default"]], ["shares.left_early"])
+
+    def test_amendment_after_start_needs_reason_and_bumps_version(self):
+        op = self._op()
+        oid = op["id"]
+        r = self.client.put(f"/api/ops/{oid}/rules", json={"rules": {"bonuses": "keep"}})
+        self.assertEqual(r.status_code, 400)
+        op = self.client.put(f"/api/ops/{oid}/rules",
+                             json={"rules": {"bonuses": "keep"}, "reason": "agreed on comms"}).json()
+        self.assertEqual(op["rules_version"], 2)
+        self.assertTrue(op["rules_amended"])
+        self.assertEqual(op["log"][-1]["text"], "amended the rules (v2): Bonuses pooled → kept by earner")
+        self.assertEqual(op["log"][-1]["reason"], "agreed on comms")
+
+    def test_event_rules_and_contracts_flow_into_op(self):
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        ev = self.client.post("/api/events", json={
+            "title": "Bounty night", "start_at": start, "types": ["Bounty Hunt"],
+            "categories": ["PvE"], "rules": {"shares": {"late": 0.5}},
+            "contracts": [{"name": "VHRT — Yela", "note": "Kestrel shares it", "amount": 120000}]})
+        self.assertEqual(ev.status_code, 200, ev.text)
+        ev = ev.json()
+        self.assertEqual(ev["contracts"][0]["name"], "VHRT — Yela")
+        self.assertEqual([d["field"] for d in ev["rules_vs_default"]], ["shares.late"])
+        op = self.client.post(f"/api/events/{ev['id']}/start").json()
+        self.assertEqual(op["rules"]["shares"]["late"], 0.5)
+        self.assertEqual([(c["name"], c["amount"]) for c in op["contracts"]], [("VHRT — Yela", 120000)])
+
+    def test_template_rules_deviation_chip(self):
+        t = self.client.post("/api/event-templates", json={
+            "name": "Rules tpl", "event": {"types": ["Raid"], "categories": ["PvP"]},
+            "rules": {"bonuses": "keep"}}).json()
+        self.assertEqual(t["rules"]["bonuses"], "keep")
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        ev = self.client.post("/api/events", json={
+            "title": "x", "start_at": start, "types": ["Raid"], "categories": ["PvP"],
+            "template_id": t["id"], "rules": {"bonuses": "pool"}}).json()
+        self.assertEqual([d["field"] for d in ev["template"]["diffs"]], ["bonuses"])
+
+    # --- contracts --------------------------------------------------------------
+    def test_contracts_are_a_checklist_and_never_split(self):
+        op = self._op()
+        oid = op["id"]
+        op = self.client.post(f"/api/ops/{oid}/contracts",
+                              json={"name": "Bunker: Kareah", "amount": 90000}).json()
+        cid = op["contracts"][0]["id"]
+        self._as("2")
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/contracts",
+                                          json={"name": "x"}).status_code, 403)
+        op = self.client.post(f"/api/ops/{oid}/contracts/{cid}/tick", json={"have": True}).json()
+        self.assertTrue(op["contracts"][0]["i_have"])
+        self.assertEqual(len(op["contracts"][0]["ticks"]), 1)
+        self._as("1")
+        # The contract's money never enters the pot or the transfers.
+        self.assertEqual(op["split"]["totals"]["pot"], 0)
+        self.assertEqual(op["transfers"], [])
+        self.assertEqual(op["contracts_total"], 90000)
+        # Correcting the amount at Settle marks it actual, no reason needed.
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        op = self.client.patch(f"/api/ops/{oid}/contracts/{cid}", json={"amount": 96000}).json()
+        self.assertTrue(op["contracts"][0]["amount_actual"])
+        self.assertIn("amount 90,000 aUEC → 96,000 aUEC", op["log"][-1]["text"])
+
+    # --- ledger + split -----------------------------------------------------------
+    def test_members_log_own_money_only_and_void_keeps_record(self):
+        op = self._op()
+        oid = op["id"]
+        r2, r3 = self._rid(op, "2"), self._rid(op, "3")
+        self._as("2")
+        self._led(oid, r3, 5000, code=403)                      # not mine
+        op = self._led(oid, r2, 300_000, note="Sold loot at Grim HEX")
+        lid = op["ledger"][0]["id"]
+        self.assertEqual(op["split"]["totals"]["pot"], 300_000)
+        self._as("3")
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/ledger/{lid}/void",
+                                          json={}).status_code, 403)
+        self._as("2")
+        op = self.client.post(f"/api/ops/{oid}/ledger/{lid}/void", json={}).json()
+        self.assertTrue(op["ledger"][0]["voided_at"])           # still listed, struck
+        self.assertEqual(op["split"]["totals"]["pot"], 0)
+        self.assertIn("voided 300,000 aUEC income", op["log"][-1]["text"])
+
+    def test_share_override_needs_reason_and_moves_money(self):
+        op = self._op()
+        oid = op["id"]
+        r1, r2, r3 = self._rid(op, "1"), self._rid(op, "2"), self._rid(op, "3")
+        self._led(oid, r1, 250_000)
+        r = self.client.put(f"/api/ops/{oid}/roster/{r3}/share", json={"share": 0.5})
+        self.assertEqual(r.status_code, 400)
+        op = self.client.put(f"/api/ops/{oid}/roster/{r3}/share",
+                             json={"share": 0.5, "reason": "AFK half the op"}).json()
+        sh = {row["roster_id"]: row["share"] for row in op["split"]["rows"]}
+        self.assertEqual((sh[r1], sh[r2], sh[r3]), (100_000, 100_000, 50_000))
+        self.assertEqual(op["log"][-1]["text"], f"set {app._resolve_member_name('3', None)}'s share to Half")
+
+    def test_cant_remove_someone_with_money(self):
+        op = self._op()
+        oid = op["id"]
+        r2 = self._rid(op, "2")
+        self._led(oid, r2, 1000)
+        self.assertEqual(self.client.delete(f"/api/ops/{oid}/roster/{r2}").status_code, 409)
+
+    # --- transfers ----------------------------------------------------------------
+    def test_transfer_lifecycle_lock_then_corrections(self):
+        op = self._op(guest="Dusty")
+        oid = op["id"]
+        r1, r2, rg = self._rid(op, "1"), self._rid(op, "2"), self._rid(op, name="Dusty")
+        op = self._led(oid, r1, 400_000)       # 4 people present → 100k each
+        planned = [t for t in op["transfers"] if not t["stored"]]
+        self.assertEqual(len(planned), 3)
+        self.assertEqual({t["amount"] for t in planned}, {100_000})
+        to2 = next(t for t in planned if t["to_roster"] == r2)
+        # Only the recipient confirms receipt; the sender marks it sent.
+        self._as("3")
+        self._mark(oid, to2, "sent", code=403)
+        self._as("1")
+        op = self._mark(oid, to2, "sent")
+        stored = [t for t in op["transfers"] if t["stored"]]
+        self.assertEqual(len(stored), 1)                       # only what was marked is fixed
+        self.assertEqual(len([t for t in op["transfers"] if not t["stored"]]), 2)
+        t2 = stored[0]
+        self.assertTrue(t2["sent_at"])
+        self._mark(oid, t2, "received", code=403)              # organizer can't confirm for 2
+        self._as("2")
+        op = self._mark(oid, t2, "received")
+        self.assertTrue(next(t for t in op["transfers"] if t["id"] == t2["id"])["received_at"])
+        # The organizer DOES confirm for the guest (who can't sign in).
+        self._as("1")
+        tg = next(t for t in op["transfers"] if not t["stored"] and t["to_roster"] == rg)
+        self._mark(oid, tg, "received")
+        # More income now: the two payments already made stay put; only 2 —
+        # who was paid 100k and now holds 40k of their own — hands money back.
+        op = self._led(oid, r2, 40_000)        # pot 440k → 110k each
+        stored = [t for t in op["transfers"] if t["stored"]]
+        self.assertEqual(sorted(t["amount"] for t in stored), [100_000, 100_000])
+        planned = [t for t in op["transfers"] if not t["stored"]]
+        self.assertEqual(sum(t["amount"] for t in planned if t["from_roster"] == r2), 30_000)
+        self.assertTrue(all(t["correction"] for t in planned if t["from_roster"] == r2))
+        # Everything still settles: stored + planned leave every balance at zero.
+        bal = {row["roster_id"]: row["balance"] for row in op["split"]["rows"]}
+        for t in op["transfers"]:
+            bal[t["from_roster"]] -= t["amount"]; bal[t["to_roster"]] += t["amount"]
+        self.assertTrue(all(v == 0 for v in bal.values()), bal)
+
+    def test_dispute_needs_note_and_receipt_clears_it(self):
+        op = self._op(members=("2",))
+        oid = op["id"]
+        self._led(oid, self._rid(op, "1"), 20_000)
+        op = self.client.get(f"/api/ops/{oid}").json()
+        t = next(x for x in op["transfers"])
+        self._as("2")
+        self._mark(oid, t, "dispute", code=400)
+        op = self._mark(oid, t, "dispute", note="nothing arrived")
+        st = next(x for x in op["transfers"] if x["stored"])
+        self.assertEqual(st["dispute_note"], "nothing arrived")
+        op = self._mark(oid, st, "received")
+        st = next(x for x in op["transfers"] if x["stored"])
+        self.assertIsNone(st["disputed_at"])
+
+    def test_my_todo_on_list_after_mission_ends(self):
+        op = self._op(members=("2",))
+        oid = op["id"]
+        self._led(oid, self._rid(op, "1"), 20_000)
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        self._as("2")
+        mine = next(o for o in self.client.get("/api/ops?scope=mine").json()["ops"] if o["id"] == oid)
+        self.assertEqual(mine["my_todo"], 1)                   # a payment to confirm
+
+    def test_closed_op_refuses_money_but_allows_confirming(self):
+        op = self._op(members=("2",))
+        oid = op["id"]
+        self._led(oid, self._rid(op, "1"), 20_000)
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "closed"})
+        self._led(oid, self._rid(op, "1"), 5, code=409)
+        op = self.client.get(f"/api/ops/{oid}").json()
+        t = op["transfers"][0]
+        self._as("2")
+        self._mark(oid, t, "received")                          # payments can finish after close
 
 
 class TradeRunStateTests(unittest.TestCase):
