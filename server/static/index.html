@@ -3403,7 +3403,7 @@
         <!-- Placeholder art (the Event Planner's) until the Ops patch is drawn;
              an admin can already swap it per org (app-image key "ops"). -->
         <a class="app-card" href="#/ops">
-          <img class="app-logo" data-app="ops" loading="lazy" src="/images/event_planner_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
+          <img class="app-logo" data-app="ops" loading="lazy" src="/images/ops_floor_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Ops</div>
           <div class="app-desc">Run a mission and keep an honest record — check people in,
             add guests, and log every change so nobody argues about who was there.</div>
@@ -26051,7 +26051,7 @@ $("org-logo-remove").onclick = async () => {
 let appArtVersions = {};   // {slug: upload epoch} — mirrors /api/settings
 const APP_ART_LABELS = {
   nav: "Resource Navigator", route: "Cargo Planner", trade: "Trade Route Planner",
-  halo: "Prospector", events: "Event Planner", lfg: "Group Finder",
+  halo: "Prospector", events: "Event Planner", ops: "Ops", lfg: "Group Finder",
   pirates: "Danger Board", goals: "Resource Manager", market: "Org Marketplace",
   intel: "Org Intel",
 };
