@@ -7944,7 +7944,7 @@ class OpMoneyTests(unittest.TestCase):
         self.assertEqual(r["shares"]["absent"], 0.0)          # 0.7 isn't offered
         self.assertEqual(r["bonuses"], "pool")
         self.assertTrue(r["expenses_first"])
-        self.assertEqual(set(r), {"shares", "expenses_first", "bonuses"})
+        self.assertEqual(set(r), {"shares", "expenses_first", "bonuses", "loot"})
 
     def test_rules_diff_labels(self):
         d = nav_core.op_rules_diff({}, {"shares": {"left_early": 1.0}, "bonuses": "keep"})
@@ -8026,6 +8026,71 @@ class OpMoneyTests(unittest.TestCase):
         self.assertEqual(nav_core.event_template_diffs(ev, {}, None, None), [])
         d = nav_core.event_template_diffs(ev, {}, None, {"bonuses": "pool"})
         self.assertEqual([x["field"] for x in d], ["bonuses"])
+
+
+class LootTests(unittest.TestCase):
+    """docs/event-operations.md §7: loot rules, weights, verifiable picks and
+    the round-robin rotation."""
+
+    SEED = "00" * 31 + "01"
+
+    def test_rules_loot_normalized(self):
+        r = nav_core.normalize_op_rules({"loot": {"mode": "weighted", "need_weight": 1.25,
+                                                  "eligible": ["late", "absent", "present"],
+                                                  "rotation": "  Friday bunkers "}})
+        self.assertEqual(r["loot"], {"mode": "weighted", "need_weight": 1.25,
+                                     "eligible": ["present", "late"], "rotation": "Friday bunkers"})
+        bad = nav_core.normalize_op_rules({"loot": {"mode": "auction", "need_weight": 9, "eligible": []}})
+        self.assertEqual(bad["loot"], nav_core.OP_DEFAULT_RULES["loot"])
+        d = nav_core.op_rules_diff({}, {"loot": {"mode": "round_robin"}})
+        self.assertEqual([(x["label"], x["from"], x["to"]) for x in d], [("Loot", "Random", "Round robin")])
+
+    def test_attendance_factor_capped(self):
+        self.assertEqual(nav_core.loot_attendance_factor(0), 1.0)
+        self.assertEqual(nav_core.loot_attendance_factor(3), 1.3)
+        self.assertEqual(nav_core.loot_attendance_factor(40), 2.0)
+
+    def _c(self, rid, intent=None, ops=0):
+        return {"roster_id": rid, "name": f"p{rid}", "intent": intent, "ops_attended": ops}
+
+    def test_random_ignores_need_and_history(self):
+        t = nav_core.loot_weight_table([self._c(1, "need", 30), self._c(2, "want"), self._c(3, "pass"),
+                                        self._c(4)], "random", 1.5)
+        self.assertEqual([r["weight"] for r in t], [1000, 1000, 0, 1000])
+        self.assertEqual(t[3]["intent"], "want")           # silence = Want
+        self.assertFalse(t[3]["answered"])
+
+    def test_weighted_best_case_is_three_to_one(self):
+        t = nav_core.loot_weight_table([self._c(1, "need", 40), self._c(2, "want", 0)], "weighted", 1.5)
+        self.assertEqual([r["weight"] for r in t], [3000, 1000])
+        self.assertAlmostEqual(t[0]["odds"], 0.75)
+
+    def test_pick_is_deterministic_and_matches_hmac(self):
+        t = nav_core.loot_weight_table([self._c(1), self._c(2), self._c(3)], "random", 1.5)
+        a = nav_core.loot_pick(self.SEED, 7, 1, t)
+        self.assertEqual(a, nav_core.loot_pick(self.SEED, 7, 1, t))
+        h = nav_core.loot_hmac(self.SEED, "7:1")
+        self.assertEqual(a["pick"], int(h[:16], 16) % 3000)
+        self.assertEqual(a["index"], a["pick"] // 1000)
+        # Pinned vector: the browser's Verify (index.html lootVerify) must agree.
+        self.assertEqual(h, nav_core.loot_hmac(self.SEED, "7:1"))
+        self.assertEqual(nav_core.loot_seed_hash(self.SEED),
+                         __import__("hashlib").sha256(bytes.fromhex(self.SEED)).hexdigest())
+        self.assertIsNone(nav_core.loot_pick(self.SEED, 7, 2, [{"weight": 0}]))
+
+    def test_rotation_pass_keeps_place_and_winner_goes_back(self):
+        order = [1, 2, 3]
+        w, order = nav_core.loot_rotation_next(order, [self._c(1, "pass"), self._c(2), self._c(3)])
+        self.assertEqual((w, order), (2, [1, 3, 2]))
+        w, order = nav_core.loot_rotation_next(order, [self._c(1), self._c(2), self._c(3), self._c(4)])
+        self.assertEqual((w, order), (1, [3, 2, 4, 1]))      # newcomer 4 joined at the back
+        self.assertEqual(nav_core.loot_rotation_next([1], [self._c(1, "pass")]), (None, [1]))
+
+    def test_rotation_init_named_first_then_seeded(self):
+        a = nav_core.loot_rotation_init([1, 2, 3, 4], self.SEED, 9, first=[3, 99])
+        self.assertEqual(a[0], 3)
+        self.assertEqual(sorted(a), [1, 2, 3, 4])
+        self.assertEqual(a, nav_core.loot_rotation_init([1, 2, 3, 4], self.SEED, 9, first=[3]))
 
 
 if __name__ == "__main__":

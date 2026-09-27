@@ -2189,6 +2189,36 @@
   .op-log li:first-child { border-top: none; }
   .op-log time { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
   .op-reason { color: var(--dim); font-style: italic; }
+  /* ---- op loot (slice 4) ---- */
+  .op-rules-loot { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;
+    margin-top: 12px; align-items: start; }
+  .op-rules-loot [hidden] { display: none; }
+  .op-rules-loot select { width: 100%; }
+  .op-rules-elig { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 0;
+    display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
+  .op-rules-elig legend { font-size: 11px; color: var(--dim); padding: 0 4px; }
+  .op-loot-add { display: grid; grid-template-columns: 2fr 70px 1.2fr auto auto; gap: 8px; align-items: center; margin: 8px 0 12px; }
+  .op-loot-add select { padding: 7px 8px; font: inherit; font-size: 12px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+  .op-loot-item { border-top: 1px solid var(--border); padding: 10px 0; }
+  .op-loot-add .op-c-tick { font-size: 12px; white-space: nowrap; }
+  .op-loot-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .op-loot-acts { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .op-loot-win { font-weight: 600; color: var(--good); }
+  .op-loot-t td { vertical-align: middle; }
+  .op-loot-t tr.win td { background: var(--accent-wash); }
+  .op-loot-t tr.me td:first-child { font-weight: 600; }
+  .op-intent button { font-size: 12px; padding: 4px 9px; background: none; color: var(--dim); cursor: pointer; }
+  .op-intent-ro { font-size: 12px; font-weight: 600; }
+  .op-intent-ro.need { color: var(--warn); }
+  .op-intent-ro.pass { color: var(--dim); }
+  .op-why { font-size: 11px; color: var(--dim); }
+  .op-loot-void { font-size: 12px; color: var(--dim); margin: 6px 0 0; padding-left: 18px; }
+  .op-commit code { font-size: 11px; }
+  .op-verify { list-style: none; padding: 0; margin: 6px 0; font-size: 13px; }
+  .op-verify .ok { color: var(--good); }
+  .op-verify .bad { color: var(--bad); font-weight: 600; }
+  @media (max-width: 760px) { .op-loot-add { grid-template-columns: 1fr 70px; } .op-loot-add > :nth-child(n+3) { grid-column: 1 / -1; } }
   /* ---- op money (slice 3) ---- */
   .ev-contracts { display: flex; flex-direction: column; gap: 8px; }
   .ev-contract-row { display: grid; grid-template-columns: 2fr 2fr 1fr auto; gap: 8px; align-items: center; }
@@ -13764,7 +13794,10 @@ const OP_ATT_KEYS = [["present", "Present"], ["late", "Late"], ["left_early", "L
 const OP_SHARE_OPTS = [[1, "Full"], [0.5, "Half"], [0, "None"]];
 const OP_SHARE_WORD = { 1: "Full", 0.5: "Half", 0: "None" };
 const OP_RULES_FALLBACK = { shares: { present: 1, late: 1, left_early: 0.5, excused: 0, absent: 0 },
-  expenses_first: true, bonuses: "pool" };
+  expenses_first: true, bonuses: "pool",
+  loot: { mode: "random", need_weight: 1.5, eligible: ["present", "late", "left_early"], rotation: null } };
+const LOOT_MODE_WORD = { random: "Random", weighted: "Weighted", round_robin: "Round robin" };
+const LOOT_NEED_WEIGHTS = [1, 1.25, 1.5, 1.75, 2];
 let opDefaultRules = null;
 
 async function loadOpDefaultRules(force) {
@@ -13778,9 +13811,12 @@ async function loadOpDefaultRules(force) {
 function fullRules(r, base) {
   base = base || opDefaultRules || OP_RULES_FALLBACK;
   r = r || {};
+  const bl = base.loot || OP_RULES_FALLBACK.loot, rl = r.loot || {};
   return { shares: { ...base.shares, ...(r.shares || {}) },
     expenses_first: r.expenses_first != null ? !!r.expenses_first : !!base.expenses_first,
-    bonuses: r.bonuses || base.bonuses || "pool" };
+    bonuses: r.bonuses || base.bonuses || "pool",
+    loot: { mode: rl.mode || bl.mode, need_weight: rl.need_weight != null ? Number(rl.need_weight) : bl.need_weight,
+      eligible: rl.eligible || bl.eligible, rotation: rl.rotation !== undefined ? rl.rotation : bl.rotation } };
 }
 
 // Client twin of nav_core.op_rules_diff (display strings).
@@ -13795,6 +13831,13 @@ function rulesDiff(a, b) {
   if (a.expenses_first !== b.expenses_first) out.push({ label: "Expenses", from: yn(a.expenses_first), to: yn(b.expenses_first) });
   const bl = { pool: "pooled", keep: "kept by earner" };
   if (a.bonuses !== b.bonuses) out.push({ label: "Bonuses", from: bl[a.bonuses], to: bl[b.bonuses] });
+  const la = a.loot, lb = b.loot, attLab = Object.fromEntries(OP_ATT_KEYS);
+  if (la.mode !== lb.mode) out.push({ label: "Loot", from: LOOT_MODE_WORD[la.mode], to: LOOT_MODE_WORD[lb.mode] });
+  if (Number(la.need_weight) !== Number(lb.need_weight)) out.push({ label: "Need weight", from: "×" + la.need_weight, to: "×" + lb.need_weight });
+  if ((la.eligible || []).join() !== (lb.eligible || []).join())
+    out.push({ label: "Loot eligibility", from: la.eligible.map(k => attLab[k]).join(", "), to: lb.eligible.map(k => attLab[k]).join(", ") });
+  if ((la.rotation || null) !== (lb.rotation || null))
+    out.push({ label: "Rotation", from: la.rotation || "this op only", to: lb.rotation || "this op only" });
   return out;
 }
 
@@ -13807,8 +13850,12 @@ function rulesChips(diffs, emptyText) {
 function rulesSummary(r) {
   r = fullRules(r);
   const sh = OP_ATT_KEYS.map(([k, lab]) => `${lab} <b>${OP_SHARE_WORD[r.shares[k]]}</b>`).join(" · ");
+  const L = r.loot, attLab = Object.fromEntries(OP_ATT_KEYS);
+  const loot = L.mode === "weighted" ? `<b>Weighted</b> (Need ×${L.need_weight}, attendance up to ×2)`
+    : L.mode === "round_robin" ? `<b>Round robin</b>${L.rotation ? ` (rotation “${esc(L.rotation)}”)` : ""}` : "<b>Random</b>";
   return `Shares: ${sh}. Expenses <b>${r.expenses_first ? "paid back before splitting" : "not paid back"}</b>. ` +
-    `Bonuses <b>${r.bonuses === "keep" ? "kept by whoever earned them" : "pooled"}</b>.`;
+    `Bonuses <b>${r.bonuses === "keep" ? "kept by whoever earned them" : "pooled"}</b>. ` +
+    `Loot ${loot}, for ${esc(L.eligible.map(k => attLab[k]).join(" / "))}.`;
 }
 
 function rulesEditorHtml(prefix, rules) {
@@ -13822,14 +13869,41 @@ function rulesEditorHtml(prefix, rules) {
       `Pay back expenses (fuel, repairs, cargo…) before splitting</label>` +
     `<div class="ev-field op-rules-bonus"><label for="${prefix}-bonus">Achievement bonus cash</label>` +
       `<select id="${prefix}-bonus"><option value="pool"${r.bonuses === "pool" ? " selected" : ""}>Pooled — split like any income</option>` +
-      `<option value="keep"${r.bonuses === "keep" ? " selected" : ""}>Kept by whoever earned it</option></select></div></div>`;
+      `<option value="keep"${r.bonuses === "keep" ? " selected" : ""}>Kept by whoever earned it</option></select></div>` +
+    `<div class="op-rules-loot"><div class="ev-field"><label for="${prefix}-lmode">Loot rolls</label>` +
+      `<select id="${prefix}-lmode" data-lmode="${prefix}">${Object.entries(LOOT_MODE_WORD).map(([k, l]) =>
+        `<option value="${k}"${r.loot.mode === k ? " selected" : ""}>${l}${k === "random" ? " — equal chance, Need = Want" : k === "weighted" ? " — Need and attendance count" : " — take turns"}</option>`).join("")}</select></div>` +
+      `<div class="ev-field" data-lshow="${prefix}:weighted"${r.loot.mode === "weighted" ? "" : " hidden"}><label for="${prefix}-lneed">Need weighs</label>` +
+        `<select id="${prefix}-lneed">${LOOT_NEED_WEIGHTS.map(v => `<option value="${v}"${Number(r.loot.need_weight) === v ? " selected" : ""}>×${v} a Want</option>`).join("")}</select></div>` +
+      `<div class="ev-field" data-lshow="${prefix}:round_robin"${r.loot.mode === "round_robin" ? "" : " hidden"}><label for="${prefix}-lrot">Rotation</label>` +
+        `<input id="${prefix}-lrot" class="ti" maxlength="40" list="${prefix}-lrot-list" placeholder="This op only" value="${esc(r.loot.rotation || "")}">` +
+        `<datalist id="${prefix}-lrot-list"></datalist>` +
+        `<span class="ev-hint">Name it (e.g. “Friday bunkers”) to carry the turn order to the next op.</span></div>` +
+      `<fieldset class="op-rules-elig"><legend>Who can roll</legend>${[["present", "Present"], ["late", "Late"], ["left_early", "Left early"], ["excused", "Excused"]].map(([k, l]) =>
+        `<label><input type="checkbox" data-lelig="${prefix}" value="${k}"${r.loot.eligible.includes(k) ? " checked" : ""}> ${l}</label>`).join("")}</fieldset>` +
+    `</div></div>`;
 }
 
 function readRulesEditor(prefix) {
   if (!$(`${prefix}-rules`)) return null;
   const shares = {};
   OP_ATT_KEYS.forEach(([k]) => { shares[k] = Number($(`${prefix}-sh-${k}`).value); });
-  return { shares, expenses_first: $(`${prefix}-exp`).checked, bonuses: $(`${prefix}-bonus`).value };
+  const eligible = [...document.querySelectorAll(`[data-lelig="${prefix}"]:checked`)].map(i => i.value);
+  return { shares, expenses_first: $(`${prefix}-exp`).checked, bonuses: $(`${prefix}-bonus`).value,
+    loot: { mode: $(`${prefix}-lmode`).value, need_weight: Number($(`${prefix}-lneed`).value),
+      eligible: eligible.length ? eligible : ["present"], rotation: $(`${prefix}-lrot`).value.trim() || null } };
+}
+
+// Show only the loot knobs the chosen mode uses. Call after inserting an editor.
+function bindRulesEditor(prefix, rotationNames) {
+  const sel = $(`${prefix}-lmode`);
+  if (!sel) return;
+  const sync = () => document.querySelectorAll(`[data-lshow^="${prefix}:"]`).forEach(el =>
+    el.hidden = el.dataset.lshow.split(":")[1] !== sel.value);
+  sel.addEventListener("change", sync);
+  sync();
+  const dl = $(`${prefix}-lrot-list`);
+  if (dl && rotationNames) dl.innerHTML = rotationNames.map(n => `<option value="${esc(n)}">`).join("");
 }
 
 // Payout-rules card for the event + template forms: collapsed, with the
@@ -13877,6 +13951,7 @@ function bindContractsCard() {
     clickable(x, () => x.closest(".ev-contract-row").remove()));
   add.onclick = () => { $("ev-f-contracts").insertAdjacentHTML("beforeend", contractRowHtml()); wireDel(); };
   wireDel();
+  bindRulesEditor("ev-f");
   // Keep the rules card's summary honest as the organizer edits.
   const card = $("ev-f-rulescard");
   if (card) card.addEventListener("change", () => {
@@ -14602,6 +14677,7 @@ function drawOp(op) {
       (op.roster.length ? `<div class="op-grid">${op.roster.map(r => opRowHtml(op, r)).join("")}</div>`
         : `<p class="stat-empty">No one on the roster yet.</p>`) +
       addPanel + deputyPanel + `</div>` +
+    opLootPanel(op) +
     opPayoutPanel(op) +
     `<div class="panel"><h2>LOG</h2><p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
       `<ol class="op-log">${op.log.slice().reverse().map(e =>
@@ -14610,6 +14686,164 @@ function drawOp(op) {
         (e.reason ? ` <span class="op-reason">— “${esc(e.reason)}”</span>` : "") + `</span></li>`).join("")}</ol></div>`;
   bindOp(op);
   bindOpMoney(op);
+  bindOpLoot(op);
+}
+
+// ---- op loot (docs/event-operations.md §7) ----
+// Every player's Need / Want / Pass is on screen for everyone, before and
+// after the roll — that visibility is the whole check on "Need on everything".
+const LOOT_INTENT_WORD = { need: "Need", want: "Want", pass: "Pass" };
+
+function lootPct(x) { return x > 0 ? (x * 100 >= 10 ? Math.round(x * 100) : (x * 100).toFixed(1)) + "%" : "—"; }
+
+function lootTableHtml(op, it, L) {
+  const rolled = it.status === "rolled";
+  const rr = L.rules.mode === "round_robin";
+  const canEdit = !rolled && L.can_manage;
+  const total = it.table.reduce((a, r) => a + (r.weight || 0), 0);
+  const rows = it.table.map(r => {
+    const win = rolled && it.roll && it.roll.winner_roster === r.roster_id;
+    const mine = r.roster_id === op.my_roster_id;
+    const intentCell = (canEdit || (mine && it.can_set_intent))
+      ? `<span class="seg op-intent" role="group" aria-label="Intent for ${esc(r.name)}">${["need", "want", "pass"].map(k =>
+          `<button class="${r.answered && r.intent === k ? "on" : ""}" data-intent="${k}" data-lid="${it.id}"${mine ? "" : ` data-rid="${r.roster_id}"`}>${LOOT_INTENT_WORD[k]}</button>`).join("")}</span>`
+      : `<span class="op-intent-ro ${esc(r.intent)}">${esc(LOOT_INTENT_WORD[r.intent] || r.intent)}</span>`;
+    const why = [
+      !r.answered ? "no answer — counts as Want" : "",
+      r.set_by_name ? `set by ${esc(r.set_by_name)}` : "",
+      !rr && L.rules.mode === "weighted" ? `×${r.att_factor} attendance (${r.ops_attended} op${r.ops_attended === 1 ? "" : "s"})${r.intent === "need" ? ` · ×${r.intent_factor} Need` : ""}` : "",
+    ].filter(Boolean).join(" · ");
+    return `<tr class="${win ? "win" : ""}${mine ? " me" : ""}"><td>${win ? "🏆 " : ""}${esc(r.name)}${r.guest ? ' <span class="ev-tpl-badge">guest</span>' : ""}</td>` +
+      `<td>${intentCell}</td><td class="op-why">${why}</td>` +
+      (rr ? "" : `<td class="num">${lootPct(total ? (r.weight || 0) / total : 0)}</td>`) + `</tr>`;
+  }).join("");
+  return `<div class="op-split-wrap"><table class="op-split op-loot-t"><thead><tr><th>Player</th><th>Wants it?</th><th></th>` +
+    (rr ? "" : `<th class="num">${rolled ? "Odds had" : "Odds now"}</th>`) + `</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function opLootPanel(op) {
+  const L = op.loot;
+  if (!L) return "";
+  if (!L.items.length && !L.can_manage) return "";
+  const rules = L.rules, rr = rules.mode === "round_robin";
+  const head = `<div class="op-rules-head"><b>${esc(L.mode_label)}</b>` +
+    (rules.mode === "weighted" ? ` <span class="muted">· Need ×${rules.need_weight} · attendance up to ×2</span>` : "") +
+    (rr && L.rotation_name ? ` <span class="muted">· rotation “${esc(L.rotation_name)}”</span>` : "") +
+    ` <span class="muted">· ${L.eligible_count} eligible</span></div>`;
+  const warn = L.unmarked_count && L.open
+    ? `<p class="op-warns" style="list-style:none;padding:0">${L.unmarked_count} ${L.unmarked_count === 1 ? "person isn't" : "people aren't"} marked yet and can't roll until they are.</p>` : "";
+  const next = rr && L.rotation_next.length ? `<p class="ev-note">Next up: ${L.rotation_next.map((n, i) => i === 0 ? `<b>${esc(n)}</b>` : esc(n)).join(" → ")}. Passing keeps your place.</p>` : "";
+  const commit = L.commitments.length
+    ? `<p class="ev-note op-commit">Rolls are drawn from a secret seed fixed when the mission started — fingerprint ` +
+      `<code title="${esc(L.commitments[L.commitments.length - 1].hash)}">${esc(L.commitments[L.commitments.length - 1].hash.slice(0, 12))}…</code>. ` +
+      (L.commitments.every(c => c.seed)
+        ? `The seed is revealed, so anyone can check no roll was redone. <button class="ev-btn sm" id="op-loot-verify">Verify every roll</button>`
+        : `It's revealed when the record closes, so anyone can check no roll was redone.`) +
+      `</p><div id="op-verify-out"></div>` : "";
+  const members = op.roster.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
+  const add = L.can_manage
+    ? `<div class="op-loot-add"><input id="op-lt-name" class="ti" maxlength="80" placeholder="Item, e.g. P4-AR rifle" aria-label="Item name">` +
+      `<input id="op-lt-qty" class="ti" type="number" min="1" value="1" aria-label="Quantity">` +
+      `<select id="op-lt-found" aria-label="Found by"><option value="">found by —</option>${members}</select>` +
+      `<label class="op-c-tick"><input type="checkbox" id="op-lt-split"> roll each separately</label>` +
+      `<button class="ev-btn" id="op-lt-add">Add item</button></div>` : "";
+  const items = L.items.slice().reverse().map(it => {
+    const rolled = it.status === "rolled";
+    const top = `<div class="op-loot-h"><span class="op-c-name">${esc(it.name)}${it.qty > 1 ? ` ×${it.qty}` : ""}</span>` +
+      (it.found_by_name ? `<span class="muted">found by ${esc(it.found_by_name)}</span>` : "") +
+      (rolled ? `<span class="op-loot-win">🏆 ${esc(it.roll.winner_name)} <span class="muted">· roll #${it.roll.seq} by ${esc(it.roll.rolled_by_name)}</span></span>`
+        : `<span class="op-tag">open</span>`) +
+      `<span class="op-loot-acts">` +
+      (!rolled && L.can_manage ? `<button class="ev-btn sm primary" data-roll="${it.id}">Roll</button><button class="op-x" data-lt-del="${it.id}" aria-label="Remove ${esc(it.name)}">✕</button>` : "") +
+      (rolled && L.can_manage ? `<button class="ev-btn sm" data-reroll="${it.id}">Void &amp; re-roll…</button>` : "") + `</span></div>`;
+    const voided = it.voided.length ? `<ul class="op-loot-void">${it.voided.map(v =>
+      `<li><s>roll #${v.seq}: ${esc(v.winner_name)}</s> — voided by ${esc(v.voided_by_name)}: “${esc(v.reason || "")}”</li>`).join("")}</ul>` : "";
+    const mine = !rolled && it.can_set_intent && !L.can_manage
+      ? `<p class="ev-note">Tap Need, Want or Pass on your row. Everyone sees every answer.</p>` : "";
+    return `<div class="op-loot-item${rolled ? " rolled" : ""}">${top}${it.table.length ? lootTableHtml(op, it, L) : `<p class="stat-empty">Nobody eligible yet.</p>`}${mine}${voided}</div>`;
+  }).join("");
+  return `<div class="panel"><h2>LOOT</h2>${head}` +
+    `<p class="ev-note">${rr ? "Items go in turn order to the next person who didn't pass." :
+      rules.mode === "weighted" ? "Need counts for more than Want, and so does recent attendance (capped, so a newcomer always has a real chance). Pass = out." :
+      "Everyone who didn't pass has the same chance — Need and Want count the same."} ` +
+    `No answer counts as Want.</p>${warn}${next}${commit}${add}` +
+    (items || `<p class="stat-empty">No loot logged yet.</p>`) + `</div>`;
+}
+
+// Recompute every random/weighted roll from the revealed seed, in the
+// browser: hash check, HMAC-SHA256(seed, "op:seq") mod total, walk the table.
+async function lootVerify(op) {
+  const out = $("op-verify-out");
+  const L = op.loot;
+  const hex2 = h => new Uint8Array(h.match(/../g).map(b => parseInt(b, 16)));
+  const tohex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+  if (!(window.crypto && crypto.subtle)) { out.innerHTML = `<p class="op-warns">This browser can't run the check here (it needs a secure https page).</p>`; return; }
+  const lines = [];
+  const keys = [];
+  for (const c of L.commitments) {
+    const h = tohex(await crypto.subtle.digest("SHA-256", hex2(c.seed)));
+    const ok = h === c.hash;
+    lines.push(`<li class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} Seed ${c.idx + 1} matches the fingerprint published when it was committed</li>`);
+    keys.push(await crypto.subtle.importKey("raw", hex2(c.seed), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]));
+  }
+  for (const r of L.rolls) {
+    const mac = tohex(await crypto.subtle.sign("HMAC", keys[r.seed_idx], new TextEncoder().encode(`${op.id}:${r.seq}`)));
+    const total = r.weights.reduce((a, w) => a + BigInt(w.weight), 0n);
+    const pick = BigInt("0x" + mac.slice(0, 16)) % total;
+    let acc = 0n, win = null;
+    for (const w of r.weights) { acc += BigInt(w.weight); if (pick < acc) { win = w.roster_id; break; } }
+    const ok = win === r.winner_roster && Number(pick) === r.pick;
+    const name = (op.roster.find(x => x.id === r.winner_roster) || {}).name || "?";
+    lines.push(`<li class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} Roll #${r.seq} (${esc(r.item)}${r.voided ? ", voided" : ""}): ${esc(name)}</li>`);
+  }
+  const bad = lines.filter(l => l.includes('class="bad"')).length;
+  out.innerHTML = `<ul class="op-verify">${lines.join("")}</ul><p class="ev-note">${bad ? `<b>${bad} check${bad === 1 ? "" : "s"} failed.</b>` : "Every roll checks out."} ` +
+    `Round-robin turns aren't random, so they're not listed — their order is shown with each roll.</p>`;
+}
+
+function bindOpLoot(op) {
+  const root = $("ops-root");
+  const add = $("op-lt-add");
+  if (add) add.onclick = () => {
+    const name = $("op-lt-name").value.trim();
+    if (!name) { opSay("Name the item."); return; }
+    const qty = Math.max(1, parseInt($("op-lt-qty").value, 10) || 1);
+    opCall(`/api/ops/${op.id}/loot`, opJson("POST", { name, qty, split_units: $("op-lt-split").checked && qty > 1,
+      found_by: $("op-lt-found").value ? Number($("op-lt-found").value) : null }));
+  };
+  root.querySelectorAll("[data-intent]").forEach(b => b.onclick = () => {
+    const cur = b.classList.contains("on");
+    const body = { intent: cur ? null : b.dataset.intent };
+    if (b.dataset.rid) body.roster_id = Number(b.dataset.rid);
+    opCall(`/api/ops/${op.id}/loot/${b.dataset.lid}/intent`, opJson("PUT", body));
+  });
+  root.querySelectorAll("[data-lt-del]").forEach(b => b.onclick = async () => {
+    if (!(await confirmDialog("Only for an item logged by mistake. The log keeps a line saying you removed it.",
+        { title: "Remove this item?", confirmLabel: "Remove", danger: true }))) return;
+    opCall(`/api/ops/${op.id}/loot/${b.dataset.ltDel}`, { method: "DELETE" });
+  });
+  root.querySelectorAll("[data-roll]").forEach(b => b.onclick = async () => {
+    const it = op.loot.items.find(x => x.id === Number(b.dataset.roll));
+    const rr = op.loot.rules.mode === "round_robin";
+    const tot = it.table.reduce((a, r) => a + (r.weight || 0), 0);
+    const odds = rr ? it.table.map(r => `${r.name}: ${LOOT_INTENT_WORD[r.intent]}`).join(" · ")
+      : it.table.map(r => `${r.name} ${LOOT_INTENT_WORD[r.intent]} ${lootPct(tot ? r.weight / tot : 0)}`).join(" · ");
+    const silent = it.table.filter(r => !r.answered).length;
+    if (!(await confirmDialog(`${odds}.${silent ? ` ${silent} didn't answer and count as Want.` : ""} Answers lock now.`,
+        { title: `Roll ${it.name}?`, confirmLabel: "Roll" }))) return;
+    opCall(`/api/ops/${op.id}/loot/${it.id}/roll`, { method: "POST" });
+  });
+  root.querySelectorAll("[data-reroll]").forEach(b => b.onclick = async () => {
+    const it = op.loot.items.find(x => x.id === Number(b.dataset.reroll));
+    const reason = await promptDialog(`This roll stays on the record, struck through, with your reason. ${it.name} opens for a new roll` +
+      (op.loot.rules.mode === "round_robin" ? `, and ${it.roll.winner_name} gets their place in the rotation back.` : "."),
+      { title: "Void and re-roll?", confirmLabel: "Void roll", placeholder: "Why, e.g. lost to a server crash" });
+    if (reason == null) return;
+    if (reason.trim().length < 3) { opSay("A reason needs at least 3 characters."); return; }
+    opCall(`/api/ops/${op.id}/loot/${it.id}/reroll`, opJson("POST", { reason: reason.trim() }));
+  });
+  const v = $("op-loot-verify");
+  if (v) v.onclick = () => lootVerify(op);
 }
 
 // ---- op contracts + payout (docs/event-operations.md §4, §6) ----
@@ -14761,6 +14995,7 @@ function bindOpMoney(op) {
     box.innerHTML = rulesEditorHtml("op-r", op.rules) +
       `<div class="ev-form-actions" style="border:none;padding-top:8px;"><button class="ev-btn primary" id="op-r-save">${op.phase === "setup" ? "Save rules" : "Amend rules…"}</button></div>`;
     box.hidden = false;
+    bindRulesEditor("op-r", op.loot && op.loot.rotation_names);
     $("op-r-save").onclick = async () => {
       const rules = readRulesEditor("op-r");
       let reason = null;
@@ -24863,6 +25098,7 @@ async function loadSettings() {
     if (s.op_default_rules && !$("op-default-rules-box").contains(document.activeElement)) {
       opDefaultRules = s.op_default_rules;
       $("op-default-rules-box").innerHTML = rulesEditorHtml("op-def", s.op_default_rules);
+      bindRulesEditor("op-def");
     }
     if (s.survey_depletion_ageoff_min && document.activeElement !== $("depletion-ageoff"))
       $("depletion-ageoff").value = s.survey_depletion_ageoff_min;
