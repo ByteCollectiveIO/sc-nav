@@ -896,6 +896,10 @@ def init(db_path) -> None:
         # op's round-robin rotation (roster ids).
         _ensure_column("operations", "loot_seeds", "TEXT")
         _ensure_column("operations", "loot_rotation", "TEXT")
+        # 'op' = a mission; 'roll' = a standalone loot roll (the Ops app's
+        # Loot roll tool): same roster/loot/log machinery, but never listed as
+        # an op and never counted as attendance.
+        _ensure_column("operations", "kind", "TEXT NOT NULL DEFAULT 'op'")
         # Personal vs org goals + blueprint-seeded craft goals (#14.2). A goal is
         # `org` (shared board, anyone contributes) or `personal` (only its creator
         # sees/fills it); `blueprint_key` tags a goal whose line items were seeded
@@ -2602,6 +2606,7 @@ def _op_row(r: sqlite3.Row) -> dict:
     d["rules"] = _u(d.get("rules")) if d.get("rules") else {}
     d["loot_seeds"] = _u(d.get("loot_seeds")) if d.get("loot_seeds") else []
     d["loot_rotation"] = _u(d.get("loot_rotation")) if d.get("loot_rotation") else None
+    d["kind"] = d.get("kind") or "op"
     return d
 
 
@@ -2609,11 +2614,13 @@ def create_op(d: dict) -> int:
     with _lock, _conn:
         cur = _conn.execute(
             "INSERT INTO operations (event_id, name, organizer_id, deputies, phase, "
-            "template_id, template_name, rules, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "template_id, template_name, rules, kind, started_at, loot_seeds, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (d.get("event_id"), d["name"], str(d["organizer_id"]),
              _j(d.get("deputies") or []), d.get("phase", "setup"),
              d.get("template_id"), d.get("template_name"), _j(d.get("rules") or {}),
+             d.get("kind") or "op", d.get("started_at"),
+             _j(d["loot_seeds"]) if d.get("loot_seeds") else None,
              d["created_at"], d["created_at"]))
     return cur.lastrowid
 
@@ -2647,19 +2654,25 @@ def ops_for_events(event_ids) -> dict:
 def list_ops(scope: str, discord_id: str | None = None, limit: int = 100) -> list[dict]:
     """Ops for a list. scope: active (not closed) · closed · quick_active /
     quick_closed (event_id NULL) · mine (managed by, or on the roster of,
-    `discord_id`). Freshest first."""
+    `discord_id`); rolls / rolls_closed / rolls_mine = the same for standalone
+    loot rolls (kind='roll'), which the op scopes never include. Freshest first."""
+    mine = ("(organizer_id = ? OR deputies LIKE ? OR id IN "
+            "(SELECT op_id FROM op_roster WHERE discord_id = ?))",
+            [str(discord_id), f'%"{discord_id}"%', str(discord_id)])
     where, args = {
         "active": ("phase != 'closed'", []),
         "closed": ("phase = 'closed'", []),
         "quick_active": ("event_id IS NULL AND phase != 'closed'", []),
         "quick_closed": ("event_id IS NULL AND phase = 'closed'", []),
-        "mine": ("(organizer_id = ? OR deputies LIKE ? OR id IN "
-                 "(SELECT op_id FROM op_roster WHERE discord_id = ?))",
-                 [str(discord_id), f'%"{discord_id}"%', str(discord_id)]),
+        "mine": mine,
+        "rolls": ("phase != 'closed'", []),
+        "rolls_closed": ("phase = 'closed'", []),
+        "rolls_mine": mine,
     }.get(scope, ("1=1", []))
+    kind = "roll" if scope.startswith("rolls") else "op"
     with _lock:
         rows = _conn.execute(
-            f"SELECT * FROM operations WHERE {where} "
+            f"SELECT * FROM operations WHERE COALESCE(kind, 'op') = '{kind}' AND {where} "
             "ORDER BY COALESCE(started_at, created_at) DESC LIMIT ?",
             (*args, limit)).fetchall()
     return [_op_row(r) for r in rows]
@@ -3068,6 +3081,7 @@ def member_ops_attended(discord_id: str, since_iso: str, exclude_op: int) -> int
         return _conn.execute(
             "SELECT COUNT(DISTINCT r.op_id) FROM op_roster r JOIN operations o ON o.id = r.op_id "
             "WHERE r.discord_id=? AND r.attendance IN ('present','late','left_early') "
+            "AND COALESCE(o.kind, 'op') = 'op' "      # a quick loot roll isn't an op attended
             "AND o.id != ? AND COALESCE(o.started_at, o.created_at) >= ?",
             (str(discord_id), exclude_op, since_iso)).fetchone()[0]
 
