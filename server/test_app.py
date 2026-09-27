@@ -2873,6 +2873,81 @@ class OpLootApiTests(unittest.TestCase):
         self.assertEqual(self.client.post(f"/api/ops/{oid}/loot/{it['id']}/reroll",
                                           json={"reason": "mine now"}).status_code, 403)
 
+    # --- standalone loot rolls (the Ops app's Loot roll tool) -----------------
+    def _quick_roll(self, **kw):
+        body = {"people": ["2", "3"], "guests": [{"name": "Dusty"}], "item": "Rare rifle", **kw}
+        r = self.client.post("/api/ops/rolls", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_standalone_roll_is_live_and_everyone_present(self):
+        op = self._quick_roll()
+        self.assertEqual((op["kind"], op["phase"]), ("roll", "live"))
+        self.assertEqual(op["name"], "Roll: Rare rifle")
+        self.assertEqual({r["attendance"] for r in op["roster"]}, {"present"})
+        self.assertEqual(len(op["roster"]), 4)                  # creator + 2 + guest
+        self.assertEqual(op["loot"]["items"][0]["name"], "Rare rifle")
+        self.assertEqual(len(op["loot"]["items"][0]["table"]), 4)
+        # People added later are "here" too.
+        op = self.client.post(f"/api/ops/{op['id']}/roster", json={"guest_name": "Late pal"}).json()
+        self.assertEqual(next(r for r in op["roster"] if r["name"] == "Late pal")["attendance"], "present")
+
+    def test_roll_seed_revealed_right_after_each_roll(self):
+        op = self._quick_roll()
+        lid = op["loot"]["items"][0]["id"]
+        op = self._roll(op["id"], lid)
+        c = op["loot"]["commitments"]
+        self.assertEqual(len(c), 2)
+        self.assertIsNotNone(c[0]["seed"])                     # the used seed: revealed now
+        self.assertIsNone(c[1]["seed"])                        # the next one: still secret
+        roll = op["loot"]["rolls"][0]
+        self.assertEqual(roll["seed_idx"], 0)
+        h = app.nav_core.loot_hmac(c[0]["seed"], f"{op['id']}:{roll['seq']}")
+        self.assertEqual(int(h[:16], 16) % roll["total"], roll["pick"])
+        self.assertEqual(app.nav_core.loot_seed_hash(c[0]["seed"]), c[0]["hash"])
+
+    def test_roll_mode_free_until_first_roll(self):
+        op = self._quick_roll()
+        r = self.client.put(f"/api/ops/{op['id']}/rules", json={"rules": {"loot": {"mode": "weighted"}}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(r.json()["rules_amended"])
+        self._roll(op["id"], op["loot"]["items"][0]["id"])
+        r = self.client.put(f"/api/ops/{op['id']}/rules", json={"rules": {"loot": {"mode": "random"}}})
+        self.assertEqual(r.status_code, 400)                   # now it needs a reason
+
+    def test_roll_done_and_reopen(self):
+        op = self._quick_roll()
+        oid = op["id"]
+        r = self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        self.assertEqual(r.status_code, 409)                   # no settle for a quick roll
+        op = self.client.post(f"/api/ops/{oid}/phase", json={"to": "closed"}).json()
+        self.assertEqual(op["phase"], "closed")
+        self.assertTrue(all(c["seed"] for c in op["loot"]["commitments"]))
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/phase", json={"to": "live"}).status_code, 400)
+        op = self.client.post(f"/api/ops/{oid}/phase", json={"to": "live", "reason": "one more drop"}).json()
+        self.assertEqual(op["phase"], "live")
+        self.assertIsNone(op["loot"]["commitments"][-1]["seed"])   # fresh secret seed
+
+    def test_rolls_stay_out_of_ops_lists_and_attendance(self):
+        op = self._quick_roll(people=["2"])
+        ops = [o["id"] for o in self.client.get("/api/ops?scope=active").json()["ops"]]
+        self.assertNotIn(op["id"], ops)
+        rolls = [o["id"] for o in self.client.get("/api/ops?scope=rolls").json()["ops"]]
+        self.assertIn(op["id"], rolls)
+        board = self.client.get("/api/events?range=upcoming").json()
+        self.assertNotIn(op["id"], [o["id"] for o in board["quick_ops"]])
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        before = db.member_ops_attended("2", since, -1)
+        self._quick_roll(people=["2"])
+        self.assertEqual(db.member_ops_attended("2", since, -1), before)   # rolls aren't ops
+
+    def test_member_lookup_route_not_swallowed(self):
+        app.members_dir.by_id["950"] = {"discord_id": "950", "guild_nick": "Quartz Pilot"}
+        r = self.client.get("/api/ops/members?q=quartz")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([m["discord_id"] for m in r.json()["members"]], ["950"])
+        del app.members_dir.by_id["950"]
+
     def test_loot_needs_live_or_settle(self):
         op = self._op(live=False)
         r = self.client.post(f"/api/ops/{op['id']}/loot", json={"name": "x"})
