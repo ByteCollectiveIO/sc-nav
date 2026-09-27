@@ -2416,6 +2416,263 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/ops/{a}").status_code, 200)   # everyone reads
 
 
+class OpMoneyApiTests(unittest.TestCase):
+    """docs/event-operations.md §4/§6 (ops slice 3): rules + amendments,
+    contracts (paid by the game — never split), the ledger, share overrides,
+    and transfers (lock on first mark, corrections after, recipient confirms)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+        db.set_setting("op_default_rules", "")
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _op(self, members=("2", "3"), guest=None):
+        """A live quick op run by 1 with `members` (+ a guest), all Present."""
+        op = self.client.post("/api/ops", json={"name": "Money op"}).json()
+        oid = op["id"]
+        for m in members:
+            self.client.post(f"/api/ops/{oid}/roster", json={"discord_id": m})
+        if guest:
+            self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": guest})
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "live"})
+        op = self.client.post(f"/api/ops/{oid}/attendance/bulk", json={"attendance": "present"}).json()
+        return op
+
+    def _rid(self, op, did=None, name=None):
+        return next(r["id"] for r in op["roster"]
+                    if (did and r["discord_id"] == did) or (name and r["name"] == name))
+
+    def _led(self, oid, rid, amount, kind="income", code=200, **kw):
+        r = self.client.post(f"/api/ops/{oid}/ledger",
+                             json={"kind": kind, "amount": amount, "roster_id": rid, **kw})
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    def _mark(self, oid, t, action, code=200, **kw):
+        body = {"action": action, **kw}
+        if t.get("stored"):
+            body["tid"] = t["id"]
+        else:
+            body.update(from_roster=t["from_roster"], to_roster=t["to_roster"], amount=t["amount"])
+        r = self.client.post(f"/api/ops/{oid}/transfers/mark", json=body)
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    # --- rules ---------------------------------------------------------------
+    def test_org_default_rules_seed_ops_and_setup_edits_are_free(self):
+        self._as("9", admin=True)
+        r = self.client.post("/api/settings", json={"op_default_rules": {"bonuses": "keep"}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self._as("1")
+        op = self.client.post("/api/ops", json={"name": "Defaults"}).json()
+        self.assertEqual(op["rules"]["bonuses"], "keep")
+        self.assertEqual(op["rules_vs_default"], [])
+        op = self.client.put(f"/api/ops/{op['id']}/rules",
+                             json={"rules": {"shares": {"left_early": 1.0}}}).json()
+        self.assertEqual(op["rules_version"], 1)              # setup: not an amendment
+        self.assertFalse(op["rules_amended"])
+        self.assertEqual([d["field"] for d in op["rules_vs_default"]], ["shares.left_early"])
+
+    def test_amendment_after_start_needs_reason_and_bumps_version(self):
+        op = self._op()
+        oid = op["id"]
+        r = self.client.put(f"/api/ops/{oid}/rules", json={"rules": {"bonuses": "keep"}})
+        self.assertEqual(r.status_code, 400)
+        op = self.client.put(f"/api/ops/{oid}/rules",
+                             json={"rules": {"bonuses": "keep"}, "reason": "agreed on comms"}).json()
+        self.assertEqual(op["rules_version"], 2)
+        self.assertTrue(op["rules_amended"])
+        self.assertEqual(op["log"][-1]["text"], "amended the rules (v2): Bonuses pooled → kept by earner")
+        self.assertEqual(op["log"][-1]["reason"], "agreed on comms")
+
+    def test_event_rules_and_contracts_flow_into_op(self):
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        ev = self.client.post("/api/events", json={
+            "title": "Bounty night", "start_at": start, "types": ["Bounty Hunt"],
+            "categories": ["PvE"], "rules": {"shares": {"late": 0.5}},
+            "contracts": [{"name": "VHRT — Yela", "note": "Kestrel shares it", "amount": 120000}]})
+        self.assertEqual(ev.status_code, 200, ev.text)
+        ev = ev.json()
+        self.assertEqual(ev["contracts"][0]["name"], "VHRT — Yela")
+        self.assertEqual([d["field"] for d in ev["rules_vs_default"]], ["shares.late"])
+        op = self.client.post(f"/api/events/{ev['id']}/start").json()
+        self.assertEqual(op["rules"]["shares"]["late"], 0.5)
+        self.assertEqual([(c["name"], c["amount"]) for c in op["contracts"]], [("VHRT — Yela", 120000)])
+
+    def test_template_rules_deviation_chip(self):
+        t = self.client.post("/api/event-templates", json={
+            "name": "Rules tpl", "event": {"types": ["Raid"], "categories": ["PvP"]},
+            "rules": {"bonuses": "keep"}}).json()
+        self.assertEqual(t["rules"]["bonuses"], "keep")
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        ev = self.client.post("/api/events", json={
+            "title": "x", "start_at": start, "types": ["Raid"], "categories": ["PvP"],
+            "template_id": t["id"], "rules": {"bonuses": "pool"}}).json()
+        self.assertEqual([d["field"] for d in ev["template"]["diffs"]], ["bonuses"])
+
+    # --- contracts --------------------------------------------------------------
+    def test_contracts_are_a_checklist_and_never_split(self):
+        op = self._op()
+        oid = op["id"]
+        op = self.client.post(f"/api/ops/{oid}/contracts",
+                              json={"name": "Bunker: Kareah", "amount": 90000}).json()
+        cid = op["contracts"][0]["id"]
+        self._as("2")
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/contracts",
+                                          json={"name": "x"}).status_code, 403)
+        op = self.client.post(f"/api/ops/{oid}/contracts/{cid}/tick", json={"have": True}).json()
+        self.assertTrue(op["contracts"][0]["i_have"])
+        self.assertEqual(len(op["contracts"][0]["ticks"]), 1)
+        self._as("1")
+        # The contract's money never enters the pot or the transfers.
+        self.assertEqual(op["split"]["totals"]["pot"], 0)
+        self.assertEqual(op["transfers"], [])
+        self.assertEqual(op["contracts_total"], 90000)
+        # Correcting the amount at Settle marks it actual, no reason needed.
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        op = self.client.patch(f"/api/ops/{oid}/contracts/{cid}", json={"amount": 96000}).json()
+        self.assertTrue(op["contracts"][0]["amount_actual"])
+        self.assertIn("amount 90,000 aUEC → 96,000 aUEC", op["log"][-1]["text"])
+
+    # --- ledger + split -----------------------------------------------------------
+    def test_members_log_own_money_only_and_void_keeps_record(self):
+        op = self._op()
+        oid = op["id"]
+        r2, r3 = self._rid(op, "2"), self._rid(op, "3")
+        self._as("2")
+        self._led(oid, r3, 5000, code=403)                      # not mine
+        op = self._led(oid, r2, 300_000, note="Sold loot at Grim HEX")
+        lid = op["ledger"][0]["id"]
+        self.assertEqual(op["split"]["totals"]["pot"], 300_000)
+        self._as("3")
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/ledger/{lid}/void",
+                                          json={}).status_code, 403)
+        self._as("2")
+        op = self.client.post(f"/api/ops/{oid}/ledger/{lid}/void", json={}).json()
+        self.assertTrue(op["ledger"][0]["voided_at"])           # still listed, struck
+        self.assertEqual(op["split"]["totals"]["pot"], 0)
+        self.assertIn("voided 300,000 aUEC income", op["log"][-1]["text"])
+
+    def test_share_override_needs_reason_and_moves_money(self):
+        op = self._op()
+        oid = op["id"]
+        r1, r2, r3 = self._rid(op, "1"), self._rid(op, "2"), self._rid(op, "3")
+        self._led(oid, r1, 250_000)
+        r = self.client.put(f"/api/ops/{oid}/roster/{r3}/share", json={"share": 0.5})
+        self.assertEqual(r.status_code, 400)
+        op = self.client.put(f"/api/ops/{oid}/roster/{r3}/share",
+                             json={"share": 0.5, "reason": "AFK half the op"}).json()
+        sh = {row["roster_id"]: row["share"] for row in op["split"]["rows"]}
+        self.assertEqual((sh[r1], sh[r2], sh[r3]), (100_000, 100_000, 50_000))
+        self.assertEqual(op["log"][-1]["text"], f"set {app._resolve_member_name('3', None)}'s share to Half")
+
+    def test_cant_remove_someone_with_money(self):
+        op = self._op()
+        oid = op["id"]
+        r2 = self._rid(op, "2")
+        self._led(oid, r2, 1000)
+        self.assertEqual(self.client.delete(f"/api/ops/{oid}/roster/{r2}").status_code, 409)
+
+    # --- transfers ----------------------------------------------------------------
+    def test_transfer_lifecycle_lock_then_corrections(self):
+        op = self._op(guest="Dusty")
+        oid = op["id"]
+        r1, r2, rg = self._rid(op, "1"), self._rid(op, "2"), self._rid(op, name="Dusty")
+        op = self._led(oid, r1, 400_000)       # 4 people present → 100k each
+        planned = [t for t in op["transfers"] if not t["stored"]]
+        self.assertEqual(len(planned), 3)
+        self.assertEqual({t["amount"] for t in planned}, {100_000})
+        to2 = next(t for t in planned if t["to_roster"] == r2)
+        # Only the recipient confirms receipt; the sender marks it sent.
+        self._as("3")
+        self._mark(oid, to2, "sent", code=403)
+        self._as("1")
+        op = self._mark(oid, to2, "sent")
+        stored = [t for t in op["transfers"] if t["stored"]]
+        self.assertEqual(len(stored), 1)                       # only what was marked is fixed
+        self.assertEqual(len([t for t in op["transfers"] if not t["stored"]]), 2)
+        t2 = stored[0]
+        self.assertTrue(t2["sent_at"])
+        self._mark(oid, t2, "received", code=403)              # organizer can't confirm for 2
+        self._as("2")
+        op = self._mark(oid, t2, "received")
+        self.assertTrue(next(t for t in op["transfers"] if t["id"] == t2["id"])["received_at"])
+        # The organizer DOES confirm for the guest (who can't sign in).
+        self._as("1")
+        tg = next(t for t in op["transfers"] if not t["stored"] and t["to_roster"] == rg)
+        self._mark(oid, tg, "received")
+        # More income now: the two payments already made stay put; only 2 —
+        # who was paid 100k and now holds 40k of their own — hands money back.
+        op = self._led(oid, r2, 40_000)        # pot 440k → 110k each
+        stored = [t for t in op["transfers"] if t["stored"]]
+        self.assertEqual(sorted(t["amount"] for t in stored), [100_000, 100_000])
+        planned = [t for t in op["transfers"] if not t["stored"]]
+        self.assertEqual(sum(t["amount"] for t in planned if t["from_roster"] == r2), 30_000)
+        self.assertTrue(all(t["correction"] for t in planned if t["from_roster"] == r2))
+        # Everything still settles: stored + planned leave every balance at zero.
+        bal = {row["roster_id"]: row["balance"] for row in op["split"]["rows"]}
+        for t in op["transfers"]:
+            bal[t["from_roster"]] -= t["amount"]; bal[t["to_roster"]] += t["amount"]
+        self.assertTrue(all(v == 0 for v in bal.values()), bal)
+
+    def test_dispute_needs_note_and_receipt_clears_it(self):
+        op = self._op(members=("2",))
+        oid = op["id"]
+        self._led(oid, self._rid(op, "1"), 20_000)
+        op = self.client.get(f"/api/ops/{oid}").json()
+        t = next(x for x in op["transfers"])
+        self._as("2")
+        self._mark(oid, t, "dispute", code=400)
+        op = self._mark(oid, t, "dispute", note="nothing arrived")
+        st = next(x for x in op["transfers"] if x["stored"])
+        self.assertEqual(st["dispute_note"], "nothing arrived")
+        op = self._mark(oid, st, "received")
+        st = next(x for x in op["transfers"] if x["stored"])
+        self.assertIsNone(st["disputed_at"])
+
+    def test_my_todo_on_list_after_mission_ends(self):
+        op = self._op(members=("2",))
+        oid = op["id"]
+        self._led(oid, self._rid(op, "1"), 20_000)
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        self._as("2")
+        mine = next(o for o in self.client.get("/api/ops?scope=mine").json()["ops"] if o["id"] == oid)
+        self.assertEqual(mine["my_todo"], 1)                   # a payment to confirm
+
+    def test_closed_op_refuses_money_but_allows_confirming(self):
+        op = self._op(members=("2",))
+        oid = op["id"]
+        self._led(oid, self._rid(op, "1"), 20_000)
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "settle"})
+        self.client.post(f"/api/ops/{oid}/phase", json={"to": "closed"})
+        self._led(oid, self._rid(op, "1"), 5, code=409)
+        op = self.client.get(f"/api/ops/{oid}").json()
+        t = op["transfers"][0]
+        self._as("2")
+        self._mark(oid, t, "received")                          # payments can finish after close
+
+
 class TradeRunStateTests(unittest.TestCase):
     """The trade-run leg/phase state machine (#21 step 5): guidance points at the
     active leg's buy terminal until the buy is confirmed, then its sell terminal;

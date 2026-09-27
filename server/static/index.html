@@ -122,6 +122,11 @@
      auto` only has the min-content meaning for a flex/grid item, so setting it
      to 0 on the rest of this subtree is a no-op. */
   main > *, main > * > * { min-width: 0; }
+  /* …and a third level for the apps that render into a `display: contents`
+     *-root inside their `display: contents` view (#events-root, #ops-root…):
+     there the panels are three levels down, missed the rule above, and a wide
+     table (the op payout split) pushed a 360px phone page out to 433px. */
+  main > * > [id$="-root"] > * { min-width: 0; }
   /* The two views are layout-transparent so their panels remain direct grid
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
@@ -2184,6 +2189,78 @@
   .op-log li:first-child { border-top: none; }
   .op-log time { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
   .op-reason { color: var(--dim); font-style: italic; }
+  /* ---- op money (slice 3) ---- */
+  .ev-contracts { display: flex; flex-direction: column; gap: 8px; }
+  .ev-contract-row { display: grid; grid-template-columns: 2fr 2fr 1fr auto; gap: 8px; align-items: center; }
+  .ev-contract-row .ev-row-del { color: var(--bad); cursor: pointer; padding: 4px 8px; }
+  .ev-contract-view { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+  .ev-rules-view { margin: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .ev-rules-view .ev-note { flex-basis: 100%; }
+  .op-rules-shares { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .op-rules-ed select { padding: 7px 8px; font: inherit; font-size: 13px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  .op-rules-chk { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 12px 0 8px; }
+  .op-rules-bonus { max-width: 360px; }
+  .op-rules { margin-bottom: 14px; }
+  .op-rules-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .op-rules-head .ev-btn.sm, .ev-btn.sm { font-size: 11px; padding: 3px 9px; }
+  .op-rules-ed { margin-top: 10px; }
+  #op-rules-box[hidden] { display: none; }
+  .op-amended { border: 1px solid var(--warn); color: var(--warn); border-radius: 6px; padding: 6px 10px;
+    font-size: 13px; margin-bottom: 8px; }
+  .op-sub { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+  .op-sub > .ev-section-h { margin: 0 0 6px; }
+  .op-contracts { display: flex; flex-direction: column; margin: 8px 0; }
+  .op-contract { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--border); }
+  .op-contract:first-child { border-top: none; }
+  .op-c-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
+  .op-c-name { font-weight: 600; }
+  .op-c-amt { font-size: 13px; font-variant-numeric: tabular-nums; }
+  .op-c-note { font-size: 12px; color: var(--dim); flex-basis: 100%; }
+  .op-c-side { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+  .op-c-have { color: var(--warn); }
+  .op-c-have.all { color: var(--good); }
+  .op-c-tick { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .op-c-add, .op-led-form { display: grid; grid-template-columns: 2fr 2fr 1fr auto; gap: 8px; margin: 8px 0; }
+  .op-led-form { grid-template-columns: 1.4fr 1fr 1.2fr 1fr 2fr auto; }
+  .op-led-form select[hidden] { display: none; }
+  .op-led-form select, .op-share { padding: 7px 8px; font: inherit; font-size: 12px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+  .op-share { max-width: 150px; }
+  .op-ov { font-size: 11px; color: var(--warn); flex-basis: 100%; }
+  .op-ledger, .op-tx { list-style: none; padding: 0; margin: 6px 0 0; font-size: 13px; }
+  .op-ledger li, .op-tx li { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 6px 0; border-top: 1px solid var(--border); }
+  .op-ledger li:first-child, .op-tx li:first-child { border-top: none; }
+  .op-ledger li.void > *:not(.op-reason) { text-decoration: line-through; opacity: .55; }
+  .op-ledger li.void .op-reason { text-decoration: none; opacity: 1; }
+  .op-ledger li .op-x { margin-left: auto; }
+  .op-l-amt { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 130px; }
+  .op-l-amt.income { color: var(--good); }
+  .op-l-amt.expense { color: var(--bad); }
+  .op-pot { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; margin-bottom: 8px; }
+  .op-pot b { font-variant-numeric: tabular-nums; }
+  .op-warns { margin: 0 0 8px; padding-left: 18px; font-size: 12px; color: var(--warn); }
+  .op-split-wrap { overflow-x: auto; }
+  .op-split { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .op-split th { text-align: left; font-size: 11px; color: var(--dim); font-weight: 400; letter-spacing: .5px;
+    padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .op-split td { padding: 6px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  .op-split .num { text-align: right; white-space: nowrap; }
+  .op-split td.send { color: var(--warn); }
+  .op-split td.recv { color: var(--good); }
+  .op-tx li.mine { background: var(--accent-wash); margin: 0 -8px; padding: 6px 8px; border-radius: 6px; }
+  .op-t-what { flex: 1; min-width: 220px; }
+  .op-t-amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .op-t-st { font-size: 12px; }
+  .op-t-st.done { color: var(--good); }
+  .op-t-st.bad { color: var(--bad); }
+  .op-t-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  @media (max-width: 760px) {
+    .op-led-form, .op-c-add, .ev-contract-row { grid-template-columns: 1fr 1fr; }
+    .op-led-form .ev-btn, .op-c-add .ev-btn { grid-column: 1 / -1; }
+  }
   @media (max-width: 560px) {
     .op-log li { grid-template-columns: 1fr; gap: 0; }
     .op-row-acts { width: 100%; flex-wrap: nowrap; }
@@ -4072,6 +4149,15 @@
       events already created from a built-in are unaffected.
     </div>
     <div class="muted" id="event-builtin-tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+    <h2>OPS PAYOUT DEFAULTS</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      The payout rules every new event and quick op starts with. Organizers can change them per
+      event before it starts; any change after that is a logged amendment with a reason.
+      Contracts are never split — the game pays them.
+    </div>
+    <div id="op-default-rules-box"></div>
+    <button id="op-default-rules-save" style="margin-top:8px;">Save defaults</button>
+    <div class="muted" id="op-default-rules-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
     <h2>⛏ MINED-OUT REPORTS</h2>
     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
       Reports age off after
@@ -13063,7 +13149,7 @@ async function renderDetailBody(e) {
 
   $("ev-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
-    meta + missionDetailsView(e, tax) + templateProvenanceHtml(e) +
+    meta + missionDetailsView(e, tax) + templateProvenanceHtml(e) + eventMoneyView(e) +
     (e.op ? `<div class="ev-op-line">${e.op.phase === "closed"
         ? `✓ This event has a mission record. <a href="#/ops/${e.op.id}">View the record →</a>`
         : `Mission ${opPhaseBadge(e.op.phase)} <a href="#/ops/${e.op.id}">Open the op →</a>`}</div>` : "") +
@@ -13119,6 +13205,7 @@ function cloneEvent(e) {
     signup_deadline: null,
     min_players: e.min_players, max_players: e.max_players,
     details: { ...(e.details || {}) },
+    rules: e.rules || null, contracts: (e.contracts || []).map(c => ({ ...c })),
     // A clone keeps its lineage: it's recorded against the same template
     // (its current version), unless that template is gone.
     template: e.template && !e.template.deleted
@@ -13669,6 +13756,135 @@ function rosterRowHtml(tax, role, needed) {
     `<span class="ev-row-del" title="remove role">✕</span></div>`;
 }
 
+// ---- payout rules + contracts (docs/event-operations.md §4.1 / §6.1.1) ----
+// One rules panel reused by the event form, the template form, ORG SETTINGS and
+// the op page. Money rules only: shares by attendance, expense payback, bonuses.
+const OP_ATT_KEYS = [["present", "Present"], ["late", "Late"], ["left_early", "Left early"],
+  ["excused", "Excused"], ["absent", "Absent"]];
+const OP_SHARE_OPTS = [[1, "Full"], [0.5, "Half"], [0, "None"]];
+const OP_SHARE_WORD = { 1: "Full", 0.5: "Half", 0: "None" };
+const OP_RULES_FALLBACK = { shares: { present: 1, late: 1, left_early: 0.5, excused: 0, absent: 0 },
+  expenses_first: true, bonuses: "pool" };
+let opDefaultRules = null;
+
+async function loadOpDefaultRules(force) {
+  if (!opDefaultRules || force) {
+    try { const s = await fetch("/api/settings").then(r => r.json()); opDefaultRules = s.op_default_rules || OP_RULES_FALLBACK; }
+    catch { opDefaultRules = OP_RULES_FALLBACK; }
+  }
+  return opDefaultRules;
+}
+
+function fullRules(r, base) {
+  base = base || opDefaultRules || OP_RULES_FALLBACK;
+  r = r || {};
+  return { shares: { ...base.shares, ...(r.shares || {}) },
+    expenses_first: r.expenses_first != null ? !!r.expenses_first : !!base.expenses_first,
+    bonuses: r.bonuses || base.bonuses || "pool" };
+}
+
+// Client twin of nav_core.op_rules_diff (display strings).
+function rulesDiff(a, b) {
+  a = fullRules(a); b = fullRules(b);
+  const out = [];
+  OP_ATT_KEYS.forEach(([k, lab]) => {
+    if (Number(a.shares[k]) !== Number(b.shares[k]))
+      out.push({ label: `${lab} share`, from: OP_SHARE_WORD[a.shares[k]], to: OP_SHARE_WORD[b.shares[k]] });
+  });
+  const yn = v => v ? "paid back first" : "not paid back";
+  if (a.expenses_first !== b.expenses_first) out.push({ label: "Expenses", from: yn(a.expenses_first), to: yn(b.expenses_first) });
+  const bl = { pool: "pooled", keep: "kept by earner" };
+  if (a.bonuses !== b.bonuses) out.push({ label: "Bonuses", from: bl[a.bonuses], to: bl[b.bonuses] });
+  return out;
+}
+
+function rulesChips(diffs, emptyText) {
+  if (!diffs.length) return `<span class="muted">${esc(emptyText || "Org default")}</span>`;
+  return diffs.map(d => `<span class="ev-dev" title="${esc(d.label)}: ${esc(d.from)} → ${esc(d.to)}">${esc(d.label)}: ${esc(d.to)}</span>`).join("");
+}
+
+// One line anyone can read: "Present Full · Late Full · Left early Half · …".
+function rulesSummary(r) {
+  r = fullRules(r);
+  const sh = OP_ATT_KEYS.map(([k, lab]) => `${lab} <b>${OP_SHARE_WORD[r.shares[k]]}</b>`).join(" · ");
+  return `Shares: ${sh}. Expenses <b>${r.expenses_first ? "paid back before splitting" : "not paid back"}</b>. ` +
+    `Bonuses <b>${r.bonuses === "keep" ? "kept by whoever earned them" : "pooled"}</b>.`;
+}
+
+function rulesEditorHtml(prefix, rules) {
+  const r = fullRules(rules);
+  const shareSel = ([k, lab]) => `<div class="ev-field"><label for="${prefix}-sh-${k}">${lab}</label>` +
+    `<select id="${prefix}-sh-${k}">${OP_SHARE_OPTS.map(([v, l]) =>
+      `<option value="${v}"${Number(r.shares[k]) === v ? " selected" : ""}>${l} share</option>`).join("")}</select></div>`;
+  return `<div class="op-rules-ed" id="${prefix}-rules">` +
+    `<div class="op-rules-shares">${OP_ATT_KEYS.map(shareSel).join("")}</div>` +
+    `<label class="op-rules-chk"><input type="checkbox" id="${prefix}-exp"${r.expenses_first ? " checked" : ""}> ` +
+      `Pay back expenses (fuel, repairs, cargo…) before splitting</label>` +
+    `<div class="ev-field op-rules-bonus"><label for="${prefix}-bonus">Achievement bonus cash</label>` +
+      `<select id="${prefix}-bonus"><option value="pool"${r.bonuses === "pool" ? " selected" : ""}>Pooled — split like any income</option>` +
+      `<option value="keep"${r.bonuses === "keep" ? " selected" : ""}>Kept by whoever earned it</option></select></div></div>`;
+}
+
+function readRulesEditor(prefix) {
+  if (!$(`${prefix}-rules`)) return null;
+  const shares = {};
+  OP_ATT_KEYS.forEach(([k]) => { shares[k] = Number($(`${prefix}-sh-${k}`).value); });
+  return { shares, expenses_first: $(`${prefix}-exp`).checked, bonuses: $(`${prefix}-bonus`).value };
+}
+
+// Payout-rules card for the event + template forms: collapsed, with the
+// deviation chips in the summary so "this one's run differently" shows shut.
+function rulesCardHtml(rules) {
+  const diffs = rulesDiff(opDefaultRules, rules);
+  return `<details class="ev-form-card ev-mission" id="ev-f-rulescard"${diffs.length ? " open" : ""}>` +
+    `<summary class="ev-section-h">Payout rules <span class="ev-hint" id="ev-f-ruleschips">${diffs.length ? diffs.length + " change" + (diffs.length === 1 ? "" : "s") + " from the org default" : "org default"}</span></summary>` +
+    `<p class="ev-note" style="margin-bottom:10px;">Decided before the op, shown to everyone who signs up. ` +
+    `Contracts aren't split here — the game pays each person who had them shared.</p>` +
+    rulesEditorHtml("ev-f", rules) + `</details>`;
+}
+
+function contractRowHtml(c) {
+  c = c || {};
+  return `<div class="ev-contract-row">` +
+    `<input class="ti ev-c-name" maxlength="80" placeholder="Contract, e.g. VHRT bounty — Yela" value="${esc(c.name || "")}" aria-label="Contract name">` +
+    `<input class="ti ev-c-note" maxlength="200" placeholder="Note (who shares it, where)" value="${esc(c.note || "")}" aria-label="Contract note">` +
+    `<input class="ti ev-c-amt" type="number" min="0" step="1000" placeholder="Pays (aUEC)" value="${c.amount != null ? c.amount : ""}" aria-label="What it pays">` +
+    `<span class="ev-row-del" title="remove contract">✕</span></div>`;
+}
+
+function contractsCardHtml(contracts) {
+  const list = (contracts || []);
+  return `<details class="ev-form-card ev-mission"${list.length ? " open" : ""}>` +
+    `<summary class="ev-section-h">Contracts to accept <span class="ev-hint">${list.length ? list.length : "optional"}</span></summary>` +
+    `<p class="ev-note" style="margin-bottom:10px;">Contracts everyone should accept or have shared before the op. ` +
+    `The game pays each one in equal cuts to everyone who had it — it's recorded here, never split.</p>` +
+    `<div class="ev-contracts" id="ev-f-contracts">${list.map(contractRowHtml).join("")}</div>` +
+    `<button class="ev-btn" id="ev-f-addcontract" style="align-self:flex-start;margin-top:6px;">+ add contract</button></details>`;
+}
+
+function readContracts() {
+  return [...document.querySelectorAll("#ev-f-contracts .ev-contract-row")].map(row => {
+    const amt = row.querySelector(".ev-c-amt").value;
+    return { name: row.querySelector(".ev-c-name").value.trim(), note: row.querySelector(".ev-c-note").value.trim(),
+      amount: amt === "" ? null : Math.max(0, parseInt(amt, 10) || 0) };
+  }).filter(c => c.name);
+}
+
+function bindContractsCard() {
+  const add = $("ev-f-addcontract");
+  if (!add) return;
+  const wireDel = () => document.querySelectorAll("#ev-f-contracts .ev-row-del").forEach(x =>
+    clickable(x, () => x.closest(".ev-contract-row").remove()));
+  add.onclick = () => { $("ev-f-contracts").insertAdjacentHTML("beforeend", contractRowHtml()); wireDel(); };
+  wireDel();
+  // Keep the rules card's summary honest as the organizer edits.
+  const card = $("ev-f-rulescard");
+  if (card) card.addEventListener("change", () => {
+    const n = rulesDiff(opDefaultRules, readRulesEditor("ev-f")).length;
+    $("ev-f-ruleschips").textContent = n ? `${n} change${n === 1 ? "" : "s"} from the org default` : "org default";
+  });
+}
+
 // Mission details (docs/event-operations.md §13): the FPS/PvP specifics a
 // Type is too coarse for. A collapsed card that opens itself when it has data.
 function missionDetailsHtml(tax, d) {
@@ -13759,6 +13975,8 @@ function eventFormHtml(tax, e, opts = {}) {
       `<div class="ev-roster" id="ev-f-roster">${rosterRows}</div>` +
       `<button class="ev-btn" id="ev-f-addrole" style="align-self:flex-start;margin-top:4px;">+ add role</button></div>` +
     missionDetailsHtml(tax, e && e.details) +
+    contractsCardHtml(e && e.contracts) +
+    rulesCardHtml(e && e.rules) +
     `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea></div>` +
     (tplMode && opts.groupCount ? `<p class="ev-note">Also carries ${opts.groupCount} fleet unit${opts.groupCount === 1 ? "" : "s"}, offered when an event is started from this template.</p>` : "") +
     `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${saveLabel}</button>` +
@@ -13787,6 +14005,7 @@ function collectEventShape() {
     min_players: parseInt($("ev-f-min").value || "0", 10) || 0,
     max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
     roles, details: readMissionDetails(), description: $("ev-f-desc").value.trim(),
+    contracts: readContracts(), rules: readRulesEditor("ev-f"),
   } };
 }
 
@@ -13821,6 +14040,7 @@ function bindEventFormControls(tax, onCancel) {
   });
   // Type-to-search POI suggestions on the location fields (free text still allowed).
   document.querySelectorAll(".ev-form .poi-pick").forEach(w => attachPoiPicker(w));
+  bindContractsCard();
   $("ev-f-cancel").onclick = onCancel;
 }
 
@@ -13872,7 +14092,8 @@ function templateSeed(t, keep) {
   const ev = t.event || {};
   return { ...ev, title: (keep && keep.title) || ev.title || "",
     start_at: keep && keep.start_at, signup_deadline: keep && keep.signup_deadline,
-    details: { ...(ev.details || {}) }, roles: (ev.roles || []).map(r => ({ ...r })) };
+    details: { ...(ev.details || {}) }, roles: (ev.roles || []).map(r => ({ ...r })),
+    contracts: (ev.contracts || []).map(c => ({ ...c })), rules: t.rules || null };
 }
 
 // "Start from template" bar at the top of CREATE EVENT.
@@ -13916,7 +14137,7 @@ async function renderTemplateBar(tax) {
   };
 }
 
-function mountCreateForm(tax, seed) {
+function mountCreateForm(tax, seed) {   // caller has awaited loadOpDefaultRules()
   $("events-root").innerHTML = `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
     `<h2 class="ev-screen-h">CREATE EVENT</h2>${eventFormHtml(tax, seed, { picker: true })}</div>`;
   bindEventForm(tax, null, () => { evFormTpl = null; location.hash = "#/events"; });
@@ -13925,6 +14146,7 @@ function mountCreateForm(tax, seed) {
 
 async function renderEventForm() {
   const tax = await loadEventsTaxonomy();
+  await loadOpDefaultRules();
   const seed = eventSeed;    // a promote-from-LFG / clone / "use template" prefill, consumed once
   eventSeed = null;
   evFormTpl = seed && seed.template ? seed.template : null;
@@ -13933,6 +14155,7 @@ async function renderEventForm() {
 
 async function renderEditForm(e) {
   const tax = await loadEventsTaxonomy();
+  await loadOpDefaultRules();
   $("ev-detail-body").innerHTML = `<h2 class="ev-screen-h">EDIT EVENT</h2>${eventFormHtml(tax, e)}`;
   bindEventForm(tax, e.id, () => renderDetailBody(e));
 }
@@ -14037,6 +14260,7 @@ async function renderTemplatesPage() {
 // Template editor: the event form minus date/time. id null = new template.
 async function renderTemplateForm(id) {
   const tax = await loadEventsTaxonomy();
+  await loadOpDefaultRules();
   const root = $("events-root");
   let t = null;
   if (id) {
@@ -14052,7 +14276,7 @@ async function renderTemplateForm(id) {
     `<h2 class="ev-screen-h">${t ? "EDIT TEMPLATE" : "NEW TEMPLATE"}</h2>` +
     (t ? `<p class="ev-note">Saving changes makes version ${t.version + 1}. Events already created from ` +
       `version ${t.version} or earlier keep their copy.</p>` : "") +
-    eventFormHtml(tax, t ? t.event : null, { mode: "template", name: t ? t.name : "",
+    eventFormHtml(tax, t ? { ...t.event, rules: t.rules } : null, { mode: "template", name: t ? t.name : "",
       groupCount: t ? t.group_count : 0 }) + `</div>`;
   bindEventFormControls(tax, () => { location.hash = "#/events/templates"; });
   $("ev-f-save").onclick = async () => {
@@ -14065,7 +14289,7 @@ async function renderTemplateForm(id) {
     try {
       const r = await fetch(t ? `/api/event-templates/${t.id}` : "/api/event-templates", {
         method: t ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, event: payload }) });
+        body: JSON.stringify((() => { const { rules, ...event } = payload; return { name, event, rules }; })()) });
       if (!r.ok) throw await r.json().catch(() => ({}));
       evTemplates = null;
       location.hash = "#/events/templates";
@@ -14104,6 +14328,21 @@ function templateProvenanceHtml(e) {
   return `<div class="ev-tpl-src">From the <b>${esc(t.name || "?")}</b> template` +
     (t.builtin ? ` <span class="muted">(built-in)</span>` : "") + state +
     (diffs.length ? ` · <span class="ev-tpl-src-l">changed:</span> ${chips}` : ` · used as-is`) + `</div>`;
+}
+
+// Contracts to accept + payout rules on the event page, so a signup knows the
+// deal before committing (§13: "decided before the event starts").
+function eventMoneyView(e) {
+  const cs = e.contracts || [];
+  const contracts = cs.length
+    ? `<div class="ev-section-h">Contracts to accept</div><ul class="ev-contract-view">` + cs.map(c =>
+        `<li><b>${esc(c.name)}</b>${c.amount != null ? ` <span class="muted">· pays ${esc(fmtAuec(c.amount))}</span>` : ""}` +
+        `${c.note ? ` <span class="muted">— ${esc(c.note)}</span>` : ""}</li>`).join("") +
+      `</ul><p class="ev-note">Paid by the game to everyone who has the contract shared — make sure you do.</p>` : "";
+  const rules = e.rules
+    ? `<div class="ev-rules-view"><span class="ev-section-h" style="margin:0">Payout rules</span> ` +
+      `${rulesChips(e.rules_vs_default || [], "org default")}<div class="ev-note">${rulesSummary(e.rules)}</div></div>` : "";
+  return contracts + rules;
 }
 
 function missionDetailsView(e, tax) {
@@ -14285,10 +14524,18 @@ function opRowHtml(op, r) {
     r.group_name ? `<span class="op-tag">${esc(r.group_name)}</span>` : "",
     r.guest_handle ? `<span class="op-tag">${esc(r.guest_handle)}</span>` : "",
   ].join("");
+  const ov = r.share_override;
+  const ruleShare = r.attendance ? (op.rules.shares[r.attendance]) : null;
+  const shareCtl = editable
+    ? `<select class="op-share" data-share-rid="${r.id}" aria-label="Share for ${esc(r.name)}" title="${ov != null ? esc("Override: " + (r.share_reason || "")) : "Follows the payout rules"}">` +
+        `<option value=""${ov == null ? " selected" : ""}>Rule${ruleShare != null ? " · " + OP_SHARE_WORD[ruleShare] : ""}</option>` +
+        OP_SHARE_OPTS.map(([v, l]) => `<option value="${v}"${ov === v ? " selected" : ""}>${l} (override)</option>`).join("") + `</select>`
+    : "";
+  const ovNote = ov != null ? `<span class="op-ov" title="${esc(r.share_reason || "")}">${esc(OP_SHARE_WORD[ov])} share — ${esc(r.share_reason || "")}</span>` : "";
   return `<div class="op-row${r.attendance ? "" : " unmarked"}${r.is_me ? " me" : ""}">` +
     `<div class="op-who"><span class="op-name">${esc(r.name)}</span>${tags}` +
-      (times ? `<span class="op-times">${times}</span>` : "") + `</div>` +
-    `<div class="op-row-acts">${att}` +
+      (times ? `<span class="op-times">${times}</span>` : "") + ovNote + `</div>` +
+    `<div class="op-row-acts">${shareCtl}${att}` +
       (editable ? `<button class="op-x" data-rm="${r.id}" title="Remove from the roster" aria-label="Remove ${esc(r.name)}">✕</button>` : "") +
     `</div></div>`;
 }
@@ -14348,18 +14595,232 @@ function drawOp(op) {
     `<p class="ev-note">${esc(hint)}</p>` +
     `<div class="ev-form-actions op-actions">${opActions(op)}${joinBtn}` +
       `<span id="op-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></div>` +
+    opContractsPanel(op) +
     `<div class="panel"><div class="op-roster-head"><h2>ROSTER</h2>` +
       `<span class="op-counts">${opCountsLine(op.counts)}</span>` +
       (canEditRoster && unmarked ? `<button class="ev-btn" id="op-bulk-absent">Mark the ${unmarked} unmarked Absent</button>` : "") + `</div>` +
       (op.roster.length ? `<div class="op-grid">${op.roster.map(r => opRowHtml(op, r)).join("")}</div>`
         : `<p class="stat-empty">No one on the roster yet.</p>`) +
       addPanel + deputyPanel + `</div>` +
+    opPayoutPanel(op) +
     `<div class="panel"><h2>LOG</h2><p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
       `<ol class="op-log">${op.log.slice().reverse().map(e =>
         `<li><time datetime="${esc(e.at)}">${esc(fmtEventTime(e.at))}</time> ` +
         `<span><b>${esc(e.actor_name)}</b> ${esc(e.text)}` +
         (e.reason ? ` <span class="op-reason">— “${esc(e.reason)}”</span>` : "") + `</span></li>`).join("")}</ol></div>`;
   bindOp(op);
+  bindOpMoney(op);
+}
+
+// ---- op contracts + payout (docs/event-operations.md §4, §6) ----
+function opContractsPanel(op) {
+  const cs = op.contracts || [];
+  const manage = op.can_manage && op.phase !== "closed";
+  const onRoster = op.my_roster_id != null;
+  const members = op.roster.length;
+  if (!cs.length && !manage) return "";
+  const rows = cs.map(c => {
+    const have = c.ticks.length;
+    const missing = op.roster.filter(r => !c.ticks.includes(r.id)).map(r => r.name);
+    return `<div class="op-contract">` +
+      `<div class="op-c-main"><span class="op-c-name">${esc(c.name)}</span>` +
+        (c.amount != null ? `<span class="op-c-amt">${esc(fmtAuec(c.amount))}${c.amount_actual ? ` <span class="op-tag">actual</span>` : ` <span class="op-tag">advertised</span>`}</span>` : "") +
+        (c.note ? `<span class="op-c-note">${esc(c.note)}</span>` : "") + `</div>` +
+      `<div class="op-c-side"><span class="op-c-have${have === members ? " all" : ""}" title="${missing.length ? esc("Still needs it: " + missing.join(", ")) : "Everyone has it"}">${have}/${members} have it</span>` +
+        (onRoster && op.phase !== "closed" ? `<label class="op-c-tick"><input type="checkbox" data-tick="${c.id}"${c.i_have ? " checked" : ""}> I have it</label>` : "") +
+        (manage ? `<button class="op-x" data-c-edit="${c.id}" title="Edit" aria-label="Edit ${esc(c.name)}">✎</button>` +
+          `<button class="op-x" data-c-del="${c.id}" title="Remove" aria-label="Remove ${esc(c.name)}">✕</button>` : "") +
+      `</div></div>`;
+  }).join("");
+  const add = manage
+    ? `<div class="op-c-add"><input id="op-c-name" class="ti" maxlength="80" placeholder="Contract, e.g. VHRT bounty — Yela" aria-label="Contract name">` +
+      `<input id="op-c-note" class="ti" maxlength="200" placeholder="Note (optional)" aria-label="Contract note">` +
+      `<input id="op-c-amt" class="ti" type="number" min="0" step="1000" placeholder="Pays (aUEC)" aria-label="What it pays">` +
+      `<button class="ev-btn" id="op-c-add">Add contract</button></div>` : "";
+  return `<div class="panel"><div class="op-roster-head"><h2>CONTRACTS</h2>` +
+    `<span class="op-counts">${cs.length ? `Paid by the game, split automatically: <b>${cs.length}</b> contract${cs.length === 1 ? "" : "s"}, <b>${esc(fmtAuec(op.contracts_total))}</b>` : "None yet"}</span></div>` +
+    `<p class="ev-note">Accept or get shared every contract below before the mission starts — the game pays ` +
+    `each one in equal cuts to everyone who has it. Nothing here goes through the split.` +
+    (op.phase === "settle" ? " Now's the time to correct each amount to what it actually paid." : "") + `</p>` +
+    (rows ? `<div class="op-contracts">${rows}</div>` : "") + add + `</div>`;
+}
+
+function opWarnText(w) {
+  if (w.key === "unmarked") return `${w.n} ${w.n === 1 ? "person isn't" : "people aren't"} marked yet — they get no share until they are.`;
+  if (w.key === "no_shares") return "Nobody has a share yet, so the pot can't be divided. Mark attendance.";
+  if (w.key === "loss") return `The op lost ${fmtAuec(-w.amount)} — the loss is shared the same way a profit would be.`;
+  if (w.key === "orphan_entries") return `${w.n} ledger ${w.n === 1 ? "entry names" : "entries name"} someone no longer on the roster.`;
+  return w.key;
+}
+
+function opPayoutPanel(op) {
+  const manage = op.can_manage && op.phase !== "closed";
+  const names = Object.fromEntries(op.roster.map(r => [r.id, r.name]));
+  const sp = op.split, T = sp.totals;
+  const open = op.phase !== "closed";
+  // Rules
+  const rules = `<div class="op-rules">` +
+    (op.rules_amended ? `<div class="op-amended" role="note">⚠ Rules amended mid-op (now v${op.rules_version}) — see the log for what changed and why.</div>` : "") +
+    `<div class="op-rules-head"><span class="ev-section-h" style="margin:0">Rules</span> ${rulesChips(op.rules_vs_default, "org default")}` +
+    (manage ? ` <button class="ev-btn sm" id="op-rules-edit">${op.phase === "setup" ? "Change" : "Amend…"}</button>` : "") + `</div>` +
+    `<div class="ev-note">${rulesSummary(op.rules)}</div><div id="op-rules-box" hidden></div></div>`;
+  // Ledger entry form
+  const me = op.my_roster_id;
+  const whoOpts = op.roster.filter(r => manage || r.id === me)
+    .map(r => `<option value="${r.id}"${r.id === me ? " selected" : ""}>${esc(r.name)}</option>`).join("");
+  const canLog = open && (manage || me != null);
+  const form = canLog
+    ? `<div class="op-led-form">` +
+      `<select id="op-l-kind" aria-label="Kind" title="Income = loot or resources sold"><option value="income">Income</option><option value="bonus">Bonus</option><option value="expense">Expense</option></select>` +
+      `<input id="op-l-amt" class="ti" type="number" min="1" step="1" placeholder="aUEC" aria-label="Amount">` +
+      `<select id="op-l-who" aria-label="Who holds / paid it">${whoOpts}</select>` +
+      `<select id="op-l-cat" aria-label="Expense category" hidden>${(op.ledger_categories || []).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>` +
+      `<input id="op-l-note" class="ti" maxlength="200" placeholder="Note, e.g. Sold loot at Grim HEX" aria-label="Note">` +
+      `<button class="ev-btn primary" id="op-l-add">Log it</button></div>` : "";
+  const led = op.ledger.length ? `<ol class="op-ledger">` + op.ledger.slice().reverse().map(e =>
+    `<li class="${e.voided_at ? "void" : ""}"><span class="op-l-amt ${e.kind}">${e.kind === "expense" ? "−" : "+"}${esc(fmtAuec(e.amount))}</span>` +
+    `<span>${e.bonus ? "bonus" : e.kind === "expense" ? esc(e.category || "expense") : "income"} ` +
+    `${e.kind === "expense" ? "paid by" : "held by"} <b>${esc(e.name)}</b>${e.note ? ` — ${esc(e.note)}` : ""}` +
+    ` <span class="muted">· logged by ${esc(e.entered_by_name)}</span>` +
+    (e.voided_at ? ` <span class="op-reason">voided${e.void_reason ? ` — “${esc(e.void_reason)}”` : ""}</span>` : "") + `</span>` +
+    (e.can_void ? `<button class="op-x" data-void="${e.id}" title="Void (stays on the record)" aria-label="Void entry">✕</button>` : "") + `</li>`).join("") + `</ol>`
+    : `<p class="stat-empty">Nothing logged yet. Log loot and resources as they're sold, and expenses as they're paid.</p>`;
+  // Split table
+  const rows = sp.rows.map(x =>
+    `<tr><td>${esc(names[x.roster_id] || "?")}</td><td class="num">${esc(OP_SHARE_WORD[x.weight] || x.weight)}</td>` +
+    `<td class="num">${esc(fmtAuec(x.share))}</td><td class="num">${x.held ? esc(fmtAuec(x.held)) : "—"}</td>` +
+    `<td class="num">${x.paid ? esc(fmtAuec(x.paid)) : "—"}</td>` +
+    `<td class="num ${x.balance > 0 ? "send" : x.balance < 0 ? "recv" : ""}">${x.balance > 0 ? "sends " + esc(fmtAuec(x.balance)) : x.balance < 0 ? "gets " + esc(fmtAuec(-x.balance)) : "even"}</td></tr>`).join("");
+  const table = `<div class="op-split-wrap"><table class="op-split"><thead><tr><th>Who</th><th class="num">Share</th><th class="num">Their cut</th>` +
+    `<th class="num">Holding</th><th class="num">Paid out</th><th class="num" title="Before any payments below">Balance (before payments)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const totals = `<div class="op-pot"><span>Pot <b>${esc(fmtAuec(T.pot))}</b></span>` +
+    `<span>income ${esc(fmtAuec(T.poolable))}</span>` +
+    (T.expenses ? `<span>expenses ${esc(fmtAuec(T.expenses))}${T.reimburse ? " (paid back first)" : " (not paid back)"}</span>` : "") +
+    (T.bonus_kept ? `<span>bonuses kept by earners ${esc(fmtAuec(T.bonus_kept))}</span>` : "") +
+    (T.weight_total ? `<span>a full share ≈ <b>${esc(fmtAuec(T.per_full_share))}</b></span>` : "") +
+    (op.contracts_total ? `<span class="muted">+ contracts paid by the game ${esc(fmtAuec(op.contracts_total))}</span>` : "") + `</div>`;
+  const warns = sp.warnings.length ? `<ul class="op-warns">${sp.warnings.map(w => `<li>${esc(opWarnText(w))}</li>`).join("")}</ul>` : "";
+  // Transfers
+  const tx = op.transfers;
+  const txRow = t => {
+    const st = t.received_at ? `<span class="op-t-st done">✓ received</span>`
+      : t.disputed_at ? `<span class="op-t-st bad" title="${esc(t.dispute_note || "")}">disputed — ${esc(t.dispute_note || "")}</span>`
+      : t.sent_at ? `<span class="op-t-st">sent, awaiting confirmation</span>`
+      : `<span class="op-t-st muted">to send</span>`;
+    const key = t.stored ? `data-tid="${t.id}"` : `data-from="${t.from_roster}" data-to="${t.to_roster}" data-amt="${t.amount}"`;
+    const acts = (t.can_send ? `<button class="ev-btn sm" data-tx="sent" ${key}>Mark sent</button>` : "") +
+      (t.can_receive ? `<button class="ev-btn sm primary" data-tx="received" ${key}>Confirm received</button>` +
+        (!t.disputed_at ? `<button class="ev-btn sm" data-tx="dispute" ${key}>Dispute</button>` : "") : "");
+    return `<li class="${t.mine_to_send || t.mine_to_receive ? "mine" : ""}"><span class="op-t-what"><b>${esc(t.from_name)}</b> → <b>${esc(t.to_name)}</b> ` +
+      `<span class="op-t-amt">${esc(fmtAuec(t.amount))}</span> <button class="op-x" data-copy="${t.amount}" title="Copy amount" aria-label="Copy amount">⧉</button>` +
+      (t.correction ? ` <span class="op-tag" title="Handing back an overpayment — the pot or their share changed after they were paid">correction</span>` : "") + `</span>${st}<span class="op-t-acts">${acts}</span></li>`;
+  };
+  const planned = tx.filter(t => !t.stored), stored = tx.filter(t => t.stored);
+  const txHtml = !tx.length
+    ? `<p class="stat-empty">${op.ledger.some(e => !e.voided_at) ? "Everyone's even — no payments needed." : "Payments appear once money is logged."}</p>`
+    : `<ol class="op-tx">${stored.map(txRow).join("")}${planned.map(txRow).join("")}</ol>` +
+      `<p class="ev-note">The fewest payments that settle everyone. A payment someone has marked stays put; ` +
+      `the rest update if the ledger or shares change.</p>`;
+  return `<div class="panel"><h2>PAYOUT</h2>` + rules +
+    `<div class="op-sub"><div class="ev-section-h">Ledger</div><p class="ev-note">Money the game left in one wallet — loot and resources sold, bonuses — and expenses someone paid. ` +
+    `Anyone on the roster can log their own. Mistakes are voided, never erased.</p>${form}${led}</div>` +
+    `<div class="op-sub"><div class="ev-section-h">Split</div>${totals}${warns}${sp.rows.length ? table : ""}</div>` +
+    `<div class="op-sub"><div class="ev-section-h">Payments</div>${txHtml}</div></div>`;
+}
+
+function bindOpMoney(op) {
+  const root = $("ops-root");
+  // contracts
+  const cAdd = $("op-c-add");
+  if (cAdd) cAdd.onclick = () => {
+    const name = $("op-c-name").value.trim();
+    if (!name) { opSay("Give the contract a name."); return; }
+    const a = $("op-c-amt").value;
+    opCall(`/api/ops/${op.id}/contracts`, opJson("POST", { name, note: $("op-c-note").value.trim(),
+      amount: a === "" ? null : parseInt(a, 10) }));
+  };
+  root.querySelectorAll("[data-tick]").forEach(b => b.onchange = () =>
+    opCall(`/api/ops/${op.id}/contracts/${b.dataset.tick}/tick`, opJson("POST", { have: b.checked })));
+  root.querySelectorAll("[data-c-del]").forEach(b => b.onclick = async () => {
+    if (!(await confirmDialog("The log keeps a line saying you removed it.", { title: "Remove this contract?", confirmLabel: "Remove", danger: true }))) return;
+    opCall(`/api/ops/${op.id}/contracts/${b.dataset.cDel}`, { method: "DELETE" });
+  });
+  root.querySelectorAll("[data-c-edit]").forEach(b => b.onclick = async () => {
+    const c = op.contracts.find(x => x.id === Number(b.dataset.cEdit));
+    const v = await promptDialog(op.phase === "settle" ? "What did it actually pay (aUEC)? Leave blank to clear." : "What does it pay (aUEC)? Leave blank to clear.",
+      { title: c.name, value: c.amount != null ? String(c.amount) : "", confirmLabel: "Save" });
+    if (v == null) return;
+    const t = v.replace(/[^0-9]/g, "");
+    opCall(`/api/ops/${op.id}/contracts/${c.id}`, opJson("PATCH", t === "" ? { clear_amount: true } : { amount: parseInt(t, 10) }));
+  });
+  // rules
+  const re = $("op-rules-edit");
+  if (re) re.onclick = () => {
+    const box = $("op-rules-box");
+    if (!box.hidden) { box.hidden = true; return; }
+    box.innerHTML = rulesEditorHtml("op-r", op.rules) +
+      `<div class="ev-form-actions" style="border:none;padding-top:8px;"><button class="ev-btn primary" id="op-r-save">${op.phase === "setup" ? "Save rules" : "Amend rules…"}</button></div>`;
+    box.hidden = false;
+    $("op-r-save").onclick = async () => {
+      const rules = readRulesEditor("op-r");
+      let reason = null;
+      if (op.phase !== "setup") {
+        reason = await promptDialog("The op has started, so this is an amendment. Everyone sees a banner, and the log records what changed and why.",
+          { title: "Amend the rules", confirmLabel: "Amend", placeholder: "Reason" });
+        if (reason == null) return;
+      }
+      opCall(`/api/ops/${op.id}/rules`, opJson("PUT", { rules, reason }));
+    };
+  };
+  // shares
+  root.querySelectorAll("[data-share-rid]").forEach(sel => sel.onchange = async () => {
+    const rid = Number(sel.dataset.shareRid), row = op.roster.find(r => r.id === rid);
+    const share = sel.value === "" ? null : Number(sel.value);
+    let reason = null;
+    if (share != null || op.reason_required) {
+      reason = await promptDialog(share != null
+        ? `Why does ${row.name} get a ${OP_SHARE_WORD[share]} share instead of what the rules give? It's shown on the roster and in the log.`
+        : "The mission has ended, so this change needs a reason. It's shown in the log.",
+        { title: share != null ? "Override share" : "Back to the rule", confirmLabel: "Save", placeholder: "Reason" });
+      if (reason == null) { drawOp(op); return; }
+    }
+    opCall(`/api/ops/${op.id}/roster/${rid}/share`, opJson("PUT", { share, reason }));
+  });
+  // ledger
+  const kind = $("op-l-kind");
+  if (kind) kind.onchange = () => { $("op-l-cat").hidden = kind.value !== "expense"; };
+  const lAdd = $("op-l-add");
+  if (lAdd) lAdd.onclick = () => {
+    const amt = parseInt($("op-l-amt").value, 10);
+    if (!(amt > 0)) { opSay("Enter an amount in aUEC."); return; }
+    const k = kind.value;
+    opCall(`/api/ops/${op.id}/ledger`, opJson("POST", { kind: k === "expense" ? "expense" : "income",
+      bonus: k === "bonus", amount: amt, roster_id: Number($("op-l-who").value),
+      category: k === "expense" ? $("op-l-cat").value : null, note: $("op-l-note").value.trim() }));
+  };
+  root.querySelectorAll("[data-void]").forEach(b => b.onclick = async () => {
+    const reason = await promptDialog("It stays on the record, struck through. Re-enter it correctly if it was a typo." +
+      (op.reason_required ? " A reason is needed now the mission has ended." : " A reason is optional."),
+      { title: "Void this entry?", confirmLabel: "Void", placeholder: "Reason" });
+    if (reason == null) return;
+    opCall(`/api/ops/${op.id}/ledger/${b.dataset.void}/void`, opJson("POST", { reason: reason.trim() || null }));
+  });
+  // transfers
+  root.querySelectorAll("[data-tx]").forEach(b => b.onclick = async () => {
+    const body = { action: b.dataset.tx };
+    if (b.dataset.tid) body.tid = Number(b.dataset.tid);
+    else Object.assign(body, { from_roster: Number(b.dataset.from), to_roster: Number(b.dataset.to), amount: Number(b.dataset.amt) });
+    if (body.action === "dispute") {
+      const note = await promptDialog("What's wrong — nothing arrived, wrong amount? The payer and organizer see this.",
+        { title: "Dispute this payment", confirmLabel: "Dispute", placeholder: "What happened" });
+      if (note == null || !note.trim()) return;
+      body.note = note.trim();
+    }
+    opCall(`/api/ops/${op.id}/transfers/mark`, opJson("POST", body));
+  });
+  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
+    try { navigator.clipboard.writeText(b.dataset.copy); opSay(`Copied ${Number(b.dataset.copy).toLocaleString()}.`); } catch {}
+  });
 }
 
 // Settle-phase edits need a reason; ask for it only then.
@@ -24399,6 +24860,10 @@ async function loadSettings() {
     if (s.listing_stale_days != null && document.activeElement !== $("listing-stale"))
       $("listing-stale").value = s.listing_stale_days;
     if (s.event_builtin_templates != null) $("event-builtin-tpl").checked = !!s.event_builtin_templates;
+    if (s.op_default_rules && !$("op-default-rules-box").contains(document.activeElement)) {
+      opDefaultRules = s.op_default_rules;
+      $("op-default-rules-box").innerHTML = rulesEditorHtml("op-def", s.op_default_rules);
+    }
     if (s.survey_depletion_ageoff_min && document.activeElement !== $("depletion-ageoff"))
       $("depletion-ageoff").value = s.survey_depletion_ageoff_min;
     if (s.feed_refresh_h != null && document.activeElement !== $("feed-refresh"))
@@ -25332,6 +25797,19 @@ $("container-clear").onclick = async () => {
 };
 
 // Marketplace staleness window (2026-08 review) — same shape as the stock window.
+$("op-default-rules-save").onclick = async () => {
+  const st = $("op-default-rules-status"), rules = readRulesEditor("op-def");
+  if (!rules) return;
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op_default_rules: rules }) });
+    if (!r.ok) throw 0;
+    const d = await r.json();
+    opDefaultRules = d.op_default_rules || rules;
+    st.textContent = "Saved. New events and quick ops start with these.";
+  } catch { st.textContent = "Couldn't save."; }
+};
 $("event-builtin-tpl").onchange = async () => {
   const st = $("event-builtin-tpl-status"), on = $("event-builtin-tpl").checked;
   st.textContent = "Saving…";

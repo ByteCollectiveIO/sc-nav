@@ -8009,6 +8009,11 @@ class EventIn(BaseModel):
     max_players: int | None = Field(default=None, ge=1, le=_MAX_PLAYERS)
     roles: list[RoleTargetIn] = Field(default_factory=list, max_length=_MAX_ROSTER_ROLES)
     details: "EventDetailsIn | None" = None
+    # Payout rules + contracts decided before the op (docs/event-operations.md
+    # §4.1/§6.1.1), so signups see them before committing. Rules None = the
+    # org default applies when the op starts.
+    rules: "OpRulesIn | None" = None
+    contracts: list["ContractIn"] = Field(default_factory=list, max_length=20)
     # Create only (ignored on edit): the template this event was started from
     # ("<id>" or "builtin:<key>") — recorded with a snapshot of its contents —
     # and whether to stamp that template's fleet units onto the new event.
@@ -8027,6 +8032,43 @@ class EventDetailsIn(BaseModel):
     prereqs: str = Field(default="", max_length=_NOTE_MAX)
 
 
+class OpRulesIn(BaseModel):
+    """A money rule set (§4.1). Partial is fine: missing keys take the org
+    default; values outside what the UI offers are ignored, never stored."""
+    shares: dict[str, float] | None = None
+    expenses_first: bool | None = None
+    bonuses: str | None = Field(default=None, max_length=8)
+
+
+class ContractIn(BaseModel):
+    """A contract the organizer wants everyone to accept (§6.1.1). The game
+    pays it; `amount` is recorded, never split."""
+    name: str = Field(min_length=1, max_length=80)
+    note: str = Field(default="", max_length=200)
+    amount: int | None = Field(default=None, ge=0, le=100_000_000_000)
+
+
+def org_default_op_rules() -> dict:
+    """The org's default payout rules (ORG SETTINGS), over the shipped ones."""
+    try:
+        raw = json.loads(db.get_setting("op_default_rules", "") or "{}")
+    except (ValueError, TypeError):
+        raw = {}
+    return nav_core.normalize_op_rules(raw)
+
+
+def _clean_rules(r: "OpRulesIn | None") -> dict | None:
+    if r is None:
+        return None
+    return nav_core.normalize_op_rules(r.model_dump(exclude_none=True),
+                                       base=org_default_op_rules())
+
+
+def _clean_contracts(cs) -> list[dict]:
+    return [{"name": c.name.strip(), "note": (c.note or "").strip(),
+             "amount": c.amount} for c in cs or [] if c.name.strip()]
+
+
 EventIn.model_rebuild()
 
 
@@ -8039,7 +8081,7 @@ class SignupIn(BaseModel):
 _EVENT_PUBLIC = ("id", "organizer_id", "title", "description",
                  "start_at", "signup_deadline", "duration_min", "location", "event_location",
                  "min_players", "max_players", "roles", "status", "details",
-                 "created_at", "updated_at")
+                 "rules", "contracts", "created_at", "updated_at")
 
 
 def _normalize_event_start(s: str) -> str:
@@ -8128,6 +8170,8 @@ def _validate_event(body: EventIn) -> dict:
         "min_players": body.min_players, "max_players": body.max_players,
         "roles": shape["roles"],
         "details": _clean_event_details(body.details),
+        "rules": _clean_rules(body.rules),
+        "contracts": _clean_contracts(body.contracts),
     }
 
 
@@ -8170,6 +8214,9 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
                          if mine else None)
     view["waitlist_count"] = sum(1 for s in signups if s["status"] == "waitlist")
     view["details"] = ev.get("details") or {}
+    view["contracts"] = ev.get("contracts") or []
+    view["rules_vs_default"] = (nav_core.op_rules_diff(org_default_op_rules(), ev["rules"])
+                                if ev.get("rules") else [])
     view["template"] = _event_template_provenance(ev)
     op = db.get_op_by_event(ev["id"])
     view["op"] = {"id": op["id"], "phase": op["phase"]} if op else None
@@ -9061,7 +9108,8 @@ async def create_event(body: EventIn, user: dict = Depends(require_session)):
         fields.update({"template_id": tpl["id"], "template_version": tpl["version"],
                        "template_name": tpl["name"],
                        "template_snapshot": {"event": tpl["event"],
-                                             "groups": tpl["groups"]}})
+                                             "groups": tpl["groups"],
+                                             "rules": tpl.get("rules")}})
     now = datetime.now(timezone.utc).isoformat()
     eid = db.create_event({**fields, "organizer_id": user["id"],
                            "status": "scheduled", "created_at": now, "updated_at": now})
@@ -9562,6 +9610,7 @@ class TemplateEventIn(BaseModel):
     max_players: int | None = Field(default=None, ge=1, le=_MAX_PLAYERS)
     roles: list[RoleTargetIn] = Field(default_factory=list, max_length=_MAX_ROSTER_ROLES)
     details: EventDetailsIn | None = None
+    contracts: list[ContractIn] = Field(default_factory=list, max_length=20)
 
 
 class TemplateGroupIn(BaseModel):
@@ -9576,11 +9625,13 @@ class EventTemplateIn(BaseModel):
     event: TemplateEventIn
     groups: list[TemplateGroupIn] = Field(default_factory=list,
                                           max_length=_MAX_EVENT_GROUPS)
+    rules: OpRulesIn | None = None
 
 
 class EventTemplatePatchIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=_NAME_MAX)
     event: TemplateEventIn | None = None
+    rules: OpRulesIn | None = None
     groups: list[TemplateGroupIn] | None = Field(default=None,
                                                  max_length=_MAX_EVENT_GROUPS)
 
@@ -9612,7 +9663,8 @@ def _clean_template_event(ev: TemplateEventIn) -> dict:
             "event_location": (ev.event_location or "").strip(),
             "min_players": ev.min_players, "max_players": ev.max_players,
             "roles": shape["roles"],
-            "details": _clean_event_details(ev.details)}
+            "details": _clean_event_details(ev.details),
+            "contracts": _clean_contracts(ev.contracts)}
 
 
 def _clean_template_groups(groups: list[TemplateGroupIn]) -> list[dict]:
@@ -9658,7 +9710,7 @@ def _event_template_view(t: dict, user: dict) -> dict:
     return {"id": str(t["id"]), "name": t["name"], "version": t["version"],
             "builtin": bool(t.get("builtin")), "builtin_key": t.get("builtin_key"),
             "official": bool(t.get("official")),
-            "event": t["event"], "groups": t["groups"],
+            "event": t["event"], "groups": t["groups"], "rules": t.get("rules"),
             "group_count": len(t["groups"] or []), "uses": t.get("uses") or 0,
             "created_by_name": (_resolve_member_name(t["created_by"], None)
                                 if t.get("created_by") else None),
@@ -9724,7 +9776,7 @@ def _event_template_provenance(ev: dict) -> dict | None:
             "version": ev.get("template_version"), "builtin": builtin,
             "current_version": current, "deleted": current is None,
             "diffs": nav_core.event_template_diffs(ev, snap.get("event") or {},
-                                                   roe_labels)}
+                                                   roe_labels, snap.get("rules"))}
 
 
 @app.get("/api/event-templates")
@@ -9741,7 +9793,8 @@ async def create_event_template(body: EventTemplateIn,
         raise HTTPException(status_code=400, detail="too many saved templates")
     now = datetime.now(timezone.utc).isoformat()
     tid = db.create_event_template(body.name.strip(), _clean_template_event(body.event),
-                                   _clean_template_groups(body.groups), user["id"], now)
+                                   _clean_template_groups(body.groups), user["id"], now,
+                                   rules=_clean_rules(body.rules))
     return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
 
 
@@ -9758,7 +9811,8 @@ async def edit_event_template(tid: int, body: EventTemplatePatchIn,
         tid, user["id"], datetime.now(timezone.utc).isoformat(),
         name=body.name.strip() if body.name is not None else None,
         event=_clean_template_event(body.event) if body.event is not None else None,
-        groups=_clean_template_groups(body.groups) if body.groups is not None else None)
+        groups=_clean_template_groups(body.groups) if body.groups is not None else None,
+        rules=_clean_rules(body.rules))
     return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
 
 
@@ -9831,10 +9885,12 @@ async def save_event_as_template(event_id: int, body: TemplateNameIn,
              "event_location": ev.get("event_location") or "",
              "min_players": ev.get("min_players") or 0,
              "max_players": ev.get("max_players"),
-             "roles": ev.get("roles") or [], "details": ev.get("details") or {}}
+             "roles": ev.get("roles") or [], "details": ev.get("details") or {},
+             "contracts": ev.get("contracts") or []}
     groups = _snapshot_event_groups(event_id) if body.include_groups else []
     tid = db.create_event_template(body.name.strip(), event, groups, user["id"],
-                                   datetime.now(timezone.utc).isoformat())
+                                   datetime.now(timezone.utc).isoformat(),
+                                   rules=ev.get("rules"))
     return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
 
 
@@ -9969,7 +10025,40 @@ def _op_log_text(e: dict) -> str:
         return "set deputies: " + (", ".join(names) if names else "none")
     if k == "rename":
         return f"renamed the op from “{p.get('from')}” to “{p.get('to')}”"
+    if k in ("rules", "rules_amended"):
+        ch = "; ".join(f"{d['label']} {d['from']} → {d['to']}" for d in p.get("diffs") or [])
+        head = f"amended the rules (v{p.get('version')})" if k == "rules_amended" else "set the rules"
+        return f"{head}: {ch}" if ch else head
+    if k == "share":
+        if p.get("to") is None:
+            return f"cleared {p.get('name')}'s share override (back to the attendance rule)"
+        return f"set {p.get('name')}'s share to {nav_core.OP_SHARE_LABEL.get(p.get('to'), p.get('to'))}"
+    if k == "contract_add":
+        return f"added the contract “{p.get('name')}”" + (f" ({_auec(p['amount'])})" if p.get("amount") is not None else "")
+    if k == "contract_edit":
+        ch = ", ".join(f"{f} {a!s} → {b!s}" for f, a, b in p.get("changes") or [])
+        return f"edited the contract “{p.get('name')}”" + (f": {ch}" if ch else "")
+    if k == "contract_remove":
+        return f"removed the contract “{p.get('name')}”"
+    if k == "ledger_add":
+        what = "bonus" if p.get("bonus") else p.get("kind")
+        verb = "paid by" if p.get("kind") == "expense" else "held by"
+        return (f"logged {_auec(p.get('amount'))} {what} {verb} {p.get('name')}"
+                + (f" — {p['note']}" if p.get("note") else ""))
+    if k == "ledger_void":
+        return f"voided {_auec(p.get('amount'))} {p.get('kind')} ({p.get('name')})"
+    if k in ("transfer_sent", "transfer_received", "transfer_dispute"):
+        verb = {"transfer_sent": "marked sent", "transfer_received": "confirmed received",
+                "transfer_dispute": "disputed"}[k]
+        return f"{verb}: {p.get('from_name')} → {p.get('to_name')} {_auec(p.get('amount'))}"
     return k or "changed the op"
+
+
+def _auec(n) -> str:
+    try:
+        return f"{int(n):,} aUEC"
+    except (TypeError, ValueError):
+        return "? aUEC"
 
 
 def _op_summary(op: dict, user: dict, roster: list[dict] | None = None) -> dict:
@@ -9990,7 +10079,10 @@ def _op_summary(op: dict, user: dict, roster: list[dict] | None = None) -> dict:
             "can_manage": _op_can_manage(op, user),
             # On it or running it — admin powers alone don't make an op "mine".
             "is_mine": bool(mine) or op["organizer_id"] == user["id"]
-                       or user["id"] in (op.get("deputies") or [])}
+                       or user["id"] in (op.get("deputies") or []),
+            # Transfers waiting on ME (send or confirm) — the Ops tile's nag.
+            "my_todo": (_op_money(op, roster, user)["my_todo"]
+                        if mine and op["phase"] in ("settle", "closed") else 0)}
 
 
 def _op_view(op: dict, user: dict) -> dict:
@@ -10014,7 +10106,95 @@ def _op_view(op: dict, user: dict) -> dict:
                    for e in db.list_op_log(op["id"])]
     view["attendance_options"] = list(nav_core.OP_ATTENDANCE)
     view["reason_required"] = op["phase"] == "settle"
+    shares = {r["id"]: r for r in roster}
+    for r in view["roster"]:
+        src = shares[r["id"]]
+        r["share_override"] = src.get("share_override")
+        r["share_reason"] = src.get("share_reason")
+    view.update(_op_money(op, roster, user))
     return view
+
+
+def _op_money(op: dict, roster: list[dict], user: dict) -> dict:
+    """Rules, contracts, ledger, split and transfers for the op page (§4/§6).
+    Only a payment someone has MARKED (sent / received / disputed) is stored
+    and fixed; everything else is planned fresh from what's still owed after
+    those. So a change never reshuffles a payment already made, and never
+    leaves stale planned ones behind to be "corrected" with round trips."""
+    rules = nav_core.normalize_op_rules(op.get("rules"), base=org_default_op_rules())
+    names = {r["id"]: _op_row_name(r) for r in roster}
+    me = next((r["id"] for r in roster if r.get("discord_id") == user["id"]), None)
+    is_guest = {r["id"]: not r.get("discord_id") for r in roster}
+    by_did = {r["id"]: r.get("discord_id") for r in roster}
+    manage = _op_can_manage(op, user)
+    ledger = db.list_op_ledger(op["id"])
+    split = nav_core.derive_op_split(roster, ledger, rules)
+    balances = {row["roster_id"]: row["balance"] for row in split["rows"]}
+    committed = db.list_op_transfers(op["id"])
+    residual = nav_core.op_residual_balances(balances, committed)
+    planned = nav_core.plan_op_transfers(residual, order=[r["id"] for r in roster])
+    # A planned payment from someone who was already paid in is them handing
+    # back an overpayment (the pot shrank, or their share did).
+    got_paid = {t["to_roster"] for t in committed}
+    for t in planned:
+        t["correction"] = t["from_roster"] in got_paid
+
+    def can(t, action):
+        if action == "sent":
+            return by_did.get(t["from_roster"]) == user["id"] or manage
+        # Receipt is the recipient's word — the one party who can't overclaim.
+        # Managers speak for a guest recipient (they can't sign in).
+        return (by_did.get(t["to_roster"]) == user["id"]
+                or (manage and is_guest.get(t["to_roster"], False)))
+
+    def tview(t, stored):
+        v = {"id": t.get("id"), "batch": t.get("batch"), "stored": stored,
+             "from_roster": t["from_roster"], "to_roster": t["to_roster"],
+             "amount": t["amount"],
+             "from_name": names.get(t["from_roster"], "?"), "to_name": names.get(t["to_roster"], "?"),
+             "sent_at": t.get("sent_at"), "received_at": t.get("received_at"),
+             "disputed_at": t.get("disputed_at"), "dispute_note": t.get("dispute_note"),
+             "correction": bool(t.get("correction")),
+             "mine_to_send": t["from_roster"] == me, "mine_to_receive": t["to_roster"] == me}
+        v["can_send"] = not v["sent_at"] and not v["received_at"] and can(t, "sent")
+        v["can_receive"] = not v["received_at"] and can(t, "received")
+        return v
+
+    tx = [tview(t, True) for t in committed] + [tview(t, False) for t in planned]
+    todo = sum(1 for t in tx if (t["mine_to_send"] and not t["sent_at"] and not t["received_at"])
+               or (t["mine_to_receive"] and not t["received_at"]))
+    contracts = db.list_op_contracts(op["id"])
+    for c in contracts:
+        c["i_have"] = me in c["ticks"] if me else False
+    contract_total = sum(c["amount"] or 0 for c in contracts)
+    led = [{"id": e["id"], "kind": e["kind"], "bonus": e["bonus"], "amount": e["amount"],
+            "roster_id": e["roster_id"], "name": names.get(e["roster_id"], "?"),
+            "category": e.get("category"), "note": e.get("note"),
+            "entered_by_name": _resolve_member_name(e["entered_by"], None),
+            "created_at": e["created_at"], "voided_at": e.get("voided_at"),
+            "void_reason": e.get("void_reason"),
+            "can_void": not e.get("voided_at") and op["phase"] != "closed"
+                        and (manage or e.get("entered_by") == user["id"])} for e in ledger]
+    amended = any(e["kind"] == "rules_amended" for e in db.list_op_log(op["id"]))
+    return {"rules": rules, "rules_version": op.get("rules_version") or 1,
+            "rules_amended": amended,
+            "rules_vs_default": nav_core.op_rules_diff(org_default_op_rules(), rules),
+            "share_labels": {str(k): v for k, v in nav_core.OP_SHARE_LABEL.items()},
+            "contracts": contracts, "contracts_total": contract_total,
+            "ledger": led, "split": split, "transfers": tx, "my_todo": todo,
+            "my_roster_id": me,
+            "ledger_categories": list(_OP_EXPENSE_CATEGORIES)}
+
+
+_OP_EXPENSE_CATEGORIES = ("fuel", "repair", "cargo", "ammo", "rental", "other")
+
+
+def _seed_op_contracts(op_id: int, contracts, actor_id: str, at: str) -> None:
+    for c in (contracts or [])[:20]:
+        if (c.get("name") or "").strip():
+            db.add_op_contract(op_id, {"name": c["name"].strip()[:80],
+                                       "note": (c.get("note") or "").strip()[:200] or None,
+                                       "amount": c.get("amount")}, actor_id, at)
 
 
 async def _op_changed(op_id: int) -> None:
@@ -10069,7 +10249,10 @@ async def create_quick_op(body: OpCreateIn, user: dict = Depends(require_session
     op_id = db.create_op({"name": name[:_NAME_MAX], "organizer_id": user["id"],
                           "template_id": tpl["id"] if tpl else None,
                           "template_name": tpl["name"] if tpl else None,
+                          "rules": nav_core.normalize_op_rules(
+                              (tpl or {}).get("rules"), base=org_default_op_rules()),
                           "created_at": at})
+    _seed_op_contracts(op_id, (tpl or {}).get("event", {}).get("contracts"), user["id"], at)
     if tpl is not None and not tpl["builtin"]:
         db.bump_event_template_uses(int(tpl["id"]))
     db.add_op_roster(op_id, {"discord_id": user["id"], "signed_up": "organizer",
@@ -10098,9 +10281,12 @@ async def start_event_op(event_id: int, user: dict = Depends(require_session)):
                               "organizer_id": ev["organizer_id"],
                               "template_id": ev.get("template_id"),
                               "template_name": ev.get("template_name"),
+                              "rules": nav_core.normalize_op_rules(
+                                  ev.get("rules"), base=org_default_op_rules()),
                               "created_at": at})
     except sqlite3.IntegrityError:          # a racing double-click made it first
         return _op_view(db.get_op_by_event(event_id), user)
+    _seed_op_contracts(op_id, ev.get("contracts"), user["id"], at)
     n = _seed_roster_from_event(op_id, ev, user["id"], at)
     _op_log(op_id, user, "created", {"event_id": event_id, "seeded": n})
     return _op_view(db.get_op(op_id), user)
@@ -10240,6 +10426,10 @@ async def remove_op_roster_row(op_id: int, rid: int, reason: str | None = None,
     row = db.get_op_roster_row(rid)
     if row is None or row["op_id"] != op_id:
         raise HTTPException(status_code=404, detail="not on this roster")
+    if db.op_roster_money_refs(rid):
+        raise HTTPException(status_code=409,
+                            detail="they have money on the ledger or a transfer — void those first, "
+                                   "or mark them Absent instead")
     db.delete_op_roster(rid)
     _op_log(op_id, user, "roster_remove",
             {"name": _op_row_name(row), "discord_id": row.get("discord_id"),
@@ -10326,6 +10516,306 @@ async def set_op_deputies(op_id: int, body: OpDeputiesIn,
         _op_log(op_id, user, "deputies",
                 {"ids": ids, "names": [_resolve_member_name(d, None) for d in ids]})
         await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+class OpRulesPutIn(BaseModel):
+    rules: OpRulesIn
+    reason: str | None = Field(default=None, max_length=_OP_REASON_MAX)
+
+
+class OpShareIn(BaseModel):
+    share: float | None = None          # 1 / 0.5 / 0, or None = back to the rule
+    reason: str | None = Field(default=None, max_length=_OP_REASON_MAX)
+
+
+class OpContractPatchIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    note: str | None = Field(default=None, max_length=200)
+    amount: int | None = Field(default=None, ge=0, le=100_000_000_000)
+    amount_actual: bool | None = None
+    clear_amount: bool = False
+
+
+class OpTickIn(BaseModel):
+    have: bool = True
+    roster_id: int | None = None        # managers ticking for a guest
+
+
+class OpLedgerIn(BaseModel):
+    kind: str = Field(max_length=8)     # income | expense
+    amount: int = Field(ge=1, le=100_000_000_000)
+    roster_id: int
+    bonus: bool = False
+    category: str | None = Field(default=None, max_length=16)
+    note: str = Field(default="", max_length=200)
+
+
+class OpVoidIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=_OP_REASON_MAX)
+
+
+class OpTransferMarkIn(BaseModel):
+    """Mark a transfer. `tid` for one already committed; otherwise the planned
+    transfer's (from, to, amount), which locks the current plan in first."""
+    action: str = Field(max_length=10)  # sent | received | dispute
+    tid: int | None = None
+    from_roster: int | None = None
+    to_roster: int | None = None
+    amount: int | None = None
+    note: str | None = Field(default=None, max_length=200)
+
+
+def _op_open_for_money(op: dict) -> None:
+    if op["phase"] == "closed":
+        raise HTTPException(status_code=409,
+                            detail="this op is closed — reopen it (with a reason) to change it")
+
+
+def _roster_row_of(op_id: int, rid: int) -> dict:
+    row = db.get_op_roster_row(rid)
+    if row is None or row["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="not on this roster")
+    return row
+
+
+@app.put("/api/ops/{op_id}/rules")
+async def set_op_rules(op_id: int, body: OpRulesPutIn, user: dict = Depends(require_session)):
+    """Set the payout rules. Free during Setup — that's when they're chosen.
+    Once the op has started, a change is an AMENDMENT (§4.2): a reason, a new
+    rules version, a log line with the field-level diff, and a banner."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_open_for_money(op)
+    old = nav_core.normalize_op_rules(op.get("rules"), base=org_default_op_rules())
+    new = nav_core.normalize_op_rules(body.rules.model_dump(exclude_none=True), base=old)
+    diffs = nav_core.op_rules_diff(old, new)
+    if not diffs:
+        return _op_view(op, user)
+    amend = op["phase"] != "setup"
+    reason = (body.reason or "").strip() or None
+    if amend and (not reason or len(reason) < _OP_REASON_MIN):
+        raise HTTPException(status_code=400,
+                            detail="the op has started — give a reason for changing the rules")
+    fields = {"rules": new}
+    version = op.get("rules_version") or 1
+    if amend:
+        version += 1
+        fields["rules_version"] = version
+    db.update_op(op_id, fields, _now_iso())
+    _op_log(op_id, user, "rules_amended" if amend else "rules",
+            {"diffs": diffs, "version": version}, reason)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.put("/api/ops/{op_id}/roster/{rid}/share")
+async def set_op_share(op_id: int, rid: int, body: OpShareIn,
+                       user: dict = Depends(require_session)):
+    """Override one person's share (Full / Half / None) — always with a reason,
+    because it's the one place an organizer's judgement moves money (§6.2)."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    reason = (body.reason or "").strip() or None
+    if body.share is not None:
+        if float(body.share) not in nav_core.OP_SHARE_VALUES:
+            raise HTTPException(status_code=400, detail="share must be Full, Half or None")
+        if not reason or len(reason) < _OP_REASON_MIN:
+            raise HTTPException(status_code=400, detail="give a reason for this share")
+    reason = _op_edit_reason(op, reason)
+    row = _roster_row_of(op_id, rid)
+    to = float(body.share) if body.share is not None else None
+    if to == row.get("share_override"):
+        return _op_view(op, user)
+    db.update_op_roster(rid, {"share_override": to, "share_reason": reason if to is not None else None},
+                        _now_iso())
+    _op_log(op_id, user, "share", {"name": _op_row_name(row), "roster_id": rid,
+                                   "from": row.get("share_override"), "to": to}, reason)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/contracts")
+async def add_op_contract(op_id: int, body: ContractIn, user: dict = Depends(require_session)):
+    """Add a contract everyone should accept (§6.1.1). Paid by the game."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_open_for_money(op)
+    if len(db.list_op_contracts(op_id)) >= 20:
+        raise HTTPException(status_code=400, detail="that's a lot of contracts — 20 max")
+    at = _now_iso()
+    db.add_op_contract(op_id, {"name": body.name.strip(), "note": (body.note or "").strip() or None,
+                               "amount": body.amount,
+                               # an amount entered once the mission is over is the real one
+                               "amount_actual": op["phase"] == "settle" and body.amount is not None},
+                       user["id"], at)
+    _op_log(op_id, user, "contract_add", {"name": body.name.strip(), "amount": body.amount})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.patch("/api/ops/{op_id}/contracts/{cid}")
+async def edit_op_contract(op_id: int, cid: int, body: OpContractPatchIn,
+                           user: dict = Depends(require_session)):
+    """Rename, re-note, or set the amount — at Settle, the ACTUAL payout
+    (no reason needed: correcting it is what Settle is for)."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_open_for_money(op)
+    c = db.get_op_contract(cid)
+    if c is None or c["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="unknown contract")
+    fields, changes = {}, []
+    if body.name is not None and body.name.strip() != c["name"]:
+        fields["name"] = body.name.strip(); changes.append(("name", c["name"], fields["name"]))
+    if body.note is not None and (body.note.strip() or None) != c.get("note"):
+        fields["note"] = body.note.strip() or None; changes.append(("note", c.get("note") or "—", fields["note"] or "—"))
+    if body.clear_amount or (body.amount is not None and body.amount != c.get("amount")):
+        new = None if body.clear_amount else body.amount
+        fields["amount"] = new
+        changes.append(("amount", _auec(c["amount"]) if c.get("amount") is not None else "—",
+                        _auec(new) if new is not None else "—"))
+    if body.amount_actual is not None:
+        fields["amount_actual"] = body.amount_actual
+    elif "amount" in fields and op["phase"] == "settle":
+        fields["amount_actual"] = fields["amount"] is not None
+    if not fields:
+        return _op_view(op, user)
+    db.update_op_contract(cid, fields, _now_iso())
+    if changes:
+        _op_log(op_id, user, "contract_edit", {"name": c["name"], "changes": changes})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.delete("/api/ops/{op_id}/contracts/{cid}")
+async def remove_op_contract(op_id: int, cid: int, user: dict = Depends(require_session)):
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    _op_open_for_money(op)
+    c = db.get_op_contract(cid)
+    if c is None or c["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="unknown contract")
+    db.delete_op_contract(cid)
+    _op_log(op_id, user, "contract_remove", {"name": c["name"], "amount": c.get("amount")})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/contracts/{cid}/tick")
+async def tick_op_contract(op_id: int, cid: int, body: OpTickIn,
+                           user: dict = Depends(require_session)):
+    """"✓ I have it": a player confirms they've accepted / been shared a
+    contract. Your own row only; managers may tick for a guest."""
+    op = _require_op(op_id)
+    _op_open_for_money(op)
+    c = db.get_op_contract(cid)
+    if c is None or c["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="unknown contract")
+    roster = db.list_op_roster(op_id)
+    if body.roster_id is not None:
+        row = next((r for r in roster if r["id"] == body.roster_id), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not on this roster")
+        if row.get("discord_id") != user["id"] and not (
+                _op_can_manage(op, user) and not row.get("discord_id")):
+            raise HTTPException(status_code=403, detail="you can only tick your own contracts")
+    else:
+        row = next((r for r in roster if r.get("discord_id") == user["id"]), None)
+        if row is None:
+            raise HTTPException(status_code=403, detail="you're not on this op's roster")
+    db.set_op_contract_tick(cid, row["id"], body.have, _now_iso())
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/ledger")
+async def add_op_ledger(op_id: int, body: OpLedgerIn, user: dict = Depends(require_session)):
+    """Log money the game left in one wallet: income (loot / resources sold,
+    bonuses) held by someone, or an expense someone paid. Anyone on the roster
+    can log their own; managers can log anyone's."""
+    op = _require_op(op_id)
+    _op_open_for_money(op)
+    if body.kind not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="kind must be income or expense")
+    row = _roster_row_of(op_id, body.roster_id)
+    if not _op_can_manage(op, user) and row.get("discord_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="you can only log money you hold or paid")
+    cat = None
+    if body.kind == "expense":
+        cat = body.category if body.category in _OP_EXPENSE_CATEGORIES else "other"
+    at = _now_iso()
+    db.add_op_ledger(op_id, {"kind": body.kind, "bonus": body.kind == "income" and body.bonus,
+                             "amount": body.amount, "roster_id": body.roster_id,
+                             "category": cat, "note": (body.note or "").strip() or None,
+                             "entered_by": user["id"], "created_at": at})
+    _op_log(op_id, user, "ledger_add",
+            {"kind": body.kind, "bonus": body.kind == "income" and body.bonus,
+             "amount": body.amount, "name": _op_row_name(row),
+             "note": (body.note or "").strip() or None})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/ledger/{lid}/void")
+async def void_op_ledger(op_id: int, lid: int, body: OpVoidIn,
+                         user: dict = Depends(require_session)):
+    """Void a ledger entry. It stays on the record, struck through, with who
+    voided it and why — a mistake is corrected by voiding and re-entering."""
+    op = _require_op(op_id)
+    e = db.get_op_ledger_entry(lid)
+    if e is None or e["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="unknown entry")
+    if not _op_can_manage(op, user) and e.get("entered_by") != user["id"]:
+        raise HTTPException(status_code=403, detail="only whoever logged it or a manager can void it")
+    reason = _op_edit_reason(op, body.reason)
+    if not db.void_op_ledger(lid, user["id"], reason, _now_iso()):
+        raise HTTPException(status_code=409, detail="already voided")
+    row = db.get_op_roster_row(e["roster_id"]) or {}
+    _op_log(op_id, user, "ledger_void",
+            {"kind": e["kind"], "amount": e["amount"], "name": _op_row_name(row) if row else "?"},
+            reason)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/transfers/mark")
+async def mark_op_transfer(op_id: int, body: OpTransferMarkIn,
+                           user: dict = Depends(require_session)):
+    """Mark a transfer sent (sender, or a manager), received or disputed (the
+    RECIPIENT — a manager only for a guest). Marking a planned transfer stores
+    THAT payment; the rest keep re-planning around it. Works after Close too:
+    the record can close with payments still outstanding."""
+    op = _require_op(op_id)
+    if body.action not in ("sent", "received", "dispute"):
+        raise HTTPException(status_code=400, detail="unknown action")
+    roster = db.list_op_roster(op_id)
+    money = _op_money(op, roster, user)
+    if body.tid is not None:
+        t = next((x for x in money["transfers"] if x["stored"] and x["id"] == body.tid), None)
+    else:
+        t = next((x for x in money["transfers"] if not x["stored"]
+                  and x["from_roster"] == body.from_roster and x["to_roster"] == body.to_roster
+                  and x["amount"] == body.amount), None)
+    if t is None:
+        raise HTTPException(status_code=409, detail="the payment plan changed — refresh and try again")
+    allowed = t["can_send"] if body.action == "sent" else t["can_receive"]
+    if not allowed:
+        raise HTTPException(status_code=403, detail=(
+            "only the sender or a manager can mark this sent" if body.action == "sent"
+            else "only the recipient can confirm or dispute this"))
+    if body.action == "dispute" and not (body.note or "").strip():
+        raise HTTPException(status_code=400, detail="say what's wrong with this payment")
+    at = _now_iso()
+    tid = t["id"]
+    if not t["stored"]:
+        ids = db.commit_op_transfers(op_id, [t], at)
+        tid = ids[(t["from_roster"], t["to_roster"], t["amount"])]
+    db.mark_op_transfer(tid, body.action, user["id"], at, (body.note or "").strip() or None)
+    _op_log(op_id, user, f"transfer_{body.action}",
+            {"tid": tid, "from_name": t["from_name"], "to_name": t["to_name"],
+             "amount": t["amount"]}, (body.note or "").strip() or None)
+    await _op_changed(op_id)
     return _op_view(db.get_op(op_id), user)
 
 
@@ -13512,6 +14002,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "container_ageoff_days": container_ageoff_days(),   # #46 container reports
         "listing_stale_days": _listing_stale_days(),  # marketplace stale badge (0 = off)
         "event_builtin_templates": event_builtin_templates_enabled(),  # §14.5 starters
+        "op_default_rules": org_default_op_rules(),   # ops payout defaults (§4.1)
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
         "feeds_refreshed_at": int(feeds_refreshed_at),  # epoch of the last uexcorp pull
@@ -13555,6 +14046,7 @@ class SettingsIn(BaseModel):
     # get an amber "stale" badge + renew nudge. 0 turns the display off.
     listing_stale_days: int | None = Field(default=None, ge=0, le=365)
     event_builtin_templates: bool | None = None
+    op_default_rules: OpRulesIn | None = None
     # ⛏ mined-out report lifetime (minutes, #37 slice 2): how long a depletion
     # report down-ranks a survey cluster in ore-first routing. Capped at a week.
     survey_depletion_ageoff_min: int | None = Field(default=None, ge=1, le=10080)
@@ -13638,6 +14130,9 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     if body.event_builtin_templates is not None:
         db.set_setting("event_builtin_templates",
                        "1" if body.event_builtin_templates else "0")
+    if body.op_default_rules is not None:
+        db.set_setting("op_default_rules", json.dumps(nav_core.normalize_op_rules(
+            body.op_default_rules.model_dump(exclude_none=True))))
     if body.survey_depletion_ageoff_min is not None:
         db.set_setting("survey_depletion_ageoff_min",
                        str(body.survey_depletion_ageoff_min))
@@ -13690,6 +14185,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "container_ageoff_days": container_ageoff_days(),
             "listing_stale_days": _listing_stale_days(),
             "event_builtin_templates": event_builtin_templates_enabled(),
+            "op_default_rules": org_default_op_rules(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),
             "extra_admin_ids": extra_admin_ids(),

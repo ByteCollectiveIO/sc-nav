@@ -7928,6 +7928,106 @@ class OpRulesTests(unittest.TestCase):
         self.assertEqual((c["took_part"], c["unmarked"], c["guests"], c["total"]), (2, 1, 1, 4))
 
 
+class OpMoneyTests(unittest.TestCase):
+    """docs/event-operations.md §4/§6: rules, the split, and transfers."""
+
+    R = [{"id": 1, "attendance": "present"}, {"id": 2, "attendance": "present"},
+         {"id": 3, "attendance": "left_early"}, {"id": 4, "attendance": "absent"}]
+
+    def _split(self, ledger, rules=None, roster=None):
+        return nav_core.derive_op_split(roster or self.R, ledger, rules or {})
+
+    def test_rules_normalize_and_reject_junk(self):
+        r = nav_core.normalize_op_rules({"shares": {"late": 0.5, "absent": 0.7, "bogus": 1},
+                                         "bonuses": "steal", "expenses_first": "yes", "x": 1})
+        self.assertEqual(r["shares"]["late"], 0.5)
+        self.assertEqual(r["shares"]["absent"], 0.0)          # 0.7 isn't offered
+        self.assertEqual(r["bonuses"], "pool")
+        self.assertTrue(r["expenses_first"])
+        self.assertEqual(set(r), {"shares", "expenses_first", "bonuses"})
+
+    def test_rules_diff_labels(self):
+        d = nav_core.op_rules_diff({}, {"shares": {"left_early": 1.0}, "bonuses": "keep"})
+        self.assertEqual([(x["label"], x["from"], x["to"]) for x in d],
+                         [("Left early share", "Half", "Full"),
+                          ("Bonuses", "pooled", "kept by earner")])
+
+    def test_split_sums_exactly_and_follows_shares(self):
+        # 1,000,001 over weights 1 / 1 / 0.5 → 2.5 shares.
+        sp = self._split([{"kind": "income", "amount": 1_000_001, "roster_id": 1}])
+        sh = {r["roster_id"]: r["share"] for r in sp["rows"]}
+        self.assertEqual(sum(sh.values()), 1_000_001)
+        self.assertEqual(sh[4], 0)
+        self.assertEqual((sh[1], sh[2], sh[3]), (400_001, 400_000, 200_000))  # tie → earlier row
+        self.assertEqual(sp["totals"]["per_full_share"], 400_000)
+
+    def test_expenses_paid_back_first(self):
+        sp = self._split([{"kind": "income", "amount": 100_000, "roster_id": 1},
+                          {"kind": "expense", "amount": 20_000, "roster_id": 2}],
+                         roster=self.R[:2])
+        by = {r["roster_id"]: r for r in sp["rows"]}
+        self.assertEqual(sp["totals"]["pot"], 80_000)
+        self.assertEqual(by[1]["balance"], 60_000)            # holds 100k, owed 40k
+        self.assertEqual(by[2]["balance"], -60_000)           # 40k share + 20k payback
+        sp = self._split([{"kind": "income", "amount": 100_000, "roster_id": 1},
+                          {"kind": "expense", "amount": 20_000, "roster_id": 2}],
+                         rules={"expenses_first": False}, roster=self.R[:2])
+        self.assertEqual(sp["totals"]["pot"], 100_000)
+        self.assertEqual({r["roster_id"]: r["balance"] for r in sp["rows"]}, {1: 50_000, 2: -50_000})
+
+    def test_bonus_pool_vs_keep_and_voided_ignored(self):
+        led = [{"kind": "income", "amount": 90_000, "roster_id": 1},
+               {"kind": "income", "amount": 30_000, "roster_id": 2, "bonus": True},
+               {"kind": "income", "amount": 999_999, "roster_id": 2, "voided_at": "x"}]
+        roster = self.R[:3]
+        self.assertEqual(self._split(led, roster=roster)["totals"]["pot"], 120_000)
+        sp = self._split(led, {"bonuses": "keep"}, roster=roster)
+        self.assertEqual(sp["totals"]["pot"], 90_000)
+        self.assertEqual(sp["totals"]["bonus_kept"], 30_000)
+        by = {r["roster_id"]: r for r in sp["rows"]}
+        self.assertEqual(by[2]["bonus_kept"], 30_000)
+        self.assertEqual(by[2]["held"], 0)                     # kept bonus never moves
+
+    def test_override_beats_attendance_and_unmarked_warns(self):
+        roster = [{"id": 1, "attendance": "present"},
+                  {"id": 2, "attendance": "present", "share_override": 0.0},
+                  {"id": 3, "attendance": None}]
+        sp = self._split([{"kind": "income", "amount": 10, "roster_id": 2}], roster=roster)
+        self.assertEqual({r["roster_id"]: r["share"] for r in sp["rows"]}, {1: 10, 2: 0, 3: 0})
+        self.assertIn({"key": "unmarked", "n": 1}, sp["warnings"])
+
+    def test_loss_is_shared(self):
+        sp = self._split([{"kind": "expense", "amount": 30_001, "roster_id": 1}],
+                         roster=self.R[:2])
+        self.assertEqual(sp["totals"]["pot"], -30_001)
+        self.assertEqual(sorted(r["share"] for r in sp["rows"]), [-15_001, -15_000])
+        self.assertIn("loss", [w["key"] for w in sp["warnings"]])
+
+    def test_transfers_settle_everything_in_few_moves(self):
+        bal = {1: 300, 2: -100, 3: -100, 4: -100, 5: 0}
+        plan = nav_core.plan_op_transfers(bal, order=[1, 2, 3, 4, 5])
+        self.assertEqual(plan, [{"from_roster": 1, "to_roster": 2, "amount": 100},
+                                {"from_roster": 1, "to_roster": 3, "amount": 100},
+                                {"from_roster": 1, "to_roster": 4, "amount": 100}])
+        net = dict(bal)
+        for t in plan:
+            net[t["from_roster"]] -= t["amount"]; net[t["to_roster"]] += t["amount"]
+        self.assertTrue(all(v == 0 for v in net.values()))
+
+    def test_residual_after_committed_transfers(self):
+        bal = {1: 300, 2: -150, 3: -150}
+        res = nav_core.op_residual_balances(bal, [{"from_roster": 1, "to_roster": 2, "amount": 150}])
+        self.assertEqual(res, {1: 150, 2: 0, 3: -150})
+        self.assertEqual(nav_core.plan_op_transfers(res, [1, 2, 3]),
+                         [{"from_roster": 1, "to_roster": 3, "amount": 150}])
+
+    def test_template_diffs_include_rules_only_when_stated(self):
+        ev = {"type": [], "category": [], "rules": {"bonuses": "keep"}}
+        self.assertEqual(nav_core.event_template_diffs(ev, {}, None, None), [])
+        d = nav_core.event_template_diffs(ev, {}, None, {"bonuses": "pool"})
+        self.assertEqual([x["field"] for x in d], ["bonuses"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
 

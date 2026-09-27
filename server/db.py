@@ -448,6 +448,8 @@ CREATE TABLE IF NOT EXISTS operations (
     deputies TEXT NOT NULL DEFAULT '[]',-- JSON list of discord_ids
     phase TEXT NOT NULL DEFAULT 'setup',-- setup | live | settle | closed
     template_id TEXT, template_name TEXT,
+    rules TEXT,                         -- JSON money rule set (§4.1), seeded at creation
+    rules_version INTEGER NOT NULL DEFAULT 1,  -- +1 per amendment after Setup
     started_at TEXT, ended_at TEXT, closed_at TEXT,
     created_at TEXT, updated_at TEXT
 );
@@ -464,6 +466,8 @@ CREATE TABLE IF NOT EXISTS op_roster (
     attendance TEXT,                    -- present | late | left_early | excused | absent | NULL
     joined_at TEXT, left_at TEXT,
     group_name TEXT,                    -- fleet unit at seed time (snapshot)
+    share_override REAL,                -- 1 / 0.5 / 0 beats the attendance rule
+    share_reason TEXT,                  -- required whenever share_override is set
     added_by TEXT,
     created_at TEXT, updated_at TEXT
 );
@@ -485,6 +489,63 @@ CREATE TABLE IF NOT EXISTS op_log (
     created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS op_log_op ON op_log(op_id);
+
+-- Contracts the organizer wants everyone to accept/have shared (§6.1.1). The
+-- GAME pays these in equal cuts to everyone who had the contract shared, so
+-- they're a checklist + a recorded amount, never pot money or transfers.
+CREATE TABLE IF NOT EXISTS op_contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    note TEXT,
+    amount INTEGER,                     -- what it pays (advertised, then actual)
+    amount_actual INTEGER NOT NULL DEFAULT 0,  -- 1 once corrected to the real payout
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT, created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS op_contracts_op ON op_contracts(op_id);
+-- "✓ I have it" per player per contract — a checklist, not attendance.
+CREATE TABLE IF NOT EXISTS op_contract_ticks (
+    contract_id INTEGER NOT NULL,
+    roster_id INTEGER NOT NULL,
+    at TEXT,
+    PRIMARY KEY (contract_id, roster_id)
+);
+
+-- Money the game left in one wallet (§6.1): income (loot/resources sold,
+-- bonuses) held by a roster row, expenses paid by one. Never edited in place:
+-- a mistake is VOIDED (kept, struck through, with who/why) and re-entered.
+CREATE TABLE IF NOT EXISTS op_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,                 -- income | expense
+    bonus INTEGER NOT NULL DEFAULT 0,   -- income only: achievement bonus cash
+    amount INTEGER NOT NULL,
+    roster_id INTEGER NOT NULL,         -- holder (income) / payer (expense)
+    category TEXT,                      -- expense: fuel | repair | cargo | ammo | rental | other
+    note TEXT,
+    entered_by TEXT, created_at TEXT,
+    voided_at TEXT, voided_by TEXT, void_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS op_ledger_op ON op_ledger(op_id);
+
+-- Payments someone has acted on (§6.3): marked sent, received or disputed.
+-- Planned payments are DERIVED from what's still owed after these, so only a
+-- payment that was really made (or claimed) is ever fixed. `batch` counts
+-- stored rows in order of first mark (kept for the record, not for planning).
+CREATE TABLE IF NOT EXISTS op_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id INTEGER NOT NULL,
+    batch INTEGER NOT NULL,             -- 1 = the first plan, 2+ = corrections
+    from_roster INTEGER NOT NULL,
+    to_roster INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    sent_at TEXT, sent_by TEXT,
+    received_at TEXT, received_by TEXT,
+    disputed_at TEXT, disputed_by TEXT, dispute_note TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS op_transfers_op ON op_transfers(op_id);
 
 -- Trade planner favorites (#21): a member's saved trade-route configurations.
 -- `data` is a JSON blob of the *plan config* (ship, usable SCU, start, mode,
@@ -778,6 +839,10 @@ def init(db_path) -> None:
         _ensure_column("events", "template_version", "INTEGER")
         _ensure_column("events", "template_name", "TEXT")
         _ensure_column("events", "template_snapshot", "TEXT")
+        # Payout rules + contracts decided on the event, so signups see them
+        # before committing (docs/event-operations.md §6.1.1/§13).
+        _ensure_column("events", "rules", "TEXT")
+        _ensure_column("events", "contracts", "TEXT")
         # Personal vs org goals + blueprint-seeded craft goals (#14.2). A goal is
         # `org` (shared board, anyone contributes) or `personal` (only its creator
         # sees/fills it); `blueprint_key` tags a goal whose line items were seeded
@@ -2019,12 +2084,13 @@ def delete_trade_favorite(discord_id: str, fav_id: int) -> bool:
 # cancel_event); updated_at is stamped on every write.
 _EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
                    "signup_deadline", "duration_min", "location", "event_location",
-                   "min_players", "max_players", "roles", "details")
+                   "min_players", "max_players", "roles", "details", "rules",
+                   "contracts")
 
 # Columns the create/edit layer hands us as Python lists; stored as JSON text.
-_EVENT_JSON = ("roles", "category", "type")
+_EVENT_JSON = ("roles", "category", "type", "contracts")
 # JSON-object columns (a dict, not a list): parsed on read, `{}` when empty.
-_EVENT_JSON_OBJ = ("details", "template_snapshot")
+_EVENT_JSON_OBJ = ("details", "template_snapshot", "rules")
 
 
 def _event_json_list(raw) -> list:
@@ -2050,6 +2116,9 @@ def _event_row_to_dict(r: sqlite3.Row) -> dict:
     for k in _EVENT_JSON_OBJ:
         v = _u(d.get(k)) if d.get(k) else None
         d[k] = v if isinstance(v, dict) else ({} if k == "details" else None)
+    if not isinstance(d.get("contracts"), list):
+        d["contracts"] = _u(d.get("contracts")) if isinstance(d.get("contracts"), str) else []
+        d["contracts"] = d["contracts"] if isinstance(d["contracts"], list) else []
     return d
 
 
@@ -2068,8 +2137,8 @@ def create_event(d: dict) -> int:
             "start_at, signup_deadline, duration_min, location, event_location, "
             "min_players, max_players, roles, status, created_at, updated_at, "
             "details, template_id, template_version, template_name, "
-            "template_snapshot) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "template_snapshot, rules, contracts) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["organizer_id"]), d.get("title"), d.get("description"),
              _j(d.get("type") or []), _j(d.get("category") or []), d.get("start_at"),
              d.get("signup_deadline"), d.get("duration_min"), d.get("location"),
@@ -2078,7 +2147,8 @@ def create_event(d: dict) -> int:
              d.get("created_at"), d.get("updated_at"),
              _j(d.get("details") or {}), d.get("template_id"),
              d.get("template_version"), d.get("template_name"),
-             _j(d["template_snapshot"]) if d.get("template_snapshot") else None),
+             _j(d["template_snapshot"]) if d.get("template_snapshot") else None,
+             _j(d["rules"]) if d.get("rules") else None, _j(d.get("contracts") or [])),
         )
     return cur.lastrowid
 
@@ -2148,6 +2218,7 @@ def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
     caller's job). Returns whether a row matched."""
     sets = ", ".join(f"{c}=?" for c in _EVENT_EDITABLE)
     vals = [_j(fields.get(c) or []) if c in _EVENT_JSON
+            else (_j(fields[c]) if fields.get(c) else None) if c == "rules"
             else _j(fields.get(c) or {}) if c in _EVENT_JSON_OBJ
             else fields.get(c)
             for c in _EVENT_EDITABLE]
@@ -2407,17 +2478,19 @@ def create_event_template(name: str, event: dict, groups: list, created_by: str,
 
 def update_event_template(tid: int, actor_id: str, at: str, *,
                           name: str | None = None, event: dict | None = None,
-                          groups: list | None = None) -> bool:
-    """Edit a template. A content change (event/groups) bumps `version`; a
-    rename alone doesn't (events diff against contents, not the label)."""
+                          groups: list | None = None, rules: dict | None = None) -> bool:
+    """Edit a template. A content change (event/groups/rules) bumps `version`;
+    a rename alone doesn't (events diff against contents, not the label)."""
     sets, vals = [], []
     if name is not None:
         sets.append("name=?"); vals.append(name)
-    content = event is not None or groups is not None
+    content = event is not None or groups is not None or rules is not None
     if event is not None:
         sets.append("event=?"); vals.append(_j(event))
     if groups is not None:
         sets.append("groups=?"); vals.append(_j(groups))
+    if rules is not None:
+        sets.append("rules=?"); vals.append(_j(rules))
     if content:
         sets.append("version=version+1")
     if not sets:
@@ -2473,6 +2546,7 @@ def event_template_history(tid: int) -> list[dict]:
 def _op_row(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["deputies"] = _u(d.get("deputies")) or []
+    d["rules"] = _u(d.get("rules")) if d.get("rules") else {}
     return d
 
 
@@ -2480,11 +2554,11 @@ def create_op(d: dict) -> int:
     with _lock, _conn:
         cur = _conn.execute(
             "INSERT INTO operations (event_id, name, organizer_id, deputies, phase, "
-            "template_id, template_name, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "template_id, template_name, rules, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (d.get("event_id"), d["name"], str(d["organizer_id"]),
              _j(d.get("deputies") or []), d.get("phase", "setup"),
-             d.get("template_id"), d.get("template_name"),
+             d.get("template_id"), d.get("template_name"), _j(d.get("rules") or {}),
              d["created_at"], d["created_at"]))
     return cur.lastrowid
 
@@ -2536,14 +2610,15 @@ def list_ops(scope: str, discord_id: str | None = None, limit: int = 100) -> lis
     return [_op_row(r) for r in rows]
 
 
-_OP_EDITABLE = ("name", "deputies", "phase", "started_at", "ended_at", "closed_at")
+_OP_EDITABLE = ("name", "deputies", "phase", "started_at", "ended_at", "closed_at",
+                "rules", "rules_version")
 
 
 def update_op(op_id: int, fields: dict, at: str) -> bool:
     cols = [c for c in _OP_EDITABLE if c in fields]
     if not cols:
         return False
-    vals = [_j(fields[c]) if c == "deputies" else fields[c] for c in cols]
+    vals = [_j(fields[c]) if c in ("deputies", "rules") else fields[c] for c in cols]
     with _lock, _conn:
         cur = _conn.execute(
             f"UPDATE operations SET {', '.join(f'{c}=?' for c in cols)}, updated_at=? "
@@ -2555,6 +2630,10 @@ def delete_op(op_id: int) -> bool:
     """Discard an op with its roster + log. The caller allows this ONLY in
     setup (before it ever went live), so no record of a real op is lost."""
     with _lock, _conn:
+        _conn.execute("DELETE FROM op_contract_ticks WHERE contract_id IN "
+                      "(SELECT id FROM op_contracts WHERE op_id=?)", (op_id,))
+        for t in ("op_contracts", "op_ledger", "op_transfers"):
+            _conn.execute(f"DELETE FROM {t} WHERE op_id=?", (op_id,))
         _conn.execute("DELETE FROM op_roster WHERE op_id=?", (op_id,))
         _conn.execute("DELETE FROM op_log WHERE op_id=?", (op_id,))
         cur = _conn.execute("DELETE FROM operations WHERE id=?", (op_id,))
@@ -2587,7 +2666,8 @@ def get_op_roster_row(rid: int) -> dict | None:
     return dict(row) if row else None
 
 
-_OP_ROSTER_EDITABLE = ("attendance", "joined_at", "left_at")
+_OP_ROSTER_EDITABLE = ("attendance", "joined_at", "left_at", "share_override",
+                       "share_reason")
 
 
 def update_op_roster(rid: int, fields: dict, at: str) -> bool:
@@ -2628,6 +2708,167 @@ def list_op_log(op_id: int) -> list[dict]:
         d["payload"] = _u(d.get("payload")) or {}
         out.append(d)
     return out
+
+
+# --- op money: contracts, ledger, transfers (§6) ----------------------------
+
+def list_op_contracts(op_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM op_contracts WHERE op_id=? ORDER BY sort, id",
+                             (op_id,)).fetchall()
+        ticks = _conn.execute(
+            "SELECT t.contract_id, t.roster_id FROM op_contract_ticks t "
+            "JOIN op_contracts c ON c.id = t.contract_id WHERE c.op_id=?",
+            (op_id,)).fetchall()
+    by = {}
+    for t in ticks:
+        by.setdefault(t["contract_id"], []).append(t["roster_id"])
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["amount_actual"] = bool(d.get("amount_actual"))
+        d["ticks"] = sorted(by.get(d["id"], []))
+        out.append(d)
+    return out
+
+
+def get_op_contract(cid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM op_contracts WHERE id=?", (cid,)).fetchone()
+    return dict(row) if row else None
+
+
+def add_op_contract(op_id: int, c: dict, by: str, at: str) -> int:
+    with _lock, _conn:
+        n = _conn.execute("SELECT COALESCE(MAX(sort), -1) + 1 FROM op_contracts "
+                          "WHERE op_id=?", (op_id,)).fetchone()[0]
+        cur = _conn.execute(
+            "INSERT INTO op_contracts (op_id, name, note, amount, amount_actual, sort, "
+            "created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (op_id, c["name"], c.get("note"), c.get("amount"),
+             1 if c.get("amount_actual") else 0, n, str(by), at, at))
+    return cur.lastrowid
+
+
+def update_op_contract(cid: int, fields: dict, at: str) -> bool:
+    cols = [k for k in ("name", "note", "amount", "amount_actual") if k in fields]
+    if not cols:
+        return False
+    vals = [(1 if fields[k] else 0) if k == "amount_actual" else fields[k] for k in cols]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE op_contracts SET {', '.join(f'{c}=?' for c in cols)}, updated_at=? "
+            "WHERE id=?", (*vals, at, cid))
+    return cur.rowcount > 0
+
+
+def delete_op_contract(cid: int) -> bool:
+    with _lock, _conn:
+        _conn.execute("DELETE FROM op_contract_ticks WHERE contract_id=?", (cid,))
+        cur = _conn.execute("DELETE FROM op_contracts WHERE id=?", (cid,))
+    return cur.rowcount > 0
+
+
+def set_op_contract_tick(cid: int, roster_id: int, have: bool, at: str) -> None:
+    with _lock, _conn:
+        if have:
+            _conn.execute("INSERT OR IGNORE INTO op_contract_ticks (contract_id, roster_id, at) "
+                          "VALUES (?,?,?)", (cid, roster_id, at))
+        else:
+            _conn.execute("DELETE FROM op_contract_ticks WHERE contract_id=? AND roster_id=?",
+                          (cid, roster_id))
+
+
+def list_op_ledger(op_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM op_ledger WHERE op_id=? ORDER BY id",
+                             (op_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["bonus"] = bool(d.get("bonus"))
+        out.append(d)
+    return out
+
+
+def add_op_ledger(op_id: int, e: dict) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO op_ledger (op_id, kind, bonus, amount, roster_id, category, note, "
+            "entered_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (op_id, e["kind"], 1 if e.get("bonus") else 0, int(e["amount"]),
+             int(e["roster_id"]), e.get("category"), e.get("note"),
+             str(e["entered_by"]), e["created_at"]))
+    return cur.lastrowid
+
+
+def get_op_ledger_entry(lid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM op_ledger WHERE id=?", (lid,)).fetchone()
+    return dict(row) if row else None
+
+
+def void_op_ledger(lid: int, by: str, reason: str | None, at: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE op_ledger SET voided_at=?, voided_by=?, void_reason=? "
+            "WHERE id=? AND voided_at IS NULL", (at, str(by), reason, lid))
+    return cur.rowcount > 0
+
+
+def op_roster_money_refs(roster_id: int) -> int:
+    """Live ledger entries + committed transfers naming a roster row. A row
+    with money on it can't be removed (the record would lose where it went)."""
+    with _lock:
+        a = _conn.execute("SELECT COUNT(*) FROM op_ledger WHERE roster_id=? AND voided_at IS NULL",
+                          (roster_id,)).fetchone()[0]
+        b = _conn.execute("SELECT COUNT(*) FROM op_transfers WHERE from_roster=? OR to_roster=?",
+                          (roster_id, roster_id)).fetchone()[0]
+    return a + b
+
+
+def list_op_transfers(op_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM op_transfers WHERE op_id=? ORDER BY batch, id",
+                             (op_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_op_transfer(tid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM op_transfers WHERE id=?", (tid,)).fetchone()
+    return dict(row) if row else None
+
+
+def commit_op_transfers(op_id: int, plan: list[dict], at: str) -> dict:
+    """Store planned payment(s) as they're first marked. Returns
+    {(from, to, amount): id}."""
+    with _lock, _conn:
+        batch = _conn.execute("SELECT COALESCE(MAX(batch), 0) + 1 FROM op_transfers "
+                              "WHERE op_id=?", (op_id,)).fetchone()[0]
+        ids = {}
+        for t in plan:
+            cur = _conn.execute(
+                "INSERT INTO op_transfers (op_id, batch, from_roster, to_roster, amount, "
+                "created_at) VALUES (?,?,?,?,?,?)",
+                (op_id, batch, t["from_roster"], t["to_roster"], int(t["amount"]), at))
+            ids[(t["from_roster"], t["to_roster"], int(t["amount"]))] = cur.lastrowid
+    return ids
+
+
+def mark_op_transfer(tid: int, action: str, by: str, at: str, note: str | None = None) -> bool:
+    col = {"sent": ("sent_at", "sent_by"), "received": ("received_at", "received_by"),
+           "dispute": ("disputed_at", "disputed_by")}[action]
+    sets = f"{col[0]}=?, {col[1]}=?"
+    vals = [at, str(by)]
+    if action == "dispute":
+        sets += ", dispute_note=?"
+        vals.append(note)
+    if action == "received":        # a confirmed receipt settles any earlier dispute
+        sets += ", disputed_at=NULL, disputed_by=NULL, dispute_note=NULL"
+    with _lock, _conn:
+        cur = _conn.execute(f"UPDATE op_transfers SET {sets} WHERE id=?", (*vals, tid))
+    return cur.rowcount > 0
 
 
 def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:
