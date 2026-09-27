@@ -4369,8 +4369,8 @@
       member account, so those ops count in their stats. Their share, payments and loot
       on those ops move with them, and each op's record logs the link. Guest names are
       free text, so you choose which rows are the same person. A <b>suggestion</b> means
-      the guest name matches a member's in-game handle or Discord name; nothing is
-      linked until you click.
+      the guest's name or RSI handle matches a member's in-game handle, or their name
+      matches a member's Discord name; nothing is linked until you click.
     </div>
     <div id="op-guests-rows" style="display:flex; flex-direction:column; gap:6px;"></div>
     <div class="muted" id="op-guests-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
@@ -25513,8 +25513,11 @@ async function loadOpGuests() {
           body: JSON.stringify({ guest_row_ids: ids, discord_id: did }) });
         const out = await r.json();
         if (!r.ok) throw out;
-        $("op-guests-status").textContent = `Linked ${out.linked} to ${out.member}.` +
-          (out.clashes.length ? ` Skipped ${out.clashes.map(c => `“${c.op_name}”`).join(", ")}: ${out.member} is already on ${out.clashes.length === 1 ? "that op" : "those ops"}.` : "");
+        const skipped = out.clashes.map(c => `“${c.op_name}”`).join(", ");
+        $("op-guests-status").textContent = !out.linked && out.clashes.length
+          ? `Nothing linked: ${out.member} is already on ${skipped}.`
+          : `Linked ${out.linked} to ${out.member}.` +
+            (out.clashes.length ? ` Skipped ${skipped}: ${out.member} is already on ${out.clashes.length === 1 ? "that op" : "those ops"}.` : "");
         loadOpGuests();
       } catch (err) { $("op-guests-status").textContent = (err && err.detail) || "Couldn't link."; }
     };
