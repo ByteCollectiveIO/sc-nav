@@ -2954,6 +2954,225 @@ class OpLootApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 409)
 
 
+class OpCloseoutTests(unittest.TestCase):
+    """docs/event-operations.md §5.3/§9.3/§10 (ops slice 5): participation
+    stats from closed ops, the Discord record on close / reopen, and admin
+    guest → member linking. Each test uses its own member ids — stats read
+    every closed op in the (class-shared) DB."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+        self._members = []
+        self.bg = []
+        self._orig_bg = app._notify_bg
+
+        def _bg(coro):                       # record which notifier fired, don't run it
+            self.bg.append(coro.cr_code.co_name)
+            coro.close()
+        app._notify_bg = _bg
+
+    def tearDown(self):
+        app._notify_bg = self._orig_bg
+        for did in self._members:
+            app.members_dir.by_id.pop(did, None)
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _member(self, did, nick):
+        app.members_dir.by_id[did] = {"discord_id": did, "guild_nick": nick}
+        self._members.append(did)
+
+    def _op(self, organizer, members=(), guests=(), close=True, attendance=None):
+        """A quick op run by `organizer`, everyone Present unless `attendance`
+        says otherwise ({discord_id or guest name: status})."""
+        self._as(organizer)
+        op = self.client.post("/api/ops", json={"name": f"Op by {organizer}"}).json()
+        for d in members:
+            self.client.post(f"/api/ops/{op['id']}/roster", json={"discord_id": d})
+        for g in guests:
+            self.client.post(f"/api/ops/{op['id']}/roster", json={"guest_name": g})
+        op = self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "live"}).json()
+        att = attendance or {}
+        for r in op["roster"]:
+            key = r.get("discord_id") or r["name"]
+            self.client.patch(f"/api/ops/{op['id']}/roster/{r['id']}",
+                              json={"attendance": att.get(key, "present")})
+        if close:
+            self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "settle"})
+            r = self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "closed"})
+            self.assertEqual(r.status_code, 200, r.text)
+        self._as("1")
+        return self.client.get(f"/api/ops/{op['id']}").json()
+
+    # --- stats (§10) --------------------------------------------------------
+    def test_derive_participation_counts_and_excused_never_counts_against(self):
+        rows = [
+            {"op_id": 1, "discord_id": "a", "attendance": "present", "signed_up": "going"},
+            {"op_id": 2, "discord_id": "a", "attendance": "absent", "signed_up": "going"},
+            {"op_id": 3, "discord_id": "a", "attendance": "excused", "signed_up": "going"},
+            {"op_id": 4, "discord_id": "a", "attendance": "late", "signed_up": "maybe"},
+            {"op_id": 1, "discord_id": None, "attendance": "present", "signed_up": "none"},
+        ]
+        out = app.nav_core.derive_op_participation(rows, {1: "b", 2: "b", 3: "a"})
+        self.assertEqual(out["a"], {"attended": 2, "organized": 1, "going": 2, "showed": 1})
+        self.assertEqual(out["b"], {"attended": 0, "organized": 2, "going": 0, "showed": 0})
+        self.assertNotIn(None, out)                       # guests never get stats
+
+    def test_only_closed_ops_count_and_rolls_never(self):
+        self._op("601", members=["602"])
+        self._op("601", members=["602"], close=False)      # still live: not final
+        self._as("602")
+        self.client.post("/api/ops/rolls", json={"people": ["601"], "item": "Gun"})
+        me = self.client.get("/api/me/ops").json()
+        self.assertEqual(me["stats"]["attended"], 1)
+        self.assertEqual([o["attendance"] for o in me["ops"]], ["present"])
+        self._as("601")
+        me = self.client.get("/api/me/ops").json()
+        self.assertEqual(me["stats"]["organized"], 1)
+        self.assertTrue(me["ops"][0]["organized"])
+
+    def test_leaderboard_is_attendance_counts_only(self):
+        self._op("611", members=["612", "613"])
+        self._op("611", members=["612", "613"], attendance={"613": "absent"})
+        rows = {r["discord_id"]: r for r in self.client.get("/api/ops/leaderboard").json()["rows"]}
+        self.assertEqual(rows["612"]["attended"], 2)
+        self.assertEqual(rows["613"]["attended"], 1)
+        self.assertEqual(set(rows["612"]), {"discord_id", "name", "attended", "me"})
+        self.assertLess(list(rows).index("612"), list(rows).index("613"))
+
+    def test_directory_carries_ops_for_admins(self):
+        self._member("621", "Ada")
+        self._op("621", members=[])
+        self._as("1", admin=True)
+        row = next(m for m in self.client.get("/api/intel/directory").json()["members"]
+                   if m["discord_id"] == "621")
+        self.assertEqual(row["ops"]["organized"], 1)
+        self.assertEqual(row["ops"]["attended"], 1)
+
+    # --- Discord record (§9.3) ------------------------------------------------
+    def test_close_and_reopen_fire_the_record_posts(self):
+        op = self._op("631", members=["632"])
+        self.assertEqual(self.bg, ["_notify_op_closed"])
+        self._as("631")
+        self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "settle", "reason": "fix a share"})
+        self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "closed"})
+        self.assertEqual(self.bg, ["_notify_op_closed", "_notify_op_reopened", "_notify_op_closed"])
+
+    def test_loot_roll_done_posts_nothing(self):
+        self._as("641")
+        roll = self.client.post("/api/ops/rolls", json={"people": ["642"], "item": "Gun"}).json()
+        self.client.post(f"/api/ops/{roll['id']}/phase", json={"to": "closed"})
+        self.assertEqual(self.bg, [])
+
+    def test_record_embed_content_and_routing(self):
+        self._member("651", "Cap_n *Bold*")
+        self._member("652", "Wing")
+        op = self._op("651", members=["652"], guests=["Pal"], close=False,
+                      attendance={"652": "late"})
+        me = next(r for r in op["roster"] if r.get("discord_id") == "651")
+        self._as("651")
+        self.client.post(f"/api/ops/{op['id']}/ledger",
+                         json={"kind": "income", "amount": 300000, "roster_id": me["id"]})
+        self.client.post(f"/api/ops/{op['id']}/loot", json={"name": "FS-9"})
+        item = self.client.get(f"/api/ops/{op['id']}").json()["loot"]["items"][0]
+        self.client.post(f"/api/ops/{op['id']}/loot/{item['id']}/roll")
+        self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "settle"})
+        self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "closed"})
+        e = app._op_record_embed(db.get_op(op["id"]), updated=False)
+        text = _msg_text("", e)
+        self.assertIn("Op record", e["title"])
+        self.assertIn(r"Cap\_n \*Bold\*", text)           # a name can't garble the post
+        self.assertIn("Late", text)
+        self.assertIn("Pal (guest)", text)
+        self.assertIn("Pot 300,000 aUEC", text)
+        self.assertIn("2 payments still open", text)
+        self.assertIn("FS-9 →", text)
+        self.assertTrue(all(f["inline"] is False for f in e["fields"]))
+        self.assertIn("updated", app._op_record_embed(db.get_op(op["id"]), updated=True)["title"])
+
+        sent, orig_send, orig_cfg = [], notify.send, notify.is_configured
+
+        async def _capture(category, text, **kw):
+            sent.append(category)
+            return True
+        notify.send = _capture
+        try:
+            notify.is_configured = lambda c: c == "events"
+            asyncio.run(app._notify_op_closed(op["id"], updated=False))
+            notify.is_configured = lambda c: c in ("events", "ops")
+            asyncio.run(app._notify_op_closed(op["id"], updated=False))
+            notify.is_configured = lambda c: False
+            asyncio.run(app._notify_op_closed(op["id"], updated=False))
+        finally:
+            notify.send, notify.is_configured = orig_send, orig_cfg
+        self.assertEqual(sent, ["events", "ops"])          # split off → ops; none set → silent
+
+    # --- guest → member linking (§5.3) -----------------------------------------
+    def test_guest_link_suggests_moves_stats_and_logs(self):
+        self._member("661", "Organizer")
+        self._member("662", "Rook Pilot")
+        app.handles.register("RookHandle", "662")
+        a = self._op("661", guests=["rookhandle"])        # handle match, any casing
+        b = self._op("661", guests=["ROOKHANDLE"])
+        self._op("661", guests=["rook pilot"])            # Discord-name match
+        self._as("1", admin=True)
+        groups = self.client.get("/api/admin/ops/guests").json()["groups"]
+        g = next(x for x in groups if x["name"].casefold() == "rookhandle")
+        self.assertEqual(len(g["rows"]), 2)
+        self.assertEqual(g["suggestion"]["discord_id"], "662")
+        self.assertEqual(g["suggestion"]["basis"], "handle")
+        g2 = next(x for x in groups if x["name"] == "rook pilot")
+        self.assertEqual(g2["suggestion"]["basis"], "name")
+        ids = [r["id"] for r in g["rows"]]
+        r = self.client.post("/api/admin/ops/guests/link",
+                             json={"guest_row_ids": ids, "discord_id": "662"}).json()
+        self.assertEqual((r["linked"], r["clashes"]), (2, []))
+        self._as("662")
+        self.assertEqual(self.client.get("/api/me/ops").json()["stats"]["attended"], 2)
+        rec = self.client.get(f"/api/ops/{a['id']}").json()
+        self.assertTrue(any(x.get("discord_id") == "662" for x in rec["roster"]))
+        self.assertIn("linked guest rookhandle to member", rec["log"][-1]["text"])
+        self._as("1", admin=True)                          # linked rows leave the guest list
+        left = [x["op_id"] for grp in self.client.get("/api/admin/ops/guests").json()["groups"]
+                for x in grp["rows"]]
+        self.assertNotIn(a["id"], left)
+        self.assertNotIn(b["id"], left)
+
+    def test_guest_link_refuses_clash_nonadmin_and_unknown_member(self):
+        self._member("671", "Org")
+        self._member("672", "Twin")
+        op = self._op("671", members=["672"], guests=["Twin"])
+        guest = next(r for r in op["roster"] if not r.get("discord_id"))
+        body = {"guest_row_ids": [guest["id"]], "discord_id": "672"}
+        self._as("671")
+        self.assertEqual(self.client.post("/api/admin/ops/guests/link", json=body).status_code, 403)
+        self._as("1", admin=True)
+        r = self.client.post("/api/admin/ops/guests/link", json=body).json()
+        self.assertEqual(r["linked"], 0)
+        self.assertEqual([c["op_id"] for c in r["clashes"]], [op["id"]])
+        self.assertEqual(self.client.post("/api/admin/ops/guests/link", json={
+            "guest_row_ids": [guest["id"]], "discord_id": "999999"}).status_code, 400)
+
+
 class TradeRunStateTests(unittest.TestCase):
     """The trade-run leg/phase state machine (#21 step 5): guidance points at the
     active leg's buy terminal until the buy is confirmed, then its sell terminal;

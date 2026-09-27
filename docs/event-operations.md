@@ -655,4 +655,9 @@ Endpoints: `GET/POST /api/event-templates`, `PATCH/DELETE
 5. **Close-out.** The Discord summary, the `ops` notify category, the
    follow-up posts, stats (profile + Intel + attendance leaderboard), and
    guest linking with handle-match suggestions.
+   *Built 2026-09-27.* Two calls made while building: closed ops refuse
+   edits, so the only "amendment after Close" is a reopen — it posts a short
+   follow-up, and the next close posts the record again marked "updated".
+   And the `ops` category falls back to the events webhook when unset, so an
+   org gets records without configuring anything.
 6. **Watcher live status** (§8). Blocked on the §12.3 capture.

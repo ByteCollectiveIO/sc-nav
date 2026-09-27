@@ -10016,6 +10016,8 @@ def _op_log_text(e: dict) -> str:
         return f"added {p.get('name')}" + (" (guest)" if p.get("guest") else "")
     if k == "roster_remove":
         return f"removed {p.get('name')}" + (" (guest)" if p.get("guest") else "")
+    if k == "guest_linked":
+        return f"linked guest {p.get('guest')} to member {p.get('name')}"
     if k == "attendance":
         to = lab.get(p.get("to"), "unmarked")
         was = lab.get(p.get("from")) if p.get("from") else None
@@ -10074,6 +10076,108 @@ def _auec(n) -> str:
         return f"{int(n):,} aUEC"
     except (TypeError, ValueError):
         return "? aUEC"
+
+
+# --- op close-out to Discord (ops slice 5, docs/event-operations.md §9.3) ---
+# A record, not a call to action: no @-pings, and payment reminders stay with
+# the Ops tile. Standalone loot rolls never post — they aren't ops.
+
+def _ops_notify_category() -> str | None:
+    """Op records go to their own `ops` webhook once an org has split it off,
+    else to the events one."""
+    return next((c for c in ("ops", "events") if notify.is_configured(c)), None)
+
+
+_MD_SPECIAL = re.compile(r"([\\*_~`|>\[\]])")
+
+
+def _md_plain(text) -> str:
+    """User text inside an embed description/field, which DO render markdown:
+    escape it so a name like `x_x` or `**` can't garble the post."""
+    return _MD_SPECIAL.sub(r"\\\1", str(text or ""))
+
+
+def _clip(text: str, n: int = 1000) -> str:
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def _op_record_embed(op: dict, *, updated: bool) -> dict:
+    roster = db.list_op_roster(op["id"])
+    viewer = {"id": op["organizer_id"], "is_admin": False}
+    counts = nav_core.op_attendance_counts(roster)
+    by_status: dict = {}
+    for r in roster:
+        by_status.setdefault(r.get("attendance"), []).append(
+            _md_plain(_op_row_name(r)) + (" (guest)" if not r.get("discord_id") else ""))
+    lines = [f"**{nav_core.OP_ATTENDANCE_LABEL[k]}** ({len(by_status[k])}): " + ", ".join(by_status[k])
+             for k in nav_core.OP_ATTENDANCE_KEYS if by_status.get(k)]
+    fields = [{"name": f"Attendance — {counts['took_part']} took part",
+               "value": _clip("\n".join(lines) or "Nobody on the roster.")}]
+    money = _op_money(op, roster, viewer)
+    if money["ledger"]:
+        T = money["split"]["totals"]
+        owed = [t for t in money["transfers"] if not t.get("received_at")]
+        val = f"Pot {_auec(T['pot'])}"
+        if T.get("weight_total"):
+            val += f" · a full share ≈ {_auec(T['per_full_share'])}"
+        val += ("\nEvery payment confirmed." if not owed else
+                f"\n{len(owed)} payment{'s' if len(owed) != 1 else ''} still open "
+                f"({_auec(sum(t['amount'] for t in owed))}).")
+        fields.append({"name": "Money", "value": val})
+    loot = _op_loot_view(op, roster, viewer)["loot"]
+    if loot["items"]:
+        out = []
+        for it in loot["items"]:
+            name = _md_plain(it["name"])
+            roll = it.get("roll")
+            rer = len(it.get("voided") or [])
+            out.append(f"{name} → **{_md_plain(roll['winner_name'])}**" if roll else f"{name} — not rolled")
+            if rer:
+                out[-1] += f" ({rer} re-roll{'s' if rer != 1 else ''})"
+        mode = nav_core.LOOT_MODE_LABEL.get(loot["rules"]["mode"], loot["rules"]["mode"])
+        fields.append({"name": f"Loot — {mode}", "value": _clip("\n".join(out))})
+    when = op.get("started_at") or op.get("created_at")
+    desc = f"{_discord_ts(when, 'f')} · run by {_md_plain(_resolve_member_name(op['organizer_id'], None))}"
+    mins = _op_minutes(op.get("started_at"), op.get("ended_at"))
+    if mins:
+        desc += f" · {mins // 60}h {mins % 60:02d}m" if mins >= 60 else f" · {mins} min"
+    e = _embed(("📜 Op record updated: " if updated else "📜 Op record: ") + op["name"], desc,
+               url=_app_url(f"#/ops/{op['id']}"), color=_EMBED_WARN if updated else _EMBED_INFO,
+               fields=fields)
+    for f in e["fields"]:
+        f["inline"] = False            # lists of names don't fit side by side
+    return e
+
+
+def _op_minutes(start: str | None, end: str | None) -> int | None:
+    try:
+        a = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(end.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    m = int((b - a).total_seconds() // 60)
+    return m if m > 0 else None
+
+
+async def _notify_op_closed(op_id: int, updated: bool) -> None:
+    cat = _ops_notify_category()
+    op = db.get_op(op_id)
+    if cat is None or op is None or op.get("kind") == "roll":
+        return
+    await notify.send(cat, "", embed=_op_record_embed(op, updated=updated),
+                      dedup_key=f"op-closed:{op_id}:{op.get('closed_at')}")
+
+
+async def _notify_op_reopened(op: dict, by: dict, reason: str, at: str) -> None:
+    cat = _ops_notify_category()
+    if cat is None or op.get("kind") == "roll":
+        return
+    await notify.send(cat, "", embed=_embed(
+        f"📜 Op record reopened: {op['name']}",
+        f"{_md_plain(_resolve_member_name(by['id'], None))} reopened it: “{_md_plain(reason)}”. "
+        "The updated record posts here when it closes again.",
+        url=_app_url(f"#/ops/{op['id']}"), color=_EMBED_WARN),
+        dedup_key=f"op-reopened:{op['id']}:{at}")
 
 
 def _op_summary(op: dict, user: dict, roster: list[dict] | None = None) -> dict:
@@ -10316,6 +10420,128 @@ async def ops_member_lookup(q: str = "", user: dict = Depends(require_session)):
     return {"members": _member_name_search(q)}
 
 
+# --- participation stats (ops slice 5, docs/event-operations.md §10) --------
+# Participation, not judging: the member sees their own numbers, admins see
+# everyone's (directory), and the public board is attendance COUNTS only —
+# never a no-show rate. Derived per request from closed ops, never stored.
+
+def _op_participation() -> dict:
+    rows, organizers = db.op_participation_rows()
+    return nav_core.derive_op_participation(rows, organizers)
+
+
+_OP_NO_STATS = {"attended": 0, "organized": 0, "going": 0, "showed": 0}
+
+
+@app.get("/api/ops/leaderboard")
+async def ops_leaderboard(user: dict = Depends(require_session)):
+    """Registered BEFORE /api/ops/{op_id}. Ops attended per member, most
+    first. Only the count — `organized`/`showed` stay off the public board."""
+    stats = _op_participation()
+    rows = [{"discord_id": did, "name": _resolve_member_name(did, None),
+             "attended": s["attended"], "me": did == user["id"]}
+            for did, s in stats.items() if s["attended"] > 0]
+    rows.sort(key=lambda r: (-r["attended"], r["name"].casefold()))
+    return {"rows": rows}
+
+
+# --- guest → member linking (ops slice 5, docs/event-operations.md §5.3) ----
+# Admin-only and retroactive. Guest names are free text, so the admin picks
+# the rows; the server only SUGGESTS a member (a bound in-game handle first,
+# then a Discord name) and never links on its own.
+
+class OpGuestLinkIn(BaseModel):
+    guest_row_ids: list[int] = Field(min_length=1, max_length=500)
+    discord_id: str = Field(min_length=1, max_length=24)
+
+
+def _guest_fold(s: str | None) -> str:
+    return (s or "").strip().casefold()
+
+
+def _guest_link_suggestion(name: str, guest_handles: list[str], by_name: dict) -> dict | None:
+    for h in [*guest_handles, name]:
+        e = handles.get(h) if (h or "").strip() else None
+        if e and e.get("discord_id"):
+            return {"discord_id": e["discord_id"], "basis": "handle", "matched": e["handle"]}
+    did = by_name.get(_guest_fold(name))
+    return {"discord_id": did, "basis": "name", "matched": name} if did else None
+
+
+@app.get("/api/admin/ops/guests")
+async def op_guest_rows(admin: dict = Depends(require_admin)):
+    """Guest rows across every op, grouped by case-folded name (one person
+    usually appears the same way twice), each group with a suggested member."""
+    by_name: dict = {}
+    for did, m in members_dir.by_id.items():
+        for n in (m.get("guild_nick"), m.get("display_name"), m.get("username")):
+            if _guest_fold(n):
+                by_name.setdefault(_guest_fold(n), did)
+    groups: dict = {}
+    for r in db.list_op_guest_rows():
+        g = groups.setdefault(_guest_fold(r["guest_name"]) or f"#{r['id']}",
+                              {"name": r["guest_name"] or "Guest", "handles": [], "rows": []})
+        if r.get("guest_handle") and r["guest_handle"] not in g["handles"]:
+            g["handles"].append(r["guest_handle"])
+        g["rows"].append({"id": r["id"], "op_id": r["op_id"], "op_name": r["op_name"],
+                          "op_at": r["op_at"], "phase": r["phase"],
+                          "handle": r.get("guest_handle"), "attendance": r.get("attendance")})
+    out = []
+    for g in groups.values():
+        sug = _guest_link_suggestion(g["name"], g["handles"], by_name)
+        if sug:
+            sug["name"] = _resolve_member_name(sug["discord_id"], None)
+        out.append({**g, "suggestion": sug})
+    # Suggested first (the ones an admin can clear in one click), then freshest.
+    out.sort(key=lambda g: max(x["op_at"] or "" for x in g["rows"]), reverse=True)
+    out.sort(key=lambda g: g["suggestion"] is None)
+    return {"groups": out}
+
+
+@app.post("/api/admin/ops/guests/link")
+async def link_op_guests(body: OpGuestLinkIn, admin: dict = Depends(require_admin)):
+    """Rewrite the chosen guest rows to one member, in place — their money and
+    loot follow the row. Logged on each op's record; stats pick it up at once
+    (they're derived). A row on an op the member is already on is refused."""
+    did = body.discord_id.strip()
+    if not did.isdigit() or did not in members_dir.by_id:
+        raise HTTPException(status_code=400, detail="pick a member who has signed in")
+    member = _resolve_member_name(did, None)
+    at = _now_iso()
+    linked, clashes, skipped, touched = 0, [], 0, set()
+    for rid in dict.fromkeys(body.guest_row_ids):
+        row = db.get_op_roster_row(rid)
+        op = db.get_op(row["op_id"]) if row else None
+        if op is None or op.get("kind") == "roll":
+            skipped += 1
+            continue
+        status = db.link_op_guest_row(rid, did, at)
+        if status == "clash":
+            clashes.append({"row_id": rid, "op_id": op["id"], "op_name": op["name"]})
+        elif status == "ok":
+            linked += 1
+            touched.add(op["id"])
+            _op_log(op["id"], admin, "guest_linked",
+                    {"guest": row.get("guest_name") or "Guest", "name": member, "discord_id": did})
+        else:
+            skipped += 1
+    for op_id in touched:
+        await _op_changed(op_id)
+    return {"linked": linked, "clashes": clashes, "skipped": skipped, "member": member}
+
+
+@app.get("/api/me/ops")
+async def my_ops(user: dict = Depends(require_session)):
+    """Your own participation numbers and your closed-op history (Settings →
+    Profile). The showed-when-signed-up figure is yours alone to see."""
+    stats = _op_participation().get(user["id"], dict(_OP_NO_STATS))
+    ops = [{"id": o["id"], "name": o["name"], "event_id": o["event_id"],
+            "at": o["started_at"] or o["created_at"], "closed_at": o["closed_at"],
+            "attendance": o["attendance"], "organized": o["organizer_id"] == user["id"]}
+           for o in db.member_op_history(user["id"])]
+    return {"stats": stats, "ops": ops}
+
+
 @app.get("/api/ops/{op_id}")
 async def get_op(op_id: int, user: dict = Depends(require_session)):
     """One op with its roster and full log. Every member can read every op —
@@ -10398,6 +10624,13 @@ async def change_op_phase(op_id: int, body: OpPhaseIn, user: dict = Depends(requ
             reason)
     if action == "close" and op.get("event_id"):
         db.complete_event(op["event_id"], at)
+    if op.get("kind") != "roll":      # a loot roll isn't an op: no record post
+        # A closed_at from an earlier close means this is the record re-closing
+        # after a reopen, so it posts as an update.
+        if action == "close":
+            _notify_bg(_notify_op_closed(op_id, updated=bool(op.get("closed_at"))))
+        elif action == "reopen":
+            _notify_bg(_notify_op_reopened(op, user, reason, at))
     await _op_changed(op_id)
     return _op_view(db.get_op(op_id), user)
 
@@ -15359,6 +15592,7 @@ async def member_directory(admin: dict = Depends(require_admin)):
     opted-out rows, and it filters them out of any future member-facing view.
     docs/member-identity-and-directory.md."""
     rows = []
+    ops = _op_participation()      # §10: admins see everyone's participation here
     for did, m in members_dir.by_id.items():
         owned = handles.handles_for(did)
         primary = m.get("primary_handle")
@@ -15374,6 +15608,7 @@ async def member_directory(admin: dict = Depends(require_admin)):
             "opt_out": bool(m.get("directory_opt_out")),
             "last_login": m.get("last_login"),
             "is_admin": did in admin_ids(),
+            "ops": ops.get(did, dict(_OP_NO_STATS)),
         })
     rows.sort(key=lambda r: (r["display_name"] or r["username"] or r["discord_id"]).lower())
     return {"members": rows, "total": len(rows)}

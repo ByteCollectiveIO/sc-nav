@@ -36,7 +36,7 @@ import db
 # A category is "on" exactly when it has a valid webhook, so there's no separate
 # enable toggle: clearing the URL turns that category off.
 CATEGORIES = ("events", "marketplace", "goals", "records", "lfg", "pirates",
-              "survey")
+              "survey", "ops")
 _WEBHOOK_PREFIX = "discord_webhook_"          # + category, e.g. discord_webhook_events
 _LEGACY_WEBHOOK_KEY = "discord_webhook_url"   # v0.13.0's single shared webhook
 REMINDER_LEAD_KEY = "discord_reminder_lead_min"

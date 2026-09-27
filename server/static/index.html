@@ -131,11 +131,11 @@
      items of <main> (preserving the gap/sizing); the [hidden] rule is more
      specific than the bare id, so toggling the attribute still hides a view. */
   #main-view, #settings-view, #setup-view, #leaderboard-view, #stats-view,
-  #route-view, #cargo-leaderboard-view, #cargo-stats-view,
+  #route-view, #cargo-leaderboard-view, #cargo-stats-view, #ops-board-view,
   #terms-view, #privacy-view { display: contents; }
   #main-view[hidden], #settings-view[hidden], #setup-view[hidden],
   #leaderboard-view[hidden], #stats-view[hidden], #route-view[hidden],
-  #cargo-leaderboard-view[hidden], #cargo-stats-view[hidden],
+  #cargo-leaderboard-view[hidden], #cargo-stats-view[hidden], #ops-board-view[hidden],
   #terms-view[hidden], #privacy-view[hidden] { display: none; }
 
   /* ---- legal pages (#/terms, #/privacy) ---- */
@@ -2193,6 +2193,13 @@
   .op-roll-row { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 6px 0;
     border-top: 1px solid var(--border); text-decoration: none; color: var(--text); font-size: 13px; }
   .op-roll-row:hover span:first-child { color: var(--accent); }
+  /* ---- admin: ops guests → members (slice 5) ---- */
+  .opg-row { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  .opg-ops summary { cursor: pointer; font-size: 12px; margin-top: 2px; }
+  .opg-op { display: block; font-size: 12px; padding: 2px 0; }
+  .opg-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  .opg-pick { position: relative; flex: 1; min-width: 180px; max-width: 280px; }
+  .opg-pick .ti { width: 100%; }
   .op-rules-loot { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;
     margin-top: 12px; align-items: start; }
   .op-rules-loot [hidden] { display: none; }
@@ -3947,6 +3954,10 @@
             style="font-size:12px;"></span>
     </div>
   </div>
+  <div class="panel" id="my-ops-panel">
+    <h2>MY OPS <span class="muted">(only you see this)</span></h2>
+    <div id="my-ops-body"><div class="muted" style="font-size:12px;">Loading…</div></div>
+  </div>
   <div class="settings-grp-h">Support the project</div>
   <div class="panel" id="support-panel">
     <h2>SUPPORT <span class="muted">(help keep the lights on)</span></h2>
@@ -4351,6 +4362,20 @@
     <div class="muted" id="handle-bind-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
   </div>
 
+  <div class="panel admin-grp" id="op-guests-panel">
+    <h2>OPS GUESTS → MEMBERS</h2>
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">
+      Someone who ran ops as a guest and later joined the org can be linked to their
+      member account, so those ops count in their stats. Their share, payments and loot
+      on those ops move with them, and each op's record logs the link. Guest names are
+      free text, so you choose which rows are the same person. A <b>suggestion</b> means
+      the guest name matches a member's in-game handle or Discord name; nothing is
+      linked until you click.
+    </div>
+    <div id="op-guests-rows" style="display:flex; flex-direction:column; gap:6px;"></div>
+    <div class="muted" id="op-guests-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+  </div>
+
   <div class="panel admin-grp" id="motd-panel">
     <h2>MESSAGE OF THE DAY</h2>
     <div class="muted" style="font-size:12px; margin-bottom:6px;">
@@ -4574,6 +4599,7 @@
       <div class="seg" id="intel-board-toggle" role="group" aria-label="Leaderboard type">
         <button data-board="mapping" title="Top contributors by POIs and resource nodes mapped">Contributors</button>
         <button data-board="hauling" title="Top haulers by aUEC earned">Earners</button>
+        <button data-board="ops" title="Ops attended, counted from closed op records">Attendance</button>
       </div>
     </div>
   </div>
@@ -4687,6 +4713,15 @@
     <div class="muted" id="cargo-lb-efficient-empty" hidden style="padding:8px 0;">No timed hauls yet.</div>
   </div>
   </div><!-- /cargo-leaderboard-view -->
+
+  <div id="ops-board-view" hidden>
+  <div class="panel">
+    <h2>OPS ATTENDED <span class="muted">(closed ops)</span></h2>
+    <p class="ev-hint">A count of the ops each member took part in: Present, Late or Left early. It counts turning up; it doesn't score anyone.</p>
+    <div class="lb-chart" id="ops-lb-chart"></div>
+    <div class="muted" id="ops-lb-empty" hidden style="padding:8px 0;">No closed ops yet. An op counts here once it's closed.</div>
+  </div>
+  </div><!-- /ops-board-view -->
 
   <div id="cargo-stats-view" hidden>
   <div id="cargo-stats-status" class="stats-status" hidden></div>
@@ -24506,6 +24541,7 @@ function applyView() {
   $("leaderboard-view").hidden = true;
   $("stats-view").hidden = true;
   $("cargo-leaderboard-view").hidden = true;
+  $("ops-board-view").hidden = true;
   $("cargo-stats-view").hidden = true;
   $("trade-stats-view").hidden = true;
   $("survey-stats-view").hidden = true;
@@ -24542,6 +24578,7 @@ function applyView() {
     // than trusting the boot-time /api/me snapshot.
     refreshIdentity();
     renderProfilePanel();
+    loadMyOps();
     if (currentMe.is_admin) loadSettings();
   } else if (route) {
     loadRoutePlanner();
@@ -24844,6 +24881,56 @@ function cargoBoard(elId, emptyId, rows, valOf, fmt, cls) {
   }).join("");
 }
 
+// Settings → MY OPS (§9.2/§10): your participation and your closed ops. The
+// showed-when-signed-up figure lives here and in the admin directory, never
+// on a public board.
+async function loadMyOps() {
+  const el = $("my-ops-body");
+  let d;
+  try {
+    const r = await fetch("/api/me/ops");
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch {
+    el.innerHTML = `<div class="muted" style="font-size:12px;">Couldn't load your ops.</div>`;
+    return;
+  }
+  const s = d.stats || {}, ops = d.ops || [];
+  if (!ops.length) {
+    el.innerHTML = `<div class="muted" style="font-size:12px;">No closed ops yet. Once an op you're on is closed, it's listed here.</div>`;
+    return;
+  }
+  const bits = [`<b>${s.attended}</b> op${s.attended === 1 ? "" : "s"} attended`];
+  if (s.organized) bits.push(`<b>${s.organized}</b> run by you`);
+  if (s.going) bits.push(`showed up for <b>${s.showed}</b> of the <b>${s.going}</b> you signed up Going for`);
+  el.innerHTML = `<p style="margin:0 0 8px;font-size:13px;">${bits.join(" · ")}</p>` +
+    ops.map(o => `<a class="op-roll-row" href="#/ops/${o.id}"><span>${esc(o.name)}</span>` +
+      `<span class="muted">${esc(fmtEventTime(o.at))} · ${o.attendance ? esc((OP_ATT_KEYS.find(k => k[0] === o.attendance) || [0, o.attendance])[1]) : "not on the roster"}` +
+      `${o.organized ? " · you ran it" : ""}</span></a>`).join("");
+}
+
+// Ops attendance (ops slice 5, docs/event-operations.md §10): counts only —
+// never a no-show rate. Shares cargoBoard's bar rows.
+async function loadOpsLeaderboard() {
+  let d;
+  try {
+    const r = await fetch("/api/ops/leaderboard");
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch {
+    const c = $("ops-lb-chart");
+    $("ops-lb-empty").hidden = true;
+    c.innerHTML = sectionMsg("Couldn't load the leaderboard",
+      "Check your connection to the nav server and try again.", { retry: true });
+    c.querySelector("[data-retry]").onclick = loadOpsLeaderboard;
+    return;
+  }
+  cargoBoard("ops-lb-chart", "ops-lb-empty",
+    (d.rows || []).map(r => ({ display_name: r.name, mine: r.me, attended: r.attended })),
+    r => r.attended, v => `${v} op${v === 1 ? "" : "s"}`, "rate");
+  stampIntelFresh();
+}
+
 async function loadCargoLeaderboard() {
   $("cargo-lb-sub").textContent = cargoLbRange === "week" ? "(this week)" : "(all-time)";
   wireRangeToggle("cargo-lb-range", cargoLbRange, r => { cargoLbRange = r; loadCargoLeaderboard(); });
@@ -25051,6 +25138,7 @@ function renderIntel(section) {
   $("intel-boards-bar").hidden = !boards;
   $("leaderboard-view").hidden = !(boards && intelBoard === "mapping");
   $("cargo-leaderboard-view").hidden = !(boards && intelBoard === "hauling");
+  $("ops-board-view").hidden = !(boards && intelBoard === "ops");
   if (section === "overview") loadIntelOverview();
   else if (section === "directory") loadDirectory();
   else if (section === "mapping") loadStats();
@@ -25065,7 +25153,9 @@ function renderIntel(section) {
       b.setAttribute("aria-pressed", on ? "true" : "false");
       b.onclick = () => { intelBoard = b.dataset.board; renderIntel("boards"); };
     });
-    if (intelBoard === "mapping") loadLeaderboard(); else loadCargoLeaderboard();
+    if (intelBoard === "mapping") loadLeaderboard();
+    else if (intelBoard === "ops") loadOpsLeaderboard();
+    else loadCargoLeaderboard();
   }
 }
 
@@ -25107,14 +25197,22 @@ async function loadDirectory() {
   const tagsCell = (m) => (m.playstyle_tags || []).length
     ? `<span class="on-ptags">${m.playstyle_tags.map(t => `<span class="on-ptag">${esc(t)}</span>`).join("")}</span>`
     : `<span class="muted">—</span>`;
+  // Ops participation (§10) — admins see everyone's, including the
+  // showed-when-signed-up figure that never appears on a public board.
+  const opsCell = (m) => {
+    const o = m.ops || {};
+    if (!o.attended && !o.organized && !o.going) return `<span class="muted">—</span>`;
+    return `${o.attended} attended` + (o.organized ? ` · ${o.organized} run` : "") +
+      (o.going ? ` <span class="dir-alts" title="Of the ops they signed up Going for, how many they took part in. Excused doesn't count against them.">· showed ${o.showed}/${o.going}</span>` : "");
+  };
   const body = rows.map(m =>
-    `<tr><td>${memberCell(m)}</td><td>${handleCell(m)}</td><td>${tagsCell(m)}</td><td>${statusCell(m)}</td></tr>`).join("");
+    `<tr><td>${memberCell(m)}</td><td>${handleCell(m)}</td><td>${tagsCell(m)}</td><td>${opsCell(m)}</td><td>${statusCell(m)}</td></tr>`).join("");
   root.innerHTML = `<div class="panel"><div class="lb-head-row">` +
     `<h2 style="margin:0;">MEMBER DIRECTORY <span class="muted">(${rows.length} member${rows.length === 1 ? "" : "s"})</span></h2></div>` +
     `<p class="ev-hint">Discord identity to in-game handle, for finding org-mates. ` +
     `Members can hide themselves from member-facing views in Settings; admins always see everyone, so opted-out rows show a <b>hidden</b> flag here.</p>` +
     (rows.length
-      ? `<div class="table-x"><table class="dir-table"><thead><tr><th>MEMBER</th><th>IN-GAME HANDLE(S)</th><th>PLAYSTYLES</th><th>STATUS</th></tr></thead><tbody>${body}</tbody></table></div>`
+      ? `<div class="table-x"><table class="dir-table"><thead><tr><th>MEMBER</th><th>IN-GAME HANDLE(S)</th><th>PLAYSTYLES</th><th>OPS</th><th>STATUS</th></tr></thead><tbody>${body}</tbody></table></div>`
       : `<div class="stat-empty">No members have signed in yet.</div>`) +
     `</div>`;
 }
@@ -25303,6 +25401,7 @@ async function loadSettings() {
     renderAdmins();
     loadPoiOverrides();
     loadHandleBindings();
+    loadOpGuests();
     loadUpdateCheck();   // cached server-side; a page load never re-polls GitHub
     applyOrgLogoAdmin(s.org_logo_v);
     appArtVersions = s.app_images || {};
@@ -25363,6 +25462,82 @@ function handleSeenText(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d) ? "" : d.toLocaleDateString();
+}
+
+// Guest → member linking (ops slice 5, docs/event-operations.md §5.3).
+async function loadOpGuests() {
+  const box = $("op-guests-rows");
+  let d;
+  try {
+    const r = await fetch("/api/admin/ops/guests");
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch {
+    box.innerHTML = `<span class="muted" style="font-size:12px;">couldn't load guest rows</span>`;
+    return;
+  }
+  const groups = d.groups || [];
+  if (!groups.length) {
+    box.innerHTML = `<span class="muted" style="font-size:12px;">No guests on any op.</span>`;
+    return;
+  }
+  box.innerHTML = groups.map((g, gi) => {
+    const sug = g.suggestion;
+    const why = sug && (sug.basis === "handle" ? `in-game handle ${esc(sug.matched)}` : "Discord name");
+    return `<div class="opg-row" data-g="${gi}">` +
+      `<div class="opg-head"><b>${esc(g.name)}</b>` +
+        (g.handles.length ? ` <span class="muted">⌖ ${g.handles.map(esc).join(", ")}</span>` : "") +
+        ` <span class="muted">· ${g.rows.length} op${g.rows.length === 1 ? "" : "s"}</span></div>` +
+      `<details class="opg-ops"><summary class="muted">Which ops</summary>` +
+        g.rows.map(r => `<label class="opg-op"><input type="checkbox" checked data-rid="${r.id}"> ` +
+          `<a href="#/ops/${r.op_id}">${esc(r.op_name)}</a> <span class="muted">${esc(fmtEventTime(r.op_at))}` +
+          `${r.phase === "closed" ? "" : " · still open"}</span></label>`).join("") + `</details>` +
+      `<div class="opg-acts">` +
+        (sug ? `<button class="ev-btn sm primary" data-link="${esc(sug.discord_id)}" data-name="${esc(sug.name)}">Link to ${esc(sug.name)}</button>` +
+          ` <span class="muted" style="font-size:12px;">suggested: ${why} matches</span>` : "") +
+        `<span class="opg-pick"><input class="ti" placeholder="${sug ? "…or someone else" : "Link to a member…"}" aria-label="Find a member to link ${esc(g.name)} to" autocomplete="off">` +
+        `<span class="op-hits" role="listbox" hidden></span></span>` +
+      `</div></div>`;
+  }).join("");
+  box.querySelectorAll(".opg-row").forEach(el => {
+    const g = groups[Number(el.dataset.g)];
+    const link = async (did, name) => {
+      const ids = [...el.querySelectorAll("input[data-rid]:checked")].map(i => Number(i.dataset.rid));
+      if (!ids.length) { $("op-guests-status").textContent = "Tick at least one op."; return; }
+      const ok = await confirmDialog(`Link ${ids.length} op${ids.length === 1 ? "" : "s"} where “${g.name}” was a guest to ${name}? ` +
+        `Their share, payments and loot on those ops move to ${name}, and each op's record logs it.`,
+        { title: "Link guest to member", confirmLabel: "Link" });
+      if (!ok) return;
+      try {
+        const r = await fetch("/api/admin/ops/guests/link", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ guest_row_ids: ids, discord_id: did }) });
+        const out = await r.json();
+        if (!r.ok) throw out;
+        $("op-guests-status").textContent = `Linked ${out.linked} to ${out.member}.` +
+          (out.clashes.length ? ` Skipped ${out.clashes.map(c => `“${c.op_name}”`).join(", ")}: ${out.member} is already on ${out.clashes.length === 1 ? "that op" : "those ops"}.` : "");
+        loadOpGuests();
+      } catch (err) { $("op-guests-status").textContent = (err && err.detail) || "Couldn't link."; }
+    };
+    const b = el.querySelector("[data-link]");
+    if (b) b.onclick = () => link(b.dataset.link, b.dataset.name);
+    const input = el.querySelector(".opg-pick input"), hits = el.querySelector(".opg-pick .op-hits");
+    let t = null;
+    input.oninput = () => {
+      clearTimeout(t);
+      const q = input.value.trim();
+      if (q.length < 2) { hits.hidden = true; return; }
+      t = setTimeout(async () => {
+        const m = await fetch(`/api/ops/members?q=${encodeURIComponent(q)}`).then(r => r.ok ? r.json() : { members: [] }).catch(() => ({ members: [] }));
+        hits.innerHTML = (m.members || []).length
+          ? m.members.map(x => `<button type="button" role="option" data-did="${esc(x.discord_id)}" data-name="${esc(x.name)}">${esc(x.name)}</button>`).join("")
+          : `<span class="muted">No match.</span>`;
+        hits.hidden = false;
+        hits.querySelectorAll("button[data-did]").forEach(h => h.onclick = () => {
+          hits.hidden = true; input.value = ""; link(h.dataset.did, h.dataset.name);
+        });
+      }, 200);
+    };
+  });
 }
 
 async function loadHandleBindings() {
@@ -25643,6 +25818,7 @@ const DISCORD_CATS = [
   { key: "lfg",         label: "Group Finder", desc: "new looking-for-group posts (opt-in per post)" },
   { key: "pirates",     label: "Danger Board", desc: "new pirate danger warnings (opt-in per post)" },
   { key: "survey",      label: "Surveying",   desc: "new survey zones (opt-in per zone) + belt-survey milestones" },
+  { key: "ops",         label: "Ops",         desc: "a closed op's record (and reopens). Unset = posts to Events" },
 ];
 const WEBHOOK_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//;
 const discSt = (key) => $("dwh-st-" + key);

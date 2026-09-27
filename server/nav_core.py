@@ -5806,6 +5806,41 @@ def op_attendance_counts(roster) -> dict:
     return out
 
 
+def derive_op_participation(rows, organizers) -> dict:
+    """Participation stats per member (docs/event-operations.md §10), derived
+    from CLOSED ops only — a live op's attendance isn't final — and never
+    stored, so a guest linked to a member later counts at once.
+
+    `rows`: member roster rows {op_id, discord_id, attendance, signed_up}.
+    `organizers`: {op_id: organizer discord_id}.
+    → {discord_id: {attended, organized, going, showed}}. `going`/`showed` is
+    "showed when signed up": of the ops a member signed up Going for, how many
+    they took part in. Excused never counts against anyone, so an excused
+    Going row leaves both numbers alone."""
+    took = {a["key"] for a in OP_ATTENDANCE if a["took_part"]}
+    out: dict = {}
+
+    def slot(did):
+        return out.setdefault(str(did), {"attended": 0, "organized": 0, "going": 0, "showed": 0})
+
+    for r in rows or []:
+        did = r.get("discord_id")
+        if not did:
+            continue
+        s = slot(did)
+        a = r.get("attendance")
+        if a in took:
+            s["attended"] += 1
+        if r.get("signed_up") == "going" and a != "excused":
+            s["going"] += 1
+            if a in took:
+                s["showed"] += 1
+    for did in (organizers or {}).values():
+        if did:
+            slot(did)["organized"] += 1
+    return out
+
+
 # --- op money: rules, split, transfers (docs/event-operations.md §4/§6) ----
 # Contracts are NOT here on purpose: a shared contract is paid out by the game
 # in equal cuts to everyone who had it shared, so the tool records it and never

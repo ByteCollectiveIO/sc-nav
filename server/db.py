@@ -3086,6 +3086,72 @@ def member_ops_attended(discord_id: str, since_iso: str, exclude_op: int) -> int
             (str(discord_id), exclude_op, since_iso)).fetchone()[0]
 
 
+# --- op participation + guest linking (ops slice 5, §5.3/§10) --------------
+# Stats read CLOSED ops only (a live op's attendance isn't final), and never a
+# standalone loot roll (kind='roll' — it isn't an op).
+_CLOSED_OP_SQL = "o.phase = 'closed' AND COALESCE(o.kind, 'op') = 'op'"
+
+
+def op_participation_rows() -> tuple[list[dict], dict]:
+    """Every member roster row of a closed op + {op_id: organizer_id}."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT r.op_id, r.discord_id, r.attendance, r.signed_up FROM op_roster r "
+            f"JOIN operations o ON o.id = r.op_id WHERE r.discord_id IS NOT NULL AND {_CLOSED_OP_SQL}"
+        ).fetchall()
+        orgs = _conn.execute(
+            f"SELECT o.id, o.organizer_id FROM operations o WHERE {_CLOSED_OP_SQL}").fetchall()
+    return [dict(r) for r in rows], {r["id"]: r["organizer_id"] for r in orgs}
+
+
+def member_op_history(discord_id: str, limit: int = 50) -> list[dict]:
+    """A member's closed ops — on the roster or organizing — freshest first,
+    with their own attendance on each."""
+    did = str(discord_id)
+    with _lock:
+        rows = _conn.execute(
+            "SELECT o.id, o.name, o.event_id, o.organizer_id, o.started_at, o.created_at, "
+            "o.closed_at, r.attendance FROM operations o "
+            "LEFT JOIN op_roster r ON r.op_id = o.id AND r.discord_id = ? "
+            f"WHERE {_CLOSED_OP_SQL} AND (r.id IS NOT NULL OR o.organizer_id = ?) "
+            "ORDER BY COALESCE(o.started_at, o.created_at) DESC LIMIT ?",
+            (did, did, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_op_guest_rows() -> list[dict]:
+    """Every guest roster row on an op (never a loot roll), with its op's name
+    and date — the admin's guest → member linking list."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT r.id, r.op_id, r.guest_name, r.guest_handle, r.attendance, "
+            "o.name AS op_name, o.phase, COALESCE(o.started_at, o.created_at) AS op_at "
+            "FROM op_roster r JOIN operations o ON o.id = r.op_id "
+            "WHERE r.discord_id IS NULL AND COALESCE(o.kind, 'op') = 'op' "
+            "ORDER BY op_at DESC, r.id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def link_op_guest_row(rid: int, discord_id: str, at: str) -> str:
+    """Turn one guest roster row into that member, in place, so the row's
+    ledger, transfers and loot (all keyed on the row id) follow it.
+    → 'ok' · 'missing' · 'not_guest' · 'clash' (the member is already on
+    that op, and one op can't hold them twice)."""
+    did = str(discord_id)
+    with _lock, _conn:
+        r = _conn.execute("SELECT op_id, discord_id FROM op_roster WHERE id=?", (rid,)).fetchone()
+        if r is None:
+            return "missing"
+        if r["discord_id"]:
+            return "not_guest"
+        if _conn.execute("SELECT 1 FROM op_roster WHERE op_id=? AND discord_id=?",
+                         (r["op_id"], did)).fetchone():
+            return "clash"
+        _conn.execute("UPDATE op_roster SET discord_id=?, guest_name=NULL, guest_handle=NULL, "
+                      "updated_at=? WHERE id=?", (did, at, rid))
+    return "ok"
+
+
 def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:
     """Completed runs, freshest first (feeds the deferred history/quick-picks)."""
     with _lock:
