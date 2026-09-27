@@ -11454,7 +11454,8 @@ async def create_loot_roll(body: RollCreateIn, user: dict = Depends(require_sess
     at = _now_iso()
     rules = nav_core.normalize_op_rules({"loot": body.loot or {}}, base=org_default_op_rules())
     item = (body.item or "").strip()
-    name = (body.name or "").strip() or (f"Roll: {item}" if item else "Loot roll")
+    # The item IS the name: the page and every list already say "Loot roll".
+    name = (body.name or "").strip() or item or "Loot roll"
     op_id = db.create_op({"name": name[:_NAME_MAX], "organizer_id": user["id"], "kind": "roll",
                           "phase": "live", "started_at": at, "rules": rules,
                           "loot_seeds": [_new_loot_seed()], "created_at": at})

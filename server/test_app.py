@@ -2883,7 +2883,7 @@ class OpLootApiTests(unittest.TestCase):
     def test_standalone_roll_is_live_and_everyone_present(self):
         op = self._quick_roll()
         self.assertEqual((op["kind"], op["phase"]), ("roll", "live"))
-        self.assertEqual(op["name"], "Roll: Rare rifle")
+        self.assertEqual(op["name"], "Rare rifle")
         self.assertEqual({r["attendance"] for r in op["roster"]}, {"present"})
         self.assertEqual(len(op["roster"]), 4)                  # creator + 2 + guest
         self.assertEqual(op["loot"]["items"][0]["name"], "Rare rifle")
