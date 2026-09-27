@@ -1853,7 +1853,7 @@
   .ev-btn.danger { border-color: var(--bad); color: var(--bad); }
   .ev-btn.danger:hover { background: var(--bad); color: var(--ink-on-accent); }
   .ev-back { display: inline-block; font-size: 12px; color: var(--dim);
-    text-decoration: none; margin-bottom: 10px; }
+    text-decoration: none; margin-bottom: 6px; padding: 5px 0; }
   .ev-back:hover { color: var(--accent); }
   /* type/category chips */
   .ev-chip { font-size: 10px; letter-spacing: .5px; text-transform: uppercase;
@@ -2163,11 +2163,13 @@
   .op-att-ro.att-excused { color: var(--dim); }
   .op-att-ro.att-absent { color: var(--bad); }
   .op-x { background: none; border: none; color: var(--dim); cursor: pointer; padding: 4px 6px;
-    font-size: 13px; }
+    font-size: 13px; min-width: 24px; min-height: 24px; }
   .op-x:hover { color: var(--bad); }
   .ev-detail-title .op-x:hover { color: var(--accent); }
   .op-add { margin-top: 14px; }
+  .op-add:not([open]) { padding-top: 6px; padding-bottom: 6px; }
   .op-add > summary { cursor: pointer; }
+  .op-add > summary.ev-section-h { margin: 0; padding: 6px 0; }
   .op-add[open] > summary { margin-bottom: 10px; }
   .op-add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
   .op-guest-row { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -2189,6 +2191,32 @@
   .op-log li:first-child { border-top: none; }
   .op-log time { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
   .op-reason { color: var(--dim); font-style: italic; }
+  .op-log-d > summary { cursor: pointer; list-style: none; padding: 4px 0; }
+  .op-log-d > summary::-webkit-details-marker { display: none; }
+  .op-log-d > summary h2 { display: inline; margin: 0; }
+  .op-log-d > summary h2::before { content: "▸ "; color: var(--dim); }
+  .op-log-d[open] > summary h2::before { content: "▾ "; }
+  .op-log-d[open] > summary { margin-bottom: 8px; }
+  /* the member's own line: attendance, cut, what they send or get */
+  .op-you { margin: 10px 0 4px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 8px;
+    align-items: baseline; }
+  .op-you-k { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-on-accent);
+    background: var(--accent); border-radius: 3px; padding: 1px 6px; font-weight: 700; }
+  .op-you a, .op-money-open a { color: var(--accent); }
+  .op-money-open { margin: 8px 0 4px; font-size: 13px; color: var(--warn); }
+  .op-todo { border: 1px solid var(--warn); border-radius: 6px; padding: 8px 12px; margin: 10px 0;
+    font-size: 13px; line-height: 1.8; }
+  .op-todo-h { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--warn); }
+  .op-todo a { color: var(--accent); }
+  .op-bulk { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .op-bulk .ev-btn { font-size: 12px; padding: 4px 10px; margin: 0; }
+  .op-share-t { border-collapse: collapse; margin: 4px 0 8px; font-size: 12px; width: auto; }
+  .op-share-t caption { text-align: left; font-size: 11px; color: var(--dim); padding-bottom: 2px; }
+  .op-share-t th { font-weight: 400; color: var(--dim); padding: 2px 10px 2px 0; text-align: left; }
+  .op-share-t td { font-weight: 700; color: var(--text); padding: 0 10px 2px 0; }
+  .op-share-t td.sh-0 { color: var(--dim); font-weight: 400; }
+  #ops-root input[type="checkbox"], #op-guests-panel input[type="checkbox"] { width: 18px; height: 18px;
+    accent-color: var(--accent); }
   /* ---- op loot (slice 4) ---- */
   .op-roll-row { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 6px 0;
     border-top: 1px solid var(--border); text-decoration: none; color: var(--text); font-size: 13px; }
@@ -2214,7 +2242,8 @@
   .op-loot-add .op-c-tick { font-size: 12px; white-space: nowrap; }
   .op-loot-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
   .op-loot-acts { margin-left: auto; display: flex; gap: 6px; align-items: center; }
-  .op-loot-win { font-weight: 600; color: var(--good); }
+  .op-loot-win { font-weight: 700; color: var(--good); font-size: 15px; margin: 0 0 6px; }
+  .op-loot-win .muted { font-weight: 400; font-size: 12px; margin-left: 6px; }
   .op-loot-t td { vertical-align: middle; }
   .op-loot-t tr.win td { background: var(--accent-wash); }
   .op-loot-t tr.me td:first-child { font-weight: 600; }
@@ -2263,7 +2292,8 @@
   .op-c-have.all { color: var(--good); }
   .op-c-tick { display: flex; align-items: center; gap: 5px; cursor: pointer; }
   .op-c-add, .op-led-form { display: grid; grid-template-columns: 2fr 2fr 1fr auto; gap: 8px; margin: 8px 0; }
-  .op-led-form { grid-template-columns: 1.4fr 1fr 1.2fr 1fr 2fr auto; }
+  .op-led-form { grid-template-columns: 1.2fr 1fr 1.2fr 2.4fr auto; }
+  .op-led-form:has(#op-l-cat:not([hidden])) { grid-template-columns: 1.2fr 1fr 1.2fr 1fr 2fr auto; }
   .op-led-form select[hidden] { display: none; }
   .op-led-form select, .op-share { padding: 7px 8px; font: inherit; font-size: 12px; background: var(--panel2);
     color: var(--text); border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
@@ -2290,7 +2320,8 @@
   .op-split .num { text-align: right; white-space: nowrap; }
   .op-split td.send { color: var(--warn); }
   .op-split td.recv { color: var(--good); }
-  .op-tx li.mine { background: var(--accent-wash); margin: 0 -8px; padding: 6px 8px; border-radius: 6px; }
+  .op-tx li.mine { background: var(--accent-wash); margin: 0 -8px 4px; padding: 6px 8px; border-radius: 6px; }
+  .op-tx + .ev-note { margin-top: 8px; }
   .op-t-what { flex: 1; min-width: 220px; }
   .op-t-amt { font-variant-numeric: tabular-nums; font-weight: 600; }
   .op-t-st { font-size: 12px; }
@@ -2298,15 +2329,36 @@
   .op-t-st.bad { color: var(--bad); }
   .op-t-hint { flex-basis: 100%; font-size: 12px; color: var(--dim); }
   .op-t-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .op-tx li.mine .muted, .op-tx li.mine .op-t-hint, .op-tx li.mine .op-x,
+  .op-loot-t tr.win .op-why, .op-loot-t tr.win .ev-tpl-badge { color: color-mix(in srgb, var(--dim) 55%, var(--text)); }
+  .op-tx li.mine .op-t-st.bad { color: color-mix(in srgb, var(--bad) 70%, var(--text)); }
   @media (max-width: 760px) {
     .op-led-form, .op-c-add, .ev-contract-row { grid-template-columns: 1fr 1fr; }
     .op-led-form .ev-btn, .op-c-add .ev-btn { grid-column: 1 / -1; }
   }
   @media (max-width: 560px) {
     .op-log li { grid-template-columns: 1fr; gap: 0; }
-    .op-row-acts { width: 100%; flex-wrap: nowrap; }
-    .op-att { display: flex; flex: 1; min-width: 0; }
-    .op-att button { flex: 1; padding: 6px 2px; font-size: 11px; }
+    /* nowrap here once clipped Absent off the seg's end (critique 2026-09-27) */
+    .op-row-acts { width: 100%; }
+    .op-att { display: flex; flex: 1 1 100%; min-width: 0; order: 1; }
+    .op-att button { flex: 1; padding: 6px 2px; font-size: 11px; min-width: 0; }
+    .op-share { order: 2; flex: 1; max-width: none; }
+    .op-row-acts .op-x { order: 3; }
+    .op-split .c-opt { display: none; }
+    .op-split td.send, .op-split td.recv { white-space: normal; }
+    /* ledger entry: amount + void on one line, the description under them */
+    .op-ledger li > span:not(.op-l-amt):not(.op-reason) { flex-basis: 100%; order: 2; }
+    .op-ledger li .op-x { order: 1; }
+    .op-bulk { margin-left: 0; }
+    /* 16px: iOS zooms any field smaller than that on focus */
+    #ops-root .ti, #ops-root select, #op-guests-panel .ti { font-size: 16px; }
+  }
+  @media (pointer: coarse) {
+    /* .op-x's own 24px min-height outranks the global touch rule; restate both */
+    .op-x { min-width: 44px; min-height: 44px; }
+    #ops-root .ev-back { display: inline-flex; align-items: center; min-height: 44px; padding: 0; }
+    #ops-root select, .op-share { min-height: 44px; }
+    .opg-ops summary, .op-add > summary.ev-section-h { padding: 12px 0; }
   }
   .ev-tpl-row { display: flex; align-items: center; gap: 10px; }
   .ev-tpl-row .ev-tpl-nm { font-weight: 600; }
@@ -2635,7 +2687,7 @@
   .mk-ostatus { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
   .mk-ostatus.accepted { color: var(--good); }
   .mk-ostatus.withdrawn, .mk-ostatus.lost { color: var(--dim); }
-  .ev-btn.sm { padding: 3px 10px; font-size: 12px; }
+  .ev-btn.sm { padding: 3px 10px; font-size: 12px; min-height: 24px; }
   .mk-mode-fields[hidden] { display: none; }
   /* crafted-item quality (SC 4.8) — badge, detail table, form editor */
   .mk-craft { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
@@ -4717,7 +4769,7 @@
   <div id="ops-board-view" hidden>
   <div class="panel">
     <h2>OPS ATTENDED <span class="muted">(closed ops)</span></h2>
-    <p class="ev-hint">A count of the ops each member took part in: Present, Late or Left early. It counts turning up; it doesn't score anyone.</p>
+    <p class="ev-note">A count of the ops each member took part in: Present, Late or Left early. It counts turning up; it doesn't score anyone, so equal counts share a place.</p>
     <div class="lb-chart" id="ops-lb-chart"></div>
     <div class="muted" id="ops-lb-empty" hidden style="padding:8px 0;">No closed ops yet. An op counts here once it's closed.</div>
   </div>
@@ -13888,11 +13940,13 @@ function rulesChips(diffs, emptyText) {
 // One line anyone can read: "Present Full · Late Full · Left early Half · …".
 function rulesSummary(r) {
   r = fullRules(r);
-  const sh = OP_ATT_KEYS.map(([k, lab]) => `${lab} <b>${OP_SHARE_WORD[r.shares[k]]}</b>`).join(" · ");
+  const sh = `<table class="op-share-t"><caption>Share by attendance</caption><tr>` +
+    OP_ATT_KEYS.map(([, lab]) => `<th scope="col">${lab}</th>`).join("") + `</tr><tr>` +
+    OP_ATT_KEYS.map(([k]) => `<td class="sh-${esc(String(r.shares[k]).replace(".", ""))}">${OP_SHARE_WORD[r.shares[k]]}</td>`).join("") + `</tr></table>`;
   const L = r.loot, attLab = Object.fromEntries(OP_ATT_KEYS);
   const loot = L.mode === "weighted" ? `<b>Weighted</b> (Need ×${L.need_weight}, attendance up to ×2)`
     : L.mode === "round_robin" ? `<b>Round robin</b>${L.rotation ? ` (rotation “${esc(L.rotation)}”)` : ""}` : "<b>Random</b>";
-  return `Shares: ${sh}. Expenses <b>${r.expenses_first ? "paid back before splitting" : "not paid back"}</b>. ` +
+  return `${sh}Expenses <b>${r.expenses_first ? "paid back before splitting" : "not paid back"}</b>. ` +
     `Bonuses <b>${r.bonuses === "keep" ? "kept by whoever earned them" : "pooled"}</b>. ` +
     `Loot ${loot}, for ${esc(L.eligible.map(k => attLab[k]).join(" / "))}.`;
 }
@@ -14494,7 +14548,7 @@ function missionDetailsView(e, tax) {
 const OP_PHASE_STEPS = [
   { key: "setup", label: "Setup" }, { key: "live", label: "Live" },
   { key: "settle", label: "Settle" }, { key: "closed", label: "Closed" }];
-const OP_PHASE_LABEL = { setup: "Setting up", live: "Live", settle: "Settling", closed: "Record" };
+const OP_PHASE_LABEL = { setup: "Setting up", live: "Live", settle: "Settling", closed: "Closed" };
 const OP_SIGNED_LABEL = { going: "signed up", waitlist: "waitlisted", maybe: "maybe",
   organizer: "organizer", none: "walk-in" };
 let opCurrent = null;       // the op on screen (#/ops/<id>)
@@ -14519,8 +14573,9 @@ function opPhaseBadge(ph) {
   return `<span class="ev-phase ${cls}">${esc(OP_PHASE_LABEL[ph] || ph)}</span>`;
 }
 
-function opCountsLine(c) {
+function opCountsLine(c, setup) {
   if (!c || !c.total) return "no one on the roster yet";
+  if (setup) return `${c.total} on the roster` + (c.guests ? ` · ${c.guests} guest${c.guests === 1 ? "" : "s"}` : "");
   const bits = [];
   if (c.took_part) bits.push(`<b>${c.took_part}</b> took part`);
   if (c.excused) bits.push(`${c.excused} excused`);
@@ -14537,7 +14592,7 @@ function opCard(o) {
     `<div class="ev-chips">${opPhaseBadge(o.phase)}` +
     (o.event_id ? `<span class="ev-chip">event</span>` : `<span class="ev-chip">quick op</span>`) + `</div></div>` +
     `<div class="ev-meta">${evGlyph("◷")}${esc(fmtEventTime(when))} &nbsp;·&nbsp; by ${esc(o.organizer_name)}</div>` +
-    `<div class="ev-meta">${opCountsLine(o.counts)}</div></a>`;
+    `<div class="ev-meta">${opCountsLine(o.counts, o.phase === "setup")}</div></a>`;
 }
 
 // The Ops home's Loot roll tool: pick people, name the drop, go.
@@ -14555,6 +14610,7 @@ function bindLootRollTool() {
   bindRulesEditor("lr");
   $("lr-lmode").addEventListener("change", () => { $("lr-mode-label").textContent = LOOT_MODE_WORD[$("lr-lmode").value]; });
   const input = $("lr-member"), hits = $("lr-hits");
+  wireHitKeys(input, hits);
   let t = null;
   input.oninput = () => {
     clearTimeout(t);
@@ -14598,6 +14654,19 @@ function bindLootRollTool() {
     });
 }
 
+// Payments waiting on me (to send, or to confirm) across my settled/closed ops.
+async function opsWaitingOnMe() {
+  try {
+    const d = await fetch("/api/ops?scope=mine").then(r => r.ok ? r.json() : { ops: [] });
+    return (d.ops || []).filter(o => o.my_todo > 0);
+  } catch { return []; }
+}
+function opsWaitingHtml(ops) {
+  if (!ops.length) return "";
+  return `<div class="op-todo" role="note"><div class="op-todo-h">Waiting on you</div>` + ops.map(o =>
+    `<a href="#/ops/${o.id}">${esc(o.name)}</a> <span class="muted">${o.my_todo} payment${o.my_todo === 1 ? "" : "s"} to send or confirm</span>`).join("<br>") + `</div>`;
+}
+
 async function renderOpsHome() {
   await loadOpDefaultRules();          // the Loot roll tool starts on the org's default mode
   const root = $("ops-root");
@@ -14605,7 +14674,9 @@ async function renderOpsHome() {
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">OPS</h2></div>` +
     `<p class="ev-intro">Run a mission and keep an honest record of it: who was there, and every ` +
     `change anyone made. Scheduled events start theirs from the event page (<b>Run mission</b>); ` +
-    `for a spur-of-the-moment op, start one here.</p>` +
+    `for a spur-of-the-moment op, start a quick op.</p>` +
+    `<div id="ops-todo"></div>` +
+    `<div class="ev-section-h">Running now</div><div id="ops-active"><p class="stat-empty">Loading…</p></div>` +
     `<div class="ev-form-card op-quick"><div class="ev-section-h">Quick op</div>` +
       `<div class="op-quick-row">` +
       `<input id="op-q-name" class="ti" maxlength="120" placeholder="Name, e.g. Tuesday salvage" aria-label="Op name">` +
@@ -14626,8 +14697,7 @@ async function renderOpsHome() {
       `<details class="ev-form-card op-add"><summary class="ev-section-h">Mode: <span id="lr-mode-label">${esc(LOOT_MODE_WORD[(fullRules(null).loot || {}).mode] || "Random")}</span></summary>${lootEditorHtml("lr", fullRules(null).loot)}</details>` +
       `<span id="lr-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>` +
       `<div id="ops-rolls"></div></div>` +
-    `<div class="panel"><h2>RUNNING NOW</h2><div id="ops-active"><p class="stat-empty">Loading…</p></div></div>` +
-    `<div class="panel"><h2>RECORDS</h2><div class="ev-boardbar"><span class="seg" role="group">` +
+    `<div class="panel"><h2>RECORDS</h2><div class="ev-boardbar"><span class="seg" role="group" aria-label="Which records">` +
       `<button id="ops-rec-all" class="on" aria-pressed="true">All</button>` +
       `<button id="ops-rec-mine" aria-pressed="false">Mine</button></span></div>` +
       `<div id="ops-closed"><p class="stat-empty">Loading…</p></div></div>`;
@@ -14654,7 +14724,8 @@ async function renderOpsHome() {
     if (scope === "mine") ops = ops.filter(o => o.phase === "closed");
     if ($(el)) $(el).innerHTML = ops.length ? ops.map(opCard).join("") : `<p class="stat-empty">${empty}</p>`;
   };
-  list("active", "ops-active", "Nothing running. Start a quick op above, or open an event and choose Run mission.");
+  opsWaitingOnMe().then(ops => { if ($("ops-todo")) $("ops-todo").innerHTML = opsWaitingHtml(ops); });
+  list("active", "ops-active", "Nothing running. Start a quick op below, or open an event and choose Run mission.");
   list("closed", "ops-closed", "No records yet — a closed op lands here.");
   const seg = (mine) => {
     $("ops-rec-all").classList.toggle("on", !mine); $("ops-rec-all").setAttribute("aria-pressed", String(!mine));
@@ -14708,8 +14779,12 @@ function opActions(op) {
 function opRowHtml(op, r) {
   const opts = op.attendance_options || [];
   const editable = op.can_manage && op.phase !== "closed";
+  // Phase gating (critique 2026-09-27): nothing is attendance until the
+  // mission starts, and a share override is a settle-up decision.
+  const started = op.phase !== "setup";
+  const attEditable = editable && started;
   const lab = (opts.find(a => a.key === r.attendance) || {}).label;
-  const att = editable
+  const att = !started ? "" : attEditable
     ? `<span class="seg op-att" role="group" aria-label="Attendance for ${esc(r.name)}">` + opts.map(a =>
         `<button class="${r.attendance === a.key ? "on" : ""}" aria-pressed="${r.attendance === a.key}" ` +
         `data-att="${esc(a.key)}" data-rid="${r.id}">${esc(a.label)}</button>`).join("") + `</span>`
@@ -14725,18 +14800,50 @@ function opRowHtml(op, r) {
   ].join("");
   const ov = r.share_override;
   const ruleShare = r.attendance ? (op.rules.shares[r.attendance]) : null;
-  const shareCtl = editable
+  const shareCtl = editable && op.phase === "settle"
     ? `<select class="op-share" data-share-rid="${r.id}" aria-label="Share for ${esc(r.name)}" title="${ov != null ? esc("Override: " + (r.share_reason || "")) : "Follows the payout rules"}">` +
-        `<option value=""${ov == null ? " selected" : ""}>Rule${ruleShare != null ? " · " + OP_SHARE_WORD[ruleShare] : ""}</option>` +
+        `<option value=""${ov == null ? " selected" : ""}>${ruleShare != null ? OP_SHARE_WORD[ruleShare] + " share (the rules)" : "Share by the rules"}</option>` +
         OP_SHARE_OPTS.map(([v, l]) => `<option value="${v}"${ov === v ? " selected" : ""}>${l} (override)</option>`).join("") + `</select>`
     : "";
   const ovNote = ov != null ? `<span class="op-ov" title="${esc(r.share_reason || "")}">${esc(OP_SHARE_WORD[ov])} share — ${esc(r.share_reason || "")}</span>` : "";
-  return `<div class="op-row${r.attendance ? "" : " unmarked"}${r.is_me ? " me" : ""}">` +
+  return `<div class="op-row${r.attendance || !started ? "" : " unmarked"}${r.is_me ? " me" : ""}">` +
     `<div class="op-who"><span class="op-name">${esc(r.name)}</span>${tags}` +
       (times ? `<span class="op-times">${times}</span>` : "") + ovNote + `</div>` +
     `<div class="op-row-acts">${shareCtl}${att}` +
       (editable ? `<button class="op-x" data-rm="${r.id}" title="Remove from the roster" aria-label="Remove ${esc(r.name)}">✕</button>` : "") +
     `</div></div>`;
+}
+
+// What's still owed on an op: payments nobody has confirmed received.
+function opOpenMoney(op) {
+  const open = (op.transfers || []).filter(t => !t.received_at);
+  return { open, disputed: open.filter(t => t.disputed_at) };
+}
+function opMoneyStatus(op) {
+  const { open, disputed } = opOpenMoney(op);
+  if (!open.length) return "";
+  return `${open.length} payment${open.length === 1 ? "" : "s"} still open` +
+    (disputed.length ? ` (${disputed.length} disputed)` : "");
+}
+
+// A member's first question is "was I counted, and what do I get or owe?" —
+// answered in one line at the top instead of across ROSTER, SPLIT and PAYMENTS.
+function opYouLine(op) {
+  const me = op.roster.find(r => r.id === op.my_roster_id);
+  if (!me || op.phase === "setup") return "";
+  const lab = (op.attendance_options || []).find(a => a.key === me.attendance);
+  const bits = [lab ? `<b>${esc(lab.label)}</b>` : `<span class="op-unmarked">not marked yet</span>`];
+  const row = (op.split.rows || []).find(x => x.roster_id === me.id);
+  if (row && op.split.totals.weight_total) bits.push(`your cut ${op.phase === "live" ? "so far " : ""}<b>${esc(fmtAuec(row.share))}</b>`);
+  if (op.phase === "settle" || op.phase === "closed") {
+    const mine = (op.transfers || []).filter(t => !t.received_at && (t.mine_to_send || t.mine_to_receive));
+    const out = mine.filter(t => t.mine_to_send), inn = mine.filter(t => t.mine_to_receive);
+    const sum = xs => esc(fmtAuec(xs.reduce((a, t) => a + t.amount, 0)));
+    if (out.length) bits.push(`<a href="#op-payments">you send ${sum(out)}</a>`);
+    if (inn.length) bits.push(`<a href="#op-payments">you get ${sum(inn)}</a>`);
+    if (!out.length && !inn.length && row && op.transfers.length) bits.push("you're settled");
+  }
+  return `<p class="op-you"><span class="op-you-k">You</span> ${bits.join(" · ")}</p>`;
 }
 
 function drawOp(op) {
@@ -14760,6 +14867,9 @@ function drawOp(op) {
     settle: "The mission is over. Finish marking everyone, then close the record. Changes now need a reason.",
     closed: "This is the record. Reopening it is possible, and is itself logged with a reason.",
   }[op.phase];
+  // Payments stay settle-able after Close, so a closed op with money still
+  // open must not read as finished.
+  const moneyOpen = op.phase === "closed" ? opMoneyStatus(op) : "";
   const joinBtn = !op.in_roster && (op.phase === "setup" || op.phase === "live")
     ? `<button class="ev-btn primary" id="op-join" title="Put yourself on the roster; the organizer marks attendance">I'm here — add me</button>` : "";
   const unmarked = op.counts.unmarked;
@@ -14773,7 +14883,7 @@ function drawOp(op) {
             `<span class="ev-hint">Members who hide from the directory won't show — they can tap “I'm here”.</span></div>` +
           `<div class="ev-field"><label for="op-add-guest">Guest (not in the org / not on Discord)</label>` +
             `<div class="op-guest-row"><input id="op-add-guest" class="ti" maxlength="40" placeholder="Name">` +
-            `<input id="op-add-ghandle" class="ti" maxlength="40" placeholder="RSI handle (optional)">` +
+            `<input id="op-add-ghandle" class="ti" maxlength="40" placeholder="RSI handle (optional)" aria-label="Guest's RSI handle (optional)">` +
             `<button class="ev-btn" id="op-add-guest-go">Add guest</button></div>` +
             `<span class="ev-hint">Guests can share money and loot, but don't get stats until they join the org.</span></div>` +
         `</div></details>` : "";
@@ -14789,9 +14899,11 @@ function drawOp(op) {
   root.innerHTML = `<div class="panel">${back}` +
     `<div class="ev-detail-title"><h2>${esc(op.name)}</h2>` +
       (op.can_manage && op.phase !== "closed" ? `<button class="op-x" id="op-rename" title="Rename" aria-label="Rename op">✎</button>` : "") +
-      `<div class="ev-chips">${opPhaseBadge(op.phase)}</div></div>` +
+      `</div>` +
     opStepper(op.phase) +
     `<div class="ev-meta-grid secondary">${meta.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` +
+    opYouLine(op) +
+    (moneyOpen ? `<p class="op-money-open"><a href="#op-payments">${esc(moneyOpen)}</a>: ${opOpenMoney(op).open.length === 1 ? "it" : "they"} can still be settled below.</p>` : "") +
     `<p class="ev-note">${esc(hint)}</p>` +
     `<div class="ev-form-actions op-actions">${opActions(op)}${joinBtn}` +
       // On the spot: a rare drop mid-mission is one tap from the header.
@@ -14802,18 +14914,21 @@ function drawOp(op) {
     // While the mission is live, loot sits above the roster — that's when it drops.
     (op.phase === "live" ? opLootPanel(op) : "") +
     `<div class="panel"><div class="op-roster-head"><h2>ROSTER</h2>` +
-      `<span class="op-counts">${opCountsLine(op.counts)}</span>` +
-      (canEditRoster && unmarked ? `<button class="ev-btn" id="op-bulk-absent">Mark the ${unmarked} unmarked Absent</button>` : "") + `</div>` +
+      `<span class="op-counts">${opCountsLine(op.counts, op.phase === "setup")}</span>` +
+      (canEditRoster && unmarked && op.phase !== "setup"
+        ? `<span class="op-bulk"><button class="ev-btn" data-bulk="present">Mark the ${unmarked} unmarked Present</button>` +
+          `<button class="ev-btn" data-bulk="absent">…or Absent</button></span>` : "") + `</div>` +
       (op.roster.length ? `<div class="op-grid">${op.roster.map(r => opRowHtml(op, r)).join("")}</div>`
         : `<p class="stat-empty">No one on the roster yet.</p>`) +
       addPanel + deputyPanel + `</div>` +
     (op.phase !== "live" ? opLootPanel(op) : "") +
     opPayoutPanel(op) +
-    `<div class="panel"><h2>LOG</h2><p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
+    `<div class="panel"><details class="op-log-d"><summary><h2>LOG <span class="muted">(${op.log.length})</span></h2></summary>` +
+      `<p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
       `<ol class="op-log">${op.log.slice().reverse().map(e =>
         `<li><time datetime="${esc(e.at)}">${esc(fmtEventTime(e.at))}</time> ` +
         `<span><b>${esc(e.actor_name)}</b> ${esc(e.text)}` +
-        (e.reason ? ` <span class="op-reason">— “${esc(e.reason)}”</span>` : "") + `</span></li>`).join("")}</ol></div>`;
+        (e.reason ? ` <span class="op-reason">— “${esc(e.reason)}”</span>` : "") + `</span></li>`).join("")}</ol></details></div>`;
   bindOp(op);
   bindOpMoney(op);
   bindOpLoot(op);
@@ -14837,7 +14952,7 @@ function drawRollSession(op) {
           `<div id="op-member-hits" class="op-hits" role="listbox" hidden></div></div>` +
         `<div class="ev-field"><label for="op-add-guest">Add a guest</label>` +
           `<div class="op-guest-row"><input id="op-add-guest" class="ti" maxlength="40" placeholder="Name">` +
-          `<input id="op-add-ghandle" class="ti" maxlength="40" placeholder="RSI handle (optional)">` +
+          `<input id="op-add-ghandle" class="ti" maxlength="40" placeholder="RSI handle (optional)" aria-label="Guest's RSI handle (optional)">` +
           `<button class="ev-btn" id="op-add-guest-go">Add guest</button></div></div></div>` : "";
   const modeEd = manage
     ? `<details class="ev-form-card op-add"><summary class="ev-section-h">Change the mode</summary>` +
@@ -14956,11 +15071,11 @@ function opLootPanel(op) {
     const rolled = it.status === "rolled";
     const top = `<div class="op-loot-h"><span class="op-c-name">${esc(it.name)}${it.qty > 1 ? ` ×${it.qty}` : ""}</span>` +
       (it.found_by_name ? `<span class="muted">found by ${esc(it.found_by_name)}</span>` : "") +
-      (rolled ? `<span class="op-loot-win">🏆 ${esc(it.roll.winner_name)} <span class="muted">· roll #${it.roll.seq} by ${esc(it.roll.rolled_by_name)}</span></span>`
-        : `<span class="op-tag">open</span>`) +
+      (rolled ? "" : `<span class="op-tag">open</span>`) +
       `<span class="op-loot-acts">` +
       (!rolled && L.can_manage ? `<button class="ev-btn sm primary" data-roll="${it.id}">Roll</button><button class="op-x" data-lt-del="${it.id}" aria-label="Remove ${esc(it.name)}">✕</button>` : "") +
-      (rolled && L.can_manage ? `<button class="ev-btn sm" data-reroll="${it.id}">Void &amp; re-roll…</button>` : "") + `</span></div>`;
+      (rolled && L.can_manage ? `<button class="ev-btn sm" data-reroll="${it.id}">Void &amp; re-roll…</button>` : "") + `</span></div>` +
+      (rolled ? `<p class="op-loot-win">🏆 ${esc(it.roll.winner_name)} <span class="muted">roll #${it.roll.seq} by ${esc(it.roll.rolled_by_name)}</span></p>` : "");
     const voided = it.voided.length ? `<ul class="op-loot-void">${it.voided.map(v =>
       `<li><s>roll #${v.seq}: ${esc(v.winner_name)}</s> — voided by ${esc(v.voided_by_name)}: “${esc(v.reason || "")}”</li>`).join("")}</ul>` : "";
     const mine = !rolled && it.can_set_intent && !L.can_manage
@@ -14989,7 +15104,10 @@ async function lootVerify(op) {
     if (!c.seed) continue;                       // not revealed yet (the next roll's)
     const h = tohex(await crypto.subtle.digest("SHA-256", hex2(c.seed)));
     const ok = h === c.hash;
-    lines.push(`<li class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} Seed ${c.idx + 1} matches the fingerprint locked in before its roll</li>`);
+    const drew = L.rolls.filter(r => r.seed_idx === c.idx);
+    const which = drew.length ? `drew ${drew.map(r => `roll #${r.seq} (${esc(r.item)})`).join(", ")}`
+      : "not used by any roll, revealed when the record closed";
+    lines.push(`<li class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} Seed ${c.idx + 1} ${ok ? "matches" : "does NOT match"} the fingerprint locked in before it · ${which}</li>`);
     keys[c.idx] = await crypto.subtle.importKey("raw", hex2(c.seed), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   }
   for (const r of L.rolls) {
@@ -15079,12 +15197,16 @@ function opContractsPanel(op) {
       `<input id="op-c-note" class="ti" maxlength="200" placeholder="Note (optional)" aria-label="Contract note">` +
       `<input id="op-c-amt" class="ti" type="number" min="0" step="1000" placeholder="Pays (aUEC)" aria-label="What it pays">` +
       `<button class="ev-btn" id="op-c-add">Add contract</button></div>` : "";
+  const note = {
+    setup: "Accept or get shared every contract below before the mission starts. The game pays each one in equal cuts to everyone who has it.",
+    live: "Check everyone has each contract before it's turned in. The game pays each one in equal cuts to everyone who has it.",
+    settle: "Correct each amount to what it actually paid. The game already split these; they're not part of the payout.",
+    closed: "Paid by the game in equal cuts to everyone who had them; not part of the payout.",
+  }[op.phase] || "";
   return `<div class="panel"><div class="op-roster-head"><h2>CONTRACTS</h2>` +
-    `<span class="op-counts">${cs.length ? `Paid by the game, split automatically: <b>${cs.length}</b> contract${cs.length === 1 ? "" : "s"}, <b>${esc(fmtAuec(op.contracts_total))}</b>` : "None yet"}</span></div>` +
-    `<p class="ev-note">Accept or get shared every contract below before the mission starts — the game pays ` +
-    `each one in equal cuts to everyone who has it. Nothing here goes through the split.` +
-    (op.phase === "settle" ? " Now's the time to correct each amount to what it actually paid." : "") + `</p>` +
-    (rows ? `<div class="op-contracts">${rows}</div>` : "") + add + `</div>`;
+    (cs.length ? `<span class="op-counts"><b>${cs.length}</b> contract${cs.length === 1 ? "" : "s"} · <b>${esc(fmtAuec(op.contracts_total))}</b></span>` : "") + `</div>` +
+    `<p class="ev-note">${note}</p>` +
+    (rows ? `<div class="op-contracts">${rows}</div>` : `<p class="stat-empty">No contracts added.</p>`) + add + `</div>`;
 }
 
 function opWarnText(w) {
@@ -15117,7 +15239,7 @@ function opPayoutPanel(op) {
       `<input id="op-l-amt" class="ti" type="number" min="1" max="100000000000" step="1" placeholder="aUEC" aria-label="Amount">` +
       `<select id="op-l-who" aria-label="Who holds / paid it">${whoOpts}</select>` +
       `<select id="op-l-cat" aria-label="Expense category" hidden>${(op.ledger_categories || []).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>` +
-      `<input id="op-l-note" class="ti" maxlength="200" placeholder="Note, e.g. Sold loot at Grim HEX" aria-label="Note">` +
+      `<input id="op-l-note" class="ti" maxlength="200" placeholder="Note, e.g. sold at Grim HEX" aria-label="Note">` +
       `<button class="ev-btn primary" id="op-l-add">Log it</button></div>` : "";
   const led = op.ledger.length ? `<ol class="op-ledger">` + op.ledger.slice().reverse().map(e =>
     `<li class="${e.voided_at ? "void" : ""}"><span class="op-l-amt ${e.kind}">${e.kind === "expense" ? "−" : "+"}${esc(fmtAuec(e.amount))}</span>` +
@@ -15129,12 +15251,12 @@ function opPayoutPanel(op) {
     : `<p class="stat-empty">Nothing logged yet. Log loot and resources as they're sold, and expenses as they're paid.</p>`;
   // Split table
   const rows = sp.rows.map(x =>
-    `<tr><td>${esc(names[x.roster_id] || "?")}</td><td class="num">${esc(OP_SHARE_WORD[x.weight] || x.weight)}</td>` +
-    `<td class="num">${esc(fmtAuec(x.share))}</td><td class="num">${x.held ? esc(fmtAuec(x.held)) : "—"}</td>` +
-    `<td class="num">${x.paid ? esc(fmtAuec(x.paid)) : "—"}</td>` +
+    `<tr><td>${esc(names[x.roster_id] || "?")}</td><td class="num c-opt">${esc(OP_SHARE_WORD[x.weight] || x.weight)}</td>` +
+    `<td class="num">${esc(fmtAuec(x.share))}</td><td class="num c-opt">${x.held ? esc(fmtAuec(x.held)) : "—"}</td>` +
+    `<td class="num c-opt">${x.paid ? esc(fmtAuec(x.paid)) : "—"}</td>` +
     `<td class="num ${x.balance > 0 ? "send" : x.balance < 0 ? "recv" : ""}">${x.balance > 0 ? "sends " + esc(fmtAuec(x.balance)) : x.balance < 0 ? "gets " + esc(fmtAuec(-x.balance)) : "even"}</td></tr>`).join("");
-  const table = `<div class="op-split-wrap"><table class="op-split"><thead><tr><th>Who</th><th class="num">Share</th><th class="num">Their cut</th>` +
-    `<th class="num">Holding</th><th class="num">Paid out</th><th class="num" title="Before any payments below">Balance (before payments)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const table = `<div class="op-split-wrap"><table class="op-split"><thead><tr><th>Who</th><th class="num c-opt">Share</th><th class="num">Their cut</th>` +
+    `<th class="num c-opt">Holding</th><th class="num c-opt">Paid out</th><th class="num" title="What each person sends or gets, before any payment below is made">Sends / gets</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   const totals = `<div class="op-pot"><span>Pot <b>${esc(fmtAuec(T.pot))}</b></span>` +
     `<span>income ${esc(fmtAuec(T.poolable))}</span>` +
     (T.expenses ? `<span>expenses ${esc(fmtAuec(T.expenses))}${T.reimburse ? " (paid back first)" : " (not paid back)"}</span>` : "") +
@@ -15155,7 +15277,7 @@ function opPayoutPanel(op) {
       ? `<span class="op-t-hint">${t.mine_to_send ? "Send what's missing in-game" : `${esc(t.from_name)} sends what's missing in-game`}` +
         ` — ${t.can_receive ? "mark it received" : `${esc(t.to_name)} confirms`} once it arrives.</span>` : "";
     const key = t.stored ? `data-tid="${t.id}"` : `data-from="${t.from_roster}" data-to="${t.to_roster}" data-amt="${t.amount}"`;
-    const acts = (t.can_send ? `<button class="ev-btn sm" data-tx="sent" ${key}>Mark sent</button>` : "") +
+    const acts = (t.can_send && !(t.mine_to_receive && !t.mine_to_send) ? `<button class="ev-btn sm" data-tx="sent" ${key}>Mark sent</button>` : "") +
       (t.can_receive ? `<button class="ev-btn sm primary" data-tx="received" ${key}>Confirm received</button>` +
         (!t.disputed_at ? `<button class="ev-btn sm" data-tx="dispute" ${key}>Dispute</button>` : "") : "");
     return `<li class="${t.mine_to_send || t.mine_to_receive ? "mine" : ""}"><span class="op-t-what"><b>${esc(t.from_name)}</b> → <b>${esc(t.to_name)}</b> ` +
@@ -15168,11 +15290,20 @@ function opPayoutPanel(op) {
     : `<ol class="op-tx">${stored.map(txRow).join("")}${planned.map(txRow).join("")}</ol>` +
       `<p class="ev-note">The fewest payments that settle everyone. A payment someone has marked stays put; ` +
       `the rest update if the ledger or shares change.</p>`;
-  return `<div class="panel"><h2>PAYOUT</h2>` + rules +
-    `<div class="op-sub"><div class="ev-section-h">Ledger</div><p class="ev-note">Money the game left in one wallet — loot and resources sold, bonuses — and expenses someone paid. ` +
-    `Anyone on the roster can log their own. Mistakes are voided, never erased.</p>${form}${led}</div>` +
+  // Phase gating: Setup decides the rules; Live logs money as it happens;
+  // the split and payments are a settle-up job, shown once the mission ends.
+  if (op.phase === "setup")
+    return `<div class="panel"><h2>PAYOUT</h2>${rules}<p class="ev-note">The ledger opens when the mission starts.</p></div>`;
+  const ledger = `<div class="op-sub"><div class="ev-section-h">Ledger</div><p class="ev-note">Money the game left in one wallet (loot and resources sold, bonuses) and expenses someone paid. ` +
+    `Anyone on the roster can log their own. Mistakes are voided, never erased.</p>${form}${led}</div>`;
+  if (op.phase === "live")
+    return `<div class="panel"><h2>PAYOUT</h2>` + rules + ledger +
+      `<div class="op-sub"><p class="op-pot">${op.ledger.some(e => !e.voided_at) ? `<span>Pot so far <b>${esc(fmtAuec(T.pot))}</b></span>` +
+        (T.weight_total ? `<span>a full share ≈ <b>${esc(fmtAuec(T.per_full_share))}</b></span>` : "") : ""}` +
+      `<span class="muted">The split and payments open when the mission ends.</span></p></div></div>`;
+  return `<div class="panel"><h2>PAYOUT</h2>` + rules + ledger +
     `<div class="op-sub"><div class="ev-section-h">Split</div>${totals}${warns}${sp.rows.length ? table : ""}</div>` +
-    `<div class="op-sub"><div class="ev-section-h">Payments</div>${txHtml}</div></div>`;
+    `<div class="op-sub" id="op-payments"><div class="ev-section-h">Payments</div>${txHtml}</div></div>`;
 }
 
 function bindOpMoney(op) {
@@ -15281,7 +15412,25 @@ async function opReason(op, what) {
   return { ok: true, reason: v.trim() };
 }
 
-function opSay(t) { const m = $("op-msg"); if (m) m.textContent = t; }
+// Results land beside the header's actions; when that's scrolled away (an
+// error from the Payout panel far below), a toast says it where you are.
+function opSay(t) {
+  const m = $("op-msg");
+  if (!m) return;
+  const r = m.getBoundingClientRect();
+  if (!t || (r.bottom > 0 && r.top < innerHeight)) { m.textContent = t; return; }
+  m.textContent = "";
+  let el = $("op-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "op-toast"; el.className = "lfg-undo-toast"; el.setAttribute("role", "status");
+    document.body.appendChild(el);
+  }
+  el.textContent = t;
+  el.classList.add("show");
+  clearTimeout(el._hide);
+  el._hide = setTimeout(() => el.classList.remove("show"), 4500);
+}
 
 async function opCall(url, opts, failMsg) {
   try {
@@ -15294,10 +15443,29 @@ async function opCall(url, opts, failMsg) {
 }
 const opJson = (method, body) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// Keyboard for the Ops type-aheads: ↓ from the field into the results,
+// ↑/↓ between them, Escape closes and returns to the field.
+function wireHitKeys(input, hits) {
+  const opts = () => [...hits.querySelectorAll("button:not(:disabled)")];
+  input.setAttribute("aria-autocomplete", "list");
+  if (hits.id) input.setAttribute("aria-controls", hits.id);
+  input.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" && !hits.hidden && opts()[0]) { e.preventDefault(); opts()[0].focus(); }
+    else if (e.key === "Escape" && !hits.hidden) { e.preventDefault(); hits.hidden = true; }
+  });
+  hits.addEventListener("keydown", e => {
+    const o = opts(), i = o.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); (o[i + 1] || o[0]).focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (i <= 0) input.focus(); else o[i - 1].focus(); }
+    else if (e.key === "Escape") { e.preventDefault(); hits.hidden = true; input.focus(); }
+  });
+}
+
 // Type-ahead member search for the add + deputy fields (op managers only).
 function bindOpMemberSearch(op, inputId, hitsId, onPick) {
   const input = $(inputId), hits = $(hitsId);
   if (!input) return;
+  wireHitKeys(input, hits);
   let t = null;
   input.oninput = () => {
     clearTimeout(t);
@@ -15337,7 +15505,14 @@ function bindOp(op) {
       if (!(await confirmDialog("It stays in the Ops app as a record, and every roll's seed is revealed for checking. Reopening later is logged.",
           { title: "Done rolling?", confirmLabel: "Done" }))) return;
     } else if (to === "closed") {
-      if (!(await confirmDialog("The op becomes a read-only record" + (op.event_id ? " and its event is marked completed" : "") + ". Reopening later is logged.",
+      // Say what Close actually does: it posts, and open money stays open.
+      const { open, disputed } = opOpenMoney(op);
+      const money = open.length
+        ? ` ${open.length} payment${open.length === 1 ? " is" : "s are"} still open` +
+          (disputed.length ? `, ${disputed.length} of them disputed` : "") + `. ${open.length === 1 ? "It stays" : "They stay"} open and can still be settled after closing.`
+        : "";
+      if (!(await confirmDialog("Attendance and the split become the record" + (op.event_id ? ", and its event is marked completed" : "") +
+          ". It's posted to the org's Discord if an admin has set that up, and reopening later is logged." + money,
           { title: "Close the record?", confirmLabel: "Close record" }))) return;
     }
     opCall(`/api/ops/${op.id}/phase`, opJson("POST", { to, reason }));
@@ -15383,14 +15558,14 @@ function bindOp(op) {
     if (!rs.ok) return;
     opCall(`/api/ops/${op.id}/roster/${b.dataset.rm}${rs.reason ? `?reason=${encodeURIComponent(rs.reason)}` : ""}`, { method: "DELETE" });
   });
-  const bulk = $("op-bulk-absent");
-  if (bulk) bulk.onclick = async () => {
-    if (!(await confirmDialog("Everyone not marked yet becomes Absent. Marks already made aren't touched.",
-        { title: "Mark the rest Absent?", confirmLabel: "Mark Absent" }))) return;
-    const rs = await opReason(op, "Mark the rest Absent");
+  root.querySelectorAll("[data-bulk]").forEach(b => b.onclick = async () => {
+    const to = b.dataset.bulk, word = to === "present" ? "Present" : "Absent";
+    if (!(await confirmDialog(`Everyone not marked yet becomes ${word}. Marks already made aren't touched.`,
+        { title: `Mark the rest ${word}?`, confirmLabel: `Mark ${word}` }))) return;
+    const rs = await opReason(op, `Mark the rest ${word}`);
     if (!rs.ok) return;
-    opCall(`/api/ops/${op.id}/attendance/bulk`, opJson("POST", { attendance: "absent", reason: rs.reason }));
-  };
+    opCall(`/api/ops/${op.id}/attendance/bulk`, opJson("POST", { attendance: to, reason: rs.reason }));
+  });
   bindOpMemberSearch(op, "op-add-member", "op-member-hits", async did => {
     const rs = await opReason(op, "Add to roster");
     if (rs.ok) opCall(`/api/ops/${op.id}/roster`, opJson("POST", { discord_id: did, reason: rs.reason }));
@@ -24863,16 +25038,19 @@ let cargoLbRange = "all", cargoStatRange = "all";
 
 // One ranked board: rows of {display_name, mine, <metric>} drawn as bars scaled
 // to the leader. `valOf` reads the metric, `fmt` renders it, `cls` tints the bar.
-function cargoBoard(elId, emptyId, rows, valOf, fmt, cls) {
+function cargoBoard(elId, emptyId, rows, valOf, fmt, cls, tiesShare) {
   const chart = $(elId);
   $(emptyId).hidden = rows.length > 0;
   const max = rows.reduce((m, r) => Math.max(m, valOf(r)), 0) || 1;
+  let rank = 0;
   chart.innerHTML = rows.map((r, i) => {
     const v = valOf(r);
     const pct = (v / max) * 100;
+    // tiesShare: equal values share a place (1, 1, 3), so a count isn't a ranking
+    rank = tiesShare && i && v === valOf(rows[i - 1]) ? rank : i + 1;
     return `<div class="lb-row">
         <div class="lb-row-head">
-          <span class="lb-rank">${i + 1}.</span>
+          <span class="lb-rank">${rank}.</span>
           <span class="lb-name${r.mine ? " me" : ""}">${esc(r.display_name)}${r.mine ? " (you)" : ""}</span>
           <span class="lb-total">${fmt(v)}</span>
         </div>
@@ -24896,14 +25074,15 @@ async function loadMyOps() {
     return;
   }
   const s = d.stats || {}, ops = d.ops || [];
+  const waiting = opsWaitingHtml(await opsWaitingOnMe());
   if (!ops.length) {
-    el.innerHTML = `<div class="muted" style="font-size:12px;">No closed ops yet. Once an op you're on is closed, it's listed here.</div>`;
+    el.innerHTML = waiting + `<div class="muted" style="font-size:12px;">No closed ops yet. Once an op you're on is closed, it's listed here.</div>`;
     return;
   }
   const bits = [`<b>${s.attended}</b> op${s.attended === 1 ? "" : "s"} attended`];
   if (s.organized) bits.push(`<b>${s.organized}</b> run by you`);
   if (s.going) bits.push(`showed up for <b>${s.showed}</b> of the <b>${s.going}</b> you signed up Going for`);
-  el.innerHTML = `<p style="margin:0 0 8px;font-size:13px;">${bits.join(" · ")}</p>` +
+  el.innerHTML = waiting + `<p style="margin:0 0 8px;font-size:13px;">${bits.join(" · ")}</p>` +
     ops.map(o => `<a class="op-roll-row" href="#/ops/${o.id}"><span>${esc(o.name)}</span>` +
       `<span class="muted">${esc(fmtEventTime(o.at))} · ${o.attendance ? esc((OP_ATT_KEYS.find(k => k[0] === o.attendance) || [0, o.attendance])[1]) : "not on the roster"}` +
       `${o.organized ? " · you ran it" : ""}</span></a>`).join("");
@@ -24927,7 +25106,7 @@ async function loadOpsLeaderboard() {
   }
   cargoBoard("ops-lb-chart", "ops-lb-empty",
     (d.rows || []).map(r => ({ display_name: r.name, mine: r.me, attended: r.attended })),
-    r => r.attended, v => `${v} op${v === 1 ? "" : "s"}`, "rate");
+    r => r.attended, v => `${v} op${v === 1 ? "" : "s"}`, "rate", true);
   stampIntelFresh();
 }
 
@@ -25486,7 +25665,7 @@ async function loadOpGuests() {
     const why = sug && (sug.basis === "handle" ? `in-game handle ${esc(sug.matched)}` : "Discord name");
     return `<div class="opg-row" data-g="${gi}">` +
       `<div class="opg-head"><b>${esc(g.name)}</b>` +
-        (g.handles.length ? ` <span class="muted">⌖ ${g.handles.map(esc).join(", ")}</span>` : "") +
+        (g.handles.length ? ` <span class="muted">RSI handle ${g.handles.map(esc).join(", ")}</span>` : "") +
         ` <span class="muted">· ${g.rows.length} op${g.rows.length === 1 ? "" : "s"}</span></div>` +
       `<details class="opg-ops"><summary class="muted">Which ops</summary>` +
         g.rows.map(r => `<label class="opg-op"><input type="checkbox" checked data-rid="${r.id}"> ` +
@@ -25504,8 +25683,10 @@ async function loadOpGuests() {
     const link = async (did, name) => {
       const ids = [...el.querySelectorAll("input[data-rid]:checked")].map(i => Number(i.dataset.rid));
       if (!ids.length) { $("op-guests-status").textContent = "Tick at least one op."; return; }
-      const ok = await confirmDialog(`Link ${ids.length} op${ids.length === 1 ? "" : "s"} where “${g.name}” was a guest to ${name}? ` +
-        `Their share, payments and loot on those ops move to ${name}, and each op's record logs it.`,
+      const picked = g.rows.filter(r => ids.includes(r.id)).map(r => `“${r.op_name}”`);
+      const opsList = picked.length > 4 ? `${picked.slice(0, 4).join(", ")} and ${picked.length - 4} more` : picked.join(", ");
+      const ok = await confirmDialog(`Link “${g.name}” to ${name} on ${opsList}? ` +
+        `Their share, payments and loot on ${ids.length === 1 ? "that op" : "those ops"} move to ${name}, and each op's record logs it.`,
         { title: "Link guest to member", confirmLabel: "Link" });
       if (!ok) return;
       try {
@@ -25524,6 +25705,7 @@ async function loadOpGuests() {
     const b = el.querySelector("[data-link]");
     if (b) b.onclick = () => link(b.dataset.link, b.dataset.name);
     const input = el.querySelector(".opg-pick input"), hits = el.querySelector(".opg-pick .op-hits");
+    wireHitKeys(input, hits);
     let t = null;
     input.oninput = () => {
       clearTimeout(t);
