@@ -626,9 +626,20 @@ event_templates  id, name, version, official (bool), created_by, created_at,
                  rules JSON NULL   -- §4.1 rule set (NULL until slice 2 lands)
                  groups JSON       -- fleet layout
                  builtin_key NULL  -- set on a "copy to customize"
-event_template_history  template_id, version, actor_id, change JSON, created_at
-events           + template_id NULL, template_version NULL, rules JSON NULL
+event_template_history  template_id, version, actor_id, action, snapshot JSON,
+                 created_at      -- append-only
+events           + template_id NULL, template_version NULL, template_name NULL,
+                 template_snapshot JSON NULL, details JSON, rules JSON NULL
 ```
+
+**As built (slice 1):** the event stores a full **snapshot** of the template
+contents it was created from (`template_snapshot`), and the deviation chips
+diff against that snapshot. The template history is not consulted. This keeps
+the diff correct for built-ins (whose old versions live only in past
+releases) and for deleted templates, and it needs no lookup. `event_templates`
+uses `AUTOINCREMENT`: a reused rowid would graft a deleted template's history
+onto the next template and re-point its events. `rules` is not on `events`
+yet; it arrives with slice 3.
 
 Endpoints: `GET/POST /api/event-templates`, `PATCH/DELETE
 /api/event-templates/{id}`, `POST /api/event-templates/{id}/official`
