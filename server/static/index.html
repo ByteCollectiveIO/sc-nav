@@ -2289,6 +2289,7 @@
   .op-t-st { font-size: 12px; }
   .op-t-st.done { color: var(--good); }
   .op-t-st.bad { color: var(--bad); }
+  .op-t-hint { flex-basis: 100%; font-size: 12px; color: var(--dim); }
   .op-t-acts { display: flex; gap: 6px; flex-wrap: wrap; }
   @media (max-width: 760px) {
     .op-led-form, .op-c-add, .ev-contract-row { grid-template-columns: 1fr 1fr; }
@@ -15113,13 +15114,18 @@ function opPayoutPanel(op) {
       : t.disputed_at ? `<span class="op-t-st bad" title="${esc(t.dispute_note || "")}">disputed — ${esc(t.dispute_note || "")}</span>`
       : t.sent_at ? `<span class="op-t-st">sent, awaiting confirmation</span>`
       : `<span class="op-t-st muted">to send</span>`;
+    // A dispute is settled by the recipient confirming once they're whole, so
+    // the payer's row would otherwise sit there with nothing to do.
+    const hint = t.disputed_at && !t.received_at && (t.mine_to_send || op.can_manage)
+      ? `<span class="op-t-hint">${t.mine_to_send ? "Send what's missing in-game" : `${esc(t.from_name)} sends what's missing in-game`}` +
+        ` — ${t.can_receive ? "mark it received" : `${esc(t.to_name)} confirms`} once it arrives.</span>` : "";
     const key = t.stored ? `data-tid="${t.id}"` : `data-from="${t.from_roster}" data-to="${t.to_roster}" data-amt="${t.amount}"`;
     const acts = (t.can_send ? `<button class="ev-btn sm" data-tx="sent" ${key}>Mark sent</button>` : "") +
       (t.can_receive ? `<button class="ev-btn sm primary" data-tx="received" ${key}>Confirm received</button>` +
         (!t.disputed_at ? `<button class="ev-btn sm" data-tx="dispute" ${key}>Dispute</button>` : "") : "");
     return `<li class="${t.mine_to_send || t.mine_to_receive ? "mine" : ""}"><span class="op-t-what"><b>${esc(t.from_name)}</b> → <b>${esc(t.to_name)}</b> ` +
       `<span class="op-t-amt">${esc(fmtAuec(t.amount))}</span> <button class="op-x" data-copy="${t.amount}" title="Copy amount" aria-label="Copy amount">⧉</button>` +
-      (t.correction ? ` <span class="op-tag" title="Handing back an overpayment — the pot or their share changed after they were paid">correction</span>` : "") + `</span>${st}<span class="op-t-acts">${acts}</span></li>`;
+      (t.correction ? ` <span class="op-tag" title="Handing back an overpayment — the pot or their share changed after they were paid">correction</span>` : "") + `</span>${st}<span class="op-t-acts">${acts}</span>${hint}</li>`;
   };
   const planned = tx.filter(t => !t.stored), stored = tx.filter(t => t.stored);
   const txHtml = !tx.length
