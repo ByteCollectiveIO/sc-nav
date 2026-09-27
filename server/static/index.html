@@ -14057,7 +14057,7 @@ function eventFormHtml(tax, e, opts = {}) {
     `</div></div>` +
     `<div class="ev-form-card"><div class="ev-section-h">Crew size</div><div class="ev-form-grid">` +
       `<div class="ev-field"><label>Min players</label><input id="ev-f-min" class="ti" type="number" min="0" step="1" value="${e && e.min_players != null ? e.min_players : 0}"></div>` +
-      `<div class="ev-field"><label>Max players</label><input id="ev-f-max" class="ti" type="number" min="1" step="1" value="${e && e.max_players != null ? e.max_players : ""}">` +
+      `<div class="ev-field"><label>Max players</label><input id="ev-f-max" class="ti" type="number" min="1" max="10000" step="1" value="${e && e.max_players != null ? e.max_players : ""}">` +
         `<span class="ev-hint">Blank = unlimited.</span></div>` +
     `</div></div>` +
     `<div class="ev-field"><label>Desired roles &amp; how many of each</label>` +
@@ -14850,19 +14850,31 @@ function drawRollSession(op) {
 // after the roll — that visibility is the whole check on "Need on everything".
 const LOOT_INTENT_WORD = { need: "Need", want: "Want", pass: "Pass" };
 
-function lootPct(x) { return x > 0 ? (x * 100 >= 10 ? Math.round(x * 100) : (x * 100).toFixed(1)) + "%" : "—"; }
+// Every row's odds, rounded so the column reads as a whole. Whole percents
+// when they add up to 100; otherwise every row gets one decimal (1.1 / 1 / 1
+// read 35 / 32 / 32 = 99). Each row stays its own nearest value — pushing the
+// leftover point onto one row would show equal chances as unequal.
+function lootOdds(table) {
+  const tot = table.reduce((a, r) => a + (r.weight || 0), 0);
+  const xs = table.map(r => tot ? (r.weight || 0) / tot : 0);
+  // …and no real chance may round to a certainty ("100%" beside "0%").
+  const whole = xs.reduce((a, x) => a + Math.round(x * 100), 0) === 100 &&
+    xs.every(x => !(x > 0) || x === 1 || (x * 100 >= 0.5 && x * 100 < 99.5));
+  return xs.map(x => !(x > 0) ? "—" : whole ? Math.round(x * 100) + "%"
+    : x * 1000 < 0.5 ? "<0.1%" : x * 1000 >= 999.5 && x < 1 ? ">99.9%" : (x * 100).toFixed(1) + "%");
+}
 
 function lootTableHtml(op, it, L) {
   const rolled = it.status === "rolled";
   const rr = L.rules.mode === "round_robin";
   const canEdit = !rolled && L.can_manage;
-  const total = it.table.reduce((a, r) => a + (r.weight || 0), 0);
-  const rows = it.table.map(r => {
+  const odds = lootOdds(it.table);
+  const rows = it.table.map((r, i) => {
     const win = rolled && it.roll && it.roll.winner_roster === r.roster_id;
     const mine = r.roster_id === op.my_roster_id;
     const intentCell = (canEdit || (mine && it.can_set_intent))
       ? `<span class="seg op-intent" role="group" aria-label="Intent for ${esc(r.name)}">${["need", "want", "pass"].map(k =>
-          `<button class="${r.answered && r.intent === k ? "on" : ""}" data-intent="${k}" data-lid="${it.id}"${mine ? "" : ` data-rid="${r.roster_id}"`}>${LOOT_INTENT_WORD[k]}</button>`).join("")}</span>`
+          `<button class="${r.answered && r.intent === k ? "on" : ""}" aria-pressed="${r.answered && r.intent === k}" data-intent="${k}" data-lid="${it.id}"${mine ? "" : ` data-rid="${r.roster_id}"`}>${LOOT_INTENT_WORD[k]}</button>`).join("")}</span>`
       : `<span class="op-intent-ro ${esc(r.intent)}">${esc(LOOT_INTENT_WORD[r.intent] || r.intent)}</span>`;
     const why = [
       !r.answered ? "no answer — counts as Want" : "",
@@ -14871,7 +14883,7 @@ function lootTableHtml(op, it, L) {
     ].filter(Boolean).join(" · ");
     return `<tr class="${win ? "win" : ""}${mine ? " me" : ""}"><td>${win ? "🏆 " : ""}${esc(r.name)}${r.guest ? ' <span class="ev-tpl-badge">guest</span>' : ""}</td>` +
       `<td>${intentCell}</td><td class="op-why">${why}</td>` +
-      (rr ? "" : `<td class="num">${lootPct(total ? (r.weight || 0) / total : 0)}</td>`) + `</tr>`;
+      (rr ? "" : `<td class="num">${odds[i]}</td>`) + `</tr>`;
   }).join("");
   return `<div class="op-split-wrap"><table class="op-split op-loot-t"><thead><tr><th>Player</th><th>Wants it?</th><th></th>` +
     (rr ? "" : `<th class="num">${rolled ? "Odds had" : "Odds now"}</th>`) + `</tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -14900,7 +14912,7 @@ function opLootPanel(op) {
   const members = op.roster.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
   const add = L.can_manage
     ? `<div class="op-loot-add"><input id="op-lt-name" class="ti" maxlength="80" placeholder="Item, e.g. P4-AR rifle" aria-label="Item name">` +
-      `<input id="op-lt-qty" class="ti" type="number" min="1" value="1" aria-label="Quantity">` +
+      `<input id="op-lt-qty" class="ti" type="number" min="1" max="10000" value="1" aria-label="Quantity">` +
       `<select id="op-lt-found" aria-label="Found by"><option value="">found by —</option>${members}</select>` +
       `<label class="op-c-tick"><input type="checkbox" id="op-lt-split"> roll each separately</label>` +
       `<button class="ev-btn" id="op-lt-add">Add item</button></div>` : "";
@@ -14985,11 +14997,11 @@ function bindOpLoot(op) {
   root.querySelectorAll("[data-roll]").forEach(b => b.onclick = async () => {
     const it = op.loot.items.find(x => x.id === Number(b.dataset.roll));
     const rr = op.loot.rules.mode === "round_robin";
-    const tot = it.table.reduce((a, r) => a + (r.weight || 0), 0);
+    const pct = lootOdds(it.table);
     const odds = rr ? it.table.map(r => `${r.name}: ${LOOT_INTENT_WORD[r.intent]}`).join(" · ")
-      : it.table.map(r => `${r.name} ${LOOT_INTENT_WORD[r.intent]} ${lootPct(tot ? r.weight / tot : 0)}`).join(" · ");
+      : it.table.map((r, i) => `${r.name} ${LOOT_INTENT_WORD[r.intent]} ${pct[i]}`).join(" · ");
     const silent = it.table.filter(r => !r.answered).length;
-    if (!(await confirmDialog(`${odds}.${silent ? ` ${silent} didn't answer and count as Want.` : ""} Answers lock now.`,
+    if (!(await confirmDialog(`${odds}.${silent ? ` ${silent} didn't answer and ${silent === 1 ? "counts" : "count"} as Want.` : ""} Answers lock now.`,
         { title: `Roll ${it.name}?`, confirmLabel: "Roll" }))) return;
     opCall(`/api/ops/${op.id}/loot/${it.id}/roll`, { method: "POST" });
   });
@@ -15066,7 +15078,7 @@ function opPayoutPanel(op) {
   const form = canLog
     ? `<div class="op-led-form">` +
       `<select id="op-l-kind" aria-label="Kind" title="Income = loot or resources sold"><option value="income">Income</option><option value="bonus">Bonus</option><option value="expense">Expense</option></select>` +
-      `<input id="op-l-amt" class="ti" type="number" min="1" step="1" placeholder="aUEC" aria-label="Amount">` +
+      `<input id="op-l-amt" class="ti" type="number" min="1" max="100000000000" step="1" placeholder="aUEC" aria-label="Amount">` +
       `<select id="op-l-who" aria-label="Who holds / paid it">${whoOpts}</select>` +
       `<select id="op-l-cat" aria-label="Expense category" hidden>${(op.ledger_categories || []).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>` +
       `<input id="op-l-note" class="ti" maxlength="200" placeholder="Note, e.g. Sold loot at Grim HEX" aria-label="Note">` +
