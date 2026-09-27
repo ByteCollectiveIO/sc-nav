@@ -3157,6 +3157,36 @@ class OpCloseoutTests(unittest.TestCase):
         self.assertNotIn(a["id"], left)
         self.assertNotIn(b["id"], left)
 
+    def test_dispute_records_arrived_amount_and_keeps_the_sender_nagged(self):
+        op = self._op("681", members=["682"], close=False)
+        me = next(r for r in op["roster"] if r.get("discord_id") == "681")
+        self._as("681")
+        self.client.post(f"/api/ops/{op['id']}/ledger",
+                         json={"kind": "income", "amount": 200000, "roster_id": me["id"]})
+        op = self.client.post(f"/api/ops/{op['id']}/phase", json={"to": "settle"}).json()
+        t = op["transfers"][0]
+        self.assertEqual((t["amount"], t["owed"]), (100000, 100000))
+        key = {"from_roster": t["from_roster"], "to_roster": t["to_roster"], "amount": t["amount"]}
+        op = self.client.post(f"/api/ops/{op['id']}/transfers/mark", json={"action": "sent", **key}).json()
+        self.assertEqual(op["my_todo"], 0)                        # sent: nothing on the sender
+        tid = op["transfers"][0]["id"]
+        self._as("682")
+        bad = self.client.post(f"/api/ops/{op['id']}/transfers/mark",
+                               json={"action": "dispute", "tid": tid, "arrived": 100000})
+        self.assertEqual(bad.status_code, 400)                    # all of it = confirm, not dispute
+        op = self.client.post(f"/api/ops/{op['id']}/transfers/mark",
+                              json={"action": "dispute", "tid": tid, "arrived": 80000}).json()
+        t = op["transfers"][0]
+        self.assertEqual((t["disputed_arrived"], t["owed"]), (80000, 20000))
+        self.assertIn("(80,000 aUEC arrived)", op["log"][-1]["text"])
+        self._as("681")
+        self.assertEqual(self.client.get(f"/api/ops/{op['id']}").json()["my_todo"], 1)  # back on the sender
+        self._as("682")
+        op = self.client.post(f"/api/ops/{op['id']}/transfers/mark",
+                              json={"action": "received", "tid": tid}).json()
+        t = op["transfers"][0]
+        self.assertEqual((t["owed"], t["disputed_arrived"], t["disputed_at"]), (0, None, None))
+
     def test_guest_link_refuses_clash_nonadmin_and_unknown_member(self):
         self._member("671", "Org")
         self._member("672", "Twin")

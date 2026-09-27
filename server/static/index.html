@@ -340,7 +340,7 @@
   input.ti, select.sel { padding: 8px 10px; font: inherit; font-size: 13px;
     background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
   #search { width: 100%; }
-  input.ti:focus, select.sel:focus { outline: none; border-color: var(--accent); }
+  input.ti:focus, select.sel:focus { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
   /* Placeholders must meet the same contrast bar as body text (DESIGN.md), not the
      UA faint-gray default. --dim is the AA-tuned muted token in both themes. */
   input.ti::placeholder, textarea.ti::placeholder { color: var(--dim); opacity: 1; }
@@ -523,6 +523,7 @@
   .lb-head-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
   .lb-seg.auec { background: var(--warn); }
   .lb-seg.rate { background: var(--accent); }
+  .lb-seg.neutral { background: var(--dim); }
   .hbar.auec .hbar-fill { background: var(--warn); }
 
   /* statistics page */
@@ -1872,14 +1873,15 @@
     border: 1px solid var(--border); }
   .ev-phase-open { color: var(--good); border-color: var(--good); }
   .ev-phase-closed { color: var(--warn); border-color: var(--warn); }
-  .ev-phase-live { color: var(--ink-on-accent); background: var(--accent); border-color: var(--accent);
+  .ev-phase-live { color: var(--ink-on-accent); background: var(--accent); border-color: var(--accent); }
+  .ev-phase-live::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ink-on-accent); margin-right: 5px; vertical-align: 1px;
     animation: ev-live-pulse 1.6s ease-in-out infinite; }
   .ev-phase-ended { color: var(--dim); border-color: var(--border); }
   .ev-phase-cancelled { color: var(--bad); border-color: var(--bad); }
   @keyframes ev-live-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
-  /* the LIVE badge is a filled cyan chip on its own — the pulse is pure emphasis,
-     so it's safe to simply stop it for reduced-motion users (badge stays legible) */
-  @media (prefers-reduced-motion: reduce) { .ev-phase-live { animation: none; } }
+  /* the pulse is pure emphasis on the dot; the label text never fades */
+  @media (prefers-reduced-motion: reduce) { .ev-phase-live::before { animation: none; } }
   /* event card */
   .ev-card { display: block; text-decoration: none; color: var(--text);
     padding: 12px 0; border-top: 1px solid var(--border); }
@@ -2127,19 +2129,19 @@
   .op-quick-row select, .op-add select { flex: 1; min-width: 150px; padding: 8px 10px; font: inherit;
     font-size: 13px; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; }
-  .op-steps { display: flex; gap: 0; list-style: none; padding: 0; margin: 10px 0 6px;
+  /* a progress track, deliberately NOT the .seg toggle look (it isn't clickable) */
+  .op-steps { display: flex; gap: 4px 18px; list-style: none; padding: 0; margin: 10px 0 6px;
     font-size: 11px; letter-spacing: .5px; text-transform: uppercase; flex-wrap: wrap; }
-  .op-steps li { padding: 4px 12px; border: 1px solid var(--border); color: var(--dim);
-    margin-right: -1px; }
-  .op-steps li:first-child { border-radius: 6px 0 0 6px; }
-  .op-steps li:last-child { border-radius: 0 6px 6px 0; }
-  .op-steps li.done { color: var(--text); }
-  .op-steps li.now { color: var(--ink-on-accent); background: var(--accent); border-color: var(--accent);
-    font-weight: 700; position: relative; }
+  .op-steps li { padding: 3px 0; color: var(--dim); opacity: .7; border-bottom: 2px solid transparent; }
+  .op-steps li.done { opacity: 1; }
+  .op-steps li.done::before { content: "✓ "; color: var(--good); }
+  .op-steps li.now { color: var(--text); opacity: 1; font-weight: 700; border-bottom-color: var(--accent); }
+  .op-steps li.now::before { content: "▸ "; color: var(--accent); }
   .op-actions { border-top: none; padding-top: 4px; }
   .op-roster-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .op-roster-head h2 { margin: 0; }
   .op-roster-head .ev-btn { margin-left: auto; font-size: 12px; padding: 4px 10px; }
+  .op-roster-head + .ev-note { margin-top: 6px; }
   .op-counts { font-size: 12px; color: var(--dim); }
   .op-counts b { color: var(--text); }
   .op-unmarked { color: var(--warn); }
@@ -2153,6 +2155,13 @@
   .op-name { font-weight: 600; font-size: 14px; }
   .op-tag { font-size: 11px; color: var(--dim); border: 1px solid var(--border); border-radius: 3px;
     padding: 0 5px; }
+  .op-tag.warn { color: var(--warn); border-color: var(--warn); }
+  /* phase readouts (the design system's .readout tiles, sized for a panel header) */
+  .op-readouts { margin: 12px 0 6px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .op-readouts .readout { background: var(--panel2); padding: 8px 12px; color: var(--text); text-decoration: none; }
+  a.readout:hover { border-color: var(--accent); }
+  .op-readouts .value.word { font-size: 20px; }
+  .op-readouts .readout.primary .value.word { font-size: 28px; }
   .op-times { font-size: 11px; color: var(--dim); }
   .op-row-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .op-att button { font-size: 12px; padding: 5px 9px; background: none; color: var(--dim); cursor: pointer; }
@@ -2197,12 +2206,7 @@
   .op-log-d > summary h2::before { content: "▸ "; color: var(--dim); }
   .op-log-d[open] > summary h2::before { content: "▾ "; }
   .op-log-d[open] > summary { margin-bottom: 8px; }
-  /* the member's own line: attendance, cut, what they send or get */
-  .op-you { margin: 10px 0 4px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 8px;
-    align-items: baseline; }
-  .op-you-k { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-on-accent);
-    background: var(--accent); border-radius: 3px; padding: 1px 6px; font-weight: 700; }
-  .op-you a, .op-money-open a { color: var(--accent); }
+  .op-money-open a { color: var(--accent); }
   .op-money-open { margin: 8px 0 4px; font-size: 13px; color: var(--warn); }
   .op-todo { border: 1px solid var(--warn); border-radius: 6px; padding: 8px 12px; margin: 10px 0;
     font-size: 13px; line-height: 1.8; }
@@ -2210,10 +2214,10 @@
   .op-todo a { color: var(--accent); }
   .op-bulk { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
   .op-bulk .ev-btn { font-size: 12px; padding: 4px 10px; margin: 0; }
-  .op-share-t { border-collapse: collapse; margin: 4px 0 8px; font-size: 12px; width: auto; }
+  .op-share-t { border-collapse: collapse; margin: 4px 0 8px; font-size: 13px; width: auto; }
   .op-share-t caption { text-align: left; font-size: 11px; color: var(--dim); padding-bottom: 2px; }
-  .op-share-t th { font-weight: 400; color: var(--dim); padding: 2px 10px 2px 0; text-align: left; }
-  .op-share-t td { font-weight: 700; color: var(--text); padding: 0 10px 2px 0; }
+  .op-share-t th { font-weight: 400; color: var(--dim); padding: 2px 16px 2px 0; text-align: left; font-size: 11px; }
+  .op-share-t td { font-weight: 700; color: var(--text); padding: 0 16px 2px 0; }
   .op-share-t td.sh-0 { color: var(--dim); font-weight: 400; }
   #ops-root input[type="checkbox"], #op-guests-panel input[type="checkbox"] { width: 18px; height: 18px;
     accent-color: var(--accent); }
@@ -2224,7 +2228,10 @@
   /* ---- admin: ops guests → members (slice 5) ---- */
   .opg-row { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
   .opg-ops summary { cursor: pointer; font-size: 12px; margin-top: 2px; }
-  .opg-op { display: block; font-size: 12px; padding: 2px 0; }
+  .opg-op { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
+  .opg-op label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #op-guests-panel a, #my-ops-panel a { color: var(--accent); }
+  #ops-board-view .ev-note { margin-bottom: 10px; }
   .opg-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
   .opg-pick { position: relative; flex: 1; min-width: 180px; max-width: 280px; }
   .opg-pick .ti { width: 100%; }
@@ -2247,9 +2254,13 @@
   .op-loot-t td { vertical-align: middle; }
   .op-loot-t tr.win td { background: var(--accent-wash); }
   .op-loot-t tr.me td:first-child { font-weight: 600; }
-  .op-intent button { font-size: 12px; padding: 4px 9px; background: none; color: var(--dim); cursor: pointer; }
+  .op-intent button { font-size: 12px; padding: 4px 9px; background: none; color: var(--dim); cursor: pointer; min-height: 24px; }
   .op-intent-ro { font-size: 12px; font-weight: 600; }
-  .op-intent-ro.need { color: var(--warn); }
+  .op-intent-ro.need { color: var(--text); font-weight: 700; }
+  .op-intent-ro.need::before { content: "▲ "; font-size: 9px; vertical-align: 1px; }
+  /* a default "Want" (nobody answered) is not a stated choice */
+  .op-intent-ro.derived { font-weight: 400; font-style: italic; color: var(--dim); }
+  .op-why-m { display: none; }
   .op-intent-ro.pass { color: var(--dim); }
   .op-why { font-size: 11px; color: var(--dim); }
   .op-loot-void { font-size: 12px; color: var(--dim); margin: 6px 0 0; padding-left: 18px; }
@@ -2340,10 +2351,17 @@
     .op-log li { grid-template-columns: 1fr; gap: 0; }
     /* nowrap here once clipped Absent off the seg's end (critique 2026-09-27) */
     .op-row-acts { width: 100%; }
-    .op-att { display: flex; flex: 1 1 100%; min-width: 0; order: 1; }
-    .op-att button { flex: 1; padding: 6px 2px; font-size: 11px; min-width: 0; }
-    .op-share { order: 2; flex: 1; max-width: none; }
-    .op-row-acts .op-x { order: 3; }
+    /* the seg shares its line with ✕ (a lone ✕ line doubled every row's height);
+       button labels may wrap to two lines instead of clipping */
+    .op-att { display: flex; flex: 1 1 calc(100% - 52px); min-width: 0; order: 1; }
+    .op-att button { flex: 1; padding: 4px 2px; font-size: 11px; min-width: 0; white-space: normal; line-height: 1.15; }
+    .op-row-acts .op-x { order: 2; }
+    .op-share { order: 3; flex: 1 1 100%; max-width: none; }
+    /* loot table: the reason moves under the name so Odds stays on screen */
+    .op-loot-t td.op-why, .op-loot-t th:nth-child(3) { display: none; }
+    .op-why-m { display: block; font-size: 11px; color: var(--dim); font-weight: 400; margin-top: 2px; }
+    .op-loot-t tr.win .op-why-m { color: color-mix(in srgb, var(--dim) 55%, var(--text)); }
+    .op-readouts .readout.primary .value { font-size: 32px; }
     .op-split .c-opt { display: none; }
     .op-split td.send, .op-split td.recv { white-space: normal; }
     /* ledger entry: amount + void on one line, the description under them */
@@ -2356,9 +2374,15 @@
   @media (pointer: coarse) {
     /* .op-x's own 24px min-height outranks the global touch rule; restate both */
     .op-x { min-width: 44px; min-height: 44px; }
-    #ops-root .ev-back { display: inline-flex; align-items: center; min-height: 44px; padding: 0; }
+    #ops-root .ev-back { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; padding: 0; }
+    #ops-root .ev-btn.sm { min-height: 44px; }
+    .op-log-d > summary { min-height: 44px; display: flex; align-items: center; }
+    /* padding, not flex: display:flex on a <summary> drops its ▸ marker */
+    #ops-root summary.ev-section-h, .opg-ops summary { padding-top: 16px; padding-bottom: 16px; }
+    /* inline links: vertical padding grows the tap area without moving the line */
+    .op-todo a, .op-money-open a, #op-guests-panel a, #my-ops-panel a { padding: 15px 0; }
     #ops-root select, .op-share { min-height: 44px; }
-    .opg-ops summary, .op-add > summary.ev-section-h { padding: 12px 0; }
+
   }
   .ev-tpl-row { display: flex; align-items: center; gap: 10px; }
   .ev-tpl-row .ev-tpl-nm { font-weight: 600; }
@@ -14585,6 +14609,8 @@ function opCountsLine(c, setup) {
   return `${c.total} on the roster · ` + bits.join(" · ");
 }
 
+const opDisplayName = n => String(n || "").replace(/^Roll: /, "");
+
 function opCard(o) {
   const when = o.started_at || o.created_at;
   return `<a class="ev-card" href="#/ops/${o.id}">` +
@@ -14646,7 +14672,7 @@ function bindLootRollTool() {
   Promise.all(["rolls", "rolls_closed"].map(sc => fetch(`/api/ops?scope=${sc}`).then(r => r.ok ? r.json() : { ops: [] }).catch(() => ({ ops: [] }))))
     .then(([a, c]) => {
       const el = $("ops-rolls"); if (!el) return;
-      const row = o => `<a class="op-roll-row" href="#/ops/${o.id}"><span>${esc(o.name)}</span>` +
+      const row = o => `<a class="op-roll-row" href="#/ops/${o.id}"><span>${esc(opDisplayName(o.name))}</span>` +
         `<span class="muted">${o.phase === "live" ? "open" : "done"} · ${esc(fmtEventTime(o.started_at || o.created_at))} · by ${esc(o.organizer_name)}</span></a>`;
       const live = a.ops || [], done = (c.ops || []).slice(0, 8);
       el.innerHTML = (live.length ? `<div class="ev-section-h" style="margin-top:12px">Open rolls</div>${live.map(row).join("")}` : "") +
@@ -14664,7 +14690,7 @@ async function opsWaitingOnMe() {
 function opsWaitingHtml(ops) {
   if (!ops.length) return "";
   return `<div class="op-todo" role="note"><div class="op-todo-h">Waiting on you</div>` + ops.map(o =>
-    `<a href="#/ops/${o.id}">${esc(o.name)}</a> <span class="muted">${o.my_todo} payment${o.my_todo === 1 ? "" : "s"} to send or confirm</span>`).join("<br>") + `</div>`;
+    `<a href="#/ops/${o.id}">${esc(o.name)}</a> <span class="muted">${o.my_todo} payment${o.my_todo === 1 ? "" : "s"} waiting on you</span>`).join("<br>") + `</div>`;
 }
 
 async function renderOpsHome() {
@@ -14677,6 +14703,7 @@ async function renderOpsHome() {
     `for a spur-of-the-moment op, start a quick op.</p>` +
     `<div id="ops-todo"></div>` +
     `<div class="ev-section-h">Running now</div><div id="ops-active"><p class="stat-empty">Loading…</p></div>` +
+    `<div id="ops-settling"></div>` +
     `<div class="ev-form-card op-quick"><div class="ev-section-h">Quick op</div>` +
       `<div class="op-quick-row">` +
       `<input id="op-q-name" class="ti" maxlength="120" placeholder="Name, e.g. Tuesday salvage" aria-label="Op name">` +
@@ -14722,6 +14749,13 @@ async function renderOpsHome() {
     catch { if ($(el)) $(el).innerHTML = `<p class="stat-empty">Couldn't load.</p>`; return; }
     let ops = d.ops || [];
     if (scope === "mine") ops = ops.filter(o => o.phase === "closed");
+    if (scope === "active") {
+      // Settling isn't running: those ops get their own short list.
+      const settling = ops.filter(o => o.phase === "settle");
+      ops = ops.filter(o => o.phase !== "settle");
+      if ($("ops-settling")) $("ops-settling").innerHTML = settling.length
+        ? `<div class="ev-section-h">Settling up</div>${settling.map(opCard).join("")}` : "";
+    }
     if ($(el)) $(el).innerHTML = ops.length ? ops.map(opCard).join("") : `<p class="stat-empty">${empty}</p>`;
   };
   opsWaitingOnMe().then(ops => { if ($("ops-todo")) $("ops-todo").innerHTML = opsWaitingHtml(ops); });
@@ -14792,6 +14826,7 @@ function opRowHtml(op, r) {
   const times = [r.joined_at ? `arrived ${esc(toLocalTime(r.joined_at))}` : "",
     r.left_at ? `left ${esc(toLocalTime(r.left_at))}` : ""].filter(Boolean).join(" · ");
   const tags = [
+    started && !r.attendance ? `<span class="op-tag warn">unmarked</span>` : "",
     r.kind === "guest" ? `<span class="ev-tpl-badge">guest</span>` : "",
     r.kind === "member" && r.signed_up && r.signed_up !== "going" ? `<span class="op-tag">${esc(OP_SIGNED_LABEL[r.signed_up] || r.signed_up)}</span>` : "",
     op.deputies.some(d => d.discord_id === r.discord_id) ? `<span class="op-tag">deputy</span>` : "",
@@ -14802,8 +14837,8 @@ function opRowHtml(op, r) {
   const ruleShare = r.attendance ? (op.rules.shares[r.attendance]) : null;
   const shareCtl = editable && op.phase === "settle"
     ? `<select class="op-share" data-share-rid="${r.id}" aria-label="Share for ${esc(r.name)}" title="${ov != null ? esc("Override: " + (r.share_reason || "")) : "Follows the payout rules"}">` +
-        `<option value=""${ov == null ? " selected" : ""}>${ruleShare != null ? OP_SHARE_WORD[ruleShare] + " share (the rules)" : "Share by the rules"}</option>` +
-        OP_SHARE_OPTS.map(([v, l]) => `<option value="${v}"${ov === v ? " selected" : ""}>${l} (override)</option>`).join("") + `</select>`
+        `<option value=""${ov == null ? " selected" : ""}>Rules: ${ruleShare != null ? OP_SHARE_WORD[ruleShare] : "—"}</option>` +
+        OP_SHARE_OPTS.map(([v, l]) => `<option value="${v}"${ov === v ? " selected" : ""}>${l} ✎ override</option>`).join("") + `</select>`
     : "";
   const ovNote = ov != null ? `<span class="op-ov" title="${esc(r.share_reason || "")}">${esc(OP_SHARE_WORD[ov])} share — ${esc(r.share_reason || "")}</span>` : "";
   return `<div class="op-row${r.attendance || !started ? "" : " unmarked"}${r.is_me ? " me" : ""}">` +
@@ -14828,22 +14863,56 @@ function opMoneyStatus(op) {
 
 // A member's first question is "was I counted, and what do I get or owe?" —
 // answered in one line at the top instead of across ROSTER, SPLIT and PAYMENTS.
-function opYouLine(op) {
+// The phase's key figures as readout tiles (DESIGN.md: one primary readout
+// per screen). A member's first question — "was I counted, and what do I get
+// or owe?" — is the primary tile once there's money to settle.
+function opReadouts(op) {
   const me = op.roster.find(r => r.id === op.my_roster_id);
-  if (!me || op.phase === "setup") return "";
-  const lab = (op.attendance_options || []).find(a => a.key === me.attendance);
-  const bits = [lab ? `<b>${esc(lab.label)}</b>` : `<span class="op-unmarked">not marked yet</span>`];
-  const row = (op.split.rows || []).find(x => x.roster_id === me.id);
-  if (row && op.split.totals.weight_total) bits.push(`your cut ${op.phase === "live" ? "so far " : ""}<b>${esc(fmtAuec(row.share))}</b>`);
-  if (op.phase === "settle" || op.phase === "closed") {
-    const mine = (op.transfers || []).filter(t => !t.received_at && (t.mine_to_send || t.mine_to_receive));
-    const out = mine.filter(t => t.mine_to_send), inn = mine.filter(t => t.mine_to_receive);
-    const sum = xs => esc(fmtAuec(xs.reduce((a, t) => a + t.amount, 0)));
-    if (out.length) bits.push(`<a href="#op-payments">you send ${sum(out)}</a>`);
-    if (inn.length) bits.push(`<a href="#op-payments">you get ${sum(inn)}</a>`);
-    if (!out.length && !inn.length && row && op.transfers.length) bits.push("you're settled");
+  const T = op.split.totals, c = op.counts;
+  const tile = (label, value, { primary, small, word, href } = {}) => {
+    const tag = href ? "a" : "div";
+    return `<${tag} class="readout${primary ? " primary" : ""}"${href ? ` href="${href}"` : ""}>` +
+      `<div class="label">${esc(label)}</div><div class="value${word ? " word" : ""}">${value}${small ? ` <small>${small}</small>` : ""}</div></${tag}>`;
+  };
+  const att = me ? ((op.attendance_options || []).find(a => a.key === me.attendance) || {}).label : null;
+  const tiles = [];
+  if (op.phase === "setup") {
+    tiles.push(tile("On the roster", c.total, { primary: true, small: c.guests ? `${c.guests} guest${c.guests === 1 ? "" : "s"}` : "" }));
+  } else if (op.phase === "live") {
+    if (op.can_manage && c.unmarked) tiles.push(tile("Unmarked", c.unmarked, { primary: true, small: `of ${c.total}` }));
+    else tiles.push(tile("Took part", c.took_part, { primary: true, small: `of ${c.total}` }));
+    if (me) tiles.push(tile("You", esc(att || "not marked yet"), { word: true }));
+    if (op.ledger.some(e => !e.voided_at)) tiles.push(tile("Pot so far", esc(fmtAuec(T.pot))));
+  } else {
+    const mine = (op.transfers || []).filter(t => t.owed > 0 && (t.mine_to_send || t.mine_to_receive));
+    const out = mine.filter(t => t.mine_to_send).reduce((a, t) => a + t.owed, 0);
+    const inn = mine.filter(t => t.mine_to_receive).reduce((a, t) => a + t.owed, 0);
+    const { open, disputed } = opOpenMoney(op);
+    if (out) tiles.push(tile("You send", esc(fmtAuec(out)), { primary: true, href: "#op-payments" }));
+    else if (inn) tiles.push(tile("You get", esc(fmtAuec(inn)), { primary: true, href: "#op-payments" }));
+    else if (me && op.transfers.length) tiles.push(tile("You", "Settled", { primary: true, word: true }));
+    else tiles.push(tile("Took part", c.took_part, { primary: true, small: `of ${c.total}` }));
+    const row = me && (op.split.rows || []).find(x => x.roster_id === me.id);
+    if (row && T.weight_total) tiles.push(tile("Your cut", esc(fmtAuec(row.share)), { small: att ? esc(att) : "" }));
+    if (op.ledger.some(e => !e.voided_at)) tiles.push(tile("Pot", esc(fmtAuec(T.pot))));
+    if (open.length) tiles.push(tile("Payments open", open.length, { href: "#op-payments",
+      small: disputed.length ? `${disputed.length} disputed` : "" }));
   }
-  return `<p class="op-you"><span class="op-you-k">You</span> ${bits.join(" · ")}</p>`;
+  return `<div class="readouts op-readouts">${tiles.join("")}</div>`;
+}
+
+// Each phase leads with the tool it's for (critique 2026-09-27: gating that
+// only hid tools still left the roster ~1000px down while Live).
+const OP_PANEL_ORDER = {
+  setup: ["roster", "payout", "contracts", "loot"],
+  live: ["roster", "loot", "payout", "contracts"],
+  settle: ["payout", "roster", "contracts", "loot"],
+  closed: ["roster", "payout", "loot", "contracts"],
+};
+function opPhasePanels(op, panels) {
+  let order = OP_PANEL_ORDER[op.phase] || OP_PANEL_ORDER.setup;
+  if (op.phase === "closed" && opOpenMoney(op).open.length) order = ["payout", ...order.filter(k => k !== "payout")];
+  return order.map(k => panels[k] || "").join("");
 }
 
 function drawOp(op) {
@@ -14861,14 +14930,20 @@ function drawOp(op) {
     op.started_at ? `started ${esc(fmtEventTime(op.started_at))}` : "",
     op.ended_at && op.phase !== "live" ? `ended ${esc(fmtEventTime(op.ended_at))}` : "",
   ].filter(Boolean);
-  const hint = {
+  // The organizer's instructions only make sense to someone who can act on them.
+  const hint = (op.can_manage ? {
     setup: "Build the roster, then start the mission. Nothing is recorded as attendance until you do.",
     live: "Mark people as they arrive. Late and Left early stamp the time. Every change is logged.",
-    settle: "The mission is over. Finish marking everyone, then close the record. Changes now need a reason.",
+    settle: "The mission is over. Finish marking everyone, settle up, then close the record. Changes now need a reason.",
     closed: "This is the record. Reopening it is possible, and is itself logged with a reason.",
-  }[op.phase];
+  } : {
+    setup: "The organizer is building the roster. Attendance starts when the mission does.",
+    live: "The organizer marks attendance as people arrive. Every change is logged.",
+    settle: "The mission is over. Your cut and any payments to you or from you are below.",
+    closed: "This is the record: nothing on it changes without a logged reason.",
+  })[op.phase];
   // Payments stay settle-able after Close, so a closed op with money still
-  // open must not read as finished.
+  // open must not read as finished (its readout tile says so too).
   const moneyOpen = op.phase === "closed" ? opMoneyStatus(op) : "";
   const joinBtn = !op.in_roster && (op.phase === "setup" || op.phase === "live")
     ? `<button class="ev-btn primary" id="op-join" title="Put yourself on the roster; the organizer marks attendance">I'm here — add me</button>` : "";
@@ -14902,27 +14977,27 @@ function drawOp(op) {
       `</div>` +
     opStepper(op.phase) +
     `<div class="ev-meta-grid secondary">${meta.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` +
-    opYouLine(op) +
-    (moneyOpen ? `<p class="op-money-open"><a href="#op-payments">${esc(moneyOpen)}</a>: ${opOpenMoney(op).open.length === 1 ? "it" : "they"} can still be settled below.</p>` : "") +
+    opReadouts(op) +
+    (moneyOpen ? `<p class="op-money-open">${esc(moneyOpen)}: ${opOpenMoney(op).open.length === 1 ? "it" : "they"} can still be settled below.</p>` : "") +
     `<p class="ev-note">${esc(hint)}</p>` +
     `<div class="ev-form-actions op-actions">${opActions(op)}${joinBtn}` +
       // On the spot: a rare drop mid-mission is one tap from the header.
       (op.phase === "live" && op.loot && op.loot.can_manage
         ? `<button class="ev-btn" id="op-roll-now" title="Log a drop and roll for it now">🎲 Roll for loot</button>` : "") +
       `<span id="op-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div></div>` +
-    opContractsPanel(op) +
-    // While the mission is live, loot sits above the roster — that's when it drops.
-    (op.phase === "live" ? opLootPanel(op) : "") +
-    `<div class="panel"><div class="op-roster-head"><h2>ROSTER</h2>` +
+    opPhasePanels(op, {
+      contracts: opContractsPanel(op),
+      loot: opLootPanel(op),
+      payout: opPayoutPanel(op),
+      roster: `<div class="panel"><div class="op-roster-head"><h2>ROSTER</h2>` +
       `<span class="op-counts">${opCountsLine(op.counts, op.phase === "setup")}</span>` +
       (canEditRoster && unmarked && op.phase !== "setup"
         ? `<span class="op-bulk"><button class="ev-btn" data-bulk="present">Mark the ${unmarked} unmarked Present</button>` +
           `<button class="ev-btn" data-bulk="absent">…or Absent</button></span>` : "") + `</div>` +
       (op.roster.length ? `<div class="op-grid">${op.roster.map(r => opRowHtml(op, r)).join("")}</div>`
         : `<p class="stat-empty">No one on the roster yet.</p>`) +
-      addPanel + deputyPanel + `</div>` +
-    (op.phase !== "live" ? opLootPanel(op) : "") +
-    opPayoutPanel(op) +
+      addPanel + deputyPanel + `</div>`,
+    }) +
     `<div class="panel"><details class="op-log-d"><summary><h2>LOG <span class="muted">(${op.log.length})</span></h2></summary>` +
       `<p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
       `<ol class="op-log">${op.log.slice().reverse().map(e =>
@@ -14962,7 +15037,7 @@ function drawRollSession(op) {
   const actions = op.can_manage
     ? (live ? `<button class="ev-btn" data-op-phase="closed">Done</button>` : `<button class="ev-btn" data-op-phase="live">Reopen</button>`) : "";
   root.innerHTML = `<div class="panel"><a class="ev-back" href="#/ops">← Ops</a>` +
-    `<div class="ev-detail-title"><h2>${esc(op.name)}</h2>` +
+    `<div class="ev-detail-title"><h2>${esc(opDisplayName(op.name))}</h2>` +
       (manage ? `<button class="op-x" id="op-rename" title="Rename" aria-label="Rename">✎</button>` : "") +
       `<div class="ev-chips"><span class="ev-chip type">Loot roll</span>${live ? opPhaseBadge("live") : `<span class="ev-phase ev-phase-ended">Done</span>`}</div></div>` +
     `<div class="ev-meta-grid secondary"><span class="ev-m">run by <b>${esc(op.organizer_name)}</b></span>` +
@@ -14974,7 +15049,7 @@ function drawRollSession(op) {
     `<div class="panel"><div class="op-roster-head"><h2>IN THE ROLL</h2><span class="op-counts">${op.roster.length} ${op.roster.length === 1 ? "person" : "people"}</span></div>` +
       `<div class="op-deps">${people}</div>${add}</div>` +
     opLootPanel(op).replace('<div class="panel"><h2>LOOT</h2>', `<div class="panel"><h2>LOOT</h2>${modeEd}`) +
-    `<div class="panel"><details><summary class="ev-section-h" style="cursor:pointer">Log (${op.log.length})</summary>` +
+    `<div class="panel"><details class="op-log-d"><summary><h2>LOG <span class="muted">(${op.log.length})</span></h2></summary>` +
       `<ol class="op-log">${op.log.slice().reverse().map(e =>
         `<li><time datetime="${esc(e.at)}">${esc(fmtEventTime(e.at))}</time> ` +
         `<span><b>${esc(e.actor_name)}</b> ${esc(e.text)}` +
@@ -15026,13 +15101,14 @@ function lootTableHtml(op, it, L) {
     const intentCell = (canEdit || (mine && it.can_set_intent))
       ? `<span class="seg op-intent" role="group" aria-label="Intent for ${esc(r.name)}">${["need", "want", "pass"].map(k =>
           `<button class="${r.answered && r.intent === k ? "on" : ""}" aria-pressed="${r.answered && r.intent === k}" data-intent="${k}" data-lid="${it.id}"${mine ? "" : ` data-rid="${r.roster_id}"`}>${LOOT_INTENT_WORD[k]}</button>`).join("")}</span>`
-      : `<span class="op-intent-ro ${esc(r.intent)}">${esc(LOOT_INTENT_WORD[r.intent] || r.intent)}</span>`;
+      : `<span class="op-intent-ro ${esc(r.intent)}${r.answered ? "" : " derived"}">${esc(LOOT_INTENT_WORD[r.intent] || r.intent)}</span>`;
     const why = [
       !r.answered ? "no answer — counts as Want" : "",
       r.set_by_name ? `set by ${esc(r.set_by_name)}` : "",
       !rr && L.rules.mode === "weighted" ? `×${r.att_factor} attendance (${r.ops_attended} op${r.ops_attended === 1 ? "" : "s"})${r.intent === "need" ? ` · ×${r.intent_factor} Need` : ""}` : "",
     ].filter(Boolean).join(" · ");
-    return `<tr class="${win ? "win" : ""}${mine ? " me" : ""}"><td>${win ? "🏆 " : ""}${esc(r.name)}${r.guest ? ' <span class="ev-tpl-badge">guest</span>' : ""}</td>` +
+    return `<tr class="${win ? "win" : ""}${mine ? " me" : ""}"><td>${win ? "🏆 " : ""}${esc(r.name)}${r.guest ? ' <span class="ev-tpl-badge">guest</span>' : ""}` +
+      (why ? `<span class="op-why-m">${why}</span>` : "") + `</td>` +
       `<td>${intentCell}</td><td class="op-why">${why}</td>` +
       (rr ? "" : `<td class="num">${odds[i]}</td>`) + `</tr>`;
   }).join("");
@@ -15043,7 +15119,7 @@ function lootTableHtml(op, it, L) {
 function opLootPanel(op) {
   const L = op.loot;
   if (!L) return "";
-  if (!L.items.length && !L.can_manage) return "";
+  if (!L.items.length && (!L.can_manage || op.phase === "settle")) return "";
   const rules = L.rules, rr = rules.mode === "round_robin";
   const head = `<div class="op-rules-head"><b>${esc(L.mode_label)}</b>` +
     (rules.mode === "weighted" ? ` <span class="muted">· Need ×${rules.need_weight} · attendance up to ×2</span>` : "") +
@@ -15178,7 +15254,7 @@ function opContractsPanel(op) {
   const manage = op.can_manage && op.phase !== "closed";
   const onRoster = op.my_roster_id != null;
   const members = op.roster.length;
-  if (!cs.length && !manage) return "";
+  if (!cs.length && !(manage && (op.phase === "setup" || op.phase === "live"))) return "";
   const rows = cs.map(c => {
     const have = c.ticks.length;
     const missing = op.roster.filter(r => !c.ticks.includes(r.id)).map(r => r.name);
@@ -15267,21 +15343,29 @@ function opPayoutPanel(op) {
   // Transfers
   const tx = op.transfers;
   const txRow = t => {
+    const short = t.disputed_at && !t.received_at && t.owed < t.amount;
     const st = t.received_at ? `<span class="op-t-st done">✓ received</span>`
-      : t.disputed_at ? `<span class="op-t-st bad" title="${esc(t.dispute_note || "")}">disputed — ${esc(t.dispute_note || "")}</span>`
+      : t.disputed_at ? `<span class="op-t-st bad" title="${esc(t.dispute_note || "")}">disputed` +
+          (t.disputed_arrived != null ? `: ${esc(fmtAuec(t.disputed_arrived))} arrived` : "") +
+          (t.dispute_note ? ` (${esc(t.dispute_note)})` : "") + `</span>`
       : t.sent_at ? `<span class="op-t-st">sent, awaiting confirmation</span>`
       : `<span class="op-t-st muted">to send</span>`;
     // A dispute is settled by the recipient confirming once they're whole, so
     // the payer's row would otherwise sit there with nothing to do.
+    const missing = short ? esc(fmtAuec(t.owed)) : "what's missing";
     const hint = t.disputed_at && !t.received_at && (t.mine_to_send || op.can_manage)
-      ? `<span class="op-t-hint">${t.mine_to_send ? "Send what's missing in-game" : `${esc(t.from_name)} sends what's missing in-game`}` +
-        ` — ${t.can_receive ? "mark it received" : `${esc(t.to_name)} confirms`} once it arrives.</span>` : "";
+      ? `<span class="op-t-hint">${t.mine_to_send ? `Send ${short ? "the missing " : ""}${missing} in-game` : `${esc(t.from_name)} sends ${short ? "the missing " : ""}${missing} in-game`}` +
+        `, then ${t.can_receive ? "mark it arrived" : `${esc(t.to_name)} confirms`}.</span>` : "";
     const key = t.stored ? `data-tid="${t.id}"` : `data-from="${t.from_roster}" data-to="${t.to_roster}" data-amt="${t.amount}"`;
+    // A disputed payment asks the recipient the only two questions left.
     const acts = (t.can_send && !(t.mine_to_receive && !t.mine_to_send) ? `<button class="ev-btn sm" data-tx="sent" ${key}>Mark sent</button>` : "") +
-      (t.can_receive ? `<button class="ev-btn sm primary" data-tx="received" ${key}>Confirm received</button>` +
-        (!t.disputed_at ? `<button class="ev-btn sm" data-tx="dispute" ${key}>Dispute</button>` : "") : "");
+      (t.can_receive ? (t.disputed_at
+        ? `<button class="ev-btn sm primary" data-tx="received" ${key}>Rest arrived</button><button class="ev-btn sm" data-tx="dispute" data-amt-full="${t.amount}" ${key}>Still short…</button>`
+        : `<button class="ev-btn sm primary" data-tx="received" ${key}>Confirm received</button><button class="ev-btn sm" data-tx="dispute" data-amt-full="${t.amount}" ${key}>Dispute…</button>`) : "");
     return `<li class="${t.mine_to_send || t.mine_to_receive ? "mine" : ""}"><span class="op-t-what"><b>${esc(t.from_name)}</b> → <b>${esc(t.to_name)}</b> ` +
-      `<span class="op-t-amt">${esc(fmtAuec(t.amount))}</span> <button class="op-x" data-copy="${t.amount}" title="Copy amount" aria-label="Copy amount">⧉</button>` +
+      (short ? `<span class="op-t-amt">${esc(fmtAuec(t.owed))}</span> <span class="muted">still owed of ${esc(fmtAuec(t.amount))}</span>`
+        : `<span class="op-t-amt">${esc(fmtAuec(t.amount))}</span>`) +
+      ` <button class="op-x" data-copy="${t.received_at ? t.amount : t.owed}" title="Copy ${short ? "the amount still owed" : "amount"}" aria-label="Copy ${short ? "the amount still owed" : "amount"}">⧉</button>` +
       (t.correction ? ` <span class="op-tag" title="Handing back an overpayment — the pot or their share changed after they were paid">correction</span>` : "") + `</span>${st}<span class="op-t-acts">${acts}</span>${hint}</li>`;
   };
   const planned = tx.filter(t => !t.stored), stored = tx.filter(t => t.stored);
@@ -15390,10 +15474,18 @@ function bindOpMoney(op) {
     if (b.dataset.tid) body.tid = Number(b.dataset.tid);
     else Object.assign(body, { from_roster: Number(b.dataset.from), to_roster: Number(b.dataset.to), amount: Number(b.dataset.amt) });
     if (body.action === "dispute") {
-      const note = await promptDialog("What's wrong — nothing arrived, wrong amount? The payer and organizer see this.",
-        { title: "Dispute this payment", confirmLabel: "Dispute", placeholder: "What happened" });
-      if (note == null || !note.trim()) return;
-      body.note = note.trim();
+      // A number, so the page can say (and copy) exactly what's still owed.
+      const full = Number(b.dataset.amtFull);
+      const v = await promptDialog(`Of the ${fmtAuec(full)}, how much actually arrived? Enter 0 if nothing did.`,
+        { title: "How much arrived?", confirmLabel: "Next", placeholder: "aUEC that arrived" });
+      if (v == null) return;
+      const arrived = parseInt(v.replace(/[^0-9]/g, ""), 10);
+      if (!(arrived >= 0)) { opSay("Enter the amount that arrived, in aUEC (0 if nothing)."); return; }
+      if (arrived >= full) { opSay("That's all of it, so confirm it received instead."); return; }
+      const note = await promptDialog(`${fmtAuec(full - arrived)} is still owed. Anything else the payer should know?`,
+        { title: "Add a note (optional)", confirmLabel: "Dispute", cancelLabel: "Skip note", placeholder: "e.g. sent to the wrong person" });
+      body.arrived = arrived;
+      if (note && note.trim()) body.note = note.trim();
     }
     opCall(`/api/ops/${op.id}/transfers/mark`, opJson("POST", body));
   });
@@ -25079,7 +25171,7 @@ async function loadMyOps() {
     el.innerHTML = waiting + `<div class="muted" style="font-size:12px;">No closed ops yet. Once an op you're on is closed, it's listed here.</div>`;
     return;
   }
-  const bits = [`<b>${s.attended}</b> op${s.attended === 1 ? "" : "s"} attended`];
+  const bits = [`<b>${s.attended}</b> closed op${s.attended === 1 ? "" : "s"} attended`];
   if (s.organized) bits.push(`<b>${s.organized}</b> run by you`);
   if (s.going) bits.push(`showed up for <b>${s.showed}</b> of the <b>${s.going}</b> you signed up Going for`);
   el.innerHTML = waiting + `<p style="margin:0 0 8px;font-size:13px;">${bits.join(" · ")}</p>` +
@@ -25106,7 +25198,10 @@ async function loadOpsLeaderboard() {
   }
   cargoBoard("ops-lb-chart", "ops-lb-empty",
     (d.rows || []).map(r => ({ display_name: r.name, mine: r.me, attended: r.attended })),
-    r => r.attended, v => `${v} op${v === 1 ? "" : "s"}`, "rate", true);
+    r => r.attended, v => `${v} op${v === 1 ? "" : "s"}`, "neutral", true);
+  const rows = d.rows || [];
+  if (rows.length > 1 && rows.every(r => r.attended === rows[0].attended))
+    $("ops-lb-chart").insertAdjacentHTML("afterbegin", `<p class="ev-note">Everyone here is on ${rows[0].attended} op${rows[0].attended === 1 ? "" : "s"}.</p>`);
   stampIntelFresh();
 }
 
@@ -25668,9 +25763,9 @@ async function loadOpGuests() {
         (g.handles.length ? ` <span class="muted">RSI handle ${g.handles.map(esc).join(", ")}</span>` : "") +
         ` <span class="muted">· ${g.rows.length} op${g.rows.length === 1 ? "" : "s"}</span></div>` +
       `<details class="opg-ops"><summary class="muted">Which ops</summary>` +
-        g.rows.map(r => `<label class="opg-op"><input type="checkbox" checked data-rid="${r.id}"> ` +
-          `<a href="#/ops/${r.op_id}">${esc(r.op_name)}</a> <span class="muted">${esc(fmtEventTime(r.op_at))}` +
-          `${r.phase === "closed" ? "" : " · still open"}</span></label>`).join("") + `</details>` +
+        g.rows.map(r => `<div class="opg-op"><label><input type="checkbox" checked data-rid="${r.id}"> ${esc(r.op_name)} ` +
+          `<span class="muted">${esc(fmtEventTime(r.op_at))}${r.phase === "closed" ? "" : " · still open"}</span></label>` +
+          ` <a href="#/ops/${r.op_id}" aria-label="Open ${esc(r.op_name)}">open ↗</a></div>`).join("") + `</details>` +
       `<div class="opg-acts">` +
         (sug ? `<button class="ev-btn sm primary" data-link="${esc(sug.discord_id)}" data-name="${esc(sug.name)}">Link to ${esc(sug.name)}</button>` +
           ` <span class="muted" style="font-size:12px;">suggested: ${why} matches</span>` : "") +
