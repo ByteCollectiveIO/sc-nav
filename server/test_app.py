@@ -6685,6 +6685,47 @@ class BeltSurveyApiTests(unittest.TestCase):
         stored = next(d for d in db.list_custom_pois() if d["id"] == mark["id"])
         self.assertEqual(stored["survey"]["build"], "sc-alpha-4.9.0/12344265")
 
+    def test_node_capture_takes_quality_lines(self):
+        """The node's own ore at several Q: the lines are stored as read and
+        the headline Q/band derived from them, through the DB and back."""
+        s = app.Session(self._user)
+        s.pos, s.t = (self.KR, 0.0, 0.0), time.time()
+        s.system = "Nyx"
+        app.hub.sessions["1"] = s
+        r = self.client.post("/api/capture/node", json={
+            "ore": "Gold", "band": "Unk", "q": 650,
+            "lines": [{"pct": 30, "q": 650}, {"pct": 50, "q": 325}]})
+        self.assertEqual(r.status_code, 200)
+        app._capture_observation(s, s.pos, s.t, s.capture_pending,
+                                 {"player_id": None, "handle": None})
+        last = s.last_capture
+        self.assertEqual((last["q"], last["q_min"], last["q_max"], last["share"]),
+                         (447, 325, 650, 80.0))
+        stored = next(d for d in db.list_observations() if d["id"] == last["id"])
+        self.assertEqual(stored["data"]["lines"],
+                         [{"pct": 30.0, "q": 650}, {"pct": 50.0, "q": 325}])
+        reloaded = app.nav_core.observation_from_dict(stored)
+        self.assertEqual(reloaded.data["q"], 447)
+        db.delete_observation(last["id"])
+        app.nav.observations.pop(last["id"], None)
+        s.capture_pending = None
+
+    def test_node_capture_rejects_bad_quality_lines(self):
+        s = app.Session(self._user)
+        app.hub.sessions["1"] = s
+        over = self.client.post("/api/capture/node", json={
+            "ore": "Gold", "lines": [{"pct": 60, "q": 500}, {"pct": 50, "q": 400}]})
+        self.assertEqual(over.status_code, 400)
+        for bad in ({"pct": 0, "q": 500}, {"pct": 10, "q": 1001},
+                    {"pct": 101, "q": 5}, {"pct": 10}):
+            r = self.client.post("/api/capture/node", json={
+                "ore": "Gold", "lines": [bad]})
+            self.assertEqual(r.status_code, 422, bad)
+        many = self.client.post("/api/capture/node", json={
+            "ore": "Gold", "lines": [{"pct": 1, "q": 1}] * 9})
+        self.assertEqual(many.status_code, 422)
+        self.assertIsNone(s.capture_pending)
+
     def test_node_capture_rejects_an_out_of_range_q(self):
         s = app.Session(self._user)
         app.hub.sessions["1"] = s

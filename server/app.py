@@ -2103,6 +2103,12 @@ class CaptureIn(BaseModel):
     survey: SurveyPayloadIn | None = None   # only honored when type=="survey"
 
 
+class QualityLineIn(BaseModel):
+    """One line of the node's OWN ore off the rock scan: '30.00% GOLD 650'."""
+    pct: float = Field(gt=0, le=100)
+    q: int = Field(ge=0, le=nav_core.MATERIAL_Q_MAX)
+
+
 class NodeCaptureIn(BaseModel):
     ore: str = Field(max_length=_TERM_MAX)
     band: int | str | None = None   # 1-8, or "Unk"/None; str length checked in the handler
@@ -2110,6 +2116,11 @@ class NodeCaptureIn(BaseModel):
     # given it WINS: _normalize_resource derives the band from it (a scan states
     # Q, never a band, so anything else would let the two disagree).
     q: int | None = Field(default=None, ge=0, le=nav_core.MATERIAL_Q_MAX)
+    # Optional: every line of THIS ore the scan lists, when it lists more than
+    # one Q. When given they win over `q` — the headline Q is derived from them
+    # (share-weighted), so nobody has to choose which line to type.
+    lines: list[QualityLineIn] | None = Field(
+        default=None, max_length=nav_core.QUALITY_LINES_MAX)
 
     biome: str | None = Field(default=None, max_length=_BIOME_MAX)
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
@@ -4092,12 +4103,16 @@ async def capture_node_start(body: NodeCaptureIn, user: dict = Depends(require_s
         raise HTTPException(status_code=400, detail="ore is required")
     if isinstance(body.band, str) and len(body.band) > _BAND_MAX:
         raise HTTPException(status_code=400, detail="band value too long")
-    # band + q passed through raw; _normalize_resource handles "Unk"/None and
-    # lets q override the band when both arrive.
-    return await _arm_observation(
-        user, "resource", {"ore": ore, "band": body.band, "q": body.q},
-        body.biome, body.note
-    )
+    lines = [ln.model_dump() for ln in body.lines or []]
+    if sum(ln["pct"] for ln in lines) > 100.0 + 1e-6:
+        raise HTTPException(status_code=400,
+                            detail="quality lines add up to more than 100%")
+    # band + q + lines passed through raw; _normalize_resource handles
+    # "Unk"/None and settles precedence: lines > q > band.
+    data = {"ore": ore, "band": body.band, "q": body.q}
+    if lines:
+        data["lines"] = lines
+    return await _arm_observation(user, "resource", data, body.biome, body.note)
 
 
 @app.post("/api/capture/wildlife")
@@ -7558,6 +7573,8 @@ def get_zone_sightings(zone_id: int, limit: int = 200, category: str = "resource
             # renders a plant row and a species row with the ore renderer.
             "owner_handle": o.owner_handle, "ore": o.data.get(field),
             "band": o.data.get("band"), "quality": o.data.get("quality"),
+            "q": o.data.get("q"), "q_min": o.data.get("q_min"),
+            "q_max": o.data.get("q_max"), "share": o.data.get("share"),
             "biome": o.biome, "mined_at": o.data.get("mined_at"),
             "latitude": o.latitude, "longitude": o.longitude,
             "height_m": o.height_m, "dist_m": dist_m,

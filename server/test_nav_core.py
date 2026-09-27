@@ -7816,5 +7816,51 @@ class PatchStalenessTests(unittest.TestCase):
                          {"4.9.0": {"n": 1, "last": 100.0}})
 
 
+
+class NodeQualityLineTests(unittest.TestCase):
+    """A scan can list the node's own ore at several Q; the headline Q is
+    derived from those lines so nobody has to pick one."""
+
+    def test_lines_derive_the_headline_q_and_band(self):
+        d = nav_core._normalize_resource({"ore": "Gold", "lines": [
+            {"pct": 30, "q": 650}, {"pct": 50, "q": 325}]})
+        # (30*650 + 50*325) / 80 = 446.875 -> 447
+        self.assertEqual((d["q"], d["q_min"], d["q_max"], d["share"]),
+                         (447, 325, 650, 80.0))
+        self.assertEqual(d["band"], nav_core.quality_band(447))
+        self.assertEqual(len(d["lines"]), 2)
+
+    def test_lines_win_over_a_typed_q_and_band(self):
+        d = nav_core._normalize_resource({"ore": "Gold", "q": 900, "band": 8,
+                                          "lines": [{"pct": 40, "q": 200}]})
+        self.assertEqual((d["q"], d["band"]), (200, 2))
+
+    def test_half_rounds_up_to_match_the_form_preview(self):
+        d = nav_core._normalize_resource({"ore": "Gold", "lines": [
+            {"pct": 50, "q": 100}, {"pct": 50, "q": 101}]})
+        self.assertEqual(d["q"], 101)          # 100.5 -> 101 (Math.round), not 100
+
+    def test_renormalizing_is_idempotent(self):
+        once = nav_core._normalize_resource({"ore": "Gold", "lines": [
+            {"pct": 12.345, "q": 500}, {"pct": 20, "q": 700}]})
+        self.assertEqual(nav_core._normalize_resource(once), once)
+
+    def test_unusable_lines_are_dropped_and_old_records_untouched(self):
+        d = nav_core._normalize_resource({"ore": "Gold", "q": 344, "lines": [
+            {"pct": 0, "q": 500}, {"pct": "x", "q": 1}, {"pct": float("nan"), "q": 2},
+            {"pct": 10}, "junk"]})
+        self.assertEqual(d["q"], 344)
+        for k in ("lines", "q_min", "q_max", "share"):
+            self.assertNotIn(k, d)
+        plain = nav_core._normalize_resource({"ore": "Gold", "band": 5})
+        self.assertNotIn("lines", plain)
+        self.assertEqual((plain["q"], plain["band"]), (None, 5))
+
+    def test_line_count_is_capped(self):
+        lines = [{"pct": 1, "q": i} for i in range(20)]
+        d = nav_core._normalize_resource({"ore": "Gold", "lines": lines})
+        self.assertEqual(len(d["lines"]), nav_core.QUALITY_LINES_MAX)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
