@@ -280,9 +280,14 @@ note, and that's visible on the record. The op can close with transfers
 outstanding. The record shows them as open, and the Ops tile nags the people
 involved.
 
-Transfers are re-derived whenever the ledger or shares change *until the
-first one is marked sent*. After that, a change adds **correction transfers**
-on top instead of reshuffling payments already made, and says so.
+**Only a payment someone has marked is fixed** (as built, slice 3). The
+rest are planned fresh from what's still owed after the marked ones, so a
+change never reshuffles a payment already made. The first design locked the
+*whole* plan in on the first mark. In testing, that produced round-trip
+"corrections" for money nobody had sent yet: after a rules amendment,
+Kestrel was told to pay back part of a payment Vex hadn't made. A planned
+payment is tagged **correction** only when the sender was already paid in,
+meaning they're handing back an overpayment.
 
 ### 6.4 Transfer fee
 
