@@ -5742,6 +5742,61 @@ def event_template_diffs(event: dict, snapshot_event: dict,
     return out
 
 
+# --- operations (docs/event-operations.md §3/§5) ----------------------------
+# The running instance of a mission. Pure rules only; storage + permissions
+# live in app.py.
+
+OP_PHASES = ("setup", "live", "settle", "closed")
+
+# (from, to) → the action's name. Forward-only, except the two reversals that
+# the SC-is-buggy call (§2.1) needs — and those two require a logged reason.
+OP_TRANSITIONS = {
+    ("setup", "live"): "start",
+    ("live", "settle"): "end",
+    ("settle", "closed"): "close",
+    ("settle", "live"): "resume",
+    ("closed", "settle"): "reopen",
+}
+OP_REASON_ACTIONS = ("resume", "reopen")
+
+# Attendance, in check-in order. `counts` = whether the status means the person
+# took part (drives the default share in slice 3 and stats in slice 5).
+OP_ATTENDANCE = (
+    {"key": "present", "label": "Present", "took_part": True},
+    {"key": "late", "label": "Late", "took_part": True},
+    {"key": "left_early", "label": "Left early", "took_part": True},
+    {"key": "excused", "label": "Excused", "took_part": False},
+    {"key": "absent", "label": "Absent", "took_part": False},
+)
+OP_ATTENDANCE_KEYS = tuple(a["key"] for a in OP_ATTENDANCE)
+OP_ATTENDANCE_LABEL = {a["key"]: a["label"] for a in OP_ATTENDANCE}
+
+
+def op_transition(frm: str, to: str) -> str | None:
+    """The action a phase change is, or None when it isn't allowed."""
+    return OP_TRANSITIONS.get((frm, to))
+
+
+def op_attendance_counts(roster) -> dict:
+    """Per-status tallies over an op roster, plus `unmarked`, `took_part`,
+    `guests` and `total`."""
+    out = {k: 0 for k in OP_ATTENDANCE_KEYS}
+    out.update(unmarked=0, took_part=0, guests=0, total=0)
+    took = {a["key"] for a in OP_ATTENDANCE if a["took_part"]}
+    for r in roster or []:
+        out["total"] += 1
+        if not r.get("discord_id"):
+            out["guests"] += 1
+        a = r.get("attendance")
+        if a in out:
+            out[a] += 1
+            if a in took:
+                out["took_part"] += 1
+        else:
+            out["unmarked"] += 1
+    return out
+
+
 # --- fleet roster / squad organizer (#20) ----------------------------------
 # The plan (groups + assignments) is a layer over the signups. These pure helpers
 # turn the three stored lists (groups, assignments, going-signups) into the board

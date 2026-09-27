@@ -57,7 +57,7 @@ _LOGO_MAX_BYTES = 2 * 1024 * 1024
 # bytes live on the /data volume, the built-in art stays in the image and is what
 # a card falls back to. The set is CLOSED — an unknown key is a 404, so this can
 # never become an arbitrary file-write endpoint keyed by user input.
-APP_IMAGE_KEYS = ("nav", "route", "trade", "halo", "events", "lfg",
+APP_IMAGE_KEYS = ("nav", "route", "trade", "halo", "events", "ops", "lfg",
                   "pirates", "goals", "market", "intel")
 
 
@@ -8171,6 +8171,8 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
     view["waitlist_count"] = sum(1 for s in signups if s["status"] == "waitlist")
     view["details"] = ev.get("details") or {}
     view["template"] = _event_template_provenance(ev)
+    op = db.get_op_by_event(ev["id"])
+    view["op"] = {"id": op["id"], "phase": op["phase"]} if op else None
     if detail:
         view["attendees"] = [
             {"discord_id": s["discord_id"],
@@ -9041,7 +9043,12 @@ async def list_events(range: str = "upcoming", user: dict = Depends(require_sess
         views = [v for v in views if v["phase"] in ("ended", "cancelled")]
     else:
         views = [v for v in views if v["phase"] != "ended"]
-    return {"range": range, "events": views}
+    # Quick ops (no event) ride the same board so the calendar is the whole
+    # history: running ones on Upcoming, closed records on Past.
+    quick = db.list_ops("quick_closed" if range == "past" else "quick_active",
+                        limit=100)
+    return {"range": range, "events": views,
+            "quick_ops": [_op_summary(o, user) for o in quick]}
 
 
 @app.post("/api/events")
@@ -9829,6 +9836,520 @@ async def save_event_as_template(event_id: int, body: TemplateNameIn,
     tid = db.create_event_template(body.name.strip(), event, groups, user["id"],
                                    datetime.now(timezone.utc).isoformat())
     return _event_template_view({**db.get_event_template(tid), "builtin": False}, user)
+
+
+# --- operations (docs/event-operations.md §3/§5, ops slice 2) --------------
+# The running instance of a mission: who was there, and an append-only log of
+# every change and who made it. Event-linked ("Run mission") or ad hoc (quick
+# op from the Ops tile). Money (slice 3) and loot (slice 4) hang off this.
+
+_OP_REASON_MIN = 3
+_MAX_OP_ROSTER = 200
+_MAX_OP_DEPUTIES = 10
+_GUEST_NAME_MAX = 40
+_OP_REASON_MAX = 300
+
+
+class OpCreateIn(BaseModel):
+    name: str = Field(default="", max_length=_NAME_MAX)
+    template_id: str | None = Field(default=None, max_length=_TYPE_MAX)
+
+
+class OpRenameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=_NAME_MAX)
+
+
+class OpPhaseIn(BaseModel):
+    to: str = Field(max_length=16)
+    reason: str | None = Field(default=None, max_length=_OP_REASON_MAX)
+
+
+class OpRosterAddIn(BaseModel):
+    """A member (discord_id) or a guest (guest_name) — exactly one."""
+    discord_id: str | None = Field(default=None, max_length=24)
+    guest_name: str | None = Field(default=None, max_length=_GUEST_NAME_MAX)
+    guest_handle: str | None = Field(default=None, max_length=_GUEST_NAME_MAX)
+    reason: str | None = Field(default=None, max_length=_OP_REASON_MAX)
+
+
+class OpAttendanceIn(BaseModel):
+    attendance: str | None = Field(default=None, max_length=16)   # None/"" = clear
+    reason: str | None = Field(default=None, max_length=_OP_REASON_MAX)
+
+
+class OpBulkAttendanceIn(BaseModel):
+    """Mark every UNMARKED row with one status (the check-in grid's
+    "Mark remaining absent")."""
+    attendance: str = Field(max_length=16)
+    reason: str | None = Field(default=None, max_length=_OP_REASON_MAX)
+
+
+class OpDeputiesIn(BaseModel):
+    discord_ids: list[str] = Field(default_factory=list, max_length=_MAX_OP_DEPUTIES)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _require_op(op_id: int) -> dict:
+    op = db.get_op(op_id)
+    if op is None:
+        raise HTTPException(status_code=404, detail="unknown operation")
+    return op
+
+
+def _op_can_manage(op: dict, user: dict) -> bool:
+    return (op["organizer_id"] == user["id"] or user["id"] in (op.get("deputies") or [])
+            or bool(user.get("is_admin")))
+
+
+def _require_op_manager(op: dict, user: dict) -> None:
+    if not _op_can_manage(op, user):
+        raise HTTPException(status_code=403,
+                            detail="only the organizer, a deputy or an admin can change this op")
+
+
+def _op_edit_reason(op: dict, reason: str | None) -> str | None:
+    """Roster/attendance edits: free while the op is being set up or run, need
+    a reason once it's in Settle (the record is being finalized), and are
+    refused once Closed — reopen first, which is itself logged."""
+    if op["phase"] == "closed":
+        raise HTTPException(status_code=409,
+                            detail="this op is closed — reopen it (with a reason) to change it")
+    reason = (reason or "").strip() or None
+    if op["phase"] == "settle" and (not reason or len(reason) < _OP_REASON_MIN):
+        raise HTTPException(status_code=400,
+                            detail="the mission has ended — give a reason for this change")
+    return reason
+
+
+def _op_row_name(r: dict) -> str:
+    if r.get("discord_id"):
+        return _resolve_member_name(r["discord_id"], None)
+    return r.get("guest_name") or "Guest"
+
+
+def _op_log(op_id: int, user: dict | None, kind: str, payload: dict,
+            reason: str | None = None) -> None:
+    db.op_log_add(op_id, user["id"] if user else None, kind, payload, reason, _now_iso())
+
+
+_OP_ACTION_TEXT = {"start": "started the mission", "end": "ended the mission",
+                   "close": "closed the record", "resume": "resumed the mission",
+                   "reopen": "reopened the record"}
+
+
+def _op_log_text(e: dict) -> str:
+    """One log row as the sentence the record shows (actor name prepended by
+    the caller). Names come from the payload, stamped at write time."""
+    p, k = e.get("payload") or {}, e.get("kind")
+    lab = nav_core.OP_ATTENDANCE_LABEL
+    if k == "created":
+        return (f"opened the op from the event (roster: {p.get('seeded', 0)})"
+                if p.get("event_id") else "opened the op"
+                + (f" from the {p['template_name']} template" if p.get("template_name") else ""))
+    if k == "phase":
+        return _OP_ACTION_TEXT.get(p.get("action"), f"changed phase to {p.get('to')}")
+    if k == "roster_add":
+        if p.get("self"):
+            return "added themselves to the roster"
+        return f"added {p.get('name')}" + (" (guest)" if p.get("guest") else "")
+    if k == "roster_remove":
+        return f"removed {p.get('name')}" + (" (guest)" if p.get("guest") else "")
+    if k == "attendance":
+        to = lab.get(p.get("to"), "unmarked")
+        was = lab.get(p.get("from")) if p.get("from") else None
+        return f"marked {p.get('name')} {to}" + (f" (was {was})" if was else "")
+    if k == "attendance_bulk":
+        n = p.get("count", 0)
+        return f"marked {n} unmarked {'person' if n == 1 else 'people'} {lab.get(p.get('to'), p.get('to'))}"
+    if k == "deputies":
+        names = p.get("names") or []
+        return "set deputies: " + (", ".join(names) if names else "none")
+    if k == "rename":
+        return f"renamed the op from “{p.get('from')}” to “{p.get('to')}”"
+    return k or "changed the op"
+
+
+def _op_summary(op: dict, user: dict, roster: list[dict] | None = None) -> dict:
+    """The list/card shape of an op."""
+    if roster is None:
+        roster = db.list_op_roster(op["id"])
+    ev = db.get_event(op["event_id"]) if op.get("event_id") else None
+    mine = next((r for r in roster if r.get("discord_id") == user["id"]), None)
+    return {"id": op["id"], "name": op["name"], "phase": op["phase"],
+            "event_id": op.get("event_id"),
+            "event_title": ev.get("title") if ev else None,
+            "organizer_id": op["organizer_id"],
+            "organizer_name": _resolve_member_name(op["organizer_id"], None),
+            "template_id": op.get("template_id"), "template_name": op.get("template_name"),
+            "started_at": op.get("started_at"), "ended_at": op.get("ended_at"),
+            "closed_at": op.get("closed_at"), "created_at": op.get("created_at"),
+            "counts": nav_core.op_attendance_counts(roster),
+            "can_manage": _op_can_manage(op, user),
+            # On it or running it — admin powers alone don't make an op "mine".
+            "is_mine": bool(mine) or op["organizer_id"] == user["id"]
+                       or user["id"] in (op.get("deputies") or [])}
+
+
+def _op_view(op: dict, user: dict) -> dict:
+    """The full op page: summary + roster + deputies + the log."""
+    roster = db.list_op_roster(op["id"])
+    view = _op_summary(op, user, roster)
+    view["deputies"] = [{"discord_id": d, "name": _resolve_member_name(d, None)}
+                        for d in op.get("deputies") or []]
+    view["roster"] = [{
+        "id": r["id"], "kind": "member" if r.get("discord_id") else "guest",
+        "discord_id": r.get("discord_id"), "name": _op_row_name(r),
+        "guest_handle": r.get("guest_handle"), "signed_up": r.get("signed_up"),
+        "attendance": r.get("attendance"), "joined_at": r.get("joined_at"),
+        "left_at": r.get("left_at"), "group_name": r.get("group_name"),
+        "is_me": r.get("discord_id") == user["id"]} for r in roster]
+    view["in_roster"] = any(r["is_me"] for r in view["roster"])
+    view["log"] = [{"id": e["id"], "at": e["created_at"], "kind": e["kind"],
+                    "actor_name": (_resolve_member_name(e["actor_id"], None)
+                                   if e.get("actor_id") else "system"),
+                    "text": _op_log_text(e), "reason": e.get("reason")}
+                   for e in db.list_op_log(op["id"])]
+    view["attendance_options"] = list(nav_core.OP_ATTENDANCE)
+    view["reason_required"] = op["phase"] == "settle"
+    return view
+
+
+async def _op_changed(op_id: int) -> None:
+    """Tell open tabs an op changed; a tab viewing it refetches. A ping, not
+    the data — the op view is per-viewer (can_manage, is_me)."""
+    await hub.send_to_all_clients({"type": "op", "id": op_id})
+
+
+def _seed_roster_from_event(op_id: int, ev: dict, actor_id: str, at: str) -> int:
+    """Roster rows for an event's going / waitlisted / maybe signups (their
+    fleet unit snapshotted) plus the organizer. Returns rows added."""
+    groups = {g["id"]: g["name"] for g in db.list_event_groups(ev["id"])}
+    unit = {str(a["discord_id"]): groups.get(a["group_id"])
+            for a in db.list_event_assignments(ev["id"])}
+    seen, n = set(), 0
+    for s_ in db.list_signups(ev["id"]):
+        if s_["status"] not in ("going", "waitlist", "maybe"):
+            continue
+        did = str(s_["discord_id"])
+        seen.add(did)
+        db.add_op_roster(op_id, {"discord_id": did, "signed_up": s_["status"],
+                                 "group_name": unit.get(did), "added_by": actor_id,
+                                 "created_at": at})
+        n += 1
+    org = str(ev["organizer_id"])
+    if org not in seen:
+        db.add_op_roster(op_id, {"discord_id": org, "signed_up": "organizer",
+                                 "group_name": unit.get(org), "added_by": actor_id,
+                                 "created_at": at})
+        n += 1
+    return n
+
+
+@app.get("/api/ops")
+async def list_ops(scope: str = "active", user: dict = Depends(require_session)):
+    """Ops for the Ops tile: `active` (setup/live/settle), `closed` (records),
+    `mine` (I run it or I'm on it)."""
+    if scope not in ("active", "closed", "mine"):
+        scope = "active"
+    rows = db.list_ops(scope, user["id"], limit=100)
+    return {"scope": scope, "ops": [_op_summary(o, user) for o in rows]}
+
+
+@app.post("/api/ops")
+async def create_quick_op(body: OpCreateIn, user: dict = Depends(require_session)):
+    """A quick op: no event, the caller organizes and is on the roster. Any
+    member may. A template (optional) supplies the default name and is recorded."""
+    tpl = _resolve_event_template(body.template_id) if body.template_id else None
+    name = (body.name or "").strip() or (tpl and (tpl["event"].get("title") or tpl["name"])) \
+        or "Quick op"
+    at = _now_iso()
+    op_id = db.create_op({"name": name[:_NAME_MAX], "organizer_id": user["id"],
+                          "template_id": tpl["id"] if tpl else None,
+                          "template_name": tpl["name"] if tpl else None,
+                          "created_at": at})
+    if tpl is not None and not tpl["builtin"]:
+        db.bump_event_template_uses(int(tpl["id"]))
+    db.add_op_roster(op_id, {"discord_id": user["id"], "signed_up": "organizer",
+                             "added_by": user["id"], "created_at": at})
+    _op_log(op_id, user, "created",
+            {"template_name": tpl["name"] if tpl else None})
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/events/{event_id}/start")
+async def start_event_op(event_id: int, user: dict = Depends(require_session)):
+    """"Run mission" on an event (organizer/admin): opens its op in Setup with
+    the roster seeded from the signups. Idempotent — an event has one op."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    existing = db.get_op_by_event(event_id)
+    if existing is not None:
+        return _op_view(existing, user)
+    if ev.get("status") == "cancelled":
+        raise HTTPException(status_code=409, detail="this event was cancelled")
+    at = _now_iso()
+    try:
+        op_id = db.create_op({"event_id": event_id, "name": ev.get("title") or "Operation",
+                              "organizer_id": ev["organizer_id"],
+                              "template_id": ev.get("template_id"),
+                              "template_name": ev.get("template_name"),
+                              "created_at": at})
+    except sqlite3.IntegrityError:          # a racing double-click made it first
+        return _op_view(db.get_op_by_event(event_id), user)
+    n = _seed_roster_from_event(op_id, ev, user["id"], at)
+    _op_log(op_id, user, "created", {"event_id": event_id, "seeded": n})
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.get("/api/ops/{op_id}")
+async def get_op(op_id: int, user: dict = Depends(require_session)):
+    """One op with its roster and full log. Every member can read every op —
+    the point is that nobody has to take anyone's word for what happened."""
+    return _op_view(_require_op(op_id), user)
+
+
+@app.patch("/api/ops/{op_id}")
+async def rename_op(op_id: int, body: OpRenameIn, user: dict = Depends(require_session)):
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    if op["phase"] == "closed":
+        raise HTTPException(status_code=409, detail="this op is closed")
+    new = body.name.strip()
+    if new != op["name"]:
+        db.update_op(op_id, {"name": new}, _now_iso())
+        _op_log(op_id, user, "rename", {"from": op["name"], "to": new})
+        await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.delete("/api/ops/{op_id}")
+async def discard_op(op_id: int, user: dict = Depends(require_session)):
+    """Discard an op that never went live. Anything past Setup is a record and
+    stays (close it instead)."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    if op["phase"] != "setup":
+        raise HTTPException(status_code=409,
+                            detail="only an op that hasn't started can be discarded")
+    db.delete_op(op_id)
+    await _op_changed(op_id)
+    return {"ok": True}
+
+
+@app.post("/api/ops/{op_id}/phase")
+async def change_op_phase(op_id: int, body: OpPhaseIn, user: dict = Depends(require_session)):
+    """Move the op through setup → live → settle → closed. Resume (settle →
+    live) and reopen (closed → settle) need a reason. Closing needs everyone
+    marked, and completes the linked event."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    action = nav_core.op_transition(op["phase"], body.to)
+    if action is None:
+        raise HTTPException(status_code=409,
+                            detail=f"can't go from {op['phase']} to {body.to}")
+    reason = (body.reason or "").strip() or None
+    if action in nav_core.OP_REASON_ACTIONS and (not reason or len(reason) < _OP_REASON_MIN):
+        raise HTTPException(status_code=400, detail=f"give a reason to {action} the op")
+    if action == "close":
+        left = nav_core.op_attendance_counts(db.list_op_roster(op_id))["unmarked"]
+        if left:
+            raise HTTPException(status_code=409,
+                                detail=f"mark everyone before closing ({left} still unmarked)")
+    at = _now_iso()
+    fields = {"phase": body.to}
+    if action == "start" and not op.get("started_at"):
+        fields["started_at"] = at
+    if action == "end":
+        fields["ended_at"] = at
+    if action == "close":
+        fields["closed_at"] = at
+    db.update_op(op_id, fields, at)
+    _op_log(op_id, user, "phase", {"action": action, "from": op["phase"], "to": body.to},
+            reason)
+    if action == "close" and op.get("event_id"):
+        db.complete_event(op["event_id"], at)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/roster")
+async def add_op_roster_row(op_id: int, body: OpRosterAddIn,
+                            user: dict = Depends(require_session)):
+    """Add a member who didn't sign up, or a guest by name (organizer/deputy/
+    admin). Guests get no stats; see §5.3 for linking one to a member later."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    reason = _op_edit_reason(op, body.reason)
+    did = (body.discord_id or "").strip() or None
+    guest = (body.guest_name or "").strip() or None
+    if bool(did) == bool(guest):
+        raise HTTPException(status_code=400, detail="add either a member or a guest name")
+    if did and not did.isdigit():
+        raise HTTPException(status_code=400, detail="bad member id")
+    roster = db.list_op_roster(op_id)
+    if len(roster) >= _MAX_OP_ROSTER:
+        raise HTTPException(status_code=400, detail="roster is full")
+    if did and any(r.get("discord_id") == did for r in roster):
+        raise HTTPException(status_code=409, detail="already on the roster")
+    at = _now_iso()
+    db.add_op_roster(op_id, {"discord_id": did, "guest_name": guest,
+                             "guest_handle": (body.guest_handle or "").strip() or None,
+                             "added_by": user["id"], "created_at": at})
+    name = _resolve_member_name(did, None) if did else guest
+    _op_log(op_id, user, "roster_add", {"name": name, "discord_id": did, "guest": not did},
+            reason)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/join")
+async def join_op(op_id: int, user: dict = Depends(require_session)):
+    """"I'm here": a member adds THEMSELVES to a setup/live op's roster (a
+    walk-in the organizer hasn't added yet). Attendance is still the
+    organizer's call — this only puts them on the list to be marked."""
+    op = _require_op(op_id)
+    if op["phase"] not in ("setup", "live"):
+        raise HTTPException(status_code=409, detail="this op isn't taking walk-ins")
+    roster = db.list_op_roster(op_id)
+    if any(r.get("discord_id") == user["id"] for r in roster):
+        return _op_view(op, user)
+    if len(roster) >= _MAX_OP_ROSTER:
+        raise HTTPException(status_code=400, detail="roster is full")
+    db.add_op_roster(op_id, {"discord_id": user["id"], "added_by": user["id"],
+                             "created_at": _now_iso()})
+    _op_log(op_id, user, "roster_add",
+            {"name": _resolve_member_name(user["id"], None), "discord_id": user["id"],
+             "self": True})
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.delete("/api/ops/{op_id}/roster/{rid}")
+async def remove_op_roster_row(op_id: int, rid: int, reason: str | None = None,
+                               user: dict = Depends(require_session)):
+    """Take someone off the roster (added by mistake). Once the op is live,
+    marking them Absent is usually the honest record — the UI says so."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    reason = _op_edit_reason(op, (reason or "")[:_OP_REASON_MAX])
+    row = db.get_op_roster_row(rid)
+    if row is None or row["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="not on this roster")
+    db.delete_op_roster(rid)
+    _op_log(op_id, user, "roster_remove",
+            {"name": _op_row_name(row), "discord_id": row.get("discord_id"),
+             "guest": not row.get("discord_id"), "attendance": row.get("attendance")},
+            reason)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.patch("/api/ops/{op_id}/roster/{rid}")
+async def mark_op_attendance(op_id: int, rid: int, body: OpAttendanceIn,
+                             user: dict = Depends(require_session)):
+    """Mark one person's attendance. While the op is Live, Late stamps when
+    they arrived and Left early when they left (not in Settle: that would stamp
+    the paperwork time, not the op's)."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    reason = _op_edit_reason(op, body.reason)
+    row = db.get_op_roster_row(rid)
+    if row is None or row["op_id"] != op_id:
+        raise HTTPException(status_code=404, detail="not on this roster")
+    to = (body.attendance or "").strip() or None
+    if to is not None and to not in nav_core.OP_ATTENDANCE_KEYS:
+        raise HTTPException(status_code=400, detail=f"unknown attendance: {to}")
+    if to == row.get("attendance"):
+        return _op_view(op, user)
+    at = _now_iso()
+    fields = {"attendance": to}
+    if op["phase"] == "live":
+        if to == "late" and not row.get("joined_at"):
+            fields["joined_at"] = at
+        if to == "left_early" and not row.get("left_at"):
+            fields["left_at"] = at
+    db.update_op_roster(rid, fields, at)
+    _op_log(op_id, user, "attendance",
+            {"name": _op_row_name(row), "roster_id": rid,
+             "from": row.get("attendance"), "to": to}, reason)
+    await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.post("/api/ops/{op_id}/attendance/bulk")
+async def bulk_op_attendance(op_id: int, body: OpBulkAttendanceIn,
+                             user: dict = Depends(require_session)):
+    """Mark everyone still UNMARKED with one status — never overwrites a mark
+    already made. One log line naming how many."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    reason = _op_edit_reason(op, body.reason)
+    if body.attendance not in nav_core.OP_ATTENDANCE_KEYS:
+        raise HTTPException(status_code=400, detail=f"unknown attendance: {body.attendance}")
+    at = _now_iso()
+    rows = [r for r in db.list_op_roster(op_id) if not r.get("attendance")]
+    for r in rows:
+        db.update_op_roster(r["id"], {"attendance": body.attendance}, at)
+    if rows:
+        _op_log(op_id, user, "attendance_bulk",
+                {"to": body.attendance, "count": len(rows),
+                 "names": [_op_row_name(r) for r in rows]}, reason)
+        await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.put("/api/ops/{op_id}/deputies")
+async def set_op_deputies(op_id: int, body: OpDeputiesIn,
+                          user: dict = Depends(require_session)):
+    """Co-leads who can run the op alongside the organizer. Organizer or admin
+    only — a deputy can't appoint more deputies."""
+    op = _require_op(op_id)
+    if op["organizer_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="only the organizer or an admin can set deputies")
+    if op["phase"] == "closed":
+        raise HTTPException(status_code=409, detail="this op is closed")
+    ids = []
+    for d in body.discord_ids:
+        d = d.strip()
+        if not d.isdigit():
+            raise HTTPException(status_code=400, detail="bad member id")
+        if d != op["organizer_id"] and d not in ids:
+            ids.append(d)
+    if ids != (op.get("deputies") or []):
+        db.update_op(op_id, {"deputies": ids}, _now_iso())
+        _op_log(op_id, user, "deputies",
+                {"ids": ids, "names": [_resolve_member_name(d, None) for d in ids]})
+        await _op_changed(op_id)
+    return _op_view(db.get_op(op_id), user)
+
+
+@app.get("/api/ops/{op_id}/member-search")
+async def op_member_search(op_id: int, q: str = "", user: dict = Depends(require_session)):
+    """Name search for adding a member to an op's roster or deputies (op
+    managers only). Returns names, never handles, and skips members who opted
+    out of the directory — they can still add themselves with "I'm here"."""
+    op = _require_op(op_id)
+    _require_op_manager(op, user)
+    q = q.strip().casefold()
+    if len(q) < 2:
+        return {"members": []}
+    out = []
+    for did, m in members_dir.by_id.items():
+        if m.get("directory_opt_out"):
+            continue
+        names = [m.get("guild_nick"), m.get("display_name"), m.get("username")]
+        if any(n and q in n.casefold() for n in names):
+            out.append({"discord_id": did,
+                        "name": m.get("guild_nick") or m.get("display_name")
+                        or m.get("username") or did})
+    out.sort(key=lambda r: r["name"].casefold())
+    return {"members": out[:10]}
 
 
 # --- org inventory & goals (shared item catalog) ---------------------------

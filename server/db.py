@@ -435,6 +435,57 @@ CREATE TABLE IF NOT EXISTS event_template_history (
 CREATE INDEX IF NOT EXISTS event_template_history_tpl
     ON event_template_history(template_id);
 
+-- Operations (docs/event-operations.md §3/§5): the running instance of a
+-- mission — event-linked ("Run mission", one op per event) or ad hoc (quick
+-- op, event_id NULL). Phases move setup → live → settle → closed, with logged
+-- resume/reopen. AUTOINCREMENT everywhere here for the same reason as
+-- event_templates: a record's ids must never be handed to a newer record.
+CREATE TABLE IF NOT EXISTS operations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER UNIQUE,            -- NULL = quick op
+    name TEXT NOT NULL,
+    organizer_id TEXT NOT NULL,
+    deputies TEXT NOT NULL DEFAULT '[]',-- JSON list of discord_ids
+    phase TEXT NOT NULL DEFAULT 'setup',-- setup | live | settle | closed
+    template_id TEXT, template_name TEXT,
+    started_at TEXT, ended_at TEXT, closed_at TEXT,
+    created_at TEXT, updated_at TEXT
+);
+
+-- Who was in the op. A row is a MEMBER (discord_id) or a GUEST (free-text
+-- name, no discord_id: money + loot later, never stats). Attendance is the
+-- fact of the op; `signed_up` keeps the intent it was seeded from.
+CREATE TABLE IF NOT EXISTS op_roster (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id INTEGER NOT NULL,
+    discord_id TEXT,
+    guest_name TEXT, guest_handle TEXT,
+    signed_up TEXT NOT NULL DEFAULT 'none', -- going | waitlist | maybe | organizer | none
+    attendance TEXT,                    -- present | late | left_early | excused | absent | NULL
+    joined_at TEXT, left_at TEXT,
+    group_name TEXT,                    -- fleet unit at seed time (snapshot)
+    added_by TEXT,
+    created_at TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS op_roster_op ON op_roster(op_id);
+CREATE UNIQUE INDEX IF NOT EXISTS op_roster_member
+    ON op_roster(op_id, discord_id) WHERE discord_id IS NOT NULL;
+
+-- The op's record of what happened and who did it. APPEND-ONLY: no route
+-- updates or deletes a row (a setup-phase op that is discarded before it ever
+-- went live takes its rows with it — nothing happened yet). Names are stored
+-- in `payload` at write time so the record survives a guest row's removal.
+CREATE TABLE IF NOT EXISTS op_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id INTEGER NOT NULL,
+    actor_id TEXT,
+    kind TEXT NOT NULL,
+    payload TEXT,                       -- JSON
+    reason TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS op_log_op ON op_log(op_id);
+
 -- Trade planner favorites (#21): a member's saved trade-route configurations.
 -- `data` is a JSON blob of the *plan config* (ship, usable SCU, start, mode,
 -- filters, budget, manual legs) — NOT the resolved legs/prices. Prices move, so a
@@ -2415,6 +2466,168 @@ def event_template_history(tid: int) -> list[dict]:
             "FROM event_template_history WHERE template_id=? ORDER BY id",
             (tid,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- operations (docs/event-operations.md §3/§5) ---------------------------
+
+def _op_row(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["deputies"] = _u(d.get("deputies")) or []
+    return d
+
+
+def create_op(d: dict) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO operations (event_id, name, organizer_id, deputies, phase, "
+            "template_id, template_name, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (d.get("event_id"), d["name"], str(d["organizer_id"]),
+             _j(d.get("deputies") or []), d.get("phase", "setup"),
+             d.get("template_id"), d.get("template_name"),
+             d["created_at"], d["created_at"]))
+    return cur.lastrowid
+
+
+def get_op(op_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM operations WHERE id=?", (op_id,)).fetchone()
+    return _op_row(row) if row else None
+
+
+def get_op_by_event(event_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM operations WHERE event_id=?",
+                            (event_id,)).fetchone()
+    return _op_row(row) if row else None
+
+
+def ops_for_events(event_ids) -> dict:
+    """{event_id: {id, phase}} for the events that have an op (board badges)."""
+    ids = [int(i) for i in event_ids]
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT id, event_id, phase FROM operations WHERE event_id IN ({marks})",
+            ids).fetchall()
+    return {r["event_id"]: {"id": r["id"], "phase": r["phase"]} for r in rows}
+
+
+def list_ops(scope: str, discord_id: str | None = None, limit: int = 100) -> list[dict]:
+    """Ops for a list. scope: active (not closed) · closed · quick_active /
+    quick_closed (event_id NULL) · mine (managed by, or on the roster of,
+    `discord_id`). Freshest first."""
+    where, args = {
+        "active": ("phase != 'closed'", []),
+        "closed": ("phase = 'closed'", []),
+        "quick_active": ("event_id IS NULL AND phase != 'closed'", []),
+        "quick_closed": ("event_id IS NULL AND phase = 'closed'", []),
+        "mine": ("(organizer_id = ? OR deputies LIKE ? OR id IN "
+                 "(SELECT op_id FROM op_roster WHERE discord_id = ?))",
+                 [str(discord_id), f'%"{discord_id}"%', str(discord_id)]),
+    }.get(scope, ("1=1", []))
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT * FROM operations WHERE {where} "
+            "ORDER BY COALESCE(started_at, created_at) DESC LIMIT ?",
+            (*args, limit)).fetchall()
+    return [_op_row(r) for r in rows]
+
+
+_OP_EDITABLE = ("name", "deputies", "phase", "started_at", "ended_at", "closed_at")
+
+
+def update_op(op_id: int, fields: dict, at: str) -> bool:
+    cols = [c for c in _OP_EDITABLE if c in fields]
+    if not cols:
+        return False
+    vals = [_j(fields[c]) if c == "deputies" else fields[c] for c in cols]
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE operations SET {', '.join(f'{c}=?' for c in cols)}, updated_at=? "
+            "WHERE id=?", (*vals, at, op_id))
+    return cur.rowcount > 0
+
+
+def delete_op(op_id: int) -> bool:
+    """Discard an op with its roster + log. The caller allows this ONLY in
+    setup (before it ever went live), so no record of a real op is lost."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM op_roster WHERE op_id=?", (op_id,))
+        _conn.execute("DELETE FROM op_log WHERE op_id=?", (op_id,))
+        cur = _conn.execute("DELETE FROM operations WHERE id=?", (op_id,))
+    return cur.rowcount > 0
+
+
+def add_op_roster(op_id: int, row: dict) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO op_roster (op_id, discord_id, guest_name, guest_handle, "
+            "signed_up, attendance, group_name, added_by, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (op_id, row.get("discord_id"), row.get("guest_name"),
+             row.get("guest_handle"), row.get("signed_up") or "none",
+             row.get("attendance"), row.get("group_name"), row.get("added_by"),
+             row["created_at"], row["created_at"]))
+    return cur.lastrowid
+
+
+def list_op_roster(op_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM op_roster WHERE op_id=? ORDER BY id",
+                             (op_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_op_roster_row(rid: int) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM op_roster WHERE id=?", (rid,)).fetchone()
+    return dict(row) if row else None
+
+
+_OP_ROSTER_EDITABLE = ("attendance", "joined_at", "left_at")
+
+
+def update_op_roster(rid: int, fields: dict, at: str) -> bool:
+    cols = [c for c in _OP_ROSTER_EDITABLE if c in fields]
+    if not cols:
+        return False
+    with _lock, _conn:
+        cur = _conn.execute(
+            f"UPDATE op_roster SET {', '.join(f'{c}=?' for c in cols)}, updated_at=? "
+            "WHERE id=?", (*[fields[c] for c in cols], at, rid))
+    return cur.rowcount > 0
+
+
+def delete_op_roster(rid: int) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM op_roster WHERE id=?", (rid,))
+    return cur.rowcount > 0
+
+
+def op_log_add(op_id: int, actor_id: str | None, kind: str, payload: dict,
+               reason: str | None, at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO op_log (op_id, actor_id, kind, payload, reason, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (op_id, str(actor_id) if actor_id else None, kind, _j(payload or {}),
+             reason, at))
+    return cur.lastrowid
+
+
+def list_op_log(op_id: int) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM op_log WHERE op_id=? ORDER BY id",
+                             (op_id,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["payload"] = _u(d.get("payload")) or {}
+        out.append(d)
+    return out
 
 
 def list_run_history(discord_id: str, limit: int = 50) -> list[dict]:

@@ -230,11 +230,14 @@ class ShellAssetTests(unittest.TestCase):
         self.assertEqual(self.client.get("/images/nope.png?v=1").status_code, 404)
 
     def test_launcher_art_is_lazy(self):
-        # Hidden behind the sign-in gate for anonymous visitors: lazy keeps ten
-        # launcher logos off the wire until the chooser is actually shown.
+        # Hidden behind the sign-in gate for anonymous visitors: lazy keeps the
+        # launcher logos off the wire until the chooser is actually shown. One
+        # tile per swappable-art key, so a new app can't ship without its key.
         html = self.client.get("/").text
         logos = re.findall(r'<img class="app-logo"[^>]*>', html)
-        self.assertEqual(len(logos), 10)
+        self.assertEqual(len(logos), len(app.APP_IMAGE_KEYS))
+        self.assertEqual(sorted(re.findall(r'data-app="([a-z]+)"', " ".join(logos))),
+                         sorted(app.APP_IMAGE_KEYS))
         for tag in logos:
             self.assertIn('loading="lazy"', tag)
 
@@ -2158,6 +2161,259 @@ class EventTemplateTests(unittest.TestCase):
         r = self.client.post("/api/settings", json={"event_builtin_templates": False})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertFalse(self.client.get("/api/settings").json()["event_builtin_templates"])
+
+
+class OperationTests(unittest.TestCase):
+    """docs/event-operations.md §3/§5 (ops slice 2): running an op — event-
+    linked or quick — through setup → live → settle → closed, the roster
+    (members, guests, walk-ins), attendance, and the append-only log."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "organizer", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _event(self):
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        r = self.client.post("/api/events", json={
+            "title": "Bunker night", "start_at": start,
+            "types": ["Combat Patrol"], "categories": ["PvE"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def _signup(self, eid, uid, status="going"):
+        self._as(uid)
+        r = self.client.post(f"/api/events/{eid}/signup", json={"roles": [], "status": status})
+        self.assertEqual(r.status_code, 200, r.text)
+        self._as("1")
+
+    def _quick(self, name="Salvage run"):
+        r = self.client.post("/api/ops", json={"name": name})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _phase(self, op_id, to, reason=None, code=200):
+        r = self.client.post(f"/api/ops/{op_id}/phase", json={"to": to, "reason": reason})
+        self.assertEqual(r.status_code, code, r.text)
+        return r.json()
+
+    def _row(self, op, name):
+        return next(r for r in op["roster"] if r["name"] == name)
+
+    # --- creation -----------------------------------------------------------
+    def test_run_mission_seeds_roster_from_signups(self):
+        eid = self._event()
+        self._signup(eid, "2", "going")
+        self._signup(eid, "3", "maybe")
+        self._signup(eid, "4", "going")
+        self._as("4"); self.client.delete(f"/api/events/{eid}/signup"); self._as("1")
+        g = self.client.post(f"/api/events/{eid}/groups",
+                             json={"name": "Alpha", "kind": "squad"}).json()
+        gid = g["groups"][0]["id"]
+        self.client.put(f"/api/events/{eid}/assignments",
+                        json={"discord_id": "2", "group_id": gid})
+        r = self.client.post(f"/api/events/{eid}/start")
+        self.assertEqual(r.status_code, 200, r.text)
+        op = r.json()
+        self.assertEqual(op["phase"], "setup")
+        self.assertEqual(op["event_id"], eid)
+        by = {x["discord_id"]: x for x in op["roster"]}
+        self.assertEqual(set(by), {"1", "2", "3"})           # withdrawn 4 left out
+        self.assertEqual(by["1"]["signed_up"], "organizer")
+        self.assertEqual(by["3"]["signed_up"], "maybe")
+        self.assertEqual(by["2"]["group_name"], "Alpha")
+        # Idempotent: one op per event, and the event advertises it.
+        again = self.client.post(f"/api/events/{eid}/start").json()
+        self.assertEqual(again["id"], op["id"])
+        ev = self.client.get(f"/api/events/{eid}").json()
+        self.assertEqual(ev["op"], {"id": op["id"], "phase": "setup"})
+
+    def test_only_event_owner_runs_mission(self):
+        eid = self._event()
+        self._as("2")
+        self.assertEqual(self.client.post(f"/api/events/{eid}/start").status_code, 403)
+
+    def test_quick_op_from_template_names_itself(self):
+        r = self.client.post("/api/ops", json={"template_id": "builtin:mining"})
+        self.assertEqual(r.status_code, 200, r.text)
+        op = r.json()
+        self.assertEqual(op["name"], "Mining")
+        self.assertEqual(op["template_name"], "Mining")
+        self.assertEqual([x["discord_id"] for x in op["roster"]], ["1"])
+        self.assertIn("Mining template", op["log"][0]["text"])
+
+    # --- lifecycle ------------------------------------------------------------
+    def test_full_lifecycle_and_close_completes_event(self):
+        eid = self._event()
+        self._signup(eid, "2")
+        op = self.client.post(f"/api/events/{eid}/start").json()
+        oid = op["id"]
+        self._phase(oid, "closed", code=409)                   # can't skip ahead
+        op = self._phase(oid, "live")
+        self.assertTrue(op["started_at"])
+        for r in op["roster"]:
+            self.client.patch(f"/api/ops/{oid}/roster/{r['id']}", json={"attendance": "present"})
+        self._phase(oid, "settle")
+        op = self._phase(oid, "closed")
+        self.assertEqual(op["phase"], "closed")
+        self.assertEqual(op["counts"]["present"], 2)
+        ev = self.client.get(f"/api/events/{eid}").json()
+        self.assertEqual(ev["status"], "completed")
+        self.assertEqual(ev["op"]["phase"], "closed")
+        # Reopen needs a reason, and it's in the log.
+        self._phase(oid, "settle", code=400)
+        op = self._phase(oid, "settle", reason="Bob's share was wrong")
+        last = op["log"][-1]
+        self.assertEqual(last["text"], "reopened the record")
+        self.assertEqual(last["reason"], "Bob's share was wrong")
+
+    def test_close_requires_everyone_marked(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live")
+        self._phase(oid, "settle")
+        r = self.client.post(f"/api/ops/{oid}/phase", json={"to": "closed"})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("unmarked", r.json()["detail"])
+
+    def test_resume_needs_reason(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live"); self._phase(oid, "settle")
+        self._phase(oid, "live", code=400)
+        self._phase(oid, "live", reason="server crashed, going back in")
+
+    def test_discard_only_in_setup(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live")
+        self.assertEqual(self.client.delete(f"/api/ops/{oid}").status_code, 409)
+        oid2 = self._quick()["id"]
+        self.assertEqual(self.client.delete(f"/api/ops/{oid2}").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/ops/{oid2}").status_code, 404)
+
+    # --- roster + attendance ---------------------------------------------------
+    def test_guests_walkins_and_attendance_log(self):
+        oid = self._quick()["id"]
+        r = self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": "Rando", "guest_handle": "rando_sc"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/roster",
+                                          json={"discord_id": "1"}).status_code, 409)
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/roster", json={}).status_code, 400)
+        self._phase(oid, "live")
+        self._as("5")                                         # walk-in adds self
+        op = self.client.post(f"/api/ops/{oid}/join").json()
+        self.assertTrue(op["in_roster"])
+        self.assertFalse(op["can_manage"])
+        rid = self._row(op, "Rando")["id"]
+        self.assertEqual(self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                                           json={"attendance": "present"}).status_code, 403)
+        self._as("1")
+        op = self.client.patch(f"/api/ops/{oid}/roster/{rid}", json={"attendance": "late"}).json()
+        self.assertTrue(self._row(op, "Rando")["joined_at"])   # stamped while live
+        op = self.client.patch(f"/api/ops/{oid}/roster/{rid}", json={"attendance": "present"}).json()
+        self.assertEqual(op["log"][-1]["text"], "marked Rando Present (was Late)")
+        op = self.client.post(f"/api/ops/{oid}/attendance/bulk", json={"attendance": "absent"}).json()
+        self.assertEqual(op["counts"]["absent"], 2)            # organizer + walk-in
+        self.assertEqual(op["counts"]["present"], 1)           # bulk never overwrote
+        self.assertEqual(op["counts"]["guests"], 1)
+        self.assertIn("marked 2 unmarked people Absent", op["log"][-1]["text"])
+        self.assertEqual(self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                                           json={"attendance": "heroic"}).status_code, 400)
+
+    def test_settle_edits_need_reason_and_closed_refuses(self):
+        oid = self._quick()["id"]
+        self._phase(oid, "live")
+        op = self._phase(oid, "settle")
+        rid = op["roster"][0]["id"]
+        r = self.client.patch(f"/api/ops/{oid}/roster/{rid}", json={"attendance": "present"})
+        self.assertEqual(r.status_code, 400)
+        op = self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                               json={"attendance": "present", "reason": "was there all along"}).json()
+        self.assertIsNone(op["roster"][0]["joined_at"])        # no stamp outside Live
+        self.assertEqual(op["log"][-1]["reason"], "was there all along")
+        self._phase(oid, "closed")
+        r = self.client.patch(f"/api/ops/{oid}/roster/{rid}",
+                              json={"attendance": "late", "reason": "nope"})
+        self.assertEqual(r.status_code, 409)
+
+    def test_removed_guest_stays_named_in_log(self):
+        oid = self._quick()["id"]
+        op = self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": "Typo Name"}).json()
+        rid = self._row(op, "Typo Name")["id"]
+        op = self.client.delete(f"/api/ops/{oid}/roster/{rid}").json()
+        self.assertNotIn("Typo Name", [r["name"] for r in op["roster"]])
+        self.assertEqual(op["log"][-1]["text"], "removed Typo Name (guest)")
+
+    def test_deputies_can_manage_but_not_appoint(self):
+        oid = self._quick()["id"]
+        op = self.client.put(f"/api/ops/{oid}/deputies", json={"discord_ids": ["7", "1", "7"]}).json()
+        self.assertEqual([d["discord_id"] for d in op["deputies"]], ["7"])   # organizer + dupes dropped
+        self._as("7")
+        self.assertTrue(self.client.get(f"/api/ops/{oid}").json()["can_manage"])
+        self.assertEqual(self.client.post(f"/api/ops/{oid}/roster",
+                                          json={"guest_name": "Pal"}).status_code, 200)
+        self.assertEqual(self.client.put(f"/api/ops/{oid}/deputies",
+                                         json={"discord_ids": ["8"]}).status_code, 403)
+        log = self.client.get(f"/api/ops/{oid}").json()["log"]
+        self.assertEqual(log[-1]["actor_name"], app._resolve_member_name("7", None))
+
+    def test_member_search_skips_opted_out_and_needs_manager(self):
+        app.members_dir.by_id["900"] = {"discord_id": "900", "guild_nick": "Zed Pilot"}
+        app.members_dir.by_id["901"] = {"discord_id": "901", "guild_nick": "Zed Hidden",
+                                        "directory_opt_out": 1}
+        oid = self._quick()["id"]
+        res = self.client.get(f"/api/ops/{oid}/member-search?q=zed").json()["members"]
+        self.assertEqual([m["discord_id"] for m in res], ["900"])
+        self._as("2")
+        self.assertEqual(self.client.get(f"/api/ops/{oid}/member-search?q=zed").status_code, 403)
+        del app.members_dir.by_id["900"], app.members_dir.by_id["901"]
+
+    def test_changes_ping_open_tabs(self):
+        sent = []
+
+        async def _capture(msg):
+            sent.append(msg)
+        orig = app.hub.send_to_all_clients
+        app.hub.send_to_all_clients = _capture
+        try:
+            oid = self._quick()["id"]
+            self.client.post(f"/api/ops/{oid}/roster", json={"guest_name": "Pinger"})
+            self._phase(oid, "live")
+        finally:
+            app.hub.send_to_all_clients = orig
+        self.assertEqual(sent, [{"type": "op", "id": oid}] * 2)
+
+    def test_lists_and_board(self):
+        a = self._quick("Board quick")["id"]
+        ids = [o["id"] for o in self.client.get("/api/ops?scope=active").json()["ops"]]
+        self.assertIn(a, ids)
+        board = self.client.get("/api/events?range=upcoming").json()
+        self.assertIn(a, [o["id"] for o in board["quick_ops"]])
+        self._phase(a, "live"); self.client.post(f"/api/ops/{a}/attendance/bulk", json={"attendance": "present"})
+        self._phase(a, "settle"); self._phase(a, "closed")
+        past = self.client.get("/api/events?range=past").json()
+        self.assertIn(a, [o["id"] for o in past["quick_ops"]])
+        self._as("2")
+        mine = [o["id"] for o in self.client.get("/api/ops?scope=mine").json()["ops"]]
+        self.assertNotIn(a, mine)
+        self.assertEqual(self.client.get(f"/api/ops/{a}").status_code, 200)   # everyone reads
 
 
 class TradeRunStateTests(unittest.TestCase):

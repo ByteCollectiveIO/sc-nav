@@ -7908,6 +7908,26 @@ class EventTemplateDiffTests(unittest.TestCase):
                               "from": None, "to": None, "edited": True}])
 
 
+class OpRulesTests(unittest.TestCase):
+    """docs/event-operations.md §3.1/§5: op phase transitions + attendance tallies."""
+
+    def test_transitions(self):
+        self.assertEqual(nav_core.op_transition("setup", "live"), "start")
+        self.assertEqual(nav_core.op_transition("closed", "settle"), "reopen")
+        self.assertIsNone(nav_core.op_transition("setup", "closed"))
+        self.assertIsNone(nav_core.op_transition("closed", "live"))
+        self.assertEqual(set(nav_core.OP_REASON_ACTIONS), {"resume", "reopen"})
+
+    def test_counts(self):
+        c = nav_core.op_attendance_counts([
+            {"discord_id": "1", "attendance": "present"},
+            {"discord_id": "2", "attendance": "left_early"},
+            {"discord_id": None, "guest_name": "g", "attendance": "excused"},
+            {"discord_id": "3", "attendance": None}])
+        self.assertEqual((c["present"], c["left_early"], c["excused"]), (1, 1, 1))
+        self.assertEqual((c["took_part"], c["unmarked"], c["guests"], c["total"]), (2, 1, 1, 4))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
 
