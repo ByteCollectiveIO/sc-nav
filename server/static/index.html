@@ -3185,7 +3185,10 @@
   .route-chip.primary, #halo-survey-mark { background: var(--accent);
     color: var(--ink-on-accent); border-color: var(--accent); font-weight: 600; }
   .route-chip.primary:hover, #halo-survey-mark:hover { filter: brightness(1.08); }
-  #halo-survey-mark[aria-disabled="true"] { opacity: .5; filter: none; cursor: default; }
+  /* Disabled reads NEUTRAL, not a faded accent: a half-opacity fill looked
+     almost-enabled (FIELD critique 2026-10-03). */
+  #halo-survey-mark[aria-disabled="true"] { background: var(--panel2); color: var(--dim);
+    border-color: var(--border); filter: none; cursor: default; }
   #halo-survey-mark[aria-disabled="true"]:hover { filter: none; }
   .svy-eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
     color: var(--accent); margin: 0 0 8px; }
@@ -3284,9 +3287,66 @@
     border-radius: 8px; overflow: hidden; background: var(--map-bg); }
   .halo-map-wrap canvas { display: block; width: 100%; }
   /* Live in-pocket radar (#36) */
-  #halo-radar-wrap { margin-top: 12px; padding-top: 10px;
-    border-top: 1px solid var(--border); }
-  .halo-radar-head { display: flex; align-items: baseline; gap: 8px; }
+  /* The radar is its own panel now (FIELD critique 2026-10-03) — the panel
+     supplies the separation the old hairline did. */
+  #halo-radar-wrap { margin-top: 4px; }
+  /* ⛏ SURVEY MARK panel (FIELD critique 2026-10-03). One decision per row,
+     labels in one column so the eye runs straight down to the commit. */
+  .mark-purpose { margin: 2px 0 8px; max-width: 72ch; }
+  .mark-steps { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 12px; padding: 0;
+    list-style: none; counter-reset: mstep; font-size: 12px; color: var(--dim); }
+  .mark-steps li { counter-increment: mstep; display: flex; align-items: baseline; gap: 6px; }
+  .mark-steps li::before { content: counter(mstep); display: inline-grid; place-items: center;
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--accent);
+    color: var(--accent); font-size: 11px; flex-shrink: 0; }
+  .mark-steps b { color: var(--text); font-weight: 600; }
+  .mark-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+  .mark-lbl { min-width: 92px; margin: 0; }
+  .mark-indent, .mark-sub { margin-left: 102px; }
+  p.mark-sub { margin-top: 4px; margin-bottom: 0; }
+  .mark-indent p.mark-sub { margin-left: 0; }
+  .mark-go { display: flex; gap: 8px; align-items: stretch; margin-top: 16px; }
+  .mark-go .cap-go { margin-top: 0; flex: 1; }
+  .mark-go #halo-survey-cancel { flex-shrink: 0; }
+  .mark-hint { margin: 6px 0 0; }
+  /* Scanner readout: rows and their column labels share one grid so the
+     labels sit over the fields they name. */
+  .scan-form .scan-row, .scan-head { display: grid; gap: 6px; align-items: center;
+    grid-template-columns: minmax(100px, 240px) 44px 76px 68px 36px 32px; }
+  .scan-head { margin-top: 10px; font-size: 11px; letter-spacing: .08em; color: var(--dim); }
+  .scan-head span:nth-child(2) { grid-column: 3; }
+  .scan-head span:nth-child(3) { grid-column: 4 / span 2; }
+  .scan-form .scan-row .ti { width: 100% !important; min-width: 0; }
+  .scan-lbl { display: flex; flex-direction: column; gap: 4px; font-size: 11px;
+    letter-spacing: .08em; color: var(--dim); }
+  .mark-hint[hidden] { display: none; }
+  /* The status line is the end of the flow — "waiting" and "✓ dropped" are
+     the moments the pilot glances back for, so they read at body size. */
+  .mark-msg { margin: 8px 0 0; font-size: 13px; color: var(--dim); min-height: 1em; }
+  .mark-msg:empty { display: none; }
+  .mark-msg.armed { color: var(--warn); }
+  .mark-msg.ok { color: var(--text); }
+  /* Armed: the button itself carries the state — an accent OUTLINE with a
+     pulsing dot, never a fill (a fill would read as "tap me again"). */
+  #halo-survey-mark.waiting { background: var(--panel2); color: var(--warn);
+    border: 1px solid var(--warn); cursor: default; filter: none; opacity: 1; }
+  #halo-survey-mark.waiting::before { content: ""; display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; background: var(--warn); margin-right: 8px; vertical-align: 1px;
+    animation: mark-pulse 1.4s ease-in-out infinite; }
+  #halo-survey-mark.marked { background: var(--good); border-color: var(--good);
+    color: var(--ink-on-accent); opacity: 1; filter: none; }
+  @keyframes mark-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) {
+    #halo-survey-mark.waiting::before { animation: none; } }
+  #halo-survey-blk .seg button:disabled, #halo-survey-blk input:disabled { opacity: .55; cursor: default; }
+  /* ⛏ in the monospace stack falls back to a symbol font whose pick reads as
+     a ↖ arrow at label sizes; an emoji-capable face draws the actual pick. */
+  .gl { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
+    font-style: normal; }
+  @media (max-width: 560px) {
+    .mark-lbl { min-width: 0; flex-basis: 100%; }
+    .mark-indent, .mark-sub { margin-left: 0; }
+  }
   #halo-radar-sub { font-size: 11px; font-variant-numeric: tabular-nums; }
   .halo-radar-plot { margin-top: 8px; border: 1px solid var(--border);
     border-radius: 8px; overflow: hidden; background: var(--map-bg);
@@ -5703,9 +5763,92 @@
         /showlocation in game — this panel reads your fix live</span></h2>
       <div id="halo-after-body"><p class="muted" style="font-size:12px; margin:0;">No live fix
         yet. Drop out of quantum, then run <b>/showlocation</b> in the in-game chat.</p></div>
+      <!-- Why the radar is absent, in one line, when it is: the radar panel
+           itself only renders when there is a centre to plot around. -->
+      <p id="halo-radar-why" class="cap-purpose" hidden style="margin:8px 0 0;"></p>
+    </div>
+
+    <!-- ⛏ SURVEY MARK — the tab's primary job, directly under the live fix
+         (FIELD critique 2026-10-03: it used to sit below the radar and the RS
+         table, ~1,260 px down on a phone, and never said what a mark IS). One
+         decision per row, the commit last, and the arm → /showlocation step
+         stated before it matters rather than after the tap. -->
+    <div class="panel" id="halo-survey-blk">
+      <h2><span class="gl" aria-hidden="true">⛏️</span> SURVEY MARK</h2>
+      <p class="cap-purpose mark-purpose">Log what's around your ship for the org's belt map —
+        rocks, the ores you see, or <b>nothing at all</b> (that maps where a field ends).</p>
+      <ol class="mark-steps" aria-label="How a mark is made">
+        <li><b>Say what's here</b> below</li>
+        <li><b>Arm</b> the mark</li>
+        <li>Type <b>/showlocation</b> in game — your ship's position becomes the mark</li>
+      </ol>
+      <div class="mark-row">
+        <label class="fld-label mark-lbl" for="halo-zone-select">ZONE</label>
+        <select id="halo-zone-select" class="sel" style="min-width:190px; flex:0 1 320px;">
+          <option value="">No zone — group by proximity</option>
+        </select>
+        <a class="muted" href="#/halo/atlas" style="font-size:12px;">Create or manage zones →</a>
+      </div>
+      <p class="cap-purpose mark-sub">Optional — with no zone, nearby marks group on their own.</p>
+      <div id="halo-zone-banner" hidden></div>
+      <div class="mark-row">
+        <span class="fld-label mark-lbl" id="halo-survey-rocks-lbl">ROCKS HERE</span>
+        <span class="seg" id="halo-survey-rocks" role="group" aria-labelledby="halo-survey-rocks-lbl">
+          <button data-rocks="none" type="button" aria-pressed="false">⛔ none</button>
+          <button data-rocks="sparse" type="button" aria-pressed="false">sparse</button>
+          <button data-rocks="medium" type="button" aria-pressed="false">medium</button>
+          <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
+        </span>
+      </div>
+      <div class="mark-row">
+        <label class="fld-label mark-lbl" for="halo-survey-ores">ORES SEEN</label>
+        <!-- The node form's combobox, in multi mode (belt ore parity): ranked
+             by what this zone has already found, value-chipped, one token per
+             ore. The datalist stays for the DROP tab's ore-first box. -->
+        <span class="ore-pick poi-pick" style="flex:0 1 320px; min-width:170px;">
+          <input id="halo-survey-ores" class="ti" autocomplete="off"
+                 placeholder="type or tap below — optional">
+        </span>
+        <datalist id="halo-survey-ore-list"></datalist>
+      </div>
+      <div class="mark-indent">
+        <div id="halo-survey-ore-toks" class="ore-toks" style="margin-top:6px;" hidden></div>
+        <!-- What this zone (or this system's belts) has already turned up, as
+             one-tap chips: the mirror of the node form's #node-ore-likely. -->
+        <div id="halo-survey-ore-likely" class="ore-likely" hidden></div>
+        <p class="cap-purpose mark-sub">Optional — carried into the scanner readout afterwards.</p>
+      </div>
+      <div class="mark-row">
+        <span class="fld-label mark-lbl" aria-hidden="true">ALSO</span>
+        <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> wrecks or debris here (salvage)</label>
+      </div>
+      <div class="mark-go">
+        <button id="halo-survey-mark" type="button" class="cap-go" aria-disabled="true"
+                aria-describedby="halo-survey-arm-hint">Arm mark</button>
+        <button id="halo-survey-cancel" type="button" class="route-chip" hidden>✕ Cancel</button>
+      </div>
+      <p id="halo-survey-arm-hint" class="cap-purpose mark-hint">↑ pick how many rocks are here first</p>
+      <p id="halo-survey-msg" class="mark-msg" role="status" aria-live="polite"></p>
+        <div id="halo-scan-blk" hidden style="margin-top:8px;">
+          <button type="button" class="route-chip" id="halo-scan-toggle" aria-expanded="false"
+            aria-controls="halo-scan-form">＋ Add scanner readout
+            <span class="muted" style="text-transform:none;">— optional: sharpens this zone's value &amp; quality</span></button>
+          <!-- A ⛏ mark is org evidence the moment it lands: it moves a zone's
+               value tier and feeds the belt model. A mis-tapped density (or a
+               mark dropped in the wrong place) had no way back except an admin
+               with SQL. Scoped to the mark THIS tab just dropped, so it can
+               never reach someone else's. -->
+          <button type="button" class="route-chip" id="halo-mark-undo"
+            title="delete the mark that just landed">↩ Undo this mark</button>
+          <span id="halo-mark-undo-msg" class="muted" role="status" aria-live="polite"
+                style="font-size:12px;"></span>
+          <div id="halo-scan-form" hidden></div>
+        </div>
+    </div>
+
+    <div class="panel" id="halo-radar-panel" hidden>
+      <h2>⌖ POCKET RADAR <span id="halo-radar-sub" class="muted" style="font-weight:400; font-size:12px;"></span></h2>
       <div id="halo-radar-wrap" hidden>
-        <div class="halo-radar-head"><span class="fld-label">⌖ POCKET RADAR</span>
-          <span id="halo-radar-sub" class="muted"></span></div>
         <div class="route-row" id="halo-radar-ctl" style="align-items:center; margin-top:6px;">
           <span class="seg" id="halo-radar-heat" role="group" aria-label="Survey heatmap layer">
             <button class="on" data-heat="off" type="button" aria-pressed="true">HEAT OFF</button>
@@ -5727,69 +5870,12 @@
           <b>/showlocation</b> as you move to update. Rings show scale.
           ◇ marks are POIs near the pocket (bright = has an in-game quantum marker).</p>
       </div>
-      <!-- RS signature reference (#38 playtest note 5): the org's own scan
-           readouts, distilled to per-ore base signatures — the identify-at-
-           range cheat sheet a surveyor keeps open while scanning in game. -->
-      <div id="halo-rs-ref" hidden style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);"></div>
-      <div id="halo-survey-blk" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);">
-        <span class="fld-label">⛏ SURVEY <span class="muted" style="font-weight:400; text-transform:none;">— mark
-          this spot for the org's belt map (“nothing here” counts too: it maps a field's edge)</span></span>
-        <div class="route-row" style="align-items:center; margin-top:8px;">
-          <label class="fld-label" for="halo-zone-select" style="margin:0;">FILING INTO</label>
-          <select id="halo-zone-select" class="sel" style="min-width:190px;"
-            title="Every ⛏ mark you drop is filed into the active zone.">
-            <option value="">— none (auto-cluster) —</option>
-          </select>
-          <a class="muted" href="#/halo/atlas" style="font-size:12px;"
-             title="create zones, browse details and coverage, export — in ATLAS">Manage &amp; Create Survey Zones →</a>
-        </div>
-        <div id="halo-zone-banner" hidden></div>
-        <div class="route-row" style="align-items:center; margin-top:8px;">
-          <span class="seg" id="halo-survey-rocks" role="group" aria-label="Rock density here">
-            <button data-rocks="none" type="button" aria-pressed="false">⛔ none</button>
-            <button data-rocks="sparse" type="button" aria-pressed="false">sparse</button>
-            <button data-rocks="medium" type="button" aria-pressed="false">medium</button>
-            <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
-          </span>
-          <!-- The node form's combobox, in multi mode (belt ore parity): ranked
-               by what this zone has already found, value-chipped, one token per
-               ore. The datalist stays for the DROP tab's ore-first box. -->
-          <span class="ore-pick poi-pick" style="flex:0 1 250px; min-width:170px;">
-            <input id="halo-survey-ores" class="ti" autocomplete="off" aria-label="Ores seen here"
-                   placeholder="ores seen — type or tap"
-                   title="Ores you can see here. These pre-fill the scan detail's ore rows after the mark lands — no need to type them again.">
-          </span>
-          <datalist id="halo-survey-ore-list"></datalist>
-          <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
-          <button id="halo-survey-mark" type="button" aria-disabled="true"
-                  aria-describedby="halo-survey-arm-hint"
-                  title="pick what's around you first — the density is the mark">⛏ Mark survey point</button>
-          <span id="halo-survey-arm-hint" class="muted" style="font-size:12px;">← how many rocks are around you?</span>
-          <span id="halo-survey-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
-        </div>
-        <!-- The ores this mark will report, one removable token each — their
-             own row so a long list never pushes the Mark button off the line. -->
-        <div id="halo-survey-ore-toks" class="ore-toks" style="margin-top:6px;" hidden></div>
-        <!-- What this zone (or this system's belts) has already turned up, as
-             one-tap chips: the mirror of the node form's #node-ore-likely. -->
-        <div id="halo-survey-ore-likely" class="ore-likely" hidden></div>
-        <div id="halo-scan-blk" hidden style="margin-top:8px;">
-          <button type="button" class="route-chip" id="halo-scan-toggle"
-            title="transcribe the scanner readout onto the mark you just dropped — everything optional">＋ scan detail
-            <span class="muted" style="text-transform:none;">(optional — scanner mass &amp; comp %)</span></button>
-          <!-- A ⛏ mark is org evidence the moment it lands: it moves a zone's
-               value tier and feeds the belt model. A mis-tapped density (or a
-               mark dropped in the wrong place) had no way back except an admin
-               with SQL. Scoped to the mark THIS tab just dropped, so it can
-               never reach someone else's. -->
-          <button type="button" class="route-chip" id="halo-mark-undo"
-            title="delete the mark that just landed">↩ Undo this mark</button>
-          <span id="halo-mark-undo-msg" class="muted" role="status" aria-live="polite"
-                style="font-size:12px;"></span>
-          <div id="halo-scan-form" hidden></div>
-        </div>
-      </div>
     </div>
+
+    <!-- RS signature reference (#38 playtest note 5): the org's own scan
+         readouts, distilled to per-ore base signatures — the identify-at-
+         range cheat sheet a surveyor keeps open while scanning in game. -->
+    <div class="panel" id="halo-rs-ref" hidden></div>
     </div><!-- /halo-tab-field -->
 
     <!-- ATLAS (#38): the org's belt atlas — zones, coverage, export. Data
@@ -9416,6 +9502,7 @@ orePicker.wire();
 wildPicker.wire();
 // The belt ⛏ mark's "ores seen" (belt ore parity): the same combobox, in multi
 // mode, value-chipped across the whole vocabulary like the node field.
+let oreVocab = [];   // /api/raw_commodities — shared by every ore picker
 const surveyOrePicker = sightingPicker({
   inputId: "halo-survey-ores", chipsId: "halo-survey-ore-likely",
   tokensId: "halo-survey-ore-toks", restCat: "resource", multi: true,
@@ -19961,6 +20048,8 @@ function setHaloSurveyRocks(r) {
 // beside it says why rather than leaving a dead control to puzzle over.
 function syncHaloMarkArm() {
   const b = $("halo-survey-mark"), hint = $("halo-survey-arm-hint");
+  // The armed/landed states own the button while they last.
+  if (b && (b.classList.contains("waiting") || b.classList.contains("marked"))) return;
   // aria-disabled, NOT the native attribute: a native disabled button drops out
   // of the tab order and swallows the click, so the one explanation the user
   // might go looking for never fires and the guard below is unreachable.
@@ -19968,20 +20057,92 @@ function syncHaloMarkArm() {
   if (hint) hint.hidden = !!haloSurveyRocks;
 }
 
+// The ARMED state lives on the button itself (FIELD critique 2026-10-03): the
+// pilot taps, switches to the game chat, and glances back — a 12 px line
+// beside an unchanged button said nothing at glance size. While armed the
+// inputs lock (the payload was already sent; an edit would silently not
+// land) and ✕ Cancel is offered. `sv` = what was armed, echoed back.
+function setHaloArmedUI(on, sv) {
+  const b = $("halo-survey-mark"), cancel = $("halo-survey-cancel"), msg = $("halo-survey-msg");
+  const blk = $("halo-survey-blk");
+  if (blk) for (const el of blk.querySelectorAll("#halo-survey-rocks button, #halo-survey-ores, #halo-survey-salvage, #halo-survey-ore-likely button, #halo-survey-ore-toks button"))
+    el.disabled = on;
+  if (cancel) cancel.hidden = !on;
+  if (!b) return;
+  b.classList.remove("marked");
+  b.classList.toggle("waiting", on);
+  if (on) {
+    b.textContent = "WAITING FOR /showlocation";
+    b.setAttribute("aria-disabled", "true");
+    const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
+    if (msg && sv) {
+      msg.className = "mark-msg armed";
+      msg.innerHTML = `Armed: <b>${esc(sv.rocks === "none" ? "no rock" : sv.rocks)}</b>`
+        + ((sv.ores || []).length ? ` · ${sv.ores.map(esc).join(", ")}` : "")
+        + (sv.salvage ? " · wrecks/debris" : "")
+        + (z ? ` → <b>${esc(z.name)}</b>` : "")
+        + ` — now type <b>/showlocation</b> in game at the spot.`;
+    }
+    const hint = $("halo-survey-arm-hint");
+    if (hint) hint.hidden = true;
+  } else {
+    b.textContent = "Arm mark";
+    syncHaloMarkArm();
+  }
+}
+
+// A landed mark flashes ✓ MARKED in the button's own slot, then the button
+// returns to its (deliberately reset) unarmed state.
+let haloMarkedTimer = null;
+function flashHaloMarked() {
+  const b = $("halo-survey-mark");
+  if (!b) return;
+  b.classList.remove("waiting");
+  b.classList.add("marked");
+  b.textContent = "✓ MARKED";
+  b.setAttribute("aria-disabled", "true");
+  clearTimeout(haloMarkedTimer);
+  haloMarkedTimer = setTimeout(() => {
+    b.classList.remove("marked");
+    b.textContent = "Arm mark";
+    syncHaloMarkArm();
+  }, 2500);
+}
+
 let haloSurveyArmed = false;
+let haloArmBaseId = null;  // capture.last.id when this mark was armed — a cancel
+                           // must not read the PREVIOUS mark as "just landed"
 let haloArmedOres = [];    // ores typed into the mark's "ore seen" box, kept to
 let haloLastMarkOres = []; // pre-seed the resolved mark's scan form (#38 note 4)
 // Called on every ws state frame: an armed survey mark resolving (capture no
 // longer pending, a fresh `last`) refreshes the Keeger pockets + progress —
 // the new mark may already BE a jumpable pocket.
 function resolveHaloSurveyArm(capture) {
-  if (!haloSurveyArmed || !capture || capture.armed) return;
+  if (!capture) return;
+  // A reload (or a second tab) while a mark is armed: pick the armed state back
+  // up from the server instead of showing an idle form over a live arm.
+  const pend = capture.armed && capture.pending;
+  if (pend && pend.survey && !haloSurveyArmed) {
+    haloSurveyArmed = true;
+    haloArmBaseId = null;
+    haloArmedOres = (pend.survey.ores || []).slice();
+    setHaloArmedUI(true, pend.survey);
+    return;
+  }
+  if (!haloSurveyArmed || capture.armed) return;
   haloSurveyArmed = false;
   const msg = $("halo-survey-msg");
-  const landed = capture.last && /^Survey /.test(capture.last.name || "");
+  const landed = !!(capture.last && /^Survey /.test(capture.last.name || "")
+    && capture.last.id !== haloArmBaseId);
+  setHaloArmedUI(false);
+  if (!landed) {
+    if (msg) { msg.className = "mark-msg"; msg.textContent = "Cancelled — nothing was marked."; }
+    return;
+  }
+  flashHaloMarked();
   const zm = landed && capture.last.zone_mismatch;
   if (msg) {
-    msg.className = zm ? "armed" : "muted";
+    msg.className = zm ? "mark-msg armed" : "mark-msg ok";
     if (zm)
       msg.textContent = `⚠ mark saved, but your active zone “${zm.name}” is in ${zm.system} — this mark is in ${capture.last.system}, so it was filed untagged`;
     else if (landed) msg.innerHTML = surveyLandedHtml(capture.last.survey);
@@ -20036,7 +20197,7 @@ function surveyLandedHtml(sv, z) {
   const parts = [`✓ mark dropped · <b>${esc(sv.rocks === "none" ? "no rock" : sv.rocks)}</b>`];
   if ((sv.ores || []).length)
     parts.push(sv.ores.map(o => esc(o) + oreValueChip(o, "resource")).join(" · "));
-  if (sv.salvage) parts.push("⚙ salvage");
+  if (sv.salvage) parts.push("wrecks/debris");
   const where = sv.zone ? `→ <b>${esc(sv.zone.name)}</b>` : sv.place ? `· ${esc(sv.place)}` : "";
   let tail = "";
   if (z) {
@@ -20049,8 +20210,9 @@ function surveyLandedHtml(sv, z) {
 
 async function haloMarkSurvey() {
   const msg = $("halo-survey-msg");
+  if (haloSurveyArmed) return;            // the button is a status while armed
   if (!haloSurveyRocks) {
-    if (msg) { msg.className = "muted"; msg.textContent = "pick a rock density first"; }
+    if (msg) { msg.className = "mark-msg armed"; msg.textContent = "Pick how many rocks are here first — that's what the mark records."; }
     return;
   }
   const now = new Date();
@@ -20070,18 +20232,17 @@ async function haloMarkSurvey() {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      msg.className = "muted"; msg.textContent = "⚠ " + (d.detail || "couldn't arm the mark");
+      msg.className = "mark-msg armed"; msg.textContent = "⚠ " + (d.detail || "couldn't arm the mark");
       return;
     }
+    const doc = await r.json().catch(() => ({}));
     haloSurveyArmed = true;
+    haloArmBaseId = doc.capture && doc.capture.last ? doc.capture.last.id : null;
     // The previous mark's undo affordance must not survive into the next one:
     // it would point at a mark that is no longer "the one you just dropped".
     const um = $("halo-mark-undo-msg");
     if (um) um.textContent = "";
-    msg.className = "armed";
-    const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
-    msg.innerHTML = "ARMED — run <b>/showlocation</b> at the spot to drop the mark"
-      + (z ? ` into <b>${esc(z.name)}</b>` : "");
+    setHaloArmedUI(true, body.survey);
   } catch { failWithRetry(msg, "network error", haloMarkSurvey); }
 }
 
@@ -20703,9 +20864,8 @@ function renderHaloRsRef() {
     + RS_MULTIPLES.map(k =>
         `<td class="num muted">${(r.base * k).toLocaleString()}</td>`).join("") + `</tr>`).join("");
   const basis = nFeed
-    ? `— match your scanner readout at range; ${nFeed} from the reference table, `
-      + `${ores.length - nFeed} from the org's own scans`
-    : `— match your scanner readout at range; built from the org's single-ore scans`;
+    ? `${nFeed} from the reference table, ${ores.length - nFeed} from the org's own scans`
+    : `Built from the org's single-ore scans`;
   // Visible legend for whichever provenance marks are actually on screen. The
   // marks carry a `title`, but a tooltip never fires on touch and these users
   // are often on a phone beside the PC — so the meaning has to be readable
@@ -20734,7 +20894,13 @@ function renderHaloRsRef() {
   // ⛏ Mark survey point — this tab's primary action — below the fold. It was
   // also the wrong interaction: in game you read ONE number off the scanner
   // and want the name, so the lookup leads and the table browses.
-  el.innerHTML = `<span class="fld-label">⌖ RS SIGNATURE <span class="muted" style="font-weight:400; text-transform:none;">${basis}</span></span>`
+  // Its own panel with a real heading (FIELD critique 2026-10-03): it sat
+  // above the survey form as an unheaded block. The lookup stays open; the
+  // table, its legend and the ship-only caveat sit behind the disclosure.
+  el.innerHTML = `<h2>⌖ RS SIGNATURE LOOKUP</h2>`
+    + `<p class="cap" style="margin:0 0 6px;">Type the radar signature your scanner shows on a rock `
+    + `and get the ore — every contact reads a whole multiple of its ore's base `
+    + `(Gold 3,585 → 7,170 → 10,755…). Readable from ~25 km. <span class="muted">${basis}.</span></p>`
     + `<div class="halo-rs-look">`
     + `<label class="muted" style="font-size:12px;">scanner reads`
     + ` <input id="halo-rs-q" class="ti" inputmode="numeric" autocomplete="off"`
@@ -20745,7 +20911,7 @@ function renderHaloRsRef() {
     + `<th scope="col" class="num">RS BASE</th>`
     + RS_MULTIPLES.map(k => `<th scope="col" class="num">×${k}</th>`).join("")
     + `</tr></thead><tbody>`
-    + rows + `</tbody></table></div>` + legend + `</details>` + foot + credit;
+    + rows + `</tbody></table></div>` + legend + foot + `</details>` + credit;
   const q = $("halo-rs-q");
   if (q) q.oninput = () => renderRsLookupResult(ores);
 }
@@ -20793,9 +20959,12 @@ function renderHaloZoneSelect() {
   const sel = $("halo-zone-select");
   if (!sel) return;
   const cur = activeSurveyZone;
-  sel.innerHTML = '<option value="">— none (auto-cluster) —</option>'
-    + haloZones.filter(z => !z.closed).map(z =>
-        `<option value="${z.zone_id}">${esc(z.name)}${zoneEvidence(z).n ? ` · ${zoneEvidence(z).label}` : ""}${surveyValueText(z.value)}</option>`
+  // Belt zones only: a surface area is read by no belt view, so a ⛏ mark
+  // filed into one vanished (the server refuses it now too). Option text is
+  // the name and its size — "$$$ ⚙" inside a native option read as noise.
+  sel.innerHTML = '<option value="">No zone — group by proximity</option>'
+    + haloZones.filter(z => !z.closed && z.kind !== "surface").map(z =>
+        `<option value="${z.zone_id}">${esc(z.name)}${zoneEvidence(z).n ? ` · ${zoneEvidence(z).label}` : ""}</option>`
       ).join("");
   if (cur != null && !haloZones.some(z => z.zone_id === cur && !z.closed)) {
     const z = haloZones.find(x => x.zone_id === cur);   // keep a closed active zone visible
@@ -21173,30 +21342,27 @@ function renderHaloZoneBanner() {
   // trigger, which would strand an open menu over a detached button.
   closeZoneMenu(true);        // defer: this renderer rebuilds the trigger
   const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
-  if (!z) { el.hidden = true; return; }
+  if (!z || z.kind === "surface") { el.hidden = true; return; }
   el.hidden = false;
+  // ONE line (FIELD critique 2026-10-03): it was the heaviest thing in the
+  // form, wrapping into ~400 px on a phone. "Clear active" duplicated the
+  // select's "No zone" option and "Plan a drop" is a DROP action — the zone
+  // card (▸ details) still has it. The ore list lives in the chips below.
   const ev = zoneEvidence(z);
-  const bits = [`<b>${ev.n}</b> ${ev.noun}${ev.n === 1 ? "" : "s"}`];
+  const bits = [`<b>${ev.n}</b>\u00a0${ev.noun}${ev.n === 1 ? "" : "s"}`];
   if (z.value) bits.push(surveyValueChip(z.value));   // org value tier (#37)
-  if (z.grid_radius_m) bits.push(`⌀ ~${fmtDist(2 * z.grid_radius_m)}`);
   if (z.status === "barren") bits.push(`<span class="halo-chip warn">barren so far</span>`);
-  else if (z.status && z.status !== "empty") bits.push(`<b>${esc(z.status)}</b> rocks`);
-  if ((z.ores || []).length) bits.push(z.ores.map(esc).join(", "));
-  el.innerHTML = `<div class="halo-zone-active">⛏ Surveying <b>${esc(z.name)}</b> — ${bits.join(" · ")}`
-    + ` <button type="button" class="route-chip" id="halo-zone-clear">Clear active</button>`
-    + (ev.n && z.kind !== "surface" ? ` <button type="button" class="route-chip" id="halo-zone-plan">Plan a drop here</button>` : "")
-    + (ev.n ? ` <button type="button" class="route-chip" id="halo-zone-details" title="mark timeline, contributors, ore breakdown — and attach scan detail to any mark">▸ details</button>` : "")
+  else if (z.status && z.status !== "empty") bits.push(`<span style="white-space:nowrap;"><b>${esc(z.status)}</b> rocks</span>`);
+  el.innerHTML = `<div class="halo-zone-active"><span>Filing into <b>${esc(z.name)}</b> · ${bits.join(" · ")}</span>`
+    + (ev.n ? ` <button type="button" class="route-chip" id="halo-zone-details" title="mark timeline, contributors, ore breakdown — and attach a scanner readout to any mark">▸ details</button>` : "")
     // Same overflow menu as the ATLAS row. Moving the row's four management
     // actions behind ... while this banner kept them inline left one job with
     // two affordances — and left the hard delete bare here, at the same weight
     // as "Clear active", on the tab a surveyor actually works from.
     + (z.can_edit ? ` <button type="button" class="route-chip zone-more" id="halo-zone-more" aria-haspopup="menu" aria-expanded="false" aria-label="more actions for ${esc(z.name)}" title="rename, archive or delete">•••</button>` : "")
     + `</div>`;
-  $("halo-zone-clear").onclick = () => setActiveSurveyZone(null);
   const mb = $("halo-zone-more");
   if (mb) mb.onclick = (e) => { e.stopPropagation(); openZoneMenu(mb, z); };
-  const pb = $("halo-zone-plan");
-  if (pb) pb.onclick = () => planHaloZone(z);
   const dbtn = $("halo-zone-details");
   // Survey summary card lives in ATLAS (#38): the banner's "▸ details" hops there.
   if (dbtn) dbtn.onclick = () => { haloGoTab("atlas"); openHaloSurveyCard(z); };
@@ -21214,10 +21380,15 @@ let haloLastMarkId = null;   // the most recently resolved survey mark
 // kept with its Q — unlike the node form, where a secondary ore must never
 // count as a sighting. The same ore may take two rows at two Qs; the server
 // sums the share and share-weights the Q, exactly as the node form's lines.
+let scanRowSeq = 0;
 function scanCompRow(ore = "", pct = "", q = "") {
+  // The same combobox the mark uses (FIELD critique 2026-10-03: the rows were
+  // a native datalist inside the same flow). Wired per row in wireScanForm.
+  const id = `scan-ore-${++scanRowSeq}`;
   return `<div class="route-row scan-row" style="align-items:center; margin-top:4px;">
-    <input class="ti scan-ore" list="halo-survey-ore-list" autocomplete="off" aria-label="Ore"
-           placeholder="ore" value="${esc(String(ore))}" style="flex:1; min-width:130px; max-width:240px;">
+    <span class="ore-pick poi-pick" style="flex:1; min-width:130px; max-width:240px;">
+      <input id="${id}" class="ti scan-ore" autocomplete="off" aria-label="Ore"
+             placeholder="ore" value="${esc(String(ore))}"></span>
     <span class="scan-val">${ore ? oreValueChip(ore, "resource") : ""}</span>
     <input class="ti scan-pct" type="number" min="0" max="100" step="0.01" aria-label="Share %"
            placeholder="%" value="${pct === "" ? "" : esc(String(pct))}" style="width:76px;">
@@ -21246,22 +21417,31 @@ function scanFormHtml(markId, scan, seedOres) {
   const seed = (!have.length && seedOres && seedOres.length)
     ? seedOres.map(o => scanCompRow(o, "")).join("") : "";
   const rows = have.length ? have.join("") : (seed || scanCompRow());
+  // Visible labels, not placeholders (FIELD critique 2026-10-03): pre-seeded
+  // rows filled the fields, so the placeholders that named them vanished — and
+  // the RS/Q explanations lived in tooltips a phone never shows.
   return `<div class="scan-form" data-mark="${markId}">
-    <div class="route-row" style="align-items:center; margin-top:6px;">
-      <input class="ti scan-mass" type="number" min="1" max="10000000" step="1"
-             placeholder="rock mass (kg)" value="${scan && scan.mass_kg ? scan.mass_kg : ""}" style="width:150px;">
-      <input class="ti scan-rs" type="number" min="1" max="10000000" step="1"
-             title="the rock's radar signature — every material reads a multiple of its base (Gold 3585 → 7170, 10755…); visible from ~25 km"
-             placeholder="RS signature" value="${scan && scan.rs ? scan.rs : ""}" style="width:120px;">
-      <button type="button" class="route-chip scan-add">＋ add line</button>
-      <button type="button" class="route-chip scan-save">Save scan</button>
-      <span class="muted scan-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    <p class="cap-purpose" style="margin:8px 0 0;">Copy your ship scanner's readout for the rock you
+      marked. All optional — each number sharpens the zone's value, quality and RS table.</p>
+    <div class="route-row" style="align-items:flex-end; margin-top:8px;">
+      <label class="scan-lbl">MASS (kg)
+        <input class="ti scan-mass" type="number" min="1" max="10000000" step="1"
+               value="${scan && scan.mass_kg ? scan.mass_kg : ""}" style="width:130px;"></label>
+      <label class="scan-lbl">RS — radar signature
+        <input class="ti scan-rs" type="number" min="1" max="10000000" step="1"
+               value="${scan && scan.rs ? scan.rs : ""}" style="width:150px;"></label>
     </div>
+    <div class="scan-head" aria-hidden="true"><span>ORE</span><span>% OF ROCK</span><span>Q (0–1000)</span></div>
     <div class="scan-rows">${rows}</div>
     <p class="muted scan-sum" style="margin:4px 0 0; font-size:12px;"></p>
-    <p class="muted route-hint" style="margin:4px 0 0;">Each line as the scanner prints it —
-      “62.40% IRON (ORE) 410” is 62.40 and Q410. Lines don't need to add to 100 (inert rock
-      makes up the rest), Q is optional, and one “best ore” line is a perfectly good scan.</p>
+    <p class="cap-purpose" style="margin:4px 0 0;">One row per line the scanner prints —
+      “62.40% IRON (ORE) 410” is 62.40 % and Q410. Lines don't need to add to 100 (inert rock
+      makes up the rest), and one “best ore” line is a perfectly good scan.</p>
+    <div class="route-row" style="align-items:center; margin-top:8px;">
+      <button type="button" class="route-chip scan-add">＋ add line</button>
+      <button type="button" class="route-chip primary scan-save">Save readout</button>
+      <span class="muted scan-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+    </div>
   </div>`;
 }
 
@@ -21304,10 +21484,31 @@ function syncScanSum(box) {
     : `${total.toFixed(2)}% of the rock` + (qs.length ? ` · ${qs.join(" · ")}` : "");
 }
 
+// Each scan row's ore field becomes the shared ore combobox, ranked by the
+// same shortlist as the mark's ores. A pick fires no input event, so onPick
+// does the chip + total refresh the input listener would.
+function wireScanRowPickers(box) {
+  const f = haloSurveyForecast();
+  for (const inp of box.querySelectorAll(".scan-ore")) {
+    if (inp.dataset.picker) continue;
+    inp.dataset.picker = "1";
+    const row = inp.closest(".scan-row");
+    const pk = sightingPicker({ inputId: inp.id, restCat: "resource", pText: "on rock marks",
+      onPick: () => {
+        row.querySelector(".scan-val").innerHTML = oreValueChip(inp.value.trim(), "resource");
+        syncScanSum(box);
+      } });
+    pk.wire();
+    pk.setVocab(oreVocab);
+    if (f) pk.setForecasts([{ label: f.label, cat: "resource", unit: "rock marks", forecast: f }]);
+  }
+}
+
 function wireScanForm(host, onSaved) {
   const box = host.querySelector(".scan-form");
   if (!box) return;
   syncScanSum(box);
+  wireScanRowPickers(box);
   box.addEventListener("input", (e) => {
     const row = e.target.closest(".scan-row");
     if (row && e.target.classList.contains("scan-ore"))
@@ -21321,6 +21522,7 @@ function wireScanForm(host, onSaved) {
   box.addEventListener("click", async (e) => {
     if (e.target.closest(".scan-add")) {
       box.querySelector(".scan-rows").insertAdjacentHTML("beforeend", scanCompRow());
+      wireScanRowPickers(box);
       return;
     }
     const rm = e.target.closest(".scan-rm");
@@ -21347,7 +21549,7 @@ function wireScanForm(host, onSaved) {
         st.textContent = "⚠ " + (typeof d.detail === "string" ? d.detail : "couldn't save the scan");
         return;
       }
-      st.textContent = "✓ scan saved — value tiers sharpen on the next read";
+      st.textContent = "✓ readout saved — the zone's value and quality update on the next read";
       if (onSaved) onSaved();
     } catch {
       // The typed scan is still in the form, so a retry re-reads it — the
@@ -21392,7 +21594,7 @@ async function undoLastSurveyMark() {
   if (form) { form.hidden = true; form.innerHTML = ""; }
   if (msg) msg.textContent = "";
   const sm = $("halo-survey-msg");
-  if (sm) { sm.className = "muted"; sm.textContent = "↩ mark removed"; }
+  if (sm) { sm.className = "mark-msg"; sm.textContent = "↩ Mark removed — pick the rocks here to mark again."; }
   delete haloTargets[haloSystem];
   loadHaloTargets(haloSystem).then(renderHaloSystemPanel);
   loadHaloZones();
@@ -21405,8 +21607,9 @@ $("halo-mark-undo").onclick = undoLastSurveyMark;
 // After-the-drop attach point: build lazily on first open, aimed at the mark
 // that just resolved.
 $("halo-scan-toggle").onclick = () => {
-  const form = $("halo-scan-form");
-  if (!form.hidden) { form.hidden = true; return; }
+  const form = $("halo-scan-form"), tog = $("halo-scan-toggle");
+  if (!form.hidden) { form.hidden = true; tog.setAttribute("aria-expanded", "false"); return; }
+  tog.setAttribute("aria-expanded", "true");
   if (haloLastMarkId == null) return;
   form.innerHTML = scanFormHtml(haloLastMarkId, null, haloLastMarkOres);
   wireScanForm(form, () => {
@@ -23391,6 +23594,16 @@ function wireHaloFinder() {
   for (const x of $("halo-survey-rocks").querySelectorAll("button"))
     x.onclick = () => setHaloSurveyRocks(x.dataset.rocks);
   $("halo-survey-mark").onclick = haloMarkSurvey;
+  // ✕ Cancel an armed mark — the same endpoint the navigator's capture forms
+  // use. The state frame normally resolves the UI; resolving here as well
+  // covers a dropped socket (the second call is a no-op).
+  $("halo-survey-cancel").onclick = async () => {
+    try {
+      const r = await fetch("/api/capture/cancel", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (r.ok) resolveHaloSurveyArm({ armed: false, last: null });
+    } catch { failWithRetry($("halo-survey-msg"), "network error — still armed", () => $("halo-survey-cancel").click()); }
+  };
   syncHaloMarkArm();
   $("halo-zone-new").onclick = newSurveyZone;
   $("halo-zone-select").onchange = (e) =>
@@ -24554,32 +24767,19 @@ let radarMarkAt = null;   // radar offset when my last ⛏ mark landed (§5.3 nu
 // produces — there is no pocket centre, so it used to vanish with no
 // explanation. Absent-with-a-reason beats absent.
 function radarEmptyState(reason) {
-  const wrap = $("halo-radar-wrap");
-  if (!wrap) return;
-  wrap.hidden = false;
-  const plot = wrap.querySelector(".halo-radar-plot");
-  if (plot) plot.hidden = true;
-  // Hide the chrome the explanation replaces: "steer so the drift arrow points
-  // at the center dot" directly above "there is no centre to plot around" is a
-  // contradiction the user has to resolve.
-  for (const n of wrap.querySelectorAll(".seg, .halo-radar-tip")) n.hidden = true;
-  let note = wrap.querySelector(".halo-radar-empty");
-  if (!note) {
-    note = document.createElement("p");
-    note.className = "cap halo-radar-empty";
-    wrap.appendChild(note);
-  }
-  note.textContent = reason;
+  // FIELD critique 2026-10-03: the whole radar panel used to render just to
+  // say it was unavailable, above the survey form. Now the panel hides and
+  // the reason is one line under the live fix — still absent-with-a-reason.
+  const panel = $("halo-radar-panel"), wrap = $("halo-radar-wrap"), why = $("halo-radar-why");
+  if (panel) panel.hidden = true;
+  if (wrap) wrap.hidden = true;
+  if (why) { why.hidden = !reason; why.textContent = reason ? "⌖ Radar: " + reason : ""; }
 }
 
 function clearRadarEmptyState() {
-  const wrap = $("halo-radar-wrap");
-  if (!wrap) return;
-  const plot = wrap.querySelector(".halo-radar-plot");
-  if (plot) plot.hidden = false;
-  for (const n of wrap.querySelectorAll(".seg, .halo-radar-tip")) n.hidden = false;
-  const note = wrap.querySelector(".halo-radar-empty");
-  if (note) note.remove();
+  const panel = $("halo-radar-panel"), why = $("halo-radar-why");
+  if (panel) panel.hidden = false;
+  if (why) { why.hidden = true; why.textContent = ""; }
 }
 
 function updatePocketRadar(d) {
@@ -24595,11 +24795,9 @@ function updatePocketRadar(d) {
     // Say why. A band is a ring, not a pocket, so there is no centre to plot
     // around — the band verdict above IS the position readout in that case.
     radarEmptyState(d && d.band
-      ? "Aaron Halo bands are rings, not pockets — there is no centre to plot "
-        + "around, so the band verdict above is your position. The radar appears "
-        + "inside a mapped pocket, or once your active survey zone has a mark in it."
-      : "Available inside a mapped pocket, or once your active survey zone has "
-        + "at least one \u26cf mark to plot around.");
+      ? "Aaron Halo bands are rings, not pockets, so there's no centre to plot — "
+        + "the band verdict above is your position."
+      : "appears inside a mapped pocket, or once your zone has a mark to plot around.");
     haloRadarLast = null; haloRadar = { key: null, pts: [] };
     return;
   }
@@ -27960,8 +28158,9 @@ function init() {
   loadFaunaHarvestables();
   fetch("/api/raw_commodities").then(r => r.json())
     .then(n => {
-      orePicker.setVocab(n || []);
-      surveyOrePicker.setVocab(n || []);
+      oreVocab = n || [];
+      orePicker.setVocab(oreVocab);
+      surveyOrePicker.setVocab(oreVocab);
       const dl = $("halo-survey-ore-list");   // DROP's ore-first box + scan rows
       if (dl) dl.innerHTML = (n || []).map(o => `<option value="${esc(o)}">`).join("");
     }).catch(() => {});
