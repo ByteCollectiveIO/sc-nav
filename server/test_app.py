@@ -8491,6 +8491,36 @@ class BeltSurveyApiTests(unittest.TestCase):
         finally:
             app.handles.player_ids_for = orig
 
+    def test_scan_lines_carry_quality(self):
+        rich, _ = self._priced_ores()
+        mark = self._mark_at((self.KR, 0.0, 0.0), ores=[rich])
+        mark.owner_id = 4242
+        orig = app.handles.player_ids_for
+        app.handles.player_ids_for = lambda uid: {4242}
+        try:
+            url = f"/api/custom_pois/{mark.id}/survey"
+            r = self.client.patch(url, json={"lines": [
+                {"ore": rich, "pct": 30, "q": 650}, {"ore": rich, "pct": 50, "q": 325},
+                {"ore": "Filler", "pct": 10}],
+                # lines WIN: a stale comp alongside them is ignored
+                "comp": {rich: 99}})
+            self.assertEqual(r.status_code, 200)
+            scan = r.json()["scan"]
+            self.assertEqual(scan["comp"], {rich: 80.0, "Filler": 10.0})
+            self.assertEqual(scan["q"], {rich: 447})
+            self.assertEqual(len(scan["lines"]), 3)
+            # the comp's ores union into the mark's list, as before
+            m = self.client.get("/api/halo/survey").json()["marks"][0]
+            self.assertIn("Filler", m["ores"])
+            self.assertEqual(m["scan"]["q"], {rich: 447})
+            # a scan can't be more than the whole rock
+            self.assertEqual(self.client.patch(url, json={"lines": [
+                {"ore": rich, "pct": 70}, {"ore": "Filler", "pct": 40}]}).status_code, 400)
+            self.assertEqual(self.client.patch(url, json={"lines": [
+                {"ore": rich, "pct": 10, "q": 1001}]}).status_code, 422)
+        finally:
+            app.handles.player_ids_for = orig
+
     def test_scan_patch_guards(self):
         rich, _ = self._priced_ores()
         # ownerless legacy mark + non-admin caller → 403
@@ -8670,6 +8700,11 @@ class BeltSurveyApiTests(unittest.TestCase):
                          {"name": "Far Zone", "system": "Nyx"})
         mark = app.nav.pois[s.last_capture["id"]]
         self.assertNotIn("zone_id", mark.survey)
+        # the payload echoes back for the FIELD confirmation line — and says
+        # the mark filed nowhere, matching the mismatch warning
+        echo = s.last_capture["survey"]
+        self.assertEqual((echo["rocks"], echo["ores"], echo["zone"]),
+                         ("dense", [], None))
 
     def test_a_mark_filed_into_a_belt_zone_can_meet_its_survey_goal(self):
         zid = db.create_survey_zone("goal-zone", "Goal Zone", "Nyx", "1",

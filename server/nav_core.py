@@ -8221,6 +8221,101 @@ def _survey_ore_counts(positives: list[dict]) -> dict:
     return counts
 
 
+# A belt rock's scan (#37 slice 3) as the scanner prints it: one line per
+# composition entry, each with its own share AND its own Q ("62% IRON 410",
+# "8% GOLD 655"). Unlike a planetary node's quality lines, EVERY ore on the
+# rock is kept — a belt scan is a composition record, not a sighting of one
+# ore, and the mark's `ores` already unions the scanned ores in. One ore may
+# appear on more than one line; `comp` sums its share and `q` share-weights
+# its quality over the lines that state one, the same rule as
+# quality_lines_summary.
+SCAN_LINES_MAX = 10
+# Below this many quality-stating scans a zone's value is NOT quality-weighted:
+# one lucky Q900 rock would otherwise double a field's score on a sample of one.
+BELT_QUALITY_MIN_SCANS = 3
+
+
+def clean_scan_lines(lines) -> list[dict]:
+    """[{ore, pct, q?}] with a name and a positive share; Q optional (an
+    unread Q is still a valid composition line). Clamps instead of raising,
+    like clean_quality_lines."""
+    out = []
+    if not isinstance(lines, list):
+        return out
+    for ln in lines:
+        if len(out) >= SCAN_LINES_MAX:
+            break
+        if not isinstance(ln, dict):
+            continue
+        ore = str(ln.get("ore") or "").strip()
+        try:
+            pct = float(ln.get("pct"))
+        except (TypeError, ValueError):
+            continue
+        if not ore or not math.isfinite(pct) or pct <= 0:
+            continue
+        row = {"ore": ore, "pct": round(min(pct, 100.0), 2)}
+        q = clean_material_q(ln.get("q")) if ln.get("q") is not None else None
+        if q is not None:
+            row["q"] = q
+        out.append(row)
+    return out
+
+
+def scan_lines_rollup(lines: list[dict]) -> tuple[dict, dict]:
+    """(comp, q) for a set of clean scan lines: comp = {ore: summed pct}
+    (capped at 100, 1 dp — the shape every scan reader already speaks), q =
+    {ore: share-weighted Q} over the lines of that ore that stated one."""
+    comp: dict[str, float] = {}
+    qw: dict[str, list[float]] = {}
+    for ln in lines:
+        comp[ln["ore"]] = comp.get(ln["ore"], 0.0) + ln["pct"]
+        if "q" in ln:
+            acc = qw.setdefault(ln["ore"], [0.0, 0.0])
+            acc[0] += ln["pct"] * ln["q"]
+            acc[1] += ln["pct"]
+    comp = {o: round(min(p, 100.0), 1) for o, p in comp.items()}
+    # half-up, matching quality_lines_summary and the JS preview
+    q = {o: int(math.floor(s / w + 0.5)) for o, (s, w) in qw.items() if w > 0}
+    return comp, q
+
+
+def _survey_quality_stats(positives: list[dict]) -> dict:
+    """Per-ore and zone-level quality off the scans that state a Q:
+    `scan_q` {ore: {n, q, q_min, q_max, band}} — n rated rocks, mean Q, spread,
+    mean band (each rock counts once per ore; `band` is what the value weight
+    reads, mirroring surface_value's avg_band) — plus `bands` {"1".."8": n}
+    and `avg_band` in the exact shape surface_zone_fit emits, so one band
+    chart serves both cards. Empty dict when no scan states a Q."""
+    per: dict[str, list[int]] = {}
+    rated = 0
+    for m in positives:
+        sq = (m.get("scan") or {}).get("q") or {}
+        got = False
+        for ore, q in sq.items():
+            if isinstance(q, (int, float)):
+                per.setdefault(ore, []).append(int(q))
+                got = True
+        rated += got
+    if not rated:
+        return {}
+    bands: dict[int, int] = {}
+    scan_q = {}
+    for ore, qs in per.items():
+        bs = [quality_band(q) for q in qs]
+        for b in bs:
+            bands[b] = bands.get(b, 0) + 1
+        scan_q[ore] = {"n": len(qs), "q": round(sum(qs) / len(qs)),
+                       "q_min": min(qs), "q_max": max(qs),
+                       "band": round(sum(bs) / len(bs), 2)}
+    return {
+        "q_scans": rated,
+        "scan_q": scan_q,
+        "bands": {str(b): bands[b] for b in sorted(bands)},
+        "avg_band": round(sum(b * c for b, c in bands.items()) / sum(bands.values()), 2),
+    }
+
+
 def _survey_scan_stats(positives: list[dict]) -> dict:
     """Scanner evidence rollup (#37 slice 3): {"scans": n, "scan_comp":
     {ore: mean pct}} over the positive marks that carry a scan comp — the
@@ -8267,6 +8362,7 @@ def _survey_scan_stats(positives: list[dict]) -> dict:
              for ore, vals in rs_by_ore.items()}
     if bases:
         out["rs_bases"] = bases
+    out.update(_survey_quality_stats(positives))
     return out
 
 
@@ -8363,7 +8459,11 @@ def survey_marks(nav: NavData, system: str,
                     "scan": s.get("scan") or None,
                     # Game build the mark was dropped in (#37 §6.1); None on
                     # marks from before stamping or an older watcher.
-                    "build": s.get("build") or None})
+                    "build": s.get("build") or None,
+                    # Nearest jumpable QT marker (assign_qt_markers keeps it
+                    # current) — what makes a zone QT-anchored (belt parity).
+                    "nearest_qt": p.nearest_qt,
+                    "nearest_qt_dist_m": p.nearest_qt_dist_m})
     out.sort(key=lambda m: m["id"])
     return out
 
@@ -8627,6 +8727,38 @@ def survey_state(nav: NavData, system: str) -> dict:
     return state
 
 
+# A belt zone is QT-ANCHORED when most of its marks sit within this of one
+# jumpable marker (a station, a Pyro field's own marker): surveyors there
+# quantum to the marker and fly the rest sublight, so the zone is NAVIGABLE the
+# way a surface area is — Set destination + fly to a mark — rather than only
+# drop-plannable. 100 km is a couple of minutes of sublight.
+BELT_QT_ANCHOR_M = 100_000.0
+
+
+def belt_zone_qt_anchor(nav: NavData, members: list[dict], system: str) -> dict | None:
+    """{id, name, dist_m, marks} for the marker at least half of a zone's marks
+    lie within BELT_QT_ANCHOR_M of (dist_m = their median distance), or None.
+    A majority, not "any": one mark dropped on the way out of a station must
+    not re-brand a deep-belt field as a station pocket."""
+    near: dict[str, list[float]] = {}
+    for m in members:
+        name, d = m.get("nearest_qt"), m.get("nearest_qt_dist_m")
+        if name and isinstance(d, (int, float)) and d <= BELT_QT_ANCHOR_M:
+            near.setdefault(name, []).append(float(d))
+    if not near:
+        return None
+    name, ds = max(near.items(), key=lambda kv: (len(kv[1]), -min(kv[1])))
+    if 2 * len(ds) < len(members):
+        return None
+    pid = next((p.id for p in nav.qt_markers
+                if p.name == name and p.system == system), None)
+    if pid is None:
+        return None
+    ds.sort()
+    return {"id": pid, "name": name, "dist_m": round(ds[len(ds) // 2]),
+            "marks": len(ds)}
+
+
 def survey_zones_state(nav: NavData, system: str, zones: list[dict],
                        t_ref: float | None = None) -> list[dict]:
     """Named survey zones (#36.1) as plannable pockets: group the org's marks by
@@ -8671,6 +8803,7 @@ def survey_zones_state(nav: NavData, system: str, zones: list[dict],
             row["survey"] = {k: fit[k] for k in
                              ("status", "marks", "positive", "ores",
                               "salvage", "closest_center_m")}
+            row["qt_anchor"] = belt_zone_qt_anchor(nav, members, row["system"])
         else:
             row["health"] = _health_score(0.0, 0.0, 0.0, 0.0, 0, BELT_HEALTH_BUCKETS)
             row.update({"xyz": None, "grid_radius_m": None, "marks": 0,
@@ -9086,6 +9219,13 @@ def _survey_value_from_index(sig: dict, idx: dict,
     # qualifies; unpriced-only scans fall through to the presence bases.
     scan_comp = sig.get("scan_comp") or {}
     if scan_comp:
+        # Quality weight (belt ore parity): each ore's price term scales by its
+        # own mean band over the pivot — surface_value's avg_band rule, applied
+        # per ore because a belt rock is a mix and a Q900 trace line must not
+        # lift the iron that makes up the rock. Gated on a minimum number of
+        # quality-stating scans; an ore no scan rated keeps weight 1.
+        scan_q = (sig.get("scan_q") or {}
+                  if int(sig.get("q_scans") or 0) >= BELT_QUALITY_MIN_SCANS else {})
         expect = 0.0
         priced = False
         for ore, pct in scan_comp.items():
@@ -9093,11 +9233,15 @@ def _survey_value_from_index(sig: dict, idx: dict,
             if s is None:
                 s = idx.get(_ORE_SUFFIX_RE.sub("", ore).strip().lower())
             if s is not None and isinstance(pct, (int, float)):
-                expect += (float(pct) / 100.0) * s
+                qb = (scan_q.get(ore) or {}).get("band")
+                qw = float(qb) / SURFACE_BAND_PIVOT if qb else 1.0
+                expect += (float(pct) / 100.0) * s * qw
                 priced = True
         if priced:
             return {"score": round(w * expect), "tier": None,
                     "basis": "scanned", "scans": int(sig.get("scans") or 0),
+                    "quality": bool(scan_q),
+                    "avg_band": sig.get("avg_band") if scan_q else None,
                     "salvage": salvage}
     sells = []
     for ore in sig.get("ores") or []:
