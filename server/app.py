@@ -2090,7 +2090,21 @@ class ScanIn(BaseModel):
     # every material has a base (Gold 3585) and every contact reads a
     # multiple of it, visible from ~25 km. Per-rock, like mass.
     rs: int | None = Field(default=None, ge=1, le=10_000_000)
+    # The scan as read, line by line, each with its own Q (belt ore parity):
+    # "62% IRON 410 / 8% GOLD 655". When given it WINS over `comp` — comp and
+    # the per-ore Q are derived from it (nav_core.scan_lines_rollup), so the
+    # two can never disagree. `comp` stays accepted for older clients.
+    lines: list["ScanLineIn"] | None = Field(
+        default=None, max_length=nav_core.SCAN_LINES_MAX)
 
+
+class ScanLineIn(BaseModel):
+    ore: str = Field(max_length=_NAME_MAX)
+    pct: float = Field(gt=0, le=100)
+    q: int | None = Field(default=None, ge=0, le=nav_core.MATERIAL_Q_MAX)
+
+
+ScanIn.model_rebuild()
 
 _SCAN_COMP_MAX = 8
 
@@ -3852,6 +3866,17 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         "owner_handle": poi.owner_handle,
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
+    if sv is not None:
+        # Echo what the mark said and where it filed (belt ore parity): the
+        # FIELD confirmation line shows it back, the way the navigator's
+        # "added ◆ <ore> Q…" line does, instead of a bare "mark dropped".
+        sess.last_capture["survey"] = {
+            "rocks": sv.get("rocks"), "ores": list(sv.get("ores") or []),
+            "salvage": bool(sv.get("salvage")),
+            "zone": ({"id": zone_kept["id"], "name": zone_kept["name"]}
+                     if zone_kept is not None else None),
+            "place": halo_tag or None,
+        }
     if zone_mismatch is not None:
         sess.last_capture["zone_mismatch"] = zone_mismatch
 
@@ -7232,7 +7257,14 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
                    # zone timeline + scan detail feed (#37 slice 3); the
                    # export inherits these — shared datasets carry scans.
                    "zone_id": m["zone_id"], "created": m["created"],
-                   "scan": m["scan"]}
+                   "scan": m["scan"],
+                   # Belt parity: the card states "18 km from <marker>" on a
+                   # QT-anchored zone's marks, as the surface card does from
+                   # its centre.
+                   "nearest_qt": m.get("nearest_qt"),
+                   "nearest_qt_dist_m": (round(m["nearest_qt_dist_m"])
+                                         if m.get("nearest_qt_dist_m") is not None
+                                         else None)}
                   for m in marks],
         "pockets": [({**p, "value": vk[p["key"]]} if p["key"] in vk else p)
                     for p in sstate["pockets"]],
@@ -13681,19 +13713,30 @@ async def update_survey_scan(poi_id: int, body: ScanIn,
     a teammate's mark goes through their own marks or an admin). An empty
     body clears the scan. Derived products (value tiers, ore routing, zone
     detail) pick it up on the next read via nav.touch()."""
-    comp = {}
-    for name, pct in (body.comp or {}).items():
-        name = (name or "").strip()[:_NAME_MAX]
-        if not name or not isinstance(pct, (int, float)):
-            continue
-        comp[name] = round(max(0.0, min(100.0, float(pct))), 1)
-        if len(comp) >= _SCAN_COMP_MAX:
-            break
+    comp, quality, lines = {}, {}, []
+    if body.lines is not None:
+        lines = nav_core.clean_scan_lines([ln.model_dump() for ln in body.lines])
+        if sum(ln["pct"] for ln in lines) > 100.0 + 1e-6:
+            raise HTTPException(status_code=400,
+                                detail="scan lines add up to more than 100%")
+        comp, quality = nav_core.scan_lines_rollup(lines)
+    else:
+        for name, pct in (body.comp or {}).items():
+            name = (name or "").strip()[:_NAME_MAX]
+            if not name or not isinstance(pct, (int, float)):
+                continue
+            comp[name] = round(max(0.0, min(100.0, float(pct))), 1)
+            if len(comp) >= _SCAN_COMP_MAX:
+                break
     scan = {}
     if body.mass_kg is not None:
         scan["mass_kg"] = round(float(body.mass_kg))
     if comp:
         scan["comp"] = comp
+    if lines:
+        scan["lines"] = lines
+    if quality:
+        scan["q"] = quality
     if body.rs is not None:
         scan["rs"] = int(body.rs)
     async with hub.lock:

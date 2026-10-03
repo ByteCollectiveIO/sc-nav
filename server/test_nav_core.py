@@ -6134,6 +6134,51 @@ class BeltSurveyTests(unittest.TestCase):
                 nav2, start=start, pockets=nav_core.survey_pockets(nav2, "Nyx"),
                 system="Nyx", markers=[stn2], allow_staging=False)
 
+    def test_scan_lines_rollup_and_quality_stats(self):
+        lines = nav_core.clean_scan_lines([
+            {"ore": " Gold ", "pct": 30, "q": 650}, {"ore": "Gold", "pct": 50, "q": 325},
+            {"ore": "Iron", "pct": 10},                     # Q unread: still comp
+            {"ore": "", "pct": 5}, {"ore": "X", "pct": 0}, {"ore": "Y", "pct": "?"}])
+        self.assertEqual([ln["ore"] for ln in lines], ["Gold", "Gold", "Iron"])
+        comp, q = nav_core.scan_lines_rollup(lines)
+        self.assertEqual(comp, {"Gold": 80.0, "Iron": 10.0})
+        self.assertEqual(q, {"Gold": 447})   # (30·650 + 50·325) / 80 = 446.9 → 447
+
+        def mk(mid, sq):
+            return {"xyz": (self.KR, 0, 0), "positive": True, "rocks": "dense",
+                    "ores": list(sq), "salvage": False, "id": mid,
+                    "scan": {"comp": {o: 20.0 for o in sq}, "q": sq}}
+        fit = nav_core.survey_cluster_fit(
+            [mk(1, {"Gold": 900}), mk(2, {"Gold": 300, "Iron": 120}),
+             mk(3, {"Iron": None})], [])
+        self.assertEqual(fit["q_scans"], 2)
+        self.assertEqual(fit["scan_q"]["Gold"],
+                         {"n": 2, "q": 600, "q_min": 300, "q_max": 900, "band": 5.5})
+        # bands B8 + B3 (gold) + B1 (iron) — the surface chart's exact shape
+        self.assertEqual(fit["bands"], {"1": 1, "3": 1, "8": 1})
+        self.assertEqual(fit["avg_band"], 4.0)
+        # no Q anywhere → the keys are absent, not zeroed
+        bare = nav_core.survey_cluster_fit([mk(4, {"Iron": None})], [])
+        self.assertNotIn("bands", bare)
+
+    def test_belt_zone_qt_anchor_needs_a_majority(self):
+        stn = _space_poi(12, "Arc Station", (self.KR, 0, 0), system="Nyx")
+        stn.qt_marker = True
+        nav = self._nav_with([], extra_pois=[stn])
+        nav_core.index_qt_markers(nav)
+
+        def m(name, d):
+            return {"nearest_qt": name, "nearest_qt_dist_m": d}
+        a = nav_core.belt_zone_qt_anchor(
+            nav, [m("Arc Station", 20e3), m("Arc Station", 40e3),
+                  m("Arc Station", 900e3)], "Nyx")
+        self.assertEqual((a["id"], a["name"], a["marks"]), (12, "Arc Station", 2))
+        self.assertIn(a["dist_m"], (20000, 40000))
+        # one mark on the way out of the station doesn't anchor a deep field
+        self.assertIsNone(nav_core.belt_zone_qt_anchor(
+            nav, [m("Arc Station", 20e3), m("Arc Station", 5e6),
+                  m(None, None)], "Nyx"))
+
     def test_scan_stats_rs_bases(self):
         def mk(mid, ores, rs):
             return {"xyz": (self.KR, 0, 0), "positive": True, "rocks": "dense",
@@ -6411,6 +6456,22 @@ class SurveyValueTests(unittest.TestCase):
             self._cluster(ores=["Gold (Raw)"], salvage=True), self.PRICES)
         self.assertEqual((mixed["basis"], mixed["salvage"]), ("ores", True))
         self.assertEqual(mixed["score"], 30000)
+
+    def test_scanned_basis_quality_weight_is_gated_and_per_ore(self):
+        base = dict(ores=["Gold (Raw)", "Quartz (Raw)"],
+                    scan_comp={"Gold (Raw)": 10.0, "Quartz (Raw)": 50.0}, scans=3)
+        plain = nav_core.survey_value(self._cluster(**base), self.PRICES)
+        # dense 5 × (0.10·6000 + 0.50·400) = 4000, no quality yet
+        self.assertEqual((plain["score"], plain["quality"]), (4000, False))
+        # Gold rated B8 on 3 rocks → gold term ×2; quartz unrated stays ×1
+        q = dict(base, q_scans=3, avg_band=8.0,
+                 scan_q={"Gold (Raw)": {"n": 3, "q": 1000, "band": 8.0}})
+        v = nav_core.survey_value(self._cluster(**q), self.PRICES)
+        self.assertEqual((v["score"], v["quality"], v["avg_band"]),
+                         (5 * (0.10 * 6000 * 2 + 0.50 * 400), True, 8.0))
+        # below BELT_QUALITY_MIN_SCANS the rating is shown, never weighted
+        thin = nav_core.survey_value(self._cluster(**dict(q, q_scans=2)), self.PRICES)
+        self.assertEqual((thin["score"], thin["quality"]), (4000, False))
 
     def test_glaciem_overlay_shape(self):
         pk = {"key": "Wtn-042", "kind": "general",

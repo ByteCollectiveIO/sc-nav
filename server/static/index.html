@@ -239,6 +239,15 @@
      the form you can act on without leaving the field you are filling. */
   .ore-likely { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
     margin-top: 8px; font-size: 12px; color: var(--dim); }
+  .ore-likely[hidden] { display: none; }
+  /* The capture button (node + fauna/harvestable boxes): full width so it
+     can't be mistaken for one of the likely-ore chips above it, and gold
+     (--sel) once the box holds an ore/species. */
+  button.cap-go { display: block; width: 100%; margin-top: 10px; padding: 9px 12px;
+    font-size: 13px; font-weight: 600; letter-spacing: .02em; min-height: 40px; }
+  button.cap-go.ready { background: var(--sel); border-color: var(--sel);
+    color: var(--ink-on-accent); }
+  button.cap-go.ready:hover { filter: brightness(1.08); }   /* author display beats the UA [hidden] rule */
   .ore-likely .ol-btn { font: inherit; cursor: pointer; padding: 2px 8px;
     border-radius: 14px; border: 1px solid var(--border);
     background: var(--panel2); color: var(--text); }
@@ -250,6 +259,15 @@
     text-transform: uppercase; color: var(--dim); position: sticky; top: 0;
     background: var(--panel2); }
   .ore-pick { position: relative; display: flex; }
+  /* Multi-pick tokens (belt ⛏ "ores seen"): one per ore, removable. */
+  .ore-toks { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .ore-toks[hidden] { display: none; }
+  .ore-tok { display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px;
+    border-radius: 14px; border: 1px solid var(--accent); background: var(--panel2);
+    font-size: 12px; color: var(--text); }
+  .ore-tok button { font: inherit; line-height: 1; padding: 2px 4px; border: 0;
+    background: none; color: var(--dim); cursor: pointer; min-width: 24px; min-height: 24px; }
+  .ore-tok button:hover { color: var(--bad); }
   .ore-pick > .ti { width: 100%; }
   /* Two capture PURPOSES, banded (2026-09-20; reworked after the 2026-09-20
      critique). The three panels used to sit in one undifferentiated row, so
@@ -808,6 +826,7 @@
   .fc-ore { display: flex; align-items: baseline; gap: 5px; }
   .fc-ore-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .fc-ore .val-chip { flex-shrink: 0; }
+  .fc-q { font-size: 11px; color: var(--dim); margin: -2px 0 4px; }
   .fc-bar-outer { background: var(--panel2); border-radius: 4px; height: 11px; overflow: hidden; }
   .fc-bar-inner { display: block; height: 100%; border-radius: 4px; }
   .fc-pct { text-align: right; font-variant-numeric: tabular-nums; }
@@ -3133,6 +3152,13 @@
   .halo-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .halo-chip { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);
     border-radius: 999px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  /* A pill on an INLINE element (span/a) is broken across lines like any run
+     of text: on an iPad's ATLAS table the "⛏ active" chip split into an icon
+     half and a word half, each with its own rounded border. A <button> pill is
+     one box already; these are the inline ones. The pill moves to the next
+     line whole instead. */
+  .halo-chip, .on-tag, .lfg-chip, .ev-cat-chip, .op-dep, .goal-tag-chip,
+  a.route-chip, span.route-chip { white-space: nowrap; }
   .halo-chip.warn { color: var(--warn); border-color: var(--warn); }
   .halo-alt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
     padding: 6px 0; border-bottom: 1px solid var(--border-soft); font-size: 12px;
@@ -3715,8 +3741,11 @@
         <select id="node-biome" class="sel" style="flex:0 1 13rem; min-width:120px;"></select>
         <input id="node-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
         <input id="node-note" class="ti" aria-label="Resource node note" placeholder="note (optional)" style="flex:2; min-width:110px;">
-        <button id="node-arm">capture /showlocation</button>
       </div>
+      <!-- Its own full-width row: once the likely-ore chips filled the box, a
+           chip-sized button at the end of the biome row read as one more
+           chip. It turns gold once there's an ore to capture (syncCaptureGo). -->
+      <button id="node-arm" class="cap-go">capture /showlocation</button>
       <div id="node-armed" class="armed" role="status" aria-live="polite" hidden>
         <span id="node-armed-label">ARMED</span> — run <b>/showlocation</b>
         <button id="node-cancel" style="margin-left:8px;">cancel</button>
@@ -3752,8 +3781,8 @@
         <select id="wild-biome" class="sel" style="flex:0 1 13rem; min-width:120px;"></select>
         <input id="wild-biome-other" class="ti" placeholder="other biome" hidden style="flex:1; min-width:110px;">
         <input id="wild-note" class="ti" aria-label="Fauna or harvestable note" placeholder="note (optional)" style="flex:2; min-width:110px;">
-        <button id="wild-arm">capture /showlocation</button>
       </div>
+      <button id="wild-arm" class="cap-go">capture /showlocation</button>
       <div id="wild-armed" class="armed" role="status" aria-live="polite" hidden>
         <span id="wild-armed-label">ARMED</span> — run <b>/showlocation</b>
         <button id="wild-cancel" style="margin-left:8px;">cancel</button>
@@ -5722,9 +5751,14 @@
             <button data-rocks="medium" type="button" aria-pressed="false">medium</button>
             <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
           </span>
-          <input id="halo-survey-ores" class="ti" autocomplete="off" list="halo-survey-ore-list"
-                 placeholder="ore seen (comma-separate; carries into scan detail)" style="width:250px;"
-                 title="Ores you can see here. These pre-fill the scan detail's ore rows after the mark lands — no need to type them again.">
+          <!-- The node form's combobox, in multi mode (belt ore parity): ranked
+               by what this zone has already found, value-chipped, one token per
+               ore. The datalist stays for the DROP tab's ore-first box. -->
+          <span class="ore-pick poi-pick" style="flex:0 1 250px; min-width:170px;">
+            <input id="halo-survey-ores" class="ti" autocomplete="off" aria-label="Ores seen here"
+                   placeholder="ores seen — type or tap"
+                   title="Ores you can see here. These pre-fill the scan detail's ore rows after the mark lands — no need to type them again.">
+          </span>
           <datalist id="halo-survey-ore-list"></datalist>
           <label class="trade-pref"><input id="halo-survey-salvage" type="checkbox"> salvage</label>
           <button id="halo-survey-mark" type="button" aria-disabled="true"
@@ -5733,6 +5767,12 @@
           <span id="halo-survey-arm-hint" class="muted" style="font-size:12px;">← how many rocks are around you?</span>
           <span id="halo-survey-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span>
         </div>
+        <!-- The ores this mark will report, one removable token each — their
+             own row so a long list never pushes the Mark button off the line. -->
+        <div id="halo-survey-ore-toks" class="ore-toks" style="margin-top:6px;" hidden></div>
+        <!-- What this zone (or this system's belts) has already turned up, as
+             one-tap chips: the mirror of the node form's #node-ore-likely. -->
+        <div id="halo-survey-ore-likely" class="ore-likely" hidden></div>
         <div id="halo-scan-blk" hidden style="margin-top:8px;">
           <button type="button" class="route-chip" id="halo-scan-toggle"
             title="transcribe the scanner readout onto the mark you just dropped — everything optional">＋ scan detail
@@ -9111,6 +9151,15 @@ function updateNodeOreValue() {
   const el = $("node-ore-value"), html = oreValueChip(nodeOre());
   el.innerHTML = html;
   el.hidden = !html;
+  syncCaptureGo("node-arm", nodeOre());
+}
+
+// The capture button goes gold the moment the box has something to capture —
+// the "you're one tap from done" signal. Both clear paths (a landed capture,
+// a cleared field) run through the value updaters, so it can't stay lit.
+function syncCaptureGo(id, value) {
+  const b = $(id);
+  if (b) b.classList.toggle("ready", !!String(value || "").trim());
 }
 
 // The same hint for the fauna/harvestable field. A harvestable is priced and a
@@ -9122,6 +9171,7 @@ function updateWildValue() {
   const html = oreValueChip($("wild-species").value.trim(), "harvestable");
   el.innerHTML = html;
   el.hidden = !html;
+  syncCaptureGo("wild-arm", $("wild-species").value);
 }
 
 // ---- sighting pickers: what's likely under your feet, first ---------------
@@ -9146,13 +9196,52 @@ const LIKELY_SHOWN = 8;
 // Below this the forecast is noise, not a suggestion.
 const LIKELY_MIN_P = 0.02;
 
-// cfg: {inputId, chipsId, valueId?, onPick?}. `groups` are the ranked
-// shortlists, in display order; `vocab` is everything else the field accepts.
+// cfg: {inputId, chipsId, valueId?, onPick?, multi?, tokensId?}. `groups` are
+// the ranked shortlists, in display order; `vocab` is everything else the field
+// accepts. `multi` (the belt ⛏ mark's "ores seen", belt ore parity): a pick
+// becomes a removable token in `tokensId` and the input clears for the next
+// one. It replaced a comma-separated <datalist> box, which could only ever
+// suggest for the FIRST ore — a datalist matches the whole field's text.
 function sightingPicker(cfg) {
-  const st = { vocab: [], groups: [], key: null };
+  const st = { vocab: [], groups: [], key: null, values: [] };
   const input = () => $(cfg.inputId);
+  const chosen = (n) => cfg.multi
+    && st.values.some(v => v.toLowerCase() === String(n).toLowerCase());
+
+  function renderTokens() {
+    const el = cfg.tokensId && $(cfg.tokensId);
+    if (!el) return;
+    el.innerHTML = st.values.map((v, i) =>
+      `<span class="ore-tok">${esc(v)}${cfg.restCat ? oreValueChip(v, cfg.restCat) : ""}`
+      + `<button type="button" data-i="${i}" aria-label="remove ${esc(v)}">✕</button></span>`).join("");
+    el.hidden = !st.values.length;
+    for (const b of el.querySelectorAll("button"))
+      b.onclick = () => { st.values.splice(Number(b.dataset.i), 1); changed(); input().focus(); };
+  }
+
+  function changed() {
+    renderTokens();
+    renderChips();
+    if (cfg.onPick) cfg.onPick();
+  }
+
+  // Free text is still a value: an ore the feed has never heard of is the
+  // "other ore" case on this form exactly as on the node form.
+  function commit(text) {
+    const name = String(text || "").trim();
+    if (name && !chosen(name)) st.values.push(name);
+  }
 
   function pick(name) {
+    if (cfg.multi) {
+      commit(name);
+      input().value = "";
+      changed();
+      input().focus();
+      const drop = $(cfg.inputId + "-drop");
+      if (drop && !drop.hidden) renderDrop("");
+      return;
+    }
     input().value = name;
     if (cfg.onPick) cfg.onPick();
     input().focus();
@@ -9164,7 +9253,7 @@ function sightingPicker(cfg) {
   // people actually remember unsearchable.
   function matches(q) {
     const needle = q.trim().toLowerCase();
-    const hit = (n) => !needle || n.toLowerCase().includes(needle);
+    const hit = (n) => (!needle || n.toLowerCase().includes(needle)) && !chosen(n);
     const groups = st.groups
       .map(g => ({ ...g, rows: g.rows.filter(r => hit(r.name)) }))
       .filter(g => g.rows.length);
@@ -9183,7 +9272,7 @@ function sightingPicker(cfg) {
     const it = document.createElement("div");
     it.className = "poi-opt";
     it.innerHTML = esc(name) + (cat ? oreValueChip(name, cat) : "")
-      + (p != null ? ` <span class="muted">likely here · ${Math.round(p * 100)}%</span>` : "");
+      + (p != null ? ` <span class="muted">${esc(cfg.pText || "likely here")} · ${Math.round(p * 100)}%</span>` : "");
     it._pick = () => { pick(name); $(cfg.inputId + "-drop").hidden = true; };
     // mousedown, not click: the pick has to land before the input's blur hides
     // the drop (same reason attachPoiPicker does it).
@@ -9216,7 +9305,8 @@ function sightingPicker(cfg) {
   function renderChips() {
     const el = $(cfg.chipsId);
     if (!el) return;
-    const parts = st.groups.filter(g => g.rows.length).map(g =>
+    const parts = st.groups.map(g => ({ ...g, rows: g.rows.filter(r => !chosen(r.name)) }))
+      .filter(g => g.rows.length).map(g =>
       `<span>${esc(g.chipLabel || g.label)}:</span>` + g.rows.map(r =>
         `<button type="button" class="ol-btn" data-name="${esc(r.name)}"`
         + ` title="seen at ${Math.round(r.p * 100)}% of nearby ${esc(g.unit || "sightings")}">`
@@ -9237,14 +9327,50 @@ function sightingPicker(cfg) {
     drop.id = cfg.inputId + "-drop";
     drop.hidden = true;
     wrap.appendChild(drop);
-    el.addEventListener("input", () => { if (cfg.onPick) cfg.onPick(); renderDrop(el.value); });
+    el.addEventListener("input", () => {
+      // Multi: a typed comma still works — the old box's habit — and commits
+      // every finished name before it.
+      if (cfg.multi && el.value.includes(",")) {
+        const parts = el.value.split(",");
+        el.value = parts.pop().trimStart();
+        parts.forEach(commit);
+        changed();
+      } else if (cfg.onPick) cfg.onPick();
+      renderDrop(el.value);
+    });
     el.addEventListener("focus", () => renderDrop(el.value));
-    el.addEventListener("blur", () => setTimeout(() => { drop.hidden = true; }, 120));
+    el.addEventListener("blur", () => setTimeout(() => {
+      drop.hidden = true;
+      // A name left typed but never committed is still what the surveyor
+      // meant; tokenise it on the way out rather than silently dropping it.
+      if (cfg.multi && el.value.trim()) { commit(el.value); el.value = ""; changed(); }
+    }, 120));
+    // Registered BEFORE attachPickerKeys so it sees the highlight state first.
+    if (cfg.multi) el.addEventListener("keydown", (e) => {
+      const active = !drop.hidden && drop.querySelector(".poi-opt.active");
+      if (e.key === "Enter" && !active && el.value.trim()) {
+        e.preventDefault();
+        pick(el.value);
+      } else if (e.key === "Backspace" && !el.value && st.values.length) {
+        st.values.pop();
+        changed();
+      }
+    });
     attachPickerKeys(el, drop);
   }
 
   return {
     wire,
+    // Multi: the committed tokens plus whatever is still typed.
+    values() {
+      const typed = (input() && input().value.trim()) || "";
+      return typed && !chosen(typed) ? [...st.values, typed] : st.values.slice();
+    },
+    clear() {
+      st.values = [];
+      if (input()) input().value = "";
+      changed();
+    },
     setVocab(names) {
       st.vocab = names || [];
       const drop = $(cfg.inputId + "-drop");
@@ -9288,6 +9414,57 @@ const wildPicker = sightingPicker({
 });
 orePicker.wire();
 wildPicker.wire();
+// The belt ⛏ mark's "ores seen" (belt ore parity): the same combobox, in multi
+// mode, value-chipped across the whole vocabulary like the node field.
+const surveyOrePicker = sightingPicker({
+  inputId: "halo-survey-ores", chipsId: "halo-survey-ore-likely",
+  tokensId: "halo-survey-ore-toks", restCat: "resource", multi: true,
+  // Not a forecast: the share of rock marks that already listed the ore.
+  pText: "on rock marks",
+});
+surveyOrePicker.wire();
+
+// nav_core._wilson_lower_bound, same z — ranks a pooled shortlist the way the
+// server ranks a zone's own `ore_likely`.
+function wilsonLower(k, n, z = 1.96) {
+  if (n <= 0) return 0;
+  const ph = k / n, z2 = z * z;
+  const c = ph + z2 / (2 * n);
+  const m = z * Math.sqrt((ph * (1 - ph) + z2 / (4 * n)) / n);
+  return Math.max(0, (c - m) / (1 + z2 / n));
+}
+
+// The belt mark's shortlist, scoped like the surface forecast: the zone this
+// mark will file into when it has rock evidence, else every deep zone in the
+// system pooled. ORDERED by the Wilson bound (a lucky 1-of-1 can't outrank a
+// solid 8-of-10) but LABELLED with the plain share, because "listed on 3 of 4
+// rock marks" is what the chip's percentage has to mean.
+function haloSurveyForecast() {
+  const sys = haloSystem;
+  const deep = (haloZones || []).filter(z => z.kind !== "surface" && !z.closed
+    && (z.system || sys) === sys);
+  const rank = (counts, n) => Object.entries(counts || {})
+    .map(([ore, k]) => ({ ore, p: k / n, w: wilsonLower(k, n) }))
+    .sort((a, b) => b.w - a.w || b.p - a.p);
+  const az = deep.find(z => z.zone_id === activeSurveyZone);
+  if (az && az.positive)
+    return { label: `found in ${az.name}`, chipLabel: `in ${az.name}`,
+             ranked: rank(az.ore_counts, az.positive) };
+  const pooled = {};
+  let n = 0;
+  for (const z of deep) {
+    n += z.positive || 0;
+    for (const [o, k] of Object.entries(z.ore_counts || {})) pooled[o] = (pooled[o] || 0) + k;
+  }
+  if (!n) return null;
+  return { label: `found in ${sys} zones`, chipLabel: `${sys} zones`, ranked: rank(pooled, n) };
+}
+
+function noteSurveyForecast() {
+  const f = haloSurveyForecast();
+  surveyOrePicker.setForecasts(f ? [{ label: f.label, chipLabel: f.chipLabel,
+    cat: "resource", unit: "rock marks", forecast: f }] : []);
+}
 
 // Fed from the live state. The panel above draws the same rankings, so both
 // read from here and can never disagree about what is likely.
@@ -19805,18 +19982,32 @@ function resolveHaloSurveyArm(capture) {
   const zm = landed && capture.last.zone_mismatch;
   if (msg) {
     msg.className = zm ? "armed" : "muted";
-    msg.textContent = zm
-      ? `⚠ mark saved, but your active zone “${zm.name}” is in ${zm.system} — this mark is in ${capture.last.system}, so it was filed untagged`
-      : landed ? "✓ mark dropped — the org's map just got better" : "";
+    if (zm)
+      msg.textContent = `⚠ mark saved, but your active zone “${zm.name}” is in ${zm.system} — this mark is in ${capture.last.system}, so it was filed untagged`;
+    else if (landed) msg.innerHTML = surveyLandedHtml(capture.last.survey);
+    else msg.textContent = "";
   }
   if (landed) {
     // Re-arm from scratch: this mark is filed, and the next one is somewhere
-    // else. Carrying the last density forward would let one tap assert it again.
+    // else. Carrying the last density forward would let one tap assert it again
+    // — and the same goes for the ores (belt ore parity): a stale ore list on
+    // the next mark is evidence nobody saw. The shortlist chips make putting
+    // them back one tap each.
     setHaloSurveyRocks(null);
+    surveyOrePicker.clear();
     delete haloTargets.Nyx;
     if (!$("halo-view").hidden && haloSystem === "Nyx")
       loadHaloTargets("Nyx").then(renderHaloSystemPanel);
-    loadHaloZones();          // the mark may have grown/created the active zone
+    // The mark may have grown/created the active zone; once the rollup is
+    // back, say what it did to the zone — the "your mark counted" half.
+    const sv = capture.last.survey, zid = sv && sv.zone && sv.zone.id;
+    loadHaloZones().then(() => {
+      const z = zid != null && haloZones.find(x => x.zone_id === zid);
+      const m = $("halo-survey-msg");
+      if (z && m && !haloSurveyArmed && m.dataset.landed === String(capture.last.id))
+        m.innerHTML = surveyLandedHtml(sv, z);
+    });
+    if (msg) msg.dataset.landed = String(capture.last.id);
     radarLayersInvalidate();  // the heatmap just gained a cell's worth (#37)
     // The mark landed at the radar's current offset — remember it so the
     // drift nudge (§5.3) can measure "how far past my last mark am I?".
@@ -19836,6 +20027,26 @@ function resolveHaloSurveyArm(capture) {
   }
 }
 
+// The landed-mark line (belt ore parity): what the mark SAID, back to the
+// surveyor, the way the node form's "added ◆ <ore> Q…" line does — density,
+// each ore with its value chip, and where it filed. `z` (the zone's fresh
+// rollup, once loadHaloZones returns) adds what the mark did to the zone.
+function surveyLandedHtml(sv, z) {
+  if (!sv) return "✓ mark dropped — the org's map just got better";
+  const parts = [`✓ mark dropped · <b>${esc(sv.rocks === "none" ? "no rock" : sv.rocks)}</b>`];
+  if ((sv.ores || []).length)
+    parts.push(sv.ores.map(o => esc(o) + oreValueChip(o, "resource")).join(" · "));
+  if (sv.salvage) parts.push("⚙ salvage");
+  const where = sv.zone ? `→ <b>${esc(sv.zone.name)}</b>` : sv.place ? `· ${esc(sv.place)}` : "";
+  let tail = "";
+  if (z) {
+    tail = ` · now ${z.marks || 0} mark${z.marks === 1 ? "" : "s"}`
+      + (z.positive != null ? `, ${z.positive} with rock` : "")
+      + (z.health ? ` · health ${Math.round(z.health.score * 100)}%` : "");
+  }
+  return parts.join(" · ") + (where ? " " + where : "") + tail;
+}
+
 async function haloMarkSurvey() {
   const msg = $("halo-survey-msg");
   if (!haloSurveyRocks) {
@@ -19843,7 +20054,7 @@ async function haloMarkSurvey() {
     return;
   }
   const now = new Date();
-  const ores = $("halo-survey-ores").value.split(",").map(s => s.trim()).filter(Boolean);
+  const ores = surveyOrePicker.values();
   haloArmedOres = ores;   // keep to pre-seed the scan form when this mark lands
   const body = {
     name: `Survey ${now.toISOString().slice(5, 10)} ${now.toTimeString().slice(0, 5)}`,
@@ -19895,6 +20106,7 @@ async function loadHaloZones(sys) {
   } catch { return; }
   renderHaloZoneSelect();
   renderHaloZoneBanner();
+  noteSurveyForecast();     // the ⛏ ore shortlist follows the zones' evidence
   renderHaloRsRef();        // FIELD-tab RS cheat sheet grows with each scan (#38)
   renderHaloOverview();     // zone squares live on the overview map (#37)
   renderHaloAtlasZones();   // and on the ATLAS zone list (#38)
@@ -20248,9 +20460,18 @@ function renderHaloAtlasZones() {
     const active = z.zone_id === activeSurveyZone;
     const rocks = z.status === "barren" ? `<span class="halo-chip warn">barren</span>`
       : (z.status && z.status !== "empty") ? esc(z.status) : `<span class="muted">—</span>`;
+    // The column is ROCKS / BAND: a belt zone with quality-stating scans now
+    // has a band to put beside its density (belt ore parity).
+    // Its own line: inline as "dense · B5.6" the narrow column orphaned the dot.
+    const band = z.avg_band
+      ? `<div class="muted" style="font-size:11px;" title="average band of the scanned rocks">B${Number(z.avg_band).toFixed(1)}</div>` : "";
     const ores = zoneWhatsHere(z);
     const acts = (z.marks ? `<button type="button" class="route-chip" data-zdetails="${z.zone_id}">▸ Details</button> ` : "")
-      + (z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
+      // An anchored zone is reached by jumping to its marker, so that REPLACES
+      // Plan here (the card still offers the drop) — a fourth inline button
+      // pushed the row's actions off an iPad-width table.
+      + (z.qt_anchor ? `<button type="button" class="route-chip" data-zdest="${z.qt_anchor.id}" title="set the navigator's destination to ${esc(z.qt_anchor.name)}, then fly the last ${esc(plainDist(z.qt_anchor.dist_m))}">Set destination</button> `
+         : z.marks ? `<button type="button" class="route-chip" data-zplan="${z.zone_id}">Plan</button> ` : "")
       + (!z.closed ? `<button type="button" class="route-chip" data-zactive="${z.zone_id}"${active ? " disabled" : ""}>`
           + `${active ? "filing" : "Set active"}</button> ` : "")
       + (z.closed ? `<span class="halo-chip">archived</span> ` : "")
@@ -20270,11 +20491,13 @@ function renderHaloAtlasZones() {
       + `<td><b>${esc(z.name)}</b>${active ? ` <span class="halo-chip" style="color:var(--sel); border-color:var(--sel);">⛏ active</span>` : ""}`
         + (z.contributors && z.contributors.length ? `<div class="muted" style="font-size:11px;">${z.contributors.map(esc).join(", ")}</div>` : "")
         + `</td>`
-      + `<td class="muted" data-l="Where" style="white-space:nowrap;">${esc(zoneWhere(z))}</td>`
+      // Wraps for an anchored zone: "near <marker name>" held nowrap pushed the
+      // row's actions out of view on an iPad.
+      + `<td class="muted" data-l="Where" style="${z.qt_anchor ? "min-width:9rem;" : "white-space:nowrap;"}">${esc(zoneWhere(z))}</td>`
       + `<td class="num" data-l="Evidence">${z.marks || 0}</td>`
       + `<td data-l="Health">${healthCell(z)}</td>`
       + `<td data-l="Value">${z.value ? surveyValueChip(z.value) : `<span class="muted">—</span>`}</td>`
-      + `<td data-l="Rocks">${rocks}</td>`
+      + `<td data-l="Rocks">${rocks}${band}</td>`
       + `<td data-l="Here">${ores}</td>`
       + `<td style="white-space:nowrap; text-align:right;">${acts}</td>`
       + `</tr>`;
@@ -20870,7 +21093,8 @@ function zonePatchNote(z) {
 // read the same text the column prints, or it will silently disagree with what
 // is on screen the first time either side is edited.
 function zoneWhere(z) {
-  return z.kind === "surface" ? (z.body || "\u2014") : "deep space";
+  return z.kind === "surface" ? (z.body || "\u2014")
+    : z.qt_anchor ? `near ${z.qt_anchor.name}` : "deep space";
 }
 
 // …plus the words the ROW shows that WHERE does not: a surface row carries a
@@ -20985,25 +21209,43 @@ function renderHaloZoneBanner() {
 // One shared form serves the after-the-drop block and the zone timeline.
 let haloLastMarkId = null;   // the most recently resolved survey mark
 
-function scanCompRow(ore = "", pct = "") {
+// One composition line off the scanner: ore, share, and that line's own Q
+// (belt ore parity). A belt scan is a composition record, so EVERY line is
+// kept with its Q — unlike the node form, where a secondary ore must never
+// count as a sighting. The same ore may take two rows at two Qs; the server
+// sums the share and share-weights the Q, exactly as the node form's lines.
+function scanCompRow(ore = "", pct = "", q = "") {
   return `<div class="route-row scan-row" style="align-items:center; margin-top:4px;">
-    <input class="ti scan-ore" list="halo-survey-ore-list" autocomplete="off"
+    <input class="ti scan-ore" list="halo-survey-ore-list" autocomplete="off" aria-label="Ore"
            placeholder="ore" value="${esc(String(ore))}" style="flex:1; min-width:130px; max-width:240px;">
-    <input class="ti scan-pct" type="number" min="0" max="100" step="0.1"
-           placeholder="%" value="${pct === "" ? "" : pct}" style="width:72px;">
-    <button type="button" class="route-chip scan-rm" title="remove this ore row">✕</button>
+    <span class="scan-val">${ore ? oreValueChip(ore, "resource") : ""}</span>
+    <input class="ti scan-pct" type="number" min="0" max="100" step="0.01" aria-label="Share %"
+           placeholder="%" value="${pct === "" ? "" : esc(String(pct))}" style="width:76px;">
+    <input class="ti scan-q" type="number" min="0" max="1000" step="1" aria-label="Quality Q"
+           title="the Q the scanner prints at the end of this line (0–1000) — optional"
+           placeholder="Q" value="${q === "" || q == null ? "" : esc(String(q))}" style="width:68px;">
+    <span class="scan-band muted" style="font-size:12px; min-width:34px;">${q === "" || q == null ? "" : "≈B" + qualityBand(Number(q))}</span>
+    <button type="button" class="route-chip scan-rm" title="remove this line" aria-label="remove this line">✕</button>
   </div>`;
 }
 
+// Rows for an existing scan: its lines as stored, else (a scan saved before
+// lines existed) its comp, each carrying the per-ore Q when one was given.
+function scanRowsFor(scan) {
+  if (scan && (scan.lines || []).length)
+    return scan.lines.map(ln => scanCompRow(ln.ore, ln.pct, ln.q));
+  const q = (scan && scan.q) || {};
+  return Object.entries((scan && scan.comp) || {}).map(([o, p]) => scanCompRow(o, p, q[o]));
+}
+
 function scanFormHtml(markId, scan, seedOres) {
-  const comp = Object.entries((scan && scan.comp) || {});
+  const have = scanRowsFor(scan);
   // No scan yet? Pre-seed the ore rows from the mark's "ore seen" list so the
   // surveyor never re-types an ore they already named — just add the % (#38
   // playtest note 4). Saving the scan unions these back into the mark's ores.
-  const seed = (!comp.length && seedOres && seedOres.length)
+  const seed = (!have.length && seedOres && seedOres.length)
     ? seedOres.map(o => scanCompRow(o, "")).join("") : "";
-  const rows = comp.length ? comp.map(([o, p]) => scanCompRow(o, p)).join("")
-                           : (seed || scanCompRow());
+  const rows = have.length ? have.join("") : (seed || scanCompRow());
   return `<div class="scan-form" data-mark="${markId}">
     <div class="route-row" style="align-items:center; margin-top:6px;">
       <input class="ti scan-mass" type="number" min="1" max="10000000" step="1"
@@ -21011,36 +21253,86 @@ function scanFormHtml(markId, scan, seedOres) {
       <input class="ti scan-rs" type="number" min="1" max="10000000" step="1"
              title="the rock's radar signature — every material reads a multiple of its base (Gold 3585 → 7170, 10755…); visible from ~25 km"
              placeholder="RS signature" value="${scan && scan.rs ? scan.rs : ""}" style="width:120px;">
-      <button type="button" class="route-chip scan-add">＋ add ore %</button>
+      <button type="button" class="route-chip scan-add">＋ add line</button>
       <button type="button" class="route-chip scan-save">Save scan</button>
       <span class="muted scan-status" role="status" aria-live="polite" style="font-size:12px;"></span>
     </div>
     <div class="scan-rows">${rows}</div>
-    <p class="muted route-hint" style="margin:4px 0 0;">Percentages as the scanner shows them —
-      they don't need to add to 100 (inert rock makes up the rest). One “best ore %” is a
-      perfectly good scan.</p>
+    <p class="muted scan-sum" style="margin:4px 0 0; font-size:12px;"></p>
+    <p class="muted route-hint" style="margin:4px 0 0;">Each line as the scanner prints it —
+      “62.40% IRON (ORE) 410” is 62.40 and Q410. Lines don't need to add to 100 (inert rock
+      makes up the rest), Q is optional, and one “best ore” line is a perfectly good scan.</p>
   </div>`;
+}
+
+// The rows as the API wants them: [{ore, pct, q?}], blank/partial rows dropped.
+function readScanLines(box) {
+  const out = [];
+  for (const row of box.querySelectorAll(".scan-row")) {
+    const ore = row.querySelector(".scan-ore").value.trim();
+    const pct = parseFloat(row.querySelector(".scan-pct").value);
+    if (!ore || !Number.isFinite(pct) || pct <= 0) continue;
+    const ln = { ore, pct: Math.min(pct, 100) };
+    const q = parseInt(row.querySelector(".scan-q").value, 10);
+    if (Number.isFinite(q)) ln.q = Math.max(0, Math.min(1000, q));
+    out.push(ln);
+  }
+  return out;
+}
+
+// Live line under the rows: the total share, and the quality the rock would
+// file as per ore — the server's rollup previewed, so what you see is stored.
+function syncScanSum(box) {
+  const el = box.querySelector(".scan-sum");
+  if (!el) return;
+  const lines = readScanLines(box);
+  const total = lines.reduce((a, ln) => a + ln.pct, 0);
+  const per = {};
+  for (const ln of lines) {
+    if (ln.q == null) continue;
+    const a = per[ln.ore] || (per[ln.ore] = { s: 0, w: 0 });
+    a.s += ln.pct * ln.q; a.w += ln.pct;
+  }
+  const qs = Object.entries(per).map(([o, a]) => {
+    const q = Math.round(a.s / a.w);
+    return `${esc(o)} Q${q} ≈B${qualityBand(q)}`;
+  });
+  el.className = total > 100.0001 ? "armed scan-sum" : "muted scan-sum";
+  el.innerHTML = !lines.length ? ""
+    : total > 100.0001
+    ? `⚠ these lines add up to ${total.toFixed(2)}% — more than the whole rock`
+    : `${total.toFixed(2)}% of the rock` + (qs.length ? ` · ${qs.join(" · ")}` : "");
 }
 
 function wireScanForm(host, onSaved) {
   const box = host.querySelector(".scan-form");
   if (!box) return;
+  syncScanSum(box);
+  box.addEventListener("input", (e) => {
+    const row = e.target.closest(".scan-row");
+    if (row && e.target.classList.contains("scan-ore"))
+      row.querySelector(".scan-val").innerHTML = oreValueChip(e.target.value.trim(), "resource");
+    if (row && e.target.classList.contains("scan-q")) {
+      const q = parseInt(e.target.value, 10);
+      row.querySelector(".scan-band").textContent = Number.isFinite(q) ? "≈B" + qualityBand(q) : "";
+    }
+    syncScanSum(box);
+  });
   box.addEventListener("click", async (e) => {
     if (e.target.closest(".scan-add")) {
       box.querySelector(".scan-rows").insertAdjacentHTML("beforeend", scanCompRow());
       return;
     }
     const rm = e.target.closest(".scan-rm");
-    if (rm) { rm.closest(".scan-row").remove(); return; }
+    if (rm) { rm.closest(".scan-row").remove(); syncScanSum(box); return; }
     if (!e.target.closest(".scan-save")) return;
     const st = box.querySelector(".scan-status");
-    const comp = {};
-    for (const row of box.querySelectorAll(".scan-row")) {
-      const o = row.querySelector(".scan-ore").value.trim();
-      const p = parseFloat(row.querySelector(".scan-pct").value);
-      if (o && Number.isFinite(p)) comp[o] = p;
+    const lines = readScanLines(box);
+    if (lines.reduce((a, ln) => a + ln.pct, 0) > 100.0001) {
+      st.textContent = "⚠ the lines add up to more than 100% — check the shares";
+      return;
     }
-    const body = { comp };
+    const body = { lines };
     const mass = parseFloat(box.querySelector(".scan-mass").value);
     if (Number.isFinite(mass) && mass >= 1) body.mass_kg = mass;
     const rs = parseInt(box.querySelector(".scan-rs").value, 10);
@@ -21052,7 +21344,7 @@ function wireScanForm(host, onSaved) {
         body: JSON.stringify(body) });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
-        st.textContent = "⚠ " + (d.detail || "couldn't save the scan");
+        st.textContent = "⚠ " + (typeof d.detail === "string" ? d.detail : "couldn't save the scan");
         return;
       }
       st.textContent = "✓ scan saved — value tiers sharpen on the next read";
@@ -21262,7 +21554,9 @@ function scanSummary(scan) {
   if (scan.mass_kg) bits.push(scan.mass_kg >= 1000
     ? `${+(scan.mass_kg / 1000).toFixed(1)} t` : `${scan.mass_kg} kg`);
   if (scan.rs) bits.push(`RS ${scan.rs}`);
-  for (const [o, p] of Object.entries(scan.comp || {})) bits.push(`${esc(o)} ${p}%`);
+  const q = scan.q || {};
+  for (const [o, p] of Object.entries(scan.comp || {}))
+    bits.push(`${esc(o)} ${p}%` + (q[o] != null ? ` Q${q[o]} ≈B${qualityBand(q[o])}` : ""));
   return bits.length ? `🔬 ${bits.join(" · ")}` : "";
 }
 
@@ -21278,6 +21572,18 @@ function surveyOreChart(z, capOverride, lane) {
   const open = lane && lane.bare ? "" : `<div class="card">`;
   const close = lane && lane.bare ? "" : `</div>`;
   const counts = z.ore_counts || {}, comp = z.scan_comp || {};
+  // Per-ore quality off the scans that stated one (belt ore parity) — mean Q,
+  // its band, and the spread when the rocks disagree.
+  const sq = z.scan_q || {};
+  // Its own line under the bar: squeezed into the name column it truncated
+  // every ore name to three letters.
+  const qTxt = (ore) => {
+    const r = sq[ore];
+    if (!r) return "";
+    const spread = r.q_min !== r.q_max ? ` · range Q${r.q_min}–${r.q_max}` : "";
+    return `<div class="fc-q">quality Q${r.q} ≈B${qualityBand(r.q)}${spread}`
+      + ` · ${r.n} rock${r.n === 1 ? "" : "s"} rated</div>`;
+  };
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   if (!entries.length)
     return open + `<h2 class="svy-h">${esc(head)}</h2>`
@@ -21299,7 +21605,7 @@ function surveyOreChart(z, capOverride, lane) {
       + `${priceCat ? oreValueChip(ore, priceCat) : ""}</span>`
       + `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${w}%;background:${oreColor(ore)}"></span></span>`
       + `<span class="fc-pct">${label}</span>`
-      + `<span class="fc-n">${sub}</span></div>`;
+      + `<span class="fc-n">${sub}</span></div>` + qTxt(ore);
   }).join("");
   return open + `<h2 class="svy-h">${esc(head)}</h2>`
     + `<p class="cap">${capOverride || (scanned
@@ -22096,12 +22402,14 @@ function surfaceZoneRow(z) {
 // Band histogram — the planetary analogue of the belt's density read, and the
 // number that actually decides whether to land: band 7-8 hits mean the trip
 // pays. Counts, not percentages: how often each band was seen here.
-function surfaceBandChart(z) {
+// `copy` (optional) = {cap, empty}: the belt card's wording (belt ore parity),
+// where a band is counted per ore per scanned rock rather than per sighting.
+function surfaceBandChart(z, copy) {
   const bands = z.bands || {};
   const total = Object.values(bands).reduce((a, b) => a + b, 0);
   if (!total)
     return `<div class="card"><h2 class="svy-h">Scan bands</h2>`
-      + `<p class="cap">No bands logged yet — band rides along with each ore sighting.</p></div>`;
+      + `<p class="cap">${(copy && copy.empty) || "No bands logged yet — band rides along with each ore sighting."}</p></div>`;
   const max = Math.max(...Object.values(bands));
   const rows = [1, 2, 3, 4, 5, 6, 7, 8].map(b => {
     const n = bands[String(b)] || 0;
@@ -22118,7 +22426,7 @@ function surfaceBandChart(z) {
       + `<span class="fc-n">${n ? Math.round(n / total * 100) + "%" : ""}</span></div>`;
   }).join("");
   return `<div class="card"><h2 class="svy-h">Scan bands</h2>`
-    + `<p class="cap">How rich the rocks read here. Band 7-8 is what makes the trip pay.</p>`
+    + `<p class="cap">${(copy && copy.cap) || "How rich the rocks read here. Band 7-8 is what makes the trip pay."}</p>`
     + rows + `</div>`;
 }
 
@@ -22475,8 +22783,13 @@ function renderHaloSurveyCard(el, z, marks) {
   const thin = !unsurveyed && !barren && (positives === 0 || marks.length < BARREN_MIN_MARKS);
   const basis = z.value
     ? (z.value.basis === "scanned" ? `${z.value.scans || 0} scan${z.value.scans === 1 ? "" : "s"}`
+         + (z.value.quality ? ", quality-weighted" : "")
        : z.value.basis === "ores" ? "reported ore list" : "density only")
     : null;
+  // QT-anchored (belt ore parity): most marks sit within reach of one jumpable
+  // marker, so this zone is NAVIGABLE the way a surface area is — quantum to
+  // the marker, fly the rest — and gets the surface card's navigation.
+  const qa = z.qt_anchor || null;
   // Three rungs, matching the surface card: the wording scales with the sample
   // instead of flipping at n=1.
   const verdict = unsurveyed
@@ -22490,13 +22803,40 @@ function renderHaloSurveyCard(el, z, marks) {
       + `<b>THIN</b> — ${marks.length} mark${marks.length === 1 ? "" : "s"}`
       + `${positives ? `, ${positives} with rock` : ", none with rock yet"}</span></div>`
     : `<div class="svy-verdict"><span class="svy-dot ok"></span><span>${surveyValueChip(z.value) || ""} `
-      + `<b>${esc(z.status || "rock")}</b> field${basis ? ` · basis: ${basis}` : ""}</span></div>`;
+      + `<b>${esc(z.status || "rock")}</b> field${basis ? ` · basis: ${basis}` : ""}`
+      // Inline, like the surface verdict: the phone-on-the-desk reader can't hover.
+      + `${z.avg_band ? ` · avg band ${Number(z.avg_band).toFixed(1)}` : ""}</span></div>`;
+  // "Where do I point the ship" — the surface card's lead, for a zone you
+  // can actually fly to: the freshest rock a scan rated B6+, else the
+  // freshest rock at all. A belt rock isn't marked worked, so it's freshness
+  // that stands in for "still there".
+  const rockMarks = marks.filter(m => m.rocks !== "none");
+  const bestBand = (m) => Math.max(0, ...Object.values((m.scan && m.scan.q) || {})
+    .map(q => qualityBand(q)));
+  const richMarks = rockMarks.filter(m => bestBand(m) >= 6);
+  const lead = qa && rockMarks.length ? (() => {
+    const best = (richMarks.length ? richMarks : rockMarks)
+      .slice().sort((a, b) => (b.created || 0) - (a.created || 0))[0];
+    const q = (best.scan && best.scan.q) || {};
+    const top = Object.entries(q).sort((a, b) => b[1] - a[1])[0];
+    const what = top ? `${esc(top[0])} Q${top[1]} ≈B${qualityBand(top[1])}`
+      : (best.ores || []).length ? best.ores.map(esc).join(", ") : `${esc(best.rocks)} rocks`;
+    // "out", not the marker's name again: the tile beside this names it, and
+    // a long marker name wrapped this line into three.
+    const from = best.nearest_qt === qa.name && best.nearest_qt_dist_m != null
+      ? ` · ${fmtDist(best.nearest_qt_dist_m)} out` : "";
+    return `<p class="cap" style="margin:6px 0 0;">Freshest ${richMarks.length ? "rich rock (B6+)" : "rock"}: <b>${what}</b>`
+      + ` · ${best.created ? fmtAge(Math.max(0, now - best.created)) : "—"}${from}`
+      + ` <button type="button" class="route-chip primary" data-flyto="${best.id}" title="set the navigator's destination to this mark">Fly to it</button></p>`;
+  })() : "";
   const tiles = [
     { k: "Marks", n: z.marks || 0 },
     { k: "Rock hits", n: z.positive || 0, cls: barren ? "warn" : "" },
     { k: "Surveyors", n: surveyors.length },
     { k: "Value", n: z.value && z.value.score ? z.value.score.toLocaleString() : "—", cls: "accent" },
     { k: "Field ⌀", n: z.grid_radius_m ? fmtDist(2 * z.grid_radius_m) : "—" },
+    // How far the rocks are from the jump in: the sublight leg every visit flies.
+    ...(qa ? [{ k: `From ${esc(qa.name)}`, n: fmtDist(qa.dist_m) }] : []),
     // Staleness matters MORE for a field you would quantum to than for a moon
     // patch 25 km from a landing pad, and the sibling had it.
     { k: "Freshest", n: marks.length && marks[0].created
@@ -22514,6 +22854,8 @@ function renderHaloSurveyCard(el, z, marks) {
           + `<b>${esc(age)}</b> · ${esc(m.owner_handle || "?")} · ${esc(m.rocks)} rocks`
           + ((m.ores || []).length ? ` · ${m.ores.map(esc).join(", ")}` : "")
           + (sc ? ` · ${sc}` : "")
+          + (qa && m.nearest_qt === qa.name && m.nearest_qt_dist_m != null
+              ? ` · ${fmtDist(m.nearest_qt_dist_m)} from ${esc(qa.name)}` : "")
           + ` <button type="button" class="route-chip" data-scanmark="${m.id}">${m.scan ? "✎ scan" : "＋ scan"}</button>`
           + `</div><div class="scan-slot" data-slot="${m.id}"></div>`;
       }).join("") : `<p class="muted" style="font-size:12px;">No marks.</p>`)
@@ -22522,6 +22864,8 @@ function renderHaloSurveyCard(el, z, marks) {
   el.innerHTML = `<div class="svy-card">`
     + `<div class="svy-head">`
     + `<button type="button" class="route-chip" id="svy-back">← Back to zones</button>`
+    // An anchored zone is reached by jumping to its marker, not by a drop.
+    + (qa ? `<button type="button" class="route-chip" id="svy-dest">Set destination · ${esc(qa.name)}</button>` : "")
     + (z.marks ? `<button type="button" class="route-chip" id="svy-plan">Plan a drop here</button>` : "")
     + (!z.closed ? `<button type="button" class="route-chip" id="svy-active"${z.zone_id === activeSurveyZone ? " disabled" : ""}>`
         + `${z.zone_id === activeSurveyZone ? "⛏ filing here" : "Set active"}</button>` : "")
@@ -22536,13 +22880,15 @@ function renderHaloSurveyCard(el, z, marks) {
     + `</div>`
     // Matches its sibling's grammar (a PLACE, not a document) and the WHERE
     // column the zones table already prints.
-    + `<p class="svy-eyebrow">${esc(z.system || haloSystem)} · deep space · Belt zone</p>`
+    + `<p class="svy-eyebrow">${esc(z.system || haloSystem)} · ${esc(zoneWhere(z))} · Belt zone</p>`
     + `<h2 class="svy-title">${esc(z.name)}</h2>`
     + `<p class="svy-sub">`
     + `${surveyors.length} surveyor${surveyors.length === 1 ? "" : "s"} · ${marks.length} mark${marks.length === 1 ? "" : "s"}${z.closed ? " · archived" : ""}</p>`
-    + verdict + zonePatchNote(z)
+    + verdict + zonePatchNote(z) + lead
     + stats + surveyHealthBlock(z)
-    + `<div class="svy-panels">${surveyOreChart(z)}${surveyRsCard(z)}</div>`
+    + `<div class="svy-panels">${surveyOreChart(z)}${surfaceBandChart(z, {
+          cap: "How rich the scanned rocks read — one count per ore per rock whose scan stated a Q. Band 7-8 is what makes the trip pay.",
+          empty: "No quality logged yet — add each line's Q in a mark's scan detail."})}${surveyRsCard(z)}</div>`
     + timeline
     + `<p class="svy-foot">Reconstructed from <b>${marks.length}</b> ⛏ mark${marks.length === 1 ? "" : "s"}`
     + (surveyors.length ? ` by <b>${surveyors.length}</b> surveyor${surveyors.length === 1 ? "" : "s"} (${surveyors.map(([w, n]) => `${esc(w)} ${n}`).join(", ")})` : "")
@@ -22550,6 +22896,9 @@ function renderHaloSurveyCard(el, z, marks) {
     + `</div>`;
   const back = $("svy-back"); if (back) back.onclick = closeHaloSurveyCard;
   const plan = $("svy-plan"); if (plan) plan.onclick = () => planHaloZone(z);
+  const dest = $("svy-dest"); if (dest && qa) dest.onclick = () => setDestination(qa.id);
+  for (const b of el.querySelectorAll("[data-flyto]"))
+    b.onclick = () => setDestination(Number(b.dataset.flyto));
   const act = $("svy-active"); if (act) act.onclick = () => { setActiveSurveyZone(z.zone_id); openHaloSurveyCard(z); };
   const arc = $("svy-archive"); if (arc) arc.onclick = () => archiveSurveyZone(z, !z.closed);
   const ex = $("svy-export"); if (ex) ex.href = "/api/halo/survey/export?system=" + encodeURIComponent(z.system || haloSystem);
@@ -22624,6 +22973,7 @@ async function setActiveSurveyZone(zid) {
   }
   if (st) { st.className = "muted"; st.textContent = ""; }
   renderHaloZoneSelect(); renderHaloZoneBanner();
+  noteSurveyForecast();     // a different zone has a different shortlist
   renderHaloAtlasZones();   // the ⛏ active chip lives there too (#38)
   renderHaloAtlasSel();
   // …and the gold ⛏ ring on both maps, so "which square am I filing into?"
@@ -27611,7 +27961,8 @@ function init() {
   fetch("/api/raw_commodities").then(r => r.json())
     .then(n => {
       orePicker.setVocab(n || []);
-      const dl = $("halo-survey-ore-list");   // survey box autocompletes the same ore vocab
+      surveyOrePicker.setVocab(n || []);
+      const dl = $("halo-survey-ore-list");   // DROP's ore-first box + scan rows
       if (dl) dl.innerHTML = (n || []).map(o => `<option value="${esc(o)}">`).join("");
     }).catch(() => {});
   fetch("/api/biomes").then(r => r.json()).then(d => {
