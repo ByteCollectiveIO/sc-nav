@@ -8676,6 +8676,24 @@ class BeltSurveyApiTests(unittest.TestCase):
             app.nav.belts["Nyx"]["pockets"] = real
         self.assertEqual(note, "Glaciem Ring (between pockets)")
 
+    def test_survey_marks_never_file_into_a_surface_area(self):
+        # A surface area is read by no belt view, so a ⛏ mark tagged to one
+        # vanished. The FIELD picker offered them; the server now refuses.
+        zid = db.create_survey_zone("moon-patch", "Moon Patch", "Nyx", "1",
+                                    "Surveyor", time.time(), body="Delamar",
+                                    center_lat=1.0, center_lon=2.0, radius_m=5000.0)
+        self.addCleanup(lambda: db.delete_survey_zone(zid))
+        r = self.client.put("/api/halo/survey/zones/active", json={"zone_id": zid})
+        self.assertEqual(r.status_code, 400)
+        s = app.Session(self._user)
+        app.hub.sessions["1"] = s
+        r = self.client.post("/api/capture/start", json={
+            "name": "Survey x", "type": "survey",
+            "survey": {"rocks": "dense", "zone_id": zid}})
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn("zone_id", r.json()["capture"]["pending"]["survey"])
+        s.capture_pending = None
+
     def test_capture_zone_system_mismatch_files_untagged(self):
         # #36.1 §7: the active zone persists on the member record, so a mark
         # can land in another system days later. The mark's own system wins:

@@ -3834,9 +3834,12 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         sv["build"] = sess.game_build
     if sv and sv.get("zone_id") is not None:
         zone = db.get_survey_zone(sv["zone_id"])
-        if zone is None or zone["system"] != poi.system:
+        if zone is None or zone["system"] != poi.system or zone.get("body"):
             sv.pop("zone_id", None)
-            if zone is not None:
+            # The warning names a SYSTEM mismatch; a surface area (a tag the
+            # arm-time guard now refuses, so only a stale pending one) just
+            # files untagged.
+            if zone is not None and zone["system"] != poi.system:
                 zone_mismatch = {"name": zone["name"], "system": zone["system"]}
         else:
             zone_kept = zone
@@ -4078,7 +4081,12 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
         # _capture_poi re-checks system + existence at fix time.
         zid = s.zone_id if s.zone_id is not None \
             else members_dir.active_survey_zone(user["id"])
-        if zid is not None and await asyncio.to_thread(db.get_survey_zone, zid) is not None:
+        zrow = (await asyncio.to_thread(db.get_survey_zone, zid)
+                if zid is not None else None)
+        # Belt zones only: a surface area (it has a `body`) is never read by
+        # survey_zones_state, so a mark tagged to one vanished from every
+        # belt view. Untagged, it still clusters by proximity.
+        if zrow is not None and not zrow.get("body"):
             survey["zone_id"] = zid
     async with hub.lock:
         sess = hub.get(user)
@@ -7779,8 +7787,15 @@ async def restore_survey_zone(zone_id: int, user: dict = Depends(require_session
 def set_active_survey_zone(body: ActiveZoneIn, user: dict = Depends(require_session)):
     """Set (or clear, with null) the caller's active survey zone — the tag
     stamped onto their next ⛏ marks. This is the 'start/stop surveying' control."""
-    if body.zone_id is not None and db.get_survey_zone(body.zone_id) is None:
-        raise HTTPException(status_code=404, detail="unknown zone")
+    if body.zone_id is not None:
+        zone = db.get_survey_zone(body.zone_id)
+        if zone is None:
+            raise HTTPException(status_code=404, detail="unknown zone")
+        # A surface area's membership is geometric — there is nothing to file
+        # into, and a ⛏ mark tagged to one is read by no belt view at all.
+        if zone.get("body"):
+            raise HTTPException(status_code=400,
+                                detail="that's a surface area — ⛏ marks file into belt zones only")
     members_dir.set_active_survey_zone(user["id"], body.zone_id)
     return {"ok": True, "active_survey_zone": body.zone_id}
 
