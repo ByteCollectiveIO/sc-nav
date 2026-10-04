@@ -466,6 +466,22 @@ def load_wiki_locations() -> list[dict]:
 wiki_locations = load_wiki_locations()
 
 
+def load_wiki_frame_aligned() -> dict:
+    """`_meta.frame_aligned` of the same snapshot: {system: degrees} the sync
+    rotated onto the starmap frame (2026-10-04 Pyro fix). Keys the one-time
+    capture-note refresh below."""
+    for base in (Path(__file__).parent, DATA_DIR):
+        try:
+            meta = json.loads((base / "locations.json").read_text()).get("_meta") or {}
+            return dict(meta.get("frame_aligned") or {})
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {}
+
+
+wiki_frame_aligned = load_wiki_frame_aligned()
+
+
 def load_shipped_containers() -> list[dict]:
     """Geometry pool for ghost-anchor recovery
     (nav_core.register_ghost_containers): the vendored snapshot plus the
@@ -3626,6 +3642,13 @@ async def _start_presence_broadcaster():
     asyncio.create_task(market_sweep_loop())
     asyncio.create_task(feed_refresh_loop())
     asyncio.create_task(_sync_strata_feed())   # optional RS feed, opt-in via key
+    # Older Pyro captures name an asteroid field from the pre-2026-10-04 (rotated)
+    # catalog; re-derive once per frame alignment. Never fatal to startup.
+    try:
+        async with hub.lock:
+            _refresh_field_capture_notes()
+    except Exception as exc:
+        print(f"[sc-nav] capture-note refresh skipped: {exc}")
     # v0.13.0 stored one shared Discord webhook; move it to the new per-category
     # settings so notifications keep flowing after this upgrade (one-time, no-op
     # thereafter).
@@ -3879,6 +3902,57 @@ def _halo_capture_note(poi) -> str | None:
             return f"near the {loc['field']['name']} asteroid field"
         return None
     return None
+
+
+# Every belt tag _halo_capture_note can write, by PATTERN. Stripping a tag by
+# recomputing it and matching the text fails as soon as the geometry under it
+# moved (a refile re-keys the SVY pocket the remaining marks sit in) — the
+# stale tag no longer equals the recomputed one and survives.
+_BELT_NOTE_RE = re.compile(
+    r"(?:\s*·\s*)?(?:"
+    r"near the .+? asteroid field"
+    r"|Keeger Belt(?: — (?:survey pocket|datamined arc) \S+| region)"
+    r"|Glaciem Ring (?:pocket \S+|\(between pockets[^)]*\))"
+    r"|Aaron Halo (?:band \d+(?: radius, off-plane)?|void \([^)]*\))"
+    r")")
+
+
+def _retag_note(note: str | None, tag: str | None) -> str | None:
+    """`note` with every belt tag replaced by `tag` (or removed when None);
+    whatever the member typed is kept, in place."""
+    typed = _BELT_NOTE_RE.sub("", note or "").strip(" ·")
+    return (f"{typed} · {tag}" if typed and tag else (tag or typed)) or None
+
+
+def _refresh_field_capture_notes() -> int:
+    """Re-derive the "near the X asteroid field" tag on every deep-space capture
+    in a field-kind belt (Pyro). The tag is written ONCE at capture time from
+    the field catalog, and until 2026-10-04 that catalog sat 85.23° around the
+    star from the game (the wiki frame rotation) — so older notes can name the
+    wrong field, or none. Runs once per frame alignment (meta
+    `capture_notes_frame`), so it re-runs by itself if the catalog's frame ever
+    changes again. Only the tag moves: whatever the member typed stays."""
+    key = json.dumps(wiki_frame_aligned, sort_keys=True)
+    if db.get_setting("capture_notes_frame") == key:
+        return 0
+    changed = 0
+    for poi in list(nav.pois.values()):
+        if not getattr(poi, "custom", False) or poi.container_name or poi.global_m is None:
+            continue
+        belt = nav.belts.get(poi.system)
+        if not belt or belt.get("kind") != "fields":
+            continue
+        new = _retag_note(poi.note, _halo_capture_note(poi))
+        if new != (poi.note or None):
+            poi.note = new
+            db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
+            changed += 1
+    if changed:
+        nav.touch()
+        print(f"[sc-nav] refreshed the asteroid-field note on {changed} capture(s) "
+              f"(catalog frame {key})")
+    db.set_setting("capture_notes_frame", key)
+    return changed
 
 
 def _capture_poi(sess, pos_m, now, pending, owner):
@@ -13909,7 +13983,6 @@ async def refile_survey_mark(poi_id: int, body: RefileIn,
             raise HTTPException(status_code=400,
                                 detail="this mark is at a known body — its system isn't in doubt")
         ensure_owns(user, poi.owner_id)
-        old_tag = _halo_capture_note(poi)
         poi.system = zone["system"]
         poi.nearest_qt, poi.nearest_qt_dist_m = nav_core.nearest_qt_marker(
             nav, poi, time.time())
@@ -13917,14 +13990,9 @@ async def refile_survey_mark(poi_id: int, body: RefileIn,
         sv["zone_id"] = zone["id"]
         poi.survey = sv
         # The capture note named the WRONG place ("Keeger Belt — survey pocket
-        # SVY-284"); swap it for what the new system says.
-        new_tag = _halo_capture_note(poi)
-        note = poi.note or ""
-        if old_tag and old_tag in note:
-            note = note.replace(old_tag, new_tag or "").strip(" ·")
-        elif new_tag and new_tag not in note:
-            note = f"{note} · {new_tag}" if note else new_tag
-        poi.note = note or None
+        # SVY-284"); swap it for what the new system says — by pattern, since
+        # refiling a sibling re-keys the pocket and the old text stops matching.
+        poi.note = _retag_note(poi.note, _halo_capture_note(poi))
         db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
         nav.touch()
         hub.mark_dataset_dirty()

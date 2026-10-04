@@ -8715,6 +8715,46 @@ class BeltSurveyApiTests(unittest.TestCase):
             app.nav.belts["Nyx"]["pockets"] = real
         self.assertEqual(note, "Glaciem Ring (between pockets)")
 
+    def test_refresh_field_capture_notes_fixes_old_pyro_tags(self):
+        # Pre-2026-10-04 Pyro captures were tagged from a catalog rotated 85°
+        # off the game, so the field they name can be wrong. The startup
+        # migration re-derives ONLY the tag, keeps the member's text, and runs
+        # once per catalog frame.
+        fields = app.nav.belts["Pyro"]["fields"]
+        f = fields[0]
+        def mk(note, xyz):
+            pid = db.next_custom_poi_id()
+            poi = app.nav_core.Poi(
+                id=pid, name=f"cap {pid}", system="Pyro", container_name=None,
+                type="survey", local_km=None, global_m=xyz, latitude=None,
+                longitude=None, height_m=None, qt_marker=False, custom=True,
+                note=note, survey={"rocks": "dense"})
+            db.add_custom_poi(app.nav_core.custom_poi_to_dict(poi))
+            app.nav.pois[pid] = poi
+            self.addCleanup(lambda: (db.delete_custom_poi(pid), app.nav.pois.pop(pid, None)))
+            return poi
+        right = f"near the {f['name']} asteroid field"
+        wrong = mk("good rocks · near the NOT-A-FIELD asteroid field", tuple(f["xyz"]))
+        untagged = mk(None, tuple(f["xyz"]))
+        far = mk("near the NOT-A-FIELD asteroid field", (1e13, 1e13, 0.0))  # in no field
+        # a refiled Pyro mark still wearing its old Nyx tag (seen on dev)
+        keeger = mk("Keeger Belt — survey pocket SVY-284", (1e13, 1e13, 0.0))
+        db.set_setting("capture_notes_frame", "stale")
+        self.assertGreaterEqual(app._refresh_field_capture_notes(), 4)
+        self.assertEqual(wrong.note, f"good rocks · {right}")
+        self.assertEqual(untagged.note, right)
+        self.assertIsNone(far.note)
+        self.assertIsNone(keeger.note)
+        # every tag format is stripped by pattern, typed text kept in place
+        self.assertEqual(app._retag_note(
+            "big ones · Glaciem Ring (between pockets, P-12 nearest)", "Keeger Belt region"),
+            "big ones · Keeger Belt region")
+        self.assertEqual(app._retag_note("Aaron Halo band 5 radius, off-plane", None), None)
+        stored = next(d for d in db.list_custom_pois() if d["id"] == wrong.id)
+        self.assertEqual(stored["note"], f"good rocks · {right}")
+        # once per frame: a second run is a no-op
+        self.assertEqual(app._refresh_field_capture_notes(), 0)
+
     def test_deep_space_fix_takes_the_active_zones_system(self):
         # 2026-10-03, in game: Pyro's Cluster MNK-833 (54.4 Gm out, no
         # container) with no sticky after a redeploy resolved to NYX — the
