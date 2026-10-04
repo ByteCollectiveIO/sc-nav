@@ -8475,6 +8475,8 @@ def survey_marks(nav: NavData, system: str,
                     # Game build the mark was dropped in (#37 §6.1); None on
                     # marks from before stamping or an older watcher.
                     "build": s.get("build") or None,
+                    # Shard the mark was dropped on (None before 2026-10-04).
+                    "shard": s.get("shard") or None,
                     # Nearest jumpable QT marker (assign_qt_markers keeps it
                     # current) — what makes a zone QT-anchored (belt parity).
                     "nearest_qt": p.nearest_qt,

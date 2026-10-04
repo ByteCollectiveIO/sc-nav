@@ -3912,6 +3912,10 @@ def _capture_poi(sess, pos_m, now, pending, owner):
     # question, asked of a pocket instead of a surface area.
     if sv is not None and sess.game_build:
         sv["build"] = sess.game_build
+    # …and the shard (2026-10-04): a mark points at a rock, and rocks are per
+    # shard like planetary nodes — the radar's "this session" dimming reads it.
+    if sv is not None and sess.shard:
+        sv["shard"] = sess.shard
     if sv and sv.get("zone_id") is not None:
         zone = db.get_survey_zone(sv["zone_id"])
         if zone is None or zone["system"] != poi.system or zone.get("body"):
@@ -7389,6 +7393,7 @@ def get_halo_survey(system: str = "Nyx", user: dict = Depends(require_session)):
                    # QT-anchored zone's marks, as the surface card does from
                    # its centre.
                    "nearest_qt": m.get("nearest_qt"),
+                   "shard": m.get("shard"),
                    "nearest_qt_dist_m": (round(m["nearest_qt_dist_m"])
                                          if m.get("nearest_qt_dist_m") is not None
                                          else None)}
