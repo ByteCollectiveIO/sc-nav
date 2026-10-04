@@ -3182,8 +3182,13 @@
      drew over a dark panel. */
   button:focus-visible, .route-chip:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-  .route-chip.primary, #halo-survey-mark { background: var(--accent);
+  .route-chip.primary { background: var(--accent);
     color: var(--ink-on-accent); border-color: var(--accent); font-weight: 600; }
+  /* "Ready to capture" is GOLD everywhere (FIELD critique round 2): the
+     navigator's capture buttons go --sel once the box is filled, so the
+     survey's Arm mark does too — one colour for one meaning. */
+  #halo-survey-mark { background: var(--sel); color: var(--ink-on-accent);
+    border-color: var(--sel); font-weight: 600; }
   .route-chip.primary:hover, #halo-survey-mark:hover { filter: brightness(1.08); }
   /* Disabled reads NEUTRAL, not a faded accent: a half-opacity fill looked
      almost-enabled (FIELD critique 2026-10-03). */
@@ -3338,7 +3343,23 @@
   @keyframes mark-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
   @media (prefers-reduced-motion: reduce) {
     #halo-survey-mark.waiting::before { animation: none; } }
-  #halo-survey-blk .seg button:disabled, #halo-survey-blk input:disabled { opacity: .55; cursor: default; }
+  /* Locked while armed — every control the lock touches has to LOOK locked
+     (round 2: the ore chips and token ✕ kept full opacity and read tappable). */
+  #halo-survey-blk .seg button:disabled, #halo-survey-blk input:disabled,
+  #halo-survey-blk select:disabled, #halo-survey-blk .ol-btn:disabled,
+  #halo-survey-blk .ore-tok button:disabled { opacity: .5; cursor: default; }
+  /* Separate panels, not one long sheet: FIELD's panels abutted with doubled
+     borders once the survey became its own panel. */
+  #halo-tab-field > .panel + .panel { margin-top: 12px; }
+  .mark-howto > summary { cursor: pointer; font-size: 12px; color: var(--dim);
+    list-style: none; margin: 0 0 8px; min-height: 24px; }
+  .mark-howto > summary::-webkit-details-marker { display: none; }
+  .mark-howto[open] > summary { display: none; }
+  /* Once you've landed a mark this session the how-to folds away, and so do
+     the "Optional — …" sub-lines: they teach once, then cost a scroll. */
+  #halo-survey-blk.mark-known .mark-sub { display: none; }
+  #halo-survey-again { margin-top: 6px; }
+  #halo-survey-again[hidden] { display: none; }
   /* ⛏ in the monospace stack falls back to a symbol font whose pick reads as
      a ↖ arrow at label sizes; an emoji-capable face draws the actual pick. */
   .gl { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
@@ -3346,6 +3367,16 @@
   @media (max-width: 560px) {
     .mark-lbl { min-width: 0; flex-basis: 100%; }
     .mark-indent, .mark-sub { margin-left: 0; }
+    /* Arm stays in reach while the form scrolls under it (round 2: it sat
+       ~1.5 screens down on a phone). Sticky only within its own panel. */
+    .mark-go { position: sticky; bottom: 0; z-index: 5; background: var(--panel);
+      padding: 8px 0; margin-top: 8px; box-shadow: 0 -8px 12px -8px var(--bg); }
+    /* The readout grid: drop the value-chip column so the row fits 344 px and
+       ✕ stays beside its own line. */
+    .scan-form .scan-row, .scan-head { grid-template-columns: minmax(80px, 1fr) 62px 56px 30px 44px; }
+    .scan-form .scan-row .scan-val { display: none; }
+    .scan-head span:nth-child(2) { grid-column: 2; }
+    .scan-head span:nth-child(3) { grid-column: 3 / span 2; }
   }
   #halo-radar-sub { font-size: 11px; font-variant-numeric: tabular-nums; }
   .halo-radar-plot { margin-top: 8px; border: 1px solid var(--border);
@@ -3410,7 +3441,14 @@
       display: inline-flex; align-items: center; justify-content: center;
     }
     .poi-opt { padding-top: 12px; padding-bottom: 12px; }
+    .halo-rs-all > summary { min-height: 44px; display: flex; align-items: center; }
   }
+  /* AFTER the coarse-pointer rule on purpose: that rule's display:inline-flex
+     beat the UA [hidden] rule, so on every touch device a HIDDEN chip or
+     icon button rendered anyway — FIELD's ✕ Cancel showed at rest and a stray
+     tap cancelled whatever capture was armed (FIELD critique round 2). */
+  .ev-cat-chip[hidden], .route-chip[hidden], .del[hidden], .edit[hidden],
+  .ev-row-del[hidden], .pkg-del[hidden], .pick-del[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -5775,13 +5813,18 @@
          stated before it matters rather than after the tap. -->
     <div class="panel" id="halo-survey-blk">
       <h2><span class="gl" aria-hidden="true">⛏️</span> SURVEY MARK</h2>
-      <p class="cap-purpose mark-purpose">Log what's around your ship for the org's belt map —
-        rocks, the ores you see, or <b>nothing at all</b> (that maps where a field ends).</p>
-      <ol class="mark-steps" aria-label="How a mark is made">
-        <li><b>Say what's here</b> below</li>
-        <li><b>Arm</b> the mark</li>
-        <li>Type <b>/showlocation</b> in game — your ship's position becomes the mark</li>
-      </ol>
+      <!-- Open until you've landed a mark this session, then folded to one
+           line (FIELD critique round 2): it teaches once, then costs a scroll. -->
+      <details class="mark-howto" id="halo-mark-howto" open>
+        <summary>? How marking works</summary>
+        <p class="cap-purpose mark-purpose">Log what's around your ship for the org's belt map —
+          rocks, the ores you see, or <b>nothing at all</b> (that maps where a field ends).</p>
+        <ol class="mark-steps" aria-label="How a mark is made">
+          <li><b>Say what's here</b> below</li>
+          <li><b>Arm</b> the mark</li>
+          <li>Type <b>/showlocation</b> in game — your ship's position becomes the mark</li>
+        </ol>
+      </details>
       <div class="mark-row">
         <label class="fld-label mark-lbl" for="halo-zone-select">ZONE</label>
         <select id="halo-zone-select" class="sel" style="min-width:190px; flex:0 1 320px;">
@@ -5828,6 +5871,10 @@
         <button id="halo-survey-cancel" type="button" class="route-chip" hidden>✕ Cancel</button>
       </div>
       <p id="halo-survey-arm-hint" class="cap-purpose mark-hint">↑ pick how many rocks are here first</p>
+      <!-- Sweeping a uniform field: one tap re-fills the last mark's density
+           and ores. It fills, never arms — every mark is still a deliberate
+           claim about where you are now. -->
+      <button type="button" class="route-chip" id="halo-survey-again" hidden></button>
       <p id="halo-survey-msg" class="mark-msg" role="status" aria-live="polite"></p>
         <div id="halo-scan-blk" hidden style="margin-top:8px;">
           <button type="button" class="route-chip" id="halo-scan-toggle" aria-expanded="false"
@@ -9454,6 +9501,13 @@ function sightingPicker(cfg) {
     },
     clear() {
       st.values = [];
+      if (input()) input().value = "";
+      changed();
+    },
+    // Multi: replace the tokens wholesale, without opening the dropdown.
+    setValues(names) {
+      st.values = [];
+      (names || []).forEach(commit);
       if (input()) input().value = "";
       changed();
     },
@@ -20035,6 +20089,13 @@ function renderHaloSystemPanel() {
 // tap — negatives map a field's edge.
 function setHaloSurveyRocks(r) {
   haloSurveyRocks = r;
+  // Picking the NEXT mark's density is what ends the ✓ MARKED state — not a
+  // timer the pilot's eyes may miss while they're in the game chat.
+  const b = $("halo-survey-mark");
+  if (r && b && b.classList.contains("marked")) {
+    b.classList.remove("marked");
+    b.textContent = "Arm mark";
+  }
   for (const x of $("halo-survey-rocks").querySelectorAll("button")) {
     const on = x.dataset.rocks === r;
     x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on));
@@ -20065,14 +20126,16 @@ function syncHaloMarkArm() {
 function setHaloArmedUI(on, sv) {
   const b = $("halo-survey-mark"), cancel = $("halo-survey-cancel"), msg = $("halo-survey-msg");
   const blk = $("halo-survey-blk");
-  if (blk) for (const el of blk.querySelectorAll("#halo-survey-rocks button, #halo-survey-ores, #halo-survey-salvage, #halo-survey-ore-likely button, #halo-survey-ore-toks button"))
+  if (blk) for (const el of blk.querySelectorAll("#halo-survey-rocks button, #halo-survey-ores, #halo-survey-salvage, #halo-survey-ore-likely button, #halo-survey-ore-toks button, #halo-zone-select, #halo-survey-again"))
     el.disabled = on;
   if (cancel) cancel.hidden = !on;
   if (!b) return;
   b.classList.remove("marked");
   b.classList.toggle("waiting", on);
   if (on) {
-    b.textContent = "WAITING FOR /showlocation";
+    // The density rides in the button: one glanceable readout of what's armed.
+    b.textContent = "WAITING FOR /showlocation" + (sv && sv.rocks
+      ? " · " + (sv.rocks === "none" ? "NO ROCK" : sv.rocks.toUpperCase()) : "");
     b.setAttribute("aria-disabled", "true");
     const z = activeSurveyZone == null ? null : haloZones.find(x => x.zone_id === activeSurveyZone);
     if (msg && sv) {
@@ -20091,22 +20154,43 @@ function setHaloArmedUI(on, sv) {
   }
 }
 
-// A landed mark flashes ✓ MARKED in the button's own slot, then the button
-// returns to its (deliberately reset) unarmed state.
-let haloMarkedTimer = null;
+// A landed mark shows ✓ MARKED in the button's own slot and HOLDS it until the
+// next density tap (round 2: a 2.5 s flash was gone before the pilot's eyes
+// came back from the game chat). The time since it landed ticks beside it.
+let haloMarkedAt = 0, haloMarkedTick = null;
 function flashHaloMarked() {
   const b = $("halo-survey-mark");
   if (!b) return;
   b.classList.remove("waiting");
   b.classList.add("marked");
-  b.textContent = "✓ MARKED";
   b.setAttribute("aria-disabled", "true");
-  clearTimeout(haloMarkedTimer);
-  haloMarkedTimer = setTimeout(() => {
-    b.classList.remove("marked");
-    b.textContent = "Arm mark";
-    syncHaloMarkArm();
-  }, 2500);
+  haloMarkedAt = Date.now();
+  const paint = () => {
+    if (!b.classList.contains("marked")) { clearInterval(haloMarkedTick); return; }
+    const sec = Math.round((Date.now() - haloMarkedAt) / 1000);
+    b.textContent = "✓ MARKED" + (sec >= 5 ? ` · ${sec < 60 ? sec + "s" : Math.floor(sec / 60) + "m"} ago` : "");
+  };
+  paint();
+  clearInterval(haloMarkedTick);
+  haloMarkedTick = setInterval(paint, 5000);
+  // The how-to has done its job once a mark has landed — fold it.
+  const how = $("halo-mark-howto"), blk = $("halo-survey-blk");
+  if (how) how.open = false;
+  if (blk) blk.classList.add("mark-known");
+}
+
+// "↻ same as last mark": re-fill (never re-arm) the previous mark's density
+// and ores for a sweep through a uniform field.
+let haloLastMarkSpec = null;
+function renderHaloSurveyAgain() {
+  const b = $("halo-survey-again");
+  if (!b) return;
+  const sv = haloLastMarkSpec;
+  b.hidden = !sv;
+  if (!sv) return;
+  b.textContent = "↻ same as last mark: "
+    + (sv.rocks === "none" ? "no rock" : sv.rocks)
+    + ((sv.ores || []).length ? " · " + sv.ores.join(", ") : "");
 }
 
 let haloSurveyArmed = false;
@@ -20140,6 +20224,7 @@ function resolveHaloSurveyArm(capture) {
     return;
   }
   flashHaloMarked();
+  if (capture.last.survey) { haloLastMarkSpec = capture.last.survey; renderHaloSurveyAgain(); }
   const zm = landed && capture.last.zone_mismatch;
   if (msg) {
     msg.className = zm ? "mark-msg armed" : "mark-msg ok";
@@ -20203,7 +20288,11 @@ function surveyLandedHtml(sv, z) {
   if (z) {
     tail = ` · now ${z.marks || 0} mark${z.marks === 1 ? "" : "s"}`
       + (z.positive != null ? `, ${z.positive} with rock` : "")
-      + (z.health ? ` · health ${Math.round(z.health.score * 100)}%` : "");
+      // "health" alone was jargon at the moment of success — say what it means.
+      + (z.health ? ` · zone health ${Math.round(z.health.score * 100)}% (${
+          z.health.score >= 0.75 ? "numbers trustworthy"
+          : z.health.score >= 0.4 ? "numbers still moving"
+          : "early — numbers are a hint"})` : "");
   }
   return parts.join(" · ") + (where ? " " + where : "") + tail;
 }
@@ -21588,6 +21677,14 @@ async function undoLastSurveyMark() {
   haloLastMarkId = null;
   haloLastMarkOres = [];
   radarMarkAt = null;
+  // ✓ MARKED now holds until the next density tap — it must not keep
+  // asserting a mark that was just deleted.
+  const mb = $("halo-survey-mark");
+  if (mb && mb.classList.contains("marked")) {
+    mb.classList.remove("marked");
+    mb.textContent = "Arm mark";
+    syncHaloMarkArm();
+  }
   if (btn) btn.disabled = false;
   const blk = $("halo-scan-blk"), form = $("halo-scan-form");
   if (blk) blk.hidden = true;
@@ -23594,10 +23691,20 @@ function wireHaloFinder() {
   for (const x of $("halo-survey-rocks").querySelectorAll("button"))
     x.onclick = () => setHaloSurveyRocks(x.dataset.rocks);
   $("halo-survey-mark").onclick = haloMarkSurvey;
+  $("halo-survey-again").onclick = () => {
+    const sv = haloLastMarkSpec;
+    if (!sv || haloSurveyArmed) return;
+    surveyOrePicker.setValues(sv.ores || []);
+    $("halo-survey-salvage").checked = !!sv.salvage;
+    setHaloSurveyRocks(sv.rocks);
+  };
   // ✕ Cancel an armed mark — the same endpoint the navigator's capture forms
   // use. The state frame normally resolves the UI; resolving here as well
   // covers a dropped socket (the second call is a no-op).
   $("halo-survey-cancel").onclick = async () => {
+    // The endpoint cancels WHATEVER this session has armed — a navigator node
+    // too. Only ever send it for a survey mark this tab armed.
+    if (!haloSurveyArmed) return;
     try {
       const r = await fetch("/api/capture/cancel", { method: "POST",
         headers: { "Content-Type": "application/json" }, body: "{}" });
