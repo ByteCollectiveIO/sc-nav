@@ -8676,6 +8676,66 @@ class BeltSurveyApiTests(unittest.TestCase):
             app.nav.belts["Nyx"]["pockets"] = real
         self.assertEqual(note, "Glaciem Ring (between pockets)")
 
+    def test_deep_space_fix_takes_the_active_zones_system(self):
+        # 2026-10-03, in game: Pyro's Cluster MNK-833 (54.4 Gm out, no
+        # container) with no sticky after a redeploy resolved to NYX — the
+        # nearest body is a Keeger arc. The zone being filed into wins over
+        # that guess, for both the FIELD verdict and the mark's stamp.
+        pos = (-41385512835.1, 35305910636.4, 608398100.9)
+        self.assertEqual(app.nav_core.system_at(app.nav, pos), "Nyx")   # the guess
+        zid = db.create_survey_zone("mnk", "Cluster MNK-833", "Pyro", "1",
+                                    "Surveyor", time.time())
+        self.addCleanup(lambda: db.delete_survey_zone(zid))
+        s = app.Session(self._user)
+        app.hub.sessions["1"] = s
+        orig = app.members_dir.active_survey_zone
+        app.members_dir.active_survey_zone = lambda uid: zid
+        try:
+            self.assertEqual(app._halo_fix_system(pos, s), "Pyro")
+            pending = {"kind": "poi", "name": "Survey mnk", "type": "survey",
+                       "qt_marker": False, "private": False, "note": None,
+                       "survey": {"rocks": "dense", "ores": [], "salvage": False,
+                                  "zone_id": zid}}
+            app._capture_poi(s, pos, time.time(), pending,
+                             {"player_id": None, "handle": None})
+            self.addCleanup(lambda: db.delete_custom_poi(s.last_capture["id"]))
+            self.assertEqual(s.last_capture["system"], "Pyro")
+            self.assertNotIn("zone_mismatch", s.last_capture)
+            self.assertEqual(s.last_capture["survey"]["zone"]["id"], zid)
+            # ...but a FRESH container-confirmed system still outranks the zone
+            s.system, s.system_t = "Nyx", time.time()
+            self.assertEqual(app._halo_fix_system(pos, s), "Nyx")
+        finally:
+            app.members_dir.active_survey_zone = orig
+
+    def test_sticky_system_survives_a_restart(self):
+        s = app.hub.get(self._user)
+        s.t = time.time()
+        s.adopt_state({"system": "Pyro"})
+        app.hub.sessions.pop(self._user["id"], None)      # the redeploy
+        s2 = app.hub.get(self._user)
+        self.assertEqual(s2.system, "Pyro")
+        app.hub.sessions.pop(self._user["id"], None)
+
+    def test_refile_moves_a_misfiled_deep_mark_into_a_zone(self):
+        zid = db.create_survey_zone("mnk2", "Cluster MNK-833", "Pyro", "1",
+                                    "Surveyor", time.time())
+        self.addCleanup(lambda: db.delete_survey_zone(zid))
+        mark = self._mark_at((-41385512835.1, 35305910636.4, 608398100.9))
+        mark.owner_id = 4242
+        orig = app.handles.player_ids_for
+        app.handles.player_ids_for = lambda uid: {4242}
+        try:
+            r = self.client.post(f"/api/custom_pois/{mark.id}/refile",
+                                 json={"zone_id": zid})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual((r.json()["system"], mark.system), ("Pyro", "Pyro"))
+            self.assertEqual(mark.survey["zone_id"], zid)
+            stored = next(d for d in db.list_custom_pois() if d["id"] == mark.id)
+            self.assertEqual(stored["system"], "Pyro")
+        finally:
+            app.handles.player_ids_for = orig
+
     def test_survey_marks_never_file_into_a_surface_area(self):
         # A surface area is read by no belt view, so a ⛏ mark tagged to one
         # vanished. The FIELD picker offered them; the server now refuses.
@@ -8715,7 +8775,7 @@ class BeltSurveyApiTests(unittest.TestCase):
         self.addCleanup(lambda: db.delete_custom_poi(s.last_capture["id"]))
         self.assertEqual(s.last_capture["system"], "Stanton")
         self.assertEqual(s.last_capture["zone_mismatch"],
-                         {"name": "Far Zone", "system": "Nyx"})
+                         {"id": zid, "name": "Far Zone", "system": "Nyx"})
         mark = app.nav.pois[s.last_capture["id"]]
         self.assertNotIn("zone_id", mark.survey)
         # the payload echoes back for the FIELD confirmation line — and says

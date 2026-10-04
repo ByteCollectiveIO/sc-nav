@@ -20227,8 +20227,31 @@ function resolveHaloSurveyArm(capture) {
   const zm = landed && capture.last.zone_mismatch;
   if (msg) {
     msg.className = zm ? "mark-msg armed" : "mark-msg ok";
-    if (zm)
-      msg.textContent = `⚠ mark saved, but your active zone “${zm.name}” is in ${zm.system} — this mark is in ${capture.last.system}, so it was filed untagged`;
+    if (zm) {
+      msg.textContent = `⚠ mark saved, but your active zone “${zm.name}” is in ${zm.system} — this mark read as ${capture.last.system}, so it was filed untagged. `;
+      // Deep space carries no system of its own; the reading can be wrong and
+      // the pilot standing there knows (refile re-stamps it; server-guarded).
+      if (zm.id != null && capture.last.container === "Space") {
+        const fb = document.createElement("button");
+        fb.type = "button"; fb.className = "route-chip";
+        fb.textContent = `↪ I'm in ${zm.system} — file it into ${zm.name}`;
+        const markId = capture.last.id;
+        fb.onclick = async () => {
+          fb.disabled = true;
+          try {
+            const r = await fetch(`/api/custom_pois/${markId}/refile`, { method: "POST",
+              headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zone_id: zm.id }) });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { fb.disabled = false; fb.textContent = "⚠ " + (d.detail || "couldn't refile"); return; }
+            msg.className = "mark-msg ok";
+            msg.textContent = `✓ filed into ${zm.name} (${zm.system})`;
+            loadHaloZones();
+            radarLayersInvalidate();
+          } catch { fb.disabled = false; fb.textContent = "⚠ network error — tap to retry"; }
+        };
+        msg.appendChild(fb);
+      }
+    }
     else if (landed) msg.innerHTML = surveyLandedHtml(capture.last.survey);
     else msg.textContent = "";
   }

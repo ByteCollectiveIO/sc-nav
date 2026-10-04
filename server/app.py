@@ -2443,6 +2443,16 @@ class Session:
         # deep-space view (compute_state reports None there) so clients — the
         # navigator's halo chip, the halo locate loop — know where we are.
         if ns.get("system"):
+            if ns["system"] != self.system:
+                # Persist on CHANGE only (this runs per fix): a restart used to
+                # wipe the sticky, and a member parked in a container-less belt
+                # then read as whatever system's body happened to be nearest —
+                # a Pyro asteroid field resolved to the Keeger Belt (2026-10-03).
+                try:
+                    db.set_setting(f"sticky_system:{self.user['id']}", json.dumps(
+                        {"system": ns["system"], "t": self.t or time.time()}))
+                except Exception as exc:
+                    print(f"[sc-nav] sticky system save failed: {exc}")
             self.system = ns["system"]
             self.system_t = self.t or time.time()
         elif self.system:
@@ -2691,6 +2701,16 @@ class SessionHub:
         if sess is None:
             sess = Session(user)
             self.sessions[user["id"]] = sess
+            # The last container-confirmed system outlives a restart. Restored
+            # with its ORIGINAL stamp, so it ranks as a stale sticky (below
+            # belt geometry and an active zone) until a container re-confirms.
+            try:
+                raw = db.get_setting(f"sticky_system:{user['id']}")
+                if raw:
+                    st = json.loads(raw)
+                    sess.system, sess.system_t = st.get("system"), st.get("t")
+            except Exception:
+                pass
             # Resume an in-progress cargo run across restart / reconnect: reload
             # it and re-point guidance at its active stop.
             run = db.get_active_run(user["id"])
@@ -3812,12 +3832,21 @@ def _halo_capture_note(poi) -> str | None:
 
 def _capture_poi(sess, pos_m, now, pending, owner):
     next_id = db.next_custom_poi_id()
+    # The system hint for a deep-space fix: a fresh container-confirmed system,
+    # else the zone this survey mark is being filed into, else the stale
+    # sticky. (A stale/absent sticky used to hand the stamp to the nearest-body
+    # guess — Pyro marks filed into Nyx's Keeger Belt.)
+    # One ladder for the FIELD verdict and the stamp (_halo_fix_system); a
+    # survey mark brings its own zone. A container, when there is one, still
+    # wins inside _frame_at.
+    zid = (pending.get("survey") or {}).get("zone_id")
+    hint = _halo_fix_system(pos_m, sess, zid) if pending.get("survey") else None
     poi = nav_core.custom_poi_from_position(
         nav, pos_m, now, pending["name"], pending["type"], next_id,
         owner_id=owner.get("player_id"), owner_handle=owner.get("handle"),
         qt_marker=pending.get("qt_marker", False),
         private=pending.get("private", False), note=pending.get("note"),
-        system_hint=sess.system, survey=pending.get("survey"),
+        system_hint=hint or sess.system, survey=pending.get("survey"),
     )
     # Zone tag sanity at fix time (#36.1 §7): a zone is system-scoped, and the
     # tag was stamped at ARM time — the mark may land in another system days
@@ -3840,7 +3869,8 @@ def _capture_poi(sess, pos_m, now, pending, owner):
             # arm-time guard now refuses, so only a stale pending one) just
             # files untagged.
             if zone is not None and zone["system"] != poi.system:
-                zone_mismatch = {"name": zone["name"], "system": zone["system"]}
+                zone_mismatch = {"id": zone["id"], "name": zone["name"],
+                                 "system": zone["system"]}
         else:
             zone_kept = zone
     halo_tag = _halo_capture_note(poi)
@@ -6936,7 +6966,7 @@ def get_halo_targets(system: str = "Stanton",
     return doc
 
 
-def _halo_fix_system(pos, sess: "Session | None") -> str:
+def _halo_fix_system(pos, sess: "Session | None", zone_id: int | None = None) -> str:
     """Best-effort star system for a live Halo position fix, most-confident
     signal first. Deep space is system-ambiguous — every system's data centers
     on its own (0,0,0), so the raw nearest-container guess mixes frames and can
@@ -6959,16 +6989,46 @@ def _halo_fix_system(pos, sess: "Session | None") -> str:
         return c.system
     belt = (nav_core.HALO_SYSTEM if nav_core.halo_contains(pos)
             else nav_core.GLACIEM_SYSTEM if nav_core.glaciem_contains(pos)
-            else nav_core.GLACIEM_SYSTEM if nav_core.keeger_contains(pos)   # #36
             else None)
     fresh = sess.system if (sess is not None and sess.system_fresh()) else None
     if belt is not None and (fresh is None or fresh == belt):
         return belt
     if fresh is not None:
         return fresh
+    # The zone being surveyed (2026-10-03) ranks below the two landmark rings
+    # and a fresh sticky — physical evidence — but ABOVE the Keeger ring,
+    # which Pyro's outer traffic crosses, and above the nearest-body guess.
+    zsys = _active_zone_system(sess, zone_id)
+    if zsys:
+        return zsys
+    if nav_core.keeger_contains(pos):   # #36
+        return nav_core.GLACIEM_SYSTEM
     if sess is not None and sess.system:
         return sess.system
     return nav_core.system_at(nav, pos)
+
+
+def _active_zone_system(sess: "Session | None", zone_id: int | None = None) -> str | None:
+    """The system of the belt zone this member is surveying (the armed mark's
+    zone, else their active zone). A deep-space fix with no container and no
+    fresh sticky is otherwise resolved by the nearest-body guess, which mixes
+    every system's frame — at Pyro's Cluster MNK-833 (54.4 Gm out) the nearest
+    body is a Keeger arc in NYX. A member filing into a Pyro zone is telling us
+    where they are; it ranks below a container, belt geometry and a fresh
+    sticky, which are all physical evidence."""
+    if sess is None:
+        return None
+    if zone_id is None:
+        try:
+            zone_id = members_dir.active_survey_zone(sess.user["id"])
+        except Exception:
+            zone_id = None
+    if zone_id is None:
+        return None
+    zone = db.get_survey_zone(zone_id)
+    if zone is None or zone.get("body") or zone.get("closed"):
+        return None
+    return zone.get("system")
 
 
 def _halo_goal_system(body: HaloPlanIn) -> str | None:
@@ -13783,6 +13843,58 @@ async def update_survey_scan(poi_id: int, body: ScanIn,
         nav.touch()
         hub.mark_dataset_dirty()
     return {"ok": True, "scan": scan or None}
+
+
+class RefileIn(BaseModel):
+    zone_id: int
+
+
+@app.post("/api/custom_pois/{poi_id}/refile")
+async def refile_survey_mark(poi_id: int, body: RefileIn,
+                             user: dict = Depends(require_session)):
+    """File a deep-space ⛏ mark into a belt zone, re-stamping its SYSTEM to the
+    zone's (owner-or-admin). Deep space carries no system of its own — every
+    system's frame shares one numeric space, so the stored position is right
+    and only the system label can be wrong. That label came from the
+    nearest-body guess when nothing better was known (a Pyro field read as the
+    Keeger Belt), and the owner standing there knows better. A container-
+    anchored mark is refused: there the system is physical fact."""
+    zone = db.get_survey_zone(body.zone_id)
+    if zone is None:
+        raise HTTPException(status_code=404, detail="unknown zone")
+    if zone.get("body"):
+        raise HTTPException(status_code=400,
+                            detail="that's a surface area — ⛏ marks file into belt zones only")
+    async with hub.lock:
+        poi = nav.pois.get(poi_id)
+        if poi is None or not getattr(poi, "custom", False):
+            raise HTTPException(status_code=404, detail="unknown custom poi")
+        if (poi.type or "").strip().lower() != nav_core.SURVEY_POI_TYPE:
+            raise HTTPException(status_code=400, detail="not a survey mark")
+        if poi.container_name:
+            raise HTTPException(status_code=400,
+                                detail="this mark is at a known body — its system isn't in doubt")
+        ensure_owns(user, poi.owner_id)
+        old_tag = _halo_capture_note(poi)
+        poi.system = zone["system"]
+        poi.nearest_qt, poi.nearest_qt_dist_m = nav_core.nearest_qt_marker(
+            nav, poi, time.time())
+        sv = dict(getattr(poi, "survey", None) or {})
+        sv["zone_id"] = zone["id"]
+        poi.survey = sv
+        # The capture note named the WRONG place ("Keeger Belt — survey pocket
+        # SVY-284"); swap it for what the new system says.
+        new_tag = _halo_capture_note(poi)
+        note = poi.note or ""
+        if old_tag and old_tag in note:
+            note = note.replace(old_tag, new_tag or "").strip(" ·")
+        elif new_tag and new_tag not in note:
+            note = f"{note} · {new_tag}" if note else new_tag
+        poi.note = note or None
+        db.add_custom_poi(nav_core.custom_poi_to_dict(poi))
+        nav.touch()
+        hub.mark_dataset_dirty()
+    return {"ok": True, "system": poi.system, "zone": {"id": zone["id"], "name": zone["name"]}}
 
 
 @app.delete("/api/custom_pois/{poi_id}")
