@@ -5965,6 +5965,19 @@
             <button data-win="7d" type="button" aria-pressed="false">7D</button>
             <button data-win="24h" type="button" aria-pressed="false">24H</button>
           </span>
+          <!-- The other maps' "view radius" slider. Step 0 = auto (follows your
+               flown path, the old behaviour); the rest are fixed spans out to
+               the whole pocket. -->
+          <!-- The navigator's "fresh only" — the SAME setting (freshOnly +
+               the org's freshness window): a mark points at a rock, and rocks
+               respawn per shard like planetary nodes. -->
+          <label class="trade-pref" title="Hide ⛏ marks older than the org's freshness window on the radar (and the navigator's map) — your own marks this session always show. Zone stats stay all-time.">
+            <input type="checkbox" id="halo-radar-fresh" checked> fresh only</label>
+          <label class="muted" style="font-size:12px; display:flex; gap:6px; align-items:center;">view radius
+            <input id="halo-radar-zoom" type="range" min="0" max="12" step="1" value="0"
+                   aria-label="radar view radius">
+            <span id="halo-radar-zoom-val">auto</span>
+          </label>
         </div>
         <div class="halo-radar-plot"><canvas id="halo-radar" role="img"
           aria-label="live top-down radar of your position inside the asteroid pocket"></canvas></div>
@@ -5973,7 +5986,14 @@
         <p class="muted halo-radar-tip">Deep space has no compass — steer so the
           <b>drift arrow</b> points at the <b>center dot</b>. Re-run
           <b>/showlocation</b> as you move to update. Rings show scale.
-          ◇ marks are POIs near the pocket (bright = has an in-game quantum marker).</p>
+          ◇ marks are POIs near the pocket (bright = has an in-game quantum marker).
+          Dots are ⛏ marks, coloured by their ore (hollow = no rock); a gold
+          ring = one you dropped this session. Like the navigator's nodes, marks
+          older than the org's freshness window hide while <b>fresh only</b> is on,
+          and faded dots are from another shard or from before your session —
+          the rock may not be there for you. You are the dot with the white
+          halo — on the map and on the <b>HEIGHT</b> bar at the right, which shows
+          how far above or below the zone's center plane your ship is.</p>
       </div>
     </div>
 
@@ -7677,6 +7697,7 @@ document.querySelectorAll(".layer").forEach(cb => {
 });
 $("fresh-toggle").onchange = (e) => {
   freshOnly = e.target.checked; renderNearby(); drawMap(); updateMapMoreSummary();
+  const r = $("halo-radar-fresh"); if (r) r.checked = freshOnly;   // same setting
 };
 $("shard-toggle").onchange = (e) => {
   shardOnly = e.target.checked; renderNearby(); drawMap(); updateMapMoreSummary();
@@ -20369,6 +20390,7 @@ function resolveHaloSurveyArm(capture) {
     // A "none" mark has no rock, so it gets no readout (Undo stays).
     if (capture.last && capture.last.id != null) {
       haloLastMarkId = capture.last.id;
+      sessionMarkIds.add(capture.last.id);   // always fresh + ringed on the radar
       const rock = !(capture.last.survey && capture.last.survey.rocks === "none");
       haloLastScan = (capture.last.survey && capture.last.survey.scan) || null;
       const blk = $("halo-scan-blk"), form = $("halo-scan-form"), tog = $("halo-scan-toggle");
@@ -25207,6 +25229,21 @@ let radarHeatWin = lsGet("radarHeatWin") || "all";      // all | 7d | 24h
 const RADAR_WIN_H = { all: 0, "7d": 168, "24h": 24 };
 if (!(radarHeatWin in RADAR_WIN_H)) radarHeatWin = "all";
 let radarRefs = { key: null, pois: null };              // landmark cache
+let radarMarks = { key: null, marks: null };            // ⛏ marks in this pocket
+// View radius (the other maps' slider). 0 = auto: follow the flown path.
+const RADAR_ZOOM_M = [0, 1e3, 2e3, 5e3, 10e3, 25e3, 50e3, 100e3, 250e3, 500e3,
+                      1e6, 2.5e6, Infinity];   // last = the whole pocket
+let radarZoomIdx = Number(lsGet("radarZoom") || 0);
+if (!(radarZoomIdx >= 0 && radarZoomIdx < RADAR_ZOOM_M.length)) radarZoomIdx = 0;
+function syncRadarZoomLabel() {
+  const sl = $("halo-radar-zoom"), out = $("halo-radar-zoom-val");
+  if (!sl || !out) return;
+  sl.value = String(radarZoomIdx);
+  const m = RADAR_ZOOM_M[radarZoomIdx];
+  const txt = !m ? "auto" : m === Infinity ? "whole pocket" : radarDist(m);
+  out.textContent = txt;
+  sl.setAttribute("aria-valuetext", txt);
+}
 let radarHeat = { key: null, win: null, data: null };   // heat-cell cache
 
 function radarSegSync() {
@@ -25236,10 +25273,27 @@ $("halo-radar-win").onclick = (e) => {
   if (haloRadarLast) { ensureRadarLayers(haloRadarLast); drawPocketRadar(haloRadarLast); }
 };
 radarSegSync();
+// One setting, two places: the radar's checkbox and the navigator's map
+// toggle are the same freshOnly.
+$("halo-radar-fresh").checked = freshOnly;
+$("halo-radar-fresh").onchange = (e) => {
+  freshOnly = e.target.checked;
+  const nav = $("fresh-toggle"); if (nav) nav.checked = freshOnly;
+  renderNearby(); drawMap(); updateMapMoreSummary();
+  renderRadarLegend();
+  if (haloRadarLast) drawPocketRadar(haloRadarLast);
+};
+$("halo-radar-zoom").oninput = (e) => {
+  radarZoomIdx = Number(e.target.value) || 0;
+  try { localStorage.setItem("radarZoom", String(radarZoomIdx)); } catch {}
+  syncRadarZoomLabel();
+  if (haloRadarLast) drawPocketRadar(haloRadarLast);
+};
+syncRadarZoomLabel();
 
 // A capture/delete anywhere invalidates both layers (someone may have pinned
 // a new landmark or dropped a mark); cheap — next radar tick refetches.
-function radarLayersInvalidate() { radarRefs.key = null; radarHeat.key = null; }
+function radarLayersInvalidate() { radarRefs.key = null; radarHeat.key = null; radarMarks.key = null; }
 
 function ensureRadarLayers(p) {
   const sys = p.system;
@@ -25255,6 +25309,21 @@ function ensureRadarLayers(p) {
       radarRefs.pois = d.pois || [];
       if (haloRadarLast && haloRadarLast.key === p.key) drawPocketRadar(haloRadarLast);
     }).catch(() => {});
+  }
+  // ⛏ marks of this pocket/zone, drawn as dots in EVERY mode (2026-10-04:
+  // with HEAT OFF — the default — a surveyor's own marks were invisible).
+  if (radarMarks.key !== p.key) {
+    radarMarks = { key: p.key, marks: null };
+    fetch(`/api/halo/survey?system=${encodeURIComponent(sys)}`)
+      .then(r => r.ok ? r.json() : null).then(d => {
+        if (!d || radarMarks.key !== p.key) return;
+        const c = p.center_xyz, reach = 2 * (p.grid_radius_m || 0);
+        radarMarks.marks = (d.marks || []).filter(m => p.kind === "zone" && p.zone_id != null
+          ? m.zone_id === p.zone_id
+          : Math.hypot(m.x - c[0], m.y - c[1], m.z - c[2]) <= reach);
+        renderRadarLegend();
+        if (haloRadarLast && haloRadarLast.key === p.key) drawPocketRadar(haloRadarLast);
+      }).catch(() => {});
   }
   if (radarHeatMode === "off") return;
   if (radarHeat.key === p.key && radarHeat.win === radarHeatWin) return;
@@ -25275,7 +25344,25 @@ function renderRadarLegend() {
   const el = $("halo-radar-legend");
   if (!el) return;
   const d = radarHeat.data;
-  if (radarHeatMode === "off" || !d) { el.hidden = true; el.innerHTML = ""; return; }
+  const ms = radarMarks.marks || [];
+  if (radarHeatMode === "off" || !d) {
+    // Marks-only legend: which colour is which ore, and which dots are yours.
+    if (!ms.length) { el.hidden = true; el.innerHTML = ""; return; }
+    const shown = ms.filter(markFresh);
+    const mine = ms.filter(m => sessionMarkIds.has(m.id)).length;
+    const faded = shown.filter(m => !markCurrent(m)).length;
+    const freq = {};
+    for (const m of shown) { const o = markOre(m); if (o) freq[o] = (freq[o] || 0) + 1; }
+    const top = Object.keys(freq).sort((a, b) => freq[b] - freq[a]).slice(0, 5);
+    el.innerHTML = `<b>${shown.length}</b> mark${shown.length === 1 ? "" : "s"} shown`
+      + (shown.length < ms.length ? ` (${ms.length - shown.length} older than ${freshWindowH} h hidden)` : "")
+      + (mine ? ` · <b>${mine}</b> this session <span style="color:var(--sel)">◯</span>` : "")
+      + (faded ? ` · ${faded} faded (other shard / before your session)` : "")
+      + (top.length ? " · " + top.map(o => `<span style="color:${oreColor(o)}">●</span> ${esc(o)}`).join("  ") : "")
+      + (ms.some(m => m.rocks === "none") ? "  ○ no rock" : "");
+    el.hidden = false;
+    return;
+  }
   const winTxt = radarHeatWin === "all" ? "all marks" : `last ${radarHeatWin}`;
   let h = `<b>${d.n_marks}</b> mark${d.n_marks === 1 ? "" : "s"} (${winTxt})`;
   if (!d.n_marks) {
@@ -25293,6 +25380,30 @@ function renderRadarLegend() {
     if (barren) h += ` · ${barren} cell${barren === 1 ? "" : "s"} surveyed empty`;
   }
   el.innerHTML = h; el.hidden = false;
+}
+
+// Radar dots follow the navigator's freshness rules for nodes (isFreshObs /
+// obsCurrentThisSession): a mark points at a ROCK, and rocks respawn per shard.
+// Zone stats (the live panel, bars, health, value) stay all-time on purpose —
+// they describe the field, not where a rock is right now.
+const sessionMarkIds = new Set();   // ⛏ marks this tab landed — always fresh
+function markFresh(m) {
+  if (sessionMarkIds.has(m.id) || !freshOnly) return true;
+  return (m.created || 0) * 1000 >= Date.now() - freshWindowH * 3600e3;
+}
+function markCurrent(m) {
+  if (sessionMarkIds.has(m.id)) return true;
+  if (m.shard && currentShard) return m.shard === currentShard;  // authoritative
+  if (sessionStartMs == null) return true;                        // no baseline yet
+  return (m.created || 0) * 1000 >= sessionStartMs;
+}
+
+// The ore a mark is "about": its readout's best-share line, else its first ore.
+function markOre(m) {
+  const sc = m.scan || {};
+  const comp = sc.comp || {};
+  const best = Object.entries(comp).sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0] : Object.keys(sc.q || {})[0] || (m.ores || [])[0] || null;
 }
 
 function radarDist(m) {   // plain-text for canvas (fmtDist returns HTML)
@@ -25328,12 +25439,16 @@ function drawPocketRadar(p) {
   const gaugeW = 52;                                  // right strip: off-plane gauge
   const mx = (w - gaugeW) / 2, my = h / 2;
   const R = Math.min(w - gaugeW, h) / 2 - 16;
+  if (R <= 4) return;   // laid out before the panel has a size — next draw wins
   const pts = haloRadar.pts;
   const reach = Math.max(Math.hypot(p.dx, p.dy),
     ...pts.map(q => Math.hypot(q.dx, q.dy)), 2000);
   // Heat ON = analysis view: hold the span at the full pocket so the cells
   // read as a map. Heat OFF = nav view: auto-zoom to the flown path (#37).
-  const span = radarHeatMode !== "off" ? p.grid_radius_m
+  const zm = RADAR_ZOOM_M[radarZoomIdx];
+  const span = zm === Infinity ? p.grid_radius_m
+    : zm ? Math.min(zm, p.grid_radius_m)
+    : radarHeatMode !== "off" ? p.grid_radius_m
     : Math.min(reach * 1.3, p.grid_radius_m);   // never zoom past the edge
   const sc = R / span;
   const SX = dx => mx + dx * sc, SY = dy => my - dy * sc;   // north = +dy = up
@@ -25446,6 +25561,27 @@ function drawPocketRadar(p) {
     ctx.font = "10px ui-monospace, Menlo, monospace";
   }
 
+  // ⛏ marks: ore-coloured dots (hollow = surveyed empty); a bright ring on
+  // the ones dropped this session — the "my survey is filling in" feedback.
+  if (radarMarks.key === p.key && radarMarks.marks) {
+    for (const m of radarMarks.marks) {
+      if (!markFresh(m)) continue;
+      const dx = m.x - p.center_xyz[0], dy = m.y - p.center_xyz[1];
+      if (Math.hypot(dx, dy) * sc > R) continue;
+      const x = SX(dx), y = SY(dy);
+      const ore = markOre(m);
+      ctx.globalAlpha = markCurrent(m) ? 1 : 0.35;   // another shard / before your session
+      ctx.beginPath(); ctx.arc(x, y, 3.6, 0, 7);
+      if (m.rocks === "none") { ctx.strokeStyle = DIM; ctx.lineWidth = 1.2; ctx.stroke(); }
+      else { ctx.fillStyle = ore ? oreColor(ore) : DIM; ctx.fill(); }
+      ctx.globalAlpha = 1;
+      if (sessionMarkIds.has(m.id)) {
+        ctx.beginPath(); ctx.arc(x, y, 6.5, 0, 7);
+        ctx.strokeStyle = GOLD; ctx.lineWidth = 1.2; ctx.stroke();
+      }
+    }
+  }
+
   // recent path
   if (pts.length > 1) {
     ctx.beginPath();
@@ -25481,6 +25617,8 @@ function drawPocketRadar(p) {
   }
   ctx.beginPath(); ctx.arc(px, py, 4.5, 0, 7); ctx.fillStyle = AC; ctx.fill();
   ctx.strokeStyle = "#07101a"; ctx.lineWidth = 1.5; ctx.stroke();
+  // A white halo marks YOU apart from the ore-coloured ⛏ dots (Iron is blue).
+  ctx.beginPath(); ctx.arc(px, py, 8, 0, 7); ctx.strokeStyle = "#e8eef7"; ctx.lineWidth = 1.4; ctx.stroke();
 
   // off-plane (z) gauge on the right strip
   const gx = w - gaugeW / 2, gTop = 20, gBot = h - 16, gMid = (gTop + gBot) / 2;
@@ -25491,13 +25629,19 @@ function drawPocketRadar(p) {
   ctx.moveTo(gx - 7, gMid); ctx.lineTo(gx + 7, gMid); ctx.stroke();
   ctx.fillStyle = DIM; ctx.font = "9px ui-monospace, Menlo, monospace";
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("OFF-PLANE", gx, gTop - 10);
-  ctx.fillText("0", gx + 15, gMid);
+  // YOUR height vs the zone's center plane, drawn with the same marker as
+  // your ship on the map (2026-10-04: a green dot here read as an ore — Tin
+  // is green in the bars).
+  ctx.fillText("HEIGHT", gx, gTop - 10);
+  ctx.textAlign = "right"; ctx.fillText("plane", gx - 9, gMid); ctx.textAlign = "center";
+  ctx.fillText("▲", gx, gTop + 2); ctx.fillText("▼", gx, gBot - 2);
   const zy = gMid - Math.max(-1, Math.min(1, p.dz / zmax)) * (gBot - gMid);
   const onplane = Math.abs(p.dz) < 5000;
-  ctx.fillStyle = onplane ? GOOD : GOLD;
-  ctx.beginPath(); ctx.arc(gx, zy, 4, 0, 7); ctx.fill();
-  ctx.textBaseline = "middle"; ctx.fillText(radarDist(p.dz), gx, gBot + 8);
+  ctx.beginPath(); ctx.arc(gx, zy, 4.5, 0, 7); ctx.fillStyle = AC; ctx.fill();
+  ctx.strokeStyle = "#07101a"; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(gx, zy, 8, 0, 7); ctx.strokeStyle = "#e8eef7"; ctx.lineWidth = 1.4; ctx.stroke();
+  ctx.fillStyle = onplane ? GOOD : DIM; ctx.textBaseline = "middle";
+  ctx.fillText(onplane ? "on plane" : (p.dz > 0 ? "+" : "−") + radarDist(Math.abs(p.dz)), gx, gBot + 8);
 }
 
 addEventListener("resize", () => { if (haloRadarLast && !$("halo-radar-wrap").hidden) drawPocketRadar(haloRadarLast); });

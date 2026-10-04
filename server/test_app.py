@@ -8747,6 +8747,21 @@ class BeltSurveyApiTests(unittest.TestCase):
         finally:
             app.members_dir.active_survey_zone = orig
 
+    def test_survey_mark_carries_the_shard(self):
+        s = app.Session(self._user)
+        s.system, s.shard = "Nyx", "pub_euw1b_123"
+        app.hub.sessions["1"] = s
+        pending = {"kind": "poi", "name": "Survey s", "type": "survey",
+                   "qt_marker": False, "private": False, "note": None,
+                   "survey": {"rocks": "dense", "ores": [], "salvage": False}}
+        app._capture_poi(s, (self.KR, 0.0, 0.0), time.time(), pending,
+                         {"player_id": None, "handle": None})
+        self.addCleanup(lambda: db.delete_custom_poi(s.last_capture["id"]))
+        self.assertEqual(app.nav.pois[s.last_capture["id"]].survey["shard"], "pub_euw1b_123")
+        m = next(x for x in self.client.get("/api/halo/survey").json()["marks"]
+                 if x["id"] == s.last_capture["id"])
+        self.assertEqual(m["shard"], "pub_euw1b_123")
+
     def test_sticky_system_survives_a_restart(self):
         s = app.hub.get(self._user)
         s.t = time.time()
@@ -8817,6 +8832,8 @@ class BeltSurveyApiTests(unittest.TestCase):
                          {"id": zid, "name": "Far Zone", "system": "Nyx"})
         mark = app.nav.pois[s.last_capture["id"]]
         self.assertNotIn("zone_id", mark.survey)
+        # no shard reported → none stamped (older watchers)
+        self.assertNotIn("shard", mark.survey)
         # the payload echoes back for the FIELD confirmation line — and says
         # the mark filed nowhere, matching the mismatch warning
         echo = s.last_capture["survey"]
