@@ -73,4 +73,5 @@ drift — trust grep and CI, not the citation.
 | Doc | Status | Notes |
 |---|---|---|
 | [monetization-and-deployment.md](monetization-and-deployment.md) | 🅿 parked 2026-06-28 | CIG fan-rules research; non-commercial rule; CIG inquiry not drafted |
+| [upstream-wiki-pyro-frame-report.md](upstream-wiki-pyro-frame-report.md) | 📝 drafted 2026-10-04, not yet filed | Ready-to-paste bug report for the SC Wiki API: Pyro system-frame `x`/`y` rotated −85.23° vs the game (our side fixed in PR #224 — `tools/sync_locations.py` frame alignment) |
 | [archive/feature-backlog-full-2026-07-04.md](archive/feature-backlog-full-2026-07-04.md) | 📦 archive | Full pre-consolidation backlog with every design's original prose (#1–25) |
