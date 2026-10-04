@@ -8248,14 +8248,20 @@ def clean_scan_lines(lines) -> list[dict]:
         if not isinstance(ln, dict):
             continue
         ore = str(ln.get("ore") or "").strip()
-        try:
-            pct = float(ln.get("pct"))
-        except (TypeError, ValueError):
-            continue
-        if not ore or not math.isfinite(pct) or pct <= 0:
-            continue
-        row = {"ore": ore, "pct": round(min(pct, 100.0), 2)}
         q = clean_material_q(ln.get("q")) if ln.get("q") is not None else None
+        try:
+            pct = float(ln.get("pct")) if ln.get("pct") is not None else None
+        except (TypeError, ValueError):
+            pct = None
+        if pct is not None and (not math.isfinite(pct) or pct <= 0):
+            pct = None
+        # A line needs an ore and at least one reading: a share, or a Q alone
+        # (the node form's single-Q case — quality known, share not read).
+        if not ore or (pct is None and q is None):
+            continue
+        row = {"ore": ore}
+        if pct is not None:
+            row["pct"] = round(min(pct, 100.0), 2)
         if q is not None:
             row["q"] = q
         out.append(row)
@@ -8268,15 +8274,23 @@ def scan_lines_rollup(lines: list[dict]) -> tuple[dict, dict]:
     {ore: share-weighted Q} over the lines of that ore that stated one."""
     comp: dict[str, float] = {}
     qw: dict[str, list[float]] = {}
+    bare: dict[str, list[int]] = {}      # Q with no share (single-Q case)
     for ln in lines:
-        comp[ln["ore"]] = comp.get(ln["ore"], 0.0) + ln["pct"]
+        if "pct" in ln:
+            comp[ln["ore"]] = comp.get(ln["ore"], 0.0) + ln["pct"]
         if "q" in ln:
-            acc = qw.setdefault(ln["ore"], [0.0, 0.0])
-            acc[0] += ln["pct"] * ln["q"]
-            acc[1] += ln["pct"]
+            if "pct" in ln:
+                acc = qw.setdefault(ln["ore"], [0.0, 0.0])
+                acc[0] += ln["pct"] * ln["q"]
+                acc[1] += ln["pct"]
+            else:
+                bare.setdefault(ln["ore"], []).append(ln["q"])
     comp = {o: round(min(p, 100.0), 1) for o, p in comp.items()}
-    # half-up, matching quality_lines_summary and the JS preview
+    # half-up, matching quality_lines_summary and the JS preview; a share-
+    # weighted Q wins, a bare Q (no share read) stands in when it's all there is
     q = {o: int(math.floor(s / w + 0.5)) for o, (s, w) in qw.items() if w > 0}
+    for o, qs in bare.items():
+        q.setdefault(o, int(math.floor(sum(qs) / len(qs) + 0.5)))
     return comp, q
 
 
@@ -8339,7 +8353,8 @@ def _survey_scan_stats(positives: list[dict]) -> dict:
         sc = m.get("scan") or {}
         comp = sc.get("comp") or {}
         rs = sc.get("rs")
-        if not comp and not rs:
+        # A Q-only readout (the node form's single-Q case) is a scan too.
+        if not comp and not rs and not sc.get("q"):
             continue
         scans += 1
         if isinstance(rs, int) and rs > 0:

@@ -6161,6 +6161,24 @@ class BeltSurveyTests(unittest.TestCase):
         bare = nav_core.survey_cluster_fit([mk(4, {"Iron": None})], [])
         self.assertNotIn("bands", bare)
 
+    def test_scan_line_may_carry_only_a_q(self):
+        # The node form's single-Q case: quality read, share not.
+        lines = nav_core.clean_scan_lines([
+            {"ore": "Gold", "q": 700}, {"ore": "Iron", "pct": 40},
+            {"ore": "Tin"}])                                  # neither → dropped
+        self.assertEqual(lines, [{"ore": "Gold", "q": 700}, {"ore": "Iron", "pct": 40.0}])
+        comp, q = nav_core.scan_lines_rollup(lines)
+        self.assertEqual((comp, q), ({"Iron": 40.0}, {"Gold": 700}))
+        # …and a Q-only mark reaches the zone's quality rollup
+        fit = nav_core.survey_cluster_fit([{
+            "xyz": (self.KR, 0, 0), "positive": True, "rocks": "dense", "id": 1,
+            "ores": ["Gold"], "salvage": False, "scan": {"q": {"Gold": 700}}}], [])
+        self.assertEqual((fit["scans"], fit["scan_q"]["Gold"]["q"]), (1, 700))
+        # a share-weighted Q wins over a bare one for the same ore
+        _, q2 = nav_core.scan_lines_rollup(nav_core.clean_scan_lines([
+            {"ore": "Gold", "q": 100}, {"ore": "Gold", "pct": 20, "q": 800}]))
+        self.assertEqual(q2, {"Gold": 800})
+
     def test_belt_zone_qt_anchor_needs_a_majority(self):
         stn = _space_poi(12, "Arc Station", (self.KR, 0, 0), system="Nyx")
         stn.qt_marker = True

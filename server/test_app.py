@@ -7920,6 +7920,15 @@ class BeltSurveyApiTests(unittest.TestCase):
             "survey": {"rocks": "none", "scan": {"lines": [{"ore": "Gold", "pct": 30}]}}})
         self.assertNotIn("scan", r.json()["capture"]["pending"]["survey"])
         s.capture_pending = None
+        # the node form's single-Q case: one ore, its Q, no share
+        r = self.client.post("/api/capture/start", json={
+            "name": "Survey q", "type": "survey",
+            "survey": {"rocks": "medium", "ores": ["Gold"],
+                       "scan": {"lines": [{"ore": "Gold", "q": 655}]}}})
+        sv = r.json()["capture"]["pending"]["survey"]
+        self.assertEqual((sv["ores"], sv["scan"]["q"]), (["Gold"], {"Gold": 655}))
+        self.assertNotIn("comp", sv["scan"])
+        s.capture_pending = None
         # >100% is refused before anything is armed
         r = self.client.post("/api/capture/start", json={
             "name": "Survey x", "type": "survey",
