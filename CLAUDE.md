@@ -321,7 +321,7 @@ library at `#/blueprints`, #29)
   `_rebuild_nav`; `feeds_refreshed_at` epoch on `/api/settings`; ORG SETTINGS
   "UEX PRICE DATA" panel (interval + "prices as of" + Refresh now button). **Wiki locations catalog (#28,
   docs/wiki-poi-enrichment.md):** committed `poi/locations.json` from
-  `tools/sync_locations.py` (SC Wiki API, re-run per game patch, CC BY-SA 4.0);
+  `tools/sync_locations.py` (SC Wiki API, re-run per game patch, CC BY-SA 4.0); **frame alignment (2026-10-04):** the wiki's STATIC Pyro frame was rotated −85.23° about the star vs the starmap/game frame (0 spread over 37 body+Lagrange pairs; Stanton/Nyx 0°) — every free-floating Pyro wiki POI (47 QT asteroid clusters, stations, the 102 Prospector Pyro drop fields) sat ~85° around the star from the game. The tool now FITS the rotation per system each sync (`fit_frame_rotation`/`align_static_frames`, refuses a spread > 0.5°, reports it) and rotates `global_m` only (body-local records were already right: 55/55 Pyro outposts validate); `_meta.frame_aligned` records what was applied; `--realign-only` fixes a committed file in place, idempotently. Pinned by `WikiFrameAlignmentTests` (Lagrange records on their containers + a real MNK-833 /showlocation within 100 km). Precision matters: 0.0004° ≈ 380 km at 54 Gm — never round the fitted angle before applying.
   `app._apply_wiki_catalog` in `load_nav_data` → nav_core `add_wiki_pois` (ids
   4M+, `Poi.source="wiki"`, token-name dedup via `wiki_name_key`, starmap wins)
   + `upgrade_qt_markers` (promotes matched starmap POIs the game marks

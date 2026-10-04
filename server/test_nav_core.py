@@ -8172,6 +8172,44 @@ class LootTests(unittest.TestCase):
         self.assertEqual(a, nav_core.loot_rotation_init([1, 2, 3, 4], self.SEED, 9, first=[3]))
 
 
+class WikiFrameAlignmentTests(unittest.TestCase):
+    """The committed wiki catalog's static (system-frame) positions must share
+    the starmap's axes. Until 2026-10-04 every Pyro static record sat 85.23°
+    around the star from where the game puts it — Cluster MNK-833's QT anchor
+    never formed, and Prospector's Pyro drop targets were off by tens of Gm.
+    tools/sync_locations.py now fits + applies the rotation on every sync."""
+
+    POI_DIR = Path(__file__).resolve().parent.parent / "poi"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.locs = json.loads((cls.POI_DIR / "locations.json").read_text())["locations"]
+        cls.conts = json.loads((cls.POI_DIR / "containers.json").read_text())
+
+    def test_pyro_lagrange_records_sit_on_their_starmap_containers(self):
+        by = {c["ObjectContainer"]: c for c in self.conts if c["System"] == "Pyro"}
+        checked = 0
+        for r in self.locs:
+            if r["system"] != "Pyro" or not r.get("global_m"):
+                continue
+            parts = r["name"].replace("PYR", "").split(" L")
+            if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+                continue
+            c = by.get(f"P{parts[0]}_L{parts[1]}")
+            if c is None:
+                continue
+            d = math.dist(r["global_m"][:2], (float(c["XCoord"]), float(c["YCoord"])))
+            self.assertLess(d, 1000e3, f"{r['name']} is {d / 1e9:.2f} Gm off its starmap container")
+            checked += 1
+        self.assertGreaterEqual(checked, 10)
+
+    def test_mnk_833_lands_on_a_real_in_game_fix(self):
+        # Ground truth: a member's /showlocation inside the field, 2026-10-03.
+        fix = (-41385512835.1, 35305910636.4, 608398100.9)
+        mnk = next(r for r in self.locs if r["name"] == "Cluster MNK-833")
+        self.assertLess(math.dist(mnk["global_m"], fix), 100e3)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
 
