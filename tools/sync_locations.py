@@ -292,12 +292,111 @@ def validate_against_starmap(records: list[dict], report: list[str]) -> None:
     report.extend(outliers)
 
 
+# ---------------------------------------------------------------- frame alignment
+#
+# The wiki's STATIC (system-frame) coordinates are not guaranteed to share the
+# starmap's axes. Measured 2026-10-04: every Pyro body and Lagrange point sits
+# at the same radius in both feeds but 85.23° apart in azimuth (zero spread
+# over 34 bodies) — and a member's real /showlocation at Cluster MNK-833
+# matched the STARMAP angle. Stanton and Nyx measure 0°. Body-local records are
+# unaffected (they're offsets inside the body's own frame; 55/55 Pyro outposts
+# validate within 5 km), so only `global_m` needs the turn.
+#
+# The rotation is FITTED per system on every sync — never hard-coded — from
+# wiki bodies (+ "PYRn Lm" Lagrange points) paired with starmap containers, so
+# an upstream fix (or a new skew) is picked up automatically and reported.
+
+_LAGRANGE_WIKI = re.compile(r"^PYR(\d)\s*L(\d)$", re.IGNORECASE)
+ALIGN_MIN_DEG = 0.01        # below this the frames already agree
+ALIGN_MAX_SPREAD_DEG = 0.5  # a "rotation" that varies by body isn't one — refuse
+
+
+def _wrap_deg(a: float) -> float:
+    return (a + 540.0) % 360.0 - 180.0
+
+
+def fit_frame_rotation(positions: list[dict], containers: list[dict],
+                       sys_starmap: str) -> tuple[float, int, float] | None:
+    """(degrees to rotate wiki -> starmap about z, pairs used, spread) or None
+    when nothing pairs. Pairs = wiki Planet/Moon by name, plus wiki 'PYRn Lm'
+    asteroid entries against starmap 'Pn_Lm' Lagrange containers; each pair
+    must agree on radius within 1% (same object, just turned)."""
+    conts = {_norm(c["ObjectContainer"]): c for c in containers if c["System"] == sys_starmap}
+    deltas = []
+    for w in positions:
+        cont = None
+        if w["type"] in BODY_TYPES:
+            cont = next((conts[k] for k in _body_name_candidates(w["name"]) if k in conts), None)
+        else:
+            m = _LAGRANGE_WIKI.match((w["name"] or "").strip())
+            if m:
+                cont = conts.get(_norm(f"P{m.group(1)}_L{m.group(2)}"))
+        if cont is None:
+            continue
+        cx, cy = float(cont["XCoord"]), float(cont["YCoord"])
+        rw, rc = math.hypot(w["x"], w["y"]), math.hypot(cx, cy)
+        if rw < 1e8 or rc < 1e8 or abs(rw - rc) > 0.01 * rc:
+            continue
+        deltas.append(_wrap_deg(math.degrees(math.atan2(cy, cx) - math.atan2(w["y"], w["x"]))))
+    if not deltas:
+        return None
+    deltas.sort()
+    med = deltas[len(deltas) // 2]
+    return med, len(deltas), deltas[-1] - deltas[0]
+
+
+def rotate_global(g: list[float], deg: float) -> list[float]:
+    a = math.radians(deg)
+    x, y, z = g
+    return [round(x * math.cos(a) - y * math.sin(a), 3),
+            round(x * math.sin(a) + y * math.cos(a), 3), z]
+
+
+def align_static_frames(records: list[dict], positions_by_sys: dict,
+                        containers: list[dict], report: list[str],
+                        skip: dict | None = None) -> dict:
+    """Rotate every static record of a skewed system onto the starmap frame.
+    Returns {system: degrees applied} for _meta. `skip` = systems already
+    aligned ({system: degrees}), reported and left alone."""
+    applied = {}
+    for sys_wiki, sys_starmap in SYSTEMS.items():
+        if skip and sys_starmap in skip:
+            report.append(f"frame alignment {sys_starmap}: already aligned ({skip[sys_starmap]:+.4f}°) — skipped")
+            continue
+        fit = fit_frame_rotation(positions_by_sys.get(sys_wiki) or [], containers, sys_starmap)
+        if fit is None:
+            report.append(f"frame alignment {sys_starmap}: no body pairs — left as-is")
+            continue
+        deg, n, spread = fit
+        if spread > ALIGN_MAX_SPREAD_DEG:
+            report.append(f"  !! frame alignment {sys_starmap}: body deltas spread {spread:.2f}° "
+                          f"over {n} pairs — not a single rotation; left as-is, INVESTIGATE")
+            continue
+        if abs(deg) < ALIGN_MIN_DEG:
+            report.append(f"frame alignment {sys_starmap}: {deg:+.3f}° over {n} pairs — frames agree")
+            continue
+        k = 0
+        for r in records:
+            if r["system"] == sys_starmap and r.get("global_m"):
+                r["global_m"] = rotate_global(r["global_m"], deg)
+                k += 1
+        applied[sys_starmap] = round(deg, 4)
+        report.append(f"frame alignment {sys_starmap}: rotated {k} static records by {deg:+.3f}° "
+                      f"(fitted over {n} body pairs, spread {spread:.3f}°)")
+    return applied
+
+
 # ---------------------------------------------------------------- main
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true", help="fetch + report, write nothing")
+    ap.add_argument("--realign-only", action="store_true",
+                    help="re-fit the frame rotation and apply it to the COMMITTED "
+                         "poi/locations.json without re-syncing its records")
     args = ap.parse_args()
+    if args.realign_only:
+        return realign_committed(args.dry_run)
 
     print("game version ...", end=" ", flush=True)
     gv = _get("/api/game-versions/default")["data"]["code"]
@@ -353,6 +452,7 @@ def main():
                       f"{stats['dropped_container']} containers)")
 
     report.append("")
+    frame_aligned = align_static_frames(all_records, positions_by_sys, containers, report)
     validate_against_starmap(all_records, report)
 
     qt_n = sum(1 for r in all_records if r["qt_valid"])
@@ -376,6 +476,9 @@ def main():
             "game_version": gv,
             "generated_by": "tools/sync_locations.py",
             "record_count": len(all_records),
+            # {system: degrees} rotated onto the starmap frame (see
+            # fit_frame_rotation). Present = this file's globals are aligned.
+            "frame_aligned": frame_aligned,
         },
         "locations": all_records,
     }
@@ -386,5 +489,36 @@ def main():
     print(f"\n  wrote poi/locations.json ({len(all_records)} records), poi/locations_sync_report.txt")
 
 
+
+def realign_committed(dry_run: bool) -> None:
+    """One-off: align the committed file's static globals without pulling a new
+    catalog (which would drag in unrelated upstream changes). Idempotent — a
+    system already recorded in _meta.frame_aligned is skipped."""
+    path = os.path.join(POI, "locations.json")
+    doc = json.load(open(path))
+    meta = doc.setdefault("_meta", {})
+    done = dict(meta.get("frame_aligned") or {})
+    positions_by_sys = {}
+    for sys_wiki, sys_starmap in SYSTEMS.items():
+        if sys_starmap in done:
+            continue
+        positions_by_sys[sys_wiki] = _get("/api/locations/positions",
+                                          **{"filter[system]": sys_wiki}).get("data", [])
+    containers = json.load(open(os.path.join(POI, "containers.json")))
+    report = []
+    pending = [r for r in doc["locations"] if r["system"] not in done]
+    applied = align_static_frames(pending, positions_by_sys, containers, report, skip=done)
+    print("\n".join(report))
+    if dry_run:
+        print("[dry-run] nothing written")
+        return
+    done.update(applied)
+    meta["frame_aligned"] = done
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=1, ensure_ascii=False)
+    print(f"wrote {path}")
+
+
 if __name__ == "__main__":
     main()
+
