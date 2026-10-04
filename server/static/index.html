@@ -3318,6 +3318,17 @@
   .mark-go .cap-go { margin-top: 0; flex: 1; }
   .mark-go #halo-survey-cancel { flex-shrink: 0; }
   .mark-hint { margin: 6px 0 0; }
+  .mark-row-top { align-items: flex-start; }
+  .mark-row-top > .mark-lbl { padding-top: 8px; }
+  .mark-rock { flex: 1; min-width: 0; max-width: 560px; }
+  .mark-rock .scan-head { margin-top: 6px; }
+  /* Live zone panel (the navigator forecast's look, for a belt zone). */
+  .zone-live { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--panel2); }
+  .zone-live[hidden] { display: none; }
+  .zone-live-h { font-size: 12px; color: var(--dim); margin: 0 0 6px; }
+  .zone-live-h b { color: var(--text); }
+  .zone-live .fc-row.bump .fc-pct { color: var(--good); }
   /* Scanner readout: rows and their column labels share one grid so the
      labels sit over the fields they name. */
   .scan-form .scan-row, .scan-head { display: grid; gap: 6px; align-items: center;
@@ -5827,13 +5838,14 @@
            line (FIELD critique round 2): it teaches once, then costs a scroll. -->
       <details class="mark-howto" id="halo-mark-howto" open>
         <summary>? How marking works</summary>
-        <p class="cap-purpose mark-purpose">Mark the rocks you scan for the org's belt map.
-          Nothing worth flying to? Mark <b>none</b> where you are — empty space maps where a field ends.</p>
+        <p class="cap-purpose mark-purpose">Log each rock you scan for the org's belt map — the same
+          steps as adding a resource node planetside. Nothing worth flying to? Mark <b>none</b> where
+          you are — empty space maps where a field ends.</p>
         <ol class="mark-steps" aria-label="How a mark is made">
           <li><b>Wide scan</b> on arrival — look up interesting RS signatures above</li>
-          <li><b>Fly to a rock</b> and scan it with your mining scanner</li>
-          <li><b>Arm</b>, then type <b>/showlocation</b> in game — the mark lands at your ship</li>
-          <li><b>Enter the rock's readout</b> — ores, %, Q</li>
+          <li><b>Fly to the rock</b> and scan it with your mining scanner</li>
+          <li><b>Fill in the rock</b> — pick the ores, then % and Q</li>
+          <li><b>Arm</b>, then type <b>/showlocation</b> in game</li>
         </ol>
       </details>
       <div class="mark-row">
@@ -5845,6 +5857,33 @@
       </div>
       <p class="cap-purpose mark-sub">Optional — with no zone, nearby marks group on their own.</p>
       <div id="halo-zone-banner" hidden></div>
+      <!-- Live feedback while surveying (the navigator's forecast panel, for a
+           zone): what this zone has turned up so far, refreshed as each mark
+           lands — the reason to keep going. -->
+      <div id="halo-zone-live" class="zone-live" hidden></div>
+      <!-- The rock, BEFORE arming — the planetary node form's order (pick the
+           ore, fill % and Q, arm, /showlocation). Rows are the shared ore
+           combobox, ranked by what this zone has found; the chips are the
+           one-tap shortlist. -->
+      <div class="mark-row mark-row-top">
+        <span class="fld-label mark-lbl">ROCK</span>
+        <div class="scan-form mark-rock" id="halo-mark-rock">
+          <div id="halo-mark-likely" class="ore-likely" style="margin-top:0;" hidden></div>
+          <div class="scan-head" aria-hidden="true"><span>ORE</span><span>% OF ROCK</span><span>Q (0–1000)</span></div>
+          <div class="scan-rows"></div>
+          <p class="muted scan-sum" style="margin:4px 0 0; font-size:12px;"></p>
+          <div class="route-row" style="align-items:flex-end; margin-top:8px;">
+            <button type="button" class="route-chip scan-add">＋ line</button>
+            <label class="scan-lbl">MASS (kg)
+              <input class="ti scan-mass" type="number" min="1" max="10000000" step="1" style="width:120px;"></label>
+            <label class="scan-lbl">RS
+              <input class="ti scan-rs" type="number" min="1" max="10000000" step="1" style="width:110px;"></label>
+          </div>
+          <p class="cap-purpose" style="margin:6px 0 0;">One row per line the mining scanner prints —
+            “62.40% IRON (ORE) 410” is 62.40 % and Q410. All optional: a mark with just the rocks
+            around you still counts.</p>
+        </div>
+      </div>
       <div class="mark-row">
         <span class="fld-label mark-lbl" id="halo-survey-rocks-lbl">ROCKS AROUND</span>
         <span class="seg" id="halo-survey-rocks" role="group" aria-labelledby="halo-survey-rocks-lbl">
@@ -5854,10 +5893,7 @@
           <button data-rocks="dense" type="button" aria-pressed="false">dense</button>
         </span>
       </div>
-      <!-- No "ores seen" before the mark (scan-first workflow): at range the
-           ship shows only RS signatures, so an ore typed here was a guess. The
-           ores come from the mining scanner's readout, entered after the mark
-           lands. The datalist stays for the DROP tab's ore-first box. -->
+      <!-- The datalist serves the DROP tab's ore-first box. -->
       <datalist id="halo-survey-ore-list"></datalist>
       <div class="mark-row">
         <span class="fld-label mark-lbl" aria-hidden="true">ALSO</span>
@@ -5876,7 +5912,7 @@
       <p id="halo-survey-msg" class="mark-msg" role="status" aria-live="polite"></p>
         <div id="halo-scan-blk" hidden style="margin-top:8px;">
           <button type="button" class="route-chip" id="halo-scan-toggle" aria-expanded="false"
-            aria-controls="halo-scan-form">Rock readout</button>
+            aria-controls="halo-scan-form">✎ Fix this mark's readout</button>
           <!-- A ⛏ mark is org evidence the moment it lands: it moves a zone's
                value tier and feeds the belt model. A mis-tapped density (or a
                mark dropped in the wrong place) had no way back except an admin
@@ -20126,7 +20162,7 @@ function syncHaloMarkArm() {
 function setHaloArmedUI(on, sv) {
   const b = $("halo-survey-mark"), cancel = $("halo-survey-cancel"), msg = $("halo-survey-msg");
   const blk = $("halo-survey-blk");
-  if (blk) for (const el of blk.querySelectorAll("#halo-survey-rocks button, #halo-survey-salvage, #halo-zone-select, #halo-survey-again"))
+  if (blk) for (const el of blk.querySelectorAll("#halo-survey-rocks button, #halo-survey-salvage, #halo-zone-select, #halo-survey-again, #halo-mark-rock input, #halo-mark-rock button, #halo-mark-likely button"))
     el.disabled = on;
   if (cancel) cancel.hidden = !on;
   if (!b) return;
@@ -20289,11 +20325,15 @@ function resolveHaloSurveyArm(capture) {
     if (capture.last && capture.last.id != null) {
       haloLastMarkId = capture.last.id;
       const rock = !(capture.last.survey && capture.last.survey.rocks === "none");
+      haloLastScan = (capture.last.survey && capture.last.survey.scan) || null;
       const blk = $("halo-scan-blk"), form = $("halo-scan-form"), tog = $("halo-scan-toggle");
       if (blk) blk.hidden = false;
-      if (tog) tog.hidden = !rock;
+      if (tog) { tog.hidden = !rock; tog.setAttribute("aria-expanded", "false"); }
       if (form) { form.hidden = true; form.innerHTML = ""; }
-      if (rock) openHaloReadout(true);
+      // This rock is filed; the next one starts blank (like the node form) —
+      // including its RS: the signature looked up was THIS rock's.
+      haloLastRsLookup = null;
+      initMarkRock();
     }
   }
 }
@@ -20305,8 +20345,10 @@ function resolveHaloSurveyArm(capture) {
 function surveyLandedHtml(sv, z) {
   if (!sv) return "✓ mark dropped — the org's map just got better";
   const parts = [`✓ mark dropped · <b>${esc(sv.rocks === "none" ? "no rock" : sv.rocks)}</b>`];
+  const sq = (sv.scan && sv.scan.q) || {}, sc = (sv.scan && sv.scan.comp) || {};
   if ((sv.ores || []).length)
-    parts.push(sv.ores.map(o => esc(o) + oreValueChip(o, "resource")).join(" · "));
+    parts.push(sv.ores.map(o => esc(o) + oreValueChip(o, "resource")
+      + (sc[o] != null ? ` ${sc[o]}%` : "") + (sq[o] != null ? ` Q${sq[o]} ≈B${qualityBand(sq[o])}` : "")).join(" · "));
   if (sv.salvage) parts.push("wrecks/debris");
   const where = sv.zone ? `→ <b>${esc(sv.zone.name)}</b>` : sv.place ? `· ${esc(sv.place)}` : "";
   let tail = "";
@@ -20319,8 +20361,7 @@ function surveyLandedHtml(sv, z) {
           : z.health.score >= 0.4 ? "numbers still moving"
           : "early — numbers are a hint"})` : "");
   }
-  return parts.join(" · ") + (where ? " " + where : "") + tail
-    + (sv.rocks && sv.rocks !== "none" ? " — <b>now enter the rock's readout below</b>" : "");
+  return parts.join(" · ") + (where ? " " + where : "") + tail;
 }
 
 async function haloMarkSurvey() {
@@ -20331,8 +20372,8 @@ async function haloMarkSurvey() {
     return;
   }
   const now = new Date();
-  // No ores at arm time (scan-first workflow): they come from the mining
-  // scanner's readout once the mark lands, and the server unions them in.
+  // The rock's readout rides the arm — the planetary node form's order. Its
+  // ores become the mark's ores server-side. A "none" mark has no rock.
   const body = {
     name: `Survey ${now.toISOString().slice(5, 10)} ${now.toTimeString().slice(0, 5)}`,
     type: "survey",
@@ -20342,6 +20383,15 @@ async function haloMarkSurvey() {
       salvage: $("halo-survey-salvage").checked,
     },
   };
+  if (haloSurveyRocks !== "none") {
+    const scan = readScanBody($("halo-mark-rock"));
+    if (scan.lines.reduce((a, ln) => a + ln.pct, 0) > 100.0001) {
+      msg.className = "mark-msg armed";
+      msg.textContent = "⚠ the rock's lines add up to more than 100% — check the shares";
+      return;
+    }
+    if (scan.lines.length || scan.mass_kg || scan.rs) body.survey.scan = scan;
+  }
   try {
     const r = await fetch("/api/capture/start", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -20382,6 +20432,8 @@ async function loadHaloZones(sys) {
   } catch { return; }
   renderHaloZoneSelect();
   renderHaloZoneBanner();
+  renderZoneLive();         // live "in this zone so far" panel
+  renderMarkLikely();       // the ROCK box's shortlist follows the zone's evidence
   renderHaloRsRef();        // FIELD-tab RS cheat sheet grows with each scan (#38)
   renderHaloOverview();     // zone squares live on the overview map (#37)
   renderHaloAtlasZones();   // and on the ATLAS zone list (#38)
@@ -20951,6 +21003,13 @@ function renderRsLookupResult(ores) {
   if (!out || !inp) return;
   const r = rsLookup(inp.value, ores);
   haloLastRsLookup = r ? r.value : null;
+  // The pilot is choosing which signature to fly to — carry it into the ROCK
+  // box's RS until they type their own there.
+  const rsIn = document.querySelector("#halo-mark-rock .scan-rs");
+  if (rsIn && (!rsIn.value || rsIn.dataset.auto)) {
+    rsIn.value = haloLastRsLookup || "";
+    if (haloLastRsLookup) rsIn.dataset.auto = "1";
+  }
   if (!r) { out.innerHTML = ""; return; }
   if (!r.hits.length) {
     out.innerHTML = `<span class="muted">${r.value.toLocaleString()} matches no known base — `
@@ -21604,11 +21663,15 @@ function syncScanSum(box) {
 // Each scan row's ore field becomes the shared ore combobox, ranked by the
 // same shortlist as the mark's ores. A pick fires no input event, so onPick
 // does the chip + total refresh the input listener would.
-function wireScanRowPickers(box) {
+function scanRowSpecs() {
   const f = haloSurveyForecast();
+  return f ? [{ label: f.label, cat: "resource", unit: "rock marks", forecast: f }] : [];
+}
+
+function wireScanRowPickers(box) {
+  const specs = scanRowSpecs();
   for (const inp of box.querySelectorAll(".scan-ore")) {
-    if (inp.dataset.picker) continue;
-    inp.dataset.picker = "1";
+    if (inp._picker) continue;
     const row = inp.closest(".scan-row");
     const pk = sightingPicker({ inputId: inp.id, restCat: "resource", pText: "on rock marks",
       onPick: () => {
@@ -21617,13 +21680,31 @@ function wireScanRowPickers(box) {
       } });
     pk.wire();
     pk.setVocab(oreVocab);
-    if (f) pk.setForecasts([{ label: f.label, cat: "resource", unit: "rock marks", forecast: f }]);
+    pk.setForecasts(specs);
+    inp._picker = pk;
   }
 }
 
-function wireScanForm(host, onSaved) {
-  const box = host.querySelector(".scan-form");
-  if (!box) return;
+// The zone's evidence moves as marks land; re-rank every live row picker.
+function refreshScanRowForecasts() {
+  const specs = scanRowSpecs();
+  for (const inp of document.querySelectorAll("#halo-tab-field .scan-ore"))
+    if (inp._picker) { inp._picker.setVocab(oreVocab); inp._picker.setForecasts(specs); }
+}
+
+// A readout box's fields as the API wants them: {lines, mass_kg?, rs?}.
+function readScanBody(box) {
+  const body = { lines: readScanLines(box) };
+  const mass = parseFloat(box.querySelector(".scan-mass").value);
+  if (Number.isFinite(mass) && mass >= 1) body.mass_kg = mass;
+  const rs = parseInt(box.querySelector(".scan-rs").value, 10);
+  if (Number.isFinite(rs) && rs >= 1) body.rs = rs;
+  return body;
+}
+
+// Row behaviour shared by the mark's ROCK box and the after-the-fact editor:
+// pickers, value chips, band preview, the running total, add/remove line.
+function wireScanRows(box) {
   syncScanSum(box);
   wireScanRowPickers(box);
   box.addEventListener("input", (e) => {
@@ -21634,28 +21715,32 @@ function wireScanForm(host, onSaved) {
       const q = parseInt(e.target.value, 10);
       row.querySelector(".scan-band").textContent = Number.isFinite(q) ? "≈B" + qualityBand(q) : "";
     }
+    if (e.target.classList.contains("scan-rs")) delete e.target.dataset.auto;
     syncScanSum(box);
   });
-  box.addEventListener("click", async (e) => {
+  box.addEventListener("click", (e) => {
     if (e.target.closest(".scan-add")) {
       box.querySelector(".scan-rows").insertAdjacentHTML("beforeend", scanCompRow());
       wireScanRowPickers(box);
       return;
     }
     const rm = e.target.closest(".scan-rm");
-    if (rm) { rm.closest(".scan-row").remove(); syncScanSum(box); return; }
+    if (rm) { rm.closest(".scan-row").remove(); syncScanSum(box); }
+  });
+}
+
+function wireScanForm(host, onSaved) {
+  const box = host.querySelector(".scan-form");
+  if (!box) return;
+  wireScanRows(box);
+  box.addEventListener("click", async (e) => {
     if (!e.target.closest(".scan-save")) return;
     const st = box.querySelector(".scan-status");
-    const lines = readScanLines(box);
-    if (lines.reduce((a, ln) => a + ln.pct, 0) > 100.0001) {
+    const body = readScanBody(box);
+    if (body.lines.reduce((a, ln) => a + ln.pct, 0) > 100.0001) {
       st.textContent = "⚠ the lines add up to more than 100% — check the shares";
       return;
     }
-    const body = { lines };
-    const mass = parseFloat(box.querySelector(".scan-mass").value);
-    if (Number.isFinite(mass) && mass >= 1) body.mass_kg = mass;
-    const rs = parseInt(box.querySelector(".scan-rs").value, 10);
-    if (Number.isFinite(rs) && rs >= 1) body.rs = rs;
     st.textContent = "saving…";
     try {
       const r = await fetch(`/api/custom_pois/${box.dataset.mark}/survey`, {
@@ -21730,14 +21815,14 @@ $("halo-mark-undo").onclick = undoLastSurveyMark;
 
 // After-the-drop attach point: build lazily on first open, aimed at the mark
 // that just resolved.
-// Open the landed mark's rock readout. `auto` = it opened itself on landing:
-// pre-fill the RS the pilot looked up and put the cursor on the first ore.
-function openHaloReadout(auto) {
+// Correct the landed mark's readout after the fact (a mistyped %, a missed
+// line) — the readout itself is entered BEFORE arming now.
+let haloLastScan = null;
+function openHaloReadout() {
   const form = $("halo-scan-form"), tog = $("halo-scan-toggle");
   if (!form || haloLastMarkId == null) return;
   if (!form.innerHTML) {
-    form.innerHTML = scanFormHtml(haloLastMarkId, null, []);
-    if (haloLastRsLookup) form.querySelector(".scan-rs").value = haloLastRsLookup;
+    form.innerHTML = scanFormHtml(haloLastMarkId, haloLastScan, []);
     wireScanForm(form, () => {
       delete haloTargets[haloSystem];
       loadHaloTargets(haloSystem).then(renderHaloSystemPanel);
@@ -21746,18 +21831,92 @@ function openHaloReadout(auto) {
   }
   form.hidden = false;
   if (tog) tog.setAttribute("aria-expanded", "true");
-  if (auto) {
-    const first = form.querySelector(".scan-ore");
-    // preventScroll + a nearest scroll: on a phone the sticky Arm bar sits
-    // over the bottom of the panel, so bring the form up rather than jump.
-    if (first) { first.focus({ preventScroll: true }); form.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
-  }
+}
+
+// The mark's ROCK box: one blank line, the RS the pilot looked up (they flew
+// to that signature), and the zone's shortlist.
+function initMarkRock() {
+  const box = $("halo-mark-rock");
+  if (!box) return;
+  box.querySelector(".scan-rows").innerHTML = scanCompRow();
+  box.querySelector(".scan-mass").value = "";
+  const rs = box.querySelector(".scan-rs");
+  rs.value = haloLastRsLookup || "";
+  if (haloLastRsLookup) rs.dataset.auto = "1"; else delete rs.dataset.auto;
+  if (!box.dataset.wired) { box.dataset.wired = "1"; wireScanRows(box); }
+  else { wireScanRowPickers(box); syncScanSum(box); }
+  renderMarkLikely();
+}
+
+// "in <zone>: Iron $ 75% …" — tap fills the first empty line (or adds one)
+// and moves the cursor to its %, the node form's chip row for a rock.
+function renderMarkLikely() {
+  const el = $("halo-mark-likely");
+  if (!el) return;
+  const f = haloSurveyForecast();
+  const rows = f ? f.ranked.filter(r => r.p >= LIKELY_MIN_P).slice(0, LIKELY_SHOWN) : [];
+  el.hidden = !rows.length;
+  el.innerHTML = rows.length ? `<span>${esc(f.chipLabel)}:</span>` + rows.map(r =>
+    `<button type="button" class="ol-btn" data-name="${esc(r.ore)}" title="on ${Math.round(r.p * 100)}% of this zone's rock marks">`
+    + `${esc(r.ore)}${oreValueChip(r.ore, "resource")} <span class="ol-p">${Math.round(r.p * 100)}%</span></button>`).join("") : "";
+  for (const b of el.querySelectorAll(".ol-btn")) b.onclick = () => {
+    const box = $("halo-mark-rock");
+    let inp = [...box.querySelectorAll(".scan-ore")].find(i => !i.value.trim());
+    if (!inp) {
+      box.querySelector(".scan-rows").insertAdjacentHTML("beforeend", scanCompRow());
+      wireScanRowPickers(box);
+      inp = [...box.querySelectorAll(".scan-ore")].pop();
+    }
+    inp.value = b.dataset.name;
+    const row = inp.closest(".scan-row");
+    row.querySelector(".scan-val").innerHTML = oreValueChip(inp.value, "resource");
+    syncScanSum(box);
+    row.querySelector(".scan-pct").focus();
+  };
+  refreshScanRowForecasts();
+}
+
+// The navigator's forecast panel, for the zone you're filing into: what it has
+// turned up so far, refreshed as each mark lands — rows that just grew are
+// flagged, because "your mark moved the picture" is the reason to keep going.
+const haloLiveSeen = {};   // zone_id -> {ore: count} at the previous render
+function renderZoneLive() {
+  const el = $("halo-zone-live");
+  if (!el) return;
+  const z = activeSurveyZone == null ? null
+    : haloZones.find(x => x.zone_id === activeSurveyZone && x.kind !== "surface");
+  if (!z) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  const n = z.positive || 0, marks = z.marks || 0;
+  const h = z.health;
+  const head = `<p class="zone-live-h">In <b>${esc(z.name)}</b> so far · <b>${marks}</b> mark${marks === 1 ? "" : "s"}`
+    + ` · <b>${n}</b> with rock`
+    + (h ? ` · zone health <b>${Math.round(h.score * 100)}%</b> (${h.score >= 0.75 ? "trustworthy"
+          : h.score >= 0.4 ? "still moving" : "early — a hint"})` : "")
+    + `</p>`;
+  const counts = z.ore_counts || {}, sq = z.scan_q || {}, comp = z.scan_comp || {};
+  const prev = haloLiveSeen[z.zone_id];
+  const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([ore, k]) => {
+    const share = n ? k / n : 0;
+    const bump = prev && (prev[ore] || 0) < k;
+    const q = sq[ore];
+    return `<div class="fc-row${bump ? " bump" : ""}">`
+      + `<span class="fc-ore"><span class="fc-ore-name">${esc(ore)}</span>${oreValueChip(ore, "resource")}</span>`
+      + `<span class="fc-bar-outer"><span class="fc-bar-inner" style="width:${Math.max(3, Math.round(share * 100))}%;background:${oreColor(ore)}"></span></span>`
+      + `<span class="fc-pct">${Math.round(share * 100)}%${bump ? " ▲" : ""}</span>`
+      + `<span class="fc-n">${k}×</span></div>`
+      + (q || comp[ore] != null ? `<div class="fc-q">${comp[ore] != null ? `avg ${Math.round(comp[ore])}% of a rock` : ""}`
+          + (q ? `${comp[ore] != null ? " · " : ""}quality Q${q.q} ≈B${qualityBand(q.q)}` : "") + `</div>` : "");
+  }).join("");
+  el.innerHTML = head + (rows || `<p class="cap-purpose" style="margin:0;">No ore logged here yet — `
+    + `fill in the rock below and your mark starts the picture.</p>`);
+  haloLiveSeen[z.zone_id] = { ...counts };
 }
 
 $("halo-scan-toggle").onclick = () => {
   const form = $("halo-scan-form"), tog = $("halo-scan-toggle");
   if (!form.hidden) { form.hidden = true; tog.setAttribute("aria-expanded", "false"); return; }
-  openHaloReadout(false);
+  openHaloReadout();
 };
 
 // Zone detail (#37 slice 3 → #38 survey summary card): a "details" button opens
@@ -23316,6 +23475,7 @@ async function setActiveSurveyZone(zid) {
   }
   if (st) { st.className = "muted"; st.textContent = ""; }
   renderHaloZoneSelect(); renderHaloZoneBanner();
+  renderZoneLive(); renderMarkLikely();   // a different zone, a different picture
   renderHaloAtlasZones();   // the ⛏ active chip lives there too (#38)
   renderHaloAtlasSel();
   // …and the gold ⛏ ring on both maps, so "which square am I filing into?"
@@ -23733,6 +23893,7 @@ function wireHaloFinder() {
   for (const x of $("halo-survey-rocks").querySelectorAll("button"))
     x.onclick = () => setHaloSurveyRocks(x.dataset.rocks);
   $("halo-survey-mark").onclick = haloMarkSurvey;
+  initMarkRock();
   $("halo-survey-again").onclick = () => {
     const sv = haloLastMarkSpec;
     if (!sv || haloSurveyArmed) return;

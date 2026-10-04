@@ -7898,6 +7898,36 @@ class BeltSurveyApiTests(unittest.TestCase):
         self.assertIsNone(r2.json()["capture"]["pending"]["survey"])
         s.capture_pending = None
 
+    def test_survey_arm_carries_the_rock_readout(self):
+        # Planetary order for belt marks: the readout is filled BEFORE arming
+        # and rides the capture; its ores become the mark's ores.
+        s = app.Session(self._user)
+        app.hub.sessions["1"] = s
+        r = self.client.post("/api/capture/start", json={
+            "name": "Survey r", "type": "survey",
+            "survey": {"rocks": "dense", "scan": {"rs": 7170, "mass_kg": 3200, "lines": [
+                {"ore": "Gold", "pct": 30, "q": 650}, {"ore": "Gold", "pct": 50, "q": 325},
+                {"ore": "Iron", "pct": 10}]}}})
+        self.assertEqual(r.status_code, 200)
+        sv = r.json()["capture"]["pending"]["survey"]
+        self.assertEqual(sv["ores"], ["Gold", "Iron"])
+        self.assertEqual((sv["scan"]["comp"], sv["scan"]["q"], sv["scan"]["rs"]),
+                         ({"Gold": 80.0, "Iron": 10.0}, {"Gold": 447}, 7170))
+        s.capture_pending = None
+        # a "none" mark has no rock — a readout on it is dropped, not stored
+        r = self.client.post("/api/capture/start", json={
+            "name": "Survey n", "type": "survey",
+            "survey": {"rocks": "none", "scan": {"lines": [{"ore": "Gold", "pct": 30}]}}})
+        self.assertNotIn("scan", r.json()["capture"]["pending"]["survey"])
+        s.capture_pending = None
+        # >100% is refused before anything is armed
+        r = self.client.post("/api/capture/start", json={
+            "name": "Survey x", "type": "survey",
+            "survey": {"rocks": "dense", "scan": {"lines": [
+                {"ore": "Gold", "pct": 70}, {"ore": "Iron", "pct": 40}]}}})
+        self.assertEqual(r.status_code, 400)
+        self.assertIsNone(s.capture_pending)
+
     def test_node_capture_takes_a_scanned_q(self):
         """A 4.10 rock scan states Q0-1000 per composition line and no band at
         all, so the capture form takes the Q and the band is derived from it."""

@@ -2076,6 +2076,10 @@ class SurveyPayloadIn(BaseModel):
     # Named survey zone (#36.1): explicit per-mark tag. None → the arming
     # member's active zone is used (the common path).
     zone_id: int | None = None
+    # The rock's mining-scanner readout, entered BEFORE arming — the planetary
+    # node form's order (pick ore, fill % / Q, arm, /showlocation). Same shape
+    # and rules as the after-the-fact PATCH …/survey; its ores union into `ores`.
+    scan: "ScanIn | None" = None
 
 
 class ScanIn(BaseModel):
@@ -2105,6 +2109,50 @@ class ScanLineIn(BaseModel):
 
 
 ScanIn.model_rebuild()
+SurveyPayloadIn.model_rebuild()
+
+
+def _normalize_scan(body: "ScanIn") -> dict:
+    """One scan readout → the stored `scan` dict ({} = nothing usable). Lines
+    win over the legacy comp; Σpct over 100 is a 400. Shared by the arm-time
+    readout (capture_start) and the after-the-fact PATCH."""
+    comp, quality, lines = {}, {}, []
+    if body.lines is not None:
+        lines = nav_core.clean_scan_lines([ln.model_dump() for ln in body.lines])
+        if sum(ln["pct"] for ln in lines) > 100.0 + 1e-6:
+            raise HTTPException(status_code=400,
+                                detail="scan lines add up to more than 100%")
+        comp, quality = nav_core.scan_lines_rollup(lines)
+    else:
+        for name, pct in (body.comp or {}).items():
+            name = (name or "").strip()[:_NAME_MAX]
+            if not name or not isinstance(pct, (int, float)):
+                continue
+            comp[name] = round(max(0.0, min(100.0, float(pct))), 1)
+            if len(comp) >= _SCAN_COMP_MAX:
+                break
+    scan = {}
+    if body.mass_kg is not None:
+        scan["mass_kg"] = round(float(body.mass_kg))
+    if comp:
+        scan["comp"] = comp
+    if lines:
+        scan["lines"] = lines
+    if quality:
+        scan["q"] = quality
+    if body.rs is not None:
+        scan["rs"] = int(body.rs)
+    return scan
+
+
+def _union_ores(have: list, extra) -> list:
+    """`have` + any of `extra` not already there (case-insensitive), order kept."""
+    out, low = list(have or []), {o.lower() for o in (have or [])}
+    for o in extra or []:
+        if o.lower() not in low:
+            out.append(o)
+            low.add(o.lower())
+    return out
 
 _SCAN_COMP_MAX = 8
 
@@ -3905,6 +3953,7 @@ def _capture_poi(sess, pos_m, now, pending, owner):
         # "added ◆ <ore> Q…" line does, instead of a bare "mark dropped".
         sess.last_capture["survey"] = {
             "rocks": sv.get("rocks"), "ores": list(sv.get("ores") or []),
+            "scan": sv.get("scan") or None,
             "salvage": bool(sv.get("salvage")),
             "zone": ({"id": zone_kept["id"], "name": zone_kept["name"]}
                      if zone_kept is not None else None),
@@ -4105,6 +4154,13 @@ async def capture_start(body: CaptureIn, user: dict = Depends(require_session)):
                   "salvage": bool(s.salvage)}
         if s.source in ("contract", "freeroam"):
             survey["source"] = s.source
+        # The rock's readout, entered before arming. A "none" mark has no rock,
+        # so a readout riding on one is dropped rather than contradicting it.
+        if s.scan is not None and rocks != "none":
+            scan = _normalize_scan(s.scan)
+            if scan:
+                survey["scan"] = scan
+                survey["ores"] = _union_ores(survey["ores"], scan.get("comp"))
         # Tag the mark to a named zone (#36.1): an explicit zone_id wins,
         # else the member's active zone. Only a zone that still exists is
         # stamped (a deleted zone silently drops to an untagged mark);
@@ -13788,32 +13844,8 @@ async def update_survey_scan(poi_id: int, body: ScanIn,
     a teammate's mark goes through their own marks or an admin). An empty
     body clears the scan. Derived products (value tiers, ore routing, zone
     detail) pick it up on the next read via nav.touch()."""
-    comp, quality, lines = {}, {}, []
-    if body.lines is not None:
-        lines = nav_core.clean_scan_lines([ln.model_dump() for ln in body.lines])
-        if sum(ln["pct"] for ln in lines) > 100.0 + 1e-6:
-            raise HTTPException(status_code=400,
-                                detail="scan lines add up to more than 100%")
-        comp, quality = nav_core.scan_lines_rollup(lines)
-    else:
-        for name, pct in (body.comp or {}).items():
-            name = (name or "").strip()[:_NAME_MAX]
-            if not name or not isinstance(pct, (int, float)):
-                continue
-            comp[name] = round(max(0.0, min(100.0, float(pct))), 1)
-            if len(comp) >= _SCAN_COMP_MAX:
-                break
-    scan = {}
-    if body.mass_kg is not None:
-        scan["mass_kg"] = round(float(body.mass_kg))
-    if comp:
-        scan["comp"] = comp
-    if lines:
-        scan["lines"] = lines
-    if quality:
-        scan["q"] = quality
-    if body.rs is not None:
-        scan["rs"] = int(body.rs)
+    scan = _normalize_scan(body)
+    comp = scan.get("comp") or {}
     async with hub.lock:
         poi = nav.pois.get(poi_id)
         if poi is None or not getattr(poi, "custom", False):
@@ -13829,13 +13861,7 @@ async def update_survey_scan(poi_id: int, body: ScanIn,
             # EITHER the mark box or the scan is enough (no double-entry;
             # #38 playtest note 4). Never removes — a scan only adds evidence.
             if comp:
-                have = list(sv.get("ores") or [])
-                low = {o.lower() for o in have}
-                for o in comp:
-                    if o.lower() not in low:
-                        have.append(o)
-                        low.add(o.lower())
-                sv["ores"] = have
+                sv["ores"] = _union_ores(sv.get("ores"), comp)
         else:
             sv.pop("scan", None)     # empty scan = clear (attach/replace)
         poi.survey = sv
