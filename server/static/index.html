@@ -3320,8 +3320,8 @@
   .mark-hint { margin: 6px 0 0; }
   .mark-row-top { align-items: flex-start; }
   .mark-row-top > .mark-lbl { padding-top: 8px; }
-  .mark-rock { flex: 1; min-width: 0; max-width: 560px; }
-  .mark-rock .scan-head { margin-top: 6px; }
+  .mark-rock { flex: 1; min-width: 0; max-width: 640px; }
+  .mark-ore-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   /* Live zone panel (the navigator forecast's look, for a belt zone). */
   .zone-live { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border);
     border-radius: 8px; background: var(--panel2); }
@@ -5844,7 +5844,7 @@
         <ol class="mark-steps" aria-label="How a mark is made">
           <li><b>Wide scan</b> on arrival — look up interesting RS signatures above</li>
           <li><b>Fly to the rock</b> and scan it with your mining scanner</li>
-          <li><b>Fill in the rock</b> — pick the ores, then % and Q</li>
+          <li><b>Fill in the rock</b> — its ore and Q (+ quality lines if the scan lists it more than once)</li>
           <li><b>Arm</b>, then type <b>/showlocation</b> in game</li>
         </ol>
       </details>
@@ -5861,28 +5861,50 @@
            zone): what this zone has turned up so far, refreshed as each mark
            lands — the reason to keep going. -->
       <div id="halo-zone-live" class="zone-live" hidden></div>
-      <!-- The rock, BEFORE arming — the planetary node form's order (pick the
-           ore, fill % and Q, arm, /showlocation). Rows are the shared ore
-           combobox, ranked by what this zone has found; the chips are the
-           one-tap shortlist. -->
+      <!-- The rock, BEFORE arming — the planetary node form, control for
+           control (user's call 2026-10-04): ONE ore, its Q, and "+ quality
+           lines" for that SAME ore listed more than once on the scan. The
+           lines are wired by the same qualityLinesCtl as the node form
+           (prefix "mark"), so the two can't drift. -->
       <div class="mark-row mark-row-top">
         <span class="fld-label mark-lbl">ROCK</span>
-        <div class="scan-form mark-rock" id="halo-mark-rock">
-          <div id="halo-mark-likely" class="ore-likely" style="margin-top:0;" hidden></div>
-          <div class="scan-head" aria-hidden="true"><span>ORE</span><span>% OF ROCK</span><span>Q (0–1000)</span></div>
-          <div class="scan-rows"></div>
-          <p class="muted scan-sum" style="margin:4px 0 0; font-size:12px;"></p>
-          <div class="route-row" style="align-items:flex-end; margin-top:8px;">
-            <button type="button" class="route-chip scan-add">＋ line</button>
-            <label class="scan-lbl">MASS (kg)
-              <input class="ti scan-mass" type="number" min="1" max="10000000" step="1" style="width:120px;"></label>
-            <label class="scan-lbl">RS
-              <input class="ti scan-rs" type="number" min="1" max="10000000" step="1" style="width:110px;"></label>
+        <div class="mark-rock" id="halo-mark-rock">
+          <div class="mark-ore-row">
+            <span class="ore-pick poi-pick" style="flex:1; min-width:150px; max-width:280px;">
+              <input id="mark-ore" class="ti" autocomplete="off" aria-label="Primary ore of the rock"
+                     placeholder="ore — type to filter">
+            </span>
+            <span id="mark-ore-value" hidden></span>
+            <label class="muted" style="font-size:12px;"
+                   title="Quality 0–1000, read off the ore's own line in the mining scan — '74.45% QUANTANIUM (RAW) 344' is Q344.">Q
+              <input id="mark-q" class="ti q-field" type="number" min="0" max="1000"
+                     step="1" inputmode="numeric" placeholder="—"
+                     aria-label="Ore quality 0 to 1000" style="width:5.5rem;">
+            </label>
+            <span id="mark-quality" class="muted" style="font-size:12px;"></span>
+            <button type="button" id="mark-lines-add" class="route-chip"
+                    title="The scan lists this ore more than once, at different Q? Enter every line — the Q becomes their share-weighted average.">+ quality lines</button>
           </div>
-          <p class="cap-purpose" style="margin:6px 0 0;">One row per line the mining scanner prints —
-            “62.40% IRON (ORE) 410” is 62.40 % and Q410. All optional: a mark with just the rocks
-            around you still counts.</p>
+          <div id="mark-lines" class="q-lines" hidden>
+            <span class="muted">Each line of this ore on the scan —
+              “30.00% GOLD 650” is 30% at Q650.</span>
+            <div id="mark-lines-rows"></div>
+            <div class="q-line">
+              <button type="button" id="mark-lines-more" class="route-chip">+ line</button>
+              <span id="mark-lines-sum" class="q-lines-sum muted" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <!-- The zone's shortlist, one tap — the mirror of #node-ore-likely. -->
+          <div id="mark-ore-likely" class="ore-likely" hidden></div>
         </div>
+      </div>
+      <div class="mark-row">
+        <span class="fld-label mark-lbl" aria-hidden="true">SCAN</span>
+        <label class="scan-lbl">MASS (kg)
+          <input id="mark-mass" class="ti" type="number" min="1" max="10000000" step="1" style="width:120px;"></label>
+        <label class="scan-lbl">RS — from your lookup
+          <input id="mark-rs" class="ti" type="number" min="1" max="10000000" step="1" style="width:130px;"></label>
+        <span class="cap-purpose" style="margin:0;">optional</span>
       </div>
       <div class="mark-row">
         <span class="fld-label mark-lbl" id="halo-survey-rocks-lbl">ROCKS AROUND</span>
@@ -5911,8 +5933,11 @@
       <button type="button" class="route-chip" id="halo-survey-again" hidden></button>
       <p id="halo-survey-msg" class="mark-msg" role="status" aria-live="polite"></p>
         <div id="halo-scan-blk" hidden style="margin-top:8px;">
-          <button type="button" class="route-chip" id="halo-scan-toggle" aria-expanded="false"
-            aria-controls="halo-scan-form">✎ Fix this mark's readout</button>
+          <!-- No after-the-fact editor here: the readout is filled before
+               arming (the node form's order), and a wrong one is Undo + mark
+               again, as planetside. The zone card's timeline keeps its editor. -->
+          <button type="button" class="route-chip" id="halo-scan-toggle" hidden
+            aria-expanded="false" aria-controls="halo-scan-form">✎ Fix this mark's readout</button>
           <!-- A ⛏ mark is org evidence the moment it lands: it moves a zone's
                value tier and feeds the belt model. A mis-tapped density (or a
                mark dropped in the wrong place) had no way back except an admin
@@ -7317,15 +7342,12 @@ $("poi-cancel").onclick = () => postJson("/api/capture/cancel", {});
 // Quality lines sit one level above both: when any line is filled in, the Q
 // is DERIVED from them (share-weighted, nav_core.quality_lines_summary's twin)
 // and Q + band go read-only, so the three can never disagree either.
-function readNodeLines() {
-  return [...document.querySelectorAll("#node-lines-rows .q-line")].map(row => ({
-    pct: Number(row.querySelector(".q-pct").value),
-    q: Number(row.querySelector(".q-lq").value),
-    blank: row.querySelector(".q-pct").value.trim() === "" || row.querySelector(".q-lq").value.trim() === "",
-  })).filter(l => !l.blank && Number.isFinite(l.pct) && l.pct > 0
-    && Number.isFinite(l.q) && l.q >= 0 && l.q <= 1000)
-    .map(l => ({ pct: l.pct, q: Math.round(l.q) }));
-}
+// Quality lines (one ore listed more than once on the scan, at different Q),
+// built ONCE for every form that captures an ore: the navigator's resource
+// node (prefix "node") and Prospector's belt ROCK (prefix "mark"). Same ids by
+// prefix — <p>-q, <p>-band (optional), <p>-quality, <p>-lines-add, <p>-lines,
+// <p>-lines-rows, <p>-lines-more, <p>-lines-sum — so the two forms cannot
+// drift apart (user's call 2026-10-04: "be consistent").
 function qualityLinesSummary(lines) {
   const total = lines.reduce((a, l) => a + l.pct, 0);
   const qs = lines.map(l => l.q);
@@ -7333,66 +7355,89 @@ function qualityLinesSummary(lines) {
            q_min: Math.min(...qs), q_max: Math.max(...qs),
            share: Math.round(Math.min(total, 100) * 100) / 100, total };
 }
-function addNodeLine(q) {
-  const row = document.createElement("div");
-  row.className = "q-line";
-  row.innerHTML =
-    `<input class="ti q-field q-pct" type="number" min="0" max="100" step="0.01" inputmode="decimal" placeholder="%" aria-label="Share of the rock, percent">`
-    + `<span class="muted">% at Q</span>`
-    + `<input class="ti q-field q-lq" type="number" min="0" max="1000" step="1" inputmode="numeric" placeholder="Q" aria-label="Quality of this line, 0 to 1000">`
-    + `<button type="button" class="route-chip q-line-x" aria-label="Remove this line">✕</button>`;
-  if (q != null) row.querySelector(".q-lq").value = q;
-  row.querySelectorAll("input").forEach(i => { i.oninput = nodeQualityPreview; });
-  row.querySelector(".q-line-x").onclick = () => {
-    row.remove();
-    if (!document.querySelector("#node-lines-rows .q-line")) clearNodeLines();
-    nodeQualityPreview();
-  };
-  $("node-lines-rows").append(row);
-  return row;
-}
-function clearNodeLines() {
-  $("node-lines-rows").innerHTML = "";
-  $("node-lines").hidden = true;
-  $("node-lines-add").hidden = false;
-}
-function nodeQualityPreview() {
-  const lines = readNodeLines();
-  const qEl = $("node-q"), sum = $("node-lines-sum");
-  if (lines.length) {
-    const s = qualityLinesSummary(lines);
-    qEl.value = String(s.q); qEl.dataset.derived = "1";
-    qEl.readOnly = true; $("node-band").disabled = true;
-    const over = s.total > 100.0001;
-    sum.textContent = over
-      ? `lines add up to ${Math.round(s.total * 100) / 100}% — over 100%`
-      : `${s.share}% of the rock · headline Q${s.q}`
-        + (s.q_min !== s.q_max ? ` (Q${s.q_min}–${s.q_max})` : "");
-    sum.classList.toggle("err", over);
-  } else {
-    // Only undo a Q the lines wrote: a Q the surveyor typed stays theirs.
-    if (qEl.dataset.derived) { qEl.value = ""; delete qEl.dataset.derived; }
-    qEl.readOnly = false; $("node-band").disabled = false;
-    sum.textContent = ""; sum.classList.remove("err");
+function qualityLinesCtl(p) {
+  const el = (k) => $(`${p}-${k}`);
+  function read() {
+    return [...document.querySelectorAll(`#${p}-lines-rows .q-line`)].map(row => ({
+      pct: Number(row.querySelector(".q-pct").value),
+      q: Number(row.querySelector(".q-lq").value),
+      blank: row.querySelector(".q-pct").value.trim() === "" || row.querySelector(".q-lq").value.trim() === "",
+    })).filter(l => !l.blank && Number.isFinite(l.pct) && l.pct > 0
+      && Number.isFinite(l.q) && l.q >= 0 && l.q <= 1000)
+      .map(l => ({ pct: l.pct, q: Math.round(l.q) }));
   }
-  const raw = qEl.value.trim();
-  const q = raw === "" ? null : Number(raw);
-  const hasQ = q !== null && Number.isFinite(q) && q >= 0;
-  if (hasQ) $("node-band").value = String(qualityBand(q));
-  $("node-quality").textContent =
-    hasQ ? bandTag(q) : BAND_QUALITY(parseInt($("node-band").value, 10));
+  function add(q) {
+    const row = document.createElement("div");
+    row.className = "q-line";
+    row.innerHTML =
+      `<input class="ti q-field q-pct" type="number" min="0" max="100" step="0.01" inputmode="decimal" placeholder="%" aria-label="Share of the rock, percent">`
+      + `<span class="muted">% at Q</span>`
+      + `<input class="ti q-field q-lq" type="number" min="0" max="1000" step="1" inputmode="numeric" placeholder="Q" aria-label="Quality of this line, 0 to 1000">`
+      + `<button type="button" class="route-chip q-line-x" aria-label="Remove this line">✕</button>`;
+    if (q != null) row.querySelector(".q-lq").value = q;
+    row.querySelectorAll("input").forEach(i => { i.oninput = preview; });
+    row.querySelector(".q-line-x").onclick = () => {
+      row.remove();
+      if (!document.querySelector(`#${p}-lines-rows .q-line`)) clear();
+      preview();
+    };
+    el("lines-rows").append(row);
+    return row;
+  }
+  function clear() {
+    el("lines-rows").innerHTML = "";
+    el("lines").hidden = true;
+    el("lines-add").hidden = false;
+  }
+  function preview() {
+    const lines = read();
+    const qEl = el("q"), sum = el("lines-sum"), band = el("band");
+    if (lines.length) {
+      const s = qualityLinesSummary(lines);
+      qEl.value = String(s.q); qEl.dataset.derived = "1";
+      qEl.readOnly = true; if (band) band.disabled = true;
+      const over = s.total > 100.0001;
+      sum.textContent = over
+        ? `lines add up to ${Math.round(s.total * 100) / 100}% — over 100%`
+        : `${s.share}% of the rock · headline Q${s.q}`
+          + (s.q_min !== s.q_max ? ` (Q${s.q_min}–${s.q_max})` : "");
+      sum.classList.toggle("err", over);
+    } else {
+      // Only undo a Q the lines wrote: a Q the surveyor typed stays theirs.
+      if (qEl.dataset.derived) { qEl.value = ""; delete qEl.dataset.derived; }
+      qEl.readOnly = false; if (band) band.disabled = false;
+      sum.textContent = ""; sum.classList.remove("err");
+    }
+    const raw = qEl.value.trim();
+    const q = raw === "" ? null : Number(raw);
+    const hasQ = q !== null && Number.isFinite(q) && q >= 0;
+    if (hasQ && band) band.value = String(qualityBand(q));
+    const qual = el("quality");
+    if (qual) qual.textContent = hasQ ? bandTag(q)
+      : band ? BAND_QUALITY(parseInt(band.value, 10)) : "";
+  }
+  el("q").oninput = preview;
+  if (el("band")) el("band").onchange = () => { el("q").value = ""; preview(); };
+  // Opening the lines carries a typed Q into the first row — it was one of them.
+  el("lines-add").onclick = () => {
+    const raw = el("q").value.trim();
+    el("lines").hidden = false;
+    el("lines-add").hidden = true;
+    add(raw === "" ? null : Number(raw)).querySelector(".q-pct").focus();
+    preview();
+  };
+  el("lines-more").onclick = () => add().querySelector(".q-pct").focus();
+  // The q the form would file: the lines' derived Q, else the typed one.
+  function q() {
+    const raw = el("q").value.trim();
+    const v = raw === "" ? null : Number(raw);
+    return v !== null && Number.isFinite(v) && v >= 0 && v <= 1000 ? Math.round(v) : null;
+  }
+  return { read, add, clear, preview, q };
 }
-$("node-q").oninput = nodeQualityPreview;
-$("node-band").onchange = () => { $("node-q").value = ""; nodeQualityPreview(); };
-// Opening the lines carries a typed Q into the first row — it was one of them.
-$("node-lines-add").onclick = () => {
-  const raw = $("node-q").value.trim();
-  $("node-lines").hidden = false;
-  $("node-lines-add").hidden = true;
-  addNodeLine(raw === "" ? null : Number(raw)).querySelector(".q-pct").focus();
-  nodeQualityPreview();
-};
-$("node-lines-more").onclick = () => addNodeLine().querySelector(".q-pct").focus();
+const nodeLines = qualityLinesCtl("node");
+const readNodeLines = nodeLines.read, addNodeLine = nodeLines.add,
+      clearNodeLines = nodeLines.clear, nodeQualityPreview = nodeLines.preview;
 nodeQualityPreview();
 $("node-arm").onclick = async () => {
   if ($("node-arm").classList.contains("waiting")) return;   // a status while armed
@@ -20162,7 +20207,7 @@ function syncHaloMarkArm() {
 function setHaloArmedUI(on, sv) {
   const b = $("halo-survey-mark"), cancel = $("halo-survey-cancel"), msg = $("halo-survey-msg");
   const blk = $("halo-survey-blk");
-  if (blk) for (const el of blk.querySelectorAll("#halo-survey-rocks button, #halo-survey-salvage, #halo-zone-select, #halo-survey-again, #halo-mark-rock input, #halo-mark-rock button, #halo-mark-likely button"))
+  if (blk) for (const el of blk.querySelectorAll("#halo-survey-rocks button, #halo-survey-salvage, #halo-zone-select, #halo-survey-again, #halo-mark-rock input, #halo-mark-rock button, #mark-mass, #mark-rs"))
     el.disabled = on;
   if (cancel) cancel.hidden = !on;
   if (!b) return;
@@ -20328,7 +20373,7 @@ function resolveHaloSurveyArm(capture) {
       haloLastScan = (capture.last.survey && capture.last.survey.scan) || null;
       const blk = $("halo-scan-blk"), form = $("halo-scan-form"), tog = $("halo-scan-toggle");
       if (blk) blk.hidden = false;
-      if (tog) { tog.hidden = !rock; tog.setAttribute("aria-expanded", "false"); }
+      if (tog) { tog.hidden = true; tog.setAttribute("aria-expanded", "false"); }
       if (form) { form.hidden = true; form.innerHTML = ""; }
       // This rock is filed; the next one starts blank (like the node form) —
       // including its RS: the signature looked up was THIS rock's.
@@ -20384,13 +20429,25 @@ async function haloMarkSurvey() {
     },
   };
   if (haloSurveyRocks !== "none") {
-    const scan = readScanBody($("halo-mark-rock"));
-    if (scan.lines.reduce((a, ln) => a + ln.pct, 0) > 100.0001) {
+    // The node form's payload, for a rock: the ore, its quality lines (or a
+    // single Q), plus the scanner's mass and RS.
+    const ore = $("mark-ore").value.trim();
+    const lines = markLines.read();
+    if (lines.reduce((a, ln) => a + ln.pct, 0) > 100.0001) {
       msg.className = "mark-msg armed";
-      msg.textContent = "⚠ the rock's lines add up to more than 100% — check the shares";
+      msg.textContent = "⚠ the quality lines add up to more than 100% — check the shares";
       return;
     }
-    if (scan.lines.length || scan.mass_kg || scan.rs) body.survey.scan = scan;
+    if (ore) body.survey.ores = [ore];
+    const scan = {};
+    const q = markLines.q();
+    if (ore && lines.length) scan.lines = lines.map(l => ({ ore, pct: l.pct, q: l.q }));
+    else if (ore && q != null) scan.lines = [{ ore, q }];
+    const mass = parseFloat($("mark-mass").value);
+    if (Number.isFinite(mass) && mass >= 1) scan.mass_kg = mass;
+    const rs = parseInt($("mark-rs").value, 10);
+    if (Number.isFinite(rs) && rs >= 1) scan.rs = rs;
+    if (Object.keys(scan).length) body.survey.scan = scan;
   }
   try {
     const r = await fetch("/api/capture/start", { method: "POST",
@@ -21005,7 +21062,7 @@ function renderRsLookupResult(ores) {
   haloLastRsLookup = r ? r.value : null;
   // The pilot is choosing which signature to fly to — carry it into the ROCK
   // box's RS until they type their own there.
-  const rsIn = document.querySelector("#halo-mark-rock .scan-rs");
+  const rsIn = $("mark-rs");
   if (rsIn && (!rsIn.value || rsIn.dataset.auto)) {
     rsIn.value = haloLastRsLookup || "";
     if (haloLastRsLookup) rsIn.dataset.auto = "1";
@@ -21580,7 +21637,7 @@ function scanCompRow(ore = "", pct = "", q = "") {
 // lines existed) its comp, each carrying the per-ore Q when one was given.
 function scanRowsFor(scan) {
   if (scan && (scan.lines || []).length)
-    return scan.lines.map(ln => scanCompRow(ln.ore, ln.pct, ln.q));
+    return scan.lines.map(ln => scanCompRow(ln.ore, ln.pct ?? "", ln.q));
   const q = (scan && scan.q) || {};
   return Object.entries((scan && scan.comp) || {}).map(([o, p]) => scanCompRow(o, p, q[o]));
 }
@@ -21833,46 +21890,40 @@ function openHaloReadout() {
   if (tog) tog.setAttribute("aria-expanded", "true");
 }
 
-// The mark's ROCK box: one blank line, the RS the pilot looked up (they flew
-// to that signature), and the zone's shortlist.
+// The mark's ROCK box = the navigator's node form: one ore (zone-ranked
+// picker + one-tap chips), its Q, and quality lines for that same ore. The
+// RS starts as the signature the pilot looked up — the rock they flew to.
+const markOrePicker = sightingPicker({
+  inputId: "mark-ore", chipsId: "mark-ore-likely", restCat: "resource",
+  pText: "on rock marks", onPick: updateMarkOreValue,
+});
+markOrePicker.wire();
+const markLines = qualityLinesCtl("mark");
+function updateMarkOreValue() {
+  const el = $("mark-ore-value"), html = oreValueChip($("mark-ore").value.trim(), "resource");
+  el.innerHTML = html;
+  el.hidden = !html;
+}
 function initMarkRock() {
-  const box = $("halo-mark-rock");
-  if (!box) return;
-  box.querySelector(".scan-rows").innerHTML = scanCompRow();
-  box.querySelector(".scan-mass").value = "";
-  const rs = box.querySelector(".scan-rs");
+  $("mark-ore").value = "";
+  updateMarkOreValue();
+  markLines.clear();
+  $("mark-q").value = "";
+  delete $("mark-q").dataset.derived;
+  markLines.preview();
+  $("mark-mass").value = "";
+  const rs = $("mark-rs");
   rs.value = haloLastRsLookup || "";
   if (haloLastRsLookup) rs.dataset.auto = "1"; else delete rs.dataset.auto;
-  if (!box.dataset.wired) { box.dataset.wired = "1"; wireScanRows(box); }
-  else { wireScanRowPickers(box); syncScanSum(box); }
   renderMarkLikely();
 }
+$("mark-rs").addEventListener("input", (e) => { delete e.target.dataset.auto; });
 
-// "in <zone>: Iron $ 75% …" — tap fills the first empty line (or adds one)
-// and moves the cursor to its %, the node form's chip row for a rock.
 function renderMarkLikely() {
-  const el = $("halo-mark-likely");
-  if (!el) return;
   const f = haloSurveyForecast();
-  const rows = f ? f.ranked.filter(r => r.p >= LIKELY_MIN_P).slice(0, LIKELY_SHOWN) : [];
-  el.hidden = !rows.length;
-  el.innerHTML = rows.length ? `<span>${esc(f.chipLabel)}:</span>` + rows.map(r =>
-    `<button type="button" class="ol-btn" data-name="${esc(r.ore)}" title="on ${Math.round(r.p * 100)}% of this zone's rock marks">`
-    + `${esc(r.ore)}${oreValueChip(r.ore, "resource")} <span class="ol-p">${Math.round(r.p * 100)}%</span></button>`).join("") : "";
-  for (const b of el.querySelectorAll(".ol-btn")) b.onclick = () => {
-    const box = $("halo-mark-rock");
-    let inp = [...box.querySelectorAll(".scan-ore")].find(i => !i.value.trim());
-    if (!inp) {
-      box.querySelector(".scan-rows").insertAdjacentHTML("beforeend", scanCompRow());
-      wireScanRowPickers(box);
-      inp = [...box.querySelectorAll(".scan-ore")].pop();
-    }
-    inp.value = b.dataset.name;
-    const row = inp.closest(".scan-row");
-    row.querySelector(".scan-val").innerHTML = oreValueChip(inp.value, "resource");
-    syncScanSum(box);
-    row.querySelector(".scan-pct").focus();
-  };
+  markOrePicker.setVocab(oreVocab);
+  markOrePicker.setForecasts(f ? [{ label: f.label, chipLabel: f.chipLabel,
+    cat: "resource", unit: "rock marks", forecast: f }] : []);
   refreshScanRowForecasts();
 }
 
@@ -28469,6 +28520,7 @@ function init() {
     .then(n => {
       oreVocab = n || [];
       orePicker.setVocab(oreVocab);
+      markOrePicker.setVocab(oreVocab);
       const dl = $("halo-survey-ore-list");   // DROP's ore-first box + scan rows
       if (dl) dl.innerHTML = (n || []).map(o => `<option value="${esc(o)}">`).join("");
     }).catch(() => {});

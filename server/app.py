@@ -2104,7 +2104,10 @@ class ScanIn(BaseModel):
 
 class ScanLineIn(BaseModel):
     ore: str = Field(max_length=_NAME_MAX)
-    pct: float = Field(gt=0, le=100)
+    # Optional: the node form's "just a Q" case — the ore's quality read off
+    # the scan without its share (q is then required; nav_core drops a line
+    # with neither).
+    pct: float | None = Field(default=None, gt=0, le=100)
     q: int | None = Field(default=None, ge=0, le=nav_core.MATERIAL_Q_MAX)
 
 
@@ -2119,7 +2122,7 @@ def _normalize_scan(body: "ScanIn") -> dict:
     comp, quality, lines = {}, {}, []
     if body.lines is not None:
         lines = nav_core.clean_scan_lines([ln.model_dump() for ln in body.lines])
-        if sum(ln["pct"] for ln in lines) > 100.0 + 1e-6:
+        if sum(ln.get("pct") or 0 for ln in lines) > 100.0 + 1e-6:
             raise HTTPException(status_code=400,
                                 detail="scan lines add up to more than 100%")
         comp, quality = nav_core.scan_lines_rollup(lines)
