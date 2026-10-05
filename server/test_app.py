@@ -36,6 +36,7 @@ import shutil
 import tempfile
 import time
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13204,6 +13205,272 @@ class CuratedFloraFaunaTests(unittest.TestCase):
         for n in ("Pingala Seeds", "Fotia Seedpod", "Wuotan Seed", "Bluemoon Fungus"):
             self.assertIn(n, names)
         self.assertEqual(len(names), len(set(names)))
+
+
+def _http_error(code):
+    return urllib.error.HTTPError("https://discord.com/x", code, "err", {}, io.BytesIO(b"{}"))
+
+
+class NotifyAttachmentTests(unittest.TestCase):
+    """Image attachments on webhook posts (docs/discord-notification-customization.md
+    §3.5): multipart encoding, and the degrade path — a post Discord refuses
+    because of its files is re-sent without them, never dropped."""
+
+    _FILES = [("thumb.png", b"\x89PNG\r\n\x1a\nfake", "image/png")]
+    _EMBED = {"title": "📅 New event", "thumbnail": {"url": "attachment://thumb.png"}}
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._orig_post = notify._post
+
+    @classmethod
+    def tearDownClass(cls):
+        notify._post = cls._orig_post
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self.calls = []
+        notify._recent.clear()
+        notify._next_send.clear()
+        notify._health.clear()
+        notify.SEND_SPACING_S = 0.0
+
+    def _fake(self, fail_with_files=None):
+        def post(url, payload, files=None):
+            self.calls.append((payload, files))
+            if files and fail_with_files:
+                raise _http_error(fail_with_files)
+        notify._post = post
+
+    def test_multipart_body_carries_payload_json_and_files(self):
+        body, ctype = notify._multipart({"content": "hi", "embeds": [self._EMBED]}, self._FILES)
+        self.assertTrue(ctype.startswith("multipart/form-data; boundary="))
+        boundary = ctype.split("boundary=")[1].encode()
+        self.assertTrue(body.startswith(b"--" + boundary))
+        self.assertTrue(body.endswith(b"--" + boundary + b"--\r\n"))
+        self.assertIn(b'name="payload_json"', body)
+        self.assertIn(b'name="files[0]"; filename="thumb.png"', body)
+        self.assertIn(b"\x89PNG\r\n\x1a\nfake", body)
+        # attachments map ids to filenames so attachment://thumb.png resolves
+        pj = body.split(b"\r\n\r\n", 1)[1].split(b"\r\n--", 1)[0]
+        self.assertEqual(json.loads(pj)["attachments"], [{"id": 0, "filename": "thumb.png"}])
+
+    def test_files_reach_post(self):
+        self._fake()
+        ok = asyncio.run(notify.send("events", "", embed=self._EMBED, files=self._FILES))
+        self.assertTrue(ok)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][1], self._FILES)
+
+    def test_no_files_keeps_the_two_argument_json_path(self):
+        # Callers without images must not change shape (tests elsewhere stub
+        # _post with a 2-arg lambda; real sends stay plain JSON).
+        notify._post = lambda url, payload: self.calls.append(payload)
+        self.assertTrue(asyncio.run(notify.send("events", "hello")))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_refused_attachment_degrades_to_text(self):
+        for code in (400, 413):
+            self.setUp()
+            self._fake(fail_with_files=code)
+            ok = asyncio.run(notify.send("events", "", embed=self._EMBED, files=self._FILES))
+            self.assertTrue(ok, code)                       # the announcement still landed
+            self.assertEqual(len(self.calls), 2)
+            resent, files = self.calls[1]
+            self.assertIsNone(files)
+            self.assertNotIn("thumbnail", resent["embeds"][0])
+            self.assertEqual(resent["embeds"][0]["title"], "📅 New event")
+            st = notify.webhook_status()["events"]
+            self.assertIn(f"HTTP {code}", st["last_image_error"])
+            self.assertEqual(st["last_error"], "")          # the webhook itself is healthy
+        self._fake()                                        # a later image post gets through
+        asyncio.run(notify.send("events", "", embed=self._EMBED, files=self._FILES))
+        self.assertEqual(notify.webhook_status()["events"]["last_image_error"], "")
+
+    def test_other_failures_are_not_retried(self):
+        self._fake(fail_with_files=404)                     # a dead webhook, not the art
+        ok = asyncio.run(notify.send("events", "", embed=self._EMBED, files=self._FILES))
+        self.assertFalse(ok)
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(notify.webhook_status()["events"]["last_error"])
+
+    def test_strip_keeps_an_external_image(self):
+        out = notify._strip_attachments({"embeds": [{
+            "thumbnail": {"url": "attachment://thumb.png"},
+            "image": {"url": "https://i.imgur.com/x.png"}}], "attachments": [{"id": 0}]})
+        self.assertNotIn("attachments", out)
+        self.assertNotIn("thumbnail", out["embeds"][0])
+        self.assertEqual(out["embeds"][0]["image"]["url"], "https://i.imgur.com/x.png")
+
+    def test_paged_send_attaches_to_page_zero_only(self):
+        self._fake()
+        ids = [str(1000 + i) for i in range(60)]
+        asyncio.run(notify.send_paged("events", "", mentions=ids,
+                                      embed=self._EMBED, files=self._FILES))
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[0][1], self._FILES)
+        self.assertIsNone(self.calls[1][1])
+
+
+class NotifyOrgImageTests(unittest.TestCase):
+    """The opt-in org image (thumbnail on announcement posts): off by default,
+    shipped patch / external URL / upload, admin-only, never on transactional
+    messages."""
+
+    _GIF = b"GIF89a" + b"\x00" * 64
+    _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "is_admin": True}
+        cls._user = dict(cls._admin)
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls._orig_send = notify.send
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._user.clear(); self._user.update(self._admin)
+        tmp = tempfile.mkdtemp()
+        orig = app.BRANDING_DIR
+        app.BRANDING_DIR = Path(tmp)
+        self.addCleanup(lambda: setattr(app, "BRANDING_DIR", orig))
+        db.set_setting(app._NOTIFY_ORG_IMAGE_KEY, "")
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category, "embed": kw.get("embed"),
+                              "files": kw.get("files")})
+            return True
+        notify.send = _capture
+        app._test_send_at = 0.0
+
+    def _upload(self, data, ctype, name="art"):
+        return self.client.post("/api/settings/discord/org-image",
+                                files={"file": (name, data, ctype)})
+
+    def test_off_by_default(self):
+        self.assertIsNone(self.client.get("/api/settings").json()["notify_org_image"])
+        kw = app._announce({"title": "x"})
+        self.assertNotIn("thumbnail", kw["embed"])
+        self.assertEqual(kw["files"], [])
+
+    def test_shipped_patch_attaches_the_logo(self):
+        r = self.client.put("/api/settings/discord/org-image", json={"kind": "shipped"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["notify_org_image"], {"kind": "shipped"})
+        kw = app._announce({"title": "x"})
+        self.assertEqual(kw["embed"]["thumbnail"], {"url": "attachment://thumb.png"})
+        (name, data, mime), = kw["files"]
+        self.assertEqual((name, mime), ("thumb.png", "image/png"))
+        self.assertEqual(data, app.SHIPPED_ORG_IMAGE.read_bytes())
+
+    def test_url_is_referenced_not_attached(self):
+        url = "https://i.imgur.com/abc123.png"
+        r = self.client.put("/api/settings/discord/org-image", json={"kind": "url", "url": url})
+        self.assertEqual(r.status_code, 200)
+        kw = app._announce({"title": "x"})
+        self.assertEqual(kw["embed"]["thumbnail"], {"url": url})
+        self.assertEqual(kw["files"], [])
+
+    def test_bad_urls_rejected(self):
+        for url in ("http://i.imgur.com/a.png",                         # not https
+                    "https://user:pw@example.com/a.png",                 # credentials
+                    "https://cdn.discordapp.com/attachments/1/2/a.png",  # expiring
+                    "https://media.discordapp.net/attachments/1/2/a.png",
+                    "https://" + "a" * 1000 + ".com/a.png",
+                    "javascript:alert(1)", ""):
+            r = self.client.put("/api/settings/discord/org-image", json={"kind": "url", "url": url})
+            self.assertEqual(r.status_code, 400, url)
+        r = self.client.put("/api/settings/discord/org-image",
+                            json={"kind": "url", "url": "https://cdn.discordapp.com/attachments/1/2/a.png"})
+        self.assertIn("Upload", r.json()["detail"])
+        self.assertIsNone(app.notify_org_image())
+
+    def test_gif_upload_served_and_attached(self):
+        r = self._upload(self._GIF, "image/gif")
+        self.assertEqual(r.status_code, 200)
+        ref = r.json()["notify_org_image"]
+        self.assertEqual(ref["kind"], "upload")
+        self.assertEqual(ref["ext"], "gif")
+        g = self.client.get(f"/api/settings/discord/org-image?v={ref['v']}")
+        self.assertEqual(g.status_code, 200)
+        self.assertEqual(g.content, self._GIF)
+        kw = app._announce({"title": "x"})
+        self.assertEqual(kw["files"], [("thumb.gif", self._GIF, "image/gif")])
+
+    def test_upload_validation(self):
+        self.assertEqual(self._upload(self._PNG, "image/gif").status_code, 400)   # mislabeled
+        self.assertEqual(self._upload(b"<svg/>", "image/svg+xml").status_code, 400)
+        big = self._GIF + b"\x00" * app._NOTIFY_IMAGE_MAX_BYTES
+        r = self._upload(big, "image/gif")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("4 MB", r.json()["detail"])
+        self.assertIsNone(app.notify_org_image())
+
+    def test_switching_or_removing_clears_the_upload(self):
+        self._upload(self._PNG, "image/png")
+        self.assertTrue(list(app.BRANDING_DIR.glob("notify_org.*")))
+        self.client.put("/api/settings/discord/org-image", json={"kind": "shipped"})
+        self.assertFalse(list(app.BRANDING_DIR.glob("notify_org.*")))
+        self._upload(self._PNG, "image/png")
+        r = self.client.delete("/api/settings/discord/org-image")
+        self.assertIsNone(r.json()["notify_org_image"])
+        self.assertFalse(list(app.BRANDING_DIR.glob("notify_org.*")))
+        self.assertEqual(self.client.get("/api/settings/discord/org-image").status_code, 404)
+
+    def test_missing_upload_file_degrades_to_no_image(self):
+        self._upload(self._PNG, "image/png")
+        for f in app.BRANDING_DIR.glob("notify_org.*"):
+            f.unlink()
+        kw = app._announce({"title": "x"})
+        self.assertNotIn("thumbnail", kw["embed"])
+        self.assertEqual(kw["files"], [])
+
+    def test_admin_only(self):
+        self._user["is_admin"] = False
+        self.assertEqual(self.client.put("/api/settings/discord/org-image",
+                                         json={"kind": "shipped"}).status_code, 403)
+        self.assertEqual(self._upload(self._PNG, "image/png").status_code, 403)
+        self.assertEqual(self.client.delete("/api/settings/discord/org-image").status_code, 403)
+
+    def test_announcements_carry_it_transactional_posts_do_not(self):
+        self.client.put("/api/settings/discord/org-image", json={"kind": "shipped"})
+        ev = {"id": 9, "title": "Op", "start_at": "2026-07-01T18:00:00+00:00"}
+        asyncio.run(app._notify_event_created(ev))
+        asyncio.run(app._notify_event_cancelled(ev))
+        asyncio.run(app._notify_waitlist_promoted(ev, "123456789012345678"))
+        created, cancelled, promoted = self.sent
+        self.assertEqual(created["embed"]["thumbnail"]["url"], "attachment://thumb.png")
+        self.assertTrue(created["files"])
+        self.assertIn("thumbnail", cancelled["embed"])
+        self.assertNotIn("thumbnail", promoted["embed"])      # "you're in" is personal
+        self.assertFalse(promoted.get("files"))
+
+    def test_test_send_shows_the_image(self):
+        self.client.put("/api/settings/discord/org-image", json={"kind": "shipped"})
+        r = self.client.post("/api/settings/discord/test", json={"category": "events"})
+        self.assertEqual(r.status_code, 200)
+        msg, = self.sent
+        self.assertIn("events channel is connected", msg["embed"]["title"])
+        self.assertEqual(msg["embed"]["thumbnail"]["url"], "attachment://thumb.png")
 
 
 if __name__ == "__main__":

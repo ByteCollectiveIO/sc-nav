@@ -208,6 +208,18 @@
   /* Reset holds its slot on every row (visibility, not display) so Upload stays
      in one column down the list; `disabled` also drops it from the tab order. */
   .art-reset[disabled] { visibility: hidden; }
+  /* Org image on Discord announcements (Settings › Discord): the "now" line reads
+     like an art row; options without a picture get a glyph tile in the thumb slot
+     so the names stay in one column. */
+  .oi-now { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 4px 0 10px; }
+  .oi-glyph { display: grid; place-items: center; color: var(--dim); font-size: 18px; }
+  .oi-glyph[hidden], #oi-now-img[hidden] { display: none; }
+  .art-row.oi-inuse { box-shadow: inset 3px 0 0 var(--sel); padding-left: 8px; }
+  #oi-url { flex: 1; min-width: 220px; }
+  @media (max-width: 560px) {
+    /* Phone: the file/link field takes its own full line under the label. */
+    #org-image-panel .art-row input, #oi-url { flex: 1 1 100%; min-width: 0; max-width: none; }
+  }
 
   /* ---- settings layout: category rail + one section at a time ---- */
   /* #/settings[/<section>]: the rail lists the "You" sections for everyone and
@@ -4480,6 +4492,43 @@
             <input id="discord-lead" type="number" min="1" max="1440" step="1" style="width:80px;"> minutes
             <button id="discord-lead-save">Save</button>
             <span class="muted" id="discord-lead-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+        </div>
+        <div class="panel admin-grp" id="org-image-panel">
+          <h2>ORG IMAGE ON ANNOUNCEMENTS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            Puts a small image in the top-right corner of announcement posts: new events,
+            reminders, event changes and cancellations, marketplace listings, and op records.
+            Off unless you pick one. Personal notices (outbid, waitlist, payments) never carry it.
+          </div>
+          <div class="oi-now">
+            <img id="oi-now-img" class="art-thumb" alt="" hidden>
+            <span id="oi-now-glyph" class="art-thumb oi-glyph" aria-hidden="true">∅</span>
+            <div class="art-name"><b id="oi-now-name">No image</b><span class="art-src" id="oi-now-src">Announcements post without one.</span></div>
+            <button id="oi-remove" class="danger-btn" hidden>Remove</button>
+          </div>
+          <div class="art-row">
+            <img class="art-thumb" src="/images/sc_org_navigator_logo.png" alt="" loading="lazy">
+            <div class="art-name"><b>Org Navigator patch</b><span class="art-src">Ships with the app. Square, ready to use.</span></div>
+            <button id="oi-shipped">Use the patch</button>
+          </div>
+          <div class="art-row">
+            <span class="art-thumb oi-glyph" aria-hidden="true">⬆</span>
+            <div class="art-name"><b>Upload your own</b><span class="art-src">PNG, JPG, WebP or GIF, up to 4&nbsp;MB. Square looks best.</span></div>
+            <input type="file" id="oi-file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Org image file">
+            <button id="oi-upload">Upload</button>
+          </div>
+          <div class="art-row">
+            <span class="art-thumb oi-glyph" aria-hidden="true">🔗</span>
+            <div class="art-name"><b>Link to an image</b><span class="art-src">An https link from an image host. Not a Discord attachment link: those expire within a day.</span></div>
+            <input id="oi-url" type="url" class="ti" autocomplete="off" placeholder="https://i.imgur.com/…" aria-label="Org image link">
+            <button id="oi-url-save">Use link</button>
+          </div>
+          <div class="muted" id="oi-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">
+            To see it in Discord, press <b>Test</b> on any connected webhook above.
+            A linked image isn't previewed here: loading it would tell the image host
+            which members opened this page.
           </div>
         </div>
       </section>
@@ -27296,6 +27345,12 @@ function renderDiscordRows(webhooks) {
     } else if (st.set && st.last_ok) {
       health = `<div class="muted" style="font-size:12px; margin-top:2px;">Last delivered ${esc(surveyAgo(st.last_ok))}.</div>`;
     }
+    // The post landed but Discord refused its image (degrade path) — the hook is
+    // fine, so this is a note about the art, not a red delivery failure.
+    if (st.set && st.last_image_error) {
+      health += `<div style="color:var(--warn); font-size:12px; margin-top:2px;">⚠ ${esc(st.last_image_error)}` +
+        `${st.last_image_error_at ? " (" + esc(surveyAgo(st.last_image_error_at)) + ")" : ""}.</div>`;
+    }
     const row = document.createElement("div");
     row.style.marginTop = "10px";
     row.innerHTML =
@@ -27316,6 +27371,7 @@ function renderDiscordRows(webhooks) {
 
 function applyDiscordSettings(s) {
   renderDiscordRows(s.discord_webhooks);
+  if ("notify_org_image" in s) renderOrgImage(s.notify_org_image);
   if (document.activeElement !== $("discord-lead"))
     $("discord-lead").value = s.discord_reminder_lead_min || 30;
 }
@@ -27361,6 +27417,88 @@ async function testDiscordWebhook(key) {
     discSt(key).textContent = (e && e.message) || "test failed — try again";
   }
 }
+
+// ---------- org image on Discord announcements ----------
+// docs/discord-notification-customization.md §3: one optional thumbnail on
+// announcement posts. null = off (the default). An uploaded image previews from
+// our own server; a linked one is deliberately NOT loaded here (CSP keeps
+// img-src to 'self', and loading it would tell the host who opened the page).
+const ORG_IMAGE_LABEL = { shipped: "Org Navigator patch", upload: "Your uploaded image", url: "Linked image" };
+
+function renderOrgImage(ref) {
+  const img = $("oi-now-img"), glyph = $("oi-now-glyph");
+  const name = $("oi-now-name"), src = $("oi-now-src");
+  img.hidden = true; glyph.hidden = false; img.removeAttribute("src");
+  $("oi-remove").hidden = !ref;
+  const onPatch = !!(ref && ref.kind === "shipped");
+  $("oi-shipped").disabled = onPatch;
+  $("oi-shipped").textContent = onPatch ? "In use" : "Use the patch";
+  document.querySelectorAll("#org-image-panel .art-row").forEach((row, i) =>
+    row.classList.toggle("oi-inuse", !!ref && ["shipped", "upload", "url"][i] === ref.kind));
+  if (!ref) {
+    glyph.textContent = "∅";
+    name.textContent = "No image";
+    src.textContent = "Announcements post without one.";
+    return;
+  }
+  name.textContent = "In use: " + ORG_IMAGE_LABEL[ref.kind];
+  if (ref.kind === "shipped") {
+    img.src = "/images/sc_org_navigator_logo.png"; img.hidden = false; glyph.hidden = true;
+    src.textContent = "Attached to each announcement.";
+  } else if (ref.kind === "upload") {
+    img.src = `/api/settings/discord/org-image?v=${ref.v}`; img.hidden = false; glyph.hidden = true;
+    src.textContent = `${(ref.ext || "").toUpperCase()}, attached to each announcement.`;
+  } else {
+    glyph.textContent = "🔗";
+    src.textContent = ref.url;   // textContent: a URL is data, never markup
+  }
+}
+
+async function orgImageRequest(method, body, workMsg) {
+  const st = $("oi-status");
+  st.textContent = workMsg;
+  try {
+    const opts = { method };
+    if (body instanceof FormData) opts.body = body;
+    else if (body) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
+    const r = await fetch("/api/settings/discord/org-image", opts);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "failed");
+    renderOrgImage(d.notify_org_image);
+    return true;
+  } catch (e) {
+    st.textContent = (e && e.message) || "failed — try again";
+    return false;
+  }
+}
+
+$("oi-shipped").onclick = async () => {
+  if (await orgImageRequest("PUT", { kind: "shipped" }, "saving…"))
+    $("oi-status").textContent = "saved: announcements now carry the Org Navigator patch";
+};
+$("oi-upload").onclick = async () => {
+  const f = $("oi-file").files[0];
+  if (!f) { $("oi-status").textContent = "choose an image first"; return; }
+  if (f.size > 4 * 1024 * 1024) { $("oi-status").textContent = "that file is over 4 MB"; return; }
+  const fd = new FormData(); fd.append("file", f);
+  if (await orgImageRequest("POST", fd, "uploading…")) {
+    $("oi-file").value = "";
+    $("oi-status").textContent = "saved: announcements now carry your image";
+  }
+};
+$("oi-url-save").onclick = async () => {
+  const url = $("oi-url").value.trim();
+  if (!url) { $("oi-status").textContent = "paste an https image link first"; return; }
+  if (await orgImageRequest("PUT", { kind: "url", url }, "saving…")) {
+    $("oi-url").value = "";
+    $("oi-status").textContent = "saved: press Test on a webhook to check it shows in Discord";
+  }
+};
+$("oi-remove").onclick = async () => {
+  if (!(await confirmDialog("Announcements will post without an image until you pick one again.",
+      { title: "Remove the org image?", confirmLabel: "Remove", danger: true }))) return;
+  if (await orgImageRequest("DELETE", null, "removing…")) $("oi-status").textContent = "removed";
+};
 
 $("discord-lead-save").onclick = async () => {
   const st = $("discord-lead-status");

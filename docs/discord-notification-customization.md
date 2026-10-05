@@ -1,6 +1,6 @@
 # Discord notification customization (images + message templates)
 
-**Status:** 📐 design, not built (2026-10-05, against v1.19.1).
+**Status:** 🔨 slice 1 built 2026-10-05 (attachments + org image, unreleased); slices 2–5 design. Written against v1.19.1.
 **Origin:** a self-hosting org asked to put its own graphics on event
 announcements. That raised the general question of what an admin can change
 about the messages the app posts to Discord.

@@ -16,6 +16,9 @@ Design rules (do not regress):
   explicit user ids we pass. This keeps app-generated content from mass-pinging.
 - The webhook URL is a credential: validate it on write (anti-SSRF — only real
   Discord webhook hosts), store it, and mask it on read.
+- Image attachments are decoration: a post Discord refuses BECAUSE of its files
+  is re-sent without them (docs/discord-notification-customization.md §3.5).
+  An announcement must never be lost to its artwork.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
 import time
 import urllib.error
 import urllib.request
@@ -98,7 +102,9 @@ def webhook_status() -> dict[str, dict]:
                   "last_ok": h.get("ok_at") or None,
                   "last_error": h.get("err") or "",
                   "last_error_at": h.get("err_at") or None,
-                  "fails": int(h.get("fails") or 0)}
+                  "fails": int(h.get("fails") or 0),
+                  "last_image_error": h.get("img_err") or "",
+                  "last_image_error_at": h.get("img_err_at") or None}
     return out
 
 
@@ -149,6 +155,15 @@ def _note_result(category: str, ok: bool, error: str = "") -> None:
         h.update(err=error[:200], err_at=time.time(), fails=int(h["fails"]) + 1)
 
 
+def _note_image_dropped(category: str, error: str) -> None:
+    """The message landed but its attached image didn't (degrade path). Kept apart
+    from `err` on purpose: the webhook is healthy, so the row must not go red —
+    it just has to say why the art went missing."""
+    h = _health.setdefault(category, {"ok_at": 0.0, "err": "", "err_at": 0.0,
+                                      "fails": 0})
+    h.update(img_err=error[:200], img_err_at=time.time())
+
+
 # --- dedup --------------------------------------------------------------------
 # A double-submit, a client retry, or two broadcaster ticks racing can all try to
 # post the same thing. Remember recent dedup keys briefly and drop repeats.
@@ -188,16 +203,56 @@ async def _pace(category: str) -> None:
         await asyncio.sleep(slot - now)
 
 
-def _post(url: str, payload: dict) -> None:
+def _multipart(payload: dict, files: list[tuple[str, bytes, str]]) -> tuple[bytes, str]:
+    """Encode a webhook message + attachments as multipart/form-data: the JSON
+    rides `payload_json`, each file is `files[n]`, and `attachments` maps the ids
+    to filenames so an embed can point at `attachment://<filename>`. Filenames
+    are ours (fixed ASCII), never user input, so no header escaping is needed."""
+    boundary = "scnav" + secrets.token_hex(16)
+    body = dict(payload)
+    body["attachments"] = [{"id": i, "filename": f[0]} for i, f in enumerate(files)]
+    out = [f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\n"
+           f"Content-Type: application/json\r\n\r\n".encode()
+           + json.dumps(body).encode("utf-8") + b"\r\n"]
+    for i, (name, data, mime) in enumerate(files):
+        out.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"files[{i}]\"; "
+                   f"filename=\"{name}\"\r\nContent-Type: {mime}\r\n\r\n".encode()
+                   + data + b"\r\n")
+    out.append(f"--{boundary}--\r\n".encode())
+    return b"".join(out), f"multipart/form-data; boundary={boundary}"
+
+
+def _strip_attachments(payload: dict) -> dict:
+    """The same message minus every `attachment://` image reference — what the
+    degrade path re-sends. An external-URL image stays (Discord fetches it)."""
+    out = dict(payload)
+    out.pop("attachments", None)
+    embeds = []
+    for e in payload.get("embeds", []):
+        e = dict(e)
+        for slot in ("thumbnail", "image"):
+            if str((e.get(slot) or {}).get("url", "")).startswith("attachment://"):
+                e.pop(slot)
+        embeds.append(e)
+    if embeds:
+        out["embeds"] = embeds
+    return out
+
+
+def _post(url: str, payload: dict,
+          files: list[tuple[str, bytes, str]] | None = None) -> None:
     """Blocking POST of one Discord webhook message. Runs in a worker thread.
     Honors a 429's full retry_after (capped at 30s — beyond that the message is
     better dropped than a thread parked); any other failure is logged by the
-    caller."""
-    body = json.dumps(payload).encode("utf-8")
+    caller. With `files`, the message goes as multipart (§3.5)."""
+    if files:
+        body, ctype = _multipart(payload, files)
+    else:
+        body, ctype = json.dumps(payload).encode("utf-8"), "application/json"
     for attempt in range(2):
         req = urllib.request.Request(
             url, data=body,
-            headers={"Content-Type": "application/json", "User-Agent": "sc-nav/1.0"},
+            headers={"Content-Type": ctype, "User-Agent": "sc-nav/1.0"},
             method="POST",
         )
         try:
@@ -220,7 +275,8 @@ _CONTENT_CAP = 1900          # Discord hard-caps content at 2000 chars
 
 
 async def send(category: str, text: str, *, mentions: list[str] | None = None,
-               dedup_key: str | None = None, embed: dict | None = None) -> bool:
+               dedup_key: str | None = None, embed: dict | None = None,
+               files: list[tuple[str, bytes, str]] | None = None) -> bool:
     """Post ``text`` to ``category``'s Discord webhook. Returns True on a
     best-effort success, False if that category has no webhook / deduped /
     failed. NEVER raises — a notification problem must not break the caller's
@@ -234,6 +290,10 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
     ``embed`` is an optional Discord embed object (title/description/url/color/
     fields) sent alongside the text — webhook-native, no bot needed. Mentions
     inside embeds don't ping, so pings always ride in ``text``.
+
+    ``files`` = [(filename, bytes, mime)] uploaded with the message; the embed
+    refers to them as ``attachment://<filename>``. If Discord refuses the post
+    because of them (400/413), it is re-sent once without them.
     """
     url = webhook_url(category)
     if not is_valid_webhook_url(url):
@@ -266,7 +326,19 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
 
     try:
         await _pace(category)
-        await asyncio.to_thread(_post, url, payload)
+        if not files:
+            await asyncio.to_thread(_post, url, payload)
+        else:
+            try:
+                await asyncio.to_thread(_post, url, payload, files)
+                _health.get(category, {}).pop("img_err", None)   # art got through again
+            except urllib.error.HTTPError as exc:
+                if exc.code not in (400, 413):
+                    raise
+                # Degrade, don't drop: the art was the problem, the message isn't.
+                await asyncio.to_thread(_post, url, _strip_attachments(payload))
+                _note_image_dropped(category, f"Discord refused the image (HTTP {exc.code}); "
+                                              "the message was sent without it")
         _note_result(category, True)
         return True
     except Exception as exc:   # log and swallow — see module docstring
@@ -278,7 +350,8 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
 async def send_paged(category: str, body: str, *,
                      mentions: list[str] | None = None,
                      dedup_key: str | None = None,
-                     embed: dict | None = None) -> bool:
+                     embed: dict | None = None,
+                     files: list[tuple[str, bytes, str]] | None = None) -> bool:
     """Post ``body`` plus a ``<@id>`` ping for EVERY mention, split across as
     many messages as Discord's caps require. ``send`` silently drops pings past
     50 ids and truncation eats trailing pings first — at 180-member org scale
@@ -290,7 +363,7 @@ async def send_paged(category: str, body: str, *,
     ids = [str(m) for m in (mentions or []) if str(m).isdigit()]
     ids = [i for i in ids if not (i in seen or seen.add(i))]
     if not ids:
-        return await send(category, body, dedup_key=dedup_key, embed=embed)
+        return await send(category, body, dedup_key=dedup_key, embed=embed, files=files)
     batches = [ids[i:i + MENTIONS_PER_MESSAGE]
                for i in range(0, len(ids), MENTIONS_PER_MESSAGE)]
     ok = True
@@ -301,5 +374,6 @@ async def send_paged(category: str, body: str, *,
         # racing double-call drops every page, not just the first.
         key = dedup_key if (dedup_key is None or n == 0) else f"{dedup_key}:p{n}"
         ok = await send(category, f"{head}\n{pings}", mentions=batch,
-                        dedup_key=key, embed=embed if n == 0 else None) and ok
+                        dedup_key=key, embed=embed if n == 0 else None,
+                        files=files if n == 0 else None) and ok
     return ok
