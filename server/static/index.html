@@ -2072,6 +2072,8 @@
   .ev-img-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
   #ev-f-imgurl { flex: 1; min-width: 220px; }
   .ev-img-hint { margin: 0 0 10px; font-size: 12px; color: var(--dim); max-width: 70ch; }
+  .ev-img-warn { margin: 0 0 8px; font-size: 12px; color: var(--warn); max-width: 70ch; }
+  .ev-img-warn[hidden] { display: none; }
   @media (max-width: 560px) { .ev-img-row input, #ev-f-imgurl { flex: 1 1 100%; min-width: 0; } }
   .ev-banner { display: block; max-width: 100%; max-height: 260px; border-radius: 8px;
     border: 1px solid var(--border); margin: 10px 0 4px; object-fit: contain; background: var(--bg); }
@@ -14700,6 +14702,9 @@ function readMissionDetails() {
 // opts.mode "template" = the template editor: no date/time/deadline (a
 // template describes a KIND of event, not a particular one), "Default title".
 // opts.picker = show the "Start from template" bar (create form only).
+const EV_IMG_MIN_W = 400;    // narrower than this reads as "small" in a Discord post
+const EV_IMG_GOOD_W = 800;   // wide enough to fill it on high-density screens too
+
 // "Discord announcement" card on the event + template forms. Its state lives in
 // evFormImage (set by eventFormHtml), painted by renderEventImageNow.
 function eventImageCardHtml() {
@@ -14709,6 +14714,7 @@ function eventImageCardHtml() {
       `or an https link (not a Discord attachment link: those expire within a day).</p>` +
     `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
       `<button class="ev-btn danger" id="ev-f-imgrm" hidden>Remove</button></div>` +
+    `<p class="ev-img-warn" id="ev-f-imgsize" hidden></p>` +
     `<div class="ev-img-row"><input type="file" id="ev-f-imgfile" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Announcement image file">` +
       `<button class="ev-btn" id="ev-f-imgup">Upload</button></div>` +
     `<div class="ev-img-row"><input id="ev-f-imgurl" class="ti" type="url" autocomplete="off" placeholder="or link one: https://i.imgur.com/…" aria-label="Announcement image link">` +
@@ -14720,10 +14726,25 @@ function renderEventImageNow() {
   const prev = $("ev-f-imgprev"), what = $("ev-f-imgwhat");
   if (!prev) return;
   const ref = evFormImage;
+  const warn = $("ev-f-imgsize");
   $("ev-f-imgrm").hidden = !ref;
+  warn.hidden = true;
+  prev.onload = null;
   prev.hidden = true; prev.removeAttribute("src");
   if (!ref) { what.innerHTML = `<span class="muted">No image. The posts go out without one.</span>`; return; }
   if (ref.kind === "upload") {
+    // Discord shows an embed image at its real size up to the post's width and
+    // never enlarges it, so a small upload stays small (a 180 px one filled a
+    // quarter of the frame in the first dev test). Say so while it can be fixed.
+    prev.onload = () => {
+      const w = prev.naturalWidth, h = prev.naturalHeight;
+      if (w && w < EV_IMG_MIN_W) {
+        warn.textContent = `This image is ${w} × ${h} px. Discord shows images at their real size ` +
+          `and never enlarges them, so it will look small in the post. Use one at least ` +
+          `${EV_IMG_GOOD_W} px wide to fill it.`;
+        warn.hidden = false;
+      }
+    };
     prev.src = `/api/notify-images/${encodeURIComponent(ref.hash)}`; prev.hidden = false;
     what.textContent = "Uploaded image";
   } else {

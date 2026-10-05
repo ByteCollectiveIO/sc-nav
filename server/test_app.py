@@ -11994,8 +11994,11 @@ class EmbedNotifyTests(unittest.TestCase):
         self.assertNotIn("content", p)               # broadcast: embed only
         e = p["embeds"][0]
         self.assertIn("Xenothreat Push", e["title"])
-        self.assertIn("<t:", e["description"])       # timestamps render in body
-        self.assertNotIn("<t:", e["title"])          # never in the title
+        # Timestamps render in the body (description or field values — the
+        # full card puts the start in a field); never in the title.
+        body = " ".join([e.get("description", "")] + [f["value"] for f in e.get("fields", [])])
+        self.assertIn("<t:", body)
+        self.assertNotIn("<t:", e["title"])
         self.assertEqual(e["color"], app._EMBED_INFO)
         self.assertEqual(p["allowed_mentions"]["users"], [])
 
@@ -13658,6 +13661,91 @@ class EventNotifyImageTests(unittest.TestCase):
         db.set_setting(notify._webhook_key("events"), "")
         app._test_send_at = 0.0
         self.assertEqual(self.client.post(f"/api/events/{eid}/notify-test").status_code, 400)
+
+
+class EventAnnounceCardTests(unittest.TestCase):
+    """The new-event post carries the whole event (user's call 2026-10-05):
+    description + a facts grid, mission details only when filled, member text
+    escaped, nothing empty shown."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def _ev(self, **over):
+        now = datetime.now(timezone.utc).isoformat()
+        d = {"organizer_id": "42", "title": "Salvage night", "description": "",
+             "type": ["Salvage Op"], "category": ["PvE", "Social"],
+             "start_at": "2026-10-23T03:35:00+00:00", "signup_deadline": None,
+             "duration_min": None, "location": "", "event_location": "",
+             "min_players": 0, "max_players": None, "roles": [], "details": {},
+             "status": "scheduled", "created_at": now, "updated_at": now, **over}
+        return db.get_event(db.create_event(d))
+
+    def _fields(self, embed):
+        return {f["name"]: f for f in embed.get("fields", [])}
+
+    def test_full_event_card(self):
+        ev = self._ev(description="Bring a Vulture.", duration_min=90,
+                      location="Baijini Point", event_location="Yela belt",
+                      min_players=5, max_players=7,
+                      roles=[{"role": "Salvage", "needed": 7}],
+                      signup_deadline="2026-10-15T01:34:00+00:00",
+                      details={"roe": "pve_only", "comms": "Org TS, channel 2",
+                               "prereqs": "Own a salvage ship"})
+        e = app._event_created_embed(ev)
+        self.assertEqual(e["title"], "📅 New event: Salvage night")
+        self.assertIn("Bring a Vulture.", e["description"])
+        f = self._fields(e)
+        self.assertIn("<t:", f["🕒 Starts"]["value"])
+        self.assertEqual(f["⏱ Length"]["value"], "1 h 30 min")
+        self.assertEqual(f["📍 Rally point"]["value"], "Baijini Point")
+        self.assertEqual(f["🎯 Event location"]["value"], "Yela belt")
+        self.assertEqual(f["👥 Crew"]["value"], "0 / 7 going (min 5)")
+        self.assertEqual(f["🧩 Roles"]["value"], "Salvage 0/7")
+        self.assertIn("<t:", f["⛔ Signups close"]["value"])
+        self.assertIn("🧭 Organizer", f)
+        self.assertEqual(f["🏷 Type"]["value"], "Salvage Op · PvE, Social")
+        self.assertFalse(f["🏷 Type"]["inline"])
+        self.assertEqual(f["⚔ Rules of engagement"]["value"], "PvE only")   # label, not key
+        self.assertEqual(f["🎙 Comms"]["value"], "Org TS, channel 2")
+        self.assertFalse(f["📋 Prerequisites"]["inline"])
+        self.assertLessEqual(len(e["fields"]), 25)                          # Discord's cap
+
+    def test_minimal_event_shows_no_empty_fields(self):
+        e = app._event_created_embed(self._ev())
+        f = self._fields(e)
+        for absent in ("⏱ Length", "📍 Rally point", "🎯 Event location", "🧩 Roles",
+                       "⛔ Signups close", "⚔ Rules of engagement", "🎯 Mission"):
+            self.assertNotIn(absent, f)
+        self.assertEqual(f["👥 Crew"]["value"], "0 / ∞ going")
+        self.assertNotIn("description", e)
+        self.assertFalse(any(v["value"] in ("", "—") for v in e["fields"]))
+
+    def test_member_text_is_escaped(self):
+        ev = self._ev(description="**free loot** [claim](https://evil.example)",
+                      location="Port_Tressler", details={"comms": "`ts`"})
+        e = app._event_created_embed(ev)
+        self.assertIn(r"\*\*free loot\*\*", e["description"])
+        self.assertIn(r"\[claim\]", e["description"])        # no masked link
+        f = self._fields(e)
+        self.assertEqual(f["📍 Rally point"]["value"], r"Port\_Tressler")
+        self.assertEqual(f["🎙 Comms"]["value"], r"\`ts\`")
+
+    def test_long_description_is_clipped_with_a_link(self):
+        orig = app.PUBLIC_BASE_URL
+        app.PUBLIC_BASE_URL = "https://nav.example.org"
+        self.addCleanup(lambda: setattr(app, "PUBLIC_BASE_URL", orig))
+        e = app._event_created_embed(self._ev(description="x" * 1900))
+        self.assertLess(len(e["description"]), 1700)
+        self.assertIn("Read the rest in the app", e["description"])
+        self.assertIn("https://nav.example.org/#/events/", e["description"])
 
 
 if __name__ == "__main__":
