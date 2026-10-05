@@ -209,16 +209,40 @@
      in one column down the list; `disabled` also drops it from the tab order. */
   .art-reset[disabled] { visibility: hidden; }
 
-  /* ---- settings layout: group panels under "Your account" vs "Org administration" ---- */
-  /* Wrapper is layout-transparent so its panels stay direct grid items of <main>
-     (keeping the 14px gap); the [hidden] rule beats display:contents to hide it. */
-  #admin-section { display: contents; }
-  #admin-section[hidden] { display: none; }
-  /* Group label binds to the panels below it: a little extra air above (group
-     break), a little less below (header hugs its first panel). */
+  /* ---- settings layout: category rail + one section at a time ---- */
+  /* #/settings[/<section>]: the rail lists the "You" sections for everyone and
+     the "Org admin" ones for admins; the body shows only the active section.
+     Every display: here restates its [hidden] — an author display beats the UA
+     rule, and this repo has shipped that bug more than once. */
+  .set-shell { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 14px;
+    align-items: start; }
+  .set-nav { position: sticky; top: 14px; display: flex; flex-direction: column; gap: 2px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+  .set-nav-admin { display: contents; }
+  .set-nav-admin[hidden] { display: none; }
+  .set-nav-h { font-size: 11px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase;
+    padding: 12px 10px 4px; }
+  .set-nav > .set-nav-h:first-child { padding-top: 4px; }
+  .set-nav a { display: block; padding: 7px 10px; border-radius: 6px; font-size: 13px;
+    color: var(--dim); text-decoration: none; transition: color .12s, background .12s; }
+  .set-nav a:hover { color: var(--text); background: var(--panel2); }
+  .set-nav a[aria-current="page"] { background: var(--accent); color: var(--ink-on-accent); }
+  .set-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+  .set-body, .set-sec { display: grid; gap: 14px; align-content: start; min-width: 0; }
+  .set-sec > * { min-width: 0; }
+  .set-sec[hidden], #admin-load-status[hidden] { display: none; }
+  #admin-load-status { font-size: 12px; }
+  @media (max-width: 720px) {
+    /* Phone: the rail becomes two wrapped rows of tabs above the section. */
+    .set-shell { grid-template-columns: minmax(0, 1fr); }
+    .set-nav { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; }
+    .set-nav-h { flex-basis: 100%; padding: 4px 2px 0; }
+    .set-nav > .set-nav-h:first-child { padding-top: 0; }
+    .set-nav a { background: var(--panel2); border: 1px solid var(--border); padding: 8px 12px; }
+  }
+  /* Section title: names the page and, for org sections, who it affects. */
   .settings-grp-h { font-size: 11px; letter-spacing: 2px; color: var(--dim);
-    text-transform: uppercase; margin: 6px 2px -4px; }
-  #settings-view > .settings-grp-h:first-child { margin-top: 0; }
+    text-transform: uppercase; margin: 0 2px -4px; }
   .settings-grp-h .muted { letter-spacing: 0; text-transform: none; font-size: 12px; }
   /* The one panel that wipes org-wide data is fenced in red so it can't be
      mistaken for an everyday setting. */
@@ -4089,550 +4113,604 @@
   </div><!-- /main-view -->
 
   <div id="settings-view" hidden>
-  <div class="settings-grp-h">Your account</div>
-  <div class="panel" id="identity-panel" hidden>
-    <h2>IN-GAME IDENTITY <span class="muted">(how org-mates find you)</span></h2>
-    <div class="ev-field" id="primary-handle-field" hidden style="max-width:340px;">
-      <label for="primary-handle">Primary handle</label>
-      <select id="primary-handle"></select>
-      <span class="ev-hint">Shown on your marketplace listings and across the apps as
-        the in-game name people should look for.</span>
-    </div>
-    <div class="muted" id="no-handle-note" hidden style="font-size:12px;">
-      No watcher-bound handle yet. Start the watcher and sign in to Star Citizen —
-      it reads the account you're playing as out of <code>Game.log</code> and
-      registers it, so your name appears here, verified, within a few seconds of
-      logging in. (Already in-game with the watcher running? It picks the handle up
-      on its next look at the log.)
-    </div>
-    <div id="handle-conflict-note" hidden class="handle-warn" style="font-size:12px;">
-      ⚠ Your watcher is reporting <b><span id="handle-conflict-name"></span></b>, but
-      that handle is already bound to another member's account, so it can't be
-      claimed and your captures stay unattributed. Ask an org admin to clear the
-      old binding, or set the watcher to the handle you actually play as.
-    </div>
-    <label style="display:flex; gap:8px; align-items:center; font-size:13px; margin-top:12px;">
-      <input type="checkbox" id="directory-optout"> Hide me from the member directory
-    </label>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Keeps your Discord-name to in-game-handle link off member-facing views.
-      Org admins can still see it. Note that posting to the marketplace shows
-      your handle on the listing either way, since a buyer has to know who to
-      meet in-game.
-    </div>
-    <span class="muted" id="identity-status" role="status" aria-live="polite"
-          style="font-size:12px; display:block; margin-top:6px;"></span>
-  </div>
-  <div class="panel" id="profile-panel">
-    <h2>PROFILE <span class="muted">(preferred playstyles)</span></h2>
-    <div class="muted" style="font-size:12px;">
-      Pick up to 6 playstyles you enjoy. They're shown next to your name in the
-      member directory and on the Who's Online roster, so org-mates can find you.
-    </div>
-    <div class="on-tags" id="profile-tags"></div>
-    <span class="muted" id="profile-status" role="status" aria-live="polite"
-          style="font-size:12px; display:block; margin-top:6px;"></span>
-    <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; cursor:pointer;">
-      <input type="checkbox" id="profile-noping">
-      Don't @-ping me on Discord
-    </label>
-    <div class="muted" style="font-size:12px; margin-top:2px;">
-      App notifications (offers, reminders, waitlist promotions) still name you in the
-      channel, but won't light up your phone.
-    </div>
-    <span class="muted" id="profile-noping-status" role="status" aria-live="polite"
-          style="font-size:12px; display:block; margin-top:4px;"></span>
-    <div style="margin-top:14px;">
-      <label style="font-size:13px; display:block; margin-bottom:4px;">Usually on</label>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="profile-avail" class="ti" maxlength="120" autocomplete="off"
-               placeholder="e.g. weekday evenings CET, weekend mornings" style="flex:1; min-width:220px;">
-        <button id="profile-avail-save">Save</button>
+  <div class="set-shell">
+    <nav class="set-nav" id="set-nav" aria-label="Settings sections">
+      <div class="set-nav-h">You</div>
+      <a href="#/settings" data-sec="profile">Profile</a>
+      <a href="#/settings/watcher" data-sec="watcher">Watcher</a>
+      <a href="#/settings/my-ops" data-sec="my-ops">My ops</a>
+      <a href="#/settings/account" data-sec="account">Account</a>
+      <div class="set-nav-admin" id="set-nav-admin" hidden>
+        <div class="set-nav-h">Org admin</div>
+        <a href="#/settings/general" data-sec="general">General</a>
+        <a href="#/settings/members" data-sec="members">Members</a>
+        <a href="#/settings/branding" data-sec="branding">Branding</a>
+        <a href="#/settings/discord" data-sec="discord">Discord</a>
+        <a href="#/settings/apps" data-sec="apps">App settings</a>
+        <a href="#/settings/data" data-sec="data">Data</a>
       </div>
-      <div class="muted" style="font-size:12px; margin-top:2px;">
-        Shown on your marketplace listings and storefront so trade partners know when to
-        find you for the handoff. Blank = not shown.
-      </div>
-      <span class="muted" id="profile-avail-status" role="status" aria-live="polite"
-            style="font-size:12px;"></span>
-    </div>
-    <div style="margin-top:14px;">
-      <label style="font-size:13px; display:block; margin-bottom:4px;">Crafter storefront</label>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="profile-craft" class="ti" maxlength="200" autocomplete="off"
-               placeholder="e.g. Taking weapon component orders — ~2 day lead" style="flex:1; min-width:220px;">
-        <button id="profile-craft-save">Save</button>
-      </div>
-      <div class="muted" style="font-size:12px; margin-top:2px;">
-        Setting a blurb lists you under the marketplace's <b>Crafter storefronts</b> — members can
-        send craft requests directly to you (only you can quote those). Your recipe list comes
-        from <a href="#/blueprints">My Blueprints</a>. Blank = storefront off.
-      </div>
-      <span class="muted" id="profile-craft-status" role="status" aria-live="polite"
-            style="font-size:12px;"></span>
-    </div>
-  </div>
-  <div class="panel" id="my-ops-panel">
-    <h2>MY OPS <span class="muted">(only you see this)</span></h2>
-    <div id="my-ops-body"><div class="muted" style="font-size:12px;">Loading…</div></div>
-  </div>
-  <div class="settings-grp-h">Support the project</div>
-  <div class="panel" id="support-panel">
-    <h2>SUPPORT <span class="muted">(help keep the lights on)</span></h2>
-    <div class="muted" style="font-size:12px; margin-bottom:10px;">
-      Org Navigator is a free, unofficial fan project. If it's useful to your crew and
-      you'd like to chip in toward hosting and development, you can sponsor it on GitHub.
-      Entirely optional; every tool stays free.
-    </div>
-    <a class="support-btn" href="https://github.com/sponsors/ByteCollectiveIO"
-       target="_blank" rel="noopener">♥ Sponsor on GitHub</a>
-  </div>
-  <div class="panel" id="token-panel" hidden>
-    <h2>WATCHER TOKEN <span class="muted">(authenticates the desktop watcher)</span></h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <input id="token-label" class="ti" placeholder="label (e.g. gaming-pc)" aria-label="Watcher token label" style="min-width:160px;">
-      <button id="token-gen">Generate token</button>
-      <span class="muted" id="token-status" role="status" aria-live="polite"></span>
-    </div>
-    <div id="token-new" class="armed" hidden style="margin-top:8px;"></div>
-    <div class="table-x" style="margin-top:8px;">
-    <table id="token-table" hidden>
-      <thead><tr><th>LABEL</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    </div>
-    <div class="muted" id="token-empty" hidden style="font-size:12px; margin-top:8px;">
-      No watcher tokens yet — generate one and paste it into the watcher on your gaming PC.
-    </div>
-    <div class="muted" id="token-error" hidden style="font-size:12px; margin-top:8px;">
-      Couldn't load your tokens — check the connection.
-      <button id="token-retry" style="margin-left:6px;">Retry</button>
-    </div>
-  </div>
-
-  <div class="panel" id="account-panel">
-    <h2>DELETE ACCOUNT <span class="muted">(danger)</span></h2>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      Permanently delete your account data — your watcher tokens, saved ships,
-      cargo runs, and hauling history. The POIs and sightings you contributed are
-      kept for the org but stripped of your name. This can't be undone. You'll be
-      signed out; signing in again starts a fresh, empty account. See our
-      <a href="#/privacy">Privacy Policy</a>.
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <button id="delete-account" class="danger-btn">Delete my account</button>
-      <span class="muted" id="delete-account-status" role="status" aria-live="polite"></span>
-    </div>
-  </div>
-
-  <div id="admin-section" hidden>
-  <div class="settings-grp-h">Org administration <span class="muted">— these settings affect everyone in your org</span></div>
-
-  <div class="panel admin-grp" id="version-panel">
-    <h2>SERVER VERSION</h2>
-    <div class="upd-banner" id="upd-banner" hidden role="status">
-      <span class="upd-icon" aria-hidden="true">⬆</span>
-      <div>
-        <div id="upd-headline"></div>
-        <div class="muted" style="font-size:12px; margin-top:2px;">
-          Pull the latest code and redeploy your stack to update.
-          <a id="upd-link" href="#" target="_blank" rel="noopener noreferrer">Release notes</a>
+    </nav>
+    <div class="set-body">
+      <div class="muted" id="admin-load-status" role="status" aria-live="polite" hidden></div>
+      <section class="set-sec" data-sec="profile" aria-label="Profile settings">
+        <div class="settings-grp-h">Profile <span class="muted">— how org-mates see and find you</span></div>
+        <div class="panel" id="identity-panel" hidden>
+          <h2>IN-GAME IDENTITY <span class="muted">(how org-mates find you)</span></h2>
+          <div class="ev-field" id="primary-handle-field" hidden style="max-width:340px;">
+            <label for="primary-handle">Primary handle</label>
+            <select id="primary-handle"></select>
+            <span class="ev-hint">Shown on your marketplace listings and across the apps as
+              the in-game name people should look for.</span>
+          </div>
+          <div class="muted" id="no-handle-note" hidden style="font-size:12px;">
+            No watcher-bound handle yet. Start the watcher and sign in to Star Citizen —
+            it reads the account you're playing as out of <code>Game.log</code> and
+            registers it, so your name appears here, verified, within a few seconds of
+            logging in. (Already in-game with the watcher running? It picks the handle up
+            on its next look at the log.)
+          </div>
+          <div id="handle-conflict-note" hidden class="handle-warn" style="font-size:12px;">
+            ⚠ Your watcher is reporting <b><span id="handle-conflict-name"></span></b>, but
+            that handle is already bound to another member's account, so it can't be
+            claimed and your captures stay unattributed. Ask an org admin to clear the
+            old binding, or set the watcher to the handle you actually play as.
+          </div>
+          <label style="display:flex; gap:8px; align-items:center; font-size:13px; margin-top:12px;">
+            <input type="checkbox" id="directory-optout"> Hide me from the member directory
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Keeps your Discord-name to in-game-handle link off member-facing views.
+            Org admins can still see it. Note that posting to the marketplace shows
+            your handle on the listing either way, since a buyer has to know who to
+            meet in-game.
+          </div>
+          <span class="muted" id="identity-status" role="status" aria-live="polite"
+                style="font-size:12px; display:block; margin-top:6px;"></span>
         </div>
-      </div>
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Running <span class="upd-ver" id="upd-current">—</span>
-      <button id="upd-check">Check for updates</button>
-      <span class="muted" id="upd-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Compares this server against the newest release published on the project's
-      GitHub repo. Checked at most once every 6&nbsp;hours; nothing is sent about your
-      org, and updating is always your call.
-    </div>
-  </div>
+        <div class="panel" id="profile-panel">
+          <h2>PROFILE <span class="muted">(preferred playstyles)</span></h2>
+          <div class="muted" style="font-size:12px;">
+            Pick up to 6 playstyles you enjoy. They're shown next to your name in the
+            member directory and on the Who's Online roster, so org-mates can find you.
+          </div>
+          <div class="on-tags" id="profile-tags"></div>
+          <span class="muted" id="profile-status" role="status" aria-live="polite"
+                style="font-size:12px; display:block; margin-top:6px;"></span>
+          <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; cursor:pointer;">
+            <input type="checkbox" id="profile-noping">
+            Don't @-ping me on Discord
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:2px;">
+            App notifications (offers, reminders, waitlist promotions) still name you in the
+            channel, but won't light up your phone.
+          </div>
+          <span class="muted" id="profile-noping-status" role="status" aria-live="polite"
+                style="font-size:12px; display:block; margin-top:4px;"></span>
+          <div style="margin-top:14px;">
+            <label style="font-size:13px; display:block; margin-bottom:4px;">Usually on</label>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <input id="profile-avail" class="ti" maxlength="120" autocomplete="off"
+                     placeholder="e.g. weekday evenings CET, weekend mornings" style="flex:1; min-width:220px;">
+              <button id="profile-avail-save">Save</button>
+            </div>
+            <div class="muted" style="font-size:12px; margin-top:2px;">
+              Shown on your marketplace listings and storefront so trade partners know when to
+              find you for the handoff. Blank = not shown.
+            </div>
+            <span class="muted" id="profile-avail-status" role="status" aria-live="polite"
+                  style="font-size:12px;"></span>
+          </div>
+          <div style="margin-top:14px;">
+            <label style="font-size:13px; display:block; margin-bottom:4px;">Crafter storefront</label>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <input id="profile-craft" class="ti" maxlength="200" autocomplete="off"
+                     placeholder="e.g. Taking weapon component orders — ~2 day lead" style="flex:1; min-width:220px;">
+              <button id="profile-craft-save">Save</button>
+            </div>
+            <div class="muted" style="font-size:12px; margin-top:2px;">
+              Setting a blurb lists you under the marketplace's <b>Crafter storefronts</b> — members can
+              send craft requests directly to you (only you can quote those). Your recipe list comes
+              from <a href="#/blueprints">My Blueprints</a>. Blank = storefront off.
+            </div>
+            <span class="muted" id="profile-craft-status" role="status" aria-live="polite"
+                  style="font-size:12px;"></span>
+          </div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="watcher" aria-label="Watcher settings" hidden>
+        <div class="settings-grp-h">Watcher</div>
+        <div class="panel" id="token-panel" hidden>
+          <h2>WATCHER TOKEN <span class="muted">(authenticates the desktop watcher)</span></h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <input id="token-label" class="ti" placeholder="label (e.g. gaming-pc)" aria-label="Watcher token label" style="min-width:160px;">
+            <button id="token-gen">Generate token</button>
+            <span class="muted" id="token-status" role="status" aria-live="polite"></span>
+          </div>
+          <div id="token-new" class="armed" hidden style="margin-top:8px;"></div>
+          <div class="table-x" style="margin-top:8px;">
+          <table id="token-table" hidden>
+            <thead><tr><th>LABEL</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          </div>
+          <div class="muted" id="token-empty" hidden style="font-size:12px; margin-top:8px;">
+            No watcher tokens yet — generate one and paste it into the watcher on your gaming PC.
+          </div>
+          <div class="muted" id="token-error" hidden style="font-size:12px; margin-top:8px;">
+            Couldn't load your tokens — check the connection.
+            <button id="token-retry" style="margin-left:6px;">Retry</button>
+          </div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="my-ops" aria-label="My ops settings" hidden>
+        <div class="settings-grp-h">My ops</div>
+        <div class="panel" id="my-ops-panel">
+          <h2>MY OPS <span class="muted">(only you see this)</span></h2>
+          <div id="my-ops-body"><div class="muted" style="font-size:12px;">Loading…</div></div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="account" aria-label="Account settings" hidden>
+        <div class="settings-grp-h">Account</div>
+        <div class="panel" id="support-panel">
+          <h2>SUPPORT <span class="muted">(help keep the lights on)</span></h2>
+          <div class="muted" style="font-size:12px; margin-bottom:10px;">
+            Org Navigator is a free, unofficial fan project. If it's useful to your crew and
+            you'd like to chip in toward hosting and development, you can sponsor it on GitHub.
+            Entirely optional; every tool stays free.
+          </div>
+          <a class="support-btn" href="https://github.com/sponsors/ByteCollectiveIO"
+             target="_blank" rel="noopener">♥ Sponsor on GitHub</a>
+        </div>
+        <div class="panel" id="account-panel">
+          <h2>DELETE ACCOUNT <span class="muted">(danger)</span></h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            Permanently delete your account data — your watcher tokens, saved ships,
+            cargo runs, and hauling history. The POIs and sightings you contributed are
+            kept for the org but stripped of your name. This can't be undone. You'll be
+            signed out; signing in again starts a fresh, empty account. See our
+            <a href="#/privacy">Privacy Policy</a>.
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button id="delete-account" class="danger-btn">Delete my account</button>
+            <span class="muted" id="delete-account-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="general" aria-label="General settings" hidden>
+        <div class="settings-grp-h">General <span class="muted">— these settings affect everyone in your org</span></div>
+        <div class="panel admin-grp" id="version-panel">
+          <h2>SERVER VERSION</h2>
+          <div class="upd-banner" id="upd-banner" hidden role="status">
+            <span class="upd-icon" aria-hidden="true">⬆</span>
+            <div>
+              <div id="upd-headline"></div>
+              <div class="muted" style="font-size:12px; margin-top:2px;">
+                Pull the latest code and redeploy your stack to update.
+                <a id="upd-link" href="#" target="_blank" rel="noopener noreferrer">Release notes</a>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Running <span class="upd-ver" id="upd-current">—</span>
+            <button id="upd-check">Check for updates</button>
+            <span class="muted" id="upd-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Compares this server against the newest release published on the project's
+            GitHub repo. Checked at most once every 6&nbsp;hours; nothing is sent about your
+            org, and updating is always your call.
+          </div>
+        </div>
+        <div class="panel admin-grp" id="motd-panel">
+          <h2>MESSAGE OF THE DAY</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Broadcast a short notice to every member. It shows as a banner at the top of
+            the app chooser until they dismiss it. Editing the text re-shows it to
+            everyone. Clear the box and save to take it down. Plain text only.
+          </div>
+          <textarea id="motd-input" maxlength="2000" rows="3"
+                    placeholder="e.g. Org op tonight at 20:00 UTC. Muster at Everus Harbor."
+                    style="width:100%; resize:vertical;"></textarea>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+            <button id="motd-save">Save message</button>
+            <button id="motd-clear" class="danger-btn">Clear</button>
+            <span class="muted" id="motd-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="members" aria-label="Members settings" hidden>
+        <div class="settings-grp-h">Members &amp; access <span class="muted">— these settings affect everyone in your org</span></div>
+        <div class="panel admin-grp" id="access-panel">
+          <h2>ACCESS</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <input id="member-role" class="ti" placeholder="(empty = any server member)"
+                   aria-label="Required Discord role ID" style="min-width:220px;" inputmode="numeric">
+            <button id="member-role-save">Save role gate</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Require a Discord <b>role</b> (in addition to being in the server) to sign in.
+            Leave blank to allow any member. In Discord with Developer Mode on, right-click
+            the role → <b>Copy Role ID</b> and paste it here. Admins always have access; a
+            change takes effect at each member's next sign-in.
+          </div>
+          <div class="muted" id="admin-status" role="status" aria-live="polite" style="margin-top:6px;"></div>
 
-  <div class="panel admin-grp" id="access-panel">
-    <h2>ACCESS</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <input id="member-role" class="ti" placeholder="(empty = any server member)"
-             aria-label="Required Discord role ID" style="min-width:220px;" inputmode="numeric">
-      <button id="member-role-save">Save role gate</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Require a Discord <b>role</b> (in addition to being in the server) to sign in.
-      Leave blank to allow any member. In Discord with Developer Mode on, right-click
-      the role → <b>Copy Role ID</b> and paste it here. Admins always have access; a
-      change takes effect at each member's next sign-in.
-    </div>
-    <div class="muted" id="admin-status" role="status" aria-live="polite" style="margin-top:6px;"></div>
-
-    <h2>ADMINS</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      Admins change these org settings and can delete any contribution. Add a member by
-      their Discord <b>user ID</b> (Developer Mode on → right-click a user →
-      <b>Copy User ID</b>); changes take effect immediately. Admins set in the server's
-      environment show as <b>root</b> and can't be removed here.
-    </div>
-    <div id="admin-list" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;"></div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <input id="admin-add" class="ti" placeholder="Discord user ID"
-             aria-label="Discord user ID to add as admin" style="min-width:220px;" inputmode="numeric">
-      <button id="admin-add-btn">Add admin</button>
-      <span class="muted" id="admin-ids-status" role="status" aria-live="polite"></span>
-    </div>
-  </div>
-
-  <div class="panel admin-grp" id="dataset-panel">
-    <h2>POI CATALOG</h2>
-    <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
-      <input type="checkbox" id="starmap-toggle"> Import the starmap.space POI catalog
-    </label>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Off by default: your org starts blank (just your own POIs and QT markers;
-      celestial bodies always load). Check to import the full starmap.space catalog
-      now — no restart needed, and it refreshes on each restart. Uncheck to drop it
-      and return to a clean database; your custom POIs stay.
-    </div>
-    <label style="display:flex; gap:8px; align-items:center; font-size:13px; margin-top:12px;">
-      <input type="checkbox" id="wiki-toggle"> Import the Star Citizen Wiki locations catalog
-    </label>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Also off by default, and independent of the starmap catalog. Adds datamined
-      outposts, stations and asteroid clusters the starmap feed lacks (game data:
-      Star Citizen Wiki, CC BY-SA 4.0). Places both catalogs know are never
-      doubled up. Updated with each app release rather than on restart.
-    </div>
-    <div class="muted" id="dataset-status" role="status" aria-live="polite"
-         style="font-size:12px; margin-top:8px;"></div>
-
-    <h2>OBSERVATION FRESHNESS</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Mark sightings stale after
-      <input id="fresh-window" type="number" min="1" step="1" style="width:80px;"> hours
-      <button id="fresh-window-save">Save</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      SC respawns resource nodes and fauna, so the map and NEARBY list hide
-      sightings older than this. (The map's "fresh only" toggle overrides per view;
-      the ore heatmap always uses every sighting.) Tune it to SC's respawn cadence.
-    </div>
-    <div class="muted" id="fresh-window-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-
-    <h2>GROUP FINDER (LFG)</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Posts turn <span style="color:var(--warn);">stale</span> after
-      <input id="lfg-stale" type="number" min="1" step="1" style="width:70px;"> min,
-      and age off the board after
-      <input id="lfg-ageoff" type="number" min="1" step="1" style="width:70px;"> min
-      <button id="lfg-life-save">Save</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      The Group Finder board is for grouping up <b>right now</b>. A post shows green
-      while fresh, goes yellow once it's stale, then drops off entirely at the age-off
-      time. Stale must be less than age-off. For scheduled or longer-lived plans, use
-      the <b>Event Planner</b> instead.
-    </div>
-    <div class="muted" id="lfg-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-
-    <h2>DANGER BOARD</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Warnings turn <span style="color:var(--warn);">stale</span> after
-      <input id="warn-stale" type="number" min="1" step="1" style="width:70px;"> min,
-      and age off the board after
-      <input id="warn-ageoff" type="number" min="1" step="1" style="width:70px;"> min
-      <button id="warn-life-save">Save</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Pirate danger warnings are meant to be <b>right now</b>, so they age off fast by default
-      (an hour). A warning shows fresh, goes stale as it nears the age-off, then drops off unless
-      someone confirms it's still active. Stale must be less than age-off.
-    </div>
-    <div class="muted" id="warn-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-      Route trade &amp; cargo runs around a danger within
-      <input id="hazard-radius" type="number" min="100" max="200000" step="100" style="width:90px;"> km
-      <button id="hazard-radius-save">Save</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      The berth the planners keep from a reported danger when routing around it. Wider than the
-      in-game snare bubble on purpose (anchors are approximate and pirates roam); at quantum
-      distances a generous berth costs almost nothing. Scales with severity automatically.
-    </div>
-    <div class="muted" id="hazard-radius-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <h2>TRADE STOCK &amp; DEMAND REPORTS</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Reports age off after
-      <input id="stock-ageoff" type="number" min="1" max="10080" step="5" style="width:80px;"> min
-      <button id="stock-ageoff-save">Save</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      A trader who finds a terminal's shelf empty — or a terminal that won't <b>buy</b> their
-      cargo — reports it from trade run mode; while the report is fresh the trade planner
-      won't route anyone through that side of the trade there (the other side is
-      unaffected). Markets restock and reset on their own, so keep this in the hours range;
-      raise it if members keep re-hitting dead terminals, lower it if reports outlive the
-      real shortage.
-    </div>
-    <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <h2>CARGO CONTAINER REPORTS</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Container reports age off after
-      <input id="container-ageoff" type="number" min="0" max="3650" step="5" style="width:80px;"> days
-      <button id="container-ageoff-save">Save</button>
-      <button id="container-clear">Clear all</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Which container sizes a commodity is sold in is set by the game patch, not by the
-      hour — so this window is <b>days</b>, not minutes. A member who finds a size missing
-      at a kiosk reports it from trade run mode, and the planner stops proposing that size
-      for that commodity org-wide. <b>Clear all</b> after a patch that reshuffles cargo, so
-      last patch's observations stop shrinking everyone's loads. 0 = never age off.
-    </div>
-    <div class="muted" id="container-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <h2>MARKETPLACE LISTINGS</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Listings look stale after
-      <input id="listing-stale" type="number" min="0" max="365" step="1" style="width:80px;"> days
-      <button id="listing-stale-save">Save</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      An open listing untouched this long gets an amber <b>stale</b> badge on the board and a
-      one-click "Still available" renew for its seller. Keeps the board leading with live
-      offers instead of dead ads. 0 turns the badge off. Nothing is auto-removed.
-    </div>
-    <div class="muted" id="listing-stale-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <h2>EVENT TEMPLATES</h2>
-    <label style="display:flex; gap:8px; align-items:center;">
-      <input id="event-builtin-tpl" type="checkbox"> Offer the built-in starter templates
-    </label>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Six presets (Mining, Salvage, Cargo haul, Bounty / combat patrol, Bunker, Raid) that ship
-      with the app. Turn them off if your org only wants its own templates. Org templates and
-      events already created from a built-in are unaffected.
-    </div>
-    <div class="muted" id="event-builtin-tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <h2>OPS PAYOUT DEFAULTS</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      The payout rules every new event and quick op starts with. Organizers can change them per
-      event before it starts; any change after that is a logged amendment with a reason.
-      Contracts are never split — the game pays them.
-    </div>
-    <div id="op-default-rules-box"></div>
-    <button id="op-default-rules-save" style="margin-top:8px;">Save defaults</button>
-    <div class="muted" id="op-default-rules-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <h2>⛏ MINED-OUT REPORTS</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Reports age off after
-      <input id="depletion-ageoff" type="number" min="1" max="10080" step="15" style="width:80px;"> min
-      <button id="depletion-ageoff-save">Save</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      A miner who finds a surveyed field emptied reports it from the element finder; while
-      the report is fresh the <b>ore router</b> ranks that cluster last (the survey map
-      itself is untouched — rocks respawn). Rock spawns rotate on the order of hours, so
-      the default is a play session (4&nbsp;h).
-    </div>
-    <div class="muted" id="depletion-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-    <h2>UEX PRICE DATA</h2>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      Auto-refresh prices every
-      <input id="feed-refresh" type="number" min="0" max="720" step="1" style="width:70px;"> hours
-      <button id="feed-refresh-save">Save</button>
-      <button id="feed-refresh-now">Refresh now</button>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      Commodity, item, terminal and price feeds re-pull from UEX Corp on this schedule —
-      they drive trade-planner margins, marketplace market values and ore value badges.
-      Minimum every <b>2 hours</b> (UEX is community-run — don't tax it); longer is fine;
-      <b>0</b> turns auto-refresh off. <b>Refresh now</b> also re-pulls the starmap dataset.
-    </div>
-    <div class="muted" id="feed-refresh-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
-
-    <h2>DISCORD NOTIFICATIONS</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      Route each kind of alert to its own channel. Create an <b>Incoming Webhook</b>
-      in a channel's settings (Integrations → Webhooks) and paste its URL into the
-      matching box. Leave a box empty to keep that kind off; reuse the same URL in
-      several boxes to send them to one channel. We never post <code>@everyone</code>;
-      URLs are stored as secrets and never shown again.
-    </div>
-    <div id="discord-rows"></div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-      Remind before an event starts
-      <input id="discord-lead" type="number" min="1" max="1440" step="1" style="width:80px;"> minutes
-      <button id="discord-lead-save">Save</button>
-      <span class="muted" id="discord-lead-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    </div>
-
-    <h2>BRANDING</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      Your guild's name shows on the login screen and the app chooser, next to the
-      built-in Org Navigator branding. Leave it blank to show the generic copy.
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
-      <input id="org-name-input" type="text" maxlength="80" placeholder="e.g. Aurora Trading Co."
-             style="min-width:220px; flex:1;">
-      <button id="org-name-save">Save name</button>
-      <span class="muted" id="org-name-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    </div>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      The blurb under <b>Org Navigator</b> on the login screen. The built-in copy
-      pitches the ten apps; you're running this server, so say what it's for
-      instead: a welcome, your recruitment line, whatever fits. One short
-      paragraph, plain text. Leave it blank to keep the built-in copy.
-    </div>
-    <textarea id="org-tagline-input" maxlength="400" rows="3"
-              placeholder="e.g. Aurora Trading Co. flight ops: routes, cargo runs and org events, all in one place."
-              style="width:100%; resize:vertical;"></textarea>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
-      <button id="org-tagline-save">Save blurb</button>
-      <button id="org-tagline-clear">Reset</button>
-      <span class="muted" id="org-tagline-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    </div>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      The <b>heading</b> over the app chooser, and the line beneath it. Both ship
-      with generic wording about "ten tools"; name them for your org instead
-      (<i>Aurora flight deck</i>, <i>Mining division tools</i>). Blank keeps the
-      built-in wording.
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
-      <input id="launcher-head-input" type="text" maxlength="80" placeholder="e.g. Your org toolkit"
-             style="min-width:220px; flex:1;">
-      <button id="launcher-head-save">Save heading</button>
-      <button id="launcher-head-clear">Reset</button>
-      <span class="muted" id="launcher-head-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    </div>
-    <textarea id="launcher-sub-input" maxlength="400" rows="2"
-              placeholder="e.g. Everything the org runs on. New here? Start with the Resource Navigator."
-              style="width:100%; resize:vertical;"></textarea>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
-      <button id="launcher-sub-save">Save line</button>
-      <button id="launcher-sub-clear">Reset</button>
-      <span class="muted" id="launcher-sub-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    </div>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
-      the header — it's added alongside, never replacing it. PNG, JPG, or WebP, up
-      to 2&nbsp;MB.
-    </div>
-    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-      <img id="org-logo-preview" alt="current org logo" hidden
-           style="height:40px; width:auto; max-width:140px; border:1px solid var(--border); border-radius:6px; padding:2px; background:var(--bg);">
-      <input type="file" id="org-logo-file" accept="image/png,image/jpeg,image/webp">
-      <button id="org-logo-upload">Upload</button>
-      <button id="org-logo-remove" hidden>Remove logo</button>
-      <span class="muted" id="org-logo-status" role="status" aria-live="polite"></span>
-    </div>
-  </div>
-
-  <div class="panel admin-grp" id="app-art-panel">
-    <h2>APP CHOOSER ARTWORK</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      Every app on the chooser ships with its own picture. Swap any of them for
-      your org's own art and the chooser takes on your identity. Square images
-      look best (the cards render them at 160&nbsp;px). PNG, JPG, or WebP, up to
-      2&nbsp;MB each. <b>Reset</b> puts the built-in picture back; the app itself
-      is never affected either way.
-    </div>
-    <div id="app-art-rows"></div>
-    <div class="muted" id="app-art-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
-  </div>
-
-  <div class="panel admin-grp" id="poi-qc-panel">
-    <h2>POI QUALITY CONTROL</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      Imported POIs are sometimes wrong — a place that doesn't exist, or a mis-set
-      quantum-travel marker. <b>Flag a POI bad</b> to drop it from routing, search and
-      as a destination; <b>override its QT status</b> to force a jump marker on or off.
-      Fixes are keyed to the POI's name + system, so they <b>survive every data
-      re-import</b>. A name shared by more than one POI applies to all of them.
-    </div>
-    <input id="poi-qc-search" class="ti" placeholder="Search a POI by name…"
-           aria-label="Search POIs to flag or override" style="width:100%; max-width:360px;">
-    <div id="poi-qc-results" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
-    <h3 style="margin-top:16px; margin-bottom:4px; font-size:13px; letter-spacing:.04em;">ACTIVE OVERRIDES</h3>
-    <div id="poi-qc-overrides" style="display:flex; flex-direction:column; gap:6px;"></div>
-    <div class="muted" id="poi-qc-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
-  </div>
-
-  <div class="panel admin-grp" id="handle-bind-panel">
-    <h2>IN-GAME HANDLE BINDINGS</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      A watcher's in-game handle binds to whoever reports it first, and then
-      <b>never transfers</b> — that guard is what stops a member claiming someone
-      else's captures and verified marketplace identity. The cost is that a handle
-      bound to the <b>wrong</b> account (a test login, a re-made Discord account,
-      another member's watcher posting it first) stays stuck. <b>Unbind</b> it here
-      and the next watcher to report it claims it. Captures already recorded keep
-      their attribution.
-    </div>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      Handles are matched <b>ignoring capitalisation</b> — <i>Bolvangar</i> and
-      <i>bolvangar</i> are one player, and claiming a name reserves every casing of
-      it. <b>Merge</b> folds one handle's captures into another: use it for a
-      collision flagged below, or when one member ended up with two handles
-      (a rename). Merging is permanent.
-    </div>
-    <input id="handle-bind-search" class="ti" placeholder="Search a handle…"
-           aria-label="Search in-game handle bindings" style="width:100%; max-width:360px;">
-    <div id="handle-bind-rows" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
-    <div class="muted" id="handle-bind-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
-  </div>
-
-  <div class="panel admin-grp" id="op-guests-panel">
-    <h2>OPS GUESTS → MEMBERS</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">
-      Someone who ran ops as a guest and later joined the org can be linked to their
-      member account, so those ops count in their stats. Their share, payments and loot
-      on those ops move with them, and each op's record logs the link. Guest names are
-      free text, so you choose which rows are the same person. A <b>suggestion</b> means
-      the guest's name or RSI handle matches a member's in-game handle, or their name
-      matches a member's Discord name; nothing is linked until you click.
-    </div>
-    <div id="op-guests-rows" style="display:flex; flex-direction:column; gap:6px;"></div>
-    <div class="muted" id="op-guests-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
-  </div>
-
-  <div class="panel admin-grp" id="motd-panel">
-    <h2>MESSAGE OF THE DAY</h2>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      Broadcast a short notice to every member. It shows as a banner at the top of
-      the app chooser until they dismiss it. Editing the text re-shows it to
-      everyone. Clear the box and save to take it down. Plain text only.
-    </div>
-    <textarea id="motd-input" maxlength="2000" rows="3"
-              placeholder="e.g. Org op tonight at 20:00 UTC. Muster at Everus Harbor."
-              style="width:100%; resize:vertical;"></textarea>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
-      <button id="motd-save">Save message</button>
-      <button id="motd-clear" class="danger-btn">Clear</button>
-      <span class="muted" id="motd-status" role="status" aria-live="polite" style="font-size:12px;"></span>
-    </div>
-  </div>
-
-  <div class="panel admin-grp danger-zone" id="danger-panel">
-    <h2>CLEAR STATISTICS <span class="muted">(danger)</span></h2>
-    <div class="muted" style="font-size:12px; margin-bottom:6px;">
-      Permanently wipe the data behind a Statistics page. There's no undo, so
-      each button asks you to confirm first.
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <button id="clear-resource-stats" class="danger-btn">Clear resource statistics</button>
-      <button id="clear-cargo-stats" class="danger-btn">Clear cargo statistics</button>
-      <button id="clear-trade-stats" class="danger-btn">Clear trade statistics</button>
-      <span class="muted" id="clear-stats-status" role="status" aria-live="polite"></span>
-    </div>
-    <div class="muted" style="font-size:12px; margin-top:4px;">
-      <b>Resource</b> deletes every resource, fauna, and harvestable sighting
-      org-wide — the Statistics page contributions and the resource leaderboard
-      reset to zero (your custom POIs and QT markers are kept). <b>Cargo</b>
-      deletes every member's completed hauling run — the cargo leaderboard,
-      hauling stats, and run history reset to zero (any in-progress haul keeps
-      running).
-    </div>
-  </div>
-  </div><!-- /admin-section -->
+          <h2>ADMINS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Admins change these org settings and can delete any contribution. Add a member by
+            their Discord <b>user ID</b> (Developer Mode on → right-click a user →
+            <b>Copy User ID</b>); changes take effect immediately. Admins set in the server's
+            environment show as <b>root</b> and can't be removed here.
+          </div>
+          <div id="admin-list" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;"></div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <input id="admin-add" class="ti" placeholder="Discord user ID"
+                   aria-label="Discord user ID to add as admin" style="min-width:220px;" inputmode="numeric">
+            <button id="admin-add-btn">Add admin</button>
+            <span class="muted" id="admin-ids-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        <div class="panel admin-grp" id="handle-bind-panel">
+          <h2>IN-GAME HANDLE BINDINGS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            A watcher's in-game handle binds to whoever reports it first, and then
+            <b>never transfers</b> — that guard is what stops a member claiming someone
+            else's captures and verified marketplace identity. The cost is that a handle
+            bound to the <b>wrong</b> account (a test login, a re-made Discord account,
+            another member's watcher posting it first) stays stuck. <b>Unbind</b> it here
+            and the next watcher to report it claims it. Captures already recorded keep
+            their attribution.
+          </div>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            Handles are matched <b>ignoring capitalisation</b> — <i>Bolvangar</i> and
+            <i>bolvangar</i> are one player, and claiming a name reserves every casing of
+            it. <b>Merge</b> folds one handle's captures into another: use it for a
+            collision flagged below, or when one member ended up with two handles
+            (a rename). Merging is permanent.
+          </div>
+          <input id="handle-bind-search" class="ti" placeholder="Search a handle…"
+                 aria-label="Search in-game handle bindings" style="width:100%; max-width:360px;">
+          <div id="handle-bind-rows" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+          <div class="muted" id="handle-bind-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+        </div>
+        <div class="panel admin-grp" id="op-guests-panel">
+          <h2>OPS GUESTS → MEMBERS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            Someone who ran ops as a guest and later joined the org can be linked to their
+            member account, so those ops count in their stats. Their share, payments and loot
+            on those ops move with them, and each op's record logs the link. Guest names are
+            free text, so you choose which rows are the same person. A <b>suggestion</b> means
+            the guest's name or RSI handle matches a member's in-game handle, or their name
+            matches a member's Discord name; nothing is linked until you click.
+          </div>
+          <div id="op-guests-rows" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div class="muted" id="op-guests-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="branding" aria-label="Branding settings" hidden>
+        <div class="settings-grp-h">Branding <span class="muted">— these settings affect everyone in your org</span></div>
+        <div class="panel admin-grp" id="branding-panel">
+          <h2>BRANDING</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Your guild's name shows on the login screen and the app chooser, next to the
+            built-in Org Navigator branding. Leave it blank to show the generic copy.
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
+            <input id="org-name-input" type="text" maxlength="80" placeholder="e.g. Aurora Trading Co."
+                   style="min-width:220px; flex:1;">
+            <button id="org-name-save">Save name</button>
+            <span class="muted" id="org-name-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            The blurb under <b>Org Navigator</b> on the login screen. The built-in copy
+            pitches the ten apps; you're running this server, so say what it's for
+            instead: a welcome, your recruitment line, whatever fits. One short
+            paragraph, plain text. Leave it blank to keep the built-in copy.
+          </div>
+          <textarea id="org-tagline-input" maxlength="400" rows="3"
+                    placeholder="e.g. Aurora Trading Co. flight ops: routes, cargo runs and org events, all in one place."
+                    style="width:100%; resize:vertical;"></textarea>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
+            <button id="org-tagline-save">Save blurb</button>
+            <button id="org-tagline-clear">Reset</button>
+            <span class="muted" id="org-tagline-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            The <b>heading</b> over the app chooser, and the line beneath it. Both ship
+            with generic wording about "ten tools"; name them for your org instead
+            (<i>Aurora flight deck</i>, <i>Mining division tools</i>). Blank keeps the
+            built-in wording.
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
+            <input id="launcher-head-input" type="text" maxlength="80" placeholder="e.g. Your org toolkit"
+                   style="min-width:220px; flex:1;">
+            <button id="launcher-head-save">Save heading</button>
+            <button id="launcher-head-clear">Reset</button>
+            <span class="muted" id="launcher-head-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+          <textarea id="launcher-sub-input" maxlength="400" rows="2"
+                    placeholder="e.g. Everything the org runs on. New here? Start with the Resource Navigator."
+                    style="width:100%; resize:vertical;"></textarea>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
+            <button id="launcher-sub-save">Save line</button>
+            <button id="launcher-sub-clear">Reset</button>
+            <span class="muted" id="launcher-sub-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Upload your guild's logo to show it <b>next to</b> the Org Navigator logo in
+            the header — it's added alongside, never replacing it. PNG, JPG, or WebP, up
+            to 2&nbsp;MB.
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+            <img id="org-logo-preview" alt="current org logo" hidden
+                 style="height:40px; width:auto; max-width:140px; border:1px solid var(--border); border-radius:6px; padding:2px; background:var(--bg);">
+            <input type="file" id="org-logo-file" accept="image/png,image/jpeg,image/webp">
+            <button id="org-logo-upload">Upload</button>
+            <button id="org-logo-remove" hidden>Remove logo</button>
+            <span class="muted" id="org-logo-status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        <div class="panel admin-grp" id="app-art-panel">
+          <h2>APP CHOOSER ARTWORK</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            Every app on the chooser ships with its own picture. Swap any of them for
+            your org's own art and the chooser takes on your identity. Square images
+            look best (the cards render them at 160&nbsp;px). PNG, JPG, or WebP, up to
+            2&nbsp;MB each. <b>Reset</b> puts the built-in picture back; the app itself
+            is never affected either way.
+          </div>
+          <div id="app-art-rows"></div>
+          <div class="muted" id="app-art-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="discord" aria-label="Discord settings" hidden>
+        <div class="settings-grp-h">Discord <span class="muted">— these settings affect everyone in your org</span></div>
+        <div class="panel admin-grp" id="discord-panel">
+          <h2>DISCORD NOTIFICATIONS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Route each kind of alert to its own channel. Create an <b>Incoming Webhook</b>
+            in a channel's settings (Integrations → Webhooks) and paste its URL into the
+            matching box. Leave a box empty to keep that kind off; reuse the same URL in
+            several boxes to send them to one channel. We never post <code>@everyone</code>;
+            URLs are stored as secrets and never shown again.
+          </div>
+          <div id="discord-rows"></div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+            Remind before an event starts
+            <input id="discord-lead" type="number" min="1" max="1440" step="1" style="width:80px;"> minutes
+            <button id="discord-lead-save">Save</button>
+            <span class="muted" id="discord-lead-status" role="status" aria-live="polite" style="font-size:12px;"></span>
+          </div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="apps" aria-label="App settings" hidden>
+        <div class="settings-grp-h">App settings <span class="muted">— these settings affect everyone in your org</span></div>
+        <div class="panel admin-grp" id="fresh-panel">
+          <h2>OBSERVATION FRESHNESS</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Mark sightings stale after
+            <input id="fresh-window" type="number" min="1" step="1" style="width:80px;"> hours
+            <button id="fresh-window-save">Save</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            SC respawns resource nodes and fauna, so the map and NEARBY list hide
+            sightings older than this. (The map's "fresh only" toggle overrides per view;
+            the ore heatmap always uses every sighting.) Tune it to SC's respawn cadence.
+          </div>
+          <div class="muted" id="fresh-window-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="depletion-panel">
+          <h2>⛏ MINED-OUT REPORTS</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Reports age off after
+            <input id="depletion-ageoff" type="number" min="1" max="10080" step="15" style="width:80px;"> min
+            <button id="depletion-ageoff-save">Save</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            A miner who finds a surveyed field emptied reports it from the element finder; while
+            the report is fresh the <b>ore router</b> ranks that cluster last (the survey map
+            itself is untouched — rocks respawn). Rock spawns rotate on the order of hours, so
+            the default is a play session (4&nbsp;h).
+          </div>
+          <div class="muted" id="depletion-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="lfg-life-panel">
+          <h2>GROUP FINDER (LFG)</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Posts turn <span style="color:var(--warn);">stale</span> after
+            <input id="lfg-stale" type="number" min="1" step="1" style="width:70px;"> min,
+            and age off the board after
+            <input id="lfg-ageoff" type="number" min="1" step="1" style="width:70px;"> min
+            <button id="lfg-life-save">Save</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            The Group Finder board is for grouping up <b>right now</b>. A post shows green
+            while fresh, goes yellow once it's stale, then drops off entirely at the age-off
+            time. Stale must be less than age-off. For scheduled or longer-lived plans, use
+            the <b>Event Planner</b> instead.
+          </div>
+          <div class="muted" id="lfg-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="warn-panel">
+          <h2>DANGER BOARD</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Warnings turn <span style="color:var(--warn);">stale</span> after
+            <input id="warn-stale" type="number" min="1" step="1" style="width:70px;"> min,
+            and age off the board after
+            <input id="warn-ageoff" type="number" min="1" step="1" style="width:70px;"> min
+            <button id="warn-life-save">Save</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Pirate danger warnings are meant to be <b>right now</b>, so they age off fast by default
+            (an hour). A warning shows fresh, goes stale as it nears the age-off, then drops off unless
+            someone confirms it's still active. Stale must be less than age-off.
+          </div>
+          <div class="muted" id="warn-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+            Route trade &amp; cargo runs around a danger within
+            <input id="hazard-radius" type="number" min="100" max="200000" step="100" style="width:90px;"> km
+            <button id="hazard-radius-save">Save</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            The berth the planners keep from a reported danger when routing around it. Wider than the
+            in-game snare bubble on purpose (anchors are approximate and pirates roam); at quantum
+            distances a generous berth costs almost nothing. Scales with severity automatically.
+          </div>
+          <div class="muted" id="hazard-radius-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="stock-panel">
+          <h2>TRADE STOCK &amp; DEMAND REPORTS</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Reports age off after
+            <input id="stock-ageoff" type="number" min="1" max="10080" step="5" style="width:80px;"> min
+            <button id="stock-ageoff-save">Save</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            A trader who finds a terminal's shelf empty — or a terminal that won't <b>buy</b> their
+            cargo — reports it from trade run mode; while the report is fresh the trade planner
+            won't route anyone through that side of the trade there (the other side is
+            unaffected). Markets restock and reset on their own, so keep this in the hours range;
+            raise it if members keep re-hitting dead terminals, lower it if reports outlive the
+            real shortage.
+          </div>
+          <div class="muted" id="stock-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="container-panel">
+          <h2>CARGO CONTAINER REPORTS</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Container reports age off after
+            <input id="container-ageoff" type="number" min="0" max="3650" step="5" style="width:80px;"> days
+            <button id="container-ageoff-save">Save</button>
+            <button id="container-clear">Clear all</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Which container sizes a commodity is sold in is set by the game patch, not by the
+            hour — so this window is <b>days</b>, not minutes. A member who finds a size missing
+            at a kiosk reports it from trade run mode, and the planner stops proposing that size
+            for that commodity org-wide. <b>Clear all</b> after a patch that reshuffles cargo, so
+            last patch's observations stop shrinking everyone's loads. 0 = never age off.
+          </div>
+          <div class="muted" id="container-ageoff-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="listing-panel">
+          <h2>MARKETPLACE LISTINGS</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Listings look stale after
+            <input id="listing-stale" type="number" min="0" max="365" step="1" style="width:80px;"> days
+            <button id="listing-stale-save">Save</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            An open listing untouched this long gets an amber <b>stale</b> badge on the board and a
+            one-click "Still available" renew for its seller. Keeps the board leading with live
+            offers instead of dead ads. 0 turns the badge off. Nothing is auto-removed.
+          </div>
+          <div class="muted" id="listing-stale-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="event-tpl-panel">
+          <h2>EVENT TEMPLATES</h2>
+          <label style="display:flex; gap:8px; align-items:center;">
+            <input id="event-builtin-tpl" type="checkbox"> Offer the built-in starter templates
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Six presets (Mining, Salvage, Cargo haul, Bounty / combat patrol, Bunker, Raid) that ship
+            with the app. Turn them off if your org only wants its own templates. Org templates and
+            events already created from a built-in are unaffected.
+          </div>
+          <div class="muted" id="event-builtin-tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="op-rules-panel">
+          <h2>OPS PAYOUT DEFAULTS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            The payout rules every new event and quick op starts with. Organizers can change them per
+            event before it starts; any change after that is a logged amendment with a reason.
+            Contracts are never split — the game pays them.
+          </div>
+          <div id="op-default-rules-box"></div>
+          <button id="op-default-rules-save" style="margin-top:8px;">Save defaults</button>
+          <div class="muted" id="op-default-rules-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="data" aria-label="Data settings" hidden>
+        <div class="settings-grp-h">Data <span class="muted">— these settings affect everyone in your org</span></div>
+        <div class="panel admin-grp" id="poi-catalog-panel">
+          <h2>POI CATALOG</h2>
+          <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
+            <input type="checkbox" id="starmap-toggle"> Import the starmap.space POI catalog
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Off by default: your org starts blank (just your own POIs and QT markers;
+            celestial bodies always load). Check to import the full starmap.space catalog
+            now — no restart needed, and it refreshes on each restart. Uncheck to drop it
+            and return to a clean database; your custom POIs stay.
+          </div>
+          <label style="display:flex; gap:8px; align-items:center; font-size:13px; margin-top:12px;">
+            <input type="checkbox" id="wiki-toggle"> Import the Star Citizen Wiki locations catalog
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Also off by default, and independent of the starmap catalog. Adds datamined
+            outposts, stations and asteroid clusters the starmap feed lacks (game data:
+            Star Citizen Wiki, CC BY-SA 4.0). Places both catalogs know are never
+            doubled up. Updated with each app release rather than on restart.
+          </div>
+          <div class="muted" id="dataset-status" role="status" aria-live="polite"
+               style="font-size:12px; margin-top:8px;"></div>
+        </div>
+        <div class="panel admin-grp" id="poi-qc-panel">
+          <h2>POI QUALITY CONTROL</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            Imported POIs are sometimes wrong — a place that doesn't exist, or a mis-set
+            quantum-travel marker. <b>Flag a POI bad</b> to drop it from routing, search and
+            as a destination; <b>override its QT status</b> to force a jump marker on or off.
+            Fixes are keyed to the POI's name + system, so they <b>survive every data
+            re-import</b>. A name shared by more than one POI applies to all of them.
+          </div>
+          <input id="poi-qc-search" class="ti" placeholder="Search a POI by name…"
+                 aria-label="Search POIs to flag or override" style="width:100%; max-width:360px;">
+          <div id="poi-qc-results" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+          <h3 style="margin-top:16px; margin-bottom:4px; font-size:13px; letter-spacing:.04em;">ACTIVE OVERRIDES</h3>
+          <div id="poi-qc-overrides" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div class="muted" id="poi-qc-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+        </div>
+        <div class="panel admin-grp" id="feed-panel">
+          <h2>UEX PRICE DATA</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            Auto-refresh prices every
+            <input id="feed-refresh" type="number" min="0" max="720" step="1" style="width:70px;"> hours
+            <button id="feed-refresh-save">Save</button>
+            <button id="feed-refresh-now">Refresh now</button>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Commodity, item, terminal and price feeds re-pull from UEX Corp on this schedule —
+            they drive trade-planner margins, marketplace market values and ore value badges.
+            Minimum every <b>2 hours</b> (UEX is community-run — don't tax it); longer is fine;
+            <b>0</b> turns auto-refresh off. <b>Refresh now</b> also re-pulls the starmap dataset.
+          </div>
+          <div class="muted" id="feed-refresh-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp danger-zone" id="danger-panel">
+          <h2>CLEAR STATISTICS <span class="muted">(danger)</span></h2>
+          <div class="muted" style="font-size:12px; margin-bottom:6px;">
+            Permanently wipe the data behind a Statistics page. There's no undo, so
+            each button asks you to confirm first.
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <button id="clear-resource-stats" class="danger-btn">Clear resource statistics</button>
+            <button id="clear-cargo-stats" class="danger-btn">Clear cargo statistics</button>
+            <button id="clear-trade-stats" class="danger-btn">Clear trade statistics</button>
+            <span class="muted" id="clear-stats-status" role="status" aria-live="polite"></span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            <b>Resource</b> deletes every resource, fauna, and harvestable sighting
+            org-wide — the Statistics page contributions and the resource leaderboard
+            reset to zero (your custom POIs and QT markers are kept). <b>Cargo</b>
+            deletes every member's completed hauling run — the cargo leaderboard,
+            hauling stats, and run history reset to zero (any in-progress haul keeps
+            running).
+          </div>
+        </div>
+      </section>
+    </div><!-- /set-body -->
+  </div><!-- /set-shell -->
   </div><!-- /settings-view -->
 
   <div id="setup-view" hidden>
@@ -4703,7 +4781,7 @@
         <code>watcher</code> folder with <code>run_watcher.bat</code> inside.</p>
         <p class="muted" style="font-size:12px;">The download contains a personal token tied to your
         account, so keep the file to yourself. You can revoke it any time under
-        <a href="#/settings">⚙ Settings</a> (handy if you re-download or change PCs).</p>
+        <a href="#/settings/watcher">⚙ Settings › Watcher</a> (handy if you re-download or change PCs).</p>
       </li>
 
       <li>
@@ -6232,8 +6310,8 @@
     <h3>6. Your choices</h3>
     <ul>
       <li>Turn off live presence sharing at any time with the share toggle.</li>
-      <li>Revoke your watcher access token in <a href="#/settings">⚙ Settings</a>.</li>
-      <li>Delete your account at any time under <a href="#/settings">⚙ Settings</a> →
+      <li>Revoke your watcher access token in <a href="#/settings/watcher">⚙ Settings › Watcher</a>.</li>
+      <li>Delete your account at any time under <a href="#/settings/account">⚙ Settings › Account</a> →
         Delete Account. This erases your personal data (tokens, saved ships, cargo
         runs, and hauling history) and removes your name from the POIs and sightings
         you contributed, which are otherwise kept for your organization.</li>
@@ -9793,13 +9871,13 @@ function renderAccount(me) {
   myProfileTags = me.playstyle_tags || [];
   pinnedIds = new Set(me.pinned_ids || []);
   activeSurveyZone = (typeof me.active_survey_zone === "number") ? me.active_survey_zone : null;
-  // The watcher-token panel is for any member; the org-administration panels are
-  // admin-only. Both groups live inside #settings-view, shown by the hash router
-  // (applyView); #admin-section wraps the admin-only group as one visibility unit.
+  // The watcher-token panel is for any member; the org-administration sections are
+  // admin-only. Both live inside #settings-view; applySettingsSection shows one
+  // section at a time and never an admin one to a non-admin.
   $("identity-panel").hidden = false;
   renderIdentityPanel();
   $("token-panel").hidden = false;
-  $("admin-section").hidden = !me.is_admin;
+  $("set-nav-admin").hidden = !me.is_admin;
   $("intel-nav-directory").hidden = !me.is_admin;   // admin-only member directory
   // Show the real server address in the Setup guide.
   $("setup-server").textContent = location.origin;
@@ -25805,7 +25883,7 @@ function applyView() {
   const online = h === "#/online" && authed;
   const lfg = h === "#/lfg" && authed;   // Group Finder — its own app (LFG board)
   const pirates = h === "#/pirates" && authed;   // Danger Board — pirate warning board (#24)
-  const settings = h === "#/settings" && authed;
+  const settings = (h === "#/settings" || h.startsWith("#/settings/")) && authed;
   const setup = h === "#/setup" && authed;
   // Org Intel: one analytics app whose section is selected by the sub-route.
   const intelSec = h === "#/intel" ? "overview" : h === "#/intel/mapping" ? "mapping"
@@ -25890,15 +25968,23 @@ function applyView() {
   $("setup-toggle").hidden = !authed;
   $("setup-toggle").classList.toggle("nav-active", setup);
 
+  const enteringSettings = settings && !settingsOpen;
+  if (!settings) settingsSec = null;
+  settingsOpen = settings;
   if (settings) {
-    // Lazy-load: don't fetch tokens/settings for members who never open the page.
-    loadTokens();
-    // Identity is bound by the watcher out-of-band, so re-read it on entry rather
-    // than trusting the boot-time /api/me snapshot.
-    refreshIdentity();
-    renderProfilePanel();
-    loadMyOps();
-    if (currentMe.is_admin) loadSettings();
+    applySettingsSection(h);
+    // Lazy-load on ENTRY, not per section: every section's DOM is already on the
+    // page, so moving between sections costs no requests (same fetches as the
+    // old single page, and none for members who never open it).
+    if (enteringSettings) {
+      loadTokens();
+      // Identity is bound by the watcher out-of-band, so re-read it on entry rather
+      // than trusting the boot-time /api/me snapshot.
+      refreshIdentity();
+      renderProfilePanel();
+      loadMyOps();
+      if (currentMe.is_admin) loadSettings();
+    }
   } else if (route) {
     loadRoutePlanner();
   } else if (trade) {
@@ -25923,6 +26009,45 @@ function applyView() {
   }
 }
 window.addEventListener("hashchange", applyView);
+
+// ---------- settings sections ----------
+// #/settings = Profile; #/settings/<slug> = one section. "me" sections are for
+// every member, "admin" ones only for org admins (a non-admin, or a stale or
+// mistyped slug, lands on Profile with the URL corrected).
+const SETTINGS_SECTIONS = {
+  profile: "me", watcher: "me", "my-ops": "me", account: "me",
+  general: "admin", members: "admin", branding: "admin", discord: "admin",
+  apps: "admin", data: "admin",
+};
+let settingsOpen = false;   // applyView: was Settings already showing?
+let settingsSec = null;      // the section applySettingsSection last showed
+
+function settingsSection(h) {
+  const slug = h.startsWith("#/settings/") ? h.slice("#/settings/".length) : "profile";
+  const kind = SETTINGS_SECTIONS[slug];
+  if (!kind || (kind === "admin" && !currentMe?.is_admin)) return "profile";
+  return slug;
+}
+
+function applySettingsSection(h) {
+  const sec = settingsSection(h);
+  if (sec === "profile" && h !== "#/settings")
+    history.replaceState(null, "", "#/settings");   // no hashchange → no re-entry
+  for (const el of document.querySelectorAll("#settings-view .set-sec"))
+    el.hidden = el.dataset.sec !== sec;
+  for (const a of document.querySelectorAll("#set-nav a")) {
+    if (a.dataset.sec === sec) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+  // One org-settings load feeds every admin section, so its failure notice sits
+  // above whichever admin section is open (it used to live in ACCESS alone).
+  const err = $("admin-load-status");
+  err.hidden = SETTINGS_SECTIONS[sec] !== "admin" || !err.dataset.loadFailed;
+  // A new section starts at its top; a re-render of the same one (renderAccount
+  // re-runs applyView) must not yank the page.
+  if (sec !== settingsSec) window.scrollTo(0, 0);
+  settingsSec = sec;
+}
 
 // ---------- leaderboard ----------
 async function loadLeaderboard() {
@@ -26740,13 +26865,14 @@ async function loadSettings() {
     if (document.activeElement !== $("motd-input"))
       $("motd-input").value = s.motd || "";
     applyDiscordSettings(s);
-    const st = $("admin-status");
-    if (st.dataset.loadFailed) { st.dataset.loadFailed = ""; st.textContent = ""; }
+    const st = $("admin-load-status");
+    if (st.dataset.loadFailed) { st.dataset.loadFailed = ""; st.textContent = ""; st.hidden = true; }
   } catch {
     // Say so instead of silently rendering a blank admin panel.
-    const st = $("admin-status");
+    const st = $("admin-load-status");
     st.dataset.loadFailed = "1";
     st.innerHTML = `couldn't load org settings — <button id="settings-retry">Retry</button>`;
+    st.hidden = SETTINGS_SECTIONS[settingsSection(location.hash)] !== "admin";
     const b = $("settings-retry");
     if (b) b.onclick = loadSettings;
   }
