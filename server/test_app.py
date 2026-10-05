@@ -13473,5 +13473,192 @@ class NotifyOrgImageTests(unittest.TestCase):
         self.assertEqual(msg["embed"]["thumbnail"]["url"], "attachment://thumb.png")
 
 
+class EventNotifyImageTests(unittest.TestCase):
+    """Slice 2: an event's own announcement banner (upload or link), carried by
+    templates, swept when nothing references it, and admin-testable."""
+
+    _PNG = b"\x89PNG\r\n\x1a\n" + b"\x01" * 64
+    _GIF = b"GIF89a" + b"\x02" * 64
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "is_admin": True}
+        cls._user = dict(cls._admin)
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls._orig_send = notify.send
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._user.clear(); self._user.update(self._admin)
+        for name in ("NOTIFY_IMAGES_DIR", "BRANDING_DIR"):
+            orig = getattr(app, name)
+            setattr(app, name, Path(tempfile.mkdtemp()))
+            self.addCleanup(lambda n=name, o=orig: setattr(app, n, o))
+        db.set_setting(app._NOTIFY_ORG_IMAGE_KEY, "")
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        app._rate_hits.clear()
+        app._test_send_at = 0.0
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category, "embed": kw.get("embed"),
+                              "files": kw.get("files") or []})
+            return True
+        notify.send = _capture
+
+    def _upload(self, data=None, ctype="image/png"):
+        r = self.client.post("/api/notify-images",
+                             files={"file": ("art", data or self._PNG, ctype)})
+        return r
+
+    def _event(self, **extra):
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        return self.client.post("/api/events", json={
+            "title": "Banner Op", "start_at": start, "types": ["Raid"],
+            "categories": ["PvE"], **extra})
+
+    def test_upload_is_content_addressed_and_served(self):
+        a = self._upload().json()
+        self.assertEqual(a["kind"], "upload")
+        self.assertEqual(a["ext"], "png")
+        self.assertRegex(a["hash"], r"^[0-9a-f]{16}$")
+        self.assertEqual(self._upload().json()["hash"], a["hash"])   # same bytes, one file
+        self.assertEqual(len(list(app.NOTIFY_IMAGES_DIR.iterdir())), 1)
+        g = self.client.get(f"/api/notify-images/{a['hash']}")
+        self.assertEqual(g.status_code, 200)
+        self.assertEqual(g.content, self._PNG)
+        self.assertEqual(self.client.get("/api/notify-images/../../etc").status_code, 404)
+        self.assertEqual(self.client.get("/api/notify-images/" + "0" * 16).status_code, 404)
+
+    def test_upload_validation(self):
+        self.assertEqual(self._upload(self._PNG, "image/gif").status_code, 400)
+        self.assertEqual(self._upload(b"<svg/>", "image/svg+xml").status_code, 400)
+        big = self._GIF + b"\x00" * app._NOTIFY_IMAGE_MAX_BYTES
+        self.assertEqual(self._upload(big, "image/gif").status_code, 400)
+        self.assertEqual(self._upload(self._GIF, "image/gif").status_code, 200)
+
+    def test_any_member_can_upload_but_it_is_rate_limited(self):
+        self._user["is_admin"] = False
+        self.assertEqual(self._upload().status_code, 200)
+        limit = app._RATE_LIMITS["upload"][0]
+        codes = [self._upload().status_code for _ in range(limit)]
+        self.assertEqual(codes[-1], 429)
+
+    def test_event_with_uploaded_banner_announces_it(self):
+        ref = self._upload().json()
+        r = self._event(notify_image={"kind": "upload", "hash": ref["hash"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["notify_image"],
+                         {"kind": "upload", "hash": ref["hash"], "ext": "png"})
+        ev = db.get_event(r.json()["id"])
+        asyncio.run(app._notify_event_created(ev))
+        asyncio.run(app._notify_event_reminder(ev))
+        asyncio.run(app._notify_event_rescheduled(ev, "2020-01-01T00:00:00+00:00", None))
+        asyncio.run(app._notify_event_cancelled(ev))
+        created, reminder, moved, cancelled = self.sent[-4:]
+        for m in (created, reminder, moved):
+            self.assertEqual(m["embed"]["image"], {"url": "attachment://banner.png"})
+            self.assertEqual(m["files"], [("banner.png", self._PNG, "image/png")])
+        self.assertNotIn("image", cancelled["embed"])          # no party banner on a cancel
+        self.assertEqual(cancelled["files"], [])
+
+    def test_linked_banner_and_org_image_together(self):
+        self.client.put("/api/settings/discord/org-image", json={"kind": "shipped"})
+        r = self._event(notify_image={"kind": "url", "url": "https://i.imgur.com/b.png"})
+        ev = db.get_event(r.json()["id"])
+        asyncio.run(app._notify_event_created(ev))
+        m = self.sent[-1]
+        self.assertEqual(m["embed"]["image"], {"url": "https://i.imgur.com/b.png"})
+        self.assertEqual(m["embed"]["thumbnail"], {"url": "attachment://thumb.png"})
+        self.assertEqual([f[0] for f in m["files"]], ["thumb.png"])   # the link isn't attached
+
+    def test_bad_refs_rejected(self):
+        for ref in ({"kind": "url", "url": "http://x.com/a.png"},
+                    {"kind": "url", "url": "https://cdn.discordapp.com/attachments/1/2/a.png"},
+                    {"kind": "upload", "hash": "0123456789abcdef"},     # not ours
+                    {"kind": "upload", "hash": "../../../etc/passwd"},
+                    {"kind": "file", "url": "https://x.com/a.png"}):
+            self.assertEqual(self._event(notify_image=ref).status_code, 400, ref)
+
+    def test_edit_can_remove_the_banner(self):
+        ref = self._upload().json()
+        eid = self._event(notify_image={"kind": "upload", "hash": ref["hash"]}).json()["id"]
+        start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        r = self.client.patch(f"/api/events/{eid}", json={
+            "title": "Banner Op", "start_at": start, "types": ["Raid"], "categories": ["PvE"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["notify_image"])
+        self.assertIsNone(db.get_event(eid)["notify_image"])
+
+    def test_missing_file_degrades_to_no_banner(self):
+        ref = self._upload().json()
+        ev = db.get_event(self._event(notify_image={"kind": "upload", "hash": ref["hash"]}).json()["id"])
+        for f in app.NOTIFY_IMAGES_DIR.iterdir():
+            f.unlink()
+        asyncio.run(app._notify_event_created(ev))
+        self.assertNotIn("image", self.sent[-1]["embed"])
+
+    def test_templates_carry_the_banner(self):
+        ref = self._upload().json()
+        img = {"kind": "upload", "hash": ref["hash"]}
+        eid = self._event(notify_image=img).json()["id"]
+        t = self.client.post(f"/api/events/{eid}/save-template", json={"name": "Weekly"}).json()
+        self.assertEqual(t["event"]["notify_image"]["hash"], ref["hash"])
+        t2 = self.client.post("/api/event-templates", json={
+            "name": "Scratch", "event": {"types": ["Raid"], "categories": ["PvE"],
+                                         "notify_image": {"kind": "url", "url": "https://i.imgur.com/t.png"}}})
+        self.assertEqual(t2.status_code, 200, t2.text)
+        self.assertEqual(t2.json()["event"]["notify_image"]["url"], "https://i.imgur.com/t.png")
+
+    def test_sweep_keeps_referenced_and_recent_uploads(self):
+        used = self._upload(self._PNG).json()["hash"]
+        tpl_only = self._upload(self._GIF, "image/gif").json()["hash"]
+        orphan = self._upload(self._PNG + b"x").json()["hash"]
+        fresh = self._upload(self._PNG + b"y").json()["hash"]
+        self._event(notify_image={"kind": "upload", "hash": used})
+        self.client.post("/api/event-templates", json={
+            "name": "T", "event": {"types": ["Raid"], "categories": ["PvE"],
+                                   "notify_image": {"kind": "upload", "hash": tpl_only}}})
+        # Age everything but `fresh` past the grace period.
+        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        with db._lock, db._conn:
+            db._conn.execute("UPDATE notify_images SET created=? WHERE hash != ?", (old, fresh))
+        self.assertEqual(app._sweep_notify_images(), 1)
+        self.assertIsNone(db.notify_image_get(orphan))
+        self.assertFalse(list(app.NOTIFY_IMAGES_DIR.glob(f"{orphan}.*")))
+        for h in (used, tpl_only, fresh):
+            self.assertIsNotNone(db.notify_image_get(h), h)
+
+    def test_event_test_send_is_admin_only(self):
+        ref = self._upload().json()
+        eid = self._event(notify_image={"kind": "upload", "hash": ref["hash"]}).json()["id"]
+        self.assertTrue(self.client.get(f"/api/events/{eid}").json()["notify_test"])
+        r = self.client.post(f"/api/events/{eid}/notify-test")
+        self.assertEqual(r.status_code, 200, r.text)
+        m = self.sent[-1]
+        self.assertTrue(m["embed"]["title"].startswith("[TEST] 📅 New event"))
+        self.assertEqual(m["embed"]["image"], {"url": "attachment://banner.png"})
+        self._user["is_admin"] = False
+        self.assertFalse(self.client.get(f"/api/events/{eid}").json()["notify_test"])
+        self.assertEqual(self.client.post(f"/api/events/{eid}/notify-test").status_code, 403)
+        self._user["is_admin"] = True
+        db.set_setting(notify._webhook_key("events"), "")
+        app._test_send_at = 0.0
+        self.assertEqual(self.client.post(f"/api/events/{eid}/notify-test").status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
