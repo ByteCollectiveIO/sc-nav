@@ -52,6 +52,17 @@ STATIC_DIR = Path(__file__).parent / "static"
 BRANDING_DIR = DATA_DIR / "branding"
 _LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 _LOGO_MAX_BYTES = 2 * 1024 * 1024
+# Images attached to Discord announcements (docs/discord-notification-customization.md
+# §3.2). GIF is allowed here (and only here): orgs make animated banners, and we
+# never decode an image, only check its magic bytes. The bigger cap is because we
+# have no image library to shrink one; Discord's own attachment limit is higher.
+_NOTIFY_IMAGE_TYPES = {**_LOGO_TYPES, "image/gif": "gif"}
+_NOTIFY_IMAGE_MIME = {ext: ct for ct, ext in _NOTIFY_IMAGE_TYPES.items()}
+_NOTIFY_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+_NOTIFY_IMAGE_URL_MAX = 1000
+# The ready-made org image an admin can pick with one click (§3.3): the Org
+# Navigator patch, already shipped in the static dir at a square 359×360.
+SHIPPED_ORG_IMAGE = STATIC_DIR / "images" / "sc_org_navigator_logo.png"
 # App-chooser artwork an admin may swap per card, keyed by the card's route slug
 # (the `#/…` hash the launcher links to). Same upload path as the org logo: the
 # bytes live on the /data volume, the built-in art stays in the image and is what
@@ -70,6 +81,8 @@ def _sniff_image(data: bytes, ext: str) -> bool:
         return data[:3] == b"\xff\xd8\xff"
     if ext == "webp":
         return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if ext == "gif":
+        return data[:6] in (b"GIF87a", b"GIF89a")
     return False
 # Watcher source for the Setup-page download. In the Docker image the files are
 # copied to server/watcher_src (see Dockerfile); in a dev checkout they live in
@@ -8569,11 +8582,11 @@ async def _notify_event_created(ev: dict) -> None:
     loc = f"\n📍 {where}" if where else ""
     await notify.send(
         "events", "",
-        embed=_embed(
+        **_announce(_embed(
             f"📅 New event: {ev['title']}",
             f"Starts {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
             f"{loc}",
-            url=_app_url(f"#/events/{ev['id']}")),
+            url=_app_url(f"#/events/{ev['id']}"))),
         dedup_key=f"event-created:{ev['id']}")
 
 
@@ -8582,10 +8595,10 @@ async def _notify_event_cancelled(ev: dict) -> None:
         return
     await notify.send(
         "events", "",
-        embed=_embed(
+        **_announce(_embed(
             f"🚫 Event cancelled: {ev['title']}",
             f"Was set for {_discord_ts(ev['start_at'])}.",
-            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_BAD),
+            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_BAD)),
         dedup_key=f"event-cancelled:{ev['id']}")
 
 
@@ -8612,11 +8625,11 @@ async def _notify_event_reminder(ev: dict) -> None:
         "events", "",
         mentions=_event_attendee_ids(ev["id"]),
         dedup_key=f"event-reminder:{ev['id']}",
-        embed=_embed(
+        **_announce(_embed(
             f"⏰ Starting soon: {ev['title']}",
             f"Begins {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
             f"{loc}",
-            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN))
+            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN)))
 
 
 async def _notify_event_rescheduled(ev: dict, old_start: str | None,
@@ -8636,8 +8649,8 @@ async def _notify_event_rescheduled(ev: dict, old_start: str | None,
         "events", "",
         mentions=_event_attendee_ids(ev["id"]),
         dedup_key=f"event-moved:{ev['id']}:{ev['start_at']}",
-        embed=_embed(f"📌 Event updated: {ev['title']}", "\n".join(lines),
-                     url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN))
+        **_announce(_embed(f"📌 Event updated: {ev['title']}", "\n".join(lines),
+                           url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN)))
 
 
 async def _notify_waitlist_promoted(ev: dict, discord_id: str) -> None:
@@ -8933,8 +8946,8 @@ async def _notify_listing_posted(listing: dict) -> None:
     desc = ((" · ".join(bits) + "\n") if bits else "") + f"Posted by {who}. {cta}"
     await notify.send(
         "marketplace", craft_line,
-        embed=_embed(f"{icon} {headline}: {listing.get('item_name')}", desc,
-                     url=_app_url(f"#/market/{listing['id']}")),
+        **_announce(_embed(f"{icon} {headline}: {listing.get('item_name')}", desc,
+                           url=_app_url(f"#/market/{listing['id']}"))),
         dedup_key=f"listing-posted:{listing['id']}",
         mentions=crafters)
 
@@ -10410,7 +10423,7 @@ async def _notify_op_closed(op_id: int, updated: bool) -> None:
     op = db.get_op(op_id)
     if cat is None or op is None or op.get("kind") == "roll":
         return
-    await notify.send(cat, "", embed=_op_record_embed(op, updated=updated),
+    await notify.send(cat, "", **_announce(_op_record_embed(op, updated=updated)),
                       dedup_key=f"op-closed:{op_id}:{op.get('closed_at')}")
 
 
@@ -14965,6 +14978,7 @@ async def get_settings(user: dict = Depends(require_session)):
         # surface only whether each category has one set + a masked tail.
         "discord_webhooks": notify.webhook_status(),
         "discord_reminder_lead_min": notify.reminder_lead_min(),
+        "notify_org_image": notify_org_image(),   # None = off (the default)
     }
 
 
@@ -15166,14 +15180,183 @@ async def test_discord_webhook(body: DiscordTestIn, admin: dict = Depends(requir
         raise HTTPException(status_code=429, detail="slow down — try again in a moment")
     _test_send_at = now
     who = admin.get("username") or "an admin"
+    # An embed carrying the org image, so a test also shows what announcements
+    # will look like — the only preview an external image URL gets.
     ok = await notify.send(
-        body.category,
-        f"✅ **Org Navigator** — the **{body.category}** channel is connected. "
-        f"Test sent by {who}.{_deep_link('')}")
+        body.category, "",
+        **_announce(_embed(
+            f"✅ Org Navigator — the {body.category} channel is connected",
+            f"Test sent by {_md_plain(who)}.", url=_app_url(""))))
     if not ok:
         raise HTTPException(status_code=502,
                             detail="Discord rejected the message — check the webhook URL")
     return {"ok": True}
+
+
+# ---- org image on Discord announcements (docs/discord-notification-customization.md) ----
+# One optional image, off by default, attached as the embed THUMBNAIL of every
+# announcement-class post. Stored in meta `notify_org_image` as JSON:
+#   {"kind": "shipped"}                       the Org Navigator patch
+#   {"kind": "url", "url": "https://…"}       Discord fetches it; we never do
+#   {"kind": "upload", "ext": "png", "v": n}  BRANDING_DIR/notify_org.<ext>
+# Uploads go to Discord as an attachment, so nothing new is served publicly.
+_NOTIFY_ORG_IMAGE_KEY = "notify_org_image"
+# Discord's own attachment links are signed and expire about a day after they're
+# copied (since 2024), so the reminder that fires tomorrow would show nothing.
+_DISCORD_CDN_HOSTS = ("cdn.discordapp.com", "media.discordapp.net")
+
+
+def _check_image_url(url: str) -> str:
+    """Validate an admin/organizer-supplied image URL. We never fetch it (Discord's
+    media proxy does), so this is about catching mistakes, not SSRF."""
+    url = (url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="enter an image URL")
+    if len(url) > _NOTIFY_IMAGE_URL_MAX:
+        raise HTTPException(status_code=400, detail="that URL is too long")
+    try:
+        u = urllib.parse.urlparse(url)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="that isn't a valid URL")
+    if u.scheme != "https" or not u.hostname:
+        raise HTTPException(status_code=400, detail="image URLs must start with https://")
+    if u.username or u.password:
+        raise HTTPException(status_code=400, detail="image URLs can't contain a username or password")
+    if u.hostname.lower() in _DISCORD_CDN_HOSTS and u.path.startswith(("/attachments/", "/ephemeral-attachments/")):
+        raise HTTPException(
+            status_code=400,
+            detail="Discord attachment links expire about a day after you copy them, so the "
+                   "image would vanish from later posts. Upload the image here instead.")
+    return url
+
+
+def notify_org_image() -> dict | None:
+    """The org image setting, or None when it's off (the default)."""
+    raw = db.get_setting(_NOTIFY_ORG_IMAGE_KEY)
+    if not raw:
+        return None
+    try:
+        ref = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(ref, dict):
+        return None
+    kind = ref.get("kind")
+    if kind == "shipped":
+        return {"kind": "shipped"}
+    if kind == "url" and isinstance(ref.get("url"), str):
+        return {"kind": "url", "url": ref["url"]}
+    if kind == "upload" and ref.get("ext") in _NOTIFY_IMAGE_MIME:
+        return {"kind": "upload", "ext": ref["ext"], "v": int(ref.get("v") or 0)}
+    return None
+
+
+def _set_notify_org_image(ref: dict | None) -> None:
+    db.set_setting(_NOTIFY_ORG_IMAGE_KEY, json.dumps(ref) if ref else "")
+
+
+def _drop_notify_org_upload() -> None:
+    for old in BRANDING_DIR.glob("notify_org.*"):
+        old.unlink(missing_ok=True)
+
+
+def _org_thumbnail() -> tuple[dict | None, list[tuple[str, bytes, str]]]:
+    """(embed thumbnail, files to attach) for the org image; (None, []) when it's
+    off or its file has gone missing (a volume restored without it). A missing
+    image is never an error: the post just goes out without it."""
+    ref = notify_org_image()
+    if ref is None:
+        return None, []
+    if ref["kind"] == "url":
+        return {"url": ref["url"]}, []
+    if ref["kind"] == "shipped":
+        path, ext = SHIPPED_ORG_IMAGE, "png"
+    else:
+        ext = ref["ext"]
+        path = BRANDING_DIR / f"notify_org.{ext}"
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None, []
+    name = f"thumb.{ext}"
+    return {"url": f"attachment://{name}"}, [(name, data, _NOTIFY_IMAGE_MIME[ext])]
+
+
+def _announce(embed: dict) -> dict:
+    """`embed=`/`files=` kwargs for an ANNOUNCEMENT-class post (§3.4): new event,
+    reminder, reschedule, cancellation, marketplace listing, op record. The org
+    image goes on these only — a mark on "you were outbid" is noise."""
+    thumb, files = _org_thumbnail()
+    if thumb:
+        embed = {**embed, "thumbnail": thumb}
+    return {"embed": embed, "files": files}
+
+
+class NotifyOrgImageIn(BaseModel):
+    kind: str = Field(max_length=16)                      # shipped | url
+    url: str | None = Field(default=None, max_length=_NOTIFY_IMAGE_URL_MAX + 100)
+
+
+@app.get("/api/settings/discord/org-image")
+async def get_notify_org_image(v: str | None = None, user: dict = Depends(require_session)):
+    """Serve an UPLOADED org image so the settings page can preview it.
+    Member-only, like the app artwork; Discord never fetches this (it gets the
+    bytes as an attachment)."""
+    ref = notify_org_image()
+    if ref and ref["kind"] == "upload":
+        path = BRANDING_DIR / f"notify_org.{ref['ext']}"
+        if path.is_file():
+            cache = "private, max-age=31536000, immutable" if v else "no-cache"
+            return FileResponse(path, headers={"Cache-Control": cache})
+    raise HTTPException(status_code=404, detail="no uploaded org image")
+
+
+@app.put("/api/settings/discord/org-image")
+async def set_notify_org_image(body: NotifyOrgImageIn, admin: dict = Depends(require_admin)):
+    """Turn the org image on as the shipped patch or an external URL (admin)."""
+    if body.kind == "shipped":
+        ref = {"kind": "shipped"}
+    elif body.kind == "url":
+        ref = {"kind": "url", "url": _check_image_url(body.url or "")}
+    else:
+        raise HTTPException(status_code=400, detail="kind must be 'shipped' or 'url'")
+    _drop_notify_org_upload()
+    _set_notify_org_image(ref)
+    return {"ok": True, "notify_org_image": notify_org_image()}
+
+
+@app.post("/api/settings/discord/org-image")
+async def upload_notify_org_image(file: UploadFile = File(...),
+                                  admin: dict = Depends(require_admin)):
+    """Upload the org image (admin): PNG/JPG/WebP/GIF by Content-Type AND magic
+    bytes, 4 MB cap, on the /data volume next to the org logo."""
+    ext = _NOTIFY_IMAGE_TYPES.get((file.content_type or "").lower())
+    if not ext:
+        raise HTTPException(status_code=400, detail="image must be a PNG, JPG, WebP, or GIF")
+    data = await file.read(_NOTIFY_IMAGE_MAX_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="the file is empty")
+    if len(data) > _NOTIFY_IMAGE_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="image too large (max 4 MB). For a GIF, try a shorter or smaller one, "
+                   "or host it elsewhere and use its link.")
+    if not _sniff_image(data, ext):
+        raise HTTPException(status_code=400,
+                            detail="file contents don't match a PNG, JPG, WebP, or GIF image")
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    _drop_notify_org_upload()
+    (BRANDING_DIR / f"notify_org.{ext}").write_bytes(data)
+    _set_notify_org_image({"kind": "upload", "ext": ext, "v": int(time.time())})
+    return {"ok": True, "notify_org_image": notify_org_image()}
+
+
+@app.delete("/api/settings/discord/org-image")
+async def delete_notify_org_image(admin: dict = Depends(require_admin)):
+    """Turn the org image off (admin) — announcements go back to no image."""
+    _drop_notify_org_upload()
+    _set_notify_org_image(None)
+    return {"ok": True, "notify_org_image": None}
 
 
 @app.get("/api/branding")
