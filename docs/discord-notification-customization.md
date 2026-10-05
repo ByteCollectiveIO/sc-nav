@@ -1,6 +1,6 @@
 # Discord notification customization (images + message templates)
 
-**Status:** 🔨 slice 1 built 2026-10-05 (attachments + org image, unreleased); slices 2–5 design. Written against v1.19.1.
+**Status:** 🔨 slices 1–2 built 2026-10-05 (attachments + org image; per-event banner), unreleased; 2b–5 design. Written against v1.19.1.
 **Origin:** a self-hosting org asked to put its own graphics on event
 announcements. That raised the general question of what an admin can change
 about the messages the app posts to Discord.
@@ -136,7 +136,7 @@ drawbacks, and how each is handled:
 |---|---|---|---|
 | Settings › Discord → **Org image** | admin | thumbnail | meta `notify_org_image` (an image ref; absent = no thumbnail). Choices: Org Navigator patch (`{"kind": "shipped"}`) · Upload · URL · Remove |
 | Event form → **Announcement image** (URL tab / Upload tab, preview, remove) | organizer | image | `events.notify_image` (JSON, `_ensure_column`) |
-| Event template form | template owner | image | `event_templates.notify_image`; copied onto events created from it, and kept by Clone |
+| Event template form | template owner | image | the template's `event` JSON (`event.notify_image`, no new column); copied onto events created from it, and kept by Clone |
 
 > **Optional later (O2):** a per-category thumbnail override (e.g. a different
 > mark on the marketplace channel). It's the same machinery keyed by category.

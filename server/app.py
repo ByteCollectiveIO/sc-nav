@@ -63,6 +63,14 @@ _NOTIFY_IMAGE_URL_MAX = 1000
 # The ready-made org image an admin can pick with one click (§3.3): the Org
 # Navigator patch, already shipped in the static dir at a square 359×360.
 SHIPPED_ORG_IMAGE = STATIC_DIR / "images" / "sc_org_navigator_logo.png"
+# Uploaded announcement banners (an event's image), content-addressed: the file
+# name is the bytes' hash, so a reference can be copied event → template → clone
+# without copying the file. See db.notify_images.
+NOTIFY_IMAGES_DIR = DATA_DIR / "notify_images"
+_NOTIFY_IMAGE_HASH_RE = re.compile(r"^[0-9a-f]{16}$")
+# An upload no event or template points at is kept this long before the startup
+# sweep removes it: long enough to cover a form that uploaded but wasn't saved yet.
+_NOTIFY_IMAGE_GRACE_S = 7 * 86400
 # App-chooser artwork an admin may swap per card, keyed by the card's route slug
 # (the `#/…` hash the launcher links to). Same upload path as the org logo: the
 # bytes live on the /data volume, the built-in art stays in the image and is what
@@ -1964,6 +1972,9 @@ _RATE_LIMITS = {
     # Credential minting. Each one is long-lived, and /download/watcher mints a
     # fresh token per call.
     "token": (10, 3600.0),
+    # Announcement-image uploads (any member who organizes events). Each is up
+    # to 4 MB on the /data volume, so cap the rate rather than trust the sweep.
+    "upload": (30, 3600.0),
 }
 
 
@@ -3666,6 +3677,12 @@ async def _start_presence_broadcaster():
     # settings so notifications keep flowing after this upgrade (one-time, no-op
     # thereafter).
     notify.migrate_legacy_webhook()
+    try:
+        n = _sweep_notify_images()
+        if n:
+            print(f"[sc-nav] removed {n} unused announcement image(s)")
+    except Exception as exc:   # housekeeping must never block startup
+        print(f"[sc-nav] announcement-image sweep skipped: {exc}")
 
 
 def nav_summary(state: dict | None) -> dict | None:
@@ -8250,6 +8267,32 @@ class RoleTargetIn(BaseModel):
     needed: int = Field(default=1, ge=0, le=500)
 
 
+class ImageRefIn(BaseModel):
+    """An announcement image: an https link, or an upload's hash from
+    POST /api/notify-images (docs/discord-notification-customization.md §3.2)."""
+    kind: str = Field(max_length=16)                     # url | upload
+    url: str | None = Field(default=None, max_length=_NOTIFY_IMAGE_URL_MAX + 100)
+    hash: str | None = Field(default=None, max_length=64)
+
+
+def _clean_image_ref(ref: "ImageRefIn | None") -> dict | None:
+    """Validate an image ref into its stored shape, or None. An upload must be
+    one we actually hold (its row carries the extension), so a client can't
+    point an event at an arbitrary path."""
+    if ref is None:
+        return None
+    if ref.kind == "url":
+        return {"kind": "url", "url": _check_image_url(ref.url or "")}
+    if ref.kind == "upload":
+        h = (ref.hash or "").strip().lower()
+        row = db.notify_image_get(h) if _NOTIFY_IMAGE_HASH_RE.match(h) else None
+        if row is None:
+            raise HTTPException(status_code=400,
+                                detail="that uploaded image wasn't found — upload it again")
+        return {"kind": "upload", "hash": h, "ext": row["ext"]}
+    raise HTTPException(status_code=400, detail="image kind must be 'url' or 'upload'")
+
+
 class EventIn(BaseModel):
     title: str = Field(min_length=1, max_length=_NAME_MAX)
     description: str = Field(default="", max_length=_DESC_MAX)
@@ -8277,6 +8320,8 @@ class EventIn(BaseModel):
     # and whether to stamp that template's fleet units onto the new event.
     template_id: str | None = Field(default=None, max_length=_TYPE_MAX)
     template_groups: bool = False
+    # Banner on this event's announcement posts (created / reminder / changed).
+    notify_image: ImageRefIn | None = None
 
 
 class EventDetailsIn(BaseModel):
@@ -8340,7 +8385,7 @@ class SignupIn(BaseModel):
 _EVENT_PUBLIC = ("id", "organizer_id", "title", "description",
                  "start_at", "signup_deadline", "duration_min", "location", "event_location",
                  "min_players", "max_players", "roles", "status", "details",
-                 "rules", "contracts", "created_at", "updated_at")
+                 "rules", "contracts", "notify_image", "created_at", "updated_at")
 
 
 def _normalize_event_start(s: str) -> str:
@@ -8431,6 +8476,7 @@ def _validate_event(body: EventIn) -> dict:
         "details": _clean_event_details(body.details),
         "rules": _clean_rules(body.rules),
         "contracts": _clean_contracts(body.contracts),
+        "notify_image": _clean_image_ref(body.notify_image),
     }
 
 
@@ -8480,6 +8526,8 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
     op = db.get_op_by_event(ev["id"])
     view["op"] = {"id": op["id"], "phase": op["phase"]} if op else None
     if detail:
+        # Admin-only "send a test to Discord" for this event's announcement (§S7).
+        view["notify_test"] = bool(user.get("is_admin")) and notify.is_configured("events")
         view["attendees"] = [
             {"discord_id": s["discord_id"],
              "display_name": _resolve_member_name(s["discord_id"], None),
@@ -8575,18 +8623,22 @@ def _notify_bg(coro) -> None:
     task.add_done_callback(_notify_tasks.discard)
 
 
+def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
+    where = (ev.get("event_location") or ev.get("location") or "").strip()
+    loc = f"\n📍 {where}" if where else ""
+    return _embed(
+        f"{title_prefix}📅 New event: {ev['title']}",
+        f"Starts {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
+        f"{loc}",
+        url=_app_url(f"#/events/{ev['id']}"))
+
+
 async def _notify_event_created(ev: dict) -> None:
     if not notify.is_configured("events"):
         return
-    where = (ev.get("event_location") or ev.get("location") or "").strip()
-    loc = f"\n📍 {where}" if where else ""
     await notify.send(
         "events", "",
-        **_announce(_embed(
-            f"📅 New event: {ev['title']}",
-            f"Starts {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
-            f"{loc}",
-            url=_app_url(f"#/events/{ev['id']}"))),
+        **_announce(_event_created_embed(ev), event=ev),
         dedup_key=f"event-created:{ev['id']}")
 
 
@@ -8629,7 +8681,7 @@ async def _notify_event_reminder(ev: dict) -> None:
             f"⏰ Starting soon: {ev['title']}",
             f"Begins {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
             f"{loc}",
-            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN)))
+            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN), event=ev))
 
 
 async def _notify_event_rescheduled(ev: dict, old_start: str | None,
@@ -8650,7 +8702,8 @@ async def _notify_event_rescheduled(ev: dict, old_start: str | None,
         mentions=_event_attendee_ids(ev["id"]),
         dedup_key=f"event-moved:{ev['id']}:{ev['start_at']}",
         **_announce(_embed(f"📌 Event updated: {ev['title']}", "\n".join(lines),
-                           url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN)))
+                           url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN),
+                    event=ev))
 
 
 async def _notify_waitlist_promoted(ev: dict, discord_id: str) -> None:
@@ -9426,6 +9479,29 @@ async def cancel_event(event_id: int, user: dict = Depends(require_session)):
     return {"ok": True, "status": "cancelled"}
 
 
+@app.post("/api/events/{event_id}/notify-test")
+async def test_event_announcement(event_id: int, admin: dict = Depends(require_admin)):
+    """Send this event's announcement (banner + org image) to the events
+    channel, marked TEST, so an admin can see how it renders in Discord.
+    Admin-only (design S7): an organizer test would spam the org channel."""
+    global _test_send_at
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    if not notify.is_configured("events"):
+        raise HTTPException(status_code=400, detail="no Discord webhook set for events")
+    now = time.monotonic()
+    if now - _test_send_at < 5:
+        raise HTTPException(status_code=429, detail="slow down — try again in a moment")
+    _test_send_at = now
+    ok = await notify.send("events", "",
+                           **_announce(_event_created_embed(ev, "[TEST] "), event=ev))
+    if not ok:
+        raise HTTPException(status_code=502,
+                            detail="Discord rejected the message — check the webhook URL")
+    return {"ok": True}
+
+
 @app.post("/api/events/{event_id}/signup")
 async def signup_event(event_id: int, body: SignupIn,
                        user: dict = Depends(require_session)):
@@ -9870,6 +9946,7 @@ class TemplateEventIn(BaseModel):
     roles: list[RoleTargetIn] = Field(default_factory=list, max_length=_MAX_ROSTER_ROLES)
     details: EventDetailsIn | None = None
     contracts: list[ContractIn] = Field(default_factory=list, max_length=20)
+    notify_image: ImageRefIn | None = None
 
 
 class TemplateGroupIn(BaseModel):
@@ -9923,7 +10000,8 @@ def _clean_template_event(ev: TemplateEventIn) -> dict:
             "min_players": ev.min_players, "max_players": ev.max_players,
             "roles": shape["roles"],
             "details": _clean_event_details(ev.details),
-            "contracts": _clean_contracts(ev.contracts)}
+            "contracts": _clean_contracts(ev.contracts),
+            "notify_image": _clean_image_ref(ev.notify_image)}
 
 
 def _clean_template_groups(groups: list[TemplateGroupIn]) -> list[dict]:
@@ -10145,7 +10223,8 @@ async def save_event_as_template(event_id: int, body: TemplateNameIn,
              "min_players": ev.get("min_players") or 0,
              "max_players": ev.get("max_players"),
              "roles": ev.get("roles") or [], "details": ev.get("details") or {},
-             "contracts": ev.get("contracts") or []}
+             "contracts": ev.get("contracts") or [],
+             "notify_image": ev.get("notify_image")}
     groups = _snapshot_event_groups(event_id) if body.include_groups else []
     tid = db.create_event_template(body.name.strip(), event, groups, user["id"],
                                    datetime.now(timezone.utc).isoformat(),
@@ -15282,14 +15361,38 @@ def _org_thumbnail() -> tuple[dict | None, list[tuple[str, bytes, str]]]:
     return {"url": f"attachment://{name}"}, [(name, data, _NOTIFY_IMAGE_MIME[ext])]
 
 
-def _announce(embed: dict) -> dict:
+def _event_banner(ev: dict | None) -> tuple[dict | None, list[tuple[str, bytes, str]]]:
+    """(embed image, files) for an event's own banner; (None, []) when it has
+    none or an uploaded file has gone missing — never an error."""
+    ref = (ev or {}).get("notify_image")
+    if not isinstance(ref, dict):
+        return None, []
+    if ref.get("kind") == "url" and ref.get("url"):
+        return {"url": ref["url"]}, []
+    if ref.get("kind") == "upload" and ref.get("ext") in _NOTIFY_IMAGE_MIME \
+            and _NOTIFY_IMAGE_HASH_RE.match(str(ref.get("hash") or "")):
+        try:
+            data = (NOTIFY_IMAGES_DIR / f"{ref['hash']}.{ref['ext']}").read_bytes()
+        except OSError:
+            return None, []
+        name = f"banner.{ref['ext']}"
+        return {"url": f"attachment://{name}"}, [(name, data, _NOTIFY_IMAGE_MIME[ref["ext"]])]
+    return None, []
+
+
+def _announce(embed: dict, *, event: dict | None = None) -> dict:
     """`embed=`/`files=` kwargs for an ANNOUNCEMENT-class post (§3.4): new event,
     reminder, reschedule, cancellation, marketplace listing, op record. The org
-    image goes on these only — a mark on "you were outbid" is noise."""
+    image (thumbnail) goes on these only — a mark on "you were outbid" is noise.
+    `event` adds that event's own banner in the full-width image slot; callers
+    pass it for created / reminder / changed, never for a cancellation."""
     thumb, files = _org_thumbnail()
     if thumb:
         embed = {**embed, "thumbnail": thumb}
-    return {"embed": embed, "files": files}
+    banner, bfiles = _event_banner(event)
+    if banner:
+        embed = {**embed, "image": banner}
+    return {"embed": embed, "files": files + bfiles}
 
 
 class NotifyOrgImageIn(BaseModel):
@@ -15357,6 +15460,68 @@ async def delete_notify_org_image(admin: dict = Depends(require_admin)):
     _drop_notify_org_upload()
     _set_notify_org_image(None)
     return {"ok": True, "notify_org_image": None}
+
+
+@app.post("/api/notify-images")
+async def upload_notify_image(file: UploadFile = File(...),
+                              user: dict = Depends(require_session)):
+    """Upload an announcement banner (any member — organizers aren't admins).
+    Same checks as the org image: PNG/JPG/WebP/GIF by Content-Type AND magic
+    bytes, 4 MB. Stored by content hash; the response is the image ref the
+    event form saves. Nothing references it until an event or template does."""
+    rate_limit("upload", user["id"])
+    ext = _NOTIFY_IMAGE_TYPES.get((file.content_type or "").lower())
+    if not ext:
+        raise HTTPException(status_code=400, detail="image must be a PNG, JPG, WebP, or GIF")
+    data = await file.read(_NOTIFY_IMAGE_MAX_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="the file is empty")
+    if len(data) > _NOTIFY_IMAGE_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="image too large (max 4 MB). For a GIF, try a shorter or smaller one, "
+                   "or host it elsewhere and use its link.")
+    if not _sniff_image(data, ext):
+        raise HTTPException(status_code=400,
+                            detail="file contents don't match a PNG, JPG, WebP, or GIF image")
+    h = hashlib.sha256(data).hexdigest()[:16]
+    NOTIFY_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    path = NOTIFY_IMAGES_DIR / f"{h}.{ext}"
+    if not path.is_file():
+        path.write_bytes(data)
+    db.notify_image_add(h, ext, len(data), user["id"], datetime.now(timezone.utc).isoformat())
+    row = db.notify_image_get(h)          # an earlier identical upload keeps its ext
+    return {"kind": "upload", "hash": h, "ext": row["ext"] if row else ext}
+
+
+@app.get("/api/notify-images/{h}")
+async def get_notify_image(h: str, user: dict = Depends(require_session)):
+    """Serve an uploaded banner for the event form/page preview. Member-only;
+    Discord gets the bytes as an attachment, never from here. Immutable: the
+    hash IS the content."""
+    row = db.notify_image_get(h) if _NOTIFY_IMAGE_HASH_RE.match(h) else None
+    if row:
+        path = NOTIFY_IMAGES_DIR / f"{h}.{row['ext']}"
+        if path.is_file():
+            return FileResponse(path, headers={
+                "Cache-Control": "private, max-age=31536000, immutable"})
+    raise HTTPException(status_code=404, detail="no such image")
+
+
+def _sweep_notify_images(now: float | None = None) -> int:
+    """Delete uploads no event or template references, once past the grace
+    period. Run at startup. Returns how many were removed."""
+    now = time.time() if now is None else now
+    cutoff = datetime.fromtimestamp(now - _NOTIFY_IMAGE_GRACE_S, timezone.utc).isoformat()
+    refs = db.notify_image_refs()
+    n = 0
+    for row in db.notify_images_older_than(cutoff):
+        if row["hash"] in refs:
+            continue
+        (NOTIFY_IMAGES_DIR / f"{row['hash']}.{row['ext']}").unlink(missing_ok=True)
+        db.notify_image_delete(row["hash"])
+        n += 1
+    return n
 
 
 @app.get("/api/branding")

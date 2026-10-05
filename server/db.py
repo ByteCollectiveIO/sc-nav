@@ -404,6 +404,20 @@ CREATE TABLE IF NOT EXISTS group_templates (
 -- (events.template_snapshot), never link to it, so editing a template can't
 -- change an event people already signed up for. Built-in presets live in code
 -- (event_taxonomy.BUILTIN_TEMPLATES); `builtin_key` marks an org copy of one.
+-- Images uploaded for Discord announcements (an event's banner), docs/
+-- discord-notification-customization.md §3.2. Content-addressed: `hash` is the
+-- first 16 hex of the bytes' SHA-256 and names the file NOTIFY_IMAGES_DIR/
+-- <hash>.<ext>, so identical uploads share one file and a reference (an event,
+-- a template, a clone) can be COPIED without copying bytes — files are
+-- immutable. Unreferenced rows past a grace period are swept at startup.
+CREATE TABLE IF NOT EXISTS notify_images (
+    hash TEXT PRIMARY KEY,
+    ext TEXT NOT NULL,
+    bytes INTEGER,
+    uploaded_by TEXT,
+    created TEXT
+);
+
 CREATE TABLE IF NOT EXISTS event_templates (
     -- AUTOINCREMENT on purpose: a plain rowid hands a deleted template's id to
     -- the next one created, which would graft the old template's history onto
@@ -892,6 +906,8 @@ def init(db_path) -> None:
         # before committing (docs/event-operations.md §6.1.1/§13).
         _ensure_column("events", "rules", "TEXT")
         _ensure_column("events", "contracts", "TEXT")
+        # Announcement banner: an image ref {kind: url|upload, …} or NULL.
+        _ensure_column("events", "notify_image", "TEXT")
         # Loot (ops slice 4): committed seeds [{seed, hash, revealed}] and the
         # op's round-robin rotation (roster ids).
         _ensure_column("operations", "loot_seeds", "TEXT")
@@ -2147,12 +2163,12 @@ def delete_trade_favorite(discord_id: str, fav_id: int) -> bool:
 _EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
                    "signup_deadline", "duration_min", "location", "event_location",
                    "min_players", "max_players", "roles", "details", "rules",
-                   "contracts")
+                   "contracts", "notify_image")
 
 # Columns the create/edit layer hands us as Python lists; stored as JSON text.
 _EVENT_JSON = ("roles", "category", "type", "contracts")
 # JSON-object columns (a dict, not a list): parsed on read, `{}` when empty.
-_EVENT_JSON_OBJ = ("details", "template_snapshot", "rules")
+_EVENT_JSON_OBJ = ("details", "template_snapshot", "rules", "notify_image")
 
 
 def _event_json_list(raw) -> list:
@@ -2199,8 +2215,8 @@ def create_event(d: dict) -> int:
             "start_at, signup_deadline, duration_min, location, event_location, "
             "min_players, max_players, roles, status, created_at, updated_at, "
             "details, template_id, template_version, template_name, "
-            "template_snapshot, rules, contracts) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "template_snapshot, rules, contracts, notify_image) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["organizer_id"]), d.get("title"), d.get("description"),
              _j(d.get("type") or []), _j(d.get("category") or []), d.get("start_at"),
              d.get("signup_deadline"), d.get("duration_min"), d.get("location"),
@@ -2210,7 +2226,8 @@ def create_event(d: dict) -> int:
              _j(d.get("details") or {}), d.get("template_id"),
              d.get("template_version"), d.get("template_name"),
              _j(d["template_snapshot"]) if d.get("template_snapshot") else None,
-             _j(d["rules"]) if d.get("rules") else None, _j(d.get("contracts") or [])),
+             _j(d["rules"]) if d.get("rules") else None, _j(d.get("contracts") or []),
+             _j(d["notify_image"]) if d.get("notify_image") else None),
         )
     return cur.lastrowid
 
@@ -2280,7 +2297,7 @@ def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
     caller's job). Returns whether a row matched."""
     sets = ", ".join(f"{c}=?" for c in _EVENT_EDITABLE)
     vals = [_j(fields.get(c) or []) if c in _EVENT_JSON
-            else (_j(fields[c]) if fields.get(c) else None) if c == "rules"
+            else (_j(fields[c]) if fields.get(c) else None) if c in ("rules", "notify_image")
             else _j(fields.get(c) or {}) if c in _EVENT_JSON_OBJ
             else fields.get(c)
             for c in _EVENT_EDITABLE]
@@ -2501,6 +2518,57 @@ def list_event_templates() -> list[dict]:
     with _lock:
         rows = _conn.execute("SELECT * FROM event_templates ORDER BY id").fetchall()
     return [_event_template_row(r) for r in rows]
+
+
+# --- notify images (announcement banners) -----------------------------------
+
+def notify_image_add(h: str, ext: str, size: int, uploaded_by: str, created: str) -> None:
+    """Record an upload. Idempotent: the same bytes uploaded twice are one row."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT OR IGNORE INTO notify_images (hash, ext, bytes, uploaded_by, created) "
+            "VALUES (?,?,?,?,?)", (h, ext, size, str(uploaded_by), created))
+
+
+def notify_image_get(h: str) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM notify_images WHERE hash=?", (h,)).fetchone()
+    return dict(row) if row else None
+
+
+def notify_image_refs() -> set[str]:
+    """Every upload hash a live event or a current template still points at.
+    Template HISTORY and an event's template_snapshot are deliberately not
+    counted: they're read-only records, and a missing banner there costs
+    nothing (sends never read them)."""
+    refs: set[str] = set()
+
+    def take(ref) -> None:
+        if isinstance(ref, dict) and ref.get("kind") == "upload" and ref.get("hash"):
+            refs.add(str(ref["hash"]))
+    with _lock:
+        ev_rows = _conn.execute(
+            "SELECT notify_image FROM events WHERE notify_image IS NOT NULL").fetchall()
+        tpl_rows = _conn.execute("SELECT event FROM event_templates").fetchall()
+    for (raw,) in ev_rows:
+        take(_u(raw))
+    for (raw,) in tpl_rows:
+        ev = _u(raw) if raw else None
+        if isinstance(ev, dict):
+            take(ev.get("notify_image"))
+    return refs
+
+
+def notify_images_older_than(before_iso: str) -> list[dict]:
+    with _lock:
+        rows = _conn.execute("SELECT * FROM notify_images WHERE created < ?",
+                             (before_iso,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def notify_image_delete(h: str) -> None:
+    with _lock, _conn:
+        _conn.execute("DELETE FROM notify_images WHERE hash=?", (h,))
 
 
 def get_event_template(tid: int) -> dict | None:

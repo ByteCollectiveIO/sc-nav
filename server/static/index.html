@@ -2062,6 +2062,19 @@
   .ev-form-card { border: 1px solid var(--border); border-radius: 8px;
     background: var(--panel2); padding: 12px 14px 14px; }
   .ev-form-card > .ev-section-h { margin: 0 0 10px; }
+  /* Announcement image (docs/discord-notification-customization.md slice 2): the
+     banner Discord shows full-width under the event's posts. */
+  .ev-img-now { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .ev-img-now img { max-width: 260px; max-height: 120px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); object-fit: contain; }
+  .ev-img-now img[hidden] { display: none; }
+  .ev-img-now .ev-img-what { flex: 1; min-width: 180px; font-size: 13px; overflow-wrap: anywhere; }
+  .ev-img-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  #ev-f-imgurl { flex: 1; min-width: 220px; }
+  .ev-img-hint { margin: 0 0 10px; font-size: 12px; color: var(--dim); max-width: 70ch; }
+  @media (max-width: 560px) { .ev-img-row input, #ev-f-imgurl { flex: 1 1 100%; min-width: 0; } }
+  .ev-banner { display: block; max-width: 100%; max-height: 260px; border-radius: 8px;
+    border: 1px solid var(--border); margin: 10px 0 4px; object-fit: contain; background: var(--bg); }
   .ev-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
   /* One uniform control height across the grid: native date/time/number controls
      and the .poi-pick-wrapped text inputs otherwise render taller/shorter than
@@ -13504,6 +13517,9 @@ let evFilterDay = null;       // "YYYY-MM-DD" (local) day filter, or null
 // the server records provenance + a snapshot to diff against.
 let evTemplates = null;
 let evFormTpl = null;
+// The open event/template form's announcement image ref ({kind: url|upload, …}
+// or null). Set when the form mounts; read by collectEventShape.
+let evFormImage = null;
 
 async function loadEventsTaxonomy() {
   if (!evTaxonomy) evTaxonomy = await fetch("/api/events/taxonomy").then(r => r.json());
@@ -13830,6 +13846,7 @@ async function renderDetailBody(e) {
       (!cancelled && !e.op ? `<button class="ev-btn primary" id="ev-runop" title="Open the op: check people in, add walk-ins and guests, keep the record">Run mission</button>` : "") +
       (cancelled || e.phase === "ended" ? ""
         : `<button class="ev-btn" id="ev-complete" title="Wrap up — moves it to the past tab as attendance history">Mark completed</button>`) +
+      (e.notify_test ? `<button class="ev-btn" id="ev-notifytest" title="Admins: post this event's announcement to the events channel, marked TEST">Send test to Discord</button>` : "") +
       (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
     : "";
 
@@ -13841,6 +13858,10 @@ async function renderDetailBody(e) {
 
   $("ev-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
+    // An uploaded banner is the org's own art, served by us — shown here too.
+    // A linked one isn't loaded (CSP + privacy, design §4.7).
+    (e.notify_image && e.notify_image.kind === "upload"
+      ? `<img class="ev-banner" src="/api/notify-images/${encodeURIComponent(e.notify_image.hash)}" alt="">` : "") +
     meta + missionDetailsView(e, tax) + templateProvenanceHtml(e) + eventMoneyView(e) +
     (e.op ? `<div class="ev-op-line">${e.op.phase === "closed"
         ? `✓ This event has a mission record. <a href="#/ops/${e.op.id}">View the record →</a>`
@@ -13861,6 +13882,13 @@ async function renderDetailBody(e) {
     const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
     const cl = $("ev-clone"); if (cl) cl.onclick = () => cloneEvent(e);
     const st = $("ev-savetpl"); if (st) st.onclick = () => saveEventAsTemplate(e);
+    const nt = $("ev-notifytest"); if (nt) nt.onclick = async () => {
+      const msg = $("ev-detail-msg");
+      msg.textContent = "sending test…";
+      const r = await fetch(`/api/events/${e.id}/notify-test`, { method: "POST" });
+      msg.textContent = r.ok ? "test sent — check the events channel"
+        : ((await r.json().catch(() => ({}))).detail) || "test failed — try again";
+    };
     const ro = $("ev-runop"); if (ro) ro.onclick = async () => {
       const r = await fetch(`/api/events/${e.id}/start`, { method: "POST" });
       const msg = $("ev-detail-msg");
@@ -13898,6 +13926,7 @@ function cloneEvent(e) {
     min_players: e.min_players, max_players: e.max_players,
     details: { ...(e.details || {}) },
     rules: e.rules || null, contracts: (e.contracts || []).map(c => ({ ...c })),
+    notify_image: e.notify_image ? { ...e.notify_image } : null,
     // A clone keeps its lineage: it's recorded against the same template
     // (its current version), unless that template is gone.
     template: e.template && !e.template.deleted
@@ -14671,8 +14700,73 @@ function readMissionDetails() {
 // opts.mode "template" = the template editor: no date/time/deadline (a
 // template describes a KIND of event, not a particular one), "Default title".
 // opts.picker = show the "Start from template" bar (create form only).
+// "Discord announcement" card on the event + template forms. Its state lives in
+// evFormImage (set by eventFormHtml), painted by renderEventImageNow.
+function eventImageCardHtml() {
+  return `<div class="ev-form-card" id="ev-f-img"><div class="ev-section-h">Discord announcement image</div>` +
+    `<p class="ev-img-hint">Optional. Shown full-width under this event's Discord posts: the announcement, ` +
+      `the reminder and change notices. A wide image works best. PNG, JPG, WebP or GIF up to 4&nbsp;MB, ` +
+      `or an https link (not a Discord attachment link: those expire within a day).</p>` +
+    `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
+      `<button class="ev-btn danger" id="ev-f-imgrm" hidden>Remove</button></div>` +
+    `<div class="ev-img-row"><input type="file" id="ev-f-imgfile" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Announcement image file">` +
+      `<button class="ev-btn" id="ev-f-imgup">Upload</button></div>` +
+    `<div class="ev-img-row"><input id="ev-f-imgurl" class="ti" type="url" autocomplete="off" placeholder="or link one: https://i.imgur.com/…" aria-label="Announcement image link">` +
+      `<button class="ev-btn" id="ev-f-imglink">Use link</button></div>` +
+    `<div id="ev-f-imgmsg" class="muted" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div></div>`;
+}
+
+function renderEventImageNow() {
+  const prev = $("ev-f-imgprev"), what = $("ev-f-imgwhat");
+  if (!prev) return;
+  const ref = evFormImage;
+  $("ev-f-imgrm").hidden = !ref;
+  prev.hidden = true; prev.removeAttribute("src");
+  if (!ref) { what.innerHTML = `<span class="muted">No image. The posts go out without one.</span>`; return; }
+  if (ref.kind === "upload") {
+    prev.src = `/api/notify-images/${encodeURIComponent(ref.hash)}`; prev.hidden = false;
+    what.textContent = "Uploaded image";
+  } else {
+    // A linked image is never loaded here (CSP + it would tell the host who
+    // opened the form); Discord fetches it when the post goes out.
+    what.innerHTML = `Linked image: <span class="muted">${esc(ref.url)}</span>`;
+  }
+}
+
+function bindEventImage() {
+  if (!$("ev-f-img")) return;
+  renderEventImageNow();
+  const msg = $("ev-f-imgmsg");
+  $("ev-f-imgup").onclick = async () => {
+    const f = $("ev-f-imgfile").files[0];
+    if (!f) { msg.textContent = "choose an image first"; return; }
+    if (f.size > 4 * 1024 * 1024) { msg.textContent = "that file is over 4 MB"; return; }
+    msg.textContent = "uploading…";
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const r = await fetch("/api/notify-images", { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || "upload failed");
+      evFormImage = d; $("ev-f-imgfile").value = "";
+      renderEventImageNow();
+      msg.textContent = "uploaded — saved with the event";
+    } catch (e) { msg.textContent = (e && e.message) || "upload failed — try again"; }
+  };
+  $("ev-f-imglink").onclick = () => {
+    const url = $("ev-f-imgurl").value.trim();
+    if (!/^https:\/\/\S+$/i.test(url)) { msg.textContent = "paste an https image link"; return; }
+    if (/^https:\/\/(cdn\.discordapp\.com|media\.discordapp\.net)\/(ephemeral-)?attachments\//i.test(url)) {
+      msg.textContent = "Discord attachment links expire within a day — upload the image instead"; return; }
+    evFormImage = { kind: "url", url }; $("ev-f-imgurl").value = "";
+    renderEventImageNow();
+    msg.textContent = "set — saved with the event";
+  };
+  $("ev-f-imgrm").onclick = () => { evFormImage = null; renderEventImageNow(); msg.textContent = "removed — saved with the event"; };
+}
+
 function eventFormHtml(tax, e, opts = {}) {
   const tplMode = opts.mode === "template";
+  evFormImage = e && e.notify_image ? { ...e.notify_image } : null;
   const evTypes = new Set(e ? (e.types || []) : []);
   const typeChips = tax.types.map(t =>
     `<label class="ev-cat-chip${evTypes.has(t) ? " on" : ""}">` +
@@ -14727,6 +14821,7 @@ function eventFormHtml(tax, e, opts = {}) {
     missionDetailsHtml(tax, e && e.details) +
     contractsCardHtml(e && e.contracts) +
     rulesCardHtml(e && e.rules) +
+    eventImageCardHtml() +
     `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea></div>` +
     (tplMode && opts.groupCount ? `<p class="ev-note">Also carries ${opts.groupCount} fleet unit${opts.groupCount === 1 ? "" : "s"}, offered when an event is started from this template.</p>` : "") +
     `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${saveLabel}</button>` +
@@ -14756,6 +14851,7 @@ function collectEventShape() {
     max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
     roles, details: readMissionDetails(), description: $("ev-f-desc").value.trim(),
     contracts: readContracts(), rules: readRulesEditor("ev-f"),
+    notify_image: evFormImage,
   } };
 }
 
@@ -14791,6 +14887,7 @@ function bindEventFormControls(tax, onCancel) {
   // Type-to-search POI suggestions on the location fields (free text still allowed).
   document.querySelectorAll(".ev-form .poi-pick").forEach(w => attachPoiPicker(w));
   bindContractsCard();
+  bindEventImage();
   $("ev-f-cancel").onclick = onCancel;
 }
 
@@ -14843,7 +14940,8 @@ function templateSeed(t, keep) {
   return { ...ev, title: (keep && keep.title) || ev.title || "",
     start_at: keep && keep.start_at, signup_deadline: keep && keep.signup_deadline,
     details: { ...(ev.details || {}) }, roles: (ev.roles || []).map(r => ({ ...r })),
-    contracts: (ev.contracts || []).map(c => ({ ...c })), rules: t.rules || null };
+    contracts: (ev.contracts || []).map(c => ({ ...c })), rules: t.rules || null,
+    notify_image: ev.notify_image ? { ...ev.notify_image } : null };
 }
 
 // "Start from template" bar at the top of CREATE EVENT.
