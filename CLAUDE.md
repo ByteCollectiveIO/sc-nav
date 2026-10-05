@@ -58,7 +58,7 @@ banner — don't scroll.
 `<style>` lines 7–1997 · body 1999–3782 · `<script>` 3784–13720.
 
 Body views (each a `#…-view` container, hash-routed):
-launcher, main (navigator), settings, setup, intel, leaderboard, stats,
+launcher, main (navigator), settings (category rail, one section at a time: `#/settings` = Profile, `#/settings/<watcher|my-ops|account>` for everyone, `#/settings/<general|members|branding|discord|apps|data>` admin-only — `SETTINGS_SECTIONS`/`applySettingsSection`; data loads on ENTRY to Settings, not per section; a non-admin or unknown slug falls back to Profile), setup, intel, leaderboard, stats,
 cargo-leaderboard, cargo-stats, route (cargo planner), events, goals, inventory,
 blueprints (RM's third tab, #29), market, online (who's online, #19),
 ops (Ops — run a mission + its record, `#/ops`, `#/ops/<id>`), lfg (group finder / LFG board, #19), pirates (danger board / pirate warnings, #24),
@@ -70,7 +70,7 @@ element finder · teammate presence · websocket · auth gate (+ PROFILE playsty
 chips, #30) · cargo planner + run mode · event planner · resource manager
 (shared masthead `rmMast`; catalog picker / goals / inventory / my blueprint
 library at `#/blueprints`, #29)
-· operations (#/ops) · marketplace · pirate danger board (#24) · halo finder / Prospector (#31, tabs #38) · view router · leaderboard · statistics · Org Intel · org settings
+· operations (#/ops) · marketplace · pirate danger board (#24) · halo finder / Prospector (#31, tabs #38) · view router · settings sections · leaderboard · statistics · Org Intel · org settings
 · org name + MOTD (`applyBranding`/`renderMotd`/`setLoginOrgName`, v0.50.0) · org logo · admins · watcher tokens · setup guide · init.
 
 ## app.py endpoint groups (grep the route to get the exact line)

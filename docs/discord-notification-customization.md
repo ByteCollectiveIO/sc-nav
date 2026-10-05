@@ -134,7 +134,7 @@ drawbacks, and how each is handled:
 
 | Where | Who | Slot | Stored in |
 |---|---|---|---|
-| ORG SETTINGS → DISCORD MESSAGES → **Org image** | admin | thumbnail | meta `notify_org_image` (an image ref; absent = no thumbnail). Choices: Org Navigator patch (`{"kind": "shipped"}`) · Upload · URL · Remove |
+| Settings › Discord → **Org image** | admin | thumbnail | meta `notify_org_image` (an image ref; absent = no thumbnail). Choices: Org Navigator patch (`{"kind": "shipped"}`) · Upload · URL · Remove |
 | Event form → **Announcement image** (URL tab / Upload tab, preview, remove) | organizer | image | `events.notify_image` (JSON, `_ensure_column`) |
 | Event template form | template owner | image | `event_templates.notify_image`; copied onto events created from it, and kept by Clone |
 
@@ -280,9 +280,9 @@ today's builder output.
 `{key}` is checked against the registry (404 otherwise), the same closed-set
 pattern as `APP_IMAGE_KEYS`.
 
-### 4.6 UI: ORG SETTINGS → DISCORD MESSAGES
+### 4.6 UI: Settings › Discord
 
-A new panel under the existing webhook rows:
+The Discord section of Settings (`#/settings/discord`, the admin category rail added before slice 1) gains panels under the existing webhook rows:
 
 - **Org image**: "None" until set. Choices: Use the Org Navigator patch · Upload ·
   Use URL; once set, a thumbnail preview and Remove.
@@ -331,7 +331,7 @@ from the security review: a member tracking other members. Discord itself never
 exposes viewers this way, because it fetches images through its own proxy.
 
 **The toggle.**
-- ORG SETTINGS → DISCORD MESSAGES → "Preview external images in the app",
+- Settings › Discord → "Preview external images in the app",
   **off by default**, stored in meta `notify_external_preview`.
 - Turning it on opens a confirm dialog that states the list above in plain
   words, including the organizer-run-server case, and requires an explicit
@@ -387,7 +387,7 @@ Each slice ships on its own and is useful without the next.
    thumbnail). Wording unchanged apart from the embed layout.
 4. **Template registry refactor.** Move the §4.3 builders onto
    `NOTIFY_TEMPLATES` + `_render_notify`. Byte-identical, pinned by tests.
-5. **Template overrides.** API (§4.5) + DISCORD MESSAGES editor with preview
+5. **Template overrides.** API (§4.5) + Settings › Discord template editor with preview
    and test send.
 
 ## 7. Tests (sketch)
