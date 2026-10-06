@@ -288,10 +288,15 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
   .set-nav-admin { display: contents; }
   .set-nav-admin[hidden] { display: none; }
-  .set-nav-h { font-size: 11px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase;
-    padding: 12px 10px 4px; }
-  .set-nav > .set-nav-h:first-child { padding-top: 4px; }
-  .set-nav a { display: block; padding: 7px 10px; border-radius: 6px; font-size: 13px;
+  /* Group headers: the same 11px tracked caps as every section label, but in
+     text colour + semibold so they read as headers, not as a dimmer link, and
+     each group after the first rules off with a hairline (DESIGN.md: sections
+     rule off from one another; cyan stays reserved for the selected link). */
+  .set-nav-h { font-size: 11px; letter-spacing: 2px; color: var(--text); font-weight: 600;
+    text-transform: uppercase; padding: 14px 10px 6px; margin-top: 8px;
+    border-top: 1px solid var(--border); }
+  .set-nav > .set-nav-h:first-child { padding-top: 4px; margin-top: 0; border-top: 0; }
+  .set-nav a { display: block; padding: 7px 10px 7px 14px; border-radius: 6px; font-size: 13px;
     color: var(--dim); text-decoration: none; transition: color .12s, background .12s; }
   .set-nav a:hover { color: var(--text); background: var(--panel2); }
   .set-nav a[aria-current="page"] { background: var(--accent); color: var(--ink-on-accent); }
@@ -309,8 +314,11 @@
        small inline label at the start of each run. */
     .set-nav { position: static; flex-direction: row; flex-wrap: nowrap; gap: 6px;
       overflow-x: auto; scrollbar-width: thin; padding: 6px; }
-    .set-nav-h { flex: none; align-self: center; padding: 0 2px 0 6px; font-size: 10px; letter-spacing: 1px; }
-    .set-nav > .set-nav-h:first-child { padding-left: 2px; }
+    /* The hairline turns vertical: a divider before each group's label. */
+    .set-nav-h { flex: none; align-self: stretch; display: flex; align-items: center;
+      padding: 0 2px 0 10px; margin: 0 0 0 4px; font-size: 10px; letter-spacing: 1px;
+      border-top: 0; border-left: 1px solid var(--border); }
+    .set-nav > .set-nav-h:first-child { padding-left: 2px; margin-left: 0; border-left: 0; }
     .set-nav a { flex: none; white-space: nowrap; background: var(--panel2);
       border: 1px solid var(--border); padding: 8px 12px; }
   }
@@ -14833,8 +14841,12 @@ function readMissionDetails() {
 // opts.mode "template" = the template editor: no date/time/deadline (a
 // template describes a KIND of event, not a particular one), "Default title".
 // opts.picker = show the "Start from template" bar (create form only).
+// Discord fits an embed's image into a frame about 400 CSS px wide (16:9 →
+// 400 × 225) and never enlarges a smaller one, so a 180 px upload filled a
+// quarter of the frame on dev. 2× that is crisp on high-density screens.
 const EV_IMG_MIN_W = 400;    // narrower than this reads as "small" in a Discord post
 const EV_IMG_GOOD_W = 800;   // wide enough to fill it on high-density screens too
+const EV_IMG_MIN_H = 225, EV_IMG_GOOD_H = 450;   // the 16:9 heights of the two widths
 
 // "Discord announcement" card on the event + template forms. Its state lives in
 // evFormImage (set by eventFormHtml), painted by renderEventImageNow.
@@ -14852,7 +14864,10 @@ function eventImageCardHtml() {
   // is refused — those expire within a day of being copied.
   return `<details class="ev-form-card ev-img-card" id="ev-f-img"${evFormImage ? " open" : ""}>` +
     `<summary class="ev-section-h">Discord announcement image <span class="ev-hint">optional</span></summary>` +
-    `<p class="ev-img-hint">Shown under the event's Discord posts; wide images fill them. ` +
+    `<p class="ev-img-hint">Shown under the event's Discord posts. ` +
+      `Discord fits the image to about ${EV_IMG_MIN_W} px wide and never enlarges a smaller one, so use at least ` +
+      `<b>${EV_IMG_MIN_W} × ${EV_IMG_MIN_H} px</b>; <b>${EV_IMG_GOOD_W} × ${EV_IMG_GOOD_H} px</b> (16:9) stays sharp on ` +
+      `high-density screens. Larger is fine. ` +
       `Paste an https link to a PNG, JPG, WebP or GIF hosted on an image site (imgur, ibb, postimg, X, RSI). ` +
       `From X, copy the image's address, not the post's link.</p>` +
     `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
@@ -14885,7 +14900,7 @@ function renderEventImageNow() {
       if (w && w < EV_IMG_MIN_W) {
         warn.textContent = `This image is ${w} × ${h} px. Discord shows images at their real size ` +
           `and never enlarges them, so it will look small in the post. Use one at least ` +
-          `${EV_IMG_GOOD_W} px wide to fill it.`;
+          `${EV_IMG_MIN_W} × ${EV_IMG_MIN_H} px; ${EV_IMG_GOOD_W} × ${EV_IMG_GOOD_H} px stays sharp.`;
         warn.hidden = false;
       }
     };
