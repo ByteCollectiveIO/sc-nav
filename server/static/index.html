@@ -14833,8 +14833,12 @@ function readMissionDetails() {
 // opts.mode "template" = the template editor: no date/time/deadline (a
 // template describes a KIND of event, not a particular one), "Default title".
 // opts.picker = show the "Start from template" bar (create form only).
+// Discord fits an embed's image into a frame about 400 CSS px wide (16:9 →
+// 400 × 225) and never enlarges a smaller one, so a 180 px upload filled a
+// quarter of the frame on dev. 2× that is crisp on high-density screens.
 const EV_IMG_MIN_W = 400;    // narrower than this reads as "small" in a Discord post
 const EV_IMG_GOOD_W = 800;   // wide enough to fill it on high-density screens too
+const EV_IMG_MIN_H = 225, EV_IMG_GOOD_H = 450;   // the 16:9 heights of the two widths
 
 // "Discord announcement" card on the event + template forms. Its state lives in
 // evFormImage (set by eventFormHtml), painted by renderEventImageNow.
@@ -14852,7 +14856,10 @@ function eventImageCardHtml() {
   // is refused — those expire within a day of being copied.
   return `<details class="ev-form-card ev-img-card" id="ev-f-img"${evFormImage ? " open" : ""}>` +
     `<summary class="ev-section-h">Discord announcement image <span class="ev-hint">optional</span></summary>` +
-    `<p class="ev-img-hint">Shown under the event's Discord posts; wide images fill them. ` +
+    `<p class="ev-img-hint">Shown under the event's Discord posts. ` +
+      `Discord fits the image to about ${EV_IMG_MIN_W} px wide and never enlarges a smaller one, so use at least ` +
+      `<b>${EV_IMG_MIN_W} × ${EV_IMG_MIN_H} px</b>; <b>${EV_IMG_GOOD_W} × ${EV_IMG_GOOD_H} px</b> (16:9) stays sharp on ` +
+      `high-density screens. Larger is fine. ` +
       `Paste an https link to a PNG, JPG, WebP or GIF hosted on an image site (imgur, ibb, postimg, X, RSI). ` +
       `From X, copy the image's address, not the post's link.</p>` +
     `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
@@ -14885,7 +14892,7 @@ function renderEventImageNow() {
       if (w && w < EV_IMG_MIN_W) {
         warn.textContent = `This image is ${w} × ${h} px. Discord shows images at their real size ` +
           `and never enlarges them, so it will look small in the post. Use one at least ` +
-          `${EV_IMG_GOOD_W} px wide to fill it.`;
+          `${EV_IMG_MIN_W} × ${EV_IMG_MIN_H} px; ${EV_IMG_GOOD_W} × ${EV_IMG_GOOD_H} px stays sharp.`;
         warn.hidden = false;
       }
     };
