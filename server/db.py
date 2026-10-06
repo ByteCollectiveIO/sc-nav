@@ -404,20 +404,6 @@ CREATE TABLE IF NOT EXISTS group_templates (
 -- (events.template_snapshot), never link to it, so editing a template can't
 -- change an event people already signed up for. Built-in presets live in code
 -- (event_taxonomy.BUILTIN_TEMPLATES); `builtin_key` marks an org copy of one.
--- Images uploaded for Discord announcements (an event's banner), docs/
--- discord-notification-customization.md §3.2. Content-addressed: `hash` is the
--- first 16 hex of the bytes' SHA-256 and names the file NOTIFY_IMAGES_DIR/
--- <hash>.<ext>, so identical uploads share one file and a reference (an event,
--- a template, a clone) can be COPIED without copying bytes — files are
--- immutable. Unreferenced rows past a grace period are swept at startup.
-CREATE TABLE IF NOT EXISTS notify_images (
-    hash TEXT PRIMARY KEY,
-    ext TEXT NOT NULL,
-    bytes INTEGER,
-    uploaded_by TEXT,
-    created TEXT
-);
-
 CREATE TABLE IF NOT EXISTS event_templates (
     -- AUTOINCREMENT on purpose: a plain rowid hands a deleted template's id to
     -- the next one created, which would graft the old template's history onto
@@ -2531,54 +2517,12 @@ def list_event_templates() -> list[dict]:
 
 
 # --- notify images (announcement banners) -----------------------------------
+# Banner uploads were removed 2026-10-06 (a banner is a link now). The table a
+# pre-change deployment created is dropped once at startup.
 
-def notify_image_add(h: str, ext: str, size: int, uploaded_by: str, created: str) -> None:
-    """Record an upload. Idempotent: the same bytes uploaded twice are one row."""
+def drop_legacy_notify_images() -> None:
     with _lock, _conn:
-        _conn.execute(
-            "INSERT OR IGNORE INTO notify_images (hash, ext, bytes, uploaded_by, created) "
-            "VALUES (?,?,?,?,?)", (h, ext, size, str(uploaded_by), created))
-
-
-def notify_image_get(h: str) -> dict | None:
-    with _lock:
-        row = _conn.execute("SELECT * FROM notify_images WHERE hash=?", (h,)).fetchone()
-    return dict(row) if row else None
-
-
-def notify_image_refs() -> set[str]:
-    """Every upload hash a live event or a current template still points at.
-    Template HISTORY and an event's template_snapshot are deliberately not
-    counted: they're read-only records, and a missing banner there costs
-    nothing (sends never read them)."""
-    refs: set[str] = set()
-
-    def take(ref) -> None:
-        if isinstance(ref, dict) and ref.get("kind") == "upload" and ref.get("hash"):
-            refs.add(str(ref["hash"]))
-    with _lock:
-        ev_rows = _conn.execute(
-            "SELECT notify_image FROM events WHERE notify_image IS NOT NULL").fetchall()
-        tpl_rows = _conn.execute("SELECT event FROM event_templates").fetchall()
-    for (raw,) in ev_rows:
-        take(_u(raw))
-    for (raw,) in tpl_rows:
-        ev = _u(raw) if raw else None
-        if isinstance(ev, dict):
-            take(ev.get("notify_image"))
-    return refs
-
-
-def notify_images_older_than(before_iso: str) -> list[dict]:
-    with _lock:
-        rows = _conn.execute("SELECT * FROM notify_images WHERE created < ?",
-                             (before_iso,)).fetchall()
-    return [dict(r) for r in rows]
-
-
-def notify_image_delete(h: str) -> None:
-    with _lock, _conn:
-        _conn.execute("DELETE FROM notify_images WHERE hash=?", (h,))
+        _conn.execute("DROP TABLE IF EXISTS notify_images")
 
 
 def get_event_template(tid: int) -> dict | None:

@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -64,14 +65,11 @@ _NOTIFY_IMAGE_URL_MAX = 1000
 # The ready-made org image an admin can pick with one click (§3.3): the Org
 # Navigator patch, already shipped in the static dir at a square 359×360.
 SHIPPED_ORG_IMAGE = STATIC_DIR / "images" / "sc_org_navigator_logo.png"
-# Uploaded announcement banners (an event's image), content-addressed: the file
-# name is the bytes' hash, so a reference can be copied event → template → clone
-# without copying the file. See db.notify_images.
-NOTIFY_IMAGES_DIR = DATA_DIR / "notify_images"
-_NOTIFY_IMAGE_HASH_RE = re.compile(r"^[0-9a-f]{16}$")
-# An upload no event or template points at is kept this long before the startup
-# sweep removes it: long enough to cover a form that uploaded but wasn't saved yet.
-_NOTIFY_IMAGE_GRACE_S = 7 * 86400
+# Event banners used to be uploadable here (content-addressed files under
+# DATA_DIR/notify_images). Dropped 2026-10-06 (security sweep): member uploads
+# had no storage ceiling. A banner is now a LINK only; this dir name survives so
+# a pre-change deployment's leftovers are removed at startup.
+_LEGACY_NOTIFY_IMAGES_DIR = DATA_DIR / "notify_images"
 # App-chooser artwork an admin may swap per card, keyed by the card's route slug
 # (the `#/…` hash the launcher links to). Same upload path as the org logo: the
 # bytes live on the /data volume, the built-in art stays in the image and is what
@@ -1621,9 +1619,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # for this fixed list of established image hosts — never "any https". Loading an
 # image tells its host the viewer's IP, time and browser; a fixed list means an
 # organizer can't point a preview at a server they run to see who opened an
-# event. RSI is on it because that's where org banners already live. Discord
-# itself always shows the image regardless (it fetches through its own proxy).
-IMAGE_PREVIEW_HOSTS = ("i.imgur.com", "i.ibb.co", "i.postimg.cc",
+# event. RSI is on it because that's where org banners already live; X's image
+# CDN (pbs.twimg.com) because an org posts its art to X and links it from there
+# (user request 2026-10-06 — the image address, not the tweet). Discord itself
+# always shows the image regardless (it fetches through its own proxy).
+IMAGE_PREVIEW_HOSTS = ("i.imgur.com", "i.ibb.co", "i.postimg.cc", "pbs.twimg.com",
                        "robertsspaceindustries.com", "media.robertsspaceindustries.com")
 
 
@@ -2012,9 +2012,6 @@ _RATE_LIMITS = {
     # Credential minting. Each one is long-lived, and /download/watcher mints a
     # fresh token per call.
     "token": (10, 3600.0),
-    # Announcement-image uploads (any member who organizes events). Each is up
-    # to 4 MB on the /data volume, so cap the rate rather than trust the sweep.
-    "upload": (30, 3600.0),
 }
 
 
@@ -3735,11 +3732,9 @@ async def _start_presence_broadcaster():
     # thereafter).
     notify.migrate_legacy_webhook()
     try:
-        n = _sweep_notify_images()
-        if n:
-            print(f"[sc-nav] removed {n} unused announcement image(s)")
+        _drop_legacy_notify_images()
     except Exception as exc:   # housekeeping must never block startup
-        print(f"[sc-nav] announcement-image sweep skipped: {exc}")
+        print(f"[sc-nav] legacy announcement-image cleanup skipped: {exc}")
 
 
 def nav_summary(state: dict | None) -> dict | None:
@@ -8325,29 +8320,20 @@ class RoleTargetIn(BaseModel):
 
 
 class ImageRefIn(BaseModel):
-    """An announcement image: an https link, or an upload's hash from
-    POST /api/notify-images (docs/discord-notification-customization.md §3.2)."""
-    kind: str = Field(max_length=16)                     # url | upload
+    """An announcement image: an https link Discord fetches itself
+    (docs/discord-notification-customization.md §3.2). Link only — uploads
+    were removed 2026-10-06 (no storage ceiling for member files)."""
+    kind: str = Field(max_length=16)                     # url
     url: str | None = Field(default=None, max_length=_NOTIFY_IMAGE_URL_MAX + 100)
-    hash: str | None = Field(default=None, max_length=64)
 
 
 def _clean_image_ref(ref: "ImageRefIn | None") -> dict | None:
-    """Validate an image ref into its stored shape, or None. An upload must be
-    one we actually hold (its row carries the extension), so a client can't
-    point an event at an arbitrary path."""
+    """Validate an image ref into its stored shape, or None."""
     if ref is None:
         return None
     if ref.kind == "url":
         return {"kind": "url", "url": _check_image_url(ref.url or "")}
-    if ref.kind == "upload":
-        h = (ref.hash or "").strip().lower()
-        row = db.notify_image_get(h) if _NOTIFY_IMAGE_HASH_RE.match(h) else None
-        if row is None:
-            raise HTTPException(status_code=400,
-                                detail="that uploaded image wasn't found — upload it again")
-        return {"kind": "upload", "hash": h, "ext": row["ext"]}
-    raise HTTPException(status_code=400, detail="image kind must be 'url' or 'upload'")
+    raise HTTPException(status_code=400, detail="image kind must be 'url'")
 
 
 class EventIn(BaseModel):
@@ -9504,7 +9490,8 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
     # `full` posts the whole description (the org wrote it as the channel
     # notice — a 2,000-char org directive shouldn't need retyping); the
     # default keeps the card short. Embed descriptions cap at 4,096. The
-    # description is the org's own markdown, so it is NOT escaped.
+    # description is the org's own markdown: formatting kept, masked links
+    # defused (the template's `fmt` var, like an event description).
     d = (goal.get("description") or "").strip()
     await notify.send(
         "goals", "",
@@ -15648,7 +15635,8 @@ def _check_image_url(url: str) -> str:
         raise HTTPException(
             status_code=400,
             detail="Discord attachment links expire about a day after you copy them, so the "
-                   "image would vanish from later posts. Upload the image here instead.")
+                   "image would vanish from later posts. Host it on an image site (imgur, ibb, "
+                   "postimg) and link that instead.")
     return url
 
 
@@ -15706,20 +15694,11 @@ def _org_thumbnail() -> tuple[dict | None, list[tuple[str, bytes, str]]]:
 
 def _event_banner(ev: dict | None) -> tuple[dict | None, list[tuple[str, bytes, str]]]:
     """(embed image, files) for an event's own banner; (None, []) when it has
-    none or an uploaded file has gone missing — never an error."""
+    none. A pre-2026-10-06 `upload` ref (file gone) degrades to no image —
+    never an error."""
     ref = (ev or {}).get("notify_image")
-    if not isinstance(ref, dict):
-        return None, []
-    if ref.get("kind") == "url" and ref.get("url"):
+    if isinstance(ref, dict) and ref.get("kind") == "url" and ref.get("url"):
         return {"url": ref["url"]}, []
-    if ref.get("kind") == "upload" and ref.get("ext") in _NOTIFY_IMAGE_MIME \
-            and _NOTIFY_IMAGE_HASH_RE.match(str(ref.get("hash") or "")):
-        try:
-            data = (NOTIFY_IMAGES_DIR / f"{ref['hash']}.{ref['ext']}").read_bytes()
-        except OSError:
-            return None, []
-        name = f"banner.{ref['ext']}"
-        return {"url": f"attachment://{name}"}, [(name, data, _NOTIFY_IMAGE_MIME[ref["ext"]])]
     return None, []
 
 
@@ -15806,66 +15785,13 @@ async def delete_notify_org_image(admin: dict = Depends(require_admin)):
     return {"ok": True, "notify_org_image": None}
 
 
-@app.post("/api/notify-images")
-async def upload_notify_image(file: UploadFile = File(...),
-                              user: dict = Depends(require_session)):
-    """Upload an announcement banner (any member — organizers aren't admins).
-    Same checks as the org image: PNG/JPG/WebP/GIF by Content-Type AND magic
-    bytes, 4 MB. Stored by content hash; the response is the image ref the
-    event form saves. Nothing references it until an event or template does."""
-    rate_limit("upload", user["id"])
-    ext = _NOTIFY_IMAGE_TYPES.get((file.content_type or "").lower())
-    if not ext:
-        raise HTTPException(status_code=400, detail="image must be a PNG, JPG, WebP, or GIF")
-    data = await file.read(_NOTIFY_IMAGE_MAX_BYTES + 1)
-    if not data:
-        raise HTTPException(status_code=400, detail="the file is empty")
-    if len(data) > _NOTIFY_IMAGE_MAX_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail="image too large (max 4 MB). For a GIF, try a shorter or smaller one, "
-                   "or host it elsewhere and use its link.")
-    if not _sniff_image(data, ext):
-        raise HTTPException(status_code=400,
-                            detail="file contents don't match a PNG, JPG, WebP, or GIF image")
-    h = hashlib.sha256(data).hexdigest()[:16]
-    NOTIFY_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    path = NOTIFY_IMAGES_DIR / f"{h}.{ext}"
-    if not path.is_file():
-        path.write_bytes(data)
-    db.notify_image_add(h, ext, len(data), user["id"], datetime.now(timezone.utc).isoformat())
-    row = db.notify_image_get(h)          # an earlier identical upload keeps its ext
-    return {"kind": "upload", "hash": h, "ext": row["ext"] if row else ext}
-
-
-@app.get("/api/notify-images/{h}")
-async def get_notify_image(h: str, user: dict = Depends(require_session)):
-    """Serve an uploaded banner for the event form/page preview. Member-only;
-    Discord gets the bytes as an attachment, never from here. Immutable: the
-    hash IS the content."""
-    row = db.notify_image_get(h) if _NOTIFY_IMAGE_HASH_RE.match(h) else None
-    if row:
-        path = NOTIFY_IMAGES_DIR / f"{h}.{row['ext']}"
-        if path.is_file():
-            return FileResponse(path, headers={
-                "Cache-Control": "private, max-age=31536000, immutable"})
-    raise HTTPException(status_code=404, detail="no such image")
-
-
-def _sweep_notify_images(now: float | None = None) -> int:
-    """Delete uploads no event or template references, once past the grace
-    period. Run at startup. Returns how many were removed."""
-    now = time.time() if now is None else now
-    cutoff = datetime.fromtimestamp(now - _NOTIFY_IMAGE_GRACE_S, timezone.utc).isoformat()
-    refs = db.notify_image_refs()
-    n = 0
-    for row in db.notify_images_older_than(cutoff):
-        if row["hash"] in refs:
-            continue
-        (NOTIFY_IMAGES_DIR / f"{row['hash']}.{row['ext']}").unlink(missing_ok=True)
-        db.notify_image_delete(row["hash"])
-        n += 1
-    return n
+def _drop_legacy_notify_images() -> None:
+    """One-time cleanup of the pre-2026-10-06 banner uploads (files + table):
+    a banner is a link now, so nothing reads them."""
+    if _LEGACY_NOTIFY_IMAGES_DIR.is_dir():
+        shutil.rmtree(_LEGACY_NOTIFY_IMAGES_DIR, ignore_errors=True)
+        print("[sc-nav] removed legacy announcement-image uploads")
+    db.drop_legacy_notify_images()
 
 
 @app.get("/api/branding")
