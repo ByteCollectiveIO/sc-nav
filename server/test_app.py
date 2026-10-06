@@ -13705,16 +13705,18 @@ class EventAnnounceCardTests(unittest.TestCase):
         blocks = e["description"].split("\n\n")
         self.assertEqual(blocks[0], "Bring a Vulture.")
         facts = blocks[1].split("\n")
-        self.assertRegex(facts[0], r"^🕒 \*\*Starts\*\* <t:\d+:F> \(<t:\d+:R>\) · 1 h 30 min$")
-        self.assertEqual(facts[1], "📍 **Rally point** Baijini Point · 🎯 **Location** Yela belt")
-        self.assertEqual(facts[2], "👥 **Crew** 0 / 7 going (min 5)")
-        self.assertEqual(facts[3], "🧩 **Roles** Salvage 0/7 · Escort 0/2")
-        self.assertRegex(facts[4], r"^⛔ \*\*Signups close\*\* <t:\d+:F>$")
-        self.assertTrue(facts[5].startswith("🧭 **Organizer** "))
-        self.assertEqual(facts[6], "🏷 **Type** Salvage Op · PvE, Social")
+        self.assertRegex(facts[0], r"^\*\*Starts\*\* <t:\d+:F> \(<t:\d+:R>\) · 1 h 30 min$")
+        self.assertEqual(facts[1], "**Rally point** Baijini Point · **Location** Yela belt")
+        self.assertEqual(facts[2], "**Crew** 0 / 7 going (min 5)")
+        self.assertEqual(facts[3], "**Roles** Salvage 0/7 · Escort 0/2")
+        self.assertRegex(facts[4], r"^\*\*Signups close\*\* <t:\d+:f>$")      # no weekday: wraps less
+        self.assertTrue(facts[5].startswith("**Organizer** "))
+        self.assertEqual(facts[6], "**Type** Salvage Op · PvE, Social")
+        # One emoji, in the title only — none leading the fact or briefing lines.
+        self.assertTrue(all(l.startswith("**") for l in e["description"].split("\n") if l and l != "Bring a Vulture."))
         self.assertEqual(blocks[2].split("\n"), [
-            "**Mission briefing**", "⚔ **ROE** PvE only",        # label, not the key
-            "🎙 **Comms** Org TS, channel 2", "📋 **Prerequisites** Own a salvage ship"])
+            "**Mission briefing**", "**ROE** PvE only",          # label, not the key
+            "**Comms** Org TS, channel 2", "**Prerequisites** Own a salvage ship"])
 
     def test_minimal_event_shows_no_empty_facts(self):
         e = app._event_created_embed(self._ev())
@@ -13722,7 +13724,7 @@ class EventAnnounceCardTests(unittest.TestCase):
         for absent in ("Rally point", "Location", "Roles", "Signups close",
                        "Mission briefing", " · 0 min", "—"):
             self.assertNotIn(absent, text)
-        self.assertIn("👥 **Crew** 0 / ∞ going", text)
+        self.assertIn("**Crew** 0 / ∞ going", text)
         self.assertEqual(len(text.split("\n\n")), 1)        # no description, no briefing
 
     def test_member_text_is_escaped(self):
@@ -13731,8 +13733,8 @@ class EventAnnounceCardTests(unittest.TestCase):
         d = app._event_created_embed(ev)["description"]
         self.assertIn(r"\*\*free loot\*\*", d)
         self.assertIn(r"\[claim\]", d)                       # no masked link
-        self.assertIn(r"📍 **Rally point** Port\_Tressler", d)
-        self.assertIn(r"🎙 **Comms** \`ts\`", d)
+        self.assertIn(r"**Rally point** Port\_Tressler", d)
+        self.assertIn(r"**Comms** \`ts\`", d)
 
     def test_long_description_is_clipped_with_a_link(self):
         orig = app.PUBLIC_BASE_URL
