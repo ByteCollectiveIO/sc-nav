@@ -74,7 +74,7 @@
    "category": "events",
    "embed": {
     "color": 16758605,
-    "description": "Begins <t:1792726500:F> (<t:1792726500:R>)",
+    "description": "Begins <t:1792726500:F> (<t:1792726500:R>)\n\n**Crew** 0 / ∞ going",
     "title": "⏰ Starting soon: Bare op",
     "url": "https://nav.example.org/#/events/2"
    },
@@ -88,7 +88,7 @@
    "category": "events",
    "embed": {
     "color": 16758605,
-    "description": "Begins <t:1792726500:F> (<t:1792726500:R>)\n📍 Yela belt",
+    "description": "Begins <t:1792726500:F> (<t:1792726500:R>)\n📍 Yela belt\n\n**Crew** 0 / 7 going (min 5)\n**Roles** Salvage 0/7 · Escort 0/2",
     "title": "⏰ Starting soon: Salvage night",
     "url": "https://nav.example.org/#/events/1"
    },

@@ -908,6 +908,10 @@ def init(db_path) -> None:
         _ensure_column("events", "contracts", "TEXT")
         # Announcement banner: an image ref {kind: url|upload, …} or NULL.
         _ensure_column("events", "notify_image", "TEXT")
+        # The Discord message id of the event's "New event" post, so the app can
+        # EDIT it as signups change (a webhook may edit its own messages).
+        # NULL = never posted, or the post was deleted in Discord.
+        _ensure_column("events", "announce_message_id", "TEXT")
         # Loot (ops slice 4): committed seeds [{seed, hash, revealed}] and the
         # op's round-robin rotation (roster ids).
         _ensure_column("operations", "loot_seeds", "TEXT")
@@ -2307,6 +2311,12 @@ def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
             (*vals, updated_at, event_id),
         )
     return cur.rowcount > 0
+
+
+def set_event_announce_message(event_id: int, message_id: str | None) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE events SET announce_message_id=? WHERE id=?",
+                      (message_id, event_id))
 
 
 def complete_event(event_id: int, updated_at: str) -> bool:
