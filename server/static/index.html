@@ -820,6 +820,7 @@
   .on-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px;
     color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
   .on-field-grow { flex: 1; min-width: 160px; }
+  .on-field[hidden] { display: none; }   /* display:flex beats the UA [hidden] rule */
   .on-field .ti, .on-field .sel { text-transform: none; letter-spacing: 0;
     color: var(--text); font-size: 14px; }
   .on-invis { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
@@ -3708,7 +3709,7 @@
     <!-- Heading + blurb are admin-overridable (ORG SETTINGS → BRANDING); the text
          here is the shipped default and the fallback — see applyCopy(). -->
     <h2 class="launcher-head" id="launcher-head">Your org toolkit</h2>
-    <p class="launcher-sub" id="launcher-sub">Ten tools, one org — grouped by what you're up to. New here? Start
+    <p class="launcher-sub" id="launcher-sub">Eleven tools, one org — grouped by what you're up to. New here? Start
       with the Resource Navigator; the rest build on it.</p>
     <div class="launcher-badges">
       <a id="online-badge" class="online-badge" href="#/online" hidden></a>
@@ -3765,8 +3766,7 @@
           <div class="app-desc">Organize raids, ops, survey runs &amp; meetups — set roles,
             sign up your org, and track who's filling each slot.</div>
         </a>
-        <!-- Placeholder art (the Event Planner's) until the Ops patch is drawn;
-             an admin can already swap it per org (app-image key "ops"). -->
+        <!-- Ops patch art; an admin can swap it per org (app-image key "ops"). -->
         <a class="app-card" href="#/ops">
           <img class="app-logo" data-app="ops" loading="lazy" src="/images/ops_floor_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Ops</div>
@@ -5758,8 +5758,8 @@
     <div class="panel" id="lfg-compose-panel">
       <h2>LOOKING FOR GROUP</h2>
       <p class="muted lfg-blurb">Rally a group right now, no schedule needed. Post that you're
-        hosting and need players, or that you're solo and want in. Posts expire in a few hours or
-        when you close the app.</p>
+        hosting and need players, or that you're solo and want in. Posts age off
+        after a few hours, or when you close them.</p>
       <div class="lfg-compose">
         <div class="lfg-dir" id="lfg-dir">
           <button type="button" data-dir="lfm" class="active">Need players
@@ -10359,9 +10359,9 @@ function renderRouteHistory() {
     // Boxed stat cards, matching the Statistics page; scope = session | recent.
     const s = (scope === "session" ? session_stats : stats) || stats;
     const cards = [[s.num_runs, "RUNS"]];
-    if (s.total_reward) cards.push([fmtAuec(s.total_reward), "aUEC EARNED"]);
-    if (s.auec_per_hour) cards.push([fmtAuec(s.auec_per_hour), "aUEC / HR"]);
-    cards.push([fmtAuec(s.total_scu), "SCU MOVED"],
+    if (s.total_reward) cards.push([fmtAuec(s.total_reward), "EARNED"]);
+    if (s.auec_per_hour) cards.push([fmtAuec(s.auec_per_hour), "PER HOUR"]);
+    cards.push([Math.round(s.total_scu || 0).toLocaleString(), "SCU MOVED"],
                [fmtGm(s.total_distance_m), "QT DISTANCE"],
                [fmtDur(s.total_time_s), "TIME"]);
     h += `<div class="stat-cards">` + cards.map(([n, k]) =>
@@ -10758,7 +10758,7 @@ function updateRewardTotal() {
   const t = rewardTotal();
   if (!t) { if (line) line.remove(); return; }
   if (!line) { line = document.createElement("div"); line.className = "rw-total"; el.appendChild(line); }
-  line.innerHTML = `Total payout: <b>${fmtAuec(t)}</b> aUEC`;
+  line.innerHTML = `Total payout: <b>${fmtAuec(t)}</b>`;
 }
 
 // The rewards payload for /plan + /run: only labels still present with a >0
@@ -11004,7 +11004,7 @@ function renderPlan(res) {
   h += `<div class="route-headline"><div class="rh-primary metric">`
     + `<span class="v">${primary.v}</span><span class="l">${primary.l}</span></div>`
     + (sm.total_reward && sm.auec_per_hour
-        ? `<div class="rh-sub"><b>${fmtAuec(sm.auec_per_hour)}</b> aUEC/hr</div>` : "")
+        ? `<div class="rh-sub"><b>${fmtAuec(sm.auec_per_hour)}</b>/hr</div>` : "")
     + `</div>`;
   // Secondary logistics strip (quiet, tabular). Omit whichever figure is primary.
   const sub = [metric(sm.num_stops, "STOPS"), metric(sm.num_packages, "PACKAGES"),
@@ -11758,9 +11758,9 @@ function renderTradeHistory() {
     // Boxed stat cards, matching the Statistics page; scope = session | recent.
     const s = (scope === "session" ? session_stats : stats) || stats;
     const cards = [[s.num_runs, "RUNS"]];
-    if (s.total_profit) cards.push([fmtAuec(s.total_profit), "aUEC PROFIT"]);
-    if (s.auec_per_hour) cards.push([fmtAuec(s.auec_per_hour), "aUEC / HR"]);
-    cards.push([fmtAuec(s.total_scu), "SCU MOVED"],
+    if (s.total_profit) cards.push([fmtAuec(s.total_profit), "PROFIT"]);
+    if (s.auec_per_hour) cards.push([fmtAuec(s.auec_per_hour), "PER HOUR"]);
+    cards.push([Math.round(s.total_scu || 0).toLocaleString(), "SCU MOVED"],
                [fmtGm(s.total_distance_m), "QT DISTANCE"],
                [fmtDur(s.total_time_s), "TIME"]);
     h += `<div class="stat-cards">` + cards.map(([n, k]) =>
@@ -12432,7 +12432,7 @@ function renderTradePlan(res) {
   const primary = { v: fmtAuec(sm.total_profit), l: "TOTAL PROFIT" };
   h += `<div class="route-headline"><div class="rh-primary metric">`
     + `<span class="v">${primary.v}</span><span class="l">${primary.l}</span></div>`
-    + (sm.profit_per_hour ? `<div class="rh-sub"><b>${fmtAuec(sm.profit_per_hour)}</b> aUEC/hr</div>` : "")
+    + (sm.profit_per_hour ? `<div class="rh-sub"><b>${fmtAuec(sm.profit_per_hour)}</b>/hr</div>` : "")
     + `</div>`;
   // Two tiers (console regroup): the readings that decide whether to fly
   // (route shape, time, capital), then the context figures smaller below.
@@ -14058,7 +14058,7 @@ async function renderDetailBody(e) {
     };
     const cn = $("ev-cancel"); if (cn) cn.onclick = async () => {
       if (!(await confirmDialog(
-          "Signups are kept, but it's hidden from the board.",
+          "Signups are kept. It stays on the board marked Cancelled until its date passes.",
           { title: "Cancel this event?", confirmLabel: "Cancel event", danger: true }))) return;
       const r = await fetch(`/api/events/${e.id}`, { method: "DELETE" });
       if (r.ok) renderEventDetail(e.id);
@@ -26740,13 +26740,13 @@ async function loadCargoLeaderboard() {
   $("cargo-lb-cards").innerHTML = [
     [d.num_haulers || 0, "HAULERS"],
     [earners.reduce((s, r) => s + r.num_runs, 0), "RUNS"],
-    [fmtAuec(earners.reduce((s, r) => s + r.total_reward, 0)), "aUEC EARNED"],
+    [fmtAuec(earners.reduce((s, r) => s + r.total_reward, 0)), "EARNED"],
     [fmtAuec(topReward), "TOP HAUL TOTAL"],
   ].map(([n, k]) =>
     `<div class="lb-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
 
   cargoBoard("cargo-lb-earners", "cargo-lb-earners-empty", earners,
-    r => r.total_reward, v => fmtAuec(v) + " aUEC", "auec");
+    r => r.total_reward, v => fmtAuec(v), "auec");
   cargoBoard("cargo-lb-efficient", "cargo-lb-efficient-empty", efficient,
     r => r.auec_per_hour, v => fmtAuec(v) + "/hr", "rate");
   stampIntelFresh();
@@ -26761,8 +26761,8 @@ function renderCargoStats(d) {
   wireRangeToggle("cargo-stat-range", cargoStatRange, r => { cargoStatRange = r; loadCargoStats(); });
   $("cargo-stat-cards").innerHTML = [
     [d.num_haulers || 0, "HAULERS"], [d.num_runs || 0, "RUNS"],
-    [fmtAuec(d.total_reward || 0), "aUEC EARNED"], [fmtAuec(d.total_scu || 0), "SCU MOVED"],
-    [d.auec_per_hour ? fmtAuec(d.auec_per_hour) : "—", "aUEC / HR"],
+    [fmtAuec(d.total_reward || 0), "EARNED"], [Math.round(d.total_scu || 0).toLocaleString(), "SCU MOVED"],
+    [d.auec_per_hour ? fmtAuec(d.auec_per_hour) : "—", "PER HOUR"],
   ].map(([n, k]) =>
     `<div class="stat-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
 
@@ -26777,8 +26777,8 @@ function renderCargoStats(d) {
     : "No weekly hauling activity yet");
   cActEl.innerHTML = act.map(w => {
     const h = (w.count / aMax) * 100;
-    return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)} aUEC">
-        <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
+    return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)}">
+        <span class="cv">${w.count ? Math.round(w.count).toLocaleString() : ""}</span>
         <span class="bar" style="height:${h}%"></span>
       </div>`;
   }).join("");
@@ -26807,8 +26807,8 @@ function renderTradeStats(d) {
   wireRangeToggle("trade-stat-range", tradeStatRange, r => { tradeStatRange = r; loadTradeStats(); });
   $("trade-stat-cards").innerHTML = [
     [d.num_traders || 0, "TRADERS"], [d.num_runs || 0, "RUNS"],
-    [fmtAuec(d.total_profit || 0), "aUEC PROFIT"], [fmtAuec(d.total_scu || 0), "SCU MOVED"],
-    [d.auec_per_hour ? fmtAuec(d.auec_per_hour) : "—", "aUEC / HR"],
+    [fmtAuec(d.total_profit || 0), "PROFIT"], [Math.round(d.total_scu || 0).toLocaleString(), "SCU MOVED"],
+    [d.auec_per_hour ? fmtAuec(d.auec_per_hour) : "—", "PER HOUR"],
   ].map(([n, k]) =>
     `<div class="stat-card"><div class="n">${n}</div><div class="k">${k}</div></div>`).join("");
 
@@ -26823,8 +26823,8 @@ function renderTradeStats(d) {
     : "No weekly trading activity yet");
   actEl.innerHTML = act.map(w => {
     const ht = (w.count / aMax) * 100;
-    return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)} aUEC">
-        <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
+    return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)}">
+        <span class="cv">${w.count ? Math.round(w.count).toLocaleString() : ""}</span>
         <span class="bar" style="height:${ht}%"></span>
       </div>`;
   }).join("");
@@ -26832,7 +26832,7 @@ function renderTradeStats(d) {
     `<span>${i % 2 === 0 ? esc(w.label) : ""}</span>`).join("");
 
   cargoBoard("trade-stat-traders", "trade-stat-traders-empty", d.traders || [],
-    r => r.total_profit, v => fmtAuec(v) + " aUEC", "auec");
+    r => r.total_profit, v => fmtAuec(v), "auec");
   statBars("trade-stat-commodities",
     { items: (d.top_commodities || []).map(c => ({ name: c.commodity, count: c.scu })) }, "auec");
   statBars("trade-stat-lanes",
@@ -27102,7 +27102,7 @@ function renderMarketStats(d) {
   actEl.innerHTML = act.map(w => {
     const hh = (w.count / aMax) * 100;
     return `<div class="col" title="${esc(w.label)}: ${fmtAuec(w.count)}">
-        <span class="cv">${w.count ? fmtAuec(w.count) : ""}</span>
+        <span class="cv">${w.count ? Math.round(w.count).toLocaleString() : ""}</span>
         <span class="bar" style="height:${hh}%"></span>
       </div>`;
   }).join("");
