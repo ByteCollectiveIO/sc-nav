@@ -23,6 +23,7 @@ Template language (deliberately tiny — no logic):
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass, field
 
@@ -37,6 +38,7 @@ class Var:
     label: str            # what the editor shows next to the chip
     sample: str           # used by the preview + test send (slice 5)
     md: bool = False      # member-typed text: escape in the description slot
+    group: str = ""       # editor chip grouping (When / Where / Crew …); "" = ungrouped
 
 
 @dataclass(frozen=True)
@@ -114,11 +116,18 @@ def validate_override(key: str, draft: dict) -> dict:
             raise ValueError(f"the {slot} is {len(text)} characters; the limit is {cap}")
         unknown = sorted({m for m in _BRACED_RE.findall(_protect(text))} - set(t.vars))
         if unknown:
-            raise ValueError(
-                "unknown field" + ("s " if len(unknown) > 1 else " ")
-                + ", ".join("{" + u + "}" for u in unknown)
-                + ". Fields you can use here: " + ", ".join("{" + v + "}" for v in t.vars)
-                + ". For a literal brace, type {{ or }}.")
+            # Name the box and the likely intended field; list them all only
+            # when nothing is close (the editor shows them as chips anyway).
+            where = {"title": "the title", "description": "the message body",
+                     "footer": "the footer"}[slot]
+            close = difflib.get_close_matches(unknown[0], list(t.vars), n=1, cutoff=0.6)
+            msg = ("Unknown field" + ("s " if len(unknown) > 1 else " ")
+                   + ", ".join("{" + u + "}" for u in unknown) + f" in {where}.")
+            if close:
+                msg += " Did you mean {" + close[0] + "}?"
+            else:
+                msg += " Fields you can use here: " + ", ".join("{" + v + "}" for v in t.vars) + "."
+            raise ValueError(msg + " For a literal brace, type {{ or }}.")
         out[slot] = text
     color = (draft.get("color") or "").strip()
     if color:
@@ -156,6 +165,9 @@ def render(key: str, values: dict, *, escape, overrides: dict | None = None) -> 
 _TITLE = Var("Event title", "Salvage night", md=True)
 _START = Var("Start (each member's own time zone)", "<t:1792726500:F>")
 _START_R = Var("Start, relative ('in 2 weeks')", "<t:1792726500:R>")
+_TITLE_EV = Var("Event title", "Salvage night", md=True, group="Event")
+_START_W = Var("Start (each member's own time zone)", "<t:1792726500:F>", group="When")
+_START_RW = Var("Start, relative ('in 2 weeks')", "<t:1792726500:R>", group="When")
 
 TEMPLATES: dict[str, Template] = {
     "event_created": Template(
@@ -178,25 +190,25 @@ TEMPLATES: dict[str, Template] = {
             "**Medical** {medical}\n"
             "**Prerequisites** {prereqs}"),
         vars={
-            "title": _TITLE,
+            "title": _TITLE_EV,
             "description": Var("Event description (first 1,500 characters)",
-                               "Bring a Vulture.", md=True),
-            "read_more": Var("'Read the rest' link, when the description was cut", ""),
-            "start": _START, "start_relative": _START_R,
-            "length": Var("Length", "1 h 30 min"),
-            "rally_point": Var("Rally point", "Port Tressler", md=True),
-            "event_location": Var("Event location", "Yela belt", md=True),
-            "crew": Var("Crew (going / max, min)", "0 / 7 going (min 5)"),
-            "roles": Var("Roles with fill", "Salvage 0/7 · Escort 0/2", md=True),
-            "signups_close": Var("Signups close", "<t:1792028040:f>"),
-            "organizer": Var("Organizer", "Bolvangar", md=True),
-            "type": Var("Type · category", "Salvage Op · PvE, Social", md=True),
-            "mission": Var("Mission", "Clear the wreck", md=True),
-            "roe": Var("Rules of engagement", "PvE only"),
-            "comms": Var("Comms", "Org TS, channel 2", md=True),
-            "loadout": Var("Loadout", "Medium armor", md=True),
-            "medical": Var("Medical", "Cutty Red on call", md=True),
-            "prereqs": Var("Prerequisites", "Own a salvage ship", md=True),
+                               "Bring a Vulture.", md=True, group="Event"),
+            "read_more": Var("'Read the rest' link, when the description was cut", "", group="Event"),
+            "start": _START_W, "start_relative": _START_RW,
+            "length": Var("Length", "1 h 30 min", group="When"),
+            "rally_point": Var("Rally point", "Port Tressler", md=True, group="Where"),
+            "event_location": Var("Event location", "Yela belt", md=True, group="Where"),
+            "crew": Var("Crew (going / max, min)", "0 / 7 going (min 5)", group="Crew"),
+            "roles": Var("Roles with fill", "Salvage 0/7 · Escort 0/2", md=True, group="Crew"),
+            "signups_close": Var("Signups close", "<t:1792028040:f>", group="When"),
+            "organizer": Var("Organizer", "Bolvangar", md=True, group="Event"),
+            "type": Var("Type · category", "Salvage Op · PvE, Social", md=True, group="Event"),
+            "mission": Var("Mission", "Clear the wreck", md=True, group="Briefing"),
+            "roe": Var("Rules of engagement", "PvE only", group="Briefing"),
+            "comms": Var("Comms", "Org TS, channel 2", md=True, group="Briefing"),
+            "loadout": Var("Loadout", "Medium armor", md=True, group="Briefing"),
+            "medical": Var("Medical", "Cutty Red on call", md=True, group="Briefing"),
+            "prereqs": Var("Prerequisites", "Own a salvage ship", md=True, group="Briefing"),
         }),
     "event_reminder": Template(
         "events", "Event reminder",

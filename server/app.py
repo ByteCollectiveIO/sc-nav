@@ -15466,8 +15466,8 @@ def _notify_template_view(key: str) -> dict:
         "editable": [s for s in notify_templates.SLOTS if getattr(t, s) is not None],
         "color": {"shipped": f"#{t.color:06X}", "override": over.get("color", ""),
                   "note": t.color_note},
-        "vars": [{"name": n, "label": v.label, "sample": v.sample, "md": v.md}
-                 for n, v in t.vars.items()],
+        "vars": [{"name": n, "label": v.label, "sample": v.sample, "md": v.md,
+                  "group": v.group} for n, v in t.vars.items()],
         "customized": bool(over),
     }
 

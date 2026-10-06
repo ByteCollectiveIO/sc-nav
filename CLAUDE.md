@@ -58,7 +58,7 @@ banner — don't scroll.
 `<style>` lines 7–1997 · body 1999–3782 · `<script>` 3784–13720.
 
 Body views (each a `#…-view` container, hash-routed):
-launcher, main (navigator), settings (category rail, one section at a time: `#/settings` = Profile, `#/settings/<watcher|my-ops|account>` for everyone, `#/settings/<general|members|branding|discord|apps|data>` admin-only — `SETTINGS_SECTIONS`/`applySettingsSection`; data loads on ENTRY to Settings, not per section; a non-admin or unknown slug falls back to Profile), setup, intel, leaderboard, stats,
+launcher, main (navigator), settings (category rail, one section at a time: `#/settings` = Profile, `#/settings/<watcher|my-ops|account>` for everyone, `#/settings/<general|members|branding|discord|announcements|apps|data>` admin-only — `discord` = webhook CHANNELS only; `announcements` = message templates + org image + linked-image previews (split 2026-10-06 critique: templates were buried ~1,300 px down) — `SETTINGS_SECTIONS`/`applySettingsSection`; data loads on ENTRY to Settings, not per section; a non-admin or unknown slug falls back to Profile), setup, intel, leaderboard, stats,
 cargo-leaderboard, cargo-stats, route (cargo planner), events, goals, inventory,
 blueprints (RM's third tab, #29), market, online (who's online, #19),
 ops (Ops — run a mission + its record, `#/ops`, `#/ops/<id>`), lfg (group finder / LFG board, #19), pirates (danger board / pirate warnings, #24),
@@ -418,7 +418,9 @@ listing_offers.
     `watcher` (position + txn ingest), `token` (`/api/tokens`,
     `/download/watcher`). Limits sit far above real use; tests clear
     `app._rate_hits`.
-  - **Frontend escaping**: `esc()` covers text AND quoted-attribute context.
+  - **Confirm dialogs**: `confirmDialog` resets `dlg.returnValue` before `showModal()`. A modal closed with Esc KEEPS the previous returnValue, so without the reset Esc on any confirm after an earlier OK resolved as OK, which made Esc on a destructive confirm DELETE (found 2026-10-06; `promptDialog` already had the reset). `safe: true` defaults focus to Cancel without red styling (privacy opt-ins).
+- **Form controls**: `textarea.ti` shares the `input.ti` dark style + focus ring. Give every text/number input and textarea `class="ti"` (or put it inside `.ev-field`); a bare control renders as the browser's grey/white box with no focus state (2026-10-06: 6 textareas + 14 Settings inputs were bare).
+- **Frontend escaping**: `esc()` covers text AND quoted-attribute context.
     The trap is `.join()` inside a template literal — use `.map(esc).join(...)`.
 - **Design**: follow `DESIGN.md` (tokens, components) and `PRODUCT.md` (scope).
 - **No build step**: the SPA is served as-is. Don't introduce a bundler.
