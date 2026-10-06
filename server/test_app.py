@@ -13405,7 +13405,7 @@ class NotifyOrgImageTests(unittest.TestCase):
             self.assertEqual(r.status_code, 400, url)
         r = self.client.put("/api/settings/discord/org-image",
                             json={"kind": "url", "url": "https://cdn.discordapp.com/attachments/1/2/a.png"})
-        self.assertIn("Upload", r.json()["detail"])
+        self.assertIn("expire", r.json()["detail"])
         self.assertIsNone(app.notify_org_image())
 
     def test_gif_upload_served_and_attached(self):
@@ -13478,8 +13478,9 @@ class NotifyOrgImageTests(unittest.TestCase):
 
 
 class EventNotifyImageTests(unittest.TestCase):
-    """Slice 2: an event's own announcement banner (upload or link), carried by
-    templates, swept when nothing references it, and admin-testable."""
+    """Slice 2: an event's own announcement banner (a LINK — uploads were
+    removed in the 2026-10-06 security sweep), carried by templates, and
+    admin-testable."""
 
     _PNG = b"\x89PNG\r\n\x1a\n" + b"\x01" * 64
     _GIF = b"GIF89a" + b"\x02" * 64
@@ -13507,7 +13508,7 @@ class EventNotifyImageTests(unittest.TestCase):
 
     def setUp(self):
         self._user.clear(); self._user.update(self._admin)
-        for name in ("NOTIFY_IMAGES_DIR", "BRANDING_DIR"):
+        for name in ("_LEGACY_NOTIFY_IMAGES_DIR", "BRANDING_DIR"):
             orig = getattr(app, name)
             setattr(app, name, Path(tempfile.mkdtemp()))
             self.addCleanup(lambda n=name, o=orig: setattr(app, n, o))
@@ -13523,10 +13524,7 @@ class EventNotifyImageTests(unittest.TestCase):
             return True
         notify.send = _capture
 
-    def _upload(self, data=None, ctype="image/png"):
-        r = self.client.post("/api/notify-images",
-                             files={"file": ("art", data or self._PNG, ctype)})
-        return r
+    _LINK = {"kind": "url", "url": "https://i.imgur.com/b.png"}
 
     def _event(self, **extra):
         start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
@@ -13534,39 +13532,18 @@ class EventNotifyImageTests(unittest.TestCase):
             "title": "Banner Op", "start_at": start, "types": ["Raid"],
             "categories": ["PvE"], **extra})
 
-    def test_upload_is_content_addressed_and_served(self):
-        a = self._upload().json()
-        self.assertEqual(a["kind"], "upload")
-        self.assertEqual(a["ext"], "png")
-        self.assertRegex(a["hash"], r"^[0-9a-f]{16}$")
-        self.assertEqual(self._upload().json()["hash"], a["hash"])   # same bytes, one file
-        self.assertEqual(len(list(app.NOTIFY_IMAGES_DIR.iterdir())), 1)
-        g = self.client.get(f"/api/notify-images/{a['hash']}")
-        self.assertEqual(g.status_code, 200)
-        self.assertEqual(g.content, self._PNG)
-        self.assertEqual(self.client.get("/api/notify-images/../../etc").status_code, 404)
+    def test_upload_endpoints_are_gone(self):
+        # Security sweep 2026-10-06: member uploads had no storage ceiling.
+        png = b"\x89PNG\r\n\x1a\n" + b"\x01" * 64
+        r = self.client.post("/api/notify-images", files={"file": ("art", png, "image/png")})
+        self.assertIn(r.status_code, (404, 405))
         self.assertEqual(self.client.get("/api/notify-images/" + "0" * 16).status_code, 404)
+        self.assertNotIn("upload", app._RATE_LIMITS)
 
-    def test_upload_validation(self):
-        self.assertEqual(self._upload(self._PNG, "image/gif").status_code, 400)
-        self.assertEqual(self._upload(b"<svg/>", "image/svg+xml").status_code, 400)
-        big = self._GIF + b"\x00" * app._NOTIFY_IMAGE_MAX_BYTES
-        self.assertEqual(self._upload(big, "image/gif").status_code, 400)
-        self.assertEqual(self._upload(self._GIF, "image/gif").status_code, 200)
-
-    def test_any_member_can_upload_but_it_is_rate_limited(self):
-        self._user["is_admin"] = False
-        self.assertEqual(self._upload().status_code, 200)
-        limit = app._RATE_LIMITS["upload"][0]
-        codes = [self._upload().status_code for _ in range(limit)]
-        self.assertEqual(codes[-1], 429)
-
-    def test_event_with_uploaded_banner_announces_it(self):
-        ref = self._upload().json()
-        r = self._event(notify_image={"kind": "upload", "hash": ref["hash"]})
+    def test_event_with_linked_banner_announces_it(self):
+        r = self._event(notify_image=self._LINK)
         self.assertEqual(r.status_code, 200, r.text)
-        self.assertEqual(r.json()["notify_image"],
-                         {"kind": "upload", "hash": ref["hash"], "ext": "png"})
+        self.assertEqual(r.json()["notify_image"], self._LINK)
         ev = db.get_event(r.json()["id"])
         asyncio.run(app._notify_event_created(ev))
         asyncio.run(app._notify_event_reminder(ev))
@@ -13574,32 +13551,29 @@ class EventNotifyImageTests(unittest.TestCase):
         asyncio.run(app._notify_event_cancelled(ev))
         created, reminder, moved, cancelled = self.sent[-4:]
         for m in (created, reminder, moved):
-            self.assertEqual(m["embed"]["image"], {"url": "attachment://banner.png"})
-            self.assertEqual(m["files"], [("banner.png", self._PNG, "image/png")])
+            self.assertEqual(m["embed"]["image"], {"url": self._LINK["url"]})
+            self.assertEqual(m["files"], [])                    # Discord fetches a link itself
         self.assertNotIn("image", cancelled["embed"])          # no party banner on a cancel
-        self.assertEqual(cancelled["files"], [])
 
     def test_linked_banner_and_org_image_together(self):
         self.client.put("/api/settings/discord/org-image", json={"kind": "shipped"})
-        r = self._event(notify_image={"kind": "url", "url": "https://i.imgur.com/b.png"})
+        r = self._event(notify_image=self._LINK)
         ev = db.get_event(r.json()["id"])
         asyncio.run(app._notify_event_created(ev))
         m = self.sent[-1]
-        self.assertEqual(m["embed"]["image"], {"url": "https://i.imgur.com/b.png"})
+        self.assertEqual(m["embed"]["image"], {"url": self._LINK["url"]})
         self.assertEqual(m["embed"]["thumbnail"], {"url": "attachment://thumb.png"})
         self.assertEqual([f[0] for f in m["files"]], ["thumb.png"])   # the link isn't attached
 
     def test_bad_refs_rejected(self):
         for ref in ({"kind": "url", "url": "http://x.com/a.png"},
                     {"kind": "url", "url": "https://cdn.discordapp.com/attachments/1/2/a.png"},
-                    {"kind": "upload", "hash": "0123456789abcdef"},     # not ours
-                    {"kind": "upload", "hash": "../../../etc/passwd"},
+                    {"kind": "upload", "hash": "0123456789abcdef"},     # uploads are gone
                     {"kind": "file", "url": "https://x.com/a.png"}):
             self.assertEqual(self._event(notify_image=ref).status_code, 400, ref)
 
     def test_edit_can_remove_the_banner(self):
-        ref = self._upload().json()
-        eid = self._event(notify_image={"kind": "upload", "hash": ref["hash"]}).json()["id"]
+        eid = self._event(notify_image=self._LINK).json()["id"]
         start = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
         r = self.client.patch(f"/api/events/{eid}", json={
             "title": "Banner Op", "start_at": start, "types": ["Raid"], "categories": ["PvE"]})
@@ -13607,54 +13581,44 @@ class EventNotifyImageTests(unittest.TestCase):
         self.assertIsNone(r.json()["notify_image"])
         self.assertIsNone(db.get_event(eid)["notify_image"])
 
-    def test_missing_file_degrades_to_no_banner(self):
-        ref = self._upload().json()
-        ev = db.get_event(self._event(notify_image={"kind": "upload", "hash": ref["hash"]}).json()["id"])
-        for f in app.NOTIFY_IMAGES_DIR.iterdir():
-            f.unlink()
-        asyncio.run(app._notify_event_created(ev))
+    def test_legacy_upload_ref_degrades_to_no_banner(self):
+        # An event saved before 2026-10-06 may still hold an upload ref; the
+        # file is gone, so the post simply goes out without an image.
+        eid = self._event(notify_image=self._LINK).json()["id"]
+        with db._lock, db._conn:
+            db._conn.execute("UPDATE events SET notify_image=? WHERE id=?",
+                             (json.dumps({"kind": "upload", "hash": "0" * 16, "ext": "png"}), eid))
+        asyncio.run(app._notify_event_created(db.get_event(eid)))
         self.assertNotIn("image", self.sent[-1]["embed"])
 
+    def test_legacy_uploads_are_removed_at_startup(self):
+        (app._LEGACY_NOTIFY_IMAGES_DIR / "deadbeef.png").write_bytes(b"x")
+        with db._lock, db._conn:
+            db._conn.execute("CREATE TABLE IF NOT EXISTS notify_images (hash TEXT PRIMARY KEY)")
+        app._drop_legacy_notify_images()
+        self.assertFalse(app._LEGACY_NOTIFY_IMAGES_DIR.exists())
+        with db._lock:
+            t = db._conn.execute("SELECT name FROM sqlite_master WHERE name='notify_images'").fetchone()
+        self.assertIsNone(t)
+
     def test_templates_carry_the_banner(self):
-        ref = self._upload().json()
-        img = {"kind": "upload", "hash": ref["hash"]}
-        eid = self._event(notify_image=img).json()["id"]
+        eid = self._event(notify_image=self._LINK).json()["id"]
         t = self.client.post(f"/api/events/{eid}/save-template", json={"name": "Weekly"}).json()
-        self.assertEqual(t["event"]["notify_image"]["hash"], ref["hash"])
+        self.assertEqual(t["event"]["notify_image"], self._LINK)
         t2 = self.client.post("/api/event-templates", json={
             "name": "Scratch", "event": {"types": ["Raid"], "categories": ["PvE"],
                                          "notify_image": {"kind": "url", "url": "https://i.imgur.com/t.png"}}})
         self.assertEqual(t2.status_code, 200, t2.text)
         self.assertEqual(t2.json()["event"]["notify_image"]["url"], "https://i.imgur.com/t.png")
 
-    def test_sweep_keeps_referenced_and_recent_uploads(self):
-        used = self._upload(self._PNG).json()["hash"]
-        tpl_only = self._upload(self._GIF, "image/gif").json()["hash"]
-        orphan = self._upload(self._PNG + b"x").json()["hash"]
-        fresh = self._upload(self._PNG + b"y").json()["hash"]
-        self._event(notify_image={"kind": "upload", "hash": used})
-        self.client.post("/api/event-templates", json={
-            "name": "T", "event": {"types": ["Raid"], "categories": ["PvE"],
-                                   "notify_image": {"kind": "upload", "hash": tpl_only}}})
-        # Age everything but `fresh` past the grace period.
-        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        with db._lock, db._conn:
-            db._conn.execute("UPDATE notify_images SET created=? WHERE hash != ?", (old, fresh))
-        self.assertEqual(app._sweep_notify_images(), 1)
-        self.assertIsNone(db.notify_image_get(orphan))
-        self.assertFalse(list(app.NOTIFY_IMAGES_DIR.glob(f"{orphan}.*")))
-        for h in (used, tpl_only, fresh):
-            self.assertIsNotNone(db.notify_image_get(h), h)
-
     def test_event_test_send_is_admin_only(self):
-        ref = self._upload().json()
-        eid = self._event(notify_image={"kind": "upload", "hash": ref["hash"]}).json()["id"]
+        eid = self._event(notify_image=self._LINK).json()["id"]
         self.assertTrue(self.client.get(f"/api/events/{eid}").json()["notify_test"])
         r = self.client.post(f"/api/events/{eid}/notify-test")
         self.assertEqual(r.status_code, 200, r.text)
         m = self.sent[-1]
         self.assertTrue(m["embed"]["title"].startswith("[TEST] 📅 New event"))
-        self.assertEqual(m["embed"]["image"], {"url": "attachment://banner.png"})
+        self.assertEqual(m["embed"]["image"], {"url": self._LINK["url"]})
         self._user["is_admin"] = False
         self.assertFalse(self.client.get(f"/api/events/{eid}").json()["notify_test"])
         self.assertEqual(self.client.post(f"/api/events/{eid}/notify-test").status_code, 403)
@@ -14127,6 +14091,39 @@ class NotifyTemplateEngineTests(unittest.TestCase):
                                           "poster": "Port_Ace", "note": "a_b"}, escape=esc)
         self.assertEqual(r["title"], "🔎 Looking for members: Port_Ace")   # titles don't render markdown
         self.assertEqual(r["description"], "a\\_b")
+
+    def test_member_text_vars_are_all_escaped(self):
+        """Security sweep 2026-10-06: an unescaped slot let a Discord nickname
+        like `[patch notes](https://…)` render as a masked link in the org
+        channel. Everything a member can type is `md`; only fixed vocabulary,
+        computed figures and <t:> stamps may stay raw."""
+        raw_ok = {"icon", "heading", "kind_label", "headline", "call_to_action", "posted",
+                  "start", "start_relative", "old_start", "signups_close", "length",
+                  "crew", "needs", "severity", "threat", "comms", "roe", "read_more",
+                  "progress"}
+        for key, t in self.nt.TEMPLATES.items():
+            for name, v in t.vars.items():
+                if not v.md:
+                    self.assertIn(name, raw_ok, (key, name))
+        link = "[patch notes](https://evil.example)"
+        esc = app._md_plain
+        for key, vals in (
+            ("listing_posted", {"icon": "🏷️", "headline": "FOR SALE", "item": link,
+                                "terms": link, "poster": link, "call_to_action": "Go."}),
+            ("goal_posted", {"icon": "🎯", "heading": "New org goal", "title": link,
+                             "progress": "1%", "lines": link, "description": link,
+                             "posted": "Posted", "poster": link, "call_to_action": "Go."}),
+            ("warning_posted", {"icon": "☠️", "kind_label": "Danger near", "where": link,
+                                "note": link, "severity": "HIGH", "threat": "Players (PvP)",
+                                "location": link, "poster": link}),
+            ("event_reminder", {"title": "T", "start": "<t:1:F>", "start_relative": "<t:1:R>",
+                                "place": link, "crew": "1 / 2 going", "roles": link}),
+            ("event_rescheduled", {"title": "T", "start": "<t:1:F>", "start_relative": "<t:1:R>",
+                                   "old_start": "<t:0:F>", "new_place": link}),
+        ):
+            d = self.nt.render(key, vals, escape=esc)["description"]
+            self.assertNotIn(link, d, key)
+            self.assertIn("\\[patch notes\\]", d, key)
 
     def test_registry_templates_use_only_declared_vars(self):
         for key, t in self.nt.TEMPLATES.items():

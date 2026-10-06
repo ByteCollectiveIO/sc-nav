@@ -14034,14 +14034,12 @@ async function renderDetailBody(e) {
   }
 }
 
-// The event's Discord announcement art, when the app can show it: an upload
-// (ours) or a link on an admin-approved preview host. A link elsewhere shows
-// as a "Discord image: linked" fact in the meta row instead.
+// The event's Discord announcement art, when the app can show it: a link on
+// an admin-approved preview host. A link elsewhere shows as a "Discord image:
+// linked" fact in the meta row instead.
 function eventBannerHtml(e) {
   const ref = e.notify_image;
   if (!ref) return "";
-  if (ref.kind === "upload")
-    return `<img class="ev-banner" src="/api/notify-images/${encodeURIComponent(ref.hash)}" alt="Discord announcement image">`;
   if (ref.kind === "url" && previewHost(ref.url))
     return `<img class="ev-banner" src="${esc(ref.url)}" referrerpolicy="no-referrer" alt="Discord announcement image">`;
   return "";
@@ -14061,7 +14059,7 @@ function cloneEvent(e) {
     min_players: e.min_players, max_players: e.max_players,
     details: { ...(e.details || {}) },
     rules: e.rules || null, contracts: (e.contracts || []).map(c => ({ ...c })),
-    notify_image: e.notify_image ? { ...e.notify_image } : null,
+    notify_image: imageRefOf(e.notify_image),
     // A clone keeps its lineage: it's recorded against the same template
     // (its current version), unless that template is gone.
     template: e.template && !e.template.deleted
@@ -14840,18 +14838,27 @@ const EV_IMG_GOOD_W = 800;   // wide enough to fill it on high-density screens t
 
 // "Discord announcement" card on the event + template forms. Its state lives in
 // evFormImage (set by eventFormHtml), painted by renderEventImageNow.
+// Only a LINK ref is still valid (uploads were removed 2026-10-06); an older
+// event's upload ref reads as "no image" so a re-save doesn't send it back.
+function imageRefOf(ref) {
+  return ref && ref.kind === "url" && ref.url ? { kind: "url", url: ref.url } : null;
+}
+
 function eventImageCardHtml() {
   // A <details> like Mission details / Contracts beside it: closed until the
-  // organizer wants it, open when the event already has an image.
+  // organizer wants it, open when the event already has an image. LINK ONLY
+  // (security sweep 2026-10-06): member uploads had no storage ceiling, so the
+  // image is hosted elsewhere and Discord fetches it. A Discord attachment link
+  // is refused — those expire within a day of being copied.
   return `<details class="ev-form-card ev-img-card" id="ev-f-img"${evFormImage ? " open" : ""}>` +
     `<summary class="ev-section-h">Discord announcement image <span class="ev-hint">optional</span></summary>` +
     `<p class="ev-img-hint">Shown under the event's Discord posts; wide images fill them. ` +
-      `PNG, JPG, WebP or GIF up to 4&nbsp;MB, or an https link.</p>` +
+      `Paste an https link to a PNG, JPG, WebP or GIF hosted on an image site (imgur, ibb, postimg, X, RSI). ` +
+      `From X, copy the image's address, not the post's link.</p>` +
     `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
       `<button class="ev-btn danger" id="ev-f-imgrm" hidden>Remove</button></div>` +
     `<p class="ev-img-warn" id="ev-f-imgsize" hidden></p>` +
-    `<div class="ev-img-row"><input type="file" id="ev-f-imgfile" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Upload an announcement image"></div>` +
-    `<div class="ev-img-row"><input id="ev-f-imgurl" class="ti" type="url" autocomplete="off" placeholder="or link one: https://i.imgur.com/…" aria-label="Announcement image link">` +
+    `<div class="ev-img-row"><input id="ev-f-imgurl" class="ti" type="url" autocomplete="off" placeholder="https://i.imgur.com/…" aria-label="Announcement image link">` +
       `<button class="ev-btn" id="ev-f-imglink">Use link</button></div>` +
     `<div id="ev-f-imgmsg" class="muted" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div></details>`;
 }
@@ -14866,10 +14873,13 @@ function renderEventImageNow() {
   prev.onload = null;
   prev.hidden = true; prev.removeAttribute("src");
   if (!ref) { what.innerHTML = `<span class="muted">No image. The posts go out without one.</span>`; return; }
-  if (ref.kind === "upload") {
-    // Discord shows an embed image at its real size up to the post's width and
-    // never enlarges it, so a small upload stays small (a 180 px one filled a
-    // quarter of the frame in the first dev test). Say so while it can be fixed.
+  // A linked image loads only from an admin-approved known host, and even
+  // then only on a click: the host sees whoever loads it (design §4.7).
+  const host = previewHost(ref.url);
+  what.innerHTML = `Linked image: <span class="muted">${esc(ref.url)}</span>` +
+    (host ? ` <button class="ev-btn" id="ev-f-imgload">Load preview from ${esc(host)}</button>` : "");
+  const load = $("ev-f-imgload");
+  if (load) load.onclick = () => {
     prev.onload = () => {
       const w = prev.naturalWidth, h = prev.naturalHeight;
       if (w && w < EV_IMG_MIN_W) {
@@ -14879,56 +14889,20 @@ function renderEventImageNow() {
         warn.hidden = false;
       }
     };
-    prev.src = `/api/notify-images/${encodeURIComponent(ref.hash)}`; prev.hidden = false;
-    what.textContent = "Uploaded image";
-  } else {
-    // A linked image loads only from an admin-approved known host, and even
-    // then only on a click: the host sees whoever loads it (design §4.7).
-    const host = previewHost(ref.url);
-    what.innerHTML = `Linked image: <span class="muted">${esc(ref.url)}</span>` +
-      (host ? ` <button class="ev-btn" id="ev-f-imgload">Load preview from ${esc(host)}</button>` : "");
-    const load = $("ev-f-imgload");
-    if (load) load.onclick = () => {
-      prev.onload = () => {
-        const w = prev.naturalWidth, h = prev.naturalHeight;
-        if (w && w < EV_IMG_MIN_W) {
-          warn.textContent = `This image is ${w} × ${h} px. Discord shows images at their real size ` +
-            `and never enlarges them, so it will look small in the post. Use one at least ` +
-            `${EV_IMG_GOOD_W} px wide to fill it.`;
-          warn.hidden = false;
-        }
-      };
-      prev.referrerPolicy = "no-referrer";
-      prev.src = ref.url; prev.hidden = false; load.remove();
-    };
-  }
+    prev.referrerPolicy = "no-referrer";
+    prev.src = ref.url; prev.hidden = false; load.remove();
+  };
 }
 
 function bindEventImage() {
   if (!$("ev-f-img")) return;
   renderEventImageNow();
   const msg = $("ev-f-imgmsg");
-  // Picking a file uploads it: one step, not "Choose File" then "Upload".
-  $("ev-f-imgfile").onchange = async () => {
-    const f = $("ev-f-imgfile").files[0];
-    if (!f) return;
-    if (f.size > 4 * 1024 * 1024) { msg.textContent = "that file is over 4 MB"; return; }
-    msg.textContent = "uploading…";
-    const fd = new FormData(); fd.append("file", f);
-    try {
-      const r = await fetch("/api/notify-images", { method: "POST", body: fd });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.detail || "upload failed");
-      evFormImage = d; $("ev-f-imgfile").value = "";
-      renderEventImageNow();
-      msg.textContent = "uploaded — saved with the event";
-    } catch (e) { msg.textContent = (e && e.message) || "upload failed — try again"; }
-  };
   $("ev-f-imglink").onclick = () => {
     const url = $("ev-f-imgurl").value.trim();
     if (!/^https:\/\/\S+$/i.test(url)) { msg.textContent = "paste an https image link"; return; }
     if (/^https:\/\/(cdn\.discordapp\.com|media\.discordapp\.net)\/(ephemeral-)?attachments\//i.test(url)) {
-      msg.textContent = "Discord attachment links expire within a day — upload the image instead"; return; }
+      msg.textContent = "Discord attachment links expire within a day — host the image on an image site and link that"; return; }
     evFormImage = { kind: "url", url }; $("ev-f-imgurl").value = "";
     renderEventImageNow();
     msg.textContent = "set — saved with the event";
@@ -14938,7 +14912,7 @@ function bindEventImage() {
 
 function eventFormHtml(tax, e, opts = {}) {
   const tplMode = opts.mode === "template";
-  evFormImage = e && e.notify_image ? { ...e.notify_image } : null;
+  evFormImage = e ? imageRefOf(e.notify_image) : null;
   const evTypes = new Set(e ? (e.types || []) : []);
   const typeChips = tax.types.map(t =>
     `<label class="ev-cat-chip${evTypes.has(t) ? " on" : ""}">` +
@@ -15114,7 +15088,7 @@ function templateSeed(t, keep) {
     start_at: keep && keep.start_at, signup_deadline: keep && keep.signup_deadline,
     details: { ...(ev.details || {}) }, roles: (ev.roles || []).map(r => ({ ...r })),
     contracts: (ev.contracts || []).map(c => ({ ...c })), rules: t.rules || null,
-    notify_image: ev.notify_image ? { ...ev.notify_image } : null };
+    notify_image: imageRefOf(ev.notify_image) };
 }
 
 // "Start from template" bar at the top of CREATE EVENT.
@@ -28104,6 +28078,10 @@ function discordMd(text, opts = {}) {
 
 function discordTime(sec, style) {
   const d = new Date(sec * 1000);
+  // A huge <t:…> value gives an out-of-range Date; RelativeTimeFormat THROWS on
+  // the resulting NaN, which would abort the whole page render (security sweep
+  // 2026-10-06). Show the tag as typed instead.
+  if (!Number.isFinite(d.getTime())) return `<t:${sec}:${style}>`;
   if (style === "R") {
     const days = Math.round((d - Date.now()) / 86400000);
     return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(days, "day");

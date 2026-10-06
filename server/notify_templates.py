@@ -22,6 +22,11 @@ Template language (deliberately tiny — no logic):
   to be formatted (an event description): its **bold** / *italics* / lists
   render, and only masked links are defused — `[text](url)` shows literally,
   so a description can't hide where a link goes (user's call, 2026-10-06).
+- Every variable that carries text a MEMBER typed (names, places, notes, item
+  and goal names) is `md`. Security sweep 2026-10-06: a Discord nickname like
+  `[patch notes](https://…)` in an unescaped slot rendered as a masked link in
+  the org channel. Only fixed vocabulary (icons, headings, mode words,
+  computed numbers, <t:> stamps) stays unescaped.
 """
 
 from __future__ import annotations
@@ -230,7 +235,7 @@ TEMPLATES: dict[str, Template] = {
         description=("Begins {start} ({start_relative})\n📍 {place}\n\n"
                      "**Crew** {crew}\n**Roles** {roles}"),
         vars={"title": _TITLE, "start": _START, "start_relative": _START_R,
-              "place": Var("Where (event location, else rally point)", "Yela belt"),
+              "place": Var("Where (event location, else rally point)", "Yela belt", md=True),
               # The reminder is sent minutes before start, so its count is the
               # one members act on (user's call 2026-10-06).
               "crew": Var("Crew right now (going / max, min)", "5 / 7 going (min 5)"),
@@ -245,7 +250,7 @@ TEMPLATES: dict[str, Template] = {
               "start": Var("New start (empty if the time didn't change)", "<t:1792726500:F>"),
               "start_relative": Var("New start, relative", "<t:1792726500:R>"),
               "old_start": Var("Old start", "<t:1792640100:F>"),
-              "new_place": Var("New place (empty if it didn't change)", "Yela belt")},
+              "new_place": Var("New place (empty if it didn't change)", "Yela belt", md=True)},
         color=0xFFB74D),
     "event_cancelled": Template(
         "events", "Event cancelled",
@@ -259,9 +264,9 @@ TEMPLATES: dict[str, Template] = {
         description="{terms}\nPosted by {poster}. {call_to_action}",
         vars={"icon": Var("Mode icon", "🏷️"),
               "headline": Var("Mode headline (FOR SALE, AUCTION…)", "FOR SALE"),
-              "item": Var("Item", "Quantanium"),
-              "terms": Var("Terms (price, quantity, deadline…)", "×3 · 250,000 aUEC"),
-              "poster": Var("Posted by", "Bolvangar"),
+              "item": Var("Item", "Quantanium", md=True),
+              "terms": Var("Terms (price, quantity, deadline…)", "×3 · 250,000 aUEC", md=True),
+              "poster": Var("Posted by", "Bolvangar", md=True),
               "call_to_action": Var("What to do next", "Make an offer on the board.")}),
     "lfg_posted": Template(
         "lfg", "Group Finder post",
@@ -273,7 +278,7 @@ TEMPLATES: dict[str, Template] = {
                      "**Comms** {comms}"),
         vars={"icon": Var("🔎 or 🙋", "🔎"),
               "heading": Var("Looking for members / Looking to join", "Looking for members"),
-              "poster": Var("Posted by", "Ace"),
+              "poster": Var("Posted by", "Ace", md=True),
               "note": Var("Their note", "need 2 for a bunker", md=True),
               "needs": Var("Open seats", "2 (filled 1/2)"),
               "playstyles": Var("Playstyles", "bunkers · PvE", md=True),
@@ -289,7 +294,7 @@ TEMPLATES: dict[str, Template] = {
                      "**Reported by** {poster}"),
         vars={"icon": Var("☠️ (players) or 🤖 (NPCs)", "☠️"),
               "kind_label": Var("'Pirate snare:' or 'Danger near'", "Pirate snare:"),
-              "where": Var("Where", "Baijini Point ↔ Orison"),
+              "where": Var("Where", "Baijini Point ↔ Orison", md=True),
               "note": Var("Their note", "2 Cutlass + a snare", md=True),
               "severity": Var("Severity", "DEADLY"),
               "threat": Var("Threat", "Players (PvP)"),
@@ -304,12 +309,12 @@ TEMPLATES: dict[str, Template] = {
                      "{posted} by {poster}. {call_to_action}"),
         vars={"icon": Var("🎯 / 🔓 / ⛏", "🎯"),
               "heading": Var("New org goal / Goal update", "New org goal"),
-              "title": Var("Goal title", "Build an Idris"),
+              "title": Var("Goal title", "Build an Idris", md=True),
               "progress": Var("Progress line (% filled, target, due)", "41% filled · due <t:1796083200:D>"),
-              "lines": Var("Line items with fill", "▫️ Iron (≥Q500) — 10/40 SCU"),
-              "description": Var("Goal description", "Org priority."),
+              "lines": Var("Line items with fill", "▫️ Iron (≥Q500) — 10/40 SCU", md=True),
+              "description": Var("Goal description (its formatting is kept)", "Org priority.", md=True, fmt=True),
               "posted": Var("Posted / Re-posted", "Posted"),
-              "poster": Var("Posted by", "Bolvangar"),
+              "poster": Var("Posted by", "Bolvangar", md=True),
               "call_to_action": Var("What to do next", "Log what you're holding to contribute.")},
         color=0x4FC3F7, color_note="Green once the goal is met."),
     "op_closed": Template(
@@ -317,6 +322,6 @@ TEMPLATES: dict[str, Template] = {
         title="📜 {heading}: {name}",
         description=None,          # attendance / money / loot are built in code
         vars={"heading": Var("Op record / Op record updated", "Op record"),
-              "name": Var("Op name", "Rockbreaker")},
+              "name": Var("Op name", "Rockbreaker", md=True)},
         color=0x4FC3F7, color_note="Amber when an updated record is posted."),
 }
