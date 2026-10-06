@@ -13788,5 +13788,71 @@ class FeedBootTests(unittest.TestCase):
         asyncio.run(app._boot_feed_refresh())          # logged, not raised
 
 
+class ImagePreviewToggleTests(unittest.TestCase):
+    """Slice 2b: in-app previews of LINKED images — admin toggle, off by
+    default, known hosts only (never `https:`), reflected in the CSP."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "is_admin": True}
+        cls._user = dict(cls._admin)
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._user.clear(); self._user.update(self._admin)
+        db.set_setting("notify_external_preview", "")
+
+    def _img_src(self, csp):
+        return next(d for d in csp.split(";") if d.strip().startswith("img-src")).strip()
+
+    def test_off_by_default(self):
+        self.assertEqual(self._img_src(app._csp("n")), "img-src 'self' data:")
+        self.assertEqual(self.client.get("/api/me").json()["image_preview_hosts"], [])
+        s = self.client.get("/api/settings").json()
+        self.assertFalse(s["notify_external_preview"])
+        self.assertEqual(s["image_preview_known_hosts"], list(app.IMAGE_PREVIEW_HOSTS))
+
+    def test_on_widens_img_src_to_exactly_the_known_hosts(self):
+        r = self.client.post("/api/settings", json={"notify_external_preview": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["notify_external_preview"])
+        img = self._img_src(self.client.get("/").headers["content-security-policy"])
+        self.assertEqual(img, "img-src 'self' data: " +
+                         " ".join(f"https://{h}" for h in app.IMAGE_PREVIEW_HOSTS))
+        self.assertNotIn(" https: ", img + " ")             # never any-https
+        self.assertNotIn("*", img)
+        self.assertEqual(self.client.get("/api/me").json()["image_preview_hosts"],
+                         list(app.IMAGE_PREVIEW_HOSTS))
+        self.client.post("/api/settings", json={"notify_external_preview": False})
+        self.assertEqual(self._img_src(self.client.get("/").headers["content-security-policy"]),
+                         "img-src 'self' data:")
+
+    def test_only_admins_can_turn_it_on(self):
+        self._user["is_admin"] = False
+        r = self.client.post("/api/settings", json={"notify_external_preview": True})
+        self.assertEqual(r.status_code, 403)
+        self.assertFalse(app.external_image_preview())
+
+    def test_rest_of_the_policy_is_unchanged(self):
+        db.set_setting("notify_external_preview", "1")
+        csp = app._csp("NONCE")
+        self.assertIn("script-src 'self' 'nonce-NONCE'", csp)
+        self.assertIn("connect-src 'self'", csp)
+        self.assertIn("default-src 'self'", csp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -4542,9 +4542,26 @@
           <div class="muted" id="oi-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
           <div class="muted" style="font-size:12px; margin-top:6px;">
             To see it in Discord, press <b>Test</b> on any connected webhook above.
-            A linked image isn't previewed here: loading it would tell the image host
-            which members opened this page.
+            A linked image is only previewed here if you turn on linked-image previews below.
           </div>
+        </div>
+        <div class="panel admin-grp" id="img-preview-panel">
+          <h2>LINKED IMAGE PREVIEWS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px;">
+            When an announcement image is a <b>link</b> rather than an upload, Discord shows it in the
+            post but the app doesn't load it. Turn this on to preview linked images inside the app,
+            on the event page and in the forms, but only from these established image hosts:
+            <span id="img-preview-hosts"></span>. Links to any other site are never previewed.
+          </div>
+          <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
+            <input type="checkbox" id="img-preview-toggle"> Preview linked images from these hosts
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:6px;">
+            Privacy: each time a member's browser loads a preview, that image host sees the member's
+            IP address (roughly where they are and their internet provider), the time, and their
+            browser and language. It doesn't see who they are in the app or which page they were on.
+          </div>
+          <div class="muted" id="img-preview-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
         </div>
       </section>
       <section class="set-sec" data-sec="apps" aria-label="App settings" hidden>
@@ -9917,6 +9934,15 @@ BIOME_SELECTS.forEach(id => $(id).onchange = () => toggleOther(id));
 
 // ---------- auth gate / account ----------
 let currentMe = null;
+// Hosts the app may load a LINKED announcement image from ([] = the admin's
+// preview toggle is off). Mirrors the CSP img-src the page loaded with.
+let imagePreviewHosts = [];
+function previewHost(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && imagePreviewHosts.includes(u.hostname) ? u.hostname : null;
+  } catch { return null; }
+}
 
 function renderAccount(me) {
   currentMe = me;
@@ -9933,6 +9959,7 @@ function renderAccount(me) {
   myIdentity = { handles: me.handles || [], primary_handle: me.primary_handle || null,
                  directory_opt_out: !!me.directory_opt_out };
   myProfileTags = me.playstyle_tags || [];
+  imagePreviewHosts = me.image_preview_hosts || [];
   pinnedIds = new Set(me.pinned_ids || []);
   activeSurveyZone = (typeof me.active_survey_zone === "number") ? me.active_survey_zone : null;
   // The watcher-token panel is for any member; the org-administration sections are
@@ -13863,7 +13890,9 @@ async function renderDetailBody(e) {
     // An uploaded banner is the org's own art, served by us — shown here too.
     // A linked one isn't loaded (CSP + privacy, design §4.7).
     (e.notify_image && e.notify_image.kind === "upload"
-      ? `<img class="ev-banner" src="/api/notify-images/${encodeURIComponent(e.notify_image.hash)}" alt="">` : "") +
+      ? `<img class="ev-banner" src="/api/notify-images/${encodeURIComponent(e.notify_image.hash)}" alt="">`
+      : e.notify_image && e.notify_image.kind === "url" && previewHost(e.notify_image.url)
+      ? `<img class="ev-banner" src="${esc(e.notify_image.url)}" referrerpolicy="no-referrer" alt="">` : "") +
     meta + missionDetailsView(e, tax) + templateProvenanceHtml(e) + eventMoneyView(e) +
     (e.op ? `<div class="ev-op-line">${e.op.phase === "closed"
         ? `✓ This event has a mission record. <a href="#/ops/${e.op.id}">View the record →</a>`
@@ -14748,9 +14777,25 @@ function renderEventImageNow() {
     prev.src = `/api/notify-images/${encodeURIComponent(ref.hash)}`; prev.hidden = false;
     what.textContent = "Uploaded image";
   } else {
-    // A linked image is never loaded here (CSP + it would tell the host who
-    // opened the form); Discord fetches it when the post goes out.
-    what.innerHTML = `Linked image: <span class="muted">${esc(ref.url)}</span>`;
+    // A linked image loads only from an admin-approved known host, and even
+    // then only on a click: the host sees whoever loads it (design §4.7).
+    const host = previewHost(ref.url);
+    what.innerHTML = `Linked image: <span class="muted">${esc(ref.url)}</span>` +
+      (host ? ` <button class="ev-btn" id="ev-f-imgload">Load preview from ${esc(host)}</button>` : "");
+    const load = $("ev-f-imgload");
+    if (load) load.onclick = () => {
+      prev.onload = () => {
+        const w = prev.naturalWidth, h = prev.naturalHeight;
+        if (w && w < EV_IMG_MIN_W) {
+          warn.textContent = `This image is ${w} × ${h} px. Discord shows images at their real size ` +
+            `and never enlarges them, so it will look small in the post. Use one at least ` +
+            `${EV_IMG_GOOD_W} px wide to fill it.`;
+          warn.hidden = false;
+        }
+      };
+      prev.referrerPolicy = "no-referrer";
+      prev.src = ref.url; prev.hidden = false; load.remove();
+    };
   }
 }
 
@@ -27490,6 +27535,8 @@ function renderDiscordRows(webhooks) {
 
 function applyDiscordSettings(s) {
   renderDiscordRows(s.discord_webhooks);
+  if ("notify_external_preview" in s) $("img-preview-toggle").checked = !!s.notify_external_preview;
+  if (s.image_preview_known_hosts) $("img-preview-hosts").textContent = s.image_preview_known_hosts.join(", ");
   if ("notify_org_image" in s) renderOrgImage(s.notify_org_image);
   if (document.activeElement !== $("discord-lead"))
     $("discord-lead").value = s.discord_reminder_lead_min || 30;
@@ -27570,6 +27617,14 @@ function renderOrgImage(ref) {
   } else {
     glyph.textContent = "🔗";
     src.textContent = ref.url;   // textContent: a URL is data, never markup
+    const host = previewHost(ref.url);
+    if (host) {
+      const b = document.createElement("button");
+      b.textContent = `Load preview from ${host}`;
+      b.style.marginLeft = "8px";
+      b.onclick = () => { img.referrerPolicy = "no-referrer"; img.src = ref.url; img.hidden = false; glyph.hidden = true; b.remove(); };
+      src.appendChild(b);
+    }
   }
 }
 
@@ -27617,6 +27672,31 @@ $("oi-remove").onclick = async () => {
   if (!(await confirmDialog("Announcements will post without an image until you pick one again.",
       { title: "Remove the org image?", confirmLabel: "Remove", danger: true }))) return;
   if (await orgImageRequest("DELETE", null, "removing…")) $("oi-status").textContent = "removed";
+};
+
+// Linked-image previews (design §4.7): off by default; turning it on is a
+// privacy decision for the whole org, so it's confirm-gated and says why.
+$("img-preview-toggle").onchange = async () => {
+  const box = $("img-preview-toggle"), st = $("img-preview-status"), on = box.checked;
+  if (on && !(await confirmDialog(
+      "Each time a member's browser loads a preview, the image host sees their IP address " +
+      "(roughly where they are and their internet provider), the time, and their browser and " +
+      "language. It doesn't learn who they are in the app or which page they were on. Only the " +
+      "listed hosts are ever previewed, so an organizer can't point a preview at a server they " +
+      "run. Discord shows linked images either way.",
+      { title: "Preview linked images in the app?", confirmLabel: "Turn on" }))) {
+    box.checked = false; return;
+  }
+  st.textContent = "saving…";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notify_external_preview: on }) });
+    if (!r.ok) throw new Error();
+    // The page's security policy was fixed when it loaded, so this tab only
+    // changes after a reload; members get it on their next page load.
+    st.textContent = on ? "on — reload the page to see previews" : "off — previews stop on the next page load";
+  } catch { box.checked = !on; st.textContent = "failed to save — try again"; }
 };
 
 $("discord-lead-save").onclick = async () => {
