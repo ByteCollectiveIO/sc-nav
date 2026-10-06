@@ -110,6 +110,7 @@ deputy, not to the organizer.
     "excused": 0.0, "absent": 0.0
   },
   "expenses_first": true,         // reimburse expenses before splitting
+  "bonuses": "pool",              // pool | keep — achievement bonus cash (§6.1)
   "loot": {
     "mode": "random",             // random | weighted | round_robin
     "need_weight": 1.5,           // weighted only: Need = ×1.5 vs Want ×1.0
@@ -119,8 +120,7 @@ deputy, not to the organizer.
     "eligible": ["present", "late", "left_early"],
     "rotation": null              // round_robin: null = this op only, or a
                                   // named rotation carried across ops (§7.5)
-  },
-  "transfer_fee_pct": 0           // see §6.4 — pending in-game verification
+  }
 }
 ```
 
@@ -197,8 +197,12 @@ contract, and expenses come out of whoever paid them. So a split has to know
 "everyone gets 212k".
 
 Ledger entries (`op_ledger`):
-- **Income:** amount, *held by* (a roster row), a note ("Cargo sale at
-  Baijini", "Bounty payout").
+- **Income:** amount, *held by* (a roster row), a note ("Sold the loot at
+  Grim HEX", "Quantanium sale at CRU-L1"). In practice this is **loot sold and
+  resources gathered** (mining, salvage, cargo). That's the money the game
+  leaves in one person's wallet, so it's what needs dividing. Achievement
+  bonus cash is income too. The game pays it only to the player who earned
+  it, so it's flagged as a bonus and the `bonuses` rule (§4.1) applies.
 - **Expense:** amount, *paid by* (a roster row), category (fuel, repair,
   cargo purchase, ammo, rental, other), a note.
 
@@ -206,18 +210,52 @@ Any participant can add an entry that names *themselves* as holder or payer
 (they know what they sold). The organizer and deputies can add any entry.
 Every entry shows who entered it, and edits are logged.
 
-**Shared contracts:** income that SC already split through contract sharing
-is *not* pot money and shouldn't be entered. The settle screen says so. That
-has to be verified in-game before the copy is written (§12).
+**Bonuses** follow the rule chosen before the op:
+- `pool` (the default) puts the bonus in the pot like any income. That is the
+  leader's "same rules for everyone": the player who landed the kill shot
+  isn't paid more for it.
+- `keep` records the bonus on the ledger, so it's visible, but leaves it out
+  of the pot, so the earner keeps it.
+
+Changing the rule mid-op is an amendment (§4.2).
+
+### 6.1.1 Contracts (paid by the game, never split here)
+
+A shared contract pays **equal cuts to every party member who had it
+shared**, automatically (confirmed in-game 2026-09-27). The tool doesn't
+recalculate or redistribute that money. What organizers need instead is to
+**tell everyone which contracts to accept before the op starts**, and keep
+what they paid on the record.
+
+- **Contract list** on the op, built in **Setup**. Each entry has:
+  - a name ("VHRT bounty — Yela", "Bunker: Kareah");
+  - an optional note (where to pick it up, who shares it);
+  - an **amount**: what it pays. It can be entered as the advertised payout
+    beforehand and corrected to the actual payout at Settle.
+- The list sits at the top of the op page during Setup and Live. A **✓ I
+  have it** tick lets each player confirm they've accepted or been shared
+  each contract, so the organizer can see who still needs it before going
+  live. The ticks are recorded, but they're a checklist, not attendance.
+- **Templates carry the list** (names and notes; amounts optional). A "Friday
+  bunker" template can say which contracts to grab every time.
+- **The money stays out of the pot and out of transfers.** The ledger shows
+  contracts as their own section: **"Paid by the game, split automatically:
+  N contracts, X aUEC."** It sits beside the pot, so the Mission record shows
+  the op's whole take without anyone moving that money twice.
+- Edits after Setup are logged like everything else. At Settle, correcting
+  an amount to the actual payout needs no reason, since that's what the step
+  is for. After Close, it needs a reopen.
 
 ### 6.2 The split
 
 ```
-pot        = Σ income − (expenses_first ? Σ expenses : 0)
+pot        = Σ poolable income − (expenses_first ? Σ expenses : 0)
+             // contracts are never income here — the game already paid them (§6.1.1)
+             // poolable = everything except bonuses under bonuses: "keep"
 weight_i   = share_override_i ?? rules.shares[attendance_i]
 share_i    = pot × weight_i / Σ weight
 owed_i     = share_i + (expenses_first ? expenses_paid_i : 0)
-balance_i  = income_held_i − owed_i       // + sends, − receives
+balance_i  = poolable_held_i − owed_i     // + sends, − receives
 ```
 
 - aUEC is an integer. Shares are rounded with the **largest-remainder**
@@ -242,15 +280,20 @@ note, and that's visible on the record. The op can close with transfers
 outstanding. The record shows them as open, and the Ops tile nags the people
 involved.
 
-Transfers are re-derived whenever the ledger or shares change *until the
-first one is marked sent*. After that, a change adds **correction transfers**
-on top instead of reshuffling payments already made, and says so.
+**Only a payment someone has marked is fixed** (as built, slice 3). The
+rest are planned fresh from what's still owed after the marked ones, so a
+change never reshuffles a payment already made. The first design locked the
+*whole* plan in on the first mark. In testing, that produced round-trip
+"corrections" for money nobody had sent yet: after a rules amendment,
+Kestrel was told to pay back part of a payment Vex hadn't made. A planned
+payment is tagged **correction** only when the sender was already paid in,
+meaning they're handing back an overpayment.
 
 ### 6.4 Transfer fee
 
-Unknown: whether a player-to-player mobiGlas transfer takes a cut. If it does,
-`transfer_fee_pct` grosses up each transfer so the recipient nets their share,
-and the sender covers it. Default 0 until measured.
+None. A player-to-player aUEC transfer arrives in full (confirmed in-game
+2026-09-27), so a transfer's amount is exactly what the recipient nets and
+there's no fee setting.
 
 ## 7. Loot
 
@@ -468,8 +511,11 @@ operations      id, event_id NULL, name, organizer_id, deputies JSON, phase,
 op_roster       id, op_id, discord_id NULL, guest_name NULL, guest_handle NULL,
                 signed_up, attendance, joined_at, left_at, group_id,
                 share_override, share_reason, linked_from_guest (bool)
-op_ledger       id, op_id, kind income|expense, amount, roster_id, category,
-                note, entered_by, created_at, voided_at, void_reason
+op_ledger       id, op_id, kind income|expense, bonus (bool), amount, roster_id,
+                category, note, entered_by, created_at, voided_at, void_reason
+op_contracts    id, op_id, name, note, amount, amount_actual (bool), sort,
+                created_by, created_at, updated_at
+op_contract_ticks  contract_id, roster_id, at   -- "✓ I have it"
 op_transfers    id, op_id, from_roster, to_roster, amount, sent_at, received_at,
                 disputed, note, correction (bool)
 op_loot         id, op_id, item_id NULL, name, qty, found_by, note, created_at
@@ -500,9 +546,12 @@ roll writes. All routes are private under `auth_gate` (none go in
 
 ## 12. Needs in-game verification before copy or code
 
-1. **Transfer fee:** does a player-to-player aUEC transfer take a cut?
-2. **Contract sharing:** which income is auto-split among party members (and
-   so stays out of the pot)?
+1. ~~**Transfer fee:**~~ **Answered 2026-09-27: no fee.** §6.4.
+2. ~~**Contract sharing:**~~ **Answered 2026-09-27:** a shared contract pays
+   equal cuts to every party member who had it shared; achievement bonus cash
+   goes only to the player who earned it and isn't split by the game. The
+   decision (maintainer): the game's contract split stands. Contracts are a
+   pre-op checklist with a recorded amount (§6.1.1), never pot money.
 3. **Game.log lines** for own death, incap → revive, respawn, and whether any
    *other* player's death appears. It needs one capture from an FPS op.
 4. **Mission reward lines** (for the future income nudge in §8).
@@ -626,9 +675,20 @@ event_templates  id, name, version, official (bool), created_by, created_at,
                  rules JSON NULL   -- §4.1 rule set (NULL until slice 2 lands)
                  groups JSON       -- fleet layout
                  builtin_key NULL  -- set on a "copy to customize"
-event_template_history  template_id, version, actor_id, change JSON, created_at
-events           + template_id NULL, template_version NULL, rules JSON NULL
+event_template_history  template_id, version, actor_id, action, snapshot JSON,
+                 created_at      -- append-only
+events           + template_id NULL, template_version NULL, template_name NULL,
+                 template_snapshot JSON NULL, details JSON, rules JSON NULL
 ```
+
+**As built (slice 1):** the event stores a full **snapshot** of the template
+contents it was created from (`template_snapshot`), and the deviation chips
+diff against that snapshot. The template history is not consulted. This keeps
+the diff correct for built-ins (whose old versions live only in past
+releases) and for deleted templates, and it needs no lookup. `event_templates`
+uses `AUTOINCREMENT`: a reused rowid would graft a deleted template's history
+onto the next template and re-point its events. `rules` is not on `events`
+yet; it arrives with slice 3.
 
 Endpoints: `GET/POST /api/event-templates`, `PATCH/DELETE
 /api/event-templates/{id}`, `POST /api/event-templates/{id}/official`
@@ -647,7 +707,8 @@ Endpoints: `GET/POST /api/event-templates`, `PATCH/DELETE
    template), the Ops tile, the check-in grid, and phase transitions. The
    Mission record card is attendance-only at this point, plus the calendar
    and Past-board reachability.
-3. **Money.** Ledger, `derive_op_split`, `plan_op_transfers`, sent/received,
+3. **Money.** Contract list (Setup checklist + amounts + "✓ I have it",
+   carried by templates), ledger, `derive_op_split`, `plan_op_transfers`, sent/received,
    correction transfers, amendments, the rule-set panel with org defaults,
    and the rules section in templates plus the §14.3 deviation chips.
 4. **Loot.** Items, intents over WS, the three modes, seed commitment and
