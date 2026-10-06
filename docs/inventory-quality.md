@@ -1,6 +1,6 @@
 # Inventory item quality (#151)
 
-Status: **✅ all five steps built 2026-09-12 (holding identity · goal gating + split · pledged stat preview · marketplace lot quality + list-from-inventory · band-grouped rollup) — awaiting dev-server test, not yet released** — researched against SC Alpha 4.10.
+Status: **✅ all five steps built 2026-09-12 (holding identity · goal gating + split · pledged stat preview · marketplace lot quality + list-from-inventory · band-grouped rollup) — SHIPPED v1.13.0, user-verified live** — researched against SC Alpha 4.10.
 
 ## The problem
 

@@ -1,6 +1,6 @@
 # Discord notification customization (images + message templates)
 
-**Status:** ✅ all slices built 2026-10-05/06 (1 attachments + org image · 2 per-event banner · 2b known-host previews · 3 LFG/danger/goal embeds · 4 template registry · 5 template editor); unreleased. Written against v1.19.1.
+**Status:** ✅ all slices built 2026-10-05/06 (1 attachments + org image · 2 per-event banner · 2b known-host previews · 3 LFG/danger/goal embeds · 4 template registry · 5 template editor); SHIPPED v1.20.0 (2026-10-06). Written against v1.19.1.
 **Revised 2026-10-06 (security sweep):** event banners are **link-only** — the member upload path in §3.2 (S1's "upload" half, S9, the `notify_images` table, the sweep) was removed: 30 uploads/h × 4 MB per member with a startup-only sweep had no storage ceiling, and an event-referenced file was never swept. The ADMIN org-image upload (§3.3, one file replaced in place) stays. Discord-CDN links are still refused; members host banners on an image site. Same sweep: every template var carrying member text is now `md` (a nickname `[text](url)` rendered as a masked link), and the in-app `discordTime` guards non-finite dates (a crafted `<t:…:R>` threw and blanked the event page). The §3.2 upload text below is kept as the historical design.
 **Origin:** a self-hosting org asked to put its own graphics on event
 announcements. That raised the general question of what an admin can change
