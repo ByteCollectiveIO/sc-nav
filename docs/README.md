@@ -17,6 +17,7 @@ drift — trust grep and CI, not the citation.
 |---|---|
 | [apps/README.md](apps/README.md) | **User-facing showcase & how-to guides** — one page per app (screenshots + walkthroughs). The player-facing counterpart to the design specs below |
 | [product-overview.md](product-overview.md) | **The consolidated map**: apps, platform services, data sources, conventions |
+| [implementation-notes.md](implementation-notes.md) | **As-built per-feature detail** moved out of `CLAUDE.md` (2026-10-06): settled user calls, in-game measurements, past-bug history, one section per endpoint group. Grep it for the function you're about to change |
 | [feature-backlog.md](feature-backlog.md) | Fast-follows, parked items, shipped log (#36 shipped v0.59.0; #37 survey platform slices 0–5 shipped v0.64–0.72, rest designed) |
 | [org-deployment-guide.md](org-deployment-guide.md) | **Runbook for an org self-hosting an instance** — VPS sizing, registrar→Cloudflare DNS migration (§5, step-by-step incl. DNSSEC + email records), Cloudflare Tunnel + Portainer install, day-one settings, backups, maintenance, runbook. Written for volunteers, not sysadmins. Printable copy: [SC-Nav-Org-Deployment-Guide.pdf](SC-Nav-Org-Deployment-Guide.pdf) — **rendered, not a source of truth; regenerate it with `tools/render_deploy_guide.py` when the markdown changes** (last re-verified 2026-09-09 against v1.11.0) |
 | [security-review-2026-08.md](security-review-2026-08.md) | **Threat model + security posture** across four surfaces (watcher→app, app→member, insider, external): what was fixed, what is verified sound and shouldn't be re-reviewed, what's still open and in what order |
@@ -75,4 +76,5 @@ drift — trust grep and CI, not the citation.
 |---|---|---|
 | [monetization-and-deployment.md](monetization-and-deployment.md) | 🅿 parked 2026-06-28 | CIG fan-rules research; non-commercial rule; CIG inquiry not drafted |
 | [upstream-wiki-pyro-frame-report.md](upstream-wiki-pyro-frame-report.md) | 📝 drafted 2026-10-04, not yet filed | Ready-to-paste bug report for the SC Wiki API: Pyro system-frame `x`/`y` rotated −85.23° vs the game (our side fixed in PR #224 — `tools/sync_locations.py` frame alignment) |
+| [archive/claude-md-audit-2026-10-06.md](archive/claude-md-audit-2026-10-06.md) | 📦 record | The 450-rule audit behind the CLAUDE.md slim-down: each rule's protection (test / comment / none) and which stayed in CLAUDE.md |
 | [archive/feature-backlog-full-2026-07-04.md](archive/feature-backlog-full-2026-07-04.md) | 📦 archive | Full pre-consolidation backlog with every design's original prose (#1–25) |
