@@ -8631,10 +8631,14 @@ def _notify_bg(coro) -> None:
 # rendering in each member's own timezone.
 _EVENT_POST_DESC_MAX = 1500
 _EVENT_POST_DETAIL_MAX = 400
+# Labels are plain bold words, no per-line emoji: a full-colour icon on every
+# line out-weighed the facts and read as cartoonish (dev screenshot,
+# 2026-10-05). The title keeps its one emoji so the post is findable in a
+# busy channel.
 _EVENT_DETAIL_LINES = (             # (detail key, label) — the mission briefing
-    ("mission", "🎯 **Mission**"), ("roe", "⚔ **ROE**"), ("comms", "🎙 **Comms**"),
-    ("loadout", "🎒 **Loadout**"), ("medical", "🩹 **Medical**"),
-    ("prereqs", "📋 **Prerequisites**"))
+    ("mission", "**Mission**"), ("roe", "**ROE**"), ("comms", "**Comms**"),
+    ("loadout", "**Loadout**"), ("medical", "**Medical**"),
+    ("prereqs", "**Prerequisites**"))
 
 
 def _fmt_duration(minutes) -> str:
@@ -8653,32 +8657,32 @@ def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
     plain = lambda v: _md_plain((v or "").strip())
 
     start = ev.get("start_at")
-    when = f"🕒 **Starts** {_discord_ts(start)} ({_discord_ts(start, 'R')})"
+    when = f"**Starts** {_discord_ts(start)} ({_discord_ts(start, 'R')})"
     if ev.get("duration_min"):
         when += f" · {_fmt_duration(ev['duration_min'])}"
     facts = [when]
-    places = [f"📍 **Rally point** {plain(ev.get('location'))}" if (ev.get("location") or "").strip() else "",
-              f"🎯 **Location** {plain(ev.get('event_location'))}" if (ev.get("event_location") or "").strip() else ""]
+    places = [f"**Rally point** {plain(ev.get('location'))}" if (ev.get("location") or "").strip() else "",
+              f"**Location** {plain(ev.get('event_location'))}" if (ev.get("event_location") or "").strip() else ""]
     if any(places):
         facts.append(" · ".join(p for p in places if p))
     fill = nav_core.derive_event_fill(ev, db.list_signups(ev["id"]))
     cap = ev.get("max_players")
-    crew = f"👥 **Crew** {fill['total_going']} / {cap if cap else '∞'} going"
+    crew = f"**Crew** {fill['total_going']} / {cap if cap else '∞'} going"
     if ev.get("min_players"):
         crew += f" (min {ev['min_players']})"
     facts.append(crew)
     roles = [f"{_md_plain(r['role'])} {r['filled']}/{r['needed']}"
              for r in fill.get("roster") or [] if r.get("needed")]
     if roles:
-        facts.append("🧩 **Roles** " + " · ".join(roles))
+        facts.append("**Roles** " + " · ".join(roles))
     if ev.get("signup_deadline"):
-        facts.append(f"⛔ **Signups close** {_discord_ts(ev['signup_deadline'])}")
+        facts.append(f"**Signups close** {_discord_ts(ev['signup_deadline'], 'f')}")
     if ev.get("organizer_id"):
-        facts.append(f"🧭 **Organizer** {_md_plain(_resolve_member_name(ev['organizer_id'], None))}")
+        facts.append(f"**Organizer** {_md_plain(_resolve_member_name(ev['organizer_id'], None))}")
     kinds = " · ".join(x for x in (", ".join(ev.get("type") or []),
                                    ", ".join(ev.get("category") or [])) if x)
     if kinds:
-        facts.append(f"🏷 **Type** {_md_plain(kinds)}")
+        facts.append(f"**Type** {_md_plain(kinds)}")
 
     details = ev.get("details") or {}
     roe_labels = {r["key"]: r["label"] for r in event_taxonomy.ROE}
