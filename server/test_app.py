@@ -13688,55 +13688,51 @@ class EventAnnounceCardTests(unittest.TestCase):
              "status": "scheduled", "created_at": now, "updated_at": now, **over}
         return db.get_event(db.create_event(d))
 
-    def _fields(self, embed):
-        return {f["name"]: f for f in embed.get("fields", [])}
+    def _lines(self, embed):
+        return (embed.get("description") or "").split("\n")
 
     def test_full_event_card(self):
         ev = self._ev(description="Bring a Vulture.", duration_min=90,
                       location="Baijini Point", event_location="Yela belt",
                       min_players=5, max_players=7,
-                      roles=[{"role": "Salvage", "needed": 7}],
+                      roles=[{"role": "Salvage", "needed": 7}, {"role": "Escort", "needed": 2}],
                       signup_deadline="2026-10-15T01:34:00+00:00",
                       details={"roe": "pve_only", "comms": "Org TS, channel 2",
                                "prereqs": "Own a salvage ship"})
         e = app._event_created_embed(ev)
         self.assertEqual(e["title"], "📅 New event: Salvage night")
-        self.assertIn("Bring a Vulture.", e["description"])
-        f = self._fields(e)
-        self.assertIn("<t:", f["🕒 Starts"]["value"])
-        self.assertEqual(f["⏱ Length"]["value"], "1 h 30 min")
-        self.assertEqual(f["📍 Rally point"]["value"], "Baijini Point")
-        self.assertEqual(f["🎯 Event location"]["value"], "Yela belt")
-        self.assertEqual(f["👥 Crew"]["value"], "0 / 7 going (min 5)")
-        self.assertEqual(f["🧩 Roles"]["value"], "Salvage 0/7")
-        self.assertIn("<t:", f["⛔ Signups close"]["value"])
-        self.assertIn("🧭 Organizer", f)
-        self.assertEqual(f["🏷 Type"]["value"], "Salvage Op · PvE, Social")
-        self.assertFalse(f["🏷 Type"]["inline"])
-        self.assertEqual(f["⚔ Rules of engagement"]["value"], "PvE only")   # label, not key
-        self.assertEqual(f["🎙 Comms"]["value"], "Org TS, channel 2")
-        self.assertFalse(f["📋 Prerequisites"]["inline"])
-        self.assertLessEqual(len(e["fields"]), 25)                          # Discord's cap
+        self.assertNotIn("fields", e)            # facts live in the body, not 3 narrow columns
+        blocks = e["description"].split("\n\n")
+        self.assertEqual(blocks[0], "Bring a Vulture.")
+        facts = blocks[1].split("\n")
+        self.assertRegex(facts[0], r"^🕒 \*\*Starts\*\* <t:\d+:F> \(<t:\d+:R>\) · 1 h 30 min$")
+        self.assertEqual(facts[1], "📍 **Rally point** Baijini Point · 🎯 **Location** Yela belt")
+        self.assertEqual(facts[2], "👥 **Crew** 0 / 7 going (min 5)")
+        self.assertEqual(facts[3], "🧩 **Roles** Salvage 0/7 · Escort 0/2")
+        self.assertRegex(facts[4], r"^⛔ \*\*Signups close\*\* <t:\d+:F>$")
+        self.assertTrue(facts[5].startswith("🧭 **Organizer** "))
+        self.assertEqual(facts[6], "🏷 **Type** Salvage Op · PvE, Social")
+        self.assertEqual(blocks[2].split("\n"), [
+            "**Mission briefing**", "⚔ **ROE** PvE only",        # label, not the key
+            "🎙 **Comms** Org TS, channel 2", "📋 **Prerequisites** Own a salvage ship"])
 
-    def test_minimal_event_shows_no_empty_fields(self):
+    def test_minimal_event_shows_no_empty_facts(self):
         e = app._event_created_embed(self._ev())
-        f = self._fields(e)
-        for absent in ("⏱ Length", "📍 Rally point", "🎯 Event location", "🧩 Roles",
-                       "⛔ Signups close", "⚔ Rules of engagement", "🎯 Mission"):
-            self.assertNotIn(absent, f)
-        self.assertEqual(f["👥 Crew"]["value"], "0 / ∞ going")
-        self.assertNotIn("description", e)
-        self.assertFalse(any(v["value"] in ("", "—") for v in e["fields"]))
+        text = e["description"]
+        for absent in ("Rally point", "Location", "Roles", "Signups close",
+                       "Mission briefing", " · 0 min", "—"):
+            self.assertNotIn(absent, text)
+        self.assertIn("👥 **Crew** 0 / ∞ going", text)
+        self.assertEqual(len(text.split("\n\n")), 1)        # no description, no briefing
 
     def test_member_text_is_escaped(self):
         ev = self._ev(description="**free loot** [claim](https://evil.example)",
                       location="Port_Tressler", details={"comms": "`ts`"})
-        e = app._event_created_embed(ev)
-        self.assertIn(r"\*\*free loot\*\*", e["description"])
-        self.assertIn(r"\[claim\]", e["description"])        # no masked link
-        f = self._fields(e)
-        self.assertEqual(f["📍 Rally point"]["value"], r"Port\_Tressler")
-        self.assertEqual(f["🎙 Comms"]["value"], r"\`ts\`")
+        d = app._event_created_embed(ev)["description"]
+        self.assertIn(r"\*\*free loot\*\*", d)
+        self.assertIn(r"\[claim\]", d)                       # no masked link
+        self.assertIn(r"📍 **Rally point** Port\_Tressler", d)
+        self.assertIn(r"🎙 **Comms** \`ts\`", d)
 
     def test_long_description_is_clipped_with_a_link(self):
         orig = app.PUBLIC_BASE_URL
