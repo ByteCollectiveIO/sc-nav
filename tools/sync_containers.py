@@ -6,7 +6,7 @@ rotating-frame position math runs on) and the optional starmap POI catalog
 are VENDORED: the server never fetches them at runtime, it reads only the
 committed files (2026-08-07 decision — a mid-flight upstream revision deleted
 station containers, relocated belt segments 33 Gm, and silently overwrote
-every deployment's cache; see CLAUDE.md Nav/live and the ghost-anchor
+every deployment's cache; see docs/implementation-notes.md Nav/live and the ghost-anchor
 machinery). This tool is the only path new upstream data takes into the app,
 and its diff report is what a human reviews before committing:
 
