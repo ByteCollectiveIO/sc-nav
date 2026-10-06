@@ -14081,5 +14081,70 @@ class NotifyGoldenTests(unittest.TestCase):
             self.assertEqual(got[k], want[k], k)
 
 
+class NotifyTemplateEngineTests(unittest.TestCase):
+    """notify_templates: substitution only, the drop rule at segment / line /
+    paragraph level, literal braces, and slot-aware escaping."""
+
+    def setUp(self):
+        import notify_templates
+        self.nt = notify_templates
+
+    def test_substitution_and_literal_braces(self):
+        self.assertEqual(self.nt.render_text("Hi {name}! {{not a var}}", {"name": "Ace"}),
+                         "Hi Ace! {not a var}")
+
+    def test_no_attribute_access_or_format_specs(self):
+        # Only bare {lowercase_name} matches; anything fancier stays literal text.
+        out = self.nt.render_text("{name.__class__} {name!r} {name:>9} {Name}", {"name": "x"})
+        self.assertEqual(out, "{name.__class__} {name!r} {name:>9} {Name}")
+
+    def test_values_are_never_re_expanded(self):
+        self.assertEqual(self.nt.render_text("{a}", {"a": "{b}", "b": "boom"}), "{b}")
+
+    def test_drop_rule_segment_line_paragraph(self):
+        tpl = "Intro\n\n**Starts** {start} · {length}\n**Rally** {rally}\n\n**Briefing**\n{mission}"
+        self.assertEqual(self.nt.render_text(tpl, {"start": "now"}), "Intro\n\n**Starts** now")
+        self.assertEqual(self.nt.render_text(tpl, {"start": "now", "length": "1 h", "mission": "Go"}),
+                         "Intro\n\n**Starts** now · 1 h\n\n**Briefing**\nGo")
+
+    def test_text_only_parts_always_stay(self):
+        self.assertEqual(self.nt.render_text("Header\nStatic · text", {}), "Header\nStatic · text")
+
+    def test_escaping_is_description_only(self):
+        esc = lambda v: v.replace("_", "\\_")
+        r = self.nt.render("lfg_posted", {"icon": "🔎", "heading": "Looking for members",
+                                          "poster": "Port_Ace", "note": "a_b"}, escape=esc)
+        self.assertEqual(r["title"], "🔎 Looking for members: Port_Ace")   # titles don't render markdown
+        self.assertEqual(r["description"], "a\\_b")
+
+    def test_registry_templates_use_only_declared_vars(self):
+        for key, t in self.nt.TEMPLATES.items():
+            for slot in self.nt.SLOTS:
+                text = getattr(t, slot)
+                if text:
+                    self.assertLessEqual(self.nt.template_vars(text), set(t.vars), (key, slot))
+            self.assertIn(t.category, notify.CATEGORIES, key)
+
+    def test_builders_supply_exactly_the_declared_vars(self):
+        seen = {}
+        orig = self.nt.render
+
+        def spy(key, values, **kw):
+            seen.setdefault(key, set()).update(values)
+            return orig(key, values, **kw)
+        self.nt.render = spy
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        try:
+            db.init(Path(tmp.name))
+            _notify_golden_run()
+        finally:
+            self.nt.render = orig
+            Path(tmp.name).unlink(missing_ok=True)
+        self.assertEqual(set(seen), set(self.nt.TEMPLATES))          # every template is used
+        for key, names in seen.items():
+            self.assertEqual(names, set(self.nt.TEMPLATES[key].vars), key)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

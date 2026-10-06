@@ -1,6 +1,6 @@
 # Discord notification customization (images + message templates)
 
-**Status:** 🔨 slices 1, 2, 2b and 3 built 2026-10-05/06 (attachments + org image; per-event banner; known-host preview toggle; LFG/danger/goal posts as embeds with the org image); 4–5 design. Written against v1.19.1.
+**Status:** 🔨 slices 1–4 built 2026-10-05/06 (attachments + org image; per-event banner; known-host preview toggle; LFG/danger/goal embeds; template registry); slice 5 (the editor) design. Written against v1.19.1.
 **Origin:** a self-hosting org asked to put its own graphics on event
 announcements. That raised the general question of what an admin can change
 about the messages the app posts to Discord.
@@ -204,6 +204,13 @@ why the art went missing. A notification must never be lost to its decoration.
 - Length caps after rendering are unchanged (`notify.send` already truncates
   title 256, description 4096, field value 1024). Template text itself is capped
   at save time: title 200, description 1,500, footer 200.
+
+**As built (slice 4, 2026-10-06), where it refines the above:**
+- The engine and the shipped wording live in `server/notify_templates.py` (`TEMPLATES`, `render`, `render_text`, `template_vars`). Builders in `app.py` compute RAW values and call `_announcement(key, values, url=, color=, fields=)`.
+- **The drop rule works at three levels, not just lines.** Any part that names variables, all of which came out empty, is left out. A part is a ` · `-separated piece of a line, a line, or a paragraph. This was needed to reproduce today's posts exactly ("Starts … · 1 h 30 min" drops just the length; the "Mission briefing" paragraph vanishes when no detail is set), and it's one rule to explain to admins.
+- **Escaping is per slot, not per variable.** A variable marked `md` (member text) is escaped in the DESCRIPTION only, the one slot Discord renders markdown in. A name moved into a title by an admin won't show stray backslashes.
+- **Byte-identical, proven:** `server/testdata/notify_golden.json` was generated from the pre-registry builders over 26 inputs (committed before the refactor) and `NotifyGoldenTests` replays it. A test also pins that each builder supplies exactly its template's declared variables.
+- Kept identical on purpose and worth a later look: the reminder's place, the listing poster and the goal poster/description go out unescaped, as they always have (the goal description is the org's own markdown by design).
 
 ### 4.2 Slots
 
