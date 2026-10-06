@@ -8729,14 +8729,24 @@ def _fmt_duration(minutes) -> str:
     return f"{h} h {m} min" if h and m else f"{h} h" if h else f"{m} min"
 
 
-def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
-    url = _app_url(f"#/events/{ev['id']}")
-    start = ev.get("start_at")
+def _event_crew(ev: dict) -> tuple[str, str]:
+    """(crew, roles) for an event RIGHT NOW: "1 / 5 going (min 3)" and
+    "Salvage 1/2 · Escort 0/2". Shared by the new-event post (kept live by
+    edits) and the reminder."""
     fill = nav_core.derive_event_fill(ev, db.list_signups(ev["id"]))
     cap = ev.get("max_players")
     crew = f"{fill['total_going']} / {cap if cap else '∞'} going"
     if ev.get("min_players"):
         crew += f" (min {ev['min_players']})"
+    roles = " · ".join(f"{r['role']} {r['filled']}/{r['needed']}"
+                       for r in fill.get("roster") or [] if r.get("needed"))
+    return crew, roles
+
+
+def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
+    url = _app_url(f"#/events/{ev['id']}")
+    start = ev.get("start_at")
+    crew, roles = _event_crew(ev)
     details = ev.get("details") or {}
     roe_labels = {r["key"]: r["label"] for r in event_taxonomy.ROE}
     roe = (details.get("roe") or "").strip()
@@ -8753,8 +8763,7 @@ def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
         "rally_point": (ev.get("location") or "").strip(),
         "event_location": (ev.get("event_location") or "").strip(),
         "crew": crew,
-        "roles": " · ".join(f"{r['role']} {r['filled']}/{r['needed']}"
-                            for r in fill.get("roster") or [] if r.get("needed")),
+        "roles": roles,
         "signups_close": (_discord_ts(ev["signup_deadline"], "f")
                           if ev.get("signup_deadline") else ""),
         "organizer": (_resolve_member_name(ev["organizer_id"], None)
@@ -8773,10 +8782,55 @@ def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
 async def _notify_event_created(ev: dict) -> None:
     if not notify.is_configured("events"):
         return
-    await notify.send(
+    # wait=True: Discord replies with the message, and its id lets us keep the
+    # crew/roles counts in this post current as people sign up (an edit).
+    sent = await notify.send(
         "events", "",
         **_announce(_event_created_embed(ev), event=ev),
-        dedup_key=f"event-created:{ev['id']}")
+        dedup_key=f"event-created:{ev['id']}", wait=True)
+    if isinstance(sent, str):
+        db.set_event_announce_message(ev["id"], sent)
+
+
+# ---- live announcement (the "New event" post keeps its counts current) ----
+# A webhook post is a snapshot, so "Crew 1 / 5 going" froze at creation. Now a
+# signup change, edit or cancellation queues ONE edit of that post, sent
+# _ANNOUNCE_EDIT_DELAY_S later with whatever is true then: a rush of signups
+# costs one Discord call, well inside the webhook rate limit. In-memory on
+# purpose: a restart only drops a pending refresh, and the next change re-queues.
+_ANNOUNCE_EDIT_DELAY_S = 60.0
+_announce_edit_pending: set[int] = set()
+
+
+def _queue_announcement_refresh(event_id: int) -> None:
+    ev = db.get_event(event_id)
+    if not ev or not ev.get("announce_message_id") or event_id in _announce_edit_pending:
+        return
+    _announce_edit_pending.add(event_id)
+    _notify_bg(_refresh_event_announcement(event_id))
+
+
+async def _refresh_event_announcement(event_id: int) -> None:
+    try:
+        await asyncio.sleep(_ANNOUNCE_EDIT_DELAY_S)
+    finally:
+        _announce_edit_pending.discard(event_id)
+    ev = db.get_event(event_id)
+    mid = (ev or {}).get("announce_message_id")
+    if not mid or not notify.is_configured("events"):
+        return
+    e = _event_created_embed(ev)
+    if ev.get("status") == "cancelled":
+        e["title"] = "🚫 Cancelled · " + e.get("title", "")
+        e["color"] = _EMBED_BAD
+    # Discord renders `timestamp` in each reader's own zone next to the footer:
+    # it says how fresh the counts are.
+    e["timestamp"] = datetime.now(timezone.utc).isoformat()
+    if not (e.get("footer") or {}).get("text"):
+        e["footer"] = {"text": "Signups updated"}
+    result = await notify.edit_message("events", mid, **_announce(e, event=ev))
+    if result == "gone":            # deleted in Discord: stop trying to edit it
+        db.set_event_announce_message(event_id, None)
 
 
 async def _notify_event_cancelled(ev: dict) -> None:
@@ -8815,6 +8869,7 @@ async def _notify_event_reminder(ev: dict) -> None:
             "title": ev["title"], "start": _discord_ts(ev["start_at"]),
             "start_relative": _discord_ts(ev["start_at"], "R"),
             "place": (ev.get("event_location") or ev.get("location") or "").strip(),
+            **dict(zip(("crew", "roles"), _event_crew(ev))),
         }, url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN), event=ev))
 
 
@@ -9599,6 +9654,7 @@ async def edit_event(event_id: int, body: EventIn, user: dict = Depends(require_
         db.reset_event_reminder(event_id)
     if updated.get("start_at") != old_start or new_where != old_where:
         _notify_bg(_notify_event_rescheduled(updated, old_start, old_where))
+    _queue_announcement_refresh(event_id)
     return _event_view(updated, user, detail=True)
 
 
@@ -9611,6 +9667,7 @@ async def cancel_event(event_id: int, user: dict = Depends(require_session)):
     _require_event_owner(ev, user)
     db.cancel_event(event_id, datetime.now(timezone.utc).isoformat())
     _notify_bg(_notify_event_cancelled(ev))
+    _queue_announcement_refresh(event_id)
     return {"ok": True, "status": "cancelled"}
 
 
@@ -9663,6 +9720,7 @@ async def signup_event(event_id: int, body: SignupIn,
             status = "waitlist"
     db.upsert_signup(event_id, user["id"], roles, status, body.note,
                      datetime.now(timezone.utc).isoformat())
+    _queue_announcement_refresh(event_id)
     return _event_view(db.get_event(event_id), user, detail=True)
 
 
@@ -9696,6 +9754,7 @@ async def withdraw_signup(event_id: int, user: dict = Depends(require_session)):
     had = db.withdraw_signup(event_id, user["id"])
     if had:
         _promote_from_waitlist(event_id)
+        _queue_announcement_refresh(event_id)
     return _event_view(db.get_event(event_id), user, detail=True)
 
 
@@ -9728,6 +9787,7 @@ async def manage_attendee(event_id: int, body: AttendeeIn,
     else:
         db.upsert_signup(event_id, did, roles, body.status, None,
                          datetime.now(timezone.utc).isoformat())
+    _queue_announcement_refresh(event_id)
     return _event_view(db.get_event(event_id), user, detail=True)
 
 

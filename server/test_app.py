@@ -14335,5 +14335,204 @@ class NotifyTemplateEditorTests(unittest.TestCase):
         self.assertTrue(self.sent[-1]["embed"]["title"].startswith("🚫 Event cancelled"))
 
 
+class NotifyWaitAndEditTests(unittest.TestCase):
+    """notify.send(wait=True) returns the posted message's id; edit_message
+    PATCHes it (the live event announcement)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._orig_post = notify._post
+
+    @classmethod
+    def tearDownClass(cls):
+        notify._post = cls._orig_post
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        notify._recent.clear(); notify._next_send.clear(); notify.SEND_SPACING_S = 0.0
+        self.calls = []
+
+    def _fake(self, reply=None, fail=None):
+        def post(url, payload, files=None, method="POST"):
+            self.calls.append({"url": url, "payload": payload, "files": files, "method": method})
+            if fail:
+                raise _http_error(fail)
+            return reply
+        notify._post = post
+
+    def test_wait_returns_the_message_id(self):
+        self._fake(reply={"id": "1300000000000000001"})
+        got = asyncio.run(notify.send("events", "", embed={"title": "x"}, wait=True))
+        self.assertEqual(got, "1300000000000000001")
+        self.assertTrue(self.calls[0]["url"].endswith("?wait=true"))
+        self._fake(reply=None)                                 # no id back: still truthy
+        self.assertIs(asyncio.run(notify.send("events", "", embed={"title": "x"}, wait=True)), True)
+
+    def test_endpoint_builder(self):
+        # Stored webhooks are validated query-less (_WEBHOOK_RE); the builder
+        # still merges safely if that ever changes.
+        base = "https://discord.com/api/webhooks/1/abc"
+        self.assertEqual(notify._webhook_endpoint(base, query="wait=true"), base + "?wait=true")
+        self.assertEqual(notify._webhook_endpoint(base + "?thread_id=42", query="wait=true"),
+                         base + "?thread_id=42&wait=true")
+        self.assertEqual(notify._webhook_endpoint(base + "/", path="/messages/9"), base + "/messages/9")
+
+    def test_edit_patches_the_message(self):
+        self._fake(reply={"id": "99"})
+        files = [("thumb.png", b"x", "image/png")]
+        got = asyncio.run(notify.edit_message("events", "99", embed={"title": "y"}, files=files))
+        self.assertEqual(got, "ok")
+        c = self.calls[0]
+        self.assertEqual(c["method"], "PATCH")
+        self.assertTrue(c["url"].endswith("/messages/99"))
+        self.assertEqual(c["payload"]["embeds"][0]["title"], "y")
+        self.assertEqual(c["files"], files)
+
+    def test_edit_of_a_deleted_message_is_gone(self):
+        self._fake(fail=404)
+        self.assertEqual(asyncio.run(notify.edit_message("events", "99", embed={"title": "y"})), "gone")
+        self._fake(fail=500)
+        self.assertEqual(asyncio.run(notify.edit_message("events", "99", embed={"title": "y"})), "error")
+        self.assertEqual(asyncio.run(notify.edit_message("events", "not-an-id", embed={"title": "y"})), "error")
+
+
+class LiveEventAnnouncementTests(unittest.TestCase):
+    """The "New event" post keeps its crew counts current: its message id is
+    stored, signup changes queue ONE batched edit, a deleted post is
+    forgotten, a cancellation marks it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "is_admin": True}
+        cls._user = dict(cls._admin)
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls._orig = (notify.send, notify.edit_message, app._ANNOUNCE_EDIT_DELAY_S)
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        notify.send, notify.edit_message, app._ANNOUNCE_EDIT_DELAY_S = cls._orig
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._user.clear(); self._user.update(self._admin)
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        db.set_setting(app._NOTIFY_ORG_IMAGE_KEY, "")
+        app._ANNOUNCE_EDIT_DELAY_S = 0.0
+        app._announce_edit_pending.clear()
+        self.edits = []
+        self.edit_result = "ok"
+
+        async def _send(category, text, *, wait=False, **kw):
+            return "1300000000000000042" if wait else True
+
+        async def _edit(category, message_id, *, embed, files=None):
+            self.edits.append({"id": message_id, "embed": embed})
+            return self.edit_result
+        notify.send, notify.edit_message = _send, _edit
+
+    def _event(self, **extra):
+        now = "2026-10-01T00:00:00+00:00"
+        eid = db.create_event({"organizer_id": "1", "title": "Salvage night", "description": "",
+                               "type": ["Raid"], "category": ["PvE"],
+                               "start_at": "2026-12-23T03:35:00+00:00", "max_players": 5,
+                               "min_players": 0, "roles": [{"role": "Salvage", "needed": 2}],
+                               "details": {}, "status": "scheduled", "created_at": now,
+                               "updated_at": now, **extra})
+        return db.get_event(eid)
+
+    def test_created_post_stores_its_message_id(self):
+        ev = self._event()
+        asyncio.run(app._notify_event_created(ev))
+        self.assertEqual(db.get_event(ev["id"])["announce_message_id"], "1300000000000000042")
+
+    def test_a_rush_of_changes_is_one_edit_with_the_current_count(self):
+        ev = self._event(announce_message_id=None)
+        db.set_event_announce_message(ev["id"], "555")
+        now = "2026-10-01T00:00:00+00:00"
+
+        async def rush():
+            for did in ("11", "12", "13"):
+                db.upsert_signup(ev["id"], did, ["Salvage"], "going", None, now)
+                app._queue_announcement_refresh(ev["id"])
+            await asyncio.sleep(0.05)
+        asyncio.run(rush())
+        self.assertEqual(len(self.edits), 1)                 # coalesced
+        e = self.edits[0]
+        self.assertEqual(e["id"], "555")
+        self.assertIn("**Crew** 3 / 5 going", e["embed"]["description"])
+        self.assertIn("**Roles** Salvage 3/2", e["embed"]["description"])
+        self.assertIn("timestamp", e["embed"])
+        self.assertEqual(e["embed"]["footer"], {"text": "Signups updated"})
+
+    def test_no_stored_post_means_no_edit(self):
+        ev = self._event()
+
+        async def go():
+            app._queue_announcement_refresh(ev["id"]); await asyncio.sleep(0.05)
+        asyncio.run(go())
+        self.assertEqual(self.edits, [])
+
+    def test_a_deleted_post_is_forgotten(self):
+        ev = self._event()
+        db.set_event_announce_message(ev["id"], "555")
+        self.edit_result = "gone"
+
+        async def go():
+            app._queue_announcement_refresh(ev["id"]); await asyncio.sleep(0.05)
+        asyncio.run(go())
+        self.assertIsNone(db.get_event(ev["id"])["announce_message_id"])
+
+    def test_cancelled_event_marks_its_post(self):
+        ev = self._event()
+        db.set_event_announce_message(ev["id"], "555")
+        db.cancel_event(ev["id"], "2026-10-02T00:00:00+00:00")
+
+        async def go():
+            app._queue_announcement_refresh(ev["id"]); await asyncio.sleep(0.05)
+        asyncio.run(go())
+        self.assertTrue(self.edits[0]["embed"]["title"].startswith("🚫 Cancelled · 📅 New event"))
+        self.assertEqual(self.edits[0]["embed"]["color"], app._EMBED_BAD)
+
+    def test_every_signup_path_queues_a_refresh(self):
+        queued = []
+        orig = app._queue_announcement_refresh
+        app._queue_announcement_refresh = lambda eid: queued.append(eid)
+        self.addCleanup(lambda: setattr(app, "_queue_announcement_refresh", orig))
+        ev = self._event()
+        eid = ev["id"]
+        self.client.post(f"/api/events/{eid}/signup", json={"roles": [], "status": "going"})
+        self.client.delete(f"/api/events/{eid}/signup")
+        self.client.put(f"/api/events/{eid}/attendees", json={"discord_id": "77", "status": "going"})
+        self.client.patch(f"/api/events/{eid}", json={"title": "Renamed", "start_at": "2026-12-23T03:35:00+00:00",
+                                                      "types": ["Raid"], "categories": ["PvE"]})
+        self.client.delete(f"/api/events/{eid}")
+        self.assertEqual(queued, [eid] * 5)
+
+    def test_reminder_carries_the_live_count(self):
+        ev = self._event()
+        db.upsert_signup(ev["id"], "11", ["Salvage"], "going", None, "2026-10-01T00:00:00+00:00")
+        sent = []
+
+        async def _send(category, text, **kw):
+            sent.append(kw.get("embed")); return True
+        notify.send = _send
+        asyncio.run(app._notify_event_reminder(db.get_event(ev["id"])))
+        self.assertIn("**Crew** 1 / 5 going", sent[0]["description"])
+        self.assertIn("**Roles** Salvage 1/2", sent[0]["description"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

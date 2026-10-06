@@ -29,6 +29,7 @@ import re
 import secrets
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import db
@@ -239,12 +240,23 @@ def _strip_attachments(payload: dict) -> dict:
     return out
 
 
+def _webhook_endpoint(url: str, path: str = "", query: str = "") -> str:
+    """The webhook URL with `path` appended (e.g. "/messages/123") and `query`
+    merged in, keeping any query it already has (a `?thread_id=` webhook)."""
+    u = urllib.parse.urlsplit(url)
+    q = "&".join(x for x in (u.query, query) if x)
+    return urllib.parse.urlunsplit((u.scheme, u.netloc, u.path.rstrip("/") + path, q, ""))
+
+
 def _post(url: str, payload: dict,
-          files: list[tuple[str, bytes, str]] | None = None) -> None:
-    """Blocking POST of one Discord webhook message. Runs in a worker thread.
-    Honors a 429's full retry_after (capped at 30s — beyond that the message is
-    better dropped than a thread parked); any other failure is logged by the
-    caller. With `files`, the message goes as multipart (§3.5)."""
+          files: list[tuple[str, bytes, str]] | None = None,
+          method: str = "POST") -> dict | None:
+    """Blocking request for one Discord webhook message (POST, or PATCH to edit
+    one). Runs in a worker thread. Honors a 429's full retry_after (capped at
+    30s — beyond that the message is better dropped than a thread parked); any
+    other failure is logged by the caller. With `files`, the message goes as
+    multipart (§3.5). Returns Discord's JSON reply when it sends one (it does
+    for `?wait=true` posts and for edits), else None."""
     if files:
         body, ctype = _multipart(payload, files)
     else:
@@ -253,11 +265,15 @@ def _post(url: str, payload: dict,
         req = urllib.request.Request(
             url, data=body,
             headers={"Content-Type": ctype, "User-Agent": "sc-nav/1.0"},
-            method="POST",
+            method=method,
         )
         try:
-            with urllib.request.urlopen(req, timeout=10):
-                return
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read()
+                try:
+                    return json.loads(raw) if raw else None
+                except ValueError:
+                    return None
         except urllib.error.HTTPError as exc:
             if exc.code == 429 and attempt == 0:
                 try:
@@ -274,9 +290,30 @@ MENTIONS_PER_MESSAGE = 50    # Discord's allowed_mentions.users hard cap
 _CONTENT_CAP = 1900          # Discord hard-caps content at 2000 chars
 
 
+def _message_id(resp) -> str | None:
+    mid = resp.get("id") if isinstance(resp, dict) else None
+    return str(mid) if mid and str(mid).isdigit() else None
+
+
+def _cap_embed(embed: dict) -> dict:
+    """Defensive caps (Discord: title 256, description 4096, field value 1024)
+    so an oversized user string degrades to truncation, not a 400 that
+    silently drops the whole message."""
+    e = dict(embed)
+    if e.get("title"):
+        e["title"] = str(e["title"])[:256]
+    if e.get("description"):
+        e["description"] = str(e["description"])[:4096]
+    for f in e.get("fields", []):
+        f["name"] = str(f.get("name", ""))[:256]
+        f["value"] = str(f.get("value", ""))[:1024]
+    return e
+
+
 async def send(category: str, text: str, *, mentions: list[str] | None = None,
                dedup_key: str | None = None, embed: dict | None = None,
-               files: list[tuple[str, bytes, str]] | None = None) -> bool:
+               files: list[tuple[str, bytes, str]] | None = None,
+               wait: bool = False) -> bool | str:
     """Post ``text`` to ``category``'s Discord webhook. Returns True on a
     best-effort success, False if that category has no webhook / deduped /
     failed. NEVER raises — a notification problem must not break the caller's
@@ -294,6 +331,10 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
     ``files`` = [(filename, bytes, mime)] uploaded with the message; the embed
     refers to them as ``attachment://<filename>``. If Discord refuses the post
     because of them (400/413), it is re-sent once without them.
+
+    ``wait=True`` asks Discord to reply with the created message, and on
+    success returns its id (a non-empty str, still truthy) so the caller can
+    EDIT it later (edit_message). Falls back to True when no id came back.
     """
     url = webhook_url(category)
     if not is_valid_webhook_url(url):
@@ -309,42 +350,63 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
     if text:
         payload["content"] = text[:_CONTENT_CAP]
     if embed:
-        # Defensive caps (Discord: title 256, description 4096, field value
-        # 1024) so an oversized user string degrades to truncation, not a 400
-        # that silently drops the whole message.
-        e = dict(embed)
-        if e.get("title"):
-            e["title"] = str(e["title"])[:256]
-        if e.get("description"):
-            e["description"] = str(e["description"])[:4096]
-        for f in e.get("fields", []):
-            f["name"] = str(f.get("name", ""))[:256]
-            f["value"] = str(f.get("value", ""))[:1024]
-        payload["embeds"] = [e]
+        payload["embeds"] = [_cap_embed(embed)]
     if "content" not in payload and "embeds" not in payload:
         return False   # Discord rejects an empty message; nothing to say
+    if wait:
+        url = _webhook_endpoint(url, query="wait=true")
 
     try:
         await _pace(category)
         if not files:
-            await asyncio.to_thread(_post, url, payload)
+            resp = await asyncio.to_thread(_post, url, payload)
         else:
             try:
-                await asyncio.to_thread(_post, url, payload, files)
+                resp = await asyncio.to_thread(_post, url, payload, files)
                 _health.get(category, {}).pop("img_err", None)   # art got through again
             except urllib.error.HTTPError as exc:
                 if exc.code not in (400, 413):
                     raise
                 # Degrade, don't drop: the art was the problem, the message isn't.
-                await asyncio.to_thread(_post, url, _strip_attachments(payload))
+                resp = await asyncio.to_thread(_post, url, _strip_attachments(payload))
                 _note_image_dropped(category, f"Discord refused the image (HTTP {exc.code}); "
                                               "the message was sent without it")
         _note_result(category, True)
-        return True
+        return (_message_id(resp) or True) if wait else True
     except Exception as exc:   # log and swallow — see module docstring
         _note_result(category, False, str(exc))
         print(f"[sc-nav] discord notify failed: {exc}")
         return False
+
+
+async def edit_message(category: str, message_id: str, *, embed: dict,
+                       files: list[tuple[str, bytes, str]] | None = None) -> str:
+    """Replace the embed of a message this category's webhook posted (a webhook
+    may edit its own messages; no bot needed). Returns "ok", "gone" (Discord
+    404: the message or webhook no longer exists, so the caller should stop
+    editing it) or "error". NEVER raises. With `files`, the message's
+    attachments are replaced by these (multipart), so `attachment://` images
+    in the new embed resolve. A refused attachment degrades to a text-only
+    edit, as with send()."""
+    url = webhook_url(category)
+    if not is_valid_webhook_url(url) or not str(message_id or "").isdigit():
+        return "error"
+    target = _webhook_endpoint(url, path=f"/messages/{message_id}")
+    payload = {"embeds": [_cap_embed(embed)], "allowed_mentions": {"parse": []}}
+    try:
+        await _pace(category)
+        try:
+            await asyncio.to_thread(_post, target, payload, files or None, "PATCH")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return "gone"
+            if not files or exc.code not in (400, 413):
+                raise
+            await asyncio.to_thread(_post, target, _strip_attachments(payload), None, "PATCH")
+        return "ok"
+    except Exception as exc:   # an edit is a nicety; never break the caller
+        print(f"[sc-nav] discord edit failed: {exc}")
+        return "error"
 
 
 async def send_paged(category: str, body: str, *,
