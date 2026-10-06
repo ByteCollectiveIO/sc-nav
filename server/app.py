@@ -8624,12 +8624,17 @@ def _notify_bg(coro) -> None:
 
 
 # The new-event post carries the whole event, not just when/where (user's call
-# 2026-10-05: description + a facts grid; mission details only when filled in).
+# 2026-10-05). The facts go in the DESCRIPTION as one bold-labelled line each,
+# not as embed fields: beside a thumbnail Discord packs inline fields into three
+# narrow columns and a full date wraps down four lines (first dev test). Discord
+# has no table element, and a code-block table would stop <t:…> timestamps
+# rendering in each member's own timezone.
 _EVENT_POST_DESC_MAX = 1500
-_EVENT_DETAIL_FIELDS = (            # (detail key, field name, inline)
-    ("mission", "🎯 Mission", False), ("roe", "⚔ Rules of engagement", True),
-    ("comms", "🎙 Comms", True), ("loadout", "🎒 Loadout", True),
-    ("medical", "🩹 Medical", True), ("prereqs", "📋 Prerequisites", False))
+_EVENT_POST_DETAIL_MAX = 400
+_EVENT_DETAIL_LINES = (             # (detail key, label) — the mission briefing
+    ("mission", "🎯 **Mission**"), ("roe", "⚔ **ROE**"), ("comms", "🎙 **Comms**"),
+    ("loadout", "🎒 **Loadout**"), ("medical", "🩹 **Medical**"),
+    ("prereqs", "📋 **Prerequisites**"))
 
 
 def _fmt_duration(minutes) -> str:
@@ -8640,47 +8645,61 @@ def _fmt_duration(minutes) -> str:
 
 
 def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
-    """The full new-event card. Every member-typed value goes through _md_plain
-    (descriptions and field values render markdown); a field with nothing to
-    say is left out rather than shown as "—"."""
+    """The full new-event card: the organizer's description, then a facts block,
+    then a mission briefing when any mission detail is filled in. Labels are
+    ours (bold); every member-typed value goes through _md_plain, since the
+    description renders markdown. A fact with nothing to say is left out."""
     url = _app_url(f"#/events/{ev['id']}")
-    fields: list[dict] = []
-
-    def add(name: str, value: str, inline: bool = True) -> None:
-        if value:
-            fields.append({"name": name, "value": value, "inline": inline})
+    plain = lambda v: _md_plain((v or "").strip())
 
     start = ev.get("start_at")
-    add("🕒 Starts", f"{_discord_ts(start)}\n({_discord_ts(start, 'R')})")
-    add("⏱ Length", _fmt_duration(ev.get("duration_min")))
-    add("📍 Rally point", _md_plain((ev.get("location") or "").strip()))
-    add("🎯 Event location", _md_plain((ev.get("event_location") or "").strip()))
+    when = f"🕒 **Starts** {_discord_ts(start)} ({_discord_ts(start, 'R')})"
+    if ev.get("duration_min"):
+        when += f" · {_fmt_duration(ev['duration_min'])}"
+    facts = [when]
+    places = [f"📍 **Rally point** {plain(ev.get('location'))}" if (ev.get("location") or "").strip() else "",
+              f"🎯 **Location** {plain(ev.get('event_location'))}" if (ev.get("event_location") or "").strip() else ""]
+    if any(places):
+        facts.append(" · ".join(p for p in places if p))
     fill = nav_core.derive_event_fill(ev, db.list_signups(ev["id"]))
     cap = ev.get("max_players")
-    crew = f"{fill['total_going']} / {cap if cap else '∞'} going"
+    crew = f"👥 **Crew** {fill['total_going']} / {cap if cap else '∞'} going"
     if ev.get("min_players"):
         crew += f" (min {ev['min_players']})"
-    add("👥 Crew", crew)
-    add("🧩 Roles", "\n".join(f"{_md_plain(r['role'])} {r['filled']}/{r['needed']}"
-                              for r in fill.get("roster") or [] if r.get("needed")))
+    facts.append(crew)
+    roles = [f"{_md_plain(r['role'])} {r['filled']}/{r['needed']}"
+             for r in fill.get("roster") or [] if r.get("needed")]
+    if roles:
+        facts.append("🧩 **Roles** " + " · ".join(roles))
     if ev.get("signup_deadline"):
-        add("⛔ Signups close", _discord_ts(ev["signup_deadline"]))
+        facts.append(f"⛔ **Signups close** {_discord_ts(ev['signup_deadline'])}")
     if ev.get("organizer_id"):
-        add("🧭 Organizer", _md_plain(_resolve_member_name(ev["organizer_id"], None)))
+        facts.append(f"🧭 **Organizer** {_md_plain(_resolve_member_name(ev['organizer_id'], None))}")
     kinds = " · ".join(x for x in (", ".join(ev.get("type") or []),
                                    ", ".join(ev.get("category") or [])) if x)
-    add("🏷 Type", _md_plain(kinds), inline=False)
+    if kinds:
+        facts.append(f"🏷 **Type** {_md_plain(kinds)}")
+
     details = ev.get("details") or {}
     roe_labels = {r["key"]: r["label"] for r in event_taxonomy.ROE}
-    for key, name, inline in _EVENT_DETAIL_FIELDS:
+    briefing = []
+    for key, label in _EVENT_DETAIL_LINES:
         v = (details.get(key) or "").strip()
-        add(name, roe_labels.get(v, v) if key == "roe" else _md_plain(_clip(v)), inline)
+        if v:
+            briefing.append(f"{label} " + (roe_labels.get(v, v) if key == "roe"
+                                            else _md_plain(_clip(v, _EVENT_POST_DETAIL_MAX))))
+
     desc = (ev.get("description") or "").strip()
-    body = _md_plain(_clip(desc, _EVENT_POST_DESC_MAX))
-    if len(desc) > _EVENT_POST_DESC_MAX and url:
-        body += f"\n[Read the rest in the app]({url})"
-    return _embed(f"{title_prefix}📅 New event: {ev['title']}", body, url=url,
-                  fields=fields)
+    blocks = []
+    if desc:
+        body = _md_plain(_clip(desc, _EVENT_POST_DESC_MAX))
+        if len(desc) > _EVENT_POST_DESC_MAX and url:
+            body += f"\n[Read the rest in the app]({url})"
+        blocks.append(body)
+    blocks.append("\n".join(facts))
+    if briefing:
+        blocks.append("**Mission briefing**\n" + "\n".join(briefing))
+    return _embed(f"{title_prefix}📅 New event: {ev['title']}", "\n\n".join(blocks), url=url)
 
 
 async def _notify_event_created(ev: dict) -> None:
