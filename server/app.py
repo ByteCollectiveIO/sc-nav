@@ -539,6 +539,9 @@ def _apply_wiki_catalog(fresh: nav_core.NavData) -> nav_core.NavData:
         nav_core.upgrade_qt_markers(fresh, wiki_locations)
     nav_core.annotate_arrival_radii(fresh, wiki_locations)
     fresh.belts = nav_core.build_belt_registry(fresh, wiki_locations)
+    # Gate endpoints — always, like the belts: Pyro's side exists only in this
+    # feed, and routing must not depend on whether the org listed wiki POIs.
+    nav_core.build_gate_registry(fresh, wiki_locations)
     return fresh
 
 
