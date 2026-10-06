@@ -13732,8 +13732,11 @@ class EventAnnounceCardTests(unittest.TestCase):
         ev = self._ev(description="**free loot** [claim](https://evil.example)",
                       location="Port_Tressler", details={"comms": "`ts`"})
         d = app._event_created_embed(ev)["description"]
-        self.assertIn(r"\*\*free loot\*\*", d)
-        self.assertIn(r"\[claim\]", d)                       # no masked link
+        # The organizer's own formatting is kept (user's call 2026-10-06) …
+        self.assertIn("**free loot**", d)
+        self.assertNotIn(r"\*\*free loot", d)
+        # … but a masked link is defused, so its URL can't hide behind text.
+        self.assertIn(r"\[claim\](https://evil.example)", d)
         self.assertIn(r"**Rally point** Port\_Tressler", d)
         self.assertIn(r"**Comms** \`ts\`", d)
 
@@ -14109,6 +14112,14 @@ class NotifyTemplateEngineTests(unittest.TestCase):
 
     def test_text_only_parts_always_stay(self):
         self.assertEqual(self.nt.render_text("Header\nStatic · text", {}), "Header\nStatic · text")
+
+    def test_fmt_vars_keep_formatting_but_defuse_masked_links(self):
+        esc = lambda v: "ESC(" + v + ")"
+        r = self.nt.render("event_created", {"title": "T", "description": "**Bold** _it_ [x](https://e.vil)",
+                                             "rally_point": "Port_T"}, escape=esc)
+        self.assertIn("**Bold** _it_ \\[x\\](https://e.vil)", r["description"])
+        self.assertIn("ESC(Port_T)", r["description"])       # other member text: still escaped
+        self.assertEqual(self.nt.defuse_masked_links("[a](b) ok"), "\\[a\\](b) ok")
 
     def test_escaping_is_description_only(self):
         esc = lambda v: v.replace("_", "\\_")
