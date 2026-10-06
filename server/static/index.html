@@ -267,6 +267,8 @@
   .dc-foot:empty { display: none; }
   .dc-ts { background: rgba(255,255,255,.06); border-radius: 3px; padding: 0 2px; }
   .dc-a { color: var(--dc-link); }
+  .dc-desc code, .ev-desc code { font-family: inherit; background: rgba(127,127,127,.15);
+    border-radius: 3px; padding: 0 3px; }
   .oi-glyph { display: grid; place-items: center; color: var(--dim); font-size: 18px; }
   .oi-glyph[hidden], #oi-now-img[hidden] { display: none; }
   #oi-url { flex: 1; min-width: 220px; }
@@ -13985,7 +13987,8 @@ async function renderDetailBody(e) {
     (e.op ? `<div class="ev-op-line">${e.op.phase === "closed"
         ? `✓ This event has a mission record. <a href="#/ops/${e.op.id}">View the record →</a>`
         : `Mission ${opPhaseBadge(e.op.phase)} <a href="#/ops/${e.op.id}">Open the op →</a>`}</div>` : "") +
-    (e.description ? `<div class="ev-desc">${esc(e.description)}</div>` : "") +
+    // Same formatting Discord shows (masked links left as typed, like there).
+    (e.description ? `<div class="ev-desc">${discordMd(e.description, { links: false, br: false })}</div>` : "") +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
     maybeRow + waitRow +
     (e.can_edit && !cancelled ? organizerAttendeePanel(e) : "") +
@@ -14991,7 +14994,8 @@ function eventFormHtml(tax, e, opts = {}) {
     contractsCardHtml(e && e.contracts) +
     rulesCardHtml(e && e.rules) +
     eventImageCardHtml() +
-    `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea></div>` +
+    `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea>` +
+      `<span class="ev-hint">Discord formatting works here and in the post: **bold**, *italics*, __underline__, ~~strike~~, \`code\`, :emoji:. Links show as typed.</span></div>` +
     (tplMode && opts.groupCount ? `<p class="ev-note">Also carries ${opts.groupCount} fleet unit${opts.groupCount === 1 ? "" : "s"}, offered when an event is started from this template.</p>` : "") +
     `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${saveLabel}</button>` +
       `<button class="ev-btn" id="ev-f-cancel">Cancel</button>` +
@@ -28074,17 +28078,28 @@ function renderTplThumb() {
   if (src) { img.referrerPolicy = "no-referrer"; img.src = src; img.hidden = false; }
 }
 
-// Enough of Discord's markdown to judge a template: escapes, **bold**,
-// [links](url), <t:…> timestamps in the viewer's own zone, line breaks.
-function discordMd(text) {
-  const keep = [];
+// Discord's inline markdown, for the template preview and the event page:
+// \-escapes, `code`, **bold**, __underline__, ~~strike~~, *italics* / _italics_,
+// [links](url) and <t:…> timestamps in the viewer's own zone. HTML-escaped
+// FIRST, then only these patterns become tags, so member text can't inject.
+// opts.links=false leaves a masked link as typed (event descriptions defuse
+// them in Discord too); opts.br=false keeps \n for a white-space:pre-wrap box.
+function discordMd(text, opts = {}) {
+  const { links = true, br = true } = opts;
+  const keep = [], code = [];
   let s = String(text).replace(/\\([\\*_~`|>\[\]])/g, (_, c) => { keep.push(c); return `\u0001${keep.length - 1}\u0002`; });
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => { code.push(c); return `\u0003${code.length - 1}\u0004`; });
   s = esc(s);
   s = s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<span class="dc-a">$1</span>');
+  s = s.replace(/__(.+?)__/g, "<u>$1</u>");
+  s = s.replace(/~~(.+?)~~/g, "<s>$1</s>");
+  s = s.replace(/\*(?!\s)([^*\n]+?)\*/g, "<i>$1</i>");
+  s = s.replace(/(^|[^\w])_(?!\s)([^_\n]+?)_(?=[^\w]|$)/g, "$1<i>$2</i>");
+  if (links) s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<span class="dc-a">$1</span>');
   s = s.replace(/&lt;t:(\d+):([FfDdTtR])&gt;/g, (_, n, st) => `<span class="dc-ts">${esc(discordTime(+n, st))}</span>`);
+  s = s.replace(/\u0003(\d+)\u0004/g, (_, i) => `<code>${esc(code[+i])}</code>`);
   s = s.replace(/\u0001(\d+)\u0002/g, (_, i) => esc(keep[+i]));
-  return s.replace(/\n/g, "<br>");
+  return br ? s.replace(/\n/g, "<br>") : s;
 }
 
 function discordTime(sec, style) {

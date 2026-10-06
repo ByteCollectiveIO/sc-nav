@@ -18,7 +18,10 @@ Template language (deliberately tiny — no logic):
 - Escaping: a variable marked `md` holds member-typed text. It is markdown-
   escaped in the DESCRIPTION slot (the only embed slot Discord renders markdown
   in) and inserted as-is in the title and footer, where an escape would show as
-  a literal backslash.
+  a literal backslash. A variable also marked `fmt` is prose the member WROTE
+  to be formatted (an event description): its **bold** / *italics* / lists
+  render, and only masked links are defused — `[text](url)` shows literally,
+  so a description can't hide where a link goes (user's call, 2026-10-06).
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ class Var:
     label: str            # what the editor shows next to the chip
     sample: str           # used by the preview + test send (slice 5)
     md: bool = False      # member-typed text: escape in the description slot
+    fmt: bool = False     # with md: keep the member's formatting, defuse masked links only
     group: str = ""       # editor chip grouping (When / Where / Crew …); "" = ungrouped
 
 
@@ -141,6 +145,15 @@ def sample_values(key: str) -> dict:
     return {n: v.sample for n, v in TEMPLATES[key].vars.items()}
 
 
+_MASKED_LINK_RE = re.compile(r"([\[\]])")
+
+
+def defuse_masked_links(text: str) -> str:
+    """Escape only the brackets, so Discord renders the member's formatting but
+    shows `[text](url)` as typed instead of a link whose URL is hidden."""
+    return _MASKED_LINK_RE.sub(r"\\\1", text)
+
+
 def render(key: str, values: dict, *, escape, overrides: dict | None = None) -> dict:
     """{title, description, footer} for announcement `key`. `values` are RAW;
     md variables are escaped here, in the description slot only. `overrides`
@@ -155,7 +168,8 @@ def render(key: str, values: dict, *, escape, overrides: dict | None = None) -> 
             continue
         vals = {n: ("" if values.get(n) is None else str(values.get(n))) for n in t.vars}
         if slot == "description":
-            vals = {n: (escape(v) if t.vars[n].md else v) for n, v in vals.items()}
+            vals = {n: (defuse_masked_links(v) if t.vars[n].fmt else escape(v))
+                    if t.vars[n].md else v for n, v in vals.items()}
         out[slot] = render_text(text, vals)
     return out
 
@@ -191,8 +205,8 @@ TEMPLATES: dict[str, Template] = {
             "**Prerequisites** {prereqs}"),
         vars={
             "title": _TITLE_EV,
-            "description": Var("Event description (first 1,500 characters)",
-                               "Bring a Vulture.", md=True, group="Event"),
+            "description": Var("Event description (first 1,500 characters; its formatting is kept)",
+                               "Bring a **Vulture**.", md=True, fmt=True, group="Event"),
             "read_more": Var("'Read the rest' link, when the description was cut", "", group="Event"),
             "start": _START_W, "start_relative": _START_RW,
             "length": Var("Length", "1 h 30 min", group="When"),
