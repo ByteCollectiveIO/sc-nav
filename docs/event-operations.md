@@ -1,6 +1,6 @@
 # Event operations — attendance, payouts, loot rolls, mission records — design plan
 
-**Status: 📐 DESIGN, not built (2026-09-27).**
+**Status: ✅ slices 1–5 SHIPPED v1.18.0 (2026-09-30); slice 6 blocked on a §12.3 capture.** Designed 2026-09-27.
 
 Events plans an op (roles, fleet groups, signups). Nothing records what
 actually *happened* once the op starts. This doc adds that: who was there, who

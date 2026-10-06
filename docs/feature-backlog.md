@@ -816,7 +816,7 @@ listed, else the [archived backlog](archive/feature-backlog-full-2026-07-04.md).
 | 10 | Per-shard nodes | 2026-06-20 | archive |
 | 11 | Mobile-responsive CSS | 2026-06-20 | archive |
 | 12 | Cargo-hauling planner v1 (+ multi-pickup, rewards, guild boards) | 2026-06-21 | [cargo-hauling-planner.md](cargo-hauling-planner.md) |
-| 13 | Guild event planner v1 (+ 7-item UI pass) | 2026-06-23/24 · v0.2.x–0.3.0 | [event-planner.md](event-planner.md), [event-planner-todo.md](event-planner-todo.md) |
+| 13 | Guild event planner v1 (+ 7-item UI pass) | 2026-06-23/24 · v0.2.x–0.3.0 | [event-planner.md](event-planner.md), [event-planner-todo.md](archive/event-planner-todo.md) |
 | 14 | Resource Manager (inventory + goals) | 2026-06-24 · v0.5.0 | [org-inventory-goals.md](org-inventory-goals.md) |
 | 15 | Org marketplace (sale/auction/barter) + scale/search pass | 2026-06-25/26 · v0.6.0–v0.7.1 | [marketplace.md](marketplace.md) |
 | 16 | Resource Manager v1.1 (units, POI locations, edit, allocations) | 2026-06-25 | [org-inventory-goals.md](org-inventory-goals.md) |

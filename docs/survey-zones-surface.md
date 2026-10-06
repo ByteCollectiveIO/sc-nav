@@ -1,6 +1,6 @@
 # Surface survey zones — named mining areas on planets and moons (#37.1) — design plan
 
-**Status: SLICE 1 BUILT (backend), rest DESIGN.** The doc `survey-platform.md`
+**Status: ✅ SHIPPED** — surface areas v1.15.0 (#177–#181, survey lanes #186); survey goals + surface milestones v1.16.0. The "Built so far" note below is the slice-1 snapshot, kept for history. The doc `survey-platform.md`
 §7.2 promised this before build.
 
 > **Built so far — backend foundation, nothing user-visible.** Storage

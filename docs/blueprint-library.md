@@ -1,6 +1,6 @@
 # Blueprint library page (#/blueprints)
 
-Status: **🔨 built 2026-09-12 — awaiting dev-server test, unreleased** (rides the #151 release hold).
+Status: **✅ SHIPPED v1.13.0 (2026-09-12).**
 
 ## The problem
 
