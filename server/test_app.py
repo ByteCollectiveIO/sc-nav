@@ -14146,5 +14146,166 @@ class NotifyTemplateEngineTests(unittest.TestCase):
             self.assertEqual(names, set(self.nt.TEMPLATES[key].vars), key)
 
 
+class NotifyTemplateEditorTests(unittest.TestCase):
+    """Slice 5: admins override announcement wording. Validated on save,
+    blank = shipped, preview + test render a draft, pings untouched."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._admin = {"id": "1", "username": "tester", "is_admin": True}
+        cls._user = dict(cls._admin)
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls._orig_send = notify.send
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._user.clear(); self._user.update(self._admin)
+        import notify_templates
+        for k in notify_templates.TEMPLATES:
+            db.set_setting(app._NOTIFY_TPL_PREFIX + k, "")
+        for c in notify.CATEGORIES:
+            db.set_setting(notify._webhook_key(c), _GOOD_WEBHOOK)
+        app._test_send_at = 0.0
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"category": category, "text": text, "embed": kw.get("embed"),
+                              "mentions": mentions})
+            return True
+        notify.send = _capture
+
+    URL = "/api/admin/notify-templates"
+
+    def _ev(self):
+        now = "2026-10-01T00:00:00+00:00"
+        return db.get_event(db.create_event({
+            "organizer_id": "42", "title": "Salvage_night", "description": "", "type": ["Raid"],
+            "category": ["PvE"], "start_at": "2026-10-23T03:35:00+00:00",
+            "location": "Lorville", "min_players": 0, "roles": [], "details": {},
+            "status": "scheduled", "created_at": now, "updated_at": now}))
+
+    def test_list_describes_every_template(self):
+        r = self.client.get(self.URL).json()["templates"]
+        import notify_templates
+        self.assertEqual([t["key"] for t in r], list(notify_templates.TEMPLATES))
+        ev = next(t for t in r if t["key"] == "event_created")
+        self.assertEqual(ev["category"], "events")
+        self.assertTrue(ev["webhook_set"])
+        self.assertIn("{title}", ev["slots"]["title"]["shipped"])
+        self.assertEqual(ev["slots"]["title"]["override"], "")
+        self.assertIn("rally_point", [v["name"] for v in ev["vars"]])
+        self.assertFalse(ev["customized"])
+        op = next(t for t in r if t["key"] == "op_closed")
+        self.assertEqual(op["editable"], ["title", "footer"])
+
+    def test_admin_only(self):
+        self._user["is_admin"] = False
+        self.assertEqual(self.client.get(self.URL).status_code, 403)
+        self.assertEqual(self.client.put(f"{self.URL}/event_created", json={"title": "x"}).status_code, 403)
+        self.assertEqual(self.client.post(f"{self.URL}/event_created/test", json={}).status_code, 403)
+
+    def test_override_changes_the_real_post_and_reset_restores_it(self):
+        r = self.client.put(f"{self.URL}/event_created", json={
+            "title": "🛰 Op posted: {title}", "footer": "Fly safe, {organizer}",
+            "description": "**When** {start}\n**Where** {rally_point} · {event_location}"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["customized"])
+        ev = self._ev()
+        asyncio.run(app._notify_event_created(ev))
+        e = self.sent[-1]["embed"]
+        self.assertEqual(e["title"], "🛰 Op posted: Salvage_night")          # raw in a title
+        self.assertRegex(e["description"], r"^\*\*When\*\* <t:\d+:F>\n\*\*Where\*\* Lorville$")
+        self.assertEqual(e["footer"], {"text": "Fly safe, Member 42"})
+        self.client.delete(f"{self.URL}/event_created")
+        asyncio.run(app._notify_event_created(ev))
+        self.assertEqual(self.sent[-1]["embed"]["title"], "📅 New event: Salvage_night")
+        self.assertNotIn("footer", self.sent[-1]["embed"])
+
+    def test_blank_slots_mean_shipped(self):
+        self.client.put(f"{self.URL}/lfg_posted", json={"title": "", "description": "  ", "footer": ""})
+        self.assertEqual(db.get_setting(app._NOTIFY_TPL_PREFIX + "lfg_posted"), "")
+
+    def test_validation(self):
+        bad = [
+            ({"title": "New: {titel}"}, "unknown field {titel}"),
+            ({"title": "{title.__class__}"}, "unknown field"),
+            ({"title": "{Title}"}, "unknown field {Title}"),
+            ({"description": "x" * 1501}, "limit is 1500"),
+            ({"color": "red"}, "#4FC3F7"),
+        ]
+        for body, msg in bad:
+            r = self.client.put(f"{self.URL}/event_created", json=body)
+            self.assertEqual(r.status_code, 400, body)
+            self.assertIn(msg, r.json()["detail"], body)
+        self.assertIn("{rally_point}", self.client.put(
+            f"{self.URL}/event_created", json={"title": "{nope}"}).json()["detail"])  # lists the valid ones
+        r = self.client.put(f"{self.URL}/op_closed", json={"description": "custom body"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.client.put(f"{self.URL}/no_such", json={}).status_code, 404)
+        ok = self.client.put(f"{self.URL}/event_created", json={"title": "{{literal}} {title}"})
+        self.assertEqual(ok.status_code, 200)
+
+    def test_color_override_replaces_the_automatic_colour(self):
+        self.client.put(f"{self.URL}/warning_posted", json={"color": "#123abc"})
+        asyncio.run(app._notify_warning_posted({
+            "id": 1, "poster": "Ace", "kind": "point", "threat": "pvp", "severity": "deadly",
+            "anchor_a": {"name": "CRU-L1"}, "anchor_b": None, "location": "", "note": ""}))
+        self.assertEqual(self.sent[-1]["embed"]["color"], 0x123ABC)
+
+    def test_pings_are_not_templatable(self):
+        self.client.put(f"{self.URL}/listing_posted", json={"description": "{terms}"})
+        orig = db.blueprint_crafters
+        db.blueprint_crafters = lambda key: ["111"]
+        try:
+            asyncio.run(app._notify_listing_posted({
+                "id": 2, "seller_id": "42", "item_name": "P4-AR", "mode": "commission",
+                "blueprint_key": "p4", "qty": 1}))
+        finally:
+            db.blueprint_crafters = orig
+        m = self.sent[-1]
+        self.assertEqual(m["text"], "Can craft: <@111>")        # the ping line is code, not a slot
+        self.assertEqual(m["mentions"], ["111"])
+
+    def test_preview_renders_the_draft_with_samples(self):
+        r = self.client.post(f"{self.URL}/lfg_posted/preview",
+                             json={"title": "{heading}!", "description": "Note: {note}"})
+        self.assertEqual(r.status_code, 200, r.text)
+        e = r.json()["embed"]
+        self.assertEqual(e["title"], "Looking for members!")
+        self.assertEqual(e["description"], "Note: need 2 for a bunker")
+        self.assertEqual(db.get_setting(app._NOTIFY_TPL_PREFIX + "lfg_posted"), "")  # not saved
+        self.assertEqual(self.client.post(f"{self.URL}/lfg_posted/preview",
+                                          json={"title": "{nope}"}).status_code, 400)
+
+    def test_test_send_posts_the_draft_marked_test(self):
+        r = self.client.post(f"{self.URL}/goal_posted/test", json={"footer": "Org goals"})
+        self.assertEqual(r.status_code, 200, r.text)
+        m = self.sent[-1]
+        self.assertEqual(m["category"], "goals")
+        self.assertTrue(m["embed"]["title"].startswith("[TEST] 🎯 New org goal"))
+        self.assertEqual(m["embed"]["footer"], {"text": "Org goals"})
+        db.set_setting(notify._webhook_key("goals"), "")
+        app._test_send_at = 0.0
+        self.assertEqual(self.client.post(f"{self.URL}/goal_posted/test", json={}).status_code, 400)
+
+    def test_corrupt_stored_override_falls_back_to_shipped(self):
+        db.set_setting(app._NOTIFY_TPL_PREFIX + "event_cancelled", "{not json")
+        asyncio.run(app._notify_event_cancelled(self._ev()))
+        self.assertTrue(self.sent[-1]["embed"]["title"].startswith("🚫 Event cancelled"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

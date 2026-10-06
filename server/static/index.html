@@ -212,6 +212,42 @@
      like an art row; options without a picture get a glyph tile in the thumb slot
      so the names stay in one column. */
   .oi-now { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 4px 0 10px; }
+  /* Message template editor (Settings › Discord). The preview imitates a
+     Discord embed on purpose — it's what the admin is designing for — so its
+     colours are Discord's dark theme, scoped here, not app tokens. */
+  .tpl-grp-h { font-size: 11px; letter-spacing: 1px; color: var(--dim); text-transform: uppercase;
+    margin: 12px 0 4px; }
+  .tpl-row { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); }
+  .tpl-row .tpl-name { flex: 1; }
+  .tpl-chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--sel); color: var(--sel); }
+  #tpl-editor[hidden], #tpl-list[hidden] { display: none; }
+  .tpl-ed-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 4px 0 10px; }
+  .tpl-ed-head b { font-size: 14px; }
+  .tpl-ed { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+  .tpl-ed > * { min-width: 0; }
+  .tpl-slot { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .tpl-slot label { font-size: 12px; color: var(--dim); }
+  .tpl-slot textarea { min-height: 220px; resize: vertical; font-family: inherit; }
+  .tpl-vars { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 12px; }
+  .tpl-var { font-size: 11px; padding: 2px 6px; border-radius: 4px; cursor: pointer; }
+  .tpl-color { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .tpl-color input[type=color] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--border); background: none; }
+  .tpl-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .tpl-err { color: var(--bad); font-size: 12px; margin-top: 6px; }
+  .tpl-err:empty { display: none; }
+  .dc-msg { --dc-bg: #313338; --dc-embed: #2b2d31; --dc-text: #dbdee1; --dc-muted: #949ba4; --dc-link: #00a8fc;
+    background: var(--dc-bg); color: var(--dc-text); border-radius: 8px; padding: 12px;
+    font-family: "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  .dc-embed { background: var(--dc-embed); border-left: 4px solid var(--dc-link); border-radius: 4px;
+    padding: 10px 14px 12px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
+  .dc-title { font-weight: 600; font-size: 15px; color: var(--dc-link); overflow-wrap: anywhere; }
+  .dc-desc { font-size: 14px; line-height: 1.375; overflow-wrap: anywhere; grid-column: 1; }
+  .dc-thumb { grid-column: 2; grid-row: 1 / span 2; width: 80px; height: 80px; object-fit: contain; border-radius: 4px; }
+  .dc-thumb[hidden] { display: none; }
+  .dc-foot { grid-column: 1 / -1; font-size: 12px; color: var(--dc-muted); }
+  .dc-foot:empty { display: none; }
+  .dc-ts { background: rgba(255,255,255,.06); border-radius: 3px; padding: 0 2px; }
+  .dc-a { color: var(--dc-link); }
   .oi-glyph { display: grid; place-items: center; color: var(--dim); font-size: 18px; }
   .oi-glyph[hidden], #oi-now-img[hidden] { display: none; }
   .art-row.oi-inuse { box-shadow: inset 3px 0 0 var(--sel); padding-left: 8px; }
@@ -4563,6 +4599,19 @@
             browser and language. It doesn't see who they are in the app or which page they were on.
           </div>
           <div class="muted" id="img-preview-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+        </div>
+        <div class="panel admin-grp" id="tpl-panel">
+          <h2>MESSAGE TEMPLATES</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px; max-width:80ch;">
+            Reword the announcements the app posts. Words in <code>{braces}</code> are filled in for
+            each post; click a field to insert it. Any part whose fields are all blank is left out:
+            a piece of a line between <code> · </code> separators, a whole line, or a whole paragraph.
+            <code>**bold**</code> works in the message body. Who gets @-mentioned is never part of a
+            template. A blank box keeps the shipped wording.
+          </div>
+          <div id="tpl-list"></div>
+          <div id="tpl-editor" hidden></div>
+          <div class="muted" id="tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
         </div>
       </section>
       <section class="set-sec" data-sec="apps" aria-label="App settings" hidden>
@@ -27079,6 +27128,7 @@ async function loadSettings() {
     if (document.activeElement !== $("motd-input"))
       $("motd-input").value = s.motd || "";
     applyDiscordSettings(s);
+    if ($("tpl-editor").hidden) loadNotifyTemplates();   // never clobber an open editor
     const st = $("admin-load-status");
     if (st.dataset.loadFailed) { st.dataset.loadFailed = ""; st.textContent = ""; st.hidden = true; }
   } catch {
@@ -27592,7 +27642,10 @@ async function testDiscordWebhook(key) {
 // img-src to 'self', and loading it would tell the host who opened the page).
 const ORG_IMAGE_LABEL = { shipped: "Org Navigator patch", upload: "Your uploaded image", url: "Linked image" };
 
+let orgImageRef = null;      // the saved org image, for the template editor's preview
+
 function renderOrgImage(ref) {
+  orgImageRef = ref || null;
   const img = $("oi-now-img"), glyph = $("oi-now-glyph");
   const name = $("oi-now-name"), src = $("oi-now-src");
   img.hidden = true; glyph.hidden = false; img.removeAttribute("src");
@@ -27699,6 +27752,222 @@ $("img-preview-toggle").onchange = async () => {
     st.textContent = on ? "on — reload the page to see previews" : "off — previews stop on the next page load";
   } catch { box.checked = !on; st.textContent = "failed to save — try again"; }
 };
+
+// ---------- message templates (Settings › Discord, slice 5) ----------
+// docs/discord-notification-customization.md §4.5/4.6. The server owns the
+// template engine: the preview is a POST that renders the DRAFT with sample
+// values, so there's no second copy of the drop rule here to drift.
+const TPL_CHANNEL = { events: "Events", marketplace: "Marketplace", lfg: "Group Finder",
+  pirates: "Danger Board", goals: "Goals", ops: "Ops" };
+const TPL_SLOT_LABEL = { title: "Title", description: "Message body", footer: "Footer (small grey line)" };
+let tplData = [];
+let tplOpen = null;          // the template being edited
+let tplFocus = null;         // the slot input a field chip inserts into
+let tplPreviewTimer = null;
+
+async function loadNotifyTemplates() {
+  try {
+    const r = await fetch("/api/admin/notify-templates");
+    if (!r.ok) throw new Error();
+    tplData = (await r.json()).templates || [];
+    renderTplList();
+  } catch { $("tpl-list").innerHTML = `<p class="muted" style="font-size:12px;">Couldn't load the templates.</p>`; }
+}
+
+function renderTplList() {
+  const groups = {};
+  for (const t of tplData) (groups[t.category] = groups[t.category] || []).push(t);
+  $("tpl-list").innerHTML = Object.entries(groups).map(([cat, list]) =>
+    `<div class="tpl-grp-h">${esc(TPL_CHANNEL[cat] || cat)}</div>` + list.map(t =>
+      `<div class="tpl-row"><span class="tpl-name">${esc(t.label)}</span>` +
+      (t.customized ? `<span class="tpl-chip">customized</span>` : "") +
+      `<button data-tpl="${esc(t.key)}">Edit</button></div>`).join("")).join("");
+  $("tpl-list").querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => openTplEditor(b.dataset.tpl));
+}
+
+// What the editor shows in a slot: the override if there is one, else the
+// shipped text, so an admin edits FROM the current wording.
+function tplCurrent(t, slot) { return t.slots[slot].override || t.slots[slot].shipped || ""; }
+
+function openTplEditor(key) {
+  const t = tplData.find(x => x.key === key);
+  if (!t) return;
+  tplOpen = t;
+  const slotHtml = slot => {
+    const id = `tpl-f-${slot}`, val = esc(tplCurrent(t, slot));
+    const field = slot === "description"
+      ? `<textarea id="${id}" class="ti" spellcheck="false">${val}</textarea>`
+      : `<input id="${id}" class="ti" autocomplete="off" value="${val}">`;
+    return `<div class="tpl-slot"><label for="${id}">${TPL_SLOT_LABEL[slot]}</label>${field}</div>`;
+  };
+  const col = t.color;
+  $("tpl-editor").innerHTML =
+    `<div class="tpl-ed-head"><b>${esc(t.label)}</b>` +
+      `<span class="muted" style="font-size:12px;">posts to the ${esc(TPL_CHANNEL[t.category] || t.category)} channel</span>` +
+      `<span style="flex:1"></span><button id="tpl-close">Back to the list</button></div>` +
+    `<div class="tpl-ed"><div>` +
+      t.editable.map(slotHtml).join("") +
+      `<div class="muted" style="font-size:12px;">Fields (click to insert):</div>` +
+      `<div class="tpl-vars">${t.vars.map(v =>
+        `<button class="tpl-var" data-var="${esc(v.name)}" title="${esc(v.label)} — e.g. ${esc(v.sample)}">{${esc(v.name)}}</button>`).join("")}</div>` +
+      `<div class="tpl-color"><label><input type="checkbox" id="tpl-color-on"${col.override ? " checked" : ""}> Custom colour</label>` +
+        `<input type="color" id="tpl-color" value="${esc(col.override || col.shipped)}" aria-label="Colour"${col.override ? "" : " disabled"}>` +
+        `<span class="muted" style="font-size:12px;">${col.note ? esc(col.note) + " A custom colour replaces that." : "Default " + esc(col.shipped) + "."}</span></div>` +
+      `<div class="tpl-actions"><button id="tpl-save">Save</button>` +
+        `<button id="tpl-reset" class="danger-btn"${t.customized ? "" : " hidden"}>Reset to shipped</button>` +
+        `<button id="tpl-test"${t.webhook_set ? "" : " disabled"} title="${t.webhook_set
+          ? "Post this draft, filled with sample values and marked [TEST], to the channel"
+          : "No webhook is set for this channel yet"}">Send test</button></div>` +
+      `<div class="tpl-err" id="tpl-err" role="alert"></div>` +
+    `</div><div><div class="muted" style="font-size:12px; margin-bottom:4px;">Preview with sample values</div>` +
+      `<div class="dc-msg"><div class="dc-embed" id="tpl-prev">` +
+        `<div class="dc-title" id="tpl-prev-title"></div>` +
+        `<img class="dc-thumb" id="tpl-prev-thumb" alt="" hidden>` +
+        `<div class="dc-desc" id="tpl-prev-desc"></div>` +
+        `<div class="dc-foot" id="tpl-prev-foot"></div></div></div></div></div>`;
+  $("tpl-list").hidden = true;
+  $("tpl-editor").hidden = false;
+  $("tpl-status").textContent = "";
+  tplFocus = $("tpl-f-" + t.editable[0]);
+  for (const slot of t.editable) {
+    const el = $("tpl-f-" + slot);
+    el.addEventListener("focus", () => { tplFocus = el; });
+    el.addEventListener("input", scheduleTplPreview);
+  }
+  $("tpl-editor").querySelectorAll("[data-var]").forEach(b => b.onclick = () => insertTplVar(b.dataset.var));
+  $("tpl-color-on").onchange = () => { $("tpl-color").disabled = !$("tpl-color-on").checked; scheduleTplPreview(); };
+  $("tpl-color").oninput = scheduleTplPreview;
+  $("tpl-close").onclick = closeTplEditor;
+  $("tpl-save").onclick = saveTpl;
+  $("tpl-reset").onclick = resetTpl;
+  $("tpl-test").onclick = testTpl;
+  renderTplThumb();
+  refreshTplPreview();
+}
+
+function closeTplEditor() {
+  tplOpen = null;
+  $("tpl-editor").hidden = true;
+  $("tpl-editor").innerHTML = "";
+  $("tpl-list").hidden = false;
+  renderTplList();
+}
+
+function insertTplVar(name) {
+  const el = tplFocus;
+  if (!el) return;
+  const tok = `{${name}}`, a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+  el.value = el.value.slice(0, a) + tok + el.value.slice(b);
+  el.focus();
+  el.selectionStart = el.selectionEnd = a + tok.length;
+  scheduleTplPreview();
+}
+
+// The draft as the API takes it. A slot left identical to the shipped text is
+// sent blank, so "unchanged" never reads as customized.
+function tplDraft() {
+  const t = tplOpen, body = {};
+  for (const slot of t.editable) {
+    const v = $("tpl-f-" + slot).value;
+    body[slot] = v === (t.slots[slot].shipped || "") ? "" : v;
+  }
+  body.color = $("tpl-color-on").checked ? $("tpl-color").value.toUpperCase() : "";
+  return body;
+}
+
+function scheduleTplPreview() {
+  clearTimeout(tplPreviewTimer);
+  tplPreviewTimer = setTimeout(refreshTplPreview, 300);
+}
+
+async function refreshTplPreview() {
+  const t = tplOpen;
+  if (!t) return;
+  const err = $("tpl-err");
+  try {
+    const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tplDraft()) });
+    const d = await r.json().catch(() => ({}));
+    if (tplOpen !== t) return;                       // closed or switched meanwhile
+    if (!r.ok) { err.textContent = d.detail || "Couldn't render the preview."; return; }
+    err.textContent = "";
+    const e = d.embed || {};
+    $("tpl-prev").style.borderLeftColor = "#" + (e.color || 0).toString(16).padStart(6, "0");
+    $("tpl-prev-title").textContent = e.title || "";
+    $("tpl-prev-desc").innerHTML = discordMd(e.description || "");
+    $("tpl-prev-foot").textContent = (e.footer && e.footer.text) || "";
+  } catch { err.textContent = "Couldn't render the preview."; }
+}
+
+function renderTplThumb() {
+  const img = $("tpl-prev-thumb"), ref = orgImageRef;
+  const src = !ref ? "" : ref.kind === "shipped" ? "/images/sc_org_navigator_logo.png"
+    : ref.kind === "upload" ? `/api/settings/discord/org-image?v=${ref.v}`
+    : previewHost(ref.url) ? ref.url : "";
+  if (src) { img.referrerPolicy = "no-referrer"; img.src = src; img.hidden = false; }
+}
+
+// Enough of Discord's markdown to judge a template: escapes, **bold**,
+// [links](url), <t:…> timestamps in the viewer's own zone, line breaks.
+function discordMd(text) {
+  const keep = [];
+  let s = String(text).replace(/\\([\\*_~`|>\[\]])/g, (_, c) => { keep.push(c); return `\u0001${keep.length - 1}\u0002`; });
+  s = esc(s);
+  s = s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<span class="dc-a">$1</span>');
+  s = s.replace(/&lt;t:(\d+):([FfDdTtR])&gt;/g, (_, n, st) => `<span class="dc-ts">${esc(discordTime(+n, st))}</span>`);
+  s = s.replace(/\u0001(\d+)\u0002/g, (_, i) => esc(keep[+i]));
+  return s.replace(/\n/g, "<br>");
+}
+
+function discordTime(sec, style) {
+  const d = new Date(sec * 1000);
+  if (style === "R") {
+    const days = Math.round((d - Date.now()) / 86400000);
+    return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(days, "day");
+  }
+  const o = { F: { dateStyle: "full", timeStyle: "short" }, f: { dateStyle: "long", timeStyle: "short" },
+    D: { dateStyle: "long" }, d: { dateStyle: "short" }, T: { timeStyle: "medium" }, t: { timeStyle: "short" } }[style];
+  return d.toLocaleString(undefined, o);
+}
+
+async function saveTpl() {
+  const t = tplOpen, err = $("tpl-err");
+  try {
+    const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tplDraft()) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { err.textContent = d.detail || "Couldn't save."; return; }
+    Object.assign(t, d);
+    $("tpl-reset").hidden = !d.customized;
+    $("tpl-status").textContent = d.customized ? `saved: "${t.label}" now uses your wording`
+      : `saved: "${t.label}" uses the shipped wording`;
+  } catch { err.textContent = "Couldn't save — try again."; }
+}
+
+async function resetTpl() {
+  const t = tplOpen;
+  if (!(await confirmDialog("Its title, body, footer and colour go back to the wording the app ships with.",
+      { title: `Reset "${t.label}"?`, confirmLabel: "Reset", danger: true }))) return;
+  const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}`, { method: "DELETE" });
+  if (!r.ok) { $("tpl-err").textContent = "Couldn't reset."; return; }
+  Object.assign(t, await r.json());
+  openTplEditor(t.key);
+  $("tpl-status").textContent = `"${t.label}" is back to the shipped wording`;
+}
+
+async function testTpl() {
+  const t = tplOpen, err = $("tpl-err");
+  $("tpl-status").textContent = "sending test…";
+  try {
+    const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}/test`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tplDraft()) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { $("tpl-status").textContent = ""; err.textContent = d.detail || "Test failed."; return; }
+    err.textContent = "";
+    $("tpl-status").textContent = `test sent to the ${TPL_CHANNEL[t.category] || t.category} channel`;
+  } catch { $("tpl-status").textContent = ""; err.textContent = "Test failed — try again."; }
+}
 
 $("discord-lead-save").onclick = async () => {
   const st = $("discord-lead-status");
