@@ -2262,14 +2262,14 @@ def position_start(nav: NavData, pos) -> Poi:
 # planet first (player -> planet -> moon).
 # ---------------------------------------------------------------------------
 
-# Currently-functioning jump-gate network (in-game): Stanton — Pyro — Nyx.
-# Stanton<->Nyx is not a direct lane; it routes through Pyro. The Terra/Magnus
-# jump points present in the dataset are NOT functioning gates, so they are
-# deliberately excluded here.
+# Currently-functioning jump-gate network (in-game): Stanton, Pyro and Nyx are
+# each directly linked to the other two (Stanton<->Nyx is a direct lane, NOT a
+# route through Pyro). The Terra/Magnus jump points present in the dataset are
+# NOT functioning gates, so they are deliberately excluded here.
 GATE_LINKS: dict[str, list[str]] = {
-    "Stanton": ["Pyro"],
+    "Stanton": ["Pyro", "Nyx"],
     "Pyro": ["Stanton", "Nyx"],
-    "Nyx": ["Pyro"],
+    "Nyx": ["Pyro", "Stanton"],
 }
 
 # Gate on a system's side, toward a neighbor: (from_system, to_system) -> the
@@ -2285,6 +2285,11 @@ GATE_NAMES: dict[tuple[str, str], tuple[str, ...]] = {
     ("Pyro", "Stanton"): ("Stanton Gateway",),
     ("Pyro", "Nyx"): ("Nyx Gateway",),
     ("Nyx", "Pyro"): ("Jumppoint_Nyx_Pyro", "Pyro Gateway", "Gateway Station Pyro"),
+    # Stanton has no jump-point container toward Nyx — wiki gateway only. On
+    # the Nyx side the container is (mis)named for Castra but sits within ~4 km
+    # of the Stanton Gateway; it's the same gate.
+    ("Stanton", "Nyx"): ("Nyx Gateway",),
+    ("Nyx", "Stanton"): ("Stanton Gateway", "Nyx - Castra Jump Point"),
 }
 
 # Time to go through a gate once you've arrived at it: request the jump, line
@@ -2613,7 +2618,7 @@ def _base_travel_cost(nav: NavData, src, dst, t_ref: float | None = None) -> dic
                       system's star stood in for it (an over-estimate)
         gate_s        time spent going through gates (0 in-system)
 
-    Cross-system legs route through the functioning Stanton-Pyro-Nyx network:
+    Cross-system legs route through the functioning gate network (GATE_LINKS):
     src -> exit gate, then gate to gate across any transit system, then entry
     gate -> dst, using the same intra-system primitives one level up."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref

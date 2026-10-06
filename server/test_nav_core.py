@@ -1253,10 +1253,10 @@ class TravelCostTests(unittest.TestCase):
         self.assertEqual(leg["via"], "Crusader")
         self.assertFalse(leg["cross_system"])
 
-    def test_system_path_chains_through_pyro(self):
+    def test_system_path_takes_the_direct_lane(self):
         self.assertEqual(nav_core.system_path("Stanton", "Pyro"), ["Stanton", "Pyro"])
-        self.assertEqual(nav_core.system_path("Stanton", "Nyx"),
-                         ["Stanton", "Pyro", "Nyx"])
+        self.assertEqual(nav_core.system_path("Stanton", "Nyx"), ["Stanton", "Nyx"])
+        self.assertEqual(nav_core.system_path("Nyx", "Stanton"), ["Nyx", "Stanton"])
         self.assertEqual(nav_core.system_path("Stanton", "Stanton"), ["Stanton"])
 
     def test_cross_system_leg(self):
@@ -1380,10 +1380,24 @@ class JumpGateRoutingTests(unittest.TestCase):
                                nav_core._leg_time_s(leg["distance_m"])
                                + nav_core.GATE_TRAVERSAL_S)
 
-    def test_transit_system_is_crossed_gate_to_gate(self):
+    def test_stanton_nyx_is_a_direct_lane(self):
         area = self._poi("Area18", "Stanton")
         nyx = next(p for p in self.nav.pois.values() if p.system == "Nyx")
-        leg = nav_core.travel_cost(self.nav, area, nyx)
+        for a, b in ((area, nyx), (nyx, area)):
+            leg = nav_core.travel_cost(self.nav, a, b)
+            self.assertEqual(leg["via_gate"], [a.system, b.system])
+            self.assertEqual(leg["gate_s"], nav_core.GATE_TRAVERSAL_S)
+            self.assertFalse(leg["partial"])
+
+    def test_transit_system_is_crossed_gate_to_gate(self):
+        # No transit exists in today's network (every pair is direct), so
+        # take the Stanton<->Nyx lane away and check a route through Pyro.
+        from unittest import mock
+        area = self._poi("Area18", "Stanton")
+        nyx = next(p for p in self.nav.pois.values() if p.system == "Nyx")
+        links = {"Stanton": ["Pyro"], "Pyro": ["Stanton", "Nyx"], "Nyx": ["Pyro"]}
+        with mock.patch.dict(nav_core.GATE_LINKS, links, clear=True):
+            leg = nav_core.travel_cost(self.nav, area, nyx)
         self.assertEqual(leg["via_gate"], ["Stanton", "Pyro", "Nyx"])
         self.assertEqual(leg["gate_s"], 2 * nav_core.GATE_TRAVERSAL_S)
         p_in = nav_core.entity_global_m(self.nav, self.nav.gates[("Pyro", "Stanton")], 0)
