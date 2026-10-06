@@ -1635,7 +1635,7 @@ class WarningAnnounceTests(unittest.TestCase):
         self.assertIn("Baijini Point", msg["text"])
         self.assertIn("Orison", msg["text"])
         self.assertIn("DEADLY", msg["text"])
-        self.assertIn("players (PvP)", msg["text"])
+        self.assertIn("Players (PvP)", msg["text"])
         self.assertEqual(msg["dedup_key"], "warning-posted:3")
 
     def test_point_announce_reads_as_danger_near(self):
@@ -13852,6 +13852,84 @@ class ImagePreviewToggleTests(unittest.TestCase):
         self.assertIn("script-src 'self' 'nonce-NONCE'", csp)
         self.assertIn("connect-src 'self'", csp)
         self.assertIn("default-src 'self'", csp)
+
+
+class AnnounceEmbedSlice3Tests(unittest.TestCase):
+    """Slice 3: Group Finder and Danger Board posts are embeds (event-card
+    style: one title emoji, bold-labelled facts, escaped member text) and,
+    with goal posts, carry the org image."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._orig_send = notify.send
+
+    @classmethod
+    def tearDownClass(cls):
+        notify.send = cls._orig_send
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        for c in ("lfg", "pirates", "goals"):
+            db.set_setting(notify._webhook_key(c), _GOOD_WEBHOOK)
+        db.set_setting(app._NOTIFY_ORG_IMAGE_KEY, '{"kind": "shipped"}')
+        self.addCleanup(lambda: db.set_setting(app._NOTIFY_ORG_IMAGE_KEY, ""))
+        self.sent = []
+
+        async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+            self.sent.append({"text": text, "embed": kw.get("embed"),
+                              "files": kw.get("files") or [], "mentions": mentions})
+            return True
+        notify.send = _capture
+
+    def test_lfg_post_is_an_embed_with_facts(self):
+        asyncio.run(app._notify_lfg_posted({
+            "id": 1, "poster": "Ace", "direction": "lfm", "tags": ["bunkers", "PvE"],
+            "slots": 2, "filled": 1, "note": "need 2 *now*", "rally": "Port_Tressler",
+            "comms": True}))
+        m, = self.sent
+        self.assertEqual(m["text"], "")                       # no plain-text body any more
+        e = m["embed"]
+        self.assertEqual(e["title"], "🔎 Looking for members: Ace")
+        self.assertEqual(e["description"].split("\n\n"), [
+            r"need 2 \*now\*",
+            "**Needs** 2 (filled 1/2)\n**Playstyles** bunkers · PvE\n"
+            r"**Rally point** Port\_Tressler" "\n**Comms** Voice comms"])
+        self.assertEqual(e["thumbnail"], {"url": "attachment://thumb.png"})
+        self.assertTrue(m["files"])
+        self.assertIsNone(m["mentions"])
+
+    def test_lfj_post_without_extras_is_just_the_title(self):
+        asyncio.run(app._notify_lfg_posted({
+            "id": 2, "poster": "Nova", "direction": "lfj", "tags": [], "slots": None,
+            "filled": 0, "note": "", "rally": None, "comms": False}))
+        e = self.sent[0]["embed"]
+        self.assertEqual(e["title"], "🙋 Looking to join: Nova")
+        self.assertNotIn("description", e)
+
+    def test_warning_post_is_an_embed_coloured_by_severity(self):
+        base = {"id": 3, "poster": "Ace", "kind": "lane", "threat": "pvp",
+                "anchor_a": {"name": "Baijini Point"}, "anchor_b": {"name": "Orison"},
+                "location": "", "note": "2 Cutlass + a _snare_"}
+        asyncio.run(app._notify_warning_posted({**base, "severity": "deadly"}))
+        asyncio.run(app._notify_warning_posted({**base, "id": 4, "severity": "sighted"}))
+        deadly, sighted = (m["embed"] for m in self.sent)
+        self.assertEqual(deadly["title"], "☠️ Pirate snare: Baijini Point ↔ Orison")
+        self.assertEqual(deadly["description"].split("\n\n"), [
+            r"2 Cutlass + a \_snare\_",
+            "**Severity** DEADLY\n**Threat** Players (PvP)\n**Reported by** Ace"])
+        self.assertEqual(deadly["color"], app._EMBED_BAD)
+        self.assertEqual(sighted["color"], app._EMBED_WARN)
+        self.assertIn("thumbnail", deadly)
+
+    def test_goal_post_carries_the_org_image(self):
+        goal = {"id": 9, "title": "Hull plating", "kind": "materials", "description": ""}
+        asyncio.run(app._notify_goal_posted(goal, {"lines": [], "overall_pct": 0}, "1"))
+        e = self.sent[0]["embed"]
+        self.assertTrue(e["title"].startswith("🎯 New org goal"))
+        self.assertEqual(e["thumbnail"], {"url": "attachment://thumb.png"})
 
 
 if __name__ == "__main__":

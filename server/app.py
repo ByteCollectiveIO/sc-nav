@@ -8858,23 +8858,25 @@ async def _notify_lfg_posted(pub: dict) -> None:
     ping; members funnel back through the deep link to actually join."""
     if not notify.is_configured("lfg"):
         return
+    # An embed in the event card's style (slice 3): one emoji in the title, the
+    # member's note, then plain bold-labelled facts; member text escaped.
     lfm = pub["direction"] == "lfm"
-    lines = [f"🔎 **Looking for members** — {pub['poster']}" if lfm
-             else f"🙋 **Looking to join** — {pub['poster']}"]
+    title = (f"🔎 Looking for members: {pub['poster']}" if lfm
+             else f"🙋 Looking to join: {pub['poster']}")
+    facts = []
     if lfm and pub.get("slots"):
-        lines.append(f"Needs {pub['slots']} (filled {pub['filled']}/{pub['slots']})")
+        facts.append(f"**Needs** {pub['slots']} (filled {pub['filled']}/{pub['slots']})")
     if pub.get("tags"):
-        lines.append(" ".join(f"`{t}`" for t in pub["tags"]))
-    if pub.get("note"):
-        lines.append(pub["note"])
-    meta = []
+        facts.append("**Playstyles** " + " · ".join(_md_plain(t) for t in pub["tags"]))
     if pub.get("rally"):
-        meta.append(f"📍 {pub['rally']}")
+        facts.append(f"**Rally point** {_md_plain(pub['rally'])}")
     if pub.get("comms"):
-        meta.append("🎙 voice comms")
-    if meta:
-        lines.append(" · ".join(meta))
-    await notify.send("lfg", "\n".join(lines) + _deep_link("#/lfg"),
+        facts.append("**Comms** Voice comms")
+    blocks = [_md_plain(pub["note"].strip())] if (pub.get("note") or "").strip() else []
+    if facts:
+        blocks.append("\n".join(facts))
+    await notify.send("lfg", "",
+                      **_announce(_embed(title, "\n\n".join(blocks), url=_app_url("#/lfg"))),
                       dedup_key=f"lfg-posted:{pub['id']}")
 
 
@@ -8900,23 +8902,28 @@ async def _notify_warning_posted(pub: dict) -> None:
     if not notify.is_configured("pirates"):
         return
     icon = "☠️" if pub["threat"] == "pvp" else "🤖"
-    threat = "players (PvP)" if pub["threat"] == "pvp" else "NPC pirates (PvE)"
+    threat = "Players (PvP)" if pub["threat"] == "pvp" else "NPC pirates (PvE)"
     a = (pub.get("anchor_a") or {}).get("name")
     b = (pub.get("anchor_b") or {}).get("name")
     if pub["kind"] == "lane":
         where = f"{a} ↔ {b}" if a and b else (pub.get("location") or "a trade lane")
-        head = f"{icon} **Pirate snare — {where}**"
+        title = f"{icon} Pirate snare: {where}"
     else:
         where = a or (pub.get("location") or "a location")
-        head = f"{icon} **Danger near {where}**"
-    lines = [head,
-             f"{pub['severity'].upper()} · {threat} · reported by {pub['poster']}"]
+        title = f"{icon} Danger near {where}"
+    # Embed, event-card style (slice 3). The title names the place; the facts
+    # say how bad and who. A deadly report reads red, anything else amber.
+    facts = [f"**Severity** {pub['severity'].upper()}", f"**Threat** {threat}"]
     loc = (pub.get("location") or "").strip()
     if loc and loc != where:
-        lines.append(f"📍 {loc}")
-    if pub.get("note"):
-        lines.append(pub["note"])
-    await notify.send("pirates", "\n".join(lines) + _deep_link("#/pirates"),
+        facts.append(f"**Location** {_md_plain(loc)}")
+    facts.append(f"**Reported by** {_md_plain(pub['poster'])}")
+    blocks = [_md_plain(pub["note"].strip())] if (pub.get("note") or "").strip() else []
+    blocks.append("\n".join(facts))
+    color = _EMBED_BAD if pub["severity"] == "deadly" else _EMBED_WARN
+    await notify.send("pirates", "",
+                      **_announce(_embed(title, "\n\n".join(blocks),
+                                         url=_app_url("#/pirates"), color=color)),
                       dedup_key=f"warning-posted:{pub['id']}")
 
 
@@ -9457,8 +9464,8 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
     title = f"{icon} {'Goal update' if refresh else 'New org goal'}: {goal['title']}"
     await notify.send(
         "goals", "",
-        embed=_embed(title, desc, url=_app_url(f"#/goals/{goal['id']}"),
-                     color=_EMBED_GOOD if progress.get("is_met") else _EMBED_INFO),
+        **_announce(_embed(title, desc, url=_app_url(f"#/goals/{goal['id']}"),
+                           color=_EMBED_GOOD if progress.get("is_met") else _EMBED_INFO)),
         dedup_key=f"goal-{'refresh' if refresh else 'posted'}:{goal['id']}:{int(time.time())}")
 
 
@@ -15532,7 +15539,8 @@ def _event_banner(ev: dict | None) -> tuple[dict | None, list[tuple[str, bytes, 
 
 def _announce(embed: dict, *, event: dict | None = None) -> dict:
     """`embed=`/`files=` kwargs for an ANNOUNCEMENT-class post (§3.4): new event,
-    reminder, reschedule, cancellation, marketplace listing, op record. The org
+    reminder, reschedule, cancellation, marketplace listing, op record, and
+    (slice 3) Group Finder post, danger warning, goal post/re-post. The org
     image (thumbnail) goes on these only — a mark on "you were outbid" is noise.
     `event` adds that event's own banner in the full-width image slot; callers
     pass it for created / reminder / changed, never for a cancellation."""
