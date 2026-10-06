@@ -288,10 +288,15 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
   .set-nav-admin { display: contents; }
   .set-nav-admin[hidden] { display: none; }
-  .set-nav-h { font-size: 11px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase;
-    padding: 12px 10px 4px; }
-  .set-nav > .set-nav-h:first-child { padding-top: 4px; }
-  .set-nav a { display: block; padding: 7px 10px; border-radius: 6px; font-size: 13px;
+  /* Group headers: the same 11px tracked caps as every section label, but in
+     text colour + semibold so they read as headers, not as a dimmer link, and
+     each group after the first rules off with a hairline (DESIGN.md: sections
+     rule off from one another; cyan stays reserved for the selected link). */
+  .set-nav-h { font-size: 11px; letter-spacing: 2px; color: var(--text); font-weight: 600;
+    text-transform: uppercase; padding: 14px 10px 6px; margin-top: 8px;
+    border-top: 1px solid var(--border); }
+  .set-nav > .set-nav-h:first-child { padding-top: 4px; margin-top: 0; border-top: 0; }
+  .set-nav a { display: block; padding: 7px 10px 7px 14px; border-radius: 6px; font-size: 13px;
     color: var(--dim); text-decoration: none; transition: color .12s, background .12s; }
   .set-nav a:hover { color: var(--text); background: var(--panel2); }
   .set-nav a[aria-current="page"] { background: var(--accent); color: var(--ink-on-accent); }
@@ -309,8 +314,11 @@
        small inline label at the start of each run. */
     .set-nav { position: static; flex-direction: row; flex-wrap: nowrap; gap: 6px;
       overflow-x: auto; scrollbar-width: thin; padding: 6px; }
-    .set-nav-h { flex: none; align-self: center; padding: 0 2px 0 6px; font-size: 10px; letter-spacing: 1px; }
-    .set-nav > .set-nav-h:first-child { padding-left: 2px; }
+    /* The hairline turns vertical: a divider before each group's label. */
+    .set-nav-h { flex: none; align-self: stretch; display: flex; align-items: center;
+      padding: 0 2px 0 10px; margin: 0 0 0 4px; font-size: 10px; letter-spacing: 1px;
+      border-top: 0; border-left: 1px solid var(--border); }
+    .set-nav > .set-nav-h:first-child { padding-left: 2px; margin-left: 0; border-left: 0; }
     .set-nav a { flex: none; white-space: nowrap; background: var(--panel2);
       border: 1px solid var(--border); padding: 8px 12px; }
   }
