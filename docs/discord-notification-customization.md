@@ -1,6 +1,6 @@
 # Discord notification customization (images + message templates)
 
-**Status:** 🔨 slices 1–2 built 2026-10-05 (attachments + org image; per-event banner), unreleased; 2b–5 design. Written against v1.19.1.
+**Status:** 🔨 slices 1, 2 and 2b built 2026-10-05/06 (attachments + org image; per-event banner; known-host preview toggle); 3–5 design. Written against v1.19.1.
 **Origin:** a self-hosting org asked to put its own graphics on event
 announcements. That raised the general question of what an admin can change
 about the messages the app posts to Discord.
@@ -418,8 +418,7 @@ Each slice ships on its own and is useful without the next.
 | # | Question | Default if unanswered |
 |---|---|---|
 | O2 | Per-category thumbnail overrides | later, on request |
-| O6 | The exact known-host list for previews | `i.imgur.com` plus a few established image hosts, chosen at build |
 
 Settled 2026-10-05: no image by default (S3), thumbnail slot for the org image
 (S6), admin-only test sends (S7), external preview as an off-by-default admin
-toggle (S8), GIF accepted under the 4 MB cap (S9), known hosts only (S10).
+toggle (S8), GIF accepted under the 4 MB cap (S9), known hosts only (S10). Settled at build (was O6): the host list is `i.imgur.com`, `i.ibb.co`, `i.postimg.cc`, `robertsspaceindustries.com`, `media.robertsspaceindustries.com` (RSI is where org banners already live); `app.IMAGE_PREVIEW_HOSTS`.

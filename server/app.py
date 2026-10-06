@@ -1615,12 +1615,35 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # injection is far lower risk). No 'unsafe-eval', no external script/object
 # sources, framing denied (clickjacking). Output-escaping is still the primary
 # XSS defense; the nonce makes the CSP a real backstop rather than a formality.
+# In-app previews of LINKED announcement images (docs/discord-notification-
+# customization.md §4.7, S8/S10): an admin toggle, OFF by default, and only ever
+# for this fixed list of established image hosts — never "any https". Loading an
+# image tells its host the viewer's IP, time and browser; a fixed list means an
+# organizer can't point a preview at a server they run to see who opened an
+# event. RSI is on it because that's where org banners already live. Discord
+# itself always shows the image regardless (it fetches through its own proxy).
+IMAGE_PREVIEW_HOSTS = ("i.imgur.com", "i.ibb.co", "i.postimg.cc",
+                       "robertsspaceindustries.com", "media.robertsspaceindustries.com")
+
+
+def external_image_preview() -> bool:
+    return db.get_setting("notify_external_preview", "0") == "1"
+
+
+def image_preview_hosts() -> list[str]:
+    """Hosts the app may load a linked image from right now ([] = toggle off)."""
+    return list(IMAGE_PREVIEW_HOSTS) if external_image_preview() else []
+
+
 def _csp(nonce: str) -> str:
+    # Read per response, so turning the toggle off closes img-src on the very
+    # next page load (an already-open page keeps the policy it loaded with).
+    hosts = "".join(f" https://{h}" for h in image_preview_hosts())
     return (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
         "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
+        f"img-src 'self' data:{hosts}; "
         "connect-src 'self'; "
         "font-src 'self'; "
         "object-src 'none'; "
@@ -15177,6 +15200,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "discord_webhooks": notify.webhook_status(),
         "discord_reminder_lead_min": notify.reminder_lead_min(),
         "notify_org_image": notify_org_image(),   # None = off (the default)
+        "notify_external_preview": external_image_preview(),
+        "image_preview_known_hosts": list(IMAGE_PREVIEW_HOSTS),
     }
 
 
@@ -15205,6 +15230,8 @@ class SettingsIn(BaseModel):
     # get an amber "stale" badge + renew nudge. 0 turns the display off.
     listing_stale_days: int | None = Field(default=None, ge=0, le=365)
     event_builtin_templates: bool | None = None
+    # Preview linked announcement images from IMAGE_PREVIEW_HOSTS in the app.
+    notify_external_preview: bool | None = None
     op_default_rules: OpRulesIn | None = None
     # ⛏ mined-out report lifetime (minutes, #37 slice 2): how long a depletion
     # report down-ranks a survey cluster in ore-first routing. Capped at a week.
@@ -15289,6 +15316,9 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     if body.event_builtin_templates is not None:
         db.set_setting("event_builtin_templates",
                        "1" if body.event_builtin_templates else "0")
+    if body.notify_external_preview is not None:
+        db.set_setting("notify_external_preview",
+                       "1" if body.notify_external_preview else "0")
     if body.op_default_rules is not None:
         db.set_setting("op_default_rules", json.dumps(nav_core.normalize_op_rules(
             body.op_default_rules.model_dump(exclude_none=True))))
@@ -15351,6 +15381,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "root_admin_ids": sorted(auth.ADMIN_IDS), "pois": len(nav.pois),
             "discord_webhooks": notify.webhook_status(),
             "discord_reminder_lead_min": notify.reminder_lead_min(),
+            "notify_external_preview": external_image_preview(),
             "org_name": org_name(), **org_copy_all(),
             "motd": motd_state()["text"]}
 
@@ -16246,6 +16277,7 @@ async def api_me(user: dict = Depends(require_session)):
             "crafter_note": (members_dir.get(user["id"]) or {}).get("crafter_note") or "",
             "active_survey_zone": members_dir.active_survey_zone(user["id"]),
             "pinned_ids": sorted(hub.get(user).pinned_ids),
+            "image_preview_hosts": image_preview_hosts(),   # [] = no linked-image previews
             **_member_identity(user["id"])}
 
 
