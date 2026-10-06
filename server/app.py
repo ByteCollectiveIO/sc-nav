@@ -15455,12 +15455,26 @@ def _clean_notify_template(key: str, body: "NotifyTemplateIn") -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _notify_template_channel(key: str) -> str | None:
+    """The channel this message REALLY posts to right now. Op records fall back
+    to the events webhook until an org splits off an ops one
+    (_ops_notify_category); everything else posts to its own category or not
+    at all. The editor labels, gates Send test and sends with this, so it
+    never claims "Ops" for a post that goes to Events (critique 2026-10-06)."""
+    cat = notify_templates.TEMPLATES[key].category
+    if cat == "ops":
+        return _ops_notify_category()
+    return cat if notify.is_configured(cat) else None
+
+
 def _notify_template_view(key: str) -> dict:
     t = notify_templates.TEMPLATES[key]
     over = notify_template_override(key)
+    channel = _notify_template_channel(key)
     return {
         "key": key, "label": t.label, "category": t.category,
-        "webhook_set": notify.is_configured(t.category),
+        "channel": channel or t.category,          # where it posts (or would)
+        "webhook_set": channel is not None,
         "slots": {slot: {"shipped": getattr(t, slot), "override": over.get(slot, "")}
                   for slot in notify_templates.SLOTS},
         "editable": [s for s in notify_templates.SLOTS if getattr(t, s) is not None],
@@ -15525,9 +15539,10 @@ async def test_notify_template(key: str, body: NotifyTemplateIn,
     global _test_send_at
     _check_notify_template_key(key)
     draft = _clean_notify_template(key, body)
-    cat = notify_templates.TEMPLATES[key].category
-    if not notify.is_configured(cat):
-        raise HTTPException(status_code=400, detail=f"no Discord webhook set for {cat}")
+    cat = _notify_template_channel(key)
+    if cat is None:
+        raise HTTPException(status_code=400,
+                            detail=f"no Discord webhook set for {notify_templates.TEMPLATES[key].category}")
     now = time.monotonic()
     if now - _test_send_at < 5:
         raise HTTPException(status_code=429, detail="slow down — try again in a moment")

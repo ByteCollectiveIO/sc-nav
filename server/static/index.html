@@ -227,7 +227,7 @@
   .tpl-ed > * { min-width: 0; }
   .tpl-slot { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
   .tpl-slot label { font-size: 12px; color: var(--dim); }
-  .tpl-slot textarea { min-height: 220px; resize: vertical; font-family: inherit; }
+  .tpl-slot textarea { min-height: 220px; resize: vertical; font-family: inherit; overflow-y: auto; }
   .tpl-vars { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 8px; }
   .tpl-vgrp { display: flex; gap: 8px; align-items: baseline; }
   .tpl-vgrp-h { font-size: 11px; color: var(--dim); min-width: 64px; flex: none; }
@@ -235,6 +235,14 @@
   .tpl-how summary { cursor: pointer; color: var(--text); }
   .tpl-how p { margin: 6px 0 0; line-height: 1.5; }
   .tpl-dirty { font-size: 12px; color: var(--warn); }
+  .tpl-blocked { font-size: 12px; color: var(--bad); }
+  .tpl-blocked[hidden] { display: none; }
+  .tpl-fix { margin-left: 4px; font-size: 12px; }
+  .tpl-excerpt { display: block; font-size: 12px; color: var(--dim); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .tpl-row .tpl-name { min-width: 0; }
+  .tpl-shipped { font-size: 11px; color: var(--dim); }
+  .dc-busy { color: var(--dc-muted); }
   .tpl-dirty[hidden], #tpl-color-auto[hidden] { display: none; }
   .tpl-why { font-size: 12px; color: var(--dim); margin-top: 6px; }
   .tpl-slot [aria-invalid="true"] { border-color: var(--bad); outline: 1px solid var(--bad); }
@@ -244,7 +252,7 @@
   .tpl-color { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
   .tpl-color input[type=color] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--border); background: none; cursor: pointer; }
   .tpl-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
-  .tpl-err { color: var(--bad); font-size: 12px; margin-top: 6px; }
+  .tpl-err { color: var(--bad); font-size: 12px; margin: -4px 0 10px; }
   .tpl-err:empty { display: none; }
   .dc-msg { --dc-bg: #313338; --dc-embed: #2b2d31; --dc-text: #dbdee1; --dc-muted: #949ba4; --dc-link: #00a8fc;
     background: var(--dc-bg); color: var(--dc-text); border-radius: 8px; padding: 12px;
@@ -289,14 +297,20 @@
   .set-body, .set-sec { display: grid; gap: 14px; align-content: start; min-width: 0; }
   .set-sec > * { min-width: 0; }
   .set-sec[hidden], #admin-load-status[hidden] { display: none; }
+  .set-sec .muted a, .tpl-why a { color: var(--accent); }
   #admin-load-status { font-size: 12px; }
   @media (max-width: 720px) {
     /* Phone: the rail becomes two wrapped rows of tabs above the section. */
     .set-shell { grid-template-columns: minmax(0, 1fr); }
-    .set-nav { position: static; flex-direction: row; flex-wrap: wrap; gap: 6px; }
-    .set-nav-h { flex-basis: 100%; padding: 4px 2px 0; }
-    .set-nav > .set-nav-h:first-child { padding-top: 0; }
-    .set-nav a { background: var(--panel2); border: 1px solid var(--border); padding: 8px 12px; }
+    /* One horizontally scrolling strip: five wrapped rows of chips pushed the
+       section ~140 px down (critique 2026-10-06). The group names become a
+       small inline label at the start of each run. */
+    .set-nav { position: static; flex-direction: row; flex-wrap: nowrap; gap: 6px;
+      overflow-x: auto; scrollbar-width: thin; padding: 6px; }
+    .set-nav-h { flex: none; align-self: center; padding: 0 2px 0 6px; font-size: 10px; letter-spacing: 1px; }
+    .set-nav > .set-nav-h:first-child { padding-left: 2px; }
+    .set-nav a { flex: none; white-space: nowrap; background: var(--panel2);
+      border: 1px solid var(--border); padding: 8px 12px; }
   }
   /* Section title: names the page and, for org sections, who it affects. */
   .settings-grp-h { font-size: 11px; letter-spacing: 2px; color: var(--dim);
@@ -438,16 +452,21 @@
   button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 12px; font: inherit; font-size: 12px; cursor: pointer; }
   button:hover { border-color: var(--accent); }
+  /* Disabled must LOOK disabled: before this a blocked Save rendered exactly
+     like an enabled one, so the protection read as a broken button
+     (critique 2026-10-06). Scoped rules elsewhere still win where set. */
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button:disabled:hover { border-color: var(--border); }
   button.active { background: var(--accent); color: var(--ink-on-accent); border-color: var(--accent); }
 
   /* textarea.ti too: without it every textarea outside .ev-field (template
      body, MOTD, org copy, LFG + danger notes) rendered as the browser's grey
      box with pure-white text and no focus state (critique 2026-10-06). */
-  input.ti, select.sel, textarea.ti { padding: 8px 10px; font: inherit; font-size: 13px;
+  input.ti, select.sel, select.ti, textarea.ti { padding: 8px 10px; font: inherit; font-size: 13px;
     background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
   textarea.ti { line-height: 1.45; resize: vertical; }
   #search { width: 100%; }
-  input.ti:focus, select.sel:focus, textarea.ti:focus { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+  input.ti:focus, select.sel:focus, select.ti:focus, textarea.ti:focus { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
   /* Placeholders must meet the same contrast bar as body text (DESIGN.md), not the
      UA faint-gray default. --dim is the AA-tuned muted token in both themes. */
   input.ti::placeholder, textarea.ti::placeholder { color: var(--dim); opacity: 1; }
@@ -2125,6 +2144,11 @@
   .ev-img-warn { margin: 0 0 8px; font-size: 12px; color: var(--warn); max-width: 70ch; }
   .ev-img-warn[hidden] { display: none; }
   @media (max-width: 560px) { .ev-img-row input, #ev-f-imgurl { flex: 1 1 100%; min-width: 0; } }
+  .ev-act-life { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .ev-act-life:empty { display: none; }
+  @media (max-width: 560px) { .ev-act-life { margin-left: 0; flex-basis: 100%; padding-top: 6px;
+    border-top: 1px solid var(--border); } }
+  .ev-img-card > summary { cursor: pointer; }
   .ev-banner { display: block; max-width: 100%; max-height: 120px; border-radius: 6px;
     border: 1px solid var(--border); margin: 8px 0 4px; object-fit: contain; background: var(--bg); }
   .ev-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
@@ -2919,7 +2943,7 @@
   .goal-unlock-line.done .rm-line-bar > span { background: var(--good); }
   /* board search / sort / filter row */
   .mk-search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
-  .mk-search input, .mk-search select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
+  .mk-search input, .mk-search select { font-family: inherit; font-size: 13px; padding: 6px 10px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
   .mk-search input:focus, .mk-search select:focus { outline: none; border-color: var(--accent); }
   .mk-search input.mk-q { flex: 1; min-width: 160px; }
@@ -2939,7 +2963,7 @@
   .mk-qhelp p { font-size: 12px; line-height: 1.5; color: var(--dim); margin: 6px 0; max-width: 68ch; }
   .mk-qhelp b { color: var(--text); }
   .mk-craftrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 2px; }
-  .mk-craftrow input, .mk-craftrow select { font-size: 13px; padding: 6px 10px; border-radius: 6px;
+  .mk-craftrow input, .mk-craftrow select { font-family: inherit; font-size: 13px; padding: 6px 10px; border-radius: 6px;
     border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
   .mk-craftrow input:focus, .mk-craftrow select:focus { outline: none; border-color: var(--accent); }
   .mk-craftrow .mk-qmin, .mk-craftrow .mk-qmax { width: 104px; font-variant-numeric: tabular-nums; }
@@ -4591,8 +4615,7 @@
           <div class="art-row">
             <span class="art-thumb oi-glyph" aria-hidden="true">⬆</span>
             <div class="art-name"><b>Upload your own</b><span class="art-src">PNG, JPG, WebP or GIF, up to 4&nbsp;MB. Square looks best.</span></div>
-            <input type="file" id="oi-file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Org image file">
-            <button id="oi-upload">Upload</button>
+            <input type="file" id="oi-file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Upload an org image">
           </div>
           <div class="art-row">
             <span class="art-thumb oi-glyph" aria-hidden="true">🔗</span>
@@ -13936,11 +13959,15 @@ async function renderDetailBody(e) {
     ? `<button class="ev-btn" id="ev-edit">Edit</button>` +
       `<button class="ev-btn" id="ev-clone" title="Create a new event pre-filled from this one">Clone</button>` +
       `<button class="ev-btn" id="ev-savetpl" title="Make this event's setup a template the org can start from">Save as template</button>` +
-      (e.notify_test ? `<button class="ev-btn" id="ev-notifytest" title="Admins: post this event's announcement to the events channel, marked TEST">Send test</button>` : "") +
+      (e.notify_test ? `<button class="ev-btn" id="ev-notifytest" title="Admins: post this event's announcement to the events channel, marked TEST">Test Discord post</button>` : "") +
       (!cancelled && !e.op ? `<button class="ev-btn primary" id="ev-runop" title="Open the op: check people in, add walk-ins and guests, keep the record">Run mission</button>` : "") +
+      // Lifecycle actions sit apart from the editing ones (critique 2026-10-06:
+      // seven buttons in one undifferentiated row).
+      `<span class="ev-act-life">` +
       (cancelled || e.phase === "ended" ? ""
         : `<button class="ev-btn" id="ev-complete" title="Wrap up — moves it to the past tab as attendance history">Mark completed</button>`) +
-      (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
+      (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`) +
+      `</span>`
     : "";
 
   // Signups are open only in the `open` phase; once closed/live/ended show a note
@@ -14578,7 +14605,7 @@ function rosterRowHtml(tax, role, needed) {
   const opts = `<option value="">role…</option>` + tax.roles.map(r =>
     `<option value="${esc(r)}" ${r === role ? "selected" : ""}>${esc(r)}</option>`).join("");
   return `<div class="ev-roster-row"><select class="ev-rr-role">${opts}</select>` +
-    `<input class="ev-rr-needed" type="number" min="0" step="1" value="${needed != null ? needed : 1}" title="how many needed">` +
+    `<input class="ev-rr-needed ti" type="number" min="0" step="1" value="${needed != null ? needed : 1}" title="how many needed">` +
     `<span class="ev-row-del" title="remove role">✕</span></div>`;
 }
 
@@ -14811,17 +14838,19 @@ const EV_IMG_GOOD_W = 800;   // wide enough to fill it on high-density screens t
 // "Discord announcement" card on the event + template forms. Its state lives in
 // evFormImage (set by eventFormHtml), painted by renderEventImageNow.
 function eventImageCardHtml() {
-  return `<div class="ev-form-card" id="ev-f-img"><div class="ev-section-h">Discord announcement image</div>` +
-    `<p class="ev-img-hint">Optional. Shown under the event's Discord posts; wide images fill them. ` +
+  // A <details> like Mission details / Contracts beside it: closed until the
+  // organizer wants it, open when the event already has an image.
+  return `<details class="ev-form-card ev-img-card" id="ev-f-img"${evFormImage ? " open" : ""}>` +
+    `<summary class="ev-section-h">Discord announcement image <span class="ev-hint">optional</span></summary>` +
+    `<p class="ev-img-hint">Shown under the event's Discord posts; wide images fill them. ` +
       `PNG, JPG, WebP or GIF up to 4&nbsp;MB, or an https link.</p>` +
     `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
       `<button class="ev-btn danger" id="ev-f-imgrm" hidden>Remove</button></div>` +
     `<p class="ev-img-warn" id="ev-f-imgsize" hidden></p>` +
-    `<div class="ev-img-row"><input type="file" id="ev-f-imgfile" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Announcement image file">` +
-      `<button class="ev-btn" id="ev-f-imgup">Upload</button></div>` +
+    `<div class="ev-img-row"><input type="file" id="ev-f-imgfile" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Upload an announcement image"></div>` +
     `<div class="ev-img-row"><input id="ev-f-imgurl" class="ti" type="url" autocomplete="off" placeholder="or link one: https://i.imgur.com/…" aria-label="Announcement image link">` +
       `<button class="ev-btn" id="ev-f-imglink">Use link</button></div>` +
-    `<div id="ev-f-imgmsg" class="muted" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div></div>`;
+    `<div id="ev-f-imgmsg" class="muted" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div></details>`;
 }
 
 function renderEventImageNow() {
@@ -14876,9 +14905,10 @@ function bindEventImage() {
   if (!$("ev-f-img")) return;
   renderEventImageNow();
   const msg = $("ev-f-imgmsg");
-  $("ev-f-imgup").onclick = async () => {
+  // Picking a file uploads it: one step, not "Choose File" then "Upload".
+  $("ev-f-imgfile").onchange = async () => {
     const f = $("ev-f-imgfile").files[0];
-    if (!f) { msg.textContent = "choose an image first"; return; }
+    if (!f) return;
     if (f.size > 4 * 1024 * 1024) { msg.textContent = "that file is over 4 MB"; return; }
     msg.textContent = "uploading…";
     const fd = new FormData(); fd.append("file", f);
@@ -26331,7 +26361,12 @@ function applySettingsSection(h) {
   err.hidden = SETTINGS_SECTIONS[sec] !== "admin" || !err.dataset.loadFailed;
   // A new section starts at its top; a re-render of the same one (renderAccount
   // re-runs applyView) must not yank the page.
-  if (sec !== settingsSec) window.scrollTo(0, 0);
+  if (sec !== settingsSec) {
+    window.scrollTo(0, 0);
+    // On a phone the rail is a scrolling strip: keep the current section in view.
+    const cur = document.querySelector('#set-nav a[aria-current="page"]');
+    if (cur) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
   settingsSec = sec;
 }
 
@@ -27594,7 +27629,7 @@ function renderDiscordRows(webhooks) {
     row.innerHTML =
       `<div><b>${c.label}</b> <span class="muted" style="font-size:12px;">${c.desc}</span></div>` +
       `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:4px;">` +
-        `<input id="dwh-${c.key}" type="url" autocomplete="off" style="flex:1; min-width:220px;" placeholder="${st.set ? "connected (" + esc(st.tail) + "); paste a new URL to replace" : "https://discord.com/api/webhooks/… (off)"}">` +
+        `<input id="dwh-${c.key}" class="ti" type="url" autocomplete="off" style="flex:1; min-width:220px;" placeholder="${st.set ? "connected (" + esc(st.tail) + "); paste a new URL to replace" : "https://discord.com/api/webhooks/… (off)"}">` +
         `<button class="disc-save">Save</button>` +
         `<button class="disc-test"${st.set ? "" : " disabled"}>Send test</button>` +
         `<button class="disc-clear danger-btn"${st.set ? "" : " hidden"}>Clear</button>` +
@@ -27725,9 +27760,9 @@ $("oi-shipped").onclick = async () => {
   if (await orgImageRequest("PUT", { kind: "shipped" }, "saving…"))
     $("oi-status").textContent = "saved: announcements now carry the Org Navigator patch";
 };
-$("oi-upload").onclick = async () => {
+$("oi-file").onchange = async () => {     // picking a file uploads it
   const f = $("oi-file").files[0];
-  if (!f) { $("oi-status").textContent = "choose an image first"; return; }
+  if (!f) return;
   if (f.size > 4 * 1024 * 1024) { $("oi-status").textContent = "that file is over 4 MB"; return; }
   const fd = new FormData(); fd.append("file", f);
   if (await orgImageRequest("POST", fd, "uploading…")) {
@@ -27806,8 +27841,11 @@ function renderTplList() {
   for (const t of tplData) (groups[t.category] = groups[t.category] || []).push(t);
   $("tpl-list").innerHTML = Object.entries(groups).map(([cat, list]) =>
     `<div class="tpl-grp-h">${esc(TPL_CHANNEL[cat] || cat)}</div>` + list.map(t =>
-      `<div class="tpl-row"><span class="tpl-name">${esc(t.label)}</span>` +
-      (t.customized ? `<span class="tpl-chip">customized</span>` : "") +
+      // The row says what the post currently leads with, so an admin can scan
+      // for what they've changed without opening each one.
+      `<div class="tpl-row"><span class="tpl-name">${esc(t.label)}` +
+        `<span class="tpl-excerpt">${esc(tplCurrent(t, "title"))}</span></span>` +
+      (t.customized ? `<span class="tpl-chip">customized</span>` : `<span class="tpl-shipped">shipped wording</span>`) +
       `<button data-tpl="${esc(t.key)}" aria-label="Edit ${esc(t.label)}">Edit</button></div>`).join("")).join("");
   $("tpl-list").querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => openTplEditor(b.dataset.tpl));
 }
@@ -27819,7 +27857,8 @@ function tplCurrent(t, slot) { return t.slots[slot].override || t.slots[slot].sh
 function tplVarChips(t) {
   const byGroup = {};
   for (const v of t.vars) (byGroup[v.group || ""] = byGroup[v.group || ""] || []).push(v);
-  const chip = v => `<button class="tpl-var" data-var="${esc(v.name)}" title="${esc(v.label)} — e.g. ${esc(v.sample)}">{${esc(v.name)}}</button>`;
+  const sample = v => !v.sample ? "" : " — e.g. " + v.sample.replace(/<t:(\d+):([FfDdTtR])>/g, (_, n, st) => discordTime(+n, st));
+  const chip = v => `<button class="tpl-var" data-var="${esc(v.name)}" title="${esc(v.label + sample(v))}">{${esc(v.name)}}</button>`;
   const grouped = Object.keys(byGroup).some(g => g);
   return TPL_GROUP_ORDER.filter(g => byGroup[g]).map(g =>
     `<div class="tpl-vgrp">${grouped && g ? `<span class="tpl-vgrp-h">${esc(g)}</span>` : ""}` +
@@ -27840,13 +27879,18 @@ function openTplEditor(key) {
   };
   const col = t.color;
   tplColorCustom = !!col.override;
-  const channel = esc(TPL_CHANNEL[t.category] || t.category);
+  // Where it REALLY posts: an op record goes to Events until an Ops channel is set.
+  const channel = esc(TPL_CHANNEL[t.channel] || t.channel);
+  const fellBack = t.channel !== t.category;
   $("tpl-editor").innerHTML =
     `<div class="tpl-ed-head"><b>${esc(t.label)}</b>` +
-      `<span class="muted" style="font-size:12px;">posts to the ${channel} channel</span>` +
+      `<span class="muted" style="font-size:12px;">posts to the ${channel} channel` +
+        `${fellBack ? ` (no ${esc(TPL_CHANNEL[t.category] || t.category)} channel set)` : ""}</span>` +
       `<span style="flex:1"></span><button id="tpl-close">Back to the list</button></div>` +
     `<div class="tpl-ed"><div class="tpl-ed-form">` +
-      t.editable.map(slotHtml).join("") +
+      // Chips sit right after the body (where most fields go), before the
+      // footer, so Tab reaches them without passing the footer first.
+      t.editable.filter(x => x !== "footer").map(slotHtml).join("") +
       `<div class="muted" style="font-size:12px;">Fields (click to insert at the cursor):</div>` +
       tplVarChips(t) +
       `<details class="tpl-how"><summary>How fields work</summary>` +
@@ -27855,22 +27899,24 @@ function openTplEditor(key) {
         `or a whole paragraph. <code>**bold**</code> works in the message body (not the title or ` +
         `footer). For a literal brace, type <code>{{</code> or <code>}}</code>. Who gets ` +
         `@-mentioned is never part of a template.</p></details>` +
+      (t.editable.includes("footer") ? slotHtml("footer") : "") +
       `<div class="tpl-color"><span>Colour</span>` +
         `<input type="color" id="tpl-color" value="${esc(col.override || col.shipped)}" aria-label="Post colour">` +
         `<span class="muted" id="tpl-color-note" style="font-size:12px;"></span>` +
         `<button id="tpl-color-auto" hidden>Use automatic colour</button></div>` +
       `<div class="tpl-actions"><button id="tpl-save">Save</button>` +
         `<span class="tpl-dirty" id="tpl-dirty" hidden>Unsaved changes</span>` +
+        `<span class="tpl-blocked" id="tpl-blocked" hidden>Fix the error to save</span>` +
         `<button id="tpl-reset" class="danger-btn"${t.customized ? "" : " hidden"}>Reset to shipped</button>` +
         `<button id="tpl-test">Send test</button></div>` +
-      (t.webhook_set ? "" : `<div class="tpl-why">Send test needs a webhook for the ${channel} channel. ` +
+      (t.webhook_set ? "" : `<div class="tpl-why">Send test needs a webhook for the ${esc(TPL_CHANNEL[t.category] || t.category)} channel. ` +
         `Add one under <a href="#/settings/discord">Discord channels</a>.</div>`) +
       `<div class="tpl-err" id="tpl-err" role="alert"></div>` +
     `</div><div class="tpl-ed-prev"><div class="muted" style="font-size:12px; margin-bottom:4px;">Preview with sample values</div>` +
-      `<div class="dc-msg"><div class="dc-embed" id="tpl-prev">` +
+      `<div class="dc-msg"><div class="dc-embed" id="tpl-prev" aria-busy="true">` +
         `<div class="dc-title" id="tpl-prev-title"></div>` +
         `<img class="dc-thumb" id="tpl-prev-thumb" alt="" hidden>` +
-        `<div class="dc-desc" id="tpl-prev-desc"></div>` +
+        `<div class="dc-desc" id="tpl-prev-desc"><span class="dc-busy">Rendering…</span></div>` +
         `<div class="dc-foot" id="tpl-prev-foot"></div></div></div></div></div>`;
   $("tpl-list").hidden = true;
   $("tpl-editor").hidden = false;
@@ -27878,8 +27924,9 @@ function openTplEditor(key) {
   for (const slot of t.editable) {
     const el = $("tpl-f-" + slot);
     el.addEventListener("focus", () => { tplFocus = el; });
-    el.addEventListener("input", () => { syncTplDirty(); scheduleTplPreview(); });
+    el.addEventListener("input", () => { syncTplDirty(); scheduleTplPreview(); growTpl(el); });
   }
+  growTpl($("tpl-f-description"));
   $("tpl-editor").querySelectorAll("[data-var]").forEach(b => b.onclick = () => insertTplVar(b.dataset.var));
   $("tpl-color").oninput = () => { tplColorCustom = true; syncTplColor(); syncTplDirty(); scheduleTplPreview(); };
   $("tpl-color-auto").onclick = () => {
@@ -27899,6 +27946,14 @@ function openTplEditor(key) {
   tplFocus.focus();          // keyboard + screen-reader users land in the editor
 }
 
+// The body box grows with its text (the shipped New event body is 18 lines;
+// a fixed 220 px clipped it), up to a cap so the page stays usable.
+function growTpl(el) {
+  if (!el || el.tagName !== "TEXTAREA") return;
+  el.style.height = "auto";
+  el.style.height = Math.min(Math.max(el.scrollHeight + 2, 220), 640) + "px";
+}
+
 function syncTplColor() {
   const col = tplOpen.color;
   $("tpl-color-auto").hidden = !tplColorCustom;
@@ -27911,6 +27966,7 @@ function syncTplDirty() { $("tpl-dirty").hidden = !tplDirty(); syncTplButtons();
 function syncTplButtons() {
   $("tpl-save").disabled = tplError;
   $("tpl-test").disabled = tplError || !tplOpen.webhook_set;
+  $("tpl-blocked").hidden = !tplError;
 }
 
 async function closeTplEditor() {
@@ -27960,16 +28016,33 @@ function scheduleTplPreview() {
 }
 
 // An error names the unknown field; mark the box that contains it.
+// The error goes directly under the box it's about (it used to sit under the
+// buttons, ~490 px from a footer typo), with a one-click "did you mean".
 function markTplError(message) {
-  const t = tplOpen;
+  const t = tplOpen, err = $("tpl-err");
   for (const slot of t.editable) $("tpl-f-" + slot).removeAttribute("aria-invalid");
   tplError = !!message;
-  $("tpl-err").textContent = message || "";
   $("tpl-prev").classList.toggle("stale", tplError);
   const tok = message && (message.match(/\{[^{}]*\}/) || [])[0];
+  const guess = message && (message.match(/Did you mean (\{[a-z_]+\})\?/) || [])[1];
+  let box = null;
   if (tok) for (const slot of t.editable) {
     const el = $("tpl-f-" + slot);
-    if (el.value.includes(tok)) el.setAttribute("aria-invalid", "true");
+    if (el.value.includes(tok)) { el.setAttribute("aria-invalid", "true"); box = box || el; }
+  }
+  // Re-home the one alert region next to the offending box (else the body).
+  const anchor = (box || $("tpl-f-description") || $("tpl-f-title")).closest(".tpl-slot");
+  if (anchor && err.previousElementSibling !== anchor) anchor.after(err);
+  err.textContent = message || "";
+  if (guess && box) {
+    const fix = document.createElement("button");
+    fix.className = "tpl-fix";
+    fix.textContent = `Use ${guess}`;
+    fix.onclick = () => {
+      box.value = box.value.split(tok).join(guess);
+      box.focus(); syncTplDirty(); refreshTplPreview();
+    };
+    err.append(" ", fix);
   }
   syncTplButtons();
 }
@@ -27984,6 +28057,7 @@ async function refreshTplPreview() {
     if (tplOpen !== t) return;                       // closed or switched meanwhile
     if (!r.ok) { markTplError(d.detail || "Couldn't render the preview."); return; }
     markTplError("");
+    $("tpl-prev").removeAttribute("aria-busy");
     const e = d.embed || {};
     $("tpl-prev").style.borderLeftColor = "#" + (e.color || 0).toString(16).padStart(6, "0");
     $("tpl-prev-title").textContent = e.title || "";

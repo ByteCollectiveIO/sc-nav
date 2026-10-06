@@ -14302,6 +14302,22 @@ class NotifyTemplateEditorTests(unittest.TestCase):
         app._test_send_at = 0.0
         self.assertEqual(self.client.post(f"{self.URL}/goal_posted/test", json={}).status_code, 400)
 
+    def test_op_record_reports_and_tests_its_real_channel(self):
+        db.set_setting(notify._webhook_key("ops"), "")
+        op = next(t for t in self.client.get(self.URL).json()["templates"] if t["key"] == "op_closed")
+        self.assertEqual(op["channel"], "events")          # falls back like _ops_notify_category
+        self.assertTrue(op["webhook_set"])
+        r = self.client.post(f"{self.URL}/op_closed/test", json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.sent[-1]["category"], "events")
+        db.set_setting(notify._webhook_key("ops"), _GOOD_WEBHOOK)
+        op = next(t for t in self.client.get(self.URL).json()["templates"] if t["key"] == "op_closed")
+        self.assertEqual(op["channel"], "ops")
+        db.set_setting(notify._webhook_key("ops"), "")
+        db.set_setting(notify._webhook_key("events"), "")
+        op = next(t for t in self.client.get(self.URL).json()["templates"] if t["key"] == "op_closed")
+        self.assertFalse(op["webhook_set"])
+
     def test_corrupt_stored_override_falls_back_to_shipped(self):
         db.set_setting(app._NOTIFY_TPL_PREFIX + "event_cancelled", "{not json")
         asyncio.run(app._notify_event_cancelled(self._ev()))
