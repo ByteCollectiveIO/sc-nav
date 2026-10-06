@@ -1,6 +1,6 @@
 # Discord notification customization (images + message templates)
 
-**Status:** 🔨 slices 1–4 built 2026-10-05/06 (attachments + org image; per-event banner; known-host preview toggle; LFG/danger/goal embeds; template registry); slice 5 (the editor) design. Written against v1.19.1.
+**Status:** ✅ all slices built 2026-10-05/06 (1 attachments + org image · 2 per-event banner · 2b known-host previews · 3 LFG/danger/goal embeds · 4 template registry · 5 template editor); unreleased. Written against v1.19.1.
 **Origin:** a self-hosting org asked to put its own graphics on event
 announcements. That raised the general question of what an admin can change
 about the messages the app posts to Discord.
@@ -286,6 +286,8 @@ today's builder output.
 
 `{key}` is checked against the registry (404 otherwise), the same closed-set
 pattern as `APP_IMAGE_KEYS`.
+
+**Slice 5 as built (2026-10-06):** overrides are meta rows `notify_tpl:<key>` (`{title?, description?, footer?, color?}`; blank = shipped), validated by `notify_templates.validate_override`: any `{…}` that isn't one of the template's fields fails with the list of valid ones (so `{Title}`, `{title.x}` and typos are caught, not silently left literal), caps 200/1500/200, `#RRGGBB`, and the op record's body is not editable. A colour override replaces the automatic variations (deadly red, goal-met green), and the editor says so. Routes match §4.5; preview and test take the DRAFT, so an admin can test before saving.
 
 ### 4.6 UI: Settings › Discord
 

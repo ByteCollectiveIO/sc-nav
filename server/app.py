@@ -8643,12 +8643,33 @@ def _embed(title: str, description: str = "", *, url: str | None = None,
     return e
 
 
+_NOTIFY_TPL_PREFIX = "notify_tpl:"      # meta key per template: an admin's override JSON
+
+
+def notify_template_override(key: str) -> dict:
+    """An admin's saved override for `key` ({title?, description?, footer?,
+    color?}), {} when none. Bad JSON reads as none — a post must still go out."""
+    raw = db.get_setting(_NOTIFY_TPL_PREFIX + key)
+    try:
+        v = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return v if isinstance(v, dict) else {}
+
+
 def _announcement(key: str, values: dict, *, url: str | None = None,
-                  color: int = _EMBED_INFO, fields: list[dict] | None = None) -> dict:
+                  color: int = _EMBED_INFO, fields: list[dict] | None = None,
+                  overrides: dict | None = None) -> dict:
     """An announcement embed from the template registry (notify_templates,
     slice 4): the builder supplies RAW values, the registry owns the wording
-    and escapes member text in the description. Footer only when non-empty."""
-    r = notify_templates.render(key, values, escape=_md_plain)
+    and escapes member text in the description. An admin's override (slice 5)
+    replaces a slot's text and, if set, the colour — including the automatic
+    variations (deadly red, goal-met green). Footer only when non-empty.
+    `overrides` lets the editor preview/test a DRAFT; None = the saved one."""
+    over = notify_template_override(key) if overrides is None else overrides
+    r = notify_templates.render(key, values, escape=_md_plain, overrides=over)
+    if over.get("color"):
+        color = int(over["color"][1:], 16)
     e = _embed(r.get("title", ""), r.get("description", ""), url=url, color=color,
                fields=fields)
     if r.get("footer"):
@@ -15404,6 +15425,116 @@ async def test_discord_webhook(body: DiscordTestIn, admin: dict = Depends(requir
             f"✅ Org Navigator — the {body.category} channel is connected",
             f"Test sent by {_md_plain(who)}.", url=_app_url(""))))
     if not ok:
+        raise HTTPException(status_code=502,
+                            detail="Discord rejected the message — check the webhook URL")
+    return {"ok": True}
+
+
+# ---- message templates (docs/discord-notification-customization.md slice 5) ----
+# Admins reword the announcement set. Wording lives in notify_templates; an
+# override is stored per key in meta and validated on save (unknown fields,
+# caps, colour). Pings are never templatable: the ping line is not a slot.
+
+class NotifyTemplateIn(BaseModel):
+    title: str | None = Field(default=None, max_length=1000)
+    description: str | None = Field(default=None, max_length=5000)
+    footer: str | None = Field(default=None, max_length=1000)
+    color: str | None = Field(default=None, max_length=16)
+
+
+def _check_notify_template_key(key: str) -> str:
+    if key not in notify_templates.TEMPLATES:      # closed set, like APP_IMAGE_KEYS
+        raise HTTPException(status_code=404, detail="unknown message template")
+    return key
+
+
+def _clean_notify_template(key: str, body: "NotifyTemplateIn") -> dict:
+    try:
+        return notify_templates.validate_override(key, body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _notify_template_view(key: str) -> dict:
+    t = notify_templates.TEMPLATES[key]
+    over = notify_template_override(key)
+    return {
+        "key": key, "label": t.label, "category": t.category,
+        "webhook_set": notify.is_configured(t.category),
+        "slots": {slot: {"shipped": getattr(t, slot), "override": over.get(slot, "")}
+                  for slot in notify_templates.SLOTS},
+        "editable": [s for s in notify_templates.SLOTS if getattr(t, s) is not None],
+        "color": {"shipped": f"#{t.color:06X}", "override": over.get("color", ""),
+                  "note": t.color_note},
+        "vars": [{"name": n, "label": v.label, "sample": v.sample, "md": v.md}
+                 for n, v in t.vars.items()],
+        "customized": bool(over),
+    }
+
+
+def _notify_template_sample(key: str, draft: dict) -> dict:
+    """The embed this template produces with its sample values and `draft`
+    as the override (the editor's unsaved text)."""
+    t = notify_templates.TEMPLATES[key]
+    e = _announcement(key, notify_templates.sample_values(key), url=_app_url(""),
+                      color=t.color, overrides=draft)
+    if t.description is None:
+        e["description"] = "(The record itself: attendance, money and loot.)"
+    return e
+
+
+@app.get("/api/admin/notify-templates")
+async def list_notify_templates(admin: dict = Depends(require_admin)):
+    """Every editable announcement, its shipped text, the org's override and
+    the fields it may use."""
+    return {"templates": [_notify_template_view(k) for k in notify_templates.TEMPLATES]}
+
+
+@app.put("/api/admin/notify-templates/{key}")
+async def save_notify_template(key: str, body: NotifyTemplateIn,
+                               admin: dict = Depends(require_admin)):
+    """Save an override. Blank slots mean "use the shipped text"; an override
+    left with nothing in it is the same as a reset."""
+    _check_notify_template_key(key)
+    clean = _clean_notify_template(key, body)
+    db.set_setting(_NOTIFY_TPL_PREFIX + key, json.dumps(clean) if clean else "")
+    return _notify_template_view(key)
+
+
+@app.delete("/api/admin/notify-templates/{key}")
+async def reset_notify_template(key: str, admin: dict = Depends(require_admin)):
+    _check_notify_template_key(key)
+    db.set_setting(_NOTIFY_TPL_PREFIX + key, "")
+    return _notify_template_view(key)
+
+
+@app.post("/api/admin/notify-templates/{key}/preview")
+async def preview_notify_template(key: str, body: NotifyTemplateIn,
+                                  admin: dict = Depends(require_admin)):
+    """Render a DRAFT with sample values. The server renders it, so there's no
+    JavaScript copy of the template engine to drift."""
+    _check_notify_template_key(key)
+    return {"embed": _notify_template_sample(key, _clean_notify_template(key, body))}
+
+
+@app.post("/api/admin/notify-templates/{key}/test")
+async def test_notify_template(key: str, body: NotifyTemplateIn,
+                               admin: dict = Depends(require_admin)):
+    """Post a DRAFT, filled with sample values and marked [TEST], to this
+    message's channel, with the org image. Admin-only (design S7)."""
+    global _test_send_at
+    _check_notify_template_key(key)
+    draft = _clean_notify_template(key, body)
+    cat = notify_templates.TEMPLATES[key].category
+    if not notify.is_configured(cat):
+        raise HTTPException(status_code=400, detail=f"no Discord webhook set for {cat}")
+    now = time.monotonic()
+    if now - _test_send_at < 5:
+        raise HTTPException(status_code=429, detail="slow down — try again in a moment")
+    _test_send_at = now
+    e = _notify_template_sample(key, draft)
+    e["title"] = "[TEST] " + e.get("title", "")
+    if not await notify.send(cat, "", **_announce(e)):
         raise HTTPException(status_code=502,
                             detail="Discord rejected the message — check the webhook URL")
     return {"ok": True}

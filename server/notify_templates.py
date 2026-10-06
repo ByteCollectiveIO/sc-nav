@@ -47,6 +47,8 @@ class Template:
     description: str | None       # None = built in code, not editable (op record)
     vars: dict = field(default_factory=dict)
     footer: str = ""
+    color: int = 0x4FC3F7         # the usual colour (preview); builders may vary it
+    color_note: str = ""          # when the builder varies it, say how
 
 
 def _protect(text: str) -> str:
@@ -88,6 +90,46 @@ def render_text(text: str, values: dict) -> str:
         if lines:
             paragraphs.append("\n".join(lines))
     return _restore("\n\n".join(p for p in paragraphs if p.strip()))
+
+
+# Admin overrides (slice 5): caps per slot, checked on save.
+OVERRIDE_CAPS = {"title": 200, "description": 1500, "footer": 200}
+_BRACED_RE = re.compile(r"\{([^{}]*)\}")
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def validate_override(key: str, draft: dict) -> dict:
+    """Clean an admin's override for `key`, or raise ValueError with a message
+    an admin can act on. Unknown fields fail HERE, at save time — not at 2 a.m.
+    when the reminder fires. Empty slots are dropped (= shipped text)."""
+    t = TEMPLATES[key]
+    out: dict = {}
+    for slot, cap in OVERRIDE_CAPS.items():
+        text = (draft.get(slot) or "").strip("\n")
+        if not text.strip():
+            continue
+        if slot == "description" and t.description is None:
+            raise ValueError("this message's body is built from the record itself and can't be edited")
+        if len(text) > cap:
+            raise ValueError(f"the {slot} is {len(text)} characters; the limit is {cap}")
+        unknown = sorted({m for m in _BRACED_RE.findall(_protect(text))} - set(t.vars))
+        if unknown:
+            raise ValueError(
+                "unknown field" + ("s " if len(unknown) > 1 else " ")
+                + ", ".join("{" + u + "}" for u in unknown)
+                + ". Fields you can use here: " + ", ".join("{" + v + "}" for v in t.vars)
+                + ". For a literal brace, type {{ or }}.")
+        out[slot] = text
+    color = (draft.get("color") or "").strip()
+    if color:
+        if not _COLOR_RE.match(color):
+            raise ValueError("colour must look like #4FC3F7")
+        out["color"] = color.upper()
+    return out
+
+
+def sample_values(key: str) -> dict:
+    return {n: v.sample for n, v in TEMPLATES[key].vars.items()}
 
 
 def render(key: str, values: dict, *, escape, overrides: dict | None = None) -> dict:
@@ -161,7 +203,8 @@ TEMPLATES: dict[str, Template] = {
         title="⏰ Starting soon: {title}",
         description="Begins {start} ({start_relative})\n📍 {place}",
         vars={"title": _TITLE, "start": _START, "start_relative": _START_R,
-              "place": Var("Where (event location, else rally point)", "Yela belt")}),
+              "place": Var("Where (event location, else rally point)", "Yela belt")},
+        color=0xFFB74D),
     "event_rescheduled": Template(
         "events", "Event changed",
         title="📌 Event updated: {title}",
@@ -171,12 +214,14 @@ TEMPLATES: dict[str, Template] = {
               "start": Var("New start (empty if the time didn't change)", "<t:1792726500:F>"),
               "start_relative": Var("New start, relative", "<t:1792726500:R>"),
               "old_start": Var("Old start", "<t:1792640100:F>"),
-              "new_place": Var("New place (empty if it didn't change)", "Yela belt")}),
+              "new_place": Var("New place (empty if it didn't change)", "Yela belt")},
+        color=0xFFB74D),
     "event_cancelled": Template(
         "events", "Event cancelled",
         title="🚫 Event cancelled: {title}",
         description="Was set for {start}.",
-        vars={"title": _TITLE, "start": _START}),
+        vars={"title": _TITLE, "start": _START},
+        color=0xEF5350),
     "listing_posted": Template(
         "marketplace", "New marketplace listing",
         title="{icon} {headline}: {item}",
@@ -218,7 +263,8 @@ TEMPLATES: dict[str, Template] = {
               "severity": Var("Severity", "DEADLY"),
               "threat": Var("Threat", "Players (PvP)"),
               "location": Var("Extra location detail", "near the comm array", md=True),
-              "poster": Var("Reported by", "Ace", md=True)}),
+              "poster": Var("Reported by", "Ace", md=True)},
+        color=0xFFB74D, color_note="Red for a deadly report, amber otherwise."),
     "goal_posted": Template(
         "goals", "Org goal post",
         title="{icon} {heading}: {title}",
@@ -233,11 +279,13 @@ TEMPLATES: dict[str, Template] = {
               "description": Var("Goal description", "Org priority."),
               "posted": Var("Posted / Re-posted", "Posted"),
               "poster": Var("Posted by", "Bolvangar"),
-              "call_to_action": Var("What to do next", "Log what you're holding to contribute.")}),
+              "call_to_action": Var("What to do next", "Log what you're holding to contribute.")},
+        color=0x4FC3F7, color_note="Green once the goal is met."),
     "op_closed": Template(
         "ops", "Op record",
         title="📜 {heading}: {name}",
         description=None,          # attendance / money / loot are built in code
         vars={"heading": Var("Op record / Op record updated", "Op record"),
-              "name": Var("Op name", "Rockbreaker")}),
+              "name": Var("Op name", "Rockbreaker")},
+        color=0x4FC3F7, color_note="Amber when an updated record is posted."),
 }
