@@ -1,6 +1,6 @@
 # Discord notification customization (images + message templates)
 
-**Status:** 🔨 slices 1, 2 and 2b built 2026-10-05/06 (attachments + org image; per-event banner; known-host preview toggle); 3–5 design. Written against v1.19.1.
+**Status:** 🔨 slices 1, 2, 2b and 3 built 2026-10-05/06 (attachments + org image; per-event banner; known-host preview toggle; LFG/danger/goal posts as embeds with the org image); 4–5 design. Written against v1.19.1.
 **Origin:** a self-hosting org asked to put its own graphics on event
 announcements. That raised the general question of what an admin can change
 about the messages the app posts to Discord.
