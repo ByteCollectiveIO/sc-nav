@@ -14240,9 +14240,10 @@ class NotifyTemplateEditorTests(unittest.TestCase):
 
     def test_validation(self):
         bad = [
-            ({"title": "New: {titel}"}, "unknown field {titel}"),
-            ({"title": "{title.__class__}"}, "unknown field"),
-            ({"title": "{Title}"}, "unknown field {Title}"),
+            ({"title": "New: {titel}"}, "Unknown field {titel} in the title. Did you mean {title}?"),
+            ({"title": "{title.__class__}"}, "Unknown field"),
+            ({"title": "{Title}"}, "Unknown field {Title}"),
+            ({"footer": "by {organiser}"}, "in the footer. Did you mean {organizer}?"),
             ({"description": "x" * 1501}, "limit is 1500"),
             ({"color": "red"}, "#4FC3F7"),
         ]

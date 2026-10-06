@@ -208,18 +208,18 @@
   /* Reset holds its slot on every row (visibility, not display) so Upload stays
      in one column down the list; `disabled` also drops it from the tab order. */
   .art-reset[disabled] { visibility: hidden; }
-  /* Org image on Discord announcements (Settings › Discord): the "now" line reads
+  /* Org image on Discord announcements (Settings › Announcements): the "now" line reads
      like an art row; options without a picture get a glyph tile in the thumb slot
      so the names stay in one column. */
   .oi-now { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 4px 0 10px; }
-  /* Message template editor (Settings › Discord). The preview imitates a
+  /* Message template editor (Settings › Announcements). The preview imitates a
      Discord embed on purpose — it's what the admin is designing for — so its
      colours are Discord's dark theme, scoped here, not app tokens. */
   .tpl-grp-h { font-size: 11px; letter-spacing: 1px; color: var(--dim); text-transform: uppercase;
     margin: 12px 0 4px; }
   .tpl-row { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); }
   .tpl-row .tpl-name { flex: 1; }
-  .tpl-chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--sel); color: var(--sel); }
+  .tpl-chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); }
   #tpl-editor[hidden], #tpl-list[hidden] { display: none; }
   .tpl-ed-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 4px 0 10px; }
   .tpl-ed-head b { font-size: 14px; }
@@ -228,10 +228,21 @@
   .tpl-slot { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
   .tpl-slot label { font-size: 12px; color: var(--dim); }
   .tpl-slot textarea { min-height: 220px; resize: vertical; font-family: inherit; }
-  .tpl-vars { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 12px; }
+  .tpl-vars { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 8px; }
+  .tpl-vgrp { display: flex; gap: 8px; align-items: baseline; }
+  .tpl-vgrp-h { font-size: 11px; color: var(--dim); min-width: 64px; flex: none; }
+  .tpl-how { font-size: 12px; color: var(--dim); margin: 4px 0 12px; max-width: 70ch; }
+  .tpl-how summary { cursor: pointer; color: var(--text); }
+  .tpl-how p { margin: 6px 0 0; line-height: 1.5; }
+  .tpl-dirty { font-size: 12px; color: var(--warn); }
+  .tpl-dirty[hidden], #tpl-color-auto[hidden] { display: none; }
+  .tpl-why { font-size: 12px; color: var(--dim); margin-top: 6px; }
+  .tpl-slot [aria-invalid="true"] { border-color: var(--bad); outline: 1px solid var(--bad); }
+  .dc-embed.stale { opacity: .45; }
+  @media (max-width: 700px) { .tpl-ed-prev { order: -1; } }
   .tpl-var { font-size: 11px; padding: 2px 6px; border-radius: 4px; cursor: pointer; }
   .tpl-color { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
-  .tpl-color input[type=color] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--border); background: none; }
+  .tpl-color input[type=color] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--border); background: none; cursor: pointer; }
   .tpl-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
   .tpl-err { color: var(--bad); font-size: 12px; margin-top: 6px; }
   .tpl-err:empty { display: none; }
@@ -250,7 +261,6 @@
   .dc-a { color: var(--dc-link); }
   .oi-glyph { display: grid; place-items: center; color: var(--dim); font-size: 18px; }
   .oi-glyph[hidden], #oi-now-img[hidden] { display: none; }
-  .art-row.oi-inuse { box-shadow: inset 3px 0 0 var(--sel); padding-left: 8px; }
   #oi-url { flex: 1; min-width: 220px; }
   @media (max-width: 560px) {
     /* Phone: the file/link field takes its own full line under the label. */
@@ -430,10 +440,14 @@
   button:hover { border-color: var(--accent); }
   button.active { background: var(--accent); color: var(--ink-on-accent); border-color: var(--accent); }
 
-  input.ti, select.sel { padding: 8px 10px; font: inherit; font-size: 13px;
+  /* textarea.ti too: without it every textarea outside .ev-field (template
+     body, MOTD, org copy, LFG + danger notes) rendered as the browser's grey
+     box with pure-white text and no focus state (critique 2026-10-06). */
+  input.ti, select.sel, textarea.ti { padding: 8px 10px; font: inherit; font-size: 13px;
     background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+  textarea.ti { line-height: 1.45; resize: vertical; }
   #search { width: 100%; }
-  input.ti:focus, select.sel:focus { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+  input.ti:focus, select.sel:focus, textarea.ti:focus { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
   /* Placeholders must meet the same contrast bar as body text (DESIGN.md), not the
      UA faint-gray default. --dim is the AA-tuned muted token in both themes. */
   input.ti::placeholder, textarea.ti::placeholder { color: var(--dim); opacity: 1; }
@@ -2111,8 +2125,8 @@
   .ev-img-warn { margin: 0 0 8px; font-size: 12px; color: var(--warn); max-width: 70ch; }
   .ev-img-warn[hidden] { display: none; }
   @media (max-width: 560px) { .ev-img-row input, #ev-f-imgurl { flex: 1 1 100%; min-width: 0; } }
-  .ev-banner { display: block; max-width: 100%; max-height: 260px; border-radius: 8px;
-    border: 1px solid var(--border); margin: 10px 0 4px; object-fit: contain; background: var(--bg); }
+  .ev-banner { display: block; max-width: 100%; max-height: 120px; border-radius: 6px;
+    border: 1px solid var(--border); margin: 8px 0 4px; object-fit: contain; background: var(--bg); }
   .ev-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
   /* One uniform control height across the grid: native date/time/number controls
      and the .poi-pick-wrapped text inputs otherwise render taller/shorter than
@@ -4188,9 +4202,10 @@
         <a href="#/settings/general" data-sec="general">General</a>
         <a href="#/settings/members" data-sec="members">Members</a>
         <a href="#/settings/branding" data-sec="branding">Branding</a>
-        <a href="#/settings/discord" data-sec="discord">Discord</a>
-        <a href="#/settings/apps" data-sec="apps">App settings</a>
-        <a href="#/settings/data" data-sec="data">Data</a>
+        <a href="#/settings/discord" data-sec="discord">Discord channels</a>
+        <a href="#/settings/announcements" data-sec="announcements">Announcements</a>
+        <a href="#/settings/apps" data-sec="apps">Apps</a>
+        <a href="#/settings/data" data-sec="data">Data &amp; resets</a>
       </div>
     </nav>
     <div class="set-body">
@@ -4371,7 +4386,7 @@
             the app chooser until they dismiss it. Editing the text re-shows it to
             everyone. Clear the box and save to take it down. Plain text only.
           </div>
-          <textarea id="motd-input" maxlength="2000" rows="3"
+          <textarea id="motd-input" class="ti" maxlength="2000" rows="3"
                     placeholder="e.g. Org op tonight at 20:00 UTC. Muster at Everus Harbor."
                     style="width:100%; resize:vertical;"></textarea>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
@@ -4459,7 +4474,7 @@
             built-in Org Navigator branding. Leave it blank to show the generic copy.
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px;">
-            <input id="org-name-input" type="text" maxlength="80" placeholder="e.g. Aurora Trading Co."
+            <input id="org-name-input" class="ti" type="text" maxlength="80" placeholder="e.g. Aurora Trading Co."
                    style="min-width:220px; flex:1;">
             <button id="org-name-save">Save name</button>
             <span class="muted" id="org-name-status" role="status" aria-live="polite" style="font-size:12px;"></span>
@@ -4470,7 +4485,7 @@
             instead: a welcome, your recruitment line, whatever fits. One short
             paragraph, plain text. Leave it blank to keep the built-in copy.
           </div>
-          <textarea id="org-tagline-input" maxlength="400" rows="3"
+          <textarea id="org-tagline-input" class="ti" maxlength="400" rows="3"
                     placeholder="e.g. Aurora Trading Co. flight ops: routes, cargo runs and org events, all in one place."
                     style="width:100%; resize:vertical;"></textarea>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
@@ -4485,13 +4500,13 @@
             built-in wording.
           </div>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
-            <input id="launcher-head-input" type="text" maxlength="80" placeholder="e.g. Your org toolkit"
+            <input id="launcher-head-input" class="ti" type="text" maxlength="80" placeholder="e.g. Your org toolkit"
                    style="min-width:220px; flex:1;">
             <button id="launcher-head-save">Save heading</button>
             <button id="launcher-head-clear">Reset</button>
             <span class="muted" id="launcher-head-status" role="status" aria-live="polite" style="font-size:12px;"></span>
           </div>
-          <textarea id="launcher-sub-input" maxlength="400" rows="2"
+          <textarea id="launcher-sub-input" class="ti" maxlength="400" rows="2"
                     placeholder="e.g. Everything the org runs on. New here? Start with the Resource Navigator."
                     style="width:100%; resize:vertical;"></textarea>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 14px;">
@@ -4526,32 +4541,41 @@
           <div class="muted" id="app-art-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
         </div>
       </section>
-      <section class="set-sec" data-sec="discord" aria-label="Discord settings" hidden>
-        <div class="settings-grp-h">Discord <span class="muted">— these settings affect everyone in your org</span></div>
+      <section class="set-sec" data-sec="discord" aria-label="Discord channels" hidden>
+        <div class="settings-grp-h">Discord channels <span class="muted">— these settings affect everyone in your org</span></div>
         <div class="panel admin-grp" id="discord-panel">
           <h2>DISCORD NOTIFICATIONS</h2>
-          <div class="muted" style="font-size:12px; margin-bottom:6px;">
-            Route each kind of alert to its own channel. Create an <b>Incoming Webhook</b>
-            in a channel's settings (Integrations → Webhooks) and paste its URL into the
-            matching box. Leave a box empty to keep that kind off; reuse the same URL in
-            several boxes to send them to one channel. We never post <code>@everyone</code>;
-            URLs are stored as secrets and never shown again.
+          <div class="muted" style="font-size:12px; margin-bottom:6px; max-width:80ch;">
+            Paste a channel's <b>Incoming Webhook</b> URL (channel settings › Integrations › Webhooks)
+            to turn that kind of post on; blank keeps it off. One URL can serve several kinds. We never
+            post <code>@everyone</code>, and URLs are stored as secrets. What the posts say and look
+            like is under <a href="#/settings/announcements">Announcements</a>.
           </div>
           <div id="discord-rows"></div>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
             Remind before an event starts
-            <input id="discord-lead" type="number" min="1" max="1440" step="1" style="width:80px;"> minutes
+            <input id="discord-lead" class="ti" type="number" min="1" max="1440" step="1" style="width:80px;"> minutes
             <button id="discord-lead-save">Save</button>
             <span class="muted" id="discord-lead-status" role="status" aria-live="polite" style="font-size:12px;"></span>
           </div>
         </div>
-        <div class="panel admin-grp" id="org-image-panel">
-          <h2>ORG IMAGE ON ANNOUNCEMENTS</h2>
+      </section>
+      <section class="set-sec" data-sec="announcements" aria-label="Announcements" hidden>
+        <div class="settings-grp-h">Announcements <span class="muted">— what the org's Discord posts say and look like</span></div>
+        <div class="panel admin-grp" id="tpl-panel">
+          <h2>MESSAGE TEMPLATES</h2>
           <div class="muted" style="font-size:12px; margin-bottom:8px;">
-            Puts a small image in the top-right corner of announcement posts: new events,
-            reminders, event changes and cancellations, marketplace listings, op records,
-            Group Finder posts, danger warnings and org goals.
-            Off unless you pick one. Personal notices (outbid, waitlist, payments) never carry it.
+            Reword what the app posts. A blank box keeps the shipped wording.
+          </div>
+          <div id="tpl-list"></div>
+          <div id="tpl-editor" hidden></div>
+          <div class="muted" id="tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+        </div>
+        <div class="panel admin-grp" id="org-image-panel">
+          <h2>ORG IMAGE</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px; max-width:80ch;">
+            A small image in the corner of announcement posts (never on personal notices like
+            outbid or payments). Off unless you pick one.
           </div>
           <div class="oi-now">
             <img id="oi-now-img" class="art-thumb" alt="" hidden>
@@ -4578,49 +4602,31 @@
           </div>
           <div class="muted" id="oi-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
           <div class="muted" style="font-size:12px; margin-top:6px;">
-            To see it in Discord, press <b>Test</b> on any connected webhook above.
-            A linked image is only previewed here if you turn on linked-image previews below.
+            To see it in Discord, use <b>Send test</b> on a message template above.
           </div>
         </div>
         <div class="panel admin-grp" id="img-preview-panel">
           <h2>LINKED IMAGE PREVIEWS</h2>
-          <div class="muted" style="font-size:12px; margin-bottom:8px;">
-            When an announcement image is a <b>link</b> rather than an upload, Discord shows it in the
-            post but the app doesn't load it. Turn this on to preview linked images inside the app,
-            on the event page and in the forms, but only from these established image hosts:
-            <span id="img-preview-hosts"></span>. Links to any other site are never previewed.
+          <div class="muted" style="font-size:12px; margin-bottom:8px; max-width:80ch;">
+            Discord always shows a linked image. This also shows it inside the app, but only from
+            <span id="img-preview-hosts"></span>.
           </div>
           <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
             <input type="checkbox" id="img-preview-toggle"> Preview linked images from these hosts
           </label>
           <div class="muted" style="font-size:12px; margin-top:6px;">
-            Privacy: each time a member's browser loads a preview, that image host sees the member's
-            IP address (roughly where they are and their internet provider), the time, and their
-            browser and language. It doesn't see who they are in the app or which page they were on.
+            The host sees a member's IP address each time a preview loads.
           </div>
           <div class="muted" id="img-preview-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
         </div>
-        <div class="panel admin-grp" id="tpl-panel">
-          <h2>MESSAGE TEMPLATES</h2>
-          <div class="muted" style="font-size:12px; margin-bottom:8px; max-width:80ch;">
-            Reword the announcements the app posts. Words in <code>{braces}</code> are filled in for
-            each post; click a field to insert it. Any part whose fields are all blank is left out:
-            a piece of a line between <code> · </code> separators, a whole line, or a whole paragraph.
-            <code>**bold**</code> works in the message body. Who gets @-mentioned is never part of a
-            template. A blank box keeps the shipped wording.
-          </div>
-          <div id="tpl-list"></div>
-          <div id="tpl-editor" hidden></div>
-          <div class="muted" id="tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
-        </div>
       </section>
-      <section class="set-sec" data-sec="apps" aria-label="App settings" hidden>
-        <div class="settings-grp-h">App settings <span class="muted">— these settings affect everyone in your org</span></div>
+      <section class="set-sec" data-sec="apps" aria-label="Apps" hidden>
+        <div class="settings-grp-h">Apps <span class="muted">— these settings affect everyone in your org</span></div>
         <div class="panel admin-grp" id="fresh-panel">
           <h2>OBSERVATION FRESHNESS</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Mark sightings stale after
-            <input id="fresh-window" type="number" min="1" step="1" style="width:80px;"> hours
+            <input id="fresh-window" class="ti" type="number" min="1" step="1" style="width:80px;"> hours
             <button id="fresh-window-save">Save</button>
           </div>
           <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -4634,7 +4640,7 @@
           <h2>⛏ MINED-OUT REPORTS</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Reports age off after
-            <input id="depletion-ageoff" type="number" min="1" max="10080" step="15" style="width:80px;"> min
+            <input id="depletion-ageoff" class="ti" type="number" min="1" max="10080" step="15" style="width:80px;"> min
             <button id="depletion-ageoff-save">Save</button>
           </div>
           <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -4649,9 +4655,9 @@
           <h2>GROUP FINDER (LFG)</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Posts turn <span style="color:var(--warn);">stale</span> after
-            <input id="lfg-stale" type="number" min="1" step="1" style="width:70px;"> min,
+            <input id="lfg-stale" class="ti" type="number" min="1" step="1" style="width:70px;"> min,
             and age off the board after
-            <input id="lfg-ageoff" type="number" min="1" step="1" style="width:70px;"> min
+            <input id="lfg-ageoff" class="ti" type="number" min="1" step="1" style="width:70px;"> min
             <button id="lfg-life-save">Save</button>
           </div>
           <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -4666,9 +4672,9 @@
           <h2>DANGER BOARD</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Warnings turn <span style="color:var(--warn);">stale</span> after
-            <input id="warn-stale" type="number" min="1" step="1" style="width:70px;"> min,
+            <input id="warn-stale" class="ti" type="number" min="1" step="1" style="width:70px;"> min,
             and age off the board after
-            <input id="warn-ageoff" type="number" min="1" step="1" style="width:70px;"> min
+            <input id="warn-ageoff" class="ti" type="number" min="1" step="1" style="width:70px;"> min
             <button id="warn-life-save">Save</button>
           </div>
           <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -4679,7 +4685,7 @@
           <div class="muted" id="warn-life-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
             Route trade &amp; cargo runs around a danger within
-            <input id="hazard-radius" type="number" min="100" max="200000" step="100" style="width:90px;"> km
+            <input id="hazard-radius" class="ti" type="number" min="100" max="200000" step="100" style="width:90px;"> km
             <button id="hazard-radius-save">Save</button>
           </div>
           <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -4693,7 +4699,7 @@
           <h2>TRADE STOCK &amp; DEMAND REPORTS</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Reports age off after
-            <input id="stock-ageoff" type="number" min="1" max="10080" step="5" style="width:80px;"> min
+            <input id="stock-ageoff" class="ti" type="number" min="1" max="10080" step="5" style="width:80px;"> min
             <button id="stock-ageoff-save">Save</button>
           </div>
           <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -4710,7 +4716,7 @@
           <h2>CARGO CONTAINER REPORTS</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Container reports age off after
-            <input id="container-ageoff" type="number" min="0" max="3650" step="5" style="width:80px;"> days
+            <input id="container-ageoff" class="ti" type="number" min="0" max="3650" step="5" style="width:80px;"> days
             <button id="container-ageoff-save">Save</button>
             <button id="container-clear">Clear all</button>
           </div>
@@ -4727,7 +4733,7 @@
           <h2>MARKETPLACE LISTINGS</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Listings look stale after
-            <input id="listing-stale" type="number" min="0" max="365" step="1" style="width:80px;"> days
+            <input id="listing-stale" class="ti" type="number" min="0" max="365" step="1" style="width:80px;"> days
             <button id="listing-stale-save">Save</button>
           </div>
           <div class="muted" style="font-size:12px; margin-top:4px;">
@@ -4761,8 +4767,8 @@
           <div class="muted" id="op-default-rules-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
         </div>
       </section>
-      <section class="set-sec" data-sec="data" aria-label="Data settings" hidden>
-        <div class="settings-grp-h">Data <span class="muted">— these settings affect everyone in your org</span></div>
+      <section class="set-sec" data-sec="data" aria-label="Data and resets" hidden>
+        <div class="settings-grp-h">Data &amp; resets <span class="muted">— these settings affect everyone in your org</span></div>
         <div class="panel admin-grp" id="poi-catalog-panel">
           <h2>POI CATALOG</h2>
           <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
@@ -4806,7 +4812,7 @@
           <h2>UEX PRICE DATA</h2>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             Auto-refresh prices every
-            <input id="feed-refresh" type="number" min="0" max="720" step="1" style="width:70px;"> hours
+            <input id="feed-refresh" class="ti" type="number" min="0" max="720" step="1" style="width:70px;"> hours
             <button id="feed-refresh-save">Save</button>
             <button id="feed-refresh-now">Refresh now</button>
           </div>
@@ -6604,8 +6610,10 @@ document.addEventListener("keydown", (e) => {
 // safe choice (Cancel) takes initial focus.
 let _confirmDialogEl = null;
 function confirmDialog(message, opts = {}) {
+  // `safe`: default focus to Cancel without the destructive red styling, for
+  // an opt-in whose cost isn't destruction (e.g. a privacy trade-off).
   const { title = "Confirm", confirmLabel = "Confirm",
-          cancelLabel = "Cancel", danger = false } = opts;
+          cancelLabel = "Cancel", danger = false, safe = false } = opts;
   let dlg = _confirmDialogEl;
   if (!dlg) {
     dlg = _confirmDialogEl = document.createElement("dialog");
@@ -6637,9 +6645,13 @@ function confirmDialog(message, opts = {}) {
     const onClose = () => { dlg.removeEventListener("close", onClose);
       resolve(dlg.returnValue === "ok"); };
     dlg.addEventListener("close", onClose);
+    // A modal closed with Esc keeps the PREVIOUS returnValue, so without this
+    // a dialog once confirmed would read Esc on the next one as "ok" — on a
+    // destructive confirm, Esc would delete. (promptDialog already did this.)
+    dlg.returnValue = "";
     dlg.showModal();
     // Default focus to the safe choice for destructive actions, else the action.
-    (danger ? cancelBtn : okBtn).focus();
+    (danger || safe ? cancelBtn : okBtn).focus();
   });
 }
 
@@ -13877,8 +13889,10 @@ async function renderDetailBody(e) {
       (f.min_players ? ` (min ${f.min_players})` : "") +
       (e.waitlist_count ? ` <span class="ev-mine-chip wait">+${e.waitlist_count} waitlisted</span>` : ""),
   ].filter(Boolean);
+  const linkedArt = e.notify_image && e.notify_image.kind === "url" && !previewHost(e.notify_image.url);
   const secondary = [
     e.signup_deadline ? evGlyph("⊘") + `Signups close <b>${esc(fmtEventTime(e.signup_deadline))}</b>` : "",
+    linkedArt ? evGlyph("▤") + `Discord image <b>linked</b>` : "",
     e.duration_min ? evGlyph("⧗") + `${e.duration_min} min` : "",
     `by <b>${esc(e.organizer_name)}</b>`,
   ].filter(Boolean);
@@ -13922,10 +13936,10 @@ async function renderDetailBody(e) {
     ? `<button class="ev-btn" id="ev-edit">Edit</button>` +
       `<button class="ev-btn" id="ev-clone" title="Create a new event pre-filled from this one">Clone</button>` +
       `<button class="ev-btn" id="ev-savetpl" title="Make this event's setup a template the org can start from">Save as template</button>` +
+      (e.notify_test ? `<button class="ev-btn" id="ev-notifytest" title="Admins: post this event's announcement to the events channel, marked TEST">Send test</button>` : "") +
       (!cancelled && !e.op ? `<button class="ev-btn primary" id="ev-runop" title="Open the op: check people in, add walk-ins and guests, keep the record">Run mission</button>` : "") +
       (cancelled || e.phase === "ended" ? ""
         : `<button class="ev-btn" id="ev-complete" title="Wrap up — moves it to the past tab as attendance history">Mark completed</button>`) +
-      (e.notify_test ? `<button class="ev-btn" id="ev-notifytest" title="Admins: post this event's announcement to the events channel, marked TEST">Send test to Discord</button>` : "") +
       (cancelled ? "" : `<button class="ev-btn danger" id="ev-cancel">Cancel event</button>`)
     : "";
 
@@ -13937,13 +13951,10 @@ async function renderDetailBody(e) {
 
   $("ev-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(e.title)}</h2><div class="ev-chips">${chips}</div></div>` +
-    // An uploaded banner is the org's own art, served by us — shown here too.
-    // A linked one isn't loaded (CSP + privacy, design §4.7).
-    (e.notify_image && e.notify_image.kind === "upload"
-      ? `<img class="ev-banner" src="/api/notify-images/${encodeURIComponent(e.notify_image.hash)}" alt="">`
-      : e.notify_image && e.notify_image.kind === "url" && previewHost(e.notify_image.url)
-      ? `<img class="ev-banner" src="${esc(e.notify_image.url)}" referrerpolicy="no-referrer" alt="">` : "") +
-    meta + missionDetailsView(e, tax) + templateProvenanceHtml(e) + eventMoneyView(e) +
+    // Readings first: the when/where/crew facts lead, the Discord art follows,
+    // capped short (critique 2026-10-06: under the title it pushed the facts
+    // ~290 px down, off a phone's first screen).
+    meta + eventBannerHtml(e) + missionDetailsView(e, tax) + templateProvenanceHtml(e) + eventMoneyView(e) +
     (e.op ? `<div class="ev-op-line">${e.op.phase === "closed"
         ? `✓ This event has a mission record. <a href="#/ops/${e.op.id}">View the record →</a>`
         : `Mission ${opPhaseBadge(e.op.phase)} <a href="#/ops/${e.op.id}">Open the op →</a>`}</div>` : "") +
@@ -13991,6 +14002,19 @@ async function renderDetailBody(e) {
       if (r.ok) renderEventDetail(e.id);
     };
   }
+}
+
+// The event's Discord announcement art, when the app can show it: an upload
+// (ours) or a link on an admin-approved preview host. A link elsewhere shows
+// as a "Discord image: linked" fact in the meta row instead.
+function eventBannerHtml(e) {
+  const ref = e.notify_image;
+  if (!ref) return "";
+  if (ref.kind === "upload")
+    return `<img class="ev-banner" src="/api/notify-images/${encodeURIComponent(ref.hash)}" alt="Discord announcement image">`;
+  if (ref.kind === "url" && previewHost(ref.url))
+    return `<img class="ev-banner" src="${esc(ref.url)}" referrerpolicy="no-referrer" alt="Discord announcement image">`;
+  return "";
 }
 
 // Clone: the create form pre-filled from an existing event (the cheap answer to
@@ -14788,9 +14812,8 @@ const EV_IMG_GOOD_W = 800;   // wide enough to fill it on high-density screens t
 // evFormImage (set by eventFormHtml), painted by renderEventImageNow.
 function eventImageCardHtml() {
   return `<div class="ev-form-card" id="ev-f-img"><div class="ev-section-h">Discord announcement image</div>` +
-    `<p class="ev-img-hint">Optional. Shown full-width under this event's Discord posts: the announcement, ` +
-      `the reminder and change notices. A wide image works best. PNG, JPG, WebP or GIF up to 4&nbsp;MB, ` +
-      `or an https link (not a Discord attachment link: those expire within a day).</p>` +
+    `<p class="ev-img-hint">Optional. Shown under the event's Discord posts; wide images fill them. ` +
+      `PNG, JPG, WebP or GIF up to 4&nbsp;MB, or an https link.</p>` +
     `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
       `<button class="ev-btn danger" id="ev-f-imgrm" hidden>Remove</button></div>` +
     `<p class="ev-img-warn" id="ev-f-imgsize" hidden></p>` +
@@ -26279,7 +26302,7 @@ window.addEventListener("hashchange", applyView);
 // mistyped slug, lands on Profile with the URL corrected).
 const SETTINGS_SECTIONS = {
   profile: "me", watcher: "me", "my-ops": "me", account: "me",
-  general: "admin", members: "admin", branding: "admin", discord: "admin",
+  general: "admin", members: "admin", branding: "admin", discord: "admin", announcements: "admin",
   apps: "admin", data: "admin",
 };
 let settingsOpen = false;   // applyView: was Settings already showing?
@@ -27573,7 +27596,7 @@ function renderDiscordRows(webhooks) {
       `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:4px;">` +
         `<input id="dwh-${c.key}" type="url" autocomplete="off" style="flex:1; min-width:220px;" placeholder="${st.set ? "connected (" + esc(st.tail) + "); paste a new URL to replace" : "https://discord.com/api/webhooks/… (off)"}">` +
         `<button class="disc-save">Save</button>` +
-        `<button class="disc-test"${st.set ? "" : " disabled"}>Test</button>` +
+        `<button class="disc-test"${st.set ? "" : " disabled"}>Send test</button>` +
         `<button class="disc-clear danger-btn"${st.set ? "" : " hidden"}>Clear</button>` +
       `</div>` + health +
       `<div class="muted" id="dwh-st-${c.key}" role="status" aria-live="polite" style="font-size:12px; margin-top:2px;"></div>`;
@@ -27653,8 +27676,6 @@ function renderOrgImage(ref) {
   const onPatch = !!(ref && ref.kind === "shipped");
   $("oi-shipped").disabled = onPatch;
   $("oi-shipped").textContent = onPatch ? "In use" : "Use the patch";
-  document.querySelectorAll("#org-image-panel .art-row").forEach((row, i) =>
-    row.classList.toggle("oi-inuse", !!ref && ["shipped", "upload", "url"][i] === ref.kind));
   if (!ref) {
     glyph.textContent = "∅";
     name.textContent = "No image";
@@ -27719,7 +27740,7 @@ $("oi-url-save").onclick = async () => {
   if (!url) { $("oi-status").textContent = "paste an https image link first"; return; }
   if (await orgImageRequest("PUT", { kind: "url", url }, "saving…")) {
     $("oi-url").value = "";
-    $("oi-status").textContent = "saved: press Test on a webhook to check it shows in Discord";
+    $("oi-status").textContent = "saved: use Send test on a message template to see it in Discord";
   }
 };
 $("oi-remove").onclick = async () => {
@@ -27738,7 +27759,7 @@ $("img-preview-toggle").onchange = async () => {
       "language. It doesn't learn who they are in the app or which page they were on. Only the " +
       "listed hosts are ever previewed, so an organizer can't point a preview at a server they " +
       "run. Discord shows linked images either way.",
-      { title: "Preview linked images in the app?", confirmLabel: "Turn on" }))) {
+      { title: "Preview linked images in the app?", confirmLabel: "Turn on", safe: true }))) {
     box.checked = false; return;
   }
   st.textContent = "saving…";
@@ -27753,17 +27774,23 @@ $("img-preview-toggle").onchange = async () => {
   } catch { box.checked = !on; st.textContent = "failed to save — try again"; }
 };
 
-// ---------- message templates (Settings › Discord, slice 5) ----------
+// ---------- message templates (Settings › Announcements, slice 5) ----------
 // docs/discord-notification-customization.md §4.5/4.6. The server owns the
 // template engine: the preview is a POST that renders the DRAFT with sample
 // values, so there's no second copy of the drop rule here to drift.
+// Critique pass (2026-10-06): unsaved edits are guarded, focus moves in and
+// out of the editor, errors mark their box and block Save, fields are grouped.
 const TPL_CHANNEL = { events: "Events", marketplace: "Marketplace", lfg: "Group Finder",
   pirates: "Danger Board", goals: "Goals", ops: "Ops" };
 const TPL_SLOT_LABEL = { title: "Title", description: "Message body", footer: "Footer (small grey line)" };
+const TPL_GROUP_ORDER = ["When", "Where", "Crew", "Event", "Briefing", ""];
 let tplData = [];
 let tplOpen = null;          // the template being edited
 let tplFocus = null;         // the slot input a field chip inserts into
 let tplPreviewTimer = null;
+let tplBaseline = "";        // the draft as last saved/opened, to detect unsaved edits
+let tplColorCustom = false;  // the swatch is the colour only once the admin picks one
+let tplError = false;        // the preview rejected the draft: Save + Send test wait
 
 async function loadNotifyTemplates() {
   try {
@@ -27781,7 +27808,7 @@ function renderTplList() {
     `<div class="tpl-grp-h">${esc(TPL_CHANNEL[cat] || cat)}</div>` + list.map(t =>
       `<div class="tpl-row"><span class="tpl-name">${esc(t.label)}</span>` +
       (t.customized ? `<span class="tpl-chip">customized</span>` : "") +
-      `<button data-tpl="${esc(t.key)}">Edit</button></div>`).join("")).join("");
+      `<button data-tpl="${esc(t.key)}" aria-label="Edit ${esc(t.label)}">Edit</button></div>`).join("")).join("");
   $("tpl-list").querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => openTplEditor(b.dataset.tpl));
 }
 
@@ -27789,37 +27816,57 @@ function renderTplList() {
 // shipped text, so an admin edits FROM the current wording.
 function tplCurrent(t, slot) { return t.slots[slot].override || t.slots[slot].shipped || ""; }
 
+function tplVarChips(t) {
+  const byGroup = {};
+  for (const v of t.vars) (byGroup[v.group || ""] = byGroup[v.group || ""] || []).push(v);
+  const chip = v => `<button class="tpl-var" data-var="${esc(v.name)}" title="${esc(v.label)} — e.g. ${esc(v.sample)}">{${esc(v.name)}}</button>`;
+  const grouped = Object.keys(byGroup).some(g => g);
+  return TPL_GROUP_ORDER.filter(g => byGroup[g]).map(g =>
+    `<div class="tpl-vgrp">${grouped && g ? `<span class="tpl-vgrp-h">${esc(g)}</span>` : ""}` +
+    `<div class="tpl-vars">${byGroup[g].map(chip).join("")}</div></div>`).join("");
+}
+
 function openTplEditor(key) {
   const t = tplData.find(x => x.key === key);
   if (!t) return;
   tplOpen = t;
+  tplError = false;
   const slotHtml = slot => {
     const id = `tpl-f-${slot}`, val = esc(tplCurrent(t, slot));
     const field = slot === "description"
-      ? `<textarea id="${id}" class="ti" spellcheck="false">${val}</textarea>`
-      : `<input id="${id}" class="ti" autocomplete="off" value="${val}">`;
+      ? `<textarea id="${id}" class="ti" spellcheck="false" aria-describedby="tpl-err">${val}</textarea>`
+      : `<input id="${id}" class="ti" autocomplete="off" value="${val}" aria-describedby="tpl-err">`;
     return `<div class="tpl-slot"><label for="${id}">${TPL_SLOT_LABEL[slot]}</label>${field}</div>`;
   };
   const col = t.color;
+  tplColorCustom = !!col.override;
+  const channel = esc(TPL_CHANNEL[t.category] || t.category);
   $("tpl-editor").innerHTML =
     `<div class="tpl-ed-head"><b>${esc(t.label)}</b>` +
-      `<span class="muted" style="font-size:12px;">posts to the ${esc(TPL_CHANNEL[t.category] || t.category)} channel</span>` +
+      `<span class="muted" style="font-size:12px;">posts to the ${channel} channel</span>` +
       `<span style="flex:1"></span><button id="tpl-close">Back to the list</button></div>` +
-    `<div class="tpl-ed"><div>` +
+    `<div class="tpl-ed"><div class="tpl-ed-form">` +
       t.editable.map(slotHtml).join("") +
-      `<div class="muted" style="font-size:12px;">Fields (click to insert):</div>` +
-      `<div class="tpl-vars">${t.vars.map(v =>
-        `<button class="tpl-var" data-var="${esc(v.name)}" title="${esc(v.label)} — e.g. ${esc(v.sample)}">{${esc(v.name)}}</button>`).join("")}</div>` +
-      `<div class="tpl-color"><label><input type="checkbox" id="tpl-color-on"${col.override ? " checked" : ""}> Custom colour</label>` +
-        `<input type="color" id="tpl-color" value="${esc(col.override || col.shipped)}" aria-label="Colour"${col.override ? "" : " disabled"}>` +
-        `<span class="muted" style="font-size:12px;">${col.note ? esc(col.note) + " A custom colour replaces that." : "Default " + esc(col.shipped) + "."}</span></div>` +
+      `<div class="muted" style="font-size:12px;">Fields (click to insert at the cursor):</div>` +
+      tplVarChips(t) +
+      `<details class="tpl-how"><summary>How fields work</summary>` +
+        `<p>Each <code>{field}</code> is filled in for every post. Any part whose fields are all ` +
+        `blank is left out: a piece of a line between <code> · </code> separators, a whole line, ` +
+        `or a whole paragraph. <code>**bold**</code> works in the message body (not the title or ` +
+        `footer). For a literal brace, type <code>{{</code> or <code>}}</code>. Who gets ` +
+        `@-mentioned is never part of a template.</p></details>` +
+      `<div class="tpl-color"><span>Colour</span>` +
+        `<input type="color" id="tpl-color" value="${esc(col.override || col.shipped)}" aria-label="Post colour">` +
+        `<span class="muted" id="tpl-color-note" style="font-size:12px;"></span>` +
+        `<button id="tpl-color-auto" hidden>Use automatic colour</button></div>` +
       `<div class="tpl-actions"><button id="tpl-save">Save</button>` +
+        `<span class="tpl-dirty" id="tpl-dirty" hidden>Unsaved changes</span>` +
         `<button id="tpl-reset" class="danger-btn"${t.customized ? "" : " hidden"}>Reset to shipped</button>` +
-        `<button id="tpl-test"${t.webhook_set ? "" : " disabled"} title="${t.webhook_set
-          ? "Post this draft, filled with sample values and marked [TEST], to the channel"
-          : "No webhook is set for this channel yet"}">Send test</button></div>` +
+        `<button id="tpl-test">Send test</button></div>` +
+      (t.webhook_set ? "" : `<div class="tpl-why">Send test needs a webhook for the ${channel} channel. ` +
+        `Add one under <a href="#/settings/discord">Discord channels</a>.</div>`) +
       `<div class="tpl-err" id="tpl-err" role="alert"></div>` +
-    `</div><div><div class="muted" style="font-size:12px; margin-bottom:4px;">Preview with sample values</div>` +
+    `</div><div class="tpl-ed-prev"><div class="muted" style="font-size:12px; margin-bottom:4px;">Preview with sample values</div>` +
       `<div class="dc-msg"><div class="dc-embed" id="tpl-prev">` +
         `<div class="dc-title" id="tpl-prev-title"></div>` +
         `<img class="dc-thumb" id="tpl-prev-thumb" alt="" hidden>` +
@@ -27828,30 +27875,60 @@ function openTplEditor(key) {
   $("tpl-list").hidden = true;
   $("tpl-editor").hidden = false;
   $("tpl-status").textContent = "";
-  tplFocus = $("tpl-f-" + t.editable[0]);
   for (const slot of t.editable) {
     const el = $("tpl-f-" + slot);
     el.addEventListener("focus", () => { tplFocus = el; });
-    el.addEventListener("input", scheduleTplPreview);
+    el.addEventListener("input", () => { syncTplDirty(); scheduleTplPreview(); });
   }
   $("tpl-editor").querySelectorAll("[data-var]").forEach(b => b.onclick = () => insertTplVar(b.dataset.var));
-  $("tpl-color-on").onchange = () => { $("tpl-color").disabled = !$("tpl-color-on").checked; scheduleTplPreview(); };
-  $("tpl-color").oninput = scheduleTplPreview;
+  $("tpl-color").oninput = () => { tplColorCustom = true; syncTplColor(); syncTplDirty(); scheduleTplPreview(); };
+  $("tpl-color-auto").onclick = () => {
+    tplColorCustom = false; $("tpl-color").value = col.shipped;
+    syncTplColor(); syncTplDirty(); scheduleTplPreview();
+  };
   $("tpl-close").onclick = closeTplEditor;
   $("tpl-save").onclick = saveTpl;
   $("tpl-reset").onclick = resetTpl;
   $("tpl-test").onclick = testTpl;
+  syncTplColor();
+  tplBaseline = JSON.stringify(tplDraft());
+  syncTplDirty();
   renderTplThumb();
   refreshTplPreview();
+  tplFocus = $("tpl-f-" + t.editable[0]);
+  tplFocus.focus();          // keyboard + screen-reader users land in the editor
 }
 
-function closeTplEditor() {
+function syncTplColor() {
+  const col = tplOpen.color;
+  $("tpl-color-auto").hidden = !tplColorCustom;
+  $("tpl-color-note").textContent = tplColorCustom ? "Custom" + (col.note ? " — replaces the automatic colour." : ".")
+    : "Automatic" + (col.note ? ": " + col.note : ".");
+}
+
+function tplDirty() { return !!tplOpen && JSON.stringify(tplDraft()) !== tplBaseline; }
+function syncTplDirty() { $("tpl-dirty").hidden = !tplDirty(); syncTplButtons(); }
+function syncTplButtons() {
+  $("tpl-save").disabled = tplError;
+  $("tpl-test").disabled = tplError || !tplOpen.webhook_set;
+}
+
+async function closeTplEditor() {
+  const t = tplOpen;
+  if (!t) return;
+  if (tplDirty() && !(await confirmDialog("Your edits to this message haven't been saved.",
+      { title: `Discard changes to "${t.label}"?`, confirmLabel: "Discard", cancelLabel: "Keep editing", danger: true }))) return;
   tplOpen = null;
   $("tpl-editor").hidden = true;
   $("tpl-editor").innerHTML = "";
   $("tpl-list").hidden = false;
   renderTplList();
+  const back = $("tpl-list").querySelector(`[data-tpl="${t.key}"]`);
+  if (back) back.focus();     // return focus to where the admin came from
 }
+
+// Closing the tab or reloading with unsaved template edits asks first.
+window.addEventListener("beforeunload", (e) => { if (tplDirty()) { e.preventDefault(); e.returnValue = ""; } });
 
 function insertTplVar(name) {
   const el = tplFocus;
@@ -27860,6 +27937,7 @@ function insertTplVar(name) {
   el.value = el.value.slice(0, a) + tok + el.value.slice(b);
   el.focus();
   el.selectionStart = el.selectionEnd = a + tok.length;
+  syncTplDirty();
   scheduleTplPreview();
 }
 
@@ -27868,10 +27946,11 @@ function insertTplVar(name) {
 function tplDraft() {
   const t = tplOpen, body = {};
   for (const slot of t.editable) {
-    const v = $("tpl-f-" + slot).value;
+    const el = $("tpl-f-" + slot);
+    const v = el ? el.value : "";
     body[slot] = v === (t.slots[slot].shipped || "") ? "" : v;
   }
-  body.color = $("tpl-color-on").checked ? $("tpl-color").value.toUpperCase() : "";
+  body.color = tplColorCustom ? $("tpl-color").value.toUpperCase() : "";
   return body;
 }
 
@@ -27880,23 +27959,37 @@ function scheduleTplPreview() {
   tplPreviewTimer = setTimeout(refreshTplPreview, 300);
 }
 
+// An error names the unknown field; mark the box that contains it.
+function markTplError(message) {
+  const t = tplOpen;
+  for (const slot of t.editable) $("tpl-f-" + slot).removeAttribute("aria-invalid");
+  tplError = !!message;
+  $("tpl-err").textContent = message || "";
+  $("tpl-prev").classList.toggle("stale", tplError);
+  const tok = message && (message.match(/\{[^{}]*\}/) || [])[0];
+  if (tok) for (const slot of t.editable) {
+    const el = $("tpl-f-" + slot);
+    if (el.value.includes(tok)) el.setAttribute("aria-invalid", "true");
+  }
+  syncTplButtons();
+}
+
 async function refreshTplPreview() {
   const t = tplOpen;
   if (!t) return;
-  const err = $("tpl-err");
   try {
     const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}/preview`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tplDraft()) });
     const d = await r.json().catch(() => ({}));
     if (tplOpen !== t) return;                       // closed or switched meanwhile
-    if (!r.ok) { err.textContent = d.detail || "Couldn't render the preview."; return; }
-    err.textContent = "";
+    if (!r.ok) { markTplError(d.detail || "Couldn't render the preview."); return; }
+    markTplError("");
     const e = d.embed || {};
     $("tpl-prev").style.borderLeftColor = "#" + (e.color || 0).toString(16).padStart(6, "0");
     $("tpl-prev-title").textContent = e.title || "";
     $("tpl-prev-desc").innerHTML = discordMd(e.description || "");
     $("tpl-prev-foot").textContent = (e.footer && e.footer.text) || "";
-  } catch { err.textContent = "Couldn't render the preview."; }
+  } catch { markTplError("Couldn't render the preview."); }
 }
 
 function renderTplThumb() {
@@ -27932,17 +28025,19 @@ function discordTime(sec, style) {
 }
 
 async function saveTpl() {
-  const t = tplOpen, err = $("tpl-err");
+  const t = tplOpen;
   try {
     const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tplDraft()) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { err.textContent = d.detail || "Couldn't save."; return; }
+    if (!r.ok) { markTplError(d.detail || "Couldn't save."); return; }
     Object.assign(t, d);
+    tplBaseline = JSON.stringify(tplDraft());
+    syncTplDirty();
     $("tpl-reset").hidden = !d.customized;
     $("tpl-status").textContent = d.customized ? `saved: "${t.label}" now uses your wording`
       : `saved: "${t.label}" uses the shipped wording`;
-  } catch { err.textContent = "Couldn't save — try again."; }
+  } catch { markTplError("Couldn't save — try again."); }
 }
 
 async function resetTpl() {
@@ -27950,23 +28045,22 @@ async function resetTpl() {
   if (!(await confirmDialog("Its title, body, footer and colour go back to the wording the app ships with.",
       { title: `Reset "${t.label}"?`, confirmLabel: "Reset", danger: true }))) return;
   const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}`, { method: "DELETE" });
-  if (!r.ok) { $("tpl-err").textContent = "Couldn't reset."; return; }
+  if (!r.ok) { markTplError("Couldn't reset."); return; }
   Object.assign(t, await r.json());
   openTplEditor(t.key);
   $("tpl-status").textContent = `"${t.label}" is back to the shipped wording`;
 }
 
 async function testTpl() {
-  const t = tplOpen, err = $("tpl-err");
+  const t = tplOpen;
   $("tpl-status").textContent = "sending test…";
   try {
     const r = await fetch(`/api/admin/notify-templates/${encodeURIComponent(t.key)}/test`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tplDraft()) });
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) { $("tpl-status").textContent = ""; err.textContent = d.detail || "Test failed."; return; }
-    err.textContent = "";
+    if (!r.ok) { $("tpl-status").textContent = ""; markTplError(d.detail || "Test failed."); return; }
     $("tpl-status").textContent = `test sent to the ${TPL_CHANNEL[t.category] || t.category} channel`;
-  } catch { $("tpl-status").textContent = ""; err.textContent = "Test failed — try again."; }
+  } catch { $("tpl-status").textContent = ""; markTplError("Test failed — try again."); }
 }
 
 $("discord-lead-save").onclick = async () => {
