@@ -31,6 +31,7 @@ import asyncio
 import contextlib
 import io
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -13930,6 +13931,219 @@ class AnnounceEmbedSlice3Tests(unittest.TestCase):
         e = self.sent[0]["embed"]
         self.assertTrue(e["title"].startswith("🎯 New org goal"))
         self.assertEqual(e["thumbnail"], {"url": "attachment://thumb.png"})
+
+
+# ---- notify golden outputs (Discord images slice 4) -------------------------
+# The announcement builders moved onto a template registry (NOTIFY_TEMPLATES)
+# with the promise that, with no admin overrides, every post is BYTE-IDENTICAL
+# to what the hand-written builders sent. server/testdata/notify_golden.json was
+# generated from the pre-refactor builders; NotifyGoldenTests replays the same
+# inputs. Regenerate ONLY for an intended wording change:
+#   SC_NAV_OFFLINE=1 SC_NAV_REGEN_GOLDEN=1 .venv/bin/python -m pytest -q test_app.py -k NotifyGolden
+NOTIFY_GOLDEN_FILE = Path(__file__).parent / "testdata" / "notify_golden.json"
+
+
+def _notify_golden_run() -> dict:
+    """Run every announcement builder over fixed inputs; return what each
+    would send (content, embed, pings, attachment names)."""
+    out: dict = {}
+    orig = (notify.send, app.PUBLIC_BASE_URL, db.blueprint_crafters)
+    sent: list = []
+
+    async def _capture(category, text, *, mentions=None, dedup_key=None, **kw):
+        sent.append({"category": category, "text": text, "embed": kw.get("embed"),
+                     "mentions": mentions, "files": [f[0] for f in kw.get("files") or []]})
+        return True
+    notify.send = _capture
+    app.PUBLIC_BASE_URL = "https://nav.example.org"
+    db.blueprint_crafters = lambda key: ["111", "222", "333"] if key else []
+    for c in notify.CATEGORIES:
+        db.set_setting(notify._webhook_key(c), _GOOD_WEBHOOK)
+    db.set_setting(app._NOTIFY_ORG_IMAGE_KEY, "")
+    now = "2026-10-01T00:00:00+00:00"
+
+    def event(**over):
+        d = {"organizer_id": "4242", "title": "Salvage night", "description": "",
+             "type": ["Salvage Op"], "category": ["PvE", "Social"],
+             "start_at": "2026-10-23T03:35:00+00:00", "signup_deadline": None,
+             "duration_min": None, "location": "", "event_location": "",
+             "min_players": 0, "max_players": None, "roles": [], "details": {},
+             "status": "scheduled", "created_at": now, "updated_at": now, **over}
+        return db.get_event(db.create_event(d))
+
+    def run(name, coro):
+        sent.clear()
+        asyncio.run(coro)
+        out[name] = list(sent)
+    try:
+        full = event(description="Bring a *Vulture*. [x](https://e.vil)", duration_min=90,
+                     location="Port_Tressler", event_location="Yela belt",
+                     min_players=5, max_players=7,
+                     roles=[{"role": "Salvage", "needed": 7}, {"role": "Escort", "needed": 2}],
+                     signup_deadline="2026-10-15T01:34:00+00:00",
+                     details={"mission": "Clear the wreck", "roe": "pvp_if_engaged",
+                              "comms": "`TS` ch 2", "loadout": "Heavy", "medical": "Cutty Red",
+                              "prereqs": "Own a ship"})
+        bare = event(title="Bare op")
+        longd = event(title="Long", description="y" * 1600, duration_min=45)
+        hours = event(title="Hours", duration_min=120, location="Lorville")
+        run("event_created_full", app._notify_event_created(full))
+        run("event_created_bare", app._notify_event_created(bare))
+        run("event_created_long", app._notify_event_created(longd))
+        run("event_created_hours", app._notify_event_created(hours))
+        run("event_reminder_full", app._notify_event_reminder(full))
+        run("event_reminder_bare", app._notify_event_reminder(bare))
+        run("event_rescheduled_time", app._notify_event_rescheduled(
+            full, "2026-10-22T03:35:00+00:00", "Yela belt"))
+        run("event_rescheduled_place", app._notify_event_rescheduled(
+            full, full["start_at"], "Somewhere else"))
+        run("event_cancelled", app._notify_event_cancelled(full))
+        base = {"id": 70, "seller_id": "4242", "item_name": "Quantanium", "qty": 1}
+        run("listing_sale", app._notify_listing_posted({**base, "mode": "sale", "price_auec": 250000, "qty": 3}))
+        run("listing_auction", app._notify_listing_posted({**base, "mode": "auction", "start_price": 1000,
+                                                           "buyout_auec": 9000, "ends_at": "2026-11-01T00:00:00Z"}))
+        run("listing_barter", app._notify_listing_posted({**base, "mode": "barter", "want": "a P4-AR"}))
+        run("listing_commission", app._notify_listing_posted({
+            **base, "mode": "commission", "blueprint_key": "p4ar", "price_auec": 50000,
+            "materials": "split", "ends_at": "2026-11-02T00:00:00Z",
+            "attributes": {"spec": {"quality": 600}}}))
+        run("listing_commission_directed", app._notify_listing_posted({
+            **base, "mode": "commission", "blueprint_key": "p4ar", "directed_to": "111"}))
+        run("listing_wtb", app._notify_listing_posted({**base, "mode": "wtb", "price_auec": 12000}))
+        run("lfg_lfm", app._notify_lfg_posted({
+            "id": 5, "poster": "Ace", "direction": "lfm", "tags": ["bunkers", "PvE"], "slots": 2,
+            "filled": 1, "note": "need 2 *now*", "rally": "Port_Tressler", "comms": True}))
+        run("lfg_lfj_bare", app._notify_lfg_posted({
+            "id": 6, "poster": "Nova", "direction": "lfj", "tags": [], "slots": None,
+            "filled": 0, "note": "", "rally": None, "comms": False}))
+        wbase = {"id": 8, "poster": "Ace", "anchor_a": {"name": "Baijini Point"},
+                 "anchor_b": {"name": "Orison"}, "location": "", "note": ""}
+        run("warning_lane_deadly", app._notify_warning_posted({**wbase, "kind": "lane", "threat": "pvp",
+                                                              "severity": "deadly", "note": "2 _Cutlass_"}))
+        run("warning_point_loc", app._notify_warning_posted({**wbase, "kind": "point", "threat": "pve",
+                                                            "severity": "sighted", "anchor_b": None,
+                                                            "location": "near the comm array"}))
+        run("warning_lane_noanchor", app._notify_warning_posted({**wbase, "kind": "lane", "threat": "pvp",
+                                                                "severity": "active", "anchor_a": None,
+                                                                "anchor_b": None, "location": "Crusader lanes"}))
+        lines = [{"name": "Iron", "have": 10, "needed": 40, "unit": "SCU", "min_q": 500},
+                 {"name": "Hull plate", "have": 2, "needed": 2, "unit": ""}]
+        goal = {"id": 9, "title": "Build an Idris", "kind": "materials",
+                "description": "Org *priority*. " + "z" * 300, "deadline": "2026-12-01T00:00:00Z"}
+        run("goal_materials", app._notify_goal_posted(goal, {"lines": lines, "overall_pct": 41.6}, "4242"))
+        run("goal_materials_full_refresh", app._notify_goal_posted(
+            goal, {"lines": lines * 5, "overall_pct": 100, "is_met": True}, "4242", refresh=True, full=True))
+        run("goal_unlock", app._notify_goal_posted(
+            {"id": 10, "title": "Unlock P4", "kind": "unlock", "description": "",
+             "unlock_spec": {"blueprints": ["p4"], "target": {"mode": "count", "value": 2},
+                             "playstyles": ["mining"]}},
+            {"lines": [{"name": "P4-AR", "have": 1, "needed": 2}], "overall_pct": 50,
+             "scope_size": 12, "needed": 2}, "4242"))
+        run("goal_survey", app._notify_goal_posted(
+            {"id": 11, "title": "Map Aberdeen", "kind": "survey", "description": "",
+             "survey_spec": {"zone_id": 1, "since": 1790000000}},
+            {"lines": [{"name": "Sightings", "have": 3, "needed": 25, "unit": "sightings"}],
+             "overall_pct": 12}, "4242"))
+        oid = db.create_op({"name": "Rockbreaker", "organizer_id": "4242", "phase": "closed",
+                            "started_at": "2026-10-01T20:00:00+00:00", "created_at": now})
+        for did, att in (("4242", "present"), ("777", "late")):
+            db.add_op_roster(oid, {"discord_id": did, "attendance": att, "created_at": now})
+        db.add_op_roster(oid, {"guest_name": "Pal_9", "attendance": "present", "created_at": now})
+        op = db.get_op(oid)
+        out["op_record"] = [{"embed": app._op_record_embed(op, updated=False)}]
+        out["op_record_updated"] = [{"embed": app._op_record_embed(op, updated=True)}]
+    finally:
+        notify.send, app.PUBLIC_BASE_URL, db.blueprint_crafters = orig
+    return out
+
+
+class NotifyGoldenTests(unittest.TestCase):
+    """With no admin overrides, the template registry must reproduce the
+    pre-refactor announcements exactly (see _notify_golden_run)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def test_announcements_match_golden(self):
+        got = json.loads(json.dumps(_notify_golden_run()))
+        if os.environ.get("SC_NAV_REGEN_GOLDEN") == "1":
+            NOTIFY_GOLDEN_FILE.write_text(json.dumps(got, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
+        want = json.loads(NOTIFY_GOLDEN_FILE.read_text())
+        self.assertEqual(sorted(got), sorted(want))
+        for k in want:
+            self.assertEqual(got[k], want[k], k)
+
+
+class NotifyTemplateEngineTests(unittest.TestCase):
+    """notify_templates: substitution only, the drop rule at segment / line /
+    paragraph level, literal braces, and slot-aware escaping."""
+
+    def setUp(self):
+        import notify_templates
+        self.nt = notify_templates
+
+    def test_substitution_and_literal_braces(self):
+        self.assertEqual(self.nt.render_text("Hi {name}! {{not a var}}", {"name": "Ace"}),
+                         "Hi Ace! {not a var}")
+
+    def test_no_attribute_access_or_format_specs(self):
+        # Only bare {lowercase_name} matches; anything fancier stays literal text.
+        out = self.nt.render_text("{name.__class__} {name!r} {name:>9} {Name}", {"name": "x"})
+        self.assertEqual(out, "{name.__class__} {name!r} {name:>9} {Name}")
+
+    def test_values_are_never_re_expanded(self):
+        self.assertEqual(self.nt.render_text("{a}", {"a": "{b}", "b": "boom"}), "{b}")
+
+    def test_drop_rule_segment_line_paragraph(self):
+        tpl = "Intro\n\n**Starts** {start} · {length}\n**Rally** {rally}\n\n**Briefing**\n{mission}"
+        self.assertEqual(self.nt.render_text(tpl, {"start": "now"}), "Intro\n\n**Starts** now")
+        self.assertEqual(self.nt.render_text(tpl, {"start": "now", "length": "1 h", "mission": "Go"}),
+                         "Intro\n\n**Starts** now · 1 h\n\n**Briefing**\nGo")
+
+    def test_text_only_parts_always_stay(self):
+        self.assertEqual(self.nt.render_text("Header\nStatic · text", {}), "Header\nStatic · text")
+
+    def test_escaping_is_description_only(self):
+        esc = lambda v: v.replace("_", "\\_")
+        r = self.nt.render("lfg_posted", {"icon": "🔎", "heading": "Looking for members",
+                                          "poster": "Port_Ace", "note": "a_b"}, escape=esc)
+        self.assertEqual(r["title"], "🔎 Looking for members: Port_Ace")   # titles don't render markdown
+        self.assertEqual(r["description"], "a\\_b")
+
+    def test_registry_templates_use_only_declared_vars(self):
+        for key, t in self.nt.TEMPLATES.items():
+            for slot in self.nt.SLOTS:
+                text = getattr(t, slot)
+                if text:
+                    self.assertLessEqual(self.nt.template_vars(text), set(t.vars), (key, slot))
+            self.assertIn(t.category, notify.CATEGORIES, key)
+
+    def test_builders_supply_exactly_the_declared_vars(self):
+        seen = {}
+        orig = self.nt.render
+
+        def spy(key, values, **kw):
+            seen.setdefault(key, set()).update(values)
+            return orig(key, values, **kw)
+        self.nt.render = spy
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        try:
+            db.init(Path(tmp.name))
+            _notify_golden_run()
+        finally:
+            self.nt.render = orig
+            Path(tmp.name).unlink(missing_ok=True)
+        self.assertEqual(set(seen), set(self.nt.TEMPLATES))          # every template is used
+        for key, names in seen.items():
+            self.assertEqual(names, set(self.nt.TEMPLATES[key].vars), key)
 
 
 if __name__ == "__main__":

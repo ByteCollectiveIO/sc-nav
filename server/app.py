@@ -42,6 +42,7 @@ import db
 import event_taxonomy
 import nav_core
 import notify
+import notify_templates
 from version import __version__ as APP_VERSION
 
 DATA_DIR = Path(os.environ.get("SC_NAV_DATA", Path(__file__).parent.parent / "poi"))
@@ -8642,6 +8643,19 @@ def _embed(title: str, description: str = "", *, url: str | None = None,
     return e
 
 
+def _announcement(key: str, values: dict, *, url: str | None = None,
+                  color: int = _EMBED_INFO, fields: list[dict] | None = None) -> dict:
+    """An announcement embed from the template registry (notify_templates,
+    slice 4): the builder supplies RAW values, the registry owns the wording
+    and escapes member text in the description. Footer only when non-empty."""
+    r = notify_templates.render(key, values, escape=_md_plain)
+    e = _embed(r.get("title", ""), r.get("description", ""), url=url, color=color,
+               fields=fields)
+    if r.get("footer"):
+        e["footer"] = {"text": r["footer"]}
+    return e
+
+
 def _discord_ts(iso: str, style: str = "F") -> str:
     """Render an ISO8601 UTC time as a Discord `<t:unix:style>` tag so every
     member sees it in their own timezone. Falls back to the raw string."""
@@ -8679,22 +8693,12 @@ def _notify_bg(coro) -> None:
     task.add_done_callback(_notify_tasks.discard)
 
 
-# The new-event post carries the whole event, not just when/where (user's call
-# 2026-10-05). The facts go in the DESCRIPTION as one bold-labelled line each,
-# not as embed fields: beside a thumbnail Discord packs inline fields into three
-# narrow columns and a full date wraps down four lines (first dev test). Discord
-# has no table element, and a code-block table would stop <t:…> timestamps
-# rendering in each member's own timezone.
+# The new-event post carries the whole event (user's call 2026-10-05): its
+# description, a facts block, and a mission briefing when any detail is set —
+# all in the embed description, not inline fields (beside a thumbnail Discord
+# packs fields into narrow columns). Wording: notify_templates "event_created".
 _EVENT_POST_DESC_MAX = 1500
 _EVENT_POST_DETAIL_MAX = 400
-# Labels are plain bold words, no per-line emoji: a full-colour icon on every
-# line out-weighed the facts and read as cartoonish (dev screenshot,
-# 2026-10-05). The title keeps its one emoji so the post is findable in a
-# busy channel.
-_EVENT_DETAIL_LINES = (             # (detail key, label) — the mission briefing
-    ("mission", "**Mission**"), ("roe", "**ROE**"), ("comms", "**Comms**"),
-    ("loadout", "**Loadout**"), ("medical", "**Medical**"),
-    ("prereqs", "**Prerequisites**"))
 
 
 def _fmt_duration(minutes) -> str:
@@ -8705,61 +8709,44 @@ def _fmt_duration(minutes) -> str:
 
 
 def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
-    """The full new-event card: the organizer's description, then a facts block,
-    then a mission briefing when any mission detail is filled in. Labels are
-    ours (bold); every member-typed value goes through _md_plain, since the
-    description renders markdown. A fact with nothing to say is left out."""
     url = _app_url(f"#/events/{ev['id']}")
-    plain = lambda v: _md_plain((v or "").strip())
-
     start = ev.get("start_at")
-    when = f"**Starts** {_discord_ts(start)} ({_discord_ts(start, 'R')})"
-    if ev.get("duration_min"):
-        when += f" · {_fmt_duration(ev['duration_min'])}"
-    facts = [when]
-    places = [f"**Rally point** {plain(ev.get('location'))}" if (ev.get("location") or "").strip() else "",
-              f"**Location** {plain(ev.get('event_location'))}" if (ev.get("event_location") or "").strip() else ""]
-    if any(places):
-        facts.append(" · ".join(p for p in places if p))
     fill = nav_core.derive_event_fill(ev, db.list_signups(ev["id"]))
     cap = ev.get("max_players")
-    crew = f"**Crew** {fill['total_going']} / {cap if cap else '∞'} going"
+    crew = f"{fill['total_going']} / {cap if cap else '∞'} going"
     if ev.get("min_players"):
         crew += f" (min {ev['min_players']})"
-    facts.append(crew)
-    roles = [f"{_md_plain(r['role'])} {r['filled']}/{r['needed']}"
-             for r in fill.get("roster") or [] if r.get("needed")]
-    if roles:
-        facts.append("**Roles** " + " · ".join(roles))
-    if ev.get("signup_deadline"):
-        facts.append(f"**Signups close** {_discord_ts(ev['signup_deadline'], 'f')}")
-    if ev.get("organizer_id"):
-        facts.append(f"**Organizer** {_md_plain(_resolve_member_name(ev['organizer_id'], None))}")
-    kinds = " · ".join(x for x in (", ".join(ev.get("type") or []),
-                                   ", ".join(ev.get("category") or [])) if x)
-    if kinds:
-        facts.append(f"**Type** {_md_plain(kinds)}")
-
     details = ev.get("details") or {}
     roe_labels = {r["key"]: r["label"] for r in event_taxonomy.ROE}
-    briefing = []
-    for key, label in _EVENT_DETAIL_LINES:
-        v = (details.get(key) or "").strip()
-        if v:
-            briefing.append(f"{label} " + (roe_labels.get(v, v) if key == "roe"
-                                            else _md_plain(_clip(v, _EVENT_POST_DETAIL_MAX))))
-
+    roe = (details.get("roe") or "").strip()
     desc = (ev.get("description") or "").strip()
-    blocks = []
-    if desc:
-        body = _md_plain(_clip(desc, _EVENT_POST_DESC_MAX))
-        if len(desc) > _EVENT_POST_DESC_MAX and url:
-            body += f"\n[Read the rest in the app]({url})"
-        blocks.append(body)
-    blocks.append("\n".join(facts))
-    if briefing:
-        blocks.append("**Mission briefing**\n" + "\n".join(briefing))
-    return _embed(f"{title_prefix}📅 New event: {ev['title']}", "\n\n".join(blocks), url=url)
+    detail = lambda k: _clip((details.get(k) or "").strip(), _EVENT_POST_DETAIL_MAX) \
+        if (details.get(k) or "").strip() else ""
+    e = _announcement("event_created", {
+        "title": ev["title"],
+        "description": _clip(desc, _EVENT_POST_DESC_MAX) if desc else "",
+        "read_more": (f"[Read the rest in the app]({url})"
+                      if len(desc) > _EVENT_POST_DESC_MAX and url else ""),
+        "start": _discord_ts(start), "start_relative": _discord_ts(start, "R"),
+        "length": _fmt_duration(ev.get("duration_min")),
+        "rally_point": (ev.get("location") or "").strip(),
+        "event_location": (ev.get("event_location") or "").strip(),
+        "crew": crew,
+        "roles": " · ".join(f"{r['role']} {r['filled']}/{r['needed']}"
+                            for r in fill.get("roster") or [] if r.get("needed")),
+        "signups_close": (_discord_ts(ev["signup_deadline"], "f")
+                          if ev.get("signup_deadline") else ""),
+        "organizer": (_resolve_member_name(ev["organizer_id"], None)
+                      if ev.get("organizer_id") else ""),
+        "type": " · ".join(x for x in (", ".join(ev.get("type") or []),
+                                       ", ".join(ev.get("category") or [])) if x),
+        "mission": detail("mission"), "roe": roe_labels.get(roe, roe),
+        "comms": detail("comms"), "loadout": detail("loadout"),
+        "medical": detail("medical"), "prereqs": detail("prereqs"),
+    }, url=url)
+    if title_prefix:
+        e["title"] = title_prefix + e["title"]
+    return e
 
 
 async def _notify_event_created(ev: dict) -> None:
@@ -8776,9 +8763,8 @@ async def _notify_event_cancelled(ev: dict) -> None:
         return
     await notify.send(
         "events", "",
-        **_announce(_embed(
-            f"🚫 Event cancelled: {ev['title']}",
-            f"Was set for {_discord_ts(ev['start_at'])}.",
+        **_announce(_announcement(
+            "event_cancelled", {"title": ev["title"], "start": _discord_ts(ev["start_at"])},
             url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_BAD)),
         dedup_key=f"event-cancelled:{ev['id']}")
 
@@ -8800,17 +8786,15 @@ async def _notify_event_reminder(ev: dict) -> None:
     op used to silently ping only the first 50."""
     if not notify.is_configured("events"):
         return
-    where = (ev.get("event_location") or ev.get("location") or "").strip()
-    loc = f"\n📍 {where}" if where else ""
     await notify.send_paged(
         "events", "",
         mentions=_event_attendee_ids(ev["id"]),
         dedup_key=f"event-reminder:{ev['id']}",
-        **_announce(_embed(
-            f"⏰ Starting soon: {ev['title']}",
-            f"Begins {_discord_ts(ev['start_at'])} ({_discord_ts(ev['start_at'], 'R')})"
-            f"{loc}",
-            url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN), event=ev))
+        **_announce(_announcement("event_reminder", {
+            "title": ev["title"], "start": _discord_ts(ev["start_at"]),
+            "start_relative": _discord_ts(ev["start_at"], "R"),
+            "place": (ev.get("event_location") or ev.get("location") or "").strip(),
+        }, url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN), event=ev))
 
 
 async def _notify_event_rescheduled(ev: dict, old_start: str | None,
@@ -8819,20 +8803,20 @@ async def _notify_event_rescheduled(ev: dict, old_start: str | None,
     the created-ping advertised the OLD details. Pings active signups."""
     if not notify.is_configured("events"):
         return
-    lines = []
-    if old_start and old_start != ev["start_at"]:
-        lines.append(f"Now starts {_discord_ts(ev['start_at'])} "
-                     f"({_discord_ts(ev['start_at'], 'R')}) — was {_discord_ts(old_start)}")
+    moved = bool(old_start and old_start != ev["start_at"])
     new_where = (ev.get("event_location") or ev.get("location") or "").strip()
-    if old_where is not None and old_where != new_where and new_where:
-        lines.append(f"📍 Now at {new_where}")
+    relocated = old_where is not None and old_where != new_where and bool(new_where)
     await notify.send_paged(
         "events", "",
         mentions=_event_attendee_ids(ev["id"]),
         dedup_key=f"event-moved:{ev['id']}:{ev['start_at']}",
-        **_announce(_embed(f"📌 Event updated: {ev['title']}", "\n".join(lines),
-                           url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN),
-                    event=ev))
+        **_announce(_announcement("event_rescheduled", {
+            "title": ev["title"],
+            "start": _discord_ts(ev["start_at"]) if moved else "",
+            "start_relative": _discord_ts(ev["start_at"], "R") if moved else "",
+            "old_start": _discord_ts(old_start) if moved else "",
+            "new_place": new_where if relocated else "",
+        }, url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN), event=ev))
 
 
 async def _notify_waitlist_promoted(ev: dict, discord_id: str) -> None:
@@ -8861,23 +8845,17 @@ async def _notify_lfg_posted(pub: dict) -> None:
     # An embed in the event card's style (slice 3): one emoji in the title, the
     # member's note, then plain bold-labelled facts; member text escaped.
     lfm = pub["direction"] == "lfm"
-    title = (f"🔎 Looking for members: {pub['poster']}" if lfm
-             else f"🙋 Looking to join: {pub['poster']}")
-    facts = []
-    if lfm and pub.get("slots"):
-        facts.append(f"**Needs** {pub['slots']} (filled {pub['filled']}/{pub['slots']})")
-    if pub.get("tags"):
-        facts.append("**Playstyles** " + " · ".join(_md_plain(t) for t in pub["tags"]))
-    if pub.get("rally"):
-        facts.append(f"**Rally point** {_md_plain(pub['rally'])}")
-    if pub.get("comms"):
-        facts.append("**Comms** Voice comms")
-    blocks = [_md_plain(pub["note"].strip())] if (pub.get("note") or "").strip() else []
-    if facts:
-        blocks.append("\n".join(facts))
-    await notify.send("lfg", "",
-                      **_announce(_embed(title, "\n\n".join(blocks), url=_app_url("#/lfg"))),
-                      dedup_key=f"lfg-posted:{pub['id']}")
+    await notify.send("lfg", "", **_announce(_announcement("lfg_posted", {
+        "icon": "🔎" if lfm else "🙋",
+        "heading": "Looking for members" if lfm else "Looking to join",
+        "poster": pub["poster"],
+        "note": (pub.get("note") or "").strip(),
+        "needs": (f"{pub['slots']} (filled {pub['filled']}/{pub['slots']})"
+                  if lfm and pub.get("slots") else ""),
+        "playstyles": " · ".join(pub.get("tags") or []),
+        "rally_point": pub.get("rally") or "",
+        "comms": "Voice comms" if pub.get("comms") else "",
+    }, url=_app_url("#/lfg"))), dedup_key=f"lfg-posted:{pub['id']}")
 
 
 def _lfg_announce_ok(poster_id: str) -> bool:
@@ -8907,24 +8885,21 @@ async def _notify_warning_posted(pub: dict) -> None:
     b = (pub.get("anchor_b") or {}).get("name")
     if pub["kind"] == "lane":
         where = f"{a} ↔ {b}" if a and b else (pub.get("location") or "a trade lane")
-        title = f"{icon} Pirate snare: {where}"
+        kind_label = "Pirate snare:"
     else:
         where = a or (pub.get("location") or "a location")
-        title = f"{icon} Danger near {where}"
-    # Embed, event-card style (slice 3). The title names the place; the facts
-    # say how bad and who. A deadly report reads red, anything else amber.
-    facts = [f"**Severity** {pub['severity'].upper()}", f"**Threat** {threat}"]
+        kind_label = "Danger near"
+    # The title names the place; the facts say how bad and who. A deadly
+    # report reads red, anything else amber.
     loc = (pub.get("location") or "").strip()
-    if loc and loc != where:
-        facts.append(f"**Location** {_md_plain(loc)}")
-    facts.append(f"**Reported by** {_md_plain(pub['poster'])}")
-    blocks = [_md_plain(pub["note"].strip())] if (pub.get("note") or "").strip() else []
-    blocks.append("\n".join(facts))
     color = _EMBED_BAD if pub["severity"] == "deadly" else _EMBED_WARN
-    await notify.send("pirates", "",
-                      **_announce(_embed(title, "\n\n".join(blocks),
-                                         url=_app_url("#/pirates"), color=color)),
-                      dedup_key=f"warning-posted:{pub['id']}")
+    await notify.send("pirates", "", **_announce(_announcement("warning_posted", {
+        "icon": icon, "kind_label": kind_label, "where": where,
+        "note": (pub.get("note") or "").strip(),
+        "severity": pub["severity"].upper(), "threat": threat,
+        "location": loc if loc and loc != where else "",
+        "poster": pub["poster"],
+    }, url=_app_url("#/pirates"), color=color)), dedup_key=f"warning-posted:{pub['id']}")
 
 
 def _warning_announce_ok(poster_id: str) -> bool:
@@ -9132,11 +9107,12 @@ async def _notify_listing_posted(listing: dict) -> None:
     crafters = [m for m in (db.blueprint_crafters(key) if key else [])
                 if str(m) != str(listing["seller_id"])][:_ANNOUNCE_MENTION_CAP]
     craft_line = ("Can craft: " + " ".join(f"<@{m}>" for m in crafters)) if crafters else ""
-    desc = ((" · ".join(bits) + "\n") if bits else "") + f"Posted by {who}. {cta}"
     await notify.send(
         "marketplace", craft_line,
-        **_announce(_embed(f"{icon} {headline}: {listing.get('item_name')}", desc,
-                           url=_app_url(f"#/market/{listing['id']}"))),
+        **_announce(_announcement("listing_posted", {
+            "icon": icon, "headline": headline, "item": listing.get("item_name"),
+            "terms": " · ".join(bits), "poster": who, "call_to_action": cta,
+        }, url=_app_url(f"#/market/{listing['id']}"))),
         dedup_key=f"listing-posted:{listing['id']}",
         mentions=crafters)
 
@@ -9449,23 +9425,25 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
         head += f" · counting since <t:{int(goal['survey_spec']['since'])}:D>"
     if goal.get("deadline"):
         head += f" · due {_discord_ts(goal['deadline'], 'D')}"
-    desc = head + "\n" + "\n".join(rows)
-    if goal.get("description"):
-        # `full` posts the whole description (the org wrote it as the channel
-        # notice — a 2,000-char org directive shouldn't need retyping); the
-        # default keeps the card short. Embed descriptions cap at 4,096.
-        d = goal["description"].strip()
-        desc += "\n\n" + (d if full or len(d) <= 280 else d[:280] + "…")
-    desc += f"\n\n{'Re-posted' if refresh else 'Posted'} by {who}. " + \
-        ("Add the recipes you unlock to your library." if unlock
-         else "Log nodes inside the area — they count automatically, no sign-up." if survey
-         else "Log what you're holding to contribute.")
-    icon = "🔓" if unlock else "⛏" if survey else "🎯"
-    title = f"{icon} {'Goal update' if refresh else 'New org goal'}: {goal['title']}"
+    # `full` posts the whole description (the org wrote it as the channel
+    # notice — a 2,000-char org directive shouldn't need retyping); the
+    # default keeps the card short. Embed descriptions cap at 4,096. The
+    # description is the org's own markdown, so it is NOT escaped.
+    d = (goal.get("description") or "").strip()
     await notify.send(
         "goals", "",
-        **_announce(_embed(title, desc, url=_app_url(f"#/goals/{goal['id']}"),
-                           color=_EMBED_GOOD if progress.get("is_met") else _EMBED_INFO)),
+        **_announce(_announcement("goal_posted", {
+            "icon": "🔓" if unlock else "⛏" if survey else "🎯",
+            "heading": "Goal update" if refresh else "New org goal",
+            "title": goal["title"],
+            "progress": head, "lines": "\n".join(rows),
+            "description": d if full or len(d) <= 280 else d[:280] + "…",
+            "posted": "Re-posted" if refresh else "Posted", "poster": who,
+            "call_to_action": ("Add the recipes you unlock to your library." if unlock
+                               else "Log nodes inside the area — they count automatically, no sign-up."
+                               if survey else "Log what you're holding to contribute."),
+        }, url=_app_url(f"#/goals/{goal['id']}"),
+            color=_EMBED_GOOD if progress.get("is_met") else _EMBED_INFO)),
         dedup_key=f"goal-{'refresh' if refresh else 'posted'}:{goal['id']}:{int(time.time())}")
 
 
@@ -10615,9 +10593,11 @@ def _op_record_embed(op: dict, *, updated: bool) -> dict:
     mins = _op_minutes(op.get("started_at"), op.get("ended_at"))
     if mins:
         desc += f" · {mins // 60}h {mins % 60:02d}m" if mins >= 60 else f" · {mins} min"
-    e = _embed(("📜 Op record updated: " if updated else "📜 Op record: ") + op["name"], desc,
-               url=_app_url(f"#/ops/{op['id']}"), color=_EMBED_WARN if updated else _EMBED_INFO,
-               fields=fields)
+    e = _announcement("op_closed", {"heading": "Op record updated" if updated else "Op record",
+                                    "name": op["name"]},
+                      url=_app_url(f"#/ops/{op['id']}"),
+                      color=_EMBED_WARN if updated else _EMBED_INFO, fields=fields)
+    e["description"] = desc        # the record body is built here, not templated
     for f in e["fields"]:
         f["inline"] = False            # lists of names don't fit side by side
     return e
