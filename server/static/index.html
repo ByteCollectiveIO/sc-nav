@@ -12543,8 +12543,9 @@ function kioskTitle(price, bs) {
   return ` title="The buy kiosk quotes ${fmtUnitPrice(price * bs)} aUEC per ${bs} SCU container"`;
 }
 
-// Container plan (#46). The server sends `box` only in hand-load mode, so both
-// helpers are no-ops on an auto-loaded plan — the leg renders exactly as before.
+// Container plan (#46). The server sends `box` under BOTH loading methods (auto
+// plans the fullest fill, hand the fewest-boxes trade-off); it's absent only on a
+// leg with nothing to box (held cargo is never re-boxed), where both helpers no-op.
 // boxChip is the instruction ("buy 21 × 24 SCU"); boxDetail is the reasoning,
 // folded away, because the trade it made (1 SCU of fill for 484 fewer boxes) is
 // the kind of thing a player wants to check once and then trust.

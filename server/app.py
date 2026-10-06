@@ -11367,8 +11367,10 @@ class OpVoidIn(BaseModel):
 
 
 class OpTransferMarkIn(BaseModel):
-    """Mark a transfer. `tid` for one already committed; otherwise the planned
-    transfer's (from, to, amount), which locks the current plan in first."""
+    """Mark a transfer. `tid` for one already stored; otherwise the planned
+    transfer's (from, to, amount), which stores THAT one payment only — the rest
+    of the plan is never locked in and keeps re-planning from what's still owed
+    (locking the whole plan on the first mark was the bug)."""
     action: str = Field(max_length=10)  # sent | received | dispute
     tid: int | None = None
     arrived: int | None = Field(default=None, ge=0)   # dispute: how much DID arrive

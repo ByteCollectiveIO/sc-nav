@@ -7344,10 +7344,16 @@ class TradeLoadingModeTests(unittest.TestCase):
             NAV, self._prices(), 505, start_id=self.A, max_stops=2, sort="profit", **kw)
         return plan["legs"][0]
 
-    def test_auto_is_unchanged_and_carries_no_box_plan(self):
+    def test_no_policy_leaves_the_load_unboxed(self):
+        # No box policy at all = the load stands, with no box plan. The app never
+        # takes this path (`_trade_box_policy` always returns a policy); auto-load
+        # is a policy too — the same full fill, with its boxes stated.
         leg = self._leg()
         self.assertEqual(leg["scu"], 505)
         self.assertIsNone(leg["box"])
+        auto = self._leg(box=nav_core.box_policy("auto"))
+        self.assertEqual(auto["scu"], 505)
+        self.assertIsNotNone(auto["box"])
 
     def test_hand_snaps_the_load_and_reprices_it(self):
         leg = self._leg(box=nav_core.box_policy("hand"))
