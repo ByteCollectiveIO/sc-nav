@@ -1,6 +1,6 @@
 # Org blueprint readiness + unlock goals
 
-Status: **🔨 built 2026-09-12 — awaiting dev-server test, unreleased** (rides the #151 hold).
+Status: **✅ SHIPPED v1.13.0 (2026-09-12).**
 
 ## The org goal this serves
 

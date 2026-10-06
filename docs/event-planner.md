@@ -2,7 +2,7 @@
 
 > **Amendments since ship:** `type` became a multi-select `types` list and the
 > taxonomy gained "Event"/"Race" categories
-> ([event-planner-todo.md](event-planner-todo.md), v0.3.0). The deferred
+> ([event-planner-todo.md](archive/event-planner-todo.md), v0.3.0). The deferred
 > "Discord announcements" item shipped via #18
 > ([discord-notifications.md](discord-notifications.md)). Fleet rosters layered
 > on top as #20 ([fleet-roster-squad-organizer.md](fleet-roster-squad-organizer.md)).
