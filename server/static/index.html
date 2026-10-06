@@ -204,7 +204,18 @@
   .art-name { min-width: 150px; flex: 1; }
   .art-name b { display: block; }
   .art-src { font-size: 11px; color: var(--dim); }
-  .art-row input[type=file] { max-width: 210px; }
+  .art-row input[type=file] { max-width: 260px; }
+  /* Native file pickers (org logo, org image, app art) rendered as the browser's
+     grey Arial button beside styled ones. Dress the control itself: the button
+     half matches `button`, the filename half reads as a muted caption. */
+  input[type=file] { font: inherit; font-size: 12px; color: var(--dim); }
+  input[type=file]::file-selector-button { font: inherit; font-size: 12px; margin-right: 8px;
+    padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel2); color: var(--text); cursor: pointer;
+    transition: color .12s, background .12s, border-color .12s; }
+  input[type=file]:hover::file-selector-button { border-color: var(--accent); }
+  input[type=file]:focus-visible { outline: none; }
+  input[type=file]:focus-visible::file-selector-button { box-shadow: 0 0 0 2px var(--accent); }
   /* Reset holds its slot on every row (visibility, not display) so Upload stays
      in one column down the list; `disabled` also drops it from the tab order. */
   .art-reset[disabled] { visibility: hidden; }
@@ -302,6 +313,10 @@
   .set-nav a[aria-current="page"] { background: var(--accent); color: var(--ink-on-accent); }
   .set-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
   .set-body, .set-sec { display: grid; gap: 14px; align-content: start; min-width: 0; }
+  .dwh-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+  .dwh-row > input { flex: 1; min-width: 220px; }
+  /* Phone: the URL takes its own line; a 160 px slot can't show a webhook URL. */
+  @media (max-width: 560px) { .dwh-row > input { flex: 1 1 100%; min-width: 0; } }
   .set-sec > * { min-width: 0; }
   .set-sec[hidden], #admin-load-status[hidden] { display: none; }
   .set-sec .muted a, .tpl-why a { color: var(--accent); }
@@ -14005,6 +14020,14 @@ async function renderDetailBody(e) {
     (editControls ? `<div class="ev-form-actions">${editControls}` +
       `<span id="ev-detail-msg" class="muted" role="status" aria-live="polite" style="font-size:12px;"></span></div>` : "");
 
+  // A linked banner that fails to load (dead link, host down, CSP) must not
+  // leave a broken-image bar: drop it and state the link as a fact instead.
+  const banner = document.querySelector("#ev-detail-body .ev-banner");
+  if (banner) banner.onerror = () => {
+    banner.remove();
+    const sec = document.querySelector("#ev-detail-body .ev-meta-grid.secondary");
+    if (sec) sec.insertAdjacentHTML("afterbegin", `<span class="ev-m">${evGlyph("▤")}Discord image <b>linked</b></span>`);
+  };
   if (!cancelled) bindSignup(e);
   if (!cancelled) renderFleetSection(e);
   if (e.can_edit && !cancelled) bindAttendeePanel(e);
@@ -14864,12 +14887,10 @@ function eventImageCardHtml() {
   // is refused — those expire within a day of being copied.
   return `<details class="ev-form-card ev-img-card" id="ev-f-img"${evFormImage ? " open" : ""}>` +
     `<summary class="ev-section-h">Discord announcement image <span class="ev-hint">optional</span></summary>` +
-    `<p class="ev-img-hint">Shown under the event's Discord posts. ` +
-      `Discord fits the image to about ${EV_IMG_MIN_W} px wide and never enlarges a smaller one, so use at least ` +
-      `<b>${EV_IMG_MIN_W} × ${EV_IMG_MIN_H} px</b>; <b>${EV_IMG_GOOD_W} × ${EV_IMG_GOOD_H} px</b> (16:9) stays sharp on ` +
-      `high-density screens. Larger is fine. ` +
-      `Paste an https link to a PNG, JPG, WebP or GIF hosted on an image site (imgur, ibb, postimg, X, RSI). ` +
-      `From X, copy the image's address, not the post's link.</p>` +
+    `<p class="ev-img-hint">Shown under the event's Discord posts. Paste an https link to an image on imgur, ibb, postimg, X or RSI ` +
+      `(from X, copy the image's address, not the post's).</p>` +
+    `<p class="ev-img-hint">Size: at least <b>${EV_IMG_MIN_W} × ${EV_IMG_MIN_H} px</b>; <b>${EV_IMG_GOOD_W} × ${EV_IMG_GOOD_H}</b> (16:9) stays sharp. ` +
+      `Discord never enlarges a small image.</p>` +
     `<div class="ev-img-now"><img id="ev-f-imgprev" alt="" hidden><div class="ev-img-what" id="ev-f-imgwhat"></div>` +
       `<button class="ev-btn danger" id="ev-f-imgrm" hidden>Remove</button></div>` +
     `<p class="ev-img-warn" id="ev-f-imgsize" hidden></p>` +
@@ -14982,9 +15003,11 @@ function eventFormHtml(tax, e, opts = {}) {
     missionDetailsHtml(tax, e && e.details) +
     contractsCardHtml(e && e.contracts) +
     rulesCardHtml(e && e.rules) +
-    eventImageCardHtml() +
     `<div class="ev-field"><label>Description</label><textarea id="ev-f-desc" maxlength="2000" placeholder="What's the plan? Meet-up details, comms, ships…">${e ? esc(e.description || "") : ""}</textarea>` +
       `<span class="ev-hint">Discord formatting works here and in the post: **bold**, *italics*, __underline__, ~~strike~~, \`code\`, :emoji:. Links show as typed.</span></div>` +
+    // The image card follows the description: both are what the Discord post
+    // shows, and the optional card used to sit above the primary text field.
+    eventImageCardHtml() +
     (tplMode && opts.groupCount ? `<p class="ev-note">Also carries ${opts.groupCount} fleet unit${opts.groupCount === 1 ? "" : "s"}, offered when an event is started from this template.</p>` : "") +
     `<div class="ev-form-actions"><button id="ev-f-save" class="ev-btn primary">${saveLabel}</button>` +
       `<button class="ev-btn" id="ev-f-cancel">Cancel</button>` +
@@ -27621,8 +27644,8 @@ function renderDiscordRows(webhooks) {
     row.style.marginTop = "10px";
     row.innerHTML =
       `<div><b>${c.label}</b> <span class="muted" style="font-size:12px;">${c.desc}</span></div>` +
-      `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:4px;">` +
-        `<input id="dwh-${c.key}" class="ti" type="url" autocomplete="off" style="flex:1; min-width:220px;" placeholder="${st.set ? "connected (" + esc(st.tail) + "); paste a new URL to replace" : "https://discord.com/api/webhooks/… (off)"}">` +
+      `<div class="dwh-row">` +
+        `<input id="dwh-${c.key}" class="ti" type="url" autocomplete="off" placeholder="${st.set ? "connected (" + esc(st.tail) + "); paste a new URL to replace" : "https://discord.com/api/webhooks/… (off)"}">` +
         `<button class="disc-save">Save</button>` +
         `<button class="disc-test"${st.set ? "" : " disabled"}>Send test</button>` +
         `<button class="disc-clear danger-btn"${st.set ? "" : " hidden"}>Clear</button>` +

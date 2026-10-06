@@ -211,7 +211,7 @@ why the art went missing. A notification must never be lost to its decoration.
 - **The drop rule works at three levels, not just lines.** Any part that names variables, all of which came out empty, is left out. A part is a ` · `-separated piece of a line, a line, or a paragraph. This was needed to reproduce today's posts exactly ("Starts … · 1 h 30 min" drops just the length; the "Mission briefing" paragraph vanishes when no detail is set), and it's one rule to explain to admins.
 - **Escaping is per slot, not per variable.** A variable marked `md` (member text) is escaped in the DESCRIPTION only, the one slot Discord renders markdown in. A name moved into a title by an admin won't show stray backslashes.
 - **Byte-identical, proven:** `server/testdata/notify_golden.json` was generated from the pre-registry builders over 26 inputs (committed before the refactor) and `NotifyGoldenTests` replays it. A test also pins that each builder supplies exactly its template's declared variables.
-- Kept identical on purpose and worth a later look: the reminder's place, the listing poster and the goal poster/description go out unescaped, as they always have (the goal description is the org's own markdown by design).
+- ~~Kept identical on purpose and worth a later look: the reminder's place, the listing poster and the goal poster/description go out unescaped~~ — closed by the 2026-10-06 security sweep (PR #245): every member-text variable is `md`; the goal description is `fmt` (formatting kept, masked links defused) like the event description.
 
 ### 4.2 Slots
 
