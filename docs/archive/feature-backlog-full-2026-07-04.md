@@ -849,7 +849,7 @@ user_ships, entry→plan UI, run/execute mode, history + quick-picks, reward
 capture + hauling stats, guild hauling leaderboard/stats). One piece remains
 blocked: the CIG drive-catalog range/refuel overlay (erkul rejected for
 CC BY-NC-ND; needs a reuse-permitted drive-data source). Full spec in
-[`docs/cargo-hauling-planner.md`](cargo-hauling-planner.md) — this is a pointer
+[`docs/cargo-hauling-planner.md`](../cargo-hauling-planner.md) — this is a pointer
 so it isn't lost in the backlog.
 
 ### Problem
@@ -900,7 +900,7 @@ become app-scoped since the planner has its own analytics.
 ## 13. Guild event planner
 
 **Status:** designed + **v1 BUILT 2026-06-23** (uncommitted). Full spec in
-[`docs/event-planner.md`](event-planner.md) — this is a pointer so it isn't lost
+[`docs/event-planner.md`](../event-planner.md) — this is a pointer so it isn't lost
 in the backlog.
 
 ### Problem
@@ -949,7 +949,7 @@ Cartographer→POIs/position, Pathfinder/Scout→recon.
 ## 14. Org inventory & goals (resource procurement campaigns)
 
 **Status:** **BUILT 2026-06-24** (uncommitted) — full doc
-[`docs/org-inventory-goals.md`](org-inventory-goals.md). Fourth app in the SPA
+[`docs/org-inventory-goals.md`](../org-inventory-goals.md). Fourth app in the SPA
 ("Resource Manager"); the shared **item catalog** half of a two-app pair with the
 [Marketplace](#15-org-marketplace-auec-only-sellauctiontrade).
 
@@ -1012,7 +1012,7 @@ list straight to the org's own map.
 ## 15. Org marketplace (aUEC-only sell/auction/trade)
 
 **Status:** **BUILT 2026-06-25 (v0.6.0)** — full doc
-[`docs/marketplace.md`](marketplace.md). Fifth app in the SPA; **sibling** of
+[`docs/marketplace.md`](../marketplace.md). Fifth app in the SPA; **sibling** of
 [Inventory & Goals](#14-org-inventory--goals-resource-procurement-campaigns),
 sharing its **item catalog**. All four build steps landed in one pass: tables,
 `derive_auction_state` (+ tests), the `/api/market` endpoint family, and the
@@ -1274,7 +1274,7 @@ available cap). This is the largest of the five and supersedes the current
 ## 17. Member identity, primary handle & directory
 
 **Status:** **ALL FOUR STEPS BUILT 2026-06-29** (uncommitted, needs /deploy). Full design:
-[`docs/member-identity-and-directory.md`](member-identity-and-directory.md).
+[`docs/member-identity-and-directory.md`](../member-identity-and-directory.md).
 
 Closes the identity inconsistency where the Marketplace shows no in-game handle
 while POIs and the leaderboard do. Introduces a persistent `members` table
@@ -1300,7 +1300,7 @@ dispatcher+settings+test-send / inline event pings / scheduled T-30 reminders
 (steps 1/2/6 v0.14.0), event reminders (step 3 v0.15.0), marketplace pings
 (step 4 v0.16.0), goals-100% + hauling-record (step 5 v0.17.0). Webhook-only,
 no bot, as designed. Full design:
-[`docs/discord-notifications.md`](discord-notifications.md). **Was priority #1.**
+[`docs/discord-notifications.md`](../discord-notifications.md). **Was priority #1.**
 
 Highest engagement-per-effort: everything shipped so far is pull-only; this makes
 the app push to where the org lives. Key constraint: **no bot** (OAuth scopes are
@@ -1321,7 +1321,7 @@ board (step 3 v0.19.0), own `#/lfg` app + Discord announce (step 4 v0.20.0),
 LFG persistence + configurable green→stale→age-off lifecycle (v0.21.0),
 suggested matches + promote-to-event (step 5 v0.22.0, commit 950a425). Group
 Finder is its own `#/lfg` app. Full design:
-[`docs/who-is-online-lfg.md`](who-is-online-lfg.md). **Was priority #2.**
+[`docs/who-is-online-lfg.md`](../who-is-online-lfg.md). **Was priority #2.**
 
 Social glue for spontaneous play. Today's two online signals are insufficient:
 `online_count` is faceless, `hub.presence` is **surface-only** + watcher-gated.
@@ -1347,7 +1347,7 @@ group-form ship picker w/ crew auto-fill + assign-row seat suggestions) and
 saved group templates (`group_templates` table + `/api/group-templates` CRUD +
 `POST /api/events/{id}/groups/apply-template` + a Templates panel in the fleet
 section). Full design:
-[`docs/fleet-roster-squad-organizer.md`](fleet-roster-squad-organizer.md).
+[`docs/fleet-roster-squad-organizer.md`](../fleet-roster-squad-organizer.md).
 **Priority #3.**
 
 Turns "12 people signed up" into an op plan. Additive layer over the event
@@ -1367,7 +1367,7 @@ unassigned-pool → group-cards board on the event detail. Manifest export → D
 Pure commodity trading using the UEX feed (complements the *contract*-based cargo
 planner): "given my ship SCU + location, top profit-per-SCU routes now."
 **SHIPPED + DEPLOYED thru v0.33.0 (all 6 build steps done, 2026-07-04).** Full spec +
-build-status table in [`docs/trade-route-planner.md`](trade-route-planner.md). Live at
+build-status table in [`docs/trade-route-planner.md`](../trade-route-planner.md). Live at
 `#/trade`: feeds + terminal→POI crosswalk, single-trade ranking, multi-leg
 auto/filtered/manual solver (v0.28.x), budget/deadhead/staleness enhancement pass
 (v0.29.0), **run/execute mode with re-plan-from-live-position + actual buy/sell figure
@@ -1406,7 +1406,7 @@ liked but can get tacky fast**; revisit with restraint (few, earned, tasteful).
 ## 24. Pirate danger warnings & snare-aware routing
 
 **Status:** **v1 FEATURE-COMPLETE 2026-07-04 (build-order steps 1–7; only /deploy
-left).** Full spec: [`docs/pirate-warnings.md`](pirate-warnings.md). Grew out of the
+left).** Full spec: [`docs/pirate-warnings.md`](../pirate-warnings.md). Grew out of the
 #21 trade-planner "hazard markers" v2 fast-follow; supersedes that parking note.
 Backend danger board + `#/pirates` app (impeccable-polished 32→~36/40) + the
 trade-planner `ignore/warn/avoid` integration all built; 349-test suite green. Only
@@ -1440,7 +1440,7 @@ Waits until the board has real data.
 ## 25. Blueprint craft commissions (marketplace "WANTED" mode)
 
 **Status:** designed 2026-07-04, not built. Full spec:
-[`docs/blueprint-craft-commissions.md`](blueprint-craft-commissions.md).
+[`docs/blueprint-craft-commissions.md`](../blueprint-craft-commissions.md).
 
 A member posts a craft request — "build me this item, to this quality spec, for
 this price" — and an org crafter quotes, accepts, crafts, and hands off in-game.
