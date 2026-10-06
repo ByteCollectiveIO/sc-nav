@@ -160,6 +160,8 @@ class NavData:
     qt_by_container: dict = field(default_factory=dict)           # (system,container) -> [Poi]
     # Per-system asteroid drop-target registry (#35, filled by build_belt_registry)
     belts: dict = field(default_factory=dict)                     # system -> registry row
+    # Jump-gate endpoints, (from_system, to_system) -> Poi (build_gate_registry)
+    gates: dict = field(default_factory=dict)
     # Drift-tolerant container resolution (see resolve_container):
     # (system, container_name_key) -> Container over the parsed set, plus
     # resolution-ONLY ghosts for anchors that vanished upstream. Ghosts are
@@ -2270,18 +2272,31 @@ GATE_LINKS: dict[str, list[str]] = {
     "Nyx": ["Pyro"],
 }
 
-# Gate POI on a system's side, toward a neighbor: (from_system, to_system) ->
-# poi id. The dataset only carries clean endpoints for some sides; missing
-# sides degrade to an approach-only cost (the leg is flagged `partial`).
-GATE_ENDPOINTS: dict[tuple[str, str], int] = {
-    ("Stanton", "Pyro"): 480,   # "Jump Point to Pyro" (Stanton-side, space POI)
-    ("Nyx", "Pyro"): 642,       # "Gateway Station Pyro" (Nyx-side)
+# Gate on a system's side, toward a neighbor: (from_system, to_system) -> the
+# names it goes by, best first. Resolved by NAME (build_gate_registry), never by
+# id — catalog ids shift between imports. The Stanton/Nyx jump points are
+# container-synthesized POIs and always load; Pyro carries no jump-point
+# container at all, so its side comes from the wiki catalog's gateway stations
+# (same spot as the jump point, within a few km), read whether or not the org
+# imported wiki POIs. A side that still won't resolve falls back to the
+# system's star (see _gate_poi) — never to "free".
+GATE_NAMES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("Stanton", "Pyro"): ("Jumppoint Pyro", "Jump Point to Pyro", "Pyro Gateway"),
+    ("Pyro", "Stanton"): ("Stanton Gateway",),
+    ("Pyro", "Nyx"): ("Nyx Gateway",),
+    ("Nyx", "Pyro"): ("Jumppoint_Nyx_Pyro", "Pyro Gateway", "Gateway Station Pyro"),
 }
 
-# Nominal fixed cost of traversing a jump-gate tunnel, in meters-equivalent, so
-# the solver consistently prefers grouping same-system stops. Tunable; the gate
-# approach legs already dominate, this just guarantees a cross-system penalty.
-GATE_TRAVERSAL_M = 1.0e9
+# Time to go through a gate once you've arrived at it: request the jump, line
+# up with the aperture, the tunnel itself, and clearing the exit point before
+# the next quantum jump. An ESTIMATE pending an in-game timing — it is TIME,
+# kept apart from distance (leg `gate_s`), so it never feeds fuel or range.
+# The cargo solver, which orders stops by distance, prices it as the distance
+# a QT drive covers in that time (_leg_cost_m). It used to be a 1 Gm
+# "distance" (~6 s of flight), and with the Pyro side of the gate costed at
+# zero a Pyro→Stanton→Pyro round trip undercut any Pyro→Pyro hop: 129 of 200
+# random 3×3 Stanton→Pyro cargo bundles crossed the gate more than once.
+GATE_TRAVERSAL_S = 300.0
 
 
 def _nearest_qt_poi(nav: NavData, target, t_ref: float):
@@ -2346,11 +2361,54 @@ def _intra_leg(nav: NavData, from_pos, dst, t_ref: float):
     return dist, via, marker_name
 
 
+def _resolve_gate(nav: NavData, system: str, names, locations=()) -> Poi | None:
+    """The first of `names` found in `system`: loaded POIs first (any catalog),
+    then the wiki records as a stand-in Poi kept OUT of nav.pois — a gate
+    position is routing geometry, not a place the org chose to list."""
+    for name in names:
+        want = name.casefold()
+        for p in nav.pois.values():
+            if p.system == system and (p.name or "").casefold() == want:
+                return p
+        for rec in locations or ():
+            if (rec.get("system") == system and (rec.get("name") or "").casefold() == want
+                    and rec.get("global_m")):
+                return Poi(id=-1, name=rec["name"], system=system, container_name=None,
+                           type="Jump Gate", local_km=None, global_m=tuple(rec["global_m"]),
+                           latitude=None, longitude=None, height_m=None,
+                           qt_marker=True, source="wiki")
+    return None
+
+
+def build_gate_registry(nav: NavData, locations=()) -> dict:
+    """Resolve every GATE_NAMES side into nav.gates (unresolved sides stay out
+    and fall back per _gate_poi). Call after the catalogs are loaded."""
+    nav.gates = {}
+    for (a, b), names in GATE_NAMES.items():
+        g = _resolve_gate(nav, a, names, locations)
+        if g is not None:
+            nav.gates[(a, b)] = g
+    return nav.gates
+
+
 def _gate_poi(nav: NavData, from_system: str, to_system: str):
-    """The gate Poi on `from_system`'s side toward `to_system`, or None if the
-    dataset doesn't carry that endpoint."""
-    pid = GATE_ENDPOINTS.get((from_system, to_system))
-    return nav.pois.get(pid) if pid is not None else None
+    """(gate Poi, known) on `from_system`'s side toward `to_system`. Unknown =
+    the system's star at the origin, which can only OVER-state the trip (it is
+    never closer to both a stop and the far gate than the real gate is to
+    neither) — the old approach-only floor made a missing side free, and the
+    cargo solver bounced across the gate to exploit it."""
+    key = (from_system, to_system)
+    if key not in nav.gates:                 # nav built without the registry
+        g = _resolve_gate(nav, from_system, GATE_NAMES.get(key, ()))
+        if g is not None:
+            nav.gates[key] = g
+    g = nav.gates.get(key)
+    if g is not None:
+        return g, True
+    return Poi(id=-1, name=f"{from_system} (gate position unknown)", system=from_system,
+               container_name=None, type="Jump Gate", local_km=None,
+               global_m=(0.0, 0.0, 0.0), latitude=None, longitude=None,
+               height_m=None, qt_marker=True), False
 
 
 # ---------------------------------------------------------------------------
@@ -2546,58 +2604,62 @@ def travel_cost(nav: NavData, src, dst, t_ref: float | None = None, *,
 def _base_travel_cost(nav: NavData, src, dst, t_ref: float | None = None) -> dict:
     """QT travel cost from stop `src` to stop `dst` (both Poi). Returns a dict:
 
-        distance_m    total QT distance for the leg
+        distance_m    total QT distance flown for the leg (gates excluded)
         qt_marker     name of the marker to jump to on arrival (or None)
         via           parent planet for the moon two-hop rule (or None)
         cross_system  True if the leg crosses a jump gate
         via_gate      list of system names traversed, gate-first (or None)
-        partial       True if a gate endpoint was missing and the cost is a
-                      lower bound (approach-only on that side)
+        partial       True if a gate side's position was unknown and the
+                      system's star stood in for it (an over-estimate)
+        gate_s        time spent going through gates (0 in-system)
 
     Cross-system legs route through the functioning Stanton-Pyro-Nyx network:
-    cost = src -> exit gate(src side) + gate traversal(s) + entry gate -> dst,
-    using the same intra-system primitives one level up."""
+    src -> exit gate, then gate to gate across any transit system, then entry
+    gate -> dst, using the same intra-system primitives one level up."""
     t_ref = ROTATION_EPOCH if t_ref is None else t_ref
     from_pos = entity_global_m(nav, src, t_ref)
     if from_pos is None:
         return {"distance_m": None, "qt_marker": None, "via": None,
-                "cross_system": False, "via_gate": None, "partial": True}
+                "cross_system": False, "via_gate": None, "partial": True,
+                "gate_s": 0.0}
 
     if src.system == dst.system:
         dist, via, marker = _intra_leg(nav, from_pos, dst, t_ref)
         return {"distance_m": dist, "qt_marker": marker, "via": via,
-                "cross_system": False, "via_gate": None, "partial": dist is None}
+                "cross_system": False, "via_gate": None, "partial": dist is None,
+                "gate_s": 0.0}
 
     path = system_path(src.system, dst.system)
     if path is None:                          # unconnected systems
         return {"distance_m": None, "qt_marker": None, "via": None,
-                "cross_system": True, "via_gate": None, "partial": True}
+                "cross_system": True, "via_gate": None, "partial": True,
+                "gate_s": 0.0}
 
+    # Fly to the exit gate, through each gate on the path (a transit system is
+    # crossed gate-to-gate), then from the last entry gate to dst. Every hop is
+    # the in-system primitive one level up; distance is what the QT drive
+    # flies, the gates themselves are time (`gate_s`).
     total = 0.0
     partial = False
-    # src side: hop to the gate leaving src.system toward the next system.
-    out_gate = _gate_poi(nav, src.system, path[1])
-    if out_gate is not None:
-        d, _, _ = _intra_leg(nav, from_pos, out_gate, t_ref)
+    pos = from_pos
+    via = marker = None
+    for i in range(len(path) - 1):
+        out_gate, known = _gate_poi(nav, path[i], path[i + 1])
+        partial |= not known
+        d, _, _ = _intra_leg(nav, pos, out_gate, t_ref)
         total += d or 0.0
-    else:
-        partial = True                        # unknown source-side gate
-    # one tunnel traversal per gate crossed.
-    total += GATE_TRAVERSAL_M * (len(path) - 1)
-    # dst side: hop from the entry gate (last system's side toward prev) to dst.
-    in_gate = _gate_poi(nav, dst.system, path[-2])
-    if in_gate is not None:
-        gate_pos = entity_global_m(nav, in_gate, t_ref)
-        d, via, marker = _intra_leg(nav, gate_pos, dst, t_ref)
-        total += d or 0.0
-    else:
-        # Unknown entry gate: floor the dst side with its local QT approach.
-        marker_poi = _nearest_qt_poi(nav, dst, t_ref)
-        total += dst.nearest_qt_dist_m or 0.0
-        via, marker = None, (marker_poi.name if marker_poi else None)
-        partial = True
+        in_gate, known = _gate_poi(nav, path[i + 1], path[i])
+        partial |= not known
+        pos = entity_global_m(nav, in_gate, t_ref)
+    d, via, marker = _intra_leg(nav, pos, dst, t_ref)
+    if d is None:
+        return {"distance_m": None, "qt_marker": marker, "via": via,
+                "cross_system": True, "via_gate": path, "partial": True,
+                "gate_s": 0.0}
+    total += d
     return {"distance_m": total, "qt_marker": marker, "via": via,
-            "cross_system": True, "via_gate": path, "partial": partial}
+            "cross_system": True, "via_gate": path, "partial": partial,
+            "gate_s": GATE_TRAVERSAL_S * (len(path) - 1)}
 
 
 def _intra_segments(nav: NavData, from_pos, dst, system: str, t_ref: float) -> list[dict]:
@@ -2634,15 +2696,14 @@ def _leg_segments(nav: NavData, src, dst, t_ref: float) -> list[dict]:
     path = system_path(src.system, dst.system)
     if path is None:
         return []
-    segs = []
-    out_gate = _gate_poi(nav, src.system, path[1])
-    if out_gate is not None:
-        segs += _intra_segments(nav, from_pos, out_gate, src.system, t_ref)
-    in_gate = _gate_poi(nav, dst.system, path[-2])
-    if in_gate is not None:
-        gate_pos = entity_global_m(nav, in_gate, t_ref)
-        if gate_pos is not None:
-            segs += _intra_segments(nav, gate_pos, dst, dst.system, t_ref)
+    segs, pos = [], from_pos
+    for i in range(len(path) - 1):
+        out_gate, _ = _gate_poi(nav, path[i], path[i + 1])
+        segs += _intra_segments(nav, pos, out_gate, path[i], t_ref)
+        in_gate, _ = _gate_poi(nav, path[i + 1], path[i])
+        pos = entity_global_m(nav, in_gate, t_ref)
+    if pos is not None:
+        segs += _intra_segments(nav, pos, dst, dst.system, t_ref)
     return segs
 
 
@@ -2870,6 +2931,25 @@ def _leg_time_s(distance_m):
     return QT_LEG_OVERHEAD_S + distance_m / QT_CRUISE_SPEED_MS
 
 
+def leg_eta_s(leg):
+    """Flight time of a travel_cost leg: the QT flying plus any gates crossed.
+    Use this, not _leg_time_s(distance), on anything travel_cost returned —
+    distance alone leaves the jump tunnels out."""
+    if leg is None or leg.get("distance_m") is None:
+        return None
+    return _leg_time_s(leg["distance_m"]) + (leg.get("gate_s") or 0.0)
+
+
+def _leg_cost_m(leg):
+    """A leg's ordering cost for the distance-minimizing cargo solver: QT
+    distance plus each gate's time priced as the distance the drive would have
+    covered meanwhile, so crossing a gate is never cheaper than its time."""
+    d = leg.get("distance_m")
+    if d is None:
+        return math.inf
+    return d + (leg.get("gate_s") or 0.0) * QT_CRUISE_SPEED_MS
+
+
 def _pkg_view(p):
     # `contract` is a player-supplied grouping label, carried through for display
     # only (it never affects routing) so the UI can colour-group packages and
@@ -2892,10 +2972,10 @@ def leg_fuel_scu(distance_m, fuel_req):
 def _leg_view(leg, fuel_req=None, max_range_m=None):
     if leg is None:
         return None
-    v = {"distance_m": leg["distance_m"], "eta_s": _leg_time_s(leg["distance_m"]),
+    v = {"distance_m": leg["distance_m"], "eta_s": leg_eta_s(leg),
          "qt_marker": leg["qt_marker"], "via": leg["via"],
          "cross_system": leg["cross_system"], "via_gate": leg["via_gate"],
-         "partial": leg["partial"]}
+         "partial": leg["partial"], "gate_s": leg.get("gate_s") or 0.0}
     # Snare-detour extras (#24 v2), present only when the leg was costed with
     # hazard volumes and something actually conflicted.
     for k in ("waypoints", "detour_m", "dodged", "blocked"):
@@ -3089,13 +3169,13 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
                 # so hazard volumes can never wedge the two halves of one
                 # physical stop apart.
                 leg = {"distance_m": 0.0, "qt_marker": None, "via": None,
-                       "cross_system": False, "via_gate": None, "partial": False}
+                       "cross_system": False, "via_gate": None, "partial": False,
+                       "gate_s": 0.0}
             else:
                 leg = travel_cost(nav, stops[a]["poi"], stops[b]["poi"], t_ref,
                                   avoid=avoid_volumes, memo=memo)
             legs[a][b] = leg
-            if leg["distance_m"] is not None:
-                dmat[a][b] = leg["distance_m"]
+            dmat[a][b] = _leg_cost_m(leg)
     # Start seed: a live position (show_location) wins over a chosen POI; absent
     # both, the run begins free at the optimizer's first stop.
     if start_pos is not None:
@@ -3111,7 +3191,7 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
             leg = travel_cost(nav, start_poi, stops[b]["poi"], t_ref,
                               avoid=avoid_volumes, memo=memo)
             start_legs[b] = leg
-            start_d[b] = leg["distance_m"] if leg["distance_m"] is not None else math.inf
+            start_d[b] = _leg_cost_m(leg)
 
     def step_cost(prev, j):
         return start_d[j] if prev is None else dmat[prev][j]
@@ -3126,14 +3206,26 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     # (#27). All stops must be visited, so an over-range hop makes an ordering
     # infeasible (unlike the selective trade solver, which just drops the trade).
     max_leg_m = max_range_m if (in_range_only and max_range_m) else None
-
-    # --- order the stops (minimize distance under precedence + capacity) ---
-    if n <= _BNB_MAX_STOPS:
-        order, peak = _bnb_order(stops, preds, dmat, start_d, usable_scu, n, gctx,
-                                 max_leg_m=max_leg_m)
+    # The cap judges the distance FLOWN, not the ordering cost (which carries
+    # gate time), so it's applied by blanking over-range hops up front.
+    if max_leg_m is not None:
+        def _over(leg):
+            return (leg is not None and leg["distance_m"] is not None
+                    and leg["distance_m"] > max_leg_m)
+        cdmat = [[math.inf if _over(legs[a][b]) else dmat[a][b] for b in range(n)]
+                 for a in range(n)]
+        cstart_d = [math.inf if _over(start_legs[b]) else start_d[b] for b in range(n)]
     else:
-        order, peak = _greedy_order(stops, preds, step_cost, usable_scu, n, gctx,
-                                    max_leg_m=max_leg_m)
+        cdmat, cstart_d = dmat, start_d
+
+    def capped_step(prev, j):
+        return cstart_d[j] if prev is None else cdmat[prev][j]
+
+    # --- order the stops (minimize travel cost under precedence + capacity) ---
+    if n <= _BNB_MAX_STOPS:
+        order, peak = _bnb_order(stops, preds, cdmat, cstart_d, usable_scu, n, gctx)
+    else:
+        order, peak = _greedy_order(stops, preds, capped_step, usable_scu, n, gctx)
 
     if order is None:
         # Distinguish a range failure from a capacity/connectivity one so the UI
@@ -3214,7 +3306,7 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
         onboard += delta
         peak_out = max(peak_out, onboard)
         out["onboard_scu"] = round(onboard, 2)
-    total_time = sum((_leg_time_s(s["leg"]["distance_m"]) or 0.0)
+    total_time = sum((s["leg"]["eta_s"] or 0.0)
                      for s in out_stops if s["leg"]) + STOP_DWELL_S * len(out_stops)
 
     summary = {"feasible": True, "num_stops": len(out_stops),
@@ -3232,11 +3324,10 @@ def plan_route(nav: NavData, packages, usable_scu, start_id=None, start_pos=None
     return {"summary": summary, "stops": out_stops}
 
 
-def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx, *, max_leg_m=None):
-    """Branch-and-bound: least-distance precedence+capacity-feasible order.
-    `max_leg_m` (when set) forbids any single hop longer than the ship's tank —
-    the "in-range only" constraint. Returns (order, peak_load) or (None, None)
-    if no feasible order exists."""
+def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx):
+    """Branch-and-bound: least-cost precedence+capacity-feasible order. An inf
+    entry is a forbidden hop (unroutable, or over range under "in-range only").
+    Returns (order, peak_load) or (None, None) if no feasible order exists."""
     gpick, gdrop, gtot = gctx
     best = {"cost": math.inf, "order": None, "peak": None}
 
@@ -3257,8 +3348,6 @@ def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx, *, max_leg_m=None):
             step = start_d[j] if prev is None else dmat[prev][j]
             if step == math.inf:
                 continue
-            if max_leg_m is not None and step > max_leg_m:
-                continue
             dfs(order + [j], visited | {j}, no, cost + step, max(peak, no),
                 seen | set(newly))
 
@@ -3266,10 +3355,9 @@ def _bnb_order(stops, preds, dmat, start_d, cap, n, gctx, *, max_leg_m=None):
     return (best["order"], best["peak"]) if best["order"] is not None else (None, None)
 
 
-def _greedy_order(stops, preds, step_cost, cap, n, gctx, *, max_leg_m=None):
+def _greedy_order(stops, preds, step_cost, cap, n, gctx):
     """Nearest-neighbor fallback for large stop sets: at each step take the
-    nearest precedence- and capacity-feasible stop. `max_leg_m` (when set) rejects
-    any hop longer than the ship's tank (the "in-range only" constraint)."""
+    nearest precedence- and capacity-feasible stop (inf = forbidden hop)."""
     gpick, gdrop, gtot = gctx
     order, visited = [], set()
     onboard = peak = 0.0
@@ -3281,7 +3369,6 @@ def _greedy_order(stops, preds, step_cost, cap, n, gctx, *, max_leg_m=None):
             if j not in visited and preds[j].issubset(visited)
             and onboard + _stop_delta(stops, gpick, gdrop, gtot, j, seen)[0] <= cap + 1e-9
             and step_cost(prev, j) != math.inf
-            and (max_leg_m is None or step_cost(prev, j) <= max_leg_m)
         ]
         if not cands:
             return None, None
@@ -3929,7 +4016,7 @@ def rank_trades(nav: NavData, prices, *, commodity=None, system=None,
                 row["distance_m"] = leg["distance_m"]
                 row["cross_system"] = leg["cross_system"]
                 row["via_gate"] = leg["via_gate"]
-                row["eta_s"] = _leg_time_s(leg["distance_m"])
+                row["eta_s"] = leg_eta_s(leg)
                 if row["eta_s"] and row["trade_profit"] is not None:
                     hours = (row["eta_s"] + STOP_DWELL_S) / 3600.0
                     if hours > 0:
@@ -4569,8 +4656,8 @@ def _cost_route(nav: NavData, chosen: list[dict], start: Poi | None, t_ref,
         stops += 1
         total_profit += row["trade_profit"] or 0
         total_dist += _dist_of(approach) + _dist_of(haul)
-        approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
-        haul_t = (_leg_time_s(haul["distance_m"]) or 0.0) if haul else 0.0
+        approach_t = (leg_eta_s(approach) or 0.0) if approach else 0.0
+        haul_t = (leg_eta_s(haul) or 0.0) if haul else 0.0
         deadhead_time += approach_t          # flying to the buy = empty hold
         loaded_time += haul_t                # flying the haul = loaded
         total_time += approach_t + haul_t + 2 * STOP_DWELL_S
@@ -4710,7 +4797,7 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                     and approach["distance_m"] is not None
                     and approach["distance_m"] > max_leg_m):
                 continue                      # empty reposition out of range — skip
-            approach_t = ((_leg_time_s(approach["distance_m"]) or 0.0) if approach else 0.0)
+            approach_t = (leg_eta_s(approach) or 0.0) if approach else 0.0
             if optimize == "return":
                 # Return (#43/#44). Two denominators, deliberately:
                 #  - With a BUDGET (max spend), return means "the multiple on the
@@ -4732,7 +4819,7 @@ def _greedy_route(nav, cands, start, max_legs, optimize, t_ref, first=None,
                 score = profit / (1.0 + (deadhead_weight - 1.0) * (approach_t / 3600.0))
             else:
                 eta = (approach_t * deadhead_weight
-                       + (_leg_time_s(haul["distance_m"]) or 0.0) + 2 * STOP_DWELL_S)
+                       + (leg_eta_s(haul) or 0.0) + 2 * STOP_DWELL_S)
                 score = profit / (eta / 3600.0) if eta > 0 else 0.0
             if score > pick_score:
                 pick, pick_score = r, score
@@ -4995,7 +5082,7 @@ def _held_sell_leg(nav, prices, held, start, *, system, max_age_s, now, t_ref,
     for p in pts:
         sp = nav.pois.get(p["poi_id"])
         leg = travel_cost(nav, start, sp, t_ref, avoid=avoid, memo=memo) if start is not None else None
-        eta = _leg_time_s(leg["distance_m"]) if (leg and leg["distance_m"] is not None) else None
+        eta = leg_eta_s(leg)
         revenue = int(p["sell"]) * scu
         if optimize == "profit":
             score = revenue
@@ -5106,8 +5193,7 @@ def replan_trade_route(nav: NavData, prices, usable_scu, *, start_id=None,
                 continue
             leg = (travel_cost(nav, pos, poi, t_ref, avoid=avoid_volumes, memo=memo)
                    if pos is not None else None)
-            eta = (_leg_time_s(leg["distance_m"])
-                   if (leg and leg["distance_m"] is not None) else None)
+            eta = leg_eta_s(leg)
             revenue = row["sell_price"] * int(round(float(lot.get("scu") or 0)))
             hours = ((eta or 0.0) + STOP_DWELL_S) / 3600.0
             score = (revenue if optimize == "profit"

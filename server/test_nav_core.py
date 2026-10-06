@@ -1345,6 +1345,86 @@ class PlanRouteTests(unittest.TestCase):
         self.assertTrue(res["stops"][1]["leg"]["cross_system"])
 
 
+class JumpGateRoutingTests(unittest.TestCase):
+    """Cross-system legs: gates resolve by name on both sides (Pyro's only
+    from the wiki feed), a gate costs TIME, and an unknown side is never free.
+    Regression: with Pyro's side costed at zero, a Pyro->Stanton->Pyro round
+    trip undercut a Pyro->Pyro hop and 129/200 random 3x3 Stanton->Pyro cargo
+    bundles crossed the gate more than once."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.nav = load_data(DATA_DIR)
+        locs = json.loads((DATA_DIR / "locations.json").read_text())["locations"]
+        nav_core.build_gate_registry(cls.nav, locs)
+
+    def _poi(self, name, system):
+        return next(p for p in self.nav.pois.values()
+                    if p.name == name and p.system == system)
+
+    def test_every_gate_side_resolves(self):
+        for (a, b) in nav_core.GATE_NAMES:
+            g = self.nav.gates.get((a, b))
+            self.assertIsNotNone(g, (a, b))
+            self.assertEqual(g.system, a)
+        # Pyro's side is a wiki stand-in, not a POI the org listed.
+        pyro = self.nav.gates[("Pyro", "Stanton")]
+        self.assertNotIn(pyro, self.nav.pois.values())
+
+    def test_gate_is_time_not_distance(self):
+        leg = nav_core.travel_cost(self.nav, self._poi("Area18", "Stanton"),
+                                   self._poi("Orbituary", "Pyro"))
+        self.assertFalse(leg["partial"])
+        self.assertEqual(leg["gate_s"], nav_core.GATE_TRAVERSAL_S)
+        self.assertAlmostEqual(nav_core.leg_eta_s(leg),
+                               nav_core._leg_time_s(leg["distance_m"])
+                               + nav_core.GATE_TRAVERSAL_S)
+
+    def test_transit_system_is_crossed_gate_to_gate(self):
+        area = self._poi("Area18", "Stanton")
+        nyx = next(p for p in self.nav.pois.values() if p.system == "Nyx")
+        leg = nav_core.travel_cost(self.nav, area, nyx)
+        self.assertEqual(leg["via_gate"], ["Stanton", "Pyro", "Nyx"])
+        self.assertEqual(leg["gate_s"], 2 * nav_core.GATE_TRAVERSAL_S)
+        p_in = nav_core.entity_global_m(self.nav, self.nav.gates[("Pyro", "Stanton")], 0)
+        p_out = nav_core.entity_global_m(self.nav, self.nav.gates[("Pyro", "Nyx")], 0)
+        self.assertGreater(leg["distance_m"], nav_core.dist3(p_in, p_out))
+
+    def test_unknown_gate_side_is_the_star_not_free(self):
+        nav = nav_core.NavData()
+        for i, (sysname, xyz) in enumerate([("Stanton", (3e10, 0, 0)),
+                                            ("Pyro", (0, 4e10, 0))]):
+            nav.pois[i] = nav_core.Poi(
+                id=i, name=f"S{i}", system=sysname, container_name=None,
+                type="Space Station", local_km=None, global_m=xyz, latitude=None,
+                longitude=None, height_m=None, qt_marker=True)
+        leg = nav_core.travel_cost(nav, nav.pois[0], nav.pois[1])
+        self.assertTrue(leg["partial"])
+        self.assertAlmostEqual(leg["distance_m"], 7e10)
+
+    def test_bundle_to_pyro_crosses_the_gate_once(self):
+        import random
+
+        def pool(system):
+            return sorted((p for p in self.nav.pois.values()
+                           if p.system == system and p.container_name
+                           and not p.custom and p.qt_marker), key=lambda p: p.id)
+        stanton, pyro = pool("Stanton"), pool("Pyro")
+        self.assertGreaterEqual(len(pyro), 3)
+        rng = random.Random(7)
+        for _ in range(40):
+            s, p = rng.sample(stanton, 3), rng.sample(pyro, 3)
+            pkgs = [{"from_id": s[i].id, "to_id": p[i].id, "scu": 10} for i in range(3)]
+            res = nav_core.plan_route(self.nav, pkgs, usable_scu=500)
+            systems = [st["system"] for st in res["stops"]]
+            crossings = sum(1 for a, b in zip(systems, systems[1:]) if a != b)
+            self.assertEqual(crossings, 1, [st["name"] for st in res["stops"]])
+        leg = res["stops"][3]["leg"]
+        self.assertTrue(leg["cross_system"])
+        self.assertGreaterEqual(res["summary"]["total_time_s"],
+                                nav_core.GATE_TRAVERSAL_S)
+
+
 class RoundTripPlanTests(unittest.TestCase):
     """A↔B contract sets (cargo both ways between the same stops) — the
     one-visit-per-location model makes their precedence circular, so the
