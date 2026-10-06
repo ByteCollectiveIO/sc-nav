@@ -1662,6 +1662,20 @@ members_dir = MemberDirectory()
 # Revoked members -> when (see access_revoked). Mirrored in memory because it's
 # consulted on every authenticated request; written only by the admin endpoint.
 revoked_access: dict[str, float] = db.all_access_revocations()
+# Boot from the last-good feed caches when they exist, and refresh from UEX in
+# the background once the server is listening (_boot_feed_refresh). Every UEX
+# loader below fetches live unless OFFLINE, and a fetch has no overall deadline
+# (urlopen's timeout is per socket read): on 2026-10-06 UEX served the 6.4 MB
+# items feed at ~120 KB/s, so a deploy sat for minutes downloading feeds before
+# binding the port, and the healthcheck saw "connection refused" the whole
+# time. A first boot with no caches still fetches synchronously — it has
+# nothing else to serve.
+_UEX_FEED_CACHES = (COMMODITIES_FILE, SHIPS_FILE, ITEMS_FILE, ITEM_CATALOG_FILE,
+                    TERMINALS_FILE, TRADE_PRICES_FILE)
+_BOOT_FROM_CACHE = not OFFLINE and all(f.is_file() for f in _UEX_FEED_CACHES)
+if _BOOT_FROM_CACHE:
+    OFFLINE = True      # restored right after the import-time loads below
+    print("[sc-nav] starting from cached UEX feeds; a live refresh follows startup")
 raw_commodity_names = load_raw_commodity_names()
 commodity_names = load_commodity_names()
 illicit_commodities = load_illicit_commodities()   # #42 legality filter
@@ -1892,6 +1906,8 @@ def rebuild_trade_terminals() -> None:
 
 
 rebuild_trade_terminals()
+if _BOOT_FROM_CACHE:
+    OFFLINE = False     # the import-time loads are done; live fetches resume
 
 
 # --- auth dependencies (defined before the endpoints that use them) ---------
@@ -3570,6 +3586,21 @@ async def _notify_listing_ending_soon(listing: dict, now: datetime) -> None:
 _FEED_REFRESH_TICK_S = 300   # how often the loop re-checks the elapsed time / setting
 
 
+async def _boot_feed_refresh():
+    """After a cache boot, pull every UEX feed live once, in the background, so
+    the server answers immediately and catches up with UEX on its own time. A
+    failed pass leaves the caches serving; the scheduled loop retries later."""
+    global harvestable_names
+    try:
+        await _refresh_feeds()
+        # Startup-only loader (not part of _refresh_feeds): its names come from
+        # the commodities feed the refresh just rewrote.
+        harvestable_names = await asyncio.to_thread(load_harvestable_names)
+        print("[sc-nav] live UEX feed refresh after startup done")
+    except Exception as exc:
+        print(f"[sc-nav] post-startup feed refresh failed; serving cached feeds: {exc}")
+
+
 async def feed_refresh_loop():
     """Scheduled uexcorp feed refresh (#33): keeps trade prices, market-value
     hints, and ore value badges current between deploys. Re-reads the interval
@@ -3665,6 +3696,8 @@ async def _start_presence_broadcaster():
     asyncio.create_task(event_reminder_loop())
     asyncio.create_task(market_sweep_loop())
     asyncio.create_task(feed_refresh_loop())
+    if _BOOT_FROM_CACHE:
+        asyncio.create_task(_boot_feed_refresh())
     asyncio.create_task(_sync_strata_feed())   # optional RS feed, opt-in via key
     # Older Pyro captures name an asteroid field from the pre-2026-10-04 (rotated)
     # catalog; re-derive once per frame alignment. Never fatal to startup.
@@ -14572,15 +14605,28 @@ async def _rebuild_nav() -> None:
 # Epoch of the last successful uexcorp feed load (the import-time loaders count
 # as the first one). Drives the scheduled loop's elapsed check and the ORG
 # SETTINGS "prices as of" readout.
-feeds_refreshed_at = time.time()
+# When booted from cache, "prices as of" is the age of those caches, not now —
+# and _boot_feed_refresh brings them current.
+feeds_refreshed_at = (min(f.stat().st_mtime for f in _UEX_FEED_CACHES)
+                      if _BOOT_FROM_CACHE else time.time())
+
+
+# One feed refresh at a time: the post-boot refresh can take minutes on a slow
+# UEX day, and the scheduled loop or an admin's Refresh may start meanwhile.
+_feed_refresh_lock = asyncio.Lock()
 
 
 async def _refresh_feeds() -> None:
     """Re-fetch every uexcorp feed and rebuild all state derived from them
     (price refs, value badges, item catalog, trade-terminal crosswalk). Shared
-    by the manual /api/refresh and the scheduled feed_refresh_loop (#33). The
-    loaders fall back to the disk cache on a failed fetch, so a UEX outage
-    degrades to stale-but-served rather than raising."""
+    by the manual /api/refresh, the scheduled feed_refresh_loop (#33) and the
+    post-boot refresh. The loaders fall back to the disk cache on a failed
+    fetch, so a UEX outage degrades to stale-but-served rather than raising."""
+    async with _feed_refresh_lock:
+        await _refresh_feeds_locked()
+
+
+async def _refresh_feeds_locked() -> None:
     global raw_commodity_names, commodity_names, illicit_commodities, ships, fleet_ships
     global item_names, item_prices, item_specs, resource_values
     global trade_terminals_raw, trade_terminal_rows, trade_prices, feeds_refreshed_at

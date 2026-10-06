@@ -13746,5 +13746,47 @@ class EventAnnounceCardTests(unittest.TestCase):
         self.assertIn("https://nav.example.org/#/events/", e["description"])
 
 
+class FeedBootTests(unittest.TestCase):
+    """Boot from cached UEX feeds, refresh live after startup (2026-10-06: a
+    slow UEX held a deploy's port closed for minutes)."""
+
+    def test_refreshes_never_overlap(self):
+        active, peak = [0], [0]
+
+        async def fake():
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+            await asyncio.sleep(0.01)
+            active[0] -= 1
+        orig = app._refresh_feeds_locked
+        app._refresh_feeds_locked = fake
+        self.addCleanup(lambda: setattr(app, "_refresh_feeds_locked", orig))
+
+        async def run():
+            await asyncio.gather(*(app._refresh_feeds() for _ in range(3)))
+        asyncio.run(run())
+        self.assertEqual(peak[0], 1)
+
+    def test_boot_refresh_updates_harvestables_and_never_raises(self):
+        calls = []
+
+        async def ok():
+            calls.append("refresh")
+        orig_r, orig_h, orig_n = app._refresh_feeds, app.load_harvestable_names, app.harvestable_names
+        self.addCleanup(lambda: (setattr(app, "_refresh_feeds", orig_r),
+                                 setattr(app, "load_harvestable_names", orig_h),
+                                 setattr(app, "harvestable_names", orig_n)))
+        app._refresh_feeds = ok
+        app.load_harvestable_names = lambda: ["Hadanite"]
+        asyncio.run(app._boot_feed_refresh())
+        self.assertEqual(calls, ["refresh"])
+        self.assertEqual(app.harvestable_names, ["Hadanite"])
+
+        async def boom():
+            raise RuntimeError("UEX down")
+        app._refresh_feeds = boom
+        asyncio.run(app._boot_feed_refresh())          # logged, not raised
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
