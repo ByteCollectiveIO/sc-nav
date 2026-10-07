@@ -399,6 +399,32 @@ def apply_poi_overrides(nav: NavData, overrides: list[dict]) -> None:
             p.qt_marker = bool(qt)
 
 
+# Pyro's RMB-* derelict mining sites: the wiki types them plain `Asteroid`, whose
+# type-level valid_quantum_travel_destination is False (still so in 4.10.1), so
+# the feed says qt_valid=false. In-game they ARE quantum targets (user-verified
+# 2026-10-06: an org zone built around RMB-SAIC was being drop-planned via
+# Terminus instead of "jump to RMB-SAIC"). Each record carries its own QT
+# arrival radius. The PYR# L# Lagrange fields share the type but are NOT
+# confirmed QT-able in-game, so they stay drop targets.
+_PYRO_RMB_RE = re.compile(r"^RMB-[A-Z]+$")
+
+
+def correct_wiki_qt_valid(locations: list[dict]) -> int:
+    """Flip qt_valid on for wiki records the feed mislabels as non-jumpable
+    (today: Pyro's RMB-* sites, see _PYRO_RMB_RE). Applied at load, not baked
+    into poi/locations.json, so a re-sync can't silently undo it. Mutates in
+    place; returns the number of records corrected."""
+    n = 0
+    for rec in locations:
+        if (rec.get("system") == PYRO_SYSTEM and not rec.get("qt_valid")
+                and rec.get("type") == "Asteroid"
+                and rec.get("arrival_m")
+                and _PYRO_RMB_RE.match(str(rec.get("name") or "").strip())):
+            rec["qt_valid"] = True
+            n += 1
+    return n
+
+
 def add_wiki_pois(nav: NavData, locations: list[dict]) -> int:
     """Import wiki-catalog locations into nav.pois as routable POIs (#28a).
 
@@ -8150,8 +8176,12 @@ _AKIRO_FIELD_NAME = "PYR1 L3"
 
 def pyro_fields(nav: NavData, locations: list[dict]) -> list[dict]:
     """Pyro's unmarked deep-space asteroid resource fields from the wiki
-    locations feed: type Asteroid*, has_resources, and NO quantum marker (the
-    qt_valid sites are ordinary jump targets — no drop planning needed).
+    locations feed: type Asteroid*, has_resources, and NO quantum marker loaded
+    in `nav` (a jumpable site is an ordinary jump target — no drop planning
+    needed). Judged against the loaded markers, not the record's qt_valid: the
+    RMB-* sites are qt_valid (correct_wiki_qt_valid) but only become markers
+    when the org imports the wiki catalog, and until then a drop plan is the
+    only way the app can get you there.
     Grouped for the picker by orbital shell (nearest planet by cylindrical
     radius); sorted inside-out. Built at registry time, independent of the
     wiki_pois_enabled org toggle — these are planner targets, not catalog
@@ -8167,13 +8197,17 @@ def pyro_fields(nav: NavData, locations: list[dict]) -> list[dict]:
         return _PYRO_SHELL_LABELS.get((c.internal_name or c.name).lower(),
                                       c.name)
 
+    jumpable = {wiki_name_key(p.name) for p in nav.pois.values()
+                if p.system == PYRO_SYSTEM and p.qt_marker}
     out = []
     for rec in locations or ():
         if rec.get("system") != PYRO_SYSTEM:
             continue
         if not str(rec.get("type") or "").startswith("Asteroid"):
             continue
-        if rec.get("qt_valid") or not rec.get("has_resources"):
+        if not rec.get("has_resources"):
+            continue
+        if wiki_name_key(str(rec.get("name") or "")) in jumpable:
             continue
         g = rec.get("global_m")
         if not g:

@@ -56,6 +56,7 @@ verify-and-refine loop, and map all carry over.
 | **Pyro VI / Pyro V planetary rings** | ❌ out of scope | **They don't exist.** Pyro VI ("Terminus") is a ringless protoplanet; Pyro V is a ringless gas giant. Galactapedia's "Pyro IV may one day become rings" is future-lore. The real content near Terminus = PYR6 L1/L2 fields + the 62–76 Gm cluster shell — covered by the Pyro field planner |
 | **Keeger Belt (Nyx Belt Beta)** | ❌ not yet | Zero containers in the 4.4+ data dump — visual/lore only. Re-check per game patch |
 | **Named Pyro clusters / RAB bases (47, `qt_valid`)** | already covered | They have their own quantum markers; the #28 wiki pipeline already imports them as targetable POIs. No drop planning needed — surface them, don't plan them |
+| **Correction 2026-10-06: the 86 RMB sites are QT-able** | fixed | In-game they are quantum targets despite the wiki's `qt_valid=false` (type-level flag on `Asteroid`, unchanged in 4.10.1). `nav_core.correct_wiki_qt_valid` flips them at load; once imported as markers they leave the drop-field list. The 16 PYR L-point fields are unverified and stay drop targets |
 
 ## 2. Game facts (what's different from the Aaron Halo)
 

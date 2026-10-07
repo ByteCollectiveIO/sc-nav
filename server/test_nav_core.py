@@ -5810,6 +5810,40 @@ class BeltRegistryTests(unittest.TestCase):
             self.assertTrue(f["uuid"])
             self.assertEqual(len(f["xyz"]), 3)
 
+    def test_pyro_rmb_sites_are_jump_targets(self):
+        """RMB-* sites are QT-able in-game though the wiki types them
+        non-QT (2026-10-06: a zone built on RMB-SAIC was drop-planned via
+        Terminus). Once the catalog is imported they are markers, leave the
+        drop-field list, and anchor a survey zone built on them; the
+        unconfirmed PYR L-point fields stay drop targets."""
+        import copy
+        locs = copy.deepcopy(json.loads(
+            (DATA_DIR / "locations.json").read_text())["locations"])
+        self.assertEqual(nav_core.correct_wiki_qt_valid(locs), 86)
+        self.assertEqual(nav_core.correct_wiki_qt_valid(locs), 0)  # idempotent
+        rec = next(r for r in locs if r["name"] == "RMB-SAIC")
+        self.assertTrue(rec["qt_valid"])
+        self.assertFalse(next(r for r in locs if r["name"] == "PYR1 L1")["qt_valid"])
+
+        nav = load_data(DATA_DIR)
+        nav_core.add_wiki_pois(nav, locs)
+        nav_core.assign_qt_markers(nav)
+        saic = next(p for p in nav.qt_markers
+                    if p.system == "Pyro" and p.name == "RMB-SAIC")
+        fields = nav_core.build_belt_registry(nav, locs)["Pyro"]["fields"]
+        self.assertEqual(len(fields), 16)
+        self.assertTrue(all(f["name"].startswith(("PYR", "Akiro")) for f in fields))
+
+        # A mark ~12 km off the site anchors the zone to it.
+        g = rec["global_m"]
+        mark = _survey_mark(9_000_001, (g[0] + 12_000.0, g[1], g[2]),
+                            ores=["Riccite (Ore)"], system="Pyro")
+        name, d = nav_core.nearest_qt_marker(nav, mark, nav_core.ROTATION_EPOCH)
+        self.assertEqual(name, "RMB-SAIC")
+        anchor = nav_core.belt_zone_qt_anchor(
+            nav, [{"nearest_qt": name, "nearest_qt_dist_m": d}], "Pyro")
+        self.assertEqual(anchor["id"], saic.id)
+
     def test_stanton_row_unchanged(self):
         st = self.belts["Stanton"]
         self.assertEqual(st["kind"], "bands")

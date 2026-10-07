@@ -484,6 +484,7 @@ def load_wiki_locations() -> list[dict]:
 
 
 wiki_locations = load_wiki_locations()
+nav_core.correct_wiki_qt_valid(wiki_locations)
 
 
 def load_wiki_frame_aligned() -> dict:
