@@ -5,7 +5,7 @@
 > **Route:** `#/pirates` · **Launcher group:** Rally the Org
 
 <div align="center">
-  <img src="../../images/readme_images/danger_board_screenshot.png" alt="Danger Board: the REPORT A DANGER ZONE composer and the ACTIVE DANGERS board with severity readouts and warning cards" width="820">
+  <img src="../../images/readme_images/danger_board_screenshot.webp" alt="Danger Board: the REPORT A DANGER ZONE composer and the ACTIVE DANGERS board with severity readouts and warning cards" width="820">
 </div>
 
 ## What it is
@@ -37,8 +37,9 @@ event for hunting it down.
    go straight to `#/pirates`.
 2. In **REPORT A DANGER ZONE**, choose the type: `A location` (a camped
    station or POI) or `A trade lane` (a snare between two points).
-3. Fill in **where it is**. A location uses one POI field; a lane uses two
-   (the buy end, then the other end), using the same free-text-tolerant
+3. Fill in **where it is**. A location uses one field, **Where's the
+   danger?**; a lane uses two, **Lane start (buy end)** and **… and the other
+   end**, using the same free-text-tolerant
    picker as the rest of the suite: pick a real POI for a routing-actionable
    warning, or just type what you remember ("Between Baijini and Orison") if
    you're mid-escape. An unresolved warning still posts and shows on the
@@ -46,10 +47,12 @@ event for hunting it down.
 4. Set **Who** (`☠️ Players` / `🤖 NPCs`) and **How bad** (`Sighted` /
    `Active` / `Deadly`) — severity drives the card color and how wide a
    berth the planners give it.
-5. Optionally add a note (up to 280 characters), and check **📣 Announce to
-   the org's Discord** if a `pirates` webhook is configured.
+5. Optionally add a note (up to 280 characters). If your org has a Discord
+   channel set up for the Danger Board, a **📣 Announce to the org's
+   Discord** checkbox appears — tick it to also post the warning there.
 6. Click **Post warning**. It appears on the board and both planners' live
-   danger set immediately.
+   danger set immediately. There's a cap on how many live warnings one member
+   can have at once; if you hit it, the board tells you to clear one first.
 
 ### Reading and working the board
 
@@ -57,7 +60,8 @@ event for hunting it down.
 — then filter chips for Threat (All / Players / NPCs), Severity (Any /
 Deadly / Active / Sighted), and a **Hide stale** toggle. Cards sort deadliest
 and freshest first, and each shows severity, location (a lane names both
-ends with `↔`), reporter, threat, system, note, and a countdown to expiry.
+ends with `↔`), threat, whether it's a camped location or a lane snare,
+system, reporter, note, and a countdown to expiry.
 From a card:
 
 - **`Still there?`** confirms the danger is still active — the
@@ -66,13 +70,14 @@ From a card:
   person's word. Confirming flips the button to `Confirmed ✓`.
 - **`⚔ Organize hunt`** — see below.
 - **`All clear`**, visible to the poster and admins, removes the warning
-  immediately instead of waiting for it to age off.
+  for everyone (after a confirm) instead of waiting for it to age off.
 
 Warnings clean themselves up: a fresh one counts down normally, flips to
 **stale** (`⏳ stale · <time left>`) near expiry, and drops off if nobody
-confirms it before age-off (defaults 40/60 minutes, admin-tunable in ORG
-SETTINGS' **DANGER BOARD** panel). Whenever at least one warning is active, a
-`☠️ N dangers` badge appears by the app launcher, linking to `#/pirates`.
+confirms it before age-off (defaults 40/60 minutes, admin-tunable in the
+**DANGER BOARD** panel under **Settings → Apps**). Whenever at least one
+warning is active, a `☠️ N dangers` badge appears on the app launcher,
+linking to `#/pirates`.
 
 ### Organizing a hunt
 
@@ -80,7 +85,7 @@ Click **⚔ Organize hunt** on any card and the app jumps to `#/events/new`
 with a **Create Event** already filled in: a title built from the danger's
 location, a description summarizing the reported severity/threat and your
 note, category set to `PvP`/`PvE` and type set to `Combat Patrol` (players)
-or `Bounty Hunt` (NPCs) to match, the location field, and a starting `Combat
+or `Bounty Hunt` (NPCs) to match, the event location, and a starting `Combat
 (Ship)` role request for 3. You still review it, set the date/time, and
 confirm before it posts.
 
@@ -96,33 +101,51 @@ confirm before it posts.
 - **Glance-read stats strip** — active/deadly/player counts, reflecting the
   whole board regardless of the current filter.
 - **Filterable, deadliest-first board** — by threat, severity, and hide-stale.
-- **Opt-in Discord announce** to the org's `pirates` webhook category, same
-  pattern as the Group Finder and Event Planner.
+- **Opt-in Discord announce** — posts an embed card to the org's Danger
+  Board channel: the place in the title (`Pirate snare: A ↔ B` or `Danger
+  near …`), your note, then severity, threat, extra location detail, and who
+  reported it, with a link back to the board. A `Deadly` report posts red,
+  anything else amber. No @-mentions. If your admins have turned on the org
+  image it rides along as the thumbnail, and the wording can be changed in
+  **Settings → Announcements**. One announced warning per member every ten
+  minutes.
 - **Free-text-tolerant location** — type a description instead of hunting
   for the exact POI; it still posts, it just isn't routing-actionable
   without a resolved anchor.
 - **Poster/admin lifecycle control** — clear a warning early with
   `All clear`; admins tune age-off/stale windows and the routing berth in
-  ORG SETTINGS.
+  **Settings → Apps**.
 
 ## Works with the rest of the suite
 
 This is the board's biggest payoff: it's live input to routing, not just a
 bulletin. Every active, anchored warning becomes a **hazard volume** — a
 sphere around a point warning, or a capsule along a lane's corridor, sized by
-severity and a shared, admin-tunable base radius (ORG SETTINGS **DANGER
-BOARD** → "Route trade & cargo runs around a danger within `N` km"). Both the
-**Trade Route Planner** (`#/trade`) and the **Cargo Planner** (`#/route`)
-read this hazard set through a `Pirate danger` control: `Ignore` flies the
-direct route regardless; `Warn` plans normally but badges any touched leg;
-`Avoid` (the default in both) actively routes around hazards — a leg that
+severity and a shared, admin-tunable base radius (**Settings → Apps →
+DANGER BOARD** → "Route trade & cargo runs around a danger within `N` km").
+Both the **Trade Route Planner** (`#/trade`, the **Danger** row) and the
+**Cargo Planner** (`#/route`, the **Pirate danger** row) read this hazard set
+through the same three-way control, each with a `board ↗` link back here:
+`Ignore` plans without checking the board; `Warn` plans normally but flags
+any leg or stop that touches a danger; `Avoid` — **on by default in both** —
+actively routes around hazards — a leg that
 merely flies past a danger gets a detour waypoint ("dodge via `<POI>`, +N
 km"), while a leg whose endpoint sits inside a hazard (a camped destination)
-can't be geometrically fixed, so it's flagged `blocked` instead — dropped as
-a candidate by the trade solver, escalated in the UI by the cargo planner
-(whose stops are contractual). Each planner also layers in a personal
-avoid-list shared between the two, and nudges you to re-plan if a fresh
-warning lands on a route you're actively running.
+can't be geometrically fixed — the trade planner drops it as a candidate
+(and says `☠ destination camped — no reroute exists` on a leg you picked by
+hand), while the cargo planner keeps the stop, since contract stops can't
+change, and warns you it's reported camped so you fly in ready. A plan that
+dodged anything says how many legs were rerouted.
+
+On top of the org-wide board, every planner has an **AVOIDED LOCATIONS** list:
+your personal "always route around this place" picks. It's one list, saved in
+your browser, shared by the Trade Route Planner, the Cargo Planner, and
+Prospector's drop planner — add a place in one and it shows in all three, and
+the board still applies on top of it.
+
+During a live trade run, if a fresh warning lands on a terminal still ahead
+of you, a banner pops up — `☠ New danger reported on your route.` — with a
+**Re-plan around it ▸** button.
 
 The other direction runs through the Event Planner: **⚔ Organize hunt**
 prefills a Create Event using the same seed mechanism the Group Finder uses
@@ -137,8 +160,10 @@ one path into the calendar.
   still posts and still helps.
 - `Still there?` matters: a well-confirmed warning is far more trustworthy
   than a lone aging report, and it keeps a real danger from quietly expiring.
-- Leave `Pirate danger` on `Avoid` in both planners — it's the only mode
+- Leave the danger control on `Avoid` in both planners — it's the only mode
   that actually changes your route.
+- A station you never want to visit, warning or not? Put it on **AVOIDED
+  LOCATIONS** once instead of re-posting a warning for it.
 - Use severity honestly: `Deadly` gives a wider berth than `Sighted`, so
   overusing it makes routes longer than they need to be.
 

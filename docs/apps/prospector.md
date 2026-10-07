@@ -1,110 +1,119 @@
 # Prospector
 
-> The org's shared survey atlas — named areas on moons and in the belts, ranked by what's in them and how well they're known — plus drop planning into unmarked rock space. **Route:** `#/halo` (tabs `#/halo/field` · `#/halo/drop`) · **Launcher group:** Out in the 'Verse
+> The org's shared survey atlas — named areas on moons and in the belts, ranked by what's in them and how well they're known — plus a live surveying cockpit and drop planning into unmarked rock space. **Route:** `#/halo` (ATLAS) · `#/halo/field` (FIELD) · `#/halo/drop` (DROP) · **Launcher group:** Out in the 'Verse
 
 <div align="center">
-  <img src="../../images/readme_images/prospector_drop_screenshot.png" alt="Prospector DROP tab: the STANTON | NYX | PYRO system segment, a density-band strip, a true-scale top-down system map, and the plan form" width="820">
+  <img src="../../images/readme_images/prospector_atlas_screenshot.webp" alt="Prospector ATLAS tab: the SURVEY ZONES table with WHERE, EVIDENCE, HEALTH, VALUE and WHAT'S HERE columns, above the COVERAGE map" width="820">
 </div>
 
 ## What it is
 
-The best mining and salvage space in the 'verse has no quantum markers. The Aaron Halo circles all of Stanton, the Glaciem Ring circles Nyx, Pyro's resource fields hang in deep space — and you can't set a quantum destination to *any* of them. You jump *through* or *past* them on a route between two ordinary markers, watch your HUD, and hold **B** to drop out early at exactly the right moment. Miss the number and you're floating in empty space 20 gigametres from anywhere with no compass to fix it.
+Mining knowledge in Star Citizen is mostly folklore: "there's good Quantanium somewhere south on that moon," "the rocks are past the second station." Prospector turns it into a shared map. Every time anyone in the org logs a resource node, a plant, a creature or a belt rock, the evidence lands in a **named area** that the whole org can see — with what's in it, what it's worth, and an honest read on how far the numbers can be trusted.
 
-The community solved this for one belt with hand-drawn charts (CaptSheppard's Cornerstone survey of the Aaron Halo). Prospector generalises it. Because the tool already knows every quantum marker's true 3D position — and your live position the instant you run `/showlocation` — it can pick the best marker to aim at from *wherever you are*, compute the exact "distance to destination" readout to exit at, route around the star and planets, and then verify where you actually landed after the drop.
+It also solves the belt problem. The best mining and salvage space has no quantum markers. The Aaron Halo circles all of Stanton, the Glaciem Ring circles Nyx, Pyro's resource fields hang in deep space — and you can't set a quantum destination to *any* of them. You jump *through* or *past* them between two ordinary markers and hold **B** to drop out at the right moment. Because the tool knows every marker's true 3D position — and your live position the instant you run `/showlocation` — it can pick the best marker to aim at from wherever you are, give you the exact "distance to destination" number to exit at, and then tell you where you actually landed.
 
-Prospector is three jobs in one app, split across three masthead tabs, in the order a session actually uses them. **ATLAS** is the org's shared survey — named areas on moons and in the belts, each carrying what is in it, how much it is worth and how far its numbers can be trusted; it is the landing tab and the one that answers *where is worth going*. **FIELD** is the live cockpit surface once you are there — it tells you exactly where you are and lets you ⛏ mark what you find, on a moon or in a belt. **DROP** plans the jump into unmarked rock space, which is a belt problem only: there is no quantum drop onto a moon, so a growing share of surveying never touches it.
+Three masthead tabs, ordered by how many sessions use them:
 
-Formerly "Halo Finder," the app was renamed Prospector because ~90% of what the org ends up mapping is ore — and it has since grown from a drop planner that recorded what you found into a survey tool that also plans drops.
+- **🗺 ATLAS** (the landing tab, `#/halo`) — the org's survey: every named area, on the ground and in the belts. It answers *where is worth going*, and works with no live position, even out of game.
+- **⛏ FIELD** (`#/halo/field`) — the cockpit once you're there: where you are, what that rock on your scanner is, and a ⛏ mark that files it into the org's map.
+- **☄ DROP** (`#/halo/drop`) — plans the jump into unmarked rock space. Belts only: there is no quantum drop onto a moon, so a lot of surveying never touches this tab.
 
-Across all three tabs, a **STANTON | NYX | PYRO** system segment in the masthead scopes everything you see.
+A **STANTON | NYX | PYRO** segment in the masthead scopes everything you see on all three tabs.
 
 ## How to use it
 
-Open **Prospector** from the launcher (or the `#/halo` hash). Pick your system in the masthead segment first — the target pickers, maps, zones, and export all follow it.
+Open **Prospector** from the launcher (or `#/halo`). Pick your system in the masthead segment first — the zone list, maps, target pickers and export all follow it.
+
+### 🗺 ATLAS — the org's survey
+
+ATLAS lists two kinds of area side by side:
+
+- **Surface areas** (tagged `⛏ surface`) — a named circle on a planet or moon. You name one from the **Resource Navigator**, not here: standing where you found the ore, use **`⛏ Name this area`** in the navigator's SURVEY band, pick a radius (5, 10, 25 or the default **50 km**), and you're done. Membership is **geometric and retroactive**: every node, plant and creature anyone has *ever* logged inside the circle joins the moment you name it, and it keeps collecting by itself afterwards — nothing to tag, nothing to arm.
+- **Belt zones** — a named asteroid field. Create one here with **`＋ New zone`**; it becomes your active zone and every ⛏ mark you drop in FIELD files into it. A belt zone works anywhere: Keeger, open Nyx, or the dead space between Glaciem's pockets.
+
+1. **Read the `SURVEY ZONES` table.** One row per area:
+   - **WHERE** — the body, or "near <marker>" for a belt zone anchored to a quantum marker.
+   - **EVIDENCE** — how many sightings or rock marks back it. A surface area splits the total by lane: ⛏ mining, ⚘ gathering, 🐾 fauna.
+   - **HEALTH** — *can I trust these numbers yet?* (see below). A **`pre-<patch>`** chip here means everything was logged before the current game patch — a patch can move where ore spawns, so treat the picture as history until someone logs fresh evidence there.
+   - **VALUE** — `$$$` / `$$` / `$` tiers. A surface area gets **one chip per lane** — mining and gathering are each ranked against their own kind, because a single gem sighting would otherwise outprice a whole iron patch. Fauna is never valued: nothing in the game prices an animal.
+   - **ROCKS / BAND** — a belt zone's density and the average band of its scanned rocks; a surface area's average band.
+   - **WHAT'S HERE** — the top finds in each lane, labelled, with their share. Ores rank by how likely you are to find them *and* what they sell for, so the list reads like the value chip broken down.
+2. **Filter and sort.** Search by zone, place (a body name, or "space") or ore — it searches every lane, so typing a plant finds the area that has it. **SORT** by `Profitability`, `Name`, `Most marks`, or **`Needs surveying`** (least-trusted first — the expedition list). Tick `my surveys` or untick `hide archived`.
+3. **Open the detail card** with **`▸ Details`**. A surface area shows its verdict, tiles (Sightings, Surveyors, Distinct ores, Value, Area ⌀, Freshest), the ore-composition and scan-band charts, a panel per extra lane ("What grows here", "What lives here") and the sighting timeline; a "Freshest unworked" line offers **`Fly to it`**. A belt card shows marks, rock hits, the ore chart, quality bands, the RS card and the mark timeline (with `＋ scan` to attach a readout to any mark). A belt zone anchored to a marker adds a **From <marker>** tile, a **"Freshest rich rock (B6+)"** line with **`Fly to it`**, and **`Set destination · <marker>`** — you jump to the marker and fly the last leg.
+4. **Read the Survey health bar.** The card breaks the score into four bars — **Ground covered**, **Mix settled**, **Scan depth**, **Freshness** — and ends with what to do next ("14 of 24 sectors have no evidence," "the evidence is ageing — a revisit would refresh it"). Health is not value: a thoroughly surveyed empty area is healthy and worth nothing, which is worth knowing. A "nothing here" mark still covers its sector, so logging the blank ground honestly is exactly how the number goes up.
+5. **Act on it.** From a row or card: **`Set destination`** (surface areas point the navigator at the nearest QT marker), **`Plan` / `Plan a drop here`** (belt zones — pins it as the DROP target), **`Set active`** (belt zones — file your FIELD marks here), **`🔗 Copy link`** (a deep link straight to the card, for Discord), **`🎯 Make it a goal`**, and **`⇩ Export`**.
+6. **Manage it.** The creator or an admin gets a **`•••`** menu: **`✎ Rename`**, **`⌀ Re-fence`** (surface areas — change the radius; membership re-counts immediately), **`⊟ Archive`** / **`↻ Reactivate`** (keeps the evidence but takes it off the picker, maps and suggestions), and **`✕ Delete`** — which never touches a sighting or mark, and offers **`↩ Undo`** for 15 minutes.
+7. **Read the `COVERAGE` map.** The system overview, belts and surveyed pockets tinted by value. Tap a named zone to select it (a bar names it and carries its actions); tap a pocket or field to pin it in DROP. Tap a body — or select a surface area — to open that body's own equal-area map, with heat cells, the named areas and a `view radius` slider (**`← Back to system`** returns). On Nyx the caption tracks how much of the Keeger arc is surveyed, draws unmapped gaps in amber, and offers **`⛏ Survey the next gap`**.
+8. **`⇩ export survey`** downloads the current system's marks plus the fitted model as versioned JSON — the org's own citable dataset.
+
+<div align="center">
+  <img src="../../images/readme_images/prospector_surface_card.webp" alt="A surface area's detail card: Set destination, Rename, Re-fence, Archive, Copy link and Make it a goal actions, the verdict line, Sightings / Surveyors / Distinct ores / Value / Area / Freshest tiles, the SURVEY HEALTH bar split into ground covered, mix settled, scan depth and freshness, ORE COMPOSITION bars, and the area map of ore-coloured sightings" width="820">
+</div>
+
+### 🎯 Survey goals
+
+**`🎯 Make it a goal`** opens a Resource Manager goal of kind **`⛏ Survey an area`**, pre-filled with the area. Set a target in `sightings` or `different surveyors`. It counts only what's logged **after** you post it, so ground the org already works doesn't start at 100%; progress follows the area as it is now, so a re-fence moves it.
+
+### ⛏ FIELD — scan, mark, steer
+
+<div align="center">
+  <img src="../../images/readme_images/prospector_field_screenshot.webp" alt="Prospector FIELD tab: AFTER THE DROP verdict, RS SIGNATURE LOOKUP, the SURVEY MARK form with ZONE, ROCK, SCAN and ROCKS AROUND rows, and the Arm /showlocation capture button" width="720">
+</div>
+<br><sub>FIELD in the order you work: where you are, what that contact is, then mark the rock.</sub>
+
+FIELD (`#/halo/field`) reads your live `/showlocation` fix. If a fix arrives while you're on another tab, a dot lights up on the FIELD tab. It follows how a belt session actually goes — at range your ship shows only an RS signature and a distance, so you identify first, fly to the rock, then mark it.
+
+1. **Read `AFTER THE DROP`.** It classifies your fix against the belt: "in band 5," "in the 3→4 void," or on Nyx "in pocket …, 3,400 km from center." After a POI or pocket drop it shows your miss and offers **`🎯 Refine from here`** — re-plan from where you now are. A plan pinned from DROP sits at the top of the tab with its drop number.
+2. **Identify contacts with `⌖ RS SIGNATURE LOOKUP`.** Type the number your scanner shows next to `scanner reads` and it names the ore — every rock reads a whole multiple of its ore's base signature, readable from ~25 km. `Show all … ores` opens the full table. Where your deployment carries the published reference table, its rows come from there and the org's own scans are checked against them (agree, disagree, or org-only); the source's attribution line is printed under the table. Ship mining only — hand and ROC mining read one flat signature per category.
+3. **Fill the `SURVEY MARK`.** It's the planetary **ADD RESOURCE NODE** form, control for control:
+   - **ZONE** — the belt zone to file into, or `No zone — group by proximity`. With an active zone, a live panel shows what it has turned up so far — marks, rock hits, zone health and the ore mix — and marks rows that grew with ▲.
+   - **ROCK** — *one* ore (the zone's likeliest ores sit one tap away under the box), its **Q** off the scan, and **`+ quality lines`** if the scan lists that ore more than once at different Q (the Q becomes their share-weighted average).
+   - **SCAN** (optional) — `MASS (kg)` and `RS`, pre-filled from your lookup.
+   - **ROCKS AROUND** — `⛔ none` / `sparse` / `medium` / `dense`. **"Nothing here" counts**: a `⛔ none` mark maps a field's edge, exactly what blind drops lack.
+   - **ALSO** — `wrecks or debris here (salvage)`.
+4. **Press `Arm /showlocation capture`**, then type `/showlocation` in game. The button reads **WAITING FOR /showlocation** until the fix lands (**`✕ Cancel`** backs out), then **✓ MARKED**. Got it wrong? **`↩ Undo this mark`** deletes the mark you just dropped — fix it and mark again. Sweeping a uniform field, **`↻ same as last mark`** re-fills the density (it never arms on its own).
+5. **Steer by `⌖ POCKET RADAR`.** A top-down plot of you inside the pocket or zone — steer so the drift arrow points at the centre dot, re-running `/showlocation` as you move. ⛏ marks show as dots coloured by their ore (hollow = no rock; a gold ring = one you dropped this session). Like the navigator's nodes, **`fresh only`** hides marks older than the org's freshness window, and faded dots come from another shard or before your session — the rock may not be there for you. The **`view radius`** slider runs from `auto` (follows your path) out to the whole pocket; the **HEIGHT** bar on the right shows how far above or below the zone's centre plane you are. `HEAT OFF` / `ROCKS` / `ORES` tints it with the org's survey density, and a nudge appears when you've drifted well past your last mark.
+
+<div align="center">
+  <img src="../../images/readme_images/prospector_pocket_radar.webp" alt="POCKET RADAR for a Pyro belt zone: heat-mode buttons, fresh-only toggle and view radius slider, ore-coloured survey marks around the centre dot, the zone's POI, the sun direction, and the HEIGHT bar on the right" width="820">
+</div>
 
 ### ☄ DROP — plan the jump
 
-Its own tab (`#/halo/drop`). It answers one question: *set destination X, jump, and exit quantum when your "distance to destination" readout hits D.*
-
-1. **Pick a target** with the `☄ Density band` / `📍 My POI` / `⛏ Ore` segment:
-   - **Density band** (Stanton) — tap a bar on the density strip to choose one of the 10 Aaron Halo bands. Band 5 is the visibly dominant jackpot (~3× the peak density of any other band). Then set the aim segment: `Anywhere in band` (a forgiving, wide drop window) or `Densest point` (a tighter window that puts you on the bullseye — best flown with a slow drive or a shallow crossing). On Nyx you pick a Glaciem Ring pocket; on Pyro you pick a named field.
-   - **My POI** — target a deep-space custom POI you tagged earlier (the wreck, the good rock). No chord will hit it exactly, so the planner minimises *miss distance* and reports it honestly ("drops you ~9,400 km from POI 'Big Q Rock'"). Getting within radar range is the product.
-   - **Ore** — start from an ore and let the org's survey data rank the fields that hold it.
-2. **Set a `START FROM`** — type a station or POI you'll jump from, or hit `📍 my current location` to plan from your live position (it arms and uses your next `/showlocation` fix). Leaving it blank plans from your live position; parked in deep space works too.
-3. **(Optional) add a ship** in the `SHIP` panel. It turns the drop window into *seconds at your quantum drive's speed* and adds fuel figures. Leave `allow a staging hop` checked so that when no clean direct jump crosses your target — blocked by the star, or you're off-plane — the planner hops you to an intermediate marker and drops you from there.
-4. Press **`Plan my drop`**. You get a plan card: any staging legs, then the **DROP leg** as a big monospace readout — `Set destination CRU-L4 → jump → EXIT at 14,292,609 km` — with the enter/peak/exit window, window-seconds for your drive, a patch-proof fallback ("or watch your distance to the Stanton marker and exit at 20,320,000 km"), a copy button, and 2–3 alternate markers you can promote with one tap. A true-scale top-down system map draws the belt, your chord, and the drop zone.
-5. Hit **`⛏ FLY IT →`** to pin this plan into the FIELD tab, ready for when you arrive.
-
-### ⛏ FIELD — verify & survey after the drop
-
 <div align="center">
-  <img src="../../images/readme_images/prospector_field_screenshot.png" alt="Prospector FIELD tab: the live-fix verdict, the pocket radar, the RS signature reference table, and the ⛏ survey marking controls" width="720">
+  <img src="../../images/readme_images/prospector_drop_screenshot.webp" alt="Prospector DROP tab: the TARGET panel with the density-band strip, the system overview map, START FROM, SHIP and the Plan my drop bar" width="720">
 </div>
-<br><sub>FIELD reads your live <code>/showlocation</code> fix, tells you exactly where you landed versus the target, and turns every fix into a one-tap ⛏ survey mark.</sub>
 
-When you drop out of quantum, run **`/showlocation`** in the in-game chat. The FIELD tab (`#/halo/field`) reads that fix live — and if you were on another tab when it arrived, a nudge dot lights up on the FIELD tab so you know to come back.
+DROP (`#/halo/drop`) answers one question: *set destination X, jump, and exit quantum when "distance to destination" hits D.* **`? Intro`** in the masthead re-shows the three-step primer.
 
-1. **Read the verdict.** The `AFTER THE DROP` panel classifies your fix against the belt: *"You're in band 5, 12,400 km inside, 800 km below plane,"* or *"in the 3→4 void, 22,000 km short of band 4,"* or on Nyx *"in pocket Wtn-022, 3,400 km from center."* In POI mode it shows your actual miss and offers **Refine** — re-plan from where you now are, converging over a hop or two. This verify-and-refine loop is the killer feature: the in-game compass is useless in deep space, so knowing exactly where you are is what makes the trip pay.
-2. **Steer by the `⌖ POCKET RADAR`.** It's a top-down radar of your position inside the pocket — steer so the drift arrow points at the centre dot, re-running `/showlocation` as you move. Heat layers (`ROCKS` / `ORES`) tint it with the org's accumulated survey density.
-3. **Match scanner readings with the `⌖ RS SIGNATURE REFERENCE` table.** Every material has a base radar signature and every rock reads an integer multiple, visible from ~25 km. The table is built from the org's own single-ore scans — it's the identify-at-a-distance cheat sheet you keep open while scanning.
-4. **⛏ Mark what you find.** In the `⛏ SURVEY` block, set density (`⛔ none` / `sparse` / `medium` / `dense`), type any ores you see, tick `salvage` if relevant, and hit **`⛏ Mark survey point`**. It records your exact position as an org-visible survey mark. **"Nothing here" counts** — a `⛔ none` mark maps a field's *edge*, which is exactly the information blind drops lack. Marks file into whatever survey zone is active (the `FILING INTO` selector), or auto-cluster by proximity if none is. After a mark lands, an optional `＋ scan detail` row lets you transcribe the scanner's mass and composition percentages onto it for a real value estimate.
-
-### 🗺 ATLAS — the org's shared belt map
-
-<div align="center">
-  <img src="../../images/readme_images/prospector_atlas_screenshot.png" alt="Prospector ATLAS tab: the SURVEY ZONES list with value tiers and ore lists, plus the coverage map of what is mapped" width="720">
-</div>
-<br><sub>ATLAS gathers the org's survey data: named zones ranked by profitability with $ value tiers, and a coverage map showing what's mapped and where to survey next.</sub>
-
-ATLAS (`#/halo/atlas`) is the data surface — useful even with no live position, even out of game.
-
-1. **Browse `SURVEY ZONES`.** Every named field the org has mapped in the current system, built from everyone's ⛏ marks. Each row carries `$$$` / `$$` / `$` value tiers (priced from the same ore-value machinery the rest of the suite uses, refined-basis marked with an asterisk), its ores, and its size. Filter by name or ore, sort by `Profitability` / `Name` / `Most marks`, and narrow to `my surveys` or `open only`. Tap a zone for its detail card: mark timeline, contributors, ore breakdown, and the RS-multiples table.
-2. **Create and manage zones.** `＋ New zone` names a field once; from then on it's your active zone in FIELD and every ⛏ mark auto-files into it — deliberate grouping, no proximity guessing. Rename, archive (keeps its marks but takes it off the picker, maps and drop suggestions — Reactivate undoes it), or delete (untags its marks, never destroys them) any time; creator or admin only, so an admin can enforce a naming convention. A zone works anywhere: Keeger, open Nyx, or the dead space between Glaciem's datamined pockets.
-3. **Read the `COVERAGE` map.** The system overview tinted by value, with unmapped-gap arcs and a NEXT GAP hint so an expedition knows where to point next.
-4. **`Plan a drop here`** on any zone or pocket pins it as the DROP target and switches you to the DROP tab — no re-typing.
-5. **`⇩ export survey`** downloads the current system's marks plus the fitted model as versioned JSON — the org's own citable dataset, the Cornerstone moment industrialised.
+1. **Pick a `TARGET`** with `☄ Density band` / `📍 My POI` / `⛏ Ore`:
+   - **Stanton** — tap a band on the Aaron Halo density strip, then `Anywhere in band` (a forgiving window) or `Densest point` (tighter — fly it with a slow drive or a shallow crossing).
+   - **Nyx** — `GLACIEM RING` aims at a pocket (leave it on `AUTO — best pocket` or type one; `include mission pockets` adds the contract-gated arcs). `KEEGER BELT` aims at the org's own surveyed pockets.
+   - **Pyro** — type a field (the Akiro Cluster, Lagrange fields, derelict mining sites); it plans the closest fly-by.
+   - **📍 My POI** — a deep-space POI you tagged; it minimises the miss and says so honestly.
+   - **⛏ Ore** — name an ore and it targets the org's best surveyed source for it, skipping fresh "mined out" reports.
+2. **`START FROM`** — a station or POI, or **`📍 my current location`**. Blank plans from your live fix.
+3. **`SHIP`** (optional) turns the drop window into seconds and adds fuel figures. Keep `allow a staging hop` on so a blocked or off-plane jump hops via another marker first.
+4. **`Plan my drop`** — staging legs, then the DROP leg as a big readout with the enter/peak/exit window, a fallback number off the system marker, and alternates you can promote with one tap. A top-down map draws the chord.
+5. **`⛏ FLY IT →`** pins the plan in FIELD, next to the live verdict and radar.
 
 ## The three systems
 
-Prospector plans into three genuinely different kinds of rock space, one per system-segment position:
-
-- **Stanton — the Aaron Halo.** A continuous ring of 10 concentric density bands between Crusader's and ArcCorp's orbits, mapped by CaptSheppard/Cornerstone's 2022 survey. Because it's continuous, the "exit where your route crosses radius R" technique works and DROP offers true band targeting with a density strip. Band 5 is the jackpot.
-- **Nyx — the Glaciem Ring + the Keeger Belt.** The Glaciem Ring is 96% empty: the rocks live in 381 discrete pocket containers, so aiming at a random ring crossing almost always drops you into nothing. Prospector aims chords at *pocket centres* (all 381 datamined, exact coordinates). The **Keeger Belt** at 48 Gm has no datamined geometry at all — so the org maps it itself, from ⛏ survey marks.
-- **Pyro — deep-space fields.** No belt exists; instead there are ~102 unmarked resource fields (the PYR L-point fields and the RMB derelict mining sites) plus the Akiro Cluster. Each is a single fixed target, planned in POI/closest-approach mode.
-
-## The crowd-sourced survey concept
-
-Cornerstone mapped the Aaron Halo with 1,746 hand-taken photo samples. Prospector takes the same measurement as a one-tap side effect of normal play. Every ⛏ mark is a player-taken, in-game `/showlocation` fix at a real spot — ground truth, not an estimate. Marks aggregate immediately: a single rock-positive mark is instantly a plannable, org-wide target; more marks merge and sharpen the field's centroid and extent; around 25 marks the app fits a full field model (radial width, thickness, angular coverage) that's exportable and promotable.
-
-Two things make this work where naïve mapping fails. **Negative marks are first-class** — a `⛔ none` "nothing here" mark maps a field's boundary as informatively as a dense one does, and the app makes it a single tap, not a failure case. And **the geometry is always derived, never stored** — recomputed from the marks, so deleting a bad mark heals the fit automatically.
-
-## Features
-
-- **Three target modes** — density band (Stanton), fixed-POI closest-approach, and pocket/field mode over a target set (Nyx/Pyro), all in one solver.
-- **Drop *windows*, not points** — enter/peak/exit readouts robust to reaction time and server lag, plus window-seconds at your specific quantum drive's speed.
-- **Obstruction-aware routing** — the star and planets are modelled as hazard volumes; when a direct chord is blocked or you're off-plane, the planner inserts a staging hop and renders it as ordinary jump legs with fuel chips.
-- **Alternate markers** — 2–3 full alternate plans returned with every solve, promotable with one tap and no re-plan.
-- **Verify-and-refine** — post-drop the fix is classified against the belt; POI/pocket mode offers a Refine re-plan that converges over a hop or two.
-- **Live pocket radar** with rocks/ores heat layers and a drift-arrow you steer by in a compass-less void, plus a drift nudge when you leave your own coverage.
-- **RS signature reference** — a per-ore radar-signature cheat sheet, built from the org's own single-ore scans, for identifying rocks at range.
-- **Named survey zones** — deliberate, anywhere, org-shared; auto-tag every mark; ranked by profitability with $ value tiers.
-- **Coverage map + NEXT GAP** so surveying stops being aimless wandering.
-- **Export** — versioned JSON of marks + fitted model, the org's citable dataset.
+- **Stanton — the Aaron Halo.** Ten concentric density bands from CaptSheppard/Cornerstone's survey (credited under the tab). Continuous, so true band targeting works.
+- **Nyx — Glaciem Ring + Keeger Belt.** Only ~4% of the Glaciem Ring holds rocks, in 381 datamined pockets, so Prospector aims at pocket centres. The **Keeger Belt** has no rock map in the game data — the org builds one from ⛏ marks, and every rock mark becomes a jumpable pocket. Its datamined mission arcs (violet outlines on the map) are believed contract-gated and unverified; you can pin one by key, but no marker chord passes near them, so reach one via its mining contract and ⛏ mark what you find.
+- **Pyro — deep-space fields.** No belt; ~100 unmarked resource fields plus the Akiro Cluster, each planned as a closest fly-by.
 
 ## Works with the rest of the suite
 
-Prospector shares the whole suite's live substrate. It reads your position from the same watcher + `/showlocation` + WebSocket pipeline as the Resource Navigator — no typing coordinates. Survey marks are ordinary custom POIs, so anything you ⛏ mark becomes searchable and mappable across the suite, and ore names flow through the same `$$$` value-badge machinery used everywhere else. When a Prospector fix lands inside a belt, the Navigator shows a passive "where you are" chip; capturing a rock anywhere annotates its band/pocket automatically.
-
-The survey data also feeds **Org Intel's Surveying section** — totals, ranked contributors, per-belt coverage, and freshest zones — and threshold-crossing milestones fire **Discord** pings (opt-in, like the LFG and danger-board announcements), so an evening's mapping expedition shows up where the org coordinates.
+Surface areas are built from the **Resource Navigator**'s node, harvestable and wildlife captures, and named from its SURVEY band; ⛏ marks are ordinary custom POIs, searchable suite-wide. Ore names carry the same `$$$` value chips used everywhere. **Org Intel → Surveying** reports totals, contributors and coverage (ore only — harvestables and fauna are contract material, not priced cargo). With a **Surveying** Discord channel set, a new belt zone can be announced (`📣 Announce it on Discord` when you create it), and milestones post when a belt zone hits 25 rock-positive marks, a belt fits its first field model, or a surface area crosses 25, 100, 250 or 500 sightings.
 
 ## Tips
 
-- **Slow drive for bullseyes.** At full cruise a 200 ms reaction can cost 10,000–57,000 km. `Anywhere in band` forgives that; `Densest point` wants a slow drive or a shallow (grazing) crossing.
-- **Trust the fallback number.** The "distance to the system marker" readout works on any belt-crossing route and survives patches — use it when the named-marker guidance feels off.
-- **Nyx is about pockets, not the ring.** Only ~4% of the Glaciem Ring holds rocks. Always let Prospector aim at a pocket; a bare ring crossing is a coin-flip into empty space.
-- **Mark the emptiness.** A `⛔ none` mark is not a wasted tap — negative marks are what let the org draw a field's true edge.
-- **Name a zone before a survey run.** With an active zone every ⛏ mark auto-files into it; without one, marks auto-cluster by proximity and two adjacent fields can silently merge.
-- **On Keeger, fly station-approach chords.** With few Nyx markers, the plannable sweet spot is rocks along a station approach; a deep-belt mark far from any marker chord has no honest drop plan and Prospector will say so rather than fake one.
+- **Sort by `Needs surveying` before a run.** The weak health bar tells you whether to drive somewhere new or scan deeper where you are.
+- **Mark the emptiness.** A `⛔ none` mark is coverage — it's how a field's edge and an area's health get drawn.
+- **Watch for `pre-<patch>`.** One fresh sighting or rock mark after a patch clears it.
+- **Name a belt zone before a survey run.** Without one, marks cluster by proximity and two adjacent fields can merge.
+- **Slow drive for bullseyes.** `Densest point` wants a slow drive or a grazing crossing; trust the system-marker fallback number when the named-marker one feels off.
 
 ---
-<sub>Part of the <a href="./README.md">SC Org Navigator app suite</a>. Design/reference spec: <a href="../survey-app-restructure.md">docs/survey-app-restructure.md</a>.</sub>
+<sub>Part of the <a href="./README.md">SC Org Navigator app suite</a>. Design/reference specs: <a href="../survey-app-restructure.md">docs/survey-app-restructure.md</a> · <a href="../survey-zones-surface.md">docs/survey-zones-surface.md</a>.</sub>

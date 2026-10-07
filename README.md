@@ -11,11 +11,13 @@ which turns it into precise, glanceable navigation and logistics — bearing,
 distance, ETA, route plans, and shared org data — pushed live over WebSocket to
 a browser on a second device (a laptop or phone beside the game).
 
-Around that navigator core has grown a **ten-app suite** in a single-file SPA,
-behind Discord-OAuth org gating: cargo and trade route planners, **Prospector**
-(a mining drop planner + crowd-sourced belt-survey atlas), an event planner with
-fleet rosters, a group finder, a pirate danger board, org inventory/goals, an
-aUEC marketplace, and guild analytics.
+Around that navigator core has grown an **eleven-app suite** in a single-file
+SPA, behind Discord-OAuth org gating: cargo and trade route planners,
+**Prospector** (the org's survey atlas for planets, moons and belts, plus drop
+planning), an event planner with templates and fleet rosters, **Ops** (run a
+mission, split the take, roll the loot, keep the record), a group finder, a
+pirate danger board, org goals and inventory with item quality, an aUEC
+marketplace, and guild analytics.
 
 > 📖 **Each app has a full showcase & how-to guide** in
 > [`docs/apps/`](docs/apps/README.md) — screenshots, walkthroughs, and tips.
@@ -25,9 +27,9 @@ aUEC marketplace, and guild analytics.
 > Industries®, and Cloud Imperium® are trademarks of Cloud Imperium Rights LLC.
 
 <div align="center">
-  <img src="images/readme_images/launcher_screenshot.png" alt="The SC Org Navigator launcher: ten app badges grouped as Out in the 'Verse, Rally the Org, and Run the Org" width="820">
+  <img src="images/readme_images/launcher_screenshot.webp" alt="The SC Org Navigator launcher: eleven app badges grouped as Out in the 'Verse, Rally the Org, and Run the Org" width="820">
   <br>
-  <sub>The launcher — ten tools grouped by what you're up to, one org, one sign-in.</sub>
+  <sub>The launcher — eleven tools grouped by what you're up to, one org, one sign-in.</sub>
 </div>
 
 ## How it works
@@ -48,7 +50,7 @@ and version together.
 
 ## The apps
 
-Ten apps in three themed launcher groups, plus account and admin surfaces. All
+Eleven apps in three themed launcher groups, plus account and admin surfaces. All
 share one component language, one auth gate, and one live WebSocket.
 
 > 📖 **Each app name below links to its showcase & how-to guide** (screenshots,
@@ -58,26 +60,27 @@ share one component language, one auth gate, and one live WebSocket.
 
 | App | Route | What it does |
 |---|---|---|
-| [**Resource Navigator**](docs/apps/navigator.md) | `#/nav` | Live position → bearing/distance/ETA to POIs; capture resource/fauna/harvestable observations; forecast, element finder, heatmaps; shard-aware, fresh-only markers; live teammate presence on the map |
-| [**Cargo Planner**](docs/apps/cargo-planner.md) | `#/route` | Pickup-and-delivery route solver for hauling contracts; run mode with arrival detection; rewards, history, quick-picks, guild hauling leaderboards |
-| [**Trade Route Planner**](docs/apps/trade-planner.md) | `#/trade` | Buy-low/sell-high multi-leg planner on live commodity prices; run mode with live-position replan; realized-profit history/stats; saved routes; hazard-aware routing (ignore/warn/avoid + snare detours) |
-| [**Prospector**](docs/apps/prospector.md) | `#/halo` | Mining drop planner + crowd-sourced belt-survey atlas across three tabs (DROP · FIELD · ATLAS): jump into unmarked rock space (Aaron Halo bands, Nyx Glaciem pockets, Pyro fields), exit quantum at the exact readout distance, verify your fix live, ⛏ survey it, and build the org's shared belt map |
+| [**Resource Navigator**](docs/apps/navigator.md) | `#/nav` | Live position → bearing/distance/ETA to any POI, resource node or wildlife; capture ore (with 0–1000 quality and quality lines), harvestable and fauna sightings; forecast scoped to the named area you're standing in; element finder, heatmaps, ore value badges, NEARBY pins + mark-mined; live teammate presence. The core the rest is built on. |
+| [**Cargo Planner**](docs/apps/cargo-planner.md) | `#/route` | Pickup-and-delivery route solver for hauling contracts under your ship's capacity — including A↔B round trips, jump gates costed as time, quantum fuel and range, danger detours; run mode with arrival detection; rewards, history, guild hauling boards. |
+| [**Trade Route Planner**](docs/apps/trade-planner.md) | `#/trade` | Multi-leg buy→sell planner on live prices with an org price overlay: stop kinds for dock-only ships, legality, best-return sort and a return floor, cargo-container sizing from the kiosks' own menus, mixed loads; run mode with live re-plan, mid-run top-ups and watcher-reported transactions; stock reports; saved routes; realized-profit stats. |
+| [**Prospector**](docs/apps/prospector.md) | `#/halo` | The org's survey atlas — named areas on planets and moons (ore, harvestables and fauna, each valued on its own) and in the belts, ranked by value and by how well they're known — plus RS-signature lookup, survey marks and a pocket radar in the field, and drop planning into unmarked rock space. ATLAS · FIELD · DROP. |
 
 **Rally the Org** — coordination:
 
 | App | Route | What it does |
 |---|---|---|
-| [**Event Planner**](docs/apps/event-planner.md) | `#/events` | Post events (multi-type, roles/targets), signups with capacity + first-come **waitlist** (auto-promote + ping), fill tracking, reschedule notifications; clone for weekly ops, day-of attendee management, past-events history; fleet rosters with ship seat templates; manifest → Discord |
-| [**Group Finder**](docs/apps/group-finder.md) | `#/lfg` | LFG board (looking-for-members / looking-to-join), playstyle tags, suggested matches, promote-to-event, Discord announce |
-| [**Danger Board**](docs/apps/danger-board.md) | `#/pirates` | Community pirate warnings (point/lane, PvP/PvE, severity, still-active confirms, age-off); feeds hazard volumes into both planners' detour routing; "organize hunt" → event |
+| [**Event Planner**](docs/apps/event-planner.md) | `#/events` | Events with roles, capacity and an auto-promoting waitlist; templates (six built-ins plus your org's own); mission details, contracts and payout rules; fleet rosters with seat templates; a Discord announcement that keeps its crew counts current; clone, day-of attendee tools, past-events calendar. |
+| [**Ops**](docs/apps/ops.md) | `#/ops` | Run a mission and keep its record: attendance and guests, a ledger that splits the take and lists the fewest payments, confirmed by whoever receives them; contracts checklist; verifiable loot rolls with Need / Want / Pass; a standalone loot-roll tool; the closed record posted to Discord. |
+| [**Group Finder**](docs/apps/group-finder.md) | `#/lfg` | LFG board (need players / want to join), playstyle tags, suggested matches, promote-to-event, Discord announce; live Who's Online roster. |
+| [**Danger Board**](docs/apps/danger-board.md) | `#/pirates` | Community pirate warnings (location or lane, players or NPCs, severity, still-active confirms, age-off); both planners route around them by default; "organize hunt" → event. |
 
 **Run the Org** — logistics & management:
 
 | App | Route | What it does |
 |---|---|---|
-| [**Resource Manager**](docs/apps/resource-manager.md) | `#/goals` · `#/inventory` · `#/blueprints` | Shared item catalog; procurement goals with allocations drawn from real holdings; per-member holdings ledger; personal craftable-blueprint library |
-| [**Marketplace**](docs/apps/marketplace.md) | `#/market` | aUEC-only sale / auction / barter / **commission** / **buy-order (WTB)** board with dual-confirm handshake; **crafter storefronts** with directed requests, org settled-price memory, market trends, availability + pickup locations, my-activity tracking, and a blueprint spec builder for craft requests |
-| [**Org Intel**](docs/apps/org-intel.md) | `#/intel` | Guild analytics: mapping, hauling, trading & **surveying** stats, leaderboards, member directory |
+| [**Resource Manager**](docs/apps/resource-manager.md) | `#/goals` · `#/inventory` · `#/blueprints` | Goals of three kinds — gather materials (with quality floors), unlock blueprints across the org, survey an area; a holdings ledger that tracks each lot's quality; a blueprint library table that knows what you can craft from free stock, and an org readiness view. |
+| [**Marketplace**](docs/apps/marketplace.md) | `#/market` | aUEC-only sale / auction / barter / commission / buy-order board with a dual-confirm handshake; list straight from your inventory with lot quality; crafter storefronts and directed requests; org price memory, trends, availability and pickup. |
+| [**Org Intel**](docs/apps/org-intel.md) | `#/intel` | Guild analytics: mapping, hauling, trading, surveying and market; contributor, earner and op-attendance leaderboards; member directory (admins). |
 
 Plus a live **Who's Online** roster (`#/online`), Settings (identity, playstyle
 profile, watcher tokens, org settings, branding, notifications), a Setup guide,
@@ -90,12 +93,15 @@ and legal pages.
 - **Live everything.** A single WebSocket fans out nav state, teammate presence
   (surface- and shard-aware), the online roster, LFG, and danger warnings.
 - **Discord-native.** OAuth sign-in gated to one guild; webhook notifications
-  per category (events, marketplace, goals, records, LFG, pirates, survey) as
-  color-coded embed cards with deep links — auction outcomes, outbid alerts,
-  event reminders and reschedules, waitlist promotions, and more. Delivery
-  health surfaces in org settings, sends are paced under Discord's rate
-  limit, mention paging reaches rosters past 50 people, and every member has
-  a personal "don't @-ping me" opt-out. No bot required.
+  per category (events, ops, marketplace, goals, records, LFG, pirates,
+  survey) as color-coded embed cards with deep links — auction outcomes,
+  outbid alerts, event reminders and reschedules, waitlist promotions, op
+  records, survey milestones and more. A new-event post updates its own crew
+  counts as people sign up. Admins can reword the announcements from
+  templates with a live preview, and add an org thumbnail or a per-event
+  banner image. Delivery health surfaces in org settings, sends are paced
+  under Discord's rate limit, mention paging reaches rosters past 50 people,
+  and every member has a personal "don't @-ping me" opt-out. No bot required.
 - **Pure, tested nav core.** All coordinate math and route/trade solvers live in
   `server/nav_core.py` with their own unit-test suite — straight-line quantum
   legs over a QT-marker graph, a 3-system gate chain (Stanton—Pyro—Nyx), and
@@ -205,28 +211,33 @@ server/    FastAPI backend + the single-file SPA
   db.py             SQLite schema + queries
   static/index.html the whole frontend (one file)
   version.py        SemVer, surfaced at /api/health + footer
-watcher/   Windows gaming-PC script: reads /showlocation, POSTs position + shard
+watcher/   Windows gaming-PC script: reads /showlocation + Game.log, POSTs position,
+           shard, handle and kiosk transactions; optional in-game overlay
 poi/       committed dataset seeds (POIs, containers, quantum, blueprints, …)
            + the runtime SQLite volume
 tools/     data-sync scripts (sync_quantum.py, sync_blueprints.py, …)
-docs/      design docs — see docs/README.md for the index
+docs/      design docs (index: docs/README.md) + per-app guides in docs/apps/
 ```
 
 Full code-navigation conventions are in [`CLAUDE.md`](CLAUDE.md); the consolidated
-product map is [`docs/product-overview.md`](docs/product-overview.md).
+product map is [`docs/product-overview.md`](docs/product-overview.md); as-built
+per-feature detail is in [`docs/implementation-notes.md`](docs/implementation-notes.md).
 
 ## Data sources & attribution
 
-Reference data is **snapshot-synced and committed**, never fetched live from
-third parties on the request path.
+Third-party reference data is **snapshot-synced and committed** (the starmap
+catalog only changes through a reviewed `tools/sync_containers.py` diff), never
+fetched live on the request path. UEX prices are the one live feed, refreshed on
+a schedule.
 
 | Source | Used for | Terms |
 |---|---|---|
 | [starmap.space](https://starmap.space) | POI / container catalog | Community dataset |
-| [UEXcorp](https://uexcorp.space) | Commodity & terminal prices, vehicles, equipment | Used with attribution |
-| [Star Citizen Wiki API](https://api.star-citizen.wiki) | Quantum fuel/range, blueprints, starmap positions, amenities | CC BY-SA 4.0 — attribution required |
+| [UEXcorp](https://uexcorp.space) | Commodity & terminal prices and stock, vehicles, equipment (refreshed every few hours) | Used with attribution |
+| [Star Citizen Wiki API](https://api.star-citizen.wiki) | Quantum fuel/range, blueprints, locations (POIs, QT radii, amenities) | CC BY-SA 4.0 — attribution required |
+| [Strata (CELD)](https://strata.celd.space) | Ore radar (RS) signatures in Prospector — optional, needs an API key; synced per deployment, not committed | Attribution shown in-app |
 | [Cornerstone](https://cstone.space) (CaptSheppard) | Aaron Halo density-band survey powering Prospector | Community dataset — credited in-app |
-| Your own `Game.log` (via the watcher) | Position, shard id | Your own game client |
+| Your own `Game.log` (via the watcher) | Position, shard, game build, your handle, commodity-kiosk transactions | Your own game client |
 
 ## Development
 

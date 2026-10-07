@@ -36,45 +36,62 @@ the Resource Manager's blueprint library.
 
 ### Post a listing
 
+<div align="center">
+  <img src="../../images/readme_images/marketplace_lot_listing_screenshot.webp" alt="NEW LISTING form for Iron (Ore): market value with a use button, From your inventory lot chips (Q800 · Baijini Point — 40 SCU free selected), quantity and price filled from the lot, availability and pickup location, and Lot quality 800 with its derived band ≈B7" width="820">
+</div>
+
 1. Open **Marketplace** from the launcher (`#/market`) and click
    `+ New listing`.
-2. Pick an **item** from the shared catalog picker (type to search
+2. Pick an **Item** from the shared catalog picker (type to search
    commodities, ships, equipment, crafted/blueprint items, or a custom item
-   name) and a **quantity**.
-3. Pick a **mode** — `Sale`, `Auction`, `Barter (trade)`,
-   `Craft request (commission)`, or `Buy order (WTB — I'm buying)`. The
-   form's fields change to match; see the mode breakdown below for what each
-   one asks for.
-4. If the item has a known in-game price, a **Market value** hint appears
-   (buy/sell aUEC pulled from the live commodity/item feeds) with a one-click
-   `use` button — and once your org has settled deals for the item, a second
-   **Sold in-org** line shows what it *actually* went for between orgmates
-   (last + median per unit, with its own `use` button). Real deals beat
-   asking prices as an anchor.
-5. Say when and where the goods change hands: an **Availability** dropdown
+   name) and a **Quantity**.
+3. Pick a **Listing type**: `Sale (fixed price)`, `Auction (timed bids)`,
+   `Barter (trade)`, `Craft request (commission)`, or
+   `Buy order (WTB — I'm buying)`. The form's fields change to match; see
+   the mode breakdown below for what each one asks for.
+4. If you hold the item, a **From your inventory:** row lists your free lots
+   of it (quality, location, how much is free). Click one and the form takes
+   that lot's free quantity, quality, and location as the pickup point. It's
+   the same seed the **Sell** button on a [Resource Manager](resource-manager.md)
+   holding sends.
+5. If the item has a known in-game price, a **Market value** hint appears
+   (buy/sell aUEC per unit, from the live commodity/item feeds) with a
+   one-click `use` button. Once your org has settled deals for the item, a
+   second **Sold in-org** line shows what it *actually* went for between
+   orgmates (last + median per unit, with its own `use` button). A listing's
+   price is for the whole quantity, so `use` multiplies the per-unit figure
+   by your quantity, and keeps tracking the quantity until you type a price
+   yourself.
+6. Say when and where the goods change hands: an **Availability** dropdown
    (`In stock now` · `Ready for pickup` · `On demand (will gather / craft)` ·
-   `Scheduled`) and an optional **pickup / handoff location** with POI
-   autocomplete. Buyers plan play sessions around these two facts, so they
-   ride every board card as a chip.
-6. Optionally record a **crafted item's quality** — if you're selling
-   something you made under SC 4.8's crafting system, open the quality
-   editor to advertise an overall **Quality (1–1000)** and/or **Band (1–8)**,
-   plus up to a handful of free-form stat rows (`+ Add stat`) like "Damage
-   Mitigation: +8%." A shared `ⓘ What do Quality and Band mean?` explainer
-   sits right on the form if you need the primer.
-7. Add an optional **note**, tick **announce to Discord** if your org has the
-   marketplace webhook configured (posts have their own opt-in in this box —
-   see below), and save. Your listing appears on the board immediately under
-   `My listings`.
+   `Scheduled (see note)`) and an optional **Pickup / handoff location**
+   with POI autocomplete. Buyers plan play sessions around these two facts,
+   so they ride every board card as a chip.
+7. Optionally record **quality**. The editor reads differently by item:
+   - For a commodity, it's **Lot quality (optional)**: the 0–1000 quality the
+     game shows on the lot (0 = station-bought). A Q800 lot is a different
+     product from a Q300 one, and buyers filter on it. Lot listings carry a
+     `◆` quality chip on the board.
+   - For anything else, it's **Crafted item quality (optional)**: the quality
+     your materials carried into the finished item, plus free-form stat rows
+     (`+ Add stat`) like "Damage Mitigation: +8%." These carry a `⚒` chip.
+
+   In both cases the **Band** is worked out from the quality for you. A
+   `ⓘ What do Quality and Band mean?` explainer sits on the form if you need
+   the primer.
+8. Add an optional **Note (optional)** and tick **📣 Announce this listing
+   to the org's Discord** if your org has the marketplace webhook configured.
+   This works on every listing type; see below. Then save. Your listing
+   appears on the board immediately under `My listings`.
 
 ### Sale, Auction, Barter, and Buy orders
 
 | Mode | You set | How it settles |
 |---|---|---|
-| **Sale** | A fixed **price** in aUEC | A buyer clicks `Buy now · N aUEC` and the listing moves straight to `pending` with them as buyer. |
-| **Auction** | A **starting price**, an **end time**, and an optional **buyout** | Members place bids (`Place bid`, at or above the next minimum); the highest bid at the end time wins, or anyone can end it instantly with `Buy out · N aUEC` if you set one. Ties go to whoever bid first. Once bids exist the end time can only be *extended*, never shortened. |
-| **Barter** | A **want** — free text or another catalog item you're after | Members counter with `Make offer` (an item + note describing what they're offering); you review the offers and `Accept` the one you like. |
-| **Buy order (WTB)** | The item you want and what you're **paying** for the lot | The direction flips: sellers respond with `Offer to sell` (their price + a "stock on hand, where" note) and *you* pick one — never automatic, since nobody can verify stock. Posting a buy order also automatically pings members whose [Resource Manager](resource-manager.md) holdings carry that item, so your order finds the stashes. |
+| **Sale** | A fixed **Price (aUEC)** for the whole quantity | A buyer clicks `Buy now · N aUEC` and the listing moves straight to `pending` with them as buyer. |
+| **Auction** | A **Starting bid (aUEC)**, an **End date** / **End time**, and an optional **Buyout (aUEC)** | Members place bids (`Place bid`, at or above the next minimum); the highest bid at the end time wins, or anyone can end it instantly with `Buy out · N aUEC` if you set one. Ties go to whoever bid first. Once bids exist the end time can only be *extended*, never shortened. |
+| **Barter** | **What you want in return**, in your own words | Members counter with `Make offer` (an item + note describing what they're offering); you review the offers and `Accept` the one you like. |
+| **Buy order (WTB)** | The item you want and what you're **Paying (aUEC)** for the whole quantity | The direction flips: sellers respond with `Offer to sell` (their price + a "stock on hand, where" note) and *you* pick one — never automatic, since nobody can verify stock. Posting a buy order also automatically pings members whose [Resource Manager](resource-manager.md) holdings carry that item, so your order finds the stashes. |
 
 ### Craft requests (commission)
 
@@ -83,24 +100,25 @@ A commission flips the usual direction: you're not selling something, you're
 
 1. Pick `Craft request (commission)` as the mode, then search for a
    **blueprint** by name (the same recipe feed behind the Resource Manager's
-   blueprint library — over 1,500 craftable weapons, armor, and ship
-   components). Picking a recipe mounts the full **spec builder** below the
+   blueprint library — craftable weapons, armor, and ship components).
+   Picking a recipe mounts the full **spec builder** below the
    field.
 2. The spec builder shows the recipe's **materials manifest** — every
    resource (by SCU) and every item-kind ingredient like crafting gems (by
    count), scaled to your quantity, plus any minimum input quality the
-   recipe demands. Set **who sources the materials**: `Crafter sources them`,
+   recipe demands. Set **Materials** (who sources them): `Crafter sources them`,
    `I supply them`, or `We split them` — this changes the job's real cost
    more than anything else, so it's front and center.
 3. For any stat the recipe can actually influence (say, Damage Mitigation or
    Coolant Rating), the builder shows **which input slot drives it** and a
    per-input **quality slider** with a live estimate of the resulting stat —
    so you can ask for "≥ Q700 on the Shell" and see roughly what that buys
-   you before you post. Slider positions are saved as **materials quality
+   you before you post. Slider positions are saved as **Materials quality
    needed** minimums a crafter can see on the listing.
-4. Set an overall target **Quality (1–1000)** / **Band (1–8)** if you want a
-   single headline number too, an optional **Budget** (leave blank for "open
-   to quotes"), and an optional **needed by** date/time.
+4. The **Requested quality spec (optional)** fills in a **Min quality
+   (0–1000)** from your weakest slider (or type your own). Then set an
+   optional **Budget (aUEC)** (blank means open to quotes) and an optional
+   **Needed by (date)** / **Needed by (time)**.
 5. Post it. Interested crafters browse the `Requests` tab, read your spec and
    manifest, and submit a **quote** — their own price and a note (ETA,
    proposed quality, material questions) — via the listing detail's offer
@@ -171,8 +189,9 @@ search bar:
   `Ending soon`.
 - An `⚙ Filters` disclosure adds **item type** (Commodities / Ships /
   Equipment / Crafted (blueprint) / Custom), **availability** (in stock /
-  pickup / on demand / scheduled), a **price range**, and — for crafted
-  goods — a **quality range**, **band**, and a **stat name/value** search.
+  pickup / on demand / scheduled), a **price range**, a **quality range**
+  and **band** (these apply to commodity lots and crafted items alike), and
+  a crafted-item **stat name/value** search.
 - On the `Requests` tab, a `✨ Requests I can craft` checkbox narrows the
   board (server-side, across every page) to commissions matching blueprints
   in your own library (see [Resource Manager](resource-manager.md)).
@@ -219,6 +238,11 @@ search bar:
 - **Availability & pickup on every listing** — in stock / ready for pickup /
   on demand / scheduled, plus a handoff location with POI autocomplete;
   chips on the board, a filter to match.
+- **Lot quality on commodities** — a commodity listing advertises the
+  quality of the actual lot, with a band worked out from it. You can post
+  straight from a Resource Manager holding with **Sell**, or pick one of your
+  lots on the form. Either way, quantity, quality, and pickup are filled in
+  from your own ledger.
 - **Crafted-goods identity** — any listing whose item is a known blueprint
   (posted directly or through a completed commission) carries a **spec
   panel**, an **expected-stats** estimate interpolated from the recipe's
@@ -244,10 +268,13 @@ search bar:
   of letting them dangle, **relist** a closed listing without retyping, and
   admins can hard-delete abusive listings; cancelling a pending deal
   notifies the bound counterparty instead of vanishing silently.
-- **Opt-in Discord announces** — posting a listing can shout to your org's
-  marketplace channel ("🏷️ FOR SALE" / "🔨 AUCTION" / "🛠️ WANTED" /
-  "📥 BUYING") with a deep link, on a per-member cooldown so it can't be
-  spammed.
+- **Opt-in Discord announces on every mode** — posting any listing can
+  shout to your org's marketplace channel ("🏷️ FOR SALE" / "🔨 AUCTION" /
+  "🔄 TRADE WANTED" / "🛠️ WANTED" / "📥 BUYING") with a deep link, on a
+  per-member cooldown so it can't be spammed. Only a craft request
+  @-mentions anyone (the members whose library holds the recipe), and a
+  directed request never does. The form tells you after posting if a
+  cooldown held your shout back.
 
 ## Works with the rest of the suite
 
@@ -261,10 +288,16 @@ spec builder here and the "My blueprints" picker there, and a request's
 `✨ Requests I can craft` filter matches against that library. New listings and
 craft requests can push an opt-in message to your org's Discord via the same
 per-category webhook system used by the Event Planner's manifest export, the
-Danger Board's warnings, and Group Finder's posts.
+Danger Board's warnings, and Group Finder's posts. From the other side, a
+holding's **Sell** button and a blueprint's **List** button in Resource
+Manager open this form pre-filled.
 
 ## Tips
 
+- Selling stock you've logged? Start from **Sell** on the holding (or pick
+  the lot under **From your inventory:**). The quantity, quality, and pickup
+  come from your ledger, and the quantity starts at what isn't pledged
+  to a goal.
 - Set a **Market value** hint by picking a catalog item first — if the item
   has feed pricing, the "use" button saves you from guessing an ask out of
   thin air; once the org has settled deals for it, prefer the **Sold in-org**
