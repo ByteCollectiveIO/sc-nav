@@ -5,7 +5,9 @@
 > **Route:** `#/trade` · **Launcher group:** Out in the 'Verse
 
 <div align="center">
-  <img src="../../images/readme_images/trade_route_planner.png" alt="Trade Route Planner plan view: mode tabs, ship/SCU pickers, stop-kind and pirate-danger controls, and an ordered leg list with live buy/sell prices" width="820">
+  <img src="../../images/readme_images/trade_planner_console.webp" alt="Trade Route Planner console: one PLAN A TRADE RUN panel with SHIP rows (ship, usable SCU, Can stop at, Loading, Box size) and ROUTE rows (Start from, Plan tabs, Optimize for with min return, Cargo), the collapsed Route rules disclosure with its chips, and the Plan trade run bar" width="820">
+  <br>
+  <sub>The planner console: ship facts on top, route strategy below, durable policy folded into Route rules.</sub>
 </div>
 
 ## What it is
@@ -17,92 +19,176 @@ and your own memory of where your hauler can even land — then doing it all
 again the moment a pirate knocks you off course or a terminal turns out to be
 sold out when you actually get there.
 
-The Trade Route Planner turns that into one tool. It pulls **live per-terminal
+The Trade Route Planner turns that into one tool. It pulls **per-terminal
 buy/sell prices** from the same UEX feeds the rest of the suite already
-trusts, chains them into a profit-maximizing loop sized to your ship's usable
-cargo, and then **runs** that plan with you — tracking which leg you're on,
-capturing what you actually paid and got paid, and re-solving on the fly from
-your live position if something goes wrong. It's not a bare price lookup: it
-already knows where you are (the same watcher feed that drives the Resource
-Navigator), what ship and cargo capacity you fly, and what the org's Danger
-Board is warning about right now — so the "best" route it hands you is one you
-can actually fly with the hull you brought.
+trusts — overlaid with fresher prices your own org members actually paid —
+chains them into a profit-maximizing loop sized to your ship's usable cargo
+and the containers the kiosk really sells, and then **runs** that plan with
+you: tracking which leg you're on, capturing what you actually paid and got
+paid, and re-solving on the fly from your live position if something goes
+wrong. It already knows where you are (the same watcher feed that drives the
+Resource Navigator), what ship you fly and where it can physically stop, and
+what the org's Danger Board is warning about right now — so the "best" route
+it hands you is one you can actually fly with the hull you brought.
 
-Because it shares plumbing with the rest of the suite — ship profiles, the POI
-catalog, the live WebSocket, Discord notifications — a plan is one tap from
-your current position, and a finished run feeds straight into guild-wide
+A finished run feeds straight into your own RECENT TRADES and the guild-wide
 Trading stats.
 
 ## How to use it
 
+### Set up the run
+
+Everything lives in one **PLAN A TRADE RUN** panel, split into a **SHIP**
+section (facts about your ship and how it loads) and a **ROUTE** section (how
+you want to trade). Hover any row label for a one-line explanation.
+
 1. Open the app launcher and pick **Trade Route Planner** under *Out in the
    'Verse*, or go straight to `#/trade`.
-2. Pick your **ship** — usable SCU fills in automatically from your saved
-   ship profile (the same one the Cargo Planner uses). If your ride is one of
-   the five dock-only haulers (Hull C/D/E, Kraken, Kraken Privateer), the
-   `Stops` control auto-flips to `Cargo dock` with an explanatory hint — see
-   **Stop kinds** below.
-3. Set your **start** — type a POI, or tap `📍 my current location` to seed
-   the plan from your live in-game position.
-4. Choose a **mode** (`Auto`, `Pick commodities`, or `Manual legs` — tabs at
-   the top of the planner; each is its own subsection below) and tune the
-   shared knobs: stop budget, system lock, minimize empty-hold flight, and
-   the price-freshness filter (on by default, only prices newer than a set
-   number of days).
-5. Set `Stops` (any / stations only / cargo dock) and `Pirate danger`
-   (ignore / warn / avoid) to match your ship and risk tolerance.
-6. Click **Plan trade run**. The result is an ordered list of legs — buy here,
-   sell there — each showing live buy/sell price, profit, running aUEC total,
-   and SCU used, plus a route-level summary (total profit, total time,
-   aUEC/hour).
-7. Like the plan? Click **★ Save route** to store the setup in **SAVED
-   ROUTES** for one-tap reload later (see **Favorites**), or **Start this
-   run ▸** to begin executing it.
+2. **Ship** — type your ship's name; usable SCU fills in from your saved ship
+   profile (the same one the Cargo Planner uses). If the ship has a known
+   quantum-drive profile, a **Quantum drive** row appears with an
+   `in-range only` checkbox (see **Fuel & range** below).
+3. **Can stop at** — `Any`, `Stations & cities`, `Stations only`, or `Cargo
+   dock` (see **Stop kinds**). Picking a dock-only hauler sets `Cargo dock`
+   for you.
+4. **Loading** — `Auto-load` (the kiosk stows the hold) or `Hand-load` (you
+   move every box). **Box size** — `Best fit`, `Max fill`, or `Fewest boxes`,
+   plus an `exact` size select to pin one container size (see **Containers**).
+5. **Start from** — type a place, tap `📍 my current location`, or leave it
+   blank to begin wherever the richest first buy is.
+6. **Plan** — choose `Auto`, `Pick commodities`, or `Manual legs` (each is
+   its own subsection below).
+7. **Optimize for** — `Best aUEC/hr`, `Most profit`, or `Best return`, with
+   an optional `min return` % floor. **Cargo** — `Single commodity` or
+   `Mixed loads`.
+8. Open **Route rules** for the policy knobs: `Max spend`, `Cargo legality`,
+   `Danger`, your **AVOIDED LOCATIONS** list, `max stops` / `system` /
+   `minimize empty-hold flight`, and `only prices newer than` N days. While
+   it's collapsed, its chips show which rules differ from the defaults.
+9. Click **Plan trade run**. Use **★ Save route** to keep the setup in
+   **SAVED ROUTES**, or **Clear** to reset.
+
+### Read the plan
+
+<div align="center">
+  <img src="../../images/readme_images/trade_plan_legs.webp" alt="A TRADE PLAN result: TOTAL PROFIT headline with aUEC/hr, a TRADES · STOPS · QT DISTANCE · EST. TIME · CAPITAL NEEDED strip, RETURN and HOLD LOADED below, and LEGS cards showing the commodity, a box-count chip, a price-age badge, buy and sell terminals with amenity chips, and per-leg profit and return" width="820">
+</div>
+
+**TRADE PLAN** leads with **TOTAL PROFIT** and aUEC/hr, then TRADES, STOPS,
+QT DISTANCE, EST. TIME, and CAPITAL NEEDED — the aUEC you must front at the
+worst point of the run. A smaller row adds RETURN (or RETURN ON SPEND when
+you set a max spend), HOLD LOADED, and QT FUEL when a drive is known.
+Danger detours and legs that touch danger are called out right under the
+headline; price age, over-range legs and the reminder that UEX prices are a
+scrape fold into an **Advisories** strip.
+
+Each card under **LEGS** shows the commodity and SCU, a `📦 N × size SCU`
+container chip, a price-age badge (`⚡` when it includes an org-reported
+price), `Buy at …` / `Sell at …` with the price and facility chips (`🚚 loading
+dock`, `⬆ freight elevator`, `⚓ docking`, pad/hangar size), and the leg's
+profit per SCU, profit, capital, and `% return`. Badges flag anything worth
+knowing before you fly: `☠ illicit`, a member stock report, `⚡ sized to
+member-reported stock`, `⊕ mixed ×N`, a surface-outpost hand-load heads-up,
+or a danger on the leg. Cross-system legs show the jump gate they use.
+
+When it looks good, click **Start this run ▸**.
 
 ### Auto mode
 
-Give the planner your ship, start, and a stop budget (default 6); it picks
-**both** the commodities and the route for you — the fully hands-off option.
-Use `Optimize for` to bias toward total profit or profit/hour, and the
-system-lock toggle to stay in your current system rather than pay
-jump-gate travel time on a cross-system leg.
+Give the planner your ship, start, and a stop budget (`max stops`, default
+6); it picks **both** the commodities and the route for you. Use the
+`system` select to stay in one system rather than pay for a jump-gate
+crossing.
 
 ### Pick commodities
 
-Same solver as Auto, but restricted to commodities you choose from the
-typeahead (chips accumulate as you add them — e.g. "just Gold and Agricium").
-Use this when you already know what you want to haul and just want the best
-buy/sell pairing and ordering for it.
+Same solver as Auto, but restricted to commodities you add (chips accumulate
+as you add them — e.g. "just Gold and Agricium"). Use this when you already
+know what you want to haul and just want the best pairing and order for it.
 
 ### Manual legs
 
-You pick every buy and sell terminal yourself, one leg at a time — no solver
-involved. The tool's job shrinks to showing you live prices and running
-profit/SCU as you build the chain. A manual plan is a first-class plan: it can
-be saved as a favorite and run exactly like an auto-solved one.
+You pick every buy and sell terminal yourself with `+ add leg` — no solver
+involved. Each row shows the live margin per SCU as you build it, or `not
+sold there` / `not bought there` when the terminal doesn't trade that
+commodity. A manual plan is a first-class plan: it can be saved and run
+exactly like a solved one. Rules you've set (stop kinds, legality, min
+return) badge a manual leg instead of dropping it — a hand-picked leg is
+your call.
 
 ### Running a plan
 
-1. From a feasible plan, click **Start this run ▸**. The active leg's buy POI
-   becomes your live destination — bearing/distance/ETA/QT-marker guidance
-   works exactly like the Resource Navigator.
-2. At the buy terminal, confirm the purchase (pre-filled price/SCU from the
-   plan, editable to match what actually happened) or use the leg's stock
-   controls if something's wrong (see **Stock & demand reports**).
-3. Once bought, guidance retargets to the sell POI. Confirm the sale the same
-   way; the run advances to the next leg.
-4. If you get pulled off course — pirates, a detour, anything — hit **↻
-   re-plan from here**. The planner re-solves from your live position. Any
-   cargo you're currently holding carries forward as a constraint (a
-   sell-first leg to your nearest reachable buyer), never optimized away.
-5. **abandon** ends the run early; a completed run rolls straight into
-   **RECENT TRADES** and the guild **Trading** stats.
+<div align="center">
+  <img src="../../images/readme_images/trade_run_buy_step.webp" alt="TRADE RUN IN PROGRESS: SCU-aboard bar, realized vs planned, the re-plan button, and the active leg with its container chip, the &#39;32 SCU not on this kiosk?&#39; re-fit, and the BOUGHT row taking box size × count for the kiosk&#39;s total aUEC, with Bought, skip and no-stock buttons; later legs show their planned co-loads" width="820">
+</div>
+
+
+1. Click **Start this run ▸**. **TRADE RUN IN PROGRESS** shows SCU aboard,
+   realized profit against the plan, and each leg as a ▲ Buy then ▼ Sell
+   step. The active terminal becomes your live destination, with the same
+   bearing/distance/QT-marker guidance as the Resource Navigator.
+2. At the buy kiosk, fill the **bought** row the way the kiosk works:
+   container size × how many, `for` the **total** aUEC the screen showed.
+   The app works out SCU and price per SCU itself, so there's no per-unit
+   field to get wrong. Tick `all it had` only if the kiosk ran out — that
+   files a low-stock report for the org. Click **✓ Bought — head to sell ▸**.
+3. At the sell kiosk, each commodity aboard gets a row: SCU and the **aUEC
+   total** received, with price per SCU worked out beside it, and a `max?`
+   tick if that's all they'd take. Click **✓ Sold ▸** on each.
+4. If a figure you type is wildly off the plan's own quote, the app asks
+   **Price looks off — record it?** before saving it. Buy kiosks quote per
+   container while sell kiosks quote per SCU, and mixing them up would skew
+   your profit figures by the box size.
+5. Knocked off course? **↻ re-plan from here** re-solves from your live
+   position. Cargo already aboard is kept as a sell-first leg, never thrown
+   away. If no buyer can be reached, the run card says the cargo is `Still
+   aboard with no known buyer` instead of quietly dropping it.
+6. Before buying you can **skip this leg ▸**. Once anything is bought, sell it
+   (even short) or re-plan. **abandon** ends the run. A completed run shows
+   **TRADE RUN COMPLETE** and lands in RECENT TRADES.
+
+### Terminal reported (watcher)
+
+If your watcher is running, it spots the kiosk's buy/sell in your game log.
+The run card then shows **⚡ Terminal reported: BOUGHT/SOLD …** with the SCU,
+box makeup and price, and fills the active form with those numbers.
+Confirming the leg records them. It never confirms by itself — you still
+press the button — and if the log shows a different container size than the
+plan assumed, it suggests re-fitting the leg.
+
+### Containers
+
+Kiosks sell whole cargo containers (1, 2, 4, 8, 16, 24, 32 SCU), so a fill is
+always a box count. **Box size** picks the trade-off: `Best fit` gives up a
+little SCU to save a lot of boxes, `Max fill` fills the hold whatever the
+count, `Fewest boxes` moves the fewest even if the hold goes out short, and
+`exact` pins one size. `Auto-load` starts on `Max fill`, `Hand-load` on
+`Best fit`; you can change either. Every leg's `container sizes` table lists
+each size's box count and shortfall, with `✓` for sizes members have seen
+offered and `✗ absent` for ones reported missing for that commodity.
+
+Your watcher reports which sizes each kiosk sells for each commodity, and the
+planner won't pick a size that's reported missing. If you're at the kiosk and
+the planned size isn't there, open **N SCU not on this kiosk?** on the buy
+step and pick the size you can actually buy. That leg re-fits and re-prices
+where you stand, and the org's planner learns the size is missing.
+
+### Mixed loads and top-ups
+
+A big hold often outruns one commodity's supply. With **Cargo → Mixed
+loads**, the planner fills each stop with several commodities bought and sold
+at the same two terminals; the leg shows `⊕ also …` lines and a `stop total`.
+After the main buy, each planned co-load appears as a prefilled row to
+confirm with **✓ Bought — add to leg ▸**. Skip any the kiosk doesn't have;
+the run carries on without it.
+
+Short-filled anyway? After buying, **⊕ top up from <terminal> ▸** lists
+other cargo you can buy where you're standing that also sells at this leg's
+destination, sized to your free SCU, with its profit and return. It's
+flagged when more than a quarter of the hold is still empty.
 
 ## Features
 
-- **Live per-terminal pricing** — buy/sell aUEC per commodity per terminal,
-  refreshed on the same schedule as the rest of the suite's UEX feeds, with
-  a per-price "as of" freshness label and a staleness filter/badge.
 - **Three planning modes**, side by side:
 
   | Mode | Tab label | You choose | Planner chooses |
@@ -111,79 +197,91 @@ be saved as a favorite and run exactly like an auto-solved one.
   | Filtered | `Pick commodities` | + one or more commodities | route among your picks |
   | Manual | `Manual legs` | every buy/sell terminal | nothing — you build the chain |
 
-- **Run mode with live re-plan** — active-leg guidance via the same
-  `compute_state`/WebSocket loop as the navigator; **↻ re-plan from here**
-  re-solves from your current position and folds any held cargo in as a
-  sunk-cost constraint rather than discarding it.
-- **Actual buy/sell capture** — confirming a leg records the real price and
-  SCU on each side, not just the UEX-scraped plan estimate, so realized
-  profit reflects what actually happened at the kiosk.
-- **History + stats** — the **RECENT TRADES** panel replays completed runs
-  and personal realized-profit stats (session and recent scopes, with a
-  session-reset option); Org Intel's **Trading** section
-  (`#/intel/trading`) rolls the whole org's runs into totals, a weekly
-  sparkline, top commodities/lanes/ships, and a top-traders leaderboard.
-- **SAVED ROUTES (favorites)** — `★ Save route` stores the plan's *inputs*
-  (ship, start, mode, filters, stop kind, danger handling), not a frozen
-  route — reloading a favorite always re-solves against current live
-  prices, so it never goes stale. Up to 40 saved per member.
+- **Three ways to rank** — `Best aUEC/hr` (default), `Most profit`, or `Best
+  return`. With a `Max spend` set, Best return ranks by the multiple on that
+  bankroll; without one it ranks profit per aUEC deployed, which favours
+  cheap cargo with a big multiple on very little money (the planner warns
+  you). The `min return` floor skips any trade earning less than that % on
+  the aUEC it ties up — buy at 100, sell at 163 is a 63% return.
+- **Stop kinds** — `Any`; `Stations & cities` (no surface outposts, but the
+  big landing-zone cities stay in); `Stations only` (no planet or moon
+  landings); `Cargo dock` (only stations with a cargo dock, for a Hull C/D/E
+  or Kraken). Picking one of those ships sets `Cargo dock` automatically, and
+  any explicit pick overrides it.
+- **Cargo legality** — `Any` (illicit legs badged `☠ illicit`), `Legal only`,
+  or `Illicit only` (contraband sells at scrapyards and lawless outposts).
+  Cargo already aboard can always be sold, so switching to Legal mid-run
+  never strands contraband in your hold.
+- **Org price overlay** — when a member's real transaction is newer than the
+  UEX scrape for a terminal, the plan uses it; the price-age badge gains a
+  `⚡` and the tooltip says so.
+- **Price freshness** — `only prices newer than` (on, 2 days by default)
+  keeps stale terminals out of the plan and the board; every leg shows its
+  price age.
+- **BEST TRADES RIGHT NOW** — a live board of the top single trades, ranked
+  the same way the planner is, honoring your floor, budget, and box
+  settings. `use` seeds a manual leg from any row.
 - **STOCK WATCH** — org-shared, time-limited reports on whether a terminal's
-  supply/demand actually matches what UEX's scrape claims:
+  supply/demand matches what UEX claims:
 
   | Report | Filed from | Effect |
   |---|---|---|
-  | `⛔ no stock to buy — skip & report` | buy phase, confirm-gated | skips the leg; files a supply-`out` report; solver avoids buying there while fresh |
-  | `⛔ won't buy here — report & re-plan` | sell phase, confirm-gated | does **not** advance (cargo stays aboard); files a demand-`out` report; auto-triggers re-plan-from-here excluding that buyer |
-  | Auto low-stock | any confirmed buy/sell under 50% of planned SCU | files a `low` report, zero extra clicks — badges future legs, doesn't block them |
+  | `⛔ no stock to buy — skip & report` | buy step, confirm-gated | skips the leg; the planner routes buys around that terminal while the report is fresh |
+  | `⛔ won't buy here — report & re-plan` | sell step, confirm-gated | cargo stays aboard; the planner stops selling there and re-plans you to a new buyer |
+  | `all it had` / `max?` tick | buy or sell actuals | files a low-stock/low-demand report with your figure; plans then size that shelf to it (`⚡ sized to member-reported stock`) |
 
-  Reports age off after a configurable window (default 180 minutes,
-  adjustable in ORG SETTINGS) and are visible to the whole org in the
-  planner's **STOCK WATCH** panel.
-- **Stop kinds (`Any` / `Stations only` / `Cargo dock`)** — some ships
-  physically can't land planetside; a Hull C/D/E, Kraken, or Kraken
-  Privateer can only moor at a station with a cargo dock. Picking one of
-  those ships auto-selects `Cargo dock`. The two filters are independent
-  axes — Levski is a planetary landing zone that still has a cargo dock, so
-  `Stations only` drops it while `Cargo dock` keeps it. Manual legs are
-  never silently dropped for this — a bad stop gets a ⛔ badge on the leg
-  instead, since a hand-picked leg is your call.
-- **Amenity chips** — stops carry `⚓ docking` and other wiki-sourced
-  amenity chips right on the leg, in both the plan and run views.
-- **Hazard-aware routing** — `Pirate danger` (`Ignore` / `Warn` / `Avoid`,
-  defaulting to `Avoid`) pulls live warnings straight from the **Danger
-  Board**: `Avoid` detours around hazard volumes or flags a leg `blocked`,
-  `Warn` flies through with a per-leg ⚠ badge, and a personal avoid-list
-  (shared with the Cargo Planner) lets you blacklist specific POIs
-  yourself. A live new-danger alert on an active run surfaces a re-route
-  nudge.
-- **Budget cap, minimize-deadhead, and price-freshness knobs** on the solver
-  itself, beyond the stop-budget default of 6.
+  A smaller purchase on its own is never treated as a stock report. Reports
+  clear after a window set in ORG SETTINGS (180 minutes by default) and show
+  in the **STOCK WATCH** panel.
+- **Danger avoidance** — `Danger` (`Ignore` / `Warn` / `Avoid`, default
+  `Avoid`) reads the **Danger Board**: `Avoid` routes around danger zones on
+  a lane and drops camped terminals, `Warn` flags any leg that touches or
+  flies past one, and a leg with no way round is marked `☠ destination
+  camped`. **AVOIDED LOCATIONS** (shared with the Cargo Planner) is your
+  own list of places to always route around. If new danger is posted on
+  your route mid-run, a **Re-plan around it ▸** banner appears.
+- **Jump gates** — cross-system legs route through the right gate and count
+  the crossing as travel time.
+- **Fuel & range** — with a known drive, per-leg fuel, a QT FUEL total, a `⚠
+  over range` flag, and an `in-range only` option that only plans jumps one
+  tank can cover.
+- **SAVED ROUTES** — `★ Save route` stores the setup (ship, start, mode,
+  filters, rules, loading and box choices), not a frozen route, so reloading
+  one always re-solves against current prices. Up to 40 per member; the
+  oldest drops off.
+- **RECENT TRADES** — your realized-profit stats (`Session` / `Recent`, with
+  `↻ start new session`), **FREQUENT LANES** chips that load a manual leg,
+  and **LAST RUNS** with `run again`. The `✕` on a run permanently deletes it
+  from your history and the org's trading stats, for a run whose kiosk
+  figures were entered wrong.
+- **Guild Trading stats** — Org Intel's **Trading** section
+  (`#/intel/trading`) rolls the whole org's runs into totals, top
+  commodities/lanes/ships, and a top-traders leaderboard.
 
 ## Works with the rest of the suite
 
-Ship and usable-SCU come straight from the same `user_ships` profile the
-Cargo Planner uses — there's no separate ship picker to maintain. Live
-position and guidance reuse the exact WebSocket/`compute_state` loop that
-drives the Resource Navigator, and `Pirate danger` handling reads directly
-from the **Danger Board**'s warning board, including its snare-detour
-routing. A finished run's realized profit rolls into Org Intel's guild
-**Trading** section alongside the Cargo Planner's Hauling stats, giving the
-org one shared analytics picture across both planners.
+Ship and usable SCU come from the same ship profile the Cargo Planner uses,
+and the avoided-locations list is shared between the two planners. Live
+position and guidance use the same loop that drives the Resource Navigator,
+and the watcher that reports your position also reports kiosk transactions
+and container menus. Danger handling reads the **Danger Board** directly. A
+finished run's realized profit rolls into Org Intel's **Trading** section
+alongside the Cargo Planner's hauling stats.
 
 ## Tips
 
+- Enter the kiosk's **total**, not a per-unit price — it's the one number
+  both kiosks show you, and the app works out the rest.
 - Leave the price-freshness filter on — a route built on week-old prices can
   quietly stop being profitable by the time you fly it.
-- `Cargo dock` isn't just a suggestion for a Hull-series ship — it's the only
-  mode that reflects what your ship can physically do. Move it back to `Any`
-  only if you're flying something smaller mid-session.
-- If a leg's sell terminal keeps rejecting your cargo, don't just skip it —
-  file `⛔ won't buy here — report & re-plan` so the org (and your own
-  re-plan) stop routing through it.
-- Favorites store the *setup*, not the route — expect the legs to change
-  slightly each time you reload one as prices move.
-- A manual plan is a real plan: you can save it as a favorite and run it with
-  full guidance and re-plan support, same as an auto-solved one.
+- `Best return` without a `Max spend` will happily find a huge multiple on
+  pocket change. Set the max spend to your real budget first.
+- Flying a big hauler? Try `Mixed loads` — and set `Hand-load` (or a box
+  size) if you'll be unloading at an outpost yourself, so the box count is
+  one you can live with.
+- If a sell terminal won't take your cargo, file `⛔ won't buy here — report
+  & re-plan` rather than skipping, so the org (and your own re-plan) stop
+  routing there.
 
 ---
 <sub>Part of the <a href="./README.md">SC Org Navigator app suite</a>. Design/reference spec: <a href="../trade-route-planner.md">docs/trade-route-planner.md</a>.</sub>

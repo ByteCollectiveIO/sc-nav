@@ -1,11 +1,12 @@
 # Org Intel
 
 > Your org's analytics deck — mapping coverage, hauling and trading activity,
-> marketplace, surveying, and the contributor leaderboards, all in one place.
+> marketplace, belt surveying, and the contributor and attendance leaderboards,
+> all in one place.
 > **Route:** `#/intel` · **Launcher group:** Run the Org
 
 <div align="center">
-  <img src="../../images/readme_images/org_intel_screenshot.png" alt="Org Intel: the analytics deck shell, with section tabs across the top — Overview, Mapping, Hauling, Trading, Surveying, Market, Leaderboards, Directory — showing the Trading section's guild totals, a weekly profit chart, top traders, top commodities, busiest lanes, and most-flown ships" width="820">
+  <img src="../../images/readme_images/org_intel_screenshot.webp" alt="Org Intel: the analytics deck shell, with section tabs across the top — Overview, Mapping, Hauling, Trading, Surveying, Market, Leaderboards, Directory — showing the Trading section's guild totals, a weekly profit chart, top traders, top commodities, busiest lanes, and most-flown ships" width="820">
 </div>
 
 ## What it is
@@ -22,9 +23,10 @@ It's built entirely from data the rest of the suite already has. There's no
 separate reporting step, no form to fill out, no admin who has to compile
 numbers — you play the game, use the tools, and the deck updates itself. Open
 `#/intel` and you get org-wide totals for mapping coverage, cargo hauling,
-trade-route profit, belt surveying, marketplace volume, and per-contributor
-leaderboards, plus (if you're an admin) a member directory that cross-walks
-Discord identity to in-game handles.
+trade-route profit, belt surveying, marketplace volume, per-contributor
+leaderboards and an ops-attendance board, plus (if you're an admin) a member
+directory that cross-walks Discord identity to in-game handles and shows each
+member's ops participation.
 
 The deck is organized as eight sections you move between along one shared
 masthead, each pulling from the same live server the rest of the suite talks
@@ -90,10 +92,17 @@ breakdowns.
 
 ### Surveying (`#/intel/surveying`)
 
-The newest section: the org's belt-survey campaign (Prospector's ATLAS tab)
-rolled up into one overview. It's derived entirely from the survey marks
+The org's belt-survey campaign rolled up into one overview — the ⛏ survey
+marks members drop from Prospector's FIELD tab, and the named zones they're
+grouped into on its ATLAS tab. It's derived entirely from the marks
 themselves — there's no separate log to keep, and deleting a bad mark heals
-the stats automatically.
+the stats automatically. If nobody has marked anything yet, the section says
+so and offers an **Open Prospector →** link instead of empty panels.
+
+This section counts **belt** surveying only. Named mining areas on planets
+and moons have their own readouts in Prospector's ATLAS tab (evidence,
+health, and value per area) and aren't pooled into these totals — surveying a
+belt and mining a moon are different jobs.
 
 <div align="center">
   <img src="../../images/readme_images/org_intel_surveying_screenshot.png" alt="Org Intel Surveying section: GUILD SURVEYING OVERVIEW stat cards (1 surveyor, 36 marks, 34 rock hits, 7 scans, 5 sessions, 2 zones), BELT COVERAGE per system for Stanton/Nyx/Pyro, TOP SURVEYORS ranked by rock hits, and FRESHEST ZONES" width="720">
@@ -112,8 +121,9 @@ the stats automatically.
   enough data to fit one.
 - **TOP SURVEYORS (rock hits / marks)** — ranked contributors.
 - **FRESHEST ZONES (latest mark first)** — the most recently active zones,
-  each tagged with its value tier, mark count, rock density, and how long
-  ago it was last touched.
+  each tagged with its value tier, system, mark count, surveyor count (when
+  more than one), rock density, and how long ago it was last touched. An
+  archived zone is labelled `(archived)`.
 
 ### Market (`#/intel/market`)
 
@@ -123,19 +133,39 @@ SELLERS** ranking by confirmed aUEC, and **MOST-TRADED ITEMS** by quantity.
 
 ### Leaderboards (`#/intel/boards`)
 
-A toggle between two contributor rankings: **Contributors** (mapping —
-**CONTRIBUTION TOTALS** cards plus a **WHO'S ADDING WHAT** chart stacked by
-POIs / Resource Nodes / Fauna / Harvestables) and **Earners** (hauling —
-**TOP EARNERS** by total aUEC delivered and **MOST EFFICIENT** by aUEC/hour
-on timed runs).
+<div align="center">
+  <img src="../../images/readme_images/org_intel_attendance_screenshot.webp" alt="Leaderboards with the Attendance toggle on: OPS ATTENDED (closed ops), the explainer that it counts turning up and scores nobody, and members ranked by ops attended with tied counts sharing a place" width="820">
+</div>
+
+A three-way toggle between rankings:
+
+- **Contributors** (mapping) — **CONTRIBUTION TOTALS** cards plus a **WHO'S
+  ADDING WHAT** chart stacked by POIs / Resource Nodes / Fauna / Harvestables.
+- **Earners** (hauling, with its own All-time / This week toggle) — **TOP
+  EARNERS** by total aUEC delivered and **MOST EFFICIENT** by aUEC/hour on
+  timed runs.
+- **Attendance** (from the Ops app) — **OPS ATTENDED**, a count of the closed
+  ops each member took part in (Present, Late, or Left early). It counts
+  turning up and nothing else: there's no no-show rate here, equal counts
+  share a place, and an op only counts once it's closed. Standalone loot
+  rolls never count.
 
 ### Directory (admins only, `#/intel/directory`)
 
-Hidden from the tab strip for everyone else. Lists every member who's
-signed in, cross-walking their Discord identity (nick/display name and
-username) to their watcher-verified in-game handle(s) and declared
-playstyle tags. A member who's opted out of member-facing directory views
-(from `Settings`) still shows here with a `hidden` flag — admins always see
+<div align="center">
+  <img src="../../images/readme_images/org_intel_directory_screenshot.webp" alt="MEMBER DIRECTORY (admin): member, in-game handle(s), playstyle chips, an OPS column such as '2 attended · 1 run', and admin status badges" width="820">
+</div>
+
+Hidden from the tab strip for everyone else. **MEMBER DIRECTORY** lists
+every member who's signed in, cross-walking their Discord identity
+(nick/display name and username) to their watcher-verified in-game handle(s)
+and declared playstyle tags. An **OPS** column shows each member's
+participation from closed op records — ops attended, ops they ran, and
+"showed" (of the ops they signed up Going for, how many they actually took
+part in; Excused doesn't count against them). That last figure is
+deliberately admin-only and never appears on a public board. A member who's
+opted out of member-facing directory views
+(from **Settings → Profile**) still shows here with a `hidden` flag — admins always see
 everyone; the opt-out only hides them from other members.
 
 ## Features
@@ -154,7 +184,10 @@ everyone; the opt-out only hides them from other members.
 - **Realized figures, not scraped estimates** — Hauling and Trading totals
   are built from what members actually confirmed at the pickup/buy/sell
   terminal, not UEX's live-quoted prices.
-- **Admin-only Member Directory** with a privacy-respecting opt-out: members
+- **Ops attendance board** — a plain count of closed ops attended, sitting
+  beside the mapping and hauling rankings.
+- **Admin-only Member Directory** with ops participation per member and a
+  privacy-respecting opt-out: members
   can hide themselves from other members' view of the directory; admins
   always retain full visibility, and the UI says so plainly on the panel.
 - **Belt-survey campaign scoreboard** — the Surveying section turns
@@ -164,10 +197,10 @@ everyone; the opt-out only hides them from other members.
 ## Works with the rest of the suite
 
 Org Intel doesn't generate any data of its own — every section is a read
-model over tables the other nine apps already write: custom POIs and
-observations from the Resource Navigator, completed runs from the Cargo
-Planner, realized trade legs from the Trade Route Planner, survey marks from
-Prospector, and confirmed deals from the Marketplace. The **Directory**
+over what the other apps already record: custom POIs and observations from
+the Resource Navigator, completed runs from the Cargo Planner, realized trade
+legs from the Trade Route Planner, survey marks from Prospector, confirmed
+deals from the Marketplace, and closed op records from Ops. The **Directory**
 section reuses the same Discord-identity and handle-binding data that
 powers seller handles on the Marketplace and player labels on the
 leaderboards, so a name you see in Intel is the same name (and handle) you'd
@@ -186,8 +219,8 @@ see anywhere else in the suite.
 - If a section looks empty right after your org starts using the tool,
   that's expected — every panel needs at least one real activity of that
   kind before it has anything to show.
-- Members worried about privacy should check `Settings` for the "hide me
-  from the member directory" toggle — it's honest about the fact that
+- Members worried about privacy should check **Settings → Profile** for
+  **Hide me from the member directory** — it's honest about the fact that
   admins can still see everyone.
 
 ---
