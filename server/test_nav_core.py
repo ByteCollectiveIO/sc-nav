@@ -8306,6 +8306,63 @@ class LootTests(unittest.TestCase):
         self.assertEqual(a, nav_core.loot_rotation_init([1, 2, 3, 4], self.SEED, 9, first=[3]))
 
 
+class SyncLocationsResourceCarryTests(unittest.TestCase):
+    """tools/sync_locations.carry_forward_resources: the wiki's 4.9.0 and
+    4.10.1 data report has_resources=false on EVERY location, and a sync that
+    took that at face value would empty Prospector's Pyro drop-field list."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib
+        import sys
+        tools = str(Path(__file__).resolve().parent.parent / "tools")
+        if tools not in sys.path:
+            sys.path.insert(0, tools)
+        cls.sync = importlib.import_module("sync_locations")
+
+    @staticmethod
+    def _rec(uuid, name, res=False, system="Pyro"):
+        return {"uuid": uuid, "name": name, "system": system, "has_resources": res}
+
+    def _prev(self, meta=None):
+        return {"_meta": meta or {"game_version": "4.8.2-LIVE.12030094"},
+                "locations": [self._rec("u1", "RMB-SAIC", True),
+                              self._rec("u2", "PYR1 L1", True),
+                              self._rec("u3", "Ruin Station", False)]}
+
+    def test_all_false_feed_carries_flags_forward(self):
+        fresh = [self._rec("u1", "RMB-SAIC"),
+                 self._rec("u9", "PYR1  L1"),      # new uuid: matched by name
+                 self._rec("u3", "Ruin Station"),
+                 self._rec("u4", "New Place")]
+        report = []
+        src = self.sync.carry_forward_resources(fresh, self._prev(), report)
+        self.assertEqual(src, "4.8.2-LIVE.12030094")
+        self.assertEqual([r["has_resources"] for r in fresh],
+                         [True, True, False, False])
+        self.assertIn("carried 2 forward", report[-1])
+        self.assertIn("1 new records left false", report[-1])
+
+    def test_feed_with_real_flags_is_left_alone(self):
+        fresh = [self._rec("u1", "RMB-SAIC", False),
+                 self._rec("u3", "Ruin Station", True)]
+        self.assertIsNone(self.sync.carry_forward_resources(fresh, self._prev(), []))
+        self.assertEqual([r["has_resources"] for r in fresh], [False, True])
+
+    def test_chained_carry_keeps_the_true_source_version(self):
+        prev = self._prev({"game_version": "4.10.1-LIVE.12660092",
+                           "resources_from": "4.8.2-LIVE.12030094"})
+        fresh = [self._rec("u1", "RMB-SAIC")]
+        self.assertEqual(self.sync.carry_forward_resources(fresh, prev, []),
+                         "4.8.2-LIVE.12030094")
+
+    def test_nothing_to_carry_says_so(self):
+        report = []
+        self.assertIsNone(self.sync.carry_forward_resources(
+            [self._rec("u1", "RMB-SAIC")], None, report))
+        self.assertIn("no previous snapshot", report[-1])
+
+
 class WikiFrameAlignmentTests(unittest.TestCase):
     """The committed wiki catalog's static (system-frame) positions must share
     the starmap's axes. Until 2026-10-04 every Pyro static record sat 85.23°

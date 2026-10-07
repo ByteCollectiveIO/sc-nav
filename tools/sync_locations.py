@@ -259,6 +259,46 @@ def distill_system(sys_wiki: str, sys_starmap: str, positions: list[dict],
     return records, stats
 
 
+# ---------------------------------------------------------------- resources
+
+def carry_forward_resources(records: list[dict], previous: dict | None,
+                            report: list[str]) -> str | None:
+    """Keep `has_resources` when the wiki's game version has no resource data.
+
+    The wiki fills resource availability per version, and some versions have
+    none: 4.9.0 and 4.10.1 report has_resources=false on EVERY location while
+    4.8.2 and 4.10.0 flag 232 (checked 2026-10-06). Syncing such a version as-is
+    zeroes the flag and Prospector's Pyro drop-field list (pyro_fields) comes up
+    empty. All-false is never real game data, so when no fresh record is flagged,
+    each record takes its flag from the committed snapshot `previous` (by uuid,
+    then system+name). A version with real flags overwrites normally.
+
+    Mutates `records`; returns the game version the flags came from, or None
+    when the fresh feed carried its own (or there was nothing to carry)."""
+    if any(r["has_resources"] for r in records):
+        return None
+    prev = (previous or {}).get("locations") or []
+    if not any(r.get("has_resources") for r in prev):
+        report.append("!! fresh feed has no has_resources flags and no previous "
+                      "snapshot to carry them from: every record is resource-less")
+        return None
+    meta = previous.get("_meta") or {}
+    source = meta.get("resources_from") or meta.get("game_version") or "previous snapshot"
+    by_uuid = {r["uuid"]: r for r in prev}
+    by_name = {(r["system"], _norm(r["name"])): r for r in prev}
+    carried = unmatched = 0
+    for r in records:
+        old = by_uuid.get(r["uuid"]) or by_name.get((r["system"], _norm(r["name"])))
+        if old is None:
+            unmatched += 1
+            continue
+        r["has_resources"] = bool(old.get("has_resources"))
+        carried += r["has_resources"]
+    report.append(f"!! fresh feed has no has_resources flags: carried {carried} "
+                  f"forward from {source} ({unmatched} new records left false)")
+    return source
+
+
 # ---------------------------------------------------------------- validation
 
 def validate_against_starmap(records: list[dict], report: list[str]) -> None:
@@ -455,12 +495,22 @@ def main():
     frame_aligned = align_static_frames(all_records, positions_by_sys, containers, report)
     validate_against_starmap(all_records, report)
 
+    prev_path = os.path.join(POI, "locations.json")
+    try:
+        with open(prev_path) as f:
+            previous = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        previous = None
+    resources_from = carry_forward_resources(all_records, previous, report)
+
     qt_n = sum(1 for r in all_records if r["qt_valid"])
     radii_n = sum(1 for r in all_records if r["arrival_m"])
     amen_n = sum(1 for r in all_records if r["amenities"])
     report.append("")
     report.append(f"total {len(all_records)} records · {qt_n} qt_valid · "
-                  f"{radii_n} with arrival radius · {amen_n} with amenities")
+                  f"{radii_n} with arrival radius · {amen_n} with amenities · "
+                  f"{sum(1 for r in all_records if r['has_resources'])} with resources"
+                  + (f" (carried from {resources_from})" if resources_from else ""))
 
     print("\n" + "\n".join(report[-6:]))
 
@@ -482,6 +532,10 @@ def main():
         },
         "locations": all_records,
     }
+    if resources_from:
+        # has_resources came from an older snapshot (carry_forward_resources);
+        # chained carries keep naming the version the flags really describe.
+        out["_meta"]["resources_from"] = resources_from
     with open(os.path.join(POI, "locations.json"), "w") as f:
         json.dump(out, f, indent=1, ensure_ascii=False)
     with open(os.path.join(POI, "locations_sync_report.txt"), "w") as f:
