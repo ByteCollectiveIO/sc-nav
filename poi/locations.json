@@ -3,12 +3,13 @@
   "source": "SC Wiki API (api.star-citizen.wiki)",
   "license": "CC BY-SA 4.0",
   "attribution": "Game data: Star Citizen Wiki (api.star-citizen.wiki), CC BY-SA 4.0",
-  "game_version": "4.8.2-LIVE.12030094",
+  "game_version": "4.10.1-LIVE.12660092",
   "generated_by": "tools/sync_locations.py",
-  "record_count": 634,
+  "record_count": 642,
   "frame_aligned": {
    "Pyro": -85.2299
-  }
+  },
+  "resources_from": "4.8.2-LIVE.12030094"
  },
  "locations": [
   {
@@ -13303,6 +13304,106 @@
    "has_resources": false
   },
   {
+   "uuid": "8d962d6c-4af2-490c-b1fa-d7fa24225969",
+   "name": "QV Breaker Station BRK-127",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    47270353272.757,
+    -8335028392.476,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
+   "uuid": "8cf3eb9c-a3cb-402e-b7fe-6c84ef9fffe1",
+   "name": "QV Breaker Station BRK-204",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    -45105001774.997,
+    16416857971.295,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
+   "uuid": "fac812bf-ea31-48b6-81b1-9b54cf4442b9",
+   "name": "QV Breaker Station BRK-320",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    -27531183169.186,
+    39318601164.188,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
+   "uuid": "0e7ad495-0fef-4141-b074-9c9210baa156",
+   "name": "QV Breaker Station BRK-425",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    27531031539.45,
+    -39318355602.301,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
+   "uuid": "9dadcb6f-d551-4b56-adbd-63099bb82ce0",
+   "name": "QV Breaker Station BRK-546",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    16416937213.808,
+    45105181258.586,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
    "uuid": "6396623a-61bd-4ced-9c8b-77c47753ef8f",
    "name": "Stanton Gateway",
    "system": "Nyx",
@@ -13327,6 +13428,66 @@
     "Landing Pad M",
     "Vehicle Services"
    ],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
+   "uuid": "296dd332-13da-485a-b6c2-7ab09b60ec36",
+   "name": "Transit Point Glaciem Alpha",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    -13592383232.413,
+    6338233621.203,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
+   "uuid": "dcdafcd8-df76-447d-a10e-63373052545e",
+   "name": "Transit Point Glaciem Bravo",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    9640228783.885,
+    -11488779774.456,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
+   "block_travel": false,
+   "has_resources": false
+  },
+  {
+   "uuid": "fff3fb38-bcbf-44b4-907c-b2e584372249",
+   "name": "Transit Point Glaciem Charlie",
+   "system": "Nyx",
+   "container": null,
+   "local_km": null,
+   "global_m": [
+    9640231386.131,
+    11488779851.098,
+    0
+   ],
+   "type": "Manmade",
+   "qt_valid": true,
+   "arrival_m": 30000,
+   "obstruction_m": null,
+   "adoption_m": 500000,
+   "amenities": [],
    "block_travel": false,
    "has_resources": false
   }
