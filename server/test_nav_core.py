@@ -6897,6 +6897,58 @@ class OreRoutingTests(unittest.TestCase):
         self.assertEqual(rows["rmb-saic"]["qt_anchor"], anchor)
         self.assertIsNone(rows["PROVEN"]["qt_anchor"])
 
+    # --- merged element finder (2026-10-08) ---------------------------------
+
+    @staticmethod
+    def _cell(n_ore, n, travel=None):
+        return {"system": "Pyro", "body": "Terminus", "p": n_ore / n,
+                "score": 0.0, "n": n, "n_ore": n_ore, "travel_m": travel}
+
+    @staticmethod
+    def _belt(key, n_ore, n_pos, **kw):
+        return {"key": key, "kind": "zone", "system": "Pyro", "n_ore": n_ore,
+                "n_pos": n_pos, "p": n_ore / n_pos, "reach": None,
+                "depleted": False, "dist_m": None, **kw}
+
+    def test_merged_finder_ranks_evidence_over_single_nodes(self):
+        # The screenshot: six single Riccite nodes on Terminus read "100%"
+        # above RMB-SAIC, where 8 of 27 belt marks were Riccite.
+        rows = nav_core.merge_finder_rows(
+            [self._cell(1, 1) for _ in range(6)],
+            [self._belt("rmb-saic", 8, 27), self._belt("cluster-mnk-833", 1, 1)])
+        self.assertEqual(rows[0]["key"], "rmb-saic")
+        self.assertEqual(rows[0]["kind"], "belt")
+        self.assertAlmostEqual(rows[0]["p"], 8 / 27)
+        self.assertEqual([r["tier"] for r in rows], [0] + [1] * 7)
+        # under the gate: a count, never a percentage
+        for r in rows[1:]:
+            self.assertIsNone(r["p"])
+            self.assertEqual((r["n_ore"], r["samples"]), (1, 1))
+        self.assertEqual({r["kind"] for r in rows[1:]}, {"surface", "belt"})
+
+    def test_merged_finder_keeps_each_sides_order_and_interleaves(self):
+        surf = [self._cell(8, 10), self._cell(2, 9)]     # Wilson ~.49, ~.06
+        belt = [self._belt("a", 5, 20), self._belt("b", 9, 10)]  # ~.11, ~.6
+        rows = nav_core.merge_finder_rows(surf, belt)
+        # belt "a" stays ahead of "b" (its own order is kept), so the strong
+        # surface cell goes first, then a, b, then the weak surface cell
+        self.assertEqual([(r["kind"], r.get("key"), r["n_ore"]) for r in rows],
+                         [("surface", None, 8), ("belt", "a", 5),
+                          ("belt", "b", 9), ("surface", None, 2)])
+
+    def test_merged_finder_near_order_and_belt_buckets(self):
+        surf = [self._cell(1, 1, travel=5e6), self._cell(4, 4, travel=9e9)]
+        belt = [self._belt("close", 8, 27, dist_m=1e9),
+                self._belt("far", 9, 10, reach="expedition", dist_m=1e6),
+                self._belt("gone", 9, 10, depleted=True, dist_m=1e5)]
+        rows = nav_core.merge_finder_rows(surf, belt, sort="near")
+        # near: the gate doesn't reorder; expedition/mined-out still go last
+        self.assertEqual([(r["kind"], r.get("key"), r["tier"]) for r in rows],
+                         [("surface", None, 0), ("belt", "close", 0),
+                          ("surface", None, 0), ("belt", "far", 2),
+                          ("belt", "gone", 3)])
+        self.assertIsNone(rows[0]["p"])      # still a count under the gate
+
     def test_no_evidence_is_the_honest_empty_answer(self):
         nav = _synthetic_nav([], system="Nyx")
         self.assertEqual(

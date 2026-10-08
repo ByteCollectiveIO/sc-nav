@@ -8417,6 +8417,25 @@ class BeltSurveyApiTests(unittest.TestCase):
         finally:
             self.client.delete(f"/api/halo/survey/zones/{zid}")
 
+    def test_finder_merges_belt_and_surface(self):
+        rich, _ = self._priced_ores()
+        for dx in (0.0, 1e6, 2e6):
+            self._mark_at((self.KR + dx, 0.0, 0.0), ores=[rich])
+        doc = self.client.get("/api/finder", params={"ore": rich}).json()
+        self.assertEqual(doc["min_samples"], 3)
+        belts = [r for r in doc["rows"] if r["kind"] == "belt"]
+        self.assertTrue(belts)
+        self.assertTrue(all("tier" in r and "samples" in r for r in doc["rows"]))
+        # harvestables are planet-only: no belt half, no crash
+        h = self.client.get("/api/finder", params={"ore": rich,
+                                                   "category": "harvestable"})
+        self.assertEqual(h.status_code, 200)
+        self.assertFalse(any(r["kind"] == "belt" for r in h.json()["rows"]))
+        self.assertEqual(self.client.get("/api/finder",
+                                         params={"ore": " "}).status_code, 400)
+        self.assertEqual(self.client.get(
+            "/api/finder", params={"ore": rich, "category": "nope"}).status_code, 400)
+
     def test_mined_out_report_lifecycle(self):
         rich, _ = self._priced_ores()
         self._mark_at((self.KR, 0.0, 0.0), ores=[rich])

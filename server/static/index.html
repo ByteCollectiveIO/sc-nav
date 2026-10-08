@@ -4125,15 +4125,10 @@
     <table id="finder-results" hidden>
       <thead><tr>
         <th>LIKELIHOOD</th><th>GO TO</th><th>JUMP TO (QT)</th>
-        <th class="num">TRAVEL</th><th>TYPICAL BAND</th><th class="num">SAMPLES</th>
+        <th class="num">TRAVEL</th><th>BAND · SCAN</th><th class="num">SAMPLES</th>
       </tr></thead>
       <tbody></tbody>
     </table>
-    </div>
-    <div id="finder-space" hidden style="margin-top:10px;">
-      <span class="fld-label">IN THE BELTS <span class="muted" style="font-weight:400; text-transform:none;">—
-        org survey clusters (player-measured, not game data)</span></span>
-      <div id="finder-space-body" style="margin-top:6px;"></div>
     </div>
   </div>
 
@@ -8479,25 +8474,23 @@ function syncFinderSelection() {
 $("finder-ore").onchange = () => { syncFinderSelection(); runFinder(); };
 $("finder-sort").onchange = runFinder;
 
+// ONE ranked list (2026-10-08): surface hotspots and belt survey clusters
+// merged server-side (/api/finder → nav_core.merge_finder_rows). It used to be
+// two stacked tables, and six single-node "100%" Terminus cells sat on top of
+// a belt zone where 8 of 27 marks were the ore. Under min_samples an area
+// shows a count, never a percentage, and ranks behind every area that clears it.
 async function runFinder() {
   const table = $("finder-results"), status = $("finder-status");
   if (!finderOre) {
     table.hidden = true; status.textContent = "";
-    renderFinderSpace(null);
     return;
   }
   const sort = $("finder-sort").value;
   let data;
   status.textContent = "finding…";
-  // Deep-space survey clusters ride the same search (#37 slice 2) — belts
-  // and planets answer in parallel, harvestables stay planet-only.
-  const spaceReq = finderCategory === "resource"
-    ? fetch(`/api/survey/find?ore=${encodeURIComponent(finderOre)}&sort=${sort}`)
-        .then(r => r.ok ? r.json() : null).catch(() => null)
-    : Promise.resolve(null);
   try {
     const r = await fetch(
-      `/api/resource_hotspots?ore=${encodeURIComponent(finderOre)}&sort=${sort}&limit=15` +
+      `/api/finder?ore=${encodeURIComponent(finderOre)}&sort=${sort}&limit=15` +
       `&category=${finderCategory}`);
     if (!r.ok) throw new Error(r.status);
     data = await r.json();
@@ -8505,101 +8498,88 @@ async function runFinder() {
     table.hidden = true;
     status.innerHTML = `couldn't load — <button type="button" id="finder-retry">Retry</button>`;
     const b = $("finder-retry"); if (b) b.onclick = runFinder;
-    renderFinderSpace(await spaceReq);
     return;
   }
-  const spaceRows = renderFinderSpace(await spaceReq);
-  const hs = data.hotspots || [];
-  if (!hs.length) {
+  const rows = data.rows || [];
+  if (!rows.length) {
     table.hidden = true;
-    status.textContent = `no ${finderOre} logged on planets yet`
-      + (spaceRows ? " — but the belts below have it" : " — log some and it'll appear here");
+    status.textContent = `no ${finderOre} logged yet — log some and it'll appear here`;
     return;
   }
   // The distance-aware orders need a live position to measure travel from.
   const needsPos = sort !== "likely";
   status.innerHTML = (needsPos && !data.has_position
     ? `sorted by likelihood — run /showlocation to order by travel`
-    : `${hs.length} known area${hs.length === 1 ? "" : "s"}` +
+    : `${rows.length} known area${rows.length === 1 ? "" : "s"}` +
       (sort === "near" ? ", closest first" : sort === "value" ? ", best value first" : ", most likely first"))
     + oreValueChip(finderOre, finderCategory);
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
-  for (const h of hs) {
-    const pct = Math.round(h.p * 100);
-    const band = h.avg_band == null ? '<span class="muted">—</span>'
+  const dash = '<span class="muted">—</span>';
+  for (const h of rows) {
+    const belt = h.kind === "belt";
+    const unit = belt ? "mark" : "node";
+    const likely = h.p != null
+      ? `<span class="hm-key"><i style="background:${oreColor(finderOre)}"></i>${Math.round(h.p * 100)}%</span>`
+      : `<span class="muted" title="fewer than ${data.min_samples} ${unit}s logged here — an early lead, not a rate">`
+        + `${h.n_ore} of ${h.samples} ${unit}${h.samples === 1 ? "" : "s"}</span>`;
+    const flags = [];
+    if (h.afar) flags.push(`<span class="halo-chip">travel there first</span>`);
+    if (h.reach === "expedition")
+      flags.push(`<span class="halo-chip warn" title="no jump chord passes near this cluster from here — plan the nearest drop, then creep at sublight">⚠ expedition · creep ≈${fmtDist(h.creep_m)}</span>`);
+    if (h.depleted)
+      flags.push(`<span class="halo-chip warn">⛏ mined out ${h.depleted_age_s != null ? fmtAge(h.depleted_age_s) : ""}</span>`);
+    else if (belt)
+      flags.push(`<button class="route-chip" type="button" data-minedout="${esc(h.key)}" data-sys="${esc(h.system || "")}"`
+        + ` title="down-ranks this cluster here until the report ages off — the survey map is untouched">⛏ mined out</button>`);
+    const where = `<span class="halo-chip" title="${belt ? "org belt survey cluster (player-measured, not game data)" : "planet or moon surface"}">${belt ? "belt" : "surface"}</span> `
+      + `<b>${esc(belt ? (h.name || h.key) : h.body)}</b> <span class="muted">${esc(h.system || "")}</span>`
+      + (flags.length ? `<div style="margin-top:3px;">${flags.join(" ")}</div>` : "");
+    let jump, jumpId = null;
+    if (belt) {
+      // An anchored zone is reached by jumping to its marker, so that REPLACES
+      // the drop plan (same rule as the ATLAS zone table).
+      if (h.qt_anchor) {
+        jumpId = Number(h.qt_anchor.id);
+        jump = `${esc(h.qt_anchor.name)} <span class="muted">(+ ${esc(plainDist(h.qt_anchor.dist_m))})</span>`;
+      } else {
+        jump = `<button class="route-chip" type="button" data-plandrop="${esc(h.key)}" data-sys="${esc(h.system || "")}">⤓ Plan drop</button>`;
+      }
+    } else {
+      // Jump route honors the moon rule: from outside its planet's system a moon
+      // is reached "via <planet>" first.
+      const via = h.via ? `<span class="muted">via ${esc(h.via)} → </span>` : "";
+      jump = h.nearest_qt
+        ? `${via}${esc(h.nearest_qt)} <span class="muted">(${fmtDist(h.nearest_qt_dist_m)})</span>` : dash;
+      if (h.nearest_qt_id != null) jumpId = h.nearest_qt_id;
+    }
+    const travelM = belt ? h.dist_m : h.travel_m;
+    const travel = travelM == null ? dash : fmtDist(travelM);
+    const detail = belt
+      ? [h.scan_pct != null ? `<span title="mean scanned composition for this ore across the cluster's scans">🔬 ≈${h.scan_pct}%</span>` : "",
+         h.value ? surveyValueChip(h.value) : ""].filter(Boolean).join(" ") || dash
+      : h.avg_band == null ? dash
       : `B${h.avg_band.toFixed(1)} <span class="muted">${esc(BAND_QUALITY(Math.round(h.avg_band)))}</span>`;
-    // Jump route honors the moon rule: from outside its planet's system a moon
-    // is reached "via <planet>" first.
-    const via = h.via ? `<span class="muted">via ${esc(h.via)} → </span>` : "";
-    const qt = h.nearest_qt
-      ? `${via}${esc(h.nearest_qt)} <span class="muted">(${fmtDist(h.nearest_qt_dist_m)})</span>`
-      : '<span class="muted">—</span>';
-    const travel = h.travel_m == null ? '<span class="muted">—</span>' : fmtDist(h.travel_m);
     const tr = document.createElement("tr");
     tr.innerHTML =
-      `<td><span class="hm-key"><i style="background:${oreColor(finderOre)}"></i>${pct}%</span></td>` +
-      `<td><b>${esc(h.body)}</b> <span class="muted">${esc(h.system)}</span></td>` +
-      `<td>${qt}</td><td class="num">${travel}</td><td>${band}</td>` +
-      `<td class="num muted">${h.n_ore}/${h.n}</td>`;
-    if (h.nearest_qt_id != null) clickable(tr, () => setDestination(h.nearest_qt_id));
+      `<td>${likely}</td><td>${where}</td><td>${jump}</td>` +
+      `<td class="num">${travel}</td><td>${detail}</td>` +
+      `<td class="num muted">${h.n_ore}/${h.samples}</td>`;
+    if (jumpId != null) clickable(tr, () => setDestination(jumpId));
     else tr.style.cursor = "default";
     tbody.appendChild(tr);
   }
-  table.hidden = false;
-}
-
-// IN THE BELTS (#37 slice 2): the deep-space half of the element finder —
-// org survey clusters ranked for the chosen ore. Returns the row count so
-// the planet-side status line can point at us when planets come up empty.
-function renderFinderSpace(d) {
-  const wrap = $("finder-space"), body = $("finder-space-body");
-  if (!wrap || !body) return 0;
-  const rows = d ? [...(d.results || []),
-                    ...(d.elsewhere || []).map(r => ({ ...r, _afar: true }))] : [];
-  if (!rows.length) { wrap.hidden = true; body.innerHTML = ""; return 0; }
-  wrap.hidden = false;
-  body.innerHTML = rows.map(r => {
-    const label = esc(r.name || r.key);
-    const bits = [];
-    // §4.3 honesty: a percentage only from ≥3 positive marks; early data
-    // shows its raw mark count instead.
-    bits.push(r.p != null
-      ? `<span class="hm-key"><i style="background:${oreColor(finderOre)}"></i>${Math.round(r.p * 100)}%</span> of marks (${r.n_ore}/${r.n_pos})`
-      : `<b>${r.n_ore}</b> of <b>${r.n_pos}</b> mark${r.n_pos === 1 ? "" : "s"}`);
-    if (r.scan_pct != null)
-      bits.push(`<span title="mean scanned composition for this ore across the cluster's scans">🔬 ≈${r.scan_pct}%</span>`);
-    if (r.value) bits.push(surveyValueChip(r.value));
-    if (r.qt_anchor)
-      bits.push(`jump to <b>${esc(r.qt_anchor.name)}</b> <span class="muted">+ ${esc(plainDist(r.qt_anchor.dist_m))}</span>`);
-    if (r.dist_m != null) bits.push(fmtDist(r.dist_m));
-    if (r._afar) bits.push(`<span class="halo-chip">travel there first</span>`);
-    if (r.reach === "expedition")
-      bits.push(`<span class="halo-chip warn" title="no jump chord passes near this cluster from here — plan the nearest drop, then creep at sublight">⚠ expedition · creep ≈${fmtDist(r.creep_m)}</span>`);
-    if (r.depleted)
-      bits.push(`<span class="halo-chip warn">⛏ mined out ${r.depleted_age_s != null ? fmtAge(r.depleted_age_s) : ""}</span>`);
-    return `<div class="halo-alt"><b>${label}</b> <span class="muted">${esc(r.system || "")}</span>`
-      + ` · ${bits.join(" · ")}`
-      // An anchored zone is reached by jumping to its marker, so that REPLACES
-      // the drop plan (same rule as the ATLAS zone table).
-      + (r.qt_anchor
-        ? ` <button class="route-chip" type="button" data-fdest="${Number(r.qt_anchor.id)}" title="set the navigator's destination to ${esc(r.qt_anchor.name)}, then fly the last ${esc(plainDist(r.qt_anchor.dist_m))}">Set destination</button>`
-        : ` <button class="route-chip" type="button" data-plandrop="${esc(r.key)}" data-sys="${esc(r.system || "")}">⤓ Plan drop</button>`)
-      + (r.depleted ? "" : ` <button class="route-chip" type="button" data-minedout="${esc(r.key)}" data-sys="${esc(r.system || "")}"`
-        + ` title="down-ranks this cluster here until the report ages off — the survey map is untouched">⛏ mined out</button>`)
-      + `</div>`;
-  }).join("");
-  for (const b of body.querySelectorAll("[data-plandrop]"))
-    b.onclick = () => {
+  // Buttons sit inside clickable rows: stop the row's setDestination firing too.
+  for (const b of tbody.querySelectorAll("[data-plandrop]"))
+    b.onclick = (e) => {
+      e.stopPropagation();
       haloOreSeed = { key: b.dataset.plandrop, system: b.dataset.sys };
       location.hash = "#/halo/drop";
       applyHaloOreSeed();   // same-view hash changes don't re-fire the router
     };
-  for (const b of body.querySelectorAll("[data-fdest]"))
-    b.onclick = () => setDestination(Number(b.dataset.fdest));
-  for (const b of body.querySelectorAll("[data-minedout]"))
-    b.onclick = () => reportMinedOut(b.dataset.minedout, b.dataset.sys);
-  return rows.length;
+  for (const b of tbody.querySelectorAll("[data-minedout]"))
+    b.onclick = (e) => { e.stopPropagation(); reportMinedOut(b.dataset.minedout, b.dataset.sys); };
+  table.hidden = false;
 }
 
 async function reportMinedOut(key, system) {
