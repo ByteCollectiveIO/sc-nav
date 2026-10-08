@@ -8570,6 +8570,8 @@ function renderFinderSpace(d) {
     if (r.scan_pct != null)
       bits.push(`<span title="mean scanned composition for this ore across the cluster's scans">🔬 ≈${r.scan_pct}%</span>`);
     if (r.value) bits.push(surveyValueChip(r.value));
+    if (r.qt_anchor)
+      bits.push(`jump to <b>${esc(r.qt_anchor.name)}</b> <span class="muted">+ ${esc(plainDist(r.qt_anchor.dist_m))}</span>`);
     if (r.dist_m != null) bits.push(fmtDist(r.dist_m));
     if (r._afar) bits.push(`<span class="halo-chip">travel there first</span>`);
     if (r.reach === "expedition")
@@ -8578,7 +8580,11 @@ function renderFinderSpace(d) {
       bits.push(`<span class="halo-chip warn">⛏ mined out ${r.depleted_age_s != null ? fmtAge(r.depleted_age_s) : ""}</span>`);
     return `<div class="halo-alt"><b>${label}</b> <span class="muted">${esc(r.system || "")}</span>`
       + ` · ${bits.join(" · ")}`
-      + ` <button class="route-chip" type="button" data-plandrop="${esc(r.key)}" data-sys="${esc(r.system || "")}">⤓ Plan drop</button>`
+      // An anchored zone is reached by jumping to its marker, so that REPLACES
+      // the drop plan (same rule as the ATLAS zone table).
+      + (r.qt_anchor
+        ? ` <button class="route-chip" type="button" data-fdest="${Number(r.qt_anchor.id)}" title="set the navigator's destination to ${esc(r.qt_anchor.name)}, then fly the last ${esc(plainDist(r.qt_anchor.dist_m))}">Set destination</button>`
+        : ` <button class="route-chip" type="button" data-plandrop="${esc(r.key)}" data-sys="${esc(r.system || "")}">⤓ Plan drop</button>`)
       + (r.depleted ? "" : ` <button class="route-chip" type="button" data-minedout="${esc(r.key)}" data-sys="${esc(r.system || "")}"`
         + ` title="down-ranks this cluster here until the report ages off — the survey map is untouched">⛏ mined out</button>`)
       + `</div>`;
@@ -8589,6 +8595,8 @@ function renderFinderSpace(d) {
       location.hash = "#/halo/drop";
       applyHaloOreSeed();   // same-view hash changes don't re-fire the router
     };
+  for (const b of body.querySelectorAll("[data-fdest]"))
+    b.onclick = () => setDestination(Number(b.dataset.fdest));
   for (const b of body.querySelectorAll("[data-minedout]"))
     b.onclick = () => reportMinedOut(b.dataset.minedout, b.dataset.sys);
   return rows.length;

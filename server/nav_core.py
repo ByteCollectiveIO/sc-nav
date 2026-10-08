@@ -9555,6 +9555,9 @@ def find_ore_in_space(nav: NavData, ore: str, clusters: list[dict], *,
             "salvage": bool(sig.get("salvage")),
             "depleted": is_dep, "reach": reach, "creep_m": creep_m,
             "dist_m": dist_m,
+            # A QT-anchored zone (belt_zone_qt_anchor) is reached by jumping
+            # to its marker — the finder offers that instead of a drop plan.
+            "qt_anchor": c.get("qt_anchor"),
             # rank bucket: clean → expedition → mined-out (never hidden)
             "_b": 2 if is_dep else (1 if reach == "expedition" else 0),
         })

@@ -8396,6 +8396,27 @@ class BeltSurveyApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/survey/find",
                                          params={"ore": " "}).status_code, 400)
 
+    def test_survey_find_offers_the_anchor_jump(self):
+        # 2026-10-08: a zone built around a QT marker (RMB-SAIC) showed only
+        # "Plan drop" in the element finder — the row must carry the anchor.
+        rich, _ = self._priced_ores()
+        g = app.nav_core.poi_global_m(app.nav, self.gate, time.time())
+        zid = self.client.post("/api/halo/survey/zones",
+                               json={"name": "Gate Field",
+                                     "system": "Nyx"}).json()["zone"]["id"]
+        try:
+            for dx in (8_000.0, 12_000.0):
+                m = self._mark_at((g[0] + dx, g[1], g[2]), ores=[rich],
+                                  zone_id=zid)
+                m.nearest_qt, m.nearest_qt_dist_m = self.gate.name, dx
+            doc = self.client.get("/api/survey/find", params={"ore": rich}).json()
+            row = next(r for r in doc["results"] + doc["elsewhere"]
+                       if r.get("kind") == "zone")
+            self.assertEqual(row["qt_anchor"]["id"], self.gate.id)
+            self.assertEqual(row["qt_anchor"]["name"], self.gate.name)
+        finally:
+            self.client.delete(f"/api/halo/survey/zones/{zid}")
+
     def test_mined_out_report_lifecycle(self):
         rich, _ = self._priced_ores()
         self._mark_at((self.KR, 0.0, 0.0), ores=[rich])
