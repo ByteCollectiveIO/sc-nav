@@ -6885,6 +6885,18 @@ class OreRoutingTests(unittest.TestCase):
         self.assertIsNone(fluke["p"])               # 2 marks → count, not pct
         self.assertEqual((fluke["n_ore"], fluke["n_pos"]), (2, 2))
 
+    def test_qt_anchor_rides_through(self):
+        # A zone anchored to a marker (RMB-SAIC, 2026-10-08) must reach the
+        # finder row so it can offer "jump there" instead of a drop plan.
+        anchor = {"id": 4000123, "name": "RMB-SAIC", "dist_m": 12000, "marks": 27}
+        pool = [*self._pool(),
+                self._cluster("rmb-saic", (0, -self.KR, 0), 27,
+                              {"Gold (Raw)": 8}, kind="zone", qt_anchor=anchor)]
+        rows = {r["key"]: r for r in nav_core.find_ore_in_space(
+            _synthetic_nav([], system="Nyx"), "Gold (Raw)", pool)}
+        self.assertEqual(rows["rmb-saic"]["qt_anchor"], anchor)
+        self.assertIsNone(rows["PROVEN"]["qt_anchor"])
+
     def test_no_evidence_is_the_honest_empty_answer(self):
         nav = _synthetic_nav([], system="Nyx")
         self.assertEqual(
