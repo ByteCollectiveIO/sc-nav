@@ -6444,7 +6444,15 @@ async def get_resource_hotspots(
     """Known areas richest in `ore` (or harvestable name), ranked. sort: likely |
     near | value. The 'near'/'value' modes use the caller's own live position."""
     _require_mappable_category(category)
-    sess = hub.sessions.get(require_user(request)["id"])
+    return _hotspots_doc(require_user(request), ore, system=system, body=body,
+                         limit=limit, sort=sort, category=category)
+
+
+def _hotspots_doc(user: dict, ore: str, *, system: str | None = None,
+                  body: str | None = None, limit: int = 20,
+                  sort: str = "likely", category: str = "resource") -> dict:
+    """GET /api/resource_hotspots's body, shared with the merged /api/finder."""
+    sess = hub.sessions.get(user["id"])
     pos = sess.pos if sess else None
     t = sess.t if sess else None
     return {
@@ -8242,6 +8250,11 @@ async def get_survey_find(ore: str, sort: str = "likely",
     "no mapped source" answer."""
     if not ore.strip():
         raise HTTPException(status_code=400, detail="pick an ore")
+    return await _survey_find_doc(ore, sort, user)
+
+
+async def _survey_find_doc(ore: str, sort: str, user: dict) -> dict:
+    """GET /api/survey/find's body, shared with the merged /api/finder."""
     if sort not in ("likely", "near", "value"):
         sort = "likely"
     async with hub.lock:
@@ -8277,6 +8290,34 @@ async def get_survey_find(ore: str, sort: str = "likely",
             "system": fix_system, "ageoff_min": survey_depletion_ageoff_min(),
             "results": results, "elsewhere": elsewhere,
             "attribution": nav_core.SURVEY_ATTRIBUTION}
+
+
+@app.get("/api/finder")
+async def get_finder(ore: str, sort: str = "likely", category: str = "resource",
+                     limit: int = 15, user: dict = Depends(require_session)):
+    """The element finder's ONE ranked list (2026-10-08): planet-surface
+    hotspots and belt survey clusters merged by nav_core.merge_finder_rows,
+    so a belt zone with 8 of 27 marks no longer sits under six single-node
+    "100%" surface cells. Harvestables are planet-only (no belt half)."""
+    if not ore.strip():
+        raise HTTPException(status_code=400, detail="pick an ore")
+    _require_mappable_category(category)
+    if sort not in ("likely", "near", "value"):
+        sort = "likely"
+    surface = _hotspots_doc(user, ore, sort=sort, category=category,
+                            limit=min(limit, 100))
+    belt, space = [], None
+    if category == "resource":
+        space = await _survey_find_doc(ore, sort, user)
+        belt = [*space["results"],
+                *({**r, "afar": True} for r in space["elsewhere"])]
+    return {
+        "ore": ore, "sort": sort, "category": category,
+        "has_position": surface["has_position"],
+        "min_samples": nav_core.FINDER_MIN_SAMPLES,
+        "ageoff_min": space["ageoff_min"] if space else None,
+        "rows": nav_core.merge_finder_rows(surface["hotspots"], belt, sort),
+    }
 
 
 class DepletedIn(BaseModel):

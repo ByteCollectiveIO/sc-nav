@@ -9549,7 +9549,7 @@ def find_ore_in_space(nav: NavData, ore: str, clusters: list[dict], *,
             "name": c.get("name"), "system": c.get("system"),
             "xyz": list(c["xyz"]), "grid_radius_m": radius,
             "marks": sig.get("marks"), "n_pos": n, "n_ore": k,
-            "p": (p if n >= 3 else None),           # §4.3 honesty gate
+            "p": (p if n >= FINDER_MIN_SAMPLES else None),  # §4.3 honesty gate
             "score": rank, "scan_pct": scan_pct,
             "ores": sig.get("ores") or [], "value": c.get("value"),
             "salvage": bool(sig.get("salvage")),
@@ -9582,6 +9582,77 @@ def find_ore_in_space(nav: NavData, ore: str, clusters: list[dict], *,
     for r in rows:
         del r["_b"]
     return rows
+
+
+# The §4.3 honesty gate, shared by both halves of the element finder: below
+# this many samples an area shows a COUNT ("1 of 1 node"), never a percentage,
+# and ranks behind every area that clears it.
+FINDER_MIN_SAMPLES = 3
+
+
+def merge_finder_rows(surface: list[dict], belt: list[dict],
+                      sort: str = "likely") -> list[dict]:
+    """One ranked element-finder list from planet-surface hotspots
+    (resource_hotspots) and belt survey clusters (find_ore_in_space rows;
+    other-system rows flagged `afar`). Each input arrives in its own sort order
+    and keeps it; the two are interleaved, never re-scored against each other.
+
+    2026-10-08: the finder showed two stacked tables, and a lone surface node
+    read "100%" above a belt zone where 8 of 27 marks were the ore — the planet
+    table had no honesty gate, and even its Wilson rank prefers 1/1 (0.21) to
+    8/27 (0.16). So rows are tiered first:
+      0  evidence: >= FINDER_MIN_SAMPLES samples
+      1  early lead: fewer samples (shown as a count, `p` None)
+      2  belt expedition (no jump chord near it from here)
+      3  belt reported mined out
+    In "near" order distance is the point, so tiers 0 and 1 share a rank.
+    Within a tier the two lists merge by their heads: the Wilson lower bound of
+    (n_ore, samples) — or travel distance in "near" order.
+
+    Rows come back as the input dicts plus `kind` ("surface"|"belt"),
+    `samples`, `tier`, and `p` gated (None under the threshold)."""
+    def prep(r, kind):
+        n = int((r.get("n") if kind == "surface" else r.get("n_pos")) or 0)
+        row = {**r, "kind": kind, "samples": n}
+        if n < FINDER_MIN_SAMPLES:
+            row["p"] = None
+        if kind == "belt" and r.get("depleted"):
+            tier = 3
+        elif kind == "belt" and r.get("reach") == "expedition":
+            tier = 2
+        elif n < FINDER_MIN_SAMPLES and sort != "near":
+            tier = 1
+        else:
+            tier = 0
+        row["tier"] = tier
+        row["_conf"] = _wilson_lower_bound(int(r.get("n_ore") or 0), n)
+        row["_dist"] = r.get("travel_m") if kind == "surface" else r.get("dist_m")
+        return row
+
+    def better(a, b):
+        if sort == "near":
+            da = a["_dist"] if a["_dist"] is not None else math.inf
+            db = b["_dist"] if b["_dist"] is not None else math.inf
+            if da != db:
+                return da < db
+        return (a["_conf"], a["n_ore"]) >= (b["_conf"], b["n_ore"])
+
+    left = [prep(r, "surface") for r in surface]
+    right = [prep(r, "belt") for r in belt]
+    out = []
+    for tier in sorted({r["tier"] for r in left + right}):
+        a = [r for r in left if r["tier"] == tier]
+        b = [r for r in right if r["tier"] == tier]
+        i = j = 0
+        while i < len(a) and j < len(b):
+            if better(a[i], b[j]):
+                out.append(a[i]); i += 1
+            else:
+                out.append(b[j]); j += 1
+        out.extend(a[i:]); out.extend(b[j:])
+    for r in out:
+        del r["_conf"], r["_dist"]
+    return out
 
 
 # --- radar reference layers (#37 slice 0) ----------------------------------

@@ -172,12 +172,15 @@ you're standing in, or the whole body when you're not in one. Each section's
 header says which (for example "3 nodes nearby · 41 in <area name>"), and a
 small dot marks rows with fewer than four samples.
 
-`ELEMENT FINDER` flips the question: pick an ore or harvestable and get a
-ranked table of where to find it — `LIKELIHOOD`, nearest known spot (`GO
-TO`), nearest QT marker (`JUMP TO (QT)`), `TRAVEL` distance, `TYPICAL BAND`,
-and `SAMPLES`, ordered by `most likely`, `nearest`, or `best value (from
-here)`. Belt ores with no fixed POI get an `IN THE BELTS` section of
-org-measured survey clusters instead.
+`ELEMENT FINDER` flips the question: pick an ore or harvestable and get one
+ranked table of where to find it, planet surfaces and the org's belt survey
+clusters together — `LIKELIHOOD`, where to go (`GO TO`, tagged `surface` or
+`belt`), the QT marker to jump to (`JUMP TO (QT)`), `TRAVEL` distance,
+`BAND · SCAN`, and `SAMPLES`, ordered by `most likely`, `nearest`, or `best
+value (from here)`. An area with fewer than three samples shows a count
+("1 of 1 node") instead of a percentage and ranks after the areas that have
+enough evidence. A belt zone built around a QT marker is a plain jump; one
+without gets `⤓ Plan drop`.
 
 ## Features
 
