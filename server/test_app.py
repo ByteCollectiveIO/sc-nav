@@ -11574,6 +11574,42 @@ class EventRolePingTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertTrue(r.json()["event"]["ping_roles"])
 
+    def _remind(self, ev):
+        asyncio.run(app._notify_event_reminder(db.get_event(ev["id"])))
+        p = self.posted[-1]
+        return p, p["embeds"][0]["description"]
+
+    def test_reminder_pings_only_the_short_roles(self):
+        self._aliases()
+        ev = self._event()           # Escort ×2, Cargo / Hauling ×1
+        now = datetime.now(timezone.utc).isoformat()
+        db.upsert_signup(ev["id"], "501", ["Cargo / Hauling"], "going", None, now)
+        p, desc = self._remind(ev)
+        # Escort's aliases only; Security pings because Escort still needs it.
+        self.assertEqual(p["allowed_mentions"]["roles"], [self._A, self._B])
+        self.assertNotIn(f"<@&{self._C}>", p["content"])
+        self.assertIn("<@501>", p["content"])              # signups still pinged
+        self.assertIn("Still short", desc)
+        self.assertIn("Escort ×2", desc)
+        self.assertNotIn("Cargo / Hauling ×", desc)
+
+    def test_reminder_with_every_role_filled_pings_no_role(self):
+        self._aliases()
+        ev = self._event(roles=[{"role": "Escort", "needed": 1}])
+        db.upsert_signup(ev["id"], "502", ["Escort"], "going", None,
+                         datetime.now(timezone.utc).isoformat())
+        p, desc = self._remind(ev)
+        self.assertNotIn("roles", p["allowed_mentions"])
+        self.assertNotIn("<@&", p["content"])
+        self.assertNotIn("Still short", desc)               # the line drops
+
+    def test_reminder_shows_short_roles_without_pinging_when_off(self):
+        self._aliases()
+        ev = self._event(ping=False)
+        p, desc = self._remind(ev)
+        self.assertNotIn("roles", p["allowed_mentions"])
+        self.assertIn("Escort ×2 · Cargo / Hauling ×1", desc)
+
     def test_role_pings_ride_the_first_page_only(self):
         users = [str(1000 + i) for i in range(80)]
         asyncio.run(notify.send_paged("events", notify.role_pings([self._A, "x"]),

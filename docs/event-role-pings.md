@@ -1,7 +1,7 @@
 # Event role pings
 
-Status: PR 1 (aliases + new-event ping) and PR 2 (reminder pings the short
-roles). Org request, designed 2026-10-08/09.
+Status: built 2026-10-09 — #266 (aliases + new-event ping) and the follow-up
+(reminder pings the short roles + `{short}` reminder line). Org request.
 
 ## What it does
 Admins map each event role (the fixed taxonomy in `event_taxonomy.ROLE_GROUPS`)
@@ -42,13 +42,20 @@ role-ping (edits can't ping in Discord anyway).
 - Limits: 10 Discord roles per event role, 100 in all (Discord's
   `allowed_mentions.roles` cap); ids are 17–20 digit snowflakes.
 
+Reminder message: the shipped `event_reminder` template gains a
+`**Still short** {short}` line ("Escort ×2 · Salvage ×1"), shown with or
+without role pings; it drops when every role is filled (the line-drop rule).
+An org that already customized the reminder keeps its wording until it adds
+`{short}`.
+
 ## Code
 - Setting `discord_role_aliases` (JSON `{event role: [{id, label}]}`):
   `role_aliases()`, `_clean_role_aliases`, `RoleAliasIn` in `app.py`;
   Settings › Discord channels › EVENT ROLE PINGS (`renderRoleAliases`,
   `saveRoleAliases`).
 - `events.ping_roles` (+ `EventIn`/`TemplateEventIn.ping_roles`; templates and
-  clones carry it). `_event_ping_role_ids(ev, roles)` resolves ids.
+  clones carry it). `_event_ping_role_ids(ev, roles)` resolves ids; `_event_short_roles(ev)` feeds
+  the reminder's ping list and `{short}`.
 - `/api/events/taxonomy` → `role_pings` {event role: [labels]} (no ids) drives
   the form's `rolePingFieldHtml` / `renderRolePingPreview`.
 
