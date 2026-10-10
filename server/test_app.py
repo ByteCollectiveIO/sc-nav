@@ -2164,6 +2164,39 @@ class EventTemplateTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertFalse(self.client.get("/api/settings").json()["event_builtin_templates"])
 
+    def test_admin_only_event_creation(self):
+        """`events_admin_only` gates CREATING an event only: a non-admin's
+        existing event stays theirs to edit, and templates stay open."""
+        mine = self.client.post("/api/events", json=self._event_body()).json()
+        try:
+            self.assertFalse(self.client.get("/api/me").json()["events_admin_only"])
+            self._as("9", admin=True)
+            r = self.client.post("/api/settings", json={"events_admin_only": True})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertTrue(r.json()["events_admin_only"])
+            self.assertTrue(self.client.get("/api/settings").json()["events_admin_only"])
+            r = self.client.post("/api/events", json=self._event_body())
+            self.assertEqual(r.status_code, 200, r.text)          # admins always may
+            self._as("1")
+            self.assertTrue(self.client.get("/api/me").json()["events_admin_only"])
+            r = self.client.post("/api/events", json=self._event_body())
+            self.assertEqual(r.status_code, 403)
+            r = self.client.post("/api/events", json=self._event_body(template_id="builtin:raid"))
+            self.assertEqual(r.status_code, 403)                  # "use template" too
+            r = self.client.patch(f"/api/events/{mine['id']}",
+                                  json=self._event_body(title="Renamed"))
+            self.assertEqual(r.status_code, 200, r.text)          # own event still editable
+            tpl = self._mk_template("Still allowed")
+            self.client.delete(f"/api/event-templates/{tpl['id']}")
+            # Non-admins can't flip it themselves.
+            r = self.client.post("/api/settings", json={"events_admin_only": False})
+            self.assertEqual(r.status_code, 403)
+        finally:
+            db.set_setting("events_admin_only", "0")
+        self._as("1")
+        r = self.client.post("/api/events", json=self._event_body())
+        self.assertEqual(r.status_code, 200, r.text)
+
 
 class OperationTests(unittest.TestCase):
     """docs/event-operations.md §3/§5 (ops slice 2): running an op — event-

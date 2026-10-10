@@ -4798,6 +4798,17 @@
           </div>
           <div class="muted" id="event-builtin-tpl-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
         </div>
+        <div class="panel admin-grp" id="event-create-panel">
+          <h2>EVENT CREATION</h2>
+          <label style="display:flex; gap:8px; align-items:center;">
+            <input id="events-admin-only" type="checkbox"> Only admins can create events
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            When on, members can still sign up for events, edit the ones they already organize,
+            run quick ops and make templates. Only creating a new event is limited to admins.
+          </div>
+          <div class="muted" id="events-admin-only-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
         <div class="panel admin-grp" id="op-rules-panel">
           <h2>OPS PAYOUT DEFAULTS</h2>
           <div class="muted" style="font-size:12px; margin-bottom:8px;">
@@ -9119,7 +9130,7 @@ function lfgCard(e) {
   const match = lfgIsMatch(e);
   let action = "";
   if (mine) {
-    action = `<button type="button" data-promote="${e.id}">Promote to event</button>` +
+    action = (canCreateEvents() ? `<button type="button" data-promote="${e.id}">Promote to event</button>` : "") +
       `<button type="button" data-close="${e.id}">Close post</button>`;
   } else if (e.direction === "lfm") {
     action = iResponded
@@ -9397,8 +9408,8 @@ function warningCard(e) {
   const iConfirmed = (e.confirmed_ids || []).includes(myId);
   let actions = `<button type="button" data-confirm="${e.id}"${iConfirmed ? " disabled" : ""}>` +
     `${iConfirmed ? "Confirmed ✓" : "Still there?"}</button>` +
-    `<button type="button" class="warn-hunt" data-hunt="${e.id}" ` +
-    `title="Organize an org op to go clear this danger">⚔ Organize hunt</button>`;
+    (canCreateEvents() ? `<button type="button" class="warn-hunt" data-hunt="${e.id}" ` +
+      `title="Organize an org op to go clear this danger">⚔ Organize hunt</button>` : "");
   if (mine || warnIsAdmin()) actions += `<button type="button" data-clear="${e.id}">All clear</button>`;
   return `<div class="warn-card sev-${sev}${mine ? " mine" : ""}${e.stale ? " stale" : ""}">` +
     `<div class="warn-card-head">` +
@@ -13654,6 +13665,23 @@ async function loadEventsTaxonomy() {
   return evTaxonomy;
 }
 
+// Org setting `events_admin_only`: only admins create events. The server's 403
+// is the gate; this hides every door to #/events/new (board, empty state,
+// clone, template Use, LFG promote, warning hunt) so a member never fills a
+// form just to have it refused.
+function canCreateEvents() {
+  return !(currentMe && currentMe.events_admin_only) || !!currentMe.is_admin;
+}
+
+function renderEventCreateLocked() {
+  eventSeed = null;
+  $("events-root").innerHTML =
+    `<div class="panel"><a class="ev-back" href="#/events">← All events</a>` +
+    `<h2 class="ev-screen-h">CREATE EVENT</h2>` +
+    `<p class="stat-empty">Event creation is limited to admins in this org. ` +
+    `Ask an admin to set up the event, or post in the <a href="#/lfg">Group Finder</a>.</p></div>`;
+}
+
 function eventsSubRoute() {
   const rest = location.hash.slice("#/events".length).replace(/^\//, "");
   if (rest === "new") return { view: "new" };
@@ -13667,7 +13695,7 @@ function eventsSubRoute() {
 
 function loadEvents() {
   const r = eventsSubRoute();
-  if (r.view === "new") return renderEventForm();
+  if (r.view === "new") return canCreateEvents() ? renderEventForm() : renderEventCreateLocked();
   if (r.view === "templates") return renderTemplatesPage();
   if (r.view === "tpl-edit") return renderTemplateForm(r.id);
   if (r.view === "detail") return renderEventDetail(r.id);
@@ -13821,19 +13849,22 @@ function renderBoardList() {
       : `No upcoming events${evFilterDay ? " on this day" : ""}${evBoardCat ? " in this category" : ""}.`;
   $("ev-list").innerHTML = note + (shown.length
     ? shown.map(e => e.kind === "op" ? opCard(e) : eventCard(e)).join("")
-    : `<p class="stat-empty">${empty} <a href="#/events/new">Create one →</a></p>`);
+    : `<p class="stat-empty">${empty}${canCreateEvents() ? ` <a href="#/events/new">Create one →</a>` : ""}</p>`);
   const clr = $("ev-clear-filter");
   if (clr) clr.onclick = () => { evFilterDay = null; bindCalendar(); renderBoardList(); };
 }
 
 async function renderEventBoard() {
   const root = $("events-root");
+  const canCreate = canCreateEvents();
   root.innerHTML =
     `<div class="panel"><div class="ev-head"><h2 class="ev-screen-h">EVENTS</h2>` +
     `<span class="ev-head-actions"><a class="ev-btn" href="#/events/templates">Templates</a>` +
-    `<a class="ev-btn primary" href="#/events/new">+ Create event</a></span></div>` +
+    (canCreate ? `<a class="ev-btn primary" href="#/events/new">+ Create event</a>` : "") + `</span></div>` +
     `<p class="ev-intro">Rally the org around in-game ops, expeditions, and meetups. Pick a day ` +
-    `to see what's scheduled, or <a href="#/events/new">create your own</a> and gather a crew.</p>` +
+    (canCreate
+      ? `to see what's scheduled, or <a href="#/events/new">create your own</a> and gather a crew.</p>`
+      : `to see what's scheduled and sign up. Admins create this org's events.</p>`) +
     `<div class="ev-boardbar"><span class="seg" role="group">` +
       `<button id="ev-range-up" class="${evBoardRange === "upcoming" ? "on" : ""}" aria-pressed="${evBoardRange === "upcoming"}">Upcoming</button>` +
       `<button id="ev-range-past" class="${evBoardRange === "past" ? "on" : ""}" aria-pressed="${evBoardRange === "past"}">Past</button></span>` +
@@ -13971,7 +14002,7 @@ async function renderDetailBody(e) {
 
   const editControls = e.can_edit
     ? `<button class="ev-btn" id="ev-edit">Edit</button>` +
-      `<button class="ev-btn" id="ev-clone" title="Create a new event pre-filled from this one">Clone</button>` +
+      (canCreateEvents() ? `<button class="ev-btn" id="ev-clone" title="Create a new event pre-filled from this one">Clone</button>` : "") +
       `<button class="ev-btn" id="ev-savetpl" title="Make this event's setup a template the org can start from">Save as template</button>` +
       (e.notify_test ? `<button class="ev-btn" id="ev-notifytest" title="Admins: post this event's announcement to the events channel, marked TEST">Test Discord post</button>` : "") +
       (!cancelled && !e.op ? `<button class="ev-btn primary" id="ev-runop" title="Open the op: check people in, add walk-ins and guests, keep the record">Run mission</button>` : "") +
@@ -15209,7 +15240,7 @@ function templateSummary(t) {
 function templateRow(t, canOfficial) {
   const badges = (t.official ? `<span class="ev-tpl-badge official">Official</span>` : "") +
     (t.builtin ? `<span class="ev-tpl-badge">Built-in</span>` : "");
-  const acts = [`<button class="ev-btn primary" data-tpl-use="${esc(t.id)}">Use</button>`];
+  const acts = canCreateEvents() ? [`<button class="ev-btn primary" data-tpl-use="${esc(t.id)}">Use</button>`] : [];
   if (t.builtin) acts.push(`<button class="ev-btn" data-tpl-copy="${esc(t.builtin_key)}" title="Make an org copy you can edit. The built-in then hides from the picker.">Copy to customize</button>`);
   if (t.can_edit) acts.push(`<a class="ev-btn" href="#/events/templates/${esc(t.id)}">Edit</a>`);
   if (canOfficial && !t.builtin) acts.push(`<button class="ev-btn" data-tpl-official="${esc(t.id)}" data-on="${t.official ? 0 : 1}">${t.official ? "Remove Official" : "Mark Official"}</button>`);
@@ -27161,6 +27192,7 @@ async function loadSettings() {
     if (s.listing_stale_days != null && document.activeElement !== $("listing-stale"))
       $("listing-stale").value = s.listing_stale_days;
     if (s.event_builtin_templates != null) $("event-builtin-tpl").checked = !!s.event_builtin_templates;
+    if (s.events_admin_only != null) $("events-admin-only").checked = !!s.events_admin_only;
     if (s.op_default_rules && !$("op-default-rules-box").contains(document.activeElement)) {
       opDefaultRules = s.op_default_rules;
       $("op-default-rules-box").innerHTML = rulesEditorHtml("op-def", s.op_default_rules);
@@ -28677,6 +28709,18 @@ $("event-builtin-tpl").onchange = async () => {
     evTemplates = null;
     st.textContent = on ? "Built-in templates are offered." : "Built-in templates are hidden.";
   } catch { st.textContent = "Couldn't save."; $("event-builtin-tpl").checked = !on; }
+};
+$("events-admin-only").onchange = async () => {
+  const st = $("events-admin-only-status"), on = $("events-admin-only").checked;
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ events_admin_only: on }) });
+    if (!r.ok) throw 0;
+    if (currentMe) currentMe.events_admin_only = on;
+    st.textContent = on ? "Only admins can create events." : "Any member can create events.";
+  } catch { st.textContent = "Couldn't save."; $("events-admin-only").checked = !on; }
 };
 $("listing-stale-save").onclick = async () => {
   const st = $("listing-stale-status");
