@@ -8779,6 +8779,13 @@ def _event_crew(ev: dict) -> tuple[str, str]:
     return crew, roles
 
 
+def _event_short_roles(ev: dict) -> list[tuple[str, int]]:
+    """[(role, how many short)] for roles not yet filled, in roster order."""
+    fill = nav_core.derive_event_fill(ev, db.list_signups(ev["id"]))
+    return [(r["role"], r["needed"] - r["filled"]) for r in fill.get("roster") or []
+            if r.get("needed") and r["filled"] < r["needed"]]
+
+
 def _event_created_embed(ev: dict, title_prefix: str = "") -> dict:
     url = _app_url(f"#/events/{ev['id']}")
     start = ev.get("start_at")
@@ -8901,8 +8908,12 @@ async def _notify_event_reminder(ev: dict) -> None:
     op used to silently ping only the first 50."""
     if not notify.is_configured("events"):
         return
+    short = _event_short_roles(ev)
+    # Role pings (organizer opt-in) call only the roles still short: a full
+    # role re-pinged at T-minus is how a role ping gets muted.
+    roles = _event_ping_role_ids(ev, [r for r, _ in short])
     await notify.send_paged(
-        "events", "",
+        "events", notify.role_pings(roles), roles=roles,
         mentions=_event_attendee_ids(ev["id"]),
         dedup_key=f"event-reminder:{ev['id']}",
         **_announce(_announcement("event_reminder", {
@@ -8910,6 +8921,7 @@ async def _notify_event_reminder(ev: dict) -> None:
             "start_relative": _discord_ts(ev["start_at"], "R"),
             "place": (ev.get("event_location") or ev.get("location") or "").strip(),
             **dict(zip(("crew", "roles"), _event_crew(ev))),
+            "short": " · ".join(f"{r} ×{n}" for r, n in short),
         }, url=_app_url(f"#/events/{ev['id']}"), color=_EMBED_WARN), event=ev))
 
 

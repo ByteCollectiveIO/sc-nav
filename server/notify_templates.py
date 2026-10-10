@@ -233,13 +233,16 @@ TEMPLATES: dict[str, Template] = {
         "events", "Event reminder",
         title="⏰ Starting soon: {title}",
         description=("Begins {start} ({start_relative})\n📍 {place}\n\n"
-                     "**Crew** {crew}\n**Roles** {roles}"),
+                     "**Crew** {crew}\n**Roles** {roles}\n**Still short** {short}"),
         vars={"title": _TITLE, "start": _START, "start_relative": _START_R,
               "place": Var("Where (event location, else rally point)", "Yela belt", md=True),
               # The reminder is sent minutes before start, so its count is the
               # one members act on (user's call 2026-10-06).
               "crew": Var("Crew right now (going / max, min)", "5 / 7 going (min 5)"),
-              "roles": Var("Roles with fill right now", "Salvage 5/7 · Escort 0/2", md=True)},
+              "roles": Var("Roles with fill right now", "Salvage 5/7 · Escort 0/2", md=True),
+              # Blank when every role is filled, so the line drops. With role
+              # pings on, these are the roles the reminder @-mentions.
+              "short": Var("Roles still short, and by how many", "Escort ×2 · Salvage ×2", md=True)},
         color=0xFFB74D),
     "event_rescheduled": Template(
         "events", "Event changed",
