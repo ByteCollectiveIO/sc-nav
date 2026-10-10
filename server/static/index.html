@@ -2186,6 +2186,18 @@
   .ev-form-grid .poi-pick .ti { height: 38px; }
   .ev-field { display: flex; flex-direction: column; gap: 4px; }
   .ev-field label { font-size: 11px; color: var(--dim); letter-spacing: .5px; }
+  .ra-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .ra-add #ra-label { flex: 1 1 200px; }
+  .ra-add #ra-id { width: 200px; }
+  .ra-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--border); }
+  .ra-role { min-width: 160px; font-size: 13px; }
+  .ra-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ra-chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 2px 2px 2px 10px; font-size: 12px; }
+  .ra-chip code { color: var(--dim); font-size: 11px; }
+  .ra-chip .ra-x { background: none; border: 0; color: var(--dim); cursor: pointer; padding: 0 6px; font-size: 14px; min-height: 0; }
+  .ra-chip .ra-x:hover { color: var(--bad); }
+  .ev-field label.ev-check { font-size: 13px; color: var(--text); letter-spacing: 0; display: flex; align-items: center; gap: 6px; align-self: flex-start; }
+  .ev-field label.ev-check input { width: auto; flex: none; margin: 0; }
   .ev-field input, .ev-field select, .ev-field textarea { width: 100%; }
   /* Dark form controls so <select> and <textarea> match the .ti inputs and the
      rest of the site instead of the browser's default white boxes. */
@@ -4602,6 +4614,24 @@
             <button id="discord-lead-save">Save</button>
             <span class="muted" id="discord-lead-status" role="status" aria-live="polite" style="font-size:12px;"></span>
           </div>
+        </div>
+        <div class="panel admin-grp" id="role-alias-panel">
+          <h2>EVENT ROLE PINGS</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:8px; max-width:80ch;">
+            Choose which Discord roles each event role calls. When an organizer turns on
+            <b>Ping Discord roles</b>, the new-event post @-mentions these roles for every role the
+            event needs, and the reminder mentions the ones still short. To get a role ID, turn on
+            Developer Mode in Discord (User Settings › Advanced), then right-click the role under
+            Server Settings › Roles › <b>Copy Role ID</b>.
+          </div>
+          <div class="ra-add">
+            <select id="ra-role" class="ti" aria-label="Event role"></select>
+            <input id="ra-label" class="ti" maxlength="60" placeholder="Discord role name, e.g. Security" aria-label="Discord role name">
+            <input id="ra-id" class="ti" maxlength="32" placeholder="Role ID" inputmode="numeric" aria-label="Discord role ID">
+            <button id="ra-addbtn">Add</button>
+          </div>
+          <div id="ra-list"></div>
+          <div class="muted" id="ra-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
         </div>
       </section>
       <section class="set-sec" data-sec="announcements" aria-label="Announcements" hidden>
@@ -14110,7 +14140,7 @@ function cloneEvent(e) {
     min_players: e.min_players, max_players: e.max_players,
     details: { ...(e.details || {}) },
     rules: e.rules || null, contracts: (e.contracts || []).map(c => ({ ...c })),
-    notify_image: imageRefOf(e.notify_image),
+    notify_image: imageRefOf(e.notify_image), ping_roles: !!e.ping_roles,
     // A clone keeps its lineage: it's recorded against the same template
     // (its current version), unless that template is gone.
     template: e.template && !e.template.deleted
@@ -14966,9 +14996,52 @@ function bindEventImage() {
   $("ev-f-imgrm").onclick = () => { evFormImage = null; renderEventImageNow(); msg.textContent = "removed — saved with the event"; };
 }
 
+// "Ping Discord roles" (docs/event-role-pings.md): the org's admin-set aliases
+// for each event role. Only shown once an admin has set some up; the value
+// lives in evFormPingRoles so an edit keeps it even when the card is hidden.
+let evFormPingRoles = false;
+function rolePingTargets() {
+  const map = (evTaxonomy && evTaxonomy.role_pings) || {};
+  const out = [], unaliased = [];
+  document.querySelectorAll("#ev-f-roster .ev-roster-row").forEach(row => {
+    const role = row.querySelector(".ev-rr-role").value;
+    const needed = parseInt(row.querySelector(".ev-rr-needed").value || "0", 10) || 0;
+    if (!role || needed <= 0) return;
+    if (!map[role]) { unaliased.push(role); return; }
+    for (const l of map[role]) if (!out.includes(l)) out.push(l);
+  });
+  return { labels: out, unaliased };
+}
+function renderRolePingPreview() {
+  const el = $("ev-f-pingprev");
+  if (!el) return;
+  if (!evFormPingRoles) { el.textContent = "Off. Tag anyone you want in the description."; return; }
+  const { labels, unaliased } = rolePingTargets();
+  el.textContent = (labels.length
+    ? `Pings ${labels.map(l => "@" + l).join(", ")} on the new-event post, and the roles still short at the reminder.`
+    : "No role above has Discord roles set up yet, so nobody is pinged.") +
+    (unaliased.length && labels.length ? ` No Discord roles set up for: ${unaliased.join(", ")}.` : "");
+}
+function rolePingFieldHtml(tax) {
+  if (!tax.role_pings || !Object.keys(tax.role_pings).length) return "";
+  return `<div class="ev-field"><label class="ev-check"><input type="checkbox" id="ev-f-pingroles"${evFormPingRoles ? " checked" : ""}> ` +
+    `Ping Discord roles</label><span class="ev-hint" id="ev-f-pingprev" role="status" aria-live="polite"></span></div>`;
+}
+document.addEventListener("input", ev => {
+  if (ev.target.id === "ev-f-pingroles") evFormPingRoles = ev.target.checked;
+  if (ev.target.id === "ev-f-pingroles" || ev.target.closest("#ev-f-roster")) renderRolePingPreview();
+});
+document.addEventListener("change", ev => {
+  if (ev.target.closest && ev.target.closest("#ev-f-roster")) renderRolePingPreview();
+});
+document.addEventListener("click", ev => {
+  if (ev.target.closest && ev.target.closest("#ev-f-roster, #ev-f-addrole")) setTimeout(renderRolePingPreview);
+});
+
 function eventFormHtml(tax, e, opts = {}) {
   const tplMode = opts.mode === "template";
   evFormImage = e ? imageRefOf(e.notify_image) : null;
+  evFormPingRoles = !!(e && e.ping_roles);
   const evTypes = new Set(e ? (e.types || []) : []);
   const typeChips = tax.types.map(t =>
     `<label class="ev-cat-chip${evTypes.has(t) ? " on" : ""}">` +
@@ -15020,6 +15093,7 @@ function eventFormHtml(tax, e, opts = {}) {
     `<div class="ev-field"><label>Desired roles &amp; how many of each</label>` +
       `<div class="ev-roster" id="ev-f-roster">${rosterRows}</div>` +
       `<button class="ev-btn" id="ev-f-addrole" style="align-self:flex-start;margin-top:4px;">+ add role</button></div>` +
+    rolePingFieldHtml(tax) +
     missionDetailsHtml(tax, e && e.details) +
     contractsCardHtml(e && e.contracts) +
     rulesCardHtml(e && e.rules) +
@@ -15056,7 +15130,7 @@ function collectEventShape() {
     max_players: maxRaw === "" ? null : parseInt(maxRaw, 10),
     roles, details: readMissionDetails(), description: $("ev-f-desc").value.trim(),
     contracts: readContracts(), rules: readRulesEditor("ev-f"),
-    notify_image: evFormImage,
+    notify_image: evFormImage, ping_roles: evFormPingRoles,
   } };
 }
 
@@ -15079,6 +15153,7 @@ function collectEventForm() {
 
 // Wire the shared form controls (roster rows, chips, POI pickers, cancel).
 function bindEventFormControls(tax, onCancel) {
+  renderRolePingPreview();
   $("ev-f-addrole").onclick = () => {
     $("ev-f-roster").insertAdjacentHTML("beforeend", rosterRowHtml(tax, "", 1));
     bindRosterDeletes();
@@ -27686,7 +27761,54 @@ function applyDiscordSettings(s) {
   if ("notify_org_image" in s) renderOrgImage(s.notify_org_image);
   if (document.activeElement !== $("discord-lead"))
     $("discord-lead").value = s.discord_reminder_lead_min || 30;
+  if ("discord_role_aliases" in s) { roleAliases = s.discord_role_aliases || {}; renderRoleAliases(); }
 }
+
+// ---- event role pings (docs/event-role-pings.md) ----
+// One add row (event role + Discord role name + ID), then a line per event role
+// that has aliases. Every add/remove saves the whole map, like the toggles here.
+let roleAliases = {};
+async function renderRoleAliases() {
+  const tax = await loadEventsTaxonomy();
+  const sel = $("ra-role");
+  if (!sel.options.length)
+    sel.innerHTML = tax.role_groups.map(g => `<optgroup label="${esc(g.group)}">` +
+      g.roles.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("") + `</optgroup>`).join("");
+  const rows = tax.roles.filter(r => (roleAliases[r] || []).length);
+  $("ra-list").innerHTML = rows.length ? rows.map(r =>
+    `<div class="ra-row"><span class="ra-role">${esc(r)}</span><span class="ra-chips">` +
+    roleAliases[r].map(a => `<span class="ra-chip">@${esc(a.label || a.id)} <code>${esc(a.id)}</code>` +
+      `<button class="ra-x" data-role="${esc(r)}" data-id="${esc(a.id)}" aria-label="Remove @${esc(a.label || a.id)} from ${esc(r)}">×</button></span>`).join("") +
+    `</span></div>`).join("")
+    : `<p class="muted" style="font-size:12px;">No role pings yet. Organizers won't see the option until you add one.</p>`;
+  $("ra-list").querySelectorAll(".ra-x").forEach(b => b.onclick = () => {
+    const left = (roleAliases[b.dataset.role] || []).filter(a => a.id !== b.dataset.id);
+    saveRoleAliases({ ...roleAliases, [b.dataset.role]: left }, "Removed.");
+  });
+}
+async function saveRoleAliases(next, okMsg) {
+  const st = $("ra-status");
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discord_role_aliases: next }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { st.textContent = d.detail || "Couldn't save."; return false; }
+    roleAliases = d.discord_role_aliases || {};
+    evTaxonomy = null;   // the event form's ping preview reads the aliases from here
+    renderRoleAliases();
+    st.textContent = okMsg;
+    return true;
+  } catch { st.textContent = "Couldn't save."; return false; }
+}
+$("ra-addbtn").onclick = async () => {
+  const role = $("ra-role").value, id = $("ra-id").value.trim(), label = $("ra-label").value.trim();
+  if (!id) { $("ra-status").textContent = "Paste the Discord role ID."; return; }
+  const cur = roleAliases[role] || [];
+  if (await saveRoleAliases({ ...roleAliases, [role]: [...cur, { id, label }] }, `Added to ${role}.`)) {
+    $("ra-id").value = ""; $("ra-label").value = "";
+  }
+};
 
 async function postDiscordWebhooks(patch, key, workMsg) {
   discSt(key).textContent = workMsg;

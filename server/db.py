@@ -894,6 +894,9 @@ def init(db_path) -> None:
         _ensure_column("events", "contracts", "TEXT")
         # Announcement banner: an image ref {kind: url|upload, …} or NULL.
         _ensure_column("events", "notify_image", "TEXT")
+        # Organizer opt-in: @-ping the org's Discord role aliases for this
+        # event's roles (docs/event-role-pings.md). 0 = off.
+        _ensure_column("events", "ping_roles", "INTEGER NOT NULL DEFAULT 0")
         # The Discord message id of the event's "New event" post, so the app can
         # EDIT it as signups change (a webhook may edit its own messages).
         # NULL = never posted, or the post was deleted in Discord.
@@ -2153,7 +2156,7 @@ def delete_trade_favorite(discord_id: str, fav_id: int) -> bool:
 _EVENT_EDITABLE = ("title", "description", "type", "category", "start_at",
                    "signup_deadline", "duration_min", "location", "event_location",
                    "min_players", "max_players", "roles", "details", "rules",
-                   "contracts", "notify_image")
+                   "contracts", "notify_image", "ping_roles")
 
 # Columns the create/edit layer hands us as Python lists; stored as JSON text.
 _EVENT_JSON = ("roles", "category", "type", "contracts")
@@ -2181,6 +2184,7 @@ def _event_row_to_dict(r: sqlite3.Row) -> dict:
     d["roles"] = _u(d.get("roles")) or []
     d["category"] = _event_json_list(d.get("category"))
     d["type"] = _event_json_list(d.get("type"))
+    d["ping_roles"] = bool(d.get("ping_roles"))
     for k in _EVENT_JSON_OBJ:
         v = _u(d.get(k)) if d.get(k) else None
         d[k] = v if isinstance(v, dict) else ({} if k == "details" else None)
@@ -2205,8 +2209,8 @@ def create_event(d: dict) -> int:
             "start_at, signup_deadline, duration_min, location, event_location, "
             "min_players, max_players, roles, status, created_at, updated_at, "
             "details, template_id, template_version, template_name, "
-            "template_snapshot, rules, contracts, notify_image) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "template_snapshot, rules, contracts, notify_image, ping_roles) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["organizer_id"]), d.get("title"), d.get("description"),
              _j(d.get("type") or []), _j(d.get("category") or []), d.get("start_at"),
              d.get("signup_deadline"), d.get("duration_min"), d.get("location"),
@@ -2217,7 +2221,8 @@ def create_event(d: dict) -> int:
              d.get("template_version"), d.get("template_name"),
              _j(d["template_snapshot"]) if d.get("template_snapshot") else None,
              _j(d["rules"]) if d.get("rules") else None, _j(d.get("contracts") or []),
-             _j(d["notify_image"]) if d.get("notify_image") else None),
+             _j(d["notify_image"]) if d.get("notify_image") else None,
+             1 if d.get("ping_roles") else 0),
         )
     return cur.lastrowid
 
@@ -2289,6 +2294,7 @@ def update_event(event_id: int, fields: dict, updated_at: str) -> bool:
     vals = [_j(fields.get(c) or []) if c in _EVENT_JSON
             else (_j(fields[c]) if fields.get(c) else None) if c in ("rules", "notify_image")
             else _j(fields.get(c) or {}) if c in _EVENT_JSON_OBJ
+            else (1 if fields.get(c) else 0) if c == "ping_roles"
             else fields.get(c)
             for c in _EVENT_EDITABLE]
     with _lock, _conn:

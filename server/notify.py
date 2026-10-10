@@ -12,8 +12,11 @@ Design rules (do not regress):
 - The blocking HTTP POST runs in a worker thread so a dead webhook can't stall
   the event loop or the request that fired it.
 - Light in-memory dedup so a double-submit / retry doesn't double-post.
-- ``allowed_mentions`` is locked down: never @everyone/@here/role pings; only the
-  explicit user ids we pass. This keeps app-generated content from mass-pinging.
+- ``allowed_mentions`` is locked down: never @everyone/@here, and only the
+  explicit user ids + role ids the caller passes. This keeps app-generated
+  content (and any ``<@&id>`` a member types) from mass-pinging. Role ids come
+  from ONE place: the admin-configured event role aliases, on an event whose
+  organizer turned role pings on (docs/event-role-pings.md).
 - The webhook URL is a credential: validate it on write (anti-SSRF — only real
   Discord webhook hosts), store it, and mask it on read.
 - Image attachments are decoration: a post Discord refuses BECAUSE of its files
@@ -287,6 +290,7 @@ def _post(url: str, payload: dict,
 
 
 MENTIONS_PER_MESSAGE = 50    # Discord's allowed_mentions.users hard cap
+ROLE_MENTIONS_MAX = 100      # Discord's allowed_mentions.roles hard cap
 _CONTENT_CAP = 1900          # Discord hard-caps content at 2000 chars
 
 
@@ -310,7 +314,20 @@ def _cap_embed(embed: dict) -> dict:
     return e
 
 
+def _role_ids(roles: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    ids = [str(r) for r in (roles or []) if str(r).isdigit()]
+    return [i for i in ids if not (i in seen or seen.add(i))][:ROLE_MENTIONS_MAX]
+
+
+def role_pings(roles: list[str] | None) -> str:
+    """``<@&id>`` text for each role id — pair it with ``send(roles=…)``, or
+    Discord renders the mention without pinging anyone."""
+    return " ".join(f"<@&{i}>" for i in _role_ids(roles))
+
+
 async def send(category: str, text: str, *, mentions: list[str] | None = None,
+               roles: list[str] | None = None,
                dedup_key: str | None = None, embed: dict | None = None,
                files: list[tuple[str, bytes, str]] | None = None,
                wait: bool = False) -> bool | str:
@@ -323,6 +340,9 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
     the text with ``<@id>`` to actually ping them. We scope allowed_mentions to
     exactly those ids and never allow @everyone/@here/role pings. Callers with
     more than MENTIONS_PER_MESSAGE ids to ping must use ``send_paged``.
+
+    ``roles`` is a list of Discord ROLE ids allowed to ping (write them into
+    the text with ``role_pings``). Only the event role aliases feed this.
 
     ``embed`` is an optional Discord embed object (title/description/url/color/
     fields) sent alongside the text — webhook-native, no bot needed. Mentions
@@ -346,6 +366,9 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
     payload = {
         "allowed_mentions": {"parse": [], "users": users},
     }
+    role_ids = _role_ids(roles)
+    if role_ids:
+        payload["allowed_mentions"]["roles"] = role_ids
     text = (text or "").strip()
     if text:
         payload["content"] = text[:_CONTENT_CAP]
@@ -411,6 +434,7 @@ async def edit_message(category: str, message_id: str, *, embed: dict,
 
 async def send_paged(category: str, body: str, *,
                      mentions: list[str] | None = None,
+                     roles: list[str] | None = None,
                      dedup_key: str | None = None,
                      embed: dict | None = None,
                      files: list[tuple[str, bytes, str]] | None = None) -> bool:
@@ -419,13 +443,15 @@ async def send_paged(category: str, body: str, *,
     50 ids and truncation eats trailing pings first — at 180-member org scale
     that means a third of an event's roster never hears about it. Message 1 =
     body + first ping batch; later messages are ping continuations. The body is
-    truncated before pings, never the other way around. Returns True only if
-    every page posted."""
+    truncated before pings, never the other way around. ``roles`` ride page 1
+    only (with the body that names them): a role ping per page would ping the
+    same people once per 50 attendees. Returns True only if every page posted."""
     seen: set[str] = set()
     ids = [str(m) for m in (mentions or []) if str(m).isdigit()]
     ids = [i for i in ids if not (i in seen or seen.add(i))]
     if not ids:
-        return await send(category, body, dedup_key=dedup_key, embed=embed, files=files)
+        return await send(category, body, roles=roles, dedup_key=dedup_key,
+                          embed=embed, files=files)
     batches = [ids[i:i + MENTIONS_PER_MESSAGE]
                for i in range(0, len(ids), MENTIONS_PER_MESSAGE)]
     ok = True
@@ -436,6 +462,7 @@ async def send_paged(category: str, body: str, *,
         # racing double-call drops every page, not just the first.
         key = dedup_key if (dedup_key is None or n == 0) else f"{dedup_key}:p{n}"
         ok = await send(category, f"{head}\n{pings}", mentions=batch,
+                        roles=roles if n == 0 else None,
                         dedup_key=key, embed=embed if n == 0 else None,
                         files=files if n == 0 else None) and ok
     return ok

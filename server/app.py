@@ -8410,6 +8410,9 @@ class EventIn(BaseModel):
     template_groups: bool = False
     # Banner on this event's announcement posts (created / reminder / changed).
     notify_image: ImageRefIn | None = None
+    # @-ping the org's Discord role aliases for this event's roles on the
+    # new-event post and the reminder (docs/event-role-pings.md).
+    ping_roles: bool = False
 
 
 class EventDetailsIn(BaseModel):
@@ -8473,7 +8476,8 @@ class SignupIn(BaseModel):
 _EVENT_PUBLIC = ("id", "organizer_id", "title", "description",
                  "start_at", "signup_deadline", "duration_min", "location", "event_location",
                  "min_players", "max_players", "roles", "status", "details",
-                 "rules", "contracts", "notify_image", "created_at", "updated_at")
+                 "rules", "contracts", "notify_image", "ping_roles",
+                 "created_at", "updated_at")
 
 
 def _normalize_event_start(s: str) -> str:
@@ -8565,6 +8569,7 @@ def _validate_event(body: EventIn) -> dict:
         "rules": _clean_rules(body.rules),
         "contracts": _clean_contracts(body.contracts),
         "notify_image": _clean_image_ref(body.notify_image),
+        "ping_roles": body.ping_roles,
     }
 
 
@@ -8815,8 +8820,12 @@ async def _notify_event_created(ev: dict) -> None:
         return
     # wait=True: Discord replies with the message, and its id lets us keep the
     # crew/roles counts in this post current as people sign up (an edit).
+    # Role pings (organizer opt-in) call every role the event still has seats
+    # for; a role listed with needed 0 isn't asking for anyone.
+    roles = _event_ping_role_ids(
+        ev, [r["role"] for r in ev.get("roles") or [] if (r.get("needed") or 0) > 0])
     sent = await notify.send(
-        "events", "",
+        "events", notify.role_pings(roles), roles=roles,
         **_announce(_event_created_embed(ev), event=ev),
         dedup_key=f"event-created:{ev['id']}", wait=True)
     if isinstance(sent, str):
@@ -9601,8 +9610,11 @@ async def _notify_hauling_record(hauler_id: str, run: dict, records: dict) -> No
 
 @app.get("/api/events/taxonomy")
 async def events_taxonomy(user: dict = Depends(require_session)):
-    """Curated types / categories / grouped roles for the create form."""
-    return event_taxonomy.taxonomy()
+    """Curated types / categories / grouped roles for the create form, plus the
+    org's role aliases by label (what the form's "Ping Discord roles" will hit)."""
+    return {**event_taxonomy.taxonomy(),
+            "role_pings": {r: [a["label"] or a["id"] for a in al]
+                           for r, al in role_aliases().items()}}
 
 
 @app.get("/api/events")
@@ -10178,6 +10190,7 @@ class TemplateEventIn(BaseModel):
     details: EventDetailsIn | None = None
     contracts: list[ContractIn] = Field(default_factory=list, max_length=20)
     notify_image: ImageRefIn | None = None
+    ping_roles: bool = False
 
 
 class TemplateGroupIn(BaseModel):
@@ -10224,6 +10237,77 @@ def events_admin_only() -> bool:
     return db.get_setting("events_admin_only", "0") == "1"
 
 
+# ---- event role aliases (docs/event-role-pings.md) ----
+# Admins map each taxonomy role to the Discord roles it should @-ping
+# ({"Escort": [{"id": "…", "label": "Security"}, …]}). Webhook-only, no bot, so
+# the app can't list the guild's roles: admins paste ROLE IDS (a plain "@Escort"
+# in text never pings). The label is ours, for the settings UI and the event form.
+_ROLE_ALIAS_KEY = "discord_role_aliases"
+_ROLE_ALIASES_PER_ROLE = 10
+_ROLE_ALIAS_LABEL_MAX = 60
+_ROLE_ID_RE = re.compile(r"^(?:<@&)?(\d{17,20})>?$")
+
+
+def role_aliases() -> dict[str, list[dict]]:
+    """The stored alias map, limited to roles still in the taxonomy."""
+    try:
+        raw = json.loads(db.get_setting(_ROLE_ALIAS_KEY, "") or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {r: [a for a in raw[r] if isinstance(a, dict) and str(a.get("id", "")).isdigit()]
+            for r in event_taxonomy.ROLES if isinstance(raw.get(r), list) and raw[r]}
+
+
+class RoleAliasIn(BaseModel):
+    id: str = Field(max_length=32)          # a role id, or a pasted <@&id>
+    label: str = Field(default="", max_length=_ROLE_ALIAS_LABEL_MAX)
+
+
+def _clean_role_aliases(body: dict[str, list[RoleAliasIn]]) -> dict[str, list[dict]]:
+    out, total = {}, set()
+    for role, aliases in body.items():
+        if role not in event_taxonomy.ROLES:
+            raise HTTPException(status_code=400, detail=f"unknown event role: {role}")
+        if len(aliases) > _ROLE_ALIASES_PER_ROLE:
+            raise HTTPException(status_code=400,
+                                detail=f"at most {_ROLE_ALIASES_PER_ROLE} Discord roles per event role")
+        rows, seen = [], set()
+        for a in aliases:
+            m = _ROLE_ID_RE.match(a.id.strip())
+            if not m:
+                raise HTTPException(status_code=400,
+                                    detail=f"not a Discord role id: {a.id.strip()!r} "
+                                           "(copy it from Server Settings › Roles)")
+            rid = m.group(1)
+            if rid in seen:
+                continue
+            seen.add(rid)
+            total.add(rid)
+            rows.append({"id": rid, "label": a.label.strip().lstrip("@")})
+        if rows:
+            out[role] = rows
+    if len(total) > notify.ROLE_MENTIONS_MAX:
+        raise HTTPException(status_code=400,
+                            detail=f"at most {notify.ROLE_MENTIONS_MAX} Discord roles in all")
+    return out
+
+
+def _event_ping_role_ids(ev: dict, roles: list[str]) -> list[str]:
+    """Discord role ids to @-ping for these event roles — none unless the
+    organizer turned role pings on. Order follows the event's roles; a Discord
+    role aliased under two event roles pings once."""
+    if not ev.get("ping_roles"):
+        return []
+    aliases, out = role_aliases(), []
+    for r in roles:
+        for a in aliases.get(r, []):
+            if a["id"] not in out:
+                out.append(a["id"])
+    return out
+
+
 def _clean_template_event(ev: TemplateEventIn) -> dict:
     """Validate + normalize a template's event part into the stored shape
     (the EventIn field names: `types`/`categories`, not the row's columns)."""
@@ -10239,7 +10323,8 @@ def _clean_template_event(ev: TemplateEventIn) -> dict:
             "roles": shape["roles"],
             "details": _clean_event_details(ev.details),
             "contracts": _clean_contracts(ev.contracts),
-            "notify_image": _clean_image_ref(ev.notify_image)}
+            "notify_image": _clean_image_ref(ev.notify_image),
+            "ping_roles": ev.ping_roles}
 
 
 def _clean_template_groups(groups: list[TemplateGroupIn]) -> list[dict]:
@@ -10462,7 +10547,8 @@ async def save_event_as_template(event_id: int, body: TemplateNameIn,
              "max_players": ev.get("max_players"),
              "roles": ev.get("roles") or [], "details": ev.get("details") or {},
              "contracts": ev.get("contracts") or [],
-             "notify_image": ev.get("notify_image")}
+             "notify_image": ev.get("notify_image"),
+             "ping_roles": bool(ev.get("ping_roles"))}
     groups = _snapshot_event_groups(event_id) if body.include_groups else []
     tid = db.create_event_template(body.name.strip(), event, groups, user["id"],
                                    datetime.now(timezone.utc).isoformat(),
@@ -15297,6 +15383,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "listing_stale_days": _listing_stale_days(),  # marketplace stale badge (0 = off)
         "event_builtin_templates": event_builtin_templates_enabled(),  # §14.5 starters
         "events_admin_only": events_admin_only(),     # only admins create events
+        "discord_role_aliases": role_aliases(),       # event role → Discord role ids
         "op_default_rules": org_default_op_rules(),   # ops payout defaults (§4.1)
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
@@ -15345,6 +15432,8 @@ class SettingsIn(BaseModel):
     listing_stale_days: int | None = Field(default=None, ge=0, le=365)
     event_builtin_templates: bool | None = None
     events_admin_only: bool | None = None
+    # Event role → Discord roles it @-pings ({} clears). Validated in the handler.
+    discord_role_aliases: dict[str, list[RoleAliasIn]] | None = Field(default=None, max_length=40)
     # Preview linked announcement images from IMAGE_PREVIEW_HOSTS in the app.
     notify_external_preview: bool | None = None
     op_default_rules: OpRulesIn | None = None
@@ -15433,6 +15522,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
                        "1" if body.event_builtin_templates else "0")
     if body.events_admin_only is not None:
         db.set_setting("events_admin_only", "1" if body.events_admin_only else "0")
+    if body.discord_role_aliases is not None:
+        db.set_setting(_ROLE_ALIAS_KEY, json.dumps(_clean_role_aliases(body.discord_role_aliases)))
     if body.notify_external_preview is not None:
         db.set_setting("notify_external_preview",
                        "1" if body.notify_external_preview else "0")
@@ -15492,6 +15583,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "listing_stale_days": _listing_stale_days(),
             "event_builtin_templates": event_builtin_templates_enabled(),
             "events_admin_only": events_admin_only(),
+            "discord_role_aliases": role_aliases(),
             "op_default_rules": org_default_op_rules(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),
