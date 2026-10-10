@@ -24,7 +24,8 @@ role-ping (edits can't ping in Discord anyway).
   list the guild's roles, and Discord only pings `<@&id>` with that id in
   `allowed_mentions.roles` — a plain "@Escort" in text pings nobody. Admins
   paste the ID (Developer Mode › right-click role › Copy Role ID); a pasted
-  `<@&id>` is accepted. The label is ours, for the settings list and the event
+  `<@&id>` is accepted. Each aliased role must be mentionable in Discord
+  (see below). The label is ours, for the settings list and the event
   form's preview.
 - Only short roles at the reminder; `needed > 0` on the new-event post; one
   reminder (the existing org lead time), not several.
@@ -59,7 +60,9 @@ An org that already customized the reminder keeps its wording until it adds
 - `/api/events/taxonomy` → `role_pings` {event role: [labels]} (no ids) drives
   the form's `rolePingFieldHtml` / `renderRolePingPreview`.
 
-## Open
-- Can a webhook ping a role that is **not** set "Allow anyone to @mention this
-  role"? Expected yes (webhooks bypass that check when `allowed_mentions`
-  permits), unverified — test on dev against a locked role.
+## Verified in Discord (2026-10-09, dev server)
+- Role pings work end to end.
+- A webhook can NOT ping a role unless the role has **Allow anyone to
+  @mention this role** turned on: `allowed_mentions.roles` permits the ping,
+  but Discord still honors the role's own setting. The settings panel tells
+  admins to turn it on for every aliased role.
