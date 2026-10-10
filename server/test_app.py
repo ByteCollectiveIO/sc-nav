@@ -11454,6 +11454,137 @@ class NotifyPagingTests(unittest.TestCase):
         self.assertEqual(self.posted[0]["allowed_mentions"]["users"], [])
 
 
+class EventRolePingTests(unittest.TestCase):
+    """docs/event-role-pings.md: admins alias event roles to Discord role ids;
+    an organizer's opt-in pings them. Only those exact role ids may ping, and
+    only roles the event still has seats for."""
+
+    _A = "111111111111111111"     # Discord role ids are 17-20 digit snowflakes
+    _B = "222222222222222222"
+    _C = "333333333333333333"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        db.set_setting(notify._webhook_key("events"), _GOOD_WEBHOOK)
+        cls._user = {"id": "9", "username": "admin", "is_admin": True}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._admin_dep()
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls._orig_post = notify._post
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def _admin_dep(cls):
+        if not cls._user.get("is_admin"):
+            raise app.HTTPException(status_code=403, detail="admin only")
+        return cls._user
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        notify._post = cls._orig_post
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        type(self)._user = {"id": "9", "username": "admin", "is_admin": True}
+        self.posted = []
+        notify._post = lambda url, payload: self.posted.append(payload) or {"id": "1"}
+        notify._recent.clear()
+        notify._next_send.clear()
+        notify.SEND_SPACING_S = 0.0
+        db.set_setting("discord_role_aliases", "")
+
+    def _set(self, aliases):
+        return self.client.post("/api/settings", json={"discord_role_aliases": aliases})
+
+    def _aliases(self):
+        r = self._set({"Escort": [{"id": self._A, "label": "@Escort"},
+                                  {"id": f"<@&{self._B}>", "label": "Security"}],
+                       "Cargo / Hauling": [{"id": self._C, "label": "Haulers"},
+                                           {"id": self._B, "label": "Security"}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["discord_role_aliases"]
+
+    def _event(self, ping=True, roles=None):
+        now = datetime.now(timezone.utc).isoformat()
+        eid = db.create_event({"organizer_id": "1", "title": "Convoy", "status": "scheduled",
+                               "start_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                               "created_at": now, "updated_at": now, "ping_roles": ping,
+                               "roles": roles if roles is not None else
+                               [{"role": "Escort", "needed": 2},
+                                {"role": "Cargo / Hauling", "needed": 1}]})
+        return db.get_event(eid)
+
+    def test_aliases_validate_and_normalize(self):
+        stored = self._aliases()
+        self.assertEqual(stored["Escort"], [{"id": self._A, "label": "Escort"},
+                                            {"id": self._B, "label": "Security"}])
+        self.assertTrue(self.client.get("/api/settings").json()["discord_role_aliases"])
+        self.assertEqual(self._set({"Escort": [{"id": "@Escort"}]}).status_code, 400)
+        self.assertEqual(self._set({"Escort": [{"id": "12345"}]}).status_code, 400)
+        self.assertEqual(self._set({"Pilot": [{"id": self._A}]}).status_code, 400)
+        self.assertEqual(self._set({"Escort": [{"id": str(10**17 + i)} for i in range(11)]})
+                         .status_code, 400)
+        # Members see labels only, keyed by event role, for the form's preview.
+        tax = self.client.get("/api/events/taxonomy").json()
+        self.assertEqual(tax["role_pings"]["Escort"], ["Escort", "Security"])
+        type(self)._user = {"id": "1", "username": "m", "is_admin": False}
+        self.assertEqual(self._set({}).status_code, 403)
+        type(self)._user = {"id": "9", "username": "admin", "is_admin": True}
+        self.assertEqual(self._set({}).status_code, 200)
+        self.assertEqual(app.role_aliases(), {})
+
+    def test_created_post_pings_aliased_roles_once(self):
+        self._aliases()
+        asyncio.run(app._notify_event_created(self._event()))
+        p = self.posted[0]
+        self.assertEqual(p["allowed_mentions"], {"parse": [], "users": [],
+                                                 "roles": [self._A, self._B, self._C]})
+        for rid in (self._A, self._B, self._C):
+            self.assertEqual(p["content"].count(f"<@&{rid}>"), 1)
+
+    def test_only_roles_with_open_seats_ping(self):
+        self._aliases()
+        ev = self._event(roles=[{"role": "Escort", "needed": 0},
+                                {"role": "Cargo / Hauling", "needed": 1}])
+        asyncio.run(app._notify_event_created(ev))
+        self.assertEqual(self.posted[0]["allowed_mentions"]["roles"], [self._C, self._B])
+
+    def test_off_by_default_pings_nobody(self):
+        self._aliases()
+        asyncio.run(app._notify_event_created(self._event(ping=False)))
+        p = self.posted[0]
+        self.assertNotIn("roles", p["allowed_mentions"])
+        self.assertNotIn("content", p)
+
+    def test_toggle_round_trips_through_the_api(self):
+        body = {"title": "Convoy", "types": ["Raid"], "categories": ["PvE"],
+                "start_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                "roles": [{"role": "Escort", "needed": 2}], "ping_roles": True}
+        r = self.client.post("/api/events", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["ping_roles"])
+        r = self.client.post(f"/api/events/{r.json()['id']}/save-template",
+                             json={"name": "Convoy std"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["event"]["ping_roles"])
+
+    def test_role_pings_ride_the_first_page_only(self):
+        users = [str(1000 + i) for i in range(80)]
+        asyncio.run(notify.send_paged("events", notify.role_pings([self._A, "x"]),
+                                      mentions=users, roles=[self._A, "x"]))
+        self.assertEqual(len(self.posted), 2)
+        self.assertEqual(self.posted[0]["allowed_mentions"]["roles"], [self._A])
+        self.assertIn(f"<@&{self._A}>", self.posted[0]["content"])
+        self.assertNotIn("roles", self.posted[1]["allowed_mentions"])
+        self.assertNotIn("<@&", self.posted[1]["content"])
+
+
 class NotifyHealthTests(unittest.TestCase):
     """Delivery-health tracking: a dead webhook (revoked → 404 forever) must be
     visible in webhook_status instead of an eternal green light."""
