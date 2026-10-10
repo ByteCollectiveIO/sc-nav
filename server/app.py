@@ -9634,7 +9634,11 @@ async def list_events(range: str = "upcoming", user: dict = Depends(require_sess
 
 @app.post("/api/events")
 async def create_event(body: EventIn, user: dict = Depends(require_session)):
-    """Create an event. Any org member may organize."""
+    """Create an event. Any org member may organize, unless the org has limited
+    creation to admins (`events_admin_only`)."""
+    if events_admin_only() and not user.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="Only admins can create events in this org.")
     fields = _validate_event(body)
     tpl = None
     if body.template_id:
@@ -10211,6 +10215,13 @@ class TemplateNameIn(BaseModel):
 def event_builtin_templates_enabled() -> bool:
     """Org setting: offer the shipped starter templates (default on)."""
     return db.get_setting("event_builtin_templates", "1") != "0"
+
+
+def events_admin_only() -> bool:
+    """Org setting: only admins may CREATE events (default off — any member may
+    organize). Gates POST /api/events alone: existing events stay their
+    organizer's to edit, and quick ops + templates stay open (no announcement)."""
+    return db.get_setting("events_admin_only", "0") == "1"
 
 
 def _clean_template_event(ev: TemplateEventIn) -> dict:
@@ -15285,6 +15296,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "container_ageoff_days": container_ageoff_days(),   # #46 container reports
         "listing_stale_days": _listing_stale_days(),  # marketplace stale badge (0 = off)
         "event_builtin_templates": event_builtin_templates_enabled(),  # §14.5 starters
+        "events_admin_only": events_admin_only(),     # only admins create events
         "op_default_rules": org_default_op_rules(),   # ops payout defaults (§4.1)
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
@@ -15332,6 +15344,7 @@ class SettingsIn(BaseModel):
     # get an amber "stale" badge + renew nudge. 0 turns the display off.
     listing_stale_days: int | None = Field(default=None, ge=0, le=365)
     event_builtin_templates: bool | None = None
+    events_admin_only: bool | None = None
     # Preview linked announcement images from IMAGE_PREVIEW_HOSTS in the app.
     notify_external_preview: bool | None = None
     op_default_rules: OpRulesIn | None = None
@@ -15418,6 +15431,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
     if body.event_builtin_templates is not None:
         db.set_setting("event_builtin_templates",
                        "1" if body.event_builtin_templates else "0")
+    if body.events_admin_only is not None:
+        db.set_setting("events_admin_only", "1" if body.events_admin_only else "0")
     if body.notify_external_preview is not None:
         db.set_setting("notify_external_preview",
                        "1" if body.notify_external_preview else "0")
@@ -15476,6 +15491,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "container_ageoff_days": container_ageoff_days(),
             "listing_stale_days": _listing_stale_days(),
             "event_builtin_templates": event_builtin_templates_enabled(),
+            "events_admin_only": events_admin_only(),
             "op_default_rules": org_default_op_rules(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),
@@ -16445,6 +16461,7 @@ async def api_me(user: dict = Depends(require_session)):
             "active_survey_zone": members_dir.active_survey_zone(user["id"]),
             "pinned_ids": sorted(hub.get(user).pinned_ids),
             "image_preview_hosts": image_preview_hosts(),   # [] = no linked-image previews
+            "events_admin_only": events_admin_only(),       # hides "Create event" for non-admins
             **_member_identity(user["id"])}
 
 
