@@ -42,7 +42,10 @@ from pathlib import Path
 
 TIMESTAMP_RE = re.compile(r"^<(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)>\s*")
 SEVERITY_RE = re.compile(r"^\[(Notice|Warning|Error|Trace|Debug|Verbose)\]\s*")
-EVENT_TAG_RE = re.compile(r"^<([^>]+)>\s*")
+# One level of nesting allowed: tags like
+# `<CSCLoadingPlatformManager::LoadEntitiesReference::<lambda_1>::operator ()>`
+# used to be cut at the inner `>`.
+EVENT_TAG_RE = re.compile(r"^<((?:[^<>]|<[^<>]*>)+)>\s*")
 TRAILING_TAGS_RE = re.compile(r"\s*((?:\[[^\]]*\])+)\s*$")
 
 # The player's own identifiers, from the log's character-status / login lines.

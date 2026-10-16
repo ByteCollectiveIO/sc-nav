@@ -408,7 +408,7 @@ mining-adjacent events *they never needed* exist (fracture/extraction,
 quantum-travel lifecycle, zone transitions) — their coverage proves presence,
 never absence.
 
-### 9.2 Spike part 2 — capture a mining session (pending)
+### 9.2 Spike part 2 — capture a mining session (scan question closed 2026-10-15, §9.2.4)
 
 `tools/gamelog_spike.py` ingests captured Game.log files and reports an
 event-tag inventory plus keyword buckets (mining, scanning, refinery,
@@ -581,6 +581,73 @@ external data; the kiosk-board names give the candidate vocabulary), and
 `shopName` string → our terminal/POI ids (same correlation trick via the
 run's expected stop, or a small static table). Patch-fragility rule still
 applies: assists that degrade to absence, never load-bearing.
+
+### 9.2.4 Capture 2 findings — mining + QT session (2026-10-15, 43 min, build 12913470)
+
+The first capture recorded live with `tools/gamelog_live.py` (§9.2.5). The
+pilot wrote down the session's steps: New Babbage hangar → retrieve Golem →
+leave hangar → QT to Clio → fly to Tremonte → **actively scan nodes**
+(Taranite, Aphorite, Copper, Dolivine) → QT to MIC-L1 → store the ship →
+**create a refinery job** → quit. No markers were dropped, so each step was
+matched against the raw log by hand. Each step, and what the log shows for it:
+
+| Step | Log evidence | Verdict |
+|---|---|---|
+| Spawn at hangar | `<Join PU>` → `<RequestLocationInventory> … Location[Stanton4_NewBabbage]` | ✅ named |
+| Retrieve ship | `SetVehicleSpawningInformations` / `…SpawnedInformations` (entity id only); on boarding, notification *"You have joined channel 'Drake Golem : <handle>'"* | ✅ ship display name |
+| Leave hangar | *"Joined hangar queue"* → *"Hangar Request Completed"* → *"Entering Armistice Zone"* | ✅ |
+| QT ×2 | `Player Selected Quantum Target` (`OOC_Stanton_4b_Clio`, `LOC_RR_S4_L1`) → `Calculate Route` (*"Projected Start Location is Clio … fuel estimate 21356.86"*) → `Quantum Drive Arrived` | ✅ full lifecycle |
+| Fly to Tremonte (a POI on Clio) | only opaque `Update Inventory Location` id changes (689215338 ↔ 3800238554) | ❌ no POI names |
+| **Active scanning, 4 ore types** | **nothing**: no ore names, no `MineableRock_` classes, no signatures; only one-time tutorial hints ("Mining - Scanning", "Scan Mode") | ❌ **confirmed absent** |
+| Dock + store ship | *"Hangar Request Completed"*, `<Vehicle Control Flow> … releasing control token for 'DRAK_Golem_868584930160'` (leaving the seat); `<RequestLocationInventory> … Location[RR_MIC_L1]`; no line for storing at the terminal | ⚠️ partial |
+| **Create refinery job** | **nothing** (one item purchase at `SCShop_RefineryAdmin_ITEM` is the only refinery-area line) | ❌ |
+| Quit | `<SystemQuit>` | ✅ |
+
+What it settles:
+
+1. **RS scan values are NOT in the log: closed.** §9.2.1's capture was
+   inconclusive because the pilot never ran the active scanner. This session
+   scanned four ore types and produced zero lines. Anything that needs scan
+   numbers needs OCR (or §9.3's sidecar).
+2. **Refinery job creation and contents are not logged.** Only the
+   *completion* notification is (§9.2.2 item 4), so a "refinery done" alert
+   is still possible and a job tracker isn't.
+3. **There is no POI-level location.** The named-position signals are
+   `Calculate Route`'s start body (planet/moon granularity, or "Stanton
+   System" when in open space) and `RequestLocationInventory` (stations and
+   landing zones, e.g. `Stanton4_NewBabbage`, `RR_MIC_L1`). Surface POIs
+   still need `/showlocation`.
+4. **QT lines are not only about your own ship.** The first `Quantum Drive
+   Arrived` of the session was `ANVL_Asgard_…`, another player's ship, and
+   every QT line reads `NOT AUTH`, so that marker can't tell them apart. A
+   parser must keep only the vehicle id the player spawned or controls.
+5. **Real QT fuel estimates are logged** (779.78 for open space near
+   microTech → Clio; 21356.86 for Clio → MIC-L1, in a Golem). That's in-game
+   ground truth the planner's quantum fuel model can be checked against.
+6. Browsing targets in the starmap logs too: `Player Requested Fuel to
+   Quantum Target` fires for each destination hovered or considered
+   (`ab_mine_stanton4_med_001`, `LOC_RR_S4_L2`, …), so it's not a commitment.
+   `Player Selected Quantum Target` is the commitment.
+
+**Watcher candidates, ranked (not built yet):** (1) the QT lifecycle, giving a
+named "where am I / where am I going" plus fuel ground truth; (2) the current
+ship, from the vehicle class in QT/control lines (auto-select it in the cargo
+and trade planners); (3) station/landing-zone presence plus
+armistice/jurisdiction/hangar transitions from notifications.
+
+### 9.2.5 Live capture tool — `tools/gamelog_live.py`
+
+The companion to `gamelog_spike.py` (which inventories logs *after* a
+session). It tails Game.log while you play. Press F9 in game, or type in its
+console, to drop a marker; `@HH:MM note` adds one after the fact, and
+`--notes FILE` with `--once` replays a past log against a timed step list.
+The report ranks the tags that cluster around each marker, keeps a nav
+timeline (QT, location, hangar, ship, zone, purchases; QT lines from other
+players' ships are flagged), collapses tutorial hints, and flags tags never
+seen in earlier sessions. Output goes to `../game_logs/live/`, outside the
+repo, with the player's identifiers scrubbed. For capture runs, writing down
+step times (or pressing F9) turns hand-matching like the table above into a
+ranked report.
 
 ### 9.3 Door two: piggyback sc-overlay's sidecar API (2026-08-02, user question)
 
