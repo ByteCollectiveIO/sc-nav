@@ -19,7 +19,7 @@ While it runs:
                           the key still reaches the game, so use one that's unbound there.
     <text> + Enter        new marker labelled <text>, at the moment you hit Enter
     @HH:MM[:SS] <text>    marker at that local time, after the fact
-    <N> <text> + Enter    label marker #N (the F9 ones, after the fact)
+    <N> <text> + Enter    label marker #N (the F9 ones, after the fact); `#N <text>` too
     r + Enter             write the report now
     q + Enter / Ctrl+C    write the report and quit
 
@@ -72,8 +72,11 @@ HINT_RE = re.compile(
     r"^(?:Stamina|Hunger & Thirst|Eating & Drinking|Maps|Radar Ping Angle|Radar.s Ping|"
     r"Quantum Drive - Spooling|Quantum Travel - Calibration|Quantum Linking|Ship Startup|"
     r"Scan Mode|Mining - [\w ]+|Welcome to [\w ]+|Hints|Inventory|"
-    r"Personal Inner Thought \(PIT\)|Monitored Space): "
-    r"|^Quantum Travel: Once ")
+    r"Personal Inner Thought \(PIT\)|Monitored Space|Multi-Tool - [\w ]+|Salvage - [\w ]+|"
+    r"Air Traffic Control \(ATC\)|Ship Movement|Multi-Function Displays|Flight Mode Select Menu|"
+    r"Quantum Travel - Cancel|Force Reaction - [\w ]+|Chat|Shopping|Vehicle Retrieval|"
+    r"Trading and Shipping Console|Exit Bed|PIT Menu - [\w ]+): "
+    r"|^Quantum Travel: Once |^Exiting Armistice Zone: You have left")
 
 # The vehicle a QT line is about: `| NOT AUTH | DRAK_Golem_868584930160[868584930160]|`.
 # Every QT line reads NOT AUTH, including other players' ships (an ANVL_Asgard
@@ -112,8 +115,17 @@ TIMELINE_RULES = [
      lambda m: f"{m.group(1).lower()} at {m.group(2)}: {m.group(3) or 'commodity'} × {m.group(4) or '?'}"),
     ("shop", re.compile(r"<CEntityComponentShopUIProvider::RmShopFlowResponse>.*?result\[(\w+)\].*?type\[(\w+)\]"),
      lambda m: f"shop {m.group(2).lower()}: {m.group(1)}"),
-    ("mission", re.compile(r"<MissionEnded>\s*(.*)"),
-     lambda m: f"mission ended: {m.group(1)}"),
+    # Every objective's world position (2026-10-17 salvage capture): the zone it
+    # is relative to, a local position in metres, and the contract name.
+    ("mission", re.compile(r"<CLocalMissionPhaseMarker::CreateMarker>.*?contract \[([^\]]+)\]"
+                           r".*?objectiveId \[([^\]_]+)_?.*?zoneHostId \[(\d+)\]"
+                           r".*?position \[x: ([-\d.]+), y: ([-\d.]+), z: ([-\d.]+)\]"),
+     lambda m: (f"objective marker: {m.group(1)}"
+                + (" (drop-off)" if m.group(2) == "dropoff" else "")
+                + f" in zone {m.group(3)} at ("
+                + ", ".join(f"{float(m.group(i)):,.0f}" for i in (4, 5, 6)) + ") m")),
+    ("mission", re.compile(r"<MissionEnded>.*?mission_state MISSION_STATE_(\w+)"),
+     lambda m: f"mission ended: {m.group(1).lower()}"),
     ("death", re.compile(r"<(Actor Death|Vehicle Destruction)>\s*(.*)"),
      lambda m: f"{m.group(1)}: {m.group(2)}"),
     ("session", re.compile(r"<SystemQuit>"),
@@ -482,6 +494,34 @@ class Tail:
         return [p.decode("utf-8", errors="replace") for p in parts], restarted
 
 
+def log_finished(path, tail_bytes=262144):
+    """True when the log already holds a `<SystemQuit>`: the game isn't running
+    and what's there is a past session (the 2026-10-17 capture opened with the
+    previous day's log). The game writes one log per launch, so one quit ends it."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - tail_bytes))
+            return b"<SystemQuit>" in fh.read()
+    except OSError:
+        return False
+
+
+def parse_command(text):
+    """A console line -> (action, arg). `N note` and `#N note` label marker N."""
+    low = text.lower()
+    if low in ("q", "quit", "exit"):
+        return "quit", None
+    if low == "r":
+        return "report", None
+    if text.startswith("@"):
+        return "at", text[1:]
+    m = re.fullmatch(r"#?(\d+)\s+(.+)", text)
+    if m:
+        return "label", (int(m.group(1)), m.group(2))
+    return "mark", text
+
+
 def load_baseline(path):
     try:
         return set(json.loads(path.read_text(encoding="utf-8")).get("tags", []))
@@ -628,7 +668,12 @@ def main(argv=None):
         report_path.write_text(prof.report(str(args.game_log)), encoding="utf-8")
         save_baseline(seen_path, prof.seen_keys())
 
-    tail = Tail(args.game_log, from_start=not args.from_end)
+    from_start = not args.from_end
+    if from_start and not args.once and log_finished(args.game_log):
+        print("Game.log is from a finished session (it ends with a quit): skipping it, "
+              "waiting for the game to start")
+        from_start = False
+    tail = Tail(args.game_log, from_start=from_start)
     if args.once:
         lines, _ = tail.poll()
         for line in lines + ([tail.partial.decode("utf-8", "replace")] if tail.partial else []):
@@ -655,28 +700,26 @@ def main(argv=None):
             text = line.strip()
             if not text:
                 continue
-            if text.lower() in ("q", "quit", "exit"):
+            action, arg = parse_command(text)
+            if action == "quit":
                 break
-            if text.lower() == "r":
+            if action == "report":
                 flush()
                 print(f"wrote {report_path}")
-                continue
-            if text.startswith("@"):
-                if prof.add_marker_at_clock(text[1:], now=datetime.now(timezone.utc)) is None:
+            elif action == "at":
+                if prof.add_marker_at_clock(arg, now=datetime.now(timezone.utc)) is None:
                     print("usage: @HH:MM[:SS] label   (local time)")
-                continue
-            m = re.fullmatch(r"(\d+)\s+(.+)", text)
-            if m:
-                ok = prof.label(int(m.group(1)), m.group(2))
-                print(f"labelled #{m.group(1)}" if ok else f"no marker #{m.group(1)}")
+            elif action == "label":
+                ok = prof.label(*arg)
+                print(f"labelled #{arg[0]}" if ok else f"no marker #{arg[0]}")
             else:
-                prof.add_marker(label=text)
+                prof.add_marker(label=arg)
         quit_evt.set()
 
     threading.Thread(target=console, daemon=True, name="console").start()
     print(f"tailing {args.game_log}\nreport: {report_path}\n"
           "MARKERS: F9 in game · note + Enter = mark now · @HH:MM note = mark earlier · "
-          "'<N> note' = label #N · r = report · q = quit")
+          "'#N note' = label #N · r = report · q = quit")
 
     last_flush = time.monotonic()
     try:

@@ -647,7 +647,70 @@ players' ships are flagged), collapses tutorial hints, and flags tags never
 seen in earlier sessions. Output goes to `../game_logs/live/`, outside the
 repo, with the player's identifiers scrubbed. For capture runs, writing down
 step times (or pressing F9) turns hand-matching like the table above into a
-ranked report.
+ranked report. Label an F9 marker after the fact with `3 note` or `#3 note`
+(capture 3 typed `#3 …`, which used to drop a new marker instead). Started
+while the game is closed, it skips the finished log (one that already holds
+`<SystemQuit>`) and waits for the relaunch, so a report no longer opens with
+the previous session.
+
+### 9.2.6 Capture 3 findings — salvage contracts (2026-10-17, ~2 h, build 12913470)
+
+Recorded with `gamelog_live.py`. The pilot's steps: log in at MIC-L1 →
+collect a finished refinery job → fly a Vulture to New Babbage, refuel and
+restock → accept an *RSI Disc. Month: UCM Order (M)* contract → retrieve an
+Argo MOTH → QT to the salvage beacon → salvage the wreck → deliver to the
+station → repeat a second time (wreck above ArcCorp, delivered to MIC-L3).
+Two F9 marks, plus the first launch dropping with error 19000 (disconnection)
+and a relaunch.
+
+| Step | Log evidence | Verdict |
+|---|---|---|
+| Collect refinery job (F9 mark) | nothing near the mark; only the login-time notification *"A Refinery Work Order has been Completed at MIC-L1 …"* | ❌ collection not logged |
+| Refuel + restock (F9 mark) | nothing near the mark (loading-platform and hangar noise only) | ❌ not logged |
+| Accept contract | notifications *Contract Accepted / New Objective: Locate Salvage Claim #N*; `<CLocalMissionPhaseMarker::CreateMarker>` with `contract [Iasi_Salvage_Medium_2]`, generator `VisitingIasi`, missionId, and the **objective's position** | ✅ named + located |
+| Retrieve MOTH | *"You have joined channel 'Argo MOTH : <handle>'"* | ✅ as capture 2 |
+| QT to the beacon | full QT lifecycle to `MISSION_QT_Quantum_Beacon_ShortRange_Salvage_<id>` | ✅ |
+| Salvage the wreck | objective text *"Salvage the RSI Constellation Mk IV Taurus at …"*; the wreck's class `RSI_Constellation_Taurus_Unmanned_Salvage` (you board it: a `Vehicle Control Flow` line); `UpdateActiveObjective` ~1/s while scraping, flag `ShowProgress` but **no value**; **no RMC/CMAT amounts anywhere** | ⚠️ activity yes, yield no |
+| Deliver + turn in | *New Objective: Deliver 0/39 SCU of Construction Pieces to ARC-L3 …* (a second `CreateMarker`, objectiveId `dropoff_…`); the count **never updates** (still 0/39 at hand-in); then `<ObjectiveComplete>`, `<MissionEnded> … MISSION_STATE_COMPLETED`, `<EndMission> CompletionType[Complete]`, *Contract Complete* | ✅ start/end, ❌ progress |
+| Reward | no aUEC amount logged | ❌ |
+
+What it settles:
+
+1. **Mission objectives carry positions.** `CreateMarker` gives `zoneHostId`
+   plus `position [x, y, z]` in metres, relative to that zone. When the zone is
+   the system, it's the starmap frame: the ArcCorp wreck's marker
+   (18,588,788 / −22,152,467 / −2,082 km) sits 2,430 km from ArcCorp's centre
+   in `containers.json`, which matches *"a debris field above ArcCorp"*. The
+   other three markers were in local frames (18 km from an asteroid-base zone,
+   ~5,000–14,000 km from their zones' origins), so they need the zone
+   host resolved first. A watcher could put the contract target on the
+   navigator without `/showlocation`.
+2. **Salvage yield isn't logged.** The only lines with numbers are
+   `SetSalvageRepairAmmoCount_NoTarget` (an anti-cheat notice: the beam added N
+   "ammo" while off target), so they count misses, not material. 145 of the 294
+   came from **another player's** `Salvage_Head_Salvation`, so per-user
+   filtering would be needed even for that.
+3. **Delivery progress isn't logged**, only the objective's start and the
+   mission's end. A hauling companion can say "contract X: deliver 39 SCU to
+   ARC-L3" and "done", not "12/39".
+4. **`Update Inventory Location` ids are stable.** 3513657059 = `RR_MIC_L1` and
+   3170699229 = `Stanton4_NewBabbage` on both 2026-10-15 (US shard) and today
+   (EU shard), and today added 2551368652 = `RR_ARC_L3`, 626814401 =
+   `RR_MIC_L3`. An id→name table learned from `RequestLocationInventory`
+   pairings would name most of the opaque ids (1902223495 shows up whenever
+   the ship leaves a station: probably open Stanton space).
+5. **QT fuel estimates aren't comparable across ships.** The MOTH's ran
+   874,114–1,139,239 for station-to-station hops where the Golem/Vulture read
+   ~21,000, so the number is in per-drive units. Check the fuel model per
+   drive, not as one scale.
+6. The pilot remembered the wrecks as Constellation Andromedas; the log says
+   Mk IV **Taurus** both times. That's another case for logging what the log
+   says over what's remembered.
+
+`gamelog_live.py` now puts the `CreateMarker` lines in the timeline as
+`objective marker: <contract> (drop-off) in zone <id> at (x, y, z) m`, prints
+mission ends as `mission ended: completed`, and hides the salvage-era tutorial
+hints (Multi-Tool, Salvage, ATC, Exit Bed and others).
 
 ### 9.3 Door two: piggyback sc-overlay's sidecar API (2026-08-02, user question)
 
