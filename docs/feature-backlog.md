@@ -51,6 +51,24 @@ goals already stamp `min_q` per line but progress never reads it. Design:
 the marketplace crafted blob on crafted holdings, derived subkind + band, then
 goals gate on it, craft preview reads pledged lots, listings/rollups follow.
 
+### 48. Inventory pickup runs (inventory/goal → cargo planner) 🔨 deliver half BUILT (2026-10-17, unreleased) · sell mode 📐 design
+Player request: pick your own holdings at known locations → an efficient
+collect-and-deliver route, usually to an org goal's drop-off once it fills.
+It's a **pre-filled hand-off to the existing cargo planner** (holding →
+drop-off packages via the `cloneRun` path), not a new solver. Blocker:
+`inventory.location` is free text — add `location_poi_id` (the POI picker
+already resolves it; the POST drops it). User calls: goals get an optional
+**drop-off POI**; non-SCU items are **0-SCU stops**; goal runs carry the
+**covered** amount (`qty − short`), short pledges listed as "still to gather";
+**delivered state + move-holdings-after-run = v2**. Too much cargo for the hold:
+an opt-in **split into trips** checkbox on the cargo planner (built). **Sell mode** (user, same
+day): consolidate scattered holdings and sell where it pays best. The planner
+picks the sell terminal per commodity (top-3 candidates from the trade price
+feed, `plan_route` per combination, best aUEC/hour or most aUEC) via a new
+`nav_core.plan_sell_route` + `POST /api/route/plan_sell`; splitting one
+commodity across terminals = v2. Design:
+[inventory-pickup-runs.md](inventory-pickup-runs.md).
+
 ### 46. Trade planner: cargo container sizing 🔨 BUILT
 
 User-found, 2026-08-09, off a real run: the planner quotes a load in loose SCU,

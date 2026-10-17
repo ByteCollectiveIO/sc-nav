@@ -1599,6 +1599,179 @@ class MultiPickupGroupTests(unittest.TestCase):
         self.assertEqual(nav_core.packages_scu(recs), 13.0)
 
 
+class InventoryPickupTests(unittest.TestCase):
+    """#48: holdings -> cargo-planner packages (docs/inventory-pickup-runs.md)."""
+
+    def _nav(self):
+        nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)])
+        nav.pois[3].name = "P1"          # two POIs share a name: ambiguous
+        return nav
+
+    def _item(self, **kw):
+        base = {"holding_id": 1, "item_name": "Iron", "unit": "SCU", "qty": 10,
+                "short": 0, "quality": None, "location": "P0", "from_id": 0,
+                "from_name": "P0", "label": "Inventory"}
+        return {**base, **kw}
+
+    def test_stored_id_wins_while_the_poi_exists(self):
+        nav = self._nav()
+        self.assertEqual(nav_core.resolve_location_poi(nav, "anything", poi_id=2), 2)
+
+    def test_vanished_stored_id_falls_back_to_the_name(self):
+        nav = self._nav()
+        self.assertEqual(nav_core.resolve_location_poi(nav, "p2", poi_id=99), 2)
+
+    def test_unique_case_folded_name_matches(self):
+        self.assertEqual(nav_core.resolve_location_poi(self._nav(), "  p0 "), 0)
+
+    def test_ambiguous_or_unknown_or_blank_name_is_none(self):
+        nav = self._nav()
+        self.assertIsNone(nav_core.resolve_location_poi(nav, "P1"))
+        self.assertIsNone(nav_core.resolve_location_poi(nav, "Area18 hangar"))
+        self.assertIsNone(nav_core.resolve_location_poi(nav, ""))
+        self.assertIsNone(nav_core.resolve_location_poi(nav, None))
+
+    def test_scu_holding_becomes_a_package_to_the_dropoff(self):
+        plan = nav_core.build_pickup_plan([self._item()], 2)
+        (p,) = plan["packages"]
+        self.assertEqual((p["from_id"], p["to_id"], p["scu"], p["commodity"]),
+                         (0, 2, 10.0, "Iron"))
+        self.assertFalse(p["zero_scu"])
+
+    def test_non_scu_unit_rides_as_a_zero_scu_stop(self):
+        plan = nav_core.build_pickup_plan(
+            [self._item(item_name="Medical pen", unit="each", qty=12)], 2)
+        (p,) = plan["packages"]
+        self.assertEqual(p["scu"], 0.0)
+        self.assertTrue(p["zero_scu"])
+        self.assertEqual(p["commodity"], "12 each Medical pen")
+
+    def test_quality_labels_the_commodity(self):
+        (p,) = nav_core.build_pickup_plan([self._item(quality=800)], 2)["packages"]
+        self.assertEqual(p["commodity"], "Iron Q800")
+
+    def test_short_part_is_to_gather_never_a_stop(self):
+        plan = nav_core.build_pickup_plan([self._item(qty=6, short=4)], 2)
+        self.assertEqual(plan["packages"][0]["scu"], 6.0)
+        self.assertEqual(plan["still_to_gather"][0]["qty"], 4.0)
+        plan = nav_core.build_pickup_plan([self._item(qty=0, short=4)], 2)
+        self.assertEqual(plan["packages"], [])
+        self.assertEqual(len(plan["still_to_gather"]), 1)
+
+    def test_unresolved_and_already_there_are_split_out(self):
+        plan = nav_core.build_pickup_plan(
+            [self._item(holding_id=1, from_id=None, from_name=None),
+             self._item(holding_id=2, from_id=2, from_name="P2")], 2)
+        self.assertEqual([r["holding_id"] for r in plan["unresolved"]], [1])
+        self.assertEqual([r["holding_id"] for r in plan["already_there"]], [2])
+        self.assertEqual(plan["packages"], [])
+
+    def test_no_dropoff_yet_leaves_to_id_open(self):
+        plan = nav_core.build_pickup_plan([self._item(from_id=2)], None)
+        self.assertEqual(plan["already_there"], [])
+        self.assertIsNone(plan["packages"][0]["to_id"])
+
+    def test_zero_scu_packages_still_get_visited_by_plan_route(self):
+        nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0)])
+        items = [self._item(holding_id=1, from_id=0),
+                 self._item(holding_id=2, item_name="Pen", unit="each", qty=3, from_id=1)]
+        pkgs = nav_core.build_pickup_plan(items, 2)["packages"]
+        res = nav_core.plan_route(nav, pkgs, usable_scu=10, start_id=0)
+        self.assertTrue(res["summary"]["feasible"])
+        pos = {s["stop_id"]: i for i, s in enumerate(res["stops"])}
+        self.assertLess(pos[0], pos[2])
+        self.assertLess(pos[1], pos[2])
+        self.assertEqual(res["summary"]["peak_load_scu"], 10.0)
+
+
+class SplitTripsTests(unittest.TestCase):
+    """plan_route_trips: a bundle too big for the hold becomes several trips when
+    the player opts in, instead of an infeasible plan."""
+
+    def _nav(self):
+        # P0, P1 pickups; P2 the drop-off; P3 far away
+        return _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (1000, 0, 0)])
+
+    def _pkg(self, pid, frm, scu, to=2, **kw):
+        return {"id": pid, "commodity": "Iron", "scu": scu, "from_id": frm, "to_id": to, **kw}
+
+    def _picked(self, plan):
+        """{package id: scu} over every pickup in the plan."""
+        return {p["id"]: p["scu"] for s in plan["stops"] for p in s["pickups"]}
+
+    def test_a_bundle_that_fits_is_one_trip_and_unchanged(self):
+        nav = self._nav()
+        pkgs = [self._pkg("a", 0, 10), self._pkg("b", 1, 10)]
+        res = nav_core.plan_route_trips(nav, pkgs, usable_scu=30)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertEqual(res["summary"]["trips"], 1)
+        self.assertEqual(res["stops"], nav_core.plan_route(nav, pkgs, usable_scu=30)["stops"])
+
+    def test_too_much_cargo_splits_into_trips_that_each_fit(self):
+        nav = self._nav()
+        pkgs = [self._pkg("a", 0, 24), self._pkg("b", 1, 16), self._pkg("c", 1, 30)]
+        res = nav_core.plan_route_trips(nav, pkgs, usable_scu=30)
+        sm = res["summary"]
+        self.assertTrue(sm["feasible"])
+        self.assertEqual(sm["trips"], 3)                 # 70 SCU / 30 SCU hold
+        self.assertLessEqual(sm["peak_load_scu"], 30)
+        self.assertEqual(sm["unsplit_capacity_scu"], 70)
+        # every SCU is still collected exactly once
+        self.assertAlmostEqual(sum(self._picked(res).values()), 70)
+        # each trip ends at the drop-off
+        ends = {}
+        for s in res["stops"]:
+            ends[s["trip"]] = s["stop_id"]
+        self.assertEqual(set(ends.values()), {2})
+
+    def test_a_package_bigger_than_the_hold_is_carried_in_parts(self):
+        nav = self._nav()
+        res = nav_core.plan_route_trips(nav, [self._pkg("big", 0, 50)], usable_scu=20)
+        self.assertEqual(res["summary"]["trips"], 3)
+        self.assertEqual(self._picked(res), {"big.1": 20, "big.2": 20, "big.3": 10})
+        self.assertEqual(res["summary"]["split_packages"], 1)
+
+    def test_trips_after_the_first_start_at_the_previous_end(self):
+        nav = self._nav()
+        res = nav_core.plan_route_trips(
+            nav, [self._pkg("a", 0, 20), self._pkg("b", 1, 20)], usable_scu=20, start_id=3)
+        self.assertEqual(res["summary"]["trips"], 2)
+        by_trip = {}
+        for s in res["stops"]:
+            by_trip.setdefault(s["trip"], []).append(s)
+        # from the far start, the nearest pickup (P1) fills trip 1 ...
+        self.assertEqual([s["stop_id"] for s in by_trip[1]], [1, 2])
+        # ... and trip 2 leaves from where trip 1 ended (P2), not from P1 or P3
+        self.assertEqual(by_trip[2][0]["stop_id"], 0)
+        self.assertAlmostEqual(by_trip[2][0]["leg"]["distance_m"], 20.0)
+
+    def test_no_top_off_split_when_whole_packages_do_it_faster(self):
+        nav = self._nav()
+        nav.pois[3].global_m = (30.0, 0.0, 0.0)          # P3 a pickup just past the drop
+        # hold 40: plain greedy tops trip 1 off with 16 of "b" and revisits P0 for
+        # the rest; whole-first takes a + c, then b in one piece — faster, fewer stops
+        pkgs = [self._pkg("a", 1, 24), self._pkg("b", 0, 30), self._pkg("c", 3, 16)]
+        res = nav_core.plan_route_trips(nav, pkgs, usable_scu=40)
+        self.assertEqual(res["summary"]["trips"], 2)
+        self.assertEqual(self._picked(res), {"a": 24, "b": 30, "c": 16})
+        self.assertEqual(res["summary"]["split_packages"], 0)
+
+    def test_zero_scu_packages_ride_the_first_trip(self):
+        nav = self._nav()
+        pkgs = [self._pkg("a", 0, 20), self._pkg("b", 1, 20), self._pkg("pen", 1, 0)]
+        res = nav_core.plan_route_trips(nav, pkgs, usable_scu=20)
+        trip_of = {p["id"]: s["trip"] for s in res["stops"] for p in s["pickups"]}
+        self.assertEqual(trip_of["pen"], 1)
+
+    def test_groups_are_never_split(self):
+        nav = self._nav()
+        pkgs = [self._pkg("g1", 0, 0, group="G", group_scu=50),
+                self._pkg("g2", 1, 0, group="G", group_scu=50)]
+        res = nav_core.plan_route_trips(nav, pkgs, usable_scu=20)
+        self.assertFalse(res["summary"]["feasible"])
+        self.assertIn("multi-pickup", res["summary"]["reason"])
+
+
 class QuickPicksTests(unittest.TestCase):
     def setUp(self):
         self.nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)])

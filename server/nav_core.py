@@ -3469,6 +3469,129 @@ def run_packages(run: dict) -> list[dict]:
     return out
 
 
+def plan_route_trips(nav: NavData, packages, usable_scu, start_id=None, start_pos=None,
+                     t_ref=None, **kw) -> dict:
+    """plan_route, but a bundle too big for the hold is split into several trips
+    instead of coming back infeasible (the player opts in — `split_trips`).
+
+    Only a CAPACITY failure splits: a bundle that's unconnected or out of range
+    returns plan_route's answer untouched, and so does one with multi-pickup
+    groups (their total is unknown per pickup, so it can't be divided).
+
+    Trips are filled greedily from where the ship is (the start, else the first
+    package's destination) by nearest pickup, two ways — whole packages first,
+    and split-freely — and the faster plan wins (see `fill`); plan_route orders
+    each trip exactly, and the next trip starts where it ended. A package that doesn't
+    fit whole is carried in parts across trips, each part its own package
+    (`<id>.<n>`), so run mode checks parts off like any package. Filling counts
+    every pickup as aboard until the end of the trip, which is exact for a
+    single drop-off and conservative for several. 0-SCU packages ride trip 1.
+    The result is one plan: stops in trip order, each stamped `trip`, with the
+    drop-off repeated per trip (run mode already handles a revisited stop)."""
+    plan = plan_route(nav, packages, usable_scu, start_id, start_pos, t_ref, **kw)
+    sm = plan["summary"]
+    if sm["feasible"] or not packages:
+        sm["trips"] = 1 if plan["stops"] else 0
+        return plan
+    need = sm.get("min_capacity_scu")
+    if sm.get("range_infeasible") or need is None or need <= float(usable_scu) + 1e-9:
+        return plan
+    if any(p.get("group") is not None for p in packages):
+        sm["reason"] = "multi-pickup deliveries can't be split into trips"
+        return plan
+    usable = float(usable_scu)
+    norm = [{**p, "id": i if p.get("id") is None else p["id"]} for i, p in enumerate(packages)]
+    zero = [p for p in norm if float(p.get("scu") or 0) <= 0]
+    if start_id is not None:
+        origin = nav.pois[start_id]
+    elif start_pos is not None:
+        origin = position_start(nav, start_pos)
+    else:
+        origin = nav.pois[int(next(p for p in norm if p not in zero)["to_id"])]
+    memo = {}
+
+    def eta(a, b):
+        if a.id == b.id:
+            return 0.0
+        k = (a.id, b.id)
+        if k not in memo:
+            memo[k] = leg_eta_s(travel_cost(nav, a, b, t_ref)) or 0.0
+        return memo[k]
+
+    def fill(whole_first):
+        """Build the trips one hold at a time. `whole_first` takes the nearest
+        package that fits WHOLE and only splits one to fill an empty hold, so a
+        holding isn't topped-off in one trip and revisited in the next; the
+        plain greedy splits freely, which can save a whole trip. Returns the
+        list of trip plans, or an infeasible plan_route result."""
+        left = [{"pkg": p, "left": float(p.get("scu") or 0), "parts": 0}
+                for p in norm if p not in zero]
+        trips, at = [], origin
+        while left:
+            space, chunk, here = usable, [], at
+            while space > 1e-9 and left:
+                near = lambda r: eta(here, nav.pois[int(r["pkg"]["from_id"])])
+                fits = [r for r in left if r["left"] <= space + 1e-9]
+                if whole_first and fits:
+                    r = min(fits, key=near)
+                elif whole_first and chunk:
+                    break                  # nothing fits whole: close this trip
+                else:
+                    r = min(left, key=near)
+                take = min(r["left"], space)
+                whole = r["parts"] == 0 and take >= r["left"] - 1e-9
+                r["parts"] += 1
+                chunk.append({**r["pkg"], "scu": round(take, 6)} if whole else
+                             {**r["pkg"], "scu": round(take, 6),
+                              "id": f"{r['pkg']['id']}.{r['parts']}"})
+                r["left"] -= take
+                space -= take
+                here = nav.pois[int(r["pkg"]["from_id"])]
+                if r["left"] <= 1e-9:
+                    left.remove(r)
+            first = not trips
+            tp = plan_route(nav, (zero + chunk) if first else chunk, usable,
+                            start_id if first else at.id, start_pos if first else None,
+                            t_ref, **kw)
+            if not tp["summary"]["feasible"]:
+                return tp                  # e.g. a leg out of range — say so as-is
+            trips.append(tp)
+            at = nav.pois[tp["stops"][-1]["stop_id"]]
+        return trips
+
+    best = None
+    for whole_first in (True, False):
+        trips = fill(whole_first)
+        if isinstance(trips, dict):
+            return trips
+        key = (sum(t["summary"]["total_time_s"] for t in trips),
+               sum(t["summary"]["num_stops"] for t in trips))
+        if best is None or key < best[0]:
+            best = (key, trips)
+    trips = best[1]
+    stops = []
+    for n, tp in enumerate(trips, 1):
+        for s in tp["stops"]:
+            stops.append({**s, "trip": n})
+    sums = [t["summary"] for t in trips]
+    summary = {**sums[0],
+               "num_stops": len(stops),
+               "num_packages": sum(s["num_packages"] for s in sums),
+               "peak_load_scu": max(s["peak_load_scu"] for s in sums),
+               "min_capacity_scu": max(s["min_capacity_scu"] for s in sums),
+               "total_distance_m": sum(s["total_distance_m"] for s in sums),
+               "total_time_s": sum(s["total_time_s"] for s in sums),
+               "trips": len(trips), "unsplit_capacity_scu": need,
+               # how many packages ride in parts (`<id>.<n>`) across trips
+               "split_packages": len({str(p["id"]).rsplit(".", 1)[0]
+                                      for s in stops for p in s["pickups"]
+                                      if str(p["id"]) not in {str(q["id"]) for q in norm}})}
+    if "total_fuel_scu" in summary:
+        tf, oc, wl = _fuel_summary([s["leg"] for s in stops])
+        summary.update(total_fuel_scu=tf, over_range_count=oc, worst_leg_m=wl)
+    return {"summary": summary, "stops": stops}
+
+
 def packages_scu(packages) -> float:
     """Total SCU a package list represents. A multi-pickup group's pickup rows
     share one delivery total (`group_scu`) instead of per-row `scu`, so the total
@@ -3483,6 +3606,81 @@ def packages_scu(packages) -> float:
             seen.add(g)
             total += float(p.get("group_scu") or 0)
     return total
+
+
+# --- inventory pickup runs (#48, docs/inventory-pickup-runs.md) ---
+# A holding's location is free text (the POI picker only suggests), so turning a
+# selection of holdings into cargo-planner packages needs the text tied back to a
+# POI. A picked POI is stored as `location_poi_id`; older rows fall back to an
+# exact name match, which is only trusted when it's unambiguous.
+
+def poi_name_index(nav: NavData) -> dict[str, list[int]]:
+    """Case-folded POI name -> every POI id carrying it (names are not unique)."""
+    idx: dict[str, list[int]] = {}
+    for pid, p in nav.pois.items():
+        if p.name:
+            idx.setdefault(p.name.strip().casefold(), []).append(pid)
+    return idx
+
+
+def resolve_location_poi(nav: NavData, text, poi_id=None, index=None) -> int | None:
+    """The POI a holding sits at: its stored `poi_id` while that POI still exists
+    (a starmap/wiki toggle can remove it), else the ONE POI whose name equals
+    the location text. An ambiguous or unmatched name is None — routing a pickup
+    to the wrong one of two same-named stations is worse than asking."""
+    if poi_id is not None and int(poi_id) in nav.pois:
+        return int(poi_id)
+    key = (text or "").strip().casefold()
+    if not key:
+        return None
+    ids = [i for i in (index if index is not None else poi_name_index(nav)).get(key) or ()
+           if i in nav.pois]          # a cached index may name a since-removed POI
+    return ids[0] if len(ids) == 1 else None
+
+
+def build_pickup_plan(items, dropoff_id) -> dict:
+    """Split a pickup selection into what the cargo planner can route and what
+    it can't. Each item: {holding_id, item_name, unit, qty (the carryable amount),
+    short (promised but not in stock), quality, location, from_id, from_name,
+    label}. Returns:
+
+    - `packages`: holding -> drop-off rows for `plan_route`. Only SCU counts
+      against the hold; any other unit (each, L, …) rides as a 0-SCU stop so the
+      route still visits it (`zero_scu`).
+    - `unresolved`: carryable, but the location isn't a known POI (or is blank)
+      — the player picks it in the planner.
+    - `already_there`: sitting at the drop-off; nothing to haul.
+    - `still_to_gather`: the `short` part of a pledge — not in any hangar, so
+      never a stop.
+    With no drop-off yet, nothing is `already_there` and packages carry
+    `to_id` None for the player to fill."""
+    out = {"packages": [], "unresolved": [], "already_there": [], "still_to_gather": []}
+    for it in items:
+        qty, short = float(it.get("qty") or 0), float(it.get("short") or 0)
+        unit = it.get("unit") or ""
+        name = it.get("item_name") or ""
+        if short > 0:
+            out["still_to_gather"].append({"holding_id": it.get("holding_id"),
+                                           "item_name": name, "unit": unit,
+                                           "qty": short, "label": it.get("label")})
+        if qty <= 0:
+            continue
+        zero = unit.strip().lower() != "scu"
+        q = it.get("quality")
+        commodity = (f"{qty:g} {unit} {name}" if zero else name) + \
+            (f" Q{q}" if q is not None else "")
+        row = {"holding_id": it.get("holding_id"), "item_name": name, "unit": unit,
+               "qty": qty, "commodity": commodity, "scu": 0.0 if zero else qty,
+               "zero_scu": zero, "location": it.get("location"),
+               "from_id": it.get("from_id"), "from_name": it.get("from_name"),
+               "to_id": dropoff_id, "contract": it.get("label")}
+        if row["from_id"] is None:
+            out["unresolved"].append(row)
+        elif dropoff_id is not None and row["from_id"] == dropoff_id:
+            out["already_there"].append(row)
+        else:
+            out["packages"].append(row)
+    return out
 
 
 def run_total_reward(run: dict) -> float:

@@ -2341,6 +2341,9 @@ class RoutePlanIn(BaseModel):
     ship: str | None = Field(default=None, max_length=_NAME_MAX)
     qd: str | None = Field(default=None, max_length=_NAME_MAX)
     in_range_only: bool = False
+    # Too much cargo for the hold: split it into several trips instead of an
+    # infeasible plan (nav_core.plan_route_trips). Opt-in, off by default.
+    split_trips: bool = False
 
 
 # Breadcrumb trail tuning. In-memory and session-scoped (lost on restart).
@@ -6527,7 +6530,7 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
     try:
         # Off-load the pure-Python solve so it never freezes the event loop.
         plan = await asyncio.to_thread(
-            nav_core.plan_route,
+            nav_core.plan_route_trips if body.split_trips else nav_core.plan_route,
             nav, [p.model_dump() for p in body.packages],
             usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
             t_ref=sess.t if sess else None, avoid_volumes=volumes,
@@ -6607,7 +6610,8 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
                    if mode == "avoid" else None)
         fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)   # #27
         try:
-            plan = nav_core.plan_route(
+            solve = nav_core.plan_route_trips if body.split_trips else nav_core.plan_route
+            plan = solve(
                 nav, [p.model_dump() for p in body.packages],
                 usable_scu=body.usable_scu, start_id=body.start_id, start_pos=start_pos,
                 t_ref=sess.t, avoid_volumes=volumes,
@@ -12222,6 +12226,7 @@ class InventoryIn(BaseModel):
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
     quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
+    location_poi_id: int | None = None      # #48: the POI the location was picked from
 
 
 def _check_quality_kind(item: dict, quality: int | None) -> None:
@@ -12279,6 +12284,8 @@ class GoalIn(BaseModel):
     # broadcast). The response's `announced` says whether it actually went out.
     announce: bool = False
     announce_full: bool = False     # post the whole description, not a 280-char cut
+    # Where contributors deliver (#48) — seeds "Plan my delivery". None = no drop-off.
+    dropoff_poi_id: int | None = None
 
 
 class UnlockSpecIn(BaseModel):
@@ -12381,6 +12388,38 @@ def _enrich_owner_names(entries: list[dict], key: str = "owner_id") -> list[dict
     return entries
 
 
+# --- inventory pickup runs (#48, docs/inventory-pickup-runs.md) ---
+_poi_name_cache: tuple = (None, -1, {})
+
+
+def _poi_names() -> dict:
+    """nav_core.poi_name_index for the CURRENT nav — rebuilt when _rebuild_nav
+    swaps it (the starmap/wiki toggles) or a custom POI is added/removed in place
+    (the count moves). resolve_location_poi also skips ids that have since gone."""
+    global _poi_name_cache
+    if _poi_name_cache[0] is not nav or _poi_name_cache[1] != len(nav.pois):
+        _poi_name_cache = (nav, len(nav.pois), nav_core.poi_name_index(nav))
+    return _poi_name_cache[2]
+
+
+def _picked_poi(poi_id: int | None, location: str | None) -> int | None:
+    """A client-picked POI for a holding's location, kept only while the POI
+    exists and its name IS the location text (a pick followed by retyping is a
+    stale pick). Never an error: the text is the record, the id a routing hint."""
+    if poi_id is None or not location:
+        return None
+    p = nav.pois.get(poi_id)
+    if p is None or (p.name or "").strip().casefold() != location.strip().casefold():
+        return None
+    return p.id
+
+
+def _holding_poi(row: dict) -> int | None:
+    """Where a holding sits, for routing: the stored pick, else a unique name match."""
+    return nav_core.resolve_location_poi(nav, row.get("location"),
+                                         row.get("location_poi_id"), _poi_names())
+
+
 def _holding_view(row: dict) -> dict:
     """Enrich a holding with how much of it is committed to goals, what's left free,
     and what's been promised past it. `available = max(0, qty - Σ allocations)`;
@@ -12423,6 +12462,8 @@ async def get_inventory(owner: str | None = None, goal: int | None = None,
             out.append({**r, "committed": committed,
                         "available": round(max(0.0, qty - committed), 6),
                         "short": round(max(0.0, committed - qty), 6),
+                        # Routable location (#48): the stored pick or a unique name match.
+                        "location_poi_id": _holding_poi(r),
                         "spec": _item_spec(r.get("item_id")),
                         # Item class, so the row editor knows whether a lot
                         # quality applies (#151) — type-level, joined at read time.
@@ -12464,7 +12505,8 @@ async def log_inventory(body: InventoryIn, user: dict = Depends(require_session)
     row = db.upsert_inventory(
         user["id"], item["item_id"], item["name"], unit, body.qty,
         body.location.strip() or None, (body.note or "").strip() or None,
-        None, now, quality=body.quality, add=True)
+        None, now, quality=body.quality, add=True,
+        location_poi_id=_picked_poi(body.location_poi_id, body.location))
     return _holding_view(row)
 
 
@@ -12474,6 +12516,7 @@ class InventoryEditIn(BaseModel):
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
     unit: str | None = Field(default=None, max_length=_UNIT_MAX)
     quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
+    location_poi_id: int | None = None
 
 
 @app.patch("/api/inventory/{inv_id}")
@@ -12516,6 +12559,12 @@ async def edit_inventory(inv_id: int, body: InventoryEditIn,
               "note": (body.note or "").strip() or None,
               "unit": catalog.valid_unit(body.unit) or row.get("unit"),
               "quality": body.quality}
+    # An untouched location keeps its stored pick (the editor reloads the text,
+    # not the pick); a changed one keeps only a pick that matches the new text.
+    poi = _picked_poi(body.location_poi_id, loc)
+    if poi is None and (loc or "") == (row.get("location") or ""):
+        poi = row.get("location_poi_id")
+    fields["location_poi_id"] = poi
     db.update_inventory(inv_id, fields, datetime.now(timezone.utc).isoformat())
     return _holding_view(db.get_inventory(inv_id))
 
@@ -12538,6 +12587,7 @@ class InventorySplitIn(BaseModel):
     quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
     # Omitted/blank = the source lot's own location.
     location: str | None = Field(default=None, max_length=_LOCATION_MAX)
+    location_poi_id: int | None = None
 
 
 @app.post("/api/inventory/{inv_id}/split")
@@ -12569,9 +12619,81 @@ async def split_inventory(inv_id: int, body: InventorySplitIn,
             status_code=400,
             detail=f"only {max(0.0, available):g} {row.get('unit') or ''} of this lot is "
                    "free to move — the rest backs goal contributions (withdraw them first)")
+    poi = _picked_poi(body.location_poi_id, loc)
+    if poi is None and (loc or "") == (row.get("location") or ""):
+        poi = row.get("location_poi_id")
     src, tgt = db.split_inventory(inv_id, body.qty, body.quality, loc,
-                                  datetime.now(timezone.utc).isoformat())
+                                  datetime.now(timezone.utc).isoformat(),
+                                  location_poi_id=poi)
     return {"source": _holding_view(src), "target": _holding_view(tgt)}
+
+
+class PickupIn(BaseModel):
+    # Either a hand-picked set of the caller's holdings, or a goal (their own
+    # contributions to it). `dropoff_poi_id` overrides the goal's drop-off.
+    holding_ids: list[int] = Field(default_factory=list, max_length=_MAX_PACKAGES)
+    goal_id: int | None = None
+    dropoff_poi_id: int | None = None
+
+
+def _pickup_item(h: dict, qty: float, short: float, label: str) -> dict:
+    from_id = _holding_poi(h)
+    return {"holding_id": h.get("id"), "item_name": h.get("item_name"),
+            "unit": h.get("unit"), "qty": qty, "short": short,
+            "quality": h.get("quality"), "location": h.get("location"),
+            "from_id": from_id, "from_name": nav.pois[from_id].name if from_id is not None else None,
+            "label": label[:_CONTRACT_MAX]}
+
+
+@app.post("/api/inventory/pickup")
+async def plan_inventory_pickup(body: PickupIn, user: dict = Depends(require_session)):
+    """Turn holdings into a cargo-planner package list (#48 inventory pickup runs,
+    docs/inventory-pickup-runs.md) — the client seeds #/route with it and the
+    normal planner/run mode take over, so nothing here solves a route. Only the
+    caller's OWN holdings: SC has no shared storage, so nobody can collect
+    another member's stash. A goal run carries each contribution's covered part
+    (allocation − short); the short part is listed as still to gather, never a
+    stop. Drop-off: the body's, else the goal's (while its POI still exists),
+    else none — the player picks one in the planner."""
+    goal = None
+    if body.goal_id is not None:
+        goal = db.get_goal(body.goal_id)
+        if goal is None or not _can_view_goal(goal, user):
+            raise HTTPException(status_code=404, detail="unknown goal")
+    if body.dropoff_poi_id is not None:
+        if body.dropoff_poi_id not in nav.pois:
+            raise HTTPException(status_code=400, detail="unknown drop-off location")
+        drop = body.dropoff_poi_id
+    elif goal is not None and goal.get("dropoff_poi_id") in nav.pois:
+        drop = goal["dropoff_poi_id"]
+    else:
+        drop = None
+    holdings = {r["id"]: r for r in db.list_inventory(owner_id=user["id"])}
+    items = []
+    if goal is not None:
+        label = f"Goal: {goal.get('title') or goal['id']}"
+        for c in db.list_goal_contributions(goal_id=goal["id"]):
+            h = holdings.get(c["holding_id"])
+            if h is None:                   # someone else's contribution
+                continue
+            short = float(c.get("short") or 0)
+            items.append(_pickup_item(h, max(0.0, float(c["qty"] or 0) - short), short, label))
+        if not items:
+            raise HTTPException(status_code=400, detail="you haven't contributed to this goal")
+    else:
+        if not body.holding_ids:
+            raise HTTPException(status_code=400, detail="pick at least one holding")
+        for hid in dict.fromkeys(body.holding_ids):
+            h = holdings.get(hid)
+            if h is None:
+                raise HTTPException(status_code=404, detail="unknown holding")
+            items.append(_pickup_item(h, float(h.get("qty") or 0), 0.0, "Inventory"))
+    plan = nav_core.build_pickup_plan(items, drop)
+    for p in plan["packages"] + plan["unresolved"] + plan["already_there"]:
+        p["commodity"] = p["commodity"][:_COMMODITY_MAX]
+    plan["dropoff"] = {"id": drop, "name": nav.pois[drop].name} if drop is not None else None
+    plan["goal"] = {"id": goal["id"], "title": goal.get("title")} if goal else None
+    return plan
 
 
 def _validate_goal(body: GoalIn) -> dict:
@@ -12903,6 +13025,21 @@ async def _notify_survey_goal_met(goal: dict, zone: dict, progress: dict) -> Non
         mentions=mentions, dedup_key=f"goal-met:{goal['id']}")
 
 
+def _goal_dropoff(body: GoalIn, current: dict | None = None) -> dict:
+    """Validate a goal's drop-off POI (#48) into its columns; the name is stamped
+    from the POI, never the client. An edit that resends a drop-off whose POI has
+    since vanished (a starmap/wiki toggle) keeps it rather than 400ing the form."""
+    pid = body.dropoff_poi_id
+    if pid is None:
+        return {"dropoff_poi_id": None, "dropoff_name": None}
+    p = nav.pois.get(pid)
+    if p is None:
+        if current and current.get("dropoff_poi_id") == pid:
+            return {"dropoff_poi_id": pid, "dropoff_name": current.get("dropoff_name")}
+        raise HTTPException(status_code=400, detail="unknown drop-off location")
+    return {"dropoff_poi_id": p.id, "dropoff_name": p.name}
+
+
 def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> dict:
     """Serialize a goal with its derived progress. `contributions` is the list of
     inventory rows earmarked to it. Auto-flips a fully-covered active goal to
@@ -12927,6 +13064,10 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
     view["visibility"] = goal.get("visibility") or "org"
     view["kind"] = goal.get("kind") or "materials"
     view["blueprint_key"] = goal.get("blueprint_key")
+    view["dropoff"] = ({"id": goal["dropoff_poi_id"], "name": goal.get("dropoff_name"),
+                        # False once a starmap/wiki toggle removed the POI.
+                        "routable": goal["dropoff_poi_id"] in nav.pois}
+                       if goal.get("dropoff_poi_id") is not None else None)
     view["creator_name"] = _resolve_member_name(goal["creator_id"], None)
     view["is_mine"] = goal["creator_id"] == user["id"]
     view["can_edit"] = goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
@@ -13004,6 +13145,7 @@ async def create_goal(body: GoalIn, user: dict = Depends(require_session)):
     `blueprint_key` (+ optional `blueprint_qty`) with no line items: the recipe's
     materials manifest becomes the line items. `visibility` scopes it org|personal."""
     fields = _validate_goal(body)
+    fields.update(_goal_dropoff(body))
     if fields.get("kind") == "survey":
         # The baseline (§11.3): only evidence from here on counts.
         fields["survey_spec"]["since"] = time.time()
@@ -13072,6 +13214,7 @@ async def edit_goal(goal_id: int, body: GoalIn, user: dict = Depends(require_ses
         raise HTTPException(status_code=404, detail="unknown goal")
     _require_goal_owner(goal, user)
     fields = _validate_goal(body)
+    fields.update(_goal_dropoff(body, goal))
     if fields.get("kind") == "survey":
         # An edit never moves the baseline: re-stamping it would silently wipe
         # the progress members already made. A goal converted INTO a survey
@@ -13109,6 +13252,7 @@ class ContributeIn(BaseModel):
     # so an un-gathered pledge never invents inventory the member doesn't have.
     holding_id: int | None = None
     on_hand: bool = False
+    location_poi_id: int | None = None      # #48: for a holding this call declares
     # Lot quality for a holding this call declares (#151) — ignored when
     # `holding_id` names an existing lot, which already has one.
     quality: int | None = Field(default=None, ge=0, le=_QUALITY_MAX)
@@ -13204,7 +13348,7 @@ async def contribute_to_goal(goal_id: int, body: ContributeIn,
         holding = db.upsert_inventory(
             user["id"], item["item_id"], item["name"], item["unit"],
             body.qty if body.on_hand else 0, loc, None, None, now,
-            quality=body.quality)
+            quality=body.quality, location_poi_id=_picked_poi(body.location_poi_id, loc))
     existing = db.find_allocation(holding["id"], goal_id)
     if body.on_hand:
         # Declaring it's in hand: bump the holding so the commitment is covered.
