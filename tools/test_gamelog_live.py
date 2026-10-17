@@ -129,6 +129,26 @@ class ProfilerTest(unittest.TestCase):
         self.assertFalse(self.p.label(2, "nope"))
         self.assertEqual(self.p.markers[0].label, "died")
 
+    def test_mission_lines(self):
+        self.p.feed(line(1, "CLocalMissionPhaseMarker::CreateMarker",
+                         "Creating objective marker: missionId [m1], generator name [VisitingIasi], "
+                         "contract [Iasi_Salvage_Medium_2], contractDefinitionId[c1], "
+                         "objectiveId [dropoff_246aa48e-a4d0_0], markerEntityId [14025], "
+                         "zoneHostId [862943818459], position [x: -2078603.324570, "
+                         "y: 4413445.009110, z: -1900839.442474]"))
+        self.p.feed(line(2, "MissionEnded", "Received MissionEnded push message for: mission_id m1 "
+                         "- mission_state MISSION_STATE_COMPLETED"))
+        self.assertEqual([e[2] for e in self.p.timeline], [
+            "objective marker: Iasi_Salvage_Medium_2 (drop-off) in zone 862943818459 "
+            "at (-2,078,603, 4,413,445, -1,900,839) m",
+            "mission ended: completed"])
+
+    def test_salvage_era_hints_hidden(self):
+        self.p.feed(note(1, "Multi-Tool - Salvage: Salvaging turns various materials into RMC."))
+        self.p.feed(note(2, "Exiting Armistice Zone: You have left the confines of the Armistice Zone."))
+        self.p.feed(note(3, "Contract Accepted:  RSI Disc. Month: UCM Order (M)"))
+        self.assertEqual([e[2] for e in self.p.timeline], ["Contract Accepted:  RSI Disc. Month: UCM Order (M)"])
+
 
 class ClockTest(unittest.TestCase):
     def test_midnight_crossing_picks_the_day_inside_the_span(self):
@@ -158,6 +178,26 @@ class TailTest(unittest.TestCase):
             self.assertEqual(t.poll(), (["two"], False))
             f.write_bytes(b"new\n")                 # relaunch truncates
             self.assertEqual(t.poll(), (["new"], True))
+
+
+class ConsoleTest(unittest.TestCase):
+    def test_parse_command(self):
+        self.assertEqual(gl.parse_command("#3 collected refinery job"), ("label", (3, "collected refinery job")))
+        self.assertEqual(gl.parse_command("3 died"), ("label", (3, "died")))
+        self.assertEqual(gl.parse_command("landed at NB"), ("mark", "landed at NB"))
+        self.assertEqual(gl.parse_command("@13:05 landed"), ("at", "13:05 landed"))
+        self.assertEqual(gl.parse_command("Q"), ("quit", None))
+        self.assertEqual(gl.parse_command("r"), ("report", None))
+
+    def test_log_finished(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "Game.log"
+            f.write_bytes(b"<t> [Notice] <Join PU> x\n")
+            self.assertFalse(gl.log_finished(f))
+            with open(f, "ab") as fh:
+                fh.write(b"<t> [Notice] <SystemQuit> CSystem::Quit invoked\n")
+            self.assertTrue(gl.log_finished(f))
+            self.assertFalse(gl.log_finished(Path(d) / "missing.log"))
 
 
 class EdgeTest(unittest.TestCase):
