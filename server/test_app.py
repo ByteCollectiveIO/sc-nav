@@ -4850,6 +4850,211 @@ class ContributionTests(unittest.TestCase):
         self.assertEqual(offered[("commodity:agricium", "Orison")]["available"], 7)
 
 
+class InventoryPickupTests(unittest.TestCase):
+    """#48 inventory pickup runs (docs/inventory-pickup-runs.md): holdings keep the
+    POI their location was picked from, goals carry a drop-off, and
+    POST /api/inventory/pickup turns either into cargo-planner packages."""
+
+    _IDS = (9_100_001, 9_100_002, 9_100_003)
+    _NAMES = ("Pickup Test Alpha", "Pickup Test Beta", "Pickup Test Gamma")
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._a = {"id": "111", "username": "ana", "is_admin": False}
+        cls._b = {"id": "222", "username": "bo", "is_admin": False}
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._a
+        cls.client = TestClient(app.app)
+        for pid, name in zip(cls._IDS, cls._NAMES):
+            app.nav.pois[pid] = app.nav_core.Poi(
+                id=pid, name=name, system="Stanton", container_name=None,
+                type="Orbital Station", local_km=None, global_m=(float(pid), 0.0, 0.0),
+                latitude=None, longitude=None, height_m=None, qt_marker=False)
+
+    @classmethod
+    def tearDownClass(cls):
+        for pid in cls._IDS:
+            app.nav.pois.pop(pid, None)
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as(self._a)
+
+    def _as(self, u):
+        app.app.dependency_overrides[app.require_session] = lambda: u
+        app.app.dependency_overrides[app.require_user] = lambda: u
+
+    def _log(self, loc, poi=None, qty=10, item="commodity:agricium", unit=None):
+        body = {"item_id": item, "qty": qty, "location": loc, "location_poi_id": poi}
+        if unit:
+            body["unit"] = unit
+        r = self.client.post("/api/inventory", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _row(self, hid):
+        rows = self.client.get("/api/inventory?owner=me").json()["rows"]
+        return next(r for r in rows if r["id"] == hid)
+
+    # -- holdings remember where they are --
+
+    def test_a_picked_location_is_stored_and_served(self):
+        a, _, _ = self._IDS
+        h = self._log(self._NAMES[0], a)
+        self.assertEqual(h["location_poi_id"], a)
+        self.assertEqual(self._row(h["id"])["location_poi_id"], a)
+
+    def test_a_stale_or_unknown_pick_is_dropped_not_an_error(self):
+        a, _, _ = self._IDS
+        self.assertIsNone(self._log("Area18 hangar", a)["location_poi_id"])   # retyped
+        self.assertIsNone(self._log(self._NAMES[1], 123_456_789)["location_poi_id"])
+
+    def test_a_text_only_location_resolves_by_its_unique_name(self):
+        h = self._log(self._NAMES[2].upper())                 # typed, never picked
+        self.assertIsNone(h["location_poi_id"])
+        self.assertEqual(self._row(h["id"])["location_poi_id"], self._IDS[2])
+
+    def test_editing_keeps_the_pick_until_the_location_text_changes(self):
+        a, _, _ = self._IDS
+        h = self._log(self._NAMES[0], a, item="commodity:hadanite")
+        r = self.client.patch(f"/api/inventory/{h['id']}", json={
+            "qty": 5, "location": self._NAMES[0]})             # editor resends text only
+        self.assertEqual(r.json()["location_poi_id"], a)
+        r = self.client.patch(f"/api/inventory/{h['id']}", json={
+            "qty": 5, "location": "my ship"})
+        self.assertIsNone(r.json()["location_poi_id"])
+
+    # -- goal drop-off --
+
+    def _goal(self, drop=None, item="commodity:agricium", needed=100):
+        r = self.client.post("/api/goals", json={
+            "title": "stock the depot", "dropoff_poi_id": drop,
+            "line_items": [{"item_id": item, "qty_needed": needed}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_goal_dropoff_name_is_stamped_from_the_poi(self):
+        g = self._goal(self._IDS[1])
+        self.assertEqual(g["dropoff"], {"id": self._IDS[1], "name": self._NAMES[1],
+                                        "routable": True})
+        self.assertIsNone(self._goal()["dropoff"])
+
+    def test_unknown_goal_dropoff_is_rejected(self):
+        r = self.client.post("/api/goals", json={
+            "title": "x", "dropoff_poi_id": 123_456_789,
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 1}]})
+        self.assertEqual(r.status_code, 400)
+
+    def test_editing_a_goal_whose_dropoff_vanished_keeps_it(self):
+        pid = 9_100_099
+        app.nav.pois[pid] = app.nav_core.Poi(
+            id=pid, name="Doomed Depot", system="Stanton", container_name=None,
+            type="Orbital Station", local_km=None, global_m=(1.0, 2.0, 3.0),
+            latitude=None, longitude=None, height_m=None, qt_marker=False)
+        g = self._goal(pid)
+        app.nav.pois.pop(pid)
+        r = self.client.patch(f"/api/goals/{g['id']}", json={
+            "title": "renamed", "dropoff_poi_id": pid,
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 100}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["dropoff"], {"id": pid, "name": "Doomed Depot",
+                                               "routable": False})
+
+    # -- the pickup plan --
+
+    def test_holdings_become_packages_to_the_chosen_dropoff(self):
+        a, b, c = self._IDS
+        ore = self._log(self._NAMES[0], a, qty=40, item="commodity:laranite")
+        pens = self._log(self._NAMES[1], b, qty=12, item="commodity:stims", unit="each")
+        there = self._log(self._NAMES[2], c, qty=3, item="commodity:gold")
+        lost = self._log("somewhere on Daymar", qty=2, item="commodity:tin")
+        r = self.client.post("/api/inventory/pickup", json={
+            "holding_ids": [ore["id"], pens["id"], there["id"], lost["id"]],
+            "dropoff_poi_id": c})
+        self.assertEqual(r.status_code, 200, r.text)
+        plan = r.json()
+        self.assertEqual(plan["dropoff"], {"id": c, "name": self._NAMES[2]})
+        pk = {p["holding_id"]: p for p in plan["packages"]}
+        self.assertEqual((pk[ore["id"]]["from_id"], pk[ore["id"]]["to_id"],
+                          pk[ore["id"]]["scu"]), (a, c, 40.0))
+        self.assertTrue(pk[pens["id"]]["zero_scu"])
+        self.assertEqual(pk[pens["id"]]["scu"], 0.0)
+        self.assertEqual([r["holding_id"] for r in plan["already_there"]], [there["id"]])
+        self.assertEqual([r["holding_id"] for r in plan["unresolved"]], [lost["id"]])
+        self.assertEqual(plan["unresolved"][0]["location"], "somewhere on Daymar")
+
+    def test_a_goal_run_carries_the_stocked_part_and_lists_the_rest(self):
+        a, b, _ = self._IDS
+        g = self._goal(b, item="commodity:beryl", needed=100)
+        h = self._log(self._NAMES[0], a, qty=6, item="commodity:beryl")
+        r = self.client.post(f"/api/goals/{g['id']}/contribute", json={
+            "item_id": "commodity:beryl", "qty": 10, "holding_id": h["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        plan = self.client.post("/api/inventory/pickup", json={"goal_id": g["id"]}).json()
+        self.assertEqual(plan["dropoff"]["id"], b)                     # the goal's
+        (p,) = plan["packages"]
+        self.assertEqual((p["from_id"], p["to_id"], p["scu"]), (a, b, 6.0))
+        self.assertTrue(p["contract"].startswith("Goal: "))
+        self.assertEqual(plan["still_to_gather"][0]["qty"], 4.0)
+
+    def test_a_goal_run_skips_other_members_contributions(self):
+        a, b, _ = self._IDS
+        g = self._goal(b, item="commodity:corundum", needed=100)
+        self._as(self._b)
+        hb = self._log(self._NAMES[0], a, qty=5, item="commodity:corundum")
+        self.client.post(f"/api/goals/{g['id']}/contribute", json={
+            "item_id": "commodity:corundum", "qty": 5, "holding_id": hb["id"]})
+        self._as(self._a)
+        r = self.client.post("/api/inventory/pickup", json={"goal_id": g["id"]})
+        self.assertEqual(r.status_code, 400)                # ana pledged nothing
+        r = self.client.post("/api/inventory/pickup", json={"holding_ids": [hb["id"]]})
+        self.assertEqual(r.status_code, 404)                # bo's stash isn't hers
+
+    def test_pickup_needs_a_selection_and_a_real_dropoff(self):
+        self.assertEqual(self.client.post("/api/inventory/pickup", json={}).status_code, 400)
+        h = self._log(self._NAMES[0], self._IDS[0], item="commodity:copper")
+        r = self.client.post("/api/inventory/pickup", json={
+            "holding_ids": [h["id"]], "dropoff_poi_id": 123_456_789})
+        self.assertEqual(r.status_code, 400)
+        plan = self.client.post("/api/inventory/pickup", json={"holding_ids": [h["id"]]}).json()
+        self.assertIsNone(plan["dropoff"])
+        self.assertIsNone(plan["packages"][0]["to_id"])
+
+    # -- too much cargo: split into trips (opt-in) --
+
+    def _route_body(self, **kw):
+        a, b, c = self._IDS
+        return {"usable_scu": 20, "avoid_mode": "ignore", **kw, "packages": [
+            {"id": "x", "commodity": "Iron", "scu": 24, "from_id": a, "to_id": c},
+            {"id": "y", "commodity": "Iron", "scu": 16, "from_id": b, "to_id": c}]}
+
+    def test_an_oversized_run_is_infeasible_unless_split_is_asked_for(self):
+        app._rate_hits.clear()
+        r = self.client.post("/api/route/plan", json=self._route_body())
+        self.assertFalse(r.json()["summary"]["feasible"])
+        r = self.client.post("/api/route/plan", json=self._route_body(split_trips=True))
+        sm = r.json()["summary"]
+        self.assertTrue(sm["feasible"], sm)
+        self.assertEqual(sm["trips"], 2)
+        self.assertEqual(sm["unsplit_capacity_scu"], 40)
+
+    def test_a_split_run_starts_and_tracks_every_part(self):
+        app._rate_hits.clear()
+        r = self.client.post("/api/route/run", json=self._route_body(split_trips=True))
+        self.assertEqual(r.status_code, 200, r.text)
+        run = r.json()["run"]
+        self.assertEqual(max(s.get("trip", 1) for s in run["stops"]), 2)
+        picked = [p for s in run["stops"] for p in s["pickups"]]
+        self.assertAlmostEqual(sum(p["scu"] for p in picked), 40)
+        self.assertEqual(len({p["id"] for p in picked}), len(picked))   # parts are distinct
+        self.client.delete("/api/route/run")
+
+
 class InventoryQualityTests(unittest.TestCase):
     """Lot quality (#151): SC 4.10 keeps Q0–1000 on every commodity and stacks
     each value separately, so quality is part of a holding's identity. Two lots

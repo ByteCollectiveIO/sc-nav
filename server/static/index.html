@@ -1393,6 +1393,13 @@
   .route-intro .ri-steps b { color: var(--text); font-weight: 600; }
   .route-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .route-hint { font-size: 12px; margin: 6px 0 0; line-height: 1.5; }
+  /* inventory pickup run banner (#48) */
+  .route-seed { font-size: 12px; line-height: 1.5; color: var(--dim); position: relative;
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 30px 7px 11px;
+    margin: 8px 0; background: var(--panel2); }
+  .route-seed b { color: var(--text); font-weight: 600; }
+  .route-seed .rs-list { margin: 2px 0 0; }
+  .route-seed .rs-x { position: absolute; top: 4px; right: 6px; }
   .route-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
   /* A plan belongs to the target it was planned for. Changing the target used
      to leave the old number on screen — and the only thing naming ITS system
@@ -1517,6 +1524,9 @@
   .route-cap .cap-fill { height: 100%; background: var(--good); }
   .route-cap.over .cap-fill { background: var(--warn); }
   .route-feasible { color: var(--good); } .route-infeasible { color: var(--bad); }
+  .route-split { font-size: 12px; color: var(--dim); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .route-trip-h { font-size: 11px; font-weight: 700; letter-spacing: .6px; color: var(--dim);
+    margin: 14px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
   .route-warn { color: var(--warn); }
   .route-stop { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
   .route-stop .seq { flex: none; width: 26px; height: 26px; border-radius: 50%;
@@ -2684,6 +2694,10 @@
   .inv-cat { color: var(--accent); }
   .inv-dim { color: var(--dim); white-space: nowrap; }
   .inv-loc { white-space: nowrap; }
+  .inv-table .inv-pick { width: 24px; padding-right: 0; }
+  .inv-pick-bar { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--panel2); }
+  .inv-pick-bar[hidden], .inv-pick-bar [hidden], .route-seed[hidden] { display: none; }
   .inv-note { font-size: 12px; margin-top: 2px; }
   .inv-actions { white-space: nowrap; text-align: right; }
   .inv-actions .ev-btn { padding: 3px 9px; }
@@ -5410,6 +5424,7 @@
       <h2>PACKAGES</h2>
       <p class="muted route-hint">One row per contract line — <b>from</b> → <b>to</b> straight off
         the contract. Shared stops are visited once.</p>
+      <div id="route-seed-note" hidden></div>
       <div id="route-pkgs"></div>
       <datalist id="route-commodities"></datalist>
       <datalist id="route-contracts"></datalist>
@@ -5434,6 +5449,8 @@
       <div class="route-actions">
         <button id="route-plan" class="active">Plan route</button>
         <button id="route-clear" title="clear all cargo lines and start a fresh route">Clear route</button>
+        <label class="route-split" title="When everything won't fit in the hold at once, plan several trips instead of refusing">
+          <input type="checkbox" id="route-split"> split into trips if it doesn't fit</label>
         <span id="route-plan-msg" class="muted" style="font-size:12px;"></span>
       </div>
     </div>
@@ -10302,6 +10319,7 @@ let lastRunSig = null;          // signature of the last-rendered run (skip no-o
 let routeHistory = null;        // {runs, stats, session_stats, session_start, picks}
 let rewardByLabel = {};         // contract label -> aUEC payout ("" = ungrouped bucket)
 let routeStatsScope = "session"; // which stats the boxes show: session | recent
+let routeSeed = null;           // inventory pickup plan handed to the planner, consumed once (#48)
 
 async function loadRoutePlanner() {
   if (!routeCatalog) {
@@ -10317,6 +10335,7 @@ async function loadRoutePlanner() {
     }).catch(() => {});
   }
   if (!routeWired) wireRoutePlanner();
+  if (routeSeed) { applyRouteSeed(routeSeed); routeSeed = null; }
   if (!$("route-pkgs").children.length) addPkgRow();
   renderRouteIntro();
   loadRouteHistory();
@@ -10484,8 +10503,63 @@ function cloneRun(run) {
   $("route-pkgs").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
 }
 
+// --- inventory pickup runs (#48) ---
+// Inventory and goals hand the planner a package list built server-side
+// (POST /api/inventory/pickup); it lands here as ordinary package rows, so plan,
+// run mode and history work unchanged.
+async function planInventoryPickup(body) {
+  const r = await fetch("/api/inventory/pickup", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) return d.detail || "Couldn't build the pickup run.";
+  routeSeed = d;
+  location.hash = "#/route";
+  return null;
+}
+
+function applyRouteSeed(plan) {
+  $("route-pkgs").innerHTML = "";
+  rewardByLabel = {};
+  const drop = plan.dropoff;
+  const seedRow = (p) => {
+    const row = addPkgRow({ commodity: p.commodity, scu: p.scu, contract: p.contract || "",
+      from_id: p.from_id, from_name: p.from_name,
+      to_id: drop ? drop.id : null, to_name: drop ? drop.name : null });
+    if (p.zero_scu) { row.dataset.zeroOk = "1"; row.querySelector(".pkg-scu").value = "0"; }
+    // Unresolved location: show the holding's text so the player knows what to pick.
+    if (p.from_id == null && p.location) row.querySelector(".pkg-from input").value = p.location;
+    return row;
+  };
+  plan.packages.forEach(seedRow);
+  plan.unresolved.forEach(seedRow);
+  refreshContractList();
+  const item = (x) => `${esc(x.item_name)} · ${fmtQty(x.qty)} ${esc(x.unit || "")}`;
+  const list = (label, xs) => xs.length
+    ? `<div class="rs-list">${label}: ${xs.map(item).join(", ")}</div>` : "";
+  const n = plan.packages.length + plan.unresolved.length;
+  const note = $("route-seed-note");
+  note.className = "route-seed";
+  note.innerHTML =
+    `<button class="ev-btn rs-x" type="button" title="dismiss">✕</button>` +
+    `<div>📦 From your inventory${plan.goal ? ` for <b>${esc(plan.goal.title || "goal")}</b>` : ""}: ` +
+    `${n} pickup${n === 1 ? "" : "s"}${drop ? ` → <b>${esc(drop.name)}</b>` : " — pick where to take them in each row’s <b>to</b>"}.` +
+    `${plan.packages.some(p => p.zero_scu) ? " Items not measured in SCU ride along as 0-SCU stops." : ""}</div>` +
+    (plan.unresolved.length ? `<div class="rs-list">📍 Pick a location for ${plan.unresolved.length} ` +
+      `row${plan.unresolved.length === 1 ? "" : "s"} — the holding’s location isn’t a known place yet.</div>` : "") +
+    list("✓ Already there", plan.already_there) +
+    list("⏳ Still to gather (not in stock, so no stop)", plan.still_to_gather);
+  note.hidden = false;
+  note.querySelector(".rs-x").onclick = () => { note.hidden = true; };
+  $("route-pkgs").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
+}
+
 function wireRoutePlanner() {
   routeWired = true;
+  // The split-into-trips choice is a per-viewer preference, remembered locally.
+  try { $("route-split").checked = localStorage.getItem("routeSplitTrips") === "1"; } catch {}
+  $("route-split").onchange = () => {
+    try { localStorage.setItem("routeSplitTrips", $("route-split").checked ? "1" : "0"); } catch {}
+  };
   attachShipPicker();
   $("route-ship-save").onclick = rememberShip;
   $("route-add-pkg").onclick = () => addPkgRow();
@@ -10711,6 +10785,11 @@ function addPickupRow(picks, pre) {
 
 // Mark a from/to picker as resolved to a known POI (same end-state as a manual
 // pick: name in the field, id on the dataset, the .picked styling on).
+// The POI id a picker input currently holds (null once typing invalidated it).
+function pickedPoiId(input) {
+  return input && input.dataset.poiId ? Number(input.dataset.poiId) : null;
+}
+
 function setPickedPoi(wrap, id, name) {
   if (id == null || name == null) return;
   const input = wrap.querySelector("input");
@@ -10867,7 +10946,10 @@ async function planRoute() {
       continue;
     }
     const from = row.querySelector(".pkg-from input");
-    if (!from.dataset.poiId || !to.dataset.poiId || !(scu > 0)) { skipped++; continue; }
+    // A non-SCU inventory item (#48) is a 0-SCU stop on purpose; a contract row
+    // with no SCU is still an entry mistake, so only seeded rows may be 0.
+    const scuOk = scu > 0 || (row.dataset.zeroOk === "1" && scu === 0);
+    if (!from.dataset.poiId || !to.dataset.poiId || !scuOk) { skipped++; continue; }
     packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
@@ -10877,6 +10959,7 @@ async function planRoute() {
                     ship: $("route-ship").value.trim() || null,
                     ...(hasDrive && $("route-qd").value ? { qd: $("route-qd").value } : {}),
                     ...(hasDrive && $("route-inrange").checked ? { in_range_only: true } : {}),
+                    ...($("route-split").checked ? { split_trips: true } : {}),
                     ...routeStartPayload() };
   haloPlanSay("planning…", "status");
   let res;
@@ -11016,10 +11099,14 @@ function renderPlan(res) {
     if (sm.range_infeasible)   // #27: a jump exceeds the drive, not a capacity problem
       h += `<p class="route-infeasible">⚠ No route where every jump fits this drive's range.
         Uncheck <b>in-range only</b> to allow mid-route refueling, or pick a longer-range drive.</p></div>`;
+    else if (sm.reason)   // e.g. split_trips can't divide a multi-pickup delivery
+      h += `<p class="route-infeasible">⚠ This won't fit your ship (needs
+        <b>${sm.min_capacity_scu} SCU</b>, you have ${sm.usable_scu}), and ${esc(sm.reason)}.
+        Drop a contract and re-plan.</p></div>`;
     else if (sm.min_capacity_scu != null)
       h += `<p class="route-infeasible">⚠ This won't fit your ship. It needs at least
         <b>${sm.min_capacity_scu} SCU</b> of usable capacity (you have ${sm.usable_scu}).
-        Drop a contract or split it into two trips.</p></div>`;
+        Drop a contract, or tick <b>split into trips if it doesn't fit</b> and re-plan.</p></div>`;
     else   // no visiting order exists at any capacity (unroutable bundle)
       h += `<p class="route-infeasible">⚠ No visiting order can satisfy these
         packages' pickups and dropoffs. Drop a contract and re-plan.</p></div>`;
@@ -11052,6 +11139,11 @@ function renderPlan(res) {
     + `<div class="cap-row"><span class="cap-label">PEAK LOAD</span>`
     + `<span class="cap-val"><b class="${peakClass}">${sm.peak_load_scu}</b> / ${sm.usable_scu} SCU</span></div>`
     + `<div class="cap-track"><div class="cap-fill" style="width:${capPct}%"></div></div></div>`;
+  if (sm.trips > 1)
+    h += `<p class="route-hint">Split into <b>${sm.trips} trips</b> — the whole load needs ` +
+      `${sm.unsplit_capacity_scu} SCU at once.` +
+      (sm.split_packages ? ` ${sm.split_packages} load${sm.split_packages === 1 ? " is" : "s are"} too big ` +
+        `for one trip and ${sm.split_packages === 1 ? "is" : "are"} collected in parts.` : "") + `</p>`;
   if (sm.start)
     h += `<p class="route-hint muted">Starting from <b>${esc(sm.start)}</b>.</p>`;
   if (sm.min_capacity_scu < sm.peak_load_scu)
@@ -11062,10 +11154,18 @@ function renderPlan(res) {
   h += routeStepper(res.stops, -1);
   assignContractColors(res.stops);
   const completes = contractCompletions(res.stops);
-  res.stops.forEach((s, i) => { h += renderStop(s, i, completes[i] || []); });
+  res.stops.forEach((s, i) => { h += routeTripHead(res.stops, i) + renderStop(s, i, completes[i] || []); });
   h += `</div>`;
   out.innerHTML = h; out.hidden = false;
   $("route-start").onclick = startRun;
+}
+
+// A split run (split_trips) stamps each stop with its `trip`; mark where each
+// trip begins. Nothing for a single-trip plan.
+function routeTripHead(stops, i) {
+  const t = stops[i].trip, n = stops.reduce((m, s) => Math.max(m, s.trip || 0), 0);
+  if (n < 2 || (i > 0 && stops[i - 1].trip === t)) return "";
+  return `<div class="route-trip-h">TRIP ${t} OF ${n}</div>`;
 }
 
 // ---- run mode (execute) ----
@@ -11284,6 +11384,7 @@ function renderRun(run) {
   h += runHoldHtml(run) + runContractsHtml(run);
   run.stops.forEach((s, i) => {
     const past = i < run.active, active = i === run.active;
+    h += routeTripHead(run.stops, i);
     h += `<div class="run-stop${active ? " active" : ""}${past ? " past" : ""}">`
       + `<div class="run-stop-head"><span class="seq">${past ? "✓" : i + 1}</span>`
       + `<span class="stop-name">${esc(s.name)} <span class="stop-sys">${esc(s.system)}</span></span></div>`;
@@ -17007,7 +17108,15 @@ function goalMyContribs(g) {
   const body = [...groups].map(([loc, items]) =>
     `<div class="rm-loc-grp"><div class="rm-loc-h">📍 ${esc(loc)}</div>` +
     items.map(row).join("") + `</div>`).join("");
-  return `<div class="ev-section-h">My contributions</div>${body}` +
+  // #48: route the stocked part of my pledges to the goal's drop-off.
+  const stocked = mine.some(c => (Number(c.qty) || 0) - (Number(c.short) || 0) > 0);
+  const drop = g.dropoff && g.dropoff.routable ? g.dropoff : null;
+  const deliver = `<div class="rm-row" style="margin:6px 0 4px">` +
+    `<button class="ev-btn primary" id="goal-plan-delivery"${stocked ? "" : ` disabled title="nothing gathered yet — everything you pledged is still ⏳ to gather"`}>` +
+    `📦 Plan my delivery</button>` +
+    `<span class="ev-hint" id="goal-plan-msg">${drop ? `Collects what you’ve stocked and brings it to <b>${esc(drop.name)}</b>.`
+      : "No drop-off set — you’ll pick where to deliver in the planner."}</span></div>`;
+  return `<div class="ev-section-h">My contributions</div>${deliver}${body}` +
     `<span class="ev-hint">Withdrawing hands the amount back to your inventory as free stock.</span>`;
 }
 
@@ -17089,6 +17198,11 @@ async function withdrawContribution(goalId, allocId, name) {
 }
 
 function wireGoalContribActions(g) {
+  const plan = $("goal-plan-delivery");
+  if (plan) plan.onclick = async () => {
+    const err = await planInventoryPickup({ goal_id: g.id });
+    if (err) $("goal-plan-msg").textContent = err;
+  };
   document.querySelectorAll("#goal-detail-body .rm-c-del").forEach(b => {
     b.onclick = async () => {
       if (await withdrawContribution(g.id, b.dataset.alloc, b.dataset.name)) renderGoalDetail(g.id);
@@ -17241,7 +17355,8 @@ function renderGoalDetailBody(g) {
   goalSeedWarn = null;
   $("goal-detail-body").innerHTML =
     `<div class="ev-detail-title"><h2>${esc(g.title)}</h2>${goalPersonalChip(g)}${rmStatusBadge(g.status)}${prioChip(g.priority)}</div>` +
-    `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b></div>` +
+    `<div class="ev-detail-meta">${rmDue(g.deadline)} · created by <b>${esc(g.creator_name)}</b>` +
+      `${g.dropoff ? ` · 📦 deliver to <b>${esc(g.dropoff.name || "")}</b>` : ""}</div>` +
     goalCraftHead(g) + seedWarn + notice +
     (g.description ? `<div class="ev-desc">${esc(g.description)}</div>` : "") +
     goalSpecBox(g) +
@@ -17308,6 +17423,7 @@ function renderGoalDetailBody(g) {
     if (src.startsWith("hold:")) body.holding_id = Number(src.slice(5));
     else {
       body.location = $("goal-c-loc").value.trim();
+      body.location_poi_id = pickedPoiId($("goal-c-loc"));
       body.on_hand = src === "have";
       body.quality = invQualityValue($("goal-c-quality"));
     }
@@ -17384,6 +17500,7 @@ function goalFormHtml(g) {
         `saving re-derives the line items from the recipe at these qualities (replacing the rows below).</span>` +
       `<div id="goal-f-bp-spec"></div></div>`;
   const kind = (g && g.kind) || "materials";
+  const drop = g && g.dropoff;      // #48 inventory pickup runs
   const kindSeg = g ? "" :
     `<div class="ev-field"><label>Goal kind</label>` +
       `<div class="rm-scope-seg" id="goal-f-kind">` +
@@ -17452,6 +17569,11 @@ function goalFormHtml(g) {
     `<div class="ev-field"><label>Line items — what to gather &amp; how much</label>` +
       `<div class="ev-roster" id="goal-f-lines">${lines}</div>` +
       `<button class="ev-btn" id="goal-f-addline" style="align-self:flex-start;margin-top:4px;">+ add item</button></div>` +
+    `<div class="ev-field"><label>Drop-off <span class="muted">(optional)</span></label>` +
+      `<span class="poi-pick${drop ? " picked" : ""}"><input id="goal-f-drop" class="ti" ` +
+        `placeholder="where contributors deliver — station, outpost…" autocomplete="off"` +
+        `${drop ? ` value="${esc(drop.name || "")}" data-poi-id="${Number(drop.id)}"` : ""}></span>` +
+      `<span class="ev-hint">Contributors get a “Plan my delivery” route that collects what they pledged and brings it here.</span></div>` +
     `</div>` +
     (g ? "" : `<label class="on-invis" id="goal-f-announce-row" hidden><input id="goal-f-announce" type="checkbox"> 📣 Announce to the org's Discord ` +
       `<span class="muted">(posts the goal and its lines to the goals channel — pings nobody)</span></label>` +
@@ -17570,9 +17692,14 @@ function collectGoalForm() {
   const dlDate = $("goal-f-dl-date").value, dlTime = $("goal-f-dl-time").value;
   let deadline = null;
   if (dlDate) deadline = new Date(`${dlDate}T${dlTime || "23:59"}`).toISOString();
+  // Typed-but-not-picked would silently drop the drop-off; make it a pick.
+  const dropEl = $("goal-f-drop");
+  if (dropEl && dropEl.value.trim() && !dropEl.dataset.poiId)
+    return { error: "Pick the drop-off from the suggestions (or clear it)." };
   const payload = { title, description: $("goal-f-desc").value.trim(),
     priority: parseInt($("goal-f-prio").value, 10) || 5, deadline, line_items,
-    visibility: goalScopeValue(), announce: goalAnnounceChecked(), announce_full: goalAnnounceFull() };
+    visibility: goalScopeValue(), announce: goalAnnounceChecked(), announce_full: goalAnnounceFull(),
+    dropoff_poi_id: dropEl && dropEl.dataset.poiId ? Number(dropEl.dataset.poiId) : null };
   if (bpKey && !line_items.length) {
     payload.blueprint_key = bpKey;
     payload.blueprint_qty = Math.max(1, parseInt($("goal-f-bp-qty").value, 10) || 1);
@@ -17700,6 +17827,7 @@ function bindGoalForm(editId, onCancel) {
       if (hint) hint.hidden = true;
     };
   }
+  if ($("goal-f-drop")) attachPoiPicker($("goal-f-drop").parentElement);
   $("goal-f-cancel").onclick = onCancel;
   $("goal-f-save").onclick = async () => {
     const { error, payload } = collectGoalForm();
@@ -17852,7 +17980,8 @@ async function logHolding() {
     const r = await fetch("/api/inventory", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ item_id, qty, unit: document.querySelector(".inv-unit").value,
-        location: $("inv-loc").value.trim(), quality: invQualityValue($("inv-quality")) }) });
+        location: $("inv-loc").value.trim(), location_poi_id: pickedPoiId($("inv-loc")),
+        quality: invQualityValue($("inv-quality")) }) });
     if (!r.ok) throw await r.json().catch(() => ({}));
     const h = await r.json();
     input.value = ""; delete input.dataset.itemId; $("inv-qty").value = ""; $("inv-loc").value = "";
@@ -17955,6 +18084,7 @@ function wireInvOrg() {
 }
 
 let rmMineRows = [];
+const rmPickSel = new Set();   // holding ids ticked for a pickup run (#48)
 // Facet filters shared by BOTH inventory tabs, keyed on each item's characteristics
 // (server-joined `spec`) plus a location facet. Persist across re-renders and tab
 // switches within the session; `q` is a free-text name search.
@@ -18002,6 +18132,9 @@ async function renderInvMine() {
     return;
   }
   rmMineRows = data.rows || [];
+  // Drop ticks on holdings that were removed or emptied since.
+  const pickable = new Set(rmMineRows.filter(r => Number(r.qty) > 0).map(r => r.id));
+  for (const id of [...rmPickSel]) if (!pickable.has(id)) rmPickSel.delete(id);
   if (!rmMineRows.length) { $("inv-body").innerHTML = `<p class="stat-empty">You haven't logged any holdings yet.</p>`; return; }
   renderInvList();
 }
@@ -18106,7 +18239,16 @@ function invSpecCells(spec, cols) {
 function invMineTableHtml(rows) {
   const cols = invSpecColsFor(rows);
   const body = rows.map(r => invMineRowHtml(r, cols)).join("");
-  return `<table class="inv-table"><thead><tr>` +
+  // #48: tick holdings → one route that collects them and delivers them somewhere.
+  const pickBar = `<div class="rm-row inv-pick-bar" id="inv-pick-bar" hidden>` +
+    `<b id="inv-pick-n"></b>` +
+    `<span class="poi-pick" style="flex:1;min-width:160px"><input id="inv-pick-to" class="ti" placeholder="deliver to…" autocomplete="off"></span>` +
+    `<select class="ti" id="inv-pick-goal" aria-label="or a goal's drop-off"><option value="">or a goal’s drop-off…</option></select>` +
+    `<button class="ev-btn primary" id="inv-pick-go">📦 Plan pickup run</button>` +
+    `<button class="ev-btn" id="inv-pick-clear">Clear</button>` +
+    `<span class="muted" id="inv-pick-msg"></span></div>`;
+  return pickBar + `<table class="inv-table"><thead><tr>` +
+    `<th class="inv-pick" aria-label="select for a pickup run"></th>` +
     `<th>Item</th><th>Quality</th>${invSpecHeads(cols)}` +
     `<th class="num">Qty</th><th>Location</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
 }
@@ -18131,7 +18273,11 @@ function invMineRowHtml(r, cols) {
     `<button class="rm-alloc-x" data-alloc="${a.id}" data-goal="${a.goal_id}" ` +
     `data-name="${esc(a.goal_title || "This contribution")}" ` +
     `title="withdraw this contribution">✕ withdraw</button></div>`).join("");
+  const pick = Number(r.qty) > 0
+    ? `<input type="checkbox" class="rm-pick" data-id="${r.id}"${rmPickSel.has(r.id) ? " checked" : ""} ` +
+      `aria-label="select ${esc(r.item_name)} for a pickup run" title="add to a pickup run">` : "";
   return `<tr class="rm-mine-row" data-id="${r.id}">` +
+    `<td class="inv-pick">${pick}</td>` +
     `<td><b>${esc(r.item_name)}</b>${note}${allocs}</td>` +
     `<td>${invQualityChip(r.quality)}</td>` +
     invSpecCells(r.spec, cols) +
@@ -18145,7 +18291,60 @@ function invMineRowHtml(r, cols) {
     `<button class="ev-btn quiet-danger rm-inv-del" data-id="${r.id}">Remove</button></td></tr>`;
 }
 
+// Pickup-run selection (#48): ids survive re-filtering; the bar shows while any
+// holding is ticked. Goals with a drop-off load once, on the first tick.
+let rmPickGoals = null;
+function syncInvPickBar() {
+  const bar = $("inv-pick-bar");
+  if (!bar) return;
+  bar.hidden = rmPickSel.size === 0;
+  $("inv-pick-n").textContent = `${rmPickSel.size} selected`;
+  if (bar.hidden || rmPickGoals) return;
+  rmPickGoals = [];
+  fetch("/api/goals?status=active").then(r => r.json()).then(d => {
+    rmPickGoals = (d.goals || []).filter(g => g.dropoff && g.dropoff.routable);
+    fillInvPickGoals();
+  }).catch(() => {});
+}
+function fillInvPickGoals() {
+  const sel = $("inv-pick-goal");
+  if (!sel || !rmPickGoals) return;
+  sel.hidden = !rmPickGoals.length;
+  sel.innerHTML = `<option value="">or a goal’s drop-off…</option>` + rmPickGoals.map(g =>
+    `<option value="${g.dropoff.id}">${esc(g.title)} → ${esc(g.dropoff.name || "")}</option>`).join("");
+}
+
+function wireInvPick() {
+  $("inv-body").querySelectorAll(".rm-pick").forEach(cb => {
+    cb.onchange = () => {
+      const id = Number(cb.dataset.id);
+      if (cb.checked) rmPickSel.add(id); else rmPickSel.delete(id);
+      syncInvPickBar();
+    };
+  });
+  if (!$("inv-pick-bar")) return;
+  attachPoiPicker($("inv-pick-to").parentElement);
+  fillInvPickGoals();
+  // The two destination inputs are alternatives: using one clears the other.
+  $("inv-pick-to").addEventListener("input", () => { $("inv-pick-goal").value = ""; });
+  $("inv-pick-goal").onchange = () => {
+    const to = $("inv-pick-to");
+    to.value = ""; to.dataset.poiId = ""; to.parentElement.classList.remove("picked");
+  };
+  $("inv-pick-clear").onclick = () => { rmPickSel.clear(); applyInvFilters(); };
+  $("inv-pick-go").onclick = async () => {
+    const msg = $("inv-pick-msg"), to = $("inv-pick-to");
+    if (to.value.trim() && !to.dataset.poiId) { msg.textContent = "Pick the destination from the suggestions (or leave it blank)."; return; }
+    const drop = pickedPoiId(to) ?? (Number($("inv-pick-goal").value) || null);
+    msg.textContent = "Building…";
+    const err = await planInventoryPickup({ holding_ids: [...rmPickSel], dropoff_poi_id: drop });
+    if (err) msg.textContent = err; else rmPickSel.clear();
+  };
+  syncInvPickBar();
+}
+
 function wireInvMine() {
+  wireInvPick();
   $("inv-body").querySelectorAll(".rm-inv-del").forEach(b => {
     b.onclick = async () => {
       const r = rmMineRows.find(x => String(x.id) === b.dataset.id);
@@ -18220,6 +18419,7 @@ function openInvEdit(id) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ qty, unit: rowEl.querySelector(".rm-e-unit").value,
           location: rowEl.querySelector(".rm-e-loc").value.trim(),
+          location_poi_id: pickedPoiId(rowEl.querySelector(".rm-e-loc")),
           note: rowEl.querySelector(".rm-e-note").value.trim(),
           quality: rowEl.querySelector(".rm-e-quality")
             ? invQualityValue(rowEl.querySelector(".rm-e-quality"))
@@ -18263,7 +18463,8 @@ function openInvSplit(id) {
       const res = await fetch(`/api/inventory/${id}/split`, { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ qty, quality: invQualityValue(rowEl.querySelector(".rm-s-quality")),
-          location: rowEl.querySelector(".rm-s-loc").value.trim() || null }) });
+          location: rowEl.querySelector(".rm-s-loc").value.trim() || null,
+          location_poi_id: pickedPoiId(rowEl.querySelector(".rm-s-loc")) }) });
       if (!res.ok) throw await res.json().catch(() => ({}));
       renderInvMine();
     } catch (err) { msg.textContent = (err && err.detail) || "Couldn't split."; }

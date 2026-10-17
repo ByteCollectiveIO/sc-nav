@@ -54,6 +54,19 @@ the as-built layer between them and the code.
 
 ## Cargo planner
 
+- **Split into trips (2026-10-17, unreleased; user call: the player chooses):**
+  `RoutePlanIn.split_trips` (planner checkbox, remembered per viewer in
+  localStorage `routeSplitTrips`, default off) swaps `plan_route` for
+  `nav_core.plan_route_trips` in BOTH `/api/route/plan` and `/api/route/run`
+  (run start re-solves from the same body, so they must agree). It only acts on
+  a CAPACITY failure (not range, not unroutable) and never splits multi-pickup
+  groups (`summary.reason`). Trips fill by nearest pickup, two ways — whole
+  packages first, and split-freely — and the faster total wins (whole-first
+  stops a holding being topped off in one trip and revisited in the next).
+  A package carried in parts becomes `<id>.<n>` packages; stops carry `trip`;
+  the drop-off repeats per trip (run mode already handles revisits).
+  `summary.trips`, `unsplit_capacity_scu`, `split_packages`. Filling counts
+  every pickup aboard to trip end: exact for one drop-off, conservative for many.
 - Cargo planner: `/api/route/plan|run|history|session/reset`. **Round-trip revisits (2026-08-30):** A↔B contract sets make one-visit-per-location precedence circular (and `_min_capacity` came back `inf` → unserializable summary → bare 500 "plan failed"); `plan_route` now detects the cycle (`nav_core._preds_cyclic`) and rebuilds with every both-role location split into drop-node + pickup-node (all precedence then pickup→drop = bipartite, always orderable), zero-distance legs between split halves, consecutive same-location nodes re-merged into one stop for output, plain dropoffs hoisted to the earliest at-or-after-pickup visit of their destination (capacity check stays conservative at the solver's node). Same `stop_id` may appear twice in `stops`; run mode handles that as-is. `min_capacity_scu` is None-guarded against non-finite values. **Jump gates (2026-10-06):** gate endpoints resolve by NAME (`nav_core.GATE_NAMES` → `build_gate_registry` → `nav.gates`, built ALWAYS in `app._apply_wiki_catalog`); Pyro has no jump-point container, so its side is the wiki gateway record (a stand-in Poi kept out of `nav.pois`). An unresolved side falls back to the system's STAR (over-estimate, leg `partial`), never to free — the old approach-only floor made Pyro's side ~0 and the solver bounced Pyro→Stanton→Pyro (129/200 random 3×3 bundles). A gate is TIME, not distance: leg `gate_s` (`GATE_TRAVERSAL_S` 300 s, an estimate pending in-game timing); `leg_eta_s(leg)` is the ETA for anything `travel_cost` returns (never `_leg_time_s(distance)`), cargo ordering uses `_leg_cost_m` (gate time × QT speed), the in-range cap judges flown `distance_m` only. `GATE_LINKS` = Stanton, Pyro, Nyx all directly linked (Stanton↔Nyx IS a direct lane — Stanton's side is wiki-only, Nyx's container is misnamed 'Nyx - Castra Jump Point'); a path through a transit system would be flown gate-to-gate.
 
 ## Cargo analytics
@@ -80,6 +93,23 @@ the as-built layer between them and the code.
 
 ## Resource manager
 
+- **Inventory pickup runs, deliver half (#48, 2026-10-17, unreleased;
+  docs/inventory-pickup-runs.md):** `inventory.location_poi_id` stores the POI a
+  holding's location was PICKED from — never part of the lot key. Every write
+  path (log, PATCH, split, contribute-creates-holding) keeps a pick only via
+  `_picked_poi` (POI exists AND its name equals the text, else NULL, never 400);
+  PATCH/split keep the stored pick while the location text is unchanged.
+  Reads resolve with `nav_core.resolve_location_poi` (stored id while it exists,
+  else a UNIQUE case-folded name match; ambiguous = None) over `_poi_names()`,
+  cached per (nav object, len(nav.pois)) because custom POIs mutate `nav.pois`
+  in place. `goals.dropoff_poi_id/dropoff_name` (name stamped server-side;
+  an edit resending a vanished POI keeps it). The goal form is the ONLY PATCH
+  caller and must resend `dropoff_poi_id` — PATCH is a full replace.
+  `POST /api/inventory/pickup` (own holdings only) → `nav_core.build_pickup_plan`;
+  goal mode carries allocation − short, short → `still_to_gather`. The client
+  seeds `#/route` via `routeSeed` (consumed once in `loadRoutePlanner`); only
+  seeded rows with `data-zero-ok` may plan at 0 SCU. Not done: Discord goal
+  announce doesn't mention the drop-off yet (would need a golden-file regen).
 - Resource manager: `/api/catalog`, `/api/inventory*`, `/api/goals*`. **Goal
   announce (2026-09-12):** `GoalIn.announce` opt-in on create + `POST
   /api/goals/{id}/announce` (creator/admin re-post = "refresh" with CURRENT

@@ -235,7 +235,8 @@ CREATE TABLE IF NOT EXISTS inventory (
     note TEXT,
     goal_id INTEGER,                   -- earmarked goal, or NULL = general pool
     updated_at TEXT,
-    quality INTEGER                     -- #151: SC lot quality 0–1000; NULL = unrated
+    quality INTEGER,                    -- #151: SC lot quality 0–1000; NULL = unrated
+    location_poi_id INTEGER             -- #48: POI the location was picked from; NULL = free text only
 );
 CREATE INDEX IF NOT EXISTS inventory_owner ON inventory(owner_id);
 CREATE INDEX IF NOT EXISTS inventory_goal ON inventory(goal_id);
@@ -933,6 +934,10 @@ def init(db_path) -> None:
         # Survey goals (#37.1 §11.2): {zone_id, target:{mode, value}, since}.
         # Progress is derived from the zone's evidence captured after `since`.
         _ensure_column("goals", "survey_spec", "TEXT")
+        # Inventory pickup runs (#48): where a goal's materials get delivered. The
+        # name is denormalized so a POI dropped by a starmap/wiki toggle still reads.
+        _ensure_column("goals", "dropoff_poi_id", "INTEGER")
+        _ensure_column("goals", "dropoff_name", "TEXT")
         # Demand-side stock reports: v0.38.0 created the table without `side`.
         _ensure_column("stock_reports", "side", "TEXT NOT NULL DEFAULT 'supply'")
         # Cargo-handling fields on the transaction ledger (#41 follow-up): the
@@ -976,6 +981,9 @@ def init(db_path) -> None:
         # index goes on only once a scan proves no duplicates already exist.
         _ensure_column("inventory", "quality", "INTEGER")
         _migrate_inventory_lot_key()
+        # The POI a holding's location was picked from (#48), so a pickup run can
+        # route to it. NOT part of the lot key — the free-text location still is.
+        _ensure_column("inventory", "location_poi_id", "INTEGER")
         if denorm_added:                        # only on the boot that adds the columns
             _backfill_listing_denorm()
 
@@ -3271,7 +3279,8 @@ def _inventory_row_to_dict(r: sqlite3.Row) -> dict:
 def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | None,
                      qty: float, location: str | None, note: str | None,
                      goal_id: int | None, updated_at: str,
-                     quality: int | None = None, add: bool = False) -> dict:
+                     quality: int | None = None, add: bool = False,
+                     location_poi_id: int | None = None) -> dict:
     """Log a member's holding. One row per (owner, item, location, quality). An
     existing match has its quantity SET to the new value by default; with
     `add=True` the quantity is ADDED to it — the log form's semantics, since
@@ -3280,7 +3289,9 @@ def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | No
     lives on the inline editor (`update_inventory`). A note only replaces the
     stored one when given, so a top-up doesn't blank it. A different quality
     is a different LOT (#151) — the game stacks per value and never blends, so
-    neither do we. Returns the row plus `added` (the delta applied) and
+    neither do we. A `location_poi_id` (#48) only fills or replaces the stored
+    one, never blanks it: the same location text is the same place. Returns
+    the row plus `added` (the delta applied) and
     `merged` (True when an existing lot took it). (SQLite treats NULLs as
     distinct in a UNIQUE, so the match is done explicitly here with COALESCE
     rather than via an upsert conflict.)"""
@@ -3295,17 +3306,18 @@ def upsert_inventory(owner_id: str, item_id: str, item_name: str, unit: str | No
         if existing:
             _conn.execute(
                 f"UPDATE inventory SET qty={'qty+?' if add else '?'}, item_name=?, unit=?, "
-                "note=COALESCE(?, note), updated_at=? WHERE id=?",
-                (qty, item_name, unit, note, updated_at, existing["id"]),
+                "note=COALESCE(?, note), location_poi_id=COALESCE(?, location_poi_id), "
+                "updated_at=? WHERE id=?",
+                (qty, item_name, unit, note, location_poi_id, updated_at, existing["id"]),
             )
             rid = existing["id"]
         else:
             cur = _conn.execute(
                 "INSERT INTO inventory (owner_id, item_id, item_name, unit, qty, "
-                "location, note, goal_id, updated_at, quality) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "location, note, goal_id, updated_at, quality, location_poi_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (str(owner_id), item_id, item_name, unit, qty, location, note,
-                 goal_id, updated_at, quality),
+                 goal_id, updated_at, quality, location_poi_id),
             )
             rid = cur.lastrowid
         row = _conn.execute("SELECT * FROM inventory WHERE id=?", (rid,)).fetchone()
@@ -3366,7 +3378,8 @@ def lot_key_clash(inv_id: int, owner_id: str, item_id: str, location: str | None
 
 
 def split_inventory(inv_id: int, qty: float, quality: int | None,
-                    location: str | None, updated_at: str) -> tuple[dict, dict]:
+                    location: str | None, updated_at: str,
+                    location_poi_id: int | None = None) -> tuple[dict, dict]:
     """Move `qty` off a holding into the lot keyed (same owner + item, `location`,
     `quality`) — creating it, or SUMMING into it if it exists (safe: the moved
     portion carries no allocations by construction). The source row and every
@@ -3388,10 +3401,10 @@ def split_inventory(inv_id: int, qty: float, quality: int | None,
         else:
             cur = _conn.execute(
                 "INSERT INTO inventory (owner_id, item_id, item_name, unit, qty, "
-                "location, note, goal_id, updated_at, quality) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "location, note, goal_id, updated_at, quality, location_poi_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (src["owner_id"], src["item_id"], src["item_name"], src["unit"], qty,
-                 location, src["note"], None, updated_at, quality))
+                 location, src["note"], None, updated_at, quality, location_poi_id))
             tid = cur.lastrowid
         _conn.execute("UPDATE inventory SET qty=qty-?, updated_at=? WHERE id=?",
                       (qty, updated_at, inv_id))
@@ -3409,7 +3422,7 @@ def allocation_count(inv_id: int) -> int:
     return int(row["n"] or 0)
 
 
-_INV_EDITABLE = ("qty", "location", "note", "unit", "quality")
+_INV_EDITABLE = ("qty", "location", "note", "unit", "quality", "location_poi_id")
 
 
 def update_inventory(inv_id: int, fields: dict, updated_at: str) -> bool:
@@ -3580,8 +3593,9 @@ def create_goal(d: dict) -> int:
         cur = _conn.execute(
             "INSERT INTO goals (creator_id, title, description, priority, deadline, "
             "status, line_items, visibility, blueprint_key, blueprint_qty, "
-            "blueprint_inputs, created_at, updated_at, kind, unlock_spec, survey_spec) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "blueprint_inputs, created_at, updated_at, kind, unlock_spec, survey_spec, "
+            "dropoff_poi_id, dropoff_name) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (str(d["creator_id"]), d.get("title"), d.get("description"),
              d.get("priority", 5), d.get("deadline"), d.get("status", "active"),
              _j(d.get("line_items") or []), d.get("visibility") or "org",
@@ -3590,7 +3604,8 @@ def create_goal(d: dict) -> int:
              d.get("created_at"), d.get("updated_at"),
              d.get("kind") or "materials",
              _j(d["unlock_spec"]) if d.get("unlock_spec") else None,
-             _j(d["survey_spec"]) if d.get("survey_spec") else None),
+             _j(d["survey_spec"]) if d.get("survey_spec") else None,
+             d.get("dropoff_poi_id"), d.get("dropoff_name")),
         )
     return cur.lastrowid
 
@@ -3626,7 +3641,8 @@ def list_goals(status: str | None = None, viewer_id: str | None = None) -> list[
 
 _GOAL_EDITABLE = ("title", "description", "priority", "deadline", "status",
                   "line_items", "visibility", "blueprint_key", "blueprint_qty",
-                  "blueprint_inputs", "kind", "unlock_spec", "survey_spec")
+                  "blueprint_inputs", "kind", "unlock_spec", "survey_spec",
+                  "dropoff_poi_id", "dropoff_name")
 _GOAL_JSON = ("line_items", "blueprint_inputs", "unlock_spec", "survey_spec")
 _GOAL_SPECS = ("unlock_spec", "survey_spec")     # JSON, but NULL rather than []
 
