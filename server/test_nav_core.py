@@ -1893,6 +1893,40 @@ class SellRouteTests(unittest.TestCase):
         self.assertTrue(res["summary"]["feasible"])
         self.assertTrue(res["summary"]["simplified"])
 
+    def test_a_buyer_short_on_demand_sends_the_rest_to_the_next(self):
+        # P2 takes only 5 of 20 Iron; P4 (nearby) takes the rest at a fair price
+        prices = [self._pt("Iron", 2, 300, stock=5), self._pt("Iron", 4, 250),
+                  self._pt("Iron", 3, 200), self._pt("Silicon", 2, 100)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100)
+        sm = res["summary"]
+        self.assertNotIn("P3", sm["assignment_label"])     # a buyer that gets nothing isn't named
+        iron = {s["poi_id"]: s for s in sm["sales"] if s["commodity"] == "Iron"}
+        self.assertEqual(set(iron), {2, 4})
+        self.assertEqual((iron[2]["scu_sold"], iron[4]["scu_sold"]), (5, 15))
+        self.assertEqual(sm["revenue"], 5 * 300 + 15 * 250 + 10 * 100)
+        self.assertEqual(sm["split_sales"], 1)
+        self.assertIn("+", sm["assignment_label"])
+        # the one Iron holding is carried in two parts, one per buyer
+        parts = {p["id"]: (p["to_id"], p["scu"]) for p in res["packages"] if p["commodity"] == "Iron"}
+        self.assertEqual(parts, {"h1~1": (2, 5), "h1~2": (4, 15)})
+
+    def test_no_split_when_the_overflow_buyer_isnt_worth_the_trip(self):
+        # the only other Iron buyer is far away and pays little: deliver it all to
+        # P2 and report the left over rather than fly 400 Gm for 15 SCU
+        prices = [self._pt("Iron", 2, 300, stock=5), self._pt("Iron", 3, 10),
+                  self._pt("Silicon", 2, 100)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100)
+        iron = [s for s in res["summary"]["sales"] if s["commodity"] == "Iron"]
+        self.assertEqual([(s["poi_id"], s["left_over"]) for s in iron], [(2, 15)])
+        self.assertEqual(res["summary"]["split_sales"], 0)
+
+    def test_alternatives_carry_their_own_packages(self):
+        prices = [self._pt("Iron", 2, 100), self._pt("Silicon", 2, 100),
+                  self._pt("Iron", 4, 90), self._pt("Silicon", 4, 90)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100)
+        for alt in res["summary"]["alternatives"]:
+            self.assertEqual(sum(p["scu"] for p in alt["packages"]), 30)
+
     def test_nothing_sellable(self):
         res = nav_core.plan_sell_route(self._nav(), [], self._holdings(), 100)
         self.assertFalse(res["summary"]["feasible"])
@@ -2631,6 +2665,25 @@ class GoalProgressTests(unittest.TestCase):
         {"item_id": "commodity:laranite", "item_name": "Laranite", "unit": "SCU",
          "qty_needed": 300},
     ]}
+
+    def test_delivered_is_counted_per_line_and_contributor(self):
+        rows = [
+            {"item_id": "commodity:titanium", "qty": 100, "owner_id": "A", "delivered": 60},
+            {"item_id": "commodity:titanium", "qty": 50, "owner_id": "B"},
+            {"item_id": "commodity:laranite", "qty": 30, "owner_id": "B", "delivered": 30},
+        ]
+        p = nav_core.derive_goal_progress(self.GOAL, rows)
+        ti, la = p["lines"]
+        self.assertEqual((ti["delivered"], la["delivered"]), (60, 30))
+        by = {c["owner_id"]: c.get("delivered", 0) for c in p["per_contributor"]}
+        self.assertEqual(by, {"A": 60, "B": 30})
+
+    def test_delivered_never_exceeds_the_stocked_part(self):
+        # 100 pledged, 40 of it not gathered yet: at most 60 can be at the drop-off
+        rows = [{"item_id": "commodity:titanium", "qty": 100, "short": 40,
+                 "owner_id": "A", "delivered": 100}]
+        p = nav_core.derive_goal_progress(self.GOAL, rows)
+        self.assertEqual(p["lines"][0]["delivered"], 60)
 
     def test_per_line_and_overall(self):
         rows = [

@@ -984,6 +984,8 @@ def init(db_path) -> None:
         # The POI a holding's location was picked from (#48), so a pickup run can
         # route to it. NOT part of the lot key — the free-text location still is.
         _ensure_column("inventory", "location_poi_id", "INTEGER")
+        # How much of a contribution has been handed over (#48 v2); 0 = not yet.
+        _ensure_column("inventory_allocations", "delivered_qty", "REAL NOT NULL DEFAULT 0")
         if denorm_added:                        # only on the boot that adds the columns
             _backfill_listing_denorm()
 
@@ -1929,6 +1931,22 @@ def complete_run(discord_id: str, run_id: int, completed_at: str, run: dict) -> 
             "WHERE id=? AND discord_id=? AND status='active'",
             (completed_at, _j(run), run_id, str(discord_id)),
         )
+
+
+def get_run(discord_id: str, run_id: int) -> dict | None:
+    """One of the member's cargo runs (any status) as {status, data}, or None."""
+    with _lock:
+        row = _conn.execute("SELECT status, data FROM runs WHERE id=? AND discord_id=?",
+                            (run_id, str(discord_id))).fetchone()
+    return {"status": row["status"], "data": _u(row["data"]) or {}} if row else None
+
+
+def set_run_data(discord_id: str, run_id: int, run: dict) -> None:
+    """Rewrite a run's blob whatever its status (stamping a completed run's
+    follow-up as applied, #48 v2)."""
+    with _lock, _conn:
+        _conn.execute("UPDATE runs SET data=? WHERE id=? AND discord_id=?",
+                      (_j(run), run_id, str(discord_id)))
 
 
 def abandon_run(discord_id: str) -> bool:
@@ -3502,6 +3520,85 @@ def delete_allocation(alloc_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def set_allocation_delivered(alloc_id: int, qty: float, now: str) -> bool:
+    """Record how much of a contribution has been handed over (#48 v2). The
+    caller caps it at the stocked part; 0 = not delivered."""
+    with _lock, _conn:
+        cur = _conn.execute(
+            "UPDATE inventory_allocations SET delivered_qty=?, updated_at=? WHERE id=?",
+            (max(0.0, float(qty)), now, alloc_id))
+    return cur.rowcount > 0
+
+
+def move_holding(inv_id: int, qty: float, location: str, location_poi_id: int | None,
+                 now: str, goal_id: int | None = None, delivered: float = 0.0) -> dict:
+    """Move `qty` of a holding to another place — what a finished pickup run did
+    in-game (#48 v2). The moved stock lands in the lot at (`location`, same item
+    + quality), created or summed into. Pledges follow the stock: moving ALL of
+    a holding carries every allocation on it (the source row is then removed);
+    moving part carries only the `goal_id` allocation (the goal run that hauled
+    it), the rest stay with the stock left behind. A carried allocation that
+    meets one to the same goal on the target merges into it. `delivered` is
+    added to the carried goal allocation's delivered amount. Returns the
+    target holding."""
+    with _lock, _conn:
+        src = _conn.execute("SELECT * FROM inventory WHERE id=?", (inv_id,)).fetchone()
+        qty = min(float(qty), float(src["qty"] or 0))
+        whole = qty >= float(src["qty"] or 0) - 1e-9
+        tgt = _conn.execute(
+            "SELECT * FROM inventory WHERE owner_id=? AND item_id=? "
+            "AND COALESCE(location,'')=COALESCE(?,'') AND goal_id IS NULL "
+            "AND COALESCE(quality,-1)=COALESCE(?,-1) AND id<>?",
+            (src["owner_id"], src["item_id"], location, src["quality"], inv_id)).fetchone()
+        if whole and tgt is None:
+            # Nothing to merge into: the holding itself moves (keeps its id + note).
+            _conn.execute("UPDATE inventory SET location=?, location_poi_id=?, updated_at=? "
+                          "WHERE id=?", (location, location_poi_id, now, inv_id))
+            tid = inv_id
+        else:
+            if tgt is None:
+                cur = _conn.execute(
+                    "INSERT INTO inventory (owner_id, item_id, item_name, unit, qty, location, "
+                    "note, goal_id, updated_at, quality, location_poi_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (src["owner_id"], src["item_id"], src["item_name"], src["unit"], qty,
+                     location, src["note"], None, now, src["quality"], location_poi_id))
+                tid = cur.lastrowid
+            else:
+                tid = tgt["id"]
+                _conn.execute("UPDATE inventory SET qty=qty+?, updated_at=? WHERE id=?",
+                              (qty, now, tid))
+            carried = _conn.execute(
+                "SELECT * FROM inventory_allocations WHERE inventory_id=?"
+                + ("" if whole else " AND goal_id=?"),
+                (inv_id,) if whole else (inv_id, goal_id)).fetchall()
+            for a in carried:
+                same = _conn.execute(
+                    "SELECT * FROM inventory_allocations WHERE inventory_id=? AND goal_id=?",
+                    (tid, a["goal_id"])).fetchone()
+                if same:
+                    _conn.execute(
+                        "UPDATE inventory_allocations SET qty=qty+?, "
+                        "delivered_qty=delivered_qty+?, updated_at=? WHERE id=?",
+                        (a["qty"], a["delivered_qty"] or 0, now, same["id"]))
+                    _conn.execute("DELETE FROM inventory_allocations WHERE id=?", (a["id"],))
+                else:
+                    _conn.execute("UPDATE inventory_allocations SET inventory_id=?, "
+                                  "updated_at=? WHERE id=?", (tid, now, a["id"]))
+            if whole:
+                _conn.execute("DELETE FROM inventory WHERE id=?", (inv_id,))
+            else:
+                _conn.execute("UPDATE inventory SET qty=qty-?, updated_at=? WHERE id=?",
+                              (qty, now, inv_id))
+        if goal_id is not None and delivered > 0:
+            _conn.execute(
+                "UPDATE inventory_allocations SET delivered_qty=MIN(qty, delivered_qty+?), "
+                "updated_at=? WHERE inventory_id=? AND goal_id=?",
+                (delivered, now, tid, goal_id))
+        row = _conn.execute("SELECT * FROM inventory WHERE id=?", (tid,)).fetchone()
+    return _inventory_row_to_dict(row)
+
+
 # How much of an allocation is NOT backed by stock the member has actually logged
 # — the "still gathering" part of a pledge. A holding can be committed past its
 # quantity (promising to gather is first-class), so on-hand stock is attributed to
@@ -3522,6 +3619,7 @@ def list_goal_contributions(goal_id: int | None = None) -> list[dict]:
     unchanged. `short` is the un-stocked ("still gathering") part of each pledge.
     `goal_id` None returns every goal's contributions (board grouping)."""
     q = ("SELECT a.id AS allocation_id, a.goal_id, a.qty AS qty, "
+         "a.delivered_qty AS delivered, "
          "a.inventory_id AS holding_id, i.owner_id, i.item_id, i.item_name, "
          "i.unit, i.location, i.quality, i.qty AS holding_qty, "
          f"{_ALLOC_SHORT_SQL} AS short "
@@ -3542,7 +3640,8 @@ def allocations_for_owner(owner_id: str) -> list[dict]:
     render in 'my holdings' (and the withdraw control on each commitment)."""
     with _lock:
         rows = _conn.execute(
-            "SELECT a.id, a.inventory_id, a.goal_id, a.qty, g.title AS goal_title, "
+            "SELECT a.id, a.inventory_id, a.goal_id, a.qty, a.delivered_qty AS delivered, "
+            "g.title AS goal_title, "
             f"{_ALLOC_SHORT_SQL} AS short "
             "FROM inventory_allocations a JOIN inventory i ON i.id = a.inventory_id "
             "LEFT JOIN goals g ON g.id = a.goal_id WHERE i.owner_id=? "

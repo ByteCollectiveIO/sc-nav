@@ -1533,6 +1533,9 @@
   .sell-alt { justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px;
     padding: 6px 0; border-bottom: 1px solid var(--border); }
   .route-pkg .pkg-to input:disabled { opacity: .85; cursor: default; }
+  /* #48 v2: delivered + run follow-up */
+  .rm-delivered { font-size: 11px; color: var(--good); margin-left: 6px; white-space: nowrap; }
+  .run-inv { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; font-size: 12px; }
   .route-warn { color: var(--warn); }
   .route-stop { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
   .route-stop .seq { flex: none; width: 26px; height: 26px; border-radius: 50%;
@@ -10526,11 +10529,22 @@ async function planInventoryPickup(body, { sell = false } = {}) {
 }
 
 let routeSell = null;   // sell mode state: {sort, single, last} — null = normal planning
+// What a run planned from Inventory means for the holdings once it's done (#48 v2):
+// {kind: deliver|sell, goal_id, sold}. Rides on /api/route/run as `inventory`.
+let routeInvCtx = null;
+
+function routeInventoryPayload() {
+  if (!routeInvCtx) return {};
+  if (![...$("route-pkgs").children].some(r => r.dataset.holdingId)) return {};
+  return { inventory: { kind: routeInvCtx.kind, goal_id: routeInvCtx.goal_id ?? null,
+                        sold: routeInvCtx.sold || {} } };
+}
 
 function applyRouteSeed(plan) {
   $("route-pkgs").innerHTML = "";
   rewardByLabel = {};
   routeSell = plan.sell ? { sort: "per_hour", single: false, last: null } : null;
+  routeInvCtx = { kind: plan.sell ? "sell" : "deliver", goal_id: plan.goal ? plan.goal.id : null, sold: {} };
   const drop = plan.sell ? null : plan.dropoff;
   const item = (x) => `${esc(x.item_name)} · ${fmtQty(x.qty)} ${esc(x.unit || "")}`;
   const list = (label, xs) => xs.length
@@ -10605,13 +10619,18 @@ function exitSellMode() {
   setSellRowsLocked(false);
 }
 
-// Fill each sell row's "to" with the buyer chosen for it ([[package id, poi id, name]]).
-function setSellDestinations(rows) {
-  const byPkg = new Map(rows.map(([id, poi, name]) => [String(id), [poi, name]]));
-  for (const row of $("route-pkgs").children) {
-    const hit = byPkg.get(`h${row.dataset.holdingId}`);
-    if (hit) setPickedPoi(row.querySelector(".pkg-to"), hit[0], hit[1]);
+// Rebuild the rows from a sell plan's packages (they carry from/to names) —
+// one row per package, so a holding split between two buyers shows as two rows.
+function seedSellRows(packages) {
+  $("route-pkgs").innerHTML = "";
+  for (const p of packages) {
+    const row = addPkgRow({ commodity: p.commodity, scu: p.scu, contract: p.contract || "Sell",
+      from_id: p.from_id, from_name: p.from_name, to_id: p.to_id, to_name: p.to_name });
+    row.dataset.holdingId = String(p.id).match(/^h(\d+)/)[1];
+    row.dataset.pkgId = p.id;
   }
+  setSellRowsLocked(!!routeSell);
+  refreshContractList();
 }
 
 async function planSell(usable) {
@@ -10637,13 +10656,14 @@ async function planSell(usable) {
   msg.textContent = "";
   routeSell.last = res;
   if (res.summary.feasible) {
-    const names = Object.fromEntries(res.stops.map(s => [s.stop_id, s.name]));
-    setSellDestinations(res.packages.map(p => [p.id, p.to_id, names[p.to_id]]));
+    seedSellRows(res.packages);
     // The expected revenue is the run's payout, so history and aUEC/hour carry it.
     rewardByLabel = { Sell: res.summary.revenue };
     refreshRewardRows();
+    if (routeInvCtx) routeInvCtx.sold = res.summary.sold || {};
     lastPlanInput = { packages: res.packages, usable_scu: usable,
-                      rewards: { Sell: res.summary.revenue }, ...routeCommonPayload() };
+                      rewards: { Sell: res.summary.revenue }, ...routeCommonPayload(),
+                      ...routeInventoryPayload() };
   }
   renderPlan(res);
   renderSellPanel(res);
@@ -10689,8 +10709,9 @@ function renderSellPanel(res) {
 // "Use this instead": put that assignment into the rows and plan it as a normal
 // cargo run (leaves sell mode; the payout becomes that option's revenue).
 function useSellAlternative(alt) {
-  const to = Object.fromEntries(alt.assignment.map(a => [a.commodity, [a.poi_id, a.station]]));
-  setSellDestinations(routeSell.last.packages.map(p => [p.id, ...to[p.commodity]]));
+  routeSell = null;                          // rows rebuilt unlocked: a normal plan from here
+  seedSellRows(alt.packages);
+  if (routeInvCtx) routeInvCtx.sold = alt.sold || {};
   rewardByLabel = { Sell: alt.revenue };
   refreshRewardRows();
   const note = $("route-seed-note");
@@ -11109,10 +11130,13 @@ async function planRoute() {
     // with no SCU is still an entry mistake, so only seeded rows may be 0.
     const scuOk = scu > 0 || (row.dataset.zeroOk === "1" && scu === 0);
     if (!from.dataset.poiId || !to.dataset.poiId || !scuOk) { skipped++; continue; }
-    packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
+    packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId),
+      // A row from Inventory names its holding, so a finished run can update it (#48 v2).
+      ...(row.dataset.pkgId ? { id: row.dataset.pkgId } : row.dataset.holdingId ? { id: `h${row.dataset.holdingId}` } : {}) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
-  lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(), ...routeCommonPayload() };
+  lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(), ...routeCommonPayload(),
+                    ...routeInventoryPayload() };
   haloPlanSay("planning…", "status");
   let res;
   try {
@@ -11366,24 +11390,53 @@ async function patchRun(body) {
     if (!r.ok) { const d = await r.json().catch(() => ({})); runPatchMsg(box, d.detail || "couldn't update the run"); return; }
     const d = await r.json();
     runPatchMsg(box, "");
-    if (d.completed) { showRunComplete(); return; }
+    if (d.completed) { showRunComplete(d.completed_run); return; }
     renderRun(d.run);
   } catch { runPatchMsg(box, "network error — try again"); }
 }
 
 // Terminal state after the last drop — the run is gone server-side, so show a
 // closure card instead of letting the panel just vanish.
-function showRunComplete() {
+function showRunComplete(done) {
   runComplete = true;
   lastRunSig = "complete";
   loadRouteHistory();   // the finished haul now feeds recents + quick-picks
   const n = currentRun ? currentRun.stops.length : null;
   const box = $("route-run");
   box.hidden = false;
+  // A run planned from Inventory (#48 v2): offer to make the ledger match.
+  const inv = done && done.inventory;
+  const follow = inv
+    ? `<div class="run-inv"><button id="run-inv-apply" class="active">${inv.kind === "sell"
+        ? "Take what I sold off my inventory"
+        : inv.goal_id ? "Mark delivered + move my holdings" : "Move my holdings to where I dropped them"}</button>`
+      + `<span class="muted" id="run-inv-msg">${inv.kind === "sell"
+        ? "Anything a buyer didn’t take stays yours, at that station."
+        : "Updates where these holdings are in your inventory."}</span></div>`
+    : "";
   box.innerHTML = `<div class="panel route-run-panel"><div class="run-head"><h2>ROUTE COMPLETE</h2></div>`
     + `<p class="route-feasible">✓ All cargo delivered${n ? " across " + n + " stops" : ""}. Nice hauling.</p>`
-    + `<button id="run-clear" class="active">Plan another route</button></div>`;
+    + follow + `<button id="run-clear" class="active">Plan another route</button></div>`;
   $("run-clear").onclick = clearRun;
+  if (inv) $("run-inv-apply").onclick = () => applyRunInventory(done);
+}
+
+async function applyRunInventory(done) {
+  const btn = $("run-inv-apply"), msg = $("run-inv-msg");
+  btn.disabled = true;
+  msg.textContent = "Updating…";
+  try {
+    const r = await fetch(`/api/route/runs/${done.id}/inventory`, { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { btn.disabled = false; msg.textContent = d.detail || "Couldn't update your inventory."; return; }
+    const q = (c) => `${fmtQty(c.sold ?? c.moved)} ${esc(c.unit || "")} ${esc(c.item_name)}`;
+    const lines = d.changes.map(c => d.kind === "sell"
+      ? `${q(c)} sold${c.left > 0 ? ` · ${fmtQty(c.left)} left at ${esc(c.left_at)}` : ""}`
+      : `${q(c)} → ${esc(c.to)}${c.delivered ? " · delivered" : ""}`);
+    btn.remove();
+    msg.innerHTML = `✓ Inventory updated: ${lines.join("; ") || "nothing to change"}.` +
+      (d.goal_id ? ` <a href="#/goals/${Number(d.goal_id)}">View the goal</a>` : "");
+  } catch { btn.disabled = false; msg.textContent = "network error — try again"; }
 }
 function clearRun() {
   runComplete = false; currentRun = null; lastRunSig = null;
@@ -11397,6 +11450,8 @@ function clearRun() {
 function clearRoute() {
   $("route-pkgs").innerHTML = "";
   rewardByLabel = {};
+  routeSell = null; routeInvCtx = null;          // inventory context ends with the route
+  $("route-seed-note").hidden = true;
   addPkgRow();
   refreshContractList();        // rebuilds + hides the (now empty) payout rows
   routeStartHere = false; routeStartArmed = false;
@@ -17152,7 +17207,9 @@ function goalLineRow(l, minqMap) {
     (low > 0 ? `<span class="rm-low" title="logged against this goal, but below Q${minq} — not counted">` +
       `⚠ ${fmtQty(low)} below Q${minq}</span>` : "") +
     (unrated > 0 ? `<span class="rm-unrated" title="counted, but these lots have no quality logged">` +
-      `${fmtQty(unrated)} unrated</span>` : "") + `</span></div>`;
+      `${fmtQty(unrated)} unrated</span>` : "") +
+    (Number(l.delivered) > 0 ? `<span class="rm-delivered" title="handed over at the drop-off">` +
+      `📦 ${fmtQty(l.delivered)} delivered</span>` : "") + `</span></div>`;
 }
 
 async function renderGoalDetail(id) {
@@ -17255,6 +17312,7 @@ function goalMyContribs(g) {
       `<span class="rm-mine-c-n"><b>${esc(c.item_name)}</b>${qchip} · ${fmtQty(c.qty)} ${esc(c.unit || "")}` +
       (short > 0 ? ` <span class="rm-pledge" title="pledged, but not logged as stock yet">` +
         `⏳ ${fmtQty(short)} still to gather</span>` : "") + `</span>` +
+      goalDeliveredCtl(c) +
       `<button class="ev-btn rm-c-edit" data-alloc="${c.allocation_id}" data-qty="${c.qty}" ` +
       `data-name="${esc(c.item_name)}">Change amount</button>` +
       `<button class="ev-btn danger rm-c-del" data-alloc="${c.allocation_id}" ` +
@@ -17265,14 +17323,37 @@ function goalMyContribs(g) {
     items.map(row).join("") + `</div>`).join("");
   // #48: route the stocked part of my pledges to the goal's drop-off.
   const stocked = mine.some(c => (Number(c.qty) || 0) - (Number(c.short) || 0) > 0);
+  // Stocked but not yet handed over — what a delivery run would still carry (#48 v2).
+  const toDeliver = mine.some(c => (Number(c.qty) || 0) - (Number(c.short) || 0) - (Number(c.delivered) || 0) > 1e-9);
+  const why = !stocked ? "nothing gathered yet — everything you pledged is still ⏳ to gather"
+    : "everything you've stocked is already delivered";
   const drop = g.dropoff && g.dropoff.routable ? g.dropoff : null;
   const deliver = `<div class="rm-row" style="margin:6px 0 4px">` +
-    `<button class="ev-btn primary" id="goal-plan-delivery"${stocked ? "" : ` disabled title="nothing gathered yet — everything you pledged is still ⏳ to gather"`}>` +
+    `<button class="ev-btn primary" id="goal-plan-delivery"${toDeliver ? "" : ` disabled title="${why}"`}>` +
     `📦 Plan my delivery</button>` +
     `<span class="ev-hint" id="goal-plan-msg">${drop ? `Collects what you’ve stocked and brings it to <b>${esc(drop.name)}</b>.`
       : "No drop-off set — you’ll pick where to deliver in the planner."}</span></div>`;
   return `<div class="ev-section-h">My contributions</div>${deliver}${body}` +
     `<span class="ev-hint">Withdrawing hands the amount back to your inventory as free stock.</span>`;
+}
+
+// Delivered (#48 v2): the stocked part of a pledge handed over at the drop-off.
+// A pledge still being gathered has nothing to hand over yet.
+function goalDeliveredCtl(c) {
+  const stocked = (Number(c.qty) || 0) - (Number(c.short) || 0);
+  if (stocked <= 0) return "";
+  return (Number(c.delivered) || 0) >= stocked - 1e-9
+    ? `<span class="rm-delivered">📦 delivered</span>` +
+      `<button class="ev-btn rm-c-deliver" data-alloc="${c.allocation_id}" data-on="0" title="not handed over after all">undo</button>`
+    : `<button class="ev-btn rm-c-deliver" data-alloc="${c.allocation_id}" data-on="1" ` +
+      `title="I've handed this over at the drop-off">Mark delivered</button>`;
+}
+
+async function markDelivered(goalId, body) {
+  const r = await fetch(`/api/goals/${goalId}/delivered`, { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (r.ok) renderGoalDetail(goalId);
+  return r.ok;
 }
 
 // Where a commitment draws from: any holding of that item the member has already
@@ -17353,6 +17434,18 @@ async function withdrawContribution(goalId, allocId, name) {
 }
 
 function wireGoalContribActions(g) {
+  document.querySelectorAll("#goal-detail-body .rm-c-deliver").forEach(b => {
+    b.onclick = () => markDelivered(g.id, { allocation_id: Number(b.dataset.alloc), delivered: b.dataset.on === "1" });
+  });
+  document.querySelectorAll("#goal-detail-body .rm-c-received").forEach(b => {
+    b.onclick = () => markDelivered(g.id, { owner_id: b.dataset.owner, delivered: b.dataset.on === "1" });
+  });
+  const leftover = $("goal-sell-leftover");
+  if (leftover) leftover.onclick = async () => {
+    const ids = goalLeftover(g).map(h => h.id);
+    const err = await planInventoryPickup({ holding_ids: ids, free_only: true }, { sell: true });
+    if (err) $("goal-leftover-msg").textContent = err;
+  };
   const plan = $("goal-plan-delivery");
   if (plan) plan.onclick = async () => {
     const err = await planInventoryPickup({ goal_id: g.id });
@@ -17488,6 +17581,20 @@ function renderSurveyGoalDetail(g) {
     };
   }
 }
+// Met goal (#48 v2): the viewer's stock of its items that no goal claims — offer
+// to sell it where it pays best.
+function goalLeftover(g) {
+  return (g.my_holdings || []).filter(h => Number(h.available) > 0 && (h.unit || "").toLowerCase() === "scu");
+}
+function goalLeftoverBlock(g, met) {
+  const left = goalLeftover(g);
+  if (!met || !left.length) return "";
+  const what = left.map(h => `${fmtQty(h.available)} ${esc(h.unit || "")} ${esc(h.item_name)}`).join(", ");
+  return `<div class="rm-row" style="margin:8px 0">` +
+    `<button class="ev-btn" id="goal-sell-leftover">💰 Sell my leftover</button>` +
+    `<span class="ev-hint" id="goal-leftover-msg">This goal is met. You still hold ${what} that no goal claims.</span></div>`;
+}
+
 function renderGoalDetailBody(g) {
   if (g.kind === "unlock") return renderUnlockGoalDetail(g);
   if (g.kind === "survey") return renderSurveyGoalDetail(g);
@@ -17497,9 +17604,20 @@ function renderGoalDetailBody(g) {
     `<option value="${esc(l.item_id)}">${esc(l.name)} (${fmtQty(l.have)}/${fmtQty(l.needed)} ${esc(l.unit || "")})</option>`).join("");
   const contributors = pr.per_contributor || [];
   const contribList = contributors.length
-    ? contributors.map(c => `<span class="ev-name">${esc(c.display_name)} · ${fmtQty(c.qty)}` +
-        (c.promised > 0 ? ` <span class="rm-pledge" title="of that, still to gather">` +
-          `⏳ ${fmtQty(c.promised)}</span>` : "") + `</span>`).join("")
+    ? contributors.map(c => {
+        // #48 v2: how much of it is at the drop-off, and the creator's receipt control.
+        const stocked = (Number(c.qty) || 0) - (Number(c.promised) || 0);   // `low` is outside qty
+        const got = Number(c.delivered) || 0;
+        const recv = g.can_edit && stocked > 0
+          ? (got >= stocked - 1e-9
+            ? ` <button class="ev-btn rm-c-received" data-owner="${esc(c.owner_id)}" data-on="0" title="undo the receipt">undo</button>`
+            : ` <button class="ev-btn rm-c-received" data-owner="${esc(c.owner_id)}" data-on="1" title="confirm you received their stocked contribution">Mark received</button>`)
+          : "";
+        return `<span class="ev-name">${esc(c.display_name)} · ${fmtQty(c.qty)}` +
+          (c.promised > 0 ? ` <span class="rm-pledge" title="of that, still to gather">` +
+            `⏳ ${fmtQty(c.promised)}</span>` : "") +
+          (got > 0 ? ` <span class="rm-delivered">📦 ${fmtQty(got)}</span>` : "") + recv + `</span>`;
+      }).join("")
     : `<span class="muted">No contributions logged yet.</span>`;
   const editBtns = (g.can_edit
     ? `<button class="ev-btn" id="goal-edit">Edit</button><button class="ev-btn danger" id="goal-del">Delete</button>` : "") + goalAnnounceButton(g);
@@ -17519,7 +17637,7 @@ function renderGoalDetailBody(g) {
     `<span class="rm-headline-l">filled${met ? " · met ✓" : ""}</span></div>` +
     `<div class="rm-bar ${met ? "met" : ""}" style="margin-bottom:14px"><span style="width:${Math.min(100, pr.overall_pct)}%"></span></div>` +
     `<div class="ev-section-h">Line items</div>${pr.lines.map(l => goalLineRow(l, minqMap)).join("")}` +
-    goalMyContribs(g) +
+    goalMyContribs(g) + goalLeftoverBlock(g, met) +
     `<div class="ev-signup"><h3>Log a contribution</h3>` +
       `<div class="rm-row">` +
         `<select id="goal-c-item" class="sel" style="flex:1;min-width:180px">${lineSel}</select>` +

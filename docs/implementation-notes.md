@@ -93,6 +93,21 @@ the as-built layer between them and the code.
 
 ## Resource manager
 
+- **#48 v2 (2026-10-18, unreleased; docs/inventory-pickup-runs.md §6):**
+  `inventory_allocations.delivered_qty` — the part of a contribution handed over,
+  capped at qty − short wherever it's read (`derive_goal_progress`,
+  `/api/goals/{id}/delivered`). Contributor marks own; creator/admin marks anyone's.
+  Pickup goal runs carry qty − short − delivered. `db.move_holding` moves stock
+  to another lot: ALL of a holding carries every allocation (source deleted),
+  part carries only the hauling goal's allocation; same-goal allocations merge.
+  Runs from Inventory store `inventory: {kind, goal_id, sold}`; package ids
+  `h<holding>` (+ `~n` sale parts, `.n` trip parts — `_HOLDING_PKG_RE`);
+  `patch_run`'s completion returns `completed_run` so the card can offer
+  `POST /api/route/runs/{id}/inventory` (applies once: `inventory_applied`).
+  Split sales: `plan_sell_route` tries each assignment plain AND with overflow to
+  the next buyers (`SELL_OVERFLOW_BUYERS`); labels/dedupe use the buyers actually
+  used. Discord: drop-off rides the goal post's code-built `progress` line, not
+  a new template var — no golden change.
 - **Sell mode (#48 §8, 2026-10-17, unreleased; docs/inventory-pickup-runs.md
   §8.8):** `POST /api/route/plan_sell` → `nav_core.plan_sell_route`. Buyers come
   from `_sell_points` — shared with `_trade_candidates`, so both planners judge

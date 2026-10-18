@@ -6591,7 +6591,19 @@ async def post_sell_plan(body: SellPlanIn, user: dict = Depends(require_session)
         start_pos = sess.pos
     owned = {r["id"]: r for r in db.list_inventory(owner_id=user["id"])}
     holdings = []
+    # A holding a previous plan split between buyers is several planner rows:
+    # fold them back into one item (amounts summed, first pickup kept).
+    merged: dict[int, SellItemIn] = {}
     for it in body.items:
+        if it.holding_id in merged:
+            m = merged[it.holding_id]
+            if m.scu is not None and it.scu is not None:
+                m.scu += it.scu
+            else:
+                m.scu = None
+        else:
+            merged[it.holding_id] = it.model_copy()
+    for it in merged.values():
         h = owned.get(it.holding_id)
         if h is None:
             raise HTTPException(status_code=404, detail="unknown holding")
@@ -6636,9 +6648,24 @@ async def post_sell_plan(body: SellPlanIn, user: dict = Depends(require_session)
 # --- cargo run execution (stateful, persisted per member) -------------------
 
 
+class RunInventoryIn(BaseModel):
+    # A run planned from Inventory (#48 v2): what finishing it means for the
+    # holdings it carried. Packages name their holding as `h<id>` (+ part suffix).
+    kind: str = Field(max_length=8)              # deliver | sell
+    goal_id: int | None = None                   # a goal delivery: mark it delivered
+    sold: dict[str, float] = Field(default_factory=dict, max_length=_MAX_PACKAGES)
+
+    @field_validator("sold")
+    @classmethod
+    def _cap_sold_keys(cls, v: dict) -> dict:
+        if any(len(k) > _COMMODITY_MAX for k in v):
+            raise ValueError(f"commodity name too long (max {_COMMODITY_MAX} chars)")
+        return v
+
+
 class RunStartIn(RoutePlanIn):
     # ship/qd/in_range_only inherited from RoutePlanIn (#27).
-    pass
+    inventory: RunInventoryIn | None = None
 
 
 class RunPatchIn(BaseModel):
@@ -6735,6 +6762,8 @@ async def start_run(body: RunStartIn, user: dict = Depends(require_session)):
             "rewards": rewards, "total_reward": sm["total_reward"],
             "total_time_s": sm["total_time_s"], "total_distance_m": sm["total_distance_m"],
         }
+        if body.inventory and body.inventory.kind in ("deliver", "sell"):
+            run["inventory"] = body.inventory.model_dump()
         run["id"] = db.start_run(user["id"], body.ship, run["started_at"], run)
         sess.run = run
         _point_at_active_stop(sess)
@@ -6781,6 +6810,7 @@ async def patch_run(body: RunPatchIn, user: dict = Depends(require_session)):
             run["active"] += 1
             _point_at_active_stop(sess)
         completed = _advance_run(sess)
+        finished = {"id": run["id"], "inventory": run.get("inventory")} if completed else None
         if completed:
             db.complete_run(user["id"], run["id"],
                             datetime.now(timezone.utc).isoformat(), run)
@@ -6796,7 +6826,8 @@ async def patch_run(body: RunPatchIn, user: dict = Depends(require_session)):
             db.update_run(user["id"], run["id"], run)
         sess.recompute()
         frame = sess.state_frame()
-        result = {"ok": True, "completed": completed, "run": sess.run_view()}
+        result = {"ok": True, "completed": completed, "run": sess.run_view(),
+                  **({"completed_run": finished} if finished else {})}
     if frame is not None:
         await sess.push_frame(frame)
     return result
@@ -6815,6 +6846,78 @@ async def abandon_run(user: dict = Depends(require_session)):
     if frame is not None:
         await sess.push_frame(frame)
     return {"ok": True, "abandoned": had}
+
+
+_HOLDING_PKG_RE = re.compile(r"^h(\d+)")     # inventory package ids: h<id>[~n][.n]
+
+
+@app.post("/api/route/runs/{run_id}/inventory")
+async def apply_run_inventory(run_id: int, user: dict = Depends(require_session)):
+    """After a run planned from Inventory finishes (#48 v2), make the ledger
+    match what happened in-game — the one-click follow-up on the completion
+    card. Only delivered packages count, and only the caller's own holdings.
+
+    - **deliver**: the hauled stock moves to where it was dropped (db.move_holding
+      — pledges follow it); a goal delivery also marks those contributions
+      delivered. A per-piece item rode as a 0-SCU stop, so its whole holding moves.
+    - **sell**: what sold (the plan's `sold` per commodity, at most what was
+      hauled) comes off the holding; anything a buyer wouldn't take stays
+      yours, now at that station. A holding sold to nothing with no pledges on
+      it is removed.
+    Applies once per run (409 after)."""
+    r = db.get_run(user["id"], run_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="unknown run")
+    run = r["data"]
+    inv = run.get("inventory")
+    if r["status"] != "completed" or not inv:
+        raise HTTPException(status_code=400, detail="this run has no inventory to update")
+    if run.get("inventory_applied"):
+        raise HTTPException(status_code=409, detail="already applied")
+    owned = {h["id"]: h for h in db.list_inventory(owner_id=user["id"])}
+    hauled: dict[tuple, float] = {}
+    for pid, p in (run.get("packages") or {}).items():
+        m = _HOLDING_PKG_RE.match(str(p.get("id") or pid))
+        if not m or p.get("state") != "delivered" or int(m.group(1)) not in owned:
+            continue
+        key = (int(m.group(1)), int(p["to_id"]))
+        hauled[key] = hauled.get(key, 0.0) + float(p.get("scu") or 0)
+    now = datetime.now(timezone.utc).isoformat()
+    changes = []
+    sold_left = {k.strip().casefold(): float(v) for k, v in (inv.get("sold") or {}).items()}
+    for (hid, to_id), qty in hauled.items():
+        h = db.get_inventory(hid)
+        if h is None or to_id not in nav.pois:
+            continue
+        stop = nav.pois[to_id].name
+        if qty <= 0:                       # a 0-SCU stop: counted per piece, all of it went
+            qty = float(h.get("qty") or 0)
+        if inv.get("kind") == "sell":
+            key = (h.get("item_name") or "").strip().casefold()
+            sold = min(qty, sold_left.get(key, 0.0), float(h.get("qty") or 0))
+            sold_left[key] = sold_left.get(key, 0.0) - sold
+            if sold > 0:
+                left = float(h.get("qty") or 0) - sold
+                if left <= 1e-9 and not db.allocation_count(hid):
+                    db.delete_inventory(hid)
+                else:
+                    db.update_inventory(hid, {"qty": max(0.0, left)}, now)
+            rest = qty - sold
+            if rest > 1e-9 and db.get_inventory(hid) is not None:
+                db.move_holding(hid, rest, stop, to_id, now)
+            changes.append({"holding_id": hid, "item_name": h.get("item_name"),
+                            "unit": h.get("unit"), "sold": sold, "left_at": stop if rest > 1e-9 else None,
+                            "left": max(0.0, rest)})
+        else:
+            gid = inv.get("goal_id")
+            db.move_holding(hid, qty, stop, to_id, now, goal_id=gid,
+                            delivered=qty if gid is not None else 0.0)
+            changes.append({"holding_id": hid, "item_name": h.get("item_name"),
+                            "unit": h.get("unit"), "moved": qty, "to": stop,
+                            "delivered": gid is not None})
+    run["inventory_applied"] = now
+    db.set_run_data(user["id"], run_id, run)
+    return {"ok": True, "kind": inv.get("kind"), "goal_id": inv.get("goal_id"), "changes": changes}
 
 
 def _run_summary(run: dict) -> dict:
@@ -9648,6 +9751,8 @@ async def _notify_goal_posted(goal: dict, progress: dict, poster_id: str, *,
         head += f" · counting since <t:{int(goal['survey_spec']['since'])}:D>"
     if goal.get("deadline"):
         head += f" · due {_discord_ts(goal['deadline'], 'D')}"
+    if goal.get("dropoff_name") and not (unlock or survey):
+        head += f" · 📦 deliver to {goal['dropoff_name']}"     # #48
     # `full` posts the whole description (the org wrote it as the channel
     # notice — a 2,000-char org directive shouldn't need retyping); the
     # default keeps the card short. Embed descriptions cap at 4,096. The
@@ -9687,9 +9792,11 @@ async def _notify_goal_met(goal: dict, contributions) -> None:
     mentions, ping = _mentions(goal["creator_id"])
     contributors = len({r.get("owner_id") for r in (contributions or []) if r.get("owner_id")})
     who = f"\n{contributors} contributor{'s' if contributors != 1 else ''} chipped in." if contributors else ""
+    # #48: where the pledged stock now has to go.
+    drop = f"\n📦 Deliver to **{goal['dropoff_name']}**." if goal.get("dropoff_name") else ""
     await notify.send(
         "goals",
-        f"🎯 **Goal reached: {goal['title']}**\nFully stocked — 100%.{who}"
+        f"🎯 **Goal reached: {goal['title']}**\nFully stocked — 100%.{who}{drop}"
         f"{_deep_link('#/goals')}{ping}",
         mentions=mentions, dedup_key=f"goal-met:{goal['id']}")
 
@@ -12725,6 +12832,8 @@ class PickupIn(BaseModel):
     holding_ids: list[int] = Field(default_factory=list, max_length=_MAX_PACKAGES)
     goal_id: int | None = None
     dropoff_poi_id: int | None = None
+    # Only the part of each holding no goal claims (sell the leftover, #48 v2).
+    free_only: bool = False
 
 
 def _pickup_item(h: dict, qty: float, short: float, label: str) -> dict:
@@ -12743,7 +12852,8 @@ async def plan_inventory_pickup(body: PickupIn, user: dict = Depends(require_ses
     normal planner/run mode take over, so nothing here solves a route. Only the
     caller's OWN holdings: SC has no shared storage, so nobody can collect
     another member's stash. A goal run carries each contribution's covered part
-    (allocation − short); the short part is listed as still to gather, never a
+    not yet delivered (allocation − short − delivered); the short part is listed
+    as still to gather, never a
     stop. Drop-off: the body's, else the goal's (while its POI still exists),
     else none — the player picks one in the planner."""
     goal = None
@@ -12768,7 +12878,9 @@ async def plan_inventory_pickup(body: PickupIn, user: dict = Depends(require_ses
             if h is None:                   # someone else's contribution
                 continue
             short = float(c.get("short") or 0)
-            items.append(_pickup_item(h, max(0.0, float(c["qty"] or 0) - short), short, label))
+            # Already handed over (#48 v2) is no longer cargo.
+            carry = float(c["qty"] or 0) - short - float(c.get("delivered") or 0)
+            items.append(_pickup_item(h, max(0.0, carry), short, label))
         if not items:
             raise HTTPException(status_code=400, detail="you haven't contributed to this goal")
     else:
@@ -12778,7 +12890,10 @@ async def plan_inventory_pickup(body: PickupIn, user: dict = Depends(require_ses
             h = holdings.get(hid)
             if h is None:
                 raise HTTPException(status_code=404, detail="unknown holding")
-            items.append(_pickup_item(h, float(h.get("qty") or 0), 0.0, "Inventory"))
+            qty = float(h.get("qty") or 0)
+            if body.free_only:
+                qty = max(0.0, qty - db.committed_for_holding(hid))
+            items.append(_pickup_item(h, qty, 0.0, "Inventory"))
     plan = nav_core.build_pickup_plan(items, drop)
     for p in plan["packages"] + plan["unresolved"] + plan["already_there"]:
         p["commodity"] = p["commodity"][:_COMMODITY_MAX]
@@ -13187,7 +13302,7 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
         # a craft goal wants, without a second list of the same numbers.
         mine = [{k: c.get(k) for k in
                  ("allocation_id", "holding_id", "item_id", "item_name",
-                  "unit", "qty", "location", "short", "quality")}
+                  "unit", "qty", "location", "short", "quality", "delivered")}
                 for c in contributions if c.get("owner_id") == user["id"]]
         view["my_contributions"] = sorted(mine, key=lambda c: c["allocation_id"])
         view["my_holdings"] = _my_holdings_for_goal(goal, user)
@@ -13489,6 +13604,42 @@ def _contribution_result(goal_id: int, user: dict) -> dict:
     if not _can_view_goal(goal, user):
         return {"ok": True}
     return _goal_view(goal, db.list_goal_contributions(goal_id=goal_id), user, detail=True)
+
+
+class DeliveredIn(BaseModel):
+    delivered: bool = True
+    allocation_id: int | None = None                         # one contribution ...
+    owner_id: str | None = Field(default=None, max_length=32)  # ... or one member's all
+
+
+@app.post("/api/goals/{goal_id}/delivered")
+async def mark_delivered(goal_id: int, body: DeliveredIn,
+                         user: dict = Depends(require_session)):
+    """Mark contributions as handed over at the drop-off (#48 v2), or undo it.
+    The contributor marks their own; the goal's creator (or an admin) can mark
+    anyone's — the org confirming receipt in-game. What counts as delivered is
+    the stocked part of a pledge (qty − short): a promise not gathered yet
+    can't have been handed over. Trust is social, like the rest of the ledger."""
+    goal = db.get_goal(goal_id)
+    if goal is None or not _can_view_goal(goal, user):
+        raise HTTPException(status_code=404, detail="unknown goal")
+    if body.allocation_id is None and body.owner_id is None:
+        raise HTTPException(status_code=400, detail="say which contribution")
+    rows = [c for c in db.list_goal_contributions(goal_id=goal_id)
+            if (body.allocation_id is None or c["allocation_id"] == body.allocation_id)
+            and (body.owner_id is None or c["owner_id"] == body.owner_id)]
+    if not rows:
+        raise HTTPException(status_code=404, detail="unknown contribution")
+    receiver = goal["creator_id"] == user["id"] or bool(user.get("is_admin"))
+    if not receiver and any(c["owner_id"] != user["id"] for c in rows):
+        raise HTTPException(status_code=403,
+                            detail="only the goal's creator can confirm someone else's delivery")
+    now = datetime.now(timezone.utc).isoformat()
+    for c in rows:
+        stocked = max(0.0, float(c["qty"] or 0) - float(c.get("short") or 0))
+        db.set_allocation_delivered(c["allocation_id"], stocked if body.delivered else 0.0, now)
+    return _goal_view(db.get_goal(goal_id), db.list_goal_contributions(goal_id=goal_id),
+                      user, detail=True)
 
 
 @app.patch("/api/goals/{goal_id}/contribute/{alloc_id}")
