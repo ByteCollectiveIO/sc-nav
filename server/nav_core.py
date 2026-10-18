@@ -18,6 +18,7 @@ it must be calibrated in game (see README "Calibrating rotation").
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import re
@@ -3469,6 +3470,195 @@ def run_packages(run: dict) -> list[dict]:
     return out
 
 
+# --- sell mode (#48 §8, docs/inventory-pickup-runs.md) ---
+# Consolidate and sell: the pickups are fixed (your holdings), the drop-off is
+# part of the answer. For each commodity keep its best few buyers, try every
+# commodity -> buyer assignment through the cargo solver, and score the routes.
+
+SELL_TOP_K = 3                 # buyers kept per commodity
+SELL_MAX_SOLVES = 81           # 4 commodities x 3 buyers; beyond it k shrinks
+
+
+def _sell_candidates(points, avoid_poi_ids, avoid_sells, exclude_poi_ids, key):
+    """One commodity's buyers, best price first, one point per POI (a station
+    with several kiosks routes to the same place). Unusable stops (#34) and
+    stops reported not buying are out for good; camped stops (#24) are out
+    unless they're the only buyers left — held cargo must keep somewhere to go,
+    the same override the trade planner gives sunk cargo. Returns
+    (points, used_avoided)."""
+    best: dict[int, dict] = {}
+    for p in points:
+        pid = p.get("poi_id")
+        if pid is None or pid in exclude_poi_ids or (pid, key) in avoid_sells:
+            continue
+        if pid not in best or int(p["sell"]) > int(best[pid]["sell"]):
+            best[pid] = p
+    ranked = sorted(best.values(), key=lambda p: -int(p["sell"]))
+    safe = [p for p in ranked if p["poi_id"] not in avoid_poi_ids]
+    return (safe, False) if safe or not ranked else (ranked, True)
+
+
+def plan_sell_route(nav: NavData, prices, holdings, usable_scu, *, start_id=None,
+                    start_pos=None, t_ref=None, sort="per_hour", single_terminal=False,
+                    max_age_s=None, now_ts=None, demand_caps=None,
+                    avoid_poi_ids=None, avoid_sells=None, exclude_poi_ids=None,
+                    split_trips=False, **route_kw) -> dict:
+    """Pick where to sell each commodity of a holding selection, and the route.
+
+    `holdings`: [{holding_id, commodity (feed name), scu, from_id, label}]; a
+    0-SCU / unpriced item belongs in `no_market` and is never planned.
+    `sort`: 'per_hour' (aUEC per hour of route, default — the goods are already
+    owned, so there's no buy cost: the trade-off is money against flying time)
+    or 'total' (most aUEC, time breaks ties). `single_terminal` keeps only
+    stations that buy EVERYTHING selected. `split_trips` lets a haul bigger
+    than the hold become several trips (plan_route_trips).
+
+    Each commodity keeps its top SELL_TOP_K buyers plus the best station that
+    buys everything (one stop is often the winner without topping any single
+    price); every assignment is solved, capped at SELL_MAX_SOLVES — k drops
+    until it fits, down to one buyer each (`simplified`). A buyer's demand
+    (`scu_sell_stock`, or the org's stated cap) limits what sells there; the
+    rest is still delivered and reported as `left_over` (v1 never splits one
+    commodity across buyers). Returns plan_route's shape for the best route,
+    with summary.revenue / auec_per_hour / sales / alternatives (the next two
+    distinct assignments) / no_market, and `packages` — the holding->buyer
+    rows, ready to run as a normal cargo plan."""
+    avoid_poi_ids = frozenset(avoid_poi_ids or ())
+    avoid_sells = frozenset(avoid_sells or ())
+    exclude_poi_ids = frozenset(exclude_poi_ids or ())
+    now = now_ts if now_ts is not None else time.time()
+    by_name = {}
+    for p in prices:
+        if p.get("commodity"):
+            by_name.setdefault(p["commodity"].strip().casefold(), p["commodity"])
+    sellable, no_market, groups = [], [], {}
+    for h in holdings:
+        name = by_name.get((h.get("commodity") or "").strip().casefold())
+        if not name or float(h.get("scu") or 0) <= 0:
+            no_market.append(h)
+            continue
+        sellable.append({**h, "commodity": name})
+        groups.setdefault(name, []).append(sellable[-1])
+    points = _sell_points(prices, max_age_s=max_age_s, now_ts=now, names=groups.keys(),
+                          demand_caps=demand_caps)
+    cands, flagged = {}, set()
+    for name in list(groups):
+        ranked, used_avoided = _sell_candidates(points.get(name, ()), avoid_poi_ids,
+                                                avoid_sells, exclude_poi_ids,
+                                                name.strip().lower())
+        if not ranked:                       # priced once, but no usable buyer now
+            no_market.extend(groups.pop(name))
+            continue
+        cands[name] = ranked
+        if used_avoided:
+            flagged.add(name)
+    sellable = [h for h in sellable if h["commodity"] in groups]
+    empty = {"summary": {"feasible": False, "reason": "nothing selected has a known buyer",
+                         "num_stops": 0, "num_packages": 0, "usable_scu": float(usable_scu),
+                         "no_market": no_market}, "stops": [], "packages": []}
+    if not groups:
+        return empty
+    names = sorted(groups)
+    held = {n: sum(float(h["scu"]) for h in groups[n]) for n in names}
+    # Stations that buy everything selected, best total revenue first.
+    common = set.intersection(*({p["poi_id"] for p in cands[n]} for n in names))
+    point_at = {n: {p["poi_id"]: p for p in cands[n]} for n in names}
+
+    def revenue(n, pid):
+        p = point_at[n][pid]
+        cap = float(p.get("scu_sell_stock") or 0)
+        sold = min(held[n], cap) if cap > 0 else held[n]
+        return sold * int(p["sell"]), sold
+
+    one_stop = sorted(common, key=lambda pid: -sum(revenue(n, pid)[0] for n in names))
+    if single_terminal:
+        if not one_stop:
+            return {**empty, "summary": {**empty["summary"],
+                    "reason": "no single station buys everything selected"}}
+        assignments = [{n: pid for n in names} for pid in one_stop[:SELL_TOP_K]]
+        simplified = False
+    else:
+        def options_for(k):
+            out = []
+            for n in names:
+                opts = [p["poi_id"] for p in cands[n][:k]]
+                if one_stop and one_stop[0] not in opts:
+                    opts.append(one_stop[0])
+                out.append(opts)
+            return out
+
+        k = SELL_TOP_K
+        options = options_for(k)
+        while k > 1 and math.prod(len(o) for o in options) > SELL_MAX_SOLVES:
+            k -= 1
+            options = options_for(k)
+        simplified = k < SELL_TOP_K
+        if math.prod(len(o) for o in options) > SELL_MAX_SOLVES:
+            # Too many commodities even at one buyer each (+ the one-stop): try
+            # the best buyer for each, and everything at the best one-stop.
+            options = None
+            assignments = [{n: cands[n][0]["poi_id"] for n in names}]
+            if one_stop:
+                assignments.append({n: one_stop[0] for n in names})
+            simplified = True
+        else:
+            assignments = [dict(zip(names, c)) for c in itertools.product(*options)]
+    solve = plan_route_trips if split_trips else plan_route
+    scored, first_fail = [], None
+    for asg in assignments:
+        pkgs = [{"id": f"h{h['holding_id']}", "commodity": h["commodity"],
+                 "scu": float(h["scu"]), "from_id": int(h["from_id"]),
+                 "to_id": asg[h["commodity"]], "contract": h.get("label")}
+                for h in sellable]
+        plan = solve(nav, pkgs, usable_scu, start_id, start_pos, t_ref, **route_kw)
+        if not plan["summary"]["feasible"]:
+            first_fail = first_fail or plan
+            continue
+        total, sales = 0.0, []
+        for n in names:
+            pid = asg[n]
+            p = point_at[n][pid]
+            got, sold = revenue(n, pid)
+            total += got
+            sales.append({"commodity": n, "poi_id": pid, "station": nav.pois[pid].name,
+                          "terminal": p.get("terminal"), "price": int(p["sell"]),
+                          "scu_held": held[n], "scu_sold": sold,
+                          "left_over": round(held[n] - sold, 6), "revenue": got,
+                          "capped": bool(p.get("demand_capped")),
+                          "source": p.get("sell_src") or "uex",
+                          "updated_at": p.get("sell_updated_at") or p.get("updated_at"),
+                          "camped": n in flagged and pid in avoid_poi_ids})
+        hours = (plan["summary"]["total_time_s"] or 0) / 3600
+        per_hour = total / hours if hours > 0 else total
+        key = (-per_hour, plan["summary"]["total_time_s"]) if sort != "total" \
+            else (-total, plan["summary"]["total_time_s"])
+        scored.append((key, asg, plan, pkgs, total, per_hour, sales))
+    if not scored:
+        fail = first_fail or empty
+        fail["summary"]["no_market"] = no_market
+        fail.setdefault("packages", [])
+        return fail
+    scored.sort(key=lambda s: s[0])
+    _, asg, plan, pkgs, total, per_hour, sales = scored[0]
+
+    def label(a):
+        stops = {a[n] for n in names}
+        if len(stops) == 1:
+            return f"Sell all at {nav.pois[next(iter(stops))].name}"
+        return ", ".join(f"{n} → {nav.pois[a[n]].name}" for n in names)
+
+    sm = plan["summary"]
+    sm.update(revenue=round(total), auec_per_hour=round(per_hour), sort=sort,
+              sales=sales, no_market=no_market, simplified=simplified,
+              assignment_label=label(asg),
+              alternatives=[{"label": label(a), "revenue": round(t), "auec_per_hour": round(ph),
+                             "total_time_s": p["summary"]["total_time_s"],
+                             "assignment": [{"commodity": n, "poi_id": a[n],
+                                             "station": nav.pois[a[n]].name} for n in names]}
+                            for _, a, p, _, t, ph, _ in scored[1:3]])
+    return {**plan, "packages": pkgs}
+
+
 def plan_route_trips(nav: NavData, packages, usable_scu, start_id=None, start_pos=None,
                      t_ref=None, **kw) -> dict:
     """plan_route, but a bundle too big for the hold is split into several trips
@@ -4341,6 +4531,32 @@ def legality_allows(name, mode, illicit) -> bool:
     return (str(name or "").strip().lower() in illicit) == (mode == "illicit")
 
 
+def _sell_points(prices, *, max_age_s=None, now_ts=None, system=None, names=None,
+                 demand_caps=None) -> dict[str, list]:
+    """Every fresh sell-side price point, by commodity name — where a commodity
+    can be sold and for how much. Shared by the trade planner (the sell end of
+    each buy->sell pair) and sell mode (plan_sell_route), so both judge sell
+    prices the same way: per-side freshness (#39 slice 0) and the org demand
+    overlay (`demand_caps`, member-stated maxima replacing the feed's figure).
+    `names` restricts to those commodities (exact feed names). No legality
+    filter on purpose: it's a buy-side preference, and held cargo always keeps
+    its buyers (see TRADE_LEGALITY)."""
+    now = now_ts if now_ts is not None else time.time()
+    want = set(names) if names is not None else None
+    out: dict[str, list] = {}
+    for p in prices:
+        name = p.get("commodity")
+        if not name or (want is not None and name not in want):
+            continue
+        if system and p.get("system") != system:
+            continue
+        if p.get("sell") and _price_fresh(p, max_age_s, now, side="sell"):
+            out.setdefault(name, []).append(
+                _cap_price_point(p, demand_caps, "scu_sell_stock", "demand_capped")
+                if demand_caps else p)
+    return out
+
+
 def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
                       budget=None, max_age_s=None, now_ts=None,
                       legality="any", illicit=frozenset(), min_return_pct=None,
@@ -4377,7 +4593,6 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
     now = now_ts if now_ts is not None else time.time()
     cset = {c.strip().lower() for c in commodities} if commodities else None
     buyers: dict[str, list] = {}
-    sellers: dict[str, list] = {}
     for p in prices:
         name = p.get("commodity")
         if not name or (cset and name.strip().lower() not in cset):
@@ -4393,10 +4608,10 @@ def _trade_candidates(prices, capacity_scu, *, system=None, commodities=None,
             buyers.setdefault(name, []).append(
                 _cap_price_point(p, supply_caps, "scu_buy", "supply_capped")
                 if supply_caps else p)
-        if p.get("sell") and _price_fresh(p, max_age_s, now, side="sell"):
-            sellers.setdefault(name, []).append(
-                _cap_price_point(p, demand_caps, "scu_sell_stock", "demand_capped")
-                if demand_caps else p)
+    # Only commodities with a buy side matter here, and buyers already passed
+    # the legality filter — so the shared sell-side pass needs no legality.
+    sellers = _sell_points(prices, max_age_s=max_age_s, now_ts=now, system=system,
+                           names=buyers.keys(), demand_caps=demand_caps)
     rows = []
     for name, srcs in buyers.items():
         key = name.strip().lower()

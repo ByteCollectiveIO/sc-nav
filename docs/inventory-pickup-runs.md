@@ -2,7 +2,7 @@
 
 🔨 **Deliver half (§1–§7) built 2026-10-17, unreleased** — as-built detail in
 implementation-notes.md › Resource manager; deferred from §4: the Discord
-announce doesn't mention the drop-off yet. **Sell mode (§8): design, not built.** A player request: pick holdings from
+announce doesn't mention the drop-off yet. **Sell mode (§8) built 2026-10-17, unreleased** — see §8.8 for where the build departs from this design. A player request: pick holdings from
 your Resource Manager inventory that sit at known locations and get an
 efficient route that collects them all and drops them off somewhere. Two
 destinations, one feature:
@@ -353,3 +353,32 @@ route instead of a "too big" error.
    (org-inventory-goals.md "Deferred: Goal completion → Marketplace")? It's
    the same selection with a different button, so it's cheap. Decide when
    the delivered state lands (v2).
+
+Answered at build: (1) yes — alternatives are always different assignments,
+and the next two by score; (2) still open, with the v2 delivered state.
+
+### 8.8 As built (2026-10-17) — where it departs from §8.2–§8.5
+
+- **No legality filter.** §8.2 listed `legality_allows`; the trade planner
+  deliberately never applies legality to cargo already held (TRADE_LEGALITY:
+  switching to "legal" must not strand contraband in your hold), and sell
+  mode is all held cargo — so it keeps every buyer.
+- **Camped buyers** (danger board / personal blacklist) are skipped while
+  another buyer exists; if they're a commodity's only buyers they come back
+  and the sale is flagged "only buyer is camped". Ship-unusable stops and
+  stops a member reported not buying are always out.
+- **The planner owns the ship.** The Inventory page can't know your hold, so
+  "💰 Sell at best price" (next to "Plan pickup run") opens the cargo planner
+  in sell mode: rows come pre-filled with "to" locked as *best buyer*, and
+  **Plan route** calls `POST /api/route/plan_sell` with the planner's ship,
+  start, danger, drive and split-into-trips settings. The banner carries
+  best aUEC/hour vs most aUEC and "one stop only".
+- **Endpoint input** is `items: [{holding_id, from_id?, scu?}]`: the row's
+  corrected pickup and lowered amount are honoured; the commodity always
+  comes from the holding. Per-piece items are listed "no SCU market price".
+- **Result** is a normal cargo plan: rows get their buyers, the contract
+  label is `Sell` with the expected revenue as its payout (so history,
+  stats and aUEC/hour carry it), and *Start this run* runs it. The SELL
+  panel lists each sale (price, amount, revenue, price age, `⚡ org`,
+  left over past demand) and the two alternatives; **Use this instead**
+  fills that assignment in and re-plans it as a normal run.

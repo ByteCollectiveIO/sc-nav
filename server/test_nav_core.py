@@ -1772,6 +1772,133 @@ class SplitTripsTests(unittest.TestCase):
         self.assertIn("multi-pickup", res["summary"]["reason"])
 
 
+class SellRouteTests(unittest.TestCase):
+    """plan_sell_route (#48 §8): fixed pickups, the planner chooses where each
+    commodity sells. Coordinates are Gm-scale so flying time actually matters."""
+
+    G = 1e9
+
+    def _nav(self):
+        # P0 Iron stash, P1 Silicon stash, P2 a station nearby, P3 far away, P4 nearer still
+        return _line_nav([(0, 0, 0), (2 * self.G, 0, 0), (4 * self.G, 0, 0),
+                          (400 * self.G, 0, 0), (3 * self.G, 0, 0)])
+
+    def _pt(self, name, poi, sell, stock=0, **kw):
+        return {"commodity": name, "poi_id": poi, "sell": sell, "scu_sell_stock": stock,
+                "terminal": f"T{poi}", **kw}
+
+    def _holdings(self, iron=20, silicon=10):
+        return [{"holding_id": 1, "commodity": "Iron", "scu": iron, "from_id": 0, "label": "Inventory"},
+                {"holding_id": 2, "commodity": "Silicon", "scu": silicon, "from_id": 1, "label": "Inventory"}]
+
+    def _sold_at(self, res):
+        return {s["commodity"]: s["poi_id"] for s in res["summary"]["sales"]}
+
+    def test_one_station_that_buys_everything_beats_a_tiny_better_price_far_away(self):
+        prices = [self._pt("Iron", 2, 100), self._pt("Silicon", 2, 100),
+                  self._pt("Iron", 3, 101)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertEqual(self._sold_at(res), {"Iron": 2, "Silicon": 2})
+        self.assertEqual(res["summary"]["revenue"], 30 * 100)
+        self.assertTrue(res["summary"]["assignment_label"].startswith("Sell all at"))
+
+    def test_a_split_wins_when_the_price_gap_pays_for_the_detour(self):
+        prices = [self._pt("Iron", 2, 100), self._pt("Silicon", 2, 100),
+                  self._pt("Iron", 4, 100_000)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100)
+        self.assertEqual(self._sold_at(res), {"Iron": 4, "Silicon": 2})
+
+    def test_total_and_per_hour_can_choose_differently(self):
+        prices = [self._pt("Iron", 2, 100), self._pt("Silicon", 2, 100),
+                  self._pt("Iron", 3, 130), self._pt("Silicon", 3, 130)]
+        nav = self._nav()
+        fast = nav_core.plan_sell_route(nav, prices, self._holdings(), 100, sort="per_hour")
+        most = nav_core.plan_sell_route(nav, prices, self._holdings(), 100, sort="total")
+        self.assertEqual(set(self._sold_at(fast).values()), {2})
+        self.assertEqual(set(self._sold_at(most).values()), {3})
+        self.assertGreater(most["summary"]["revenue"], fast["summary"]["revenue"])
+        self.assertGreater(fast["summary"]["auec_per_hour"], most["summary"]["auec_per_hour"])
+
+    def test_runners_up_are_other_assignments(self):
+        prices = [self._pt("Iron", 2, 100), self._pt("Silicon", 2, 100),
+                  self._pt("Iron", 4, 90), self._pt("Silicon", 4, 90)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100)
+        alts = res["summary"]["alternatives"]
+        self.assertTrue(alts)
+        best = res["summary"]["assignment_label"]
+        self.assertTrue(all(a["label"] != best for a in alts))
+
+    def test_demand_caps_what_sells_and_reports_the_rest(self):
+        prices = [self._pt("Iron", 2, 100, stock=5), self._pt("Silicon", 2, 100)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100)
+        iron = next(s for s in res["summary"]["sales"] if s["commodity"] == "Iron")
+        self.assertEqual((iron["scu_sold"], iron["left_over"]), (5, 15))
+        self.assertEqual(res["summary"]["revenue"], 5 * 100 + 10 * 100)
+
+    def test_unpriced_or_unmeasured_items_are_listed_not_planned(self):
+        prices = [self._pt("Iron", 2, 100)]
+        hs = self._holdings() + [{"holding_id": 3, "commodity": "Iron", "scu": 0,
+                                  "from_id": 0, "label": "pens"}]
+        res = nav_core.plan_sell_route(self._nav(), prices, hs, 100)
+        self.assertEqual(sorted(h["holding_id"] for h in res["summary"]["no_market"]), [2, 3])
+        self.assertEqual([p["id"] for p in res["packages"]], ["h1"])
+
+    def test_case_insensitive_commodity_match(self):
+        prices = [self._pt("Iron", 2, 100)]
+        hs = [{"holding_id": 1, "commodity": "iron", "scu": 5, "from_id": 0}]
+        res = nav_core.plan_sell_route(self._nav(), prices, hs, 100)
+        self.assertEqual(res["packages"][0]["commodity"], "Iron")
+
+    def test_camped_buyer_avoided_unless_it_is_the_only_one(self):
+        prices = [self._pt("Iron", 2, 200), self._pt("Iron", 4, 100), self._pt("Silicon", 4, 100)]
+        nav = self._nav()
+        res = nav_core.plan_sell_route(nav, prices, self._holdings(), 100, avoid_poi_ids={2})
+        self.assertEqual(self._sold_at(res)["Iron"], 4)
+        res = nav_core.plan_sell_route(nav, prices, self._holdings(), 100, avoid_poi_ids={4})
+        sil = next(s for s in res["summary"]["sales"] if s["commodity"] == "Silicon")
+        self.assertEqual(sil["poi_id"], 4)          # its only buyer, camped or not
+        self.assertTrue(sil["camped"])
+
+    def test_unusable_and_not_buying_stops_are_never_used(self):
+        prices = [self._pt("Iron", 2, 500), self._pt("Iron", 4, 100), self._pt("Silicon", 4, 100)]
+        nav = self._nav()
+        res = nav_core.plan_sell_route(nav, prices, self._holdings(), 100, exclude_poi_ids={2})
+        self.assertEqual(self._sold_at(res)["Iron"], 4)
+        res = nav_core.plan_sell_route(nav, prices, self._holdings(), 100,
+                                       avoid_sells={(2, "iron")})
+        self.assertEqual(self._sold_at(res)["Iron"], 4)
+
+    def test_single_terminal_only_uses_a_station_that_buys_everything(self):
+        prices = [self._pt("Iron", 2, 100), self._pt("Silicon", 4, 100)]
+        res = nav_core.plan_sell_route(self._nav(), prices, self._holdings(), 100,
+                                       single_terminal=True)
+        self.assertFalse(res["summary"]["feasible"])
+        self.assertIn("single station", res["summary"]["reason"])
+
+    def test_a_small_hold_needs_split_trips(self):
+        prices = [self._pt("Iron", 2, 100), self._pt("Silicon", 2, 100)]
+        nav = self._nav()
+        res = nav_core.plan_sell_route(nav, prices, self._holdings(), 12)
+        self.assertFalse(res["summary"]["feasible"])
+        res = nav_core.plan_sell_route(nav, prices, self._holdings(), 12, split_trips=True)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertGreaterEqual(res["summary"]["trips"], 2)
+
+    def test_many_commodities_simplify_the_search(self):
+        names = ["A", "B", "C", "D", "E", "F"]
+        prices = [self._pt(n, poi, 100 + poi) for n in names for poi in (2, 3, 4)]
+        hs = [{"holding_id": i, "commodity": n, "scu": 1, "from_id": 0} for i, n in enumerate(names)]
+        res = nav_core.plan_sell_route(self._nav(), prices, hs, 100)
+        self.assertTrue(res["summary"]["feasible"])
+        self.assertTrue(res["summary"]["simplified"])
+
+    def test_nothing_sellable(self):
+        res = nav_core.plan_sell_route(self._nav(), [], self._holdings(), 100)
+        self.assertFalse(res["summary"]["feasible"])
+        self.assertEqual(len(res["summary"]["no_market"]), 2)
+
+
 class QuickPicksTests(unittest.TestCase):
     def setUp(self):
         self.nav = _line_nav([(0, 0, 0), (10, 0, 0), (20, 0, 0), (30, 0, 0)])

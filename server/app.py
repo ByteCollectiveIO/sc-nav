@@ -6542,6 +6542,97 @@ async def post_route_plan(body: RoutePlanIn, user: dict = Depends(require_sessio
     return _annotate_cargo_stops(plan, warnings, mode)
 
 
+class SellItemIn(BaseModel):
+    holding_id: int
+    # The planner row may have corrected an unresolved location, or lowered
+    # the amount; both default to the holding's own.
+    from_id: int | None = None
+    scu: float | None = Field(default=None, ge=0, le=100_000)
+
+
+class SellPlanIn(BaseModel):
+    items: list[SellItemIn] = Field(min_length=1, max_length=_MAX_PACKAGES)
+    usable_scu: float = Field(gt=0, le=100_000)
+    start_id: int | None = None
+    start_here: bool = False
+    sort: str = Field(default="per_hour", max_length=12)        # per_hour | total
+    single_terminal: bool = False
+    max_price_age_days: float | None = Field(default=None, gt=0, le=365)
+    avoid_mode: str = "avoid"
+    avoid_poi_ids: list[int] = Field(default_factory=list, max_length=50)
+    ship: str | None = Field(default=None, max_length=_NAME_MAX)
+    qd: str | None = Field(default=None, max_length=_NAME_MAX)
+    in_range_only: bool = False
+    split_trips: bool = False
+
+
+SELL_LABEL = "Sell"     # the run's contract label; its reward = expected revenue
+
+
+@app.post("/api/route/plan_sell")
+async def post_sell_plan(body: SellPlanIn, user: dict = Depends(require_session)):
+    """Sell mode (#48 §8, docs/inventory-pickup-runs.md): collect the caller's
+    holdings and sell each commodity where it pays best. Reads the holdings
+    server-side (own only; the commodity is never the client's word), resolves
+    each pickup POI (the row's correction, else the holding's), prices from the
+    trade feed + org overlay, demand from the org stock caps, and drops buyers
+    a stock report says stopped buying. Returns plan_route's shape for the best
+    route plus revenue/sales/alternatives and `packages` — rerun those through
+    /api/route/run as a normal cargo run (reward = expected revenue)."""
+    rate_limit("solve", user["id"])
+    if body.start_id is not None and body.start_id not in nav.pois:
+        raise HTTPException(status_code=404, detail="unknown start_id")
+    sess = hub.sessions.get(user["id"])
+    start_pos = None
+    if body.start_here:
+        if sess is None or sess.pos is None:
+            raise HTTPException(status_code=400,
+                                detail="no live position yet — run /showlocation, or pick a start POI")
+        start_pos = sess.pos
+    owned = {r["id"]: r for r in db.list_inventory(owner_id=user["id"])}
+    holdings = []
+    for it in body.items:
+        h = owned.get(it.holding_id)
+        if h is None:
+            raise HTTPException(status_code=404, detail="unknown holding")
+        from_id = it.from_id if it.from_id in nav.pois else _holding_poi(h)
+        if from_id is None:
+            raise HTTPException(status_code=400,
+                                detail=f"pick where your {h.get('item_name')} is first")
+        qty = float(h.get("qty") or 0)
+        scu = min(it.scu, qty) if it.scu is not None else qty
+        if (h.get("unit") or "").strip().lower() != "scu":
+            scu = 0.0                        # counted per piece: no SCU market price
+        holdings.append({"holding_id": h["id"], "commodity": h.get("item_name"),
+                         "item_name": h.get("item_name"), "unit": h.get("unit"),
+                         "scu": scu, "from_id": from_id, "label": SELL_LABEL})
+    mode = _norm_avoid_mode(body.avoid_mode, default="avoid")
+    async with hub.lock:
+        warnings = hub.active_trade_warnings() if mode != "ignore" else []
+    blacklist = list(body.avoid_poi_ids or ())
+    volumes = (_build_hazard_volumes(warnings, blacklist, sess.t if sess else None)
+               if mode == "avoid" else None)
+    camped = frozenset()
+    if mode == "avoid":
+        camped = frozenset(nav_core.trade_avoid_sets(warnings)[0] or ()) | set(blacklist)
+    stock_reports = active_stock_reports()
+    fuel_req, max_range_m, _qd = _resolve_drive(body.ship, body.qd)
+    plan = await asyncio.to_thread(
+        nav_core.plan_sell_route, nav, trade_price_points, holdings, body.usable_scu,
+        start_id=body.start_id, start_pos=start_pos, t_ref=sess.t if sess else None,
+        sort="total" if body.sort == "total" else "per_hour",
+        single_terminal=body.single_terminal,
+        max_age_s=body.max_price_age_days * 86400 if body.max_price_age_days else None,
+        demand_caps=nav_core.stock_demand_caps(stock_reports),
+        avoid_poi_ids=camped, avoid_sells=nav_core.stock_avoid_sells(stock_reports),
+        split_trips=body.split_trips, avoid_volumes=volumes,
+        fuel_req=fuel_req, max_range_m=max_range_m, in_range_only=body.in_range_only)
+    if plan["summary"].get("feasible"):
+        _apply_reward_summary(plan["summary"], {SELL_LABEL: plan["summary"]["revenue"]})
+        _annotate_cargo_stops(plan, warnings, mode)
+    return plan
+
+
 # --- cargo run execution (stateful, persisted per member) -------------------
 
 

@@ -51,7 +51,7 @@ goals already stamp `min_q` per line but progress never reads it. Design:
 the marketplace crafted blob on crafted holdings, derived subkind + band, then
 goals gate on it, craft preview reads pledged lots, listings/rollups follow.
 
-### 48. Inventory pickup runs (inventory/goal → cargo planner) 🔨 deliver half BUILT (2026-10-17, unreleased) · sell mode 📐 design
+### 48. Inventory pickup runs (inventory/goal → cargo planner) 🔨 deliver half SHIPPED to dev (#272) · sell mode BUILT (2026-10-17, unreleased)
 Player request: pick your own holdings at known locations → an efficient
 collect-and-deliver route, usually to an org goal's drop-off once it fills.
 It's a **pre-filled hand-off to the existing cargo planner** (holding →
