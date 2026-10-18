@@ -37,6 +37,7 @@ import shutil
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -6300,6 +6301,78 @@ class PositionPostReturnsNavTests(unittest.TestCase):
         self.assertIn("nav", body)
         self.assertIsNotNone(body["nav"])
         self.assertIn("destination", body["nav"])   # None here: no target set
+
+
+class HeartbeatKeepsFixTimeTests(unittest.TestCase):
+    """2026-10-18 field report: a member hovering over a node they'd just
+    mapped watched their marker step west every heartbeat. The watcher re-sends
+    the same SYSTEM-frame coordinates every 60 s; re-stamping them with the
+    arrival time re-ran the body-frame conversion at a later rotation angle,
+    so the planet turned east under a position that wasn't moving."""
+
+    UID = "heartbeat-user"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._user = {"id": cls.UID, "username": "hover", "is_admin": False}
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        app.hub.sessions.pop(cls.UID, None)
+        app.hub.presence.pop(cls.UID, None)
+        app.hub._dirty.discard(cls.UID)
+        app.hub._removed.discard(cls.UID)
+
+    def setUp(self):
+        app.hub.sessions.pop(self.UID, None)
+        app._rate_hits.clear()
+        cont = app.nav.resolve_container("Stanton", "Daymar")
+        self.assertIsNotNone(cont)
+        self.assertNotEqual(cont.rotation_speed, 0)   # the drift needs a spin
+        r_km = cont.body_radius / 1000.0
+        self.t0 = time.time()
+        self.fix = app.nav_core.local_km_to_global(cont, (r_km, 0.0, 0.0), self.t0)
+
+    def _post(self, at, **extra):
+        x, y, z = self.fix
+        with mock.patch.object(app.time, "time", return_value=at):
+            r = self.client.post("/api/position", json={"x": x, "y": y, "z": z, **extra})
+        self.assertEqual(r.status_code, 200, r.text)
+        return app.hub.sessions[self.UID]
+
+    def _latlon(self, sess):
+        return sess.nav_state["latitude"], sess.nav_state["longitude"]
+
+    def test_repeated_fix_does_not_drift(self):
+        here = self._latlon(self._post(self.t0))
+        for minutes in (5, 10, 15):
+            # an older watcher's unflagged heartbeat and a flagged one alike
+            sess = self._post(self.t0 + 60 * minutes)
+            self.assertEqual(self._latlon(sess), here)
+            sess = self._post(self.t0 + 60 * minutes + 30, heartbeat=True)
+            self.assertEqual(self._latlon(sess), here)
+        self.assertEqual(sess.t, self.t0)
+
+    def test_a_new_fix_still_moves_the_stamp(self):
+        self._post(self.t0)
+        self.fix = (self.fix[0] + 1000.0, self.fix[1], self.fix[2])
+        sess = self._post(self.t0 + 120)
+        self.assertEqual(sess.t, self.t0 + 120)
+
+    def test_heartbeat_never_fulfills_an_armed_capture(self):
+        sess = self._post(self.t0)
+        pending = {"kind": "observation", "category": "resource", "data": {"ore": "Iron"}}
+        sess.capture_pending = pending
+        self._post(self.t0 + 60, heartbeat=True)
+        self.assertIs(sess.capture_pending, pending)
+        sess.capture_pending = None
 
 
 class HandleRegistrationTests(unittest.TestCase):
