@@ -1535,6 +1535,7 @@
   .route-pkg .pkg-to input:disabled { opacity: .85; cursor: default; }
   /* #48 v2: delivered + run follow-up */
   .rm-delivered { font-size: 11px; color: var(--good); margin-left: 6px; white-space: nowrap; }
+  .logi-tbl td, .logi-tbl th { font-size: 12px; }
   .run-inv { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; font-size: 12px; }
   .route-warn { color: var(--warn); }
   .route-stop { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
@@ -17595,6 +17596,39 @@ function goalLeftoverBlock(g, met) {
     `<span class="ev-hint" id="goal-leftover-msg">This goal is met. You still hold ${what} that no goal claims.</span></div>`;
 }
 
+// Organizer view (#48): where the goal's materials are staged, by place — who
+// holds what there, how much is left to hand over, and how far it is from the
+// drop-off. Only the creator/admin get `logistics` from the server.
+function goalLogisticsBlock(g) {
+  const groups = g.logistics;
+  if (!groups || !groups.length) return "";
+  const units = (o) => Object.entries(o || {}).map(([u, v]) => `${fmtQty(v)} ${esc(u)}`).join(", ");
+  const body = groups.map(grp => {
+    const left = units(grp.to_deliver);
+    // Only stocked material needs a place to collect from; a pure pledge doesn't.
+    const where = grp.at_dropoff ? "at the drop-off"
+      : grp.eta_s != null ? `${fmtGm(grp.distance_m)} · ${fmtDur(grp.eta_s)} to the drop-off`
+      : !left ? (Object.keys(grp.delivered || {}).length ? "" : "still being gathered")
+      : grp.poi_id == null ? "not a known place — ask where" : (g.dropoff ? "" : "no drop-off set");
+    const rows = grp.lines.map(l =>
+      `<tr><td>${esc(l.display_name || "")}</td>` +
+      `<td>${esc(l.item_name || "")}${l.quality == null ? "" : ` ${invQualityChip(l.quality)}`}</td>` +
+      `<td class="num">${l.to_deliver > 0 ? `<b>${fmtQty(l.to_deliver)}</b> ${esc(l.unit)}` : "—"}</td>` +
+      `<td class="num">${l.delivered > 0 ? `${fmtQty(l.delivered)} ${esc(l.unit)}` : "—"}</td>` +
+      `<td class="num">${l.promised > 0 ? `<span class="rm-pledge">⏳ ${fmtQty(l.promised)}</span>` : "—"}</td></tr>`).join("");
+    return `<div class="rm-loc-grp"><div class="rm-loc-h">📍 ${esc(grp.location || "No location given")}` +
+      `${grp.system ? ` <span class="muted">${esc(grp.system)}</span>` : ""}` +
+      `${where ? ` <span class="muted">· ${esc(where)}</span>` : ""}` +
+      `${left ? ` <span class="muted">· ${left} to deliver</span>` : ""}</div>` +
+      `<div class="table-scroll"><table class="inv-table logi-tbl"><thead><tr><th>Member</th><th>Item</th>` +
+      `<th class="num">To deliver</th><th class="num">Delivered</th><th class="num">To gather</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table></div></div>`;
+  }).join("");
+  return `<div class="ev-section-h">Where the materials are <span class="muted">· organizer view</span></div>` +
+    `<span class="ev-hint">Every contribution by the place it's staged, busiest first. Members bring their own ` +
+    `stock (SC has no shared storage) — use this to see who to nudge or where to meet.</span>${body}`;
+}
+
 function renderGoalDetailBody(g) {
   if (g.kind === "unlock") return renderUnlockGoalDetail(g);
   if (g.kind === "survey") return renderSurveyGoalDetail(g);
@@ -17650,6 +17684,7 @@ function renderGoalDetailBody(g) {
       `</div><span class="ev-hint" id="goal-c-hint"></span>` +
       `<span id="goal-c-msg" class="muted"></span></div>` +
     `<div class="ev-section-h">Contributors</div><div class="ev-roster-names">${contribList}</div>` +
+    goalLogisticsBlock(g) +
     `<div class="ev-form-actions">${editBtns}</div>`;
 
   document.querySelectorAll("#goal-detail-body .rm-finder-link").forEach(a => {

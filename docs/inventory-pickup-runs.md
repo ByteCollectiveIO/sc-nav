@@ -164,7 +164,7 @@ from the drop-off. A holding bigger than the hold is collected in parts. It
 works for any cargo-planner bundle, not just inventory runs (multi-pickup
 deliveries excepted). As built: implementation-notes.md › Cargo planner.
 
-## 6. v2 — built 2026-10-18 (unreleased), except the organizer view
+## 6. v2 — built 2026-10-18 (unreleased)
 
 - **Delivered** (`inventory_allocations.delivered_qty`): how much of a
   contribution has been handed over — never more than its stocked part
@@ -186,7 +186,12 @@ deliveries excepted). As built: implementation-notes.md › Cargo planner.
 - **Split sales**: see §8.4. **Sell my leftover**: a met goal offers to sell
   the viewer's free (uncommitted) SCU stock of its items, through sell mode
   (`POST /api/inventory/pickup` with `free_only`).
-- Still later: an organizer view of per-contributor pickup locations.
+- **Organizer view** ("Where the materials are", goal creator/admin only):
+  every contribution grouped by where it's staged — who holds what there,
+  how much is left to deliver / delivered / still to gather, and each place's
+  distance and travel time to the drop-off; busiest place first. Members
+  bring their own stock, so it's for nudging people or picking a meet-up spot.
+  Nothing new is exposed: the org rollup already shows stock by location.
 
 ---
 

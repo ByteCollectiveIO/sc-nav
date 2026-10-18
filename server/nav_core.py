@@ -3470,6 +3470,48 @@ def run_packages(run: dict) -> list[dict]:
     return out
 
 
+def derive_goal_logistics(rows) -> list[dict]:
+    """Where a goal's materials are staged, for its organizer (#48): the
+    contributions grouped by location, each group listing who holds what there
+    — `to_deliver` (stocked, not handed over yet), `delivered`, `promised`
+    (pledged but not gathered: no location to collect from yet, so it's
+    reported but never counts toward a place). Rows carry {owner_id, item_id,
+    item_name, unit, quality, qty, short, delivered, location, poi_id} with
+    `poi_id` already resolved (None = free text). Groups key on the POI when
+    known, else the case-folded text; one line per (member, item, quality).
+    Totals are per unit (SCU and "each" never add up). Busiest place first:
+    most SCU left to deliver, then most of anything, then name."""
+    groups: dict = {}
+    for r in rows or []:
+        qty = _qty(r.get("qty"))
+        promised = min(_qty(r.get("short")), qty)
+        delivered = min(_qty(r.get("delivered")), qty - promised)
+        to_deliver = qty - promised - delivered
+        loc = (r.get("location") or "").strip()
+        key = ("poi", r["poi_id"]) if r.get("poi_id") is not None else ("text", loc.casefold())
+        g = groups.setdefault(key, {"location": loc or None, "poi_id": r.get("poi_id"),
+                                    "lines": {}, "to_deliver": {}, "delivered": {}, "promised": {}})
+        unit = r.get("unit") or ""
+        lk = (r.get("owner_id"), r.get("item_id"), r.get("quality"))
+        ln = g["lines"].setdefault(lk, {"owner_id": r.get("owner_id"), "item_id": r.get("item_id"),
+                                        "item_name": r.get("item_name"), "unit": unit,
+                                        "quality": r.get("quality"), "to_deliver": 0.0,
+                                        "delivered": 0.0, "promised": 0.0})
+        for k, v in (("to_deliver", to_deliver), ("delivered", delivered), ("promised", promised)):
+            ln[k] += v
+            if v > 0:
+                g[k][unit] = g[k].get(unit, 0.0) + v
+    out = []
+    for g in groups.values():
+        lines = sorted(g.pop("lines").values(), key=lambda l: (-l["to_deliver"], l["item_name"] or ""))
+        out.append({**g, "lines": lines,
+                    "contributors": len({l["owner_id"] for l in lines})})
+    def rank(g):
+        scu = sum(v for u, v in g["to_deliver"].items() if u.strip().lower() == "scu")
+        return (-scu, -sum(g["to_deliver"].values()), (g["location"] or "~").casefold())
+    return sorted(out, key=rank)
+
+
 # --- sell mode (#48 §8, docs/inventory-pickup-runs.md) ---
 # Consolidate and sell: the pickups are fixed (your holdings), the drop-off is
 # part of the answer. For each commodity keep its best few buyers, try every
