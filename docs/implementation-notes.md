@@ -113,6 +113,12 @@ the as-built layer between them and the code.
   text; per-unit totals; `promised` never counts toward a place) +
   `_goal_logistics` (names, `travel_cost` ETA to the drop-off).
   `list_goal_contributions` now selects `i.location_poi_id` for `_holding_poi`.
+  **Name drift (2026-10-18, user-found on dev):** a holding logged at 'Wide Forest
+  Station (ARC-L1)' (the old synth_container_pois fold) read as "not a known place"
+  once the catalog named the POI 'ARC-L1 Wide Forest Station' — the stored id was
+  gone and the exact-name fallback missed. `resolve_location_poi` now falls back
+  to `wiki_name_key` (order-insensitive tokens) after the exact name, unique-only
+  at each step; `poi_name_index` carries both keys.
 - **Sell mode (#48 §8, 2026-10-17, unreleased; docs/inventory-pickup-runs.md
   §8.8):** `POST /api/route/plan_sell` → `nav_core.plan_sell_route`. Buyers come
   from `_sell_points` — shared with `_trade_candidates`, so both planners judge

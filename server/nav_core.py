@@ -3918,28 +3918,38 @@ def packages_scu(packages) -> float:
 # POI. A picked POI is stored as `location_poi_id`; older rows fall back to an
 # exact name match, which is only trusted when it's unambiguous.
 
-def poi_name_index(nav: NavData) -> dict[str, list[int]]:
-    """Case-folded POI name -> every POI id carrying it (names are not unique)."""
-    idx: dict[str, list[int]] = {}
+def poi_name_index(nav: NavData) -> dict:
+    """POI name -> every POI id carrying it (names are not unique), under two
+    keys: the case-folded name, and ("tokens", wiki_name_key(name)) — the
+    order-insensitive form that absorbs the catalogs' naming drift ('ARC-L1
+    Wide Forest Station' vs 'Wide Forest Station (ARC-L1)' vs 'ARC L1 …')."""
+    idx: dict = {}
     for pid, p in nav.pois.items():
         if p.name:
             idx.setdefault(p.name.strip().casefold(), []).append(pid)
+            idx.setdefault(("tokens", wiki_name_key(p.name)), []).append(pid)
     return idx
 
 
 def resolve_location_poi(nav: NavData, text, poi_id=None, index=None) -> int | None:
     """The POI a holding sits at: its stored `poi_id` while that POI still exists
     (a starmap/wiki toggle can remove it), else the ONE POI whose name equals
-    the location text. An ambiguous or unmatched name is None — routing a pickup
-    to the wrong one of two same-named stations is worse than asking."""
+    the location text, else the ONE whose name has the same words in any order
+    (a station the catalogs renamed since it was logged — 2026-10-18: holdings
+    logged at 'Wide Forest Station (ARC-L1)' read as unknown once the POI became
+    'ARC-L1 Wide Forest Station'). Ambiguity at either step is None — routing a
+    pickup to the wrong one of two same-named stations is worse than asking."""
     if poi_id is not None and int(poi_id) in nav.pois:
         return int(poi_id)
-    key = (text or "").strip().casefold()
-    if not key:
+    text = (text or "").strip()
+    if not text:
         return None
-    ids = [i for i in (index if index is not None else poi_name_index(nav)).get(key) or ()
-           if i in nav.pois]          # a cached index may name a since-removed POI
-    return ids[0] if len(ids) == 1 else None
+    idx = index if index is not None else poi_name_index(nav)
+    for key in (text.casefold(), ("tokens", wiki_name_key(text))):
+        ids = [i for i in idx.get(key) or () if i in nav.pois]   # a cached index may
+        if ids:                                                  # name a removed POI
+            return ids[0] if len(ids) == 1 else None
+    return None
 
 
 def build_pickup_plan(items, dropoff_id) -> dict:

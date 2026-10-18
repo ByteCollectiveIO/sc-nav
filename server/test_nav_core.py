@@ -1624,6 +1624,26 @@ class InventoryPickupTests(unittest.TestCase):
     def test_unique_case_folded_name_matches(self):
         self.assertEqual(nav_core.resolve_location_poi(self._nav(), "  p0 "), 0)
 
+    def test_a_renamed_station_still_resolves_by_its_words(self):
+        # 2026-10-18: holdings logged at the synth-fold name read as unknown once
+        # the catalog named the station 'ARC-L1 Wide Forest Station'.
+        nav = self._nav()
+        nav.pois[2].name = "ARC-L1 Wide Forest Station"
+        for text in ("Wide Forest Station (ARC-L1)", "arc l1 wide forest station"):
+            self.assertEqual(nav_core.resolve_location_poi(nav, text), 2, text)
+
+    def test_word_order_match_is_still_refused_when_ambiguous(self):
+        nav = self._nav()
+        nav.pois[0].name = "ARC-L1 Wide Forest Station"
+        nav.pois[2].name = "Wide Forest Station ARC-L1"
+        self.assertIsNone(nav_core.resolve_location_poi(nav, "Wide Forest Station (ARC-L1)"))
+
+    def test_an_exact_name_wins_over_a_word_order_match(self):
+        nav = self._nav()
+        nav.pois[0].name = "ARC-L1 Wide Forest Station"
+        nav.pois[2].name = "Wide Forest Station (ARC-L1)"
+        self.assertEqual(nav_core.resolve_location_poi(nav, "Wide Forest Station (ARC-L1)"), 2)
+
     def test_ambiguous_or_unknown_or_blank_name_is_none(self):
         nav = self._nav()
         self.assertIsNone(nav_core.resolve_location_poi(nav, "P1"))
