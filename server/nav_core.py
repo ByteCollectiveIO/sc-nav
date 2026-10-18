@@ -3477,6 +3477,7 @@ def run_packages(run: dict) -> list[dict]:
 
 SELL_TOP_K = 3                 # buyers kept per commodity
 SELL_MAX_SOLVES = 81           # 4 commodities x 3 buyers; beyond it k shrinks
+SELL_OVERFLOW_BUYERS = 3      # buyers one commodity may be split across (v2)
 
 
 def _sell_candidates(points, avoid_poi_ids, avoid_sells, exclude_poi_ids, key):
@@ -3517,12 +3518,15 @@ def plan_sell_route(nav: NavData, prices, holdings, usable_scu, *, start_id=None
     buys everything (one stop is often the winner without topping any single
     price); every assignment is solved, capped at SELL_MAX_SOLVES — k drops
     until it fits, down to one buyer each (`simplified`). A buyer's demand
-    (`scu_sell_stock`, or the org's stated cap) limits what sells there; the
-    rest is still delivered and reported as `left_over` (v1 never splits one
-    commodity across buyers). Returns plan_route's shape for the best route,
-    with summary.revenue / auec_per_hour / sales / alternatives (the next two
-    distinct assignments) / no_market, and `packages` — the holding->buyer
-    rows, ready to run as a normal cargo plan."""
+    (`scu_sell_stock`, or the org's stated cap) limits what sells there. Each
+    assignment is also tried with the rest sent on to the next-best buyers
+    (split sales, up to SELL_OVERFLOW_BUYERS per commodity) and the better
+    route wins; whatever the last buyer can't take is still delivered and
+    reported as `left_over`. Returns plan_route's shape for the best route,
+    with summary.revenue / auec_per_hour / sales (one per commodity x buyer) /
+    alternatives (the next two distinct routes, each with its `packages`) /
+    no_market, and `packages` — the holding->buyer rows (a holding split
+    between buyers as `h<id>~<n>` parts), ready to run as a normal cargo plan."""
     avoid_poi_ids = frozenset(avoid_poi_ids or ())
     avoid_sells = frozenset(avoid_sells or ())
     exclude_poi_ids = frozenset(exclude_poi_ids or ())
@@ -3604,58 +3608,126 @@ def plan_sell_route(nav: NavData, prices, holdings, usable_scu, *, start_id=None
         else:
             assignments = [dict(zip(names, c)) for c in itertools.product(*options)]
     solve = plan_route_trips if split_trips else plan_route
-    scored, first_fail = [], None
+
+    def cap_of(n, pid):
+        c = float(point_at[n][pid].get("scu_sell_stock") or 0)
+        return c if c > 0 else math.inf
+
+    def overflow_route(asg):
+        """Where demand runs out, send the rest on to the next-best buyers (up to
+        SELL_OVERFLOW_BUYERS in all) — None when no commodity is capped short."""
+        route, any_split = {}, False
+        for n in names:
+            chain = [asg[n]]
+            if cap_of(n, asg[n]) < held[n] - 1e-9:
+                chain += [p["poi_id"] for p in cands[n]
+                          if p["poi_id"] != asg[n]][:SELL_OVERFLOW_BUYERS - 1]
+            any_split = any_split or len(chain) > 1
+            route[n] = chain
+        return route if any_split else None
+
+    def build(route):
+        """Packages + sales for a route {commodity: [buyer poi, ...]}: each buyer
+        is filled to its demand in turn; the last takes whatever is left (past
+        its demand that's `left_over`, still delivered). A holding that spans
+        two buyers is carried as parts `h<id>~<n>`. Also returns the route as
+        actually used (buyers that end up carrying nothing dropped)."""
+        pkgs, sales, total, used = [], [], 0.0, {}
+        for n in names:
+            buyers = route[n]
+            carried = [0.0] * len(buyers)
+            bi, room = 0, cap_of(n, buyers[0])
+            for h in groups[n]:
+                left, part, whole = float(h["scu"]), 0, None
+                while left > 1e-9:
+                    last = bi == len(buyers) - 1
+                    take = left if last else min(left, room)
+                    if take <= 1e-9:
+                        bi += 1
+                        room = cap_of(n, buyers[bi])
+                        continue
+                    if whole is None:
+                        whole = take >= float(h["scu"]) - 1e-9
+                    part += 1
+                    pkgs.append({"id": f"h{h['holding_id']}" if whole else f"h{h['holding_id']}~{part}",
+                                 "commodity": n, "scu": round(take, 6),
+                                 "from_id": int(h["from_id"]), "to_id": buyers[bi],
+                                 "from_name": nav.pois[int(h["from_id"])].name,
+                                 "to_name": nav.pois[buyers[bi]].name,
+                                 "contract": h.get("label")})
+                    carried[bi] += take
+                    left -= take
+                    room -= take
+            used[n] = [pid for i, pid in enumerate(buyers) if carried[i] > 0]
+            for i, pid in enumerate(buyers):
+                if carried[i] <= 0:
+                    continue
+                p = point_at[n][pid]
+                sold = min(carried[i], cap_of(n, pid))
+                got = sold * int(p["sell"])
+                total += got
+                sales.append({"commodity": n, "poi_id": pid, "station": nav.pois[pid].name,
+                              "terminal": p.get("terminal"), "price": int(p["sell"]),
+                              "scu_held": held[n], "scu_carried": round(carried[i], 6),
+                              "scu_sold": sold, "left_over": round(carried[i] - sold, 6),
+                              "revenue": got, "capped": bool(p.get("demand_capped")),
+                              "source": p.get("sell_src") or "uex",
+                              "updated_at": p.get("sell_updated_at") or p.get("updated_at"),
+                              "camped": n in flagged and pid in avoid_poi_ids})
+        return pkgs, sales, total, used
+
+    def sold_by(sales):
+        """SCU expected to sell, per commodity — what a finished run takes off
+        the holdings (#48 v2)."""
+        out = {}
+        for s_ in sales:
+            out[s_["commodity"]] = out.get(s_["commodity"], 0.0) + s_["scu_sold"]
+        return out
+
+    def label(route):
+        stops = {pid for n in names for pid in route[n]}
+        if len(stops) == 1:
+            return f"Sell all at {nav.pois[next(iter(stops))].name}"
+        return ", ".join(f"{n} → {' + '.join(nav.pois[p].name for p in route[n])}" for n in names)
+
+    routes = []
     for asg in assignments:
-        pkgs = [{"id": f"h{h['holding_id']}", "commodity": h["commodity"],
-                 "scu": float(h["scu"]), "from_id": int(h["from_id"]),
-                 "to_id": asg[h["commodity"]], "contract": h.get("label")}
-                for h in sellable]
+        routes.append({n: [asg[n]] for n in names})
+        over = overflow_route(asg)
+        if over:
+            routes.append(over)
+    scored, first_fail, seen = [], None, set()
+    for route in routes:
+        pkgs, sales, total, route = build(route)
+        sig = tuple((n, tuple(route[n])) for n in names)
+        if sig in seen:                 # an overflow nobody needed = the base route
+            continue
+        seen.add(sig)
         plan = solve(nav, pkgs, usable_scu, start_id, start_pos, t_ref, **route_kw)
         if not plan["summary"]["feasible"]:
             first_fail = first_fail or plan
             continue
-        total, sales = 0.0, []
-        for n in names:
-            pid = asg[n]
-            p = point_at[n][pid]
-            got, sold = revenue(n, pid)
-            total += got
-            sales.append({"commodity": n, "poi_id": pid, "station": nav.pois[pid].name,
-                          "terminal": p.get("terminal"), "price": int(p["sell"]),
-                          "scu_held": held[n], "scu_sold": sold,
-                          "left_over": round(held[n] - sold, 6), "revenue": got,
-                          "capped": bool(p.get("demand_capped")),
-                          "source": p.get("sell_src") or "uex",
-                          "updated_at": p.get("sell_updated_at") or p.get("updated_at"),
-                          "camped": n in flagged and pid in avoid_poi_ids})
         hours = (plan["summary"]["total_time_s"] or 0) / 3600
         per_hour = total / hours if hours > 0 else total
         key = (-per_hour, plan["summary"]["total_time_s"]) if sort != "total" \
             else (-total, plan["summary"]["total_time_s"])
-        scored.append((key, asg, plan, pkgs, total, per_hour, sales))
+        scored.append((key, route, plan, pkgs, total, per_hour, sales))
     if not scored:
         fail = first_fail or empty
         fail["summary"]["no_market"] = no_market
         fail.setdefault("packages", [])
         return fail
     scored.sort(key=lambda s: s[0])
-    _, asg, plan, pkgs, total, per_hour, sales = scored[0]
-
-    def label(a):
-        stops = {a[n] for n in names}
-        if len(stops) == 1:
-            return f"Sell all at {nav.pois[next(iter(stops))].name}"
-        return ", ".join(f"{n} → {nav.pois[a[n]].name}" for n in names)
-
+    _, route, plan, pkgs, total, per_hour, sales = scored[0]
     sm = plan["summary"]
     sm.update(revenue=round(total), auec_per_hour=round(per_hour), sort=sort,
               sales=sales, no_market=no_market, simplified=simplified,
-              assignment_label=label(asg),
-              alternatives=[{"label": label(a), "revenue": round(t), "auec_per_hour": round(ph),
-                             "total_time_s": p["summary"]["total_time_s"],
-                             "assignment": [{"commodity": n, "poi_id": a[n],
-                                             "station": nav.pois[a[n]].name} for n in names]}
-                            for _, a, p, _, t, ph, _ in scored[1:3]])
+              assignment_label=label(route),
+              split_sales=sum(len(route[n]) > 1 for n in names), sold=sold_by(sales),
+              alternatives=[{"label": label(r), "revenue": round(t), "auec_per_hour": round(ph),
+                             "total_time_s": p["summary"]["total_time_s"], "packages": k,
+                             "sold": sold_by(sl)}
+                            for _, r, p, k, t, ph, sl in scored[1:3]])
     return {**plan, "packages": pkgs}
 
 
@@ -7001,10 +7073,14 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
     by_contributor: dict[str, float] = {}
     low_by_contributor: dict[str, float] = {}
     promised_by_contributor: dict[str, float] = {}
+    delivered_by_item: dict[str, float] = {}
+    delivered_by_contributor: dict[str, float] = {}
     for r in inventory_rows or []:
         iid = r.get("item_id")
         qty = _qty(r.get("qty"))
         promised = min(_qty(r.get("short")), qty)
+        # Handed over (#48 v2): never more than the stocked part of the pledge.
+        delivered = min(_qty(r.get("delivered")), qty - promised)
         owner = r.get("owner_id")
         if not lot_qualifies(r.get("quality"), minq_by_item.get(iid, 0)):
             low_by_item[iid] = low_by_item.get(iid, 0.0) + qty
@@ -7018,6 +7094,10 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
                 unrated_by_item[iid] = unrated_by_item.get(iid, 0.0) + qty
         by_contributor[owner] = by_contributor.get(owner, 0.0) + qty
         promised_by_contributor[owner] = promised_by_contributor.get(owner, 0.0) + promised
+        if delivered > 0:
+            if iid:
+                delivered_by_item[iid] = delivered_by_item.get(iid, 0.0) + delivered
+            delivered_by_contributor[owner] = delivered_by_contributor.get(owner, 0.0) + delivered
 
     lines, total_need, total_have, all_met = [], 0.0, 0.0, True
     for li in (goal.get("line_items") or []):
@@ -7044,6 +7124,8 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
             # vs. still promised. `have` = on_hand + promised, always.
             "promised": promised,
             "on_hand": have - promised,
+            # Of the on-hand part, how much is already at the drop-off (#48 v2).
+            "delivered": min(delivered_by_item.get(iid, 0.0), have - promised),
         }
         # A quality floor (craft goals: recipe minimum max'd with the member's
         # slider asks; any goal: a hand-set floor for contract hand-ins) gates
@@ -7058,6 +7140,7 @@ def derive_goal_progress(goal: dict, inventory_rows) -> dict:
     per_contributor = sorted(
         ({"owner_id": o, "qty": q,
           "promised": min(promised_by_contributor.get(o, 0.0), q),
+          **({"delivered": delivered_by_contributor[o]} if delivered_by_contributor.get(o) else {}),
           **({"low": low_by_contributor[o]} if low_by_contributor.get(o) else {})}
          for o, q in by_contributor.items()),
         key=lambda x: x["qty"], reverse=True)

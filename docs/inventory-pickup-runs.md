@@ -164,13 +164,29 @@ from the drop-off. A holding bigger than the hold is collected in parts. It
 works for any cargo-planner bundle, not just inventory runs (multi-pickup
 deliveries excepted). As built: implementation-notes.md › Cargo planner.
 
-## 6. v2 (decided: later)
+## 6. v2 — built 2026-10-18 (unreleased), except the organizer view
 
-- On run finish, offer "Move these holdings to <drop-off>" → updates
-  `location`/`location_poi_id` of the hauled lots.
-- A **delivered** flag on `inventory_allocations` so `derive_goal_progress`
-  can split on hand / promised / **delivered**; goal board shows delivered.
-- Organizer view: per-contributor pickup locations for a goal.
+- **Delivered** (`inventory_allocations.delivered_qty`): how much of a
+  contribution has been handed over — never more than its stocked part
+  (qty − short). `derive_goal_progress` reports `delivered` per line and per
+  contributor. The contributor marks their own (**Mark delivered** / undo);
+  the goal's creator or an admin can mark anyone's (**Mark received**), which
+  is the org confirming receipt in-game. `POST /api/goals/{id}/delivered`.
+  A goal pickup run carries only what's stocked and not yet delivered.
+- **After a run planned from Inventory**, the completion card offers one
+  click to make the ledger match (`POST /api/route/runs/{id}/inventory`, once
+  per run): a delivery moves the hauled stock to the drop-off (pledges follow
+  it — `db.move_holding`) and, for a goal run, marks it delivered; a sell run
+  takes what sold off the holdings, and anything a buyer wouldn't take stays
+  yours at that station. Runs carry `inventory: {kind, goal_id, sold}` and
+  package ids `h<holding id>` so the server knows which holdings rode.
+- **Drop-off in Discord**: the goal post's progress line says
+  "📦 deliver to <station>", and the goal-met ping says where to deliver.
+  Goals without a drop-off post exactly as before (golden file unchanged).
+- **Split sales**: see §8.4. **Sell my leftover**: a met goal offers to sell
+  the viewer's free (uncommitted) SCU stock of its items, through sell mode
+  (`POST /api/inventory/pickup` with `free_only`).
+- Still later: an organizer view of per-contributor pickup locations.
 
 ---
 
@@ -285,7 +301,9 @@ route instead of a "too big" error.
 
 ### 8.4 Edge cases
 
-- **Terminal takes less than you have:** v1 keeps one terminal per commodity
+- **Terminal takes less than you have:** *(v2, built 2026-10-18: every assignment is
+  also tried with the rest sent on to the next-best buyers — up to 3 per commodity,
+  holdings carried in parts `h<id>~<n>` — and the better route wins.)* v1 kept one terminal per commodity
   and sells up to the cap, flagging the rest: "ARC-L1 takes ~200 of your
   600 SCU Iron — 400 left over". Splitting one commodity across two
   terminals is **v2**, because it means splitting a package and makes the

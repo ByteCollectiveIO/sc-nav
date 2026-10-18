@@ -5096,6 +5096,89 @@ class InventoryPickupTests(unittest.TestCase):
             "usable_scu": 50, "items": [{"holding_id": lost["id"]}]})
         self.assertEqual(r.status_code, 404)
 
+    # -- #48 v2: delivered state + inventory follow-up after a run --
+
+    def _finish_run(self, body):
+        """Start a run and check every package off; returns the completion response."""
+        r = self.client.post("/api/route/run", json=body)
+        self.assertEqual(r.status_code, 200, r.text)
+        for s in r.json()["run"]["stops"]:
+            for p in s["pickups"]:
+                d = self.client.patch("/api/route/run", json={"package_id": str(p["id"]),
+                                                              "state": "delivered"}).json()
+        self.assertTrue(d["completed"])
+        return d
+
+    def test_marking_delivered_is_yours_or_the_goal_creators(self):
+        a, b, _ = self._IDS
+        g = self._goal(b, item="commodity:titanium", needed=100)
+        h = self._log(self._NAMES[0], a, qty=8, item="commodity:titanium")
+        g = self.client.post(f"/api/goals/{g['id']}/contribute", json={
+            "item_id": "commodity:titanium", "qty": 10, "holding_id": h["id"]}).json()
+        alloc = g["my_contributions"][0]["allocation_id"]
+        self._as(self._b)                      # someone else can't mark it
+        r = self.client.post(f"/api/goals/{g['id']}/delivered",
+                             json={"allocation_id": alloc, "delivered": True})
+        self.assertEqual(r.status_code, 403)
+        self._as(self._a)                      # the contributor (also the creator here)
+        g = self.client.post(f"/api/goals/{g['id']}/delivered",
+                             json={"allocation_id": alloc, "delivered": True}).json()
+        line = g["progress"]["lines"][0]
+        self.assertEqual(line["delivered"], 8)   # the stocked part; 2 still to gather
+        self.assertEqual(g["my_contributions"][0]["delivered"], 8)
+        g = self.client.post(f"/api/goals/{g['id']}/delivered",
+                             json={"owner_id": "111", "delivered": False}).json()
+        self.assertEqual(g["progress"]["lines"][0]["delivered"], 0)
+
+    def test_finishing_a_goal_run_moves_the_stock_and_marks_it_delivered(self):
+        a, b, _ = self._IDS
+        app._rate_hits.clear()
+        g = self._goal(b, item="commodity:iron", needed=100)
+        h = self._log(self._NAMES[0], a, qty=30, item="commodity:iron")
+        self.client.post(f"/api/goals/{g['id']}/contribute", json={
+            "item_id": "commodity:iron", "qty": 20, "holding_id": h["id"]})
+        plan = self.client.post("/api/inventory/pickup", json={"goal_id": g["id"]}).json()
+        pkgs = [{"id": f"h{p['holding_id']}", "commodity": p["commodity"], "scu": p["scu"],
+                 "from_id": p["from_id"], "to_id": p["to_id"]} for p in plan["packages"]]
+        d = self._finish_run({"usable_scu": 50, "avoid_mode": "ignore", "packages": pkgs,
+                              "inventory": {"kind": "deliver", "goal_id": g["id"]}})
+        done = d["completed_run"]
+        self.assertEqual(done["inventory"]["goal_id"], g["id"])
+        r = self.client.post(f"/api/route/runs/{done['id']}/inventory")
+        self.assertEqual(r.status_code, 200, r.text)
+        rows = {(x["item_id"], x["location"]): x
+                for x in self.client.get("/api/inventory?owner=me").json()["rows"]}
+        self.assertEqual(rows[("commodity:iron", self._NAMES[0])]["qty"], 10)   # left behind
+        moved = rows[("commodity:iron", self._NAMES[1])]
+        self.assertEqual((moved["qty"], moved["location_poi_id"]), (20, b))
+        self.assertEqual(moved["allocations"][0]["goal_id"], g["id"])         # pledge followed it
+        line = self.client.get(f"/api/goals/{g['id']}").json()["progress"]["lines"][0]
+        self.assertEqual(line["delivered"], 20)
+        self.assertEqual(self.client.post(f"/api/route/runs/{done['id']}/inventory").status_code, 409)
+
+    def test_finishing_a_sell_run_takes_the_sold_stock_off(self):
+        a, b, c = self._IDS
+        app._rate_hits.clear()
+        h = self._log(self._NAMES[0], a, qty=12, item="commodity:tin")
+        pkgs = [{"id": f"h{h['id']}", "commodity": "Tin", "scu": 12, "from_id": a, "to_id": c}]
+        d = self._finish_run({"usable_scu": 50, "avoid_mode": "ignore", "packages": pkgs,
+                              "inventory": {"kind": "sell", "sold": {"Tin": 9}}})
+        r = self.client.post(f"/api/route/runs/{d['completed_run']['id']}/inventory").json()
+        self.assertEqual((r["changes"][0]["sold"], r["changes"][0]["left"]), (9, 3))
+        rows = [x for x in self.client.get("/api/inventory?owner=me").json()["rows"]
+                if x["item_id"] == "commodity:tin"]
+        self.assertEqual([(x["location"], x["qty"]) for x in rows], [(self._NAMES[2], 3)])
+
+    def test_free_only_pickup_leaves_pledged_stock_out(self):
+        a, b, _ = self._IDS
+        g = self._goal(b, item="commodity:gold", needed=100)
+        h = self._log(self._NAMES[0], a, qty=10, item="commodity:gold")
+        self.client.post(f"/api/goals/{g['id']}/contribute", json={
+            "item_id": "commodity:gold", "qty": 4, "holding_id": h["id"]})
+        plan = self.client.post("/api/inventory/pickup", json={
+            "holding_ids": [h["id"]], "free_only": True}).json()
+        self.assertEqual(plan["packages"][0]["scu"], 6)
+
     def test_a_split_run_starts_and_tracks_every_part(self):
         app._rate_hits.clear()
         r = self.client.post("/api/route/run", json=self._route_body(split_trips=True))
@@ -5652,6 +5735,28 @@ class GoalAnnounceTests(unittest.TestCase):
                               "mentions": mentions, "dedup_key": dedup_key})
             return True
         notify.send = _capture
+
+    def test_a_goal_post_and_its_met_ping_name_the_drop_off(self):
+        app._goal_announce_at.clear()
+        pid = 9_200_001
+        app.nav.pois[pid] = app.nav_core.Poi(
+            id=pid, name="Depot Theta", system="Stanton", container_name=None,
+            type="Orbital Station", local_km=None, global_m=(1.0, 0.0, 0.0),
+            latitude=None, longitude=None, height_m=None, qt_marker=False)
+        self.addCleanup(app.nav.pois.pop, pid, None)
+        r = self.client.post("/api/goals", json={
+            "title": "Stock Theta", "announce": True, "dropoff_poi_id": pid,
+            "line_items": [{"item_id": "commodity:agricium", "qty_needed": 5}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        gid = r.json()["id"]
+        time.sleep(0.2)
+        post = next(m["text"] for m in self.sent if "New org goal" in m["text"])
+        self.assertIn("deliver to Depot Theta", post)
+        self.client.post(f"/api/goals/{gid}/contribute", json={
+            "item_id": "commodity:agricium", "qty": 5, "on_hand": True})
+        time.sleep(0.2)
+        met = next(m["text"] for m in self.sent if "Goal reached" in m["text"])
+        self.assertIn("Deliver to **Depot Theta**", met)
 
     def test_a_survey_goal_announces_its_area_and_baseline(self):
         app._goal_announce_at.clear()
