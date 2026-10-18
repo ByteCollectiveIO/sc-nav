@@ -5043,6 +5043,59 @@ class InventoryPickupTests(unittest.TestCase):
         self.assertEqual(sm["trips"], 2)
         self.assertEqual(sm["unsplit_capacity_scu"], 40)
 
+    # -- sell mode (#48 §8) --
+
+    def _with_prices(self, points):
+        orig = app.trade_price_points
+        app.trade_price_points = points
+        self.addCleanup(setattr, app, "trade_price_points", orig)
+
+    def test_sell_plan_picks_the_buyer_and_runs_as_a_cargo_run(self):
+        a, b, c = self._IDS
+        app._rate_hits.clear()
+        self._with_prices([
+            {"commodity": "Taranite", "poi_id": c, "sell": 300, "scu_sell_stock": 0, "terminal": "Tc"},
+            {"commodity": "Taranite", "poi_id": b, "sell": 250, "scu_sell_stock": 0, "terminal": "Tb"}])
+        ore = self._log(self._NAMES[0], a, qty=12, item="commodity:taranite")
+        pens = self._log(self._NAMES[0], a, qty=4, item="commodity:stims", unit="each")
+        r = self.client.post("/api/route/plan_sell", json={
+            "usable_scu": 50, "avoid_mode": "ignore",
+            "items": [{"holding_id": ore["id"]}, {"holding_id": pens["id"]}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        plan = r.json()
+        sm = plan["summary"]
+        self.assertTrue(sm["feasible"], sm)
+        self.assertEqual(sm["revenue"], 12 * 300)
+        self.assertEqual(sm["total_reward"], 12 * 300)          # the run's payout
+        self.assertEqual([h["holding_id"] for h in sm["no_market"]], [pens["id"]])
+        (pkg,) = plan["packages"]
+        self.assertEqual((pkg["from_id"], pkg["to_id"], pkg["contract"]), (a, c, "Sell"))
+        # the packages run as a normal cargo run
+        r = self.client.post("/api/route/run", json={
+            "usable_scu": 50, "avoid_mode": "ignore", "packages": plan["packages"],
+            "rewards": {"Sell": sm["revenue"]}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.client.delete("/api/route/run")
+
+    def test_sell_plan_uses_the_rows_location_and_only_own_holdings(self):
+        a, b, c = self._IDS
+        app._rate_hits.clear()
+        self._with_prices([{"commodity": "Taranite", "poi_id": c, "sell": 300,
+                            "scu_sell_stock": 0, "terminal": "Tc"}])
+        lost = self._log("in my ship somewhere", qty=5, item="commodity:taranite")
+        r = self.client.post("/api/route/plan_sell", json={
+            "usable_scu": 50, "avoid_mode": "ignore", "items": [{"holding_id": lost["id"]}]})
+        self.assertEqual(r.status_code, 400)                    # no location yet
+        r = self.client.post("/api/route/plan_sell", json={
+            "usable_scu": 50, "avoid_mode": "ignore",
+            "items": [{"holding_id": lost["id"], "from_id": b, "scu": 3}]})
+        self.assertEqual(r.json()["packages"][0]["from_id"], b)
+        self.assertEqual(r.json()["packages"][0]["scu"], 3)
+        self._as(self._b)
+        r = self.client.post("/api/route/plan_sell", json={
+            "usable_scu": 50, "items": [{"holding_id": lost["id"]}]})
+        self.assertEqual(r.status_code, 404)
+
     def test_a_split_run_starts_and_tracks_every_part(self):
         app._rate_hits.clear()
         r = self.client.post("/api/route/run", json=self._route_body(split_trips=True))

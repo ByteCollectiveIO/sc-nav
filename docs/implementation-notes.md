@@ -93,6 +93,19 @@ the as-built layer between them and the code.
 
 ## Resource manager
 
+- **Sell mode (#48 §8, 2026-10-17, unreleased; docs/inventory-pickup-runs.md
+  §8.8):** `POST /api/route/plan_sell` → `nav_core.plan_sell_route`. Buyers come
+  from `_sell_points` — shared with `_trade_candidates`, so both planners judge
+  sell prices identically (per-side freshness, org demand caps) — with NO
+  legality filter (held cargo keeps its buyers, as TRADE_LEGALITY rules).
+  Per commodity: top `SELL_TOP_K` buyers (one point per POI) + the best
+  buys-everything station; every assignment solved via plan_route /
+  plan_route_trips, capped at `SELL_MAX_SOLVES` (k shrinks, then best-each +
+  one-stop only = `simplified`). Revenue sells up to demand (`scu_sell_stock`
+  0 = uncapped, the trade convention); the rest is still delivered (`left_over`).
+  Package ids `h<holding_id>`, contract `SELL_LABEL` ("Sell") with reward =
+  revenue, so the result runs through /api/route/run unchanged. Client:
+  `routeSell` state in the cargo planner; `planRoute` branches to `planSell`.
 - **Inventory pickup runs, deliver half (#48, 2026-10-17, unreleased;
   docs/inventory-pickup-runs.md):** `inventory.location_poi_id` stores the POI a
   holding's location was PICKED from — never part of the lot key. Every write

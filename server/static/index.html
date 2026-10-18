@@ -1527,6 +1527,12 @@
   .route-split { font-size: 12px; color: var(--dim); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
   .route-trip-h { font-size: 11px; font-weight: 700; letter-spacing: .6px; color: var(--dim);
     margin: 14px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+  /* sell mode (#48 §8) */
+  .route-seed .rs-sell-opts { margin-top: 6px; gap: 10px; flex-wrap: wrap; }
+  .sell-tbl td, .sell-tbl th { font-size: 12px; }
+  .sell-alt { justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px;
+    padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .route-pkg .pkg-to input:disabled { opacity: .85; cursor: default; }
   .route-warn { color: var(--warn); }
   .route-stop { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
   .route-stop .seq { flex: none; width: 26px; height: 26px; border-radius: 50%;
@@ -10507,50 +10513,190 @@ function cloneRun(run) {
 // Inventory and goals hand the planner a package list built server-side
 // (POST /api/inventory/pickup); it lands here as ordinary package rows, so plan,
 // run mode and history work unchanged.
-async function planInventoryPickup(body) {
+// `sell` (#48 §8): the rows go to the planner in sell mode, where Plan route
+// picks the buyers instead of the player filling in each "to".
+async function planInventoryPickup(body, { sell = false } = {}) {
   const r = await fetch("/api/inventory/pickup", { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) return d.detail || "Couldn't build the pickup run.";
-  routeSeed = d;
+  routeSeed = { ...d, sell };
   location.hash = "#/route";
   return null;
 }
 
+let routeSell = null;   // sell mode state: {sort, single, last} — null = normal planning
+
 function applyRouteSeed(plan) {
   $("route-pkgs").innerHTML = "";
   rewardByLabel = {};
-  const drop = plan.dropoff;
-  const seedRow = (p) => {
-    const row = addPkgRow({ commodity: p.commodity, scu: p.scu, contract: p.contract || "",
-      from_id: p.from_id, from_name: p.from_name,
-      to_id: drop ? drop.id : null, to_name: drop ? drop.name : null });
-    if (p.zero_scu) { row.dataset.zeroOk = "1"; row.querySelector(".pkg-scu").value = "0"; }
-    // Unresolved location: show the holding's text so the player knows what to pick.
-    if (p.from_id == null && p.location) row.querySelector(".pkg-from input").value = p.location;
-    return row;
-  };
-  plan.packages.forEach(seedRow);
-  plan.unresolved.forEach(seedRow);
-  refreshContractList();
+  routeSell = plan.sell ? { sort: "per_hour", single: false, last: null } : null;
+  const drop = plan.sell ? null : plan.dropoff;
   const item = (x) => `${esc(x.item_name)} · ${fmtQty(x.qty)} ${esc(x.unit || "")}`;
   const list = (label, xs) => xs.length
     ? `<div class="rs-list">${label}: ${xs.map(item).join(", ")}</div>` : "";
-  const n = plan.packages.length + plan.unresolved.length;
+  // Sell mode: an item counted per piece has no SCU market price — list it, no row.
+  const noMarket = plan.sell ? [...plan.packages, ...plan.unresolved].filter(p => p.zero_scu) : [];
+  const seedRow = (p) => {
+    if (plan.sell && p.zero_scu) return;
+    const row = addPkgRow({ commodity: p.commodity, scu: p.scu,
+      contract: plan.sell ? "Sell" : (p.contract || ""),
+      from_id: p.from_id, from_name: p.from_name,
+      to_id: drop ? drop.id : null, to_name: drop ? drop.name : null });
+    row.dataset.holdingId = p.holding_id;
+    if (p.zero_scu) { row.dataset.zeroOk = "1"; row.querySelector(".pkg-scu").value = "0"; }
+    // Unresolved location: show the holding's text so the player knows what to pick.
+    if (p.from_id == null && p.location) row.querySelector(".pkg-from input").value = p.location;
+  };
+  plan.packages.forEach(seedRow);
+  plan.unresolved.forEach(seedRow);
+  setSellRowsLocked(!!plan.sell);
+  refreshContractList();
+  const n = $("route-pkgs").children.length;
   const note = $("route-seed-note");
   note.className = "route-seed";
+  const head = plan.sell
+    ? `<div>💰 Sell from your inventory: ${n} pickup${n === 1 ? "" : "s"}. <b>Plan route</b> finds the best ` +
+      `buyer for each commodity with your ship, start and danger settings.</div>` +
+      `<div class="rm-row rs-sell-opts"><span class="seg" id="rs-sort" role="group" aria-label="What counts as best">` +
+        `<button type="button" data-sort="per_hour" class="on" aria-pressed="true">best aUEC/hour</button>` +
+        `<button type="button" data-sort="total" aria-pressed="false">most aUEC</button></span>` +
+      `<label class="route-split"><input type="checkbox" id="rs-one"> one stop only</label>` +
+      `<button type="button" class="ev-btn" id="rs-exit">Choose destinations myself</button></div>`
+    : `<div>📦 From your inventory${plan.goal ? ` for <b>${esc(plan.goal.title || "goal")}</b>` : ""}: ` +
+      `${n} pickup${n === 1 ? "" : "s"}${drop ? ` → <b>${esc(drop.name)}</b>` : " — pick where to take them in each row’s <b>to</b>"}.` +
+      `${plan.packages.some(p => p.zero_scu) ? " Items not measured in SCU ride along as 0-SCU stops." : ""}</div>`;
   note.innerHTML =
-    `<button class="ev-btn rs-x" type="button" title="dismiss">✕</button>` +
-    `<div>📦 From your inventory${plan.goal ? ` for <b>${esc(plan.goal.title || "goal")}</b>` : ""}: ` +
-    `${n} pickup${n === 1 ? "" : "s"}${drop ? ` → <b>${esc(drop.name)}</b>` : " — pick where to take them in each row’s <b>to</b>"}.` +
-    `${plan.packages.some(p => p.zero_scu) ? " Items not measured in SCU ride along as 0-SCU stops." : ""}</div>` +
-    (plan.unresolved.length ? `<div class="rs-list">📍 Pick a location for ${plan.unresolved.length} ` +
-      `row${plan.unresolved.length === 1 ? "" : "s"} — the holding’s location isn’t a known place yet.</div>` : "") +
+    `<button class="ev-btn rs-x" type="button" title="dismiss">✕</button>` + head +
+    (plan.unresolved.filter(p => !(plan.sell && p.zero_scu)).length
+      ? `<div class="rs-list">📍 Pick a location for the rows with an empty <b>from</b> — ` +
+        `the holding’s location isn’t a known place yet.</div>` : "") +
     list("✓ Already there", plan.already_there) +
-    list("⏳ Still to gather (not in stock, so no stop)", plan.still_to_gather);
+    list("⏳ Still to gather (not in stock, so no stop)", plan.still_to_gather) +
+    list("Not sold — no SCU market price", noMarket);
   note.hidden = false;
-  note.querySelector(".rs-x").onclick = () => { note.hidden = true; };
+  note.querySelector(".rs-x").onclick = () => { note.hidden = true; exitSellMode(); };
+  if (plan.sell) {
+    note.querySelectorAll("#rs-sort button").forEach(b => b.onclick = () => {
+      routeSell.sort = b.dataset.sort;
+      note.querySelectorAll("#rs-sort button").forEach(x => {
+        x.classList.toggle("on", x === b); x.setAttribute("aria-pressed", String(x === b));
+      });
+    });
+    $("rs-one").onchange = () => { routeSell.single = $("rs-one").checked; };
+    $("rs-exit").onclick = () => { note.hidden = true; exitSellMode(); };
+  }
   $("route-pkgs").scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
+}
+
+// In sell mode the planner owns each row's "to"; lock it so it reads as an answer.
+function setSellRowsLocked(locked) {
+  for (const row of $("route-pkgs").children) {
+    const to = row.querySelector(".pkg-to input");
+    if (!to) continue;
+    to.disabled = locked;
+    to.placeholder = locked ? "best buyer" : "to";
+  }
+}
+
+function exitSellMode() {
+  if (!routeSell) return;
+  routeSell = null;
+  setSellRowsLocked(false);
+}
+
+// Fill each sell row's "to" with the buyer chosen for it ([[package id, poi id, name]]).
+function setSellDestinations(rows) {
+  const byPkg = new Map(rows.map(([id, poi, name]) => [String(id), [poi, name]]));
+  for (const row of $("route-pkgs").children) {
+    const hit = byPkg.get(`h${row.dataset.holdingId}`);
+    if (hit) setPickedPoi(row.querySelector(".pkg-to"), hit[0], hit[1]);
+  }
+}
+
+async function planSell(usable) {
+  const msg = $("route-plan-msg");
+  const items = [];
+  for (const row of $("route-pkgs").children) {
+    if (!row.dataset.holdingId) continue;
+    const from = pickedPoiId(row.querySelector(".pkg-from input"));
+    if (from == null) { msg.textContent = "pick where each item is (its from box) first"; return; }
+    const scu = Number(row.querySelector(".pkg-scu").value);
+    items.push({ holding_id: Number(row.dataset.holdingId), from_id: from, ...(scu > 0 ? { scu } : {}) });
+  }
+  if (!items.length) { msg.textContent = "nothing to sell — add holdings from your inventory"; return; }
+  haloPlanSay("finding the best buyers…", "status");
+  let res;
+  try {
+    const r = await fetch("/api/route/plan_sell", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, usable_scu: usable, sort: routeSell.sort,
+        single_terminal: routeSell.single, ...routeCommonPayload() }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); haloPlanSay("⚠ " + (d.detail || "plan failed"), "error"); return; }
+    res = await r.json();
+  } catch { haloPlanSay("⚠ network error", "error"); return; }
+  msg.textContent = "";
+  routeSell.last = res;
+  if (res.summary.feasible) {
+    const names = Object.fromEntries(res.stops.map(s => [s.stop_id, s.name]));
+    setSellDestinations(res.packages.map(p => [p.id, p.to_id, names[p.to_id]]));
+    // The expected revenue is the run's payout, so history and aUEC/hour carry it.
+    rewardByLabel = { Sell: res.summary.revenue };
+    refreshRewardRows();
+    lastPlanInput = { packages: res.packages, usable_scu: usable,
+                      rewards: { Sell: res.summary.revenue }, ...routeCommonPayload() };
+  }
+  renderPlan(res);
+  renderSellPanel(res);
+}
+
+function renderSellPanel(res) {
+  const sm = res.summary;
+  if (!sm.feasible) return;
+  const rows = sm.sales.map(s => {
+    const age = tradeAgeInfo(s.updated_at);
+    const notes = [
+      s.source === "org" ? `<span title="org-reported price">⚡ org</span>` : "",
+      `<span class="${age.stale ? "route-warn" : "muted"}">${esc(age.txt)}</span>`,
+      s.left_over > 0 ? `<span class="route-warn">takes ~${fmtQty(s.scu_sold)} — ${fmtQty(s.left_over)} SCU left over</span>` : "",
+      s.camped ? `<span class="route-warn" title="on the danger board, but it's the only buyer">⚠ only buyer is camped</span>` : "",
+    ].filter(Boolean).join(" · ");
+    return `<tr><td><b>${esc(s.commodity)}</b></td><td>${esc(s.station)}` +
+      `${s.terminal ? ` <span class="muted">${esc(s.terminal)}</span>` : ""}</td>` +
+      `<td class="num">${fmtQty(s.price)}/SCU</td><td class="num">${fmtQty(s.scu_sold)} SCU</td>` +
+      `<td class="num"><b>${fmtAuec(s.revenue)}</b></td><td>${notes}</td></tr>`;
+  }).join("");
+  const alts = (sm.alternatives || []).map((a, i) =>
+    `<div class="rm-row sell-alt"><span>${esc(a.label)} — <b>${fmtAuec(a.revenue)}</b> · ` +
+    `${fmtDur(a.total_time_s)} · ${fmtAuec(a.auec_per_hour)}/hr</span>` +
+    `<button class="ev-btn" type="button" data-alt="${i}">Use this instead</button></div>`).join("");
+  const h = `<div class="panel"><h2>SELL</h2>` +
+    `<p class="route-hint">Best ${sm.sort === "total" ? "total" : "aUEC/hour"}: <b>${esc(sm.assignment_label)}</b> — ` +
+    `<b>${fmtAuec(sm.revenue)}</b> expected.</p>` +
+    `<div class="table-scroll"><table class="inv-table sell-tbl"><thead><tr><th>Commodity</th><th>Sell at</th>` +
+    `<th class="num">Price</th><th class="num">Sells</th><th class="num">Revenue</th><th></th></tr></thead>` +
+    `<tbody>${rows}</tbody></table></div>` +
+    (sm.simplified ? `<p class="route-hint muted">Many commodities: fewer buyers were compared per commodity to keep this quick.</p>` : "") +
+    (sm.no_market && sm.no_market.length ? `<p class="route-hint muted">Not sold (no SCU market price): ` +
+      `${sm.no_market.map(h => esc(h.item_name || h.commodity)).join(", ")}.</p>` : "") +
+    (alts ? `<div class="ev-section-h">Other options</div>${alts}` : "") +
+    `<p class="route-hint muted">Prices are UEX's plus org reports; the feed has no quality, so every lot ` +
+    `of a commodity is priced the same.</p></div>`;
+  const out = $("route-result");
+  out.insertAdjacentHTML("afterbegin", h);
+  out.querySelectorAll(".sell-alt button").forEach(b => b.onclick = () => useSellAlternative(sm.alternatives[+b.dataset.alt]));
+}
+
+// "Use this instead": put that assignment into the rows and plan it as a normal
+// cargo run (leaves sell mode; the payout becomes that option's revenue).
+function useSellAlternative(alt) {
+  const to = Object.fromEntries(alt.assignment.map(a => [a.commodity, [a.poi_id, a.station]]));
+  setSellDestinations(routeSell.last.packages.map(p => [p.id, ...to[p.commodity]]));
+  rewardByLabel = { Sell: alt.revenue };
+  refreshRewardRows();
+  const note = $("route-seed-note");
+  exitSellMode();
+  note.hidden = true;
+  planRoute();
 }
 
 function wireRoutePlanner() {
@@ -10924,10 +11070,23 @@ function attachPoiPicker(wrap, onPick) {
   attachPickerKeys(input, drop);
 }
 
+// Ship, start, danger and trip settings — shared by /api/route/plan, /run and
+// sell mode's /api/route/plan_sell.
+function routeCommonPayload() {
+  const hasDrive = !$("route-drive-wrap").hidden;   // #27: only when the ship matched a profile
+  return { avoid_mode: routeAvoid, ...(avoidPoiIds().length ? { avoid_poi_ids: avoidPoiIds() } : {}),
+           ship: $("route-ship").value.trim() || null,
+           ...(hasDrive && $("route-qd").value ? { qd: $("route-qd").value } : {}),
+           ...(hasDrive && $("route-inrange").checked ? { in_range_only: true } : {}),
+           ...($("route-split").checked ? { split_trips: true } : {}),
+           ...routeStartPayload() };
+}
+
 async function planRoute() {
   const usable = Number($("route-scu").value);
   const msg = $("route-plan-msg");
   if (!(usable > 0)) { msg.textContent = "pick a ship / set a usable SCU first"; return; }
+  if (routeSell) return planSell(usable);
   const packages = [];
   let skipped = 0;
   for (const row of $("route-pkgs").children) {
@@ -10953,14 +11112,7 @@ async function planRoute() {
     packages.push({ commodity, scu, contract, from_id: Number(from.dataset.poiId), to_id: Number(to.dataset.poiId) });
   }
   if (!packages.length) { msg.textContent = "add a complete package: pick from + to and a SCU amount"; return; }
-  const hasDrive = !$("route-drive-wrap").hidden;   // #27: only when the ship matched a profile
-  lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(),
-                    avoid_mode: routeAvoid, ...(avoidPoiIds().length ? { avoid_poi_ids: avoidPoiIds() } : {}),
-                    ship: $("route-ship").value.trim() || null,
-                    ...(hasDrive && $("route-qd").value ? { qd: $("route-qd").value } : {}),
-                    ...(hasDrive && $("route-inrange").checked ? { in_range_only: true } : {}),
-                    ...($("route-split").checked ? { split_trips: true } : {}),
-                    ...routeStartPayload() };
+  lastPlanInput = { packages, usable_scu: usable, rewards: buildRewards(), ...routeCommonPayload() };
   haloPlanSay("planning…", "status");
   let res;
   try {
@@ -11099,6 +11251,9 @@ function renderPlan(res) {
     if (sm.range_infeasible)   // #27: a jump exceeds the drive, not a capacity problem
       h += `<p class="route-infeasible">⚠ No route where every jump fits this drive's range.
         Uncheck <b>in-range only</b> to allow mid-route refueling, or pick a longer-range drive.</p></div>`;
+    else if (sm.reason && sm.min_capacity_scu == null)   // sell mode: no buyer, no one-stop station
+      h += `<p class="route-infeasible">⚠ ${esc(sm.reason)}.${(sm.no_market || []).length
+        ? ` No market price for: ${sm.no_market.map(x => esc(x.item_name || x.commodity)).join(", ")}.` : ""}</p></div>`;
     else if (sm.reason)   // e.g. split_trips can't divide a multi-pickup delivery
       h += `<p class="route-infeasible">⚠ This won't fit your ship (needs
         <b>${sm.min_capacity_scu} SCU</b>, you have ${sm.usable_scu}), and ${esc(sm.reason)}.
@@ -18245,6 +18400,7 @@ function invMineTableHtml(rows) {
     `<span class="poi-pick" style="flex:1;min-width:160px"><input id="inv-pick-to" class="ti" placeholder="deliver to…" autocomplete="off"></span>` +
     `<select class="ti" id="inv-pick-goal" aria-label="or a goal's drop-off"><option value="">or a goal’s drop-off…</option></select>` +
     `<button class="ev-btn primary" id="inv-pick-go">📦 Plan pickup run</button>` +
+    `<button class="ev-btn" id="inv-pick-sell" title="collect these and sell each commodity where it pays best">💰 Sell at best price</button>` +
     `<button class="ev-btn" id="inv-pick-clear">Clear</button>` +
     `<span class="muted" id="inv-pick-msg"></span></div>`;
   return pickBar + `<table class="inv-table"><thead><tr>` +
@@ -18338,6 +18494,13 @@ function wireInvPick() {
     const drop = pickedPoiId(to) ?? (Number($("inv-pick-goal").value) || null);
     msg.textContent = "Building…";
     const err = await planInventoryPickup({ holding_ids: [...rmPickSel], dropoff_poi_id: drop });
+    if (err) msg.textContent = err; else rmPickSel.clear();
+  };
+  // Sell mode (#48 §8): no destination here — the planner picks the buyers.
+  $("inv-pick-sell").onclick = async () => {
+    const msg = $("inv-pick-msg");
+    msg.textContent = "Building…";
+    const err = await planInventoryPickup({ holding_ids: [...rmPickSel] }, { sell: true });
     if (err) msg.textContent = err; else rmPickSel.clear();
   };
   syncInvPickBar();
