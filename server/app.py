@@ -38,6 +38,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
+import calendar_ics
 import catalog
 import db
 import event_taxonomy
@@ -1532,6 +1533,12 @@ _PUBLIC_PREFIXES = ("/auth/", "/images/")   # OAuth flow + the shell's own asset
 # The shell's lifted-out stylesheet + script (see `_shell_parts`). An exact
 # shape, not an "/assets/" prefix, so nothing else can ever be served under it.
 _SHELL_ASSET_RE = re.compile(r"^/assets/app\.([0-9a-f]{16})\.(css|js)$")
+# A member's subscribed calendar feed. Calendar apps (Google fetches from its
+# own servers) can't sign in, so the URL's token IS the credential. It is let
+# past the gate by exact shape only; the route then refuses (404, never 401)
+# unless the org setting is on AND the token resolves to a member whose access
+# isn't revoked. Read-only, events only — see `calendar_feed`.
+_CALENDAR_FEED_RE = re.compile(r"^/cal/[A-Za-z0-9_-]{43}\.ics$")
 
 # A watcher token is an unattended credential that lives in plaintext next to a
 # script on a member's gaming PC, so it gets exactly the three endpoints the
@@ -1574,7 +1581,8 @@ def session_user(request: Request) -> dict | None:
 async def auth_gate(request: Request, call_next):
     path, method = request.url.path, request.method
     if ((method, path) in _PUBLIC_EXACT or path.startswith(_PUBLIC_PREFIXES)
-            or (method == "GET" and _SHELL_ASSET_RE.match(path))):
+            or (method == "GET" and (_SHELL_ASSET_RE.match(path)
+                                     or _CALENDAR_FEED_RE.match(path)))):
         return await call_next(request)
     if session_user(request):
         return await call_next(request)
@@ -2016,6 +2024,9 @@ _RATE_LIMITS = {
     # Credential minting. Each one is long-lived, and /download/watcher mints a
     # fresh token per call.
     "token": (10, 3600.0),
+    # Calendar feed fetches, per feed owner. Apple's fastest refresh is every
+    # 5 min (12/h) per device; a few devices sit well under this.
+    "calendar": (120, 3600.0),
 }
 
 
@@ -9896,6 +9907,21 @@ async def get_event(event_id: int, user: dict = Depends(require_session)):
     return _event_view(ev, user, detail=True)
 
 
+@app.get("/api/events/{event_id}/ics")
+async def event_ics(event_id: int, request: Request,
+                    user: dict = Depends(require_session)):
+    """One event as a downloadable .ics — the "Add to calendar → Apple / other"
+    option. A one-time copy (a later reschedule doesn't follow it), so it needs
+    no org setting: it's the member's own session, same data as the page."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    return Response(
+        _events_ics([ev], request), media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="event-{event_id}.ics"',
+                 "Cache-Control": "no-store"})
+
+
 @app.patch("/api/events/{event_id}")
 async def edit_event(event_id: int, body: EventIn, user: dict = Depends(require_session)):
     """Edit an event (organizer or admin) — full replace of the editable fields.
@@ -10449,6 +10475,13 @@ def events_admin_only() -> bool:
     organize). Gates POST /api/events alone: existing events stay their
     organizer's to edit, and quick ops + templates stay open (no announcement)."""
     return db.get_setting("events_admin_only", "0") == "1"
+
+
+def calendar_feed_enabled() -> bool:
+    """Org setting: members may create subscribed-calendar links (default OFF).
+    Each link works without signing in, so publishing one is an admin's
+    deliberate call; turning it off deletes every member's link."""
+    return db.get_setting("calendar_feed_enabled", "0") == "1"
 
 
 # ---- event role aliases (docs/event-role-pings.md) ----
@@ -15677,6 +15710,8 @@ async def set_member_access(member_id: str, body: MemberAccessIn,
         for t in tokens.list_for(member_id):
             if tokens.revoke(t["id"], member_id, True):
                 dropped += 1
+        # Same for their calendar link: a URL credential with no expiry.
+        await asyncio.to_thread(db.delete_calendar_feed, member_id)
         await _drop_member_session(member_id)
     print(f"[sc-nav] admin {admin.get('id')} "
           f"{'revoked' if body.revoked else 'restored'} access for {member_id} "
@@ -15804,6 +15839,8 @@ async def get_settings(user: dict = Depends(require_session)):
         "listing_stale_days": _listing_stale_days(),  # marketplace stale badge (0 = off)
         "event_builtin_templates": event_builtin_templates_enabled(),  # §14.5 starters
         "events_admin_only": events_admin_only(),     # only admins create events
+        "calendar_feed_enabled": calendar_feed_enabled(),   # members may subscribe
+        "calendar_feed_count": db.count_calendar_feeds(),
         "discord_role_aliases": role_aliases(),       # event role → Discord role ids
         "op_default_rules": org_default_op_rules(),   # ops payout defaults (§4.1)
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
@@ -15853,6 +15890,8 @@ class SettingsIn(BaseModel):
     listing_stale_days: int | None = Field(default=None, ge=0, le=365)
     event_builtin_templates: bool | None = None
     events_admin_only: bool | None = None
+    # Subscribed calendar links (public-by-URL). Turning it off deletes them all.
+    calendar_feed_enabled: bool | None = None
     # Event role → Discord roles it @-pings ({} clears). Validated in the handler.
     discord_role_aliases: dict[str, list[RoleAliasIn]] | None = Field(default=None, max_length=40)
     # Preview linked announcement images from IMAGE_PREVIEW_HOSTS in the app.
@@ -15943,6 +15982,13 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
                        "1" if body.event_builtin_templates else "0")
     if body.events_admin_only is not None:
         db.set_setting("events_admin_only", "1" if body.events_admin_only else "0")
+    if body.calendar_feed_enabled is not None:
+        db.set_setting("calendar_feed_enabled", "1" if body.calendar_feed_enabled else "0")
+        if not body.calendar_feed_enabled:
+            # Off means off: a re-enable must not quietly revive links that
+            # were out in the world (maybe the reason it was switched off).
+            n = await asyncio.to_thread(db.delete_all_calendar_feeds)
+            print(f"[sc-nav] calendar feeds disabled; {n} member link(s) deleted")
     if body.discord_role_aliases is not None:
         db.set_setting(_ROLE_ALIAS_KEY, json.dumps(_clean_role_aliases(body.discord_role_aliases)))
     if body.notify_external_preview is not None:
@@ -16004,6 +16050,8 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "listing_stale_days": _listing_stale_days(),
             "event_builtin_templates": event_builtin_templates_enabled(),
             "events_admin_only": events_admin_only(),
+            "calendar_feed_enabled": calendar_feed_enabled(),
+            "calendar_feed_count": db.count_calendar_feeds(),
             "discord_role_aliases": role_aliases(),
             "op_default_rules": org_default_op_rules(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
@@ -16975,6 +17023,7 @@ async def api_me(user: dict = Depends(require_session)):
             "pinned_ids": sorted(hub.get(user).pinned_ids),
             "image_preview_hosts": image_preview_hosts(),   # [] = no linked-image previews
             "events_admin_only": events_admin_only(),       # hides "Create event" for non-admins
+            "calendar_feed_enabled": calendar_feed_enabled(),   # Settings → Calendar
             **_member_identity(user["id"])}
 
 
@@ -17358,6 +17407,102 @@ async def remove_my_blueprint(key: str, user: dict = Depends(require_session)):
         raise HTTPException(status_code=404, detail="not in your library")
     return {"ok": True,
             "blueprints": _member_blueprint_view(db.list_member_blueprints(user["id"]))}
+
+
+# ---- calendar subscriptions (docs/event-calendar.md) ----
+# A member's own feed of events at /cal/<token>.ics, for Google / Apple /
+# Outlook to subscribe to. Off unless an admin turns it on (`calendar_feed_enabled`):
+# the URL is the only credential, because calendar apps can't sign in. Guards:
+# exact-shape gate exemption (`_CALENDAR_FEED_RE`), hash-only storage, one
+# link per member (a new one kills the old), deleted on off-boarding and
+# account deletion, deleted org-wide when the setting goes off.
+_CAL_HISTORY_DAYS = 30      # how far back a feed keeps past events
+
+
+def _events_ics(events: list[dict], request: Request,
+                feed_name: str | None = None) -> str:
+    base = _server_base_url(request)
+    host = urllib.parse.urlsplit(base).hostname or "org-navigator"
+    return calendar_ics.calendar(
+        events, uid_host=host, feed_name=feed_name,
+        url_for=lambda ev: f"{base}/#/events/{ev['id']}")
+
+
+def _calendar_feed_name(scope: str) -> str:
+    org = org_name() or "Org"
+    return f"{org} events" if scope == "all" else f"{org} events (mine)"
+
+
+@app.get("/cal/{token}.ics")
+async def calendar_feed(token: str, request: Request):
+    """A member's subscribed calendar. Every refusal is a bare 404 — an
+    unauthenticated caller learns nothing about whether the setting is on or a
+    token ever existed."""
+    if not calendar_feed_enabled():
+        raise HTTPException(status_code=404, detail="not found")
+    feed = await asyncio.to_thread(db.calendar_feed_by_hash, TokenStore._hash(token))
+    if feed is None or access_revoked(feed["discord_id"], None):
+        raise HTTPException(status_code=404, detail="not found")
+    uid = feed["discord_id"]
+    rate_limit("calendar", uid)
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=_CAL_HISTORY_DAYS)).isoformat()
+    events = await asyncio.to_thread(
+        db.calendar_events, None if feed["scope"] == "all" else uid, since)
+    await asyncio.to_thread(db.touch_calendar_feed, uid, now.isoformat())
+    return Response(
+        _events_ics(events, request, feed_name=_calendar_feed_name(feed["scope"])),
+        media_type="text/calendar; charset=utf-8",
+        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
+class CalendarFeedIn(BaseModel):
+    scope: str = Field(default="mine", pattern="^(mine|all)$")
+
+
+def _calendar_feed_public(feed: dict | None) -> dict | None:
+    return feed and {"scope": feed["scope"], "created": feed["created"],
+                     "last_used": feed["last_used"]}
+
+
+@app.get("/api/me/calendar")
+async def my_calendar(user: dict = Depends(require_session)):
+    """Whether subscriptions are on, and the caller's link (never its URL —
+    only the hash is kept, so it's shown once, at creation)."""
+    return {"enabled": calendar_feed_enabled(),
+            "feed": _calendar_feed_public(db.get_calendar_feed(user["id"]))}
+
+
+@app.post("/api/me/calendar")
+async def create_my_calendar(body: CalendarFeedIn, request: Request,
+                             user: dict = Depends(require_session)):
+    """Create (or replace) the caller's calendar link. Returns the URL once."""
+    if not calendar_feed_enabled():
+        raise HTTPException(status_code=403,
+                            detail="Calendar subscriptions are turned off for this org.")
+    rate_limit("token", user["id"])
+    raw = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc).isoformat()
+    await asyncio.to_thread(db.set_calendar_feed, user["id"], TokenStore._hash(raw),
+                            body.scope, now)
+    return {"url": f"{_server_base_url(request)}/cal/{raw}.ics",
+            "feed": _calendar_feed_public(db.get_calendar_feed(user["id"]))}
+
+
+@app.put("/api/me/calendar")
+async def update_my_calendar(body: CalendarFeedIn, user: dict = Depends(require_session)):
+    """Switch the caller's feed between their events and all org events. The
+    link stays the same; the next refresh picks the change up."""
+    if not await asyncio.to_thread(db.set_calendar_feed_scope, user["id"], body.scope):
+        raise HTTPException(status_code=404, detail="no calendar link yet")
+    return {"feed": _calendar_feed_public(db.get_calendar_feed(user["id"]))}
+
+
+@app.delete("/api/me/calendar")
+async def delete_my_calendar(user: dict = Depends(require_session)):
+    """Turn the caller's link off. Subscribed calendars stop updating."""
+    await asyncio.to_thread(db.delete_calendar_feed, user["id"])
+    return {"ok": True}
 
 
 class TokenCreateIn(BaseModel):

@@ -7297,6 +7297,207 @@ class MemberAccessRevocationTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
 
+class CalendarIcsTests(unittest.TestCase):
+    """The .ics wire format (server/calendar_ics.py). Calendar clients fail
+    silently on a malformed line — the event just never shows — so these pin
+    the RFC 5545 rules a test is the only way to notice."""
+
+    def _cal(self, *events, **kw):
+        import calendar_ics
+        return calendar_ics.calendar(
+            list(events), uid_host="nav.example", now=datetime(2026, 10, 18, tzinfo=timezone.utc),
+            url_for=lambda ev: f"https://nav.example/#/events/{ev['id']}", **kw)
+
+    def _ev(self, **over):
+        return {"id": 7, "title": "Raid night", "start_at": "2026-10-20T19:00:00+00:00",
+                "duration_min": 90, "location": "Port Tressler", "event_location": None,
+                "status": "scheduled", "updated_at": "2026-10-18T10:00:00+00:00", **over}
+
+    def test_times_are_utc_and_end_follows_duration(self):
+        out = self._cal(self._ev())
+        self.assertIn("DTSTART:20261020T190000Z\r\n", out)
+        self.assertIn("DTEND:20261020T203000Z\r\n", out)
+        self.assertIn("UID:event-7@nav.example\r\n", out)
+
+    def test_missing_duration_gets_an_hour(self):
+        self.assertIn("DTEND:20261020T200000Z", self._cal(self._ev(duration_min=None)))
+
+    def test_text_is_escaped_so_a_title_cannot_inject_properties(self):
+        out = self._cal(self._ev(title="Raid, part 2; bring\nSTATUS:CANCELLED",
+                                 location="Olisar, Stanton"))
+        self.assertIn("SUMMARY:Raid\\, part 2\\; bring\\nSTATUS:CANCELLED\r\n", out)
+        self.assertIn("LOCATION:Olisar\\, Stanton\r\n", out)
+        self.assertEqual(out.count("\r\nSTATUS:"), 1)      # only the real one
+
+    def test_long_lines_fold_at_75_octets_without_splitting_utf8(self):
+        out = self._cal(self._ev(title="Ü" * 100))
+        for line in out.split("\r\n"):
+            self.assertLessEqual(len(line.encode("utf-8")), 75)
+        unfolded = out.replace("\r\n ", "")
+        self.assertIn("SUMMARY:" + "Ü" * 100 + "\r\n", unfolded)
+
+    def test_cancelled_stays_listed_and_says_so(self):
+        out = self._cal(self._ev(status="cancelled"))
+        self.assertIn("STATUS:CANCELLED", out)
+        self.assertIn("SUMMARY:Cancelled: Raid night", out)
+
+    def test_feed_carries_name_and_refresh_hint_but_a_download_does_not(self):
+        feed = self._cal(self._ev(), feed_name="Org events")
+        self.assertIn("X-WR-CALNAME:Org events", feed)
+        self.assertIn("REFRESH-INTERVAL;VALUE=DURATION:PT1H", feed)
+        self.assertIn("X-PUBLISHED-TTL:PT1H", feed)
+        one = self._cal(self._ev())
+        self.assertNotIn("X-WR-CALNAME", one)
+        self.assertNotIn("REFRESH-INTERVAL", one)
+
+    def test_description_is_the_basics(self):
+        out = self._cal(self._ev(event_location="Daymar", description="secret plan"))
+        unfolded = out.replace("\r\n ", "")
+        self.assertIn("DESCRIPTION:Rally: Port Tressler\\nEvent: Daymar\\n"
+                      "https://nav.example/#/events/7", unfolded)
+        self.assertNotIn("secret plan", out)
+
+
+class EventCalendarFeedTests(unittest.TestCase):
+    """Subscribed calendar links (/cal/<token>.ics): admin opt-in, per-member
+    scope, revocation. The URL is the credential, so every refusal path matters."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._user = {"id": "1", "username": "u1", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._user
+        app.app.dependency_overrides[app.require_user] = lambda: cls._user
+        app.app.dependency_overrides[app.require_admin] = lambda: cls._admin_dep()
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._user
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def _admin_dep(cls):
+        if not cls._user.get("is_admin"):
+            raise app.HTTPException(status_code=403, detail="admin only")
+        return cls._user
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        self._as("1")
+        db.set_setting("calendar_feed_enabled", "1")
+        db.delete_all_calendar_feeds()
+        app.revoked_access.clear()
+        app._rate_hits.clear()
+
+    def _as(self, uid, admin=False):
+        type(self)._user = {"id": uid, "username": f"u{uid}", "is_admin": admin}
+
+    def _event(self, title, days=1):
+        r = self.client.post("/api/events", json={
+            "title": title, "types": ["Raid"], "categories": ["PvP"],
+            "start_at": (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["id"]
+
+    def _feed_path(self, scope="mine"):
+        r = self.client.post("/api/me/calendar", json={"scope": scope})
+        self.assertEqual(r.status_code, 200, r.text)
+        return "/cal/" + r.json()["url"].split("/cal/", 1)[1]
+
+    def _fetch(self, path):
+        """Fetch as a calendar app would: nobody signed in."""
+        orig = app.session_user
+        app.session_user = lambda request: None
+        try:
+            return self.client.get(path)
+        finally:
+            app.session_user = orig
+
+    def test_off_by_default_and_admin_only_to_turn_on(self):
+        db.set_setting("calendar_feed_enabled", "")
+        self.assertFalse(app.calendar_feed_enabled())
+        self.assertFalse(self.client.get("/api/me").json()["calendar_feed_enabled"])
+        self.assertEqual(self.client.post("/api/me/calendar", json={}).status_code, 403)
+        self.assertEqual(self.client.post("/api/settings",
+                                          json={"calendar_feed_enabled": True}).status_code, 403)
+        self._as("9", admin=True)
+        r = self.client.post("/api/settings", json={"calendar_feed_enabled": True})
+        self.assertTrue(r.json()["calendar_feed_enabled"])
+
+    def test_feed_is_reachable_without_a_session_and_scoped_to_mine(self):
+        mine = self._event("Mine")
+        self._as("2")
+        theirs = self._event("Theirs")
+        joined = self._event("Joined")
+        withdrawn = self._event("Withdrawn")
+        self._as("1")
+        self.client.post(f"/api/events/{joined}/signup", json={"status": "maybe"})
+        self.client.post(f"/api/events/{withdrawn}/signup", json={})
+        self.client.delete(f"/api/events/{withdrawn}/signup")
+        path = self._feed_path("mine")
+        r = self._fetch(path)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.headers["content-type"].startswith("text/calendar"))
+        self.assertIn(f"UID:event-{mine}@", r.text)
+        self.assertIn(f"UID:event-{joined}@", r.text)
+        self.assertNotIn(f"UID:event-{theirs}@", r.text)
+        self.assertNotIn(f"UID:event-{withdrawn}@", r.text)
+        # Switching scope keeps the same link.
+        self.assertEqual(self.client.put("/api/me/calendar",
+                                         json={"scope": "all"}).status_code, 200)
+        self.assertIn(f"UID:event-{theirs}@", self._fetch(path).text)
+        self.assertIsNotNone(self.client.get("/api/me/calendar").json()["feed"]["last_used"])
+
+    def test_a_new_link_kills_the_old_one(self):
+        old = self._feed_path()
+        new = self._feed_path()
+        self.assertEqual(self._fetch(old).status_code, 404)
+        self.assertEqual(self._fetch(new).status_code, 200)
+        self.client.delete("/api/me/calendar")
+        self.assertEqual(self._fetch(new).status_code, 404)
+
+    def test_unknown_token_is_404_and_bad_shape_never_passes_the_gate(self):
+        self.assertEqual(self._fetch("/cal/" + "A" * 43 + ".ics").status_code, 404)
+        for path in ("/cal/short.ics", "/cal/" + "A" * 43 + ".json", "/cal/"):
+            self.assertEqual(self._fetch(path).status_code, 401, path)
+
+    def test_turning_the_setting_off_deletes_every_link(self):
+        path = self._feed_path()
+        self._as("9", admin=True)
+        self.client.post("/api/settings", json={"calendar_feed_enabled": False})
+        self.assertEqual(self._fetch(path).status_code, 404)
+        self.client.post("/api/settings", json={"calendar_feed_enabled": True})
+        self.assertEqual(self._fetch(path).status_code, 404)   # no quiet revival
+        self.assertEqual(db.count_calendar_feeds(), 0)
+
+    def test_revoking_a_member_deletes_their_link(self):
+        self._as("4242")
+        path = self._feed_path()
+        self._as("9", admin=True)
+        r = self.client.post("/api/admin/members/4242/access", json={"revoked": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self._fetch(path).status_code, 404)
+        self.assertIsNone(db.get_calendar_feed("4242"))
+
+    def test_account_deletion_removes_the_link(self):
+        db.set_calendar_feed("55", "h" * 64, "mine", "now")
+        self.assertEqual(db.delete_member("55", set())["calendar_feeds"], 1)
+
+    def test_single_event_download_needs_no_setting(self):
+        db.set_setting("calendar_feed_enabled", "0")
+        eid = self._event("Solo")
+        r = self.client.get(f"/api/events/{eid}/ics")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIn("attachment", r.headers["content-disposition"])
+        self.assertIn("SUMMARY:Solo", r.text)
+        self.assertEqual(self.client.get("/api/events/999999/ics").status_code, 404)
+
+
 class AuthGateTests(unittest.TestCase):
     """The gate is deny-by-default. These pin the two properties that a
     permissive gate silently lost: nothing outside the public allowlist is
