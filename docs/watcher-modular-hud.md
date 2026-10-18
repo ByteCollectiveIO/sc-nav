@@ -627,7 +627,11 @@ What it settles:
 6. Browsing targets in the starmap logs too: `Player Requested Fuel to
    Quantum Target` fires for each destination hovered or considered
    (`ab_mine_stanton4_med_001`, `LOC_RR_S4_L2`, …), so it's not a commitment.
-   `Player Selected Quantum Target` is the commitment.
+   `Player Selected Quantum Target` is the commitment. **Corrected by capture
+   4 (§9.2.7):** `Selected` also fires on every starmap click (four targets,
+   22 selections in 15 s), so it isn't a commitment either. Only
+   `Quantum Drive Arrived` proves a jump happened; the last `Selected` before
+   it names where the jump went.
 
 **Watcher candidates, ranked (not built yet):** (1) the QT lifecycle, giving a
 named "where am I / where am I going" plus fuel ground truth; (2) the current
@@ -711,6 +715,61 @@ What it settles:
 `objective marker: <contract> (drop-off) in zone <id> at (x, y, z) m`, prints
 mission ends as `mission ended: completed`, and hides the salvage-era tutorial
 hints (Multi-Tool, Salvage, ATC, Exit Bed and others).
+
+### 9.2.7 Capture 4 findings — trade run to Terra Gateway, a short sell (2026-10-17, ~1 h 40 min, build 12913470)
+
+The pilot's steps: MIC-L3 → MOTH to New Babbage → Ironclad to Baijini Point
+(`RR_ARC_LEO`) → buy two commodities → ship retrieval bugged, log to the
+menu and back (a new shard, not a relaunch) → QT to the Stanton–Terra jump
+point station (`RR_JP_StantonTerra`) → sell. One commodity sold in full; the
+silicon only partly.
+
+| | Commodity `4236c16b…` | Commodity `7bbd3197…` (silicon, per the pilot) |
+|---|---|---|
+| Bought at Baijini | 272 SCU (17 × 16) for 819,958 = 3,014.55/SCU | 336 SCU (42 × 8) for 659,737 = 1,963.50/SCU |
+| Sold at Terra Gateway | **272 SCU** for 1,130,976 = 4,158.00/SCU | **96 SCU** (12 × 8) for 221,760 = 2,310.00/SCU |
+| Left in the hold | 0 | **240 SCU (30 × 8)** |
+
+The log has the commodity GUID but not its name (the server's
+`commodity_guids` maps it), so "silicon" is from the pilot. The pilot recalled
+selling about half; the log says 96 of 336 SCU (29%).
+
+What it settles:
+
+1. **A short sell is visible after the fact, but its cause isn't.** Every time
+   the kiosk reopens it re-lists the player's cargo
+   (`<…::AddPlayerCommodityItem> … commodityName[] Cargo Box Data:
+   [boxSize[8] | unitAmount[30]]`). That line read 30 × 8 on all six reopens
+   between the sell and the quit, and no further sell request followed. So
+   sold < held can be detected, by box size, since `commodityName` is blank.
+   *Why* the kiosk stopped at 96 isn't logged: there's no demand or stock
+   figure, and no response line for a commodity trade (`RmShopFlowResponse`
+   only fires for item shops). #41's run mode already turns a short confirmed
+   sell into a low-demand report; this line is the evidence a watcher could use
+   to say "240 SCU still aboard".
+2. **The kiosk menu (§6.2 of `trade-transaction-capture.md`) lists only what
+   the kiosk sells to you.** Terra Gateway buys silicon but doesn't sell it
+   (the pilot confirmed this in game), and its `LoadShopInventoryData` menu has
+   neither commodity it bought from the pilot. Baijini, which sells Silicon,
+   lists it. So the menu is a buy-side catalogue: present means "you can buy X
+   here, in these box sizes"; absent says nothing about whether the terminal
+   buys X from you.
+3. **`Player Selected Quantum Target` isn't a commitment** (corrects §9.2.4
+   item 6): browsing the starmap logged 22 selections of four targets in
+   15 s. The live tool now collapses QT lines that repeat one from the last
+   minute (the timeline went from ~100 QT lines to 37).
+4. **The log names other players.** Elevator riders (`[TRANSPORT] Player
+   <handle>[<geid>] entered this carriage`), another player's salvage beam
+   (`with user [<handle>][<id>]`), and force-detached attachments
+   (`name = <handle> to unblock`) all carry handles. The shared scrubber
+   (`gamelog_spike.build_scrubber`) now folds those too, not just the
+   player's own identifiers.
+5. More `Update Inventory Location` ids for the backlog table (#47):
+   3490636373 = `RR_ARC_LEO`, 3495364466 = `RR_JP_StantonTerra`. MIC-L3, New
+   Babbage and the open-space id read the same as in the earlier captures.
+
+The live timeline now writes commodity trades as `buy 336 SCU of commodity
+7bbd3197… (42 × 8 SCU) for 659,737 aUEC at <shop>`, not `commodity × 33600.000000 cSCU`.
 
 ### 9.3 Door two: piggyback sc-overlay's sidecar API (2026-08-02, user question)
 

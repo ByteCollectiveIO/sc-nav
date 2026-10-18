@@ -110,6 +110,15 @@ TIMELINE_RULES = [
      lambda m: f"ship retrieval requested (entity {m.group(1)})"),
     ("ship", re.compile(r"<Vehicle Control Flow>.*?(\w+) control token for '([^']+)'"),
      lambda m: f"{m.group(1)} control of {_short(m.group(2))}"),
+    # Commodity kiosk: the GUID (no name; the server's commodity_guids maps it),
+    # SCU (buy quotes centi-SCU, sell quotes SCU), boxes and the aUEC total.
+    ("shop", re.compile(r"<CEntityComponentCommodityUIProvider::SendCommodity(Buy|Sell)Request>"
+                        r".*?shopName\[([^\]]+)\].*?(?:price|amount)\[([\d.]+)\]"
+                        r".*?resourceGUID\[([0-9a-f]{8})[^\]]*\].*?quantity\[([\d.]+)( cSCU)?\]"
+                        r".*?boxSize\[([\d.]+)\]\s*\|\s*unitAmount\[(\d+)\]"),
+     lambda m: (f"{m.group(1).lower()} {float(m.group(5)) / (100 if m.group(6) else 1):g} SCU "
+                f"of commodity {m.group(4)}… ({m.group(8)} × {float(m.group(7)):g} SCU) "
+                f"for {float(m.group(3)):,.0f} aUEC at {m.group(2)}")),
     ("shop", re.compile(r"<CEntityComponent\w*UIProvider::Send(?:Shop|Commodity)(Buy|Sell)Request>"
                         r".*?shopName\[([^\]]+)\](?:.*?itemName\[([^\]]+)\])?(?:.*?quantity\[([^\]]+)\])?"),
      lambda m: f"{m.group(1).lower()} at {m.group(2)}: {m.group(3) or 'commodity'} × {m.group(4) or '?'}"),
@@ -136,7 +145,12 @@ OWN_VEHICLE_RES = (
     re.compile(r"<Vehicle Control Flow>.*?control token for '[^']+' \[(\d+)\]"),
 )
 
-MARKER_PRE_S = 5       # lines this long BEFORE a mark belong to it (you react late)
+# Browsing the starmap re-logs the same QT target/route/fuel triplet on every
+# click (2026-10-17: ~70 lines in 15 s), so a QT line that repeats one from the
+# last minute is dropped, not only an exact repeat of the line before.
+QT_REPEAT_S = 60
+
+MARKER_PRE_S = 5      # lines this long BEFORE a mark belong to it (you react late)
 MARKER_POST_S = 20     # ...and this long after (the game logs some outcomes late)
 WINDOW_TOP = 10        # tags listed per marker
 # Below this share, every tag near a mark is just background: report it as a
@@ -297,6 +311,12 @@ class Profiler:
         prev = self.timeline[-1] if self.timeline else None
         if prev and prev[1:] == entry[1:]:
             return None                        # the game repeats itself
+        if entry[1] == "qt":
+            for old in reversed(self.timeline):
+                if (dt - old[0]).total_seconds() > QT_REPEAT_S:
+                    break
+                if old[1:] == entry[1:]:
+                    return None
         self.timeline.append(entry)
         return entry
 

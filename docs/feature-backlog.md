@@ -51,6 +51,49 @@ goals already stamp `min_q` per line but progress never reads it. Design:
 the marketplace crafted blob on crafted holdings, derived subkind + band, then
 goals gate on it, craft preview reads pledged lots, listings/rollups follow.
 
+### 47. Game.log location ids → names table 📐 IDEA (2026-10-17) · waiting on more captures
+Not to be built until more sessions have been logged (user call, 2026-10-17):
+each new capture adds id/name pairs to the table below and tests whether the
+ids hold across sessions and builds.
+
+
+From capture 3 ([`watcher-modular-hud.md`](watcher-modular-hud.md) §9.2.6 item 4).
+`<Update Inventory Location> … Location [old] -> [new]` fires on every move
+between stations, landing zones and open space, but only carries an opaque
+numeric id. When the player is at a station or landing zone, a
+`<RequestLocationInventory> … Location[<name>]` line lands in the same second
+and names it. Pairs seen so far:
+
+| id | name | seen |
+|---|---|---|
+| 3513657059 | `RR_MIC_L1` | 2026-10-15 (US shard) + 2026-10-17 (EU shard) |
+| 3170699229 | `Stanton4_NewBabbage` | both sessions |
+| 2551368652 | `RR_ARC_L3` | 2026-10-17 |
+| 626814401 | `RR_MIC_L3` | 2026-10-17 |
+| 3490636373 | `RR_ARC_LEO` (Baijini Point) | 2026-10-17 capture 4 |
+| 3495364466 | `RR_JP_StantonTerra` | 2026-10-17 capture 4 |
+| 1902223495 | *(unnamed: appears whenever the ship leaves a station; probably open Stanton space)* | all three sessions |
+
+MIC-L3 and New Babbage read the same again in capture 4 (§9.2.7). All captures
+so far are on build 12913470.
+
+**What it would buy:** the watcher could report "at MIC-L1" / "left MIC-L1"
+from lines it already tails, without `/showlocation` (station/LZ granularity
+only; §9.2.4 item 3: there are no POI-level names). That makes candidate (3) on
+§9.2.4's watcher list cheap.
+
+**Open before building:**
+- **Does an id survive a patch?** Both captures were on build 12913470. Mine the
+  70-session `gamelog_backups/` corpus (§9.2.2) for same-second pairings across
+  builds first; that decides whether the table is a vendored constant or
+  learned per build.
+- **Where it lives:** a committed table (like the vendored starmap snapshots)
+  versus learned at runtime from watcher-reported pairings. Learning is
+  self-healing but needs a new ingest field. Lean towards vendored if ids
+  survive patches.
+- Name the unnamed ids (open space, moons/planets in transit) only if a second
+  signal confirms them; don't guess from "it appears after leaving".
+
 ### 48. Inventory pickup runs (inventory/goal → cargo planner) 🔨 deliver half SHIPPED to dev (#272) · sell mode BUILT (2026-10-17, unreleased)
 Player request: pick your own holdings at known locations → an efficient
 collect-and-deliver route, usually to an org goal's drop-off once it fills.

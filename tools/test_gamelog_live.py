@@ -143,6 +143,43 @@ class ProfilerTest(unittest.TestCase):
             "at (-2,078,603, 4,413,445, -1,900,839) m",
             "mission ended: completed"])
 
+    def test_commodity_trade_lines(self):
+        self.p.feed(line(1, "CEntityComponentCommodityUIProvider::SendCommodityBuyRequest",
+                         "Sending SShopCommodityBuyRequest - playerId[1] shopId[2] "
+                         "shopName[SCShop_Admin_lt_base_g] kioskId[3] price[659737.000000] "
+                         "shopPricePerCentiSCU[19.635000] resourceGUID[7bbd3197-a6e1-49b3-a495-0b7ef4f8ce40] "
+                         "autoLoading[1] quantity[33600.000000 cSCU] Cargo Box Data: boxSize[8.000000] | unitAmount[42]"))
+        self.p.feed(line(2, "CEntityComponentCommodityUIProvider::SendCommoditySellRequest",
+                         "Sending SShopCommoditySellRequest - playerId[1] shopId[4] "
+                         "shopName[SCShop_Admin_lt_base_g] kioskId[5] amount[221760.000000] "
+                         "resourceGUID[7bbd3197-a6e1-49b3-a495-0b7ef4f8ce40] autoLoading[1] quantity[96] "
+                         "transactionMode[ResourceContainer] Cargo Box Data:  [boxSize[8] | unitAmount[12]]"))
+        self.assertEqual([e[2] for e in self.p.timeline], [
+            "buy 336 SCU of commodity 7bbd3197… (42 × 8 SCU) for 659,737 aUEC at SCShop_Admin_lt_base_g",
+            "sell 96 SCU of commodity 7bbd3197… (12 × 8 SCU) for 221,760 aUEC at SCShop_Admin_lt_base_g"])
+
+    def test_starmap_browsing_qt_repeats_collapsed(self):
+        def sel(sec, target):
+            self.p.feed(line(sec, "Player Selected Quantum Target - Local", QT.format(
+                v="DRAK_Ironclad_882643973835", id=882643973835, msg=f"selected point {target}")))
+        for sec, target in [(1, "A"), (2, "B"), (3, "A"), (4, "B"), (5, "C")]:
+            sel(sec, target)
+        self.assertEqual([e[2] for e in self.p.timeline if e[1] == "qt"], [
+            "QT target selected: A (DRAK_Ironclad)", "QT target selected: B (DRAK_Ironclad)",
+            "QT target selected: C (DRAK_Ironclad)"])
+
+    def test_other_players_scrubbed(self):
+        scrub = gl.build_scrubber("", False)
+        self.assertEqual(scrub("[TRANSPORT] Player SomePilot7[203604412131] entered this carriage"),
+                         "[TRANSPORT] Player <OTHER>[<ID>] entered this carriage")
+        self.assertEqual(scrub("Weapon [Salvage_Head_Salvation_1][1] with user [Pilot-X][226245788805] received"),
+                         "Weapon [Salvage_Head_Salvation_1][1] with user [<OTHER>][<ID>] received")
+        self.assertEqual(scrub("detaching ENTITY ATTACHMENT id = 2041 name = Glitchy to unblock removal"),
+                         "detaching ENTITY ATTACHMENT id = 2041 name = <OTHER> to unblock removal")
+        self.assertEqual(scrub('session=1 nickname="Someone" playerGEID=1'), 'session=1 nickname="<OTHER>" playerGEID=1')
+        self.assertEqual(scrub("Player[Someone] Attachment[x]"), "Player[<OTHER>] Attachment[x]")
+        self.assertEqual(scrub("Player[<PLAYER>] Attachment[x]"), "Player[<PLAYER>] Attachment[x]")
+
     def test_salvage_era_hints_hidden(self):
         self.p.feed(note(1, "Multi-Tool - Salvage: Salvaging turns various materials into RMC."))
         self.p.feed(note(2, "Exiting Armistice Zone: You have left the confines of the Armistice Zone."))

@@ -51,6 +51,17 @@ TRAILING_TAGS_RE = re.compile(r"\s*((?:\[[^\]]*\])+)\s*$")
 # The player's own identifiers, from the log's character-status / login lines.
 IDENT_CHAR_RE = re.compile(r"geid (\d+) - accountId (\d+) - name (\S+) - state STATE_CURRENT")
 IDENT_HANDLE_RE = re.compile(r"Handle\[([^\]]+)\]")
+# Other players' handles, in the shapes the log names them (2026-10-17 captures:
+# elevator riders, salvage beams, attachments). Applied after the player's own
+# identifiers are folded, so `<PLAYER>` never matches. The id after a handle is
+# that player's geid; it goes too.
+OTHER_PLAYER_RES = (
+    (re.compile(r"\b(Player:? )[^\s\[\]<>]+\[\d+\]"), r"\1<OTHER>[<ID>]"),
+    (re.compile(r"\b(Player\[)[^\]<>]+\]"), r"\1<OTHER>]"),
+    (re.compile(r"\b(user \[)[^\]<>]+\]\[\d+\]"), r"\1<OTHER>][<ID>]"),
+    (re.compile(r"\b(name = )[^\s<>]+( to unblock)"), r"\1<OTHER>\2"),
+    (re.compile(r'\b(nickname=")[^"<>]+"'), r'\1<OTHER>"'),
+)
 IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
 CHAT_RE = re.compile(r"chat", re.IGNORECASE)
 
@@ -98,7 +109,8 @@ def parse_line(raw):
 
 
 def build_scrubber(text, keep_identity):
-    """Return a fn folding the player's own identifiers out of sample lines."""
+    """Return a fn folding the player's own identifiers, and any other player's
+    handle, out of sample lines."""
     if keep_identity:
         return lambda s: s
     handle = acct = geid = None
@@ -117,6 +129,8 @@ def build_scrubber(text, keep_identity):
             s = re.sub(r"\b%s\b" % re.escape(acct), "<ACCT>", s)
         if geid and len(geid) >= 6:
             s = re.sub(r"\b%s\b" % re.escape(geid), "<GEID>", s)
+        for rx, sub in OTHER_PLAYER_RES:
+            s = rx.sub(sub, s)
         return IPV4_RE.sub("<IP>", s)
 
     return scrub
