@@ -13306,7 +13306,30 @@ def _goal_view(goal: dict, contributions, user: dict, detail: bool = False) -> d
                 for c in contributions if c.get("owner_id") == user["id"]]
         view["my_contributions"] = sorted(mine, key=lambda c: c["allocation_id"])
         view["my_holdings"] = _my_holdings_for_goal(goal, user)
+        if view["can_edit"]:                  # the organizer's logistics view (#48)
+            view["logistics"] = _goal_logistics(goal, contributions)
     return view
+
+
+def _goal_logistics(goal: dict, contributions) -> list[dict]:
+    """Where a goal's materials are staged (nav_core.derive_goal_logistics),
+    with station names, member names, and how far each place is from the
+    drop-off. Creator/admin only — though nothing new is exposed: the org
+    inventory rollup already shows every member's stock by location."""
+    groups = nav_core.derive_goal_logistics(
+        [{**c, "poi_id": _holding_poi(c)} for c in contributions])
+    drop = nav.pois.get(goal.get("dropoff_poi_id")) if goal.get("dropoff_poi_id") is not None else None
+    for g in groups:
+        p = nav.pois.get(g["poi_id"]) if g["poi_id"] is not None else None
+        if p is not None:
+            g["location"], g["system"] = p.name, p.system
+        g["at_dropoff"] = p is not None and drop is not None and p.id == drop.id
+        if p is not None and drop is not None and not g["at_dropoff"]:
+            leg = nav_core.travel_cost(nav, p, drop)
+            g["distance_m"], g["eta_s"] = leg.get("distance_m"), nav_core.leg_eta_s(leg)
+        for ln in g["lines"]:
+            ln["display_name"] = _resolve_member_name(ln["owner_id"], None)
+    return groups
 
 
 def _my_holdings_for_goal(goal: dict, user: dict) -> list[dict]:

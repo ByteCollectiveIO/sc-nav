@@ -1772,6 +1772,44 @@ class SplitTripsTests(unittest.TestCase):
         self.assertIn("multi-pickup", res["summary"]["reason"])
 
 
+class GoalLogisticsTests(unittest.TestCase):
+    """derive_goal_logistics: a goal's contributions grouped by where they're staged."""
+
+    def _r(self, owner, item, qty, poi=None, loc=None, short=0, delivered=0, unit="SCU", q=None):
+        return {"owner_id": owner, "item_id": f"commodity:{item.lower()}", "item_name": item,
+                "unit": unit, "quality": q, "qty": qty, "short": short, "delivered": delivered,
+                "location": loc, "poi_id": poi}
+
+    def test_groups_by_place_and_ranks_by_what_is_left_to_deliver(self):
+        rows = [self._r("A", "Iron", 10, poi=1, loc="Everus"),
+                self._r("B", "Iron", 30, poi=2, loc="Baijini"),
+                self._r("B", "Tin", 5, poi=1, loc="Everus")]
+        out = nav_core.derive_goal_logistics(rows)
+        self.assertEqual([g["poi_id"] for g in out], [2, 1])
+        everus = out[1]
+        self.assertEqual(everus["contributors"], 2)
+        self.assertEqual(everus["to_deliver"], {"SCU": 15})
+
+    def test_splits_delivered_promised_and_left(self):
+        (g,) = nav_core.derive_goal_logistics(
+            [self._r("A", "Iron", 20, poi=1, short=5, delivered=10)])
+        (ln,) = g["lines"]
+        self.assertEqual((ln["to_deliver"], ln["delivered"], ln["promised"]), (5, 10, 5))
+
+    def test_free_text_places_group_case_insensitively_and_units_stay_apart(self):
+        rows = [self._r("A", "Iron", 4, loc="My Cutlass"),
+                self._r("B", "Pen", 3, loc="my cutlass", unit="each")]
+        (g,) = nav_core.derive_goal_logistics(rows)
+        self.assertIsNone(g["poi_id"])
+        self.assertEqual(g["to_deliver"], {"SCU": 4, "each": 3})
+
+    def test_one_line_per_member_item_and_quality(self):
+        rows = [self._r("A", "Iron", 4, poi=1), self._r("A", "Iron", 6, poi=1),
+                self._r("A", "Iron", 2, poi=1, q=800)]
+        (g,) = nav_core.derive_goal_logistics(rows)
+        self.assertEqual({l["quality"]: l["to_deliver"] for l in g["lines"]}, {None: 10, 800: 2})
+
+
 class SellRouteTests(unittest.TestCase):
     """plan_sell_route (#48 §8): fixed pickups, the planner chooses where each
     commodity sells. Coordinates are Gm-scale so flying time actually matters."""

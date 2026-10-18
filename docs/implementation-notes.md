@@ -108,6 +108,11 @@ the as-built layer between them and the code.
   the next buyers (`SELL_OVERFLOW_BUYERS`); labels/dedupe use the buyers actually
   used. Discord: drop-off rides the goal post's code-built `progress` line, not
   a new template var — no golden change.
+  Organizer view: `_goal_view` adds `logistics` (detail + `can_edit` only) from
+  `nav_core.derive_goal_logistics` (groups by resolved POI, else case-folded
+  text; per-unit totals; `promised` never counts toward a place) +
+  `_goal_logistics` (names, `travel_cost` ETA to the drop-off).
+  `list_goal_contributions` now selects `i.location_poi_id` for `_holding_poi`.
 - **Sell mode (#48 §8, 2026-10-17, unreleased; docs/inventory-pickup-runs.md
   §8.8):** `POST /api/route/plan_sell` → `nav_core.plan_sell_route`. Buyers come
   from `_sell_points` — shared with `_trade_candidates`, so both planners judge

@@ -5179,6 +5179,27 @@ class InventoryPickupTests(unittest.TestCase):
             "holding_ids": [h["id"]], "free_only": True}).json()
         self.assertEqual(plan["packages"][0]["scu"], 6)
 
+    def test_the_organizer_sees_where_materials_are_staged(self):
+        a, b, c = self._IDS
+        g = self._goal(c, item="commodity:laranite", needed=100)          # ana creates
+        ha = self._log(self._NAMES[0], a, qty=10, item="commodity:laranite")
+        self.client.post(f"/api/goals/{g['id']}/contribute", json={
+            "item_id": "commodity:laranite", "qty": 10, "holding_id": ha["id"]})
+        self._as(self._b)
+        hb = self._log(self._NAMES[1], b, qty=30, item="commodity:laranite")
+        self.client.post(f"/api/goals/{g['id']}/contribute", json={
+            "item_id": "commodity:laranite", "qty": 35, "holding_id": hb["id"]})
+        self.assertNotIn("logistics", self.client.get(f"/api/goals/{g['id']}").json())
+        self._as(self._a)
+        logi = self.client.get(f"/api/goals/{g['id']}").json()["logistics"]
+        self.assertEqual([x["poi_id"] for x in logi], [b, a])            # most left first
+        beta = logi[0]
+        self.assertEqual(beta["location"], self._NAMES[1])
+        self.assertEqual(beta["to_deliver"], {"SCU": 30})
+        self.assertEqual(beta["lines"][0]["promised"], 5)
+        self.assertGreater(beta["eta_s"], 0)
+        self.assertFalse(beta["at_dropoff"])
+
     def test_a_split_run_starts_and_tracks_every_part(self):
         app._rate_hits.clear()
         r = self.client.post("/api/route/run", json=self._route_body(split_trips=True))

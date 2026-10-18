@@ -3621,7 +3621,7 @@ def list_goal_contributions(goal_id: int | None = None) -> list[dict]:
     q = ("SELECT a.id AS allocation_id, a.goal_id, a.qty AS qty, "
          "a.delivered_qty AS delivered, "
          "a.inventory_id AS holding_id, i.owner_id, i.item_id, i.item_name, "
-         "i.unit, i.location, i.quality, i.qty AS holding_qty, "
+         "i.unit, i.location, i.location_poi_id, i.quality, i.qty AS holding_qty, "
          f"{_ALLOC_SHORT_SQL} AS short "
          "FROM inventory_allocations a "
          "JOIN inventory i ON i.id = a.inventory_id")
